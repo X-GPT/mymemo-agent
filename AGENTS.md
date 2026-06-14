@@ -73,8 +73,8 @@ Source: [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/an
 MyMemo Monorepo (Bun workspaces) containing:
 - **chat-api** (`apps/chat-api/`) - AI chat service; orchestrates per-user E2B sandboxes
 - **sandbox-daemon** (`apps/sandbox-daemon/`) - in-sandbox HTTP daemon; bundled and shipped into E2B
-- **llm-gateway** (`apps/llm-gateway/`) - control plane; the only service holding the real `ANTHROPIC_API_KEY`. Verifies the per-turn bearer token and proxies to Anthropic
-- **document-gateway** (`apps/document-gateway/`) - control plane; the only service holding the real document-API credential. Verifies the per-turn token, enforces the turn's signed scope, and proxies document search/fetch to the MyMemo document API
+- **gateway** (`apps/gateway/`) - control plane; the only service holding BOTH the real `ANTHROPIC_API_KEY` and the read-only KB `DATABASE_URL`. Verifies the per-turn bearer token on every route, proxies the Anthropic Messages endpoints, and serves scope-enforced document search/fetch against the MyMemo KB Postgres
+- **mymemo-docs** (`apps/mymemo-docs/`) - CLI on the sandbox PATH that the agent uses to reach the gateway's document endpoints
 - **@mymemo/llm-token** (`packages/llm-token/`) - shared package
 
 ## Commands
@@ -104,7 +104,7 @@ docker-compose up    # Local development
    - **Identity headers** (`InternalIdentity`): `X-Member-Code` (required), `X-Partner-Code` (required), `X-Team-Code`, `X-Member-Name`, `X-Partner-Name` (all optional)
 2. SSE stream initiated in `chat.route.ts` after body validation (`.strict()`, rejects extra keys) and identity-header validation (401 on missing/invalid)
 3. `chat.controller.ts::complete()` orchestrates the merged request — no upstream API calls
-4. `runSandboxChat` is the sole agent path: creates a fresh per-user E2B sandbox each turn and forwards the turn to its daemon. The optional `sessionId` from the request body is passed through as the daemon's `agent_session_id`; when omitted, the daemon allocates a new session. chat-api mints a short-lived `@mymemo/llm-token` bound to `{userId, sandboxId, requestId}` and sends it (with `LLM_GATEWAY_PUBLIC_URL`) in the turn body. The daemon sets these as `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` on the agent process, so **the sandbox never holds a provider key** — all LLM calls route through `llm-gateway`, which validates the token and injects the real `ANTHROPIC_API_KEY`. The agent accesses the user's documents on demand via the `mymemo-docs` CLI (on PATH in the sandbox template), which calls `document-gateway` with the same per-turn token (sent as `MYMEMO_DOC_GATEWAY_URL` + `MYMEMO_DOC_TOKEN`); the gateway enforces the turn's **signed scope** server-side. Documents are **not** materialized to the sandbox filesystem.
+4. `runSandboxChat` is the sole agent path: creates a fresh per-user E2B sandbox each turn and forwards the turn to its daemon. The optional `sessionId` from the request body is passed through as the daemon's `agent_session_id`; when omitted, the daemon allocates a new session. chat-api mints a short-lived `@mymemo/llm-token` bound to `{userId, sandboxId, requestId}` and sends it (with `GATEWAY_PUBLIC_URL`) in the turn body. The daemon sets these as `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` on the agent process, so **the sandbox never holds a provider key** — all LLM calls route through the `gateway`, which validates the token and injects the real `ANTHROPIC_API_KEY`. The agent accesses the user's documents on demand via the `mymemo-docs` CLI (on PATH in the sandbox template), which calls the same `gateway` with the same per-turn token (sent as `MYMEMO_DOC_GATEWAY_URL` + `MYMEMO_DOC_TOKEN`); the gateway enforces the turn's **signed scope** server-side. The Claude binary and the CLI reach the one merged gateway through two independent env vars that both point at `GATEWAY_PUBLIC_URL` (the binary hits `/v1/messages`, the CLI hits `/v1/documents/*`). Documents are **not** materialized to the sandbox filesystem.
 5. Events emitted via SSE:
    - `text_delta` — `{ text }` payload, one event per streamed token chunk; the client concatenates these to build the full response
    - `done` — `{}` payload, marks end-of-stream after the final `text_delta`
@@ -116,7 +116,9 @@ docker-compose up    # Local development
 
 Identity arrives via `X-*` headers, **not** the JSON body. chat-api does not authenticate users itself; the internal caller (gateway / BFF) is responsible for authenticating the user and forwarding their identity. The body schema uses `.strict()` so any attempt to pass identity in the body is rejected with a 400. This service must therefore only be reachable from trusted internal callers; do not expose `POST /api/v1/chat` directly to untrusted networks.
 
-The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-capable code). It holds no provider key and no document credential — only a short-lived, single-user, signed bearer token whose claims include the turn's document scope. The inbound edges from a sandbox are **sandbox → llm-gateway** and **sandbox → document-gateway**; each gateway holds its real credential + `LLM_TOKEN_SECRET`, should only be reachable from sandboxes, and reaches only its upstream (`api.anthropic.com` / the MyMemo document API). Because scope is signed into the token and enforced by `document-gateway`, a prompt-injected agent cannot read documents outside its turn's scope. chat-api mints the token; both gateways verify it; the daemon never sees `LLM_TOKEN_SECRET`.
+The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-capable code). It holds no provider key and no document credential — only a short-lived, single-user, signed bearer token whose claims include the turn's document scope. The inbound edges from a sandbox are **sandbox → gateway** (for both LLM and document calls); the gateway holds the real credentials + `LLM_TOKEN_SECRET`, should only be reachable from sandboxes, and reaches only its two upstreams (`api.anthropic.com` and the MyMemo KB Postgres). Because scope is signed into the token and enforced by the gateway's document routes, a prompt-injected agent cannot read documents outside its turn's scope. chat-api mints the token; the gateway verifies it; the daemon never sees `LLM_TOKEN_SECRET`.
+
+**Merge tradeoff (be aware):** the LLM proxy and the document reader used to be two separate services (`llm-gateway` + `document-gateway`), each holding exactly one credential. They are now one `gateway` process that holds BOTH `ANTHROPIC_API_KEY` and `DATABASE_URL` and has a single egress identity reaching both Anthropic and the KB Postgres. This is a wider blast radius — a compromise of the gateway now exposes both credentials at once — accepted as the cost of running one deployable control plane instead of two. The token still has no audience/capability claim, so one token is valid on both route families; that was already true when they were separate and is unchanged by the merge.
 
 ### Key Modules
 
@@ -126,7 +128,8 @@ The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-cap
 | `src/features/sandbox-orchestration/` | `runSandboxChat`, sandbox manager, daemon proxy; mints the per-turn LLM token |
 | `src/features/sandbox-agent/` | Sandbox-side agent system prompt builder |
 | `src/config/env.ts` | Environment validation |
-| `apps/llm-gateway/src/index.ts` | Control-plane proxy: verifies token, injects `ANTHROPIC_API_KEY`, forwards to Anthropic |
+| `apps/gateway/src/index.ts` | Merged control plane: one `bearerClaims` token-verify helper; document routes (`/v1/documents/*`, scope-enforced) registered before the catch-all Anthropic proxy (`/v1/messages*`, path-allowlisted, injects `ANTHROPIC_API_KEY`) |
+| `apps/gateway/src/queries.ts` | Parameterized FTS / scope-resolution SQL against the KB Postgres |
 | `packages/llm-token/index.ts` | `mintLlmToken` / `verifyLlmToken` (shared, HMAC-signed) |
 
 ### Chat Scopes
@@ -148,32 +151,23 @@ The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-cap
 Required:
 - `E2B_API_KEY`
 - `DAEMON_AUTH_TOKEN`
-- `LLM_TOKEN_SECRET` — HMAC secret for minting per-turn tokens (shared with both gateways)
-- `LLM_GATEWAY_PUBLIC_URL` — llm-gateway base URL the sandbox agent uses; **must be reachable from inside the E2B sandbox**
-- `DOCUMENT_GATEWAY_PUBLIC_URL` — document-gateway base URL the sandbox agent's `mymemo-docs` CLI uses; **must be reachable from inside the E2B sandbox**
+- `LLM_TOKEN_SECRET` — HMAC secret for minting per-turn tokens (shared with the gateway)
+- `GATEWAY_PUBLIC_URL` — base URL of the merged gateway; the sandbox agent points BOTH the Claude binary (→ `/v1/messages`) and the `mymemo-docs` CLI (→ `/v1/documents/*`) at it. **Must be reachable from inside the E2B sandbox**
 
 Optional:
 - `LOG_LEVEL` (default: `info`)
 - `PORT` (default: 3000)
 - `E2B_TEMPLATE` (default: `sandbox-template-dev`)
 
-### llm-gateway
+### gateway
 
 Required:
 - `ANTHROPIC_API_KEY` — the real provider key; lives **only** in this service
-- `LLM_TOKEN_SECRET` — must match chat-api's
-
-Optional:
-- `UPSTREAM_BASE_URL` (default: `https://api.anthropic.com`)
-- `GATEWAY_PORT` (default: 8081)
-
-### document-gateway
-
-Required:
 - `DATABASE_URL` — read-only connection to the MyMemo KB Postgres; the credential lives **only** in this service
 - `LLM_TOKEN_SECRET` — must match chat-api's
 
 Optional:
+- `UPSTREAM_BASE_URL` (default: `https://api.anthropic.com`)
 - `DB_PASSWORD` — spliced into `DATABASE_URL` when it is passwordless (the form the platform injects)
 - `DB_SSL` (default: on; set `disable` for a local non-TLS Postgres)
-- `DOCUMENT_GATEWAY_PORT` (default: 8082)
+- `GATEWAY_PORT` (default: 8080)

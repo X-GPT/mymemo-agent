@@ -9,7 +9,7 @@ import { mintLlmToken } from "@mymemo/llm-token";
  *     -p 55432:5432 postgres:16
  *   DOC_GATEWAY_IT=1 DB_SSL=disable \
  *   DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/kbtest \
- *   bun test apps/document-gateway/src/index.integration.test.ts
+ *   bun test apps/gateway/src/index.integration.test.ts
  */
 
 const RUN = !!Bun.env.DOC_GATEWAY_IT;
@@ -35,12 +35,17 @@ function hdr(t: string): Record<string, string> {
 	return { authorization: `Bearer ${t}`, "content-type": "application/json" };
 }
 function post(path: string, t: string, body: unknown) {
-	return app.request(path, { method: "POST", headers: hdr(t), body: JSON.stringify(body) });
+	return app.request(path, {
+		method: "POST",
+		headers: hdr(t),
+		body: JSON.stringify(body),
+	});
 }
 
 beforeAll(async () => {
 	if (!RUN) return;
 	Bun.env.LLM_TOKEN_SECRET = SECRET;
+	Bun.env.ANTHROPIC_API_KEY = Bun.env.ANTHROPIC_API_KEY ?? "test-anthropic-key";
 	({ app } = await import("./index"));
 	const { getDb } = await import("./db");
 	const db = getDb();
@@ -72,7 +77,12 @@ beforeAll(async () => {
 	);
 	await db.query(
 		"insert into passage (id, document_id, workspace_id, passage_text, search_tsv, status) values ($1,$2,$3,$4, to_tsvector('simple',$4), 'active')",
-		[PASSAGE, DOC, WS, "machine learning is a subset of artificial intelligence"],
+		[
+			PASSAGE,
+			DOC,
+			WS,
+			"machine learning is a subset of artificial intelligence",
+		],
 	);
 	await db.query(
 		"insert into content_asset (compat_int_id, member_code, kb_document_id) values ($1,$2,$3)",
@@ -89,63 +99,87 @@ beforeAll(async () => {
 	);
 });
 
-describe.skipIf(!RUN)("document-gateway integration (real Postgres)", () => {
-	it("global search returns the FTS hit", async () => {
-		const res = await post("/v1/documents/search", tok({ scope: "global" }), {
-			query: "machine",
+describe.skipIf(!RUN)(
+	"gateway document reader integration (real Postgres)",
+	() => {
+		it("global search returns the FTS hit", async () => {
+			const res = await post("/v1/documents/search", tok({ scope: "global" }), {
+				query: "machine",
+			});
+			expect(res.status).toBe(200);
+			const { documents } = (await res.json()) as {
+				documents: { passageId: string; documentId: string; title: string }[];
+			};
+			expect(documents).toHaveLength(1);
+			expect(documents[0]).toMatchObject({
+				passageId: PASSAGE,
+				documentId: DOC,
+				title: "ML Intro",
+			});
 		});
-		expect(res.status).toBe(200);
-		const { documents } = (await res.json()) as {
-			documents: { passageId: string; documentId: string; title: string }[];
-		};
-		expect(documents).toHaveLength(1);
-		expect(documents[0]).toMatchObject({
-			passageId: PASSAGE,
-			documentId: DOC,
-			title: "ML Intro",
+
+		it("global search misses on a non-matching term", async () => {
+			const res = await post("/v1/documents/search", tok({ scope: "global" }), {
+				query: "quantumzzz",
+			});
+			expect(
+				((await res.json()) as { documents: unknown[] }).documents,
+			).toHaveLength(0);
 		});
-	});
 
-	it("global search misses on a non-matching term", async () => {
-		const res = await post("/v1/documents/search", tok({ scope: "global" }), {
-			query: "quantumzzz",
+		it("fetch returns content clipped to 50k", async () => {
+			const res = await post("/v1/documents/fetch", tok({ scope: "global" }), {
+				documentId: DOC,
+			});
+			expect(res.status).toBe(200);
+			const doc = (await res.json()) as { content: string; title: string };
+			expect(doc.title).toBe("ML Intro");
+			expect(doc.content.length).toBe(50000);
 		});
-		expect(((await res.json()) as { documents: unknown[] }).documents).toHaveLength(0);
-	});
 
-	it("fetch returns content clipped to 50k", async () => {
-		const res = await post("/v1/documents/fetch", tok({ scope: "global" }), {
-			documentId: DOC,
+		it("document scope resolves summaryId and restricts to it (exercises ::bigint + ANY)", async () => {
+			const t = tok({ scope: "document", summaryId: SUMMARY_ID });
+			const res = await post("/v1/documents/search", t, { query: "machine" });
+			expect(
+				((await res.json()) as { documents: unknown[] }).documents,
+			).toHaveLength(1);
+			// fetch in scope ok; out of scope forbidden
+			expect(
+				(await post("/v1/documents/fetch", t, { documentId: DOC })).status,
+			).toBe(200);
+			expect(
+				(await post("/v1/documents/fetch", t, { documentId: "other" })).status,
+			).toBe(403);
 		});
-		expect(res.status).toBe(200);
-		const doc = (await res.json()) as { content: string; title: string };
-		expect(doc.title).toBe("ML Intro");
-		expect(doc.content.length).toBe(50000);
-	});
 
-	it("document scope resolves summaryId and restricts to it (exercises ::bigint + ANY)", async () => {
-		const t = tok({ scope: "document", summaryId: SUMMARY_ID });
-		const res = await post("/v1/documents/search", t, { query: "machine" });
-		expect(((await res.json()) as { documents: unknown[] }).documents).toHaveLength(1);
-		// fetch in scope ok; out of scope forbidden
-		expect((await post("/v1/documents/fetch", t, { documentId: DOC })).status).toBe(200);
-		expect((await post("/v1/documents/fetch", t, { documentId: "other" })).status).toBe(403);
-	});
+		it("collection scope restricts to the collection's documents", async () => {
+			const t = tok({ scope: "collection", collectionId: COLLECTION });
+			const res = await post("/v1/documents/search", t, { query: "machine" });
+			expect(
+				((await res.json()) as { documents: unknown[] }).documents,
+			).toHaveLength(1);
+			expect(
+				(await post("/v1/documents/fetch", t, { documentId: DOC })).status,
+			).toBe(200);
+		});
 
-	it("collection scope restricts to the collection's documents", async () => {
-		const t = tok({ scope: "collection", collectionId: COLLECTION });
-		const res = await post("/v1/documents/search", t, { query: "machine" });
-		expect(((await res.json()) as { documents: unknown[] }).documents).toHaveLength(1);
-		expect((await post("/v1/documents/fetch", t, { documentId: DOC })).status).toBe(200);
-	});
-
-	it("a different workspace sees nothing (the workspace pin)", async () => {
-		const t = mintLlmToken(
-			{ userId: "other-member", sandboxId: "s", requestId: "r", scope: "global" },
-			SECRET,
-		);
-		const res = await post("/v1/documents/search", t, { query: "machine" });
-		expect(((await res.json()) as { documents: unknown[] }).documents).toHaveLength(0);
-		expect((await post("/v1/documents/fetch", t, { documentId: DOC })).status).toBe(404);
-	});
-});
+		it("a different workspace sees nothing (the workspace pin)", async () => {
+			const t = mintLlmToken(
+				{
+					userId: "other-member",
+					sandboxId: "s",
+					requestId: "r",
+					scope: "global",
+				},
+				SECRET,
+			);
+			const res = await post("/v1/documents/search", t, { query: "machine" });
+			expect(
+				((await res.json()) as { documents: unknown[] }).documents,
+			).toHaveLength(0);
+			expect(
+				(await post("/v1/documents/fetch", t, { documentId: DOC })).status,
+			).toBe(404);
+		});
+	},
+);

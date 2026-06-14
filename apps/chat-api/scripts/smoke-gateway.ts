@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /**
- * Smoke test for the LLM-gateway credential path — no E2B, no sandbox required.
+ * Smoke test for the gateway's LLM credential path — no E2B, no sandbox required.
  *
- * Boots apps/llm-gateway locally and verifies the legs that no unit test covers,
+ * Boots apps/gateway locally and verifies the legs that no unit test covers,
  * against the REAL Anthropic API:
  *
  *   Layer A — gateway ⇄ Anthropic
@@ -35,7 +35,7 @@ const MODEL = argValue("--model", "claude-sonnet-4-6");
 const RUN_BINARY = !flags.has("--no-binary");
 const SECRET = Bun.env.LLM_TOKEN_SECRET || `smoke-${crypto.randomUUID()}`;
 const BASE = `http://localhost:${PORT}`;
-const GATEWAY_ENTRY = `${import.meta.dir}/../../llm-gateway/src/index.ts`;
+const GATEWAY_ENTRY = `${import.meta.dir}/../../gateway/src/index.ts`;
 
 const apiKey = Bun.env.ANTHROPIC_API_KEY;
 if (!apiKey) {
@@ -128,6 +128,11 @@ const gateway = Bun.spawn(["bun", "run", GATEWAY_ENTRY], {
 		ANTHROPIC_API_KEY: apiKey,
 		LLM_TOKEN_SECRET: SECRET,
 		GATEWAY_PORT: String(PORT),
+		// The merged gateway also validates DATABASE_URL at boot. This smoke test
+		// only exercises the LLM proxy path, which never touches the DB (the client
+		// is lazy), so a placeholder URL is enough to get past env validation.
+		DATABASE_URL: Bun.env.DATABASE_URL || "postgresql://smoke@localhost/smoke",
+		DB_SSL: Bun.env.DB_SSL || "disable",
 	},
 	stdout: "pipe",
 	stderr: "pipe",
@@ -147,7 +152,7 @@ drain(gateway.stdout);
 drain(gateway.stderr);
 
 async function run(): Promise<number> {
-	console.log(`\n▶ booting llm-gateway on :${PORT} …`);
+	console.log(`\n▶ booting gateway on :${PORT} …`);
 	if (!(await waitForHealth())) {
 		console.error(
 			`✗ gateway did not become healthy.\n--- gateway logs ---\n${gwLog}`,
