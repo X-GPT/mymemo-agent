@@ -55,8 +55,7 @@ describe("runSandboxChat", () => {
 		Bun.env.E2B_API_KEY = "test-e2b-key";
 		Bun.env.DAEMON_AUTH_TOKEN = "test-daemon-auth-token";
 		Bun.env.LLM_TOKEN_SECRET = "test-llm-token-secret";
-		Bun.env.LLM_GATEWAY_PUBLIC_URL = "https://gateway.test";
-		Bun.env.DOCUMENT_GATEWAY_PUBLIC_URL = "https://docs.test";
+		Bun.env.GATEWAY_PUBLIC_URL = "https://gateway.test";
 		({ runSandboxChat } = await import("./sandbox-orchestration"));
 		singletonModule = await import("./singleton");
 		proxyModule = await import("./sandbox-proxy");
@@ -112,6 +111,7 @@ describe("runSandboxChat", () => {
 			"forwardChatTurnToSandbox",
 		).mockImplementation(async (opts) => {
 			expect(opts.turnRequest.llm_base_url).toBe("https://gateway.test");
+			expect(opts.turnRequest.doc_gateway_url).toBe("https://gateway.test");
 			const verified = verifyLlmToken(
 				opts.turnRequest.llm_token,
 				"test-llm-token-secret",

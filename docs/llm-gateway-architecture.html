@@ -23,7 +23,7 @@
     --red-dim:rgba(204,58,46,.10);
     --green:#0f8a59;     /* the bearer token */
     --green-dim:rgba(15,138,89,.10);
-    --amber:#a9690a;     /* the real document-API key (document-gateway) */
+    --amber:#a9690a;     /* the read-only KB database URL (gateway) */
     --amber-dim:rgba(169,105,10,.12);
     --mono:"IBM Plex Mono",ui-monospace,monospace;
     --sans:"Archivo",system-ui,sans-serif;
@@ -211,11 +211,11 @@
       never the <span class="k">key</span>.
     </h1>
     <p class="sub rv" style="--d:.18s">
-      Every real credential moves out of the E2B sandbox into dedicated control planes — an <b>llm-gateway</b>
-      for the model and a <b>document-gateway</b> for the user's documents. chat-api mints one short-lived,
-      <b>scope-bound</b> bearer token per turn; the gateways are the <b>only</b> places the real
+      Every real credential moves out of the E2B sandbox into a single dedicated control plane — one <b>gateway</b>
+      that serves both the model and the user's documents. chat-api mints one short-lived,
+      <b>scope-bound</b> bearer token per turn; the gateway is the <b>only</b> place the real
       <code style="font-family:var(--mono);color:var(--red)">ANTHROPIC_API_KEY</code> and
-      <code style="font-family:var(--mono);color:var(--amber)">DATABASE_URL</code> live.
+      <code style="font-family:var(--mono);color:var(--amber)">DATABASE_URL</code> live — now co-located in one process.
     </p>
   </header>
 
@@ -240,13 +240,8 @@
           </div>
 
           <div class="node">
-            <div class="nh"><span class="nm">llm-gateway</span><span class="badge key">ANTHROPIC_API_KEY</span></div>
-            <div class="role">Stateless service. Verifies the bearer token, injects the real <code>x-api-key</code>, and proxies a strict path allowlist (<code>/v1/messages</code>, <code>/v1/messages/count_tokens</code>) to Anthropic. The only provider-key holder.</div>
-          </div>
-
-          <div class="node">
-            <div class="nh"><span class="nm">document-gateway</span><span class="badge db">DATABASE_URL</span></div>
-            <div class="role">Stateless service. Verifies the same token, <b>enforces its signed scope</b> (global / collection / document) server-side, pins every call to the token's <code>userId</code> (the KB <code>workspace_id</code>), and reads the user's MyMemo knowledge base (Postgres) directly — FTS over passages. The only holder of the read-only <code>DATABASE_URL</code>.</div>
+            <div class="nh"><span class="nm">gateway</span><span><span class="badge key">ANTHROPIC_API_KEY</span> <span class="badge db">DATABASE_URL</span></span></div>
+            <div class="role">Stateless service, two jobs behind one token-verify. <b>LLM proxy:</b> injects the real <code>x-api-key</code> and proxies a strict path allowlist (<code>/v1/messages</code>, <code>/v1/messages/count_tokens</code>) to Anthropic. <b>Document reader:</b> on <code>/v1/documents/*</code> it <b>enforces the signed scope</b> (global / collection / document) server-side, pins every call to the token's <code>userId</code> (the KB <code>workspace_id</code>), and reads the MyMemo knowledge base (Postgres) directly — FTS over passages. The document routes are registered <b>before</b> the catch-all Anthropic proxy. The only holder of <code>ANTHROPIC_API_KEY</code> <em>and</em> the read-only <code>DATABASE_URL</code> — both now live in this one process.</div>
           </div>
         </div>
 
@@ -267,23 +262,23 @@
 
       <div class="boundary-note">
         <span class="tag">trust boundary</span>
-        <div>The agent has <b>nowhere else to reach</b> — srt's network allowlist denies every egress except the two gateway hosts. Its only token is a 10-minute, single-user <span style="color:var(--green);font-weight:600">Bearer token</span> whose <b>scope is signed in</b>, so a prompt-injected agent can't widen its document access, has nothing worth stealing, <em>and</em> nowhere to send a stolen secret.</div>
+        <div>The agent has <b>nowhere else to reach</b> — srt's network allowlist denies every egress except the single gateway host. Its only token is a 10-minute, single-user <span style="color:var(--green);font-weight:600">Bearer token</span> whose <b>scope is signed in</b>, so a prompt-injected agent can't widen its document access, has nothing worth stealing, <em>and</em> nowhere to send a stolen secret.</div>
       </div>
       <div class="external">
-        <span class="dot"></span>EXTERNAL &nbsp;·&nbsp; <b>api.anthropic.com</b> — reached only by llm-gateway (with the injected <span style="color:var(--red)">x-api-key</span>) &nbsp;·&nbsp; <b>MyMemo KB Postgres (RDS)</b> — read only by document-gateway (with <span style="color:var(--amber)">DATABASE_URL</span>)
+        <span class="dot"></span>EXTERNAL &nbsp;·&nbsp; <b>api.anthropic.com</b> — reached only by the gateway (with the injected <span style="color:var(--red)">x-api-key</span>) &nbsp;·&nbsp; <b>MyMemo KB Postgres (RDS)</b> — read only by the gateway (with <span style="color:var(--amber)">DATABASE_URL</span>)
       </div>
     </div>
 
     <div class="credflow rv">
       <div class="cf k">
-        <h4>● the real keys — contained</h4>
-        <p>Each lives on one service, is used in one place, and crosses one external edge.</p>
-        <div class="path"><span class="hot">llm-gateway</span> &nbsp;set x-api-key&nbsp; → &nbsp;api.anthropic.com<br/><span class="hot">document-gateway</span> &nbsp;DATABASE_URL&nbsp; → &nbsp;MyMemo KB Postgres</div>
+        <h4>● the real keys — co-located</h4>
+        <p>Both now live on the one gateway. Each is still used in one place and crosses one external edge — but a single process holds both, a wider blast radius than two services.</p>
+        <div class="path"><span class="hot">gateway</span> &nbsp;set x-api-key&nbsp; → &nbsp;api.anthropic.com<br/><span class="hot">gateway</span> &nbsp;DATABASE_URL&nbsp; → &nbsp;MyMemo KB Postgres</div>
       </div>
       <div class="cf t">
         <h4>● the token — travels</h4>
-        <p>Minted with scope, carried in the turn body, set as agent env, presented as Bearer to both gateways, verified, discarded.</p>
-        <div class="path"><span class="hot">chat-api</span> → daemon → agent → <span class="hot">llm-gateway</span> / <span class="hot">document-gateway</span> ✓</div>
+        <p>Minted with scope, carried in the turn body, set as agent env, presented as Bearer to the gateway (both route families), verified, discarded.</p>
+        <div class="path"><span class="hot">chat-api</span> → daemon → agent → <span class="hot">gateway</span> (<code style="font-family:var(--mono)">/v1/messages</code> · <code style="font-family:var(--mono)">/v1/documents/*</code>) ✓</div>
       </div>
     </div>
   </section>
@@ -308,7 +303,7 @@
       </div></div>
       <div class="step"><div class="num"></div><div class="body">
         <div class="t">Mint the scope-bound token</div>
-        <div class="d">HMAC-sign <code class="tok">{ userId, sandboxId, requestId, scope, collectionId?, summaryId?, exp:+10m }</code> with <code>LLM_TOKEN_SECRET</code> (<code>packages/llm-token</code>). One token serves both gateways.</div>
+        <div class="d">HMAC-sign <code class="tok">{ userId, sandboxId, requestId, scope, collectionId?, summaryId?, exp:+10m }</code> with <code>LLM_TOKEN_SECRET</code> (<code>packages/llm-token</code>). One token serves both route families on the gateway.</div>
       </div></div>
       <div class="step"><div class="num"></div><div class="body">
         <div class="t">chat-api → daemon</div>
@@ -319,12 +314,12 @@
         <div class="d">Daemon spawns <code>bun agent.js</code> under <a href="https://github.com/anthropic-experimental/sandbox-runtime" target="_blank" rel="noopener">srt</a> (bwrap on Linux · sandbox-exec on macOS) — filesystem allowlist for the workspace cwd, network allowlist for the gateway hosts only. Env: <code class="tok">ANTHROPIC_BASE_URL</code>/<code class="tok">ANTHROPIC_AUTH_TOKEN</code> + <code class="tok">MYMEMO_DOC_GATEWAY_URL</code>/<code class="tok">MYMEMO_DOC_TOKEN</code>, <b>no</b> <code class="key">ANTHROPIC_API_KEY</code>, <b>no</b> <code class="key">DATABASE_URL</code>.</div>
       </div></div>
       <div class="step"><div class="num"></div><div class="body">
-        <div class="t">agent → document-gateway (on demand)</div>
-        <div class="d">When it needs documents the agent runs <code>mymemo-docs search</code>/<code>fetch</code> (a CLI on its <code>PATH</code>) → <code>document-gateway</code> verifies the token, <b>enforces the signed scope</b>, and reads the KB Postgres (FTS over passages) with the read-only <code class="key">DATABASE_URL</code>. Nothing is materialized to the sandbox FS.</div>
+        <div class="t">agent → gateway · documents (on demand)</div>
+        <div class="d">When it needs documents the agent runs <code>mymemo-docs search</code>/<code>fetch</code> (a CLI on its <code>PATH</code>) → the <code>gateway</code>'s <code>/v1/documents/*</code> routes verify the token, <b>enforce the signed scope</b>, and read the KB Postgres (FTS over passages) with the read-only <code class="key">DATABASE_URL</code>. Nothing is materialized to the sandbox FS.</div>
       </div></div>
       <div class="step"><div class="num"></div><div class="body">
-        <div class="t">claude → llm-gateway</div>
-        <div class="d">The binary calls <code>${ANTHROPIC_BASE_URL}/v1/messages</code> with <code class="tok">Authorization: Bearer</code>. The gateway verifies (signature + expiry + shape), injects <code class="key">x-api-key</code>, and proxies to Anthropic.</div>
+        <div class="t">claude → gateway · messages</div>
+        <div class="d">The binary calls <code>${ANTHROPIC_BASE_URL}/v1/messages</code> with <code class="tok">Authorization: Bearer</code>. The gateway's catch-all proxy verifies (signature + expiry + shape), checks the path allowlist, injects <code class="key">x-api-key</code>, and proxies to Anthropic.</div>
       </div></div>
       <div class="step"><div class="num"></div><div class="body">
         <div class="t">Stream back</div>
@@ -346,8 +341,8 @@
       <div class="ls"><div class="stage">mint</div><div class="who">chat-api</div><div class="what">HMAC-SHA256 over claims incl. <b>scope</b>; 10-min TTL.</div><div class="arrow">→</div></div>
       <div class="ls"><div class="stage">carry</div><div class="who">/turn body</div><div class="what">As <code style="font-family:var(--mono);font-size:11px">llm_token</code> + <code style="font-family:var(--mono);font-size:11px">llm_base_url</code> + <code style="font-family:var(--mono);font-size:11px">doc_gateway_url</code>.</div><div class="arrow">→</div></div>
       <div class="ls"><div class="stage">inject env</div><div class="who">daemon</div><div class="what">Set on the agent as <code style="font-family:var(--mono);font-size:11px">ANTHROPIC_AUTH_TOKEN</code> + <code style="font-family:var(--mono);font-size:11px">MYMEMO_DOC_TOKEN</code>.</div><div class="arrow">→</div></div>
-      <div class="ls"><div class="stage">present</div><div class="who">claude</div><div class="what"><code style="font-family:var(--mono);font-size:11px">Authorization: Bearer</code> to either gateway.</div><div class="arrow">→</div></div>
-      <div class="ls"><div class="stage">verify</div><div class="who">gateways</div><div class="what">Sig + expiry + shape → swap for the real key; document-gateway also enforces the scope.</div></div>
+      <div class="ls"><div class="stage">present</div><div class="who">claude</div><div class="what"><code style="font-family:var(--mono);font-size:11px">Authorization: Bearer</code> to the gateway (either route family).</div><div class="arrow">→</div></div>
+      <div class="ls"><div class="stage">verify</div><div class="who">gateway</div><div class="what">Sig + expiry + shape → swap for the real key; the document routes also enforce the scope.</div></div>
     </div>
   </section>
 
@@ -373,18 +368,11 @@
           <td>→ E2B daemon</td>
         </tr>
         <tr>
-          <td class="comp">llm-gateway</td>
+          <td class="comp">gateway</td>
           <td class="c only">✓ only here</td>
-          <td class="c no">✕</td>
-          <td class="c yes">✓ <span class="sm">verify</span></td>
-          <td>← sandboxes · → anthropic</td>
-        </tr>
-        <tr>
-          <td class="comp">document-gateway</td>
-          <td class="c no">✕</td>
           <td class="c only">✓ only here</td>
           <td class="c yes">✓ <span class="sm">verify + enforce scope</span></td>
-          <td>← sandboxes · → KB Postgres</td>
+          <td>← sandboxes · → anthropic + KB Postgres</td>
         </tr>
         <tr>
           <td class="comp">sandbox-daemon</td>
@@ -398,7 +386,7 @@
           <td class="c no">✕</td>
           <td class="c no">✕</td>
           <td class="c no">✕</td>
-          <td>→ llm-gateway + document-gateway only <span class="sm">(srt egress allowlist)</span></td>
+          <td>→ gateway only <span class="sm">(srt egress allowlist)</span></td>
         </tr>
       </tbody>
     </table>
@@ -419,10 +407,10 @@
    └─ <span class="b">bun agent.js</span>          <span class="g"># env: ANTHROPIC_* + MYMEMO_DOC_* (tokens only, no keys)</span>
       └─ <span class="b">claude</span>             <span class="c"># Agent SDK · </span><span class="g">Authorization: Bearer</span>
          ├─ Bash / Grep / Read   <span class="c"># tool subprocesses</span>
-         ├─ <span class="a">mymemo-docs</span>          <span class="c"># CLI on PATH · search/fetch via document-gateway</span>
-         ├─ <span class="g">✓ llm-gateway</span>        <span class="c"># model calls — allowed outbound</span>
-         ├─ <span class="g">✓ document-gateway</span>   <span class="c"># document calls — allowed outbound</span>
-         └─ <span class="r">✗ everywhere else</span>     <span class="c"># anthropic, KB Postgres, public internet — denied</span>
+         ├─ <span class="a">mymemo-docs</span>          <span class="c"># CLI on PATH · search/fetch via gateway /v1/documents/*</span>
+         ├─ <span class="g">✓ gateway /v1/messages</span>   <span class="c"># model calls — allowed outbound</span>
+         ├─ <span class="g">✓ gateway /v1/documents</span>  <span class="c"># document calls — allowed outbound (same host)</span>
+         └─ <span class="r">✗ everywhere else</span>      <span class="c"># anthropic, KB Postgres, public internet — denied</span>
     </div>
   </section>
 
@@ -432,28 +420,28 @@
       <div class="n">06</div>
       <div>
         <h2>Runtime variants</h2>
-        <p>Same architecture, three deployment shapes — only the sandbox runtime and the gateways' locality change.</p>
+        <p>Same architecture, three deployment shapes — only the sandbox runtime and the gateway's locality change.</p>
       </div>
     </div>
     <table class="mtx rv">
       <thead>
-        <tr><th>Environment</th><th>Sandbox runtime</th><th>gateways (llm + doc)</th><th>Agent isolation</th></tr>
+        <tr><th>Environment</th><th>Sandbox runtime</th><th>gateway (llm + doc, one service)</th><th>Agent isolation</th></tr>
       </thead>
       <tbody>
         <tr>
           <td class="comp">production</td>
           <td>real E2B · Firecracker microVM</td>
-          <td>separate services · public HTTPS</td>
+          <td>one service · public HTTPS</td>
           <td>srt (bwrap) + egress allowlist</td>
         </tr>
         <tr>
           <td class="comp">E2B integration test</td>
           <td>real E2B</td>
-          <td>sibling processes inside the sandbox · loopback</td>
+          <td>sibling process inside the sandbox · loopback</td>
           <td>srt (bwrap) + egress allowlist</td>
         </tr>
         <tr>
-          <td class="comp">local dev · agent + gateways</td>
+          <td class="comp">local dev · agent + gateway</td>
           <td>none — bun on host</td>
           <td>bun on host · localhost</td>
           <td>(skipped — no sandbox runtime)</td>
@@ -461,7 +449,7 @@
       </tbody>
     </table>
     <p style="margin-top:14px;font-size:13.5px;color:var(--ink-soft);max-width:680px">
-      The same code path runs in all three — the toggle is <code style="font-family:var(--mono);background:var(--paper-2);border:1px solid var(--line);border-radius:3px;padding:1px 5px">LLM_GATEWAY_PUBLIC_URL</code> + <code style="font-family:var(--mono);background:var(--paper-2);border:1px solid var(--line);border-radius:3px;padding:1px 5px">DOCUMENT_GATEWAY_PUBLIC_URL</code> (loopback vs. public URL) plus the choice of sandbox provider. chat-api always mints the token; the gateways always verify it.
+      The same code path runs in all three — the toggle is <code style="font-family:var(--mono);background:var(--paper-2);border:1px solid var(--line);border-radius:3px;padding:1px 5px">GATEWAY_PUBLIC_URL</code> (loopback vs. public URL) plus the choice of sandbox provider. The Claude binary and the <code style="font-family:var(--mono)">mymemo-docs</code> CLI both point at it. chat-api always mints the token; the gateway always verifies it.
     </p>
   </section>
 
@@ -482,7 +470,7 @@
     <a href="https://github.com/X-GPT/chat-api/issues/114" target="_blank" rel="noopener">#114</a>
     <br/>NOTE — agent isolation migrates from raw <code style="font-family:var(--mono)">bwrap</code> to <a href="https://github.com/anthropic-experimental/sandbox-runtime" target="_blank" rel="noopener">srt</a> alongside #103 (adds the egress allowlist). SDK pinned at <code style="font-family:var(--mono)">@anthropic-ai/claude-agent-sdk@0.2.97</code>.
     <div class="pills">
-      <span>apps/chat-api</span><span>apps/llm-gateway</span><span>apps/document-gateway</span><span>apps/sandbox-daemon</span><span>packages/llm-token</span>
+      <span>apps/chat-api</span><span>apps/gateway</span><span>apps/sandbox-daemon</span><span>apps/mymemo-docs</span><span>packages/llm-token</span>
     </div>
   </footer>
 

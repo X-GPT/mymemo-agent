@@ -9,46 +9,30 @@ services:
     env_file:
       - ./apps/chat-api/.env
     depends_on:
-      - llm-gateway
-      - document-gateway
+      - gateway
     restart: always
     networks:
       - mymemo-network
 
-  # Control plane: the only service holding the real provider key. Sandboxed
-  # agents reach it via ANTHROPIC_BASE_URL with a short-lived bearer token.
-  # Note: LLM_GATEWAY_PUBLIC_URL (set for chat-api) must resolve to an address
-  # reachable from inside the E2B sandbox, not just this compose network.
-  llm-gateway:
-    container_name: llm-gateway
-    build:
-      context: .
-      dockerfile: apps/llm-gateway/Dockerfile
-    ports:
-      - 8081:8081
-    env_file:
-      - ./apps/llm-gateway/.env
-    restart: always
-    networks:
-      - mymemo-network
-
-  # Control plane: the only service holding the read-only KB DATABASE_URL.
-  # Sandboxed agents reach it via MYMEMO_DOC_GATEWAY_URL with the same per-turn
-  # bearer token; it verifies the token, enforces the signed scope, and reads
-  # the MyMemo KB Postgres (FTS) directly.
+  # Control plane: the single service holding BOTH the real provider key
+  # (ANTHROPIC_API_KEY) and the read-only KB DATABASE_URL. Sandboxed agents reach
+  # it with one short-lived, scope-bound bearer token — the Claude binary via
+  # ANTHROPIC_BASE_URL (→ /v1/messages, proxied to Anthropic) and the mymemo-docs
+  # CLI via MYMEMO_DOC_GATEWAY_URL (→ /v1/documents/*, scope enforced server-side,
+  # reads the MyMemo KB Postgres / FTS directly).
   # Note: DATABASE_URL must point at a Postgres reachable from this service (the
   # staging RDS is private — needs an in-VPC host or tunnel), and
-  # DOCUMENT_GATEWAY_PUBLIC_URL (set for chat-api) must resolve to an address
-  # reachable from inside the E2B sandbox, not just this compose network.
-  document-gateway:
-    container_name: document-gateway
+  # GATEWAY_PUBLIC_URL (set for chat-api) must resolve to an address reachable
+  # from inside the E2B sandbox, not just this compose network.
+  gateway:
+    container_name: gateway
     build:
       context: .
-      dockerfile: apps/document-gateway/Dockerfile
+      dockerfile: apps/gateway/Dockerfile
     ports:
-      - 8082:8082
+      - 8080:8080
     env_file:
-      - ./apps/document-gateway/.env
+      - ./apps/gateway/.env
     restart: always
     networks:
       - mymemo-network

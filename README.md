@@ -11,9 +11,8 @@ architecture and trust boundaries.
 |-----|----------|------|
 | **chat-api** | `apps/chat-api/` | AI chat service; orchestrates a per-user E2B sandbox per turn |
 | **sandbox-daemon** | `apps/sandbox-daemon/` | In-sandbox HTTP daemon; bundled and shipped into E2B, spawns the agent per turn |
-| **llm-gateway** | `apps/llm-gateway/` | Control plane; the only service holding the real `ANTHROPIC_API_KEY`. Verifies the per-turn token and proxies to Anthropic |
-| **document-gateway** | `apps/document-gateway/` | Control plane; verifies the per-turn token, enforces its signed scope, and proxies document search/fetch |
-| **mymemo-docs** | `apps/mymemo-docs/` | CLI on the sandbox PATH that the agent uses to reach the document-gateway |
+| **gateway** | `apps/gateway/` | Control plane; the only service holding the real `ANTHROPIC_API_KEY` and the read-only KB `DATABASE_URL`. Verifies the per-turn token, proxies to Anthropic, and serves scope-enforced document search/fetch |
+| **mymemo-docs** | `apps/mymemo-docs/` | CLI on the sandbox PATH that the agent uses to reach the gateway's document endpoints |
 
 Shared libraries live under `packages/` (e.g. `@mymemo/llm-token`).
 
@@ -33,8 +32,7 @@ See [apps/chat-api/README.md](./apps/chat-api/README.md) for chat-api documentat
 ├── apps/                   # Deployable applications
 │   ├── chat-api/           # AI chat service (orchestrator)
 │   ├── sandbox-daemon/     # In-sandbox daemon shipped into E2B
-│   ├── llm-gateway/        # Anthropic proxy (holds the provider key)
-│   ├── document-gateway/   # Scoped document proxy
+│   ├── gateway/            # Control plane: Anthropic proxy + scoped document reader
 │   └── mymemo-docs/        # In-sandbox docs CLI
 ├── packages/               # Shared libraries (e.g. @mymemo/llm-token)
 ├── AGENTS.md               # Architecture & agent guidance

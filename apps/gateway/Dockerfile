@@ -21,12 +21,12 @@ RUN cd /temp/prod && bun install --frozen-lockfile --production
 # Final release image
 FROM base AS release
 COPY --from=install /temp/prod/node_modules node_modules
-COPY apps/document-gateway/src apps/document-gateway/src
-COPY apps/document-gateway/package.json apps/document-gateway/tsconfig.json apps/document-gateway/
+COPY apps/gateway/src apps/gateway/src
+COPY apps/gateway/package.json apps/gateway/tsconfig.json apps/gateway/
 COPY packages/llm-token packages/llm-token
 COPY package.json .
 
-WORKDIR /usr/src/app/apps/document-gateway
+WORKDIR /usr/src/app/apps/gateway
 USER bun
-EXPOSE 8082/tcp
+EXPOSE 8080/tcp
 ENTRYPOINT [ "bun", "run", "src/index.ts" ]

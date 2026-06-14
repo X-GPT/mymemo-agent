@@ -81,11 +81,11 @@ export async function runSandboxChat(
 				message: query,
 				agent_session_id: sessionId ?? undefined,
 				system_prompt: systemPrompt,
-				llm_base_url: apiEnv.LLM_GATEWAY_PUBLIC_URL,
-				doc_gateway_url: apiEnv.DOCUMENT_GATEWAY_PUBLIC_URL,
-				// One per-turn capability token. The llm-gateway uses
-				// {userId,sandboxId,requestId}; the document-gateway additionally
-				// enforces the signed scope. The daemon sets it as both the LLM and
+				llm_base_url: apiEnv.GATEWAY_PUBLIC_URL,
+				doc_gateway_url: apiEnv.GATEWAY_PUBLIC_URL,
+				// One per-turn capability token. The gateway's LLM proxy uses
+				// {userId,sandboxId,requestId}; its document routes additionally
+				// enforce the signed scope. The daemon sets it as both the LLM and
 				// the document bearer token on the agent.
 				llm_token: mintLlmToken(
 					{

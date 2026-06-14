@@ -5,7 +5,7 @@ function parsePort(value: string | undefined, fallback: number): number {
 	const n = Number(value);
 	invariant(
 		Number.isInteger(n) && n > 0 && n < 65536,
-		`DOCUMENT_GATEWAY_PORT must be an integer in 1..65535, got: ${value}`,
+		`GATEWAY_PORT must be an integer in 1..65535, got: ${value}`,
 	);
 	return n;
 }
@@ -31,18 +31,22 @@ function withSsl(url: string, enabled: boolean): string {
 }
 
 /**
- * Environment for the document gateway — the trusted control plane that reads
- * the MyMemo knowledge base directly. This is the only service here that holds
- * the database credential; keep its surface tiny. Validated at module load.
+ * Environment for the merged gateway — the single control plane for sandboxed
+ * agents. This is the only service that holds BOTH the real provider key
+ * (ANTHROPIC_API_KEY) and the read-only KB credential (DATABASE_URL); keep its
+ * surface tiny. Validated at module load.
  *
- * Uses a dedicated DOCUMENT_GATEWAY_PORT (not the generic PORT) so it never
- * collides with another co-located service reading the same injected env.
+ * Uses a dedicated GATEWAY_PORT (not the generic PORT) so it never collides with
+ * another co-located service reading the same injected env.
  */
 export const gwEnv = (() => {
-	invariant(Bun.env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
+	invariant(Bun.env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY is required");
 	invariant(Bun.env.DATABASE_URL, "DATABASE_URL is required");
+	invariant(Bun.env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
 
 	return {
+		// The real provider key — injected as x-api-key on the Anthropic proxy.
+		ANTHROPIC_API_KEY: Bun.env.ANTHROPIC_API_KEY,
 		// Shared with chat-api (which mints the per-turn token) so we can verify it.
 		LLM_TOKEN_SECRET: Bun.env.LLM_TOKEN_SECRET,
 		// Read-only connection to the KB Postgres (the same RDS the platform uses).
@@ -52,6 +56,10 @@ export const gwEnv = (() => {
 			withPassword(Bun.env.DATABASE_URL, Bun.env.DB_PASSWORD),
 			Bun.env.DB_SSL !== "disable",
 		),
-		DOCUMENT_GATEWAY_PORT: parsePort(Bun.env.DOCUMENT_GATEWAY_PORT, 8082),
+		// Trailing slash stripped so `${base}${path}` never yields a double slash.
+		UPSTREAM_BASE_URL: (
+			Bun.env.UPSTREAM_BASE_URL || "https://api.anthropic.com"
+		).replace(/\/+$/, ""),
+		GATEWAY_PORT: parsePort(Bun.env.GATEWAY_PORT, 8080),
 	} as const;
 })();
