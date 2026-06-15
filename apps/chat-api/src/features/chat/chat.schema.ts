@@ -16,11 +16,12 @@ export const ChatBodyRequest = z
 		collectionId: z.string().max(MAX_IDENTIFIER_LENGTH).nullish(),
 		summaryId: z.string().max(MAX_IDENTIFIER_LENGTH).nullish(),
 
-		// Daemon-managed conversation session. When omitted, the daemon
-		// allocates a new session; when present, the daemon resumes that
-		// session. Clients are responsible for persisting the latest
-		// sessionId emitted via the `session_id` SSE event.
-		sessionId: z.string().min(1).max(MAX_IDENTIFIER_LENGTH).optional(),
+		// Product-visible conversation thread id. When omitted, chat-api
+		// generates one and emits it via the `conversation_id` SSE event;
+		// clients persist it and send it back to continue the same thread.
+		// This is NOT the Claude SDK resume state — that is `agentSessionId`,
+		// managed server-side and never accepted from the client.
+		conversationId: z.string().min(1).max(MAX_IDENTIFIER_LENGTH).optional(),
 	})
 	.strict();
 export type ChatBodyRequest = z.infer<typeof ChatBodyRequest>;

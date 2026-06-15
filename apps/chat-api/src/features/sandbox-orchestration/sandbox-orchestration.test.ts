@@ -32,10 +32,10 @@ function makeOptions(
 		scope: "general" as const,
 		collectionId: null,
 		summaryId: null,
-		sessionId: null,
+		agentSessionId: null,
 		onTextDelta: async () => {},
 		onTextEnd: async () => {},
-		onSessionId: async () => {},
+		onAgentSessionId: async () => {},
 		onSandboxId: async () => {},
 		logger: silentLogger,
 		...overrides,
@@ -124,7 +124,7 @@ describe("runSandboxChat", () => {
 		await runSandboxChat(makeOptions());
 	});
 
-	it("forwards request sessionId as agent_session_id", async () => {
+	it("forwards agentSessionId as agent_session_id", async () => {
 		spyForwardTurn = spyOn(
 			proxyModule,
 			"forwardChatTurnToSandbox",
@@ -132,10 +132,10 @@ describe("runSandboxChat", () => {
 			expect(opts.turnRequest.agent_session_id).toBe("client-session");
 		});
 
-		await runSandboxChat(makeOptions({ sessionId: "client-session" }));
+		await runSandboxChat(makeOptions({ agentSessionId: "client-session" }));
 	});
 
-	it("omits agent_session_id when no sessionId provided", async () => {
+	it("omits agent_session_id when no agentSessionId provided", async () => {
 		spyForwardTurn = spyOn(
 			proxyModule,
 			"forwardChatTurnToSandbox",
@@ -143,7 +143,7 @@ describe("runSandboxChat", () => {
 			expect(opts.turnRequest.agent_session_id).toBeUndefined();
 		});
 
-		await runSandboxChat(makeOptions({ sessionId: null }));
+		await runSandboxChat(makeOptions({ agentSessionId: null }));
 	});
 
 	it("always creates a fresh sandbox for the user", async () => {
@@ -190,7 +190,7 @@ describe("runSandboxChat", () => {
 		expect(received).toEqual(["sbx-123"]);
 	});
 
-	it("surfaces daemon-emitted session_id via callback", async () => {
+	it("surfaces daemon-emitted session id via onAgentSessionId callback", async () => {
 		const received: string[] = [];
 		spyForwardTurn = spyOn(
 			proxyModule,
@@ -201,7 +201,7 @@ describe("runSandboxChat", () => {
 
 		await runSandboxChat(
 			makeOptions({
-				onSessionId: async (id) => {
+				onAgentSessionId: async (id) => {
 					received.push(id);
 				},
 			}),

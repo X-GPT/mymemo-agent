@@ -20,10 +20,11 @@ export interface RunSandboxChatOptions {
 	scope: ChatMessagesScope;
 	collectionId: string | null;
 	summaryId: string | null;
-	sessionId: string | null;
+	/** Claude SDK resume state. Null starts a fresh agent session. */
+	agentSessionId: string | null;
 	onTextDelta: (text: string) => Promise<void>;
 	onTextEnd: () => Promise<void>;
-	onSessionId: (sessionId: string) => Promise<void>;
+	onAgentSessionId: (agentSessionId: string) => Promise<void>;
 	onSandboxId: (sandboxId: string) => Promise<void>;
 	logger: ChatLogger;
 }
@@ -39,10 +40,10 @@ export async function runSandboxChat(
 		scope,
 		collectionId,
 		summaryId,
-		sessionId,
+		agentSessionId,
 		onTextDelta,
 		onTextEnd,
-		onSessionId,
+		onAgentSessionId,
 		onSandboxId,
 		logger,
 	} = options;
@@ -79,7 +80,7 @@ export async function runSandboxChat(
 				collection_id: collectionId ?? undefined,
 				summary_id: summaryId ?? undefined,
 				message: query,
-				agent_session_id: sessionId ?? undefined,
+				agent_session_id: agentSessionId ?? undefined,
 				system_prompt: systemPrompt,
 				llm_base_url: apiEnv.GATEWAY_PUBLIC_URL,
 				doc_gateway_url: apiEnv.GATEWAY_PUBLIC_URL,
@@ -106,7 +107,9 @@ export async function runSandboxChat(
 				turnRequest,
 				onTextDelta,
 				onTextEnd,
-				onSessionId,
+				// The proxy surfaces the daemon's Claude SDK session id, which we
+				// expose as the agent session id.
+				onSessionId: onAgentSessionId,
 			});
 
 			return { status: "completed" } as const;
