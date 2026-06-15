@@ -1,14 +1,17 @@
 {
-  "name": "chat-api",
-  "module": "index.ts",
-  "devDependencies": {
-    "@biomejs/biome": "^2.3.11",
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5.9.3"
-  },
-  "private": true,
-  "type": "module",
-  "workspaces": ["apps/*", "packages/*"]
+	"name": "mymemo-agent",
+	"module": "index.ts",
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.11",
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5.9.3"
+	},
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"apps/*",
+		"packages/*"
+	]
 }
