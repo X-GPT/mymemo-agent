@@ -1,0 +1,941 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MyMemo Agent Workspace Technical Design</title>
+<style>
+	:root {
+		color-scheme: light;
+		--ink: #18212d;
+		--muted: #647282;
+		--line: #d8e0e8;
+		--paper: #f6f8fa;
+		--white: #ffffff;
+		--blue: #2458a6;
+		--teal: #087d7b;
+		--green: #2f7d32;
+		--amber: #a15c00;
+		--red: #b4342c;
+		--violet: #6546a4;
+		--shadow: 0 18px 48px rgba(24, 36, 52, 0.12);
+	}
+
+	* {
+		box-sizing: border-box;
+	}
+
+	body {
+		margin: 0;
+		background: var(--paper);
+		color: var(--ink);
+		font-family:
+			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+			"Segoe UI", sans-serif;
+		line-height: 1.5;
+	}
+
+	header {
+		min-height: 58vh;
+		padding: 34px 24px 72px;
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+		color: var(--white);
+		background:
+			linear-gradient(rgba(18, 28, 42, 0.58), rgba(18, 28, 42, 0.44)),
+			url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='840' viewBox='0 0 1600 840'%3E%3Crect width='1600' height='840' fill='%2317202a'/%3E%3Cg opacity='.88'%3E%3Crect x='110' y='150' width='310' height='175' rx='18' fill='%23f7f8fa'/%3E%3Crect x='590' y='100' width='420' height='245' rx='18' fill='%23f7f8fa'/%3E%3Crect x='1190' y='150' width='300' height='175' rx='18' fill='%23f7f8fa'/%3E%3Crect x='175' y='550' width='330' height='145' rx='18' fill='%23f7f8fa'/%3E%3Crect x='630' y='535' width='340' height='175' rx='18' fill='%23f7f8fa'/%3E%3Crect x='1110' y='550' width='330' height='145' rx='18' fill='%23f7f8fa'/%3E%3Cpath d='M420 238 C520 238 500 220 590 220' stroke='%23087d7b' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Cpath d='M1010 220 C1110 220 1095 238 1190 238' stroke='%23087d7b' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Cpath d='M800 345 C800 450 655 482 505 585' stroke='%23f4b24d' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Cpath d='M800 345 C800 455 800 470 800 535' stroke='%236546a4' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Cpath d='M800 345 C800 450 980 482 1110 585' stroke='%23f4b24d' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='800' cy='220' r='68' fill='%232458a6'/%3E%3Ccircle cx='340' cy='622' r='36' fill='%232f7d32'/%3E%3Ccircle cx='800' cy='622' r='36' fill='%236546a4'/%3E%3Ccircle cx='1275' cy='622' r='36' fill='%23b4342c'/%3E%3C/g%3E%3C/svg%3E");
+		background-position: center;
+		background-size: cover;
+	}
+
+	main {
+		padding: 42px 24px 84px;
+	}
+
+	.topbar,
+	.hero,
+	main > section,
+	footer {
+		width: min(1160px, 100%);
+		margin: 0 auto;
+	}
+
+	.topbar {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 20px;
+		font-size: 13px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.pill {
+		border: 1px solid rgba(255, 255, 255, 0.52);
+		border-radius: 999px;
+		padding: 8px 12px;
+		background: rgba(255, 255, 255, 0.14);
+	}
+
+	.hero {
+		margin-top: 112px;
+	}
+
+	h1 {
+		max-width: 920px;
+		margin: 0;
+		font-size: clamp(42px, 7vw, 88px);
+		line-height: 0.96;
+		letter-spacing: 0;
+	}
+
+	.lede {
+		max-width: 760px;
+		margin: 28px 0 0;
+		color: rgba(255, 255, 255, 0.9);
+		font-size: 20px;
+	}
+
+	section + section {
+		margin-top: 40px;
+	}
+
+	.panel {
+		background: var(--white);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		box-shadow: var(--shadow);
+		padding: 26px;
+	}
+
+	h2 {
+		margin: 0 0 18px;
+		font-size: 26px;
+		letter-spacing: 0;
+	}
+
+	h3 {
+		margin: 0 0 10px;
+		font-size: 18px;
+	}
+
+	p {
+		margin: 0;
+	}
+
+	.summary {
+		display: grid;
+		grid-template-columns: 1.08fr 0.92fr;
+		gap: 20px;
+		align-items: stretch;
+	}
+
+	.callout {
+		border-left: 5px solid var(--blue);
+		background: #edf3fb;
+		border-radius: 6px;
+		padding: 18px 20px;
+		font-size: 18px;
+	}
+
+	.callout strong {
+		color: var(--blue);
+	}
+
+	.note {
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fbfcfd;
+		padding: 16px;
+	}
+
+	.note + .note {
+		margin-top: 12px;
+	}
+
+	.note b {
+		display: block;
+		margin-bottom: 6px;
+	}
+
+	.note span,
+	.note p,
+	.node p,
+	.step p,
+	.card p,
+	footer {
+		color: var(--muted);
+	}
+
+	.badge {
+		display: inline-flex;
+		align-items: center;
+		border-radius: 999px;
+		padding: 3px 9px;
+		font-size: 12px;
+		font-weight: 700;
+		color: var(--white);
+		background: var(--violet);
+	}
+
+	.badge.green {
+		background: var(--green);
+	}
+
+	.badge.red {
+		background: var(--red);
+	}
+
+	.badge.amber {
+		background: var(--amber);
+	}
+
+	.arch {
+		display: grid;
+		grid-template-columns: repeat(5, minmax(0, 1fr));
+		gap: 14px;
+		align-items: stretch;
+	}
+
+	.arch + .arch {
+		margin-top: 14px;
+	}
+
+	.node {
+		min-height: 158px;
+		border: 1px solid var(--line);
+		border-top: 6px solid var(--blue);
+		border-radius: 8px;
+		background: var(--white);
+		padding: 16px;
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+	}
+
+	.node.runtime {
+		border-top-color: var(--amber);
+	}
+
+	.node.gateway {
+		border-top-color: var(--teal);
+	}
+
+	.node.storage {
+		border-top-color: var(--violet);
+	}
+
+	.node.data {
+		border-top-color: var(--green);
+	}
+
+	.arrow {
+		display: grid;
+		place-items: center;
+		color: var(--teal);
+		font-size: 34px;
+		font-weight: 800;
+	}
+
+	.flow {
+		display: grid;
+		grid-template-columns: repeat(6, minmax(0, 1fr));
+		gap: 10px;
+	}
+
+	.step,
+	.card {
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fbfcfd;
+		padding: 14px;
+	}
+
+	.step {
+		min-height: 128px;
+	}
+
+	.step strong {
+		display: block;
+		margin-bottom: 8px;
+	}
+
+	.grid3 {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 16px;
+	}
+
+	.grid2 {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 16px;
+	}
+
+	ul {
+		margin: 0;
+		padding-left: 20px;
+		color: var(--muted);
+	}
+
+	li + li {
+		margin-top: 8px;
+	}
+
+	code {
+		background: #eef1f5;
+		border: 1px solid #dce3eb;
+		border-radius: 5px;
+		padding: 1px 5px;
+		font-family: "SFMono-Regular", Consolas, monospace;
+		font-size: 0.92em;
+	}
+
+	pre {
+		overflow: auto;
+		background: #17202a;
+		color: #f7f8fa;
+		border-radius: 8px;
+		padding: 16px;
+		line-height: 1.55;
+	}
+
+	pre code {
+		display: block;
+		background: transparent;
+		border: 0;
+		color: #f7f8fa;
+		padding: 0;
+		white-space: pre;
+	}
+
+	.table {
+		display: grid;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		overflow: hidden;
+	}
+
+	.row {
+		display: grid;
+		grid-template-columns: 0.92fr 1.08fr 1.2fr;
+	}
+
+	.row > div {
+		padding: 14px 16px;
+		border-top: 1px solid var(--line);
+	}
+
+	.row:first-child > div {
+		border-top: 0;
+		background: #17202a;
+		color: var(--white);
+		font-weight: 700;
+	}
+
+	.row > div + div {
+		border-left: 1px solid var(--line);
+	}
+
+	footer {
+		margin-top: 48px;
+		font-size: 14px;
+	}
+
+	@media (max-width: 940px) {
+		header {
+			min-height: 52vh;
+		}
+
+		.hero {
+			margin-top: 76px;
+		}
+
+		.summary,
+		.arch,
+		.flow,
+		.grid2,
+		.grid3,
+		.row {
+			grid-template-columns: 1fr;
+		}
+
+		.arrow {
+			transform: rotate(90deg);
+			min-height: 54px;
+		}
+
+		.row > div + div {
+			border-left: 0;
+		}
+	}
+</style>
+</head>
+<body>
+	<header>
+		<div class="topbar">
+			<div>MyMemo agent workspace technical design</div>
+			<div class="pill">E2B runtime · OpenRouter gateway · durable workspace</div>
+		</div>
+		<div class="hero">
+			<h1>Persistent workspace. Ephemeral sandbox. OpenRouter-backed gateway.</h1>
+			<p class="lede">The target system gives users durable agent continuity while keeping compute warm only while useful, routing LLM calls through OpenRouter for cheaper models, and keeping documents, provider keys, and database access behind the unified gateway.</p>
+		</div>
+	</header>
+
+	<main>
+		<section class="summary">
+			<div class="panel">
+				<h2>Core Decision</h2>
+				<div class="callout">
+					<strong>Use E2B for execution and OpenRouter through the gateway for LLMs.</strong>
+					The sandbox is a hydrated working copy for untrusted agent execution. The control plane and gateway own state, tokens, documents, OpenRouter credentials, audit, model policy, and VPC database access.
+				</div>
+			</div>
+			<div class="panel">
+				<div class="note">
+					<b><span class="badge green">Runtime</span> Warm-on-demand</b>
+					<span>Lease or create a sandbox for active work, sync state out, then terminate after a short idle window.</span>
+				</div>
+				<div class="note">
+					<b><span class="badge red">Boundary</span> No direct DB access</b>
+					<span>The sandbox never receives <code>DATABASE_URL</code>, AWS credentials, <code>OPENROUTER_API_KEY</code>, or direct provider keys.</span>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>System Shape</h2>
+			<div class="arch" aria-label="Primary architecture">
+				<div class="node">
+					<h3>chat-api</h3>
+					<p>Owns conversations, runs, workspace sync, sandbox leases, token minting, and SSE replay.</p>
+				</div>
+				<div class="arrow">→</div>
+				<div class="node runtime">
+					<h3>E2B sandbox</h3>
+					<p>Runs daemon, agent, Bash/browser tools, local hydrated docs, and generated files during a lease.</p>
+				</div>
+				<div class="arrow">↔</div>
+				<div class="node storage">
+					<h3>workspace store</h3>
+					<p>Durable artifacts, workdirs, document manifests, snapshots, and run event logs.</p>
+				</div>
+			</div>
+			<div class="arch" aria-label="Authority architecture">
+				<div class="node gateway">
+					<h3>unified gateway</h3>
+					<p>OpenRouter-backed LLM proxy, document search/fetch, token enforcement, budgets, and audit.</p>
+				</div>
+				<div class="arrow">→</div>
+				<div class="node data">
+					<h3>private DB</h3>
+					<p>Reachable only from the gateway security group. Never from E2B.</p>
+				</div>
+				<div class="arrow">↔</div>
+				<div class="node data">
+					<h3>OpenRouter</h3>
+					<p>Gateway-only upstream for cheaper model routing and fallback policy.</p>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Current Baseline</h2>
+			<div class="grid2">
+				<div class="card">
+					<h3>Repository</h3>
+					<pre><code>apps/
+  chat-api/          public/internal chat API and E2B orchestrator
+  gateway/           unified LLM proxy (Anthropic upstream today) + scoped document DB reader
+  sandbox-daemon/    daemon and agent bundle shipped into E2B
+  mymemo-docs/       CLI used by the sandbox agent for document search/fetch
+
+packages/
+  llm-token/         HMAC signed bearer token</code></pre>
+				</div>
+				<div class="card">
+					<h3>Current Behavior</h3>
+					<ul>
+						<li><code>chat-api</code> creates a fresh E2B sandbox per turn.</li>
+						<li><code>daemon.js</code> and <code>agent.js</code> are deployed into that sandbox.</li>
+						<li>The sandbox agent calls the unified gateway for LLM and documents.</li>
+						<li>The gateway proxies LLM traffic to Anthropic today (<code>ANTHROPIC_API_KEY</code>, <code>UPSTREAM_BASE_URL</code> defaults to <code>api.anthropic.com</code>).</li>
+						<li>Target state: the gateway sends LLM traffic to OpenRouter by default.</li>
+						<li>Documents are not materialized to local disk by default.</li>
+						<li><code>mymemo-docs</code> exposes separate <code>search</code> and <code>fetch</code>.</li>
+						<li>Claude SDK <code>sessionId</code> is an internal <code>agentSessionId</code>.</li>
+					</ul>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Identifiers</h2>
+			<div class="table">
+				<div class="row">
+					<div>Name</div>
+					<div>Meaning</div>
+					<div>Notes</div>
+				</div>
+				<div class="row">
+					<div><code>conversationId</code></div>
+					<div>MyMemo-owned user-visible thread.</div>
+					<div>Survives sandbox recreation and provider session resets.</div>
+				</div>
+				<div class="row">
+					<div><code>runId</code></div>
+					<div>One backend agent execution attempt.</div>
+					<div>Used for logs, audit, SSE replay, retries, cancellation, and document hydration.</div>
+				</div>
+				<div class="row">
+					<div><code>agentSessionId</code></div>
+					<div>Claude Agent SDK session id.</div>
+					<div>Internal continuity id. It is not the conversation id or run id.</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Sandbox Lifecycle</h2>
+			<div class="flow" aria-label="Warm on demand lifecycle">
+				<div class="step">
+					<strong>1. Request</strong>
+					<p>Create a <code>runId</code> for the conversation.</p>
+				</div>
+				<div class="step">
+					<strong>2. Lease</strong>
+					<p>Reuse a warm sandbox or create a new E2B sandbox.</p>
+				</div>
+				<div class="step">
+					<strong>3. Hydrate</strong>
+					<p>Restore conversation workdir, manifests, and selected artifacts.</p>
+				</div>
+				<div class="step">
+					<strong>4. Execute</strong>
+					<p>Run the agent and stream durable events.</p>
+				</div>
+				<div class="step">
+					<strong>5. Sync</strong>
+					<p>Persist changed files, document manifest, outputs, and audit.</p>
+				</div>
+				<div class="step">
+					<strong>6. Recycle</strong>
+					<p>Terminate after idle, version drift, health failure, or risk signal.</p>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Workspace Layout</h2>
+			<div class="grid2">
+				<div class="card">
+					<h3>Inside Sandbox</h3>
+					<pre><code>/workspace/
+  system/
+    daemon.js
+    agent.js
+    version.json
+
+  conversations/
+    {conversationId}/
+      docs/
+        manifest.json
+        doc-{id}.md
+      work/
+        agent scratch files
+      output/
+        generated artifacts</code></pre>
+				</div>
+				<div class="card">
+					<h3>Durable Store</h3>
+					<pre><code>workspace store
+  users/{userId}/conversations/{conversationId}/work/
+  users/{userId}/conversations/{conversationId}/output/
+  users/{userId}/conversations/{conversationId}/docs/manifest.json
+  users/{userId}/runs/{runId}/events.jsonl</code></pre>
+				</div>
+			</div>
+			<p style="margin-top: 16px; color: var(--muted);">The sandbox filesystem is a hydrated working copy. Durable source of truth lives outside the sandbox.</p>
+		</section>
+
+		<section class="panel">
+			<h2>Document Access</h2>
+			<div class="flow" aria-label="Document access lifecycle">
+				<div class="step">
+					<strong>Open question</strong>
+					<p>Remote search is required by default for broad document questions.</p>
+				</div>
+				<div class="step">
+					<strong>One tool</strong>
+					<p>Agent calls <code>search_documents(query)</code>.</p>
+				</div>
+				<div class="step">
+					<strong>Internal fetch</strong>
+					<p>Gateway/daemon searches, ranks, fetches selected docs, and enforces limits.</p>
+				</div>
+				<div class="step">
+					<strong>Hydrate local</strong>
+					<p>Fetched docs are written under the conversation docs directory.</p>
+				</div>
+				<div class="step">
+					<strong>Return paths</strong>
+					<p>Tool returns snippets plus local file paths.</p>
+				</div>
+				<div class="step">
+					<strong>Process locally</strong>
+					<p>Agent reads local paths and writes output artifacts.</p>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2><code>search_documents</code> Contract</h2>
+			<div class="grid2">
+				<div class="card">
+					<h3>Internal Behavior</h3>
+					<ul>
+						<li>Search remote document index through the unified gateway.</li>
+						<li>Rank candidates.</li>
+						<li>Fetch selected top documents through the gateway.</li>
+						<li>Write fetched documents to local sandbox disk.</li>
+						<li>Update the conversation docs manifest.</li>
+						<li>Return snippets plus local file paths.</li>
+					</ul>
+				</div>
+				<div class="card">
+					<h3>Example Result</h3>
+					<pre><code>{
+  "documents": [
+    {
+      "documentId": "doc_123",
+      "source": "hydrated_from_remote",
+      "title": "Acme Renewal Agreement",
+      "snippet": "The renewal term starts...",
+      "localPath": "/workspace/conversations/conv_123/docs/doc_123.md"
+    },
+    {
+      "documentId": "doc_099",
+      "source": "already_local",
+      "title": "Prior Renewal Notes",
+      "snippet": "Renewal was discussed...",
+      "localPath": "/workspace/conversations/conv_123/docs/doc_099.md"
+    }
+  ]
+}</code></pre>
+				</div>
+			</div>
+		</section>
+
+		<section class="grid3">
+			<div class="card">
+				<h3>Agent Policy</h3>
+				<ul>
+					<li>Local docs are the working set, not the whole corpus.</li>
+					<li>Search remote by default for open document questions.</li>
+					<li>Use local-only only when the user explicitly says current or already-loaded files.</li>
+				</ul>
+			</div>
+			<div class="card">
+				<h3>Gateway Policy</h3>
+				<ul>
+						<li>Separate <code>llm</code> and <code>documents</code> audiences.</li>
+						<li>Enforce user, conversation, run, scope, expiry, and limits.</li>
+						<li>Audit every search and hydrated document.</li>
+				</ul>
+			</div>
+			<div class="card">
+				<h3>Sandbox Policy</h3>
+				<ul>
+					<li>No database credentials, <code>OPENROUTER_API_KEY</code>, or provider keys.</li>
+					<li>No full corpus copied by default.</li>
+					<li>Sandbox is disposable after state sync.</li>
+				</ul>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Agent Document Policy</h2>
+			<div class="table">
+				<div class="row">
+					<div>User Request</div>
+					<div>Required Behavior</div>
+					<div>Reason</div>
+				</div>
+				<div class="row">
+					<div>“What are the renewal terms?”</div>
+					<div>Call <code>search_documents</code>.</div>
+					<div>Open document question; local docs may be incomplete.</div>
+				</div>
+				<div class="row">
+					<div>“Compare all renewal agreements.”</div>
+					<div>Call <code>search_documents</code> and combine already-local and newly hydrated docs.</div>
+					<div>Related or historical documents may not be local.</div>
+				</div>
+				<div class="row">
+					<div>“Summarize the Acme contract you just found.”</div>
+					<div>Local-only is acceptable.</div>
+					<div>The user explicitly refers to an already loaded document.</div>
+				</div>
+				<div class="row">
+					<div>“Continue editing the draft.”</div>
+					<div>Local-only is acceptable.</div>
+					<div>The task is scoped to a generated local artifact.</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Unified Gateway Responsibilities</h2>
+			<div class="grid2">
+				<div class="card">
+					<h3>LLM Module</h3>
+					<ul>
+						<li>Verify bearer token.</li>
+						<li>Enforce audience and expiry.</li>
+						<li>Enforce model/header allowlists.</li>
+						<li>Inject <code>OPENROUTER_API_KEY</code> only on upstream requests.</li>
+						<li>Proxy sandbox LLM traffic to OpenRouter.</li>
+						<li>Select cheaper/default models by gateway policy, run config, or environment.</li>
+						<li>Preserve the sandbox-facing Claude Agent SDK compatibility surface where practical.</li>
+					</ul>
+				</div>
+				<div class="card">
+					<h3>Document Module</h3>
+					<ul>
+						<li>Verify bearer token.</li>
+						<li>Enforce user, conversation, run, scope, and expiry.</li>
+						<li>Search private document DB.</li>
+						<li>Fetch scoped document content.</li>
+						<li>Enforce hydration limits.</li>
+						<li>Audit every search and hydrated document.</li>
+					</ul>
+				</div>
+			</div>
+			<div class="note" style="margin-top: 16px;">
+				<b><span class="badge red">Sandbox must never receive</span></b>
+				<span><code>DATABASE_URL</code>, DB password, AWS credentials, <code>OPENROUTER_API_KEY</code>, direct provider API keys, or broad document credentials.</span>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>OpenRouter LLM Routing</h2>
+			<div class="grid2">
+				<div class="card">
+					<h3>Sandbox-Facing Env</h3>
+					<pre><code>ANTHROPIC_BASE_URL=&lt;MYMEMO_GATEWAY_URL&gt;
+ANTHROPIC_AUTH_TOKEN=&lt;short-lived llm_token&gt;
+ANTHROPIC_API_KEY=""</code></pre>
+					<p>The sandbox still talks only to the MyMemo gateway. <code>ANTHROPIC_AUTH_TOKEN</code> is the MyMemo run token, not the OpenRouter API key.</p>
+				</div>
+				<div class="card">
+					<h3>Gateway Upstream Env</h3>
+					<pre><code>LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=...
+OPENROUTER_BASE_URL=https://openrouter.ai/api
+OPENROUTER_DEFAULT_MODEL=anthropic/claude-sonnet-4.5
+OPENROUTER_CHEAP_MODEL=google/gemini-flash-1.5
+OPENROUTER_HTTP_REFERER=https://mymemo.example
+OPENROUTER_APP_TITLE=MyMemo</code></pre>
+				</div>
+			</div>
+			<div class="note" style="margin-top: 16px;">
+				<b><span class="badge green">Routing policy</span></b>
+				<span>Provider selection is centralized in the gateway. The sandbox can request a capability or model class, but the gateway owns the allowlist, fallback rules, budget controls, and final OpenRouter model selection.</span>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Token Model</h2>
+			<div class="grid2">
+				<div class="card">
+					<h3>Recommended Claims</h3>
+					<pre><code>{
+  "aud": "documents",
+  "userId": "user_123",
+  "conversationId": "conv_123",
+  "runId": "run_456",
+  "sandboxId": "sbx_789",
+  "scope": "collection",
+  "collectionId": "col_123",
+  "exp": 1760000000000
+}</code></pre>
+				</div>
+				<div class="card">
+					<h3>Audience Enforcement</h3>
+					<ul>
+						<li>Use <code>aud = "llm"</code> for LLM proxy requests.</li>
+						<li>Use <code>aud = "documents"</code> for document operations.</li>
+						<li>Prefer separate env vars: <code>ANTHROPIC_AUTH_TOKEN</code> and <code>MYMEMO_DOC_TOKEN</code>.</li>
+						<li><code>ANTHROPIC_AUTH_TOKEN</code> is the MyMemo short-lived gateway token, not <code>OPENROUTER_API_KEY</code>.</li>
+						<li>Even in one deployed gateway, each route family rejects the wrong audience.</li>
+					</ul>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Target Code Structure</h2>
+			<div class="grid3">
+				<div class="card">
+					<h3>chat-api</h3>
+					<pre><code>src/
+  chat/
+  runs/
+  workspaces/
+  sandboxes/
+  documents/
+  agent/
+  routes/
+  config/
+  lib/</code></pre>
+				</div>
+				<div class="card">
+					<h3>sandbox-daemon</h3>
+					<pre><code>routes/
+agent/
+process/
+tools/
+  search-documents.ts
+workspace/
+  manifest.ts
+  hydrate.ts</code></pre>
+				</div>
+				<div class="card">
+					<h3>gateway</h3>
+					<pre><code>src/
+  auth/
+  llm/
+    providers/
+      openrouter.ts
+  documents/
+  db/
+  server.ts
+  env.ts</code></pre>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Folder Responsibilities</h2>
+			<div class="grid3">
+				<div class="card">
+					<h3>chat-api</h3>
+					<ul>
+						<li><code>chat/</code>: request validation, SSE, client event mapping.</li>
+						<li><code>runs/</code>: run lifecycle, event persistence, retry/cancel.</li>
+						<li><code>workspaces/</code>: restore/sync state, manifests, object-store interface.</li>
+						<li><code>sandboxes/</code>: E2B create/reuse/deploy/recycle/proxy.</li>
+						<li><code>documents/</code>: hydration policy, visible docs, limits.</li>
+						<li><code>agent/</code>: prompts, tool instructions, <code>agentSessionId</code>.</li>
+					</ul>
+				</div>
+				<div class="card">
+					<h3>sandbox-daemon</h3>
+					<ul>
+						<li><code>routes/</code>: <code>/turn</code>, <code>/health</code>, <code>/current</code>.</li>
+						<li><code>agent/</code>: Claude Agent SDK process ownership.</li>
+						<li><code>tools/</code>: <code>search_documents</code> orchestration.</li>
+						<li><code>workspace/</code>: local manifest and hydrated doc writes.</li>
+						<li><code>process/</code>: spawn, watchdogs, stream parsing.</li>
+					</ul>
+				</div>
+				<div class="card">
+					<h3>gateway</h3>
+					<ul>
+						<li><code>auth/</code>: bearer parsing and claims validation.</li>
+						<li><code>llm/</code>: proxy routes, model/header policy, OpenRouter provider adapter.</li>
+						<li><code>documents/</code>: search, fetch, hydrate policy.</li>
+						<li><code>db/</code>: private database client and queries.</li>
+						<li><code>server.ts</code>: route composition.</li>
+					</ul>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Major Gaps From Current Code</h2>
+			<div class="grid2">
+				<div class="card">
+					<h3>Runtime And State</h3>
+					<ul>
+						<li>Current code creates and kills a fresh sandbox per turn.</li>
+						<li>No sandbox lease manager or warm idle policy exists.</li>
+						<li>No durable workspace store or sync manifest exists.</li>
+						<li>No <code>conversationId</code> or <code>runId</code> exists.</li>
+						<li>Claude SDK <code>sessionId</code> is exposed as <code>sessionId</code>; treat it as <code>agentSessionId</code>.</li>
+					</ul>
+				</div>
+				<div class="card">
+					<h3>Documents And Tokens</h3>
+					<ul>
+						<li><code>mymemo-docs</code> exposes separate <code>search</code> and <code>fetch</code>.</li>
+						<li>The prompt instructs manual search then fetch.</li>
+						<li>Documents are not hydrated to local disk as first-class local paths.</li>
+						<li>Tokens do not include <code>aud</code>, <code>conversationId</code>, or <code>runId</code>.</li>
+						<li>Gateway needs an OpenRouter provider adapter and model policy for cheaper-model routing.</li>
+						<li>Gateway is one deployable service but should be split internally.</li>
+					</ul>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Implementation Order</h2>
+			<div class="table">
+				<div class="row">
+					<div>Phase</div>
+					<div>Change</div>
+					<div>Outcome</div>
+				</div>
+				<div class="row">
+					<div>1</div>
+					<div>Add <code>conversationId</code>, <code>runId</code>, and <code>agentSessionId</code> terminology.</div>
+					<div>Correct IDs before deeper architecture work.</div>
+				</div>
+				<div class="row">
+					<div>2</div>
+					<div>Add sandbox lease and workspace-store interfaces while preserving current fresh-sandbox behavior.</div>
+					<div>Creates stable boundaries for warm reuse and sync.</div>
+				</div>
+				<div class="row">
+					<div>3</div>
+					<div>Replace agent-facing search/fetch with <code>search_documents</code> hydration.</div>
+					<div>Agent gets local paths while gateway keeps authority.</div>
+				</div>
+				<div class="row">
+					<div>4</div>
+					<div>Add token audiences, run-scoped document manifests, warm reuse, idle recycle, and OpenRouter model policy.</div>
+					<div>Matches the target runtime, security, and cheaper-model routing model.</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Non-Goals</h2>
+			<div class="grid2">
+				<div class="card">
+					<ul>
+						<li>Do not give the sandbox direct database access.</li>
+						<li>Do not copy the full user corpus into the sandbox by default.</li>
+						<li>Do not treat local docs as the complete corpus.</li>
+					</ul>
+				</div>
+				<div class="card">
+					<ul>
+						<li>Do not use Claude SDK <code>sessionId</code> as <code>conversationId</code> or <code>runId</code>.</li>
+						<li>Do not expose <code>OPENROUTER_API_KEY</code> to the sandbox, daemon child agent, client, or document tools.</li>
+						<li>Do not make Fargate the default runtime unless AWS-native control becomes more important than E2B's agent sandbox abstraction.</li>
+					</ul>
+				</div>
+			</div>
+		</section>
+
+		<footer>
+			This HTML mirrors <code>docs/agent-workspace-technical-design.md</code>. The Markdown document is the agent-facing source of design intent; this page is the human-readable presentation.
+		</footer>
+	</main>
+</body>
+</html>
