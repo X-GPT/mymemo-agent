@@ -30,7 +30,7 @@ let app: ReturnType<typeof createGateway>;
 
 function tok(extra: Record<string, unknown> = {}): string {
 	return mintLlmToken(
-		{ userId: WS, sandboxId: "s", requestId: "r", ...extra },
+		{ aud: "documents", userId: WS, sandboxId: "s", requestId: "r", ...extra },
 		SECRET,
 	);
 }
@@ -174,6 +174,7 @@ describe.skipIf(!RUN)(
 		it("a different workspace sees nothing (the workspace pin)", async () => {
 			const t = mintLlmToken(
 				{
+					aud: "documents",
 					userId: "other-member",
 					sandboxId: "s",
 					requestId: "r",

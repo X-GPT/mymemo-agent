@@ -18,10 +18,16 @@ export interface TurnRequest {
 	/** Document gateway base URL the sandbox agent's `mymemo-docs` CLI calls. */
 	doc_gateway_url: string;
 	/**
-	 * Short-lived bearer token the agent presents to both gateways. Carries the
-	 * signed turn scope that the document gateway enforces.
+	 * Short-lived bearer token (aud: "llm") the agent presents to the LLM proxy.
+	 * Set as the agent's ANTHROPIC_AUTH_TOKEN.
 	 */
 	llm_token: string;
+	/**
+	 * Short-lived bearer token (aud: "documents") the agent's `mymemo-docs` CLI
+	 * presents to the document routes. Carries the signed turn scope the gateway
+	 * enforces. Set as the agent's MYMEMO_DOC_TOKEN.
+	 */
+	doc_token: string;
 }
 
 interface ForwardOptions {

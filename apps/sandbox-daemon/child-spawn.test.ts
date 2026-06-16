@@ -168,7 +168,9 @@ describe("spawnAgent agent environment", () => {
 			systemPrompt: "s",
 			cwd: "/workspace/data/u1/canonical",
 			llmBaseUrl: "https://gateway.example",
+			docGatewayUrl: "https://docs.example",
 			llmToken: "tok-123",
+			docToken: "doc-456",
 			onEvent: async () => {},
 		});
 
@@ -179,6 +181,9 @@ describe("spawnAgent agent environment", () => {
 		const env = call[1].env;
 		expect(env.ANTHROPIC_BASE_URL).toBe("https://gateway.example");
 		expect(env.ANTHROPIC_AUTH_TOKEN).toBe("tok-123");
+		// Document access uses its own gateway url + (aud: documents) token.
+		expect(env.MYMEMO_DOC_GATEWAY_URL).toBe("https://docs.example");
+		expect(env.MYMEMO_DOC_TOKEN).toBe("doc-456");
 		// The whole point of the gateway: no provider key reaches the agent.
 		expect("ANTHROPIC_API_KEY" in env).toBe(false);
 	});
@@ -284,6 +289,7 @@ describe("spawnAgent idle timeout", () => {
 			llmBaseUrl: "https://gateway.example",
 			docGatewayUrl: "https://docs.example",
 			llmToken: "tok-test",
+			docToken: "doc-test",
 			onEvent,
 		};
 	}

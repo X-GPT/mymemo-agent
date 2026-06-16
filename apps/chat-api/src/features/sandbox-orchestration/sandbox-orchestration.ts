@@ -1,4 +1,4 @@
-import { mintLlmToken } from "@mymemo/llm-token";
+import { type LlmTokenClaims, mintLlmToken } from "@mymemo/llm-token";
 import { apiEnv, type ChatMessagesScope } from "@/config/env";
 import type { ChatLogger } from "@/features/chat/chat.logger";
 import { buildSandboxAgentPrompt } from "@/features/sandbox-agent";
@@ -86,6 +86,20 @@ export async function runSandboxChat(
 			});
 
 			const requestId = crypto.randomUUID();
+
+			// Two single-audience capability tokens for this turn. They share the
+			// same identity/run claims; only `aud` and the document scope differ.
+			// The gateway enforces audience per route, so the LLM token cannot read
+			// documents and the document token cannot spend on the LLM. The daemon
+			// sets the LLM token as the agent's ANTHROPIC_AUTH_TOKEN and the doc
+			// token as its MYMEMO_DOC_TOKEN.
+			const baseClaims: Omit<LlmTokenClaims, "exp" | "aud"> = {
+				userId,
+				sandboxId: sandbox.sandboxId,
+				requestId,
+				conversationId,
+				runId,
+			};
 			const turnRequest: TurnRequest = {
 				request_id: requestId,
 				user_id: userId,
@@ -99,15 +113,17 @@ export async function runSandboxChat(
 				system_prompt: systemPrompt,
 				llm_base_url: apiEnv.GATEWAY_PUBLIC_URL,
 				doc_gateway_url: apiEnv.GATEWAY_PUBLIC_URL,
-				// One per-turn capability token. The gateway's LLM proxy uses
-				// {userId,sandboxId,requestId}; its document routes additionally
-				// enforce the signed scope. The daemon sets it as both the LLM and
-				// the document bearer token on the agent.
+				// LLM token: no document scope — the LLM proxy ignores it.
 				llm_token: mintLlmToken(
+					{ ...baseClaims, aud: "llm" },
+					apiEnv.LLM_TOKEN_SECRET,
+				),
+				// Document token: carries the signed scope the document routes
+				// enforce server-side (the agent cannot widen it).
+				doc_token: mintLlmToken(
 					{
-						userId,
-						sandboxId: sandbox.sandboxId,
-						requestId,
+						...baseClaims,
+						aud: "documents",
 						scope: toSandboxScope(scope),
 						collectionId: collectionId ?? undefined,
 						summaryId: summaryId ?? undefined,

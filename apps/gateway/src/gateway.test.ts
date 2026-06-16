@@ -33,9 +33,17 @@ const fakeDb: Db = {
 
 const app = createGateway(config, fakeDb);
 
+// Defaults to the document audience since most callers below are the document
+// reader suite; LLM-proxy callers pass `aud: "llm"` explicitly.
 function token(extra: Partial<Omit<LlmTokenClaims, "exp">> = {}): string {
 	return mintLlmToken(
-		{ userId: "u1", sandboxId: "sbx", requestId: "req", ...extra },
+		{
+			aud: "documents",
+			userId: "u1",
+			sandboxId: "sbx",
+			requestId: "req",
+			...extra,
+		},
 		SECRET,
 	);
 }
@@ -57,7 +65,7 @@ const callOf = (k: ReturnType<typeof kind>) =>
 describe("gateway · llm proxy", () => {
 	const validToken = () =>
 		mintLlmToken(
-			{ userId: "u1", sandboxId: "sbx-1", requestId: "req-1" },
+			{ aud: "llm", userId: "u1", sandboxId: "sbx-1", requestId: "req-1" },
 			SECRET,
 		);
 
@@ -80,6 +88,31 @@ describe("gateway · llm proxy", () => {
 			headers: { authorization: "Bearer not-a-real-token" },
 		});
 		expect(res.status).toBe(401);
+	});
+
+	it("rejects a token minted for the documents audience (no upstream call)", async () => {
+		fetchSpy = spyOn(globalThis, "fetch").mockRejectedValue(
+			new Error("should not forward"),
+		);
+		const docToken = mintLlmToken(
+			{
+				aud: "documents",
+				userId: "u1",
+				sandboxId: "sbx-1",
+				requestId: "req-1",
+			},
+			SECRET,
+		);
+		const res = await app.request("/v1/messages", {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${docToken}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({ model: "claude-sonnet-4-6", messages: [] }),
+		});
+		expect(res.status).toBe(401);
+		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
 	it("injects x-api-key and forwards anthropic headers for a valid token", async () => {
@@ -169,6 +202,16 @@ describe("gateway · document reader (FTS / Postgres)", () => {
 		const res = await app.request("/v1/documents/search", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ query: "x" }),
+		});
+		expect(res.status).toBe(401);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("rejects a token minted for the llm audience (no DB touched)", async () => {
+		const res = await app.request("/v1/documents/search", {
+			method: "POST",
+			headers: headers(token({ aud: "llm", scope: "global" })),
 			body: JSON.stringify({ query: "x" }),
 		});
 		expect(res.status).toBe(401);
@@ -477,7 +520,7 @@ describe("gateway · routing isolation", () => {
 		);
 		const res = await app.request("/v1/messages", {
 			method: "POST",
-			headers: headers(token({ scope: "global" })),
+			headers: headers(token({ aud: "llm", scope: "global" })),
 			body: "{}",
 		});
 		expect(res.status).toBe(200);
@@ -492,7 +535,7 @@ describe("gateway · routing isolation", () => {
 		);
 		const res = await app.request("/v1/files", {
 			method: "POST",
-			headers: headers(token({ scope: "global" })),
+			headers: headers(token({ aud: "llm", scope: "global" })),
 			body: "{}",
 		});
 		expect(res.status).toBe(404);

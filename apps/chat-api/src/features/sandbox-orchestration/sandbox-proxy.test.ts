@@ -13,7 +13,9 @@ function makeTurnRequest(overrides: Partial<TurnRequest> = {}): TurnRequest {
 		message: "hello",
 		system_prompt: "you are helpful",
 		llm_base_url: "https://gateway.test",
+		doc_gateway_url: "https://gateway.test",
 		llm_token: "test-token",
+		doc_token: "test-doc-token",
 		...overrides,
 	};
 }

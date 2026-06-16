@@ -1,4 +1,8 @@
-import { type LlmTokenClaims, verifyLlmToken } from "@mymemo/llm-token";
+import {
+	type LlmTokenClaims,
+	type TokenAudience,
+	verifyLlmToken,
+} from "@mymemo/llm-token";
 import { type Context, Hono } from "hono";
 import type { GatewayConfig } from "./config";
 import type { Db } from "./db";
@@ -27,7 +31,10 @@ import {
  *      so a prompt-injected agent cannot widen it. Search is FTS-only.
  *
  * Both code paths verify the token with the same verifyLlmToken +
- * config.llmTokenSecret (see `bearerClaims`). Route registration order is
+ * config.llmTokenSecret (see `bearerClaims`), but each passes its own required
+ * audience: the document routes accept only `aud: "documents"` tokens and the
+ * LLM proxy accepts only `aud: "llm"`, so a token minted for one family cannot
+ * be replayed against the other. Route registration order is
  * correctness-critical: Hono matches in registration order and the LLM proxy is
  * a catch-all, so the document routes MUST be registered before it (see below).
  *
@@ -66,11 +73,18 @@ const RESPONSE_DROP_HEADERS = new Set([
 
 const SEARCH_LIMIT = 8;
 
-// Single token-verify helper shared by both route families.
-function bearerClaims(c: Context, secret: string): LlmTokenClaims | null {
+// Single token-verify helper shared by both route families. Each family passes
+// its own audience so a token minted for the other family fails closed here:
+// an `llm` token cannot reach the document routes and a `documents` token
+// cannot reach the LLM proxy.
+function bearerClaims(
+	c: Context,
+	secret: string,
+	audience: TokenAudience,
+): LlmTokenClaims | null {
 	const auth = c.req.header("authorization")?.trim() ?? "";
 	const token = /^Bearer\s+(.+)$/i.exec(auth)?.[1] ?? "";
-	return verifyLlmToken(token, secret);
+	return verifyLlmToken(token, secret, audience);
 }
 
 function unauthorized(c: Context) {
@@ -107,6 +121,25 @@ function scopeError(claims: LlmTokenClaims): string | null {
 }
 
 /**
+ * Shared guard for the document routes: verify the bearer token for the
+ * "documents" audience and fail closed on an unknown scope or empty
+ * identity/scope ids. Returns the usable claims, or a Response to return as-is.
+ * Both /v1/documents/* routes share this contract, so the enforcement lives in
+ * one place and the two routes cannot drift apart.
+ */
+function requireDocumentClaims(
+	c: Context,
+	secret: string,
+): LlmTokenClaims | Response {
+	const claims = bearerClaims(c, secret, "documents");
+	if (!claims) return unauthorized(c);
+	if (!isKnownScope(claims.scope)) return forbidden(c, "unknown scope");
+	const bad = scopeError(claims);
+	if (bad) return forbidden(c, bad);
+	return claims;
+}
+
+/**
  * Build the gateway app from injected config + db. Pure: config in, app out.
  * The only place the environment is read is the entrypoint (`index.ts`).
  */
@@ -126,11 +159,8 @@ export function createGateway(config: GatewayConfig, db: Db): Hono {
 	// 2. Document reader. Registered before the catch-all so /v1/documents/* is
 	//    handled here and never reaches the Anthropic proxy.
 	app.post("/v1/documents/search", async (c) => {
-		const claims = bearerClaims(c, config.llmTokenSecret);
-		if (!claims) return unauthorized(c);
-		if (!isKnownScope(claims.scope)) return forbidden(c, "unknown scope");
-		const bad = scopeError(claims);
-		if (bad) return forbidden(c, bad);
+		const claims = requireDocumentClaims(c, config.llmTokenSecret);
+		if (claims instanceof Response) return claims;
 
 		const body = await c.req
 			.json<{ query?: string }>()
@@ -168,11 +198,8 @@ export function createGateway(config: GatewayConfig, db: Db): Hono {
 	});
 
 	app.post("/v1/documents/fetch", async (c) => {
-		const claims = bearerClaims(c, config.llmTokenSecret);
-		if (!claims) return unauthorized(c);
-		if (!isKnownScope(claims.scope)) return forbidden(c, "unknown scope");
-		const bad = scopeError(claims);
-		if (bad) return forbidden(c, bad);
+		const claims = requireDocumentClaims(c, config.llmTokenSecret);
+		if (claims instanceof Response) return claims;
 
 		const body = await c.req
 			.json<{ documentId?: string }>()
@@ -220,7 +247,7 @@ export function createGateway(config: GatewayConfig, db: Db): Hono {
 }
 
 async function proxyToAnthropic(c: Context, config: GatewayConfig) {
-	const claims = bearerClaims(c, config.llmTokenSecret);
+	const claims = bearerClaims(c, config.llmTokenSecret, "llm");
 	if (!claims) {
 		return c.json(
 			{
