@@ -28,6 +28,8 @@ function makeOptions(
 ): RunSandboxChatOptions {
 	return {
 		userId: "user-1",
+		conversationId: "conv-1",
+		runId: "run-1",
 		query: "hello",
 		scope: "general" as const,
 		collectionId: null,
@@ -122,6 +124,20 @@ describe("runSandboxChat", () => {
 		});
 
 		await runSandboxChat(makeOptions());
+	});
+
+	it("propagates conversationId and runId into the daemon turn request", async () => {
+		spyForwardTurn = spyOn(
+			proxyModule,
+			"forwardChatTurnToSandbox",
+		).mockImplementation(async (opts) => {
+			expect(opts.turnRequest.conversation_id).toBe("conv-42");
+			expect(opts.turnRequest.run_id).toBe("run-99");
+		});
+
+		await runSandboxChat(
+			makeOptions({ conversationId: "conv-42", runId: "run-99" }),
+		);
 	});
 
 	it("forwards agentSessionId as agent_session_id", async () => {
