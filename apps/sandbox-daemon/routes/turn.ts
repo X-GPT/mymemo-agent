@@ -1,22 +1,15 @@
 import { timingSafeEqual } from "node:crypto";
-import { mkdirSync } from "node:fs";
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import { spawnAgent } from "../child-spawn";
 import { acquireTurn } from "../turn-lock";
+import {
+	assertValidConversationId,
+	createConversationWorkspace,
+} from "../workspace";
 
 const app = new Hono();
 const DAEMON_AUTH_HEADER = "x-daemon-auth-token";
-
-// The agent's working directory inside the sandbox. Documents are no longer
-// materialized to disk — the agent fetches them on demand via the
-// `mymemo-docs` CLI (which calls the document-gateway) — so this is just an
-// empty rw scratch dir for the agent's Bash/file tools.
-// Must be a subpath of /workspace that bwrap re-binds rw (see child-spawn).
-// Env-overridable so integration tests can point it at a temp dir.
-function getAgentCwd(): string {
-	return process.env.SANDBOX_AGENT_CWD ?? "/workspace/agent";
-}
 
 function authTokenMatches(
 	presented: string | undefined,
@@ -76,6 +69,14 @@ app.post("/turn", async (c) => {
 		return c.json({ error: "Missing required fields" }, 400);
 	}
 
+	// conversation_id is joined into the workspace path; reject anything that
+	// could escape the conversation subtree before touching the filesystem.
+	try {
+		assertValidConversationId(body.conversation_id);
+	} catch {
+		return c.json({ error: "Invalid conversation_id" }, 400);
+	}
+
 	const {
 		request_id,
 		conversation_id,
@@ -109,8 +110,10 @@ app.post("/turn", async (c) => {
 					}),
 				);
 
-				const cwd = getAgentCwd();
-				mkdirSync(cwd, { recursive: true });
+				// Materialize the conversation workspace tree and run the agent
+				// from its `work/` dir (created before spawn for bwrap's rw bind).
+				const workspace = createConversationWorkspace(conversation_id);
+				const cwd = workspace.work;
 
 				let turnFailed = false;
 				let agentCompleted = false;

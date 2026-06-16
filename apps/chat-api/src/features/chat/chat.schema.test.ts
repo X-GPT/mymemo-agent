@@ -34,6 +34,41 @@ describe("ChatBodyRequest", () => {
 		expect(result.success).toBe(false);
 	});
 
+	it("accepts a generated uuid-shaped conversationId", () => {
+		const result = ChatBodyRequest.safeParse({
+			chatContent: "hello",
+			conversationId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		});
+		expect(result.success).toBe(true);
+	});
+
+	it("rejects a conversationId with path-unsafe characters", () => {
+		// Must match the sandbox-daemon path-segment contract; a `.`, space, `/`,
+		// or `..` here would otherwise fail deeper in the daemon after a sandbox
+		// is created.
+		for (const conversationId of [
+			"conv.1",
+			"my thread",
+			"a/b",
+			"../escape",
+			"conv#1",
+		]) {
+			const result = ChatBodyRequest.safeParse({
+				chatContent: "hello",
+				conversationId,
+			});
+			expect(result.success).toBe(false);
+		}
+	});
+
+	it("rejects a conversationId longer than 128 chars", () => {
+		const result = ChatBodyRequest.safeParse({
+			chatContent: "hello",
+			conversationId: "a".repeat(129),
+		});
+		expect(result.success).toBe(false);
+	});
+
 	it("rejects unknown keys (strict)", () => {
 		const result = ChatBodyRequest.safeParse({
 			chatContent: "hello",
