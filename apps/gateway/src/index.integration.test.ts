@@ -1,5 +1,8 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { mintLlmToken } from "@mymemo/llm-token";
+import { loadConfigFromEnv } from "./config";
+import { createDb } from "./db";
+import { createGateway } from "./gateway";
 
 /**
  * Integration test: exercises the REAL Bun.sql wiring + SQL against a throwaway
@@ -23,7 +26,7 @@ const COLLECTION = "col-compat-str"; // content_collection.compat_str_id
 const COLLECTION_INT = "98765"; // content_collection.compat_int_id
 const LONG = "Full content about machine learning. ".repeat(2000); // >50k chars
 
-let app: typeof import("./index").app;
+let app: ReturnType<typeof createGateway>;
 
 function tok(extra: Record<string, unknown> = {}): string {
 	return mintLlmToken(
@@ -44,11 +47,16 @@ function post(path: string, t: string, body: unknown) {
 
 beforeAll(async () => {
 	if (!RUN) return;
-	Bun.env.LLM_TOKEN_SECRET = SECRET;
-	Bun.env.ANTHROPIC_API_KEY = Bun.env.ANTHROPIC_API_KEY ?? "test-anthropic-key";
-	({ app } = await import("./index"));
-	const { getDb } = await import("./db");
-	const db = getDb();
+	// Inject explicit config: DATABASE_URL comes from the throwaway Postgres, the
+	// secret matches the tokens we sign below, and the provider key is a stub
+	// (this suite never reaches the Anthropic proxy).
+	const config = loadConfigFromEnv({
+		...Bun.env,
+		LLM_TOKEN_SECRET: SECRET,
+		ANTHROPIC_API_KEY: Bun.env.ANTHROPIC_API_KEY ?? "test-anthropic-key",
+	});
+	const db = createDb(config.databaseUrl);
+	app = createGateway(config, db);
 
 	await db.query(
 		"drop table if exists passage_collection, passage, document, content_asset, content_collection, workspace cascade",

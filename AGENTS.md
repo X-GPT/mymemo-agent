@@ -128,7 +128,9 @@ The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-cap
 | `src/features/sandbox-orchestration/` | `runSandboxChat`, sandbox manager, daemon proxy; mints the per-turn LLM token |
 | `src/features/sandbox-agent/` | Sandbox-side agent system prompt builder |
 | `src/config/env.ts` | Environment validation |
-| `apps/gateway/src/index.ts` | Merged control plane: one `bearerClaims` token-verify helper; document routes (`/v1/documents/*`, scope-enforced) registered before the catch-all Anthropic proxy (`/v1/messages*`, path-allowlisted, injects `ANTHROPIC_API_KEY`) |
+| `apps/gateway/src/gateway.ts` | `createGateway(config, db)` — the merged control plane: one `bearerClaims` token-verify helper; document routes (`/v1/documents/*`, scope-enforced) registered before the catch-all Anthropic proxy (`/v1/messages*`, path-allowlisted, injects `ANTHROPIC_API_KEY`). Pure: config in, app out |
+| `apps/gateway/src/config.ts` | `loadConfigFromEnv(env): GatewayConfig` — parse/validate env once into a typed config |
+| `apps/gateway/src/index.ts` | Entrypoint: the only place that reads `Bun.env`; builds config + db and serves the app |
 | `apps/gateway/src/queries.ts` | Parameterized FTS / scope-resolution SQL against the KB Postgres |
 | `packages/llm-token/index.ts` | `mintLlmToken` / `verifyLlmToken` (shared, HMAC-signed) |
 

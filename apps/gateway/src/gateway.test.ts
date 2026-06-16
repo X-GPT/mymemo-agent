@@ -1,28 +1,19 @@
-import { afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { type LlmTokenClaims, mintLlmToken } from "@mymemo/llm-token";
+import type { GatewayConfig } from "./config";
 import type { Db } from "./db";
+import { createGateway } from "./gateway";
 
-// The merged env (ANTHROPIC_API_KEY + DATABASE_URL + LLM_TOKEN_SECRET) is
-// provided by the test-setup preload (see bunfig.toml) before ./index loads.
-// SECRET must match the preload's LLM_TOKEN_SECRET so minted tokens verify.
-const SECRET = "test-secret";
-
-let app: typeof import("./index").app;
-let setDbForTests: typeof import("./index").setDbForTests;
-beforeAll(async () => {
-	({ app, setDbForTests } = await import("./index"));
-});
-
-function token(extra: Partial<Omit<LlmTokenClaims, "exp">> = {}): string {
-	return mintLlmToken(
-		{ userId: "u1", sandboxId: "sbx", requestId: "req", ...extra },
-		SECRET,
-	);
-}
-
-function headers(t: string): Record<string, string> {
-	return { authorization: `Bearer ${t}`, "content-type": "application/json" };
-}
+// Single source of truth: the app verifies with config.llmTokenSecret and the
+// tests sign with the same value, so a sign/verify mismatch is unrepresentable.
+const config: GatewayConfig = {
+	anthropicApiKey: "test-anthropic-key",
+	llmTokenSecret: "test-secret",
+	databaseUrl: "postgres://test@localhost/test",
+	upstreamBaseUrl: "https://api.anthropic.com",
+	gatewayPort: 8080,
+};
+const SECRET = config.llmTokenSecret;
 
 // Fake Db: records every query and replies via a per-test responder keyed off
 // the SQL. Lets us assert the exact scope filters without a live Postgres.
@@ -39,6 +30,19 @@ const fakeDb: Db = {
 		return responder(text, params) as T[];
 	},
 };
+
+const app = createGateway(config, fakeDb);
+
+function token(extra: Partial<Omit<LlmTokenClaims, "exp">> = {}): string {
+	return mintLlmToken(
+		{ userId: "u1", sandboxId: "sbx", requestId: "req", ...extra },
+		SECRET,
+	);
+}
+
+function headers(t: string): Record<string, string> {
+	return { authorization: `Bearer ${t}`, "content-type": "application/json" };
+}
 
 function kind(text: string): "search" | "resolveDoc" | "resolveColl" | "fetch" {
 	if (text.includes("ts_rank_cd")) return "search";
@@ -156,7 +160,6 @@ describe("gateway · llm proxy", () => {
 
 // ── Document reader (verbatim from the former document-gateway suite) ──
 describe("gateway · document reader (FTS / Postgres)", () => {
-	beforeAll(() => setDbForTests(fakeDb));
 	afterEach(() => {
 		calls = [];
 		responder = () => [];
@@ -443,7 +446,6 @@ describe("gateway · document reader (FTS / Postgres)", () => {
 // is handled by the document reader and never proxied to Anthropic; /v1/messages
 // still proxies; other /v1/* still 404 on the proxy's path allowlist.
 describe("gateway · routing isolation", () => {
-	beforeAll(() => setDbForTests(fakeDb));
 	let fetchSpy: ReturnType<typeof spyOn> | undefined;
 	afterEach(() => {
 		fetchSpy?.mockRestore();

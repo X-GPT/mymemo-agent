@@ -2,11 +2,10 @@
 // Runs each workspace's `test` script in its own process, serially.
 //
 // Separate processes give env/module isolation: packages set conflicting test
-// env (e.g. chat-api wants LLM_TOKEN_SECRET="test-llm-token-secret", gateway
-// wants "test-secret") and freeze module-load config, so a single shared
-// `bun test` over the whole tree leaks state across packages. Serial execution
-// additionally keeps wall-clock timing tests (sandbox-daemon's idle timers)
-// stable under load.
+// env (e.g. chat-api wants LLM_TOKEN_SECRET="test-llm-token-secret") and freeze
+// module-load config, so a single shared `bun test` over the whole tree leaks
+// state across packages. Serial execution additionally keeps wall-clock timing
+// tests (sandbox-daemon's idle timers) stable under load.
 //
 // Discovery is by the presence of a `test` script in a workspace's
 // package.json, so a new package opts in just by declaring one — no list to
