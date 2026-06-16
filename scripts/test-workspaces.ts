@@ -26,14 +26,26 @@ for (const group of WORKSPACE_GROUPS) {
 		const dir = join(group, name);
 		const pkgPath = join(root, dir, "package.json");
 		if (!existsSync(pkgPath)) continue;
-		const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+		let pkg: { scripts?: Record<string, string> };
+		try {
+			pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+		} catch (err) {
+			console.error(
+				`Invalid package.json at ${pkgPath}: ${(err as Error).message}`,
+			);
+			process.exit(1);
+		}
 		if (pkg.scripts?.test) targets.push(dir);
 	}
 }
 
 if (targets.length === 0) {
-	console.log("No workspaces with a `test` script found.");
-	process.exit(0);
+	// This repo always has test-bearing workspaces, so zero means discovery
+	// broke (wrong cwd, renamed dirs) — fail loudly rather than pass silently.
+	console.error(
+		"No workspaces with a `test` script found — discovery is broken.",
+	);
+	process.exit(1);
 }
 
 console.log(`Testing ${targets.length} workspaces:\n  ${targets.join("\n  ")}`);
