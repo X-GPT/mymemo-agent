@@ -15,11 +15,13 @@
  *     that something corrupted the workspace; we throw rather than silently
  *     treating it as empty and overwriting whatever was there.
  *   - Writes are atomic. We write to a temp file in the same directory and
- *     rename it into place, so a crash mid-write can never leave a half-written
- *     `manifest.json` behind.
+ *     rename it into place, so a reader never observes a half-written
+ *     `manifest.json`: it sees either the old file or the complete new one.
+ *     (This guards against torn writes, not against power-loss durability —
+ *     the bytes are not fsync'd before the rename.)
  */
 
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Current on-disk schema version. Bumped only on a breaking format change. */
@@ -139,8 +141,14 @@ export function writeDocsManifest(
 ): void {
 	const target = docsManifestPath(docsDir);
 	const tmp = `${target}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-	renameSync(tmp, target);
+	try {
+		writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+		renameSync(tmp, target);
+	} catch (cause) {
+		// Don't leave a partial temp file behind on a failed write (e.g. ENOSPC).
+		rmSync(tmp, { force: true });
+		throw cause;
+	}
 }
 
 /**
