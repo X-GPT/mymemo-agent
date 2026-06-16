@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MyMemo Agent Workspace Architecture</title>
+<style>
+	:root {
+		color-scheme: light;
+		--ink: #17202a;
+		--muted: #657383;
+		--line: #d8e0e8;
+		--paper: #f6f8fa;
+		--white: #ffffff;
+		--blue: #2458a6;
+		--teal: #087d7b;
+		--green: #2f7d32;
+		--amber: #a15c00;
+		--red: #b4342c;
+		--violet: #6546a4;
+		--shadow: 0 18px 48px rgba(24, 36, 52, 0.12);
+	}
+
+	* {
+		box-sizing: border-box;
+	}
+
+	body {
+		margin: 0;
+		background: var(--paper);
+		color: var(--ink);
+		font-family:
+			Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+			"Segoe UI", sans-serif;
+		line-height: 1.5;
+	}
+
+	header {
+		min-height: 58vh;
+		padding: 34px 24px 72px;
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+		color: var(--white);
+		background:
+			linear-gradient(rgba(18, 28, 42, 0.56), rgba(18, 28, 42, 0.42)),
+			url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='840' viewBox='0 0 1600 840'%3E%3Crect width='1600' height='840' fill='%2317202a'/%3E%3Cg opacity='.88'%3E%3Crect x='110' y='150' width='310' height='175' rx='18' fill='%23f7f8fa'/%3E%3Crect x='590' y='100' width='420' height='245' rx='18' fill='%23f7f8fa'/%3E%3Crect x='1190' y='150' width='300' height='175' rx='18' fill='%23f7f8fa'/%3E%3Crect x='175' y='550' width='330' height='145' rx='18' fill='%23f7f8fa'/%3E%3Crect x='630' y='535' width='340' height='175' rx='18' fill='%23f7f8fa'/%3E%3Crect x='1110' y='550' width='330' height='145' rx='18' fill='%23f7f8fa'/%3E%3Cpath d='M420 238 C520 238 500 220 590 220' stroke='%23087d7b' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Cpath d='M1010 220 C1110 220 1095 238 1190 238' stroke='%23087d7b' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Cpath d='M800 345 C800 450 655 482 505 585' stroke='%23f4b24d' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Cpath d='M800 345 C800 455 800 470 800 535' stroke='%236546a4' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Cpath d='M800 345 C800 450 980 482 1110 585' stroke='%23f4b24d' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='800' cy='220' r='68' fill='%232458a6'/%3E%3Ccircle cx='340' cy='622' r='36' fill='%232f7d32'/%3E%3Ccircle cx='800' cy='622' r='36' fill='%236546a4'/%3E%3Ccircle cx='1275' cy='622' r='36' fill='%23b4342c'/%3E%3C/g%3E%3C/svg%3E");
+		background-position: center;
+		background-size: cover;
+	}
+
+	main {
+		padding: 42px 24px 84px;
+	}
+
+	.topbar,
+	.hero,
+	main > section,
+	footer {
+		width: min(1160px, 100%);
+		margin: 0 auto;
+	}
+
+	.topbar {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 20px;
+		font-size: 13px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.pill {
+		border: 1px solid rgba(255, 255, 255, 0.52);
+		border-radius: 999px;
+		padding: 8px 12px;
+		background: rgba(255, 255, 255, 0.14);
+	}
+
+	.hero {
+		margin-top: 112px;
+	}
+
+	h1 {
+		max-width: 920px;
+		margin: 0;
+		font-size: clamp(42px, 7vw, 88px);
+		line-height: 0.96;
+		letter-spacing: 0;
+	}
+
+	.lede {
+		max-width: 760px;
+		margin: 28px 0 0;
+		color: rgba(255, 255, 255, 0.9);
+		font-size: 20px;
+	}
+
+	section + section {
+		margin-top: 40px;
+	}
+
+	h2 {
+		margin: 0 0 18px;
+		font-size: 26px;
+		letter-spacing: 0;
+	}
+
+	h3 {
+		margin: 0 0 10px;
+		font-size: 18px;
+	}
+
+	p {
+		margin: 0;
+	}
+
+	.panel {
+		background: var(--white);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		box-shadow: var(--shadow);
+		padding: 26px;
+	}
+
+	.summary {
+		display: grid;
+		grid-template-columns: 1.08fr 0.92fr;
+		gap: 20px;
+		align-items: stretch;
+	}
+
+	.callout {
+		border-left: 5px solid var(--blue);
+		background: #edf3fb;
+		border-radius: 6px;
+		padding: 18px 20px;
+		font-size: 18px;
+	}
+
+	.callout strong {
+		color: var(--blue);
+	}
+
+	.stack {
+		display: grid;
+		gap: 12px;
+	}
+
+	.note {
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fbfcfd;
+		padding: 16px;
+	}
+
+	.note b {
+		display: block;
+		margin-bottom: 6px;
+	}
+
+	.note span,
+	.note p {
+		color: var(--muted);
+	}
+
+	.badge {
+		display: inline-flex;
+		align-items: center;
+		border-radius: 999px;
+		padding: 3px 9px;
+		font-size: 12px;
+		font-weight: 700;
+		color: var(--white);
+		background: var(--violet);
+	}
+
+	.badge.green {
+		background: var(--green);
+	}
+
+	.badge.red {
+		background: var(--red);
+	}
+
+	.badge.amber {
+		background: var(--amber);
+	}
+
+	.arch {
+		display: grid;
+		grid-template-columns: repeat(5, minmax(0, 1fr));
+		gap: 14px;
+		align-items: stretch;
+	}
+
+	.arch + .arch {
+		margin-top: 14px;
+	}
+
+	.node {
+		min-height: 158px;
+		border: 1px solid var(--line);
+		border-top: 6px solid var(--blue);
+		border-radius: 8px;
+		background: var(--white);
+		padding: 16px;
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+	}
+
+	.node p {
+		color: var(--muted);
+		font-size: 14px;
+	}
+
+	.node.runtime {
+		border-top-color: var(--amber);
+	}
+
+	.node.gateway {
+		border-top-color: var(--teal);
+	}
+
+	.node.storage {
+		border-top-color: var(--violet);
+	}
+
+	.node.data {
+		border-top-color: var(--green);
+	}
+
+	.node.risk {
+		border-top-color: var(--red);
+	}
+
+	.arrow {
+		display: grid;
+		place-items: center;
+		color: var(--teal);
+		font-size: 34px;
+		font-weight: 800;
+	}
+
+	.flow {
+		display: grid;
+		grid-template-columns: repeat(6, minmax(0, 1fr));
+		gap: 10px;
+	}
+
+	.step {
+		min-height: 128px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fbfcfd;
+		padding: 14px;
+	}
+
+	.step strong {
+		display: block;
+		margin-bottom: 8px;
+	}
+
+	.step p {
+		color: var(--muted);
+		font-size: 14px;
+	}
+
+	.lanes {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 16px;
+	}
+
+	.lane {
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: #fbfcfd;
+		padding: 18px;
+	}
+
+	ul {
+		margin: 0;
+		padding-left: 20px;
+		color: var(--muted);
+	}
+
+	li + li {
+		margin-top: 8px;
+	}
+
+	code {
+		background: #eef1f5;
+		border: 1px solid #dce3eb;
+		border-radius: 5px;
+		padding: 1px 5px;
+		font-family: "SFMono-Regular", Consolas, monospace;
+		font-size: 0.92em;
+	}
+
+	.table {
+		display: grid;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		overflow: hidden;
+	}
+
+	.row {
+		display: grid;
+		grid-template-columns: 0.92fr 1.08fr 1.2fr;
+	}
+
+	.row > div {
+		padding: 14px 16px;
+		border-top: 1px solid var(--line);
+	}
+
+	.row:first-child > div {
+		border-top: 0;
+		background: #17202a;
+		color: var(--white);
+		font-weight: 700;
+	}
+
+	.row > div + div {
+		border-left: 1px solid var(--line);
+	}
+
+	footer {
+		margin-top: 48px;
+		color: var(--muted);
+		font-size: 14px;
+	}
+
+	@media (max-width: 940px) {
+		header {
+			min-height: 52vh;
+		}
+
+		.hero {
+			margin-top: 76px;
+		}
+
+		.summary,
+		.arch,
+		.flow,
+		.lanes,
+		.row {
+			grid-template-columns: 1fr;
+		}
+
+		.arrow {
+			transform: rotate(90deg);
+			min-height: 54px;
+		}
+
+		.row > div + div {
+			border-left: 0;
+		}
+	}
+</style>
+</head>
+<body>
+	<header>
+		<div class="topbar">
+			<div>MyMemo agent workspace architecture</div>
+			<div class="pill">E2B runtime · unified gateway · VPC DB</div>
+		</div>
+		<div class="hero">
+			<h1>Use E2B for execution. Keep documents behind the gateway.</h1>
+			<p class="lede">The target design is a warm-on-demand AI workspace: the user gets durable continuity, the sandbox only runs while useful, and document access remains mediated by a VPC-capable unified gateway instead of direct database credentials.</p>
+		</div>
+	</header>
+
+	<main>
+		<section class="summary">
+			<div class="panel">
+				<h2>Architecture Decision</h2>
+				<div class="callout">
+					<strong>Choose E2B now, not Fargate.</strong>
+					E2B is better aligned with Bash-capable, prompt-influenced agent execution. AWS remains the durable data/control plane: database, unified gateway, object storage, audit, and state.
+				</div>
+			</div>
+			<div class="panel stack">
+				<div class="note">
+					<b><span class="badge green">Runtime</span> Warm-on-demand sandbox</b>
+					<span>One logical workspace per user, but physical sandboxes are created or reused only around active work and killed after a short idle window.</span>
+				</div>
+				<div class="note">
+					<b><span class="badge red">Boundary</span> No DB access from sandbox</b>
+					<span>The sandbox never receives <code>DATABASE_URL</code>, AWS credentials, or broad document credentials. It asks a gateway for documents.</span>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>System Shape</h2>
+			<div class="arch" aria-label="Primary architecture">
+				<div class="node">
+					<h3>chat-api control plane</h3>
+					<p>Owns identity merge, logical workspace, conversation, run, event log, sandbox lease, and token minting.</p>
+				</div>
+				<div class="arrow">→</div>
+				<div class="node runtime">
+					<h3>E2B sandbox runtime</h3>
+					<p>Runs daemon, agent, Bash tools, browser/runtime work, and conversation-local files during a lease.</p>
+				</div>
+				<div class="arrow">↔</div>
+				<div class="node storage">
+					<h3>workspace store</h3>
+					<p>Durable object storage for artifacts, workdirs, hydrated docs, snapshots, and sync manifests.</p>
+				</div>
+			</div>
+			<div class="arch" aria-label="Document access architecture">
+				<div class="node gateway">
+					<h3>unified gateway · docs</h3>
+					<p>Runs inside or with access to the AWS VPC. The document module verifies doc tokens and enforces document scope.</p>
+				</div>
+				<div class="arrow">→</div>
+				<div class="node data">
+					<h3>document DB</h3>
+					<p>Private database reachable only from the unified gateway security group, never from E2B sandboxes.</p>
+				</div>
+				<div class="arrow">↔</div>
+				<div class="node gateway">
+					<h3>unified gateway · LLM</h3>
+					<p>The LLM module injects provider keys, enforces model/budget policy, and keeps LLM credentials outside the sandbox.</p>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Sandbox Lifecycle</h2>
+			<div class="flow" aria-label="Warm on demand lifecycle">
+				<div class="step">
+					<strong>1. Request</strong>
+					<p>User sends a message for a conversation or task.</p>
+				</div>
+				<div class="step">
+					<strong>2. Lease</strong>
+					<p>Reuse a warm E2B sandbox for the user or create a new one.</p>
+				</div>
+				<div class="step">
+					<strong>3. Hydrate</strong>
+					<p>Restore conversation workdir, selected artifacts, and likely docs.</p>
+				</div>
+				<div class="step">
+					<strong>4. Run</strong>
+					<p>Agent works locally and can request more documents on demand.</p>
+				</div>
+				<div class="step">
+					<strong>5. Sync</strong>
+					<p>Persist changed files, emitted events, fetched-doc manifest, and outputs.</p>
+				</div>
+				<div class="step">
+					<strong>6. Recycle</strong>
+					<p>After 3-5 minutes idle, version drift, or risk signal, terminate sandbox.</p>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Document Access Model</h2>
+			<div class="flow" aria-label="Hybrid document retrieval">
+				<div class="step">
+					<strong>Open question</strong>
+					<p>For broad document questions, remote search is the default even when local files seem relevant.</p>
+				</div>
+				<div class="step">
+					<strong>One tool</strong>
+					<p>Agent calls <code>search_documents(query)</code>. There is no separate agent-facing fetch step.</p>
+				</div>
+				<div class="step">
+					<strong>Internal hydrate</strong>
+					<p>Gateway/daemon searches, ranks, fetches selected docs, and writes them to local disk.</p>
+				</div>
+				<div class="step">
+					<strong>Combined results</strong>
+					<p>Tool returns already-local docs plus newly hydrated remote docs as local file paths.</p>
+				</div>
+				<div class="step">
+					<strong>Local process</strong>
+					<p>Agent reads returned paths under the conversation docs directory and works locally.</p>
+				</div>
+				<div class="step">
+					<strong>Explicit local only</strong>
+					<p>Skip remote search only when the user clearly says to use current or already-loaded files.</p>
+				</div>
+			</div>
+		</section>
+
+		<section class="lanes">
+			<div class="lane">
+				<h3>Sandbox Rules</h3>
+				<ul>
+					<li>Sandbox is a hydrated working copy, not the source of truth.</li>
+					<li>Conversation files live under <code>/workspace/conversations/{conversationId}</code>.</li>
+					<li>Local docs are a working set, not proof the whole corpus has been searched.</li>
+					<li>Documents are projected per conversation/run, not copied as a full user corpus.</li>
+					<li>Daemon/agent updates are handled by recycling idle sandboxes or starting new ones with the latest bundle.</li>
+				</ul>
+			</div>
+			<div class="lane">
+				<h3>Unified Gateway Rules</h3>
+				<ul>
+					<li>Use separate <code>doc_token</code> and <code>llm_token</code>.</li>
+					<li>Add and enforce <code>aud</code>, <code>userId</code>, <code>conversationId</code>, <code>runId</code>, scope, and expiry.</li>
+					<li>DB security group allows inbound only from the unified gateway.</li>
+					<li><code>search_documents</code> internally searches, fetches, hydrates, dedupes, limits, and audits.</li>
+				</ul>
+			</div>
+			<div class="lane">
+				<h3>Cost Controls</h3>
+				<ul>
+					<li>Keep sandboxes warm only briefly after active work.</li>
+					<li>Persist state to object storage/Postgres before termination.</li>
+					<li>Hydrate only needed files to reduce startup and storage cost.</li>
+					<li>Use Fargate later only if AWS-native control outweighs sandbox-platform engineering cost.</li>
+				</ul>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Agent Document Policy</h2>
+			<div class="table">
+				<div class="row">
+					<div>User Intent</div>
+					<div>Agent Behavior</div>
+					<div>Reason</div>
+				</div>
+				<div class="row">
+					<div><span class="badge green">Open document question</span></div>
+					<div>Call <code>search_documents</code>, then read the returned local paths.</div>
+					<div>Relevant local files do not prove remote files are irrelevant.</div>
+				</div>
+				<div class="row">
+					<div><span class="badge amber">Compare or find all</span></div>
+					<div>Search remote corpus and combine already-local docs with newly hydrated docs.</div>
+					<div>The answer may require related or historical documents outside the current working set.</div>
+				</div>
+				<div class="row">
+					<div><span class="badge">Explicit current-file task</span></div>
+					<div>Use local files only when the user says this file, current files, already loaded docs, or the file just found.</div>
+					<div>The user intentionally narrowed the scope to the sandbox working set.</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>E2B vs Fargate</h2>
+			<div class="table">
+				<div class="row">
+					<div>Choice</div>
+					<div>Strength</div>
+					<div>Recommendation</div>
+				</div>
+				<div class="row">
+					<div><span class="badge green">E2B</span></div>
+					<div>Purpose-built agent sandbox runtime with the current daemon/orchestration model already in place.</div>
+					<div>Use now. Add warm-on-demand leasing, durable workspace sync, and unified-gateway-backed document access.</div>
+				</div>
+				<div class="row">
+					<div><span class="badge amber">Fargate</span></div>
+					<div>AWS-native task runtime with strong VPC/IAM integration, but it is a generic container platform.</div>
+					<div>Consider later if you want to own the sandbox platform inside AWS and need tighter enterprise controls.</div>
+				</div>
+				<div class="row">
+					<div><span class="badge red">Always-on per-user runtime</span></div>
+					<div>Best continuity and lowest follow-up latency, but idle cost scales directly with users.</div>
+					<div>Avoid as the default. Use short warm windows and recycle aggressively.</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Component Contract</h2>
+			<div class="table">
+				<div class="row">
+					<div>Component</div>
+					<div>Owns</div>
+					<div>Must Not Own</div>
+				</div>
+				<div class="row">
+					<div>chat-api</div>
+					<div>Logical workspace, sandbox lease, conversation/run state, token minting, sync orchestration, SSE replay.</div>
+					<div>Provider keys, DB credentials, or long-lived untrusted execution.</div>
+				</div>
+				<div class="row">
+					<div>E2B sandbox</div>
+					<div>Agent runtime, Bash/browser/tool execution, local projected files, generated artifacts during a lease.</div>
+					<div>Direct DB access, full user corpus, AWS credentials, provider credentials, or durable source-of-truth state.</div>
+				</div>
+				<div class="row">
+					<div>unified gateway</div>
+					<div>LLM proxying, provider-key injection, VPC DB access, document search/fetch, scope enforcement, audit, hydration responses.</div>
+					<div>Prompt construction, conversation memory, durable workspace ownership, or arbitrary sandbox execution.</div>
+				</div>
+				<div class="row">
+					<div>workspace store</div>
+					<div>Persisted workdirs, outputs, snapshots, fetched-doc manifests, and sync metadata.</div>
+					<div>Authorization decisions or running code.</div>
+				</div>
+			</div>
+		</section>
+
+		<footer>
+			Target architecture: E2B runs the untrusted agent only while useful; the AWS-hosted unified gateway and stores own data authority, durable state, audit, provider-key injection, and VPC-only database access. The sandbox can discover missing documents through controlled on-demand retrieval, but it never connects to the database directly.
+		</footer>
+	</main>
+</body>
+</html>
