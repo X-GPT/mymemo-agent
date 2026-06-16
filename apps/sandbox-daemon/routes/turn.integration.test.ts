@@ -29,10 +29,10 @@ mock.module("../child-spawn", () => ({
 	spawnAgent: mockSpawnAgent,
 }));
 
-// Point the agent's working directory at a temp dir so the turn route's
-// mkdirSync doesn't touch the host's /workspace.
+// Point the workspace root at a temp dir so the turn route's directory
+// creation doesn't touch the host's /workspace.
 const testRoot = join(tmpdir(), `turn-integration-${Date.now()}`);
-process.env.SANDBOX_AGENT_CWD = join(testRoot, "agent");
+process.env.SANDBOX_WORKSPACE_ROOT = testRoot;
 
 // Ensure turn-lock module is loaded
 require("../turn-lock");
@@ -204,6 +204,39 @@ describe("POST /turn integration", () => {
 		expect(started).toBeDefined();
 		expect(started?.conversation_id).toBe("conv-77");
 		expect(started?.run_id).toBe("run-88");
+	});
+
+	it("rejects a malformed conversation_id with 400 and no spawn", async () => {
+		const res = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(
+				makeTurnBody({ conversation_id: "../../etc/passwd" }),
+			),
+		});
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: "Invalid conversation_id" });
+		expect(mockSpawnAgent).not.toHaveBeenCalled();
+	});
+
+	it("runs the agent from the conversation's work dir", async () => {
+		let captured: SpawnAgentInput | undefined;
+		mockSpawnAgent.mockImplementation((input) => {
+			captured = input;
+			return emitAgent(input, [{ type: "completed" }]);
+		});
+
+		const res = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(makeTurnBody({ conversation_id: "conv-cwd" })),
+		});
+		await res.text();
+
+		expect(captured?.cwd).toBe(
+			join(testRoot, "conversations", "conv-cwd", "work"),
+		);
 	});
 
 	it("forwards llm/doc base urls and both tokens from the body to spawnAgent", async () => {
