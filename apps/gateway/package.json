@@ -3,6 +3,7 @@
 	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
+		"test": "bun test",
 		"dev": "bun run --hot src/index.ts",
 		"format": "biome format --write",
 		"lint": "biome lint --write",
