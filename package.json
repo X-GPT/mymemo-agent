@@ -2,7 +2,7 @@
 	"name": "mymemo-agent",
 	"module": "index.ts",
 	"scripts": {
-		"test": "bun --cwd packages/llm-token test && bun --cwd apps/gateway test && bun --cwd apps/mymemo-docs test && bun --cwd apps/chat-api test && bun --cwd apps/sandbox-daemon test"
+		"test": "bun run scripts/test-workspaces.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.11",
