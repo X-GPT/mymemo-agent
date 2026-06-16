@@ -15,7 +15,7 @@ The current codebase is a Bun monorepo:
 ```text
 apps/
   chat-api/          public/internal chat API and E2B orchestrator
-  gateway/           unified OpenRouter-backed LLM proxy + scoped document DB reader
+  gateway/           unified LLM proxy (Anthropic upstream today) + scoped document DB reader
   sandbox-daemon/    daemon and agent bundle shipped into E2B
   mymemo-docs/       CLI used by the sandbox agent for document search/fetch
 
@@ -29,6 +29,7 @@ Current behavior:
 - `chat-api` deploys `daemon.js` and `agent.js` into the sandbox.
 - `sandbox-daemon` runs the Claude Agent SDK process.
 - The agent calls the unified gateway for LLM traffic and document access.
+- The gateway proxies LLM traffic to Anthropic today: it requires `ANTHROPIC_API_KEY` and defaults `UPSTREAM_BASE_URL` to `https://api.anthropic.com` (`apps/gateway/src/env.ts`).
 - Target state: the gateway sends LLM traffic to OpenRouter by default, not directly to Anthropic.
 - Documents are not materialized to the sandbox filesystem by default.
 - The current document tool exposes separate `mymemo-docs search` and `mymemo-docs fetch`.

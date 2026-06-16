@@ -449,7 +449,7 @@
 					<h3>Repository</h3>
 					<pre><code>apps/
   chat-api/          public/internal chat API and E2B orchestrator
-  gateway/           unified OpenRouter-backed LLM proxy + scoped document DB reader
+  gateway/           unified LLM proxy (Anthropic upstream today) + scoped document DB reader
   sandbox-daemon/    daemon and agent bundle shipped into E2B
   mymemo-docs/       CLI used by the sandbox agent for document search/fetch
 
@@ -462,6 +462,7 @@ packages/
 						<li><code>chat-api</code> creates a fresh E2B sandbox per turn.</li>
 						<li><code>daemon.js</code> and <code>agent.js</code> are deployed into that sandbox.</li>
 						<li>The sandbox agent calls the unified gateway for LLM and documents.</li>
+						<li>The gateway proxies LLM traffic to Anthropic today (<code>ANTHROPIC_API_KEY</code>, <code>UPSTREAM_BASE_URL</code> defaults to <code>api.anthropic.com</code>).</li>
 						<li>Target state: the gateway sends LLM traffic to OpenRouter by default.</li>
 						<li>Documents are not materialized to local disk by default.</li>
 						<li><code>mymemo-docs</code> exposes separate <code>search</code> and <code>fetch</code>.</li>
