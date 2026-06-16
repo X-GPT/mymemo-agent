@@ -32,6 +32,8 @@ function authTokenMatches(
 interface TurnRequest {
 	request_id: string;
 	user_id: string;
+	conversation_id: string;
+	run_id: string;
 	scope_type: "global" | "collection" | "document";
 	collection_id?: string;
 	summary_id?: string;
@@ -61,6 +63,8 @@ app.post("/turn", async (c) => {
 	if (
 		!body.request_id ||
 		!body.user_id ||
+		!body.conversation_id ||
+		!body.run_id ||
 		!body.message ||
 		!body.system_prompt ||
 		!body.llm_base_url ||
@@ -72,6 +76,8 @@ app.post("/turn", async (c) => {
 
 	const {
 		request_id,
+		conversation_id,
+		run_id,
 		message,
 		agent_session_id,
 		system_prompt,
@@ -91,7 +97,14 @@ app.post("/turn", async (c) => {
 			c.header("Content-Type", "application/x-ndjson");
 
 			try {
-				await s.write(ndjsonLine({ type: "started", turn_id: request_id }));
+				await s.write(
+					ndjsonLine({
+						type: "started",
+						turn_id: request_id,
+						conversation_id,
+						run_id,
+					}),
+				);
 
 				const cwd = getAgentCwd();
 				mkdirSync(cwd, { recursive: true });

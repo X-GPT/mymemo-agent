@@ -73,6 +73,8 @@ export async function complete(
 
 	await runSandboxChat({
 		userId: memberCode,
+		conversationId: resolvedConversationId,
+		runId,
 		query: chatContent,
 		scope,
 		collectionId: normalizedCollectionId,

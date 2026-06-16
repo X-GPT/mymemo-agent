@@ -14,11 +14,18 @@ Bun.env.GATEWAY_PUBLIC_URL =
 // Orchestration is mocked so no E2B sandbox, gateway, database, or provider
 // call is made. A mutable holder lets each test swap the run behavior.
 type RunOpts = {
+	userId: string;
+	conversationId: string;
+	runId: string;
 	onSandboxId: (id: string) => Promise<void>;
 	onAgentSessionId: (id: string) => Promise<void>;
 	onTextDelta: (text: string) => Promise<void>;
 	onTextEnd: () => Promise<void>;
 };
+
+// Captures the options the route passed into orchestration, so tests can assert
+// run identity is propagated from the chat route down to the sandbox turn.
+let lastRunOpts: RunOpts | undefined;
 
 let runSandboxChatImpl: (opts: RunOpts) => Promise<unknown> = async (opts) => {
 	await opts.onSandboxId("sbx-test");
@@ -31,7 +38,10 @@ let runSandboxChatImpl: (opts: RunOpts) => Promise<unknown> = async (opts) => {
 class FakeConversationBusyError extends Error {}
 
 mock.module("@/features/sandbox-orchestration", () => ({
-	runSandboxChat: (opts: RunOpts) => runSandboxChatImpl(opts),
+	runSandboxChat: (opts: RunOpts) => {
+		lastRunOpts = opts;
+		return runSandboxChatImpl(opts);
+	},
 	ConversationBusyError: FakeConversationBusyError,
 }));
 
@@ -73,6 +83,7 @@ function parseSSE(raw: string): SSEFrame[] {
 
 describe("POST /v1/chat", () => {
 	beforeEach(() => {
+		lastRunOpts = undefined;
 		runSandboxChatImpl = async (opts) => {
 			await opts.onSandboxId("sbx-test");
 			await opts.onAgentSessionId("agent-sess-test");
@@ -131,6 +142,23 @@ describe("POST /v1/chat", () => {
 		const { conversationId } = JSON.parse(convFrame!.data);
 		expect(typeof conversationId).toBe("string");
 		expect(conversationId.length).toBeGreaterThan(0);
+	});
+
+	it("propagates userId, conversationId, and runId into orchestration", async () => {
+		const res = await postChat({
+			chatContent: "hi",
+			conversationId: "conv-xyz",
+		});
+		const frames = parseSSE(await res.text());
+		const runId = JSON.parse(
+			frames.find((f) => f.event === "run_id")!.data,
+		).runId;
+
+		expect(lastRunOpts).toBeDefined();
+		expect(lastRunOpts!.userId).toBe("member-1");
+		// The id the route forwards must match the one announced to the client.
+		expect(lastRunOpts!.conversationId).toBe("conv-xyz");
+		expect(lastRunOpts!.runId).toBe(runId);
 	});
 
 	it("carries a run_id and agent_session_id payload", async () => {

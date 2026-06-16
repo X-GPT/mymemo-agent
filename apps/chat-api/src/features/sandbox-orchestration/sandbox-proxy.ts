@@ -3,6 +3,10 @@ import { ConversationBusyError } from "./errors";
 export interface TurnRequest {
 	request_id: string;
 	user_id: string;
+	/** Product-visible thread id. Stable across turns of one conversation. */
+	conversation_id: string;
+	/** Identifies this single backend execution attempt. */
+	run_id: string;
 	scope_type: "global" | "collection" | "document";
 	collection_id?: string;
 	summary_id?: string;

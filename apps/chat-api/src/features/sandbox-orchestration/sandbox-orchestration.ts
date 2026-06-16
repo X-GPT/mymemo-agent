@@ -16,6 +16,10 @@ function toSandboxScope(scope: ChatMessagesScope): SandboxScopeType {
 
 export interface RunSandboxChatOptions {
 	userId: string;
+	/** Product-visible thread id for this turn. */
+	conversationId: string;
+	/** Identifies this single backend execution attempt. */
+	runId: string;
 	query: string;
 	scope: ChatMessagesScope;
 	collectionId: string | null;
@@ -36,6 +40,8 @@ export async function runSandboxChat(
 ): Promise<RunSandboxChatResult> {
 	const {
 		userId,
+		conversationId,
+		runId,
 		query,
 		scope,
 		collectionId,
@@ -47,6 +53,13 @@ export async function runSandboxChat(
 		onSandboxId,
 		logger,
 	} = options;
+
+	logger.info({
+		msg: "Sandbox chat run starting",
+		userId,
+		conversationId,
+		runId,
+	});
 
 	const attempt = async () => {
 		const sandbox = await sandboxManager.createSandbox(userId, logger);
@@ -76,6 +89,8 @@ export async function runSandboxChat(
 			const turnRequest: TurnRequest = {
 				request_id: requestId,
 				user_id: userId,
+				conversation_id: conversationId,
+				run_id: runId,
 				scope_type: toSandboxScope(scope),
 				collection_id: collectionId ?? undefined,
 				summary_id: summaryId ?? undefined,
@@ -128,6 +143,8 @@ export async function runSandboxChat(
 		logger.error({
 			msg: "Sandbox creation failed, retrying",
 			userId,
+			conversationId,
+			runId,
 			error: err.message,
 		});
 
@@ -137,6 +154,8 @@ export async function runSandboxChat(
 			logger.error({
 				msg: "Sandbox creation retry also failed",
 				userId,
+				conversationId,
+				runId,
 				error: retryErr instanceof Error ? retryErr.message : String(retryErr),
 			});
 			throw retryErr;

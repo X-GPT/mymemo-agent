@@ -63,6 +63,8 @@ describe("POST /turn integration", () => {
 		return {
 			request_id: `req-${reqCounter}-${Date.now()}`,
 			user_id: "user-1",
+			conversation_id: "conv-1",
+			run_id: "run-1",
 			scope_type: "global",
 			message: "hello",
 			system_prompt: "you are helpful",
@@ -167,6 +169,40 @@ describe("POST /turn integration", () => {
 			.filter((e) => e.type === "text_delta")
 			.map((e) => e.text);
 		expect(deltas).toEqual(["Hello ", "World"]);
+	});
+
+	it("rejects a body missing conversation_id or run_id with 400", async () => {
+		const body: Record<string, unknown> = makeTurnBody();
+		delete body.conversation_id;
+		const res = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(body),
+		});
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: "Missing required fields" });
+		expect(mockSpawnAgent).not.toHaveBeenCalled();
+	});
+
+	it("surfaces conversation_id and run_id on the started event", async () => {
+		mockSpawnAgent.mockImplementation((input) =>
+			emitAgent(input, [{ type: "completed" }]),
+		);
+
+		const res = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(
+				makeTurnBody({ conversation_id: "conv-77", run_id: "run-88" }),
+			),
+		});
+
+		const events = parseNdjson(await res.text());
+		const started = events.find((e) => e.type === "started");
+		expect(started).toBeDefined();
+		expect(started?.conversation_id).toBe("conv-77");
+		expect(started?.run_id).toBe("run-88");
 	});
 
 	it("forwards llm_base_url and llm_token from the body to spawnAgent", async () => {
