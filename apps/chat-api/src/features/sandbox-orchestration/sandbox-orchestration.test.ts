@@ -107,23 +107,80 @@ describe("runSandboxChat", () => {
 		);
 	});
 
-	it("mints a verifiable llm token bound to the user and sandbox, plus the gateway url", async () => {
+	it("mints verifiable per-audience llm and doc tokens bound to the user, sandbox, and run", async () => {
 		spyForwardTurn = spyOn(
 			proxyModule,
 			"forwardChatTurnToSandbox",
 		).mockImplementation(async (opts) => {
 			expect(opts.turnRequest.llm_base_url).toBe("https://gateway.test");
 			expect(opts.turnRequest.doc_gateway_url).toBe("https://gateway.test");
-			const verified = verifyLlmToken(
+
+			// LLM token verifies only for the llm audience, not documents.
+			const llm = verifyLlmToken(
 				opts.turnRequest.llm_token,
 				"test-llm-token-secret",
+				"llm",
 			);
-			expect(verified?.userId).toBe("user-1");
-			expect(verified?.sandboxId).toBe("sbx-123");
-			expect(verified?.requestId).toBe(opts.turnRequest.request_id);
+			expect(llm?.aud).toBe("llm");
+			expect(llm?.userId).toBe("user-1");
+			expect(llm?.sandboxId).toBe("sbx-123");
+			expect(llm?.requestId).toBe(opts.turnRequest.request_id);
+			expect(llm?.conversationId).toBe("conv-1");
+			expect(llm?.runId).toBe("run-1");
+			expect(
+				verifyLlmToken(
+					opts.turnRequest.llm_token,
+					"test-llm-token-secret",
+					"documents",
+				),
+			).toBeNull();
+
+			// Doc token verifies only for the documents audience, not llm.
+			const doc = verifyLlmToken(
+				opts.turnRequest.doc_token,
+				"test-llm-token-secret",
+				"documents",
+			);
+			expect(doc?.aud).toBe("documents");
+			expect(doc?.userId).toBe("user-1");
+			expect(doc?.runId).toBe("run-1");
+			expect(
+				verifyLlmToken(
+					opts.turnRequest.doc_token,
+					"test-llm-token-secret",
+					"llm",
+				),
+			).toBeNull();
 		});
 
 		await runSandboxChat(makeOptions());
+	});
+
+	it("signs the document scope into the doc token, not the llm token", async () => {
+		spyForwardTurn = spyOn(
+			proxyModule,
+			"forwardChatTurnToSandbox",
+		).mockImplementation(async (opts) => {
+			const doc = verifyLlmToken(
+				opts.turnRequest.doc_token,
+				"test-llm-token-secret",
+				"documents",
+			);
+			expect(doc?.scope).toBe("collection");
+			expect(doc?.collectionId).toBe("col-1");
+			// The LLM token carries no document scope.
+			const llm = verifyLlmToken(
+				opts.turnRequest.llm_token,
+				"test-llm-token-secret",
+				"llm",
+			);
+			expect(llm?.scope).toBeUndefined();
+			expect(llm?.collectionId).toBeUndefined();
+		});
+
+		await runSandboxChat(
+			makeOptions({ scope: "collection", collectionId: "col-1" }),
+		);
 	});
 
 	it("propagates conversationId and runId into the daemon turn request", async () => {

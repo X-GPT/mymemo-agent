@@ -251,11 +251,16 @@ export interface SpawnAgentInput {
 	/** Document gateway base URL — set as MYMEMO_DOC_GATEWAY_URL for the CLI. */
 	docGatewayUrl: string;
 	/**
-	 * Short-lived bearer token — set as ANTHROPIC_AUTH_TOKEN (LLM gateway) and
-	 * MYMEMO_DOC_TOKEN (document gateway). The signed scope is enforced by the
-	 * document gateway.
+	 * Short-lived LLM bearer token (aud: "llm") — set as ANTHROPIC_AUTH_TOKEN for
+	 * the Claude binary. Holds no document scope.
 	 */
 	llmToken: string;
+	/**
+	 * Short-lived document bearer token (aud: "documents") — set as
+	 * MYMEMO_DOC_TOKEN for the `mymemo-docs` CLI. Carries the signed scope the
+	 * document gateway enforces.
+	 */
+	docToken: string;
 	onEvent: (event: AgentEvent) => void | Promise<void>;
 }
 
@@ -266,7 +271,8 @@ export interface SpawnAgentResult {
 export async function spawnAgent(
 	input: SpawnAgentInput,
 ): Promise<SpawnAgentResult> {
-	const { onEvent, llmBaseUrl, docGatewayUrl, llmToken, ...config } = input;
+	const { onEvent, llmBaseUrl, docGatewayUrl, llmToken, docToken, ...config } =
+		input;
 	ensureClaudeProjectsDir();
 	const proc = Bun.spawn(buildAgentSpawnArgv(config.cwd), {
 		env: {
@@ -275,10 +281,10 @@ export async function spawnAgent(
 			ANTHROPIC_BASE_URL: llmBaseUrl,
 			ANTHROPIC_AUTH_TOKEN: llmToken,
 			// Document access: the `mymemo-docs` CLI (on PATH) calls the document
-			// gateway with this token. The gateway enforces the token's signed
-			// scope, so the agent holds no document credential.
+			// gateway with its own (aud: "documents") token. The gateway enforces
+			// the token's signed scope, so the agent holds no document credential.
 			MYMEMO_DOC_GATEWAY_URL: docGatewayUrl,
-			MYMEMO_DOC_TOKEN: llmToken,
+			MYMEMO_DOC_TOKEN: docToken,
 			PATH: process.env.PATH ?? "",
 			CLAUDE_CODE_PATH: process.env.CLAUDE_CODE_PATH ?? "/usr/local/bin/claude",
 		},

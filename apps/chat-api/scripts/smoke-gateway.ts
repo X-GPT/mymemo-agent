@@ -53,7 +53,12 @@ function check(name: string, ok: boolean, detail = ""): void {
 
 function mint(ttlMs?: number): string {
 	return mintLlmToken(
-		{ userId: "smoke", sandboxId: "smoke-sbx", requestId: crypto.randomUUID() },
+		{
+			aud: "llm",
+			userId: "smoke",
+			sandboxId: "smoke-sbx",
+			requestId: crypto.randomUUID(),
+		},
 		SECRET,
 		ttlMs,
 	);

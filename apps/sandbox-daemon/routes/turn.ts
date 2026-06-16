@@ -43,6 +43,7 @@ interface TurnRequest {
 	llm_base_url: string;
 	doc_gateway_url: string;
 	llm_token: string;
+	doc_token: string;
 }
 
 function ndjsonLine(obj: Record<string, unknown>): string {
@@ -69,7 +70,8 @@ app.post("/turn", async (c) => {
 		!body.system_prompt ||
 		!body.llm_base_url ||
 		!body.doc_gateway_url ||
-		!body.llm_token
+		!body.llm_token ||
+		!body.doc_token
 	) {
 		return c.json({ error: "Missing required fields" }, 400);
 	}
@@ -84,6 +86,7 @@ app.post("/turn", async (c) => {
 		llm_base_url,
 		doc_gateway_url,
 		llm_token,
+		doc_token,
 	} = body;
 
 	const lock = acquireTurn(request_id);
@@ -119,6 +122,7 @@ app.post("/turn", async (c) => {
 					llmBaseUrl: llm_base_url,
 					docGatewayUrl: doc_gateway_url,
 					llmToken: llm_token,
+					docToken: doc_token,
 					onEvent: async (event) => {
 						if (event.type === "completed") {
 							// We emit our own `completed` below.

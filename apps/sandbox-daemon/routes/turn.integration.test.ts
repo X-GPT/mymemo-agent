@@ -71,6 +71,7 @@ describe("POST /turn integration", () => {
 			llm_base_url: "https://gateway.test",
 			doc_gateway_url: "https://docs.test",
 			llm_token: "test-token",
+			doc_token: "test-doc-token",
 			...overrides,
 		};
 	}
@@ -205,7 +206,7 @@ describe("POST /turn integration", () => {
 		expect(started?.run_id).toBe("run-88");
 	});
 
-	it("forwards llm_base_url and llm_token from the body to spawnAgent", async () => {
+	it("forwards llm/doc base urls and both tokens from the body to spawnAgent", async () => {
 		let captured: SpawnAgentInput | undefined;
 		mockSpawnAgent.mockImplementation((input) => {
 			captured = input;
@@ -222,7 +223,21 @@ describe("POST /turn integration", () => {
 		await res.text();
 
 		expect(captured?.llmBaseUrl).toBe("https://gateway.test");
+		expect(captured?.docGatewayUrl).toBe("https://docs.test");
 		expect(captured?.llmToken).toBe("test-token");
+		expect(captured?.docToken).toBe("test-doc-token");
+	});
+
+	it("rejects a turn missing the doc_token (400, no spawn)", async () => {
+		const body = makeTurnBody();
+		body.doc_token = "";
+		const res = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(body),
+		});
+		expect(res.status).toBe(400);
+		expect(mockSpawnAgent).not.toHaveBeenCalled();
 	});
 
 	it("forwards session_id from agent.js", async () => {

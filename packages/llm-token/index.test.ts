@@ -4,6 +4,7 @@ import { type LlmTokenClaims, mintLlmToken, verifyLlmToken } from "./index";
 
 const SECRET = "test-secret";
 const claims: Omit<LlmTokenClaims, "exp"> = {
+	aud: "llm",
 	userId: "u1",
 	sandboxId: "sbx-1",
 	requestId: "req-1",
@@ -73,13 +74,19 @@ describe("llm-token", () => {
 	it("rejects a validly-signed object with a missing or non-numeric exp", () => {
 		expect(
 			verifyLlmToken(
-				signedToken({ userId: "u", sandboxId: "s", requestId: "r" }),
+				signedToken({
+					aud: "llm",
+					userId: "u",
+					sandboxId: "s",
+					requestId: "r",
+				}),
 				SECRET,
 			),
 		).toBeNull();
 		expect(
 			verifyLlmToken(
 				signedToken({
+					aud: "llm",
 					userId: "u",
 					sandboxId: "s",
 					requestId: "r",
@@ -100,9 +107,59 @@ describe("llm-token", () => {
 		// JSON.stringify(Infinity) === "null", so craft raw JSON: 1e999 → Infinity,
 		// which `Infinity < Date.now()` would treat as never-expiring.
 		const body = Buffer.from(
-			'{"userId":"u","sandboxId":"s","requestId":"r","exp":1e999}',
+			'{"aud":"llm","userId":"u","sandboxId":"s","requestId":"r","exp":1e999}',
 		).toString("base64url");
 		const sig = createHmac("sha256", SECRET).update(body).digest("base64url");
 		expect(verifyLlmToken(`${body}.${sig}`, SECRET)).toBeNull();
+	});
+
+	// ── Audience (aud) ──
+	it("rejects a validly-signed token with a missing audience", () => {
+		expect(
+			verifyLlmToken(
+				signedToken({
+					userId: "u",
+					sandboxId: "s",
+					requestId: "r",
+					exp: Date.now() + 1000,
+				}),
+				SECRET,
+			),
+		).toBeNull();
+	});
+
+	it("rejects a validly-signed token with an invalid audience value", () => {
+		expect(
+			verifyLlmToken(
+				signedToken({
+					aud: "admin",
+					userId: "u",
+					sandboxId: "s",
+					requestId: "r",
+					exp: Date.now() + 1000,
+				}),
+				SECRET,
+			),
+		).toBeNull();
+	});
+
+	it("rejects a token whose audience does not match the expected audience", () => {
+		const llmTok = mintLlmToken({ ...claims, aud: "llm" }, SECRET);
+		const docTok = mintLlmToken({ ...claims, aud: "documents" }, SECRET);
+		// Right audience verifies; wrong audience fails closed.
+		expect(verifyLlmToken(llmTok, SECRET, "llm")?.aud).toBe("llm");
+		expect(verifyLlmToken(llmTok, SECRET, "documents")).toBeNull();
+		expect(verifyLlmToken(docTok, SECRET, "documents")?.aud).toBe("documents");
+		expect(verifyLlmToken(docTok, SECRET, "llm")).toBeNull();
+	});
+
+	it("round-trips conversationId and runId claims", () => {
+		const token = mintLlmToken(
+			{ ...claims, conversationId: "conv-1", runId: "run-1" },
+			SECRET,
+		);
+		const verified = verifyLlmToken(token, SECRET);
+		expect(verified?.conversationId).toBe("conv-1");
+		expect(verified?.runId).toBe("run-1");
 	});
 });
