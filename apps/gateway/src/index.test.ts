@@ -2,12 +2,10 @@ import { afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { type LlmTokenClaims, mintLlmToken } from "@mymemo/llm-token";
 import type { Db } from "./db";
 
-// The merged env validates ANTHROPIC_API_KEY + DATABASE_URL + LLM_TOKEN_SECRET at
-// module load, so set all three before importing ./index.
+// The merged env (ANTHROPIC_API_KEY + DATABASE_URL + LLM_TOKEN_SECRET) is
+// provided by the test-setup preload (see bunfig.toml) before ./index loads.
+// SECRET must match the preload's LLM_TOKEN_SECRET so minted tokens verify.
 const SECRET = "test-secret";
-Bun.env.ANTHROPIC_API_KEY = "test-anthropic-key";
-Bun.env.DATABASE_URL = "postgres://test@localhost/test";
-Bun.env.LLM_TOKEN_SECRET = SECRET;
 
 let app: typeof import("./index").app;
 let setDbForTests: typeof import("./index").setDbForTests;

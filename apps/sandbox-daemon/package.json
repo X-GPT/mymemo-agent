@@ -3,6 +3,7 @@
 	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
+		"test": "bun test",
 		"build": "bun build ./daemon-entry.ts --target=bun --minify --outfile=dist/daemon.js && bun build ./agent-entry.ts --target=bun --minify --outfile=dist/agent.js",
 		"format": "biome format --write",
 		"lint": "biome lint --write",
