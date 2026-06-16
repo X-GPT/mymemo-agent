@@ -63,6 +63,8 @@ app.post("/turn", async (c) => {
 	if (
 		!body.request_id ||
 		!body.user_id ||
+		!body.conversation_id ||
+		!body.run_id ||
 		!body.message ||
 		!body.system_prompt ||
 		!body.llm_base_url ||

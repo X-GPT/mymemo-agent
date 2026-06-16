@@ -171,6 +171,20 @@ describe("POST /turn integration", () => {
 		expect(deltas).toEqual(["Hello ", "World"]);
 	});
 
+	it("rejects a body missing conversation_id or run_id with 400", async () => {
+		const body: Record<string, unknown> = makeTurnBody();
+		delete body.conversation_id;
+		const res = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(body),
+		});
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: "Missing required fields" });
+		expect(mockSpawnAgent).not.toHaveBeenCalled();
+	});
+
 	it("surfaces conversation_id and run_id on the started event", async () => {
 		mockSpawnAgent.mockImplementation((input) =>
 			emitAgent(input, [{ type: "completed" }]),
