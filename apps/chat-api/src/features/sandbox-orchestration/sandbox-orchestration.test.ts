@@ -48,10 +48,13 @@ describe("runSandboxChat", () => {
 	let runSandboxChat: typeof import("./sandbox-orchestration").runSandboxChat;
 	let singletonModule: typeof import("./singleton");
 	let proxyModule: typeof import("./sandbox-proxy");
+	let workspaceStoreModule: typeof import("@/features/workspace-store");
 	let spyCreate: ReturnType<typeof spyOn>;
 	let spyEnsureDaemon: ReturnType<typeof spyOn>;
 	let spyForwardTurn: ReturnType<typeof spyOn>;
 	let spyKill: ReturnType<typeof spyOn>;
+	let spyHydrate: ReturnType<typeof spyOn>;
+	let spySync: ReturnType<typeof spyOn>;
 
 	beforeEach(async () => {
 		Bun.env.E2B_API_KEY = "test-e2b-key";
@@ -61,6 +64,26 @@ describe("runSandboxChat", () => {
 		({ runSandboxChat } = await import("./sandbox-orchestration"));
 		singletonModule = await import("./singleton");
 		proxyModule = await import("./sandbox-proxy");
+		workspaceStoreModule = await import("@/features/workspace-store");
+
+		// Keep the durable store off the filesystem for orchestration tests; the
+		// store itself is exercised in workspace-store tests.
+		spyHydrate = spyOn(
+			workspaceStoreModule.workspaceStore,
+			"hydrateConversationWorkspace",
+		).mockResolvedValue({
+			paths: {
+				conversation: "/tmp/conv",
+				work: "/tmp/conv/work",
+				output: "/tmp/conv/output",
+				docs: "/tmp/conv/docs",
+			},
+			docsManifest: { version: 1, documents: [] },
+		});
+		spySync = spyOn(
+			workspaceStoreModule.workspaceStore,
+			"syncConversationWorkspace",
+		).mockResolvedValue(undefined);
 
 		const sandbox = createMockSandbox();
 		spyCreate = spyOn(
@@ -85,6 +108,8 @@ describe("runSandboxChat", () => {
 		spyEnsureDaemon?.mockRestore();
 		spyForwardTurn?.mockRestore();
 		spyKill?.mockRestore();
+		spyHydrate?.mockRestore();
+		spySync?.mockRestore();
 		mock.restore();
 	});
 
@@ -320,6 +345,80 @@ describe("runSandboxChat", () => {
 		await runSandboxChat(
 			makeOptions({ scope: "document", summaryId: "sum-1" }),
 		);
+	});
+
+	it("hydrates the durable workspace before forwarding the turn", async () => {
+		const order: string[] = [];
+		spyHydrate.mockImplementation(async () => {
+			order.push("hydrate");
+			return {
+				paths: {
+					conversation: "/tmp/conv",
+					work: "/tmp/conv/work",
+					output: "/tmp/conv/output",
+					docs: "/tmp/conv/docs",
+				},
+				docsManifest: { version: 1, documents: [] },
+			};
+		});
+		spyForwardTurn = spyOn(
+			proxyModule,
+			"forwardChatTurnToSandbox",
+		).mockImplementation(async () => {
+			order.push("forward");
+		});
+
+		await runSandboxChat(
+			makeOptions({ userId: "user-1", conversationId: "conv-1" }),
+		);
+
+		expect(spyHydrate).toHaveBeenCalledWith({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		expect(order).toEqual(["hydrate", "forward"]);
+	});
+
+	it("syncs the durable workspace after a successful turn", async () => {
+		spyForwardTurn = spyOn(
+			proxyModule,
+			"forwardChatTurnToSandbox",
+		).mockResolvedValue(undefined);
+
+		await runSandboxChat(
+			makeOptions({ userId: "user-1", conversationId: "conv-1" }),
+		);
+
+		expect(spySync).toHaveBeenCalledWith({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+	});
+
+	it("syncs the durable workspace even when the turn fails", async () => {
+		spyForwardTurn = spyOn(
+			proxyModule,
+			"forwardChatTurnToSandbox",
+		).mockRejectedValue(new Error("daemon unreachable"));
+
+		await expect(runSandboxChat(makeOptions())).rejects.toThrow(
+			"daemon unreachable",
+		);
+
+		expect(spySync).toHaveBeenCalled();
+	});
+
+	it("does not let a sync failure mask the turn result or skip teardown", async () => {
+		spyForwardTurn = spyOn(
+			proxyModule,
+			"forwardChatTurnToSandbox",
+		).mockResolvedValue(undefined);
+		spySync.mockRejectedValue(new Error("durable store down"));
+
+		const result = await runSandboxChat(makeOptions());
+
+		expect(result).toEqual({ status: "completed" });
+		expect(spyKill).toHaveBeenCalled();
 	});
 
 	it("propagates proxy errors", async () => {

@@ -24,6 +24,10 @@ export const apiEnv = (() => {
 		GATEWAY_PUBLIC_URL: Bun.env.GATEWAY_PUBLIC_URL.replace(/\/+$/, ""),
 		LOG_LEVEL: Bun.env.LOG_LEVEL || "info",
 		E2B_TEMPLATE: Bun.env.E2B_TEMPLATE || "sandbox-template-dev",
+		// Root directory of the durable workspace store (local filesystem adapter).
+		// Mount a persistent volume here in production; durable conversation and run
+		// state lives under it following the `WorkspaceStore` path model.
+		WORKSPACE_STORE_ROOT: Bun.env.WORKSPACE_STORE_ROOT || "/workspace-store",
 	} as const;
 })();
 

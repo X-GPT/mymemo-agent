@@ -2,6 +2,7 @@ import { type LlmTokenClaims, mintLlmToken } from "@mymemo/llm-token";
 import { apiEnv, type ChatMessagesScope } from "@/config/env";
 import type { ChatLogger } from "@/features/chat/chat.logger";
 import { buildSandboxAgentPrompt } from "@/features/sandbox-agent";
+import { workspaceStore } from "@/features/workspace-store";
 import { SandboxCreationError } from "./errors";
 import { forwardChatTurnToSandbox, type TurnRequest } from "./sandbox-proxy";
 import { sandboxManager } from "./singleton";
@@ -62,6 +63,14 @@ export async function runSandboxChat(
 	});
 
 	const attempt = async () => {
+		// Prepare the durable workspace before the run. Done before leasing a
+		// sandbox so the durable layout and working-set manifest exist regardless
+		// of whether the sandbox comes up.
+		await workspaceStore.hydrateConversationWorkspace({
+			userId,
+			conversationId,
+		});
+
 		const sandbox = await sandboxManager.createSandbox(userId, logger);
 
 		// Sandboxes are ephemeral — one per turn — so they must be torn down when
@@ -145,6 +154,23 @@ export async function runSandboxChat(
 
 			return { status: "completed" } as const;
 		} finally {
+			// A sandbox was leased, so persist the durable workspace whether the
+			// turn succeeded, failed, or was canceled. A sync failure must not mask
+			// the turn's own outcome, and the sandbox must still be torn down.
+			try {
+				await workspaceStore.syncConversationWorkspace({
+					userId,
+					conversationId,
+				});
+			} catch (syncErr) {
+				logger.error({
+					msg: "Workspace sync failed",
+					userId,
+					conversationId,
+					runId,
+					error: syncErr instanceof Error ? syncErr.message : String(syncErr),
+				});
+			}
 			await sandboxManager.killSandbox(userId, sandbox, logger);
 		}
 	};
