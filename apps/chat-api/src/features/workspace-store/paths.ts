@@ -7,13 +7,21 @@
  *   users/{userId}/conversations/{conversationId}/docs/manifest.json
  *   users/{userId}/runs/{runId}/events.jsonl
  *
- * `userId`, `conversationId`, and `runId` all originate outside this module, so
- * each is validated before it is ever joined into a path. A value containing
- * `/`, `..`, or NUL could otherwise escape its subtree and reach another user's
- * or conversation's data. The charset is an allowlist, matching the daemon's
- * `assertValidConversationId`: anything outside it is rejected, never rewritten.
+ * Each id is made path-safe before it is ever joined into a path, so a value
+ * containing `/`, `..`, or NUL cannot escape its subtree and reach another
+ * user's or conversation's data:
+ *   - `conversationId` and `runId` are allocated by chat-api in a known-safe
+ *     shape (the chat schema restricts `conversationId` to the same charset;
+ *     `runId` is a UUID), so they are validated against an allowlist and a
+ *     malformed value is rejected, never rewritten — matching the daemon's
+ *     `assertValidConversationId`.
+ *   - `userId` is the caller-supplied member code, which has no enforced
+ *     charset and may exceed a filesystem name limit, so it cannot be used as a
+ *     path segment directly. It is hashed into a fixed-length, path-safe segment
+ *     instead (see `encodeUserSegment`).
  */
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 const VALID_ID = /^[A-Za-z0-9_-]+$/;
@@ -21,7 +29,8 @@ const MAX_ID_LENGTH = 128;
 
 /**
  * Throw if `value` is missing, too long, or contains any character that could
- * escape its directory. `label` names the field for the error message.
+ * escape its directory. `label` names the field for the error message. Use only
+ * for ids chat-api allocates in a known-safe shape (`conversationId`, `runId`).
  */
 export function assertValidId(
 	label: string,
@@ -35,6 +44,20 @@ export function assertValidId(
 	) {
 		throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
 	}
+}
+
+/**
+ * Derive a path-safe directory segment from a `userId` (member code). The member
+ * code's charset and length are unconstrained, so it is hashed rather than used
+ * verbatim: any input maps to a fixed `[0-9a-f]{64}` segment that cannot
+ * traverse out of the `users/` directory, and distinct ids map to distinct
+ * segments, so per-user isolation holds. Throws only on a missing/empty id.
+ */
+export function encodeUserSegment(userId: unknown): string {
+	if (typeof userId !== "string" || userId.length === 0) {
+		throw new Error(`Invalid userId: ${JSON.stringify(userId)}`);
+	}
+	return createHash("sha256").update(userId, "utf8").digest("hex");
 }
 
 export interface DurableConversationPaths {
@@ -57,12 +80,11 @@ export function resolveDurableConversationPaths(
 	userId: string,
 	conversationId: string,
 ): DurableConversationPaths {
-	assertValidId("userId", userId);
 	assertValidId("conversationId", conversationId);
 	const conversation = join(
 		root,
 		"users",
-		userId,
+		encodeUserSegment(userId),
 		"conversations",
 		conversationId,
 	);
@@ -83,7 +105,13 @@ export function resolveDurableRunEventsPath(
 	userId: string,
 	runId: string,
 ): string {
-	assertValidId("userId", userId);
 	assertValidId("runId", runId);
-	return join(root, "users", userId, "runs", runId, "events.jsonl");
+	return join(
+		root,
+		"users",
+		encodeUserSegment(userId),
+		"runs",
+		runId,
+		"events.jsonl",
+	);
 }

@@ -7,12 +7,13 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { type DocsManifest, MalformedManifestError } from "./docs-manifest";
 import {
 	createLocalWorkspaceStore,
 	type LocalWorkspaceStore,
 } from "./local-workspace-store";
+import { encodeUserSegment } from "./paths";
 
 let root: string;
 let store: LocalWorkspaceStore;
@@ -37,7 +38,13 @@ describe("LocalWorkspaceStore durable path model", () => {
 			conversationId: "conv-1",
 		});
 
-		const base = join(root, "users", "user-1", "conversations", "conv-1");
+		const base = join(
+			root,
+			"users",
+			encodeUserSegment("user-1"),
+			"conversations",
+			"conv-1",
+		);
 		expect(paths.conversation).toBe(base);
 		expect(paths.work).toBe(join(base, "work"));
 		expect(paths.output).toBe(join(base, "output"));
@@ -69,7 +76,13 @@ describe("LocalWorkspaceStore durable path model", () => {
 	it("sync ensures the durable layout exists", async () => {
 		const ref = { userId: "user-1", conversationId: "conv-1" };
 		await store.syncConversationWorkspace(ref);
-		const base = join(root, "users", "user-1", "conversations", "conv-1");
+		const base = join(
+			root,
+			"users",
+			encodeUserSegment("user-1"),
+			"conversations",
+			"conv-1",
+		);
 		expect(existsSync(join(base, "work"))).toBe(true);
 		expect(existsSync(join(base, "output"))).toBe(true);
 		expect(existsSync(join(base, "docs"))).toBe(true);
@@ -81,7 +94,7 @@ describe("LocalWorkspaceStore durable path model", () => {
 		const manifestPath = join(
 			root,
 			"users",
-			"user-1",
+			encodeUserSegment("user-1"),
 			"conversations",
 			"conv-1",
 			"docs",
@@ -95,7 +108,14 @@ describe("LocalWorkspaceStore durable path model", () => {
 		await store.appendRunEvent(ref, { type: "run_started" });
 		await store.appendRunEvent(ref, { type: "run_completed", ok: true });
 
-		const file = join(root, "users", "user-1", "runs", "run-1", "events.jsonl");
+		const file = join(
+			root,
+			"users",
+			encodeUserSegment("user-1"),
+			"runs",
+			"run-1",
+			"events.jsonl",
+		);
 		const lines = readFileSync(file, "utf8").trim().split("\n");
 		expect(lines.map((l) => JSON.parse(l))).toEqual([
 			{ type: "run_started" },
@@ -115,8 +135,12 @@ describe("LocalWorkspaceStore isolation and traversal", () => {
 			conversationId: "conv-1",
 		});
 		expect(a.paths.conversation).not.toBe(b.paths.conversation);
-		expect(a.paths.conversation).toContain(join("users", "user-a"));
-		expect(b.paths.conversation).toContain(join("users", "user-b"));
+		expect(a.paths.conversation).toContain(
+			join("users", encodeUserSegment("user-a")),
+		);
+		expect(b.paths.conversation).toContain(
+			join("users", encodeUserSegment("user-b")),
+		);
 	});
 
 	it("keeps different conversations in separate trees for the same user", async () => {
@@ -151,18 +175,11 @@ describe("LocalWorkspaceStore isolation and traversal", () => {
 		expect(other.documents).toEqual([]);
 	});
 
-	const traversalIds = ["../evil", "..", "a/b", "a\0b", "with space", ""];
+	// conversationId and runId are chat-api-allocated in a known-safe shape, so a
+	// malformed value is rejected outright.
+	const unsafeIds = ["../evil", "..", "a/b", "a\0b", "with space", ""];
 
-	for (const bad of traversalIds) {
-		it(`rejects traversal-prone userId ${JSON.stringify(bad)}`, async () => {
-			await expect(
-				store.hydrateConversationWorkspace({
-					userId: bad,
-					conversationId: "conv-1",
-				}),
-			).rejects.toThrow(/Invalid userId/);
-		});
-
+	for (const bad of unsafeIds) {
 		it(`rejects traversal-prone conversationId ${JSON.stringify(bad)}`, async () => {
 			await expect(
 				store.hydrateConversationWorkspace({
@@ -179,13 +196,56 @@ describe("LocalWorkspaceStore isolation and traversal", () => {
 		});
 	}
 
-	it("rejects an over-long id", async () => {
+	it("rejects an over-long conversationId", async () => {
 		await expect(
 			store.hydrateConversationWorkspace({
-				userId: "u".repeat(129),
+				userId: "user-1",
+				conversationId: "c".repeat(129),
+			}),
+		).rejects.toThrow(/Invalid conversationId/);
+	});
+
+	// userId is the caller-supplied member code (unconstrained charset/length),
+	// so it is hashed into a path-safe segment rather than rejected — except an
+	// empty id, which is never valid.
+	it("rejects an empty userId", async () => {
+		await expect(
+			store.hydrateConversationWorkspace({
+				userId: "",
 				conversationId: "conv-1",
 			}),
 		).rejects.toThrow(/Invalid userId/);
+	});
+
+	for (const bad of ["../evil", "..", "a/b", "a\0b", "with space"]) {
+		it(`neutralizes traversal-prone userId ${JSON.stringify(bad)} instead of escaping root`, async () => {
+			const { paths } = await store.hydrateConversationWorkspace({
+				userId: bad,
+				conversationId: "conv-1",
+			});
+			// The user segment is a hex hash containing no path separators, so the
+			// conversation dir stays strictly under <root>/users.
+			expect(paths.conversation.startsWith(join(root, "users") + sep)).toBe(
+				true,
+			);
+			expect(existsSync(paths.work)).toBe(true);
+		});
+	}
+
+	it("accepts a member-code userId that is not path-safe or over-long", async () => {
+		// e.g. an email-shaped member code, or one longer than a filesystem name
+		// limit — these worked end-to-end before the durable store existed.
+		const memberCode = `${"u".repeat(200)}@corp.com`;
+		const { paths } = await store.hydrateConversationWorkspace({
+			userId: memberCode,
+			conversationId: "conv-1",
+		});
+		expect(existsSync(paths.work)).toBe(true);
+		expect(encodeUserSegment(memberCode)).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	it("maps distinct member codes to distinct user segments", async () => {
+		expect(encodeUserSegment("user-a")).not.toBe(encodeUserSegment("user-b"));
 	});
 });
 

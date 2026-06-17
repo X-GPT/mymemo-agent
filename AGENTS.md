@@ -160,6 +160,7 @@ Optional:
 - `LOG_LEVEL` (default: `info`)
 - `PORT` (default: 3000)
 - `E2B_TEMPLATE` (default: `sandbox-template-dev`)
+- `WORKSPACE_STORE_ROOT` — root dir of the durable workspace store (local filesystem `WorkspaceStore` adapter). Holds per-user/per-conversation work, output, and the docs manifest, plus per-run event logs, following the path model `users/{userId}/conversations/{conversationId}/…` and `users/{userId}/runs/{runId}/events.jsonl`. Defaults to `.workspace-store` under the process cwd (writable in the container). **For durability across container recycles, point this at a mounted persistent volume in production**
 
 ### gateway
 

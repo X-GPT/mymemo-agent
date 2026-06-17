@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import invariant from "tiny-invariant";
 
 /**
@@ -25,9 +26,12 @@ export const apiEnv = (() => {
 		LOG_LEVEL: Bun.env.LOG_LEVEL || "info",
 		E2B_TEMPLATE: Bun.env.E2B_TEMPLATE || "sandbox-template-dev",
 		// Root directory of the durable workspace store (local filesystem adapter).
-		// Mount a persistent volume here in production; durable conversation and run
-		// state lives under it following the `WorkspaceStore` path model.
-		WORKSPACE_STORE_ROOT: Bun.env.WORKSPACE_STORE_ROOT || "/workspace-store",
+		// Defaults to a writable dir under the process cwd so it works out of the
+		// box (in the container the cwd is the app dir, which is writable by the
+		// `bun` user); in production point this at a mounted persistent volume so
+		// durable conversation and run state survives container recycles.
+		WORKSPACE_STORE_ROOT:
+			Bun.env.WORKSPACE_STORE_ROOT || join(process.cwd(), ".workspace-store"),
 	} as const;
 })();
 

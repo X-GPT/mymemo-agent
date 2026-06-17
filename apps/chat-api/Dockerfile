@@ -45,6 +45,10 @@ COPY --from=prerelease /usr/src/app/packages/llm-token packages/llm-token
 COPY --from=prerelease /usr/src/app/package.json .
 
 WORKDIR /usr/src/app/apps/chat-api
+# Default durable workspace store root (WORKSPACE_STORE_ROOT). Created and owned
+# by the `bun` user so the local filesystem adapter can write out of the box;
+# mount a persistent volume here in production for durability across recycles.
+RUN mkdir -p .workspace-store && chown -R bun:bun .workspace-store
 USER bun
 EXPOSE 3000/tcp
 ENTRYPOINT [ "bun", "run", "src/index.ts" ]
