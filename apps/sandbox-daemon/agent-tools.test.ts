@@ -21,26 +21,28 @@ describe("tool surface constants", () => {
 		);
 	});
 
-	it("makes Bash plus the local working-set built-ins available, and pre-approves them with the document tool", () => {
-		expect(ALLOWED_BUILTIN_TOOLS).toEqual(["Bash", "Read", "Grep", "Glob"]);
+	it("makes the workspace built-ins available, and pre-approves them with the document tool", () => {
+		expect(ALLOWED_BUILTIN_TOOLS).toEqual([
+			"Bash",
+			"Read",
+			"Grep",
+			"Glob",
+			"Write",
+			"Edit",
+		]);
 		expect(PRE_APPROVED_TOOLS).toEqual([
 			"Bash",
 			"Read",
 			"Grep",
 			"Glob",
+			"Write",
+			"Edit",
 			SEARCH_DOCUMENTS_TOOL,
 		]);
 	});
 
-	it("keeps the write/network/orchestration built-ins off the available surface", () => {
-		for (const absent of [
-			"Write",
-			"Edit",
-			"NotebookEdit",
-			"WebFetch",
-			"WebSearch",
-			"Task",
-		]) {
+	it("keeps the network and orchestration built-ins off the available surface", () => {
+		for (const absent of ["WebFetch", "WebSearch", "Task", "NotebookEdit"]) {
 			expect(ALLOWED_BUILTIN_TOOLS).not.toContain(absent);
 			expect(PRE_APPROVED_TOOLS).not.toContain(absent);
 		}
@@ -69,10 +71,10 @@ describe("createCanUseTool (fail-closed permission handler)", () => {
 	it("denies any tool that is not pre-approved, naming it in the message", async () => {
 		const canUse = createCanUseTool();
 		for (const denied of [
-			"Write",
-			"Edit",
 			"WebFetch",
 			"WebSearch",
+			"Task",
+			"NotebookEdit",
 			"mcp__other__exfiltrate",
 		]) {
 			const res = await canUse(denied, {}, NO_OPTS);

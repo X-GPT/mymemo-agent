@@ -1,30 +1,33 @@
 /**
  * Claude Agent SDK tool surface and permission policy for the sandbox agent.
  *
- * The agent runs prompt-injectable, untrusted code, so its tool surface is
- * pinned explicitly instead of relying on `permissionMode: "bypassPermissions"`.
- * The SDK separates tool *availability* from tool *pre-approval*, so we use both
- * layers plus a fail-closed catch-all:
+ * Security boundary: the agent runs prompt-injectable, untrusted code, and the
+ * real containment is OS-level — bwrap (read-only root, tmpfs workspace,
+ * unshared user/pid/uts/ipc namespaces) inside an E2B sandbox, with a scrubbed
+ * env holding no provider key, no DB credential, and only short-lived per-turn
+ * gateway tokens (see `child-spawn.ts`, covered by `child-spawn.test.ts`).
+ * Because `Bash` is on the surface (below), that isolation — not this tool
+ * list — is what bounds what the agent can do; Bash already subsumes file
+ * writes and network egress (`curl`).
+ *
+ * This module's job is therefore behavior-scoping, not the wall: pin the agent
+ * to a predictable, reasoned-about set instead of the full Claude Code default,
+ * and keep `permissionMode` off `bypassPermissions`.
  *
  * - `tools` pins the available built-ins (availability, not pre-approval).
- * - `allowedTools` pre-approves exactly that set plus the MyMemo MCP tool.
- * - `canUseTool` denies anything not pre-approved, so an unexpected or injected
- *   tool call cannot run under `permissionMode: "default"`.
+ * - `allowedTools` pre-approves that set plus the MyMemo MCP tool, so an
+ *   unattended turn runs without permission prompts.
+ * - `canUseTool` denies anything off the list — hygiene so an injected prompt
+ *   can't casually reach a first-class tool we never reasoned about. It is NOT
+ *   a containment boundary (Bash defeats that); it just keeps behavior scoped.
  *
- * Bash REMAINS available: this is a general workspace agent that runs code,
- * manipulates files under `work/`, and produces artifacts under `output/` — not
- * a pure document-Q&A bot. `mcp__mymemo__search_documents` replaces only the
- * *document-fetch* use of Bash (the `mymemo-docs` CLI), not general computation,
- * so removing Bash would cripple the agent's actual job.
- *
- * Allowed Bash command surface: unrestricted. The boundary is OS-level sandbox
- * isolation, not a command allowlist — the agent runs under bwrap (read-only
- * root, tmpfs workspace, unshared user/pid/uts/ipc namespaces) inside an E2B
- * sandbox, with a scrubbed environment that holds no provider key, no DB
- * credential, and only short-lived per-turn gateway tokens (see `child-spawn.ts`,
- * covered by `child-spawn.test.ts`). A command allowlist would cripple a general
- * agent while adding little over that isolation, so the isolation is the
- * documented, tested compensating control.
+ * Surface rationale: `Bash` for general workspace work (running code, builds,
+ * scripts); `Read`/`Grep`/`Glob` for the local working set; `Write`/`Edit` for
+ * authoring files under `work/`/`output/` (more reliable than Bash heredocs, and
+ * denying them buys nothing over Bash). `mcp__mymemo__search_documents` is the
+ * document path. Deliberately omitted: `WebFetch`/`WebSearch` (the agent answers
+ * from MyMemo documents, not the open web — a soft policy default, since
+ * Bash+curl is still a hole) and `Task`/subagent orchestration (unneeded).
  */
 
 import {
@@ -45,13 +48,20 @@ export const SEARCH_DOCUMENTS_TOOL_NAME = "search_documents";
 export const SEARCH_DOCUMENTS_TOOL = `mcp__${MYMEMO_MCP_SERVER_NAME}__${SEARCH_DOCUMENTS_TOOL_NAME}`;
 
 /**
- * Built-in tools the agent may use: `Bash` for general workspace work (running
- * code, writing files under `work/`/`output/`), and `Read`/`Grep`/`Glob` for the
- * local hydrated working set. See the file header for why Bash stays. Every
- * other built-in (`Write`, `Edit`, `WebFetch`, `Task`, …) is absent by omission
- * from this list, and `canUseTool` denies anything off it.
+ * Built-in tools available to the agent (see the file header for the rationale
+ * and what is deliberately omitted): `Bash` for general workspace work,
+ * `Read`/`Grep`/`Glob` for the local working set, `Write`/`Edit` for authoring
+ * files under `work/`/`output/`. Every other built-in (`WebFetch`, `WebSearch`,
+ * `Task`, …) is absent by omission, and `canUseTool` denies anything off it.
  */
-export const ALLOWED_BUILTIN_TOOLS = ["Bash", "Read", "Grep", "Glob"] as const;
+export const ALLOWED_BUILTIN_TOOLS = [
+	"Bash",
+	"Read",
+	"Grep",
+	"Glob",
+	"Write",
+	"Edit",
+] as const;
 
 /** Every tool the agent is pre-approved to call without prompting. */
 export const PRE_APPROVED_TOOLS = [

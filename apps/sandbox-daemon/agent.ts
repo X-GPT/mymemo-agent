@@ -55,12 +55,12 @@ export function buildQueryOptions(
 	const queryOptions: Record<string, unknown> = {
 		cwd,
 		systemPrompt,
-		// Lock down the tool surface for the untrusted agent (see agent-tools.ts):
-		// `tools` pins the available built-ins (Bash + Read/Grep/Glob), `allowedTools`
-		// pre-approves them plus the MyMemo MCP document tool, and `canUseTool`
-		// fail-closes anything else under `permissionMode: "default"`. Bash stays for
-		// general workspace work; its command surface is bounded by the bwrap/E2B
-		// sandbox, not an allowlist (see agent-tools.ts header).
+		// Scope the tool surface for the untrusted agent (see agent-tools.ts; the
+		// bwrap/E2B sandbox is the real security boundary, this list is behavior
+		// scoping): `tools` pins the available built-ins (Bash, Read, Grep, Glob,
+		// Write, Edit), `allowedTools` pre-approves them plus the MyMemo MCP document
+		// tool, and `canUseTool` denies anything else under `permissionMode:
+		// "default"` (no bypassPermissions).
 		tools: [...ALLOWED_BUILTIN_TOOLS],
 		allowedTools: [...PRE_APPROVED_TOOLS],
 		canUseTool: createCanUseTool(),

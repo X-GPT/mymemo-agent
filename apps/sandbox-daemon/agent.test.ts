@@ -44,9 +44,16 @@ describe("buildQueryOptions", () => {
 });
 
 describe("buildQueryOptions tool surface", () => {
-	it("pins the available built-ins to Bash plus the read-only working-set tools", () => {
+	it("pins the available built-ins to the workspace tool set", () => {
 		const opts = buildQueryOptions(base);
-		expect(opts.tools).toEqual(["Bash", "Read", "Grep", "Glob"]);
+		expect(opts.tools).toEqual([
+			"Bash",
+			"Read",
+			"Grep",
+			"Glob",
+			"Write",
+			"Edit",
+		]);
 	});
 
 	it("pre-approves the built-ins plus the document tool via allowedTools", () => {
@@ -56,6 +63,8 @@ describe("buildQueryOptions tool surface", () => {
 			"Read",
 			"Grep",
 			"Glob",
+			"Write",
+			"Edit",
 			SEARCH_DOCUMENTS_TOOL,
 		]);
 	});
@@ -66,7 +75,7 @@ describe("buildQueryOptions tool surface", () => {
 		expect(opts.permissionMode).not.toBe("bypassPermissions");
 
 		const canUse = opts.canUseTool as CanUseTool;
-		const denied = await canUse("Write", {}, {} as never);
+		const denied = await canUse("WebFetch", {}, {} as never);
 		expect(denied.behavior).toBe("deny");
 		const allowed = await canUse("Bash", { command: "ls" }, {} as never);
 		expect(allowed.behavior).toBe("allow");
