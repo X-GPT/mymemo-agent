@@ -146,7 +146,18 @@ export class FileSystemSessionStore implements SessionStore {
 		const entries: SessionStoreEntry[] = [];
 		for (const line of raw.split("\n")) {
 			if (line.length === 0) continue;
-			entries.push(JSON.parse(line) as SessionStoreEntry);
+			try {
+				entries.push(JSON.parse(line) as SessionStoreEntry);
+			} catch {
+				// A transcript line can be truncated if a prior turn was SIGKILL'd
+				// (idle/max-turn watchdog) mid-append. Tolerate it: skip the
+				// unparseable line so resume degrades to the intact prefix, rather
+				// than the SDK failing the whole turn when load() rejects. Logged so
+				// the corruption is observable.
+				console.error(
+					"skipping unparseable session transcript line on load (truncated write?)",
+				);
+			}
 		}
 		return entries;
 	}

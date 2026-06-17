@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionKey } from "@anthropic-ai/claude-agent-sdk";
@@ -77,6 +78,31 @@ describe("FileSystemSessionStore append/load", () => {
 		const k = key(SESSION);
 		await store.append(k, []);
 		expect(await store.load(k)).toBeNull();
+	});
+
+	it("tolerates a truncated trailing line instead of failing the whole load", async () => {
+		// Simulate a turn SIGKILL'd mid-append: intact entries followed by a
+		// truncated final JSON object. load() must return the intact prefix, not
+		// throw (which would fail the resuming turn entirely).
+		const store = makeStore({ conversationId: "conv-truncated" });
+		const k = key("truncated-session");
+		await store.append(k, [
+			{ type: "user", uuid: "1" },
+			{ type: "assistant", uuid: "2" },
+		]);
+		const file = join(
+			testRoot,
+			"users",
+			createHash("sha256").update(USER, "utf8").digest("hex"),
+			"conversations",
+			"conv-truncated",
+			"sessions",
+			"truncated-session.jsonl",
+		);
+		appendFileSync(file, '{"type":"user","uuid":"3"', "utf8"); // truncated, no newline
+
+		const loaded = await store.load(k);
+		expect((loaded ?? []).map((e) => e.uuid)).toEqual(["1", "2"]);
 	});
 });
 
