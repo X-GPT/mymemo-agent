@@ -144,16 +144,24 @@ describe("buildAgentSpawnArgv", () => {
 		expect(wholeRootBind).toBe(-1);
 	});
 
-	it("rejects a store root that would mask a required mount", () => {
+	it("rejects a store root that overlaps any sandbox-managed mount", () => {
 		const mounts = [
 			"/workspace/agent.js",
 			"/workspace/conversations/c/work",
 			"/home/user/.claude/projects",
 		];
-		// Ancestor of the agent bundle / cwd — the --tmpfs root would shadow them.
+		// Inside an ephemeral tmpfs — sandbox-local or re-masked, so resume silently
+		// never works.
 		expect(() => assertSessionStoreRootSafe("/workspace", mounts)).toThrow(
-			/masks required mount/,
+			/ephemeral/,
 		);
+		expect(() =>
+			assertSessionStoreRootSafe("/workspace/sessions", mounts),
+		).toThrow(/ephemeral/);
+		expect(() => assertSessionStoreRootSafe("/tmp/sessions", mounts)).toThrow(
+			/ephemeral/,
+		);
+		// Ancestor of a required re-bind — our --tmpfs root would shadow it.
 		expect(() => assertSessionStoreRootSafe("/", mounts)).toThrow(
 			/masks required mount/,
 		);
@@ -161,13 +169,12 @@ describe("buildAgentSpawnArgv", () => {
 		expect(() => assertSessionStoreRootSafe("relative/path", mounts)).toThrow(
 			/absolute path/,
 		);
-		// A dedicated root outside the workspace is fine.
+		// A dedicated durable root outside every sandbox-managed mount is fine.
 		expect(() =>
 			assertSessionStoreRootSafe("/session-store", mounts),
 		).not.toThrow();
-		// A sibling under /workspace that masks nothing required is fine.
 		expect(() =>
-			assertSessionStoreRootSafe("/workspace/sessions", mounts),
+			assertSessionStoreRootSafe("/mnt/durable/sessions", mounts),
 		).not.toThrow();
 	});
 
@@ -256,7 +263,12 @@ describe("spawnAgent agent environment", () => {
 	it("forwards the session-store root + identity when configured, omits them otherwise", async () => {
 		originalHome = Bun.env.HOME;
 		Bun.env.HOME = join(tmpdir(), `spawn-agent-store-${Date.now()}`);
-		const storeRoot = join(tmpdir(), `session-store-spawn-${Date.now()}`);
+		// A DURABLE root: not under /workspace or /tmp (tmpdir() is /tmp on Linux,
+		// which assertSessionStoreRootSafe now rejects). Use the package dir.
+		const storeRoot = join(
+			process.cwd(),
+			`.session-store-spawn-test-${Date.now()}`,
+		);
 		const originalRoot = process.env.AGENT_SESSION_STORE_ROOT;
 
 		const writes: string[] = [];
@@ -311,6 +323,7 @@ describe("spawnAgent agent environment", () => {
 			if (originalRoot === undefined)
 				delete process.env.AGENT_SESSION_STORE_ROOT;
 			else process.env.AGENT_SESSION_STORE_ROOT = originalRoot;
+			rmSync(storeRoot, { recursive: true, force: true });
 		}
 	});
 });

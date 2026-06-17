@@ -89,14 +89,28 @@ function getSessionStoreRoot(): string | undefined {
 	return root && root.length > 0 ? root : undefined;
 }
 
+// Mounts the agent gets that are EPHEMERAL: tmpfs that vanishes when the
+// per-turn sandbox is killed. A store root at or under either is useless —
+// `/workspace` is sandbox-local (no resume across recycle) and `/tmp` is also
+// re-masked by the later `--tmpfs /tmp`, silently dropping the mirror.
+const EPHEMERAL_ROOTS = [WORKSPACE_ROOT, "/tmp"];
+
+/** True when `child` is `parent` or nested beneath it (both pre-resolved). */
+function isAtOrUnder(child: string, parent: string): boolean {
+	return (
+		child === parent || child.startsWith(parent === "/" ? "/" : `${parent}/`)
+	);
+}
+
 /**
- * Throw if the configured store root would mask a mount the agent needs. We
- * `--tmpfs` the root to hide other tenants' transcripts; bwrap applies mounts in
- * order and last wins, so a root that is an ancestor of (or equal to) the agent
- * bundle, cwd, or `~/.claude/projects` would shadow those re-binds and break
- * every turn. A durable root nested inside the ephemeral sandbox workspace is
- * also wrong (it would not survive recycle), so reject it loudly rather than
- * silently wedge the agent. Requires an absolute path.
+ * Throw unless the configured store root is a durable path that overlaps no
+ * sandbox-managed mount. Two failure modes, both from bwrap applying mounts in
+ * order (last wins):
+ *  - root AT/UNDER an ephemeral tmpfs (`/workspace`, `/tmp`) — the transcript is
+ *    sandbox-local or gets re-masked, so resume silently never works.
+ *  - root that is an ANCESTOR of a required re-bind (agent bundle, cwd,
+ *    `~/.claude/projects`) — our `--tmpfs <root>` shadows it and wedges the turn.
+ * Requires an absolute path. Reject loudly rather than mirror into a void.
  */
 export function assertSessionStoreRootSafe(
 	root: string,
@@ -108,12 +122,15 @@ export function assertSessionStoreRootSafe(
 		);
 	}
 	const r = resolve(root);
-	// `${r}/` is "//" when r is "/", which nothing starts with — handle root "/"
-	// (an ancestor of everything absolute) explicitly.
-	const prefix = r === "/" ? "/" : `${r}/`;
+	for (const ephemeral of EPHEMERAL_ROOTS) {
+		if (isAtOrUnder(r, resolve(ephemeral))) {
+			throw new Error(
+				`${SESSION_STORE_ROOT_ENV} (${root}) is inside the ephemeral ${ephemeral}; transcripts there don't survive sandbox recycle — use a durable path outside ${EPHEMERAL_ROOTS.join(" and ")}`,
+			);
+		}
+	}
 	for (const mount of mounts) {
-		const m = resolve(mount);
-		if (m === r || m.startsWith(prefix)) {
+		if (isAtOrUnder(resolve(mount), r)) {
 			throw new Error(
 				`${SESSION_STORE_ROOT_ENV} (${root}) masks required mount ${mount}; use a dedicated path outside the sandbox workspace`,
 			);
