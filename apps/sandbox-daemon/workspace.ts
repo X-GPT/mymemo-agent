@@ -7,8 +7,16 @@
  *     conversations/
  *       {conversationId}/
  *         docs/
- *         work/      <- the agent's working directory (cwd)
+ *         work/          <- the agent's working directory (cwd)
  *         output/
+ *         claude-config/ <- the agent SDK's CLAUDE_CONFIG_DIR (config + transcripts)
+ *
+ * `claude-config/` is the per-conversation home the daemon points the Claude
+ * Agent SDK at via CLAUDE_CONFIG_DIR. It is a SIBLING of `work/`, not a child,
+ * and deliberately NOT named `.claude`: the SDK reads project-level config from
+ * `<cwd>/.claude` (settings, commands, agents, CLAUDE.md), so a child named
+ * `.claude` would collide the SDK's own state (`projects/`, transcripts, …) with
+ * the agent's project config. Keeping it a distinct sibling separates the two.
  *
  * The agent runs from the conversation's `work/` dir. `conversationId` arrives
  * from the untrusted turn request, so it is validated before it is ever joined
@@ -70,6 +78,8 @@ export interface ConversationWorkspace {
 	work: string;
 	/** /workspace/conversations/{conversationId}/output */
 	output: string;
+	/** /workspace/conversations/{conversationId}/claude-config — the agent SDK's CLAUDE_CONFIG_DIR */
+	claudeConfig: string;
 }
 
 /**
@@ -89,6 +99,7 @@ export function resolveConversationWorkspace(
 		docs: join(conversation, "docs"),
 		work: join(conversation, "work"),
 		output: join(conversation, "output"),
+		claudeConfig: join(conversation, "claude-config"),
 	};
 }
 
@@ -105,5 +116,6 @@ export function createConversationWorkspace(
 	mkdirSync(ws.docs, { recursive: true });
 	mkdirSync(ws.work, { recursive: true });
 	mkdirSync(ws.output, { recursive: true });
+	mkdirSync(ws.claudeConfig, { recursive: true });
 	return ws;
 }

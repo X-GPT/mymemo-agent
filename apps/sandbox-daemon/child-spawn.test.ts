@@ -2,6 +2,7 @@ import {
 	afterAll,
 	afterEach,
 	beforeAll,
+	beforeEach,
 	describe,
 	expect,
 	it,
@@ -19,7 +20,10 @@ import {
 
 describe("buildAgentSpawnArgv", () => {
 	it("wraps bun /workspace/agent.js with bwrap and the agreed flags", () => {
-		const argv = buildAgentSpawnArgv("/workspace/data/u1/canonical");
+		const argv = buildAgentSpawnArgv(
+			"/workspace/data/u1/canonical",
+			"/workspace/data/u1/claude-config",
+		);
 
 		expect(argv[0]).toBe("bwrap");
 
@@ -50,7 +54,10 @@ describe("buildAgentSpawnArgv", () => {
 
 	it("masks /workspace, then re-binds only the agent bundle and selected scope", () => {
 		const cwd = "/workspace/data/u2/scopes/request-doc-42";
-		const argv = buildAgentSpawnArgv(cwd);
+		const argv = buildAgentSpawnArgv(
+			cwd,
+			"/workspace/data/u2/scopes/claude-config",
+		);
 
 		const roRootIdx = argv.findIndex(
 			(a, i) => a === "--ro-bind" && argv[i + 1] === "/" && argv[i + 2] === "/",
@@ -85,24 +92,40 @@ describe("buildAgentSpawnArgv", () => {
 		expect(tmpfsWorkspaceIdx).toBeLessThan(bindCwdIdx);
 	});
 
-	it("re-binds ~/.claude/projects rw so the Claude SDK can persist sessions", () => {
-		// Claude Agent SDK writes session transcripts under ~/.claude/projects;
-		// with --ro-bind / / that path would be read-only and both the
-		// first-turn write and resume on subsequent turns would silently
-		// fail. Pin that we re-bind it rw.
-		const argv = buildAgentSpawnArgv("/workspace/data/u1/canonical");
-		const projectsDir = `${Bun.env.HOME ?? "/home/user"}/.claude/projects`;
+	it("re-binds the per-conversation SDK config home rw, as a sibling of cwd (not the project .claude)", () => {
+		// CLAUDE_CONFIG_DIR is a sibling of the agent's work/ cwd, deliberately not
+		// named `.claude` and not under cwd, so the SDK's config + transcript writes
+		// can't collide with the agent's project-local `.claude`. The shared
+		// ~/.claude is no longer bound, so it stays read-only.
+		const cwd = "/workspace/conversations/conv-1/work";
+		const configDir = "/workspace/conversations/conv-1/claude-config";
+		const argv = buildAgentSpawnArgv(cwd, configDir);
+
 		const idx = argv.findIndex(
 			(a, i) =>
 				a === "--bind" &&
-				argv[i + 1] === projectsDir &&
-				argv[i + 2] === projectsDir,
+				argv[i + 1] === configDir &&
+				argv[i + 2] === configDir,
 		);
 		expect(idx).toBeGreaterThan(-1);
+		// Config home is NOT under cwd and is not named `.claude`.
+		expect(configDir.startsWith(`${cwd}/`)).toBe(false);
+		expect(argv.some((a) => a.includes("/.claude"))).toBe(false);
+		// The config home lives under /workspace, so its rw --bind MUST come after
+		// the `--tmpfs /workspace` mask — otherwise the mask shadows it read-only
+		// and the SDK's first-turn config/transcript write wedges the turn.
+		const tmpfsWorkspaceIdx = argv.findIndex(
+			(a, i) => a === "--tmpfs" && argv[i + 1] === "/workspace",
+		);
+		expect(tmpfsWorkspaceIdx).toBeGreaterThan(-1);
+		expect(tmpfsWorkspaceIdx).toBeLessThan(idx);
 	});
 
 	it("does not expose /workspace/daemon.log, daemon.js, or sync.js", () => {
-		const argv = buildAgentSpawnArgv("/workspace/data/u1/canonical");
+		const argv = buildAgentSpawnArgv(
+			"/workspace/data/u1/canonical",
+			"/workspace/data/u1/claude-config",
+		);
 		// None of these paths should appear anywhere in the argv — they are
 		// covered by the --tmpfs /workspace and never re-bound.
 		expect(argv).not.toContain("/workspace/daemon.js");
@@ -111,7 +134,7 @@ describe("buildAgentSpawnArgv", () => {
 	});
 
 	it("adds no session-store mount when not configured", () => {
-		const argv = buildAgentSpawnArgv("/tmp/cwd");
+		const argv = buildAgentSpawnArgv("/tmp/cwd", "/tmp/claude-config");
 		expect(argv).not.toContain("/durable");
 	});
 
@@ -122,7 +145,10 @@ describe("buildAgentSpawnArgv", () => {
 		// re-bind ONLY the per-conversation sessions dir.
 		const root = "/durable";
 		const sessionsDir = "/durable/users/abc123/conversations/conv-1/sessions";
-		const argv = buildAgentSpawnArgv("/tmp/cwd", { root, sessionsDir });
+		const argv = buildAgentSpawnArgv("/tmp/cwd", "/tmp/claude-config", {
+			root,
+			sessionsDir,
+		});
 
 		const tmpfsRootIdx = argv.findIndex(
 			(a, i) => a === "--tmpfs" && argv[i + 1] === root,
@@ -188,7 +214,7 @@ describe("buildAgentSpawnArgv", () => {
 		process.env.SANDBOX_BUN_PATH = "/custom/bun";
 		process.env.SANDBOX_AGENT_PATH = "/custom/agent.js";
 		try {
-			const argv = buildAgentSpawnArgv("/tmp/cwd");
+			const argv = buildAgentSpawnArgv("/tmp/cwd", "/tmp/claude-config");
 			expect(argv[0]).toBe("/custom/bwrap");
 			expect(argv.slice(-2)).toEqual(["/custom/bun", "/custom/agent.js"]);
 		} finally {
@@ -201,12 +227,22 @@ describe("buildAgentSpawnArgv", () => {
 
 describe("spawnAgent agent environment", () => {
 	let spawnSpy: ReturnType<typeof spyOn> | undefined;
-	let originalHome: string | undefined;
+	let baseDir: string;
+	let cwd: string;
+	let claudeConfigDir: string;
+
+	beforeEach(() => {
+		// Model the conversation workspace: cwd is `<base>/work` and the SDK config
+		// home is its sibling `<base>/claude-config` (the layout createConversation-
+		// Workspace materializes). Both sit under baseDir and clean up together.
+		baseDir = mkdtempSync(join(tmpdir(), "spawn-agent-"));
+		cwd = join(baseDir, "work");
+		claudeConfigDir = join(baseDir, "claude-config");
+	});
 
 	afterEach(() => {
 		spawnSpy?.mockRestore();
-		if (originalHome === undefined) delete Bun.env.HOME;
-		else Bun.env.HOME = originalHome;
+		rmSync(baseDir, { recursive: true, force: true });
 	});
 
 	function fakeProc() {
@@ -227,10 +263,6 @@ describe("spawnAgent agent environment", () => {
 	}
 
 	it("passes the gateway base url + bearer token and never a provider key", async () => {
-		// Keep ensureClaudeProjectsDir's mkdir inside a temp HOME.
-		originalHome = Bun.env.HOME;
-		Bun.env.HOME = join(tmpdir(), `spawn-agent-${Date.now()}`);
-
 		spawnSpy = spyOn(Bun, "spawn").mockReturnValue(
 			fakeProc() as unknown as ReturnType<typeof Bun.spawn>,
 		);
@@ -238,7 +270,8 @@ describe("spawnAgent agent environment", () => {
 		await spawnAgent({
 			userQuery: "q",
 			systemPrompt: "s",
-			cwd: "/workspace/data/u1/canonical",
+			cwd,
+			claudeConfigDir,
 			llmBaseUrl: "https://gateway.example",
 			docGatewayUrl: "https://docs.example",
 			llmToken: "tok-123",
@@ -256,13 +289,14 @@ describe("spawnAgent agent environment", () => {
 		// Document access uses its own gateway url + (aud: documents) token.
 		expect(env.MYMEMO_DOC_GATEWAY_URL).toBe("https://docs.example");
 		expect(env.MYMEMO_DOC_TOKEN).toBe("doc-456");
+		// SDK config + transcripts are isolated per conversation in a sibling of
+		// cwd (not the project `.claude`, not the shared ~/.claude).
+		expect(env.CLAUDE_CONFIG_DIR).toBe(claudeConfigDir);
 		// The whole point of the gateway: no provider key reaches the agent.
 		expect("ANTHROPIC_API_KEY" in env).toBe(false);
 	});
 
 	it("forwards the session-store root + identity when configured, omits them otherwise", async () => {
-		originalHome = Bun.env.HOME;
-		Bun.env.HOME = join(tmpdir(), `spawn-agent-store-${Date.now()}`);
 		// A DURABLE root: not under /workspace or /tmp (tmpdir() is /tmp on Linux,
 		// which assertSessionStoreRootSafe now rejects). Use the package dir.
 		const storeRoot = join(
@@ -299,7 +333,8 @@ describe("spawnAgent agent environment", () => {
 			await spawnAgent({
 				userQuery: "q",
 				systemPrompt: "s",
-				cwd: "/workspace/conversations/conv-1/work",
+				cwd,
+				claudeConfigDir,
 				userId: "member-abc",
 				conversationId: "conv-1",
 				llmBaseUrl: "https://gateway.example",
@@ -335,7 +370,6 @@ describe("spawnAgent idle timeout", () => {
 	// NDJSON + watchdog wiring rather than mocking it.
 	let tmpDir: string;
 	const fixtures: Record<string, string> = {};
-	let originalHome: string | undefined;
 
 	const ENV_VARS = [
 		"SANDBOX_BWRAP_PATH",
@@ -347,10 +381,9 @@ describe("spawnAgent idle timeout", () => {
 
 	beforeAll(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "child-spawn-"));
-
-		// Keep ensureClaudeProjectsDir's mkdir inside the temp dir.
-		originalHome = Bun.env.HOME;
-		Bun.env.HOME = tmpDir;
+		// makeInput models the conversation workspace under tmpDir: cwd is
+		// `<tmpDir>/work` and the config home `<tmpDir>/claude-config`. The
+		// bwrap-shim strips the bind flags, so neither needs to exist on disk.
 
 		fixtures.bwrapShim = join(tmpDir, "bwrap-shim.sh");
 		writeFileSync(
@@ -415,8 +448,6 @@ describe("spawnAgent idle timeout", () => {
 			if (originalEnv[key] === undefined) delete process.env[key];
 			else process.env[key] = originalEnv[key];
 		}
-		if (originalHome === undefined) delete Bun.env.HOME;
-		else Bun.env.HOME = originalHome;
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
@@ -424,7 +455,8 @@ describe("spawnAgent idle timeout", () => {
 		return {
 			userQuery: "test",
 			systemPrompt: "test",
-			cwd: tmpDir,
+			cwd: join(tmpDir, "work"),
+			claudeConfigDir: join(tmpDir, "claude-config"),
 			llmBaseUrl: "https://gateway.example",
 			docGatewayUrl: "https://docs.example",
 			llmToken: "tok-test",

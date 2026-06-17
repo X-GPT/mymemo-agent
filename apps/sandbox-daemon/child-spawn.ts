@@ -69,17 +69,6 @@ function getAgentMaxTurnMs(): number {
 // Changing it requires updating all three.
 const WORKSPACE_ROOT = "/workspace";
 
-// The Claude Agent SDK persists session transcripts to
-// ~/.claude/projects/ by default. With --ro-bind / / that directory is
-// read-only inside bwrap, which breaks both the first-turn write and any
-// `resume: sessionId` on later turns. Re-bind just this subtree as rw.
-// Confined to the specific directory the SDK writes to so the rest of
-// ~/.claude (settings, auth state) stays read-only.
-function getClaudeProjectsDir(): string {
-	const home = Bun.env.HOME ?? "/home/user";
-	return `${home}/.claude/projects`;
-}
-
 // Durable root the agent's SessionStore mirror writes to (must match
 // SESSION_STORE_ROOT_ENV in session-store.ts, which the agent reads). Unset =
 // session mirroring disabled, so no extra bwrap bind.
@@ -108,8 +97,8 @@ function isAtOrUnder(child: string, parent: string): boolean {
  * order (last wins):
  *  - root AT/UNDER an ephemeral tmpfs (`/workspace`, `/tmp`) — the transcript is
  *    sandbox-local or gets re-masked, so resume silently never works.
- *  - root that is an ANCESTOR of a required re-bind (agent bundle, cwd,
- *    `~/.claude/projects`) — our `--tmpfs <root>` shadows it and wedges the turn.
+ *  - root that is an ANCESTOR of a required re-bind (agent bundle, cwd, the SDK
+ *    config home) — our `--tmpfs <root>` shadows it and wedges the turn.
  * Requires an absolute path. Reject loudly rather than mirror into a void.
  */
 export function assertSessionStoreRootSafe(
@@ -180,13 +169,13 @@ function resolveSessionStoreBind(
  *                                             dir; documents are fetched via
  *                                             the `mymemo-docs` CLI, not
  *                                             read from disk).
- *   5. --bind ~/.claude/projects ...       — re-expose the Claude Agent SDK's
- *                                             session transcript directory
- *                                             rw so resume across turns
- *                                             works. Caller is responsible
- *                                             for ensuring the dir exists
- *                                             before spawn (see
- *                                             ensureClaudeProjectsDir).
+ *   5. --bind <claudeConfigDir> ...        — re-expose the per-conversation
+ *                                             CLAUDE_CONFIG_DIR (a sibling of
+ *                                             cwd, from the workspace layout) rw
+ *                                             so the SDK can write its config +
+ *                                             session transcripts. The dir is
+ *                                             created by createConversationWorkspace
+ *                                             before spawn.
  *   6. --tmpfs <store root> + --bind <conv> — when session mirroring is on,
  *                                             mask the whole durable transcript
  *                                             root, then re-bind ONLY this
@@ -205,10 +194,10 @@ function resolveSessionStoreBind(
  */
 export function buildAgentSpawnArgv(
 	cwd: string,
+	claudeConfigDir: string,
 	sessionStoreBind?: { root: string; sessionsDir: string },
 ): string[] {
 	const agentBundle = getAgentBundlePath();
-	const claudeProjectsDir = getClaudeProjectsDir();
 	return [
 		getBwrapExecutable(),
 		"--ro-bind",
@@ -222,9 +211,11 @@ export function buildAgentSpawnArgv(
 		"--bind",
 		cwd,
 		cwd,
+		// The SDK's per-conversation CLAUDE_CONFIG_DIR — a sibling of cwd, re-bound
+		// rw so config + transcript writes land in an isolated, non-project dir.
 		"--bind",
-		claudeProjectsDir,
-		claudeProjectsDir,
+		claudeConfigDir,
+		claudeConfigDir,
 		// Mask the entire durable transcript root (defeats the broad `--ro-bind /
 		// /` read-through for other tenants), then re-expose ONLY this
 		// conversation's `sessions/` dir rw. Order matters: tmpfs first, bind
@@ -253,16 +244,6 @@ export function buildAgentSpawnArgv(
 		getBunExecutable(),
 		agentBundle,
 	];
-}
-
-/**
- * Pre-create ~/.claude/projects so the bwrap --bind has something to mount.
- * Idempotent. Must be called before spawnAgent on every turn — bwrap fails
- * if the source path doesn't exist, and the SDK can't create it itself
- * (the rest of ~/.claude is read-only inside the sandbox).
- */
-function ensureClaudeProjectsDir(): void {
-	mkdirSync(getClaudeProjectsDir(), { recursive: true });
 }
 
 function narrowAgentEvent(raw: Record<string, unknown>): AgentEvent | null {
@@ -348,6 +329,13 @@ export interface SpawnAgentInput {
 	userQuery: string;
 	systemPrompt: string;
 	cwd: string;
+	/**
+	 * Per-conversation CLAUDE_CONFIG_DIR (a sibling of cwd, from the workspace
+	 * layout). Set on the agent and re-bound rw so the SDK's config + transcript
+	 * writes stay isolated from the agent's project `.claude`. Created by the
+	 * caller (createConversationWorkspace) before spawn, like cwd.
+	 */
+	claudeConfigDir: string;
 	sessionId?: string;
 	/** Trusted member code — keys the durable session-transcript store. */
 	userId?: string;
@@ -378,9 +366,15 @@ export interface SpawnAgentResult {
 export async function spawnAgent(
 	input: SpawnAgentInput,
 ): Promise<SpawnAgentResult> {
-	const { onEvent, llmBaseUrl, docGatewayUrl, llmToken, docToken, ...config } =
-		input;
-	ensureClaudeProjectsDir();
+	const {
+		onEvent,
+		llmBaseUrl,
+		docGatewayUrl,
+		llmToken,
+		docToken,
+		claudeConfigDir,
+		...config
+	} = input;
 	// Bind only this conversation's transcript subtree into the agent (never the
 	// whole multi-tenant root). Pre-create it so the bwrap --bind has a source.
 	const sessionStoreBind = resolveSessionStoreBind(
@@ -388,39 +382,47 @@ export async function spawnAgent(
 		config.conversationId,
 	);
 	if (sessionStoreBind) {
-		// Reject a root that would mask the agent bundle, cwd, or ~/.claude before
-		// we spawn — otherwise the --tmpfs root silently shadows them.
+		// Reject a root that would mask the agent bundle, cwd, or the SDK config
+		// home before we spawn — otherwise the --tmpfs root silently shadows them.
 		assertSessionStoreRootSafe(sessionStoreBind.root, [
 			getAgentBundlePath(),
 			config.cwd,
-			getClaudeProjectsDir(),
+			claudeConfigDir,
 		]);
 		mkdirSync(sessionStoreBind.sessionsDir, { recursive: true });
 	}
-	const proc = Bun.spawn(buildAgentSpawnArgv(config.cwd, sessionStoreBind), {
-		env: {
-			// The agent holds no provider key — it talks to the LLM gateway, which
-			// injects the real key. ANTHROPIC_AUTH_TOKEN is sent as a Bearer header.
-			ANTHROPIC_BASE_URL: llmBaseUrl,
-			ANTHROPIC_AUTH_TOKEN: llmToken,
-			// Document access: the `mymemo-docs` CLI (on PATH) calls the document
-			// gateway with its own (aud: "documents") token. The gateway enforces
-			// the token's signed scope, so the agent holds no document credential.
-			MYMEMO_DOC_GATEWAY_URL: docGatewayUrl,
-			MYMEMO_DOC_TOKEN: docToken,
-			PATH: process.env.PATH ?? "",
-			CLAUDE_CODE_PATH: process.env.CLAUDE_CODE_PATH ?? "/usr/local/bin/claude",
-			// Where the agent's SessionStore mirrors transcripts. Forwarded only
-			// when the per-conversation subtree is bound above; absent => the agent
-			// builds no store and mirroring is disabled.
-			...(sessionStoreBind
-				? { [SESSION_STORE_ROOT_ENV]: sessionStoreBind.root }
-				: {}),
+	const proc = Bun.spawn(
+		buildAgentSpawnArgv(config.cwd, claudeConfigDir, sessionStoreBind),
+		{
+			env: {
+				// The agent holds no provider key — it talks to the LLM gateway, which
+				// injects the real key. ANTHROPIC_AUTH_TOKEN is sent as a Bearer header.
+				ANTHROPIC_BASE_URL: llmBaseUrl,
+				ANTHROPIC_AUTH_TOKEN: llmToken,
+				// Document access: the `mymemo-docs` CLI (on PATH) calls the document
+				// gateway with its own (aud: "documents") token. The gateway enforces
+				// the token's signed scope, so the agent holds no document credential.
+				MYMEMO_DOC_GATEWAY_URL: docGatewayUrl,
+				MYMEMO_DOC_TOKEN: docToken,
+				PATH: process.env.PATH ?? "",
+				CLAUDE_CODE_PATH:
+					process.env.CLAUDE_CODE_PATH ?? "/usr/local/bin/claude",
+				// Per-conversation config + transcript home (a sibling of cwd, not the
+				// project `.claude`). Sandbox-local, so the SDK's local writes are
+				// isolated per conversation and the shared ~/.claude stays read-only.
+				CLAUDE_CONFIG_DIR: claudeConfigDir,
+				// Where the agent's SessionStore mirrors transcripts. Forwarded only
+				// when the per-conversation subtree is bound above; absent => the agent
+				// builds no store and mirroring is disabled.
+				...(sessionStoreBind
+					? { [SESSION_STORE_ROOT_ENV]: sessionStoreBind.root }
+					: {}),
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+			stdin: "pipe",
 		},
-		stdout: "pipe",
-		stderr: "pipe",
-		stdin: "pipe",
-	});
+	);
 
 	proc.stdin.write(JSON.stringify(config));
 	await proc.stdin.end();

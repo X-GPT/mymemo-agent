@@ -122,6 +122,10 @@ app.post("/turn", async (c) => {
 					userQuery: message,
 					systemPrompt: system_prompt,
 					cwd,
+					// Per-conversation CLAUDE_CONFIG_DIR — owned by the workspace
+					// layout (a sibling of cwd), bound rw and set on the agent so its
+					// SDK config + transcripts stay isolated from the project `.claude`.
+					claudeConfigDir: workspace.claudeConfig,
 					sessionId: agent_session_id,
 					// Identity keys the durable session-transcript store; both arrive
 					// validated from the trusted turn request.

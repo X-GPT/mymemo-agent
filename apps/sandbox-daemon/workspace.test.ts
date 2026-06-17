@@ -85,6 +85,7 @@ describe("resolveConversationWorkspace", () => {
 			docs: join(testRoot, "conversations", "conv-99", "docs"),
 			work: join(testRoot, "conversations", "conv-99", "work"),
 			output: join(testRoot, "conversations", "conv-99", "output"),
+			claudeConfig: join(testRoot, "conversations", "conv-99", "claude-config"),
 		});
 	});
 
@@ -96,9 +97,15 @@ describe("resolveConversationWorkspace", () => {
 });
 
 describe("createConversationWorkspace", () => {
-	it("creates system, docs, work, and output directories", () => {
+	it("creates system, docs, work, output, and claude-config directories", () => {
 		const ws = createConversationWorkspace("conv-create");
-		for (const dir of [ws.system, ws.docs, ws.work, ws.output]) {
+		for (const dir of [
+			ws.system,
+			ws.docs,
+			ws.work,
+			ws.output,
+			ws.claudeConfig,
+		]) {
 			expect(existsSync(dir)).toBe(true);
 			expect(statSync(dir).isDirectory()).toBe(true);
 		}
