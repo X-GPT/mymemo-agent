@@ -78,6 +78,17 @@ function getClaudeProjectsDir(): string {
 	return `${home}/.claude/projects`;
 }
 
+// Durable root the agent's SessionStore mirror writes to (must match
+// SESSION_STORE_ROOT_ENV in session-store.ts, which the agent reads). Unset =
+// session mirroring disabled, so no extra bwrap bind. When set it points
+// outside /workspace (which is tmpfs-masked) at a path that survives sandbox
+// recycle, so it must be re-bound rw inside bwrap and exist before spawn.
+const SESSION_STORE_ROOT_ENV = "AGENT_SESSION_STORE_ROOT";
+function getSessionStoreRoot(): string | undefined {
+	const root = process.env[SESSION_STORE_ROOT_ENV];
+	return root && root.length > 0 ? root : undefined;
+}
+
 /**
  * Build the argv for the bwrap-wrapped agent process. Extracted as a pure
  * helper so the flag set is easy to inspect and unit-test.
@@ -119,6 +130,7 @@ function getClaudeProjectsDir(): string {
 export function buildAgentSpawnArgv(cwd: string): string[] {
 	const agentBundle = getAgentBundlePath();
 	const claudeProjectsDir = getClaudeProjectsDir();
+	const sessionStoreRoot = getSessionStoreRoot();
 	return [
 		getBwrapExecutable(),
 		"--ro-bind",
@@ -135,6 +147,11 @@ export function buildAgentSpawnArgv(cwd: string): string[] {
 		"--bind",
 		claudeProjectsDir,
 		claudeProjectsDir,
+		// 7. --bind <sessionStoreRoot> ...     — re-expose the durable session
+		//                                         transcript root rw so the agent's
+		//                                         SessionStore mirror can write it.
+		//                                         Only when configured.
+		...(sessionStoreRoot ? ["--bind", sessionStoreRoot, sessionStoreRoot] : []),
 		"--tmpfs",
 		"/tmp",
 		"--proc",
@@ -160,6 +177,15 @@ export function buildAgentSpawnArgv(cwd: string): string[] {
  */
 function ensureClaudeProjectsDir(): void {
 	mkdirSync(getClaudeProjectsDir(), { recursive: true });
+}
+
+/**
+ * Pre-create the session-transcript root so its bwrap --bind has a source.
+ * No-op when session mirroring is disabled. Idempotent.
+ */
+function ensureSessionStoreRoot(): void {
+	const root = getSessionStoreRoot();
+	if (root) mkdirSync(root, { recursive: true });
 }
 
 function narrowAgentEvent(raw: Record<string, unknown>): AgentEvent | null {
@@ -246,6 +272,10 @@ export interface SpawnAgentInput {
 	systemPrompt: string;
 	cwd: string;
 	sessionId?: string;
+	/** Trusted member code — keys the durable session-transcript store. */
+	userId?: string;
+	/** Trusted conversation id — keys the durable session-transcript store. */
+	conversationId?: string;
 	/** LLM gateway base URL — set as ANTHROPIC_BASE_URL for the Claude binary. */
 	llmBaseUrl: string;
 	/** Document gateway base URL — set as MYMEMO_DOC_GATEWAY_URL for the CLI. */
@@ -274,6 +304,8 @@ export async function spawnAgent(
 	const { onEvent, llmBaseUrl, docGatewayUrl, llmToken, docToken, ...config } =
 		input;
 	ensureClaudeProjectsDir();
+	ensureSessionStoreRoot();
+	const sessionStoreRoot = getSessionStoreRoot();
 	const proc = Bun.spawn(buildAgentSpawnArgv(config.cwd), {
 		env: {
 			// The agent holds no provider key — it talks to the LLM gateway, which
@@ -287,6 +319,11 @@ export async function spawnAgent(
 			MYMEMO_DOC_TOKEN: docToken,
 			PATH: process.env.PATH ?? "",
 			CLAUDE_CODE_PATH: process.env.CLAUDE_CODE_PATH ?? "/usr/local/bin/claude",
+			// Where the agent's SessionStore mirrors transcripts. Only forwarded
+			// when configured; absent => the agent disables session mirroring.
+			...(sessionStoreRoot
+				? { [SESSION_STORE_ROOT_ENV]: sessionStoreRoot }
+				: {}),
 		},
 		stdout: "pipe",
 		stderr: "pipe",

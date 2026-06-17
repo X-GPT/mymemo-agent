@@ -79,6 +79,7 @@ app.post("/turn", async (c) => {
 
 	const {
 		request_id,
+		user_id,
 		conversation_id,
 		run_id,
 		message,
@@ -122,6 +123,10 @@ app.post("/turn", async (c) => {
 					systemPrompt: system_prompt,
 					cwd,
 					sessionId: agent_session_id,
+					// Identity keys the durable session-transcript store; both arrive
+					// validated from the trusted turn request.
+					userId: user_id,
+					conversationId: conversation_id,
 					llmBaseUrl: llm_base_url,
 					docGatewayUrl: doc_gateway_url,
 					llmToken: llm_token,

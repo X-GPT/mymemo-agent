@@ -106,6 +106,31 @@ describe("buildAgentSpawnArgv", () => {
 		expect(argv).not.toContain("/workspace/daemon.log");
 	});
 
+	it("re-binds the session-store root rw only when configured", () => {
+		const original = process.env.AGENT_SESSION_STORE_ROOT;
+		try {
+			// Unset: no bind for it.
+			delete process.env.AGENT_SESSION_STORE_ROOT;
+			expect(buildAgentSpawnArgv("/tmp/cwd")).not.toContain(
+				"/durable/sessions",
+			);
+
+			// Set: re-bound rw so the agent's SessionStore mirror can write.
+			process.env.AGENT_SESSION_STORE_ROOT = "/durable/sessions";
+			const argv = buildAgentSpawnArgv("/tmp/cwd");
+			const idx = argv.findIndex(
+				(a, i) =>
+					a === "--bind" &&
+					argv[i + 1] === "/durable/sessions" &&
+					argv[i + 2] === "/durable/sessions",
+			);
+			expect(idx).toBeGreaterThan(-1);
+		} finally {
+			if (original === undefined) delete process.env.AGENT_SESSION_STORE_ROOT;
+			else process.env.AGENT_SESSION_STORE_ROOT = original;
+		}
+	});
+
 	it("respects SANDBOX_BWRAP_PATH and SANDBOX_BUN_PATH env overrides", () => {
 		const original = {
 			bwrap: process.env.SANDBOX_BWRAP_PATH,
@@ -186,6 +211,67 @@ describe("spawnAgent agent environment", () => {
 		expect(env.MYMEMO_DOC_TOKEN).toBe("doc-456");
 		// The whole point of the gateway: no provider key reaches the agent.
 		expect("ANTHROPIC_API_KEY" in env).toBe(false);
+	});
+
+	it("forwards the session-store root + identity when configured, omits them otherwise", async () => {
+		originalHome = Bun.env.HOME;
+		Bun.env.HOME = join(tmpdir(), `spawn-agent-store-${Date.now()}`);
+		const storeRoot = join(tmpdir(), `session-store-spawn-${Date.now()}`);
+		const originalRoot = process.env.AGENT_SESSION_STORE_ROOT;
+
+		const writes: string[] = [];
+		const capturingProc = () => ({
+			stdin: {
+				write: (s: string) => writes.push(s),
+				end: () => Promise.resolve(),
+			},
+			stdout: new ReadableStream<Uint8Array>({
+				start(c) {
+					c.close();
+				},
+			}),
+			stderr: new ReadableStream<Uint8Array>({
+				start(c) {
+					c.close();
+				},
+			}),
+			exited: Promise.resolve(0),
+		});
+
+		try {
+			process.env.AGENT_SESSION_STORE_ROOT = storeRoot;
+			spawnSpy = spyOn(Bun, "spawn").mockReturnValue(
+				capturingProc() as unknown as ReturnType<typeof Bun.spawn>,
+			);
+
+			await spawnAgent({
+				userQuery: "q",
+				systemPrompt: "s",
+				cwd: "/workspace/conversations/conv-1/work",
+				userId: "member-abc",
+				conversationId: "conv-1",
+				llmBaseUrl: "https://gateway.example",
+				docGatewayUrl: "https://docs.example",
+				llmToken: "tok",
+				docToken: "doc",
+				onEvent: async () => {},
+			});
+
+			const call = spawnSpy.mock.calls[0] as [
+				string[],
+				{ env: Record<string, string> },
+			];
+			// Root is forwarded to the agent process so it builds a SessionStore.
+			expect(call[1].env.AGENT_SESSION_STORE_ROOT).toBe(storeRoot);
+			// Identity is threaded through the stdin config for key derivation.
+			const config = JSON.parse(writes.join(""));
+			expect(config.userId).toBe("member-abc");
+			expect(config.conversationId).toBe("conv-1");
+		} finally {
+			if (originalRoot === undefined)
+				delete process.env.AGENT_SESSION_STORE_ROOT;
+			else process.env.AGENT_SESSION_STORE_ROOT = originalRoot;
+		}
 	});
 });
 
