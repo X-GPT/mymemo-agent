@@ -27,7 +27,6 @@
  * than lost, but no `listSubkeys` is implemented.
  */
 
-import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type {
@@ -35,26 +34,12 @@ import type {
 	SessionStore,
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
+import {
+	assertSafeId,
+	resolveConversationSessionsDir,
+} from "./session-store-paths";
 
 const VALID_ID = /^[A-Za-z0-9_-]+$/;
-const MAX_ID_LENGTH = 128;
-
-/**
- * Throw unless `value` is a non-empty, length-bounded id from the safe charset.
- * Used for `conversationId` and the SDK `sessionId`, both of which arrive in a
- * known-safe shape (chat-api charset / SDK UUID). A malformed value is rejected,
- * never rewritten, so the stored path always matches the id the caller used.
- */
-function assertSafeId(label: string, value: unknown): asserts value is string {
-	if (
-		typeof value !== "string" ||
-		value.length === 0 ||
-		value.length > MAX_ID_LENGTH ||
-		!VALID_ID.test(value)
-	) {
-		throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
-	}
-}
 
 /**
  * Validate an optional `subpath` (e.g. `subagents/agent-7`). `/` is allowed as
@@ -70,16 +55,6 @@ function assertSafeSubpath(subpath: string): void {
 	}
 }
 
-/**
- * Hash a `userId` into a fixed-length, path-safe segment. The member code has
- * no enforced charset or length, so it is hashed rather than used verbatim:
- * any input maps to `[0-9a-f]{64}`, distinct ids map to distinct segments
- * (per-user isolation), and nothing can traverse out of `users/`.
- */
-function encodeUserSegment(userId: string): string {
-	return createHash("sha256").update(userId, "utf8").digest("hex");
-}
-
 export interface SessionStoreConfig {
 	/** Durable root dir. In the sandbox this is bound rw; in tests a temp dir. */
 	rootDir: string;
@@ -93,17 +68,13 @@ export class FileSystemSessionStore implements SessionStore {
 	private readonly sessionsDir: string;
 
 	constructor(config: SessionStoreConfig) {
-		if (typeof config.userId !== "string" || config.userId.length === 0) {
-			throw new Error(`Invalid userId: ${JSON.stringify(config.userId)}`);
-		}
-		assertSafeId("conversationId", config.conversationId);
-		this.sessionsDir = join(
+		// Shares the exact path scheme the daemon binds into the agent's bwrap
+		// namespace (see session-store-paths.ts), so the dir the SDK writes is the
+		// one — and only one — re-exposed read-write to this turn.
+		this.sessionsDir = resolveConversationSessionsDir(
 			config.rootDir,
-			"users",
-			encodeUserSegment(config.userId),
-			"conversations",
+			config.userId,
 			config.conversationId,
-			"sessions",
 		);
 	}
 

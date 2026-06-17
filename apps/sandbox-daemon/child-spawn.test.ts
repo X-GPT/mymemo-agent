@@ -106,29 +106,38 @@ describe("buildAgentSpawnArgv", () => {
 		expect(argv).not.toContain("/workspace/daemon.log");
 	});
 
-	it("re-binds the session-store root rw only when configured", () => {
-		const original = process.env.AGENT_SESSION_STORE_ROOT;
-		try {
-			// Unset: no bind for it.
-			delete process.env.AGENT_SESSION_STORE_ROOT;
-			expect(buildAgentSpawnArgv("/tmp/cwd")).not.toContain(
-				"/durable/sessions",
-			);
+	it("adds no session-store mount when not configured", () => {
+		const argv = buildAgentSpawnArgv("/tmp/cwd");
+		expect(argv).not.toContain("/durable");
+	});
 
-			// Set: re-bound rw so the agent's SessionStore mirror can write.
-			process.env.AGENT_SESSION_STORE_ROOT = "/durable/sessions";
-			const argv = buildAgentSpawnArgv("/tmp/cwd");
-			const idx = argv.findIndex(
-				(a, i) =>
-					a === "--bind" &&
-					argv[i + 1] === "/durable/sessions" &&
-					argv[i + 2] === "/durable/sessions",
-			);
-			expect(idx).toBeGreaterThan(-1);
-		} finally {
-			if (original === undefined) delete process.env.AGENT_SESSION_STORE_ROOT;
-			else process.env.AGENT_SESSION_STORE_ROOT = original;
-		}
+	it("binds ONLY this conversation's sessions dir and masks the rest of the root", () => {
+		// The agent is prompt-injectable with Bash/Read; binding the whole
+		// multi-tenant root would expose other users' transcripts. Assert we
+		// --tmpfs the root (so the broad `--ro-bind / /` can't leak siblings) and
+		// re-bind ONLY the per-conversation sessions dir.
+		const root = "/durable";
+		const sessionsDir = "/durable/users/abc123/conversations/conv-1/sessions";
+		const argv = buildAgentSpawnArgv("/tmp/cwd", { root, sessionsDir });
+
+		const tmpfsRootIdx = argv.findIndex(
+			(a, i) => a === "--tmpfs" && argv[i + 1] === root,
+		);
+		const bindConvIdx = argv.findIndex(
+			(a, i) =>
+				a === "--bind" &&
+				argv[i + 1] === sessionsDir &&
+				argv[i + 2] === sessionsDir,
+		);
+		expect(tmpfsRootIdx).toBeGreaterThan(-1);
+		expect(bindConvIdx).toBeGreaterThan(-1);
+		// Mask must precede the narrow re-bind, or the bind is shadowed.
+		expect(tmpfsRootIdx).toBeLessThan(bindConvIdx);
+		// The whole root is never bound rw — only the conversation subtree.
+		const wholeRootBind = argv.findIndex(
+			(a, i) => a === "--bind" && argv[i + 1] === root && argv[i + 2] === root,
+		);
+		expect(wholeRootBind).toBe(-1);
 	});
 
 	it("respects SANDBOX_BWRAP_PATH and SANDBOX_BUN_PATH env overrides", () => {

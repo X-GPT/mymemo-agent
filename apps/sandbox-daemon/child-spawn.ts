@@ -12,6 +12,7 @@
 
 import { mkdirSync } from "node:fs";
 import type { AgentEvent } from "./ipc-protocol";
+import { resolveConversationSessionsDir } from "./session-store-paths";
 
 export type { AgentEvent } from "./ipc-protocol";
 
@@ -80,13 +81,32 @@ function getClaudeProjectsDir(): string {
 
 // Durable root the agent's SessionStore mirror writes to (must match
 // SESSION_STORE_ROOT_ENV in session-store.ts, which the agent reads). Unset =
-// session mirroring disabled, so no extra bwrap bind. When set it points
-// outside /workspace (which is tmpfs-masked) at a path that survives sandbox
-// recycle, so it must be re-bound rw inside bwrap and exist before spawn.
+// session mirroring disabled, so no extra bwrap bind.
 const SESSION_STORE_ROOT_ENV = "AGENT_SESSION_STORE_ROOT";
 function getSessionStoreRoot(): string | undefined {
 	const root = process.env[SESSION_STORE_ROOT_ENV];
 	return root && root.length > 0 ? root : undefined;
+}
+
+/**
+ * The single durable subtree this turn's agent may touch: the current
+ * conversation's `sessions/` dir, plus the root that must be masked first.
+ * The agent is prompt-injectable and holds Bash/Read, so binding the whole
+ * durable root (every user, every conversation) would let one turn read or
+ * overwrite another tenant's transcripts. We instead `--tmpfs` the root (so the
+ * broad `--ro-bind / /` can't leak siblings either) and re-bind ONLY this dir.
+ * Returns undefined when mirroring is disabled or identity is missing.
+ */
+function resolveSessionStoreBind(
+	userId: string | undefined,
+	conversationId: string | undefined,
+): { root: string; sessionsDir: string } | undefined {
+	const root = getSessionStoreRoot();
+	if (!root || !userId || !conversationId) return undefined;
+	return {
+		root,
+		sessionsDir: resolveConversationSessionsDir(root, userId, conversationId),
+	};
 }
 
 /**
@@ -117,7 +137,13 @@ function getSessionStoreRoot(): string | undefined {
  *                                             for ensuring the dir exists
  *                                             before spawn (see
  *                                             ensureClaudeProjectsDir).
- *   6. --tmpfs /tmp                        — fresh scratch space.
+ *   6. --tmpfs <store root> + --bind <conv> — when session mirroring is on,
+ *                                             mask the whole durable transcript
+ *                                             root, then re-bind ONLY this
+ *                                             conversation's `sessions/` dir rw.
+ *                                             Other tenants' transcripts are
+ *                                             never visible to the agent.
+ *   7. --tmpfs /tmp                        — fresh scratch space.
  *
  * Namespaces:
  *   - --unshare-user, --unshare-pid, --unshare-uts, --unshare-ipc.
@@ -127,10 +153,12 @@ function getSessionStoreRoot(): string | undefined {
  * Lifetime:
  *   - --die-with-parent so a daemon crash takes bwrap + the agent with it.
  */
-export function buildAgentSpawnArgv(cwd: string): string[] {
+export function buildAgentSpawnArgv(
+	cwd: string,
+	sessionStoreBind?: { root: string; sessionsDir: string },
+): string[] {
 	const agentBundle = getAgentBundlePath();
 	const claudeProjectsDir = getClaudeProjectsDir();
-	const sessionStoreRoot = getSessionStoreRoot();
 	return [
 		getBwrapExecutable(),
 		"--ro-bind",
@@ -147,11 +175,19 @@ export function buildAgentSpawnArgv(cwd: string): string[] {
 		"--bind",
 		claudeProjectsDir,
 		claudeProjectsDir,
-		// 7. --bind <sessionStoreRoot> ...     — re-expose the durable session
-		//                                         transcript root rw so the agent's
-		//                                         SessionStore mirror can write it.
-		//                                         Only when configured.
-		...(sessionStoreRoot ? ["--bind", sessionStoreRoot, sessionStoreRoot] : []),
+		// Mask the entire durable transcript root (defeats the broad `--ro-bind /
+		// /` read-through for other tenants), then re-expose ONLY this
+		// conversation's `sessions/` dir rw. Order matters: tmpfs first, bind
+		// second, so the narrow bind wins for its subpath.
+		...(sessionStoreBind
+			? [
+					"--tmpfs",
+					sessionStoreBind.root,
+					"--bind",
+					sessionStoreBind.sessionsDir,
+					sessionStoreBind.sessionsDir,
+				]
+			: []),
 		"--tmpfs",
 		"/tmp",
 		"--proc",
@@ -177,15 +213,6 @@ export function buildAgentSpawnArgv(cwd: string): string[] {
  */
 function ensureClaudeProjectsDir(): void {
 	mkdirSync(getClaudeProjectsDir(), { recursive: true });
-}
-
-/**
- * Pre-create the session-transcript root so its bwrap --bind has a source.
- * No-op when session mirroring is disabled. Idempotent.
- */
-function ensureSessionStoreRoot(): void {
-	const root = getSessionStoreRoot();
-	if (root) mkdirSync(root, { recursive: true });
 }
 
 function narrowAgentEvent(raw: Record<string, unknown>): AgentEvent | null {
@@ -304,9 +331,16 @@ export async function spawnAgent(
 	const { onEvent, llmBaseUrl, docGatewayUrl, llmToken, docToken, ...config } =
 		input;
 	ensureClaudeProjectsDir();
-	ensureSessionStoreRoot();
-	const sessionStoreRoot = getSessionStoreRoot();
-	const proc = Bun.spawn(buildAgentSpawnArgv(config.cwd), {
+	// Bind only this conversation's transcript subtree into the agent (never the
+	// whole multi-tenant root). Pre-create it so the bwrap --bind has a source.
+	const sessionStoreBind = resolveSessionStoreBind(
+		config.userId,
+		config.conversationId,
+	);
+	if (sessionStoreBind) {
+		mkdirSync(sessionStoreBind.sessionsDir, { recursive: true });
+	}
+	const proc = Bun.spawn(buildAgentSpawnArgv(config.cwd, sessionStoreBind), {
 		env: {
 			// The agent holds no provider key — it talks to the LLM gateway, which
 			// injects the real key. ANTHROPIC_AUTH_TOKEN is sent as a Bearer header.
@@ -319,10 +353,11 @@ export async function spawnAgent(
 			MYMEMO_DOC_TOKEN: docToken,
 			PATH: process.env.PATH ?? "",
 			CLAUDE_CODE_PATH: process.env.CLAUDE_CODE_PATH ?? "/usr/local/bin/claude",
-			// Where the agent's SessionStore mirrors transcripts. Only forwarded
-			// when configured; absent => the agent disables session mirroring.
-			...(sessionStoreRoot
-				? { [SESSION_STORE_ROOT_ENV]: sessionStoreRoot }
+			// Where the agent's SessionStore mirrors transcripts. Forwarded only
+			// when the per-conversation subtree is bound above; absent => the agent
+			// builds no store and mirroring is disabled.
+			...(sessionStoreBind
+				? { [SESSION_STORE_ROOT_ENV]: sessionStoreBind.root }
 				: {}),
 		},
 		stdout: "pipe",
