@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { CanUseTool, SessionStore } from "@anthropic-ai/claude-agent-sdk";
+import type { SessionStore } from "@anthropic-ai/claude-agent-sdk";
 import { buildQueryOptions } from "./agent";
 import { MYMEMO_MCP_SERVER_NAME, SEARCH_DOCUMENTS_TOOL } from "./agent-tools";
 
@@ -74,17 +74,21 @@ describe("buildQueryOptions tool surface", () => {
 		expect(opts.permissionMode).toBe("default");
 		expect(opts.permissionMode).not.toBe("bypassPermissions");
 
-		const canUse = opts.canUseTool as CanUseTool;
-		const denied = await canUse("WebFetch", {}, {} as never);
+		const { canUseTool } = opts;
+		expect(canUseTool).toBeDefined();
+		if (!canUseTool) return;
+		const denied = await canUseTool("WebFetch", {}, {} as never);
 		expect(denied.behavior).toBe("deny");
-		const allowed = await canUse("Bash", { command: "ls" }, {} as never);
+		const allowed = await canUseTool("Bash", { command: "ls" }, {} as never);
 		expect(allowed.behavior).toBe("allow");
 	});
 
 	it("registers the MyMemo MCP server so mcp__mymemo__search_documents is available", () => {
 		const opts = buildQueryOptions(base);
-		const servers = opts.mcpServers as Record<string, { name: string }>;
-		expect(servers[MYMEMO_MCP_SERVER_NAME]).toBeDefined();
-		expect(servers[MYMEMO_MCP_SERVER_NAME].name).toBe(MYMEMO_MCP_SERVER_NAME);
+		const server = opts.mcpServers?.[MYMEMO_MCP_SERVER_NAME];
+		expect(server?.type).toBe("sdk");
+		if (server?.type === "sdk") {
+			expect(server.name).toBe(MYMEMO_MCP_SERVER_NAME);
+		}
 	});
 });

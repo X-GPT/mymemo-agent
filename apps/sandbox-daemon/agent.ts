@@ -6,6 +6,7 @@
 import {
 	type HookCallbackMatcher,
 	type HookEvent,
+	type Options,
 	query,
 	type SessionStore,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -42,17 +43,18 @@ export interface AgentCallbacks {
 }
 
 /**
- * Build the Claude Agent SDK `query()` options for a turn. Pure (apart from
- * reading `CLAUDE_CODE_PATH`) so the wiring — `resume`, and the `sessionStore`
+ * Build the Claude Agent SDK `query()` options for a turn. Free of turn I/O
+ * (apart from reading `CLAUDE_CODE_PATH` and constructing the in-process MyMemo
+ * MCP server) so the wiring — the tool surface, `resume`, and the `sessionStore`
  * transcript mirror — is unit-testable without spawning the SDK. `hooks` is
- * layered on separately by `runAgent` since it closes over the heartbeat.
+ * layered on separately by `runAgent` since it closes over the heartbeat. Typed
+ * as the SDK `Options` so a mistyped field name fails at compile time instead of
+ * silently widening the untrusted agent's tool surface.
  */
-export function buildQueryOptions(
-	options: AgentRunOptions,
-): Record<string, unknown> {
+export function buildQueryOptions(options: AgentRunOptions): Options {
 	const { systemPrompt, cwd, sessionId, sessionStore } = options;
 
-	const queryOptions: Record<string, unknown> = {
+	const queryOptions: Options = {
 		cwd,
 		systemPrompt,
 		// Scope the tool surface for the untrusted agent (see agent-tools.ts; the

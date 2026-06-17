@@ -70,10 +70,12 @@ export const PRE_APPROVED_TOOLS = [
 ] as const;
 
 /**
- * Fail-closed permission handler: allow only pre-approved tools, deny everything
- * else with a clear message. With `allowedTools` pre-approving the same set this
- * is rarely consulted, but it is the backstop that keeps an unexpected or
- * prompt-injected tool call from running under `permissionMode: "default"`.
+ * Default-deny permission handler: allow only pre-approved tools, deny everything
+ * else with a clear message. With `allowedTools` pre-approving the same set it is
+ * rarely consulted; it keeps the agent's behavior scoped to the reasoned-about
+ * set under `permissionMode: "default"`. This is behavior-scoping, NOT a
+ * containment boundary — `Bash` can already do what a denied tool would (see the
+ * file header); the bwrap/E2B sandbox is the boundary.
  */
 export function createCanUseTool(
 	preApproved: readonly string[] = PRE_APPROVED_TOOLS,
