@@ -13,7 +13,6 @@ import {
 	ALLOWED_BUILTIN_TOOLS,
 	createCanUseTool,
 	createMymemoMcpServer,
-	DISALLOWED_BUILTIN_TOOLS,
 	MYMEMO_MCP_SERVER_NAME,
 	PRE_APPROVED_TOOLS,
 } from "./agent-tools";
@@ -57,13 +56,13 @@ export function buildQueryOptions(
 		cwd,
 		systemPrompt,
 		// Lock down the tool surface for the untrusted agent (see agent-tools.ts):
-		// `tools` pins the available built-ins, `allowedTools` pre-approves them
-		// plus the MyMemo MCP document tool, `disallowedTools` hard-denies Bash,
-		// and `canUseTool` fail-closes anything else under `permissionMode:
-		// "default"`. Documents are reached only through the in-process MCP server.
+		// `tools` pins the available built-ins (Bash + Read/Grep/Glob), `allowedTools`
+		// pre-approves them plus the MyMemo MCP document tool, and `canUseTool`
+		// fail-closes anything else under `permissionMode: "default"`. Bash stays for
+		// general workspace work; its command surface is bounded by the bwrap/E2B
+		// sandbox, not an allowlist (see agent-tools.ts header).
 		tools: [...ALLOWED_BUILTIN_TOOLS],
 		allowedTools: [...PRE_APPROVED_TOOLS],
-		disallowedTools: [...DISALLOWED_BUILTIN_TOOLS],
 		canUseTool: createCanUseTool(),
 		mcpServers: { [MYMEMO_MCP_SERVER_NAME]: createMymemoMcpServer() },
 		permissionMode: "default",

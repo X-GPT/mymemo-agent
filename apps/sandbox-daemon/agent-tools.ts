@@ -8,15 +8,23 @@
  *
  * - `tools` pins the available built-ins (availability, not pre-approval).
  * - `allowedTools` pre-approves exactly that set plus the MyMemo MCP tool.
- * - `disallowedTools` hard-denies `Bash`, even if a future change widens `tools`.
  * - `canUseTool` denies anything not pre-approved, so an unexpected or injected
- *   tool call cannot run.
+ *   tool call cannot run under `permissionMode: "default"`.
  *
- * Bash is intentionally absent from the surface. Its only purpose was the
- * `mymemo-docs` CLI for document access, which `mcp__mymemo__search_documents`
- * replaces; dropping it shrinks the untrusted agent's blast radius. The agent
- * reads the local hydrated working set with `Read`/`Grep`/`Glob` and reaches the
- * remote corpus only through the MyMemo MCP tool.
+ * Bash REMAINS available: this is a general workspace agent that runs code,
+ * manipulates files under `work/`, and produces artifacts under `output/` — not
+ * a pure document-Q&A bot. `mcp__mymemo__search_documents` replaces only the
+ * *document-fetch* use of Bash (the `mymemo-docs` CLI), not general computation,
+ * so removing Bash would cripple the agent's actual job.
+ *
+ * Allowed Bash command surface: unrestricted. The boundary is OS-level sandbox
+ * isolation, not a command allowlist — the agent runs under bwrap (read-only
+ * root, tmpfs workspace, unshared user/pid/uts/ipc namespaces) inside an E2B
+ * sandbox, with a scrubbed environment that holds no provider key, no DB
+ * credential, and only short-lived per-turn gateway tokens (see `child-spawn.ts`,
+ * covered by `child-spawn.test.ts`). A command allowlist would cripple a general
+ * agent while adding little over that isolation, so the isolation is the
+ * documented, tested compensating control.
  */
 
 import {
@@ -37,17 +45,13 @@ export const SEARCH_DOCUMENTS_TOOL_NAME = "search_documents";
 export const SEARCH_DOCUMENTS_TOOL = `mcp__${MYMEMO_MCP_SERVER_NAME}__${SEARCH_DOCUMENTS_TOOL_NAME}`;
 
 /**
- * Built-in tools the agent may use, for reading the local hydrated working set.
- * Bash is deliberately excluded (see file header).
+ * Built-in tools the agent may use: `Bash` for general workspace work (running
+ * code, writing files under `work/`/`output/`), and `Read`/`Grep`/`Glob` for the
+ * local hydrated working set. See the file header for why Bash stays. Every
+ * other built-in (`Write`, `Edit`, `WebFetch`, `Task`, …) is absent by omission
+ * from this list, and `canUseTool` denies anything off it.
  */
-export const ALLOWED_BUILTIN_TOOLS = ["Read", "Grep", "Glob"] as const;
-
-/**
- * Built-ins explicitly denied as defense-in-depth. `tools` already makes every
- * other built-in unavailable; we additionally deny `Bash` by name so a future
- * widening of `tools` cannot silently re-expose the highest-risk built-in.
- */
-export const DISALLOWED_BUILTIN_TOOLS = ["Bash"] as const;
+export const ALLOWED_BUILTIN_TOOLS = ["Bash", "Read", "Grep", "Glob"] as const;
 
 /** Every tool the agent is pre-approved to call without prompting. */
 export const PRE_APPROVED_TOOLS = [
