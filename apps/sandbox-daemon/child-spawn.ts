@@ -11,7 +11,9 @@
  */
 
 import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
 import type { AgentEvent } from "./ipc-protocol";
+import { resolveConversationSessionsDir } from "./session-store-paths";
 
 export type { AgentEvent } from "./ipc-protocol";
 
@@ -78,6 +80,85 @@ function getClaudeProjectsDir(): string {
 	return `${home}/.claude/projects`;
 }
 
+// Durable root the agent's SessionStore mirror writes to (must match
+// SESSION_STORE_ROOT_ENV in session-store.ts, which the agent reads). Unset =
+// session mirroring disabled, so no extra bwrap bind.
+const SESSION_STORE_ROOT_ENV = "AGENT_SESSION_STORE_ROOT";
+function getSessionStoreRoot(): string | undefined {
+	const root = process.env[SESSION_STORE_ROOT_ENV];
+	return root && root.length > 0 ? root : undefined;
+}
+
+// Mounts the agent gets that are EPHEMERAL: tmpfs that vanishes when the
+// per-turn sandbox is killed. A store root at or under either is useless —
+// `/workspace` is sandbox-local (no resume across recycle) and `/tmp` is also
+// re-masked by the later `--tmpfs /tmp`, silently dropping the mirror.
+const EPHEMERAL_ROOTS = [WORKSPACE_ROOT, "/tmp"];
+
+/** True when `child` is `parent` or nested beneath it (both pre-resolved). */
+function isAtOrUnder(child: string, parent: string): boolean {
+	return (
+		child === parent || child.startsWith(parent === "/" ? "/" : `${parent}/`)
+	);
+}
+
+/**
+ * Throw unless the configured store root is a durable path that overlaps no
+ * sandbox-managed mount. Two failure modes, both from bwrap applying mounts in
+ * order (last wins):
+ *  - root AT/UNDER an ephemeral tmpfs (`/workspace`, `/tmp`) — the transcript is
+ *    sandbox-local or gets re-masked, so resume silently never works.
+ *  - root that is an ANCESTOR of a required re-bind (agent bundle, cwd,
+ *    `~/.claude/projects`) — our `--tmpfs <root>` shadows it and wedges the turn.
+ * Requires an absolute path. Reject loudly rather than mirror into a void.
+ */
+export function assertSessionStoreRootSafe(
+	root: string,
+	mounts: string[],
+): void {
+	if (!root.startsWith("/")) {
+		throw new Error(
+			`${SESSION_STORE_ROOT_ENV} must be an absolute path: ${JSON.stringify(root)}`,
+		);
+	}
+	const r = resolve(root);
+	for (const ephemeral of EPHEMERAL_ROOTS) {
+		if (isAtOrUnder(r, resolve(ephemeral))) {
+			throw new Error(
+				`${SESSION_STORE_ROOT_ENV} (${root}) is inside the ephemeral ${ephemeral}; transcripts there don't survive sandbox recycle — use a durable path outside ${EPHEMERAL_ROOTS.join(" and ")}`,
+			);
+		}
+	}
+	for (const mount of mounts) {
+		if (isAtOrUnder(resolve(mount), r)) {
+			throw new Error(
+				`${SESSION_STORE_ROOT_ENV} (${root}) masks required mount ${mount}; use a dedicated path outside the sandbox workspace`,
+			);
+		}
+	}
+}
+
+/**
+ * The single durable subtree this turn's agent may touch: the current
+ * conversation's `sessions/` dir, plus the root that must be masked first.
+ * The agent is prompt-injectable and holds Bash/Read, so binding the whole
+ * durable root (every user, every conversation) would let one turn read or
+ * overwrite another tenant's transcripts. We instead `--tmpfs` the root (so the
+ * broad `--ro-bind / /` can't leak siblings either) and re-bind ONLY this dir.
+ * Returns undefined when mirroring is disabled or identity is missing.
+ */
+function resolveSessionStoreBind(
+	userId: string | undefined,
+	conversationId: string | undefined,
+): { root: string; sessionsDir: string } | undefined {
+	const root = getSessionStoreRoot();
+	if (!root || !userId || !conversationId) return undefined;
+	return {
+		root,
+		sessionsDir: resolveConversationSessionsDir(root, userId, conversationId),
+	};
+}
+
 /**
  * Build the argv for the bwrap-wrapped agent process. Extracted as a pure
  * helper so the flag set is easy to inspect and unit-test.
@@ -106,7 +187,13 @@ function getClaudeProjectsDir(): string {
  *                                             for ensuring the dir exists
  *                                             before spawn (see
  *                                             ensureClaudeProjectsDir).
- *   6. --tmpfs /tmp                        — fresh scratch space.
+ *   6. --tmpfs <store root> + --bind <conv> — when session mirroring is on,
+ *                                             mask the whole durable transcript
+ *                                             root, then re-bind ONLY this
+ *                                             conversation's `sessions/` dir rw.
+ *                                             Other tenants' transcripts are
+ *                                             never visible to the agent.
+ *   7. --tmpfs /tmp                        — fresh scratch space.
  *
  * Namespaces:
  *   - --unshare-user, --unshare-pid, --unshare-uts, --unshare-ipc.
@@ -116,7 +203,10 @@ function getClaudeProjectsDir(): string {
  * Lifetime:
  *   - --die-with-parent so a daemon crash takes bwrap + the agent with it.
  */
-export function buildAgentSpawnArgv(cwd: string): string[] {
+export function buildAgentSpawnArgv(
+	cwd: string,
+	sessionStoreBind?: { root: string; sessionsDir: string },
+): string[] {
 	const agentBundle = getAgentBundlePath();
 	const claudeProjectsDir = getClaudeProjectsDir();
 	return [
@@ -135,6 +225,19 @@ export function buildAgentSpawnArgv(cwd: string): string[] {
 		"--bind",
 		claudeProjectsDir,
 		claudeProjectsDir,
+		// Mask the entire durable transcript root (defeats the broad `--ro-bind /
+		// /` read-through for other tenants), then re-expose ONLY this
+		// conversation's `sessions/` dir rw. Order matters: tmpfs first, bind
+		// second, so the narrow bind wins for its subpath.
+		...(sessionStoreBind
+			? [
+					"--tmpfs",
+					sessionStoreBind.root,
+					"--bind",
+					sessionStoreBind.sessionsDir,
+					sessionStoreBind.sessionsDir,
+				]
+			: []),
 		"--tmpfs",
 		"/tmp",
 		"--proc",
@@ -246,6 +349,10 @@ export interface SpawnAgentInput {
 	systemPrompt: string;
 	cwd: string;
 	sessionId?: string;
+	/** Trusted member code — keys the durable session-transcript store. */
+	userId?: string;
+	/** Trusted conversation id — keys the durable session-transcript store. */
+	conversationId?: string;
 	/** LLM gateway base URL — set as ANTHROPIC_BASE_URL for the Claude binary. */
 	llmBaseUrl: string;
 	/** Document gateway base URL — set as MYMEMO_DOC_GATEWAY_URL for the CLI. */
@@ -274,7 +381,23 @@ export async function spawnAgent(
 	const { onEvent, llmBaseUrl, docGatewayUrl, llmToken, docToken, ...config } =
 		input;
 	ensureClaudeProjectsDir();
-	const proc = Bun.spawn(buildAgentSpawnArgv(config.cwd), {
+	// Bind only this conversation's transcript subtree into the agent (never the
+	// whole multi-tenant root). Pre-create it so the bwrap --bind has a source.
+	const sessionStoreBind = resolveSessionStoreBind(
+		config.userId,
+		config.conversationId,
+	);
+	if (sessionStoreBind) {
+		// Reject a root that would mask the agent bundle, cwd, or ~/.claude before
+		// we spawn — otherwise the --tmpfs root silently shadows them.
+		assertSessionStoreRootSafe(sessionStoreBind.root, [
+			getAgentBundlePath(),
+			config.cwd,
+			getClaudeProjectsDir(),
+		]);
+		mkdirSync(sessionStoreBind.sessionsDir, { recursive: true });
+	}
+	const proc = Bun.spawn(buildAgentSpawnArgv(config.cwd, sessionStoreBind), {
 		env: {
 			// The agent holds no provider key — it talks to the LLM gateway, which
 			// injects the real key. ANTHROPIC_AUTH_TOKEN is sent as a Bearer header.
@@ -287,6 +410,12 @@ export async function spawnAgent(
 			MYMEMO_DOC_TOKEN: docToken,
 			PATH: process.env.PATH ?? "",
 			CLAUDE_CODE_PATH: process.env.CLAUDE_CODE_PATH ?? "/usr/local/bin/claude",
+			// Where the agent's SessionStore mirrors transcripts. Forwarded only
+			// when the per-conversation subtree is bound above; absent => the agent
+			// builds no store and mirroring is disabled.
+			...(sessionStoreBind
+				? { [SESSION_STORE_ROOT_ENV]: sessionStoreBind.root }
+				: {}),
 		},
 		stdout: "pipe",
 		stderr: "pipe",

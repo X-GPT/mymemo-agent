@@ -7,6 +7,7 @@ import {
 	type HookCallbackMatcher,
 	type HookEvent,
 	query,
+	type SessionStore,
 } from "@anthropic-ai/claude-agent-sdk";
 import { createHeartbeatController } from "./heartbeat";
 
@@ -15,6 +16,13 @@ export interface AgentRunOptions {
 	systemPrompt: string;
 	cwd: string;
 	sessionId?: string;
+	/**
+	 * Mirror SDK session transcripts to durable storage so `resume` survives a
+	 * fresh or recycled sandbox. Omit to keep today's behavior (local transcript
+	 * only). Never paired with `persistSession: false` — the mirror hook fires
+	 * after the local write, so local writes must stay enabled.
+	 */
+	sessionStore?: SessionStore;
 }
 
 export interface AgentCallbacks {
@@ -27,13 +35,15 @@ export interface AgentCallbacks {
 }
 
 /**
- * Run a Claude Agent SDK query and stream results through callbacks.
+ * Build the Claude Agent SDK `query()` options for a turn. Pure (apart from
+ * reading `CLAUDE_CODE_PATH`) so the wiring — `resume`, and the `sessionStore`
+ * transcript mirror — is unit-testable without spawning the SDK. `hooks` is
+ * layered on separately by `runAgent` since it closes over the heartbeat.
  */
-export async function runAgent(
+export function buildQueryOptions(
 	options: AgentRunOptions,
-	callbacks: AgentCallbacks,
-): Promise<void> {
-	const { userQuery, systemPrompt, cwd, sessionId } = options;
+): Record<string, unknown> {
+	const { systemPrompt, cwd, sessionId, sessionStore } = options;
 
 	const queryOptions: Record<string, unknown> = {
 		cwd,
@@ -51,6 +61,28 @@ export async function runAgent(
 	if (sessionId) {
 		queryOptions.resume = sessionId;
 	}
+
+	// When durable session storage is configured, mirror the SDK transcript to
+	// it. Deliberately leave `persistSession` unset (defaults on): the mirror
+	// hook runs after the local write, so disabling local writes would silence
+	// it.
+	if (sessionStore) {
+		queryOptions.sessionStore = sessionStore;
+	}
+
+	return queryOptions;
+}
+
+/**
+ * Run a Claude Agent SDK query and stream results through callbacks.
+ */
+export async function runAgent(
+	options: AgentRunOptions,
+	callbacks: AgentCallbacks,
+): Promise<void> {
+	const { userQuery } = options;
+
+	const queryOptions = buildQueryOptions(options);
 
 	// Tool execution emits nothing on stdout, so without this a single tool that
 	// runs longer than the idle window trips the daemon watchdog. Pre/PostToolUse
@@ -111,6 +143,17 @@ export async function runAgent(
 
 	try {
 		for await (const msg of result) {
+			// Transcript-mirror failures are non-fatal (the batch is dropped,
+			// at-most-once) but must not be silent — the turn answers correctly yet
+			// resume may be incomplete. Surface to stderr, which the daemon drains
+			// into its log; the turn itself continues.
+			if (msg.type === "system" && msg.subtype === "mirror_error") {
+				console.error(
+					`session transcript mirror failed (resume may be incomplete): ${msg.error}`,
+				);
+				continue;
+			}
+
 			if (!emittedSessionId && msg.type === "stream_event") {
 				await callbacks.onSessionId(msg.session_id);
 				emittedSessionId = true;

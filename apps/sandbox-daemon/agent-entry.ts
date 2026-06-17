@@ -4,7 +4,7 @@
  * (no daemon secrets).
  *
  * Stdin:   single JSON object —
- *            { userQuery, systemPrompt, cwd, sessionId? }
+ *            { userQuery, systemPrompt, cwd, sessionId?, userId?, conversationId? }
  * Stdout:  NDJSON, one event per line —
  *            { type: "text_delta", text: "..." }
  *            { type: "session_id", sessionId: "..." }
@@ -23,12 +23,15 @@
 
 import { runAgent } from "./agent";
 import type { AgentEvent } from "./ipc-protocol";
+import { createSessionStore, SESSION_STORE_ROOT_ENV } from "./session-store";
 
 interface AgentConfig {
 	userQuery: string;
 	systemPrompt: string;
 	cwd: string;
 	sessionId?: string;
+	userId?: string;
+	conversationId?: string;
 }
 
 function emit(event: AgentEvent): void {
@@ -60,6 +63,11 @@ function parseConfig(raw: string): AgentConfig {
 		cwd: parsed.cwd,
 		sessionId:
 			typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
+		userId: typeof parsed.userId === "string" ? parsed.userId : undefined,
+		conversationId:
+			typeof parsed.conversationId === "string"
+				? parsed.conversationId
+				: undefined,
 	};
 }
 
@@ -76,25 +84,38 @@ async function main() {
 		process.exit(1);
 	}
 
-	let failed = false;
-	await runAgent(config, {
-		onTextDelta: async (text) => {
-			emit({ type: "text_delta", text });
-		},
-		onSessionId: async (sessionId) => {
-			emit({ type: "session_id", sessionId });
-		},
-		onHeartbeat: () => {
-			emit({ type: "heartbeat" });
-		},
-		onCompleted: async () => {
-			emit({ type: "completed" });
-		},
-		onFailed: async (message) => {
-			failed = true;
-			emit({ type: "failed", message });
-		},
+	// Mirror SDK session transcripts to durable storage when configured, so
+	// `resume` survives a fresh or recycled sandbox. Disabled (null) when no
+	// root is set or identity is missing — the SDK then keeps its local
+	// transcript only.
+	const sessionStore = createSessionStore({
+		rootDir: process.env[SESSION_STORE_ROOT_ENV],
+		userId: config.userId,
+		conversationId: config.conversationId,
 	});
+
+	let failed = false;
+	await runAgent(
+		{ ...config, sessionStore: sessionStore ?? undefined },
+		{
+			onTextDelta: async (text) => {
+				emit({ type: "text_delta", text });
+			},
+			onSessionId: async (sessionId) => {
+				emit({ type: "session_id", sessionId });
+			},
+			onHeartbeat: () => {
+				emit({ type: "heartbeat" });
+			},
+			onCompleted: async () => {
+				emit({ type: "completed" });
+			},
+			onFailed: async (message) => {
+				failed = true;
+				emit({ type: "failed", message });
+			},
+		},
+	);
 
 	process.exit(failed ? 1 : 0);
 }

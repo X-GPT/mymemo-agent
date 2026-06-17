@@ -11,7 +11,11 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "./child-spawn";
-import { buildAgentSpawnArgv, spawnAgent } from "./child-spawn";
+import {
+	assertSessionStoreRootSafe,
+	buildAgentSpawnArgv,
+	spawnAgent,
+} from "./child-spawn";
 
 describe("buildAgentSpawnArgv", () => {
 	it("wraps bun /workspace/agent.js with bwrap and the agreed flags", () => {
@@ -106,6 +110,74 @@ describe("buildAgentSpawnArgv", () => {
 		expect(argv).not.toContain("/workspace/daemon.log");
 	});
 
+	it("adds no session-store mount when not configured", () => {
+		const argv = buildAgentSpawnArgv("/tmp/cwd");
+		expect(argv).not.toContain("/durable");
+	});
+
+	it("binds ONLY this conversation's sessions dir and masks the rest of the root", () => {
+		// The agent is prompt-injectable with Bash/Read; binding the whole
+		// multi-tenant root would expose other users' transcripts. Assert we
+		// --tmpfs the root (so the broad `--ro-bind / /` can't leak siblings) and
+		// re-bind ONLY the per-conversation sessions dir.
+		const root = "/durable";
+		const sessionsDir = "/durable/users/abc123/conversations/conv-1/sessions";
+		const argv = buildAgentSpawnArgv("/tmp/cwd", { root, sessionsDir });
+
+		const tmpfsRootIdx = argv.findIndex(
+			(a, i) => a === "--tmpfs" && argv[i + 1] === root,
+		);
+		const bindConvIdx = argv.findIndex(
+			(a, i) =>
+				a === "--bind" &&
+				argv[i + 1] === sessionsDir &&
+				argv[i + 2] === sessionsDir,
+		);
+		expect(tmpfsRootIdx).toBeGreaterThan(-1);
+		expect(bindConvIdx).toBeGreaterThan(-1);
+		// Mask must precede the narrow re-bind, or the bind is shadowed.
+		expect(tmpfsRootIdx).toBeLessThan(bindConvIdx);
+		// The whole root is never bound rw — only the conversation subtree.
+		const wholeRootBind = argv.findIndex(
+			(a, i) => a === "--bind" && argv[i + 1] === root && argv[i + 2] === root,
+		);
+		expect(wholeRootBind).toBe(-1);
+	});
+
+	it("rejects a store root that overlaps any sandbox-managed mount", () => {
+		const mounts = [
+			"/workspace/agent.js",
+			"/workspace/conversations/c/work",
+			"/home/user/.claude/projects",
+		];
+		// Inside an ephemeral tmpfs — sandbox-local or re-masked, so resume silently
+		// never works.
+		expect(() => assertSessionStoreRootSafe("/workspace", mounts)).toThrow(
+			/ephemeral/,
+		);
+		expect(() =>
+			assertSessionStoreRootSafe("/workspace/sessions", mounts),
+		).toThrow(/ephemeral/);
+		expect(() => assertSessionStoreRootSafe("/tmp/sessions", mounts)).toThrow(
+			/ephemeral/,
+		);
+		// Ancestor of a required re-bind — our --tmpfs root would shadow it.
+		expect(() => assertSessionStoreRootSafe("/", mounts)).toThrow(
+			/masks required mount/,
+		);
+		// Relative paths are rejected outright (bwrap needs absolute).
+		expect(() => assertSessionStoreRootSafe("relative/path", mounts)).toThrow(
+			/absolute path/,
+		);
+		// A dedicated durable root outside every sandbox-managed mount is fine.
+		expect(() =>
+			assertSessionStoreRootSafe("/session-store", mounts),
+		).not.toThrow();
+		expect(() =>
+			assertSessionStoreRootSafe("/mnt/durable/sessions", mounts),
+		).not.toThrow();
+	});
+
 	it("respects SANDBOX_BWRAP_PATH and SANDBOX_BUN_PATH env overrides", () => {
 		const original = {
 			bwrap: process.env.SANDBOX_BWRAP_PATH,
@@ -186,6 +258,73 @@ describe("spawnAgent agent environment", () => {
 		expect(env.MYMEMO_DOC_TOKEN).toBe("doc-456");
 		// The whole point of the gateway: no provider key reaches the agent.
 		expect("ANTHROPIC_API_KEY" in env).toBe(false);
+	});
+
+	it("forwards the session-store root + identity when configured, omits them otherwise", async () => {
+		originalHome = Bun.env.HOME;
+		Bun.env.HOME = join(tmpdir(), `spawn-agent-store-${Date.now()}`);
+		// A DURABLE root: not under /workspace or /tmp (tmpdir() is /tmp on Linux,
+		// which assertSessionStoreRootSafe now rejects). Use the package dir.
+		const storeRoot = join(
+			process.cwd(),
+			`.session-store-spawn-test-${Date.now()}`,
+		);
+		const originalRoot = process.env.AGENT_SESSION_STORE_ROOT;
+
+		const writes: string[] = [];
+		const capturingProc = () => ({
+			stdin: {
+				write: (s: string) => writes.push(s),
+				end: () => Promise.resolve(),
+			},
+			stdout: new ReadableStream<Uint8Array>({
+				start(c) {
+					c.close();
+				},
+			}),
+			stderr: new ReadableStream<Uint8Array>({
+				start(c) {
+					c.close();
+				},
+			}),
+			exited: Promise.resolve(0),
+		});
+
+		try {
+			process.env.AGENT_SESSION_STORE_ROOT = storeRoot;
+			spawnSpy = spyOn(Bun, "spawn").mockReturnValue(
+				capturingProc() as unknown as ReturnType<typeof Bun.spawn>,
+			);
+
+			await spawnAgent({
+				userQuery: "q",
+				systemPrompt: "s",
+				cwd: "/workspace/conversations/conv-1/work",
+				userId: "member-abc",
+				conversationId: "conv-1",
+				llmBaseUrl: "https://gateway.example",
+				docGatewayUrl: "https://docs.example",
+				llmToken: "tok",
+				docToken: "doc",
+				onEvent: async () => {},
+			});
+
+			const call = spawnSpy.mock.calls[0] as [
+				string[],
+				{ env: Record<string, string> },
+			];
+			// Root is forwarded to the agent process so it builds a SessionStore.
+			expect(call[1].env.AGENT_SESSION_STORE_ROOT).toBe(storeRoot);
+			// Identity is threaded through the stdin config for key derivation.
+			const config = JSON.parse(writes.join(""));
+			expect(config.userId).toBe("member-abc");
+			expect(config.conversationId).toBe("conv-1");
+		} finally {
+			if (originalRoot === undefined)
+				delete process.env.AGENT_SESSION_STORE_ROOT;
+			else process.env.AGENT_SESSION_STORE_ROOT = originalRoot;
+			rmSync(storeRoot, { recursive: true, force: true });
+		}
 	});
 });
 

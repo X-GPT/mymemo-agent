@@ -1,0 +1,189 @@
+/**
+ * Local filesystem adapter for the Claude Agent SDK `SessionStore` (the
+ * transcript-mirror hook). The SDK keeps its authoritative JSONL transcript
+ * under `~/.claude/projects/` and, after each local write succeeds, mirrors the
+ * same entries here via `append`. On a fresh or recycled sandbox the SDK calls
+ * `load` once before spawning its subprocess to materialize a prior transcript,
+ * which is how `resume: agentSessionId` survives a sandbox that no longer has
+ * the local copy.
+ *
+ * Storage is keyed by user, conversation, and SDK session id following the same
+ * durable path model the chat-api `WorkspaceStore` uses:
+ *
+ *   {root}/users/{sha256(userId)}/conversations/{conversationId}/sessions/{sessionId}.jsonl
+ *
+ * `userId` and `conversationId` are bound at construction from the trusted turn
+ * request — they are NOT taken from the SDK-provided key, whose `projectKey` is
+ * derived from the agent cwd and carries no tenancy meaning. Per-user and
+ * per-conversation isolation therefore holds structurally: a store built for
+ * one {user, conversation} can only ever read or write that subtree. The
+ * SDK-supplied `sessionId`/`subpath` are validated before they are joined into
+ * a path so a malformed value cannot escape the conversation's `sessions/` dir.
+ *
+ * Subagent transcript resume is intentionally unsupported: the sandbox agent
+ * runs without the Task tool, so it never spawns subagents and the SDK never
+ * needs `listSubkeys` to discover their transcripts. `append`/`load` still
+ * accept a `subpath` (validated) so a stray subagent batch is stored rather
+ * than lost, but no `listSubkeys` is implemented.
+ */
+
+import {
+	appendFileSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readSync,
+	statSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import type {
+	SessionKey,
+	SessionStore,
+	SessionStoreEntry,
+} from "@anthropic-ai/claude-agent-sdk";
+import {
+	assertSafeId,
+	resolveConversationSessionsDir,
+} from "./session-store-paths";
+
+const VALID_ID = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Validate an optional `subpath` (e.g. `subagents/agent-7`). `/` is allowed as
+ * a separator, but every segment must be from the safe charset — this rejects
+ * `..`, absolute paths, and NUL before the subpath is joined into a file path.
+ */
+function assertSafeSubpath(subpath: string): void {
+	const segments = subpath.split("/");
+	for (const segment of segments) {
+		if (segment.length === 0 || !VALID_ID.test(segment)) {
+			throw new Error(`Invalid session subpath: ${JSON.stringify(subpath)}`);
+		}
+	}
+}
+
+/**
+ * True if `file` is missing, empty, or already ends in `\n` — i.e. a fresh
+ * append would start on a clean line. Reads only the final byte so it stays
+ * cheap on large transcripts.
+ */
+function endsWithNewline(file: string): boolean {
+	if (!existsSync(file)) return true;
+	const size = statSync(file).size;
+	if (size === 0) return true;
+	const fd = openSync(file, "r");
+	try {
+		const buf = Buffer.alloc(1);
+		readSync(fd, buf, 0, 1, size - 1);
+		return buf[0] === 0x0a; // '\n'
+	} finally {
+		closeSync(fd);
+	}
+}
+
+export interface SessionStoreConfig {
+	/** Durable root dir. In the sandbox this is bound rw; in tests a temp dir. */
+	rootDir: string;
+	/** Trusted member code from the turn request. */
+	userId: string;
+	/** Trusted conversation id from the turn request. */
+	conversationId: string;
+}
+
+export class FileSystemSessionStore implements SessionStore {
+	private readonly sessionsDir: string;
+
+	constructor(config: SessionStoreConfig) {
+		// Shares the exact path scheme the daemon binds into the agent's bwrap
+		// namespace (see session-store-paths.ts), so the dir the SDK writes is the
+		// one — and only one — re-exposed read-write to this turn.
+		this.sessionsDir = resolveConversationSessionsDir(
+			config.rootDir,
+			config.userId,
+			config.conversationId,
+		);
+	}
+
+	/**
+	 * Resolve the JSONL file for a key. Ignores `key.projectKey` (SDK-derived
+	 * from cwd, not tenancy) and uses the {user, conversation} bound at
+	 * construction. Validates the SDK-supplied `sessionId`/`subpath` so neither
+	 * can escape `sessionsDir`.
+	 */
+	private fileFor(key: SessionKey): string {
+		assertSafeId("sessionId", key.sessionId);
+		if (key.subpath === undefined) {
+			return join(this.sessionsDir, `${key.sessionId}.jsonl`);
+		}
+		assertSafeSubpath(key.subpath);
+		return join(this.sessionsDir, key.sessionId, `${key.subpath}.jsonl`);
+	}
+
+	/**
+	 * Append a transcript batch as JSONL, preserving call order. One
+	 * `appendFileSync` per batch keeps entries within a batch contiguous and in
+	 * order; concurrent processes interleave by commit time, per the contract.
+	 *
+	 * If a prior turn was SIGKILL'd mid-append the file can end with an
+	 * unterminated fragment and no trailing newline. We prepend a newline in that
+	 * case so the corrupt tail stays on its own (load-skippable) line instead of
+	 * the first new entry being concatenated onto it — otherwise `load()` would
+	 * drop this completed turn's first entry along with the fragment.
+	 */
+	async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
+		if (entries.length === 0) return;
+		const file = this.fileFor(key);
+		mkdirSync(dirname(file), { recursive: true });
+		const sep = endsWithNewline(file) ? "" : "\n";
+		const lines = `${sep}${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+		appendFileSync(file, lines, "utf8");
+	}
+
+	/**
+	 * Load a full session for resume. Returns the appended entry sequence, or
+	 * `null` for a session that was never written (the SDK then starts fresh).
+	 */
+	async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
+		const file = this.fileFor(key);
+		if (!existsSync(file)) return null;
+		const raw = readFileSync(file, "utf8");
+		const entries: SessionStoreEntry[] = [];
+		for (const line of raw.split("\n")) {
+			if (line.length === 0) continue;
+			try {
+				entries.push(JSON.parse(line) as SessionStoreEntry);
+			} catch {
+				// A transcript line can be truncated if a prior turn was SIGKILL'd
+				// (idle/max-turn watchdog) mid-append. Tolerate it: skip the
+				// unparseable line so resume degrades to the intact prefix, rather
+				// than the SDK failing the whole turn when load() rejects. Logged so
+				// the corruption is observable.
+				console.error(
+					"skipping unparseable session transcript line on load (truncated write?)",
+				);
+			}
+		}
+		return entries;
+	}
+}
+
+/**
+ * Build a session store from config, or `null` when durable session storage is
+ * not configured (no root) — the caller then runs with the SDK's default local
+ * transcript only, today's behavior.
+ */
+export function createSessionStore(
+	config: Partial<SessionStoreConfig>,
+): FileSystemSessionStore | null {
+	if (!config.rootDir || !config.userId || !config.conversationId) return null;
+	return new FileSystemSessionStore({
+		rootDir: config.rootDir,
+		userId: config.userId,
+		conversationId: config.conversationId,
+	});
+}
+
+/** Env var naming the durable session-transcript root. Unset = disabled. */
+export const SESSION_STORE_ROOT_ENV = "AGENT_SESSION_STORE_ROOT";
