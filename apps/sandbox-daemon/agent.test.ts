@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import type { SessionStore } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, SessionStore } from "@anthropic-ai/claude-agent-sdk";
 import { buildQueryOptions } from "./agent";
+import { MYMEMO_MCP_SERVER_NAME, SEARCH_DOCUMENTS_TOOL } from "./agent-tools";
 
 const base = {
 	userQuery: "hello",
@@ -39,5 +40,47 @@ describe("buildQueryOptions", () => {
 		expect(buildQueryOptions({ ...base, sessionId: "sess-1" }).resume).toBe(
 			"sess-1",
 		);
+	});
+});
+
+describe("buildQueryOptions tool surface", () => {
+	it("pins the available built-ins to the read-only working-set tools (no Bash)", () => {
+		const opts = buildQueryOptions(base);
+		expect(opts.tools).toEqual(["Read", "Grep", "Glob"]);
+		expect(opts.tools).not.toContain("Bash");
+	});
+
+	it("pre-approves the built-ins plus the document tool via allowedTools", () => {
+		const opts = buildQueryOptions(base);
+		expect(opts.allowedTools).toEqual([
+			"Read",
+			"Grep",
+			"Glob",
+			SEARCH_DOCUMENTS_TOOL,
+		]);
+	});
+
+	it("hard-denies Bash through disallowedTools", () => {
+		const opts = buildQueryOptions(base);
+		expect(opts.disallowedTools).toContain("Bash");
+	});
+
+	it("does not rely on bypassPermissions and supplies a fail-closed canUseTool", async () => {
+		const opts = buildQueryOptions(base);
+		expect(opts.permissionMode).toBe("default");
+		expect(opts.permissionMode).not.toBe("bypassPermissions");
+
+		const canUse = opts.canUseTool as CanUseTool;
+		const denied = await canUse("Bash", {}, {} as never);
+		expect(denied.behavior).toBe("deny");
+		const allowed = await canUse("Read", { file_path: "/x" }, {} as never);
+		expect(allowed.behavior).toBe("allow");
+	});
+
+	it("registers the MyMemo MCP server so mcp__mymemo__search_documents is available", () => {
+		const opts = buildQueryOptions(base);
+		const servers = opts.mcpServers as Record<string, { name: string }>;
+		expect(servers[MYMEMO_MCP_SERVER_NAME]).toBeDefined();
+		expect(servers[MYMEMO_MCP_SERVER_NAME].name).toBe(MYMEMO_MCP_SERVER_NAME);
 	});
 });

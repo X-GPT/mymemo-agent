@@ -9,6 +9,14 @@ import {
 	query,
 	type SessionStore,
 } from "@anthropic-ai/claude-agent-sdk";
+import {
+	ALLOWED_BUILTIN_TOOLS,
+	createCanUseTool,
+	createMymemoMcpServer,
+	DISALLOWED_BUILTIN_TOOLS,
+	MYMEMO_MCP_SERVER_NAME,
+	PRE_APPROVED_TOOLS,
+} from "./agent-tools";
 import { createHeartbeatController } from "./heartbeat";
 
 export interface AgentRunOptions {
@@ -48,10 +56,17 @@ export function buildQueryOptions(
 	const queryOptions: Record<string, unknown> = {
 		cwd,
 		systemPrompt,
-		// The agent reaches documents via the `mymemo-docs` CLI (Bash), which calls
-		// the document gateway. No MCP server is needed.
-		allowedTools: ["Bash", "Read", "Grep", "Glob"],
-		permissionMode: "bypassPermissions",
+		// Lock down the tool surface for the untrusted agent (see agent-tools.ts):
+		// `tools` pins the available built-ins, `allowedTools` pre-approves them
+		// plus the MyMemo MCP document tool, `disallowedTools` hard-denies Bash,
+		// and `canUseTool` fail-closes anything else under `permissionMode:
+		// "default"`. Documents are reached only through the in-process MCP server.
+		tools: [...ALLOWED_BUILTIN_TOOLS],
+		allowedTools: [...PRE_APPROVED_TOOLS],
+		disallowedTools: [...DISALLOWED_BUILTIN_TOOLS],
+		canUseTool: createCanUseTool(),
+		mcpServers: { [MYMEMO_MCP_SERVER_NAME]: createMymemoMcpServer() },
+		permissionMode: "default",
 		includePartialMessages: true,
 		model: "claude-sonnet-4-6",
 		pathToClaudeCodeExecutable:
