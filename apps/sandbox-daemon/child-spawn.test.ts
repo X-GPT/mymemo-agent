@@ -11,7 +11,11 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "./child-spawn";
-import { buildAgentSpawnArgv, spawnAgent } from "./child-spawn";
+import {
+	assertSessionStoreRootSafe,
+	buildAgentSpawnArgv,
+	spawnAgent,
+} from "./child-spawn";
 
 describe("buildAgentSpawnArgv", () => {
 	it("wraps bun /workspace/agent.js with bwrap and the agreed flags", () => {
@@ -138,6 +142,33 @@ describe("buildAgentSpawnArgv", () => {
 			(a, i) => a === "--bind" && argv[i + 1] === root && argv[i + 2] === root,
 		);
 		expect(wholeRootBind).toBe(-1);
+	});
+
+	it("rejects a store root that would mask a required mount", () => {
+		const mounts = [
+			"/workspace/agent.js",
+			"/workspace/conversations/c/work",
+			"/home/user/.claude/projects",
+		];
+		// Ancestor of the agent bundle / cwd — the --tmpfs root would shadow them.
+		expect(() => assertSessionStoreRootSafe("/workspace", mounts)).toThrow(
+			/masks required mount/,
+		);
+		expect(() => assertSessionStoreRootSafe("/", mounts)).toThrow(
+			/masks required mount/,
+		);
+		// Relative paths are rejected outright (bwrap needs absolute).
+		expect(() => assertSessionStoreRootSafe("relative/path", mounts)).toThrow(
+			/absolute path/,
+		);
+		// A dedicated root outside the workspace is fine.
+		expect(() =>
+			assertSessionStoreRootSafe("/session-store", mounts),
+		).not.toThrow();
+		// A sibling under /workspace that masks nothing required is fine.
+		expect(() =>
+			assertSessionStoreRootSafe("/workspace/sessions", mounts),
+		).not.toThrow();
 	});
 
 	it("respects SANDBOX_BWRAP_PATH and SANDBOX_BUN_PATH env overrides", () => {

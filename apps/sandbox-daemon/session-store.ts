@@ -27,7 +27,16 @@
  * than lost, but no `listSubkeys` is implemented.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+	appendFileSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readSync,
+	statSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import type {
 	SessionKey,
@@ -52,6 +61,25 @@ function assertSafeSubpath(subpath: string): void {
 		if (segment.length === 0 || !VALID_ID.test(segment)) {
 			throw new Error(`Invalid session subpath: ${JSON.stringify(subpath)}`);
 		}
+	}
+}
+
+/**
+ * True if `file` is missing, empty, or already ends in `\n` — i.e. a fresh
+ * append would start on a clean line. Reads only the final byte so it stays
+ * cheap on large transcripts.
+ */
+function endsWithNewline(file: string): boolean {
+	if (!existsSync(file)) return true;
+	const size = statSync(file).size;
+	if (size === 0) return true;
+	const fd = openSync(file, "r");
+	try {
+		const buf = Buffer.alloc(1);
+		readSync(fd, buf, 0, 1, size - 1);
+		return buf[0] === 0x0a; // '\n'
+	} finally {
+		closeSync(fd);
 	}
 }
 
@@ -97,12 +125,19 @@ export class FileSystemSessionStore implements SessionStore {
 	 * Append a transcript batch as JSONL, preserving call order. One
 	 * `appendFileSync` per batch keeps entries within a batch contiguous and in
 	 * order; concurrent processes interleave by commit time, per the contract.
+	 *
+	 * If a prior turn was SIGKILL'd mid-append the file can end with an
+	 * unterminated fragment and no trailing newline. We prepend a newline in that
+	 * case so the corrupt tail stays on its own (load-skippable) line instead of
+	 * the first new entry being concatenated onto it — otherwise `load()` would
+	 * drop this completed turn's first entry along with the fragment.
 	 */
 	async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
 		if (entries.length === 0) return;
 		const file = this.fileFor(key);
 		mkdirSync(dirname(file), { recursive: true });
-		const lines = `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+		const sep = endsWithNewline(file) ? "" : "\n";
+		const lines = `${sep}${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
 		appendFileSync(file, lines, "utf8");
 	}
 

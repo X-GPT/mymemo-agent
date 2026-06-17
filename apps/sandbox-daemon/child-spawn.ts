@@ -11,6 +11,7 @@
  */
 
 import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
 import type { AgentEvent } from "./ipc-protocol";
 import { resolveConversationSessionsDir } from "./session-store-paths";
 
@@ -86,6 +87,38 @@ const SESSION_STORE_ROOT_ENV = "AGENT_SESSION_STORE_ROOT";
 function getSessionStoreRoot(): string | undefined {
 	const root = process.env[SESSION_STORE_ROOT_ENV];
 	return root && root.length > 0 ? root : undefined;
+}
+
+/**
+ * Throw if the configured store root would mask a mount the agent needs. We
+ * `--tmpfs` the root to hide other tenants' transcripts; bwrap applies mounts in
+ * order and last wins, so a root that is an ancestor of (or equal to) the agent
+ * bundle, cwd, or `~/.claude/projects` would shadow those re-binds and break
+ * every turn. A durable root nested inside the ephemeral sandbox workspace is
+ * also wrong (it would not survive recycle), so reject it loudly rather than
+ * silently wedge the agent. Requires an absolute path.
+ */
+export function assertSessionStoreRootSafe(
+	root: string,
+	mounts: string[],
+): void {
+	if (!root.startsWith("/")) {
+		throw new Error(
+			`${SESSION_STORE_ROOT_ENV} must be an absolute path: ${JSON.stringify(root)}`,
+		);
+	}
+	const r = resolve(root);
+	// `${r}/` is "//" when r is "/", which nothing starts with — handle root "/"
+	// (an ancestor of everything absolute) explicitly.
+	const prefix = r === "/" ? "/" : `${r}/`;
+	for (const mount of mounts) {
+		const m = resolve(mount);
+		if (m === r || m.startsWith(prefix)) {
+			throw new Error(
+				`${SESSION_STORE_ROOT_ENV} (${root}) masks required mount ${mount}; use a dedicated path outside the sandbox workspace`,
+			);
+		}
+	}
 }
 
 /**
@@ -338,6 +371,13 @@ export async function spawnAgent(
 		config.conversationId,
 	);
 	if (sessionStoreBind) {
+		// Reject a root that would mask the agent bundle, cwd, or ~/.claude before
+		// we spawn — otherwise the --tmpfs root silently shadows them.
+		assertSessionStoreRootSafe(sessionStoreBind.root, [
+			getAgentBundlePath(),
+			config.cwd,
+			getClaudeProjectsDir(),
+		]);
 		mkdirSync(sessionStoreBind.sessionsDir, { recursive: true });
 	}
 	const proc = Bun.spawn(buildAgentSpawnArgv(config.cwd, sessionStoreBind), {

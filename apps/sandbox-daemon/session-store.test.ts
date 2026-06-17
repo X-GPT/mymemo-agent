@@ -80,6 +80,33 @@ describe("FileSystemSessionStore append/load", () => {
 		expect(await store.load(k)).toBeNull();
 	});
 
+	it("isolates a truncated tail so the next append is not corrupted", async () => {
+		// A prior turn SIGKILL'd mid-append leaves an unterminated fragment with no
+		// trailing newline. The NEXT turn's append must not concatenate onto it —
+		// otherwise load() skips the fragment AND the new turn's first entry.
+		const store = makeStore({ conversationId: "conv-tail-repair" });
+		const k = key("tail-session");
+		await store.append(k, [{ type: "user", uuid: "1" }]);
+
+		const file = join(
+			testRoot,
+			"users",
+			createHash("sha256").update(USER, "utf8").digest("hex"),
+			"conversations",
+			"conv-tail-repair",
+			"sessions",
+			"tail-session.jsonl",
+		);
+		appendFileSync(file, '{"type":"assistant","uuid":"PARTIAL"', "utf8"); // killed mid-write
+
+		// The new turn completes and appends.
+		await store.append(k, [{ type: "user", uuid: "2" }]);
+
+		const loaded = await store.load(k);
+		// Only the corrupt fragment is dropped; entry 1 and the new entry 2 survive.
+		expect((loaded ?? []).map((e) => e.uuid)).toEqual(["1", "2"]);
+	});
+
 	it("tolerates a truncated trailing line instead of failing the whole load", async () => {
 		// Simulate a turn SIGKILL'd mid-append: intact entries followed by a
 		// truncated final JSON object. load() must return the intact prefix, not
