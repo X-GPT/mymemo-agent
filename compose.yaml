@@ -3,10 +3,13 @@
 # long-lived container running the same daemon + agent bundles, and `postgres`
 # stands in for the MyMemo KB so the gateway can boot and serve document search.
 #
-# Secrets come from a root `.env` (see .env.example): copy it to `.env` and fill
-# in ANTHROPIC_API_KEY, LLM_TOKEN_SECRET, and DAEMON_AUTH_TOKEN. The same
-# LLM_TOKEN_SECRET / DAEMON_AUTH_TOKEN values must be shared across services, so
-# they are interpolated from one place here.
+# Config split: non-secret wiring (provider selection, service URLs, ports, the
+# local DB connection) lives inline below, so reading a service's block shows
+# exactly what it gets. Secrets live in a per-service env file next to each app
+# (see each apps/<svc>/.env.example); copy each to .env and fill it in. Two
+# values are shared and MUST match across the files that use them:
+#   LLM_TOKEN_SECRET   — chat-api (mints) + gateway (verifies)
+#   DAEMON_AUTH_TOKEN  — chat-api (calls)  + sandbox (checks)
 #
 # Note: the agent runs without bwrap — the sandbox container is the isolation
 # boundary (see apps/sandbox-daemon/child-spawn.ts). dev and prod share one spawn
@@ -26,9 +29,10 @@ services:
       LOCAL_SANDBOX_DAEMON_URL: http://sandbox:8080
       # Same compose network — no getHost tunneling, just the service name.
       GATEWAY_PUBLIC_URL: http://gateway:8080
-      DAEMON_AUTH_TOKEN: ${DAEMON_AUTH_TOKEN}
-      LLM_TOKEN_SECRET: ${LLM_TOKEN_SECRET}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_LEVEL: info
+    # Secrets: DAEMON_AUTH_TOKEN, LLM_TOKEN_SECRET
+    env_file:
+      - apps/chat-api/.env
     depends_on:
       gateway:
         condition: service_started
@@ -40,7 +44,8 @@ services:
 
   # Control plane: the only service holding BOTH the real provider key
   # (ANTHROPIC_API_KEY) and the KB DATABASE_URL. Locally it talks to the
-  # `postgres` service over the compose network with TLS disabled.
+  # `postgres` service over the compose network with TLS disabled. The DB
+  # connection is a local-only dev credential, so it is inline (not a secret).
   gateway:
     build:
       context: .
@@ -48,11 +53,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      LLM_TOKEN_SECRET: ${LLM_TOKEN_SECRET}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-mymemo}:${POSTGRES_PASSWORD:-mymemo}@postgres:5432/${POSTGRES_DB:-mymemo_kb}
+      DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_kb
       DB_SSL: disable
       GATEWAY_PORT: "8080"
+    # Secrets: ANTHROPIC_API_KEY, LLM_TOKEN_SECRET
+    env_file:
+      - apps/gateway/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,14 +69,16 @@ services:
   # Replaces the E2B sandbox: a long-lived daemon container with the daemon +
   # agent bundles and the claude / mymemo-docs binaries baked in. The session
   # store is on a named volume so SDK transcripts survive `docker compose restart
-  # sandbox` (the MYM-27 resume demo); the container's local ~/.claude does not.
+  # sandbox`; the container's local ~/.claude does not.
   sandbox:
     build:
       context: .
       dockerfile: apps/sandbox-daemon/Dockerfile
     environment:
-      DAEMON_AUTH_TOKEN: ${DAEMON_AUTH_TOKEN}
       AGENT_SESSION_STORE_ROOT: /session-store
+    # Secrets: DAEMON_AUTH_TOKEN (must match chat-api's)
+    env_file:
+      - apps/sandbox-daemon/.env
     volumes:
       - session-store:/session-store
     healthcheck:
@@ -85,19 +93,18 @@ services:
 
   # The gateway requires a DATABASE_URL to boot. Seeded with the KB schema + FTS
   # and a small fixture (see apps/gateway/db/init.sql) so document search/fetch
-  # return results for the seeded member.
+  # return results for the seeded member. Local-only dev credentials, inline.
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-mymemo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mymemo}
-      POSTGRES_DB: ${POSTGRES_DB:-mymemo_kb}
+      POSTGRES_USER: mymemo
+      POSTGRES_PASSWORD: mymemo
+      POSTGRES_DB: mymemo_kb
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./apps/gateway/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test:
-        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mymemo} -d ${POSTGRES_DB:-mymemo_kb}"]
+      test: ["CMD-SHELL", "pg_isready -U mymemo -d mymemo_kb"]
       interval: 5s
       timeout: 3s
       retries: 12
