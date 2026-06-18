@@ -140,10 +140,11 @@ describe("spawnAgent agent environment", () => {
 	});
 
 	it("forwards the session-store root + identity when configured, omits them otherwise", async () => {
-		const storeRoot = join(
-			process.cwd(),
-			`.session-store-spawn-test-${Date.now()}`,
-		);
+		// A durable absolute root that is NOT under /workspace or /tmp, so
+		// assertDurableStoreRoot accepts it regardless of where the repo is checked
+		// out (a cwd-derived path fails under a /workspace checkout). Bun.spawn is
+		// mocked, so nothing is actually written here.
+		const storeRoot = `/srv/mymemo-session-store-test-${Date.now()}`;
 		const originalRoot = process.env.AGENT_SESSION_STORE_ROOT;
 
 		const writes: string[] = [];

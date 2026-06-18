@@ -86,9 +86,10 @@ curl -N http://localhost:3000/v1/chat \
   -d '{"chatContent":"What is machine learning?"}'
 ```
 
-The stream emits `session_id`, `sandbox_id`, `text_delta` events, then `done`.
-Persist the `sessionId` to resume the conversation on a later turn (pass it back
-as `sessionId`).
+The stream emits `conversation_id`, `run_id`, `sandbox_id`, `agent_session_id`,
+then `text_delta` events, then `done`. You can pass `conversationId` back to reuse
+the same thread id, but conversational *resume* (recalling prior turns) is not
+wired through the endpoint yet — see the persistence note below.
 
 ### Session-transcript persistence across a sandbox recycle (MYM-27)
 
@@ -101,17 +102,20 @@ by member + conversation + agent session:
 docker compose exec sandbox find /session-store -name '*.jsonl'
 # /session-store/users/<sha256(member)>/conversations/<conversationId>/sessions/<agentSessionId>.jsonl
 
-docker compose restart sandbox      # wipes the in-container ~/.claude; the volume survives
+# Recreate the container (fresh writable layer; the named volume is kept).
+# Use --force-recreate, NOT `restart`: `restart` reuses the same writable layer,
+# so it wouldn't prove the volume — rather than the container — is what persists.
+docker compose up -d --force-recreate sandbox
 
-# ...and it's still there after the recycle, while the container-local copy is gone:
+# ...still there on the fresh container, proving the volume holds it (the SDK's
+# container-local copy under CLAUDE_CONFIG_DIR was discarded with the old layer):
 docker compose exec sandbox find /session-store -name '*.jsonl'
-docker compose exec sandbox ls /root/.claude/projects   # gone — recreated empty
 ```
 
 This is what the harness demonstrates today: durable transcript **persistence**
-across a sandbox recycle. Automatic conversational **resume** through the chat
+across a sandbox recreate. Automatic conversational **resume** through the chat
 endpoint is not wired yet — `chat.controller.ts` currently passes
-`agentSessionId: null` (continuity is a later milestone), and the request body
+`agentSessionId: null` (continuity is tracked in MYM-34), and the request body
 has no `sessionId` field (it is `.strict()`). The agent-side resume path itself
 is proven by `apps/sandbox-daemon` unit tests.
 
@@ -125,4 +129,14 @@ this container locally), and dev and prod share one spawn path
 (`apps/sandbox-daemon/child-spawn.ts`). The agent still holds no provider key and
 runs under the SDK's scoped tool surface; do not expose this container to
 untrusted networks.
+
+Unlike prod (a fresh per-turn E2B sandbox), the local `sandbox` is **one
+long-lived container reused across turns and conversations**. Without per-turn
+recycling or bwrap, a prompt-injected turn can read sibling
+`users/*/conversations/*` transcripts on the shared `/session-store`, leave
+stray background processes, or overwrite the baked `/workspace/*.js` bundles —
+affecting later turns. That's fine for a **single-user dev harness** (it is not a
+security boundary), but it is why the harness is for local testing only. (The
+daemon-token-via-`/proc` exposure from dropping PID isolation does apply to prod
+too and is tracked in MYM-35.)
 
