@@ -6,9 +6,17 @@
 import {
 	type HookCallbackMatcher,
 	type HookEvent,
+	type Options,
 	query,
 	type SessionStore,
 } from "@anthropic-ai/claude-agent-sdk";
+import {
+	ALLOWED_BUILTIN_TOOLS,
+	createCanUseTool,
+	createMymemoMcpServer,
+	MYMEMO_MCP_SERVER_NAME,
+	PRE_APPROVED_TOOLS,
+} from "./agent-tools";
 import { createHeartbeatController } from "./heartbeat";
 
 export interface AgentRunOptions {
@@ -35,23 +43,31 @@ export interface AgentCallbacks {
 }
 
 /**
- * Build the Claude Agent SDK `query()` options for a turn. Pure (apart from
- * reading `CLAUDE_CODE_PATH`) so the wiring — `resume`, and the `sessionStore`
+ * Build the Claude Agent SDK `query()` options for a turn. Free of turn I/O
+ * (apart from reading `CLAUDE_CODE_PATH` and constructing the in-process MyMemo
+ * MCP server) so the wiring — the tool surface, `resume`, and the `sessionStore`
  * transcript mirror — is unit-testable without spawning the SDK. `hooks` is
- * layered on separately by `runAgent` since it closes over the heartbeat.
+ * layered on separately by `runAgent` since it closes over the heartbeat. Typed
+ * as the SDK `Options` so a mistyped field name fails at compile time instead of
+ * silently widening the untrusted agent's tool surface.
  */
-export function buildQueryOptions(
-	options: AgentRunOptions,
-): Record<string, unknown> {
+export function buildQueryOptions(options: AgentRunOptions): Options {
 	const { systemPrompt, cwd, sessionId, sessionStore } = options;
 
-	const queryOptions: Record<string, unknown> = {
+	const queryOptions: Options = {
 		cwd,
 		systemPrompt,
-		// The agent reaches documents via the `mymemo-docs` CLI (Bash), which calls
-		// the document gateway. No MCP server is needed.
-		allowedTools: ["Bash", "Read", "Grep", "Glob"],
-		permissionMode: "bypassPermissions",
+		// Scope the tool surface for the untrusted agent (see agent-tools.ts; the
+		// bwrap/E2B sandbox is the real security boundary, this list is behavior
+		// scoping): `tools` pins the available built-ins (Bash, Read, Grep, Glob,
+		// Write, Edit), `allowedTools` pre-approves them plus the MyMemo MCP document
+		// tool, and `canUseTool` denies anything else under `permissionMode:
+		// "default"` (no bypassPermissions).
+		tools: [...ALLOWED_BUILTIN_TOOLS],
+		allowedTools: [...PRE_APPROVED_TOOLS],
+		canUseTool: createCanUseTool(),
+		mcpServers: { [MYMEMO_MCP_SERVER_NAME]: createMymemoMcpServer() },
+		permissionMode: "default",
 		includePartialMessages: true,
 		model: "claude-sonnet-4-6",
 		pathToClaudeCodeExecutable:

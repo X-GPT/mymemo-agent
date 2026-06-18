@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { SessionStore } from "@anthropic-ai/claude-agent-sdk";
 import { buildQueryOptions } from "./agent";
+import { MYMEMO_MCP_SERVER_NAME, SEARCH_DOCUMENTS_TOOL } from "./agent-tools";
 
 const base = {
 	userQuery: "hello",
@@ -39,5 +40,55 @@ describe("buildQueryOptions", () => {
 		expect(buildQueryOptions({ ...base, sessionId: "sess-1" }).resume).toBe(
 			"sess-1",
 		);
+	});
+});
+
+describe("buildQueryOptions tool surface", () => {
+	it("pins the available built-ins to the workspace tool set", () => {
+		const opts = buildQueryOptions(base);
+		expect(opts.tools).toEqual([
+			"Bash",
+			"Read",
+			"Grep",
+			"Glob",
+			"Write",
+			"Edit",
+		]);
+	});
+
+	it("pre-approves the built-ins plus the document tool via allowedTools", () => {
+		const opts = buildQueryOptions(base);
+		expect(opts.allowedTools).toEqual([
+			"Bash",
+			"Read",
+			"Grep",
+			"Glob",
+			"Write",
+			"Edit",
+			SEARCH_DOCUMENTS_TOOL,
+		]);
+	});
+
+	it("does not rely on bypassPermissions and supplies a fail-closed canUseTool", async () => {
+		const opts = buildQueryOptions(base);
+		expect(opts.permissionMode).toBe("default");
+		expect(opts.permissionMode).not.toBe("bypassPermissions");
+
+		const { canUseTool } = opts;
+		expect(canUseTool).toBeDefined();
+		if (!canUseTool) return;
+		const denied = await canUseTool("WebFetch", {}, {} as never);
+		expect(denied.behavior).toBe("deny");
+		const allowed = await canUseTool("Bash", { command: "ls" }, {} as never);
+		expect(allowed.behavior).toBe("allow");
+	});
+
+	it("registers the MyMemo MCP server so mcp__mymemo__search_documents is available", () => {
+		const opts = buildQueryOptions(base);
+		const server = opts.mcpServers?.[MYMEMO_MCP_SERVER_NAME];
+		expect(server?.type).toBe("sdk");
+		if (server?.type === "sdk") {
+			expect(server.name).toBe(MYMEMO_MCP_SERVER_NAME);
+		}
 	});
 });
