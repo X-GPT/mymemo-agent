@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { Sandbox } from "e2b";
-import { apiEnv } from "@/config/env";
+import type { ApiConfig } from "@/config/env";
 import { SandboxCreationError } from "./errors";
 import type {
 	SandboxDaemonEndpoint,
@@ -72,6 +72,8 @@ async function loadSandboxBundles(): Promise<SandboxBundleSet> {
  * the daemon + agent bundles and waits for `/health`; `killSandbox` tears it down.
  */
 export class E2BSandboxProvider implements SandboxProvider {
+	constructor(private readonly config: ApiConfig) {}
+
 	async createSandbox(
 		userId: string,
 		logger: SyncLogger,
@@ -79,7 +81,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 		logger.info({ msg: "Creating sandbox", userId });
 
 		try {
-			const sandbox = await Sandbox.create(apiEnv.E2B_TEMPLATE, {
+			const sandbox = await Sandbox.create(this.config.e2bTemplate, {
 				metadata: { userId },
 			});
 
@@ -141,7 +143,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 		// Sandbox its own createSandbox returned.
 		const sandbox = handle as Sandbox;
 		const daemonUrl = this.getDaemonUrl(sandbox);
-		const endpoint = { url: daemonUrl, authToken: apiEnv.DAEMON_AUTH_TOKEN };
+		const endpoint = { url: daemonUrl, authToken: this.config.daemonAuthToken };
 
 		const bundles = await getSandboxBundles();
 
@@ -204,7 +206,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 				background: true,
 				envs: {
 					DAEMON_VERSION: expectedVersion,
-					DAEMON_AUTH_TOKEN: apiEnv.DAEMON_AUTH_TOKEN,
+					DAEMON_AUTH_TOKEN: this.config.daemonAuthToken,
 				},
 			},
 		);

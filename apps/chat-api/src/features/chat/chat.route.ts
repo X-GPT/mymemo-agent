@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { validator as zValidator } from "hono-openapi";
-import type { Env as PinoEnv } from "hono-pino";
+import type { AppEnv } from "@/deps";
 import { ConversationBusyError } from "@/features/sandbox-orchestration";
 import { complete } from "./chat.controller";
 import { ChatLogger } from "./chat.logger";
@@ -13,7 +13,7 @@ import {
 } from "./chat.schema";
 import { HonoSSESender } from "./chat.streaming";
 
-const app = new Hono<PinoEnv>();
+const app = new Hono<AppEnv>();
 
 app.post(
 	"/",
@@ -74,6 +74,7 @@ app.post(
 
 				try {
 					await complete(
+						c.var.deps,
 						request,
 						sender,
 						new ChatLogger(c.var.logger, request.memberCode),

@@ -10,7 +10,6 @@ export {
 	LocalWorkspaceStore,
 } from "./local-workspace-store";
 export type { DurableConversationPaths } from "./paths";
-export { workspaceStore } from "./singleton";
 export type {
 	ConversationRef,
 	HydrateResult,
