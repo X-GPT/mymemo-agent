@@ -96,9 +96,9 @@ export class FileSystemSessionStore implements SessionStore {
 	private readonly sessionsDir: string;
 
 	constructor(config: SessionStoreConfig) {
-		// Shares the exact path scheme the daemon binds into the agent's bwrap
-		// namespace (see session-store-paths.ts), so the dir the SDK writes is the
-		// one — and only one — re-exposed read-write to this turn.
+		// Resolve the single per-{user,conversation} subtree this store may touch
+		// (see session-store-paths.ts). Bound at construction from the trusted turn
+		// identity, so the SDK can only read/write this conversation's transcripts.
 		this.sessionsDir = resolveConversationSessionsDir(
 			config.rootDir,
 			config.userId,

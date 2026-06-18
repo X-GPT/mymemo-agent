@@ -6,7 +6,20 @@ import invariant from "tiny-invariant";
  * All variables are validated at module load time
  */
 export const apiEnv = (() => {
-	invariant(Bun.env.E2B_API_KEY, "E2B_API_KEY is required");
+	// Which sandbox provider runs the turn. `local` targets the docker-compose
+	// E2E harness (a long-lived daemon container reached over the compose
+	// network); the default `e2b` leases a fresh sandbox per turn in production.
+	const sandboxProvider =
+		Bun.env.SANDBOX_PROVIDER === "local" ? "local" : "e2b";
+
+	// E2B credentials are only needed for the E2B provider; the local provider
+	// reaches a container it does not create, so don't hard-require them there.
+	if (sandboxProvider === "e2b") {
+		invariant(
+			Bun.env.E2B_API_KEY,
+			"E2B_API_KEY is required when SANDBOX_PROVIDER=e2b",
+		);
+	}
 	invariant(Bun.env.DAEMON_AUTH_TOKEN, "DAEMON_AUTH_TOKEN is required");
 	invariant(Bun.env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
 	invariant(Bun.env.GATEWAY_PUBLIC_URL, "GATEWAY_PUBLIC_URL is required");
@@ -24,6 +37,13 @@ export const apiEnv = (() => {
 	}
 
 	return {
+		// "e2b" (default) | "local" — selected in sandbox-orchestration/singleton.ts.
+		SANDBOX_PROVIDER: sandboxProvider,
+		// Base URL of the local daemon container (SANDBOX_PROVIDER=local only).
+		// Same docker-compose network as chat-api; trailing slash stripped.
+		LOCAL_SANDBOX_DAEMON_URL: (
+			Bun.env.LOCAL_SANDBOX_DAEMON_URL || "http://sandbox:8080"
+		).replace(/\/+$/, ""),
 		DAEMON_AUTH_TOKEN: Bun.env.DAEMON_AUTH_TOKEN,
 		// HMAC secret for the session tokens minted into each sandbox turn. Shared
 		// with the gateway, which verifies them and enforces the token's signed

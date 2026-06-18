@@ -2,13 +2,12 @@
  * Claude Agent SDK tool surface and permission policy for the sandbox agent.
  *
  * Security boundary: the agent runs prompt-injectable, untrusted code, and the
- * real containment is OS-level — bwrap (read-only root, tmpfs workspace,
- * unshared user/pid/uts/ipc namespaces) inside an E2B sandbox, with a scrubbed
- * env holding no provider key, no DB credential, and only short-lived per-turn
- * gateway tokens (see `child-spawn.ts`, covered by `child-spawn.test.ts`).
- * Because `Bash` is on the surface (below), that isolation — not this tool
- * list — is what bounds what the agent can do; Bash already subsumes file
- * writes and network egress (`curl`).
+ * real containment is the sandbox itself — the per-turn E2B sandbox in prod (the
+ * daemon's container locally), with a scrubbed env holding no provider key, no
+ * DB credential, and only short-lived per-turn gateway tokens (see
+ * `child-spawn.ts`, covered by `child-spawn.test.ts`). Because `Bash` is on the
+ * surface (below), that isolation — not this tool list — is what bounds what the
+ * agent can do; Bash already subsumes file writes and network egress (`curl`).
  *
  * This module's job is therefore behavior-scoping, not the wall: pin the agent
  * to a predictable, reasoned-about set instead of the full Claude Code default,
@@ -75,7 +74,7 @@ export const PRE_APPROVED_TOOLS = [
  * rarely consulted; it keeps the agent's behavior scoped to the reasoned-about
  * set under `permissionMode: "default"`. This is behavior-scoping, NOT a
  * containment boundary — `Bash` can already do what a denied tool would (see the
- * file header); the bwrap/E2B sandbox is the boundary.
+ * file header); the sandbox/container is the boundary.
  */
 export function createCanUseTool(
 	preApproved: readonly string[] = PRE_APPROVED_TOOLS,

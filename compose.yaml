@@ -1,3 +1,17 @@
+# Local end-to-end harness (MYM-31): the full chat-api → sandbox-daemon →
+# gateway path without E2B. The `sandbox` service replaces the E2B sandbox with a
+# long-lived container running the same daemon + agent bundles, and `postgres`
+# stands in for the MyMemo KB so the gateway can boot and serve document search.
+#
+# Secrets come from a root `.env` (see .env.example): copy it to `.env` and fill
+# in ANTHROPIC_API_KEY, LLM_TOKEN_SECRET, and DAEMON_AUTH_TOKEN. The same
+# LLM_TOKEN_SECRET / DAEMON_AUTH_TOKEN values must be shared across services, so
+# they are interpolated from one place here.
+#
+# Note: the agent runs without bwrap — the sandbox container is the isolation
+# boundary (see apps/sandbox-daemon/child-spawn.ts). dev and prod share one spawn
+# path.
+
 services:
   chat-api:
     container_name: chat-api
@@ -5,38 +19,101 @@ services:
       context: .
       dockerfile: apps/chat-api/Dockerfile
     ports:
-      - 3000:3000
-    env_file:
-      - ./apps/chat-api/.env
+      - "3000:3000"
+    environment:
+      # Select the local provider: reach the long-lived daemon container instead
+      # of leasing an E2B sandbox per turn. E2B_API_KEY is not required here.
+      SANDBOX_PROVIDER: local
+      LOCAL_SANDBOX_DAEMON_URL: http://sandbox:8080
+      # Same compose network — no getHost tunneling, just the service name.
+      GATEWAY_PUBLIC_URL: http://gateway:8080
+      DAEMON_AUTH_TOKEN: ${DAEMON_AUTH_TOKEN}
+      LLM_TOKEN_SECRET: ${LLM_TOKEN_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
-      - gateway
-    restart: always
+      gateway:
+        condition: service_started
+      sandbox:
+        condition: service_healthy
+    restart: unless-stopped
     networks:
       - mymemo-network
 
-  # Control plane: the single service holding BOTH the real provider key
-  # (ANTHROPIC_API_KEY) and the read-only KB DATABASE_URL. Sandboxed agents reach
-  # it with one short-lived, scope-bound bearer token — the Claude binary via
-  # ANTHROPIC_BASE_URL (→ /v1/messages, proxied to Anthropic) and the mymemo-docs
-  # CLI via MYMEMO_DOC_GATEWAY_URL (→ /v1/documents/*, scope enforced server-side,
-  # reads the MyMemo KB Postgres / FTS directly).
-  # Note: DATABASE_URL must point at a Postgres reachable from this service (the
-  # staging RDS is private — needs an in-VPC host or tunnel), and
-  # GATEWAY_PUBLIC_URL (set for chat-api) must resolve to an address reachable
-  # from inside the E2B sandbox, not just this compose network.
+  # Control plane: the only service holding BOTH the real provider key
+  # (ANTHROPIC_API_KEY) and the KB DATABASE_URL. Locally it talks to the
+  # `postgres` service over the compose network with TLS disabled.
   gateway:
     container_name: gateway
     build:
       context: .
       dockerfile: apps/gateway/Dockerfile
     ports:
-      - 8080:8080
-    env_file:
-      - ./apps/gateway/.env
-    restart: always
+      - "8080:8080"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_TOKEN_SECRET: ${LLM_TOKEN_SECRET}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mymemo}:${POSTGRES_PASSWORD:-mymemo}@postgres:5432/${POSTGRES_DB:-mymemo_kb}
+      DB_SSL: disable
+      GATEWAY_PORT: "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - mymemo-network
+
+  # Replaces the E2B sandbox: a long-lived daemon container with the daemon +
+  # agent bundles and the claude / mymemo-docs binaries baked in. The session
+  # store is on a named volume so SDK transcripts survive `docker compose restart
+  # sandbox` (the MYM-27 resume demo); the container's local ~/.claude does not.
+  sandbox:
+    container_name: sandbox
+    build:
+      context: .
+      dockerfile: apps/sandbox-daemon/Dockerfile
+    environment:
+      DAEMON_AUTH_TOKEN: ${DAEMON_AUTH_TOKEN}
+      AGENT_SESSION_STORE_ROOT: /session-store
+    volumes:
+      - session-store:/session-store
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - mymemo-network
+
+  # The gateway requires a DATABASE_URL to boot. Seeded with the KB schema + FTS
+  # and a small fixture (see apps/gateway/db/init.sql) so document search/fetch
+  # return results for the seeded member.
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mymemo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mymemo}
+      POSTGRES_DB: ${POSTGRES_DB:-mymemo_kb}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./apps/gateway/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mymemo} -d ${POSTGRES_DB:-mymemo_kb}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
     networks:
       - mymemo-network
 
 networks:
   mymemo-network:
     driver: bridge
+
+volumes:
+  pgdata:
+  session-store:

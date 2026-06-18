@@ -8,217 +8,33 @@ import {
 	it,
 	spyOn,
 } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "./child-spawn";
-import {
-	assertSessionStoreRootSafe,
-	buildAgentSpawnArgv,
-	spawnAgent,
-} from "./child-spawn";
+import { buildAgentSpawnArgv, spawnAgent } from "./child-spawn";
 
 describe("buildAgentSpawnArgv", () => {
-	it("wraps bun /workspace/agent.js with bwrap and the agreed flags", () => {
-		const argv = buildAgentSpawnArgv(
-			"/workspace/data/u1/canonical",
-			"/workspace/data/u1/claude-config",
-		);
-
-		expect(argv[0]).toBe("bwrap");
-
-		const dashDash = argv.indexOf("--");
-		expect(dashDash).toBeGreaterThan(0);
-		expect(argv.slice(dashDash)).toEqual(["--", "bun", "/workspace/agent.js"]);
-
-		const flags = argv.slice(1, dashDash);
-		// FS layout
-		expect(flags).toContain("--ro-bind");
-		expect(flags).toContain("--bind");
-		expect(flags).toContain("/workspace/data/u1/canonical");
-		expect(flags).toContain("--tmpfs");
-		expect(flags).toContain("/tmp");
-		expect(flags).toContain("--proc");
-		expect(flags).toContain("--dev");
-		// Namespaces — note `--unshare-net` is intentionally absent so the
-		// agent can reach the LLM gateway over HTTPS.
-		expect(flags).toContain("--unshare-user");
-		expect(flags).toContain("--unshare-pid");
-		expect(flags).toContain("--unshare-uts");
-		expect(flags).toContain("--unshare-ipc");
-		expect(flags).not.toContain("--unshare-net");
-		expect(flags).not.toContain("--unshare-all");
-		// Lifetime: bwrap + agent should die if the daemon goes away.
-		expect(flags).toContain("--die-with-parent");
+	it("runs bun /workspace/agent.js directly, with no wrapper", () => {
+		// The sandbox/container is the isolation boundary, so the agent runs
+		// directly — there is no bwrap (or any other) wrapper around it.
+		const argv = buildAgentSpawnArgv();
+		expect(argv).toEqual(["bun", "/workspace/agent.js"]);
 	});
 
-	it("masks /workspace, then re-binds only the agent bundle and selected scope", () => {
-		const cwd = "/workspace/data/u2/scopes/request-doc-42";
-		const argv = buildAgentSpawnArgv(
-			cwd,
-			"/workspace/data/u2/scopes/claude-config",
-		);
-
-		const roRootIdx = argv.findIndex(
-			(a, i) => a === "--ro-bind" && argv[i + 1] === "/" && argv[i + 2] === "/",
-		);
-		const tmpfsWorkspaceIdx = argv.findIndex(
-			(a, i) => a === "--tmpfs" && argv[i + 1] === "/workspace",
-		);
-		const roAgentIdx = argv.findIndex(
-			(a, i) =>
-				a === "--ro-bind" &&
-				argv[i + 1] === "/workspace/agent.js" &&
-				argv[i + 2] === "/workspace/agent.js",
-		);
-		const bindCwdIdx = argv.findIndex(
-			(a, i) => a === "--bind" && argv[i + 1] === cwd && argv[i + 2] === cwd,
-		);
-
-		expect(roRootIdx).toBeGreaterThan(-1);
-		expect(tmpfsWorkspaceIdx).toBeGreaterThan(-1);
-		expect(roAgentIdx).toBeGreaterThan(-1);
-		expect(bindCwdIdx).toBeGreaterThan(-1);
-
-		// Ordering matters: later mounts shadow earlier ones for the same
-		// subtree. Required order:
-		//   1. --ro-bind / /             (everything visible)
-		//   2. --tmpfs /workspace        (masks daemon.log, daemon.js, sync.js
-		//                                 AND every user's data tree)
-		//   3. --ro-bind agent.js        (re-expose only the bundle bun runs)
-		//   4. --bind <cwd>              (re-expose only the selected scope)
-		expect(roRootIdx).toBeLessThan(tmpfsWorkspaceIdx);
-		expect(tmpfsWorkspaceIdx).toBeLessThan(roAgentIdx);
-		expect(tmpfsWorkspaceIdx).toBeLessThan(bindCwdIdx);
-	});
-
-	it("re-binds the per-conversation SDK config home rw, as a sibling of cwd (not the project .claude)", () => {
-		// CLAUDE_CONFIG_DIR is a sibling of the agent's work/ cwd, deliberately not
-		// named `.claude` and not under cwd, so the SDK's config + transcript writes
-		// can't collide with the agent's project-local `.claude`. The shared
-		// ~/.claude is no longer bound, so it stays read-only.
-		const cwd = "/workspace/conversations/conv-1/work";
-		const configDir = "/workspace/conversations/conv-1/claude-config";
-		const argv = buildAgentSpawnArgv(cwd, configDir);
-
-		const idx = argv.findIndex(
-			(a, i) =>
-				a === "--bind" &&
-				argv[i + 1] === configDir &&
-				argv[i + 2] === configDir,
-		);
-		expect(idx).toBeGreaterThan(-1);
-		// Config home is NOT under cwd and is not named `.claude`.
-		expect(configDir.startsWith(`${cwd}/`)).toBe(false);
-		expect(argv.some((a) => a.includes("/.claude"))).toBe(false);
-		// The config home lives under /workspace, so its rw --bind MUST come after
-		// the `--tmpfs /workspace` mask — otherwise the mask shadows it read-only
-		// and the SDK's first-turn config/transcript write wedges the turn.
-		const tmpfsWorkspaceIdx = argv.findIndex(
-			(a, i) => a === "--tmpfs" && argv[i + 1] === "/workspace",
-		);
-		expect(tmpfsWorkspaceIdx).toBeGreaterThan(-1);
-		expect(tmpfsWorkspaceIdx).toBeLessThan(idx);
-	});
-
-	it("does not expose /workspace/daemon.log, daemon.js, or sync.js", () => {
-		const argv = buildAgentSpawnArgv(
-			"/workspace/data/u1/canonical",
-			"/workspace/data/u1/claude-config",
-		);
-		// None of these paths should appear anywhere in the argv — they are
-		// covered by the --tmpfs /workspace and never re-bound.
-		expect(argv).not.toContain("/workspace/daemon.js");
-		expect(argv).not.toContain("/workspace/sync.js");
-		expect(argv).not.toContain("/workspace/daemon.log");
-	});
-
-	it("adds no session-store mount when not configured", () => {
-		const argv = buildAgentSpawnArgv("/tmp/cwd", "/tmp/claude-config");
-		expect(argv).not.toContain("/durable");
-	});
-
-	it("binds ONLY this conversation's sessions dir and masks the rest of the root", () => {
-		// The agent is prompt-injectable with Bash/Read; binding the whole
-		// multi-tenant root would expose other users' transcripts. Assert we
-		// --tmpfs the root (so the broad `--ro-bind / /` can't leak siblings) and
-		// re-bind ONLY the per-conversation sessions dir.
-		const root = "/durable";
-		const sessionsDir = "/durable/users/abc123/conversations/conv-1/sessions";
-		const argv = buildAgentSpawnArgv("/tmp/cwd", "/tmp/claude-config", {
-			root,
-			sessionsDir,
-		});
-
-		const tmpfsRootIdx = argv.findIndex(
-			(a, i) => a === "--tmpfs" && argv[i + 1] === root,
-		);
-		const bindConvIdx = argv.findIndex(
-			(a, i) =>
-				a === "--bind" &&
-				argv[i + 1] === sessionsDir &&
-				argv[i + 2] === sessionsDir,
-		);
-		expect(tmpfsRootIdx).toBeGreaterThan(-1);
-		expect(bindConvIdx).toBeGreaterThan(-1);
-		// Mask must precede the narrow re-bind, or the bind is shadowed.
-		expect(tmpfsRootIdx).toBeLessThan(bindConvIdx);
-		// The whole root is never bound rw — only the conversation subtree.
-		const wholeRootBind = argv.findIndex(
-			(a, i) => a === "--bind" && argv[i + 1] === root && argv[i + 2] === root,
-		);
-		expect(wholeRootBind).toBe(-1);
-	});
-
-	it("rejects a store root that overlaps any sandbox-managed mount", () => {
-		const mounts = [
-			"/workspace/agent.js",
-			"/workspace/conversations/c/work",
-			"/home/user/.claude/projects",
-		];
-		// Inside an ephemeral tmpfs — sandbox-local or re-masked, so resume silently
-		// never works.
-		expect(() => assertSessionStoreRootSafe("/workspace", mounts)).toThrow(
-			/ephemeral/,
-		);
-		expect(() =>
-			assertSessionStoreRootSafe("/workspace/sessions", mounts),
-		).toThrow(/ephemeral/);
-		expect(() => assertSessionStoreRootSafe("/tmp/sessions", mounts)).toThrow(
-			/ephemeral/,
-		);
-		// Ancestor of a required re-bind — our --tmpfs root would shadow it.
-		expect(() => assertSessionStoreRootSafe("/", mounts)).toThrow(
-			/masks required mount/,
-		);
-		// Relative paths are rejected outright (bwrap needs absolute).
-		expect(() => assertSessionStoreRootSafe("relative/path", mounts)).toThrow(
-			/absolute path/,
-		);
-		// A dedicated durable root outside every sandbox-managed mount is fine.
-		expect(() =>
-			assertSessionStoreRootSafe("/session-store", mounts),
-		).not.toThrow();
-		expect(() =>
-			assertSessionStoreRootSafe("/mnt/durable/sessions", mounts),
-		).not.toThrow();
-	});
-
-	it("respects SANDBOX_BWRAP_PATH and SANDBOX_BUN_PATH env overrides", () => {
+	it("respects SANDBOX_BUN_PATH and SANDBOX_AGENT_PATH env overrides", () => {
 		const original = {
-			bwrap: process.env.SANDBOX_BWRAP_PATH,
 			bun: process.env.SANDBOX_BUN_PATH,
 			agent: process.env.SANDBOX_AGENT_PATH,
 		};
-		process.env.SANDBOX_BWRAP_PATH = "/custom/bwrap";
 		process.env.SANDBOX_BUN_PATH = "/custom/bun";
 		process.env.SANDBOX_AGENT_PATH = "/custom/agent.js";
 		try {
-			const argv = buildAgentSpawnArgv("/tmp/cwd", "/tmp/claude-config");
-			expect(argv[0]).toBe("/custom/bwrap");
-			expect(argv.slice(-2)).toEqual(["/custom/bun", "/custom/agent.js"]);
+			expect(buildAgentSpawnArgv()).toEqual([
+				"/custom/bun",
+				"/custom/agent.js",
+			]);
 		} finally {
-			process.env.SANDBOX_BWRAP_PATH = original.bwrap;
 			process.env.SANDBOX_BUN_PATH = original.bun;
 			process.env.SANDBOX_AGENT_PATH = original.agent;
 		}
@@ -283,6 +99,8 @@ describe("spawnAgent agent environment", () => {
 			string[],
 			{ env: Record<string, string> },
 		];
+		// The agent runs directly under bun, no wrapper.
+		expect(call[0]).toEqual(["bun", "/workspace/agent.js"]);
 		const env = call[1].env;
 		expect(env.ANTHROPIC_BASE_URL).toBe("https://gateway.example");
 		expect(env.ANTHROPIC_AUTH_TOKEN).toBe("tok-123");
@@ -297,8 +115,6 @@ describe("spawnAgent agent environment", () => {
 	});
 
 	it("forwards the session-store root + identity when configured, omits them otherwise", async () => {
-		// A DURABLE root: not under /workspace or /tmp (tmpdir() is /tmp on Linux,
-		// which assertSessionStoreRootSafe now rejects). Use the package dir.
 		const storeRoot = join(
 			process.cwd(),
 			`.session-store-spawn-test-${Date.now()}`,
@@ -361,18 +177,54 @@ describe("spawnAgent agent environment", () => {
 			rmSync(storeRoot, { recursive: true, force: true });
 		}
 	});
+
+	it("omits the session-store root when identity is missing, even if configured", async () => {
+		const storeRoot = join(
+			process.cwd(),
+			`.session-store-spawn-test-noid-${Date.now()}`,
+		);
+		const originalRoot = process.env.AGENT_SESSION_STORE_ROOT;
+		try {
+			process.env.AGENT_SESSION_STORE_ROOT = storeRoot;
+			spawnSpy = spyOn(Bun, "spawn").mockReturnValue(
+				fakeProc() as unknown as ReturnType<typeof Bun.spawn>,
+			);
+
+			await spawnAgent({
+				userQuery: "q",
+				systemPrompt: "s",
+				cwd,
+				claudeConfigDir,
+				// No userId/conversationId — mirroring must stay off.
+				llmBaseUrl: "https://gateway.example",
+				docGatewayUrl: "https://docs.example",
+				llmToken: "tok",
+				docToken: "doc",
+				onEvent: async () => {},
+			});
+
+			const call = spawnSpy.mock.calls[0] as [
+				string[],
+				{ env: Record<string, string> },
+			];
+			expect("AGENT_SESSION_STORE_ROOT" in call[1].env).toBe(false);
+		} finally {
+			if (originalRoot === undefined)
+				delete process.env.AGENT_SESSION_STORE_ROOT;
+			else process.env.AGENT_SESSION_STORE_ROOT = originalRoot;
+			rmSync(storeRoot, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("spawnAgent idle timeout", () => {
-	// Real-subprocess tests: tiny fixture scripts stand in for agent.js, and a
-	// shim replaces bwrap (absent on dev machines) — it drops the bwrap flags
-	// and execs the command after `--`, so we exercise the actual Bun.spawn +
+	// Real-subprocess tests: tiny fixture scripts stand in for agent.js, run
+	// directly under bun (no bwrap wrapper), so we exercise the actual Bun.spawn +
 	// NDJSON + watchdog wiring rather than mocking it.
 	let tmpDir: string;
 	const fixtures: Record<string, string> = {};
 
 	const ENV_VARS = [
-		"SANDBOX_BWRAP_PATH",
 		"SANDBOX_AGENT_PATH",
 		"SANDBOX_AGENT_IDLE_TIMEOUT_MS",
 		"SANDBOX_AGENT_MAX_TURN_MS",
@@ -382,15 +234,8 @@ describe("spawnAgent idle timeout", () => {
 	beforeAll(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "child-spawn-"));
 		// makeInput models the conversation workspace under tmpDir: cwd is
-		// `<tmpDir>/work` and the config home `<tmpDir>/claude-config`. The
-		// bwrap-shim strips the bind flags, so neither needs to exist on disk.
-
-		fixtures.bwrapShim = join(tmpDir, "bwrap-shim.sh");
-		writeFileSync(
-			fixtures.bwrapShim,
-			`#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n`,
-		);
-		chmodSync(fixtures.bwrapShim, 0o755);
+		// `<tmpDir>/work` and the config home `<tmpDir>/claude-config`. Neither is
+		// bound or chdir'd into, so neither needs to exist on disk.
 
 		// Agent that consumes stdin then hangs (idle forever).
 		fixtures.agentHang = join(tmpDir, "agent-hang.ts");
@@ -440,7 +285,6 @@ describe("spawnAgent idle timeout", () => {
 		);
 
 		for (const key of ENV_VARS) originalEnv[key] = process.env[key];
-		process.env.SANDBOX_BWRAP_PATH = fixtures.bwrapShim;
 	});
 
 	afterAll(() => {

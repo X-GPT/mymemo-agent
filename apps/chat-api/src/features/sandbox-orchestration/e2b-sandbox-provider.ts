@@ -2,13 +2,13 @@ import { resolve } from "node:path";
 import { Sandbox } from "e2b";
 import { apiEnv } from "@/config/env";
 import { SandboxCreationError } from "./errors";
+import type {
+	SandboxDaemonEndpoint,
+	SandboxHandle,
+	SandboxProvider,
+	SyncLogger,
+} from "./sandbox-provider";
 
-export interface SyncLogger {
-	info(obj: Record<string, unknown>): void;
-	error(obj: Record<string, unknown>): void;
-}
-
-export const WORKSPACE_ROOT = "/workspace";
 const DAEMON_PORT = 8080;
 const DAEMON_STARTUP_TIMEOUT_MS = 15_000;
 const DAEMON_HEALTH_CHECK_INTERVAL_MS = 500;
@@ -36,11 +36,6 @@ const DIST_DIR = resolve(
 interface SandboxBundleSet {
 	files: Array<{ sandboxPath: string; code: string }>;
 	version: string;
-}
-
-export interface SandboxDaemonEndpoint {
-	url: string;
-	authToken: string;
 }
 
 let bundlePromise: Promise<SandboxBundleSet> | null = null;
@@ -71,8 +66,16 @@ async function loadSandboxBundles(): Promise<SandboxBundleSet> {
 	return { files, version };
 }
 
-export class SandboxManager {
-	async createSandbox(userId: string, logger: SyncLogger): Promise<Sandbox> {
+/**
+ * Production provider: a fresh per-turn E2B sandbox. `createSandbox` returns the
+ * live E2B `Sandbox` (it satisfies `SandboxHandle`); `ensureSandboxDaemon` pushes
+ * the daemon + agent bundles and waits for `/health`; `killSandbox` tears it down.
+ */
+export class E2BSandboxProvider implements SandboxProvider {
+	async createSandbox(
+		userId: string,
+		logger: SyncLogger,
+	): Promise<SandboxHandle> {
 		logger.info({ msg: "Creating sandbox", userId });
 
 		try {
@@ -96,9 +99,10 @@ export class SandboxManager {
 
 	async killSandbox(
 		userId: string,
-		sandbox: Sandbox,
+		handle: SandboxHandle,
 		logger: SyncLogger,
 	): Promise<void> {
+		const sandbox = handle as Sandbox;
 		try {
 			await sandbox.kill();
 		} catch (err) {
@@ -128,9 +132,10 @@ export class SandboxManager {
 	 */
 	async ensureSandboxDaemon(
 		userId: string,
-		sandbox: Sandbox,
+		handle: SandboxHandle,
 		logger: SyncLogger,
 	): Promise<SandboxDaemonEndpoint> {
+		const sandbox = handle as Sandbox;
 		const daemonUrl = this.getDaemonUrl(sandbox);
 		const endpoint = { url: daemonUrl, authToken: apiEnv.DAEMON_AUTH_TOKEN };
 

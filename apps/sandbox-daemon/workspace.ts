@@ -106,7 +106,7 @@ export function resolveConversationWorkspace(
 /**
  * Create the workspace directory tree for a conversation and return its paths.
  * Idempotent (recursive mkdir). Must be called before spawning the agent so the
- * cwd exists for bwrap's rw bind.
+ * cwd and per-conversation SDK config home exist when the agent runs.
  */
 export function createConversationWorkspace(
 	conversationId: string,

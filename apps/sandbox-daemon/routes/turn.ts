@@ -112,7 +112,7 @@ app.post("/turn", async (c) => {
 				);
 
 				// Materialize the conversation workspace tree and run the agent
-				// from its `work/` dir (created before spawn for bwrap's rw bind).
+				// from its `work/` dir (created before spawn so the cwd exists).
 				const workspace = createConversationWorkspace(conversation_id);
 				const cwd = workspace.work;
 

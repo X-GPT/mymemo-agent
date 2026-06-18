@@ -1,9 +1,7 @@
 /**
- * Durable session-transcript path scheme, shared by the agent-side adapter
- * (`session-store.ts`, which writes the files) and the daemon-side spawner
- * (`child-spawn.ts`, which binds exactly one conversation's subtree into the
- * agent's bwrap namespace). Kept free of the Claude Agent SDK import so it can
- * live in the daemon bundle without pulling the SDK in.
+ * Durable session-transcript path scheme used by the agent-side adapter
+ * (`session-store.ts`, which writes the files). Kept free of the Claude Agent
+ * SDK import so it can live in the daemon bundle without pulling the SDK in.
  *
  * Layout (matches the chat-api `WorkspaceStore` model):
  *   {root}/users/{sha256(userId)}/conversations/{conversationId}/sessions/
@@ -50,9 +48,9 @@ export function encodeUserSegment(userId: unknown): string {
 
 /**
  * Resolve the per-conversation `sessions/` directory under the durable root.
- * This is the ONLY subtree a turn's agent may touch — the daemon binds exactly
- * this path into the agent's bwrap namespace, so a prompt-injected agent cannot
- * reach another user's or conversation's transcripts even with Bash/Read.
+ * The agent's FileSystemSessionStore is bound to one {user, conversation} at
+ * construction and only ever reads/writes this subtree, so transcripts stay
+ * structurally separated per user and per conversation.
  */
 export function resolveConversationSessionsDir(
 	root: string,

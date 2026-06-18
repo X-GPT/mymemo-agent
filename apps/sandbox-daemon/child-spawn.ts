@@ -6,14 +6,18 @@
  *
  * The agent speaks NDJSON on stdout. We line-buffer, parse, and dispatch.
  *
+ * Isolation: the agent runs directly (`bun /workspace/agent.js`) — the sandbox
+ * itself (the per-turn E2B sandbox in prod, the daemon's container locally) is
+ * the security boundary. The agent holds no provider key, runs under the SDK's
+ * scoped tool surface (see agent-tools.ts), and is treated as untrusted, so dev
+ * and prod share this one spawn path.
+ *
  * Bundle paths are env-overridable for tests; in production sandboxes the
- * chat-api writes the two bundles to /workspace/{daemon,agent}.js.
+ * chat-api writes the two bundles to /workspace/{daemon,agent}.js, and the local
+ * container bakes them at the same paths.
  */
 
-import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
 import type { AgentEvent } from "./ipc-protocol";
-import { resolveConversationSessionsDir } from "./session-store-paths";
 
 export type { AgentEvent } from "./ipc-protocol";
 
@@ -22,9 +26,6 @@ function getAgentBundlePath(): string {
 }
 function getBunExecutable(): string {
 	return process.env.SANDBOX_BUN_PATH ?? "bun";
-}
-function getBwrapExecutable(): string {
-	return process.env.SANDBOX_BWRAP_PATH ?? "bwrap";
 }
 
 // The agent is a streaming workload of unbounded but "chatty" duration, so a
@@ -63,187 +64,23 @@ function getAgentMaxTurnMs(): number {
 	);
 }
 
-// Must match the sandbox template's setWorkdir (apps/chat-api/sandbox-template/
-// template.ts) and the path the chat-api writes bundles into
-// (apps/chat-api/src/features/sandbox-orchestration/sandbox-manager.ts).
-// Changing it requires updating all three.
-const WORKSPACE_ROOT = "/workspace";
-
 // Durable root the agent's SessionStore mirror writes to (must match
 // SESSION_STORE_ROOT_ENV in session-store.ts, which the agent reads). Unset =
-// session mirroring disabled, so no extra bwrap bind.
+// session mirroring disabled. The agent's FileSystemSessionStore creates its own
+// per-conversation subtree on first write, so the daemon only forwards the root.
 const SESSION_STORE_ROOT_ENV = "AGENT_SESSION_STORE_ROOT";
 function getSessionStoreRoot(): string | undefined {
 	const root = process.env[SESSION_STORE_ROOT_ENV];
 	return root && root.length > 0 ? root : undefined;
 }
 
-// Mounts the agent gets that are EPHEMERAL: tmpfs that vanishes when the
-// per-turn sandbox is killed. A store root at or under either is useless —
-// `/workspace` is sandbox-local (no resume across recycle) and `/tmp` is also
-// re-masked by the later `--tmpfs /tmp`, silently dropping the mirror.
-const EPHEMERAL_ROOTS = [WORKSPACE_ROOT, "/tmp"];
-
-/** True when `child` is `parent` or nested beneath it (both pre-resolved). */
-function isAtOrUnder(child: string, parent: string): boolean {
-	return (
-		child === parent || child.startsWith(parent === "/" ? "/" : `${parent}/`)
-	);
-}
-
 /**
- * Throw unless the configured store root is a durable path that overlaps no
- * sandbox-managed mount. Two failure modes, both from bwrap applying mounts in
- * order (last wins):
- *  - root AT/UNDER an ephemeral tmpfs (`/workspace`, `/tmp`) — the transcript is
- *    sandbox-local or gets re-masked, so resume silently never works.
- *  - root that is an ANCESTOR of a required re-bind (agent bundle, cwd, the SDK
- *    config home) — our `--tmpfs <root>` shadows it and wedges the turn.
- * Requires an absolute path. Reject loudly rather than mirror into a void.
+ * Build the argv for the agent process. The agent runs directly under bun — the
+ * sandbox/container is the isolation boundary, so there is no wrapper. Extracted
+ * as a pure helper so the command is easy to inspect and unit-test.
  */
-export function assertSessionStoreRootSafe(
-	root: string,
-	mounts: string[],
-): void {
-	if (!root.startsWith("/")) {
-		throw new Error(
-			`${SESSION_STORE_ROOT_ENV} must be an absolute path: ${JSON.stringify(root)}`,
-		);
-	}
-	const r = resolve(root);
-	for (const ephemeral of EPHEMERAL_ROOTS) {
-		if (isAtOrUnder(r, resolve(ephemeral))) {
-			throw new Error(
-				`${SESSION_STORE_ROOT_ENV} (${root}) is inside the ephemeral ${ephemeral}; transcripts there don't survive sandbox recycle — use a durable path outside ${EPHEMERAL_ROOTS.join(" and ")}`,
-			);
-		}
-	}
-	for (const mount of mounts) {
-		if (isAtOrUnder(resolve(mount), r)) {
-			throw new Error(
-				`${SESSION_STORE_ROOT_ENV} (${root}) masks required mount ${mount}; use a dedicated path outside the sandbox workspace`,
-			);
-		}
-	}
-}
-
-/**
- * The single durable subtree this turn's agent may touch: the current
- * conversation's `sessions/` dir, plus the root that must be masked first.
- * The agent is prompt-injectable and holds Bash/Read, so binding the whole
- * durable root (every user, every conversation) would let one turn read or
- * overwrite another tenant's transcripts. We instead `--tmpfs` the root (so the
- * broad `--ro-bind / /` can't leak siblings either) and re-bind ONLY this dir.
- * Returns undefined when mirroring is disabled or identity is missing.
- */
-function resolveSessionStoreBind(
-	userId: string | undefined,
-	conversationId: string | undefined,
-): { root: string; sessionsDir: string } | undefined {
-	const root = getSessionStoreRoot();
-	if (!root || !userId || !conversationId) return undefined;
-	return {
-		root,
-		sessionsDir: resolveConversationSessionsDir(root, userId, conversationId),
-	};
-}
-
-/**
- * Build the argv for the bwrap-wrapped agent process. Extracted as a pure
- * helper so the flag set is easy to inspect and unit-test.
- *
- * Filesystem layout:
- *   1. --ro-bind / /                       — system libs, bun, claude,
- *                                             /etc/ssl, /home/user/.claude.
- *                                             Read-only.
- *   2. --tmpfs /workspace                  — mask the daemon's working
- *                                             directory entirely. Hides
- *                                             daemon.log (which accumulates
- *                                             stderr across turns),
- *                                             daemon.js, and agent.js.
- *   3. --ro-bind /workspace/agent.js ...   — re-expose only the agent bundle
- *                                             so bun can load it.
- *   4. --bind <cwd> <cwd>                  — re-expose only the agent's
- *                                             working directory as
- *                                             read-write (an empty scratch
- *                                             dir; documents are fetched via
- *                                             the `mymemo-docs` CLI, not
- *                                             read from disk).
- *   5. --bind <claudeConfigDir> ...        — re-expose the per-conversation
- *                                             CLAUDE_CONFIG_DIR (a sibling of
- *                                             cwd, from the workspace layout) rw
- *                                             so the SDK can write its config +
- *                                             session transcripts. The dir is
- *                                             created by createConversationWorkspace
- *                                             before spawn.
- *   6. --tmpfs <store root> + --bind <conv> — when session mirroring is on,
- *                                             mask the whole durable transcript
- *                                             root, then re-bind ONLY this
- *                                             conversation's `sessions/` dir rw.
- *                                             Other tenants' transcripts are
- *                                             never visible to the agent.
- *   7. --tmpfs /tmp                        — fresh scratch space.
- *
- * Namespaces:
- *   - --unshare-user, --unshare-pid, --unshare-uts, --unshare-ipc.
- *   - Inherited network — the Claude SDK calls the LLM gateway over HTTPS,
- *     so we cannot --unshare-net.
- *
- * Lifetime:
- *   - --die-with-parent so a daemon crash takes bwrap + the agent with it.
- */
-export function buildAgentSpawnArgv(
-	cwd: string,
-	claudeConfigDir: string,
-	sessionStoreBind?: { root: string; sessionsDir: string },
-): string[] {
-	const agentBundle = getAgentBundlePath();
-	return [
-		getBwrapExecutable(),
-		"--ro-bind",
-		"/",
-		"/",
-		"--tmpfs",
-		WORKSPACE_ROOT,
-		"--ro-bind",
-		agentBundle,
-		agentBundle,
-		"--bind",
-		cwd,
-		cwd,
-		// The SDK's per-conversation CLAUDE_CONFIG_DIR — a sibling of cwd, re-bound
-		// rw so config + transcript writes land in an isolated, non-project dir.
-		"--bind",
-		claudeConfigDir,
-		claudeConfigDir,
-		// Mask the entire durable transcript root (defeats the broad `--ro-bind /
-		// /` read-through for other tenants), then re-expose ONLY this
-		// conversation's `sessions/` dir rw. Order matters: tmpfs first, bind
-		// second, so the narrow bind wins for its subpath.
-		...(sessionStoreBind
-			? [
-					"--tmpfs",
-					sessionStoreBind.root,
-					"--bind",
-					sessionStoreBind.sessionsDir,
-					sessionStoreBind.sessionsDir,
-				]
-			: []),
-		"--tmpfs",
-		"/tmp",
-		"--proc",
-		"/proc",
-		"--dev",
-		"/dev",
-		"--unshare-user",
-		"--unshare-pid",
-		"--unshare-uts",
-		"--unshare-ipc",
-		"--die-with-parent",
-		"--",
-		getBunExecutable(),
-		agentBundle,
-	];
+export function buildAgentSpawnArgv(): string[] {
+	return [getBunExecutable(), getAgentBundlePath()];
 }
 
 function narrowAgentEvent(raw: Record<string, unknown>): AgentEvent | null {
@@ -331,9 +168,9 @@ export interface SpawnAgentInput {
 	cwd: string;
 	/**
 	 * Per-conversation CLAUDE_CONFIG_DIR (a sibling of cwd, from the workspace
-	 * layout). Set on the agent and re-bound rw so the SDK's config + transcript
-	 * writes stay isolated from the agent's project `.claude`. Created by the
-	 * caller (createConversationWorkspace) before spawn, like cwd.
+	 * layout). Set on the agent so the SDK's config + transcript writes stay
+	 * isolated from the agent's project `.claude`. Created by the caller
+	 * (createConversationWorkspace) before spawn, like cwd.
 	 */
 	claudeConfigDir: string;
 	sessionId?: string;
@@ -375,61 +212,46 @@ export async function spawnAgent(
 		claudeConfigDir,
 		...config
 	} = input;
-	// Bind only this conversation's transcript subtree into the agent (never the
-	// whole multi-tenant root). Pre-create it so the bwrap --bind has a source.
-	const sessionStoreBind = resolveSessionStoreBind(
-		config.userId,
-		config.conversationId,
-	);
-	if (sessionStoreBind) {
-		// Reject a root that would mask the agent bundle, cwd, or the SDK config
-		// home before we spawn — otherwise the --tmpfs root silently shadows them.
-		assertSessionStoreRootSafe(sessionStoreBind.root, [
-			getAgentBundlePath(),
-			config.cwd,
-			claudeConfigDir,
-		]);
-		mkdirSync(sessionStoreBind.sessionsDir, { recursive: true });
-	}
-	const proc = Bun.spawn(
-		buildAgentSpawnArgv(config.cwd, claudeConfigDir, sessionStoreBind),
-		{
-			env: {
-				// The agent holds no provider key — it talks to the LLM gateway, which
-				// injects the real key. ANTHROPIC_AUTH_TOKEN is sent as a Bearer header.
-				ANTHROPIC_BASE_URL: llmBaseUrl,
-				ANTHROPIC_AUTH_TOKEN: llmToken,
-				// Document access: the `mymemo-docs` CLI (on PATH) calls the document
-				// gateway with its own (aud: "documents") token. The gateway enforces
-				// the token's signed scope, so the agent holds no document credential.
-				MYMEMO_DOC_GATEWAY_URL: docGatewayUrl,
-				MYMEMO_DOC_TOKEN: docToken,
-				PATH: process.env.PATH ?? "",
-				CLAUDE_CODE_PATH:
-					process.env.CLAUDE_CODE_PATH ?? "/usr/local/bin/claude",
-				// Per-conversation config + transcript home (a sibling of cwd, not the
-				// project `.claude`). Sandbox-local, so the SDK's local writes are
-				// isolated per conversation and the shared ~/.claude stays read-only.
-				CLAUDE_CONFIG_DIR: claudeConfigDir,
-				// Where the agent's SessionStore mirrors transcripts. Forwarded only
-				// when the per-conversation subtree is bound above; absent => the agent
-				// builds no store and mirroring is disabled.
-				...(sessionStoreBind
-					? { [SESSION_STORE_ROOT_ENV]: sessionStoreBind.root }
-					: {}),
-			},
-			stdout: "pipe",
-			stderr: "pipe",
-			stdin: "pipe",
+	// Forward the durable transcript root only when mirroring is configured and
+	// the turn carries identity — the agent's SessionStore derives its
+	// per-{user,conversation} subtree from the root + the identity threaded
+	// through the stdin config below. Absent root/identity => mirroring disabled.
+	const sessionStoreRoot =
+		config.userId && config.conversationId ? getSessionStoreRoot() : undefined;
+	const proc = Bun.spawn(buildAgentSpawnArgv(), {
+		env: {
+			// The agent holds no provider key — it talks to the LLM gateway, which
+			// injects the real key. ANTHROPIC_AUTH_TOKEN is sent as a Bearer header.
+			ANTHROPIC_BASE_URL: llmBaseUrl,
+			ANTHROPIC_AUTH_TOKEN: llmToken,
+			// Document access: the `mymemo-docs` CLI (on PATH) calls the document
+			// gateway with its own (aud: "documents") token. The gateway enforces
+			// the token's signed scope, so the agent holds no document credential.
+			MYMEMO_DOC_GATEWAY_URL: docGatewayUrl,
+			MYMEMO_DOC_TOKEN: docToken,
+			PATH: process.env.PATH ?? "",
+			CLAUDE_CODE_PATH: process.env.CLAUDE_CODE_PATH ?? "/usr/local/bin/claude",
+			// Per-conversation config + transcript home (a sibling of cwd, not the
+			// project `.claude`). Sandbox-local, so the SDK's local writes are
+			// isolated per conversation and the shared ~/.claude stays read-only.
+			CLAUDE_CONFIG_DIR: claudeConfigDir,
+			// Where the agent's SessionStore mirrors transcripts. Forwarded only
+			// when mirroring is configured and identity is present; absent => the
+			// agent builds no store and mirroring is disabled.
+			...(sessionStoreRoot
+				? { [SESSION_STORE_ROOT_ENV]: sessionStoreRoot }
+				: {}),
 		},
-	);
+		stdout: "pipe",
+		stderr: "pipe",
+		stdin: "pipe",
+	});
 
 	proc.stdin.write(JSON.stringify(config));
 	await proc.stdin.end();
 
-	// Idle watchdog + absolute ceiling. Either SIGKILL lands on the bwrap
-	// supervisor; --die-with-parent (in buildAgentSpawnArgv) propagates it to the
-	// inner agent, which closes stdout and unblocks the read loop below.
+	// Idle watchdog + absolute ceiling. The SIGKILL lands on the agent process,
+	// which closes stdout and unblocks the read loop below.
 	const idleMs = getAgentIdleTimeoutMs();
 	const maxTurnMs = getAgentMaxTurnMs();
 	let timedOut = false;
