@@ -71,7 +71,7 @@ Send a turn (SSE stream). `X-Member-Code: demo-member` matches the seeded KB so
 document search returns results:
 
 ```sh
-curl -N http://localhost:3000/api/v1/chat \
+curl -N http://localhost:3000/v1/chat \
   -H 'Content-Type: application/json' \
   -H 'X-Member-Code: demo-member' \
   -H 'X-Partner-Code: demo-partner' \
@@ -85,21 +85,27 @@ as `sessionId`).
 ### Session-transcript persistence across a sandbox recycle (MYM-27)
 
 The daemon mirrors SDK transcripts to `AGENT_SESSION_STORE_ROOT=/session-store`,
-a named volume that outlives the container:
+a named volume that outlives the container. After a turn, the transcript is keyed
+by member + conversation + agent session:
 
 ```sh
-# Turn 1 — note the returned sessionId
-curl -N http://localhost:3000/api/v1/chat -H 'Content-Type: application/json' \
-  -H 'X-Member-Code: demo-member' -H 'X-Partner-Code: demo-partner' \
-  -d '{"chatContent":"My favorite color is teal. Remember it."}'
+# After turn 1 above, the transcript is on the volume...
+docker compose exec sandbox find /session-store -name '*.jsonl'
+# /session-store/users/<sha256(member)>/conversations/<conversationId>/sessions/<agentSessionId>.jsonl
 
 docker compose restart sandbox      # wipes the in-container ~/.claude; the volume survives
 
-# Turn 2 with the same sessionId — the agent recalls "teal"
-curl -N http://localhost:3000/api/v1/chat -H 'Content-Type: application/json' \
-  -H 'X-Member-Code: demo-member' -H 'X-Partner-Code: demo-partner' \
-  -d '{"chatContent":"What is my favorite color?","sessionId":"<sessionId-from-turn-1>"}'
+# ...and it's still there after the recycle, while the container-local copy is gone:
+docker compose exec sandbox find /session-store -name '*.jsonl'
+docker compose exec sandbox ls /root/.claude/projects   # gone — recreated empty
 ```
+
+This is what the harness demonstrates today: durable transcript **persistence**
+across a sandbox recycle. Automatic conversational **resume** through the chat
+endpoint is not wired yet — `chat.controller.ts` currently passes
+`agentSessionId: null` (continuity is a later milestone), and the request body
+has no `sessionId` field (it is `.strict()`). The agent-side resume path itself
+is proven by `apps/sandbox-daemon` unit tests.
 
 `docker compose down -v` wipes the volumes (KB seed + transcripts) to start clean.
 

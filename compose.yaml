@@ -14,7 +14,6 @@
 
 services:
   chat-api:
-    container_name: chat-api
     build:
       context: .
       dockerfile: apps/chat-api/Dockerfile
@@ -43,7 +42,6 @@ services:
   # (ANTHROPIC_API_KEY) and the KB DATABASE_URL. Locally it talks to the
   # `postgres` service over the compose network with TLS disabled.
   gateway:
-    container_name: gateway
     build:
       context: .
       dockerfile: apps/gateway/Dockerfile
@@ -67,7 +65,6 @@ services:
   # store is on a named volume so SDK transcripts survive `docker compose restart
   # sandbox` (the MYM-27 resume demo); the container's local ~/.claude does not.
   sandbox:
-    container_name: sandbox
     build:
       context: .
       dockerfile: apps/sandbox-daemon/Dockerfile
@@ -91,7 +88,6 @@ services:
   # return results for the seeded member.
   postgres:
     image: postgres:16
-    container_name: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mymemo}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mymemo}
