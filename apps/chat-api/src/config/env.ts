@@ -1,78 +1,96 @@
 import { join } from "node:path";
 import invariant from "tiny-invariant";
 
+export type ChatMessagesScope = "general" | "collection" | "document";
+
+export type SandboxProviderKind = "e2b" | "local";
+
+/** Subset of the process environment the API reads. */
+type Env = Record<string, string | undefined>;
+
 /**
- * Environment variables for the API server
- * All variables are validated at module load time
+ * Typed, validated configuration for the chat-api. Built once from the
+ * environment at the entrypoint (`createApp`) and injected down via `AppDeps`,
+ * so no other module reads global env. This mirrors the gateway's
+ * `loadConfigFromEnv` seam and keeps the app decoupled from mutable global
+ * process state — tests construct config explicitly instead of racing a cached
+ * module singleton.
  */
-export const apiEnv = (() => {
-	// Which sandbox provider runs the turn. `local` targets the docker-compose
-	// E2E harness (a long-lived daemon container reached over the compose
-	// network); the default `e2b` leases a fresh sandbox per turn in production.
-	// Reject an unrecognized value loudly rather than silently falling back to
-	// e2b (a typo like `locl` would otherwise surface as a confusing
-	// "E2B_API_KEY required").
-	const rawSandboxProvider = Bun.env.SANDBOX_PROVIDER;
+export interface ApiConfig {
+	/** `e2b` (default) leases a fresh sandbox per turn; `local` targets the harness daemon container. */
+	sandboxProvider: SandboxProviderKind;
+	/** Base URL of the local daemon container (SANDBOX_PROVIDER=local only). */
+	localSandboxDaemonUrl: string;
+	/** E2B template name (SANDBOX_PROVIDER=e2b only). */
+	e2bTemplate: string;
+	/** Shared bearer for the daemon's /turn endpoint. */
+	daemonAuthToken: string;
+	/** HMAC secret for the per-turn tokens minted into each sandbox turn (shared with the gateway). */
+	llmTokenSecret: string;
+	/** Base URL of the merged gateway, reachable from the sandbox; trailing slash stripped. */
+	gatewayPublicUrl: string;
+	/** pino log level. */
+	logLevel: string;
+	/** Root dir of the durable workspace store (local filesystem adapter). */
+	workspaceStoreRoot: string;
+}
+
+/**
+ * Parse + validate the environment into a typed config. Pure: env in, config
+ * out. `E2B_API_KEY` is validated here but not surfaced — the E2B SDK reads it
+ * straight from `process.env` at `Sandbox.create`.
+ */
+export function loadApiConfigFromEnv(env: Env): ApiConfig {
+	// Which sandbox provider runs the turn. Reject an unrecognized value loudly
+	// rather than silently falling back to e2b (a typo like `locl` would
+	// otherwise surface as a confusing "E2B_API_KEY required").
+	const rawSandboxProvider = env.SANDBOX_PROVIDER;
 	invariant(
 		rawSandboxProvider === undefined ||
 			rawSandboxProvider === "e2b" ||
 			rawSandboxProvider === "local",
 		`SANDBOX_PROVIDER must be "e2b" or "local" (got: ${rawSandboxProvider})`,
 	);
-	const sandboxProvider = rawSandboxProvider === "local" ? "local" : "e2b";
+	const sandboxProvider: SandboxProviderKind =
+		rawSandboxProvider === "local" ? "local" : "e2b";
 
 	// E2B credentials are only needed for the E2B provider; the local provider
 	// reaches a container it does not create, so don't hard-require them there.
 	if (sandboxProvider === "e2b") {
 		invariant(
-			Bun.env.E2B_API_KEY,
+			env.E2B_API_KEY,
 			"E2B_API_KEY is required when SANDBOX_PROVIDER=e2b",
 		);
 	}
-	invariant(Bun.env.DAEMON_AUTH_TOKEN, "DAEMON_AUTH_TOKEN is required");
-	invariant(Bun.env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
-	invariant(Bun.env.GATEWAY_PUBLIC_URL, "GATEWAY_PUBLIC_URL is required");
+	invariant(env.DAEMON_AUTH_TOKEN, "DAEMON_AUTH_TOKEN is required");
+	invariant(env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
+	invariant(env.GATEWAY_PUBLIC_URL, "GATEWAY_PUBLIC_URL is required");
 
 	// Durable workspace store root. Optional with a writable fallback so it works
 	// out of the box, but the fallback is process-local and lost on container
 	// recycle — warn loudly so a missing volume mount in production surfaces here
 	// instead of as silent data loss.
 	const workspaceStoreRoot =
-		Bun.env.WORKSPACE_STORE_ROOT || join(process.cwd(), ".workspace-store");
-	if (!Bun.env.WORKSPACE_STORE_ROOT) {
+		env.WORKSPACE_STORE_ROOT || join(process.cwd(), ".workspace-store");
+	if (!env.WORKSPACE_STORE_ROOT) {
 		console.warn(
 			`WORKSPACE_STORE_ROOT is not set; durable workspace state will be written to ${workspaceStoreRoot} and will NOT survive container recycles. Set it to a mounted persistent volume in production.`,
 		);
 	}
 
 	return {
-		// "e2b" (default) | "local" — selected in sandbox-orchestration/singleton.ts.
-		SANDBOX_PROVIDER: sandboxProvider,
-		// Base URL of the local daemon container (SANDBOX_PROVIDER=local only).
+		sandboxProvider,
 		// Same docker-compose network as chat-api; trailing slash stripped.
-		LOCAL_SANDBOX_DAEMON_URL: (
-			Bun.env.LOCAL_SANDBOX_DAEMON_URL || "http://sandbox:8080"
+		localSandboxDaemonUrl: (
+			env.LOCAL_SANDBOX_DAEMON_URL || "http://sandbox:8080"
 		).replace(/\/+$/, ""),
-		DAEMON_AUTH_TOKEN: Bun.env.DAEMON_AUTH_TOKEN,
-		// HMAC secret for the session tokens minted into each sandbox turn. Shared
-		// with the gateway, which verifies them and enforces the token's signed
-		// document scope.
-		LLM_TOKEN_SECRET: Bun.env.LLM_TOKEN_SECRET,
-		// Base URL of the merged gateway. The sandboxed agent points BOTH the Claude
-		// binary (ANTHROPIC_BASE_URL → /v1/messages) and the `mymemo-docs` CLI
-		// (MYMEMO_DOC_GATEWAY_URL → /v1/documents/*) at this one service. Must be
-		// reachable from inside the E2B sandbox. Trailing slash stripped so the
-		// binary's `${base}/v1/messages` never produces a double slash.
-		GATEWAY_PUBLIC_URL: Bun.env.GATEWAY_PUBLIC_URL.replace(/\/+$/, ""),
-		LOG_LEVEL: Bun.env.LOG_LEVEL || "info",
-		E2B_TEMPLATE: Bun.env.E2B_TEMPLATE || "sandbox-template-dev",
-		// Root directory of the durable workspace store (local filesystem adapter).
-		// Defaults to a writable dir under the process cwd so it works out of the
-		// box (in the container the cwd is the app dir, which is writable by the
-		// `bun` user); in production point this at a mounted persistent volume so
-		// durable conversation and run state survives container recycles.
-		WORKSPACE_STORE_ROOT: workspaceStoreRoot,
-	} as const;
-})();
-
-export type ChatMessagesScope = "general" | "collection" | "document";
+		e2bTemplate: env.E2B_TEMPLATE || "sandbox-template-dev",
+		daemonAuthToken: env.DAEMON_AUTH_TOKEN,
+		llmTokenSecret: env.LLM_TOKEN_SECRET,
+		// Trailing slash stripped so the binary's `${base}/v1/messages` never
+		// produces a double slash.
+		gatewayPublicUrl: env.GATEWAY_PUBLIC_URL.replace(/\/+$/, ""),
+		logLevel: env.LOG_LEVEL || "info",
+		workspaceStoreRoot,
+	};
+}

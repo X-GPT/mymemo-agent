@@ -1,4 +1,4 @@
-import { apiEnv } from "@/config/env";
+import type { ApiConfig } from "@/config/env";
 import type {
 	SandboxDaemonEndpoint,
 	SandboxHandle,
@@ -32,8 +32,11 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 	private readonly pollIntervalMs: number;
 
 	// Timeouts are injectable so tests can exercise the unhealthy/throw path
-	// without waiting the real 30s; the singleton uses the defaults.
-	constructor(opts: LocalContainerSandboxProviderOptions = {}) {
+	// without waiting the real 30s; production uses the defaults.
+	constructor(
+		private readonly config: ApiConfig,
+		opts: LocalContainerSandboxProviderOptions = {},
+	) {
 		this.readyTimeoutMs = opts.readyTimeoutMs ?? DAEMON_READY_TIMEOUT_MS;
 		this.pollIntervalMs =
 			opts.pollIntervalMs ?? DAEMON_HEALTH_CHECK_INTERVAL_MS;
@@ -46,7 +49,7 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 		logger.info({
 			msg: "Using local sandbox container",
 			userId,
-			daemonUrl: apiEnv.LOCAL_SANDBOX_DAEMON_URL,
+			daemonUrl: this.config.localSandboxDaemonUrl,
 		});
 		return { sandboxId: LOCAL_SANDBOX_ID };
 	}
@@ -56,8 +59,8 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 		_handle: SandboxHandle,
 		logger: SyncLogger,
 	): Promise<SandboxDaemonEndpoint> {
-		const url = apiEnv.LOCAL_SANDBOX_DAEMON_URL;
-		const endpoint = { url, authToken: apiEnv.DAEMON_AUTH_TOKEN };
+		const url = this.config.localSandboxDaemonUrl;
+		const endpoint = { url, authToken: this.config.daemonAuthToken };
 
 		// Bundles are baked into the image, so there is nothing to push — just wait
 		// for the container's daemon to accept connections.

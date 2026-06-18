@@ -38,7 +38,8 @@ let runSandboxChatImpl: (opts: RunOpts) => Promise<unknown> = async (opts) => {
 class FakeConversationBusyError extends Error {}
 
 mock.module("@/features/sandbox-orchestration", () => ({
-	runSandboxChat: (opts: RunOpts) => {
+	// runSandboxChat is now called as (deps, opts); capture the second arg.
+	runSandboxChat: (_deps: unknown, opts: RunOpts) => {
 		lastRunOpts = opts;
 		return runSandboxChatImpl(opts);
 	},

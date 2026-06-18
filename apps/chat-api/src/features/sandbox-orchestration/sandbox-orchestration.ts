@@ -1,11 +1,10 @@
 import { type LlmTokenClaims, mintLlmToken } from "@mymemo/llm-token";
-import { apiEnv, type ChatMessagesScope } from "@/config/env";
+import type { ChatMessagesScope } from "@/config/env";
+import type { AppDeps } from "@/deps";
 import type { ChatLogger } from "@/features/chat/chat.logger";
 import { buildSandboxAgentPrompt } from "@/features/sandbox-agent";
-import { workspaceStore } from "@/features/workspace-store";
 import { SandboxCreationError } from "./errors";
 import { forwardChatTurnToSandbox, type TurnRequest } from "./sandbox-proxy";
-import { sandboxProvider } from "./singleton";
 
 type SandboxScopeType = "global" | "collection" | "document";
 
@@ -37,8 +36,10 @@ export interface RunSandboxChatOptions {
 export type RunSandboxChatResult = { status: "completed" };
 
 export async function runSandboxChat(
+	deps: AppDeps,
 	options: RunSandboxChatOptions,
 ): Promise<RunSandboxChatResult> {
+	const { config, sandboxProvider, workspaceStore } = deps;
 	const {
 		userId,
 		conversationId,
@@ -120,12 +121,12 @@ export async function runSandboxChat(
 				message: query,
 				agent_session_id: agentSessionId ?? undefined,
 				system_prompt: systemPrompt,
-				llm_base_url: apiEnv.GATEWAY_PUBLIC_URL,
-				doc_gateway_url: apiEnv.GATEWAY_PUBLIC_URL,
+				llm_base_url: config.gatewayPublicUrl,
+				doc_gateway_url: config.gatewayPublicUrl,
 				// LLM token: no document scope — the LLM proxy ignores it.
 				llm_token: mintLlmToken(
 					{ ...baseClaims, aud: "llm" },
-					apiEnv.LLM_TOKEN_SECRET,
+					config.llmTokenSecret,
 				),
 				// Document token: carries the signed scope the document routes
 				// enforce server-side (the agent cannot widen it).
@@ -137,7 +138,7 @@ export async function runSandboxChat(
 						collectionId: collectionId ?? undefined,
 						summaryId: summaryId ?? undefined,
 					},
-					apiEnv.LLM_TOKEN_SECRET,
+					config.llmTokenSecret,
 				),
 			};
 

@@ -8,12 +8,17 @@ import {
 	spyOn,
 } from "bun:test";
 import { verifyLlmToken } from "@mymemo/llm-token";
+import type { ApiConfig } from "@/config/env";
+import type { AppDeps } from "@/deps";
+import type { ChatLogger } from "@/features/chat/chat.logger";
+import {
+	type RunSandboxChatOptions,
+	runSandboxChat,
+} from "./sandbox-orchestration";
+import * as proxyModule from "./sandbox-proxy";
 import { createMockSandbox } from "./test-helpers";
 
-type RunSandboxChatOptions =
-	import("./sandbox-orchestration").RunSandboxChatOptions;
-
-import type { ChatLogger } from "@/features/chat/chat.logger";
+type ForwardOpts = Parameters<typeof proxyModule.forwardChatTurnToSandbox>[0];
 
 const silentLogger = {
 	info: () => {},
@@ -22,6 +27,19 @@ const silentLogger = {
 	debug: () => {},
 	child: () => silentLogger,
 } as unknown as ChatLogger;
+
+// Config is injected, not read from env — so the secret/url under test are fixed
+// here and can't be perturbed by another test file or Bun's .env auto-load.
+const config: ApiConfig = {
+	sandboxProvider: "e2b",
+	localSandboxDaemonUrl: "http://sandbox:8080",
+	e2bTemplate: "test-template",
+	daemonAuthToken: "test-daemon-auth-token",
+	llmTokenSecret: "test-llm-token-secret",
+	gatewayPublicUrl: "https://gateway.test",
+	logLevel: "info",
+	workspaceStoreRoot: "/tmp/workspace-store-test",
+};
 
 function makeOptions(
 	overrides: Partial<RunSandboxChatOptions> = {},
@@ -45,86 +63,53 @@ function makeOptions(
 }
 
 describe("runSandboxChat", () => {
-	let runSandboxChat: typeof import("./sandbox-orchestration").runSandboxChat;
-	let singletonModule: typeof import("./singleton");
-	let proxyModule: typeof import("./sandbox-proxy");
-	let workspaceStoreModule: typeof import("@/features/workspace-store");
-	let spyCreate: ReturnType<typeof spyOn>;
-	let spyEnsureDaemon: ReturnType<typeof spyOn>;
-	let spyForwardTurn: ReturnType<typeof spyOn>;
-	let spyKill: ReturnType<typeof spyOn>;
-	let spyHydrate: ReturnType<typeof spyOn>;
-	let spySync: ReturnType<typeof spyOn>;
+	let createSandbox: ReturnType<typeof mock>;
+	let ensureSandboxDaemon: ReturnType<typeof mock>;
+	let killSandbox: ReturnType<typeof mock>;
+	let hydrate: ReturnType<typeof mock>;
+	let sync: ReturnType<typeof mock>;
+	let forwardTurn: ReturnType<typeof spyOn>;
+	let deps: AppDeps;
 
-	beforeEach(async () => {
-		Bun.env.E2B_API_KEY = "test-e2b-key";
-		Bun.env.DAEMON_AUTH_TOKEN = "test-daemon-auth-token";
-		Bun.env.LLM_TOKEN_SECRET = "test-llm-token-secret";
-		Bun.env.GATEWAY_PUBLIC_URL = "https://gateway.test";
-		({ runSandboxChat } = await import("./sandbox-orchestration"));
-		singletonModule = await import("./singleton");
-		proxyModule = await import("./sandbox-proxy");
-		workspaceStoreModule = await import("@/features/workspace-store");
-
-		// Keep the durable store off the filesystem for orchestration tests; the
-		// store itself is exercised in workspace-store tests.
-		spyHydrate = spyOn(
-			workspaceStoreModule.workspaceStore,
-			"hydrateConversationWorkspace",
-		).mockResolvedValue({
-			paths: {
-				conversation: "/tmp/conv",
-				work: "/tmp/conv/work",
-				output: "/tmp/conv/output",
-				docs: "/tmp/conv/docs",
-			},
-			docsManifest: { version: 1, documents: [] },
-		});
-		spySync = spyOn(
-			workspaceStoreModule.workspaceStore,
-			"syncConversationWorkspace",
-		).mockResolvedValue(undefined);
-
+	beforeEach(() => {
 		const sandbox = createMockSandbox();
-		spyCreate = spyOn(
-			singletonModule.sandboxProvider,
-			"createSandbox",
-		).mockResolvedValue(sandbox as unknown as import("e2b").Sandbox);
-		spyEnsureDaemon = spyOn(
-			singletonModule.sandboxProvider,
-			"ensureSandboxDaemon",
-		).mockResolvedValue({
+		createSandbox = mock(async () => sandbox);
+		ensureSandboxDaemon = mock(async () => ({
 			url: "http://daemon:8080",
 			authToken: "test-daemon-auth-token",
-		});
-		spyKill = spyOn(
-			singletonModule.sandboxProvider,
-			"killSandbox",
+		}));
+		killSandbox = mock(async () => undefined);
+		hydrate = mock(async () => undefined);
+		sync = mock(async () => undefined);
+
+		deps = {
+			config,
+			sandboxProvider: { createSandbox, ensureSandboxDaemon, killSandbox },
+			workspaceStore: {
+				hydrateConversationWorkspace: hydrate,
+				syncConversationWorkspace: sync,
+			},
+		} as unknown as AppDeps;
+
+		// forwardChatTurnToSandbox stays a module import in runSandboxChat, so spy it.
+		forwardTurn = spyOn(
+			proxyModule,
+			"forwardChatTurnToSandbox",
 		).mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {
-		spyCreate?.mockRestore();
-		spyEnsureDaemon?.mockRestore();
-		spyForwardTurn?.mockRestore();
-		spyKill?.mockRestore();
-		spyHydrate?.mockRestore();
-		spySync?.mockRestore();
+		forwardTurn?.mockRestore();
 		mock.restore();
 	});
 
 	it("forwards turn to daemon and returns completed", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockResolvedValue(undefined);
-
-		const result = await runSandboxChat(makeOptions());
+		const result = await runSandboxChat(deps, makeOptions());
 
 		expect(result).toEqual({ status: "completed" });
-		expect(spyCreate).toHaveBeenCalled();
-		expect(spyEnsureDaemon).toHaveBeenCalled();
-		expect(spyForwardTurn).toHaveBeenCalledWith(
+		expect(createSandbox).toHaveBeenCalled();
+		expect(ensureSandboxDaemon).toHaveBeenCalled();
+		expect(forwardTurn).toHaveBeenCalledWith(
 			expect.objectContaining({
 				daemonUrl: "http://daemon:8080",
 				daemonAuthToken: "test-daemon-auth-token",
@@ -133,14 +118,10 @@ describe("runSandboxChat", () => {
 	});
 
 	it("mints verifiable per-audience llm and doc tokens bound to the user, sandbox, and run", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			expect(opts.turnRequest.llm_base_url).toBe("https://gateway.test");
 			expect(opts.turnRequest.doc_gateway_url).toBe("https://gateway.test");
 
-			// LLM token verifies only for the llm audience, not documents.
 			const llm = verifyLlmToken(
 				opts.turnRequest.llm_token,
 				"test-llm-token-secret",
@@ -160,7 +141,6 @@ describe("runSandboxChat", () => {
 				),
 			).toBeNull();
 
-			// Doc token verifies only for the documents audience, not llm.
 			const doc = verifyLlmToken(
 				opts.turnRequest.doc_token,
 				"test-llm-token-secret",
@@ -178,14 +158,11 @@ describe("runSandboxChat", () => {
 			).toBeNull();
 		});
 
-		await runSandboxChat(makeOptions());
+		await runSandboxChat(deps, makeOptions());
 	});
 
 	it("signs the document scope into the doc token, not the llm token", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			const doc = verifyLlmToken(
 				opts.turnRequest.doc_token,
 				"test-llm-token-secret",
@@ -193,7 +170,6 @@ describe("runSandboxChat", () => {
 			);
 			expect(doc?.scope).toBe("collection");
 			expect(doc?.collectionId).toBe("col-1");
-			// The LLM token carries no document scope.
 			const llm = verifyLlmToken(
 				opts.turnRequest.llm_token,
 				"test-llm-token-secret",
@@ -204,80 +180,64 @@ describe("runSandboxChat", () => {
 		});
 
 		await runSandboxChat(
+			deps,
 			makeOptions({ scope: "collection", collectionId: "col-1" }),
 		);
 	});
 
 	it("propagates conversationId and runId into the daemon turn request", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			expect(opts.turnRequest.conversation_id).toBe("conv-42");
 			expect(opts.turnRequest.run_id).toBe("run-99");
 		});
 
 		await runSandboxChat(
+			deps,
 			makeOptions({ conversationId: "conv-42", runId: "run-99" }),
 		);
 	});
 
 	it("forwards agentSessionId as agent_session_id", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			expect(opts.turnRequest.agent_session_id).toBe("client-session");
 		});
 
-		await runSandboxChat(makeOptions({ agentSessionId: "client-session" }));
+		await runSandboxChat(
+			deps,
+			makeOptions({ agentSessionId: "client-session" }),
+		);
 	});
 
 	it("omits agent_session_id when no agentSessionId provided", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			expect(opts.turnRequest.agent_session_id).toBeUndefined();
 		});
 
-		await runSandboxChat(makeOptions({ agentSessionId: null }));
+		await runSandboxChat(deps, makeOptions({ agentSessionId: null }));
 	});
 
 	it("always creates a fresh sandbox for the user", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockResolvedValue(undefined);
+		await runSandboxChat(deps, makeOptions());
 
-		await runSandboxChat(makeOptions());
-
-		expect(spyCreate).toHaveBeenCalledWith("user-1", expect.anything());
+		expect(createSandbox).toHaveBeenCalledWith("user-1", expect.anything());
 		// Ephemeral: the sandbox is torn down once the turn completes.
-		expect(spyKill).toHaveBeenCalled();
+		expect(killSandbox).toHaveBeenCalled();
 	});
 
 	it("kills the sandbox even when the turn fails", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockRejectedValue(new Error("daemon unreachable"));
+		forwardTurn.mockRejectedValue(new Error("daemon unreachable"));
 
-		await expect(runSandboxChat(makeOptions())).rejects.toThrow(
+		await expect(runSandboxChat(deps, makeOptions())).rejects.toThrow(
 			"daemon unreachable",
 		);
 
-		expect(spyKill).toHaveBeenCalled();
+		expect(killSandbox).toHaveBeenCalled();
 	});
 
 	it("invokes onSandboxId with the resolved sandbox id", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockResolvedValue(undefined);
-
 		const received: string[] = [];
 		await runSandboxChat(
+			deps,
 			makeOptions({
 				onSandboxId: async (id) => {
 					received.push(id);
@@ -290,14 +250,12 @@ describe("runSandboxChat", () => {
 
 	it("surfaces daemon-emitted session id via onAgentSessionId callback", async () => {
 		const received: string[] = [];
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			await opts.onSessionId("new-session-123");
 		});
 
 		await runSandboxChat(
+			deps,
 			makeOptions({
 				onAgentSessionId: async (id) => {
 					received.push(id);
@@ -309,70 +267,52 @@ describe("runSandboxChat", () => {
 	});
 
 	it("maps general scope to global", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			expect(opts.turnRequest.scope_type).toBe("global");
 		});
 
-		await runSandboxChat(makeOptions({ scope: "general" }));
+		await runSandboxChat(deps, makeOptions({ scope: "general" }));
 	});
 
 	it("maps collection scope correctly", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			expect(opts.turnRequest.scope_type).toBe("collection");
 			expect(opts.turnRequest.collection_id).toBe("col-1");
 		});
 
 		await runSandboxChat(
+			deps,
 			makeOptions({ scope: "collection", collectionId: "col-1" }),
 		);
 	});
 
 	it("maps document scope correctly", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async (opts) => {
+		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			expect(opts.turnRequest.scope_type).toBe("document");
 			expect(opts.turnRequest.summary_id).toBe("sum-1");
 		});
 
 		await runSandboxChat(
+			deps,
 			makeOptions({ scope: "document", summaryId: "sum-1" }),
 		);
 	});
 
 	it("hydrates the durable workspace before forwarding the turn", async () => {
 		const order: string[] = [];
-		spyHydrate.mockImplementation(async () => {
+		hydrate.mockImplementation(async () => {
 			order.push("hydrate");
-			return {
-				paths: {
-					conversation: "/tmp/conv",
-					work: "/tmp/conv/work",
-					output: "/tmp/conv/output",
-					docs: "/tmp/conv/docs",
-				},
-				docsManifest: { version: 1, documents: [] },
-			};
 		});
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockImplementation(async () => {
+		forwardTurn.mockImplementation(async () => {
 			order.push("forward");
 		});
 
 		await runSandboxChat(
+			deps,
 			makeOptions({ userId: "user-1", conversationId: "conv-1" }),
 		);
 
-		expect(spyHydrate).toHaveBeenCalledWith({
+		expect(hydrate).toHaveBeenCalledWith({
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
@@ -380,54 +320,40 @@ describe("runSandboxChat", () => {
 	});
 
 	it("syncs the durable workspace after a successful turn", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockResolvedValue(undefined);
-
 		await runSandboxChat(
+			deps,
 			makeOptions({ userId: "user-1", conversationId: "conv-1" }),
 		);
 
-		expect(spySync).toHaveBeenCalledWith({
+		expect(sync).toHaveBeenCalledWith({
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
 	});
 
 	it("syncs the durable workspace even when the turn fails", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockRejectedValue(new Error("daemon unreachable"));
+		forwardTurn.mockRejectedValue(new Error("daemon unreachable"));
 
-		await expect(runSandboxChat(makeOptions())).rejects.toThrow(
+		await expect(runSandboxChat(deps, makeOptions())).rejects.toThrow(
 			"daemon unreachable",
 		);
 
-		expect(spySync).toHaveBeenCalled();
+		expect(sync).toHaveBeenCalled();
 	});
 
 	it("does not let a sync failure mask the turn result or skip teardown", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockResolvedValue(undefined);
-		spySync.mockRejectedValue(new Error("durable store down"));
+		sync.mockRejectedValue(new Error("durable store down"));
 
-		const result = await runSandboxChat(makeOptions());
+		const result = await runSandboxChat(deps, makeOptions());
 
 		expect(result).toEqual({ status: "completed" });
-		expect(spyKill).toHaveBeenCalled();
+		expect(killSandbox).toHaveBeenCalled();
 	});
 
 	it("propagates proxy errors", async () => {
-		spyForwardTurn = spyOn(
-			proxyModule,
-			"forwardChatTurnToSandbox",
-		).mockRejectedValue(new Error("daemon unreachable"));
+		forwardTurn.mockRejectedValue(new Error("daemon unreachable"));
 
-		await expect(runSandboxChat(makeOptions())).rejects.toThrow(
+		await expect(runSandboxChat(deps, makeOptions())).rejects.toThrow(
 			"daemon unreachable",
 		);
 	});

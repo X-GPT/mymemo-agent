@@ -1,4 +1,5 @@
 import type { ChatMessagesScope } from "@/config/env";
+import type { AppDeps } from "@/deps";
 import { runSandboxChat } from "@/features/sandbox-orchestration";
 import type { EventMessage } from "./chat.events";
 import type { ChatLogger } from "./chat.logger";
@@ -6,6 +7,7 @@ import type { ChatRequest } from "./chat.schema";
 import type { MymemoEventSender } from "./chat.streaming";
 
 export async function complete(
+	deps: AppDeps,
 	request: ChatRequest,
 	mymemoEventSender: MymemoEventSender,
 	logger: ChatLogger,
@@ -71,7 +73,7 @@ export async function complete(
 		}
 	};
 
-	await runSandboxChat({
+	await runSandboxChat(deps, {
 		userId: memberCode,
 		conversationId: resolvedConversationId,
 		runId,
