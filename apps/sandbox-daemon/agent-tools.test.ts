@@ -1,4 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	ALLOWED_BUILTIN_TOOLS,
 	buildMymemoTools,
@@ -98,12 +101,121 @@ describe("MyMemo MCP tool registration", () => {
 		const tools = buildMymemoTools();
 		expect(tools.map((t) => t.name)).toEqual([SEARCH_DOCUMENTS_TOOL_NAME]);
 	});
+});
 
-	it("returns a recoverable tool error until MYM-11 implements the handler", async () => {
-		const [searchDocuments] = buildMymemoTools();
-		const result = await searchDocuments.handler({}, undefined);
-		expect(result.isError).toBe(true);
-		expect(JSON.stringify(result.content)).toContain("not implemented");
+describe("search_documents tool handler", () => {
+	const ENV = ["MYMEMO_DOC_GATEWAY_URL", "MYMEMO_DOC_TOKEN"] as const;
+	const original: Record<string, string | undefined> = {};
+	let docsDir: string;
+	let realFetch: typeof fetch;
+
+	beforeEach(() => {
+		for (const k of ENV) original[k] = process.env[k];
+		docsDir = mkdtempSync(join(tmpdir(), "agent-tools-handler-"));
+		realFetch = globalThis.fetch;
+	});
+
+	afterEach(() => {
+		for (const k of ENV) {
+			if (original[k] === undefined) delete process.env[k];
+			else process.env[k] = original[k];
+		}
+		globalThis.fetch = realFetch;
+		rmSync(docsDir, { recursive: true, force: true });
+	});
+
+	function handler(context?: { docsDir: string; runId: string }) {
+		const [searchDocuments] = buildMymemoTools(context);
+		return searchDocuments.handler;
+	}
+
+	it("fails closed (recoverable) when the document gateway env is missing", async () => {
+		delete process.env.MYMEMO_DOC_GATEWAY_URL;
+		delete process.env.MYMEMO_DOC_TOKEN;
+		const res = await handler({ docsDir, runId: "run-1" })(
+			{ query: "q" },
+			NO_OPTS,
+		);
+		expect(res.isError).toBe(true);
+		expect(JSON.stringify(res.content)).toContain("not configured");
+	});
+
+	it("fails closed (recoverable) when the workspace context is missing", async () => {
+		process.env.MYMEMO_DOC_GATEWAY_URL = "https://gateway.example";
+		process.env.MYMEMO_DOC_TOKEN = "doc-token";
+		const res = await handler(undefined)({ query: "q" }, NO_OPTS);
+		expect(res.isError).toBe(true);
+		expect(JSON.stringify(res.content)).toContain(
+			"workspace is not configured",
+		);
+	});
+
+	it("returns a non-error message when nothing matches", async () => {
+		process.env.MYMEMO_DOC_GATEWAY_URL = "https://gateway.example";
+		process.env.MYMEMO_DOC_TOKEN = "doc-token";
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify({ documents: [] }), {
+				status: 200,
+			})) as unknown as typeof fetch;
+
+		const res = await handler({ docsDir, runId: "run-1" })(
+			{ query: "q" },
+			NO_OPTS,
+		);
+		expect(res.isError).toBeFalsy();
+		expect(JSON.stringify(res.content)).toContain("No MyMemo documents");
+	});
+
+	it("hydrates and returns the documents as JSON content", async () => {
+		process.env.MYMEMO_DOC_GATEWAY_URL = "https://gateway.example";
+		process.env.MYMEMO_DOC_TOKEN = "doc-token";
+		globalThis.fetch = (async (url: string | URL) => {
+			const u = String(url);
+			if (u.endsWith("/search")) {
+				return new Response(
+					JSON.stringify({
+						documents: [{ documentId: "d1", title: "T1", snippet: "S1" }],
+					}),
+					{ status: 200 },
+				);
+			}
+			return new Response(
+				JSON.stringify({ documentId: "d1", title: "T1", content: "BODY" }),
+				{ status: 200 },
+			);
+		}) as unknown as typeof fetch;
+
+		const res = await handler({ docsDir, runId: "run-1" })(
+			{ query: "q" },
+			NO_OPTS,
+		);
+		expect(res.isError).toBeFalsy();
+		const text = (res.content[0] as { text: string }).text;
+		const parsed = JSON.parse(text);
+		expect(parsed.documents[0]).toMatchObject({
+			documentId: "d1",
+			source: "gateway",
+			title: "T1",
+			snippet: "S1",
+			localPath: join(docsDir, "d1.md"),
+		});
+		expect(readFileSync(join(docsDir, "d1.md"), "utf8")).toBe("BODY");
+	});
+
+	it("maps gateway errors to a recoverable tool error (isError), not a throw", async () => {
+		process.env.MYMEMO_DOC_GATEWAY_URL = "https://gateway.example";
+		process.env.MYMEMO_DOC_TOKEN = "doc-token";
+		globalThis.fetch = (async () =>
+			new Response("upstream boom", {
+				status: 502,
+			})) as unknown as typeof fetch;
+
+		const res = await handler({ docsDir, runId: "run-1" })(
+			{ query: "q" },
+			NO_OPTS,
+		);
+		expect(res.isError).toBe(true);
+		expect(JSON.stringify(res.content)).toContain("Document search failed");
 	});
 });
 

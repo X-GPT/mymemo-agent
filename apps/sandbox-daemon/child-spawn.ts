@@ -204,6 +204,15 @@ export interface SpawnAgentInput {
 	 * (createConversationWorkspace) before spawn, like cwd.
 	 */
 	claudeConfigDir: string;
+	/**
+	 * Absolute path to the conversation's docs/ dir. Forwarded (via the stdin
+	 * config) to the `search_documents` tool as its hydration target + manifest
+	 * home. The agent runs directly in the sandbox, so it reads/writes this real
+	 * directory (created by createConversationWorkspace before spawn, like cwd).
+	 */
+	docsDir?: string;
+	/** The run that owns this turn — recorded in the docs manifest by the tool. */
+	runId?: string;
 	sessionId?: string;
 	/** Trusted member code — keys the durable session-transcript store. */
 	userId?: string;
@@ -258,9 +267,10 @@ export async function spawnAgent(
 			// injects the real key. ANTHROPIC_AUTH_TOKEN is sent as a Bearer header.
 			ANTHROPIC_BASE_URL: llmBaseUrl,
 			ANTHROPIC_AUTH_TOKEN: llmToken,
-			// Document access: the `mymemo-docs` CLI (on PATH) calls the document
-			// gateway with its own (aud: "documents") token. The gateway enforces
-			// the token's signed scope, so the agent holds no document credential.
+			// Document access: the in-process `search_documents` MCP tool calls the
+			// document gateway with its own (aud: "documents") token. The gateway
+			// enforces the token's signed scope, so the agent holds no document
+			// credential.
 			MYMEMO_DOC_GATEWAY_URL: docGatewayUrl,
 			MYMEMO_DOC_TOKEN: docToken,
 			PATH: process.env.PATH ?? "",

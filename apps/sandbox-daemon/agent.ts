@@ -25,6 +25,14 @@ export interface AgentRunOptions {
 	cwd: string;
 	sessionId?: string;
 	/**
+	 * Absolute path to the conversation's `docs/` dir and the run that owns this
+	 * turn. Both feed the `search_documents` MCP tool (hydration target + manifest
+	 * attribution). When either is missing the tool is registered but reports a
+	 * recoverable "workspace not configured" error if called.
+	 */
+	docsDir?: string;
+	runId?: string;
+	/**
 	 * Mirror SDK session transcripts to durable storage so `resume` survives a
 	 * fresh or recycled sandbox. Omit to keep today's behavior (local transcript
 	 * only). Never paired with `persistSession: false` — the mirror hook fires
@@ -52,7 +60,8 @@ export interface AgentCallbacks {
  * silently widening the untrusted agent's tool surface.
  */
 export function buildQueryOptions(options: AgentRunOptions): Options {
-	const { systemPrompt, cwd, sessionId, sessionStore } = options;
+	const { systemPrompt, cwd, sessionId, sessionStore, docsDir, runId } =
+		options;
 
 	const queryOptions: Options = {
 		cwd,
@@ -66,7 +75,11 @@ export function buildQueryOptions(options: AgentRunOptions): Options {
 		tools: [...ALLOWED_BUILTIN_TOOLS],
 		allowedTools: [...PRE_APPROVED_TOOLS],
 		canUseTool: createCanUseTool(),
-		mcpServers: { [MYMEMO_MCP_SERVER_NAME]: createMymemoMcpServer() },
+		mcpServers: {
+			[MYMEMO_MCP_SERVER_NAME]: createMymemoMcpServer(
+				docsDir && runId ? { docsDir, runId } : undefined,
+			),
+		},
 		permissionMode: "default",
 		includePartialMessages: true,
 		model: "claude-sonnet-4-6",
