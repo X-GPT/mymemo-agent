@@ -102,6 +102,8 @@ export class E2BSandboxProvider implements SandboxProvider {
 		handle: SandboxHandle,
 		logger: SyncLogger,
 	): Promise<void> {
+		// Safe: the provider is singleton-selected per process, so the handle is
+		// always the E2B Sandbox this provider's createSandbox returned.
 		const sandbox = handle as Sandbox;
 		try {
 			await sandbox.kill();
@@ -135,6 +137,8 @@ export class E2BSandboxProvider implements SandboxProvider {
 		handle: SandboxHandle,
 		logger: SyncLogger,
 	): Promise<SandboxDaemonEndpoint> {
+		// Safe: see killSandbox — the singleton provider only ever receives the
+		// Sandbox its own createSandbox returned.
 		const sandbox = handle as Sandbox;
 		const daemonUrl = this.getDaemonUrl(sandbox);
 		const endpoint = { url: daemonUrl, authToken: apiEnv.DAEMON_AUTH_TOKEN };

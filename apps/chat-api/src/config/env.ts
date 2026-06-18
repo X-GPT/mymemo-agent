@@ -9,8 +9,17 @@ export const apiEnv = (() => {
 	// Which sandbox provider runs the turn. `local` targets the docker-compose
 	// E2E harness (a long-lived daemon container reached over the compose
 	// network); the default `e2b` leases a fresh sandbox per turn in production.
-	const sandboxProvider =
-		Bun.env.SANDBOX_PROVIDER === "local" ? "local" : "e2b";
+	// Reject an unrecognized value loudly rather than silently falling back to
+	// e2b (a typo like `locl` would otherwise surface as a confusing
+	// "E2B_API_KEY required").
+	const rawSandboxProvider = Bun.env.SANDBOX_PROVIDER;
+	invariant(
+		rawSandboxProvider === undefined ||
+			rawSandboxProvider === "e2b" ||
+			rawSandboxProvider === "local",
+		`SANDBOX_PROVIDER must be "e2b" or "local" (got: ${rawSandboxProvider})`,
+	);
+	const sandboxProvider = rawSandboxProvider === "local" ? "local" : "e2b";
 
 	// E2B credentials are only needed for the E2B provider; the local provider
 	// reaches a container it does not create, so don't hard-require them there.

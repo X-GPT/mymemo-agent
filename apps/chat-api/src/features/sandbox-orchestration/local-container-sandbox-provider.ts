@@ -20,7 +20,25 @@ const DAEMON_HEALTH_CHECK_INTERVAL_MS = 500;
  * outlives the turn). The single-turn lock in the daemon serializes concurrent
  * turns — fine for a test harness; see MYM-31 for the prod divergence.
  */
+export interface LocalContainerSandboxProviderOptions {
+	/** Max time to wait for the daemon to report healthy (default 30s). */
+	readyTimeoutMs?: number;
+	/** Poll interval while waiting (default 500ms). */
+	pollIntervalMs?: number;
+}
+
 export class LocalContainerSandboxProvider implements SandboxProvider {
+	private readonly readyTimeoutMs: number;
+	private readonly pollIntervalMs: number;
+
+	// Timeouts are injectable so tests can exercise the unhealthy/throw path
+	// without waiting the real 30s; the singleton uses the defaults.
+	constructor(opts: LocalContainerSandboxProviderOptions = {}) {
+		this.readyTimeoutMs = opts.readyTimeoutMs ?? DAEMON_READY_TIMEOUT_MS;
+		this.pollIntervalMs =
+			opts.pollIntervalMs ?? DAEMON_HEALTH_CHECK_INTERVAL_MS;
+	}
+
 	async createSandbox(
 		userId: string,
 		logger: SyncLogger,
@@ -43,7 +61,7 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 
 		// Bundles are baked into the image, so there is nothing to push — just wait
 		// for the container's daemon to accept connections.
-		const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS;
+		const deadline = Date.now() + this.readyTimeoutMs;
 		while (Date.now() < deadline) {
 			if (await this.isHealthy(url)) {
 				logger.info({
@@ -53,10 +71,10 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 				});
 				return endpoint;
 			}
-			await new Promise((r) => setTimeout(r, DAEMON_HEALTH_CHECK_INTERVAL_MS));
+			await new Promise((r) => setTimeout(r, this.pollIntervalMs));
 		}
 		throw new Error(
-			`Local sandbox daemon at ${url} did not become healthy within ${DAEMON_READY_TIMEOUT_MS}ms`,
+			`Local sandbox daemon at ${url} did not become healthy within ${this.readyTimeoutMs}ms`,
 		);
 	}
 
