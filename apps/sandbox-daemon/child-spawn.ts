@@ -17,6 +17,7 @@
  * container bakes them at the same paths.
  */
 
+import { resolve } from "node:path";
 import type { AgentEvent } from "./ipc-protocol";
 
 export type { AgentEvent } from "./ipc-protocol";
@@ -72,6 +73,36 @@ const SESSION_STORE_ROOT_ENV = "AGENT_SESSION_STORE_ROOT";
 function getSessionStoreRoot(): string | undefined {
 	const root = process.env[SESSION_STORE_ROOT_ENV];
 	return root && root.length > 0 ? root : undefined;
+}
+
+// Paths that don't survive a sandbox recycle. A store root at or under either is
+// useless for resume: transcripts written there are sandbox-local and lost when
+// the sandbox is torn down (the agent's FileSystemSessionStore silently mkdirs
+// and writes, so the misconfig surfaces as data loss, not an error).
+const EPHEMERAL_ROOTS = ["/workspace", "/tmp"];
+
+/**
+ * Fail loudly if a configured session-store root would silently lose transcripts:
+ * a relative path (resolved against the agent's ephemeral cwd) or one inside an
+ * ephemeral mount. This is independent of the (removed) bwrap mounts — it guards
+ * the durable-mirror invariant the resume feature relies on. Throwing here, at
+ * spawn time, turns an operator misconfiguration into a clear failure instead of
+ * a quiet recall regression after a sandbox recycle.
+ */
+export function assertDurableStoreRoot(root: string): void {
+	if (!root.startsWith("/")) {
+		throw new Error(
+			`${SESSION_STORE_ROOT_ENV} must be an absolute path: ${JSON.stringify(root)}`,
+		);
+	}
+	const resolved = resolve(root);
+	for (const ephemeral of EPHEMERAL_ROOTS) {
+		if (resolved === ephemeral || resolved.startsWith(`${ephemeral}/`)) {
+			throw new Error(
+				`${SESSION_STORE_ROOT_ENV} (${root}) is inside the ephemeral ${ephemeral}; transcripts there don't survive a sandbox recycle — use a durable path outside ${EPHEMERAL_ROOTS.join(" and ")}`,
+			);
+		}
+	}
 }
 
 /**
@@ -218,6 +249,9 @@ export async function spawnAgent(
 	// through the stdin config below. Absent root/identity => mirroring disabled.
 	const sessionStoreRoot =
 		config.userId && config.conversationId ? getSessionStoreRoot() : undefined;
+	// Reject a root that would silently lose transcripts (relative or ephemeral)
+	// before spawning, so the misconfig fails loudly instead of breaking resume.
+	if (sessionStoreRoot) assertDurableStoreRoot(sessionStoreRoot);
 	const proc = Bun.spawn(buildAgentSpawnArgv(), {
 		env: {
 			// The agent holds no provider key — it talks to the LLM gateway, which

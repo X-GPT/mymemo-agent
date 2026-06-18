@@ -12,7 +12,32 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "./child-spawn";
-import { buildAgentSpawnArgv, spawnAgent } from "./child-spawn";
+import {
+	assertDurableStoreRoot,
+	buildAgentSpawnArgv,
+	spawnAgent,
+} from "./child-spawn";
+
+describe("assertDurableStoreRoot", () => {
+	it("rejects a relative root (would resolve against the ephemeral agent cwd)", () => {
+		expect(() => assertDurableStoreRoot("session-store")).toThrow(
+			/absolute path/,
+		);
+	});
+
+	it("rejects an ephemeral root that won't survive a sandbox recycle", () => {
+		expect(() => assertDurableStoreRoot("/workspace")).toThrow(/ephemeral/);
+		expect(() => assertDurableStoreRoot("/workspace/sessions")).toThrow(
+			/ephemeral/,
+		);
+		expect(() => assertDurableStoreRoot("/tmp/sessions")).toThrow(/ephemeral/);
+	});
+
+	it("accepts a durable absolute root", () => {
+		expect(() => assertDurableStoreRoot("/session-store")).not.toThrow();
+		expect(() => assertDurableStoreRoot("/mnt/durable/sessions")).not.toThrow();
+	});
+});
 
 describe("buildAgentSpawnArgv", () => {
 	it("runs bun /workspace/agent.js directly, with no wrapper", () => {
