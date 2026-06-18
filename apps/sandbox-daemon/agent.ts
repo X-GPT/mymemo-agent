@@ -58,7 +58,7 @@ export function buildQueryOptions(options: AgentRunOptions): Options {
 		cwd,
 		systemPrompt,
 		// Scope the tool surface for the untrusted agent (see agent-tools.ts; the
-		// bwrap/E2B sandbox is the real security boundary, this list is behavior
+		// sandbox/container is the real security boundary, this list is behavior
 		// scoping): `tools` pins the available built-ins (Bash, Read, Grep, Glob,
 		// Write, Edit), `allowedTools` pre-approves them plus the MyMemo MCP document
 		// tool, and `canUseTool` denies anything else under `permissionMode:

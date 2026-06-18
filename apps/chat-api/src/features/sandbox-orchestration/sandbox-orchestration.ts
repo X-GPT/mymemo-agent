@@ -5,7 +5,7 @@ import { buildSandboxAgentPrompt } from "@/features/sandbox-agent";
 import { workspaceStore } from "@/features/workspace-store";
 import { SandboxCreationError } from "./errors";
 import { forwardChatTurnToSandbox, type TurnRequest } from "./sandbox-proxy";
-import { sandboxManager } from "./singleton";
+import { sandboxProvider } from "./singleton";
 
 type SandboxScopeType = "global" | "collection" | "document";
 
@@ -71,7 +71,7 @@ export async function runSandboxChat(
 			conversationId,
 		});
 
-		const sandbox = await sandboxManager.createSandbox(userId, logger);
+		const sandbox = await sandboxProvider.createSandbox(userId, logger);
 
 		// Sandboxes are ephemeral — one per turn — so they must be torn down when
 		// the turn finishes (success or failure), or they accumulate in E2B. The
@@ -81,7 +81,7 @@ export async function runSandboxChat(
 		try {
 			await onSandboxId(sandbox.sandboxId);
 
-			const daemon = await sandboxManager.ensureSandboxDaemon(
+			const daemon = await sandboxProvider.ensureSandboxDaemon(
 				userId,
 				sandbox,
 				logger,
@@ -171,7 +171,7 @@ export async function runSandboxChat(
 					error: syncErr instanceof Error ? syncErr.message : String(syncErr),
 				});
 			}
-			await sandboxManager.killSandbox(userId, sandbox, logger);
+			await sandboxProvider.killSandbox(userId, sandbox, logger);
 		}
 	};
 

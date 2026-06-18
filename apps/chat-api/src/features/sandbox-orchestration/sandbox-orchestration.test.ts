@@ -87,18 +87,18 @@ describe("runSandboxChat", () => {
 
 		const sandbox = createMockSandbox();
 		spyCreate = spyOn(
-			singletonModule.sandboxManager,
+			singletonModule.sandboxProvider,
 			"createSandbox",
 		).mockResolvedValue(sandbox as unknown as import("e2b").Sandbox);
 		spyEnsureDaemon = spyOn(
-			singletonModule.sandboxManager,
+			singletonModule.sandboxProvider,
 			"ensureSandboxDaemon",
 		).mockResolvedValue({
 			url: "http://daemon:8080",
 			authToken: "test-daemon-auth-token",
 		});
 		spyKill = spyOn(
-			singletonModule.sandboxManager,
+			singletonModule.sandboxProvider,
 			"killSandbox",
 		).mockResolvedValue(undefined);
 	});

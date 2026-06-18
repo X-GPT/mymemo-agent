@@ -151,7 +151,7 @@ The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-cap
 ### chat-api
 
 Required:
-- `E2B_API_KEY`
+- `E2B_API_KEY` — required only when `SANDBOX_PROVIDER=e2b` (the default); not needed for the local provider
 - `DAEMON_AUTH_TOKEN`
 - `LLM_TOKEN_SECRET` — HMAC secret for minting per-turn tokens (shared with the gateway)
 - `GATEWAY_PUBLIC_URL` — base URL of the merged gateway; the sandbox agent points BOTH the Claude binary (→ `/v1/messages`) and the `mymemo-docs` CLI (→ `/v1/documents/*`) at it. **Must be reachable from inside the E2B sandbox**
@@ -159,6 +159,8 @@ Required:
 Optional:
 - `LOG_LEVEL` (default: `info`)
 - `PORT` (default: 3000)
+- `SANDBOX_PROVIDER` (default: `e2b`) — `e2b` leases a fresh sandbox per turn; `local` targets a long-lived daemon container for the docker-compose E2E harness (`compose.yaml`). Selected in `sandbox-orchestration/singleton.ts`
+- `LOCAL_SANDBOX_DAEMON_URL` (default: `http://sandbox:8080`) — base URL of the local daemon container (`SANDBOX_PROVIDER=local` only)
 - `E2B_TEMPLATE` (default: `sandbox-template-dev`)
 - `WORKSPACE_STORE_ROOT` — root dir of the durable workspace store (local filesystem `WorkspaceStore` adapter). Holds per-user/per-conversation work, output, and the docs manifest, plus per-run event logs, following the path model `users/{userId}/conversations/{conversationId}/…` and `users/{userId}/runs/{runId}/events.jsonl`. Defaults to `.workspace-store` under the process cwd (writable in the container). **For durability across container recycles, point this at a mounted persistent volume in production**
 
