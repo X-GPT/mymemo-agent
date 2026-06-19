@@ -71,11 +71,26 @@ function deps(fetchImpl: typeof fetch): SearchDocumentsDeps {
 }
 
 describe("documentFilename", () => {
-	it("derives a .md filename and sanitizes path-unsafe characters", () => {
+	it("keeps a clean id as a readable .md filename", () => {
 		expect(documentFilename("abc-123")).toBe("abc-123.md");
-		expect(documentFilename("../../etc/passwd")).toBe("______etc_passwd.md");
-		expect(documentFilename("a/b\\c")).toBe("a_b_c.md");
-		expect(documentFilename("")).toBe("document.md");
+		expect(documentFilename("doc-ml-intro")).toBe("doc-ml-intro.md");
+	});
+
+	it("sanitizes path-unsafe characters and disambiguates with a hash suffix", () => {
+		// A rewritten id can't keep its raw name (it would traverse / collide), so
+		// it gets `<safe>.<8-hex>.md`.
+		expect(documentFilename("../../etc/passwd")).toMatch(
+			/^______etc_passwd\.[0-9a-f]{8}\.md$/,
+		);
+		expect(documentFilename("a/b\\c")).toMatch(/^a_b_c\.[0-9a-f]{8}\.md$/);
+		expect(documentFilename("")).toMatch(/^document\.[0-9a-f]{8}\.md$/);
+	});
+
+	it("never maps two distinct ids to the same filename", () => {
+		// `a/b` and `a.b` both sanitize to `a_b`; the hash of the original id keeps
+		// their files distinct. A clean `a_b` also stays distinct from both.
+		expect(documentFilename("a/b")).not.toBe(documentFilename("a.b"));
+		expect(documentFilename("a/b")).not.toBe(documentFilename("a_b"));
 	});
 });
 

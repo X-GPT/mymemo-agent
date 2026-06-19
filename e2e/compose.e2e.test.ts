@@ -46,7 +46,13 @@ import { resolve } from "node:path";
 const RUN = process.env.RUN_COMPOSE_E2E === "1";
 const CHAT_URL = process.env.COMPOSE_CHAT_URL ?? "http://localhost:3000";
 const AUTOSTART = process.env.COMPOSE_E2E_AUTOSTART === "1";
-const TURN_TIMEOUT_MS = Number(process.env.COMPOSE_E2E_TIMEOUT_MS) || 120_000;
+// `Number(undefined)` is NaN and `Number("0")` is 0 — both must fall back to the
+// default rather than become a 0/NaN timeout that aborts every turn instantly.
+const rawTurnTimeout = Number(process.env.COMPOSE_E2E_TIMEOUT_MS);
+const TURN_TIMEOUT_MS =
+	Number.isFinite(rawTurnTimeout) && rawTurnTimeout > 0
+		? rawTurnTimeout
+		: 120_000;
 
 // bun:test hooks take no per-call timeout argument, and bringing the stack up
 // (optionally with `--build`) can take minutes. Raise the file-wide default so
@@ -199,9 +205,16 @@ describe.skipIf(!RUN)(
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
 
-				expect(res.status).toBe(200);
+				// Read the body once, up front: on a non-200 (e.g. the gateway 502s or
+				// chat-api 500s) surface it in the failure message instead of a bare
+				// "expected 200, got 500" that hides the cause.
+				const bodyText = await res.text();
+				expect(
+					res.status,
+					`unexpected status; body: ${bodyText.slice(0, 500)}`,
+				).toBe(200);
 
-				const frames = parseSSE(await res.text());
+				const frames = parseSSE(bodyText);
 				const events = frames.map((f) => f.event).filter((e) => e !== "ping");
 
 				// 1. Protocol: the docker path streams the full target vocabulary and

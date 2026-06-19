@@ -26,6 +26,7 @@
  * returns an empty result.
  */
 
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readDocsManifest, upsertDocsManifestEntry } from "./docs-manifest";
@@ -126,10 +127,23 @@ async function postJson<T>(
  * Map a remote document id to a safe local filename. The id comes from the
  * gateway, but never trust a remote value as a path: collapse anything outside
  * `[A-Za-z0-9_-]` so it cannot traverse out of `docs/`.
+ *
+ * Collapsing is lossy, so two distinct ids could map to the same name (e.g.
+ * `a/b` and `a_b` both → `a_b`), which would clobber one document's file while
+ * the manifest still holds both entries — the stale entry would then point at
+ * the other document's content. A clean id (unchanged by sanitization) can't
+ * collide, so it keeps its readable name; any id that had to be rewritten gets a
+ * short hash of the *original* id appended, so distinct ids always get distinct
+ * files.
  */
 export function documentFilename(documentId: string): string {
 	const safe = documentId.replace(/[^A-Za-z0-9_-]/g, "_");
-	return `${safe || "document"}.md`;
+	if (safe.length > 0 && safe === documentId) return `${safe}.md`;
+	const hash = createHash("sha256")
+		.update(documentId)
+		.digest("hex")
+		.slice(0, 8);
+	return `${safe || "document"}.${hash}.md`;
 }
 
 /**
