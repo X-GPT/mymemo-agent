@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readDocsManifest, upsertDocsManifestEntry } from "./docs-manifest";
@@ -144,6 +150,7 @@ describe("searchAndHydrate", () => {
 				source: GATEWAY_SOURCE,
 				title: "Doc One",
 				snippet: "snippet one",
+				passageId: "p1",
 				localPath: join(docsDir, "d1.md"),
 			},
 			{
@@ -151,6 +158,7 @@ describe("searchAndHydrate", () => {
 				source: GATEWAY_SOURCE,
 				title: "Doc Two",
 				snippet: "snippet two",
+				passageId: "p2",
 				localPath: join(docsDir, "d2.md"),
 			},
 		]);
@@ -185,7 +193,7 @@ describe("searchAndHydrate", () => {
 	});
 
 	it("reports already-hydrated documents as already_local without re-fetching", async () => {
-		// Pre-seed the manifest + a file as if a prior run hydrated d1.
+		// Pre-seed the manifest AND the file on disk, as a prior run would have.
 		upsertDocsManifestEntry(docsDir, {
 			documentId: "d1",
 			title: "Old Title",
@@ -194,6 +202,7 @@ describe("searchAndHydrate", () => {
 			hydratedAt: "2026-06-01T00:00:00.000Z",
 			runId: "run-0",
 		});
+		writeFileSync(join(docsDir, "d1.md"), "cached body", "utf8");
 
 		const { fetchImpl, calls } = fakeGateway({
 			search: {
@@ -219,11 +228,50 @@ describe("searchAndHydrate", () => {
 				// Title prefers the fresh search hit; localPath points at the cached file.
 				title: "Fresh Title",
 				snippet: "fresh snippet",
+				passageId: "p1",
 				localPath: join(docsDir, "d1.md"),
 			},
 		]);
 		// Never fetched — the document was already local.
 		expect(calls.some((c) => c.url.endsWith("/fetch"))).toBe(false);
+	});
+
+	it("re-fetches when a manifest entry's file is missing on disk", async () => {
+		// Manifest says d1 is hydrated, but the file is gone (deleted, or a
+		// manifest restored ahead of its blobs). The stale entry must not be
+		// trusted — re-fetch instead of handing back a path Read would fail on.
+		upsertDocsManifestEntry(docsDir, {
+			documentId: "d1",
+			title: "Stale Title",
+			localPath: "d1.md",
+			source: GATEWAY_SOURCE,
+			hydratedAt: "2026-06-01T00:00:00.000Z",
+			runId: "run-0",
+		});
+		// Note: no d1.md file written.
+
+		const { fetchImpl, calls } = fakeGateway({
+			search: {
+				body: {
+					documents: [
+						{ passageId: "p1", documentId: "d1", title: "T1", snippet: "s1" },
+					],
+				},
+			},
+			fetchByDoc: {
+				d1: { body: { documentId: "d1", title: "T1", content: "FRESH" } },
+			},
+		});
+
+		const results = await searchAndHydrate("query", deps(fetchImpl));
+
+		// Re-hydrated from the gateway, not reported already_local.
+		expect(results[0]).toMatchObject({
+			documentId: "d1",
+			source: GATEWAY_SOURCE,
+		});
+		expect(calls.some((c) => c.url.endsWith("/fetch"))).toBe(true);
+		expect(readFileSync(join(docsDir, "d1.md"), "utf8")).toBe("FRESH");
 	});
 
 	it("throws GatewayDocumentError on a non-OK search response", async () => {

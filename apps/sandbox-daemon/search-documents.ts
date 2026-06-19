@@ -27,7 +27,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readDocsManifest, upsertDocsManifestEntry } from "./docs-manifest";
 
@@ -52,6 +52,13 @@ export interface SearchDocumentResult {
 	source: DocumentResultSource;
 	title: string;
 	snippet: string;
+	/**
+	 * The passage the snippet came from. Carried through so the agent can satisfy
+	 * the `passageId`-based citation contract (see the agent system prompt);
+	 * `""` if the gateway hit omitted it. Search returns multiple passages per
+	 * document — this is the top-ranked passage for the hydrated document.
+	 */
+	passageId: string;
 	/** Absolute path to the hydrated file (the agent can `Read` this). */
 	localPath: string;
 }
@@ -199,14 +206,21 @@ export async function searchAndHydrate(
 		// `documentId` is guaranteed by selectDocuments.
 		const documentId = hit.documentId as string;
 		const snippet = hit.snippet ?? "";
+		const passageId = hit.passageId ?? "";
 
+		// Treat a document as already-local only when both the manifest entry AND
+		// the file are present. A manifest entry whose file is gone (the agent
+		// deleted it, or a future workspace hydrate restored the manifest before
+		// the blobs) must fall through to a re-fetch — otherwise we'd hand back a
+		// path the agent's `Read` would fail on for a document that is in scope.
 		const existing = localById.get(documentId);
-		if (existing) {
+		if (existing && existsSync(join(deps.docsDir, existing.localPath))) {
 			results.push({
 				documentId,
 				source: "already_local",
 				title: hit.title || existing.title,
 				snippet,
+				passageId,
 				localPath: join(deps.docsDir, existing.localPath),
 			});
 			continue;
@@ -237,6 +251,7 @@ export async function searchAndHydrate(
 			source: GATEWAY_SOURCE,
 			title,
 			snippet,
+			passageId,
 			localPath: absolutePath,
 		});
 	}
