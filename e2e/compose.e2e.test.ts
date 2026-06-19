@@ -185,12 +185,16 @@ describe.skipIf(!RUN)(
 						"x-member-code": MEMBER_CODE,
 						"x-partner-code": PARTNER_CODE,
 					},
-					// Phrased to require the document tool: the answer is only in the
-					// seeded KB, so a correct turn must call search_documents.
+					// Force the document tool explicitly. The remote-search-by-default
+					// agent prompt is MYM-13 (not yet wired), so a soft "find my doc
+					// about X" lets the model answer from its own knowledge without ever
+					// calling search_documents. Instructing it to call the tool and not
+					// answer from memory makes the hydration deterministic here.
 					body: JSON.stringify({
 						chatContent:
-							"Search my MyMemo documents for the introduction to machine " +
-							"learning and summarize it in one sentence.",
+							"Use the search_documents tool to find my MyMemo document about " +
+							"machine learning, then tell me its title. You must call " +
+							"search_documents; do not answer from your own knowledge.",
 					}),
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
