@@ -19,7 +19,7 @@
  * search_documents. It is therefore OPT-IN and never runs in the normal unit
  * suite. Enable with:
  *
- *   RUN_COMPOSE_E2E=1 bun test apps/chat-api/e2e/compose.e2e.test.ts
+ *   RUN_COMPOSE_E2E=1 bun test e2e/compose.e2e.test.ts
  *
  * Prerequisites (see README.md "Local end-to-end harness"):
  *   - The stack is up: `docker compose up --build` from the repo root, with the
@@ -54,8 +54,8 @@ const TURN_TIMEOUT_MS = Number(process.env.COMPOSE_E2E_TIMEOUT_MS) || 120_000;
 // when the suite will actually run.
 if (RUN) setDefaultTimeout(660_000);
 
-// apps/chat-api/e2e -> repo root (where compose.yaml lives).
-const REPO_ROOT = resolve(import.meta.dir, "../../..");
+// e2e/ -> repo root (where compose.yaml lives).
+const REPO_ROOT = resolve(import.meta.dir, "..");
 
 // The seeded member + documents (apps/gateway/db/init.sql). The X-Member-Code
 // header maps to the KB workspace, so document search resolves against these.
