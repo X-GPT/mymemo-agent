@@ -181,6 +181,8 @@ describe("searchAndHydrate", () => {
 				source: GATEWAY_SOURCE,
 				hydratedAt: FIXED_NOW.toISOString(),
 				runId: "run-1",
+				// "BODY1" is 5 bytes.
+				byteSize: 5,
 			},
 			{
 				documentId: "d2",
@@ -189,6 +191,7 @@ describe("searchAndHydrate", () => {
 				source: GATEWAY_SOURCE,
 				hydratedAt: FIXED_NOW.toISOString(),
 				runId: "run-1",
+				byteSize: 5,
 			},
 		]);
 
@@ -475,6 +478,61 @@ describe("searchAndHydrate hydration limits", () => {
 			source: "skipped_run_budget",
 		});
 		expect(existsSync(join(docsDir, documentFilename("b")))).toBe(false);
+	});
+
+	it("keeps charging the run budget after the agent deletes a hydrated file", async () => {
+		// P1: budget is charged against the byte count recorded in the manifest,
+		// not the live on-disk size — so deleting/truncating a file can't free it.
+		const limits = {
+			maxDocumentsPerSearch: 5,
+			maxBytesPerDocument: 1000,
+			maxBytesPerRun: 100,
+		};
+
+		// Call 1 hydrates an 80-byte doc, then the (untrusted) agent deletes it.
+		const first = gatewayWithSizedDocs({ a: 80 });
+		await searchAndHydrate("q1", deps(first.fetchImpl, { limits }));
+		rmSync(join(docsDir, documentFilename("a")));
+
+		// Call 2 in the same run: the 80 bytes are still charged (manifest entry
+		// remains), so a 40-byte doc overflows the 100-byte budget.
+		const second = gatewayWithSizedDocs({ b: 40 });
+		const results = await searchAndHydrate(
+			"q2",
+			deps(second.fetchImpl, { limits }),
+		);
+		expect(results[0]).toMatchObject({
+			documentId: "b",
+			source: "skipped_run_budget",
+		});
+		expect(existsSync(join(docsDir, documentFilename("b")))).toBe(false);
+	});
+
+	it("does not fetch once the run budget is fully exhausted", async () => {
+		// P2: when no budget remains, candidates are skipped BEFORE the gateway
+		// fetch, so a prompt-injection loop can't keep burning fetch cost.
+		const limits = {
+			maxDocumentsPerSearch: 5,
+			maxBytesPerDocument: 1000,
+			maxBytesPerRun: 100,
+		};
+
+		// Call 1 hydrates exactly the full budget.
+		const first = gatewayWithSizedDocs({ a: 100 });
+		await searchAndHydrate("q1", deps(first.fetchImpl, { limits }));
+
+		// Call 2: budget exhausted, so the candidate is skipped without fetching.
+		const second = gatewayWithSizedDocs({ b: 40 });
+		const results = await searchAndHydrate(
+			"q2",
+			deps(second.fetchImpl, { limits }),
+		);
+		expect(results[0]).toMatchObject({
+			documentId: "b",
+			source: "skipped_run_budget",
+		});
+		// Searched, but never fetched — the short-circuit fired before /fetch.
+		expect(second.calls.some((c) => c.url.endsWith("/fetch"))).toBe(false);
 	});
 
 	it("charges a different run's budget independently", async () => {

@@ -48,6 +48,24 @@ export const HYDRATION_LIMIT_ENV = {
 } as const satisfies Record<keyof HydrationLimits, string>;
 
 /**
+ * The hydration-limit env vars that are actually set, as a plain object suitable
+ * for forwarding into the agent child's env. `Bun.spawn` replaces (does not
+ * inherit) the child env, so without this the child's `loadHydrationLimits()`
+ * would never see operator overrides and would silently use the defaults. Unset
+ * vars are omitted so they stay genuinely unset in the child.
+ */
+export function hydrationLimitEnv(
+	env: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+	const forwarded: Record<string, string> = {};
+	for (const name of Object.values(HYDRATION_LIMIT_ENV)) {
+		const value = env[name];
+		if (value !== undefined && value !== "") forwarded[name] = value;
+	}
+	return forwarded;
+}
+
+/**
  * Parse one limit env var: unset → the default; present → a positive integer.
  * Anything else (non-numeric, zero, negative, fractional) is a misconfiguration
  * that throws rather than silently falling back, so a typo can't quietly disable

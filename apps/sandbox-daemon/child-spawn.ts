@@ -18,6 +18,7 @@
  */
 
 import { resolve } from "node:path";
+import { hydrationLimitEnv } from "./hydration-policy";
 import type { AgentEvent } from "./ipc-protocol";
 
 export type { AgentEvent } from "./ipc-protocol";
@@ -285,6 +286,11 @@ export async function spawnAgent(
 			...(sessionStoreRoot
 				? { [SESSION_STORE_ROOT_ENV]: sessionStoreRoot }
 				: {}),
+			// Hydration-limit overrides for the `search_documents` tool. The child
+			// env is a fresh whitelist (not inherited), so these must be forwarded
+			// explicitly or the tool silently uses defaults. Not secrets — plain
+			// policy ints; only the ones the operator actually set are passed.
+			...hydrationLimitEnv(),
 		},
 		stdout: "pipe",
 		stderr: "pipe",

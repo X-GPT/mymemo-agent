@@ -27,7 +27,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	type DocsManifest,
@@ -215,25 +215,18 @@ function selectDocuments(
 }
 
 /**
- * Bytes already hydrated under `runId`, summed from the on-disk size of the
- * manifest entries this run wrote. This seeds the per-run budget so the cap
- * holds across multiple `search_documents` calls in the same run, not just
- * within one call. Entries whose file is missing contribute 0.
+ * Bytes already hydrated under `runId`, summed from the byte count RECORDED in
+ * the manifest at hydration time (not the live on-disk size). This seeds the
+ * per-run budget so the cap holds across multiple `search_documents` calls in
+ * the same run. Using the recorded count means a prompt-injectable agent can't
+ * free budget by deleting or truncating a file it already hydrated — the charge
+ * stands as long as the manifest entry does. Legacy entries without a recorded
+ * `byteSize` contribute 0.
  */
-function runHydratedBytes(
-	docsDir: string,
-	manifest: DocsManifest,
-	runId: string,
-): number {
+function runHydratedBytes(manifest: DocsManifest, runId: string): number {
 	let total = 0;
 	for (const entry of manifest.documents) {
-		if (entry.runId !== runId) continue;
-		try {
-			total += statSync(join(docsDir, entry.localPath)).size;
-		} catch {
-			// File gone (deleted, or manifest restored ahead of its blobs) — it no
-			// longer occupies the run's byte budget.
-		}
+		if (entry.runId === runId) total += entry.byteSize ?? 0;
 	}
 	return total;
 }
@@ -271,7 +264,7 @@ export async function searchAndHydrate(
 
 	// Seed the per-run byte budget from what this run already hydrated, so the
 	// cap holds across multiple search_documents calls in the run.
-	let runBytes = runHydratedBytes(deps.docsDir, manifest, deps.runId);
+	let runBytes = runHydratedBytes(manifest, deps.runId);
 
 	const results: SearchDocumentResult[] = [];
 	for (const hit of selected) {
@@ -299,6 +292,24 @@ export async function searchAndHydrate(
 				});
 				continue;
 			}
+		}
+
+		// Run budget already exhausted: don't even fetch. Every remaining
+		// non-local candidate would be discarded post-fetch anyway, so fetching
+		// them just burns gateway cost — the cap is meant to bound exactly that.
+		// (A doc small enough to still fit is handled by the post-fetch check
+		// below; this short-circuits only once nothing more can fit at all.)
+		if (runBytes >= limits.maxBytesPerRun) {
+			results.push({
+				documentId,
+				source: "skipped_run_budget",
+				title: hit.title || "",
+				snippet,
+				passageId,
+				localPath: "",
+				error: `per-run hydration budget of ${limits.maxBytesPerRun} bytes is exhausted (already ${runBytes})`,
+			});
+			continue;
 		}
 
 		const doc = await postJson<GatewayFetchedDocument>(
@@ -352,6 +363,7 @@ export async function searchAndHydrate(
 			source: GATEWAY_SOURCE,
 			hydratedAt: now().toISOString(),
 			runId: deps.runId,
+			byteSize: byteLength,
 		});
 
 		results.push({
