@@ -27,25 +27,46 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readDocsManifest, upsertDocsManifestEntry } from "./docs-manifest";
+import {
+	type DocsManifest,
+	readDocsManifest,
+	upsertDocsManifestEntry,
+} from "./docs-manifest";
+import {
+	DEFAULT_HYDRATION_LIMITS,
+	type HydrationLimits,
+} from "./hydration-policy";
 
 /**
- * Max distinct documents hydrated per search call. A conservative interim cap so
- * one call can't fill the workspace; MYM-12 (Task 8) will centralize hydration
- * limits (per-document and per-run byte ceilings) in a dedicated policy module.
+ * Max distinct documents hydrated per search call. Kept as a named export for
+ * existing callers/tests; the configurable source of truth is now
+ * {@link HydrationLimits.maxDocumentsPerSearch} (see hydration-policy.ts).
  */
-export const MAX_HYDRATED_DOCUMENTS = 5;
+export const MAX_HYDRATED_DOCUMENTS =
+	DEFAULT_HYDRATION_LIMITS.maxDocumentsPerSearch;
 
 /** Manifest `source` recorded for documents hydrated from the gateway. */
 export const GATEWAY_SOURCE = "gateway";
 
 /**
- * Result `source`: `"gateway"` for a document hydrated by this call,
- * `"already_local"` for one already present in the conversation workspace.
+ * Result `source`:
+ * - `"gateway"` — hydrated by this call.
+ * - `"already_local"` — already present in the conversation workspace.
+ * - `"skipped_too_large"` — fetched but over the per-document byte limit; NOT
+ *   written to disk.
+ * - `"skipped_run_budget"` — fetched but would push this run over its byte
+ *   budget; NOT written to disk.
+ *
+ * For the two `skipped_*` sources `localPath` is `""` and `error` explains the
+ * limit that was hit.
  */
-export type DocumentResultSource = typeof GATEWAY_SOURCE | "already_local";
+export type DocumentResultSource =
+	| typeof GATEWAY_SOURCE
+	| "already_local"
+	| "skipped_too_large"
+	| "skipped_run_budget";
 
 export interface SearchDocumentResult {
 	documentId: string;
@@ -59,8 +80,13 @@ export interface SearchDocumentResult {
 	 * document — this is the top-ranked passage for the hydrated document.
 	 */
 	passageId: string;
-	/** Absolute path to the hydrated file (the agent can `Read` this). */
+	/**
+	 * Absolute path to the hydrated file (the agent can `Read` this), or `""` for
+	 * a `skipped_*` document that was not written to disk.
+	 */
 	localPath: string;
+	/** Why a `skipped_*` document was not hydrated; absent on hydrated rows. */
+	error?: string;
 }
 
 /** One passage hit from the gateway search endpoint. */
@@ -87,6 +113,11 @@ export interface SearchDocumentsDeps {
 	docsDir: string;
 	/** The run that caused this hydration (recorded in the manifest). */
 	runId: string;
+	/**
+	 * Hydration caps (document count + byte ceilings). Defaults to
+	 * {@link DEFAULT_HYDRATION_LIMITS}; the daemon passes env-derived limits.
+	 */
+	limits?: HydrationLimits;
 	/** Injectable for tests; defaults to the global `fetch`. */
 	fetchImpl?: typeof fetch;
 	/** Injectable clock for deterministic `hydratedAt`; defaults to `() => new Date()`. */
@@ -164,10 +195,13 @@ export function documentFilename(documentId: string): string {
 
 /**
  * Dedupe passage hits down to distinct documents (keeping the first hit's title
- * and snippet for each), preserving search-rank order, capped at
- * {@link MAX_HYDRATED_DOCUMENTS}. Hits without a `documentId` are dropped.
+ * and snippet for each), preserving search-rank order, capped at `maxDocuments`.
+ * Hits without a `documentId` are dropped.
  */
-function selectDocuments(hits: GatewaySearchHit[]): GatewaySearchHit[] {
+function selectDocuments(
+	hits: GatewaySearchHit[],
+	maxDocuments: number,
+): GatewaySearchHit[] {
 	const seen = new Set<string>();
 	const selected: GatewaySearchHit[] = [];
 	for (const hit of hits) {
@@ -175,9 +209,33 @@ function selectDocuments(hits: GatewaySearchHit[]): GatewaySearchHit[] {
 		if (!documentId || seen.has(documentId)) continue;
 		seen.add(documentId);
 		selected.push(hit);
-		if (selected.length >= MAX_HYDRATED_DOCUMENTS) break;
+		if (selected.length >= maxDocuments) break;
 	}
 	return selected;
+}
+
+/**
+ * Bytes already hydrated under `runId`, summed from the on-disk size of the
+ * manifest entries this run wrote. This seeds the per-run budget so the cap
+ * holds across multiple `search_documents` calls in the same run, not just
+ * within one call. Entries whose file is missing contribute 0.
+ */
+function runHydratedBytes(
+	docsDir: string,
+	manifest: DocsManifest,
+	runId: string,
+): number {
+	let total = 0;
+	for (const entry of manifest.documents) {
+		if (entry.runId !== runId) continue;
+		try {
+			total += statSync(join(docsDir, entry.localPath)).size;
+		} catch {
+			// File gone (deleted, or manifest restored ahead of its blobs) — it no
+			// longer occupies the run's byte budget.
+		}
+	}
+	return total;
 }
 
 /**
@@ -191,6 +249,7 @@ export async function searchAndHydrate(
 ): Promise<SearchDocumentResult[]> {
 	const doFetch = deps.fetchImpl ?? fetch;
 	const now = deps.now ?? (() => new Date());
+	const limits = deps.limits ?? DEFAULT_HYDRATION_LIMITS;
 
 	const searchResponse = await postJson<{ documents?: unknown }>(
 		doFetch,
@@ -202,13 +261,17 @@ export async function searchAndHydrate(
 		? (searchResponse.documents as GatewaySearchHit[])
 		: [];
 
-	const selected = selectDocuments(hits);
+	const selected = selectDocuments(hits, limits.maxDocumentsPerSearch);
 	if (selected.length === 0) return [];
 
 	// Read the manifest once up front so repeated searches recognise documents
 	// already hydrated in this conversation workspace.
 	const manifest = readDocsManifest(deps.docsDir);
 	const localById = new Map(manifest.documents.map((d) => [d.documentId, d]));
+
+	// Seed the per-run byte budget from what this run already hydrated, so the
+	// cap holds across multiple search_documents calls in the run.
+	let runBytes = runHydratedBytes(deps.docsDir, manifest, deps.runId);
 
 	const results: SearchDocumentResult[] = [];
 	for (const hit of selected) {
@@ -245,10 +308,43 @@ export async function searchAndHydrate(
 			{ documentId },
 		);
 
+		const content = doc.content ?? "";
+		const byteLength = Buffer.byteLength(content, "utf8");
+		const title = doc.title || hit.title || "";
+
+		// Enforce the byte caps BEFORE touching disk: an oversized or
+		// budget-busting document is reported, never written. Per-document is
+		// checked first so a single huge file is attributed to its own limit
+		// rather than the run budget it would also blow.
+		if (byteLength > limits.maxBytesPerDocument) {
+			results.push({
+				documentId,
+				source: "skipped_too_large",
+				title,
+				snippet,
+				passageId,
+				localPath: "",
+				error: `document is ${byteLength} bytes, over the per-document limit of ${limits.maxBytesPerDocument}`,
+			});
+			continue;
+		}
+		if (runBytes + byteLength > limits.maxBytesPerRun) {
+			results.push({
+				documentId,
+				source: "skipped_run_budget",
+				title,
+				snippet,
+				passageId,
+				localPath: "",
+				error: `hydrating ${byteLength} bytes would exceed the per-run budget of ${limits.maxBytesPerRun} bytes (already ${runBytes})`,
+			});
+			continue;
+		}
+
 		const filename = documentFilename(documentId);
 		const absolutePath = join(deps.docsDir, filename);
-		const title = doc.title || hit.title || "";
-		writeFileSync(absolutePath, doc.content ?? "", "utf8");
+		writeFileSync(absolutePath, content, "utf8");
+		runBytes += byteLength;
 		upsertDocsManifestEntry(deps.docsDir, {
 			documentId,
 			title,

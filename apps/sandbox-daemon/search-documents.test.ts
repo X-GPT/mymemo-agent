@@ -65,7 +65,10 @@ function fakeGateway(opts: {
 	return { fetchImpl, calls };
 }
 
-function deps(fetchImpl: typeof fetch): SearchDocumentsDeps {
+function deps(
+	fetchImpl: typeof fetch,
+	overrides?: Partial<SearchDocumentsDeps>,
+): SearchDocumentsDeps {
 	return {
 		gatewayUrl: "https://gateway.example",
 		token: "doc-token",
@@ -73,6 +76,7 @@ function deps(fetchImpl: typeof fetch): SearchDocumentsDeps {
 		runId: "run-1",
 		fetchImpl,
 		now: () => FIXED_NOW,
+		...overrides,
 	};
 }
 
@@ -343,5 +347,161 @@ describe("searchAndHydrate", () => {
 		expect(calls.filter((c) => c.url.endsWith("/fetch")).length).toBe(
 			MAX_HYDRATED_DOCUMENTS,
 		);
+	});
+});
+
+describe("searchAndHydrate hydration limits", () => {
+	/** Build a search body + fetch map for docs of the given byte sizes. */
+	function gatewayWithSizedDocs(sizes: Record<string, number>) {
+		const documents = Object.keys(sizes).map((id) => ({
+			passageId: `p-${id}`,
+			documentId: id,
+			title: id,
+			snippet: `snippet ${id}`,
+		}));
+		const fetchByDoc: Record<string, { body: unknown }> = {};
+		for (const [id, size] of Object.entries(sizes)) {
+			fetchByDoc[id] = {
+				body: { documentId: id, title: id, content: "x".repeat(size) },
+			};
+		}
+		return fakeGateway({ search: { body: { documents } }, fetchByDoc });
+	}
+
+	it("enforces maxDocumentsPerSearch from the injected limits", async () => {
+		const { fetchImpl, calls } = gatewayWithSizedDocs({ a: 1, b: 1, c: 1 });
+		const results = await searchAndHydrate(
+			"q",
+			deps(fetchImpl, {
+				limits: {
+					maxDocumentsPerSearch: 2,
+					maxBytesPerDocument: 1000,
+					maxBytesPerRun: 1000,
+				},
+			}),
+		);
+
+		expect(results.map((r) => r.documentId)).toEqual(["a", "b"]);
+		// Only the two selected documents were fetched.
+		expect(calls.filter((c) => c.url.endsWith("/fetch")).length).toBe(2);
+	});
+
+	it("skips an oversized document without writing it to disk", async () => {
+		const { fetchImpl } = gatewayWithSizedDocs({ big: 50, small: 10 });
+		const results = await searchAndHydrate(
+			"q",
+			deps(fetchImpl, {
+				limits: {
+					maxDocumentsPerSearch: 5,
+					maxBytesPerDocument: 20,
+					maxBytesPerRun: 1000,
+				},
+			}),
+		);
+
+		const big = results.find((r) => r.documentId === "big");
+		expect(big).toMatchObject({
+			documentId: "big",
+			source: "skipped_too_large",
+			localPath: "",
+		});
+		expect(big?.error).toContain("per-document limit of 20");
+
+		// Oversized doc not blindly written; the under-limit one still hydrates.
+		expect(existsSync(join(docsDir, documentFilename("big")))).toBe(false);
+		const small = results.find((r) => r.documentId === "small");
+		expect(small?.source).toBe(GATEWAY_SOURCE);
+		expect(readFileSync(small?.localPath ?? "", "utf8")).toBe("x".repeat(10));
+
+		// Only the hydrated doc is in the manifest.
+		expect(
+			readDocsManifest(docsDir).documents.map((d) => d.documentId),
+		).toEqual(["small"]);
+	});
+
+	it("enforces the per-run byte budget, still fitting a later smaller doc", async () => {
+		// a fills most of the budget; b would overflow it; c still fits.
+		const { fetchImpl } = gatewayWithSizedDocs({ a: 60, b: 60, c: 30 });
+		const results = await searchAndHydrate(
+			"q",
+			deps(fetchImpl, {
+				limits: {
+					maxDocumentsPerSearch: 5,
+					maxBytesPerDocument: 1000,
+					maxBytesPerRun: 100,
+				},
+			}),
+		);
+
+		expect(results.map((r) => [r.documentId, r.source])).toEqual([
+			["a", GATEWAY_SOURCE],
+			["b", "skipped_run_budget"],
+			["c", GATEWAY_SOURCE],
+		]);
+		const b = results.find((r) => r.documentId === "b");
+		expect(b?.localPath).toBe("");
+		expect(b?.error).toContain("per-run budget of 100");
+
+		// Only a and c reached disk and the manifest.
+		expect(existsSync(join(docsDir, documentFilename("b")))).toBe(false);
+		expect(
+			readDocsManifest(docsDir)
+				.documents.map((d) => d.documentId)
+				.sort(),
+		).toEqual(["a", "c"]);
+	});
+
+	it("carries the per-run budget across calls in the same run", async () => {
+		const limits = {
+			maxDocumentsPerSearch: 5,
+			maxBytesPerDocument: 1000,
+			maxBytesPerRun: 100,
+		};
+
+		// First call hydrates a 80-byte doc under run-1.
+		const first = gatewayWithSizedDocs({ a: 80 });
+		await searchAndHydrate("q1", deps(first.fetchImpl, { limits }));
+		expect(existsSync(join(docsDir, documentFilename("a")))).toBe(true);
+
+		// Second call in the SAME run: only 20 bytes of budget remain, so a
+		// 40-byte doc is rejected even though it is under the per-document limit.
+		const second = gatewayWithSizedDocs({ b: 40 });
+		const results = await searchAndHydrate(
+			"q2",
+			deps(second.fetchImpl, { limits }),
+		);
+		expect(results[0]).toMatchObject({
+			documentId: "b",
+			source: "skipped_run_budget",
+		});
+		expect(existsSync(join(docsDir, documentFilename("b")))).toBe(false);
+	});
+
+	it("charges a different run's budget independently", async () => {
+		const limits = {
+			maxDocumentsPerSearch: 5,
+			maxBytesPerDocument: 1000,
+			maxBytesPerRun: 100,
+		};
+
+		// run-1 hydrates 80 bytes.
+		const first = gatewayWithSizedDocs({ a: 80 });
+		await searchAndHydrate(
+			"q1",
+			deps(first.fetchImpl, { runId: "run-1", limits }),
+		);
+
+		// run-2 starts with a fresh budget, so a 40-byte doc hydrates fine even
+		// though run-1 already wrote 80 bytes into the shared docs dir.
+		const second = gatewayWithSizedDocs({ b: 40 });
+		const results = await searchAndHydrate(
+			"q2",
+			deps(second.fetchImpl, { runId: "run-2", limits }),
+		);
+		expect(results[0]).toMatchObject({
+			documentId: "b",
+			source: GATEWAY_SOURCE,
+		});
+		expect(existsSync(join(docsDir, documentFilename("b")))).toBe(true);
 	});
 });

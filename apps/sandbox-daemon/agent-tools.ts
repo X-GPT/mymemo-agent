@@ -36,6 +36,7 @@ import {
 	tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { loadHydrationLimits } from "./hydration-policy";
 import { searchAndHydrate } from "./search-documents";
 
 /** MCP server name; the agent sees its tools as `mcp__<server>__<tool>`. */
@@ -156,6 +157,7 @@ export function buildMymemoTools(context?: MymemoToolContext) {
 						token,
 						docsDir: context.docsDir,
 						runId: context.runId,
+						limits: loadHydrationLimits(),
 					});
 					if (documents.length === 0) {
 						return {
