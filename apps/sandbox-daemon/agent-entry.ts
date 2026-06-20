@@ -32,6 +32,8 @@ interface AgentConfig {
 	sessionId?: string;
 	userId?: string;
 	conversationId?: string;
+	runId?: string;
+	docsDir?: string;
 }
 
 function emit(event: AgentEvent): void {
@@ -68,6 +70,8 @@ function parseConfig(raw: string): AgentConfig {
 			typeof parsed.conversationId === "string"
 				? parsed.conversationId
 				: undefined,
+		runId: typeof parsed.runId === "string" ? parsed.runId : undefined,
+		docsDir: typeof parsed.docsDir === "string" ? parsed.docsDir : undefined,
 	};
 }
 

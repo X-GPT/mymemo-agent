@@ -33,9 +33,10 @@ import {
 	type CanUseTool,
 	createSdkMcpServer,
 	type McpSdkServerConfigWithInstance,
-	type SdkMcpToolDefinition,
 	tool,
 } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
+import { searchAndHydrate } from "./search-documents";
 
 /** MCP server name; the agent sees its tools as `mcp__<server>__<tool>`. */
 export const MYMEMO_MCP_SERVER_NAME = "mymemo";
@@ -92,41 +93,106 @@ export function createCanUseTool(
 }
 
 /**
+ * Per-turn context the document tool needs to hydrate into the right place:
+ * which conversation `docs/` dir to write to, and which run to attribute the
+ * hydration to in the manifest. Threaded in from the daemon (see agent.ts) so
+ * this module reads no environment for paths/identity. The gateway URL + bearer
+ * token are read from the per-turn env inside the handler instead.
+ */
+export interface MymemoToolContext {
+	/** Absolute path to the conversation's `docs/` dir. */
+	docsDir: string;
+	/** The run that owns this turn (recorded in the docs manifest). */
+	runId: string;
+}
+
+function toolError(message: string): {
+	content: { type: "text"; text: string }[];
+	isError: true;
+} {
+	return { content: [{ type: "text", text: message }], isError: true };
+}
+
+/**
  * The MyMemo MCP tool definitions registered with the in-process server.
  *
- * Today this is the single document operation. Its handler is a placeholder:
- * the real search → fetch → hydrate → manifest flow is implemented in MYM-11
- * (Task 7). Until then it returns a recoverable tool error (`isError: true`) so
- * a premature call fails in a way the agent can explain, rather than silently
- * returning nothing.
+ * The single `search_documents` operation runs the search → fetch → hydrate →
+ * manifest flow (see search-documents.ts). The gateway URL + (aud: "documents")
+ * token come from the per-turn env the daemon set on the agent process; the
+ * conversation `docs/` dir and run id arrive via {@link MymemoToolContext}.
+ *
+ * Expected failures — gateway errors, or a missing env/context (a premature call
+ * before the turn is wired) — return a recoverable tool error (`isError: true`)
+ * so the agent can retry or explain, rather than throwing and crashing the query
+ * loop. No matches is a normal (non-error) empty result.
  */
-export function buildMymemoTools(): SdkMcpToolDefinition[] {
+export function buildMymemoTools(context?: MymemoToolContext) {
 	return [
 		tool(
 			SEARCH_DOCUMENTS_TOOL_NAME,
-			"Search the user's MyMemo documents and hydrate matches into the local conversation workspace. Returns snippets plus local file paths.",
-			{},
-			async () => ({
-				content: [
-					{
-						type: "text",
-						text: "search_documents is not implemented yet (pending MYM-11).",
-					},
-				],
-				isError: true,
-			}),
+			"Search the user's MyMemo documents and hydrate matches into the local conversation workspace. Returns one row per document with its documentId, source, title, snippet, and the local file path you can Read.",
+			{
+				query: z
+					.string()
+					.min(1)
+					.describe("What to search the user's MyMemo documents for."),
+			},
+			async ({ query }) => {
+				const gatewayUrl = process.env.MYMEMO_DOC_GATEWAY_URL;
+				const token = process.env.MYMEMO_DOC_TOKEN;
+				if (!gatewayUrl || !token) {
+					return toolError(
+						"Document gateway is not configured for this turn (missing MYMEMO_DOC_GATEWAY_URL / MYMEMO_DOC_TOKEN).",
+					);
+				}
+				if (!context) {
+					return toolError(
+						"Document workspace is not configured for this turn.",
+					);
+				}
+				try {
+					const documents = await searchAndHydrate(query, {
+						gatewayUrl,
+						token,
+						docsDir: context.docsDir,
+						runId: context.runId,
+					});
+					if (documents.length === 0) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: "No MyMemo documents matched the query.",
+								},
+							],
+						};
+					}
+					return {
+						content: [
+							{ type: "text", text: JSON.stringify({ documents }, null, 2) },
+						],
+					};
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					return toolError(`Document search failed: ${message}`);
+				}
+			},
 		),
 	];
 }
 
 /**
  * Register the MyMemo in-process MCP server exposing the document tool(s), so
- * `mcp__mymemo__search_documents` is available to the agent.
+ * `mcp__mymemo__search_documents` is available to the agent. `context` is
+ * forwarded to the tool handler; omit it only where the surface is inspected
+ * without being run (tests, registration checks).
  */
-export function createMymemoMcpServer(): McpSdkServerConfigWithInstance {
+export function createMymemoMcpServer(
+	context?: MymemoToolContext,
+): McpSdkServerConfigWithInstance {
 	return createSdkMcpServer({
 		name: MYMEMO_MCP_SERVER_NAME,
 		version: "0.1.0",
-		tools: buildMymemoTools(),
+		tools: buildMymemoTools(context),
 	});
 }

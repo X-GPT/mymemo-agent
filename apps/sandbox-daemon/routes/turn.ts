@@ -126,6 +126,10 @@ app.post("/turn", async (c) => {
 					// layout (a sibling of cwd), bound rw and set on the agent so its
 					// SDK config + transcripts stay isolated from the project `.claude`.
 					claudeConfigDir: workspace.claudeConfig,
+					// docs/ is bound rw and forwarded to the `search_documents` tool as
+					// its hydration target; run_id attributes hydration in the manifest.
+					docsDir: workspace.docs,
+					runId: run_id,
 					sessionId: agent_session_id,
 					// Identity keys the durable session-transcript store; both arrive
 					// validated from the trusted turn request.

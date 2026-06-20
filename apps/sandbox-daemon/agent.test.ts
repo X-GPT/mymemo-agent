@@ -41,6 +41,18 @@ describe("buildQueryOptions", () => {
 			"sess-1",
 		);
 	});
+
+	it("exposes the conversation docs/ dir to the agent's file tools when set", () => {
+		// docs/ is a sibling of the work/ cwd; without it in additionalDirectories
+		// the agent can't Read the localPath search_documents returns.
+		const docsDir = "/workspace/conversations/c/docs";
+		const opts = buildQueryOptions({ ...base, docsDir, runId: "run-1" });
+		expect(opts.additionalDirectories).toEqual([docsDir]);
+	});
+
+	it("omits additionalDirectories when no docsDir is wired", () => {
+		expect("additionalDirectories" in buildQueryOptions(base)).toBe(false);
+	});
 });
 
 describe("buildQueryOptions tool surface", () => {

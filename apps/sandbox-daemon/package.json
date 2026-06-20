@@ -11,6 +11,7 @@
 	},
 	"dependencies": {
 		"hono": "^4.10.1",
-		"@anthropic-ai/claude-agent-sdk": "0.2.117"
+		"@anthropic-ai/claude-agent-sdk": "0.2.117",
+		"zod": "^4.1.12"
 	}
 }
