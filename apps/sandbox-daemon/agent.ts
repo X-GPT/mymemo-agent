@@ -80,6 +80,12 @@ export function buildQueryOptions(options: AgentRunOptions): Options {
 				docsDir && runId ? { docsDir, runId } : undefined,
 			),
 		},
+		// `search_documents` hydrates into the conversation's `docs/` dir, which is
+		// a SIBLING of the agent's `work/` cwd. Claude Code scopes its file tools
+		// (Read/Glob/Grep) to the cwd plus `additionalDirectories`, so without this
+		// the agent couldn't read the very `localPath` the tool hands back. Expose
+		// the docs dir read/write so the agent can inspect hydrated documents.
+		...(docsDir ? { additionalDirectories: [docsDir] } : {}),
 		permissionMode: "default",
 		includePartialMessages: true,
 		model: "claude-sonnet-4-6",
