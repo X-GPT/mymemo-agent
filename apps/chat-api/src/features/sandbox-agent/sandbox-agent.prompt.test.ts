@@ -102,6 +102,17 @@ describe("buildSandboxAgentPrompt", () => {
 		expect(prompt).toContain("NEVER use outside knowledge");
 	});
 
+	it("exempts explicitly-scoped current-turn local files from the search-only rule", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		// A file the agent created this turn is not a search result; the source
+		// rule must still allow reading/editing it when the user scopes the task.
+		expect(prompt).toContain("even though it is not a search result");
+	});
+
 	describe("general scope", () => {
 		it("includes general scope context", () => {
 			const prompt = buildSandboxAgentPrompt({
