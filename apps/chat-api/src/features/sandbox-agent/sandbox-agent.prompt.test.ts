@@ -19,14 +19,77 @@ describe("buildSandboxAgentPrompt", () => {
 		expect(prompt).toContain("[c1]: p_abc123");
 	});
 
-	it("instructs use of the mymemo-docs CLI", () => {
+	it("instructs use of the search_documents tool", () => {
 		const prompt = buildSandboxAgentPrompt({
 			...baseOptions,
 			scope: "general",
 		});
 
-		expect(prompt).toContain("mymemo-docs search");
-		expect(prompt).toContain("mymemo-docs fetch");
+		expect(prompt).toContain("search_documents");
+		expect(prompt).toContain("mcp__mymemo__search_documents");
+	});
+
+	it("states remote search is required by default", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		expect(prompt).toContain("Remote search is required by default");
+	});
+
+	it("describes local documents as the current working set only", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		expect(prompt).toContain("current working set");
+	});
+
+	it("permits local-only work only when the user scopes to current-turn files", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		expect(prompt).toContain(
+			"Local-only work is acceptable only when the user explicitly scopes the task to files loaded or created earlier in this same turn",
+		);
+	});
+
+	it("requires re-search for documents from a previous turn (no cross-turn local reads)", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		// The working set is per-turn (fresh sandbox each turn), so prior-turn
+		// localPaths are gone — the agent must re-hydrate, not Read a stale path.
+		expect(prompt).toContain("does not carry over between turns");
+		expect(prompt).toContain(
+			"follow-up about a document from a previous message",
+		);
+	});
+
+	it("explains hydrated documents expose a local path the agent can Read", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		expect(prompt).toContain("localPath");
+		expect(prompt).toContain("Read");
+	});
+
+	it("no longer instructs separate search then fetch via mymemo-docs", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		expect(prompt).not.toContain("mymemo-docs fetch");
+		expect(prompt).not.toContain("mymemo-docs search");
 	});
 
 	it("includes source restriction rules", () => {
@@ -37,6 +100,17 @@ describe("buildSandboxAgentPrompt", () => {
 
 		expect(prompt).toContain("ONLY use information from documents");
 		expect(prompt).toContain("NEVER use outside knowledge");
+	});
+
+	it("exempts explicitly-scoped current-turn local files from the search-only rule", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		// A file the agent created this turn is not a search result; the source
+		// rule must still allow reading/editing it when the user scopes the task.
+		expect(prompt).toContain("even though it is not a search result");
 	});
 
 	describe("general scope", () => {
