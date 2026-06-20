@@ -61,11 +61,16 @@ export interface CreateRunOptions {
 export function normalizeRunError(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	if (typeof error === "string") return error;
+	// JSON.stringify returns `undefined` (not a string) for undefined, symbols,
+	// and functions, and throws on BigInt/circular values. Fall back to String()
+	// in both cases so a failed run always records a non-empty error string.
+	let json: string | undefined;
 	try {
-		return JSON.stringify(error);
+		json = JSON.stringify(error);
 	} catch {
-		return String(error);
+		json = undefined;
 	}
+	return json ?? String(error);
 }
 
 /**
@@ -174,7 +179,9 @@ export class Run {
 	}
 
 	private write(event: RunEvent): Promise<void> {
-		return this.sink.appendRunEvent(this.ref, { at: this.now(), ...event });
+		// `at` is the authoritative server stamp, applied after the payload so a
+		// passthrough field named `at` cannot override it (same rule as `type`).
+		return this.sink.appendRunEvent(this.ref, { ...event, at: this.now() });
 	}
 }
 

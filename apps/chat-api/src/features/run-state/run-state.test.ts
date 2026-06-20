@@ -106,6 +106,42 @@ describe("run-state lifecycle", () => {
 		]);
 	});
 
+	it("keeps the server timestamp authoritative when payload carries its own `at`", async () => {
+		const { sink, messages } = fakeSink();
+		const run = await createRun({
+			sink,
+			ref,
+			conversationId: "conv-1",
+			now: fakeClock(),
+		});
+
+		await run.recordAgentEvent({ at: "PAYLOAD-TIME", text: "hi" });
+
+		// The agent event is stamped with the run clock, not the payload's `at`.
+		expect(messages()).toMatchObject([
+			{ type: RunEventType.Started, at: "2026-06-20T00:00:00.000Z" },
+			{
+				type: RunEventType.AgentEvent,
+				at: "2026-06-20T00:00:01.000Z",
+				text: "hi",
+			},
+		]);
+	});
+
+	it("records a non-empty error message even when failed with no value", async () => {
+		const { sink, messages } = fakeSink();
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+
+		// e.g. `throw undefined` or a promise rejected with no reason.
+		await run.markRunFailed(undefined);
+
+		expect(run.status).toBe("failed");
+		expect(messages()).toMatchObject([
+			{ type: RunEventType.Started },
+			{ type: RunEventType.Failed, error: "undefined" },
+		]);
+	});
+
 	it("records a canceled lifecycle", async () => {
 		const { sink, types } = fakeSink();
 		const run = await createRun({ sink, ref, conversationId: "conv-1" });
@@ -153,6 +189,22 @@ describe("normalizeRunError", () => {
 
 	it("serializes a non-Error, non-string value", () => {
 		expect(normalizeRunError({ code: 500 })).toBe('{"code":500}');
+	});
+
+	// JSON.stringify yields `undefined` for these (not a string); the failed-run
+	// contract requires a non-empty error string, so they must fall back to String().
+	it("returns a non-empty string for values JSON.stringify drops", () => {
+		expect(normalizeRunError(undefined)).toBe("undefined");
+		expect(normalizeRunError(Symbol("x"))).toBe("Symbol(x)");
+		for (const v of [undefined, Symbol("x"), () => {}]) {
+			const out = normalizeRunError(v);
+			expect(typeof out).toBe("string");
+			expect(out.length).toBeGreaterThan(0);
+		}
+	});
+
+	it("falls back to String() when JSON.stringify throws (BigInt)", () => {
+		expect(normalizeRunError(12n)).toBe("12");
 	});
 });
 
