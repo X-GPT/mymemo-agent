@@ -47,14 +47,28 @@ describe("buildSandboxAgentPrompt", () => {
 		expect(prompt).toContain("current working set");
 	});
 
-	it("permits local-only work only when the user scopes to loaded files", () => {
+	it("permits local-only work only when the user scopes to current-turn files", () => {
 		const prompt = buildSandboxAgentPrompt({
 			...baseOptions,
 			scope: "general",
 		});
 
 		expect(prompt).toContain(
-			"Local-only work is acceptable only when the user explicitly scopes",
+			"Local-only work is acceptable only when the user explicitly scopes the task to files loaded or created earlier in this same turn",
+		);
+	});
+
+	it("requires re-search for documents from a previous turn (no cross-turn local reads)", () => {
+		const prompt = buildSandboxAgentPrompt({
+			...baseOptions,
+			scope: "general",
+		});
+
+		// The working set is per-turn (fresh sandbox each turn), so prior-turn
+		// localPaths are gone — the agent must re-hydrate, not Read a stale path.
+		expect(prompt).toContain("does not carry over between turns");
+		expect(prompt).toContain(
+			"follow-up about a document from a previous message",
 		);
 	});
 
