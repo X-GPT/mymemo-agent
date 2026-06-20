@@ -36,6 +36,7 @@ import {
 	tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { loadHydrationLimits } from "./hydration-policy";
 import { searchAndHydrate } from "./search-documents";
 
 /** MCP server name; the agent sees its tools as `mcp__<server>__<tool>`. */
@@ -130,7 +131,7 @@ export function buildMymemoTools(context?: MymemoToolContext) {
 	return [
 		tool(
 			SEARCH_DOCUMENTS_TOOL_NAME,
-			"Search the user's MyMemo documents and hydrate matches into the local conversation workspace. Returns one row per document with its documentId, source, title, snippet, and the local file path you can Read.",
+			'Search the user\'s MyMemo documents and hydrate matches into the local conversation workspace. Returns one row per document with its documentId, source, title, snippet, and localPath. A non-empty localPath is a file you can Read; if source is "skipped_too_large" or "skipped_run_budget" the document was not hydrated, localPath is empty, and the row\'s `error` says which limit was hit.',
 			{
 				query: z
 					.string()
@@ -156,6 +157,7 @@ export function buildMymemoTools(context?: MymemoToolContext) {
 						token,
 						docsDir: context.docsDir,
 						runId: context.runId,
+						limits: loadHydrationLimits(),
 					});
 					if (documents.length === 0) {
 						return {
