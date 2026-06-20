@@ -150,6 +150,24 @@ async function readConversationManifest(
 	return JSON.parse(stdout) as { version: number; documents: unknown[] };
 }
 
+/**
+ * Read a hydrated document's content from inside the sandbox container, by its
+ * manifest-relative `localPath`. Returns null when the file is absent — so the
+ * test can prove the blob was actually written, not just manifested.
+ */
+async function readHydratedDoc(
+	conversationId: string,
+	localPath: string,
+): Promise<string | null> {
+	const path = `/workspace/conversations/${conversationId}/docs/${localPath}`;
+	const { code, stdout } = await compose(
+		["exec", "-T", "sandbox", "sh", "-lc", `cat ${path} 2>/dev/null || true`],
+		15_000,
+	);
+	if (code !== 0 || stdout === "") return null;
+	return stdout;
+}
+
 let startedByTest = false;
 
 describe.skipIf(!RUN)(
@@ -258,6 +276,18 @@ describe.skipIf(!RUN)(
 				expect(hydrated.localPath.length).toBeGreaterThan(0);
 				expect(hydrated.source.length).toBeGreaterThan(0);
 				expect(hydrated.runId).toBe(runId);
+
+				// 3. The manifest entry must be backed by a real, non-empty file on
+				//    disk — not just a manifest row — so the agent's Read would work.
+				const docContent = await readHydratedDoc(
+					conversationId,
+					hydrated.localPath,
+				);
+				expect(
+					docContent,
+					`manifest references ${hydrated.localPath} but no file was hydrated there`,
+				).not.toBeNull();
+				expect(docContent!.trim().length).toBeGreaterThan(0);
 			},
 			TURN_TIMEOUT_MS + 30_000,
 		);

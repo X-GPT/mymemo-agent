@@ -127,7 +127,16 @@ async function postJson<T>(
 		// keep it short and never include the bearer token.
 		throw new GatewayDocumentError(`gateway returned ${res.status}`);
 	}
-	return res.json() as Promise<T>;
+	// A 200 with a non-JSON body (e.g. an HTML error page from a proxy/LB) would
+	// otherwise throw a bare SyntaxError; normalize it to a GatewayDocumentError
+	// so callers see one recoverable error type instead of two.
+	try {
+		return (await res.json()) as T;
+	} catch (cause) {
+		throw new GatewayDocumentError(
+			`gateway returned a non-JSON body: ${(cause as Error).message}`,
+		);
+	}
 }
 
 /**
@@ -214,16 +223,19 @@ export async function searchAndHydrate(
 		// the blobs) must fall through to a re-fetch — otherwise we'd hand back a
 		// path the agent's `Read` would fail on for a document that is in scope.
 		const existing = localById.get(documentId);
-		if (existing && existsSync(join(deps.docsDir, existing.localPath))) {
-			results.push({
-				documentId,
-				source: "already_local",
-				title: hit.title || existing.title,
-				snippet,
-				passageId,
-				localPath: join(deps.docsDir, existing.localPath),
-			});
-			continue;
+		if (existing) {
+			const existingPath = join(deps.docsDir, existing.localPath);
+			if (existsSync(existingPath)) {
+				results.push({
+					documentId,
+					source: "already_local",
+					title: hit.title || existing.title,
+					snippet,
+					passageId,
+					localPath: existingPath,
+				});
+				continue;
+			}
 		}
 
 		const doc = await postJson<GatewayFetchedDocument>(

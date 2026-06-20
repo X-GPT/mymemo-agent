@@ -288,6 +288,17 @@ describe("searchAndHydrate", () => {
 		);
 	});
 
+	it("throws GatewayDocumentError on a 200 with a non-JSON body", async () => {
+		// e.g. a proxy/LB returns an HTML error page with status 200.
+		const fetchImpl = (async () =>
+			new Response("<html>oops</html>", {
+				status: 200,
+			})) as unknown as typeof fetch;
+		await expect(searchAndHydrate("q", deps(fetchImpl))).rejects.toBeInstanceOf(
+			GatewayDocumentError,
+		);
+	});
+
 	it("throws GatewayDocumentError on a non-OK fetch response", async () => {
 		const { fetchImpl } = fakeGateway({
 			search: {
