@@ -18,53 +18,11 @@
  */
 
 import { resolve } from "node:path";
+import type { AgentSpawnConfig } from "./config";
 import { hydrationLimitEnv } from "./hydration-policy";
 import type { AgentEvent } from "./ipc-protocol";
 
 export type { AgentEvent } from "./ipc-protocol";
-
-function getAgentBundlePath(): string {
-	return process.env.SANDBOX_AGENT_PATH ?? "/workspace/agent.js";
-}
-function getBunExecutable(): string {
-	return process.env.SANDBOX_BUN_PATH ?? "bun";
-}
-
-// The agent is a streaming workload of unbounded but "chatty" duration, so a
-// wall-clock cap alone would kill healthy long turns. We bound it two ways:
-//
-//   1. An idle timeout, re-armed on every NDJSON event. Text streaming covers
-//      the model phase; a `heartbeat` (emitted by agent.ts while a tool runs —
-//      tool execution is otherwise silent on stdout) covers tool phases. So
-//      sustained silence now genuinely means a hang (a wedged model read), and
-//      a healthy long tool no longer trips this.
-//   2. A generous absolute per-turn ceiling as a backstop for the one case the
-//      idle timeout can't see: a tool that hangs forever keeps the heartbeat
-//      ticking, so without this it would never be killed and would pin the
-//      single-turn lock. Set far above any legitimate turn.
-const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 120_000;
-const DEFAULT_AGENT_MAX_TURN_MS = 600_000;
-
-// Number("") -> 0 and Number("abc") -> NaN, and setTimeout(fn, 0|NaN) fires
-// immediately — a malformed env var would SIGKILL every turn at spawn. Fall
-// back to the default on any non-finite or non-positive value.
-function getPositiveMsEnv(value: string | undefined, fallback: number): number {
-	if (value === undefined) return fallback;
-	const n = Number(value);
-	return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-function getAgentIdleTimeoutMs(): number {
-	return getPositiveMsEnv(
-		process.env.SANDBOX_AGENT_IDLE_TIMEOUT_MS,
-		DEFAULT_AGENT_IDLE_TIMEOUT_MS,
-	);
-}
-function getAgentMaxTurnMs(): number {
-	return getPositiveMsEnv(
-		process.env.SANDBOX_AGENT_MAX_TURN_MS,
-		DEFAULT_AGENT_MAX_TURN_MS,
-	);
-}
 
 // Durable root the agent's SessionStore mirror writes to (must match
 // SESSION_STORE_ROOT_ENV in session-store.ts, which the agent reads). Unset =
@@ -111,8 +69,8 @@ export function assertDurableStoreRoot(root: string): void {
  * sandbox/container is the isolation boundary, so there is no wrapper. Extracted
  * as a pure helper so the command is easy to inspect and unit-test.
  */
-export function buildAgentSpawnArgv(): string[] {
-	return [getBunExecutable(), getAgentBundlePath()];
+export function buildAgentSpawnArgv(config: AgentSpawnConfig): string[] {
+	return [config.bunExecutable, config.agentBundlePath];
 }
 
 function narrowAgentEvent(raw: Record<string, unknown>): AgentEvent | null {
@@ -243,6 +201,7 @@ export interface SpawnAgentResult {
 
 export async function spawnAgent(
 	input: SpawnAgentInput,
+	spawnConfig: AgentSpawnConfig,
 ): Promise<SpawnAgentResult> {
 	const {
 		onEvent,
@@ -262,7 +221,7 @@ export async function spawnAgent(
 	// Reject a root that would silently lose transcripts (relative or ephemeral)
 	// before spawning, so the misconfig fails loudly instead of breaking resume.
 	if (sessionStoreRoot) assertDurableStoreRoot(sessionStoreRoot);
-	const proc = Bun.spawn(buildAgentSpawnArgv(), {
+	const proc = Bun.spawn(buildAgentSpawnArgv(spawnConfig), {
 		env: {
 			// The agent holds no provider key — it talks to the LLM gateway, which
 			// injects the real key. ANTHROPIC_AUTH_TOKEN is sent as a Bearer header.
@@ -302,8 +261,8 @@ export async function spawnAgent(
 
 	// Idle watchdog + absolute ceiling. The SIGKILL lands on the agent process,
 	// which closes stdout and unblocks the read loop below.
-	const idleMs = getAgentIdleTimeoutMs();
-	const maxTurnMs = getAgentMaxTurnMs();
+	const idleMs = spawnConfig.agentIdleTimeoutMs;
+	const maxTurnMs = spawnConfig.agentMaxTurnMs;
 	let timedOut = false;
 	let hitMaxTurn = false;
 	let idleTimer: ReturnType<typeof setTimeout> | undefined;

@@ -1,41 +1,23 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	assertValidConversationId,
 	createConversationWorkspace,
-	getWorkspaceRoot,
 	resolveConversationWorkspace,
 } from "./workspace";
 
+// Workspace root is injected, not read from env — point it at a temp dir so the
+// tests never touch the host's real /workspace.
 const testRoot = join(tmpdir(), `workspace-test-${Date.now()}`);
-const savedRoot = process.env.SANDBOX_WORKSPACE_ROOT;
 
 beforeAll(() => {
 	mkdirSync(testRoot, { recursive: true });
-	process.env.SANDBOX_WORKSPACE_ROOT = testRoot;
-});
-
-afterEach(() => {
-	process.env.SANDBOX_WORKSPACE_ROOT = testRoot;
 });
 
 afterAll(() => {
 	rmSync(testRoot, { recursive: true, force: true });
-	if (savedRoot === undefined) delete process.env.SANDBOX_WORKSPACE_ROOT;
-	else process.env.SANDBOX_WORKSPACE_ROOT = savedRoot;
-});
-
-describe("getWorkspaceRoot", () => {
-	it("honors SANDBOX_WORKSPACE_ROOT", () => {
-		expect(getWorkspaceRoot()).toBe(testRoot);
-	});
-
-	it("defaults to /workspace when unset", () => {
-		delete process.env.SANDBOX_WORKSPACE_ROOT;
-		expect(getWorkspaceRoot()).toBe("/workspace");
-	});
 });
 
 describe("assertValidConversationId", () => {
@@ -77,7 +59,7 @@ describe("assertValidConversationId", () => {
 
 describe("resolveConversationWorkspace", () => {
 	it("builds the target layout under the workspace root", () => {
-		const ws = resolveConversationWorkspace("conv-99");
+		const ws = resolveConversationWorkspace("conv-99", testRoot);
 		expect(ws).toEqual({
 			root: testRoot,
 			system: join(testRoot, "system"),
@@ -90,7 +72,7 @@ describe("resolveConversationWorkspace", () => {
 	});
 
 	it("throws on a malformed id before constructing any path", () => {
-		expect(() => resolveConversationWorkspace("../escape")).toThrow(
+		expect(() => resolveConversationWorkspace("../escape", testRoot)).toThrow(
 			/Invalid conversationId/,
 		);
 	});
@@ -98,7 +80,7 @@ describe("resolveConversationWorkspace", () => {
 
 describe("createConversationWorkspace", () => {
 	it("creates system, docs, work, output, and claude-config directories", () => {
-		const ws = createConversationWorkspace("conv-create");
+		const ws = createConversationWorkspace("conv-create", testRoot);
 		for (const dir of [
 			ws.system,
 			ws.docs,
@@ -112,15 +94,19 @@ describe("createConversationWorkspace", () => {
 	});
 
 	it("is idempotent", () => {
-		expect(() => createConversationWorkspace("conv-twice")).not.toThrow();
-		expect(() => createConversationWorkspace("conv-twice")).not.toThrow();
+		expect(() =>
+			createConversationWorkspace("conv-twice", testRoot),
+		).not.toThrow();
+		expect(() =>
+			createConversationWorkspace("conv-twice", testRoot),
+		).not.toThrow();
 		expect(
 			existsSync(join(testRoot, "conversations", "conv-twice", "work")),
 		).toBe(true);
 	});
 
 	it("refuses to create directories for a malformed id", () => {
-		expect(() => createConversationWorkspace("../../pwned")).toThrow(
+		expect(() => createConversationWorkspace("../../pwned", testRoot)).toThrow(
 			/Invalid conversationId/,
 		);
 		expect(existsSync(join(testRoot, "..", "pwned"))).toBe(false);

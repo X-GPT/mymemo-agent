@@ -32,16 +32,32 @@ mock.module("../child-spawn", () => ({
 // Point the workspace root at a temp dir so the turn route's directory
 // creation doesn't touch the host's /workspace.
 const testRoot = join(tmpdir(), `turn-integration-${Date.now()}`);
-process.env.SANDBOX_WORKSPACE_ROOT = testRoot;
 
 // Ensure turn-lock module is loaded
 require("../turn-lock");
 
-import turnRoutes from "./turn";
+import type { DaemonConfig } from "../config";
+import { createTurnRoutes } from "./turn";
+
+// Config is injected — no ambient env. workspaceRoot points at the temp dir and
+// the bearer secret is fixed here; agentSpawn is unused because spawnAgent is
+// mocked above.
+const config: DaemonConfig = {
+	daemonPort: 8080,
+	daemonVersion: "test",
+	daemonAuthToken: "daemon-token",
+	workspaceRoot: testRoot,
+	agentSpawn: {
+		agentBundlePath: "/workspace/agent.js",
+		bunExecutable: "bun",
+		agentIdleTimeoutMs: 120_000,
+		agentMaxTurnMs: 600_000,
+	},
+};
 
 describe("POST /turn integration", () => {
 	const app = new Hono();
-	app.route("/", turnRoutes);
+	app.route("/", createTurnRoutes(config));
 	let reqCounter = 0;
 
 	beforeAll(() => {
@@ -49,7 +65,6 @@ describe("POST /turn integration", () => {
 	});
 
 	beforeEach(() => {
-		process.env.DAEMON_AUTH_TOKEN = "daemon-token";
 		mockSpawnAgent.mockReset();
 	});
 

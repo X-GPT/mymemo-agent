@@ -17,6 +17,22 @@ import {
 	buildAgentSpawnArgv,
 	spawnAgent,
 } from "./child-spawn";
+import type { AgentSpawnConfig } from "./config";
+
+// Spawn config is injected, not read from env. Default matches config.ts's
+// defaults; tests override only the field they exercise.
+const DEFAULT_SPAWN_CONFIG: AgentSpawnConfig = {
+	agentBundlePath: "/workspace/agent.js",
+	bunExecutable: "bun",
+	agentIdleTimeoutMs: 120_000,
+	agentMaxTurnMs: 600_000,
+};
+
+function makeSpawnConfig(
+	overrides: Partial<AgentSpawnConfig> = {},
+): AgentSpawnConfig {
+	return { ...DEFAULT_SPAWN_CONFIG, ...overrides };
+}
 
 describe("assertDurableStoreRoot", () => {
 	it("rejects a relative root (would resolve against the ephemeral agent cwd)", () => {
@@ -43,26 +59,19 @@ describe("buildAgentSpawnArgv", () => {
 	it("runs bun /workspace/agent.js directly, with no wrapper", () => {
 		// The sandbox/container is the isolation boundary, so the agent runs
 		// directly — there is no bwrap (or any other) wrapper around it.
-		const argv = buildAgentSpawnArgv();
+		const argv = buildAgentSpawnArgv(makeSpawnConfig());
 		expect(argv).toEqual(["bun", "/workspace/agent.js"]);
 	});
 
-	it("respects SANDBOX_BUN_PATH and SANDBOX_AGENT_PATH env overrides", () => {
-		const original = {
-			bun: process.env.SANDBOX_BUN_PATH,
-			agent: process.env.SANDBOX_AGENT_PATH,
-		};
-		process.env.SANDBOX_BUN_PATH = "/custom/bun";
-		process.env.SANDBOX_AGENT_PATH = "/custom/agent.js";
-		try {
-			expect(buildAgentSpawnArgv()).toEqual([
-				"/custom/bun",
-				"/custom/agent.js",
-			]);
-		} finally {
-			process.env.SANDBOX_BUN_PATH = original.bun;
-			process.env.SANDBOX_AGENT_PATH = original.agent;
-		}
+	it("uses the bun executable and agent bundle path from config", () => {
+		expect(
+			buildAgentSpawnArgv(
+				makeSpawnConfig({
+					bunExecutable: "/custom/bun",
+					agentBundlePath: "/custom/agent.js",
+				}),
+			),
+		).toEqual(["/custom/bun", "/custom/agent.js"]);
 	});
 });
 
@@ -108,17 +117,20 @@ describe("spawnAgent agent environment", () => {
 			fakeProc() as unknown as ReturnType<typeof Bun.spawn>,
 		);
 
-		await spawnAgent({
-			userQuery: "q",
-			systemPrompt: "s",
-			cwd,
-			claudeConfigDir,
-			llmBaseUrl: "https://gateway.example",
-			docGatewayUrl: "https://docs.example",
-			llmToken: "tok-123",
-			docToken: "doc-456",
-			onEvent: async () => {},
-		});
+		await spawnAgent(
+			{
+				userQuery: "q",
+				systemPrompt: "s",
+				cwd,
+				claudeConfigDir,
+				llmBaseUrl: "https://gateway.example",
+				docGatewayUrl: "https://docs.example",
+				llmToken: "tok-123",
+				docToken: "doc-456",
+				onEvent: async () => {},
+			},
+			makeSpawnConfig(),
+		);
 
 		const call = spawnSpy.mock.calls[0] as [
 			string[],
@@ -172,19 +184,22 @@ describe("spawnAgent agent environment", () => {
 				capturingProc() as unknown as ReturnType<typeof Bun.spawn>,
 			);
 
-			await spawnAgent({
-				userQuery: "q",
-				systemPrompt: "s",
-				cwd,
-				claudeConfigDir,
-				userId: "member-abc",
-				conversationId: "conv-1",
-				llmBaseUrl: "https://gateway.example",
-				docGatewayUrl: "https://docs.example",
-				llmToken: "tok",
-				docToken: "doc",
-				onEvent: async () => {},
-			});
+			await spawnAgent(
+				{
+					userQuery: "q",
+					systemPrompt: "s",
+					cwd,
+					claudeConfigDir,
+					userId: "member-abc",
+					conversationId: "conv-1",
+					llmBaseUrl: "https://gateway.example",
+					docGatewayUrl: "https://docs.example",
+					llmToken: "tok",
+					docToken: "doc",
+					onEvent: async () => {},
+				},
+				makeSpawnConfig(),
+			);
 
 			const call = spawnSpy.mock.calls[0] as [
 				string[],
@@ -216,18 +231,21 @@ describe("spawnAgent agent environment", () => {
 				fakeProc() as unknown as ReturnType<typeof Bun.spawn>,
 			);
 
-			await spawnAgent({
-				userQuery: "q",
-				systemPrompt: "s",
-				cwd,
-				claudeConfigDir,
-				// No userId/conversationId — mirroring must stay off.
-				llmBaseUrl: "https://gateway.example",
-				docGatewayUrl: "https://docs.example",
-				llmToken: "tok",
-				docToken: "doc",
-				onEvent: async () => {},
-			});
+			await spawnAgent(
+				{
+					userQuery: "q",
+					systemPrompt: "s",
+					cwd,
+					claudeConfigDir,
+					// No userId/conversationId — mirroring must stay off.
+					llmBaseUrl: "https://gateway.example",
+					docGatewayUrl: "https://docs.example",
+					llmToken: "tok",
+					docToken: "doc",
+					onEvent: async () => {},
+				},
+				makeSpawnConfig(),
+			);
 
 			const call = spawnSpy.mock.calls[0] as [
 				string[],
@@ -249,13 +267,6 @@ describe("spawnAgent idle timeout", () => {
 	// NDJSON + watchdog wiring rather than mocking it.
 	let tmpDir: string;
 	const fixtures: Record<string, string> = {};
-
-	const ENV_VARS = [
-		"SANDBOX_AGENT_PATH",
-		"SANDBOX_AGENT_IDLE_TIMEOUT_MS",
-		"SANDBOX_AGENT_MAX_TURN_MS",
-	];
-	const originalEnv: Record<string, string | undefined> = {};
 
 	beforeAll(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "child-spawn-"));
@@ -309,15 +320,9 @@ describe("spawnAgent idle timeout", () => {
 			fixtures.agentLinger,
 			`import { closeSync } from "node:fs";\nfor await (const _ of process.stdin) {}\nprocess.stdout.write(JSON.stringify({ type: "completed" }) + "\\n");\nawait new Promise((r) => setTimeout(r, 50));\ncloseSync(1);\nawait new Promise(() => {});\n`,
 		);
-
-		for (const key of ENV_VARS) originalEnv[key] = process.env[key];
 	});
 
 	afterAll(() => {
-		for (const key of ENV_VARS) {
-			if (originalEnv[key] === undefined) delete process.env[key];
-			else process.env[key] = originalEnv[key];
-		}
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
@@ -336,12 +341,15 @@ describe("spawnAgent idle timeout", () => {
 	}
 
 	it("kills the child and emits failed when no events arrive", async () => {
-		process.env.SANDBOX_AGENT_PATH = fixtures.agentHang;
-		process.env.SANDBOX_AGENT_IDLE_TIMEOUT_MS = "200";
-
 		const events: AgentEvent[] = [];
 		const start = Date.now();
-		await spawnAgent(makeInput((e) => events.push(e)));
+		await spawnAgent(
+			makeInput((e) => events.push(e)),
+			makeSpawnConfig({
+				agentBundlePath: fixtures.agentHang,
+				agentIdleTimeoutMs: 200,
+			}),
+		);
 		const elapsed = Date.now() - start;
 
 		// 200ms timeout + spawn/teardown overhead. Cap at 5s to catch hangs.
@@ -355,14 +363,17 @@ describe("spawnAgent idle timeout", () => {
 	});
 
 	it("does not fire while events keep arriving (timer resets)", async () => {
-		process.env.SANDBOX_AGENT_PATH = fixtures.agentSlow;
+		const events: AgentEvent[] = [];
 		// 2s idle window: generous enough to absorb bun's cold start (~900ms
 		// observed) before the first event, while the fixture's ~2.5s total
 		// span exceeds it — so passing proves the timer resets per event.
-		process.env.SANDBOX_AGENT_IDLE_TIMEOUT_MS = "2000";
-
-		const events: AgentEvent[] = [];
-		const result = await spawnAgent(makeInput((e) => events.push(e)));
+		const result = await spawnAgent(
+			makeInput((e) => events.push(e)),
+			makeSpawnConfig({
+				agentBundlePath: fixtures.agentSlow,
+				agentIdleTimeoutMs: 2000,
+			}),
+		);
 
 		expect(result.exitCode).toBe(0);
 		expect(events.find((e) => e.type === "failed")).toBeUndefined();
@@ -371,13 +382,16 @@ describe("spawnAgent idle timeout", () => {
 	}, 15_000);
 
 	it("kills a lingering child after completed without a spurious failed", async () => {
-		process.env.SANDBOX_AGENT_PATH = fixtures.agentLinger;
-		// Same 2s window as above to absorb bun's cold start before `completed`.
-		process.env.SANDBOX_AGENT_IDLE_TIMEOUT_MS = "2000";
-
 		const events: AgentEvent[] = [];
 		const start = Date.now();
-		const result = await spawnAgent(makeInput((e) => events.push(e)));
+		// Same 2s window as above to absorb bun's cold start before `completed`.
+		const result = await spawnAgent(
+			makeInput((e) => events.push(e)),
+			makeSpawnConfig({
+				agentBundlePath: fixtures.agentLinger,
+				agentIdleTimeoutMs: 2000,
+			}),
+		);
 		const elapsed = Date.now() - start;
 
 		// The watchdog must bound the wait on the never-exiting child...
@@ -392,12 +406,15 @@ describe("spawnAgent idle timeout", () => {
 	// only by `heartbeat` events (the liveness a tool emits while executing)
 	// must NOT trip the watchdog, even though no token ever streams.
 	it("treats heartbeats as liveness: a silent-but-beating tool survives", async () => {
-		process.env.SANDBOX_AGENT_PATH = fixtures.agentHeartbeat;
-		process.env.SANDBOX_AGENT_IDLE_TIMEOUT_MS = "2000";
-		delete process.env.SANDBOX_AGENT_MAX_TURN_MS; // default ceiling, won't fire
-
 		const events: AgentEvent[] = [];
-		const result = await spawnAgent(makeInput((e) => events.push(e)));
+		// Default ceiling won't fire within the fixture's ~2.5s span.
+		const result = await spawnAgent(
+			makeInput((e) => events.push(e)),
+			makeSpawnConfig({
+				agentBundlePath: fixtures.agentHeartbeat,
+				agentIdleTimeoutMs: 2000,
+			}),
+		);
 
 		expect(result.exitCode).toBe(0);
 		expect(events.find((e) => e.type === "failed")).toBeUndefined();
@@ -410,15 +427,18 @@ describe("spawnAgent idle timeout", () => {
 	// The honest residual: a tool that hangs forever keeps heartbeating, so the
 	// idle watchdog can't see it. The absolute per-turn ceiling is the backstop.
 	it("kills a forever-beating turn via the absolute ceiling, not the idle timer", async () => {
-		process.env.SANDBOX_AGENT_PATH = fixtures.agentHeartbeatForever;
-		// Idle window large so it never fires; ceiling small so it does. The
-		// elapsed-time assertion proves the ceiling — not the idle timer — killed it.
-		process.env.SANDBOX_AGENT_IDLE_TIMEOUT_MS = "30000";
-		process.env.SANDBOX_AGENT_MAX_TURN_MS = "1500";
-
 		const events: AgentEvent[] = [];
 		const start = Date.now();
-		const result = await spawnAgent(makeInput((e) => events.push(e)));
+		// Idle window large so it never fires; ceiling small so it does. The
+		// elapsed-time assertion proves the ceiling — not the idle timer — killed it.
+		const result = await spawnAgent(
+			makeInput((e) => events.push(e)),
+			makeSpawnConfig({
+				agentBundlePath: fixtures.agentHeartbeatForever,
+				agentIdleTimeoutMs: 30000,
+				agentMaxTurnMs: 1500,
+			}),
+		);
 		const elapsed = Date.now() - start;
 
 		// Ceiling (1500ms) fired well before the idle window (30000ms).
@@ -433,22 +453,4 @@ describe("spawnAgent idle timeout", () => {
 			expect(failed.message).toContain("1500");
 		}
 	}, 15_000);
-
-	// A malformed SANDBOX_AGENT_IDLE_TIMEOUT_MS must fall back to the default,
-	// not become NaN/0 — setTimeout(fn, NaN|0) fires immediately and would
-	// SIGKILL every turn at spawn.
-	it("falls back to the default idle timeout on a malformed env value", async () => {
-		process.env.SANDBOX_AGENT_PATH = fixtures.agentSlow;
-		delete process.env.SANDBOX_AGENT_MAX_TURN_MS; // default ceiling, won't fire
-
-		for (const bad of ["abc", ""]) {
-			process.env.SANDBOX_AGENT_IDLE_TIMEOUT_MS = bad;
-			const events: AgentEvent[] = [];
-			// With the default 120s window the ~2.5s fixture finishes cleanly;
-			// an immediate (NaN/0) fire would kill it before `completed`.
-			const result = await spawnAgent(makeInput((e) => events.push(e)));
-			expect(result.exitCode).toBe(0);
-			expect(events.find((e) => e.type === "failed")).toBeUndefined();
-		}
-	}, 20_000);
 });
