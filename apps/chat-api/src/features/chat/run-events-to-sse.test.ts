@@ -68,12 +68,6 @@ describe("runEventToClientEvents", () => {
 		expect(
 			runEventToClientEvents({ type: RunEventType.DaemonStarted }),
 		).toEqual([]);
-		expect(
-			runEventToClientEvents({
-				type: RunEventType.Hydration,
-				documentId: "doc-1",
-			}),
-		).toEqual([]);
 		expect(runEventToClientEvents({ type: RunEventType.Canceled })).toEqual([]);
 		// An unrecognized agent event discriminator carries no client frame.
 		expect(

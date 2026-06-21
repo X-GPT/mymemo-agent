@@ -47,7 +47,6 @@ export const RunEventType = {
 	SandboxLeased: "sandbox_leased",
 	DaemonStarted: "daemon_started",
 	AgentEvent: "agent_event",
-	Hydration: "hydration",
 	Completed: "run_completed",
 	Failed: "run_failed",
 	Canceled: "run_canceled",
@@ -196,11 +195,6 @@ export class Run {
 				: {}),
 			type: RunEventType.AgentEvent,
 		});
-	}
-
-	/** Record a document hydration event. The category label is authoritative. */
-	recordHydration(data: Record<string, unknown>): Promise<void> {
-		return this.appendRunEvent({ ...data, type: RunEventType.Hydration });
 	}
 
 	/** Mark the run completed successfully. */

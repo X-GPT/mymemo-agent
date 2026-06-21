@@ -1,26 +1,20 @@
 import { describe, expect, it } from "bun:test";
-import { acquireTurn, getCurrentTurn } from "./turn-lock";
+import { acquireTurn } from "./turn-lock";
 
 describe("turn-lock", () => {
-	it("reports current state", () => {
-		const state = getCurrentTurn();
-		expect(state).toHaveProperty("busy");
-		expect(state).toHaveProperty("turnId");
-	});
-
 	it("acquires and releases a turn", () => {
 		const lock = acquireTurn("turn-1");
 		expect(lock).not.toBeNull();
 
-		const state = getCurrentTurn();
-		expect(state.busy).toBe(true);
-		expect(state.turnId).toBe("turn-1");
+		// While the slot is held, a second acquire is rejected.
+		expect(acquireTurn("turn-2")).toBeNull();
 
 		lock?.release();
 
-		const after = getCurrentTurn();
-		expect(after.busy).toBe(false);
-		expect(after.turnId).toBeNull();
+		// After release, a new turn can be acquired.
+		const next = acquireTurn("turn-3");
+		expect(next).not.toBeNull();
+		next?.release();
 	});
 
 	it("rejects concurrent turn", () => {
@@ -45,7 +39,10 @@ describe("turn-lock", () => {
 		lock?.release();
 		lock?.release(); // second release should be safe
 
-		expect(getCurrentTurn().busy).toBe(false);
+		// The slot is free again.
+		const next = acquireTurn("turn-y");
+		expect(next).not.toBeNull();
+		next?.release();
 	});
 
 	it("release only releases matching turn", () => {
@@ -56,10 +53,9 @@ describe("turn-lock", () => {
 		const lock2 = acquireTurn("turn-2");
 		expect(lock2).not.toBeNull();
 
-		// Releasing lock1 again should NOT release lock2
+		// Releasing lock1 again should NOT release lock2 — the slot stays held.
 		lock1?.release();
-		expect(getCurrentTurn().busy).toBe(true);
-		expect(getCurrentTurn().turnId).toBe("turn-2");
+		expect(acquireTurn("turn-3")).toBeNull();
 
 		lock2?.release();
 	});

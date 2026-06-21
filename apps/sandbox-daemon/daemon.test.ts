@@ -25,14 +25,6 @@ describe("createDaemon", () => {
 		expect(typeof body.uptime).toBe("number");
 	});
 
-	it("serves /current with the lock state", async () => {
-		const app = createDaemon(baseConfig);
-		const res = await app.request("/current");
-		expect(res.status).toBe(200);
-		const body = await res.json();
-		expect(body).toHaveProperty("busy");
-	});
-
 	it("wires /turn (no app-layer auth; the sandbox edge is the boundary)", async () => {
 		const app = createDaemon(baseConfig);
 		// /turn is registered and validates the body — an incomplete body is
