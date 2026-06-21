@@ -47,6 +47,14 @@ Responsibilities:
 - Maps to the latest `agentSessionId`.
 - Owns a durable conversation workspace.
 - Survives sandbox recreation, provider changes, and agent session resets.
+- Has a single **immutable document scope** (`global`, a `collection`, or a
+  `document`) for its whole lifetime. Scope is fixed at the first turn and never
+  narrows or changes within a conversation. This is what makes a reused
+  conversation workspace safe: every document hydrated into `docs/` is, by
+  construction, within the conversation's one scope, so a later turn reading it
+  off disk cannot escape the scope the gateway would have enforced. The daemon
+  enforces this — a turn whose scope differs from the bound scope is rejected
+  (see `apps/sandbox-daemon/conversation-scope.ts`).
 
 ### `runId`
 

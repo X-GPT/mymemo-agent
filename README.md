@@ -140,3 +140,11 @@ security boundary), but it is why the harness is for local testing only. (The
 daemon-token-via-`/proc` exposure from dropping PID isolation does apply to prod
 too and is tracked in MYM-35.)
 
+Within a single conversation, the reused workspace is still safe against a
+**scope** leak: a conversation's document scope is immutable (see the technical
+design doc's `conversationId` section). Documents hydrated into
+`conversations/{id}/docs/` are always within that one scope, and the daemon
+rejects (HTTP 409) any later turn whose scope differs, so a narrower turn can
+never read documents a broader turn left on disk (MYM-39). The scope a
+conversation is bound to is recorded in `conversations/{id}/scope.json`.
+
