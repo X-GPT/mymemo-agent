@@ -131,7 +131,7 @@ export function buildMymemoTools(context?: MymemoToolContext) {
 	return [
 		tool(
 			SEARCH_DOCUMENTS_TOOL_NAME,
-			'Search the user\'s MyMemo documents and hydrate matches into the local conversation workspace. Returns one row per document with its documentId, source, title, snippet, and localPath. A non-empty localPath is a file you can Read; if source is "skipped_too_large" or "skipped_run_budget" the document was not hydrated, localPath is empty, and the row\'s `error` says which limit was hit.',
+			"Search the user's MyMemo documents and hydrate matches into the local conversation workspace. Returns one row per document with its documentId, source, title, snippet, and localPath — a file you can Read.",
 			{
 				query: z
 					.string()
