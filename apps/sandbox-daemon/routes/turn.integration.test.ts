@@ -78,7 +78,11 @@ describe("POST /turn integration", () => {
 		return {
 			request_id: `req-${reqCounter}-${Date.now()}`,
 			user_id: "user-1",
-			conversation_id: "conv-1",
+			// Unique per call so the persistent per-conversation scope binding
+			// (scope.json, kept under testRoot for the whole file) can't couple
+			// otherwise-independent tests. Tests that need a shared conversation
+			// pass conversation_id via overrides.
+			conversation_id: `conv-${reqCounter}`,
 			run_id: "run-1",
 			scope_type: "global",
 			message: "hello",
