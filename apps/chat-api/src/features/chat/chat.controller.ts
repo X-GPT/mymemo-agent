@@ -62,6 +62,7 @@ export async function complete(
 			// Daemon stream events become run events; their SSE frames are derived
 			// from the recorded events, not sent ad hoc.
 			onSandboxId: (sandboxId) => run.recordSandboxLeased(sandboxId),
+			onDaemonStarted: () => run.recordDaemonStarted(),
 			onAgentSessionId: (agentSessionId) =>
 				run.recordAgentEvent({ type: "session_id", sessionId: agentSessionId }),
 			onTextDelta: (text) => run.recordAgentEvent({ type: "text_delta", text }),

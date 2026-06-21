@@ -29,6 +29,8 @@ export interface RunSandboxChatOptions {
 	onTextDelta: (text: string) => Promise<void>;
 	onAgentSessionId: (agentSessionId: string) => Promise<void>;
 	onSandboxId: (sandboxId: string) => Promise<void>;
+	/** Fired once the in-sandbox daemon is confirmed up, before the turn is forwarded. */
+	onDaemonStarted: () => Promise<void>;
 	logger: ChatLogger;
 }
 
@@ -51,6 +53,7 @@ export async function runSandboxChat(
 		onTextDelta,
 		onAgentSessionId,
 		onSandboxId,
+		onDaemonStarted,
 		logger,
 	} = options;
 
@@ -85,6 +88,7 @@ export async function runSandboxChat(
 				sandbox,
 				logger,
 			);
+			await onDaemonStarted();
 
 			const systemPrompt = buildSandboxAgentPrompt({
 				scope,

@@ -10,6 +10,7 @@ import { runEventToClientEvents } from "./run-events-to-sse";
 // made; a swappable impl lets each test drive success/failure behavior.
 type RunOpts = {
 	onSandboxId: (id: string) => Promise<void>;
+	onDaemonStarted: () => Promise<void>;
 	onAgentSessionId: (id: string) => Promise<void>;
 	onTextDelta: (text: string) => Promise<void>;
 };
@@ -69,6 +70,7 @@ describe("complete", () => {
 	beforeEach(() => {
 		runSandboxChatImpl = async (opts) => {
 			await opts.onSandboxId("sbx-1");
+			await opts.onDaemonStarted();
 			await opts.onAgentSessionId("agent-sess-1");
 			await opts.onTextDelta("Hello");
 			return { status: "completed" };
@@ -103,6 +105,7 @@ describe("complete", () => {
 		expect(runEvents.map((e) => e.type)).toEqual([
 			"run_started",
 			"sandbox_leased",
+			"daemon_started",
 			"agent_event",
 			"agent_event",
 			"run_completed",

@@ -56,6 +56,7 @@ function makeOptions(
 		onTextDelta: async () => {},
 		onAgentSessionId: async () => {},
 		onSandboxId: async () => {},
+		onDaemonStarted: async () => {},
 		logger: silentLogger,
 		...overrides,
 	};
@@ -245,6 +246,28 @@ describe("runSandboxChat", () => {
 		);
 
 		expect(received).toEqual(["sbx-123"]);
+	});
+
+	it("invokes onDaemonStarted after the daemon is up and before forwarding the turn", async () => {
+		const order: string[] = [];
+		ensureSandboxDaemon.mockImplementation(async () => {
+			order.push("ensureDaemon");
+			return { url: "http://daemon:8080", authToken: "test-daemon-auth-token" };
+		});
+		forwardTurn.mockImplementation(async () => {
+			order.push("forward");
+		});
+
+		await runSandboxChat(
+			deps,
+			makeOptions({
+				onDaemonStarted: async () => {
+					order.push("daemonStarted");
+				},
+			}),
+		);
+
+		expect(order).toEqual(["ensureDaemon", "daemonStarted", "forward"]);
 	});
 
 	it("surfaces daemon-emitted session id via onAgentSessionId callback", async () => {
