@@ -1,4 +1,5 @@
 export {
+	type CancelOutcome,
 	type CreateRunOptions,
 	createRun,
 	normalizeRunError,

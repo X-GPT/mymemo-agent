@@ -158,6 +158,87 @@ describe("run-state lifecycle", () => {
 	});
 });
 
+describe("run-state cancellation (idempotent)", () => {
+	// Acceptance: cancellation covers an active run, an already-completed run, an
+	// already-failed run, and an already-canceled run. Only the active case
+	// transitions; every other call is a safe no-op so a late cancel signal that
+	// races the run's natural outcome never throws or double-records.
+
+	it("cancels an active run and records exactly one run_canceled", async () => {
+		const { sink, types } = fakeSink();
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+
+		const outcome = await run.cancel();
+
+		expect(outcome).toEqual({ transitioned: true, status: "canceled" });
+		expect(run.status).toBe("canceled");
+		expect(types()).toEqual([RunEventType.Started, RunEventType.Canceled]);
+	});
+
+	it("is idempotent: a repeated cancel is a no-op with no duplicate event", async () => {
+		const { sink, types } = fakeSink();
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+
+		await run.cancel();
+		const second = await run.cancel();
+
+		expect(second).toEqual({ transitioned: false, status: "canceled" });
+		expect(run.status).toBe("canceled");
+		// Still exactly one canceled record — the second cancel wrote nothing.
+		expect(types()).toEqual([RunEventType.Started, RunEventType.Canceled]);
+	});
+
+	it("does not cancel an already-completed run (cancel lost the race)", async () => {
+		const { sink, types } = fakeSink();
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+		await run.markRunCompleted();
+
+		const outcome = await run.cancel();
+
+		expect(outcome).toEqual({ transitioned: false, status: "completed" });
+		expect(run.status).toBe("completed");
+		expect(types()).toEqual([RunEventType.Started, RunEventType.Completed]);
+	});
+
+	it("does not cancel an already-failed run (cancel lost the race)", async () => {
+		const { sink, types } = fakeSink();
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+		await run.markRunFailed(new Error("boom"));
+
+		const outcome = await run.cancel();
+
+		expect(outcome).toEqual({ transitioned: false, status: "failed" });
+		expect(run.status).toBe("failed");
+		expect(types()).toEqual([RunEventType.Started, RunEventType.Failed]);
+	});
+
+	it("stays running and is retryable when the cancel write fails", async () => {
+		let failNext = true;
+		const persisted: RunEvent[] = [];
+		const sink: RunEventSink = {
+			async appendRunEvent(_ref, event) {
+				if (failNext && event.type === RunEventType.Canceled) {
+					failNext = false;
+					throw new Error("ENOSPC");
+				}
+				persisted.push(event);
+			},
+		};
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+
+		// First cancel write rejects; status must not advance, so a retry works.
+		await expect(run.cancel()).rejects.toThrow(/ENOSPC/);
+		expect(run.status).toBe("running");
+
+		const outcome = await run.cancel();
+		expect(outcome).toEqual({ transitioned: true, status: "canceled" });
+		expect(persisted.map((e) => e.type)).toEqual([
+			RunEventType.Started,
+			RunEventType.Canceled,
+		]);
+	});
+});
+
 describe("run-state terminal guards", () => {
 	it("rejects a second terminal transition", async () => {
 		const { sink } = fakeSink();

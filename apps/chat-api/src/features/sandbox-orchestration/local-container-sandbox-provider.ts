@@ -85,6 +85,21 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 		// The local container is long-lived — nothing to tear down per turn.
 	}
 
+	async cancelSandbox(
+		userId: string,
+		handle: SandboxHandle,
+		logger: SyncLogger,
+	): Promise<void> {
+		// The shared container is long-lived and has no per-turn abort hook, so
+		// cancellation is a best-effort no-op here; the daemon's turn lock frees
+		// when the turn ends. Mirrors killSandbox.
+		logger.info({
+			msg: "Local sandbox cancel is a no-op",
+			userId,
+			sandboxId: handle.sandboxId,
+		});
+	}
+
 	private async isHealthy(url: string): Promise<boolean> {
 		try {
 			const response = await fetch(`${url}/health`, {

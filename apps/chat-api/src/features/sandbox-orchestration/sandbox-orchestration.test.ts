@@ -66,6 +66,7 @@ describe("runSandboxChat", () => {
 	let createSandbox: ReturnType<typeof mock>;
 	let ensureSandboxDaemon: ReturnType<typeof mock>;
 	let killSandbox: ReturnType<typeof mock>;
+	let cancelSandbox: ReturnType<typeof mock>;
 	let hydrate: ReturnType<typeof mock>;
 	let sync: ReturnType<typeof mock>;
 	let forwardTurn: ReturnType<typeof spyOn>;
@@ -79,12 +80,18 @@ describe("runSandboxChat", () => {
 			authToken: "test-daemon-auth-token",
 		}));
 		killSandbox = mock(async () => undefined);
+		cancelSandbox = mock(async () => undefined);
 		hydrate = mock(async () => undefined);
 		sync = mock(async () => undefined);
 
 		deps = {
 			config,
-			sandboxProvider: { createSandbox, ensureSandboxDaemon, killSandbox },
+			sandboxProvider: {
+				createSandbox,
+				ensureSandboxDaemon,
+				killSandbox,
+				cancelSandbox,
+			},
 			workspaceStore: {
 				hydrateConversationWorkspace: hydrate,
 				syncConversationWorkspace: sync,

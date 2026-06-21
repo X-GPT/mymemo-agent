@@ -127,6 +127,24 @@ export class E2BSandboxProvider implements SandboxProvider {
 	}
 
 	/**
+	 * Cancel an in-flight turn. A per-turn E2B sandbox has no in-place turn abort,
+	 * so killing the sandbox is the cancellation. `killSandbox` already swallows
+	 * errors, so this is idempotent and safe whether or not a turn is in flight.
+	 */
+	async cancelSandbox(
+		userId: string,
+		handle: SandboxHandle,
+		logger: SyncLogger,
+	): Promise<void> {
+		logger.info({
+			msg: "Canceling sandbox turn",
+			userId,
+			sandboxId: handle.sandboxId,
+		});
+		await this.killSandbox(userId, handle, logger);
+	}
+
+	/**
 	 * Deploy the daemon + agent bundles onto the freshly created sandbox and
 	 * wait for the daemon to report healthy. Returns the daemon URL and the
 	 * fixed auth token clients must present.

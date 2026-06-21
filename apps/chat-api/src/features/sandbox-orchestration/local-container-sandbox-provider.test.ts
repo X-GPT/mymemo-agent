@@ -98,4 +98,15 @@ describe("LocalContainerSandboxProvider", () => {
 		const provider = new LocalContainerSandboxProvider(config);
 		await expect(provider.killSandbox()).resolves.toBeUndefined();
 	});
+
+	it("cancelSandbox is a best-effort no-op (no per-turn abort on the shared container)", async () => {
+		const provider = new LocalContainerSandboxProvider(config);
+		await expect(
+			provider.cancelSandbox(
+				"user-1",
+				{ sandboxId: "local-sandbox" },
+				silentLogger,
+			),
+		).resolves.toBeUndefined();
+	});
 });
