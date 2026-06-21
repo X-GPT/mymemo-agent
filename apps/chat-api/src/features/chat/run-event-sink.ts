@@ -11,9 +11,14 @@
  *   fail closed.
  * - For a *terminal* event (`run_completed` / `run_failed` / `run_canceled`)
  *   the client-facing outcome must not hinge on the audit write: a failed
- *   durable append is logged but the derived frame is still emitted and the
- *   call resolves, so a log hiccup can never turn a finished turn into a
- *   client error (or silently drop its `done`/`error`).
+ *   durable append is logged but the derived frame (if any) is still emitted
+ *   and the call resolves, so a log hiccup can never turn a finished turn into
+ *   a client error (or silently drop its `done`/`error`). Because the call
+ *   resolves, `Run.terminate` advances the run's status even though the
+ *   terminal event was not persisted — a deliberate trade-off: when the
+ *   durable store is failing we prefer telling the client the true outcome
+ *   over keeping the audit log retryable. The dropped record is logged loudly
+ *   (see the matching note in `run-state.ts` `terminate`).
  * - SSE send failures are always logged and swallowed — a broken client
  *   connection must not fail the run or corrupt its durable record.
  */
@@ -45,7 +50,7 @@ export function createSseRunEventSink(
 				if (!TERMINAL_EVENT_TYPES.has(event.type)) throw err;
 				logger.error({
 					message:
-						"Failed to persist terminal run event; emitting client frame anyway",
+						"Failed to persist terminal run event; settling the run and surfacing any derived client frame anyway",
 					eventType: event.type,
 					error: err,
 				});

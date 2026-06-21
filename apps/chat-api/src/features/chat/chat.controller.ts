@@ -73,16 +73,19 @@ export async function complete(
 	} catch (err) {
 		// Any daemon, transport, or orchestration failure terminates the run and
 		// derives the client's `error` frame. Log the original error (stack, cause,
-		// type) here — the durable run log only records a normalized message. A busy
-		// conversation gets a friendlier client message; everything else carries its
-		// normalized error.
-		logger.error({ message: "Sandbox chat run failed", error: err });
-		const failure =
-			err instanceof ConversationBusyError
-				? new Error(
-						"Sandbox is busy processing another request. Please try again shortly.",
-					)
-				: err;
-		await run.markRunFailed(failure);
+		// type) here — the durable run log only records a normalized message.
+		if (err instanceof ConversationBusyError) {
+			// Expected, retryable backpressure — not a failure to alert on. The
+			// client gets a friendlier, actionable message.
+			logger.warn({ message: "Sandbox chat run rejected: conversation busy" });
+			await run.markRunFailed(
+				new Error(
+					"Sandbox is busy processing another request. Please try again shortly.",
+				),
+			);
+		} else {
+			logger.error({ message: "Sandbox chat run failed", error: err });
+			await run.markRunFailed(err);
+		}
 	}
 }
