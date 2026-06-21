@@ -286,7 +286,7 @@ export async function spawnAgent(
 			...(sessionStoreRoot
 				? { [SESSION_STORE_ROOT_ENV]: sessionStoreRoot }
 				: {}),
-			// Hydration-limit overrides for the `search_documents` tool. The child
+			// Hydration-limit override(s) for the `search_documents` tool. The child
 			// env is a fresh whitelist (not inherited), so these must be forwarded
 			// explicitly or the tool silently uses defaults. Not secrets — plain
 			// policy ints; only the ones the operator actually set are passed.

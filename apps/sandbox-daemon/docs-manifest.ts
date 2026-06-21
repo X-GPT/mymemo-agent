@@ -42,14 +42,6 @@ export interface DocsManifestEntry {
 	hydratedAt: string;
 	/** The run that caused this hydration. */
 	runId: string;
-	/**
-	 * Byte length of the hydrated content as written. Recorded so the per-run
-	 * hydration budget is charged against an immutable number rather than the
-	 * on-disk file size, which a prompt-injectable agent could shrink or delete
-	 * to free budget. Optional for backward compatibility with manifests written
-	 * before this field existed.
-	 */
-	byteSize?: number;
 }
 
 export interface DocsManifest {
@@ -84,9 +76,7 @@ function isManifestEntry(value: unknown): value is DocsManifestEntry {
 		typeof e.localPath === "string" &&
 		typeof e.source === "string" &&
 		typeof e.hydratedAt === "string" &&
-		typeof e.runId === "string" &&
-		(e.byteSize === undefined ||
-			(typeof e.byteSize === "number" && Number.isFinite(e.byteSize)))
+		typeof e.runId === "string"
 	);
 }
 
