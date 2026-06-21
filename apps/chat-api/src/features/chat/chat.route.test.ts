@@ -26,7 +26,6 @@ type RunOpts = {
 	onSandboxId: (id: string) => Promise<void>;
 	onAgentSessionId: (id: string) => Promise<void>;
 	onTextDelta: (text: string) => Promise<void>;
-	onTextEnd: () => Promise<void>;
 };
 
 // Captures the options the route passed into orchestration, so tests can assert
@@ -37,7 +36,6 @@ let runSandboxChatImpl: (opts: RunOpts) => Promise<unknown> = async (opts) => {
 	await opts.onSandboxId("sbx-test");
 	await opts.onAgentSessionId("agent-sess-test");
 	await opts.onTextDelta("Hello");
-	await opts.onTextEnd();
 	return { status: "completed" };
 };
 
@@ -95,7 +93,6 @@ describe("POST /v1/chat", () => {
 			await opts.onSandboxId("sbx-test");
 			await opts.onAgentSessionId("agent-sess-test");
 			await opts.onTextDelta("Hello");
-			await opts.onTextEnd();
 			return { status: "completed" };
 		};
 	});

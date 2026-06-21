@@ -27,7 +27,6 @@ export interface RunSandboxChatOptions {
 	/** Claude SDK resume state. Null starts a fresh agent session. */
 	agentSessionId: string | null;
 	onTextDelta: (text: string) => Promise<void>;
-	onTextEnd: () => Promise<void>;
 	onAgentSessionId: (agentSessionId: string) => Promise<void>;
 	onSandboxId: (sandboxId: string) => Promise<void>;
 	logger: ChatLogger;
@@ -50,7 +49,6 @@ export async function runSandboxChat(
 		summaryId,
 		agentSessionId,
 		onTextDelta,
-		onTextEnd,
 		onAgentSessionId,
 		onSandboxId,
 		logger,
@@ -147,7 +145,6 @@ export async function runSandboxChat(
 				daemonAuthToken: daemon.authToken,
 				turnRequest,
 				onTextDelta,
-				onTextEnd,
 				// The proxy surfaces the daemon's Claude SDK session id, which we
 				// expose as the agent session id.
 				onSessionId: onAgentSessionId,

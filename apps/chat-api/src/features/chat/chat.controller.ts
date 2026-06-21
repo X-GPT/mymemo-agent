@@ -65,16 +65,18 @@ export async function complete(
 			onAgentSessionId: (agentSessionId) =>
 				run.recordAgentEvent({ type: "session_id", sessionId: agentSessionId }),
 			onTextDelta: (text) => run.recordAgentEvent({ type: "text_delta", text }),
-			// `done` is derived from `run_completed`, emitted only after the whole
-			// run (including workspace sync) succeeds — not at end of the text stream.
-			onTextEnd: async () => {},
 			logger,
 		});
+		// `done` is derived from `run_completed`, emitted only after the whole run
+		// (including workspace sync) succeeds — not at end of the text stream.
 		await run.markRunCompleted();
 	} catch (err) {
 		// Any daemon, transport, or orchestration failure terminates the run and
-		// derives the client's `error` frame. A busy conversation gets a friendlier
-		// message; everything else carries its normalized error.
+		// derives the client's `error` frame. Log the original error (stack, cause,
+		// type) here — the durable run log only records a normalized message. A busy
+		// conversation gets a friendlier client message; everything else carries its
+		// normalized error.
+		logger.error({ message: "Sandbox chat run failed", error: err });
 		const failure =
 			err instanceof ConversationBusyError
 				? new Error(

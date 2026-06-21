@@ -54,7 +54,6 @@ function makeOptions(
 		summaryId: null,
 		agentSessionId: null,
 		onTextDelta: async () => {},
-		onTextEnd: async () => {},
 		onAgentSessionId: async () => {},
 		onSandboxId: async () => {},
 		logger: silentLogger,

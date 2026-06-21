@@ -12,7 +12,6 @@ type RunOpts = {
 	onSandboxId: (id: string) => Promise<void>;
 	onAgentSessionId: (id: string) => Promise<void>;
 	onTextDelta: (text: string) => Promise<void>;
-	onTextEnd: () => Promise<void>;
 };
 
 let runSandboxChatImpl: (opts: RunOpts) => Promise<unknown>;
@@ -72,7 +71,6 @@ describe("complete", () => {
 			await opts.onSandboxId("sbx-1");
 			await opts.onAgentSessionId("agent-sess-1");
 			await opts.onTextDelta("Hello");
-			await opts.onTextEnd();
 			return { status: "completed" };
 		};
 	});
@@ -132,6 +130,28 @@ describe("complete", () => {
 		expect(types()).not.toContain("done");
 		const errorFrame = messages.at(-1);
 		expect(errorFrame).toEqual({ type: "error", message: "daemon exploded" });
+	});
+
+	it("still emits done (not error) when the terminal completion write fails", async () => {
+		// A successful agent turn must not be reported as a client error just
+		// because persisting `run_completed` to the durable log failed.
+		const { sender, types } = fakeSender();
+		const deps = {
+			config: {},
+			sandboxProvider: {},
+			workspaceStore: {
+				async appendRunEvent(_ref: RunRef, event: RunEvent) {
+					if (event.type === "run_completed") {
+						throw new Error("disk full");
+					}
+				},
+			},
+		} as unknown as AppDeps;
+
+		await complete(deps, request, sender, logger);
+
+		expect(types()).toContain("done");
+		expect(types()).not.toContain("error");
 	});
 
 	it("surfaces a friendly message when the conversation is busy", async () => {
