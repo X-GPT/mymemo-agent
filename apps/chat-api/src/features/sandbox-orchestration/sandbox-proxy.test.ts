@@ -45,7 +45,6 @@ describe("forwardChatTurnToSandbox", () => {
 				daemonAuthToken: "daemon-token",
 				turnRequest: makeTurnRequest(),
 				onTextDelta: async () => {},
-				onTextEnd: async () => {},
 				onSessionId: async () => {},
 			});
 		} finally {
@@ -66,7 +65,6 @@ describe("forwardChatTurnToSandbox", () => {
 					daemonAuthToken: "daemon-token",
 					turnRequest: makeTurnRequest(),
 					onTextDelta: async () => {},
-					onTextEnd: async () => {},
 					onSessionId: async () => {},
 				}),
 			).rejects.toBeInstanceOf(ConversationBusyError);
@@ -88,7 +86,6 @@ describe("forwardChatTurnToSandbox", () => {
 					daemonAuthToken: "daemon-token",
 					turnRequest: makeTurnRequest(),
 					onTextDelta: async () => {},
-					onTextEnd: async () => {},
 					onSessionId: async () => {},
 				}),
 			).rejects.toThrow("Daemon returned 500");
@@ -111,7 +108,6 @@ describe("forwardChatTurnToSandbox", () => {
 		) as unknown as typeof fetch;
 
 		const deltas: string[] = [];
-		let textEndCalled = false;
 
 		try {
 			await forwardChatTurnToSandbox({
@@ -121,14 +117,10 @@ describe("forwardChatTurnToSandbox", () => {
 				onTextDelta: async (text) => {
 					deltas.push(text);
 				},
-				onTextEnd: async () => {
-					textEndCalled = true;
-				},
 				onSessionId: async () => {},
 			});
 
 			expect(deltas).toEqual(["hello ", "world"]);
-			expect(textEndCalled).toBe(true);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
@@ -163,7 +155,6 @@ describe("forwardChatTurnToSandbox", () => {
 					}
 					completionOrder.push(text);
 				},
-				onTextEnd: async () => {},
 				onSessionId: async (id) => {
 					completionOrder.push(id);
 				},
@@ -195,7 +186,6 @@ describe("forwardChatTurnToSandbox", () => {
 				daemonAuthToken: "daemon-token",
 				turnRequest: makeTurnRequest(),
 				onTextDelta: async () => {},
-				onTextEnd: async () => {},
 				onSessionId: async (id) => {
 					capturedSessionId = id;
 				},
@@ -225,7 +215,6 @@ describe("forwardChatTurnToSandbox", () => {
 					daemonAuthToken: "daemon-token",
 					turnRequest: makeTurnRequest(),
 					onTextDelta: async () => {},
-					onTextEnd: async () => {},
 					onSessionId: async () => {},
 				}),
 			).rejects.toThrow("agent crashed");
@@ -252,7 +241,6 @@ describe("forwardChatTurnToSandbox", () => {
 					daemonAuthToken: "daemon-token",
 					turnRequest: makeTurnRequest(),
 					onTextDelta: async () => {},
-					onTextEnd: async () => {},
 					onSessionId: async () => {},
 				}),
 			).rejects.toThrow("agent error");
@@ -286,7 +274,6 @@ describe("forwardChatTurnToSandbox", () => {
 				onTextDelta: async (text) => {
 					deltas.push(text);
 				},
-				onTextEnd: async () => {},
 				onSessionId: async () => {},
 			});
 

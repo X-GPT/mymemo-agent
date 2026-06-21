@@ -122,6 +122,26 @@ describe("LocalWorkspaceStore durable path model", () => {
 			{ type: "run_completed", ok: true },
 		]);
 	});
+
+	it("appends in order across many events (first event creates the dir, rest reuse it)", async () => {
+		const ref = { userId: "user-1", runId: "run-2" };
+		// First append exercises the lazy-mkdir (ENOENT) branch; the rest exercise
+		// the steady-state single-append branch against the now-existing dir.
+		for (let i = 0; i < 5; i++) {
+			await store.appendRunEvent(ref, { type: "agent_event", i });
+		}
+
+		const file = join(
+			root,
+			"users",
+			encodeUserSegment("user-1"),
+			"runs",
+			"run-2",
+			"events.jsonl",
+		);
+		const lines = readFileSync(file, "utf8").trim().split("\n");
+		expect(lines.map((l) => JSON.parse(l).i)).toEqual([0, 1, 2, 3, 4]);
+	});
 });
 
 describe("LocalWorkspaceStore isolation and traversal", () => {

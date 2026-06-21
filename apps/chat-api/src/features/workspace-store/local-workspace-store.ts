@@ -11,7 +11,8 @@
  * task. The abstraction and call sites are in place so that wiring is additive.
  */
 
-import { appendFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
+import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
 	type DocsManifest,
@@ -74,13 +75,24 @@ export class LocalWorkspaceStore implements WorkspaceStore {
 	}
 
 	async appendRunEvent(ref: RunRef, event: RunEvent): Promise<void> {
+		// Hot path: wired through the run-event sink, this runs once per streamed
+		// token. Use async fs so the write yields the event loop instead of
+		// blocking it, and create the run directory lazily — only the first event
+		// of a run pays the mkdir, after which a single append is the whole cost
+		// (no per-event mkdir, and no unbounded "created dirs" memo to leak).
 		const file = resolveDurableRunEventsPath(
 			this.rootDir,
 			ref.userId,
 			ref.runId,
 		);
-		mkdirSync(dirname(file), { recursive: true });
-		appendFileSync(file, `${JSON.stringify(event)}\n`, "utf8");
+		const line = `${JSON.stringify(event)}\n`;
+		try {
+			await appendFile(file, line, "utf8");
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+			await mkdir(dirname(file), { recursive: true });
+			await appendFile(file, line, "utf8");
+		}
 	}
 }
 
