@@ -118,6 +118,8 @@ Identity arrives via `X-*` headers, **not** the JSON body. chat-api does not aut
 
 The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-capable code). It holds no provider key and no document credential — only a short-lived, single-user, signed bearer token whose claims include the turn's document scope. The inbound edges from a sandbox are **sandbox → gateway** (for both LLM and document calls); the gateway holds the real credentials + `LLM_TOKEN_SECRET`, should only be reachable from sandboxes, and reaches only its two upstreams (`api.anthropic.com` and the MyMemo KB Postgres). Because scope is signed into the token and enforced by the gateway's document routes, a prompt-injected agent cannot read documents outside its turn's scope. chat-api mints the token; the gateway verifies it; the daemon never sees `LLM_TOKEN_SECRET`.
 
+The **chat-api → daemon `/turn`** edge has no application-layer auth and the daemon holds no secret of its own (MYM-35). In prod each E2B sandbox is created with `allowPublicTraffic: false`, so its edge rejects any request to the daemon's public URL that lacks the per-sandbox `e2b-traffic-access-token` (held only by chat-api, sent on every daemon call); chat-api fails the sandbox create if that token is absent, so the restriction can't silently fail open. Locally the daemon container is unpublished on the compose network. The previous shared `DAEMON_AUTH_TOKEN` bearer was removed: it lived in the daemon's process env where the untrusted agent could read it via `/proc`, yet it was redundant with the edge and identical across all sandboxes.
+
 **Merge tradeoff (be aware):** the LLM proxy and the document reader used to be two separate services (`llm-gateway` + `document-gateway`), each holding exactly one credential. They are now one `gateway` process that holds BOTH `ANTHROPIC_API_KEY` and `DATABASE_URL` and has a single egress identity reaching both Anthropic and the KB Postgres. This is a wider blast radius — a compromise of the gateway now exposes both credentials at once — accepted as the cost of running one deployable control plane instead of two. The token still has no audience/capability claim, so one token is valid on both route families; that was already true when they were separate and is unchanged by the merge.
 
 ### Key Modules
@@ -155,7 +157,6 @@ The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-cap
 
 Required:
 - `E2B_API_KEY` — required only when `SANDBOX_PROVIDER=e2b` (the default); not needed for the local provider
-- `DAEMON_AUTH_TOKEN`
 - `LLM_TOKEN_SECRET` — HMAC secret for minting per-turn tokens (shared with the gateway)
 - `GATEWAY_PUBLIC_URL` — base URL of the merged gateway; the sandbox agent points BOTH the Claude binary (→ `/v1/messages`) and the `mymemo-docs` CLI (→ `/v1/documents/*`) at it. **Must be reachable from inside the E2B sandbox**
 

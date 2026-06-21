@@ -7,7 +7,6 @@ describe("loadConfigFromEnv", () => {
 		expect(config).toEqual({
 			daemonPort: 8080,
 			daemonVersion: "unknown",
-			daemonAuthToken: undefined,
 			workspaceRoot: "/workspace",
 			agentSpawn: {
 				agentBundlePath: "/workspace/agent.js",
@@ -22,7 +21,6 @@ describe("loadConfigFromEnv", () => {
 		const config = loadConfigFromEnv({
 			DAEMON_PORT: "9090",
 			DAEMON_VERSION: "v1.2.3",
-			DAEMON_AUTH_TOKEN: "secret",
 			SANDBOX_WORKSPACE_ROOT: "/tmp/ws",
 			SANDBOX_AGENT_PATH: "/custom/agent.js",
 			SANDBOX_BUN_PATH: "/custom/bun",
@@ -32,7 +30,6 @@ describe("loadConfigFromEnv", () => {
 		expect(config).toEqual({
 			daemonPort: 9090,
 			daemonVersion: "v1.2.3",
-			daemonAuthToken: "secret",
 			workspaceRoot: "/tmp/ws",
 			agentSpawn: {
 				agentBundlePath: "/custom/agent.js",

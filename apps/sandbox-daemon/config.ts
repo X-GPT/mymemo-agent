@@ -45,9 +45,9 @@ type Env = Record<string, string | undefined>;
 // throwing (unlike the gateway's `parsePort`, which fails fast). The daemon runs
 // inside the sandbox where there is no operator to read a boot error, and a
 // malformed watchdog value that became the live timeout would SIGKILL every turn
-// at spawn — so a safe default beats aborting. Required secrets are absent here
-// (the only secret, DAEMON_AUTH_TOKEN, fails closed at request time), so there
-// is nothing to fail-fast on.
+// at spawn — so a safe default beats aborting. The daemon holds no secret of its
+// own (the /turn boundary is the sandbox edge, see routes/turn.ts), so there is
+// nothing to fail-fast on.
 
 /** Parse a TCP port: an integer in 1..65535, else the fallback. */
 function parsePort(value: string | undefined, fallback: number): number {
@@ -87,11 +87,6 @@ export interface DaemonConfig {
 	daemonPort: number;
 	/** Surfaced by /health for the chat-api bundle check (DAEMON_VERSION). */
 	daemonVersion: string;
-	/**
-	 * Bearer secret required on /turn. When unset, every /turn is rejected with
-	 * 401 (fail-closed) — preserved as-is so behavior matches the pre-config code.
-	 */
-	daemonAuthToken: string | undefined;
 	/** Root of the sandbox workspace tree (SANDBOX_WORKSPACE_ROOT). */
 	workspaceRoot: string;
 	/** Settings for spawning the per-turn agent child. */
@@ -107,7 +102,6 @@ export function loadConfigFromEnv(env: Env): DaemonConfig {
 	return {
 		daemonPort: parsePort(env.DAEMON_PORT, DEFAULT_DAEMON_PORT),
 		daemonVersion: env.DAEMON_VERSION ?? DEFAULT_DAEMON_VERSION,
-		daemonAuthToken: env.DAEMON_AUTH_TOKEN,
 		workspaceRoot: env.SANDBOX_WORKSPACE_ROOT ?? DEFAULT_WORKSPACE_ROOT,
 		agentSpawn: {
 			agentBundlePath: env.SANDBOX_AGENT_PATH ?? DEFAULT_AGENT_BUNDLE_PATH,

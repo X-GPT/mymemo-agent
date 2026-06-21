@@ -60,7 +60,9 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 		logger: SyncLogger,
 	): Promise<SandboxDaemonEndpoint> {
 		const url = this.config.localSandboxDaemonUrl;
-		const endpoint = { url, authToken: this.config.daemonAuthToken };
+		// No edge to authenticate against: the daemon container is unpublished on
+		// the compose network, so the turn proxy sends no traffic token.
+		const endpoint = { url };
 
 		// Bundles are baked into the image, so there is nothing to push — just wait
 		// for the container's daemon to accept connections.

@@ -29,11 +29,11 @@ describe("forwardChatTurnToSandbox", () => {
 		mock.restore();
 	});
 
-	it("sends daemon auth token header", async () => {
+	it("sends the e2b traffic access token header", async () => {
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = mock((_url, init) => {
 			const headers = new Headers((init as RequestInit).headers);
-			expect(headers.get("x-daemon-auth-token")).toBe("daemon-token");
+			expect(headers.get("e2b-traffic-access-token")).toBe("traffic-token");
 			return Promise.resolve(
 				new Response(ndjsonBody([{ type: "completed" }]), { status: 200 }),
 			);
@@ -42,7 +42,7 @@ describe("forwardChatTurnToSandbox", () => {
 		try {
 			await forwardChatTurnToSandbox({
 				daemonUrl: "http://localhost:8080",
-				daemonAuthToken: "daemon-token",
+				trafficAccessToken: "traffic-token",
 				turnRequest: makeTurnRequest(),
 				onTextDelta: async () => {},
 				onSessionId: async () => {},
@@ -62,7 +62,7 @@ describe("forwardChatTurnToSandbox", () => {
 			await expect(
 				forwardChatTurnToSandbox({
 					daemonUrl: "http://localhost:8080",
-					daemonAuthToken: "daemon-token",
+					trafficAccessToken: "traffic-token",
 					turnRequest: makeTurnRequest(),
 					onTextDelta: async () => {},
 					onSessionId: async () => {},
@@ -83,7 +83,7 @@ describe("forwardChatTurnToSandbox", () => {
 			await expect(
 				forwardChatTurnToSandbox({
 					daemonUrl: "http://localhost:8080",
-					daemonAuthToken: "daemon-token",
+					trafficAccessToken: "traffic-token",
 					turnRequest: makeTurnRequest(),
 					onTextDelta: async () => {},
 					onSessionId: async () => {},
@@ -112,7 +112,7 @@ describe("forwardChatTurnToSandbox", () => {
 		try {
 			await forwardChatTurnToSandbox({
 				daemonUrl: "http://localhost:8080",
-				daemonAuthToken: "daemon-token",
+				trafficAccessToken: "traffic-token",
 				turnRequest: makeTurnRequest(),
 				onTextDelta: async (text) => {
 					deltas.push(text);
@@ -147,7 +147,7 @@ describe("forwardChatTurnToSandbox", () => {
 		try {
 			await forwardChatTurnToSandbox({
 				daemonUrl: "http://localhost:8080",
-				daemonAuthToken: "daemon-token",
+				trafficAccessToken: "traffic-token",
 				turnRequest: makeTurnRequest(),
 				onTextDelta: async (text) => {
 					if (text === "slow") {
@@ -183,7 +183,7 @@ describe("forwardChatTurnToSandbox", () => {
 		try {
 			await forwardChatTurnToSandbox({
 				daemonUrl: "http://localhost:8080",
-				daemonAuthToken: "daemon-token",
+				trafficAccessToken: "traffic-token",
 				turnRequest: makeTurnRequest(),
 				onTextDelta: async () => {},
 				onSessionId: async (id) => {
@@ -212,7 +212,7 @@ describe("forwardChatTurnToSandbox", () => {
 			await expect(
 				forwardChatTurnToSandbox({
 					daemonUrl: "http://localhost:8080",
-					daemonAuthToken: "daemon-token",
+					trafficAccessToken: "traffic-token",
 					turnRequest: makeTurnRequest(),
 					onTextDelta: async () => {},
 					onSessionId: async () => {},
@@ -238,7 +238,7 @@ describe("forwardChatTurnToSandbox", () => {
 			await expect(
 				forwardChatTurnToSandbox({
 					daemonUrl: "http://localhost:8080",
-					daemonAuthToken: "daemon-token",
+					trafficAccessToken: "traffic-token",
 					turnRequest: makeTurnRequest(),
 					onTextDelta: async () => {},
 					onSessionId: async () => {},
@@ -269,7 +269,7 @@ describe("forwardChatTurnToSandbox", () => {
 		try {
 			await forwardChatTurnToSandbox({
 				daemonUrl: "http://localhost:8080",
-				daemonAuthToken: "daemon-token",
+				trafficAccessToken: "traffic-token",
 				turnRequest: makeTurnRequest(),
 				onTextDelta: async (text) => {
 					deltas.push(text);

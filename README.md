@@ -66,12 +66,10 @@ Each service reads its own `apps/<svc>/.env` (non-secret wiring stays inline in
 `compose.yaml`). Create them from the examples:
 
 ```sh
-cp apps/chat-api/.env.example       apps/chat-api/.env
-cp apps/gateway/.env.example        apps/gateway/.env
-cp apps/sandbox-daemon/.env.example apps/sandbox-daemon/.env
-# Fill in apps/gateway/.env's ANTHROPIC_API_KEY. Keep the shared values identical
-# across files: LLM_TOKEN_SECRET (chat-api + gateway), DAEMON_AUTH_TOKEN
-# (chat-api + sandbox-daemon).
+cp apps/chat-api/.env.example apps/chat-api/.env
+cp apps/gateway/.env.example  apps/gateway/.env
+# Fill in apps/gateway/.env's ANTHROPIC_API_KEY. Keep LLM_TOKEN_SECRET identical
+# across the chat-api and gateway files. The sandbox-daemon needs no secrets.
 docker compose up --build
 ```
 

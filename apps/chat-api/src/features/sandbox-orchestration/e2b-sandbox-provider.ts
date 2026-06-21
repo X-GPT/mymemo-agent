@@ -2,11 +2,12 @@ import { resolve } from "node:path";
 import { Sandbox } from "e2b";
 import type { ApiConfig } from "@/config/env";
 import { SandboxCreationError } from "./errors";
-import type {
-	SandboxDaemonEndpoint,
-	SandboxHandle,
-	SandboxProvider,
-	SyncLogger,
+import {
+	type SandboxDaemonEndpoint,
+	type SandboxHandle,
+	type SandboxProvider,
+	type SyncLogger,
+	trafficAccessHeaders,
 } from "./sandbox-provider";
 
 const DAEMON_PORT = 8080;
@@ -80,23 +81,43 @@ export class E2BSandboxProvider implements SandboxProvider {
 	): Promise<SandboxHandle> {
 		logger.info({ msg: "Creating sandbox", userId });
 
+		let sandbox: Sandbox;
 		try {
-			const sandbox = await Sandbox.create(this.config.e2bTemplate, {
+			// allowPublicTraffic: false makes the sandbox edge reject any request to
+			// the daemon's public URL that lacks the per-sandbox traffic token (held
+			// only here). This is the sole boundary in front of /turn now that the
+			// daemon's shared bearer is gone (MYM-35).
+			sandbox = await Sandbox.create(this.config.e2bTemplate, {
 				metadata: { userId },
+				network: { allowPublicTraffic: false },
 			});
-
-			logger.info({
-				msg: "Sandbox created",
-				userId,
-				sandboxId: sandbox.sandboxId,
-			});
-
-			return sandbox;
 		} catch (err) {
+			// A create failure may be transient — SandboxCreationError is retried by
+			// runSandboxChat.
 			throw new SandboxCreationError(
 				`Failed to create sandbox for user ${userId}: ${err instanceof Error ? err.message : String(err)}`,
 			);
 		}
+
+		// The token is only minted when public traffic is restricted, so its absence
+		// means the restriction did not take effect — a daemon open to the internet.
+		// This is a deterministic invariant, not a transient failure, so throw a
+		// plain Error (NOT SandboxCreationError) so runSandboxChat fails fast instead
+		// of retrying an identical create.
+		if (!sandbox.trafficAccessToken) {
+			await sandbox.kill().catch(() => {});
+			throw new Error(
+				"E2B sandbox has no trafficAccessToken; allowPublicTraffic restriction did not take effect",
+			);
+		}
+
+		logger.info({
+			msg: "Sandbox created",
+			userId,
+			sandboxId: sandbox.sandboxId,
+		});
+
+		return sandbox;
 	}
 
 	async killSandbox(
@@ -161,7 +182,12 @@ export class E2BSandboxProvider implements SandboxProvider {
 		// Sandbox its own createSandbox returned.
 		const sandbox = handle as Sandbox;
 		const daemonUrl = this.getDaemonUrl(sandbox);
-		const endpoint = { url: daemonUrl, authToken: this.config.daemonAuthToken };
+		// trafficAccessToken is guaranteed present — createSandbox fails the create
+		// when it is missing — so the turn proxy can always authenticate to the edge.
+		const endpoint = {
+			url: daemonUrl,
+			trafficAccessToken: sandbox.trafficAccessToken,
+		};
 
 		const bundles = await getSandboxBundles();
 
@@ -181,9 +207,15 @@ export class E2BSandboxProvider implements SandboxProvider {
 
 	private async checkDaemonHealth(
 		daemonUrl: string,
+		trafficAccessToken: string | undefined,
 	): Promise<{ status: string; version: string; uptime: number } | null> {
 		try {
+			// The daemon URL is the sandbox's restricted public host, so /health is
+			// gated by the edge too — present the traffic token or the edge 403s.
+			// createSandbox guarantees the token, so an absent one would only ever
+			// surface here as a 403 → "never healthy" → loud startup failure.
 			const response = await fetch(`${daemonUrl}/health`, {
+				headers: trafficAccessHeaders(trafficAccessToken),
 				signal: AbortSignal.timeout(3_000),
 			});
 			if (!response.ok) return null;
@@ -224,7 +256,6 @@ export class E2BSandboxProvider implements SandboxProvider {
 				background: true,
 				envs: {
 					DAEMON_VERSION: expectedVersion,
-					DAEMON_AUTH_TOKEN: this.config.daemonAuthToken,
 				},
 			},
 		);
@@ -233,7 +264,10 @@ export class E2BSandboxProvider implements SandboxProvider {
 		const deadline = Date.now() + DAEMON_STARTUP_TIMEOUT_MS;
 
 		while (Date.now() < deadline) {
-			const health = await this.checkDaemonHealth(daemonUrl);
+			const health = await this.checkDaemonHealth(
+				daemonUrl,
+				sandbox.trafficAccessToken,
+			);
 			if (health && (!expectedVersion || health.version === expectedVersion)) {
 				logger.info({
 					msg: "Sandbox daemon is ready",

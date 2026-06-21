@@ -6,10 +6,13 @@
 # Config split: non-secret wiring (provider selection, service URLs, ports, the
 # local DB connection) lives inline below, so reading a service's block shows
 # exactly what it gets. Secrets live in a per-service env file next to each app
-# (see each apps/<svc>/.env.example); copy each to .env and fill it in. Two
-# values are shared and MUST match across the files that use them:
+# (see each apps/<svc>/.env.example); copy each to .env and fill it in. One value
+# is shared and MUST match across the files that use it:
 #   LLM_TOKEN_SECRET   — chat-api (mints) + gateway (verifies)
-#   DAEMON_AUTH_TOKEN  — chat-api (calls)  + sandbox (checks)
+#
+# The daemon's /turn has no application-layer auth (MYM-35): in prod the E2B
+# sandbox edge gates its public URL; here the `sandbox` container is unpublished
+# on the compose network, so it has no secret and no env file.
 #
 # Note: the agent runs without bwrap — the sandbox container is the isolation
 # boundary (see apps/sandbox-daemon/child-spawn.ts). dev and prod share one spawn
@@ -30,7 +33,7 @@ services:
       # Same compose network — no getHost tunneling, just the service name.
       GATEWAY_PUBLIC_URL: http://gateway:8080
       LOG_LEVEL: info
-    # Secrets: DAEMON_AUTH_TOKEN, LLM_TOKEN_SECRET
+    # Secrets: LLM_TOKEN_SECRET
     env_file:
       - apps/chat-api/.env
     depends_on:
@@ -76,9 +79,8 @@ services:
       dockerfile: apps/sandbox-daemon/Dockerfile
     environment:
       AGENT_SESSION_STORE_ROOT: /session-store
-    # Secrets: DAEMON_AUTH_TOKEN (must match chat-api's)
-    env_file:
-      - apps/sandbox-daemon/.env
+    # No secrets: /turn has no app-layer auth (MYM-35); the container is
+    # unpublished on the compose network.
     volumes:
       - session-store:/session-store
     healthcheck:

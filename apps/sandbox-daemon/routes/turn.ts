@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import { spawnAgent } from "../child-spawn";
@@ -8,19 +7,6 @@ import {
 	assertValidConversationId,
 	createConversationWorkspace,
 } from "../workspace";
-
-const DAEMON_AUTH_HEADER = "x-daemon-auth-token";
-
-function authTokenMatches(
-	presented: string | undefined,
-	expected: string,
-): boolean {
-	if (!presented) return false;
-	const presentedBuffer = Buffer.from(presented, "utf8");
-	const expectedBuffer = Buffer.from(expected, "utf8");
-	if (presentedBuffer.length !== expectedBuffer.length) return false;
-	return timingSafeEqual(presentedBuffer, expectedBuffer);
-}
 
 interface TurnRequest {
 	request_id: string;
@@ -45,21 +31,21 @@ function ndjsonLine(obj: Record<string, unknown>): string {
 
 /**
  * /turn route factory. Receives the daemon config so it reads no ambient env:
- * the bearer secret, workspace root, and agent-spawn settings all arrive by
- * injection from `daemon-entry.ts`.
+ * the workspace root and agent-spawn settings arrive by injection from
+ * `daemon-entry.ts`.
+ *
+ * No application-layer auth: the boundary in front of /turn is the sandbox edge,
+ * not a daemon-held secret. In prod the E2B sandbox is created with
+ * `allowPublicTraffic: false`, so its edge rejects any request that lacks the
+ * per-sandbox `e2b-traffic-access-token` (held only by chat-api) before it
+ * reaches the daemon. Locally the daemon container is unpublished on the compose
+ * network. A daemon-held shared bearer was removed (MYM-35): it was readable by
+ * the untrusted agent via `/proc` yet redundant with the edge.
  */
 export function createTurnRoutes(config: DaemonConfig): Hono {
 	const app = new Hono();
 
 	app.post("/turn", async (c) => {
-		const expectedToken = config.daemonAuthToken;
-		if (
-			!expectedToken ||
-			!authTokenMatches(c.req.header(DAEMON_AUTH_HEADER), expectedToken)
-		) {
-			return c.json({ error: "Unauthorized" }, 401);
-		}
-
 		const body = await c.req.json<TurnRequest>();
 
 		if (

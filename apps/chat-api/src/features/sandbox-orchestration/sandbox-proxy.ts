@@ -1,4 +1,5 @@
 import { ConversationBusyError } from "./errors";
+import { trafficAccessHeaders } from "./sandbox-provider";
 
 export interface TurnRequest {
 	request_id: string;
@@ -32,7 +33,12 @@ export interface TurnRequest {
 
 interface ForwardOptions {
 	daemonUrl: string;
-	daemonAuthToken: string;
+	/**
+	 * Per-sandbox E2B traffic access token, sent as `e2b-traffic-access-token` so
+	 * the sandbox edge admits the request to the daemon's restricted public URL.
+	 * Undefined for the local provider (no edge), where no header is sent.
+	 */
+	trafficAccessToken?: string;
 	turnRequest: TurnRequest;
 	onTextDelta: (text: string) => Promise<void>;
 	onSessionId: (id: string) => Promise<void>;
@@ -45,8 +51,13 @@ interface ForwardOptions {
 export async function forwardChatTurnToSandbox(
 	options: ForwardOptions,
 ): Promise<void> {
-	const { daemonUrl, daemonAuthToken, turnRequest, onTextDelta, onSessionId } =
-		options;
+	const {
+		daemonUrl,
+		trafficAccessToken,
+		turnRequest,
+		onTextDelta,
+		onSessionId,
+	} = options;
 
 	// Idle-based timeout over the streamed body, re-armed on every chunk —
 	// turns are legitimately long, so an absolute timeout over the whole read
@@ -75,7 +86,7 @@ export async function forwardChatTurnToSandbox(
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
-				"x-daemon-auth-token": daemonAuthToken,
+				...trafficAccessHeaders(trafficAccessToken),
 			},
 			body: JSON.stringify(turnRequest),
 			signal: idleController.signal,

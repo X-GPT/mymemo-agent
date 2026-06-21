@@ -23,8 +23,6 @@ export interface ApiConfig {
 	localSandboxDaemonUrl: string;
 	/** E2B template name (SANDBOX_PROVIDER=e2b only). */
 	e2bTemplate: string;
-	/** Shared bearer for the daemon's /turn endpoint. */
-	daemonAuthToken: string;
 	/** HMAC secret for the per-turn tokens minted into each sandbox turn (shared with the gateway). */
 	llmTokenSecret: string;
 	/** Base URL of the merged gateway, reachable from the sandbox; trailing slash stripped. */
@@ -62,7 +60,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 			"E2B_API_KEY is required when SANDBOX_PROVIDER=e2b",
 		);
 	}
-	invariant(env.DAEMON_AUTH_TOKEN, "DAEMON_AUTH_TOKEN is required");
 	invariant(env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
 	invariant(env.GATEWAY_PUBLIC_URL, "GATEWAY_PUBLIC_URL is required");
 
@@ -85,7 +82,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 			env.LOCAL_SANDBOX_DAEMON_URL || "http://sandbox:8080"
 		).replace(/\/+$/, ""),
 		e2bTemplate: env.E2B_TEMPLATE || "sandbox-template-dev",
-		daemonAuthToken: env.DAEMON_AUTH_TOKEN,
 		llmTokenSecret: env.LLM_TOKEN_SECRET,
 		// Trailing slash stripped so the binary's `${base}/v1/messages` never
 		// produces a double slash.

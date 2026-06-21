@@ -307,7 +307,7 @@
       </div></div>
       <div class="step"><div class="num"></div><div class="body">
         <div class="t">chat-api → daemon</div>
-        <div class="d"><code>POST /turn</code> (<code>x-daemon-auth-token</code>) with the system prompt, scope, message, <code class="tok">llm_base_url</code>, <code class="tok">doc_gateway_url</code>, and <code class="tok">llm_token</code>.</div>
+        <div class="d"><code>POST /turn</code> (admitted by the E2B sandbox edge via <code>e2b-traffic-access-token</code>; the daemon itself has no app-layer auth) with the system prompt, scope, message, <code class="tok">llm_base_url</code>, <code class="tok">doc_gateway_url</code>, and <code class="tok">llm_token</code>.</div>
       </div></div>
       <div class="step"><div class="num"></div><div class="body">
         <div class="t">Spawn the agent (srt)</div>
