@@ -69,7 +69,7 @@ const LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** Reserved field a daemon agent-event payload's own `type` is preserved under. */
-const AGENT_EVENT_TYPE_FIELD = "agentEventType";
+export const AGENT_EVENT_TYPE_FIELD = "agentEventType";
 
 export interface CreateRunOptions {
 	sink: RunEventSink;
@@ -264,10 +264,15 @@ export class Run {
 					`Run ${this.ref.runId} already ${this._status}; cannot mark ${status}`,
 				);
 			}
-			// Persist the terminal event before advancing the status. If the write
+			// Persist the terminal event before advancing the status: if the sink
 			// rejects (e.g. ENOSPC, transient store failure) the run stays `running`
 			// so the outcome can be retried, rather than being stuck terminal with no
-			// durable record of how it ended.
+			// durable record of how it ended. Note this guarantee is only as strong
+			// as the sink: a sink may deliberately resolve on a failed terminal write
+			// to decouple client signaling from audit durability (the chat SSE sink
+			// does — see `chat/run-event-sink.ts`), in which case status advances
+			// without a persisted terminal record. The default fail-closed contract
+			// holds for any sink that propagates its write failures.
 			await this.write(event);
 			this._status = status;
 		});

@@ -23,16 +23,12 @@
  * into a path — a value containing `/`, `..`, or NUL could otherwise escape the
  * conversation subtree.
  *
- * The root is env-overridable (`SANDBOX_WORKSPACE_ROOT`) so tests can point it
- * at a temp dir instead of the host's real `/workspace`.
+ * The root is injected (`DaemonConfig.workspaceRoot`, default `/workspace`) so
+ * tests can point it at a temp dir instead of the host's real `/workspace`.
  */
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-
-// Must stay in sync with child-spawn's WORKSPACE_ROOT and the sandbox template's
-// setWorkdir (apps/chat-api/sandbox-template/template.ts).
-const DEFAULT_WORKSPACE_ROOT = "/workspace";
 
 // conversationId is allocated by chat-api (UUID/nanoid-shaped). Restrict it to a
 // conservative charset so no value can traverse out of its conversation dir.
@@ -40,10 +36,6 @@ const DEFAULT_WORKSPACE_ROOT = "/workspace";
 // rewritten, so the path the daemon creates always matches the id chat-api uses.
 const VALID_CONVERSATION_ID = /^[A-Za-z0-9_-]+$/;
 const MAX_CONVERSATION_ID_LENGTH = 128;
-
-export function getWorkspaceRoot(): string {
-	return process.env.SANDBOX_WORKSPACE_ROOT ?? DEFAULT_WORKSPACE_ROOT;
-}
 
 /**
  * Throw if `conversationId` is missing, too long, or contains any character
@@ -83,18 +75,18 @@ export interface ConversationWorkspace {
 }
 
 /**
- * Compute the workspace paths for a conversation. Pure: validates the id and
- * joins paths, but touches no filesystem.
+ * Compute the workspace paths for a conversation under `workspaceRoot`. Pure:
+ * validates the id and joins paths, but touches no filesystem.
  */
 export function resolveConversationWorkspace(
 	conversationId: string,
+	workspaceRoot: string,
 ): ConversationWorkspace {
 	assertValidConversationId(conversationId);
-	const root = getWorkspaceRoot();
-	const conversation = join(root, "conversations", conversationId);
+	const conversation = join(workspaceRoot, "conversations", conversationId);
 	return {
-		root,
-		system: join(root, "system"),
+		root: workspaceRoot,
+		system: join(workspaceRoot, "system"),
 		conversation,
 		docs: join(conversation, "docs"),
 		work: join(conversation, "work"),
@@ -110,8 +102,9 @@ export function resolveConversationWorkspace(
  */
 export function createConversationWorkspace(
 	conversationId: string,
+	workspaceRoot: string,
 ): ConversationWorkspace {
-	const ws = resolveConversationWorkspace(conversationId);
+	const ws = resolveConversationWorkspace(conversationId, workspaceRoot);
 	mkdirSync(ws.system, { recursive: true });
 	mkdirSync(ws.docs, { recursive: true });
 	mkdirSync(ws.work, { recursive: true });

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Importing `@/index` below eagerly evaluates `config/env.ts`, which throws
 // when these are unset. The bunfig preload (`test-setup.ts`) covers this when
@@ -10,6 +13,9 @@ Bun.env.DAEMON_AUTH_TOKEN =
 Bun.env.LLM_TOKEN_SECRET = Bun.env.LLM_TOKEN_SECRET ?? "test-llm-token-secret";
 Bun.env.GATEWAY_PUBLIC_URL =
 	Bun.env.GATEWAY_PUBLIC_URL ?? "https://gateway.test";
+// The controller now records run events through the real workspace store; point
+// it at a throwaway dir so the route tests stay hermetic and don't pollute cwd.
+Bun.env.WORKSPACE_STORE_ROOT = mkdtempSync(join(tmpdir(), "mym-route-test-"));
 
 // Orchestration is mocked so no E2B sandbox, gateway, database, or provider
 // call is made. A mutable holder lets each test swap the run behavior.
@@ -20,7 +26,6 @@ type RunOpts = {
 	onSandboxId: (id: string) => Promise<void>;
 	onAgentSessionId: (id: string) => Promise<void>;
 	onTextDelta: (text: string) => Promise<void>;
-	onTextEnd: () => Promise<void>;
 };
 
 // Captures the options the route passed into orchestration, so tests can assert
@@ -31,7 +36,6 @@ let runSandboxChatImpl: (opts: RunOpts) => Promise<unknown> = async (opts) => {
 	await opts.onSandboxId("sbx-test");
 	await opts.onAgentSessionId("agent-sess-test");
 	await opts.onTextDelta("Hello");
-	await opts.onTextEnd();
 	return { status: "completed" };
 };
 
@@ -89,7 +93,6 @@ describe("POST /v1/chat", () => {
 			await opts.onSandboxId("sbx-test");
 			await opts.onAgentSessionId("agent-sess-test");
 			await opts.onTextDelta("Hello");
-			await opts.onTextEnd();
 			return { status: "completed" };
 		};
 	});

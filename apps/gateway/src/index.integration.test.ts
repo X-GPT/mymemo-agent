@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { mintLlmToken } from "@mymemo/llm-token";
-import { loadConfigFromEnv } from "./config";
-import { createDb } from "./db";
-import { createGateway } from "./gateway";
+import { createDb } from "./db/client";
+import { loadConfigFromEnv } from "./env";
+import { createGateway } from "./server";
 
 /**
  * Integration test: exercises the REAL Bun.sql wiring + SQL against a throwaway

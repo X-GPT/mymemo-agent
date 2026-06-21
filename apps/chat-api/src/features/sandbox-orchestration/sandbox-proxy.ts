@@ -35,7 +35,6 @@ interface ForwardOptions {
 	daemonAuthToken: string;
 	turnRequest: TurnRequest;
 	onTextDelta: (text: string) => Promise<void>;
-	onTextEnd: () => Promise<void>;
 	onSessionId: (id: string) => Promise<void>;
 }
 
@@ -46,14 +45,8 @@ interface ForwardOptions {
 export async function forwardChatTurnToSandbox(
 	options: ForwardOptions,
 ): Promise<void> {
-	const {
-		daemonUrl,
-		daemonAuthToken,
-		turnRequest,
-		onTextDelta,
-		onTextEnd,
-		onSessionId,
-	} = options;
+	const { daemonUrl, daemonAuthToken, turnRequest, onTextDelta, onSessionId } =
+		options;
 
 	// Idle-based timeout over the streamed body, re-armed on every chunk —
 	// turns are legitimately long, so an absolute timeout over the whole read
@@ -180,8 +173,6 @@ export async function forwardChatTurnToSandbox(
 		if (agentError) {
 			throw new Error(`Sandbox agent error: ${agentError}`);
 		}
-
-		await onTextEnd();
 	} finally {
 		clearTimeout(idleTimer);
 	}

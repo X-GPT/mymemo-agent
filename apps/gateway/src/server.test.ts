@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { type LlmTokenClaims, mintLlmToken } from "@mymemo/llm-token";
-import type { GatewayConfig } from "./config";
-import type { Db } from "./db";
-import { createGateway } from "./gateway";
+import type { Db } from "./db/client";
+import type { GatewayConfig } from "./env";
+import { createGateway } from "./server";
 
 // Single source of truth: the app verifies with config.llmTokenSecret and the
 // tests sign with the same value, so a sign/verify mismatch is unrepresentable.
