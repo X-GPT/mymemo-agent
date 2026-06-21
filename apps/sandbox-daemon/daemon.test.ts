@@ -26,14 +26,6 @@ describe("createDaemon", () => {
 		expect(typeof body.uptime).toBe("number");
 	});
 
-	it("serves /current with the lock state", async () => {
-		const app = createDaemon(baseConfig);
-		const res = await app.request("/current");
-		expect(res.status).toBe(200);
-		const body = await res.json();
-		expect(body).toHaveProperty("busy");
-	});
-
 	it("wires /turn so the injected auth token is enforced", async () => {
 		const app = createDaemon(baseConfig);
 		// No bearer header → the turn route rejects before any spawn.

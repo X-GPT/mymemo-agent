@@ -146,11 +146,6 @@ export async function forwardChatTurnToSandbox(
 								break;
 							case "started":
 								break;
-							case "result":
-								break;
-							case "error":
-								agentError = (evt.message as string) ?? "Unknown agent error";
-								break;
 						}
 					}
 				}

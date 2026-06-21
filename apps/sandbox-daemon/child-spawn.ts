@@ -21,14 +21,15 @@ import { resolve } from "node:path";
 import type { AgentSpawnConfig } from "./config";
 import { hydrationLimitEnv } from "./hydration-policy";
 import type { AgentEvent } from "./ipc-protocol";
+// Single source of truth for the durable session-store root env var name; the
+// agent's SessionStore reads the same constant. Imported (not re-declared) so the
+// two sides can't drift. Unset = session mirroring disabled; the agent's
+// FileSystemSessionStore creates its own per-conversation subtree on first write,
+// so the daemon only forwards the root.
+import { SESSION_STORE_ROOT_ENV } from "./session-store";
 
 export type { AgentEvent } from "./ipc-protocol";
 
-// Durable root the agent's SessionStore mirror writes to (must match
-// SESSION_STORE_ROOT_ENV in session-store.ts, which the agent reads). Unset =
-// session mirroring disabled. The agent's FileSystemSessionStore creates its own
-// per-conversation subtree on first write, so the daemon only forwards the root.
-const SESSION_STORE_ROOT_ENV = "AGENT_SESSION_STORE_ROOT";
 function getSessionStoreRoot(): string | undefined {
 	const root = process.env[SESSION_STORE_ROOT_ENV];
 	return root && root.length > 0 ? root : undefined;

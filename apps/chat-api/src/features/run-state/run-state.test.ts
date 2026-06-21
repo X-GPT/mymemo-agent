@@ -52,13 +52,12 @@ describe("run-state lifecycle", () => {
 		await run.recordSandboxLeased("sbx-1");
 		await run.recordDaemonStarted();
 		await run.recordAgentEvent({ text: "hello" });
-		await run.recordHydration({ documentId: "doc-1" });
 		await run.markRunCompleted();
 
 		expect(run.status).toBe("completed");
 		// Ordered event stream: start, sandbox lease, daemon start, agent event,
-		// hydration event, completion. The start event carries run identity, every
-		// event is timestamped, and passthrough fields survive verbatim.
+		// completion. The start event carries run identity, every event is
+		// timestamped, and passthrough fields survive verbatim.
 		expect(messages()).toMatchObject([
 			{
 				type: RunEventType.Started,
@@ -70,7 +69,6 @@ describe("run-state lifecycle", () => {
 			{ type: RunEventType.SandboxLeased, sandboxId: "sbx-1" },
 			{ type: RunEventType.DaemonStarted },
 			{ type: RunEventType.AgentEvent, text: "hello" },
-			{ type: RunEventType.Hydration, documentId: "doc-1" },
 			{ type: RunEventType.Completed },
 		]);
 		// Every event is written under the run's ref.

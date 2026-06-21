@@ -223,32 +223,6 @@ describe("forwardChatTurnToSandbox", () => {
 		}
 	});
 
-	it("handles error event type from agent", async () => {
-		const body = ndjsonBody([
-			{ type: "started", turn_id: "t1" },
-			{ type: "error", message: "agent error" },
-		]);
-
-		const originalFetch = globalThis.fetch;
-		globalThis.fetch = mock(() =>
-			Promise.resolve(new Response(body, { status: 200 })),
-		) as unknown as typeof fetch;
-
-		try {
-			await expect(
-				forwardChatTurnToSandbox({
-					daemonUrl: "http://localhost:8080",
-					daemonAuthToken: "daemon-token",
-					turnRequest: makeTurnRequest(),
-					onTextDelta: async () => {},
-					onSessionId: async () => {},
-				}),
-			).rejects.toThrow("agent error");
-		} finally {
-			globalThis.fetch = originalFetch;
-		}
-	});
-
 	it("ignores non-JSON lines", async () => {
 		const body =
 			"not json\n" +

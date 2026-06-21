@@ -5,8 +5,8 @@
  * lifecycle as an ordered event stream. The client-visible stream is *derived*
  * from those recorded events by this pure function, so every SSE frame the
  * client sees corresponds to an event that was recorded in the run's durable
- * log. Events that have no client-facing meaning (daemon start, hydration,
- * cancellation) map to no SSE frame.
+ * log. Events that have no client-facing meaning (daemon start, cancellation)
+ * map to no SSE frame.
  */
 
 import { AGENT_EVENT_TYPE_FIELD, RunEventType } from "@/features/run-state";
@@ -61,8 +61,8 @@ export function runEventToClientEvents(event: RunEvent): EventMessage[] {
 				},
 			];
 		default:
-			// daemon_started, hydration, run_canceled, and any future internal-only
-			// event carry no client-facing frame.
+			// daemon_started, run_canceled, and any future internal-only event
+			// carry no client-facing frame.
 			return [];
 	}
 }

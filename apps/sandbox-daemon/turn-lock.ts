@@ -19,10 +19,3 @@ export function acquireTurn(turnId: string): { release: () => void } | null {
 
 	return { release };
 }
-
-export function getCurrentTurn(): {
-	busy: boolean;
-	turnId: string | null;
-} {
-	return { busy: currentTurnId !== null, turnId: currentTurnId };
-}

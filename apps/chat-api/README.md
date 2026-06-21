@@ -91,7 +91,6 @@ Stream chat completions using OpenAI GPT-4o.
 src/
 ├── features/
 │   └── chat/
-│       ├── chat.constants.ts    # Chat-related constants
 │       ├── chat.controller.ts   # OpenAI integration logic
 │       ├── chat.route.ts        # Chat API routes
 │       └── chat.route.test.ts   # Route tests

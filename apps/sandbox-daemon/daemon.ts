@@ -7,7 +7,6 @@
 
 import { Hono } from "hono";
 import type { DaemonConfig } from "./config";
-import { createCurrentRoutes } from "./routes/current";
 import { createHealthRoutes } from "./routes/health";
 import { createTurnRoutes } from "./routes/turn";
 
@@ -15,7 +14,6 @@ export function createDaemon(config: DaemonConfig): Hono {
 	const app = new Hono();
 
 	app.route("/", createHealthRoutes(config));
-	app.route("/", createCurrentRoutes());
 	app.route("/", createTurnRoutes(config));
 
 	app.onError((err, c) => {
