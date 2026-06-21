@@ -29,6 +29,18 @@ export interface RunEventSink {
 /** Lifecycle state of a run. */
 export type RunStatus = "running" | "completed" | "failed" | "canceled";
 
+/** Result of an idempotent {@link Run.cancel} request. */
+export interface CancelOutcome {
+	/**
+	 * True only when this call moved the run from `running` to `canceled` (and so
+	 * recorded the `run_canceled` event). False for every no-op: a repeated cancel,
+	 * or a cancel that lost the race to natural completion/failure.
+	 */
+	transitioned: boolean;
+	/** The run's status after the call. */
+	status: RunStatus;
+}
+
 /** Canonical run-event type names recorded by this module. */
 export const RunEventType = {
 	Started: "run_started",
@@ -212,6 +224,36 @@ export class Run {
 		return this.terminate("canceled", { type: RunEventType.Canceled });
 	}
 
+	/**
+	 * Idempotent cancellation request — the entry point the cancellation contract
+	 * exposes. Unlike the strict `markRun*` terminals, `cancel` is best-effort and
+	 * safe to call repeatedly or after the run has already ended:
+	 *
+	 *  - `running` → records `run_canceled`, advances to `canceled`, returns
+	 *    `{ transitioned: true, status: "canceled" }`.
+	 *  - already `canceled` → no-op (no duplicate event), `transitioned: false`.
+	 *  - `completed` / `failed` → no-op; the run already reached a different
+	 *    terminal state, so cancellation lost the race. `transitioned: false`.
+	 *
+	 * A cancel signal can arrive after the run has naturally finished; tolerating
+	 * the terminal states (instead of throwing like `markRunCanceled`) keeps the
+	 * single-start/single-terminal audit invariant intact. The `transitioned` flag
+	 * lets callers fire a sandbox/daemon cancellation hook only when this call
+	 * actually performed the cancellation.
+	 */
+	cancel(): Promise<CancelOutcome> {
+		return this.critical(async () => {
+			if (this._status !== "running") {
+				return { transitioned: false, status: this._status };
+			}
+			// Persist before advancing, same ordering rule as terminate(): a failed
+			// write leaves the run running so the cancel can be retried.
+			await this.write({ type: RunEventType.Canceled });
+			this._status = "canceled";
+			return { transitioned: true, status: "canceled" };
+		});
+	}
+
 	private terminate(
 		status: Exclude<RunStatus, "running">,
 		event: RunEvent,
@@ -250,7 +292,7 @@ export class Run {
 	 * caller observes `fn`'s own outcome; the internal tail swallows rejections so
 	 * one failed operation does not block the next.
 	 */
-	private critical(fn: () => Promise<void>): Promise<void> {
+	private critical<T>(fn: () => Promise<T>): Promise<T> {
 		const result = this.queue.then(fn);
 		this.queue = result.then(
 			() => {},
