@@ -39,13 +39,11 @@ require("../turn-lock");
 import type { DaemonConfig } from "../config";
 import { createTurnRoutes } from "./turn";
 
-// Config is injected — no ambient env. workspaceRoot points at the temp dir and
-// the bearer secret is fixed here; agentSpawn is unused because spawnAgent is
-// mocked above.
+// Config is injected — no ambient env. workspaceRoot points at the temp dir;
+// agentSpawn is unused because spawnAgent is mocked above.
 const config: DaemonConfig = {
 	daemonPort: 8080,
 	daemonVersion: "test",
-	daemonAuthToken: "daemon-token",
 	workspaceRoot: testRoot,
 	agentSpawn: {
 		agentBundlePath: "/workspace/agent.js",
@@ -98,7 +96,6 @@ describe("POST /turn integration", () => {
 	function turnHeaders() {
 		return {
 			"Content-Type": "application/json",
-			"x-daemon-auth-token": "daemon-token",
 		};
 	}
 
@@ -119,48 +116,6 @@ describe("POST /turn integration", () => {
 		}
 		return { exitCode };
 	}
-
-	it("rejects requests without daemon auth token", async () => {
-		const res = await app.request("/turn", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(makeTurnBody()),
-		});
-
-		expect(res.status).toBe(401);
-		expect(await res.json()).toEqual({ error: "Unauthorized" });
-		expect(mockSpawnAgent).not.toHaveBeenCalled();
-	});
-
-	it("rejects requests with a wrong daemon auth token", async () => {
-		const res = await app.request("/turn", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"x-daemon-auth-token": "wrong-token",
-			},
-			body: JSON.stringify(makeTurnBody()),
-		});
-
-		expect(res.status).toBe(401);
-		expect(await res.json()).toEqual({ error: "Unauthorized" });
-		expect(mockSpawnAgent).not.toHaveBeenCalled();
-	});
-
-	it("rejects non-ASCII auth tokens without throwing", async () => {
-		const res = await app.request("/turn", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"x-daemon-auth-token": "éééééééééééé",
-			},
-			body: JSON.stringify(makeTurnBody()),
-		});
-
-		expect(res.status).toBe(401);
-		expect(await res.json()).toEqual({ error: "Unauthorized" });
-		expect(mockSpawnAgent).not.toHaveBeenCalled();
-	});
 
 	it("streams text_delta events forwarded from agent.js", async () => {
 		mockSpawnAgent.mockImplementation((input) =>

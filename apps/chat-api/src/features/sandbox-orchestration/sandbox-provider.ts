@@ -22,10 +22,36 @@ export interface SandboxHandle {
 	sandboxId: string;
 }
 
-/** Where the turn proxy reaches the in-sandbox daemon, plus its auth token. */
+/** Where the turn proxy reaches the in-sandbox daemon. */
 export interface SandboxDaemonEndpoint {
 	url: string;
-	authToken: string;
+	/**
+	 * Per-sandbox E2B traffic access token (sent as `e2b-traffic-access-token`).
+	 * Present for the E2B provider, whose sandbox is created with
+	 * `allowPublicTraffic: false` so its edge gates the public URL. Absent for the
+	 * local provider, where the daemon container is unpublished on the compose
+	 * network and there is no edge to authenticate against.
+	 */
+	trafficAccessToken?: string;
+}
+
+/**
+ * Header name the E2B edge checks to admit a request to a sandbox's restricted
+ * public URL. Vendor-controlled — keep it the single source of truth so the two
+ * daemon callers (the turn proxy and the daemon health check) can't drift. Both
+ * go through `trafficAccessHeaders`, so this stays module-private.
+ */
+const E2B_TRAFFIC_ACCESS_TOKEN_HEADER = "e2b-traffic-access-token";
+
+/**
+ * The `e2b-traffic-access-token` header for a daemon request, or an empty object
+ * when there is no token (the local provider, which has no edge to authenticate
+ * against). Spread into a `fetch` headers object.
+ */
+export function trafficAccessHeaders(
+	token: string | undefined,
+): Record<string, string> {
+	return token ? { [E2B_TRAFFIC_ACCESS_TOKEN_HEADER]: token } : {};
 }
 
 export interface SandboxProvider {

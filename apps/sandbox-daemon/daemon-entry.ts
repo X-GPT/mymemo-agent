@@ -13,10 +13,11 @@
  * Env (see config.ts):
  *   DAEMON_PORT       — HTTP port (default 8080).
  *   DAEMON_VERSION    — surfaced by /health for the chat-api bundle check.
- *   DAEMON_AUTH_TOKEN — bearer secret for /turn (unset => every /turn is 401).
  *
- * The daemon holds no provider key: the agent's LLM gateway URL and bearer
- * token arrive per turn in the /turn body and are forwarded into agent.js's env.
+ * The daemon holds no secret: /turn has no application-layer auth (the sandbox
+ * edge is the boundary, see routes/turn.ts). The agent's LLM gateway URL and
+ * bearer token arrive per turn in the /turn body and are forwarded into
+ * agent.js's env.
  */
 
 import { loadConfigFromEnv } from "./config";
