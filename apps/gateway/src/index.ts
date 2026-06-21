@@ -1,6 +1,6 @@
-import { loadConfigFromEnv } from "./config";
-import { createDb } from "./db";
-import { createGateway } from "./gateway";
+import { createDb } from "./db/client";
+import { loadConfigFromEnv } from "./env";
+import { createGateway } from "./server";
 
 // Entrypoint — the only place that reads the environment. Parse/validate once,
 // then inject the typed config into the app and the Db so no other module is

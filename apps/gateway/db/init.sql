@@ -1,7 +1,7 @@
 -- Local KB seed for the docker-compose E2E harness (MYM-31).
 --
 -- The gateway requires a DATABASE_URL to boot, and its document routes read this
--- schema (see apps/gateway/src/queries.ts). This mirrors the schema exercised by
+-- schema (see apps/gateway/src/db/queries.ts). This mirrors the schema exercised by
 -- apps/gateway/src/index.integration.test.ts and adds a small fixture so
 -- `mymemo-docs search`/`fetch` return real results for the seeded member.
 --

@@ -14,31 +14,26 @@ describe("loadHydrationLimits", () => {
 	it("treats an empty-string override as unset (uses the default)", () => {
 		expect(
 			loadHydrationLimits({
-				[HYDRATION_LIMIT_ENV.maxBytesPerDocument]: "",
+				[HYDRATION_LIMIT_ENV.maxDocumentsPerSearch]: "",
 			}),
 		).toEqual(DEFAULT_HYDRATION_LIMITS);
 	});
 
-	it("overrides each limit independently from the environment", () => {
-		const limits = loadHydrationLimits({
-			[HYDRATION_LIMIT_ENV.maxDocumentsPerSearch]: "2",
-			[HYDRATION_LIMIT_ENV.maxBytesPerDocument]: "1024",
-			[HYDRATION_LIMIT_ENV.maxBytesPerRun]: "4096",
-		});
-		expect(limits).toEqual({
-			maxDocumentsPerSearch: 2,
-			maxBytesPerDocument: 1024,
-			maxBytesPerRun: 4096,
-		});
+	it("overrides the limit from the environment", () => {
+		expect(
+			loadHydrationLimits({
+				[HYDRATION_LIMIT_ENV.maxDocumentsPerSearch]: "2",
+			}),
+		).toEqual({ maxDocumentsPerSearch: 2 });
 	});
 
 	it("throws on a non-positive-integer override rather than silently disabling a cap", () => {
 		for (const bad of ["0", "-1", "1.5", "abc", "ten"]) {
 			expect(() =>
 				loadHydrationLimits({
-					[HYDRATION_LIMIT_ENV.maxBytesPerRun]: bad,
+					[HYDRATION_LIMIT_ENV.maxDocumentsPerSearch]: bad,
 				}),
-			).toThrow(HYDRATION_LIMIT_ENV.maxBytesPerRun);
+			).toThrow(HYDRATION_LIMIT_ENV.maxDocumentsPerSearch);
 		}
 	});
 });
@@ -51,11 +46,10 @@ describe("hydrationLimitEnv", () => {
 	it("forwards only the limit vars that are set, omitting unset/empty ones", () => {
 		expect(
 			hydrationLimitEnv({
-				[HYDRATION_LIMIT_ENV.maxBytesPerRun]: "4096",
-				[HYDRATION_LIMIT_ENV.maxBytesPerDocument]: "",
+				[HYDRATION_LIMIT_ENV.maxDocumentsPerSearch]: "7",
 				UNRELATED: "ignored",
 			}),
-		).toEqual({ [HYDRATION_LIMIT_ENV.maxBytesPerRun]: "4096" });
+		).toEqual({ [HYDRATION_LIMIT_ENV.maxDocumentsPerSearch]: "7" });
 	});
 
 	it("passes values through verbatim (validation happens at load time, not forward time)", () => {

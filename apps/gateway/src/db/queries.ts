@@ -1,4 +1,4 @@
-import type { Db } from "./db";
+import type { Db } from "./client";
 
 /**
  * Read-side of the MyMemo knowledge base, FTS-only (no dense/vector, no rerank).

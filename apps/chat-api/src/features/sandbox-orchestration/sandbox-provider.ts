@@ -40,4 +40,17 @@ export interface SandboxProvider {
 		handle: SandboxHandle,
 		logger: SyncLogger,
 	): Promise<void>;
+	/**
+	 * Best-effort cancellation hook for an in-flight turn. Idempotent and safe to
+	 * call whether or not a turn is active, so a cancel signal that races a turn's
+	 * completion never throws. The run-state cancellation contract ({@link Run.cancel})
+	 * drives this; SSE wiring (Task 11) and leasing (Milestone 5) will invoke it.
+	 * The per-turn providers have no in-place abort, so they honor it by tearing
+	 * the sandbox down — which aborts the daemon turn.
+	 */
+	cancelSandbox(
+		userId: string,
+		handle: SandboxHandle,
+		logger: SyncLogger,
+	): Promise<void>;
 }

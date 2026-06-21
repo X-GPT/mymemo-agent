@@ -29,11 +29,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-	type DocsManifest,
-	readDocsManifest,
-	upsertDocsManifestEntry,
-} from "./docs-manifest";
+import { readDocsManifest, upsertDocsManifestEntry } from "./docs-manifest";
 import {
 	DEFAULT_HYDRATION_LIMITS,
 	type HydrationLimits,
@@ -54,19 +50,8 @@ export const GATEWAY_SOURCE = "gateway";
  * Result `source`:
  * - `"gateway"` — hydrated by this call.
  * - `"already_local"` — already present in the conversation workspace.
- * - `"skipped_too_large"` — fetched but over the per-document byte limit; NOT
- *   written to disk.
- * - `"skipped_run_budget"` — fetched but would push this run over its byte
- *   budget; NOT written to disk.
- *
- * For the two `skipped_*` sources `localPath` is `""` and `error` explains the
- * limit that was hit.
  */
-export type DocumentResultSource =
-	| typeof GATEWAY_SOURCE
-	| "already_local"
-	| "skipped_too_large"
-	| "skipped_run_budget";
+export type DocumentResultSource = typeof GATEWAY_SOURCE | "already_local";
 
 export interface SearchDocumentResult {
 	documentId: string;
@@ -80,13 +65,8 @@ export interface SearchDocumentResult {
 	 * document — this is the top-ranked passage for the hydrated document.
 	 */
 	passageId: string;
-	/**
-	 * Absolute path to the hydrated file (the agent can `Read` this), or `""` for
-	 * a `skipped_*` document that was not written to disk.
-	 */
+	/** Absolute path to the hydrated file (the agent can `Read` this). */
 	localPath: string;
-	/** Why a `skipped_*` document was not hydrated; absent on hydrated rows. */
-	error?: string;
 }
 
 /** One passage hit from the gateway search endpoint. */
@@ -114,7 +94,7 @@ export interface SearchDocumentsDeps {
 	/** The run that caused this hydration (recorded in the manifest). */
 	runId: string;
 	/**
-	 * Hydration caps (document count + byte ceilings). Defaults to
+	 * Hydration caps (max documents per search). Defaults to
 	 * {@link DEFAULT_HYDRATION_LIMITS}; the daemon passes env-derived limits.
 	 */
 	limits?: HydrationLimits;
@@ -215,23 +195,6 @@ function selectDocuments(
 }
 
 /**
- * Bytes already hydrated under `runId`, summed from the byte count RECORDED in
- * the manifest at hydration time (not the live on-disk size). This seeds the
- * per-run budget so the cap holds across multiple `search_documents` calls in
- * the same run. Using the recorded count means a prompt-injectable agent can't
- * free budget by deleting or truncating a file it already hydrated — the charge
- * stands as long as the manifest entry does. Legacy entries without a recorded
- * `byteSize` contribute 0.
- */
-function runHydratedBytes(manifest: DocsManifest, runId: string): number {
-	let total = 0;
-	for (const entry of manifest.documents) {
-		if (entry.runId === runId) total += entry.byteSize ?? 0;
-	}
-	return total;
-}
-
-/**
  * Run the full search → select → hydrate → manifest flow and return one row per
  * selected document. Throws {@link GatewayDocumentError} on gateway failure;
  * returns `[]` when the search has no matches.
@@ -262,10 +225,6 @@ export async function searchAndHydrate(
 	const manifest = readDocsManifest(deps.docsDir);
 	const localById = new Map(manifest.documents.map((d) => [d.documentId, d]));
 
-	// Seed the per-run byte budget from what this run already hydrated, so the
-	// cap holds across multiple search_documents calls in the run.
-	let runBytes = runHydratedBytes(manifest, deps.runId);
-
 	const results: SearchDocumentResult[] = [];
 	for (const hit of selected) {
 		// `documentId` is guaranteed by selectDocuments.
@@ -294,24 +253,6 @@ export async function searchAndHydrate(
 			}
 		}
 
-		// Run budget already exhausted: don't even fetch. Every remaining
-		// non-local candidate would be discarded post-fetch anyway, so fetching
-		// them just burns gateway cost — the cap is meant to bound exactly that.
-		// (A doc small enough to still fit is handled by the post-fetch check
-		// below; this short-circuits only once nothing more can fit at all.)
-		if (runBytes >= limits.maxBytesPerRun) {
-			results.push({
-				documentId,
-				source: "skipped_run_budget",
-				title: hit.title || "",
-				snippet,
-				passageId,
-				localPath: "",
-				error: `per-run hydration budget of ${limits.maxBytesPerRun} bytes is exhausted (already ${runBytes})`,
-			});
-			continue;
-		}
-
 		const doc = await postJson<GatewayFetchedDocument>(
 			doFetch,
 			`${deps.gatewayUrl}/v1/documents/fetch`,
@@ -320,42 +261,11 @@ export async function searchAndHydrate(
 		);
 
 		const content = doc.content ?? "";
-		const byteLength = Buffer.byteLength(content, "utf8");
 		const title = doc.title || hit.title || "";
-
-		// Enforce the byte caps BEFORE touching disk: an oversized or
-		// budget-busting document is reported, never written. Per-document is
-		// checked first so a single huge file is attributed to its own limit
-		// rather than the run budget it would also blow.
-		if (byteLength > limits.maxBytesPerDocument) {
-			results.push({
-				documentId,
-				source: "skipped_too_large",
-				title,
-				snippet,
-				passageId,
-				localPath: "",
-				error: `document is ${byteLength} bytes, over the per-document limit of ${limits.maxBytesPerDocument}`,
-			});
-			continue;
-		}
-		if (runBytes + byteLength > limits.maxBytesPerRun) {
-			results.push({
-				documentId,
-				source: "skipped_run_budget",
-				title,
-				snippet,
-				passageId,
-				localPath: "",
-				error: `hydrating ${byteLength} bytes would exceed the per-run budget of ${limits.maxBytesPerRun} bytes (already ${runBytes})`,
-			});
-			continue;
-		}
 
 		const filename = documentFilename(documentId);
 		const absolutePath = join(deps.docsDir, filename);
 		writeFileSync(absolutePath, content, "utf8");
-		runBytes += byteLength;
 		upsertDocsManifestEntry(deps.docsDir, {
 			documentId,
 			title,
@@ -363,7 +273,6 @@ export async function searchAndHydrate(
 			source: GATEWAY_SOURCE,
 			hydratedAt: now().toISOString(),
 			runId: deps.runId,
-			byteSize: byteLength,
 		});
 
 		results.push({
