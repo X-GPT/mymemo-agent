@@ -42,12 +42,15 @@ export const RunEventType = {
 } as const;
 
 /**
- * Terminal event types. They are produced only by the lifecycle markers
+ * Lifecycle-owned event types. The start record is emitted once by `createRun`,
+ * and the terminal records are emitted by the markers
  * (`markRunCompleted`/`markRunFailed`/`markRunCanceled`), which also advance the
- * state machine; the generic `appendRunEvent` primitive rejects them so a caller
- * cannot record an outcome without the matching state transition.
+ * state machine. The generic `appendRunEvent` primitive rejects all of them so a
+ * caller cannot record a second start or an outcome out of band — replay/audit
+ * consumers see exactly one start and one terminal record per run.
  */
-const TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([
+const LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
+	RunEventType.Started,
 	RunEventType.Completed,
 	RunEventType.Failed,
 	RunEventType.Canceled,
@@ -135,17 +138,17 @@ export class Run {
 
 	/**
 	 * Append one intermediate event to the run's durable log. The primitive behind
-	 * the `record*` helpers; callers pass a non-terminal `type` plus any structured
+	 * the `record*` helpers; callers pass a non-lifecycle `type` plus any structured
 	 * fields, and a timestamp (`at`) is stamped on every event. Rejects if the run
-	 * has already reached a terminal state, or if `type` is a terminal type —
-	 * outcomes must go through the lifecycle markers so the state machine advances
-	 * with them.
+	 * has already reached a terminal state, or if `type` is a lifecycle-owned type
+	 * (`run_started` and the terminal types) — the start is emitted by `createRun`
+	 * and outcomes by the `markRun*` markers, so neither may be recorded out of band.
 	 */
 	appendRunEvent(event: RunEvent): Promise<void> {
-		if (TERMINAL_EVENT_TYPES.has(event.type)) {
+		if (LIFECYCLE_EVENT_TYPES.has(event.type)) {
 			return Promise.reject(
 				new Error(
-					`Cannot append terminal event "${event.type}" via appendRunEvent; use the matching markRun* method (run ${this.ref.runId})`,
+					`Cannot append lifecycle-owned event "${event.type}" via appendRunEvent; it is recorded by createRun/markRun* (run ${this.ref.runId})`,
 				),
 			);
 		}

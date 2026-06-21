@@ -182,20 +182,24 @@ describe("run-state terminal guards", () => {
 		);
 	});
 
-	it("rejects terminal event types from the generic appendRunEvent primitive", async () => {
+	it("rejects lifecycle-owned event types from the generic appendRunEvent primitive", async () => {
 		const { sink, types } = fakeSink();
 		const run = await createRun({ sink, ref, conversationId: "conv-1" });
 
+		// Start and the terminal types are owned by createRun / markRun*; appending
+		// them out of band would let a run record a duplicate start or an outcome
+		// without advancing the state machine.
 		for (const t of [
+			RunEventType.Started,
 			RunEventType.Completed,
 			RunEventType.Failed,
 			RunEventType.Canceled,
 		]) {
 			await expect(run.appendRunEvent({ type: t })).rejects.toThrow(
-				/Cannot append terminal event/,
+				/Cannot append lifecycle-owned event/,
 			);
 		}
-		// The run is untouched: still running, nothing terminal persisted.
+		// The run is untouched: still running, exactly one start record persisted.
 		expect(run.status).toBe("running");
 		expect(types()).toEqual([RunEventType.Started]);
 	});
