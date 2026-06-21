@@ -168,7 +168,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 	/**
 	 * Deploy the daemon + agent bundles onto the freshly created sandbox and
 	 * wait for the daemon to report healthy. Returns the daemon URL and the
-	 * fixed auth token clients must present.
+	 * per-sandbox E2B traffic access token clients must present to the edge.
 	 *
 	 * Sandboxes are created fresh per turn, so the daemon is never already
 	 * running — there is nothing to health-check or restart, only to deploy.

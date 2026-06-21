@@ -38,9 +38,10 @@ export interface SandboxDaemonEndpoint {
 /**
  * Header name the E2B edge checks to admit a request to a sandbox's restricted
  * public URL. Vendor-controlled — keep it the single source of truth so the two
- * daemon callers (the turn proxy and the daemon health check) can't drift.
+ * daemon callers (the turn proxy and the daemon health check) can't drift. Both
+ * go through `trafficAccessHeaders`, so this stays module-private.
  */
-export const E2B_TRAFFIC_ACCESS_TOKEN_HEADER = "e2b-traffic-access-token";
+const E2B_TRAFFIC_ACCESS_TOKEN_HEADER = "e2b-traffic-access-token";
 
 /**
  * The `e2b-traffic-access-token` header for a daemon request, or an empty object
