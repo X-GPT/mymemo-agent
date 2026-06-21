@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Importing `@/index` below eagerly evaluates `config/env.ts`, which throws
 // when these are unset. The bunfig preload (`test-setup.ts`) covers this when
@@ -10,6 +13,9 @@ Bun.env.DAEMON_AUTH_TOKEN =
 Bun.env.LLM_TOKEN_SECRET = Bun.env.LLM_TOKEN_SECRET ?? "test-llm-token-secret";
 Bun.env.GATEWAY_PUBLIC_URL =
 	Bun.env.GATEWAY_PUBLIC_URL ?? "https://gateway.test";
+// The controller now records run events through the real workspace store; point
+// it at a throwaway dir so the route tests stay hermetic and don't pollute cwd.
+Bun.env.WORKSPACE_STORE_ROOT = mkdtempSync(join(tmpdir(), "mym-route-test-"));
 
 // Orchestration is mocked so no E2B sandbox, gateway, database, or provider
 // call is made. A mutable holder lets each test swap the run behavior.

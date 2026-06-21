@@ -57,7 +57,7 @@ const LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** Reserved field a daemon agent-event payload's own `type` is preserved under. */
-const AGENT_EVENT_TYPE_FIELD = "agentEventType";
+export const AGENT_EVENT_TYPE_FIELD = "agentEventType";
 
 export interface CreateRunOptions {
 	sink: RunEventSink;

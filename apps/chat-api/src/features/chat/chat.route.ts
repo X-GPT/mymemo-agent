@@ -3,7 +3,6 @@ import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "@/deps";
-import { ConversationBusyError } from "@/features/sandbox-orchestration";
 import { complete } from "./chat.controller";
 import { ChatLogger } from "./chat.logger";
 import {
@@ -73,25 +72,17 @@ app.post(
 				}, 5000);
 
 				try {
+					// `complete` derives every client frame from recorded run events,
+					// including the terminal `done`/`error`. Errors thrown out of here
+					// are pre-run failures (e.g. the run could not be started); the
+					// streamSSE `onError` handler below surfaces those as an `error`
+					// frame.
 					await complete(
 						c.var.deps,
 						request,
 						sender,
 						new ChatLogger(c.var.logger, request.memberCode),
 					);
-				} catch (err) {
-					if (err instanceof ConversationBusyError) {
-						await sender.send({
-							id: crypto.randomUUID(),
-							message: {
-								type: "error",
-								message:
-									"Sandbox is busy processing another request. Please try again shortly.",
-							},
-						});
-						return;
-					}
-					throw err;
 				} finally {
 					// Always clear the interval when complete finishes
 					clearInterval(keepaliveInterval);

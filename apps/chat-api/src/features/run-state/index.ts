@@ -1,4 +1,5 @@
 export {
+	AGENT_EVENT_TYPE_FIELD,
 	type CreateRunOptions,
 	createRun,
 	normalizeRunError,
