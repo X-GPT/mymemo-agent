@@ -146,7 +146,7 @@ export async function runSandboxChat(
 
 			await forwardChatTurnToSandbox({
 				daemonUrl: daemon.url,
-				daemonAuthToken: daemon.authToken,
+				trafficAccessToken: daemon.trafficAccessToken,
 				turnRequest,
 				onTextDelta,
 				// The proxy surfaces the daemon's Claude SDK session id, which we

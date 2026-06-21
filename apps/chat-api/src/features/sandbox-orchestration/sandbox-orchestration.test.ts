@@ -34,7 +34,6 @@ const config: ApiConfig = {
 	sandboxProvider: "e2b",
 	localSandboxDaemonUrl: "http://sandbox:8080",
 	e2bTemplate: "test-template",
-	daemonAuthToken: "test-daemon-auth-token",
 	llmTokenSecret: "test-llm-token-secret",
 	gatewayPublicUrl: "https://gateway.test",
 	logLevel: "info",
@@ -77,7 +76,7 @@ describe("runSandboxChat", () => {
 		createSandbox = mock(async () => sandbox);
 		ensureSandboxDaemon = mock(async () => ({
 			url: "http://daemon:8080",
-			authToken: "test-daemon-auth-token",
+			trafficAccessToken: "test-traffic-token",
 		}));
 		killSandbox = mock(async () => undefined);
 		cancelSandbox = mock(async () => undefined);
@@ -119,7 +118,7 @@ describe("runSandboxChat", () => {
 		expect(forwardTurn).toHaveBeenCalledWith(
 			expect.objectContaining({
 				daemonUrl: "http://daemon:8080",
-				daemonAuthToken: "test-daemon-auth-token",
+				trafficAccessToken: "test-traffic-token",
 			}),
 		);
 	});
@@ -259,7 +258,10 @@ describe("runSandboxChat", () => {
 		const order: string[] = [];
 		ensureSandboxDaemon.mockImplementation(async () => {
 			order.push("ensureDaemon");
-			return { url: "http://daemon:8080", authToken: "test-daemon-auth-token" };
+			return {
+				url: "http://daemon:8080",
+				trafficAccessToken: "test-traffic-token",
+			};
 		});
 		forwardTurn.mockImplementation(async () => {
 			order.push("forward");

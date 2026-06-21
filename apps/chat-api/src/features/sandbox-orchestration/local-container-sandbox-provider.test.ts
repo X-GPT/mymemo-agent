@@ -10,7 +10,6 @@ const config: ApiConfig = {
 	sandboxProvider: "local",
 	localSandboxDaemonUrl: "http://sandbox:8080",
 	e2bTemplate: "unused",
-	daemonAuthToken: "test-daemon-token",
 	llmTokenSecret: "test-llm-secret",
 	gatewayPublicUrl: "http://gateway:8080",
 	logLevel: "info",
@@ -45,7 +44,6 @@ describe("LocalContainerSandboxProvider", () => {
 
 		expect(endpoint).toEqual({
 			url: config.localSandboxDaemonUrl,
-			authToken: config.daemonAuthToken,
 		});
 		expect(fetchSpy).toHaveBeenCalledWith(
 			`${config.localSandboxDaemonUrl}/health`,

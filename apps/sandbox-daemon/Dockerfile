@@ -55,7 +55,9 @@ RUN chmod 0755 /usr/local/bin/mymemo-docs
 COPY --from=builder /src/apps/sandbox-daemon/dist/daemon.js /workspace/daemon.js
 COPY --from=builder /src/apps/sandbox-daemon/dist/agent.js /workspace/agent.js
 
-# DAEMON_AUTH_TOKEN + AGENT_SESSION_STORE_ROOT are supplied at runtime (compose).
+# AGENT_SESSION_STORE_ROOT is supplied at runtime (compose). The daemon holds no
+# secret: /turn has no app-layer auth (MYM-35); the container is unpublished on
+# the compose network.
 ENV DAEMON_PORT=8080 \
     DAEMON_VERSION=local
 EXPOSE 8080/tcp
