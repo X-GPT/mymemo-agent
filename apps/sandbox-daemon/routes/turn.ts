@@ -2,10 +2,15 @@ import { timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import { spawnAgent } from "../child-spawn";
+import {
+	bindConversationScope,
+	ConversationScopeMismatchError,
+} from "../conversation-scope";
 import { acquireTurn } from "../turn-lock";
 import {
 	assertValidConversationId,
 	createConversationWorkspace,
+	resolveConversationWorkspace,
 } from "../workspace";
 
 const app = new Hono();
@@ -75,6 +80,27 @@ app.post("/turn", async (c) => {
 		assertValidConversationId(body.conversation_id);
 	} catch {
 		return c.json({ error: "Invalid conversation_id" }, 400);
+	}
+
+	// A conversation's document scope is immutable. The first turn binds it; a
+	// later turn that changes scope is rejected before anything streams, so a
+	// reused workspace can never serve a narrower turn documents the original
+	// broader-scope turn hydrated to disk (MYM-39). The id is validated above,
+	// so resolving the conversation dir here is safe.
+	try {
+		bindConversationScope(
+			resolveConversationWorkspace(body.conversation_id).conversation,
+			{
+				scopeType: body.scope_type,
+				collectionId: body.collection_id ?? null,
+				summaryId: body.summary_id ?? null,
+			},
+		);
+	} catch (err) {
+		if (err instanceof ConversationScopeMismatchError) {
+			return c.json({ error: "Conversation scope is immutable" }, 409);
+		}
+		return c.json({ error: "Failed to resolve conversation scope" }, 500);
 	}
 
 	const {

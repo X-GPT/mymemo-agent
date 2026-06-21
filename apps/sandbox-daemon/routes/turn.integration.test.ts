@@ -349,6 +349,74 @@ describe("POST /turn integration", () => {
 		expect(types).not.toContain("failed");
 	});
 
+	it("rejects a turn that changes the conversation's scope with 409 (MYM-39)", async () => {
+		mockSpawnAgent.mockImplementation((input) =>
+			emitAgent(input, [{ type: "completed" }]),
+		);
+		const conversationId = `conv-scope-${Date.now()}`;
+
+		// First turn binds the conversation to global scope.
+		const first = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(
+				makeTurnBody({ conversation_id: conversationId, scope_type: "global" }),
+			),
+		});
+		await first.text();
+		expect(first.status).toBe(200);
+
+		mockSpawnAgent.mockClear();
+
+		// A later, narrower (document) turn in the same conversation is rejected
+		// before anything spawns, so it can never read globally-hydrated docs.
+		const second = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(
+				makeTurnBody({
+					conversation_id: conversationId,
+					scope_type: "document",
+					summary_id: "sum-1",
+				}),
+			),
+		});
+
+		expect(second.status).toBe(409);
+		expect(await second.json()).toEqual({
+			error: "Conversation scope is immutable",
+		});
+		expect(mockSpawnAgent).not.toHaveBeenCalled();
+	});
+
+	it("allows a later turn with the same scope in a conversation", async () => {
+		mockSpawnAgent.mockImplementation((input) =>
+			emitAgent(input, [{ type: "completed" }]),
+		);
+		const conversationId = `conv-same-scope-${Date.now()}`;
+		const body = {
+			conversation_id: conversationId,
+			scope_type: "collection",
+			collection_id: "col-1",
+		};
+
+		const first = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(makeTurnBody(body)),
+		});
+		await first.text();
+		expect(first.status).toBe(200);
+
+		const second = await app.request("/turn", {
+			method: "POST",
+			headers: turnHeaders(),
+			body: JSON.stringify(makeTurnBody(body)),
+		});
+		await second.text();
+		expect(second.status).toBe(200);
+	});
+
 	it("returns 409 when a turn is already in progress", async () => {
 		let resolveAgent!: () => void;
 		const agentPromise = new Promise<void>((resolve) => {
