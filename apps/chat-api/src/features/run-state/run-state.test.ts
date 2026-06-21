@@ -97,12 +97,17 @@ describe("run-state lifecycle", () => {
 		const run = await createRun({ sink, ref, conversationId: "conv-1" });
 
 		// Daemon payloads have their own `type` (e.g. "text_delta"); it must not
-		// clobber the run-event category, or NDJSON consumers can't filter by it.
+		// clobber the run-event category (or NDJSON consumers can't filter by it),
+		// but it is preserved under `agentEventType` so the stream can be replayed.
 		await run.recordAgentEvent({ type: "text_delta", text: "hi" });
 
 		expect(messages()).toMatchObject([
 			{ type: RunEventType.Started },
-			{ type: RunEventType.AgentEvent, text: "hi" },
+			{
+				type: RunEventType.AgentEvent,
+				agentEventType: "text_delta",
+				text: "hi",
+			},
 		]);
 	});
 
@@ -175,6 +180,79 @@ describe("run-state terminal guards", () => {
 		await expect(run.recordDaemonStarted()).rejects.toThrow(
 			/Cannot append .* to a canceled run/,
 		);
+	});
+
+	it("rejects terminal event types from the generic appendRunEvent primitive", async () => {
+		const { sink, types } = fakeSink();
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+
+		for (const t of [
+			RunEventType.Completed,
+			RunEventType.Failed,
+			RunEventType.Canceled,
+		]) {
+			await expect(run.appendRunEvent({ type: t })).rejects.toThrow(
+				/Cannot append terminal event/,
+			);
+		}
+		// The run is untouched: still running, nothing terminal persisted.
+		expect(run.status).toBe("running");
+		expect(types()).toEqual([RunEventType.Started]);
+	});
+});
+
+describe("run-state durability and ordering", () => {
+	it("stays running and is retryable when the terminal write fails", async () => {
+		let failNext = true;
+		const persisted: RunEvent[] = [];
+		const sink: RunEventSink = {
+			async appendRunEvent(_ref, event) {
+				if (failNext && event.type === RunEventType.Failed) {
+					failNext = false;
+					throw new Error("ENOSPC");
+				}
+				persisted.push(event);
+			},
+		};
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+
+		// First terminal write rejects; status must not advance, so a retry works.
+		await expect(run.markRunFailed("boom")).rejects.toThrow(/ENOSPC/);
+		expect(run.status).toBe("running");
+
+		await run.markRunFailed("boom");
+		expect(run.status).toBe("failed");
+		expect(persisted.map((e) => e.type)).toEqual([
+			RunEventType.Started,
+			RunEventType.Failed,
+		]);
+	});
+
+	it("serializes a slow append ahead of a terminal marker (no log after terminal)", async () => {
+		const order: string[] = [];
+		const sink: RunEventSink = {
+			async appendRunEvent(_ref, event) {
+				// Make the first intermediate append slow so a non-awaited terminal
+				// marker would, without serialization, race ahead of it.
+				if (event.type === RunEventType.DaemonStarted) {
+					await new Promise((r) => setTimeout(r, 20));
+				}
+				order.push(event.type);
+			},
+		};
+		const run = await createRun({ sink, ref, conversationId: "conv-1" });
+
+		// Fire both without awaiting the first.
+		const appendP = run.recordDaemonStarted();
+		const completeP = run.markRunCompleted();
+		await Promise.all([appendP, completeP]);
+
+		expect(order).toEqual([
+			RunEventType.Started,
+			RunEventType.DaemonStarted,
+			RunEventType.Completed,
+		]);
+		expect(run.status).toBe("completed");
 	});
 });
 

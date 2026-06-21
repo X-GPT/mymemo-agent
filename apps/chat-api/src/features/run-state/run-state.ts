@@ -41,6 +41,21 @@ export const RunEventType = {
 	Canceled: "run_canceled",
 } as const;
 
+/**
+ * Terminal event types. They are produced only by the lifecycle markers
+ * (`markRunCompleted`/`markRunFailed`/`markRunCanceled`), which also advance the
+ * state machine; the generic `appendRunEvent` primitive rejects them so a caller
+ * cannot record an outcome without the matching state transition.
+ */
+const TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([
+	RunEventType.Completed,
+	RunEventType.Failed,
+	RunEventType.Canceled,
+]);
+
+/** Reserved field a daemon agent-event payload's own `type` is preserved under. */
+const AGENT_EVENT_TYPE_FIELD = "agentEventType";
+
 export interface CreateRunOptions {
 	sink: RunEventSink;
 	/** Identifies the run's durable event log, scoped to its owner. */
@@ -81,6 +96,17 @@ export function normalizeRunError(error: unknown): string {
 export class Run {
 	private _status: RunStatus = "running";
 
+	/**
+	 * Serializes every operation so the status guard and the durable write form
+	 * one critical section. Two lifecycle calls that are not awaited in sequence
+	 * (e.g. cancellation racing a streamed agent event once cancellation is wired)
+	 * therefore still run one-at-a-time and in enqueue order — the audit log never
+	 * records activity after the terminal event, and the guard always sees the
+	 * settled status of the previous operation. The tail is kept always-fulfilled
+	 * so a rejected operation does not stall the chain.
+	 */
+	private queue: Promise<void> = Promise.resolve();
+
 	private constructor(
 		private readonly sink: RunEventSink,
 		private readonly ref: RunRef,
@@ -96,28 +122,37 @@ export class Run {
 		const { sink, ref, conversationId } = options;
 		const now = options.now ?? (() => new Date().toISOString());
 		const run = new Run(sink, ref, now);
-		await run.write({
-			type: RunEventType.Started,
-			conversationId,
-			userId: ref.userId,
-			runId: ref.runId,
-		});
+		await run.critical(() =>
+			run.write({
+				type: RunEventType.Started,
+				conversationId,
+				userId: ref.userId,
+				runId: ref.runId,
+			}),
+		);
 		return run;
 	}
 
 	/**
-	 * Append one event to the run's durable log. The primitive behind every
-	 * recorded event; callers pass a `type` plus any structured fields. A
-	 * timestamp (`at`) is stamped on every event. Throws if the run has already
-	 * reached a terminal state.
+	 * Append one intermediate event to the run's durable log. The primitive behind
+	 * the `record*` helpers; callers pass a non-terminal `type` plus any structured
+	 * fields, and a timestamp (`at`) is stamped on every event. Rejects if the run
+	 * has already reached a terminal state, or if `type` is a terminal type —
+	 * outcomes must go through the lifecycle markers so the state machine advances
+	 * with them.
 	 */
-	async appendRunEvent(event: RunEvent): Promise<void> {
-		if (this._status !== "running") {
-			throw new Error(
-				`Cannot append "${event.type}" to a ${this._status} run (${this.ref.runId})`,
+	appendRunEvent(event: RunEvent): Promise<void> {
+		if (TERMINAL_EVENT_TYPES.has(event.type)) {
+			return Promise.reject(
+				new Error(
+					`Cannot append terminal event "${event.type}" via appendRunEvent; use the matching markRun* method (run ${this.ref.runId})`,
+				),
 			);
 		}
-		await this.write(event);
+		return this.critical(() => {
+			this.ensureRunning(event.type);
+			return this.write(event);
+		});
 	}
 
 	/** Record that a sandbox was leased for this run. */
@@ -131,12 +166,21 @@ export class Run {
 	}
 
 	/**
-	 * Record an agent event, carrying its structured fields through verbatim. The
-	 * `agent_event` category label is authoritative — it is applied after the
-	 * payload, so a daemon field named `type` cannot mislabel the event.
+	 * Record an agent event. The `agent_event` category label is authoritative —
+	 * applied after the payload so a daemon field named `type` cannot mislabel the
+	 * event — but the daemon's own discriminator (e.g. `text_delta`, `session_id`)
+	 * is preserved under `agentEventType` so the run log can replay the original
+	 * stream rather than guessing from optional fields.
 	 */
 	recordAgentEvent(data: Record<string, unknown>): Promise<void> {
-		return this.appendRunEvent({ ...data, type: RunEventType.AgentEvent });
+		const { type: daemonType, ...rest } = data;
+		return this.appendRunEvent({
+			...rest,
+			...(daemonType !== undefined
+				? { [AGENT_EVENT_TYPE_FIELD]: daemonType }
+				: {}),
+			type: RunEventType.AgentEvent,
+		});
 	}
 
 	/** Record a document hydration event. The category label is authoritative. */
@@ -165,23 +209,51 @@ export class Run {
 		return this.terminate("canceled", { type: RunEventType.Canceled });
 	}
 
-	private async terminate(
+	private terminate(
 		status: Exclude<RunStatus, "running">,
 		event: RunEvent,
 	): Promise<void> {
+		return this.critical(async () => {
+			if (this._status !== "running") {
+				throw new Error(
+					`Run ${this.ref.runId} already ${this._status}; cannot mark ${status}`,
+				);
+			}
+			// Persist the terminal event before advancing the status. If the write
+			// rejects (e.g. ENOSPC, transient store failure) the run stays `running`
+			// so the outcome can be retried, rather than being stuck terminal with no
+			// durable record of how it ended.
+			await this.write(event);
+			this._status = status;
+		});
+	}
+
+	private ensureRunning(eventType: string): void {
 		if (this._status !== "running") {
 			throw new Error(
-				`Run ${this.ref.runId} already ${this._status}; cannot mark ${status}`,
+				`Cannot append "${eventType}" to a ${this._status} run (${this.ref.runId})`,
 			);
 		}
-		this._status = status;
-		await this.write(event);
 	}
 
 	private write(event: RunEvent): Promise<void> {
 		// `at` is the authoritative server stamp, applied after the payload so a
 		// passthrough field named `at` cannot override it (same rule as `type`).
 		return this.sink.appendRunEvent(this.ref, { ...event, at: this.now() });
+	}
+
+	/**
+	 * Run `fn` as a critical section serialized after all prior operations. The
+	 * caller observes `fn`'s own outcome; the internal tail swallows rejections so
+	 * one failed operation does not block the next.
+	 */
+	private critical(fn: () => Promise<void>): Promise<void> {
+		const result = this.queue.then(fn);
+		this.queue = result.then(
+			() => {},
+			() => {},
+		);
+		return result;
 	}
 }
 
