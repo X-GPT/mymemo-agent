@@ -30,8 +30,13 @@ import type {
  *
  * Concurrency policy: **reject**. A second turn for a conversation whose lease is
  * already in flight throws `ConversationBusyError`. The in-flight guard is
- * per-process; the daemon's own single-turn lock is the cross-process backstop
- * (it returns the same error), so the two layers together cover both cases.
+ * per-process, so it only serializes turns landing on the same process. The
+ * daemon's single-turn lock backstops two turns that reuse the *same* warm
+ * sandbox (it 409s the second), but it does NOT cover a cross-replica race where
+ * neither replica has a warm lease yet: both would `acquireFresh` and create
+ * distinct sandboxes, and the conflicting `upsert` orphans one. A DB-level guard
+ * (conditional insert / advisory lock on the lease key) closes that gap and is
+ * left to the Task 14 wiring that puts this on the live multi-replica path.
  */
 
 export interface AcquireOptions {
@@ -158,11 +163,13 @@ export class SandboxLeaseManager {
 	 * still removed from the store — so cancellation racing teardown never throws.
 	 */
 	async terminate(ref: LeaseRef, logger: SyncLogger): Promise<void> {
+		// Free the in-flight guard too: terminating a lease whose turn is still held
+		// (e.g. the reaper races a turn) must not leave the key set, or the
+		// conversation is wedged with ConversationBusyError until the process exits.
+		this.inFlight.delete(inFlightKey(ref));
+
 		const record = await this.deps.leaseStore.get(ref);
 		if (!record) return;
-		// Remove the pointer first: even if the kill below fails, the stale lease
-		// must not be reused, and the next turn will create a fresh sandbox.
-		await this.deps.leaseStore.delete(ref);
 		try {
 			const handle = await this.deps.sandboxProvider.connectSandbox(
 				record.sandboxId,
@@ -170,8 +177,8 @@ export class SandboxLeaseManager {
 			);
 			await this.deps.sandboxProvider.killSandbox(ref.userId, handle, logger);
 		} catch (err) {
-			// The sandbox was likely already gone (reaped / never existed). The
-			// pointer is already deleted, so this is a clean no-op end state.
+			// connect threw → the sandbox is already gone (reaped / never existed),
+			// so dropping the pointer below is correct.
 			logger.info({
 				msg: "Sandbox already gone on terminate",
 				userId: ref.userId,
@@ -180,12 +187,22 @@ export class SandboxLeaseManager {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
+		// Delete only after the kill attempt: deleting first would orphan the
+		// sandbox id before we tried to kill it.
+		await this.deps.leaseStore.delete(ref);
 	}
 
 	/**
 	 * Reattach to a persisted warm lease, or `null` when there is none / it is
 	 * stale. A stale pointer (the sandbox no longer reattaches) is deleted so the
 	 * caller falls through to a fresh create.
+	 *
+	 * Staleness here is only "the sandbox VM no longer reattaches" — `connectSandbox`
+	 * succeeds whenever the control plane still has the sandbox, so a VM that is up
+	 * but whose in-sandbox daemon has died (or whose bundle version drifted) is
+	 * reused with its persisted endpoint and fails at `/turn`. Daemon-health /
+	 * version-drift gating before reuse is Task 15 (recycle conditions); until then
+	 * the persisted `daemonUrl`/`trafficAccessToken` are trusted as-is.
 	 */
 	private async tryReuse(
 		ref: LeaseRef,
@@ -216,6 +233,14 @@ export class SandboxLeaseManager {
 		// A reused live process already holds its resume state; honor an explicit
 		// override but otherwise carry the conversation's recorded session forward.
 		const agentSessionId = opts.agentSessionId ?? record.agentSessionId ?? null;
+
+		// Reuse is a use: re-persist the pointer so `updated_at` advances. The idle
+		// reaper (Task 14) ages leases by that timestamp, so without this a
+		// continuously-reused (and thus never-upserted) sandbox would look idle and
+		// be reaped mid-use. Also persists an explicit session override so the row
+		// doesn't drift from the live lease.
+		await this.deps.leaseStore.upsert({ ...record, agentSessionId });
+
 		logger.info({
 			msg: "Reusing warm sandbox lease",
 			userId: ref.userId,
@@ -250,37 +275,47 @@ export class SandboxLeaseManager {
 
 		await this.deps.workspaceStore.hydrateConversationWorkspace(ref);
 		const sandbox = await this.createWithRetry(ref.userId, logger);
-		const daemon = await this.deps.sandboxProvider.ensureSandboxDaemon(
-			ref.userId,
-			sandbox,
-			logger,
-		);
 
-		await this.deps.leaseStore.upsert({
-			userId: ref.userId,
-			conversationId: ref.conversationId,
-			sandboxId: sandbox.sandboxId,
-			daemonUrl: daemon.url,
-			trafficAccessToken: daemon.trafficAccessToken ?? null,
-			agentSessionId,
-		});
+		// The sandbox now exists; anything past this point that throws must tear it
+		// down, or a created-but-unusable sandbox leaks (the per-turn path's
+		// `finally { killSandbox }` guaranteed this — there is no caller `finally`
+		// here because no lease was handed back).
+		try {
+			const daemon = await this.deps.sandboxProvider.ensureSandboxDaemon(
+				ref.userId,
+				sandbox,
+				logger,
+			);
 
-		logger.info({
-			msg: "Leased fresh sandbox",
-			userId: ref.userId,
-			conversationId: ref.conversationId,
-			sandboxId: sandbox.sandboxId,
-			reused: false,
-			resuming: agentSessionId !== null,
-		});
-		return {
-			userId: ref.userId,
-			conversationId: ref.conversationId,
-			sandbox,
-			daemon,
-			reused: false,
-			agentSessionId,
-		};
+			await this.deps.leaseStore.upsert({
+				userId: ref.userId,
+				conversationId: ref.conversationId,
+				sandboxId: sandbox.sandboxId,
+				daemonUrl: daemon.url,
+				trafficAccessToken: daemon.trafficAccessToken ?? null,
+				agentSessionId,
+			});
+
+			logger.info({
+				msg: "Leased fresh sandbox",
+				userId: ref.userId,
+				conversationId: ref.conversationId,
+				sandboxId: sandbox.sandboxId,
+				reused: false,
+				resuming: agentSessionId !== null,
+			});
+			return {
+				userId: ref.userId,
+				conversationId: ref.conversationId,
+				sandbox,
+				daemon,
+				reused: false,
+				agentSessionId,
+			};
+		} catch (err) {
+			await this.deps.sandboxProvider.killSandbox(ref.userId, sandbox, logger);
+			throw err;
+		}
 	}
 
 	private async createWithRetry(

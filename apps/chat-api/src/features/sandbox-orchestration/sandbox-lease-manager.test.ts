@@ -15,6 +15,8 @@ const silentLogger = {
 /** In-memory {@link LeaseStore} keyed exactly like the Postgres composite PK. */
 class FakeLeaseStore implements LeaseStore {
 	readonly records = new Map<string, LeaseRecord>();
+	/** Every upsert, in order — stands in for the row's `updated_at` bumps. */
+	readonly upserts: LeaseRecord[] = [];
 	private key(ref: LeaseRef) {
 		return `${ref.userId}\0${ref.conversationId}`;
 	}
@@ -23,6 +25,7 @@ class FakeLeaseStore implements LeaseStore {
 	}
 	async upsert(record: LeaseRecord) {
 		this.records.set(this.key(record), { ...record });
+		this.upserts.push({ ...record });
 	}
 	async delete(ref: LeaseRef) {
 		this.records.delete(this.key(ref));
@@ -117,6 +120,24 @@ describe("SandboxLeaseManager", () => {
 			expect(order).toEqual(["hydrate", "create"]);
 		});
 
+		it("tears the sandbox down if it cannot be made usable after create", async () => {
+			// ensureSandboxDaemon throws after createSandbox succeeded: the created
+			// sandbox must be killed, not leaked, and nothing persisted.
+			d.ensureSandboxDaemon.mockImplementationOnce(async () => {
+				throw new Error("daemon never came up");
+			});
+
+			await expect(d.manager.acquire(refA, silentLogger)).rejects.toThrow(
+				"daemon never came up",
+			);
+
+			expect(d.killSandbox).toHaveBeenCalledTimes(1);
+			expect(await d.leaseStore.get(refA)).toBeNull();
+			// Guard freed, so the conversation is not wedged.
+			const ok = await d.manager.acquire(refA, silentLogger);
+			expect(ok.reused).toBe(false);
+		});
+
 		it("retries once on a transient SandboxCreationError", async () => {
 			d.createSandbox
 				.mockImplementationOnce(async () => {
@@ -149,6 +170,17 @@ describe("SandboxLeaseManager", () => {
 				url: "http://daemon:8080",
 				trafficAccessToken: "tok",
 			});
+		});
+
+		it("re-persists the lease on reuse so the idle reaper sees fresh liveness", async () => {
+			const first = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(first, silentLogger);
+			const upsertsBefore = d.leaseStore.upserts.length;
+
+			await d.manager.acquire(refA, silentLogger);
+
+			// Reuse writes the row again (bumping updated_at), not just reads it.
+			expect(d.leaseStore.upserts.length).toBe(upsertsBefore + 1);
 		});
 
 		it("recreates a fresh sandbox when the warm lease is stale (sandbox gone)", async () => {
@@ -325,6 +357,17 @@ describe("SandboxLeaseManager", () => {
 			expect(await d.leaseStore.get(refA)).toBeNull();
 			expect(d.connectSandbox).toHaveBeenCalledWith("sbx-1", expect.anything());
 			expect(d.killSandbox).toHaveBeenCalledTimes(1);
+		});
+
+		it("frees the in-flight guard so a terminated conversation is acquirable", async () => {
+			// Acquire and do NOT release — the turn is still "in flight" when the
+			// reaper terminates. The conversation must not be left wedged.
+			await d.manager.acquire(refA, silentLogger);
+
+			await d.manager.terminate(refA, silentLogger);
+
+			const next = await d.manager.acquire(refA, silentLogger);
+			expect(next.reused).toBe(false);
 		});
 
 		it("is a no-op for an unknown lease", async () => {

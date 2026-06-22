@@ -167,12 +167,15 @@ Optional:
 - `LOCAL_SANDBOX_DAEMON_URL` (default: `http://sandbox:8080`) — base URL of the local daemon container (`SANDBOX_PROVIDER=local` only)
 - `E2B_TEMPLATE` (default: `sandbox-template-dev`)
 - `WORKSPACE_STORE_ROOT` — root dir of the durable workspace store (local filesystem `WorkspaceStore` adapter). Holds per-user/per-conversation work, output, and the docs manifest, plus per-run event logs, following the path model `users/{userId}/conversations/{conversationId}/…` and `users/{userId}/runs/{runId}/events.jsonl`. Defaults to `.workspace-store` under the process cwd (writable in the container). **For durability across container recycles, point this at a mounted persistent volume in production**
+- `DATABASE_URL` — connection to chat-api's **own writable** Postgres (`mymemo_agent`), which backs the sandbox-lease registry (Milestone 5). This is a **separate database and credential** from the gateway's read-only KB (`mymemo_kb`), even when co-located on the same Postgres instance — chat-api never touches KB tables. Optional: only consumed once sandbox leasing is wired into the turn path (Task 14); without it, chat-api keeps the per-turn create/kill behavior
+- `DB_PASSWORD` — spliced into `DATABASE_URL` when it is passwordless (the form the platform injects)
+- `DB_SSL` (default: on; set `disable` for a local non-TLS Postgres)
 
 ### gateway
 
 Required:
 - `ANTHROPIC_API_KEY` — the real provider key; lives **only** in this service
-- `DATABASE_URL` — read-only connection to the MyMemo KB Postgres; the credential lives **only** in this service
+- `DATABASE_URL` — read-only connection to the MyMemo KB Postgres; this **read-only KB credential** lives **only** in this service (chat-api has its own, separate `DATABASE_URL` for its writable `mymemo_agent` DB — it is never the KB credential)
 - `LLM_TOKEN_SECRET` — must match chat-api's
 
 Optional:
