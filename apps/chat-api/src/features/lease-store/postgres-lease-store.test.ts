@@ -32,8 +32,6 @@ const record: LeaseRecord = {
 	userId: "user-1",
 	conversationId: "conv-1",
 	sandboxId: "sbx-1",
-	daemonUrl: "http://daemon:8080",
-	trafficAccessToken: "tok",
 	agentSessionId: "sess-1",
 };
 
@@ -44,8 +42,6 @@ describe("PostgresLeaseStore", () => {
 				user_id: "user-1",
 				conversation_id: "conv-1",
 				sandbox_id: "sbx-1",
-				daemon_url: "http://daemon:8080",
-				traffic_access_token: "tok",
 				agent_session_id: "sess-1",
 			},
 		]);
@@ -68,14 +64,12 @@ describe("PostgresLeaseStore", () => {
 		).toBeNull();
 	});
 
-	it("get maps a null traffic token and session to null fields", async () => {
+	it("get maps a null session to a null field", async () => {
 		const db = fakeDb([
 			{
 				user_id: "u",
 				conversation_id: "c",
 				sandbox_id: "s",
-				daemon_url: "http://d",
-				traffic_access_token: null,
 				agent_session_id: null,
 			},
 		]);
@@ -83,11 +77,10 @@ describe("PostgresLeaseStore", () => {
 			userId: "u",
 			conversationId: "c",
 		});
-		expect(got?.trafficAccessToken).toBeNull();
 		expect(got?.agentSessionId).toBeNull();
 	});
 
-	it("upsert writes all columns and is keyed by the conversation PK", async () => {
+	it("upsert writes the pointer columns and is keyed by the conversation PK", async () => {
 		const db = fakeDb();
 		await new PostgresLeaseStore(db).upsert(record);
 
@@ -96,14 +89,10 @@ describe("PostgresLeaseStore", () => {
 		expect(call.text).toContain(
 			"ON CONFLICT (user_id, conversation_id) DO UPDATE",
 		);
-		expect(call.params).toEqual([
-			"user-1",
-			"conv-1",
-			"sbx-1",
-			"http://daemon:8080",
-			"tok",
-			"sess-1",
-		]);
+		// Only id + session are persisted; the daemon endpoint is not stored.
+		expect(call.params).toEqual(["user-1", "conv-1", "sbx-1", "sess-1"]);
+		expect(call.text).not.toContain("daemon_url");
+		expect(call.text).not.toContain("traffic_access_token");
 	});
 
 	it("delete removes the row by the composite key", async () => {

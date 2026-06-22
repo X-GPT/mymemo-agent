@@ -197,12 +197,14 @@ export class SandboxLeaseManager {
 	 * stale. A stale pointer (the sandbox no longer reattaches) is deleted so the
 	 * caller falls through to a fresh create.
 	 *
+	 * The daemon endpoint is recomputed from the reattached handle (never read from
+	 * the store), so it cannot be stale relative to the live sandbox.
+	 *
 	 * Staleness here is only "the sandbox VM no longer reattaches" — `connectSandbox`
 	 * succeeds whenever the control plane still has the sandbox, so a VM that is up
 	 * but whose in-sandbox daemon has died (or whose bundle version drifted) is
-	 * reused with its persisted endpoint and fails at `/turn`. Daemon-health /
-	 * version-drift gating before reuse is Task 15 (recycle conditions); until then
-	 * the persisted `daemonUrl`/`trafficAccessToken` are trusted as-is.
+	 * reused and fails at `/turn`. Daemon-health / version-drift gating before reuse
+	 * is Task 15 (recycle conditions).
 	 */
 	private async tryReuse(
 		ref: LeaseRef,
@@ -253,10 +255,8 @@ export class SandboxLeaseManager {
 			userId: ref.userId,
 			conversationId: ref.conversationId,
 			sandbox,
-			daemon: {
-				url: record.daemonUrl,
-				trafficAccessToken: record.trafficAccessToken ?? undefined,
-			},
+			// Derived from the reattached handle, not the store — can't be stale.
+			daemon: this.deps.sandboxProvider.daemonEndpoint(sandbox),
 			reused: true,
 			agentSessionId,
 		};
@@ -291,8 +291,6 @@ export class SandboxLeaseManager {
 				userId: ref.userId,
 				conversationId: ref.conversationId,
 				sandboxId: sandbox.sandboxId,
-				daemonUrl: daemon.url,
-				trafficAccessToken: daemon.trafficAccessToken ?? null,
 				agentSessionId,
 			});
 

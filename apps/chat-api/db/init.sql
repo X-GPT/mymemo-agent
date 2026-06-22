@@ -12,13 +12,11 @@ CREATE DATABASE mymemo_agent;
 \connect mymemo_agent
 
 CREATE TABLE IF NOT EXISTS sandbox_leases (
-	user_id              TEXT        NOT NULL,
-	conversation_id      TEXT        NOT NULL,
-	sandbox_id           TEXT        NOT NULL,
-	daemon_url           TEXT        NOT NULL,
-	traffic_access_token TEXT,
-	agent_session_id     TEXT,
-	created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-	updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+	user_id          TEXT        NOT NULL,
+	conversation_id  TEXT        NOT NULL,
+	sandbox_id       TEXT        NOT NULL,
+	agent_session_id TEXT,
+	created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
 	PRIMARY KEY (user_id, conversation_id)
 );

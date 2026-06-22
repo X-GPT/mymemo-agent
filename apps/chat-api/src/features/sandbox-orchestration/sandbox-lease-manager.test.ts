@@ -42,6 +42,11 @@ function makeDeps() {
 		url: "http://daemon:8080",
 		trafficAccessToken: "tok",
 	}));
+	// Pure compute from the handle — the endpoint is derived, never persisted.
+	const daemonEndpoint = mock(() => ({
+		url: "http://daemon:8080",
+		trafficAccessToken: "tok",
+	}));
 	const killSandbox = mock(async () => undefined);
 	const cancelSandbox = mock(async () => undefined);
 	const hydrate = mock(async () => undefined);
@@ -52,6 +57,7 @@ function makeDeps() {
 		sandboxProvider: {
 			createSandbox,
 			connectSandbox,
+			daemonEndpoint,
 			ensureSandboxDaemon,
 			killSandbox,
 			cancelSandbox,
@@ -97,12 +103,8 @@ describe("SandboxLeaseManager", () => {
 			});
 			expect(d.hydrate).toHaveBeenCalledWith(refA);
 			expect(d.createSandbox).toHaveBeenCalledTimes(1);
-			// The warm pointer is persisted durably for the next turn / replica.
-			expect(await d.leaseStore.get(refA)).toMatchObject({
-				sandboxId: "sbx-1",
-				daemonUrl: "http://daemon:8080",
-				trafficAccessToken: "tok",
-			});
+			// Only the sandbox id is persisted — the endpoint is recomputed on reuse.
+			expect(await d.leaseStore.get(refA)).toMatchObject({ sandboxId: "sbx-1" });
 		});
 
 		it("hydrates the durable workspace before creating the sandbox", async () => {
@@ -297,8 +299,6 @@ describe("SandboxLeaseManager", () => {
 			await d.leaseStore.upsert({
 				...refA,
 				sandboxId: "old",
-				daemonUrl: "http://daemon:8080",
-				trafficAccessToken: null,
 				agentSessionId: "sess-resume",
 			});
 			d.connectSandbox.mockImplementationOnce(async () => {

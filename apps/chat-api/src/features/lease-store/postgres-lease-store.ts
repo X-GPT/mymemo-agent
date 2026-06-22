@@ -15,8 +15,7 @@ export class PostgresLeaseStore implements LeaseStore {
 
 	async get(ref: LeaseRef): Promise<LeaseRecord | null> {
 		const rows = await this.db.query<LeaseRow>(
-			`SELECT user_id, conversation_id, sandbox_id, daemon_url,
-			        traffic_access_token, agent_session_id
+			`SELECT user_id, conversation_id, sandbox_id, agent_session_id
 			   FROM sandbox_leases
 			  WHERE user_id = $1 AND conversation_id = $2`,
 			[ref.userId, ref.conversationId],
@@ -31,21 +30,16 @@ export class PostgresLeaseStore implements LeaseStore {
 		// (Task 14) can age leases out.
 		await this.db.query(
 			`INSERT INTO sandbox_leases
-			   (user_id, conversation_id, sandbox_id, daemon_url,
-			    traffic_access_token, agent_session_id, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, now())
+			   (user_id, conversation_id, sandbox_id, agent_session_id, updated_at)
+			 VALUES ($1, $2, $3, $4, now())
 			 ON CONFLICT (user_id, conversation_id) DO UPDATE SET
 			   sandbox_id = EXCLUDED.sandbox_id,
-			   daemon_url = EXCLUDED.daemon_url,
-			   traffic_access_token = EXCLUDED.traffic_access_token,
 			   agent_session_id = EXCLUDED.agent_session_id,
 			   updated_at = now()`,
 			[
 				record.userId,
 				record.conversationId,
 				record.sandboxId,
-				record.daemonUrl,
-				record.trafficAccessToken,
 				record.agentSessionId,
 			],
 		);
@@ -64,8 +58,6 @@ interface LeaseRow {
 	user_id: string;
 	conversation_id: string;
 	sandbox_id: string;
-	daemon_url: string;
-	traffic_access_token: string | null;
 	agent_session_id: string | null;
 }
 
@@ -74,8 +66,6 @@ function rowToRecord(row: LeaseRow): LeaseRecord {
 		userId: row.user_id,
 		conversationId: row.conversation_id,
 		sandboxId: row.sandbox_id,
-		daemonUrl: row.daemon_url,
-		trafficAccessToken: row.traffic_access_token,
 		agentSessionId: row.agent_session_id,
 	};
 }

@@ -135,6 +135,22 @@ export class E2BSandboxProvider implements SandboxProvider {
 		return Sandbox.connect(sandboxId);
 	}
 
+	/**
+	 * Recompute the daemon endpoint from a (created or reconnected) handle. Both
+	 * the host and the per-sandbox traffic token live on the Sandbox object —
+	 * `Sandbox.connect` repopulates them — so a warm-lease reuse derives the
+	 * endpoint here instead of reading persisted (and potentially stale) columns.
+	 */
+	daemonEndpoint(handle: SandboxHandle): SandboxDaemonEndpoint {
+		// Safe: see killSandbox — the singleton provider only ever receives the
+		// Sandbox its own createSandbox/connectSandbox returned.
+		const sandbox = handle as Sandbox;
+		return {
+			url: this.getDaemonUrl(sandbox),
+			trafficAccessToken: sandbox.trafficAccessToken,
+		};
+	}
+
 	async killSandbox(
 		userId: string,
 		handle: SandboxHandle,
@@ -194,15 +210,11 @@ export class E2BSandboxProvider implements SandboxProvider {
 		logger: SyncLogger,
 	): Promise<SandboxDaemonEndpoint> {
 		// Safe: see killSandbox — the singleton provider only ever receives the
-		// Sandbox its own createSandbox returned.
+		// Sandbox its own createSandbox returned. trafficAccessToken is guaranteed
+		// present — createSandbox fails the create when it is missing — so the turn
+		// proxy can always authenticate to the edge.
 		const sandbox = handle as Sandbox;
-		const daemonUrl = this.getDaemonUrl(sandbox);
-		// trafficAccessToken is guaranteed present — createSandbox fails the create
-		// when it is missing — so the turn proxy can always authenticate to the edge.
-		const endpoint = {
-			url: daemonUrl,
-			trafficAccessToken: sandbox.trafficAccessToken,
-		};
+		const endpoint = this.daemonEndpoint(sandbox);
 
 		const bundles = await getSandboxBundles();
 

@@ -7,8 +7,10 @@
  *
  * What is stored is the *pointer*, not the live sandbox: a sandbox handle is an
  * open network client that cannot be serialized. A reusing process reattaches to
- * the sandbox by id through the `SandboxProvider`; this store only persists the
- * id plus the daemon endpoint needed to reach it.
+ * the sandbox by id through the `SandboxProvider` and recomputes the daemon
+ * endpoint from the reattached handle, so the store persists only the id (the
+ * URL and per-sandbox edge token are derived, never written here — that keeps
+ * the edge secret out of a durable store and the endpoint from going stale).
  *
  * The lease is an optimization, not the source of truth — durable conversation
  * state (transcripts, docs, manifest) lives in `WorkspaceStore`. A lost or stale
@@ -29,12 +31,12 @@ export interface LeaseRef {
 export interface LeaseRecord {
 	userId: string;
 	conversationId: string;
-	/** The leased sandbox; a reusing process reattaches via the provider. */
+	/**
+	 * The leased sandbox. A reusing process reattaches via the provider and
+	 * recomputes the daemon endpoint from the handle — the URL and edge token are
+	 * deliberately NOT stored.
+	 */
 	sandboxId: string;
-	/** Where the in-sandbox daemon is reachable. */
-	daemonUrl: string;
-	/** Per-sandbox E2B edge token, or null for providers with no edge (local). */
-	trafficAccessToken: string | null;
 	/** Claude SDK resume state last threaded into this conversation, if any. */
 	agentSessionId: string | null;
 }

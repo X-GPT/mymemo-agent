@@ -89,6 +89,11 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 		return { sandboxId };
 	}
 
+	daemonEndpoint(): SandboxDaemonEndpoint {
+		// Fixed container URL, no edge token (unpublished on the compose network).
+		return { url: this.config.localSandboxDaemonUrl };
+	}
+
 	async killSandbox(): Promise<void> {
 		// The local container is long-lived — nothing to tear down per turn.
 	}

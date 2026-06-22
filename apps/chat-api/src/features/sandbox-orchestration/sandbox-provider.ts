@@ -64,6 +64,15 @@ export interface SandboxProvider {
 	 * exists, which the lease manager treats as a stale lease and recreates.
 	 */
 	connectSandbox(sandboxId: string, logger: SyncLogger): Promise<SandboxHandle>;
+	/**
+	 * The daemon endpoint (URL + edge token) for an already-running sandbox,
+	 * computed purely from the handle — no bundle deploy, no network call. This is
+	 * how a reused warm lease reaches the daemon: the endpoint is recomputed from
+	 * the reattached handle rather than persisted, so it can never go stale and the
+	 * per-sandbox edge token is never written to a durable store. `ensureSandboxDaemon`
+	 * returns the same shape on a fresh create (after it deploys + health-checks).
+	 */
+	daemonEndpoint(handle: SandboxHandle): SandboxDaemonEndpoint;
 	ensureSandboxDaemon(
 		userId: string,
 		handle: SandboxHandle,
