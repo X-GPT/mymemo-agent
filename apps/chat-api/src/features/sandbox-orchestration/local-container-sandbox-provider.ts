@@ -83,6 +83,12 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 		);
 	}
 
+	async connectSandbox(sandboxId: string): Promise<SandboxHandle> {
+		// One long-lived container, so there is nothing to reattach to — the handle
+		// is static. Returns whatever id the lease recorded for symmetry with E2B.
+		return { sandboxId };
+	}
+
 	async killSandbox(): Promise<void> {
 		// The local container is long-lived — nothing to tear down per turn.
 	}

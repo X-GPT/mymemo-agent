@@ -120,6 +120,21 @@ export class E2BSandboxProvider implements SandboxProvider {
 		return sandbox;
 	}
 
+	/**
+	 * Reattach to a running E2B sandbox by id. `Sandbox.connect` re-establishes the
+	 * client (including the per-sandbox traffic token) without re-deploying bundles,
+	 * which is what makes a warm lease reusable from a process that did not create
+	 * it. Throws if the sandbox was already reaped — the lease manager treats that
+	 * as a stale lease.
+	 */
+	async connectSandbox(
+		sandboxId: string,
+		logger: SyncLogger,
+	): Promise<SandboxHandle> {
+		logger.info({ msg: "Connecting to existing sandbox", sandboxId });
+		return Sandbox.connect(sandboxId);
+	}
+
 	async killSandbox(
 		userId: string,
 		handle: SandboxHandle,

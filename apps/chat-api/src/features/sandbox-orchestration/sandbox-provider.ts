@@ -56,6 +56,14 @@ export function trafficAccessHeaders(
 
 export interface SandboxProvider {
 	createSandbox(userId: string, logger: SyncLogger): Promise<SandboxHandle>;
+	/**
+	 * Reattach to an already-running sandbox by id. Leasing (Milestone 5) persists
+	 * only a sandbox *id* — a live handle is an open network client that can't be
+	 * serialized — so a process reusing a warm lease, or tearing down a lease it
+	 * never created, reconstructs the handle here. Rejects if the sandbox no longer
+	 * exists, which the lease manager treats as a stale lease and recreates.
+	 */
+	connectSandbox(sandboxId: string, logger: SyncLogger): Promise<SandboxHandle>;
 	ensureSandboxDaemon(
 		userId: string,
 		handle: SandboxHandle,

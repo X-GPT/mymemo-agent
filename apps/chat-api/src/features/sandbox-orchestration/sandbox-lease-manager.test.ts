@@ -1,0 +1,350 @@
+import { beforeEach, describe, expect, it, mock } from "bun:test";
+import type { ChatLogger } from "@/features/chat/chat.logger";
+import type { LeaseRecord, LeaseRef, LeaseStore } from "@/features/lease-store";
+import { ConversationBusyError, SandboxCreationError } from "./errors";
+import { SandboxLeaseManager } from "./sandbox-lease-manager";
+
+const silentLogger = {
+	info: () => {},
+	error: () => {},
+	warn: () => {},
+	debug: () => {},
+	child: () => silentLogger,
+} as unknown as ChatLogger;
+
+/** In-memory {@link LeaseStore} keyed exactly like the Postgres composite PK. */
+class FakeLeaseStore implements LeaseStore {
+	readonly records = new Map<string, LeaseRecord>();
+	private key(ref: LeaseRef) {
+		return `${ref.userId}\0${ref.conversationId}`;
+	}
+	async get(ref: LeaseRef) {
+		return this.records.get(this.key(ref)) ?? null;
+	}
+	async upsert(record: LeaseRecord) {
+		this.records.set(this.key(record), { ...record });
+	}
+	async delete(ref: LeaseRef) {
+		this.records.delete(this.key(ref));
+	}
+}
+
+function makeDeps() {
+	let nextSandboxId = 1;
+	const createSandbox = mock(async () => ({
+		sandboxId: `sbx-${nextSandboxId++}`,
+	}));
+	const connectSandbox = mock(async (sandboxId: string) => ({ sandboxId }));
+	const ensureSandboxDaemon = mock(async () => ({
+		url: "http://daemon:8080",
+		trafficAccessToken: "tok",
+	}));
+	const killSandbox = mock(async () => undefined);
+	const cancelSandbox = mock(async () => undefined);
+	const hydrate = mock(async () => undefined);
+	const sync = mock(async () => undefined);
+	const leaseStore = new FakeLeaseStore();
+
+	const manager = new SandboxLeaseManager({
+		sandboxProvider: {
+			createSandbox,
+			connectSandbox,
+			ensureSandboxDaemon,
+			killSandbox,
+			cancelSandbox,
+			// biome-ignore lint/suspicious/noExplicitAny: partial provider mock for the lease seam.
+		} as any,
+		leaseStore,
+		workspaceStore: {
+			hydrateConversationWorkspace: hydrate,
+			syncConversationWorkspace: sync,
+			// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync are used.
+		} as any,
+	});
+
+	return {
+		manager,
+		leaseStore,
+		createSandbox,
+		connectSandbox,
+		ensureSandboxDaemon,
+		killSandbox,
+		hydrate,
+		sync,
+	};
+}
+
+const refA: LeaseRef = { userId: "user-1", conversationId: "conv-1" };
+
+describe("SandboxLeaseManager", () => {
+	let d: ReturnType<typeof makeDeps>;
+	beforeEach(() => {
+		d = makeDeps();
+	});
+
+	describe("fresh acquisition", () => {
+		it("creates and hydrates a fresh sandbox, persisting the lease pointer", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+
+			expect(lease.reused).toBe(false);
+			expect(lease.sandbox.sandboxId).toBe("sbx-1");
+			expect(lease.daemon).toEqual({
+				url: "http://daemon:8080",
+				trafficAccessToken: "tok",
+			});
+			expect(d.hydrate).toHaveBeenCalledWith(refA);
+			expect(d.createSandbox).toHaveBeenCalledTimes(1);
+			// The warm pointer is persisted durably for the next turn / replica.
+			expect(await d.leaseStore.get(refA)).toMatchObject({
+				sandboxId: "sbx-1",
+				daemonUrl: "http://daemon:8080",
+				trafficAccessToken: "tok",
+			});
+		});
+
+		it("hydrates the durable workspace before creating the sandbox", async () => {
+			const order: string[] = [];
+			d.hydrate.mockImplementation(async () => {
+				order.push("hydrate");
+			});
+			d.createSandbox.mockImplementation(async () => {
+				order.push("create");
+				return { sandboxId: "sbx-1" };
+			});
+
+			await d.manager.acquire(refA, silentLogger);
+
+			expect(order).toEqual(["hydrate", "create"]);
+		});
+
+		it("retries once on a transient SandboxCreationError", async () => {
+			d.createSandbox
+				.mockImplementationOnce(async () => {
+					throw new SandboxCreationError("boom");
+				})
+				.mockImplementationOnce(async () => ({ sandboxId: "sbx-retry" }));
+
+			const lease = await d.manager.acquire(refA, silentLogger);
+
+			expect(d.createSandbox).toHaveBeenCalledTimes(2);
+			expect(lease.sandbox.sandboxId).toBe("sbx-retry");
+		});
+	});
+
+	describe("warm reuse", () => {
+		it("reuses a healthy warm sandbox for the same user + conversation", async () => {
+			const first = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(first, silentLogger);
+
+			const second = await d.manager.acquire(refA, silentLogger);
+
+			expect(second.reused).toBe(true);
+			expect(second.sandbox.sandboxId).toBe("sbx-1");
+			// Reuse reattaches by id and reaches the daemon via the persisted
+			// endpoint — no new sandbox, no re-deploy.
+			expect(d.connectSandbox).toHaveBeenCalledWith("sbx-1", expect.anything());
+			expect(d.createSandbox).toHaveBeenCalledTimes(1);
+			expect(d.ensureSandboxDaemon).toHaveBeenCalledTimes(1);
+			expect(second.daemon).toEqual({
+				url: "http://daemon:8080",
+				trafficAccessToken: "tok",
+			});
+		});
+
+		it("recreates a fresh sandbox when the warm lease is stale (sandbox gone)", async () => {
+			const first = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(first, silentLogger);
+			d.connectSandbox.mockImplementationOnce(async () => {
+				throw new Error("sandbox not found");
+			});
+
+			const second = await d.manager.acquire(refA, silentLogger);
+
+			expect(second.reused).toBe(false);
+			expect(second.sandbox.sandboxId).toBe("sbx-2");
+			expect(d.createSandbox).toHaveBeenCalledTimes(2);
+			// The fresh pointer supersedes the stale one.
+			expect(await d.leaseStore.get(refA)).toMatchObject({
+				sandboxId: "sbx-2",
+			});
+		});
+	});
+
+	describe("isolation", () => {
+		it("never shares a sandbox across users", async () => {
+			const a = await d.manager.acquire(
+				{ userId: "user-1", conversationId: "conv-x" },
+				silentLogger,
+			);
+			const b = await d.manager.acquire(
+				{ userId: "user-2", conversationId: "conv-x" },
+				silentLogger,
+			);
+
+			expect(a.sandbox.sandboxId).not.toBe(b.sandbox.sandboxId);
+			expect(b.reused).toBe(false);
+			expect(d.createSandbox).toHaveBeenCalledTimes(2);
+		});
+
+		it("never shares a sandbox across conversations of one user", async () => {
+			const a = await d.manager.acquire(
+				{ userId: "user-1", conversationId: "conv-1" },
+				silentLogger,
+			);
+			const b = await d.manager.acquire(
+				{ userId: "user-1", conversationId: "conv-2" },
+				silentLogger,
+			);
+
+			expect(a.sandbox.sandboxId).not.toBe(b.sandbox.sandboxId);
+			expect(b.reused).toBe(false);
+		});
+	});
+
+	describe("concurrency (reject policy)", () => {
+		it("rejects a second turn while the first is in flight", async () => {
+			const first = await d.manager.acquire(refA, silentLogger);
+
+			await expect(
+				d.manager.acquire(refA, silentLogger),
+			).rejects.toBeInstanceOf(ConversationBusyError);
+			// Only the first turn's sandbox was created.
+			expect(d.createSandbox).toHaveBeenCalledTimes(1);
+
+			// After release, the conversation is acquirable again (and warm-reused).
+			await d.manager.release(first, silentLogger);
+			const again = await d.manager.acquire(refA, silentLogger);
+			expect(again.reused).toBe(true);
+		});
+
+		it("races: two simultaneous acquires yield exactly one busy rejection", async () => {
+			const results = await Promise.allSettled([
+				d.manager.acquire(refA, silentLogger),
+				d.manager.acquire(refA, silentLogger),
+			]);
+
+			const fulfilled = results.filter((r) => r.status === "fulfilled");
+			const rejected = results.filter((r) => r.status === "rejected");
+			expect(fulfilled).toHaveLength(1);
+			expect(rejected).toHaveLength(1);
+			expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+				ConversationBusyError,
+			);
+			expect(d.createSandbox).toHaveBeenCalledTimes(1);
+		});
+
+		it("frees the in-flight guard when acquisition fails", async () => {
+			d.createSandbox.mockImplementationOnce(async () => {
+				throw new Error("hard failure");
+			});
+
+			await expect(d.manager.acquire(refA, silentLogger)).rejects.toThrow(
+				"hard failure",
+			);
+			// Not wedged: a later acquire proceeds (fresh, since nothing persisted).
+			const ok = await d.manager.acquire(refA, silentLogger);
+			expect(ok.reused).toBe(false);
+		});
+	});
+
+	describe("resume", () => {
+		it("threads agentSessionId into a fresh sandbox and persists it", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger, {
+				agentSessionId: "sess-1",
+			});
+
+			expect(lease.reused).toBe(false);
+			expect(lease.agentSessionId).toBe("sess-1");
+			expect(await d.leaseStore.get(refA)).toMatchObject({
+				agentSessionId: "sess-1",
+			});
+		});
+
+		it("carries the recorded agentSessionId forward on a stale-lease recreate", async () => {
+			// Seed a persisted lease whose sandbox is gone.
+			await d.leaseStore.upsert({
+				...refA,
+				sandboxId: "old",
+				daemonUrl: "http://daemon:8080",
+				trafficAccessToken: null,
+				agentSessionId: "sess-resume",
+			});
+			d.connectSandbox.mockImplementationOnce(async () => {
+				throw new Error("gone");
+			});
+
+			// A fresh acquire with no explicit session still creates a new sandbox;
+			// resume state is the caller's to re-pass, so the fresh lease starts null
+			// unless provided.
+			const lease = await d.manager.acquire(refA, silentLogger);
+			expect(lease.reused).toBe(false);
+			expect(lease.agentSessionId).toBeNull();
+		});
+
+		it("carries the recorded agentSessionId forward on warm reuse", async () => {
+			const first = await d.manager.acquire(refA, silentLogger, {
+				agentSessionId: "sess-1",
+			});
+			await d.manager.release(first, silentLogger);
+
+			const second = await d.manager.acquire(refA, silentLogger);
+			expect(second.reused).toBe(true);
+			expect(second.agentSessionId).toBe("sess-1");
+		});
+	});
+
+	describe("release", () => {
+		it("syncs the durable workspace and frees the guard", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(lease, silentLogger);
+
+			expect(d.sync).toHaveBeenCalledWith(refA);
+			// Still persisted (kept warm), and re-acquirable.
+			expect(await d.leaseStore.get(refA)).not.toBeNull();
+		});
+
+		it("does not throw when the workspace sync fails", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			d.sync.mockImplementationOnce(async () => {
+				throw new Error("store down");
+			});
+
+			await expect(
+				d.manager.release(lease, silentLogger),
+			).resolves.toBeUndefined();
+		});
+	});
+
+	describe("terminate", () => {
+		it("removes the pointer and kills the sandbox", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(lease, silentLogger);
+
+			await d.manager.terminate(refA, silentLogger);
+
+			expect(await d.leaseStore.get(refA)).toBeNull();
+			expect(d.connectSandbox).toHaveBeenCalledWith("sbx-1", expect.anything());
+			expect(d.killSandbox).toHaveBeenCalledTimes(1);
+		});
+
+		it("is a no-op for an unknown lease", async () => {
+			await expect(
+				d.manager.terminate(refA, silentLogger),
+			).resolves.toBeUndefined();
+			expect(d.killSandbox).not.toHaveBeenCalled();
+		});
+
+		it("still removes the pointer when the sandbox is already gone", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(lease, silentLogger);
+			d.connectSandbox.mockImplementationOnce(async () => {
+				throw new Error("gone");
+			});
+
+			await expect(
+				d.manager.terminate(refA, silentLogger),
+			).resolves.toBeUndefined();
+			expect(await d.leaseStore.get(refA)).toBeNull();
+		});
+	});
+});

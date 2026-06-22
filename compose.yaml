@@ -32,6 +32,11 @@ services:
       LOCAL_SANDBOX_DAEMON_URL: http://sandbox:8080
       # Same compose network — no getHost tunneling, just the service name.
       GATEWAY_PUBLIC_URL: http://gateway:8080
+      # chat-api's OWN writable database (mymemo_agent), separate from the
+      # gateway's read-only KB (mymemo_kb) on the same postgres instance. Holds
+      # the sandbox-lease registry. Local-only dev credential, so inline.
+      DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
+      DB_SSL: disable
       LOG_LEVEL: info
     # Secrets: LLM_TOKEN_SECRET
     env_file:
@@ -40,6 +45,8 @@ services:
       gateway:
         condition: service_started
       sandbox:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -104,7 +111,10 @@ services:
       POSTGRES_DB: mymemo_kb
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./apps/gateway/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Two databases on one instance: the gateway's read-only KB (mymemo_kb,
+      # seeded here) and chat-api's writable mymemo_agent (lease registry).
+      - ./apps/gateway/db/init.sql:/docker-entrypoint-initdb.d/00-kb.sql:ro
+      - ./apps/chat-api/db/init.sql:/docker-entrypoint-initdb.d/10-chat-api.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mymemo -d mymemo_kb"]
       interval: 5s

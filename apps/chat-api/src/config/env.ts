@@ -31,6 +31,35 @@ export interface ApiConfig {
 	logLevel: string;
 	/** Root dir of the durable workspace store (local filesystem adapter). */
 	workspaceStoreRoot: string;
+	/**
+	 * Writable connection to chat-api's own Postgres (`mymemo_agent`), distinct
+	 * from the gateway's read-only KB. Backs the sandbox-lease registry.
+	 * Optional: only consumed once leasing is wired into the turn path (Task 14),
+	 * so a deployment without it keeps the per-turn create/kill behavior.
+	 * DB_PASSWORD spliced in when passwordless; TLS applied (DB_SSL=disable to
+	 * turn off for a local non-TLS Postgres).
+	 */
+	databaseUrl?: string;
+}
+
+/**
+ * If DATABASE_URL is passwordless (the form the platform injects) and
+ * DB_PASSWORD is set, splice the password in. Mirrors the gateway's helper.
+ */
+function withPassword(url: string, password: string | undefined): string {
+	if (!password) return url;
+	const m = /^([a-z]+:\/\/)([^@/]+)@(.*)$/i.exec(url);
+	if (!m) return url;
+	const [, scheme, userinfo, rest] = m;
+	if (!scheme || !userinfo || rest === undefined) return url;
+	if (userinfo.includes(":")) return url; // already has a password
+	return `${scheme}${userinfo}:${encodeURIComponent(password)}@${rest}`;
+}
+
+/** Append `sslmode=require` unless TLS is disabled or the URL already sets it. */
+function withSsl(url: string, enabled: boolean): string {
+	if (!enabled || /[?&]sslmode=/.test(url)) return url;
+	return `${url}${url.includes("?") ? "&" : "?"}sslmode=require`;
 }
 
 /**
@@ -88,5 +117,11 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		gatewayPublicUrl: env.GATEWAY_PUBLIC_URL.replace(/\/+$/, ""),
 		logLevel: env.LOG_LEVEL || "info",
 		workspaceStoreRoot,
+		databaseUrl: env.DATABASE_URL
+			? withSsl(
+					withPassword(env.DATABASE_URL, env.DB_PASSWORD),
+					env.DB_SSL !== "disable",
+				)
+			: undefined,
 	};
 }
