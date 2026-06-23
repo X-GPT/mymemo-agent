@@ -151,6 +151,30 @@ export class E2BSandboxProvider implements SandboxProvider {
 		};
 	}
 
+	/**
+	 * Extend the sandbox's auto-shutdown timeout. Best-effort: a transient failure
+	 * here just leaves the sandbox on its prior timeout, so it is logged, not
+	 * thrown — the lease manager must not tear down a healthy sandbox over a failed
+	 * keep-alive.
+	 */
+	async setSandboxTimeout(
+		handle: SandboxHandle,
+		timeoutMs: number,
+		logger: SyncLogger,
+	): Promise<void> {
+		const sandbox = handle as Sandbox;
+		try {
+			await sandbox.setTimeout(timeoutMs);
+		} catch (err) {
+			logger.error({
+				msg: "Failed to set sandbox timeout",
+				sandboxId: sandbox.sandboxId,
+				timeoutMs,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	async killSandbox(
 		userId: string,
 		handle: SandboxHandle,

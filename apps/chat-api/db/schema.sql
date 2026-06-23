@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS sandbox_leases (
 	-- Claude SDK resume state last threaded into this conversation.
 	agent_session_id TEXT,
 	created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-	-- Bumped on every upsert; the idle reaper (Task 14) ages leases out by this.
+	-- Bumped on every upsert (each acquire/reuse). The sandbox's own E2B timeout
+	-- is what actually reaps an idle sandbox; this lets the Task 14 reaper
+	-- proactively sync + drop the row before that expiry.
 	updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
 	PRIMARY KEY (user_id, conversation_id)
 );

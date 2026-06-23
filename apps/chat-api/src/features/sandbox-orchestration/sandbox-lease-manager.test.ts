@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, mock } from "bun:test";
 import type { ChatLogger } from "@/features/chat/chat.logger";
 import type { LeaseRecord, LeaseRef, LeaseStore } from "@/features/lease-store";
 import { ConversationBusyError, SandboxCreationError } from "./errors";
-import { SandboxLeaseManager } from "./sandbox-lease-manager";
+import {
+	DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
+	SandboxLeaseManager,
+} from "./sandbox-lease-manager";
 
 const silentLogger = {
 	info: () => {},
@@ -49,6 +52,7 @@ function makeDeps() {
 	}));
 	const killSandbox = mock(async () => undefined);
 	const cancelSandbox = mock(async () => undefined);
+	const setSandboxTimeout = mock(async () => undefined);
 	const hydrate = mock(async () => undefined);
 	const sync = mock(async () => undefined);
 	const leaseStore = new FakeLeaseStore();
@@ -58,6 +62,7 @@ function makeDeps() {
 			createSandbox,
 			connectSandbox,
 			daemonEndpoint,
+			setSandboxTimeout,
 			ensureSandboxDaemon,
 			killSandbox,
 			cancelSandbox,
@@ -78,6 +83,7 @@ function makeDeps() {
 		connectSandbox,
 		ensureSandboxDaemon,
 		killSandbox,
+		setSandboxTimeout,
 		hydrate,
 		sync,
 	};
@@ -203,6 +209,77 @@ describe("SandboxLeaseManager", () => {
 			expect(await d.leaseStore.get(refA)).toMatchObject({
 				sandboxId: "sbx-2",
 			});
+		});
+	});
+
+	describe("idle timeout (single clock)", () => {
+		it("sets the sandbox timeout to the idle window on a fresh acquire", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+
+			expect(d.setSandboxTimeout).toHaveBeenCalledWith(
+				lease.sandbox,
+				DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
+				expect.anything(),
+			);
+		});
+
+		it("resets the timeout on warm reuse so the new turn gets a full window", async () => {
+			const first = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(first, silentLogger);
+			d.setSandboxTimeout.mockClear();
+
+			await d.manager.acquire(refA, silentLogger);
+
+			expect(d.setSandboxTimeout).toHaveBeenCalledWith(
+				{ sandboxId: "sbx-1" },
+				DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
+				expect.anything(),
+			);
+		});
+
+		it("resets the idle countdown from turn end on release", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			d.setSandboxTimeout.mockClear();
+
+			await d.manager.release(lease, silentLogger);
+
+			expect(d.setSandboxTimeout).toHaveBeenCalledWith(
+				lease.sandbox,
+				DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
+				expect.anything(),
+			);
+		});
+
+		it("honors a custom idle window", async () => {
+			const manager = new SandboxLeaseManager(
+				{
+					sandboxProvider: {
+						createSandbox: d.createSandbox,
+						connectSandbox: d.connectSandbox,
+						daemonEndpoint: () => ({ url: "http://daemon:8080" }),
+						setSandboxTimeout: d.setSandboxTimeout,
+						ensureSandboxDaemon: d.ensureSandboxDaemon,
+						killSandbox: d.killSandbox,
+						cancelSandbox: async () => {},
+						// biome-ignore lint/suspicious/noExplicitAny: partial provider mock.
+					} as any,
+					leaseStore: d.leaseStore,
+					workspaceStore: {
+						hydrateConversationWorkspace: d.hydrate,
+						syncConversationWorkspace: d.sync,
+						// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync used.
+					} as any,
+				},
+				1_000,
+			);
+
+			await manager.acquire(refA, silentLogger);
+
+			expect(d.setSandboxTimeout).toHaveBeenCalledWith(
+				expect.anything(),
+				1_000,
+				expect.anything(),
+			);
 		});
 	});
 

@@ -94,6 +94,10 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 		return { url: this.config.localSandboxDaemonUrl };
 	}
 
+	async setSandboxTimeout(): Promise<void> {
+		// The container is long-lived and has no auto-shutdown timeout to manage.
+	}
+
 	async killSandbox(): Promise<void> {
 		// The local container is long-lived — nothing to tear down per turn.
 	}

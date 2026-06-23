@@ -73,6 +73,20 @@ export interface SandboxProvider {
 	 * returns the same shape on a fresh create (after it deploys + health-checks).
 	 */
 	daemonEndpoint(handle: SandboxHandle): SandboxDaemonEndpoint;
+	/**
+	 * Reset the sandbox's auto-shutdown timeout to `timeoutMs` from now. A running
+	 * E2B sandbox kills itself at its timeout, so this is the single clock the lease
+	 * uses to keep a warm sandbox alive: it is reset on every acquire and release,
+	 * so the idle window *is* the sandbox's lifetime and an idle sandbox is reaped
+	 * by E2B itself at expiry. Best-effort — providers swallow failures (the
+	 * sandbox simply keeps its prior timeout). A no-op for the long-lived local
+	 * container.
+	 */
+	setSandboxTimeout(
+		handle: SandboxHandle,
+		timeoutMs: number,
+		logger: SyncLogger,
+	): Promise<void>;
 	ensureSandboxDaemon(
 		userId: string,
 		handle: SandboxHandle,
