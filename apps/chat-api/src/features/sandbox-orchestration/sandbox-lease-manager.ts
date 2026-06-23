@@ -1,4 +1,4 @@
-import type { LeaseRef, LeaseStore } from "@/features/lease-store";
+import type { LeaseRecord, LeaseRef, LeaseStore } from "@/features/lease-store";
 import type { WorkspaceStore } from "@/features/workspace-store";
 import { ConversationBusyError, SandboxCreationError } from "./errors";
 import type {
@@ -87,6 +87,19 @@ function inFlightKey(ref: LeaseRef): string {
 	return `${ref.userId}\0${ref.conversationId}`;
 }
 
+/**
+ * Resolve the session to thread into a turn. An explicit `opts.agentSessionId`
+ * wins — *including an explicit `null`*, which means "start a fresh session", so
+ * a caller can reset a warm conversation. Only when the caller omits the field
+ * entirely (`undefined`) do we fall back to the conversation's recorded session.
+ */
+function resolveAgentSessionId(
+	opts: AcquireOptions,
+	fallback: string | null,
+): string | null {
+	return opts.agentSessionId !== undefined ? opts.agentSessionId : fallback;
+}
+
 export class SandboxLeaseManager {
 	/** Keys of conversations with a turn currently in flight (reject policy). */
 	private readonly inFlight = new Set<string>();
@@ -121,9 +134,19 @@ export class SandboxLeaseManager {
 		this.inFlight.add(key);
 
 		try {
-			const reused = await this.tryReuse(ref, logger, opts);
-			if (reused) return reused;
-			return await this.acquireFresh(ref, logger, opts);
+			// Read the pointer once. tryReuse may delete it (stale), so capture the
+			// recorded session first and carry it into a fresh create — a recycled
+			// sandbox should resume the conversation, not start blank.
+			const record = await this.deps.leaseStore.get(ref);
+			if (record) {
+				const reused = await this.tryReuse(ref, record, logger, opts);
+				if (reused) return reused;
+			}
+			return await this.acquireFresh(
+				ref,
+				logger,
+				resolveAgentSessionId(opts, record?.agentSessionId ?? null),
+			);
 		} catch (err) {
 			// Free the guard on any failure so the conversation isn't wedged; a
 			// successful acquire keeps the key held until `release`.
@@ -133,13 +156,16 @@ export class SandboxLeaseManager {
 	}
 
 	/**
-	 * End a turn's hold on a lease without tearing the sandbox down: the in-flight
-	 * guard is freed and the durable workspace is synced, but the sandbox is kept
-	 * warm for the next turn. Idle termination of warm leases is Task 14. A sync
-	 * failure is logged, not thrown — the turn already finished.
+	 * End a turn's hold on a lease without tearing the sandbox down: the durable
+	 * workspace is synced, then the in-flight guard is freed, but the sandbox is
+	 * kept warm for the next turn. Idle termination of warm leases is Task 14.
+	 *
+	 * The guard is held until the sync completes (cleared in `finally`), so the
+	 * next turn for this conversation cannot start against the same workspace
+	 * before the prior turn's state is durably captured. A sync failure is logged,
+	 * not thrown — the turn already finished — but still releases the guard.
 	 */
 	async release(lease: SandboxLease, logger: SyncLogger): Promise<void> {
-		this.inFlight.delete(inFlightKey(lease));
 		try {
 			await this.deps.workspaceStore.syncConversationWorkspace({
 				userId: lease.userId,
@@ -152,6 +178,8 @@ export class SandboxLeaseManager {
 				conversationId: lease.conversationId,
 				error: err instanceof Error ? err.message : String(err),
 			});
+		} finally {
+			this.inFlight.delete(inFlightKey(lease));
 		}
 	}
 
@@ -163,33 +191,40 @@ export class SandboxLeaseManager {
 	 * still removed from the store — so cancellation racing teardown never throws.
 	 */
 	async terminate(ref: LeaseRef, logger: SyncLogger): Promise<void> {
-		// Free the in-flight guard too: terminating a lease whose turn is still held
-		// (e.g. the reaper races a turn) must not leave the key set, or the
-		// conversation is wedged with ConversationBusyError until the process exits.
-		this.inFlight.delete(inFlightKey(ref));
-
-		const record = await this.deps.leaseStore.get(ref);
-		if (!record) return;
+		// Hold the guard for the whole teardown so a racing `acquire` can't hand out
+		// a lease to the sandbox we are killing, then clear it in `finally` so the
+		// conversation is never left wedged with ConversationBusyError. (If a turn
+		// was genuinely in flight, the guard was already held; clearing it here is
+		// the cancellation semantics — the reaper must not terminate in-flight
+		// leases, which is enforced where it is wired, Task 14.)
+		const key = inFlightKey(ref);
+		this.inFlight.add(key);
 		try {
-			const handle = await this.deps.sandboxProvider.connectSandbox(
-				record.sandboxId,
-				logger,
-			);
-			await this.deps.sandboxProvider.killSandbox(ref.userId, handle, logger);
-		} catch (err) {
-			// connect threw → the sandbox is already gone (reaped / never existed),
-			// so dropping the pointer below is correct.
-			logger.info({
-				msg: "Sandbox already gone on terminate",
-				userId: ref.userId,
-				conversationId: ref.conversationId,
-				sandboxId: record.sandboxId,
-				error: err instanceof Error ? err.message : String(err),
-			});
+			const record = await this.deps.leaseStore.get(ref);
+			if (!record) return;
+			try {
+				const handle = await this.deps.sandboxProvider.connectSandbox(
+					record.sandboxId,
+					logger,
+				);
+				await this.deps.sandboxProvider.killSandbox(ref.userId, handle, logger);
+			} catch (err) {
+				// connect threw → the sandbox is already gone (reaped / never existed),
+				// so dropping the pointer below is correct.
+				logger.info({
+					msg: "Sandbox already gone on terminate",
+					userId: ref.userId,
+					conversationId: ref.conversationId,
+					sandboxId: record.sandboxId,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+			// Delete only after the kill attempt: deleting first would orphan the
+			// sandbox id before we tried to kill it.
+			await this.deps.leaseStore.delete(ref);
+		} finally {
+			this.inFlight.delete(key);
 		}
-		// Delete only after the kill attempt: deleting first would orphan the
-		// sandbox id before we tried to kill it.
-		await this.deps.leaseStore.delete(ref);
 	}
 
 	/**
@@ -208,12 +243,10 @@ export class SandboxLeaseManager {
 	 */
 	private async tryReuse(
 		ref: LeaseRef,
+		record: LeaseRecord,
 		logger: SyncLogger,
 		opts: AcquireOptions,
 	): Promise<SandboxLease | null> {
-		const record = await this.deps.leaseStore.get(ref);
-		if (!record) return null;
-
 		let sandbox: SandboxHandle;
 		try {
 			sandbox = await this.deps.sandboxProvider.connectSandbox(
@@ -233,8 +266,9 @@ export class SandboxLeaseManager {
 		}
 
 		// A reused live process already holds its resume state; honor an explicit
-		// override but otherwise carry the conversation's recorded session forward.
-		const agentSessionId = opts.agentSessionId ?? record.agentSessionId ?? null;
+		// override (including an explicit null = start fresh) but otherwise carry
+		// the conversation's recorded session forward.
+		const agentSessionId = resolveAgentSessionId(opts, record.agentSessionId);
 
 		// Reuse is a use: re-persist the pointer so `updated_at` advances. The idle
 		// reaper (Task 14) ages leases by that timestamp, so without this a
@@ -269,10 +303,8 @@ export class SandboxLeaseManager {
 	private async acquireFresh(
 		ref: LeaseRef,
 		logger: SyncLogger,
-		opts: AcquireOptions,
+		agentSessionId: string | null,
 	): Promise<SandboxLease> {
-		const agentSessionId = opts.agentSessionId ?? null;
-
 		await this.deps.workspaceStore.hydrateConversationWorkspace(ref);
 		const sandbox = await this.createWithRetry(ref.userId, logger);
 

@@ -104,7 +104,9 @@ describe("SandboxLeaseManager", () => {
 			expect(d.hydrate).toHaveBeenCalledWith(refA);
 			expect(d.createSandbox).toHaveBeenCalledTimes(1);
 			// Only the sandbox id is persisted — the endpoint is recomputed on reuse.
-			expect(await d.leaseStore.get(refA)).toMatchObject({ sandboxId: "sbx-1" });
+			expect(await d.leaseStore.get(refA)).toMatchObject({
+				sandboxId: "sbx-1",
+			});
 		});
 
 		it("hydrates the durable workspace before creating the sandbox", async () => {
@@ -294,7 +296,7 @@ describe("SandboxLeaseManager", () => {
 			});
 		});
 
-		it("carries the recorded agentSessionId forward on a stale-lease recreate", async () => {
+		it("resumes the recorded session when a stale lease is recreated", async () => {
 			// Seed a persisted lease whose sandbox is gone.
 			await d.leaseStore.upsert({
 				...refA,
@@ -305,12 +307,15 @@ describe("SandboxLeaseManager", () => {
 				throw new Error("gone");
 			});
 
-			// A fresh acquire with no explicit session still creates a new sandbox;
-			// resume state is the caller's to re-pass, so the fresh lease starts null
-			// unless provided.
+			// The recreated sandbox should resume the conversation's recorded
+			// session, not start blank.
 			const lease = await d.manager.acquire(refA, silentLogger);
 			expect(lease.reused).toBe(false);
-			expect(lease.agentSessionId).toBeNull();
+			expect(lease.sandbox.sandboxId).toBe("sbx-1");
+			expect(lease.agentSessionId).toBe("sess-resume");
+			expect(await d.leaseStore.get(refA)).toMatchObject({
+				agentSessionId: "sess-resume",
+			});
 		});
 
 		it("carries the recorded agentSessionId forward on warm reuse", async () => {
@@ -322,6 +327,24 @@ describe("SandboxLeaseManager", () => {
 			const second = await d.manager.acquire(refA, silentLogger);
 			expect(second.reused).toBe(true);
 			expect(second.agentSessionId).toBe("sess-1");
+		});
+
+		it("honors an explicit null override to start a warm conversation fresh", async () => {
+			const first = await d.manager.acquire(refA, silentLogger, {
+				agentSessionId: "sess-1",
+			});
+			await d.manager.release(first, silentLogger);
+
+			// Explicit null means "start fresh" — not "fall back to the recorded
+			// session" — so the reused lease (and the persisted row) clear it.
+			const second = await d.manager.acquire(refA, silentLogger, {
+				agentSessionId: null,
+			});
+			expect(second.reused).toBe(true);
+			expect(second.agentSessionId).toBeNull();
+			expect(await d.leaseStore.get(refA)).toMatchObject({
+				agentSessionId: null,
+			});
 		});
 	});
 
@@ -344,6 +367,30 @@ describe("SandboxLeaseManager", () => {
 			await expect(
 				d.manager.release(lease, silentLogger),
 			).resolves.toBeUndefined();
+		});
+
+		it("holds the in-flight guard until the release sync completes", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			let finishSync: () => void = () => {};
+			d.sync.mockImplementationOnce(
+				() =>
+					new Promise<undefined>((resolve) => {
+						finishSync = () => resolve(undefined);
+					}),
+			);
+
+			const releasing = d.manager.release(lease, silentLogger);
+			// Sync is still in flight, so the next turn must not start against the
+			// same workspace yet.
+			await expect(
+				d.manager.acquire(refA, silentLogger),
+			).rejects.toBeInstanceOf(ConversationBusyError);
+
+			finishSync();
+			await releasing;
+			// Once the sync settles the guard is freed and the conversation reuses.
+			const again = await d.manager.acquire(refA, silentLogger);
+			expect(again.reused).toBe(true);
 		});
 	});
 
