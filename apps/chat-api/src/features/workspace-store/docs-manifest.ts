@@ -13,13 +13,28 @@
  *     so a reader never observes a half-written `manifest.json`.
  */
 
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 /** Current on-disk schema version. Must match the daemon's manifest version. */
 export const DOCS_MANIFEST_VERSION = 1;
 
 const MANIFEST_FILENAME = "manifest.json";
+
+/**
+ * A temp file older than this is treated as abandoned (its writer crashed before
+ * the rename) and reclaimed on the next write. Comfortably longer than any real
+ * manifest write, so a concurrent live writer's in-flight temp is never swept.
+ */
+const STALE_TEMP_MS = 60_000;
 
 export interface DocsManifestEntry {
 	/** Remote document id (stable across hydrations). */
@@ -120,16 +135,60 @@ export function readDocsManifest(docsDir: string): DocsManifest {
 }
 
 /**
+ * Best-effort removal of temp files orphaned by a writer that crashed between
+ * the write and the rename. Each write uses a unique temp name (so concurrent
+ * writers never collide), which means a hard crash leaks its temp file and
+ * nothing else would ever reclaim it. Only temps older than {@link
+ * STALE_TEMP_MS} are removed, so a concurrent live writer's fresh temp is left
+ * alone. Failures are ignored: this is opportunistic cleanup, not correctness.
+ */
+function sweepStaleTemps(docsDir: string): void {
+	const prefix = `${MANIFEST_FILENAME}.`;
+	let names: string[];
+	try {
+		names = readdirSync(docsDir);
+	} catch {
+		return;
+	}
+	const now = Date.now();
+	for (const name of names) {
+		if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+		const path = join(docsDir, name);
+		try {
+			if (now - statSync(path).mtimeMs > STALE_TEMP_MS) {
+				rmSync(path, { force: true });
+			}
+		} catch {
+			// Raced with another writer renaming/removing it — ignore.
+		}
+	}
+}
+
+/**
  * Atomically write a manifest into a `docs/` directory. Writes a sibling temp
  * file and renames it into place so a partial write can never be observed as
  * `manifest.json`. The `docs/` directory must already exist.
+ *
+ * The temp file name is unique per write (pid + random token) so two writers
+ * targeting the same `docs/` dir never share a temp path: each writes its own
+ * temp file and renames it into place atomically. The final `manifest.json` is
+ * therefore never torn or a byte-mix of two writers — it is always exactly one
+ * writer's complete output. This matters because chat-api does not serialize
+ * turns per conversation, so two concurrent turns can write this durable
+ * manifest at the same time.
+ *
+ * The guarantee is corruption-freedom only: writes are last-writer-wins, not a
+ * merge. A caller that reads the manifest, mutates it, and writes it back can
+ * still drop a concurrent writer's change (a lost update) and must serialize
+ * those read-modify-write mutations itself if that matters.
  */
 export function writeDocsManifest(
 	docsDir: string,
 	manifest: DocsManifest,
 ): void {
+	sweepStaleTemps(docsDir);
 	const target = docsManifestPath(docsDir);
-	const tmp = `${target}.tmp`;
+	const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
 	try {
 		writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 		renameSync(tmp, target);

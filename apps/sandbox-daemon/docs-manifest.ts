@@ -21,13 +21,28 @@
  *     the bytes are not fsync'd before the rename.)
  */
 
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 /** Current on-disk schema version. Bumped only on a breaking format change. */
 export const DOCS_MANIFEST_VERSION = 1;
 
 const MANIFEST_FILENAME = "manifest.json";
+
+/**
+ * A temp file older than this is treated as abandoned (its writer crashed before
+ * the rename) and reclaimed on the next write. Comfortably longer than any real
+ * manifest write, so a concurrent live writer's in-flight temp is never swept.
+ */
+const STALE_TEMP_MS = 60_000;
 
 export interface DocsManifestEntry {
 	/** Remote document id (stable across hydrations). */
@@ -131,16 +146,59 @@ export function readDocsManifest(docsDir: string): DocsManifest {
 }
 
 /**
+ * Best-effort removal of temp files orphaned by a writer that crashed between
+ * the write and the rename. Each write uses a unique temp name (so concurrent
+ * writers never collide), which means a hard crash leaks its temp file and
+ * nothing else would ever reclaim it. Only temps older than {@link
+ * STALE_TEMP_MS} are removed, so a concurrent live writer's fresh temp is left
+ * alone. Failures are ignored: this is opportunistic cleanup, not correctness.
+ */
+function sweepStaleTemps(docsDir: string): void {
+	const prefix = `${MANIFEST_FILENAME}.`;
+	let names: string[];
+	try {
+		names = readdirSync(docsDir);
+	} catch {
+		return;
+	}
+	const now = Date.now();
+	for (const name of names) {
+		if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+		const path = join(docsDir, name);
+		try {
+			if (now - statSync(path).mtimeMs > STALE_TEMP_MS) {
+				rmSync(path, { force: true });
+			}
+		} catch {
+			// Raced with another writer renaming/removing it — ignore.
+		}
+	}
+}
+
+/**
  * Atomically write a manifest into a conversation's `docs/` directory. Writes a
  * sibling temp file and renames it into place so a partial write can never be
  * observed as `manifest.json`. The `docs/` directory must already exist.
+ *
+ * The temp file name is unique per write (pid + random token) so two writers
+ * targeting the same `docs/` dir never share a temp path: each writes its own
+ * temp file and renames it into place atomically, so the final `manifest.json`
+ * is always one writer's complete output — never a byte-mix of both. (A fixed
+ * temp name would let concurrent writers truncate and clobber each other's
+ * temp bytes before the rename.)
+ *
+ * The guarantee is corruption-freedom only: writes are last-writer-wins, not a
+ * merge. A caller that reads the manifest, mutates it, and writes it back (see
+ * {@link upsertDocsManifestEntry}) can still drop a concurrent writer's change;
+ * such read-modify-write callers must serialize themselves.
  */
 export function writeDocsManifest(
 	docsDir: string,
 	manifest: DocsManifest,
 ): void {
+	sweepStaleTemps(docsDir);
 	const target = docsManifestPath(docsDir);
-	const tmp = `${target}.tmp`;
+	const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
 	try {
 		writeFileSync(tmp, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 		renameSync(tmp, target);
@@ -155,6 +213,12 @@ export function writeDocsManifest(
  * Read the manifest, insert or replace the entry for `entry.documentId`, and
  * write it back atomically. Re-hydrating a document updates its existing entry
  * in place rather than appending a duplicate. Returns the updated manifest.
+ *
+ * This is a read-modify-write, so it is only safe under a single writer: the
+ * daemon's per-turn lock serializes turns within a sandbox. Two concurrent
+ * upserts would each read the same base and one would overwrite the other (a
+ * lost update); the atomic write in {@link writeDocsManifest} prevents
+ * corruption but not that.
  */
 export function upsertDocsManifestEntry(
 	docsDir: string,
