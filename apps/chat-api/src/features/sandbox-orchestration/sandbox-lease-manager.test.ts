@@ -446,6 +446,20 @@ describe("SandboxLeaseManager", () => {
 			).resolves.toBeUndefined();
 		});
 
+		it("frees the guard even if the idle-timeout reset throws", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			d.setSandboxTimeout.mockImplementationOnce(async () => {
+				throw new Error("e2b control plane down");
+			});
+
+			await expect(
+				d.manager.release(lease, silentLogger),
+			).resolves.toBeUndefined();
+			// Not wedged: the conversation is acquirable again.
+			const again = await d.manager.acquire(refA, silentLogger);
+			expect(again.reused).toBe(true);
+		});
+
 		it("holds the in-flight guard until the release sync completes", async () => {
 			const lease = await d.manager.acquire(refA, silentLogger);
 			let finishSync: () => void = () => {};

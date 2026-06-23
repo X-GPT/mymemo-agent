@@ -186,21 +186,24 @@ export class SandboxLeaseManager {
 	 * not thrown — the turn already finished — but still releases the guard.
 	 */
 	async release(lease: SandboxLease, logger: SyncLogger): Promise<void> {
-		// Reset the idle countdown from turn end: the sandbox now lives
-		// `idleTimeoutMs` from here, then E2B auto-kills it if no turn reuses it.
-		await this.deps.sandboxProvider.setSandboxTimeout(
-			lease.sandbox,
-			this.idleTimeoutMs,
-			logger,
-		);
+		// Both the idle-timeout reset and the sync run inside the try so the guard
+		// is freed in `finally` no matter what — a throw from either must not leave
+		// the conversation wedged with ConversationBusyError.
 		try {
+			// Reset the idle countdown from turn end: the sandbox now lives
+			// `idleTimeoutMs` from here, then E2B auto-kills it if no turn reuses it.
+			await this.deps.sandboxProvider.setSandboxTimeout(
+				lease.sandbox,
+				this.idleTimeoutMs,
+				logger,
+			);
 			await this.deps.workspaceStore.syncConversationWorkspace({
 				userId: lease.userId,
 				conversationId: lease.conversationId,
 			});
 		} catch (err) {
 			logger.error({
-				msg: "Workspace sync failed on lease release",
+				msg: "Lease release cleanup failed",
 				userId: lease.userId,
 				conversationId: lease.conversationId,
 				error: err instanceof Error ? err.message : String(err),

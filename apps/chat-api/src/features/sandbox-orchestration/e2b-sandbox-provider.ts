@@ -132,7 +132,17 @@ export class E2BSandboxProvider implements SandboxProvider {
 		logger: SyncLogger,
 	): Promise<SandboxHandle> {
 		logger.info({ msg: "Connecting to existing sandbox", sandboxId });
-		return Sandbox.connect(sandboxId);
+		const sandbox = await Sandbox.connect(sandboxId);
+		// Same invariant createSandbox enforces: without the per-sandbox traffic
+		// token the daemon edge is unreachable. If a reconnect comes back without
+		// it, throw so the lease manager treats the lease as stale and recreates,
+		// rather than reusing it and 403-ing every turn at the edge.
+		if (!sandbox.trafficAccessToken) {
+			throw new Error(
+				`Reconnected sandbox ${sandboxId} has no trafficAccessToken; cannot reach its daemon edge`,
+			);
+		}
+		return sandbox;
 	}
 
 	/**
