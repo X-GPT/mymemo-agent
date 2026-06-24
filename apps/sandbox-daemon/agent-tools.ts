@@ -1,32 +1,26 @@
 /**
  * Claude Agent SDK tool surface and permission policy for the sandbox agent.
  *
- * Security boundary: the agent runs prompt-injectable, untrusted code, and the
- * real containment is the sandbox itself — the per-turn E2B sandbox in prod (the
- * daemon's container locally), with a scrubbed env holding no provider key, no
- * DB credential, and only short-lived per-turn gateway tokens (see
- * `child-spawn.ts`, covered by `child-spawn.test.ts`). Because `Bash` is on the
- * surface (below), that isolation — not this tool list — is what bounds what the
- * agent can do; Bash already subsumes file writes and network egress (`curl`).
+ * Security boundary: the agent runs prompt-injectable, untrusted code; the real
+ * containment is the sandbox itself (per-turn E2B in prod, the daemon's container
+ * locally) with a scrubbed env holding no provider key, no DB credential, only
+ * short-lived per-turn tokens (see `child-spawn.ts`). Because `Bash` is on the
+ * surface, that isolation — not this tool list — bounds the agent: Bash already
+ * subsumes file writes and network egress (`curl`).
  *
- * This module's job is therefore behavior-scoping, not the wall: pin the agent
- * to a predictable, reasoned-about set instead of the full Claude Code default,
- * and keep `permissionMode` off `bypassPermissions`.
+ * So this module is behavior-scoping, not the wall: pin the agent to a
+ * reasoned-about set instead of the full Claude Code default, and keep
+ * `permissionMode` off `bypassPermissions`.
+ *  - `tools` pins availability (not pre-approval).
+ *  - `allowedTools` pre-approves that set + the MyMemo MCP tool, so unattended
+ *    turns run without prompts.
+ *  - `canUseTool` denies anything off the list — hygiene, not containment.
  *
- * - `tools` pins the available built-ins (availability, not pre-approval).
- * - `allowedTools` pre-approves that set plus the MyMemo MCP tool, so an
- *   unattended turn runs without permission prompts.
- * - `canUseTool` denies anything off the list — hygiene so an injected prompt
- *   can't casually reach a first-class tool we never reasoned about. It is NOT
- *   a containment boundary (Bash defeats that); it just keeps behavior scoped.
- *
- * Surface rationale: `Bash` for general workspace work (running code, builds,
- * scripts); `Read`/`Grep`/`Glob` for the local working set; `Write`/`Edit` for
- * authoring files under `work/`/`output/` (more reliable than Bash heredocs, and
- * denying them buys nothing over Bash). `mcp__mymemo__search_documents` is the
- * document path. Deliberately omitted: `WebFetch`/`WebSearch` (the agent answers
- * from MyMemo documents, not the open web — a soft policy default, since
- * Bash+curl is still a hole) and `Task`/subagent orchestration (unneeded).
+ * Surface: `Bash` for workspace work; `Read`/`Grep`/`Glob` for the local set;
+ * `Write`/`Edit` for authoring under `work/`/`output/`;
+ * `mcp__mymemo__search_documents` for documents. Omitted: `WebFetch`/`WebSearch`
+ * (answer from MyMemo docs, not the web — soft default, Bash+curl is still a hole)
+ * and `Task` (unneeded).
  */
 
 import {
@@ -48,13 +42,7 @@ export const SEARCH_DOCUMENTS_TOOL_NAME = "search_documents";
 /** Fully-qualified, agent-facing name of the document tool. */
 export const SEARCH_DOCUMENTS_TOOL = `mcp__${MYMEMO_MCP_SERVER_NAME}__${SEARCH_DOCUMENTS_TOOL_NAME}`;
 
-/**
- * Built-in tools available to the agent (see the file header for the rationale
- * and what is deliberately omitted): `Bash` for general workspace work,
- * `Read`/`Grep`/`Glob` for the local working set, `Write`/`Edit` for authoring
- * files under `work/`/`output/`. Every other built-in (`WebFetch`, `WebSearch`,
- * `Task`, …) is absent by omission, and `canUseTool` denies anything off it.
- */
+/** Built-ins available to the agent (rationale + omissions in the file header). */
 export const ALLOWED_BUILTIN_TOOLS = [
 	"Bash",
 	"Read",
@@ -71,12 +59,9 @@ export const PRE_APPROVED_TOOLS = [
 ] as const;
 
 /**
- * Default-deny permission handler: allow only pre-approved tools, deny everything
- * else with a clear message. With `allowedTools` pre-approving the same set it is
- * rarely consulted; it keeps the agent's behavior scoped to the reasoned-about
- * set under `permissionMode: "default"`. This is behavior-scoping, NOT a
- * containment boundary — `Bash` can already do what a denied tool would (see the
- * file header); the sandbox/container is the boundary.
+ * Default-deny permission handler: allow only pre-approved tools, deny the rest.
+ * Rarely consulted (since `allowedTools` pre-approves the same set); it keeps
+ * behavior scoped, NOT a containment boundary — Bash defeats that (see header).
  */
 export function createCanUseTool(
 	preApproved: readonly string[] = PRE_APPROVED_TOOLS,
@@ -94,11 +79,10 @@ export function createCanUseTool(
 }
 
 /**
- * Per-turn context the document tool needs to hydrate into the right place:
- * which conversation `docs/` dir to write to, and which run to attribute the
- * hydration to in the manifest. Threaded in from the daemon (see agent.ts) so
- * this module reads no environment for paths/identity. The gateway URL + bearer
- * token are read from the per-turn env inside the handler instead.
+ * Per-turn context the document tool needs: which conversation `docs/` dir to
+ * write to, and which run to attribute hydration to. Threaded in from the daemon
+ * so this module reads no env for paths/identity (the gateway URL + token are read
+ * from per-turn env in the handler).
  */
 export interface MymemoToolContext {
 	/** Absolute path to the conversation's `docs/` dir. */
@@ -115,17 +99,14 @@ function toolError(message: string): {
 }
 
 /**
- * The MyMemo MCP tool definitions registered with the in-process server.
+ * The MyMemo MCP tool definitions for the in-process server. The single
+ * `search_documents` operation runs the search → fetch → hydrate → manifest flow
+ * (see search-documents.ts); the gateway URL + (aud: "documents") token come from
+ * per-turn env, the `docs/` dir + run id via {@link MymemoToolContext}.
  *
- * The single `search_documents` operation runs the search → fetch → hydrate →
- * manifest flow (see search-documents.ts). The gateway URL + (aud: "documents")
- * token come from the per-turn env the daemon set on the agent process; the
- * conversation `docs/` dir and run id arrive via {@link MymemoToolContext}.
- *
- * Expected failures — gateway errors, or a missing env/context (a premature call
- * before the turn is wired) — return a recoverable tool error (`isError: true`)
- * so the agent can retry or explain, rather than throwing and crashing the query
- * loop. No matches is a normal (non-error) empty result.
+ * Expected failures (gateway errors, missing env/context) return a recoverable
+ * tool error (`isError: true`) so the agent can retry instead of crashing the
+ * query loop. No matches is a normal empty result.
  */
 export function buildMymemoTools(context?: MymemoToolContext) {
 	return [

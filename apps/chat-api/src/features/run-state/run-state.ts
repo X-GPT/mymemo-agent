@@ -1,26 +1,21 @@
 /**
  * Run lifecycle module. A "run" is one backend execution attempt for a chat turn
- * (identified by `runId`). This module records the run's lifecycle as an ordered
- * stream of events so a run is auditable and replayable after the fact.
+ * (`runId`), recorded as an ordered NDJSON event stream so it is auditable and
+ * replayable. Events persist through a {@link RunEventSink} (in prod the durable
+ * `WorkspaceStore.appendRunEvent`, one object per line under
+ * `users/{userId}/runs/{runId}/events.jsonl`). This module owns the event
+ * vocabulary and the state machine, not persistence.
  *
- * Events are persisted as NDJSON through a {@link RunEventSink} — in production
- * the durable `WorkspaceStore.appendRunEvent`, which writes one JSON object per
- * line to `users/{userId}/runs/{runId}/events.jsonl`. This module owns the event
- * vocabulary and the lifecycle state machine; it does not own persistence.
- *
- * A run starts in `running` and moves once to exactly one terminal state
- * (`completed`, `failed`, or `canceled`). Recording any event after a terminal
- * transition is a programming error and throws, so a run can never report two
- * outcomes or log activity after it has ended. Wiring this module into the chat
- * orchestration path (and mapping run events onto client SSE) is a later task.
+ * A run starts `running` and moves once to exactly one terminal state. Recording
+ * any event after a terminal transition throws, so a run can never report two
+ * outcomes or log activity after it ended.
  */
 
 import type { RunEvent, RunRef } from "@/features/workspace-store";
 
 /**
- * The persistence primitive this module writes through. A subset of
- * {@link WorkspaceStore} so the run module depends only on what it uses and is
- * trivial to fake in tests.
+ * Persistence primitive this module writes through — a subset of
+ * {@link WorkspaceStore}, so the run module depends only on what it uses.
  */
 export interface RunEventSink {
 	appendRunEvent(ref: RunRef, event: RunEvent): Promise<void>;
@@ -32,9 +27,9 @@ export type RunStatus = "running" | "completed" | "failed" | "canceled";
 /** Result of an idempotent {@link Run.cancel} request. */
 export interface CancelOutcome {
 	/**
-	 * True only when this call moved the run from `running` to `canceled` (and so
-	 * recorded the `run_canceled` event). False for every no-op: a repeated cancel,
-	 * or a cancel that lost the race to natural completion/failure.
+	 * True only when this call moved `running` → `canceled` (recording the event).
+	 * False for every no-op: a repeated cancel, or one that lost the race to
+	 * natural completion/failure.
 	 */
 	transitioned: boolean;
 	/** The run's status after the call. */
@@ -53,12 +48,10 @@ export const RunEventType = {
 } as const;
 
 /**
- * Lifecycle-owned event types. The start record is emitted once by `createRun`,
- * and the terminal records are emitted by the markers
- * (`markRunCompleted`/`markRunFailed`/`markRunCanceled`), which also advance the
- * state machine. The generic `appendRunEvent` primitive rejects all of them so a
- * caller cannot record a second start or an outcome out of band — replay/audit
- * consumers see exactly one start and one terminal record per run.
+ * Event types `appendRunEvent` refuses: the start is emitted once by `createRun`
+ * and outcomes by the `markRun*` markers (which also advance the state machine),
+ * so neither can be recorded out of band — replay/audit see exactly one start
+ * and one terminal record per run.
  */
 const LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
 	RunEventType.Started,
@@ -112,12 +105,11 @@ export class Run {
 
 	/**
 	 * Serializes every operation so the status guard and the durable write form
-	 * one critical section. Two lifecycle calls that are not awaited in sequence
-	 * (e.g. cancellation racing a streamed agent event once cancellation is wired)
-	 * therefore still run one-at-a-time and in enqueue order — the audit log never
-	 * records activity after the terminal event, and the guard always sees the
-	 * settled status of the previous operation. The tail is kept always-fulfilled
-	 * so a rejected operation does not stall the chain.
+	 * one critical section: lifecycle calls run one-at-a-time in enqueue order (so
+	 * a cancel racing a streamed agent event can't interleave), the guard always
+	 * sees the previous op's settled status, and the audit log never records
+	 * activity after the terminal event. The tail stays fulfilled so a rejected
+	 * operation doesn't stall the chain.
 	 */
 	private queue: Promise<void> = Promise.resolve();
 
@@ -148,12 +140,9 @@ export class Run {
 	}
 
 	/**
-	 * Append one intermediate event to the run's durable log. The primitive behind
-	 * the `record*` helpers; callers pass a non-lifecycle `type` plus any structured
-	 * fields, and a timestamp (`at`) is stamped on every event. Rejects if the run
-	 * has already reached a terminal state, or if `type` is a lifecycle-owned type
-	 * (`run_started` and the terminal types) — the start is emitted by `createRun`
-	 * and outcomes by the `markRun*` markers, so neither may be recorded out of band.
+	 * Append one intermediate event to the durable log — the primitive behind the
+	 * `record*` helpers. Stamps `at` on every event. Rejects if the run is already
+	 * terminal, or if `type` is a {@link LIFECYCLE_EVENT_TYPES lifecycle-owned} type.
 	 */
 	appendRunEvent(event: RunEvent): Promise<void> {
 		if (LIFECYCLE_EVENT_TYPES.has(event.type)) {
@@ -180,11 +169,10 @@ export class Run {
 	}
 
 	/**
-	 * Record an agent event. The `agent_event` category label is authoritative —
-	 * applied after the payload so a daemon field named `type` cannot mislabel the
-	 * event — but the daemon's own discriminator (e.g. `text_delta`, `session_id`)
-	 * is preserved under `agentEventType` so the run log can replay the original
-	 * stream rather than guessing from optional fields.
+	 * Record an agent event. The `agent_event` label is applied after the payload
+	 * so a daemon field named `type` can't mislabel it; the daemon's own
+	 * discriminator (e.g. `text_delta`) is preserved under `agentEventType` so the
+	 * run log can replay the original stream.
 	 */
 	recordAgentEvent(data: Record<string, unknown>): Promise<void> {
 		const { type: daemonType, ...rest } = data;
@@ -219,21 +207,17 @@ export class Run {
 	}
 
 	/**
-	 * Idempotent cancellation request — the entry point the cancellation contract
-	 * exposes. Unlike the strict `markRun*` terminals, `cancel` is best-effort and
-	 * safe to call repeatedly or after the run has already ended:
+	 * Idempotent, best-effort cancellation — safe to call repeatedly or after the
+	 * run has ended (unlike the strict `markRun*` terminals):
 	 *
-	 *  - `running` → records `run_canceled`, advances to `canceled`, returns
-	 *    `{ transitioned: true, status: "canceled" }`.
-	 *  - already `canceled` → no-op (no duplicate event), `transitioned: false`.
-	 *  - `completed` / `failed` → no-op; the run already reached a different
-	 *    terminal state, so cancellation lost the race. `transitioned: false`.
+	 *  - `running` → records `run_canceled`, advances, `transitioned: true`.
+	 *  - already `canceled` → no-op, no duplicate event, `transitioned: false`.
+	 *  - `completed` / `failed` → no-op; cancellation lost the race,
+	 *    `transitioned: false`.
 	 *
-	 * A cancel signal can arrive after the run has naturally finished; tolerating
-	 * the terminal states (instead of throwing like `markRunCanceled`) keeps the
-	 * single-start/single-terminal audit invariant intact. The `transitioned` flag
-	 * lets callers fire a sandbox/daemon cancellation hook only when this call
-	 * actually performed the cancellation.
+	 * Tolerating the terminal states keeps the single-start/single-terminal audit
+	 * invariant intact; `transitioned` lets callers fire the daemon cancellation
+	 * hook only when this call actually performed the cancellation.
 	 */
 	cancel(): Promise<CancelOutcome> {
 		return this.critical(async () => {
@@ -258,15 +242,11 @@ export class Run {
 					`Run ${this.ref.runId} already ${this._status}; cannot mark ${status}`,
 				);
 			}
-			// Persist the terminal event before advancing the status: if the sink
-			// rejects (e.g. ENOSPC, transient store failure) the run stays `running`
-			// so the outcome can be retried, rather than being stuck terminal with no
-			// durable record of how it ended. Note this guarantee is only as strong
-			// as the sink: a sink may deliberately resolve on a failed terminal write
-			// to decouple client signaling from audit durability (the chat SSE sink
-			// does — see `chat/run-event-sink.ts`), in which case status advances
-			// without a persisted terminal record. The default fail-closed contract
-			// holds for any sink that propagates its write failures.
+			// Persist before advancing status: if the sink rejects, the run stays
+			// `running` so the outcome can be retried rather than being stuck terminal
+			// with no record of how it ended. This guarantee is only as strong as the
+			// sink; one that resolves on a failed terminal write (the chat SSE sink
+			// does, to decouple signaling from audit durability) advances anyway.
 			await this.write(event);
 			this._status = status;
 		});
