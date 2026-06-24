@@ -1,31 +1,26 @@
 /**
  * Spawn helper for the per-turn agent.js child. The daemon never imports the
- * Claude Agent SDK itself — it lives exclusively in agent.js. The agent's LLM
- * credentials are not provider keys: it gets a gateway base URL + short-lived
- * bearer token, supplied per turn.
+ * Claude Agent SDK — it lives exclusively in agent.js. The agent gets no provider
+ * key: only a gateway base URL + short-lived bearer token, supplied per turn.
  *
- * The agent speaks NDJSON on stdout. We line-buffer, parse, and dispatch.
+ * The agent speaks NDJSON on stdout; we line-buffer, parse, and dispatch.
  *
  * Isolation: the agent runs directly (`bun /workspace/agent.js`) — the sandbox
- * itself (the per-turn E2B sandbox in prod, the daemon's container locally) is
- * the security boundary. The agent holds no provider key, runs under the SDK's
- * scoped tool surface (see agent-tools.ts), and is treated as untrusted, so dev
- * and prod share this one spawn path.
+ * (per-turn E2B in prod, the daemon's container locally) is the security boundary.
+ * It holds no provider key and runs under the SDK's scoped tool surface
+ * (agent-tools.ts), so dev and prod share this one spawn path.
  *
- * Bundle paths are env-overridable for tests; in production sandboxes the
- * chat-api writes the two bundles to /workspace/{daemon,agent}.js, and the local
- * container bakes them at the same paths.
+ * Bundle paths are env-overridable for tests; in prod chat-api writes the bundles
+ * to /workspace/{daemon,agent}.js and the local container bakes them there.
  */
 
 import { resolve } from "node:path";
 import type { AgentSpawnConfig } from "./config";
 import { hydrationLimitEnv } from "./hydration-policy";
 import type { AgentEvent } from "./ipc-protocol";
-// Single source of truth for the durable session-store root env var name; the
-// agent's SessionStore reads the same constant. Imported (not re-declared) so the
-// two sides can't drift. Unset = session mirroring disabled; the agent's
-// FileSystemSessionStore creates its own per-conversation subtree on first write,
-// so the daemon only forwards the root.
+// Single source of truth for the durable session-store root env var; the agent's
+// SessionStore reads the same constant, so the two sides can't drift. Unset =
+// mirroring disabled; the daemon only forwards the root.
 import { SESSION_STORE_ROOT_ENV } from "./session-store";
 
 export type { AgentEvent } from "./ipc-protocol";
@@ -35,19 +30,16 @@ function getSessionStoreRoot(): string | undefined {
 	return root && root.length > 0 ? root : undefined;
 }
 
-// Paths that don't survive a sandbox recycle. A store root at or under either is
-// useless for resume: transcripts written there are sandbox-local and lost when
-// the sandbox is torn down (the agent's FileSystemSessionStore silently mkdirs
-// and writes, so the misconfig surfaces as data loss, not an error).
+// Paths that don't survive a sandbox recycle. A store root at or under either
+// loses transcripts silently — FileSystemSessionStore just mkdirs and writes, so
+// the misconfig surfaces as data loss, not an error.
 const EPHEMERAL_ROOTS = ["/workspace", "/tmp"];
 
 /**
- * Fail loudly if a configured session-store root would silently lose transcripts:
- * a relative path (resolved against the agent's ephemeral cwd) or one inside an
- * ephemeral mount. This is independent of the (removed) bwrap mounts — it guards
- * the durable-mirror invariant the resume feature relies on. Throwing here, at
- * spawn time, turns an operator misconfiguration into a clear failure instead of
- * a quiet recall regression after a sandbox recycle.
+ * Fail loudly if a session-store root would silently lose transcripts: a relative
+ * path (resolved against the ephemeral cwd) or one inside an ephemeral mount.
+ * Throwing at spawn time turns an operator misconfig into a clear failure instead
+ * of a quiet recall regression after a sandbox recycle.
  */
 export function assertDurableStoreRoot(root: string): void {
 	if (!root.startsWith("/")) {
@@ -66,9 +58,8 @@ export function assertDurableStoreRoot(root: string): void {
 }
 
 /**
- * Build the argv for the agent process. The agent runs directly under bun — the
- * sandbox/container is the isolation boundary, so there is no wrapper. Extracted
- * as a pure helper so the command is easy to inspect and unit-test.
+ * Build the argv for the agent process — runs directly under bun (no wrapper; the
+ * sandbox is the boundary). Pure helper so the command is easy to test.
  */
 export function buildAgentSpawnArgv(config: AgentSpawnConfig): string[] {
 	return [config.bunExecutable, config.agentBundlePath];
@@ -213,10 +204,9 @@ export async function spawnAgent(
 		claudeConfigDir,
 		...config
 	} = input;
-	// Forward the durable transcript root only when mirroring is configured and
-	// the turn carries identity — the agent's SessionStore derives its
-	// per-{user,conversation} subtree from the root + the identity threaded
-	// through the stdin config below. Absent root/identity => mirroring disabled.
+	// Forward the durable transcript root only when mirroring is configured and the
+	// turn carries identity (the agent derives its per-{user,conversation} subtree
+	// from root + identity). Absent root/identity => mirroring disabled.
 	const sessionStoreRoot =
 		config.userId && config.conversationId ? getSessionStoreRoot() : undefined;
 	// Reject a root that would silently lose transcripts (relative or ephemeral)
