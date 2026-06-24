@@ -1,5 +1,9 @@
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
+import {
+	type ConversationStore,
+	createConversationStore,
+} from "./features/conversation-store";
 import { E2BSandboxProvider } from "./features/sandbox-orchestration/e2b-sandbox-provider";
 import { LocalContainerSandboxProvider } from "./features/sandbox-orchestration/local-container-sandbox-provider";
 import type { SandboxProvider } from "./features/sandbox-orchestration/sandbox-provider";
@@ -18,6 +22,12 @@ export interface AppDeps {
 	config: ApiConfig;
 	sandboxProvider: SandboxProvider;
 	workspaceStore: WorkspaceStore;
+	/**
+	 * Durable conversation registry (source of truth for frozen scope). `null`
+	 * when no `DATABASE_URL` is configured — the conversation endpoints require it
+	 * and respond 503 when it is absent.
+	 */
+	conversationStore: ConversationStore | null;
 }
 
 /** Hono environment: pino logger vars plus the injected `AppDeps`. */
@@ -29,5 +39,6 @@ export function createDeps(config: ApiConfig): AppDeps {
 			? new LocalContainerSandboxProvider(config)
 			: new E2BSandboxProvider(config);
 	const workspaceStore = createLocalWorkspaceStore(config.workspaceStoreRoot);
-	return { config, sandboxProvider, workspaceStore };
+	const conversationStore = createConversationStore(config);
+	return { config, sandboxProvider, workspaceStore, conversationStore };
 }

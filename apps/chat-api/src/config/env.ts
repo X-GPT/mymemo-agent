@@ -63,6 +63,20 @@ function withSsl(url: string, enabled: boolean): string {
 }
 
 /**
+ * Resolve the writable DB connection string from its env parts: splice in
+ * DB_PASSWORD when passwordless, and apply TLS unless DB_SSL=disable. Shared by
+ * the app config and the standalone migration runner so both connect identically.
+ */
+export function resolveDatabaseUrl(
+	databaseUrl: string | undefined,
+	dbPassword: string | undefined,
+	dbSsl: string | undefined,
+): string | undefined {
+	if (!databaseUrl) return undefined;
+	return withSsl(withPassword(databaseUrl, dbPassword), dbSsl !== "disable");
+}
+
+/**
  * Parse + validate the environment into a typed config. Pure: env in, config
  * out. `E2B_API_KEY` is validated here but not surfaced — the E2B SDK reads it
  * straight from `process.env` at `Sandbox.create`.
@@ -117,11 +131,10 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		gatewayPublicUrl: env.GATEWAY_PUBLIC_URL.replace(/\/+$/, ""),
 		logLevel: env.LOG_LEVEL || "info",
 		workspaceStoreRoot,
-		databaseUrl: env.DATABASE_URL
-			? withSsl(
-					withPassword(env.DATABASE_URL, env.DB_PASSWORD),
-					env.DB_SSL !== "disable",
-				)
-			: undefined,
+		databaseUrl: resolveDatabaseUrl(
+			env.DATABASE_URL,
+			env.DB_PASSWORD,
+			env.DB_SSL,
+		),
 	};
 }

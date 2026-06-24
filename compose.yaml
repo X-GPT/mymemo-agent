@@ -48,7 +48,31 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+    networks:
+      - mymemo-network
+
+  # One-shot: apply the writable DB (mymemo_agent) schema from Drizzle migrations,
+  # then exit. The postgres init only creates the database; the tables are owned
+  # by migrations (apps/chat-api/src/db/schema.ts -> drizzle/). chat-api waits for
+  # this to complete so its lease/conversation tables exist before it serves.
+  # Reuses the chat-api image (which ships drizzle/); runs to completion, no restart.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/chat-api/Dockerfile
+    # Override the image ENTRYPOINT (bun run src/index.ts) rather than CMD — the
+    # image sets no CMD, so a `command:` would append to the entrypoint instead.
+    entrypoint: ["bun", "run", "db:migrate"]
+    environment:
+      DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
+      DB_SSL: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
     networks:
       - mymemo-network
 

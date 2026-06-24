@@ -40,6 +40,10 @@ COPY --from=install /temp/prod/node_modules node_modules
 COPY --from=prerelease /usr/src/app/apps/chat-api/src apps/chat-api/src
 COPY --from=prerelease /usr/src/app/apps/chat-api/package.json apps/chat-api/
 COPY --from=prerelease /usr/src/app/apps/chat-api/tsconfig.json apps/chat-api/
+# Drizzle migrations for the writable DB (mymemo_agent). Shipped so the image can
+# run `bun run db:migrate` (the compose `migrate` one-shot, or a prod deploy step)
+# — the runner reads SQL from this folder; drizzle-kit is not needed at runtime.
+COPY --from=prerelease /usr/src/app/apps/chat-api/drizzle apps/chat-api/drizzle
 COPY --from=prerelease /usr/src/app/apps/sandbox-daemon/dist apps/sandbox-daemon/dist
 COPY --from=prerelease /usr/src/app/packages/llm-token packages/llm-token
 COPY --from=prerelease /usr/src/app/package.json .

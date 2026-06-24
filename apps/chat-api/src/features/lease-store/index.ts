@@ -1,9 +1,8 @@
 import type { ApiConfig } from "@/config/env";
-import { createDb } from "./db";
+import { createDatabase } from "@/db/client";
 import type { LeaseStore } from "./lease-store";
 import { PostgresLeaseStore } from "./postgres-lease-store";
 
-export type { Db } from "./db";
 export type { LeaseRecord, LeaseRef, LeaseStore } from "./lease-store";
 export { PostgresLeaseStore } from "./postgres-lease-store";
 
@@ -15,5 +14,5 @@ export { PostgresLeaseStore } from "./postgres-lease-store";
  */
 export function createLeaseStore(config: ApiConfig): LeaseStore | null {
 	if (!config.databaseUrl) return null;
-	return new PostgresLeaseStore(createDb(config.databaseUrl));
+	return new PostgresLeaseStore(createDatabase(config.databaseUrl));
 }

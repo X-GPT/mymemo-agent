@@ -99,22 +99,30 @@ docker-compose up    # Local development
 
 ### Request Flow
 
-1. `POST /api/v1/chat` with:
-   - **JSON body** (`ChatBodyRequest`): chat payload — `chatContent`, optional `collectionId`/`summaryId`/`sessionId`
-   - **Identity headers** (`InternalIdentity`): `X-Member-Code` (required), `X-Partner-Code` (required), `X-Team-Code`, `X-Member-Name`, `X-Partner-Name` (all optional)
-2. SSE stream initiated in `chat.route.ts` after body validation (`.strict()`, rejects extra keys) and identity-header validation (401 on missing/invalid)
-3. `chat.controller.ts::complete()` orchestrates the merged request — no upstream API calls
-4. `runSandboxChat` is the sole agent path: creates a fresh per-user E2B sandbox each turn and forwards the turn to its daemon. The optional `sessionId` from the request body is passed through as the daemon's `agent_session_id`; when omitted, the daemon allocates a new session. chat-api mints a short-lived `@mymemo/llm-token` bound to `{userId, sandboxId, requestId}` and sends it (with `GATEWAY_PUBLIC_URL`) in the turn body. The daemon sets these as `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` on the agent process, so **the sandbox never holds a provider key** — all LLM calls route through the `gateway`, which validates the token and injects the real `ANTHROPIC_API_KEY`. The agent accesses the user's documents on demand via the `mymemo-docs` CLI (on PATH in the sandbox template), which calls the same `gateway` with the same per-turn token (sent as `MYMEMO_DOC_GATEWAY_URL` + `MYMEMO_DOC_TOKEN`); the gateway enforces the turn's **signed scope** server-side. The Claude binary and the CLI reach the one merged gateway through two independent env vars that both point at `GATEWAY_PUBLIC_URL` (the binary hits `/v1/messages`, the CLI hits `/v1/documents/*`). Documents are **not** materialized to the sandbox filesystem.
-5. Events emitted via SSE:
-   - `text_delta` — `{ text }` payload, one event per streamed token chunk; the client concatenates these to build the full response
-   - `done` — `{}` payload, marks end-of-stream after the final `text_delta`
-   - `session_id` — `{ sessionId }`, daemon-assigned conversation session; clients must persist and echo back to resume
+The chat surface is **two endpoints** under `/v1` (mounted in `src/routes/v1.ts`), modeled on the Managed Agents resource shape — a `conversation` is the durable container, `events` are what you append to it:
+
+1. `POST /v1/conversations` — create a conversation. With:
+   - **JSON body** (`CreateConversationBody`, `.strict()`): optional `collectionId` / `summaryId`. Scope is **resolved once from these ids and frozen** onto the conversation record; it is never re-derived per turn.
+   - **Identity headers** (`InternalIdentity`): `X-Member-Code` (required), `X-Partner-Code` (required), `X-Team-Code`, `X-Member-Name`, `X-Partner-Name` (all optional). `memberCode` is the conversation owner (`user_id`).
+   - Returns `201 { conversationId, scope }`. `conversationId` is **server-generated** (a UUID, path-safe by construction). Persisted via `conversationStore` to chat-api's writable `mymemo_agent` DB. Responds `503` when no `DATABASE_URL` is configured (the conversation store is required for this flow).
+2. `POST /v1/conversations/:conversationId/events` — append an event and stream the turn. With:
+   - **JSON body** (`ConversationEventBody`): a discriminated union over `type`. Today only `{ type: "user.message", text }`; extensible to `user.interrupt` / `user.tool_confirmation` without a contract rename. Unknown types → `400`.
+   - Same identity headers. The `:conversationId` path param is re-validated as path-safe.
+   - The route loads the conversation (scoped to `memberCode`) and returns **`404`** if it does not exist or belongs to another member — a clean gate **before** the SSE stream opens. Then it reads the **frozen** scope from the record (the client cannot widen it) and streams the turn.
+3. Both endpoints live in `src/features/conversations/` — `conversations.route.ts` (validation + SSE), `conversations.controller.ts` (`createConversation`, `runConversationTurn`). No upstream API calls here.
+4. `runSandboxChat` is the sole agent path: creates a fresh per-user E2B sandbox each turn and forwards the turn (with the conversation's frozen scope) to its daemon. The daemon's `bindConversationScope` records the scope on the first turn and rejects a mismatched scope on later turns — a backstop to chat-api being the authority. `agentSessionId` is currently `null` (conversation continuity is a later milestone; a fresh agent session starts each turn). chat-api mints a short-lived `@mymemo/llm-token` bound to `{userId, sandboxId, requestId}` and sends it (with `GATEWAY_PUBLIC_URL`) in the turn body. The daemon sets these as `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` on the agent process, so **the sandbox never holds a provider key** — all LLM calls route through the `gateway`, which validates the token and injects the real `ANTHROPIC_API_KEY`. The agent accesses the user's documents on demand via the `mymemo-docs` CLI (on PATH in the sandbox template), which calls the same `gateway` with the same per-turn token (sent as `MYMEMO_DOC_GATEWAY_URL` + `MYMEMO_DOC_TOKEN`); the gateway enforces the turn's **signed scope** server-side. The Claude binary and the CLI reach the one merged gateway through two independent env vars that both point at `GATEWAY_PUBLIC_URL` (the binary hits `/v1/messages`, the CLI hits `/v1/documents/*`). Documents are **not** materialized to the sandbox filesystem.
+5. The client-visible SSE stream is a **projection of the run's recorded events** (each event is persisted durably, then mapped to its frame). Frames:
+   - `conversation_id` — `{ conversationId }`, echoed at run start
+   - `run_id` — `{ runId }`, identifies this single backend execution attempt
    - `sandbox_id` — `{ sandboxId }`, the E2B sandbox created for this turn (a fresh sandbox is created per turn)
+   - `agent_session_id` — `{ sessionId }`, the daemon-assigned Claude SDK session for this turn
+   - `text_delta` — `{ text }`, one event per streamed token chunk; the client concatenates these
+   - `done` — `{}`, marks end-of-stream, emitted only after the whole run (including workspace sync) succeeds
    - `error` — `{ message }`, surfaced on agent or transport failure
 
 ### Trust Boundary
 
-Identity arrives via `X-*` headers, **not** the JSON body. chat-api does not authenticate users itself; the internal caller (gateway / BFF) is responsible for authenticating the user and forwarding their identity. The body schema uses `.strict()` so any attempt to pass identity in the body is rejected with a 400. This service must therefore only be reachable from trusted internal callers; do not expose `POST /api/v1/chat` directly to untrusted networks.
+Identity arrives via `X-*` headers, **not** the JSON body. chat-api does not authenticate users itself; the internal caller (gateway / BFF) is responsible for authenticating the user and forwarding their identity. The body schemas use `.strict()` so any attempt to pass identity in the body is rejected with a 400. This service must therefore only be reachable from trusted internal callers; do not expose the `/v1/conversations*` endpoints directly to untrusted networks. Conversation scope is **frozen at creation** and re-read from the store each turn, so a per-turn request cannot widen it; and the events route only serves a conversation owned by the requesting `memberCode` (else `404`).
 
 The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-capable code). It holds no provider key and no document credential — only a short-lived, single-user, signed bearer token whose claims include the turn's document scope. The inbound edges from a sandbox are **sandbox → gateway** (for both LLM and document calls); the gateway holds the real credentials + `LLM_TOKEN_SECRET`, should only be reachable from sandboxes, and reaches only its two upstreams (`api.anthropic.com` and the MyMemo KB Postgres). Because scope is signed into the token and enforced by the gateway's document routes, a prompt-injected agent cannot read documents outside its turn's scope. chat-api mints the token; the gateway verifies it; the daemon never sees `LLM_TOKEN_SECRET`.
 
@@ -126,7 +134,10 @@ The **chat-api → daemon `/turn`** edge has no application-layer auth and the d
 
 | Path | Purpose |
 |------|---------|
-| `src/features/chat/chat.controller.ts` | Reads context from request body, hands the turn to the sandbox |
+| `src/features/conversations/` | `conversations.route.ts` (the two endpoints), `conversations.controller.ts` (`createConversation` freezes scope; `runConversationTurn` reads it back and hands the turn to the sandbox) |
+| `src/features/conversation-store/` | Durable conversation registry (frozen scope), Drizzle-backed over `mymemo_agent`; `createConversationStore` factory |
+| `src/features/chat/` | SSE / run-event plumbing reused by the conversation routes (`chat.streaming.ts`, `chat.events.ts`, `chat.logger.ts`, `run-event-sink.ts`, `run-events-to-sse.ts`) |
+| `src/db/` | Drizzle schema (`schema.ts`: `conversations`, `sandbox_leases`), client (`client.ts`), and migration runner (`migrate.ts`) for the writable DB; migrations in `drizzle/` |
 | `src/features/sandbox-orchestration/` | `runSandboxChat`, sandbox manager, daemon proxy; mints the per-turn LLM token |
 | `src/features/sandbox-agent/` | Sandbox-side agent system prompt builder |
 | `src/config/env.ts` | Environment validation |
@@ -141,9 +152,11 @@ The **chat-api → daemon `/turn`** edge has no application-layer auth and the d
 
 ### Chat Scopes
 
-- `general` - inferred when no `collectionId` / `summaryId` is provided
-- `collection` - inferred when `collectionId` is provided
-- `document` - inferred when `summaryId` is provided
+Resolved once at `POST /v1/conversations` and **frozen** onto the conversation record (every turn re-reads it; it never changes for the conversation's lifetime):
+
+- `general` - no `collectionId` / `summaryId` provided
+- `collection` - `collectionId` provided
+- `document` - `summaryId` provided (takes precedence over `collectionId`)
 
 ## Code Style
 
