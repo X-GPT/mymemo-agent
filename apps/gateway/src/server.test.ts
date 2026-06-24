@@ -11,6 +11,7 @@ const config: GatewayConfig = {
 	llmTokenSecret: "test-secret",
 	databaseUrl: "postgres://test@localhost/test",
 	upstreamBaseUrl: "https://api.anthropic.com",
+	llmProvider: "anthropic",
 	gatewayPort: 8080,
 };
 const SECRET = config.llmTokenSecret;

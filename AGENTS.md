@@ -174,12 +174,19 @@ Optional:
 ### gateway
 
 Required:
-- `ANTHROPIC_API_KEY` — the real provider key; lives **only** in this service
+- `ANTHROPIC_API_KEY` — the real Anthropic provider key; lives **only** in this service. **Required only when `LLM_PROVIDER=anthropic`** (the default); an OpenRouter-only deployment does not need it
 - `DATABASE_URL` — read-only connection to the MyMemo KB Postgres; this **read-only KB credential** lives **only** in this service (chat-api has its own, separate `DATABASE_URL` for its writable `mymemo_agent` DB — it is never the KB credential)
 - `LLM_TOKEN_SECRET` — must match chat-api's
 
 Optional:
-- `UPSTREAM_BASE_URL` (default: `https://api.anthropic.com`)
+- `UPSTREAM_BASE_URL` (default: `https://api.anthropic.com`) — Anthropic upstream base (`LLM_PROVIDER=anthropic` only)
+- `LLM_PROVIDER` (default: `anthropic`) — which LLM upstream the proxy forwards to: `anthropic` injects the real `x-api-key` and talks to the Anthropic Messages API directly; `openrouter` forwards to OpenRouter's Anthropic-compatible Messages endpoint with a gateway-only bearer key. Gateway-side policy; the sandbox is unaware of it
+- `OPENROUTER_API_KEY` — gateway-only OpenRouter secret, injected as `Authorization: Bearer` on the upstream request only. **Required when `LLM_PROVIDER=openrouter`**; never minted into a token or sent to the sandbox
+- `OPENROUTER_BASE_URL` (e.g. `https://openrouter.ai/api`) — OpenRouter base (trailing slash stripped). **Required when `LLM_PROVIDER=openrouter`**
+- `OPENROUTER_DEFAULT_MODEL` — default model deployment policy picks. **Required when `LLM_PROVIDER=openrouter`** (full model allowlist/rewriting is Task 18)
+- `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE` — optional OpenRouter attribution headers (`HTTP-Referer` / `X-Title`)
 - `DB_PASSWORD` — spliced into `DATABASE_URL` when it is passwordless (the form the platform injects)
 - `DB_SSL` (default: on; set `disable` for a local non-TLS Postgres)
 - `GATEWAY_PORT` (default: 8080)
+
+Compatibility note: the OpenRouter adapter is gated to the proven Claude-SDK-compatible surface — only `/v1/messages` forwards; `/v1/messages/count_tokens` is not part of OpenRouter's Anthropic-compatible surface and fails closed (404). `anthropic` remains the default until OpenRouter compatibility is verified end-to-end.
