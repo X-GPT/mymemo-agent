@@ -25,9 +25,16 @@ import { createGateway } from "../server";
  * Task 18 (MYM-22). Defaults to a cheap model if OPENROUTER_MODEL is unset.
  */
 
-const RUN = !!Bun.env.OPENROUTER_IT && !!Bun.env.OPENROUTER_API_KEY;
+// Gate purely on the opt-in flag (matching the DOC_GATEWAY_IT convention). If
+// the flag is set but the key is missing, beforeAll fails LOUDLY via
+// loadConfigFromEnv rather than silently skipping — a skipped run must mean "not
+// asked for", never "asked for but misconfigured".
+const RUN = !!Bun.env.OPENROUTER_IT;
 const SECRET = "test-secret";
 const MODEL = Bun.env.OPENROUTER_MODEL || "anthropic/claude-haiku-4.5";
+// Read once at module load so the key-leak assertion compares against the real
+// secret without mirroring it into mutable state.
+const API_KEY = Bun.env.OPENROUTER_API_KEY ?? "";
 
 // LLM path never touches the DB; an unused fake satisfies the seam.
 const fakeDb: Db = {
@@ -37,7 +44,6 @@ const fakeDb: Db = {
 };
 
 let app: ReturnType<typeof createGateway>;
-let apiKey = "";
 
 beforeAll(() => {
 	if (!RUN) return;
@@ -58,7 +64,6 @@ beforeAll(() => {
 		OPENROUTER_HTTP_REFERER: "https://mymemo.example",
 		OPENROUTER_APP_TITLE: "MyMemo",
 	});
-	apiKey = config.openRouter?.apiKey ?? "";
 	app = createGateway(config, fakeDb);
 });
 
@@ -91,12 +96,17 @@ describe.skipIf(!RUN)("gateway · openrouter LIVE compatibility smoke", () => {
 
 		expect(res.status).toBe(200);
 		const body = await res.text();
-		// Anthropic Messages streaming shape — the SDK relies on these event types.
+		// Assert the protocol-guaranteed envelope of an Anthropic streamed message
+		// (always emitted, regardless of how the model chunks its output) plus that
+		// a content block was opened. Avoid asserting `content_block_delta`
+		// specifically — whether/how text deltas chunk is model behavior we don't
+		// control, so requiring it would make this live test flaky.
 		expect(body).toContain("event: message_start");
-		expect(body).toContain("content_block_delta");
-		expect(body).toContain("message_stop");
+		expect(body).toContain("event: content_block_start");
+		expect(body).toContain("event: message_stop");
 		// The injected provider key must never appear in the streamed response.
-		expect(body).not.toContain(apiKey);
+		expect(API_KEY.length).toBeGreaterThan(0);
+		expect(body).not.toContain(API_KEY);
 	}, 30_000);
 
 	it("returns a non-streaming Anthropic-shaped message from OpenRouter", async () => {
