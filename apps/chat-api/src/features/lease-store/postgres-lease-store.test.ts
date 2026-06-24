@@ -105,4 +105,42 @@ describe("PostgresLeaseStore", () => {
 		expect(firstCall(db).text).toContain("DELETE FROM sandbox_leases");
 		expect(firstCall(db).params).toEqual(["user-1", "conv-1"]);
 	});
+
+	it("listIdleLeases selects rows older than the cutoff and maps them", async () => {
+		const db = fakeDb([
+			{
+				user_id: "user-1",
+				conversation_id: "conv-1",
+				sandbox_id: "sbx-1",
+				agent_session_id: "sess-1",
+			},
+			{
+				user_id: "user-2",
+				conversation_id: "conv-2",
+				sandbox_id: "sbx-2",
+				agent_session_id: null,
+			},
+		]);
+		const cutoff = new Date("2026-06-20T00:00:00.000Z");
+
+		const idle = await new PostgresLeaseStore(db).listIdleLeases(cutoff);
+
+		expect(idle).toEqual([
+			record,
+			{
+				userId: "user-2",
+				conversationId: "conv-2",
+				sandboxId: "sbx-2",
+				agentSessionId: null,
+			},
+		]);
+		expect(firstCall(db).text).toContain("FROM sandbox_leases");
+		expect(firstCall(db).text).toContain("WHERE updated_at < $1");
+		expect(firstCall(db).params).toEqual([cutoff]);
+	});
+
+	it("listIdleLeases returns an empty array when nothing is idle", async () => {
+		const store = new PostgresLeaseStore(fakeDb([]));
+		expect(await store.listIdleLeases(new Date())).toEqual([]);
+	});
 });

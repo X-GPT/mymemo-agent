@@ -51,4 +51,11 @@ export interface LeaseStore {
 	get(ref: LeaseRef): Promise<LeaseRecord | null>;
 	upsert(record: LeaseRecord): Promise<void>;
 	delete(ref: LeaseRef): Promise<void>;
+	/**
+	 * Every lease whose `updated_at` is older than `idleSince` — i.e. that has had
+	 * no acquire/release activity since then. The idle reaper (Task 14) ages warm
+	 * leases by this timestamp to sync + tear them down before E2B's own timeout
+	 * would. Returns the pointers; the reaper decides which are safe to terminate.
+	 */
+	listIdleLeases(idleSince: Date): Promise<LeaseRecord[]>;
 }

@@ -124,6 +124,11 @@ export class SandboxLeaseManager {
 		private readonly deps: SandboxLeaseManagerDeps,
 		/** Idle window the sandbox timeout is reset to on each acquire/release. */
 		private readonly idleTimeoutMs: number = DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
+		/**
+		 * Clock the idle reaper ages leases against. Injectable so idle-termination
+		 * tests are deterministic without real timers; defaults to wall clock.
+		 */
+		private readonly now: () => Date = () => new Date(),
 	) {}
 
 	/**
@@ -219,8 +224,18 @@ export class SandboxLeaseManager {
 	 * and recycle conditions (Task 15) drive. Idempotent and best-effort — an
 	 * unknown lease is a no-op, and a sandbox already reaped (connect throws) is
 	 * still removed from the store — so cancellation racing teardown never throws.
+	 *
+	 * With `syncBeforeKill` the durable workspace is synced *before* the sandbox is
+	 * killed (the idle reaper's sync-before-kill, capturing any state a crash left
+	 * unsynced). The sync runs while the in-flight guard is held, so it cannot race
+	 * a new turn, and a sync failure is logged — not thrown — so a down store never
+	 * strands the sandbox. Cancellation/recycle callers omit it and just tear down.
 	 */
-	async terminate(ref: LeaseRef, logger: SyncLogger): Promise<void> {
+	async terminate(
+		ref: LeaseRef,
+		logger: SyncLogger,
+		opts: { syncBeforeKill?: boolean } = {},
+	): Promise<void> {
 		// Hold the guard for the whole teardown so a racing `acquire` can't hand out
 		// a lease to the sandbox we are killing, then clear it in `finally` so the
 		// conversation is never left wedged with ConversationBusyError. (If a turn
@@ -232,6 +247,20 @@ export class SandboxLeaseManager {
 		try {
 			const record = await this.deps.leaseStore.get(ref);
 			if (!record) return;
+			if (opts.syncBeforeKill) {
+				// Capture durable state before the sandbox dies. A sync failure must
+				// not strand the sandbox (mirrors `release`), so log and tear down.
+				try {
+					await this.deps.workspaceStore.syncConversationWorkspace(ref);
+				} catch (err) {
+					logger.error({
+						msg: "Workspace sync before terminate failed",
+						userId: ref.userId,
+						conversationId: ref.conversationId,
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
 			try {
 				const handle = await this.deps.sandboxProvider.connectSandbox(
 					record.sandboxId,
@@ -254,6 +283,59 @@ export class SandboxLeaseManager {
 			await this.deps.leaseStore.delete(ref);
 		} finally {
 			this.inFlight.delete(key);
+		}
+	}
+
+	/**
+	 * Idle-termination sweep (Task 14). Finds warm leases with no acquire/release
+	 * activity for longer than the idle window — `updated_at` older than
+	 * `now - idleTimeoutMs` — syncs each one's durable workspace, then tears its
+	 * sandbox down. This reclaims sandboxes proactively (before E2B's own timeout)
+	 * and captures state a crashed turn never synced.
+	 *
+	 * Active leases are kept alive: a conversation with a turn in flight holds the
+	 * in-flight guard, so it is skipped here even when its row looks idle (a turn
+	 * longer than the idle window does not bump `updated_at`). The guard check and
+	 * `terminate`'s guard claim have no `await` between them, so an in-flight turn
+	 * can't be reaped out from under itself. Cross-replica in-flight turns aren't
+	 * visible to this per-process guard; the daemon's single-turn lock backstops
+	 * that, and health/version gating before reuse is Task 15.
+	 *
+	 * Best-effort and self-contained: a failure reaping one lease is logged and the
+	 * sweep continues, so one wedged conversation can't stall the rest.
+	 */
+	async reapIdle(logger: SyncLogger): Promise<void> {
+		const cutoff = new Date(this.now().getTime() - this.idleTimeoutMs);
+		const idle = await this.deps.leaseStore.listIdleLeases(cutoff);
+		for (const record of idle) {
+			const ref: LeaseRef = {
+				userId: record.userId,
+				conversationId: record.conversationId,
+			};
+			// Active run → keep warm, never terminate mid-run. (No await before
+			// `terminate` claims the guard, so this check stays race-free.)
+			if (this.inFlight.has(inFlightKey(ref))) {
+				logger.info({
+					msg: "Skipping idle reap of active lease",
+					userId: ref.userId,
+					conversationId: ref.conversationId,
+					sandboxId: record.sandboxId,
+				});
+				continue;
+			}
+			try {
+				await this.terminate(ref, logger, { syncBeforeKill: true });
+			} catch (err) {
+				// Surfacing per run policy: log and move on so one failure can't stall
+				// the sweep. (terminate already swallows a missing sandbox internally.)
+				logger.error({
+					msg: "Idle reap failed",
+					userId: ref.userId,
+					conversationId: ref.conversationId,
+					sandboxId: record.sandboxId,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 		}
 	}
 

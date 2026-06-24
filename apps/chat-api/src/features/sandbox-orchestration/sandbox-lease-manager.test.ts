@@ -15,23 +15,53 @@ const silentLogger = {
 	child: () => silentLogger,
 } as unknown as ChatLogger;
 
+/**
+ * Controllable clock so idle-reaping is deterministic without real timers (the
+ * codebase idiom — see run-state's `fakeClock`). The lease manager ages leases
+ * against it, and the store stamps `updatedAt` from it, so cutoff and timestamps
+ * advance together.
+ */
+function makeClock(startMs = 1_000_000) {
+	let ms = startMs;
+	return {
+		now: () => new Date(ms),
+		advance: (deltaMs: number) => {
+			ms += deltaMs;
+		},
+	};
+}
+
 /** In-memory {@link LeaseStore} keyed exactly like the Postgres composite PK. */
 class FakeLeaseStore implements LeaseStore {
-	readonly records = new Map<string, LeaseRecord>();
+	readonly records = new Map<string, LeaseRecord & { updatedAt: number }>();
 	/** Every upsert, in order — stands in for the row's `updated_at` bumps. */
 	readonly upserts: LeaseRecord[] = [];
+	/** Stamps `updatedAt` so `listIdleLeases` can age rows like Postgres' now(). */
+	constructor(private readonly now: () => Date = () => new Date()) {}
 	private key(ref: LeaseRef) {
 		return `${ref.userId}\0${ref.conversationId}`;
 	}
 	async get(ref: LeaseRef) {
-		return this.records.get(this.key(ref)) ?? null;
+		const row = this.records.get(this.key(ref));
+		if (!row) return null;
+		const { updatedAt: _updatedAt, ...record } = row;
+		return record;
 	}
 	async upsert(record: LeaseRecord) {
-		this.records.set(this.key(record), { ...record });
+		this.records.set(this.key(record), {
+			...record,
+			updatedAt: this.now().getTime(),
+		});
 		this.upserts.push({ ...record });
 	}
 	async delete(ref: LeaseRef) {
 		this.records.delete(this.key(ref));
+	}
+	async listIdleLeases(idleSince: Date) {
+		const cutoff = idleSince.getTime();
+		return [...this.records.values()]
+			.filter((row) => row.updatedAt < cutoff)
+			.map(({ updatedAt: _updatedAt, ...record }) => record);
 	}
 }
 
@@ -55,30 +85,36 @@ function makeDeps() {
 	const setSandboxTimeout = mock(async () => undefined);
 	const hydrate = mock(async () => undefined);
 	const sync = mock(async () => undefined);
-	const leaseStore = new FakeLeaseStore();
+	const clock = makeClock();
+	const leaseStore = new FakeLeaseStore(clock.now);
 
-	const manager = new SandboxLeaseManager({
-		sandboxProvider: {
-			createSandbox,
-			connectSandbox,
-			daemonEndpoint,
-			setSandboxTimeout,
-			ensureSandboxDaemon,
-			killSandbox,
-			cancelSandbox,
-			// biome-ignore lint/suspicious/noExplicitAny: partial provider mock for the lease seam.
-		} as any,
-		leaseStore,
-		workspaceStore: {
-			hydrateConversationWorkspace: hydrate,
-			syncConversationWorkspace: sync,
-			// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync are used.
-		} as any,
-	});
+	const manager = new SandboxLeaseManager(
+		{
+			sandboxProvider: {
+				createSandbox,
+				connectSandbox,
+				daemonEndpoint,
+				setSandboxTimeout,
+				ensureSandboxDaemon,
+				killSandbox,
+				cancelSandbox,
+				// biome-ignore lint/suspicious/noExplicitAny: partial provider mock for the lease seam.
+			} as any,
+			leaseStore,
+			workspaceStore: {
+				hydrateConversationWorkspace: hydrate,
+				syncConversationWorkspace: sync,
+				// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync are used.
+			} as any,
+		},
+		DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
+		clock.now,
+	);
 
 	return {
 		manager,
 		leaseStore,
+		clock,
 		createSandbox,
 		connectSandbox,
 		ensureSandboxDaemon,
@@ -526,6 +562,110 @@ describe("SandboxLeaseManager", () => {
 				d.manager.terminate(refA, silentLogger),
 			).resolves.toBeUndefined();
 			expect(await d.leaseStore.get(refA)).toBeNull();
+		});
+	});
+
+	describe("idle termination (reapIdle)", () => {
+		it("syncs and terminates a warm lease idle past the window", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(lease, silentLogger);
+			d.sync.mockClear();
+
+			// Cross the idle window, then sweep.
+			d.clock.advance(DEFAULT_SANDBOX_IDLE_TIMEOUT_MS + 1);
+			await d.manager.reapIdle(silentLogger);
+
+			expect(d.sync).toHaveBeenCalledWith(refA);
+			expect(d.killSandbox).toHaveBeenCalledTimes(1);
+			expect(await d.leaseStore.get(refA)).toBeNull();
+		});
+
+		it("keeps a lease that has not been idle long enough", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(lease, silentLogger);
+
+			// Still inside the window.
+			d.clock.advance(DEFAULT_SANDBOX_IDLE_TIMEOUT_MS - 1);
+			await d.manager.reapIdle(silentLogger);
+
+			expect(d.killSandbox).not.toHaveBeenCalled();
+			expect(await d.leaseStore.get(refA)).not.toBeNull();
+		});
+
+		it("does not terminate an active lease even when its row looks idle", async () => {
+			// Acquire and do NOT release: the turn is in flight (guard held), and a
+			// turn longer than the idle window leaves `updated_at` old.
+			await d.manager.acquire(refA, silentLogger);
+
+			d.clock.advance(DEFAULT_SANDBOX_IDLE_TIMEOUT_MS + 1);
+			await d.manager.reapIdle(silentLogger);
+
+			expect(d.killSandbox).not.toHaveBeenCalled();
+			expect(await d.leaseStore.get(refA)).not.toBeNull();
+		});
+
+		it("syncs the workspace before killing the sandbox", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(lease, silentLogger);
+			const order: string[] = [];
+			d.sync.mockImplementation(async () => {
+				order.push("sync");
+			});
+			d.killSandbox.mockImplementation(async () => {
+				order.push("kill");
+			});
+
+			d.clock.advance(DEFAULT_SANDBOX_IDLE_TIMEOUT_MS + 1);
+			await d.manager.reapIdle(silentLogger);
+
+			expect(order).toEqual(["sync", "kill"]);
+		});
+
+		it("terminates only the idle leases, leaving warm ones alone", async () => {
+			const refB: LeaseRef = { userId: "user-1", conversationId: "conv-2" };
+			const a = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(a, silentLogger);
+
+			// conv-2 is acquired/released later, so it stays inside the window when
+			// conv-1 has aged out.
+			d.clock.advance(DEFAULT_SANDBOX_IDLE_TIMEOUT_MS - 10);
+			const b = await d.manager.acquire(refB, silentLogger);
+			await d.manager.release(b, silentLogger);
+			d.clock.advance(20);
+
+			await d.manager.reapIdle(silentLogger);
+
+			expect(await d.leaseStore.get(refA)).toBeNull();
+			expect(await d.leaseStore.get(refB)).not.toBeNull();
+			expect(d.killSandbox).toHaveBeenCalledTimes(1);
+		});
+
+		it("logs the failure and continues when one lease cannot be reaped", async () => {
+			const errors: Record<string, unknown>[] = [];
+			const recordingLogger = {
+				info: () => {},
+				error: (obj: Record<string, unknown>) => errors.push(obj),
+			};
+			const refBad: LeaseRef = { userId: "user-1", conversationId: "conv-bad" };
+			const good = await d.manager.acquire(refA, silentLogger);
+			await d.manager.release(good, silentLogger);
+			const bad = await d.manager.acquire(refBad, silentLogger);
+			await d.manager.release(bad, silentLogger);
+
+			// Make tearing down conv-bad throw (a store delete failure surfaces out of
+			// terminate); the sweep must still reap conv-1.
+			const realDelete = d.leaseStore.delete.bind(d.leaseStore);
+			d.leaseStore.delete = async (ref: LeaseRef) => {
+				if (ref.conversationId === "conv-bad") throw new Error("delete boom");
+				return realDelete(ref);
+			};
+
+			d.clock.advance(DEFAULT_SANDBOX_IDLE_TIMEOUT_MS + 1);
+			await d.manager.reapIdle(recordingLogger);
+
+			// The good lease was still reaped despite the bad one throwing.
+			expect(await d.leaseStore.get(refA)).toBeNull();
+			expect(errors.some((e) => e.msg === "Idle reap failed")).toBe(true);
 		});
 	});
 });

@@ -1,5 +1,9 @@
 export { ConversationBusyError, SandboxCreationError } from "./errors";
 export {
+	DEFAULT_REAP_INTERVAL_MS,
+	IdleSandboxReaper,
+} from "./idle-sandbox-reaper";
+export {
 	type AcquireOptions,
 	type SandboxLease,
 	SandboxLeaseManager,

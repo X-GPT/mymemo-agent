@@ -51,6 +51,16 @@ export class PostgresLeaseStore implements LeaseStore {
 			[ref.userId, ref.conversationId],
 		);
 	}
+
+	async listIdleLeases(idleSince: Date): Promise<LeaseRecord[]> {
+		const rows = await this.db.query<LeaseRow>(
+			`SELECT user_id, conversation_id, sandbox_id, agent_session_id
+			   FROM sandbox_leases
+			  WHERE updated_at < $1`,
+			[idleSince],
+		);
+		return rows.map(rowToRecord);
+	}
 }
 
 /** Raw `sandbox_leases` row as returned by the driver (snake_case columns). */
