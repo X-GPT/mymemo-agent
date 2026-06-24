@@ -17,17 +17,17 @@ import { createGateway } from "../server";
  * Gated on OPENROUTER_IT so the normal suite skips it (no network, no spend). Run:
  *   OPENROUTER_IT=1 \
  *   OPENROUTER_API_KEY=sk-or-... \
- *   OPENROUTER_MODEL=anthropic/claude-3.5-haiku \
+ *   OPENROUTER_MODEL=anthropic/claude-haiku-4.5 \
  *   bun test apps/gateway/src/llm/openrouter.live.test.ts
  *
- * The model MUST be a namespaced OpenRouter id (e.g. `anthropic/claude-3.5-haiku`);
+ * The model MUST be a namespaced OpenRouter id (e.g. `anthropic/claude-haiku-4.5`);
  * this test sends it directly, sidestepping the bare-model-id rewrite that is
  * Task 18 (MYM-22). Defaults to a cheap model if OPENROUTER_MODEL is unset.
  */
 
 const RUN = !!Bun.env.OPENROUTER_IT && !!Bun.env.OPENROUTER_API_KEY;
 const SECRET = "test-secret";
-const MODEL = Bun.env.OPENROUTER_MODEL || "anthropic/claude-3.5-haiku";
+const MODEL = Bun.env.OPENROUTER_MODEL || "anthropic/claude-haiku-4.5";
 
 // LLM path never touches the DB; an unused fake satisfies the seam.
 const fakeDb: Db = {
