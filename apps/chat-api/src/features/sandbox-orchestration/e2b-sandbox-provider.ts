@@ -120,6 +120,71 @@ export class E2BSandboxProvider implements SandboxProvider {
 		return sandbox;
 	}
 
+	/**
+	 * Reattach to a running E2B sandbox by id. `Sandbox.connect` re-establishes the
+	 * client (including the per-sandbox traffic token) without re-deploying bundles,
+	 * which is what makes a warm lease reusable from a process that did not create
+	 * it. Throws if the sandbox was already reaped — the lease manager treats that
+	 * as a stale lease.
+	 */
+	async connectSandbox(
+		sandboxId: string,
+		logger: SyncLogger,
+	): Promise<SandboxHandle> {
+		logger.info({ msg: "Connecting to existing sandbox", sandboxId });
+		const sandbox = await Sandbox.connect(sandboxId);
+		// Same invariant createSandbox enforces: without the per-sandbox traffic
+		// token the daemon edge is unreachable. If a reconnect comes back without
+		// it, throw so the lease manager treats the lease as stale and recreates,
+		// rather than reusing it and 403-ing every turn at the edge.
+		if (!sandbox.trafficAccessToken) {
+			throw new Error(
+				`Reconnected sandbox ${sandboxId} has no trafficAccessToken; cannot reach its daemon edge`,
+			);
+		}
+		return sandbox;
+	}
+
+	/**
+	 * Recompute the daemon endpoint from a (created or reconnected) handle. Both
+	 * the host and the per-sandbox traffic token live on the Sandbox object —
+	 * `Sandbox.connect` repopulates them — so a warm-lease reuse derives the
+	 * endpoint here instead of reading persisted (and potentially stale) columns.
+	 */
+	daemonEndpoint(handle: SandboxHandle): SandboxDaemonEndpoint {
+		// Safe: see killSandbox — the singleton provider only ever receives the
+		// Sandbox its own createSandbox/connectSandbox returned.
+		const sandbox = handle as Sandbox;
+		return {
+			url: this.getDaemonUrl(sandbox),
+			trafficAccessToken: sandbox.trafficAccessToken,
+		};
+	}
+
+	/**
+	 * Extend the sandbox's auto-shutdown timeout. Best-effort: a transient failure
+	 * here just leaves the sandbox on its prior timeout, so it is logged, not
+	 * thrown — the lease manager must not tear down a healthy sandbox over a failed
+	 * keep-alive.
+	 */
+	async setSandboxTimeout(
+		handle: SandboxHandle,
+		timeoutMs: number,
+		logger: SyncLogger,
+	): Promise<void> {
+		const sandbox = handle as Sandbox;
+		try {
+			await sandbox.setTimeout(timeoutMs);
+		} catch (err) {
+			logger.error({
+				msg: "Failed to set sandbox timeout",
+				sandboxId: sandbox.sandboxId,
+				timeoutMs,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	async killSandbox(
 		userId: string,
 		handle: SandboxHandle,
@@ -179,15 +244,11 @@ export class E2BSandboxProvider implements SandboxProvider {
 		logger: SyncLogger,
 	): Promise<SandboxDaemonEndpoint> {
 		// Safe: see killSandbox — the singleton provider only ever receives the
-		// Sandbox its own createSandbox returned.
+		// Sandbox its own createSandbox returned. trafficAccessToken is guaranteed
+		// present — createSandbox fails the create when it is missing — so the turn
+		// proxy can always authenticate to the edge.
 		const sandbox = handle as Sandbox;
-		const daemonUrl = this.getDaemonUrl(sandbox);
-		// trafficAccessToken is guaranteed present — createSandbox fails the create
-		// when it is missing — so the turn proxy can always authenticate to the edge.
-		const endpoint = {
-			url: daemonUrl,
-			trafficAccessToken: sandbox.trafficAccessToken,
-		};
+		const endpoint = this.daemonEndpoint(sandbox);
 
 		const bundles = await getSandboxBundles();
 

@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 const sandboxKill = mock(async () => {});
 let createImpl: () => Promise<unknown> = async () => ({});
 const sandboxCreate = mock(() => createImpl());
-mock.module("e2b", () => ({ Sandbox: { create: sandboxCreate } }));
+let connectImpl: () => Promise<unknown> = async () => ({});
+const sandboxConnect = mock(() => connectImpl());
+mock.module("e2b", () => ({
+	Sandbox: { create: sandboxCreate, connect: sandboxConnect },
+}));
 
 import type { ApiConfig } from "@/config/env";
 import { E2BSandboxProvider } from "./e2b-sandbox-provider";
@@ -79,5 +83,35 @@ describe("E2BSandboxProvider.createSandbox", () => {
 
 		expect(err).toBeInstanceOf(SandboxCreationError);
 		expect(sandboxKill).not.toHaveBeenCalled();
+	});
+});
+
+describe("E2BSandboxProvider.connectSandbox", () => {
+	afterEach(() => {
+		sandboxConnect.mockClear();
+	});
+
+	it("returns the reconnected handle when the traffic token is present", async () => {
+		connectImpl = async () =>
+			fakeSandbox({ trafficAccessToken: "traffic-token" });
+		const handle = await new E2BSandboxProvider(config).connectSandbox(
+			"sbx-1",
+			silentLogger,
+		);
+		expect(handle.sandboxId).toBe("sbx-1");
+	});
+
+	// Parity with createSandbox's invariant: a reconnect that comes back without
+	// the per-sandbox edge token is unreachable, so it must throw — the lease
+	// manager then treats the lease as stale and recreates instead of reusing a
+	// sandbox whose every turn would 403 at the edge.
+	it("throws when the reconnected sandbox has no traffic token", async () => {
+		connectImpl = async () => fakeSandbox({ trafficAccessToken: undefined });
+		const err = await new E2BSandboxProvider(config)
+			.connectSandbox("sbx-1", silentLogger)
+			.catch((e) => e);
+
+		expect(err).toBeInstanceOf(Error);
+		expect((err as Error).message).toMatch(/no trafficAccessToken/);
 	});
 });

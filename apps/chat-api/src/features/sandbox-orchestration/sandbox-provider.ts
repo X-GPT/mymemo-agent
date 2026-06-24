@@ -56,6 +56,37 @@ export function trafficAccessHeaders(
 
 export interface SandboxProvider {
 	createSandbox(userId: string, logger: SyncLogger): Promise<SandboxHandle>;
+	/**
+	 * Reattach to an already-running sandbox by id. Leasing (Milestone 5) persists
+	 * only a sandbox *id* — a live handle is an open network client that can't be
+	 * serialized — so a process reusing a warm lease, or tearing down a lease it
+	 * never created, reconstructs the handle here. Rejects if the sandbox no longer
+	 * exists, which the lease manager treats as a stale lease and recreates.
+	 */
+	connectSandbox(sandboxId: string, logger: SyncLogger): Promise<SandboxHandle>;
+	/**
+	 * The daemon endpoint (URL + edge token) for an already-running sandbox,
+	 * computed purely from the handle — no bundle deploy, no network call. This is
+	 * how a reused warm lease reaches the daemon: the endpoint is recomputed from
+	 * the reattached handle rather than persisted, so it can never go stale and the
+	 * per-sandbox edge token is never written to a durable store. `ensureSandboxDaemon`
+	 * returns the same shape on a fresh create (after it deploys + health-checks).
+	 */
+	daemonEndpoint(handle: SandboxHandle): SandboxDaemonEndpoint;
+	/**
+	 * Reset the sandbox's auto-shutdown timeout to `timeoutMs` from now. A running
+	 * E2B sandbox kills itself at its timeout, so this is the single clock the lease
+	 * uses to keep a warm sandbox alive: it is reset on every acquire and release,
+	 * so the idle window *is* the sandbox's lifetime and an idle sandbox is reaped
+	 * by E2B itself at expiry. Best-effort — providers swallow failures (the
+	 * sandbox simply keeps its prior timeout). A no-op for the long-lived local
+	 * container.
+	 */
+	setSandboxTimeout(
+		handle: SandboxHandle,
+		timeoutMs: number,
+		logger: SyncLogger,
+	): Promise<void>;
 	ensureSandboxDaemon(
 		userId: string,
 		handle: SandboxHandle,

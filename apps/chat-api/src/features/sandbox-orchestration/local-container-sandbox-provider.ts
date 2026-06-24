@@ -83,6 +83,21 @@ export class LocalContainerSandboxProvider implements SandboxProvider {
 		);
 	}
 
+	async connectSandbox(sandboxId: string): Promise<SandboxHandle> {
+		// One long-lived container, so there is nothing to reattach to — the handle
+		// is static. Returns whatever id the lease recorded for symmetry with E2B.
+		return { sandboxId };
+	}
+
+	daemonEndpoint(): SandboxDaemonEndpoint {
+		// Fixed container URL, no edge token (unpublished on the compose network).
+		return { url: this.config.localSandboxDaemonUrl };
+	}
+
+	async setSandboxTimeout(): Promise<void> {
+		// The container is long-lived and has no auto-shutdown timeout to manage.
+	}
+
 	async killSandbox(): Promise<void> {
 		// The local container is long-lived — nothing to tear down per turn.
 	}
