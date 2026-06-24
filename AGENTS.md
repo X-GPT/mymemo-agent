@@ -174,7 +174,7 @@ Optional:
 ### gateway
 
 Required:
-- `ANTHROPIC_API_KEY` — the real provider key; lives **only** in this service
+- `ANTHROPIC_API_KEY` — the real Anthropic provider key; lives **only** in this service. **Required only when `LLM_PROVIDER=anthropic`** (the default); an OpenRouter-only deployment does not need it
 - `DATABASE_URL` — read-only connection to the MyMemo KB Postgres; this **read-only KB credential** lives **only** in this service (chat-api has its own, separate `DATABASE_URL` for its writable `mymemo_agent` DB — it is never the KB credential)
 - `LLM_TOKEN_SECRET` — must match chat-api's
 

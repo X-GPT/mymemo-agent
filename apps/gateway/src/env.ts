@@ -130,14 +130,25 @@ export interface GatewayConfig {
  * another co-located service reading the same injected env.
  */
 export function loadConfigFromEnv(env: Env): GatewayConfig {
-	invariant(env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY is required");
 	invariant(env.DATABASE_URL, "DATABASE_URL is required");
 	invariant(env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
 
 	const llmProvider = parseProvider(env.LLM_PROVIDER);
 
+	// ANTHROPIC_API_KEY is the anthropic provider's upstream credential, so it is
+	// required only when that provider is selected — an OpenRouter-only deployment
+	// must not be forced to supply a dummy Anthropic key it never uses.
+	if (llmProvider === "anthropic") {
+		invariant(
+			env.ANTHROPIC_API_KEY,
+			"ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic",
+		);
+	}
+
 	return {
-		anthropicApiKey: env.ANTHROPIC_API_KEY,
+		// "" when the openrouter provider is selected (the anthropic provider — the
+		// only reader — is never built in that case, so the key is never sent).
+		anthropicApiKey: env.ANTHROPIC_API_KEY ?? "",
 		llmTokenSecret: env.LLM_TOKEN_SECRET,
 		// DB_PASSWORD is spliced in when DATABASE_URL is passwordless; TLS is on by
 		// default (set DB_SSL=disable for a local non-TLS Postgres).

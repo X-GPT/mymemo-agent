@@ -223,6 +223,25 @@ describe("loadConfigFromEnv · LLM_PROVIDER", () => {
 		).toThrow(/LLM_PROVIDER/);
 	});
 
+	it("requires ANTHROPIC_API_KEY for the anthropic provider", () => {
+		const { ANTHROPIC_API_KEY: _omit, ...noKey } = base;
+		expect(() => loadConfigFromEnv(noKey)).toThrow(/ANTHROPIC_API_KEY/);
+	});
+
+	it("does NOT require ANTHROPIC_API_KEY for the openrouter provider", () => {
+		const { ANTHROPIC_API_KEY: _omit, ...noKey } = base;
+		const cfg = loadConfigFromEnv({
+			...noKey,
+			LLM_PROVIDER: "openrouter",
+			OPENROUTER_API_KEY: "sk-or",
+			OPENROUTER_BASE_URL: "https://openrouter.ai/api",
+			OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4.5",
+		});
+		expect(cfg.llmProvider).toBe("openrouter");
+		expect(cfg.anthropicApiKey).toBe("");
+		expect(cfg.openRouter?.apiKey).toBe("sk-or");
+	});
+
 	it("requires the OpenRouter vars when the provider is selected", () => {
 		expect(() =>
 			loadConfigFromEnv({ ...base, LLM_PROVIDER: "openrouter" }),
