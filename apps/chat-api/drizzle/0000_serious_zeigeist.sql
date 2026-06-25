@@ -1,4 +1,7 @@
-CREATE TABLE "conversations" (
+-- `IF NOT EXISTS` is hand-added (drizzle-kit does not emit it): `sandbox_leases`
+-- may already exist on a mymemo_agent DB provisioned by the pre-Drizzle init.sql
+-- (its shape is identical), so a baseline run must not abort here. Keep on regen.
+CREATE TABLE IF NOT EXISTS "conversations" (
 	"user_id" text NOT NULL,
 	"conversation_id" text NOT NULL,
 	"scope" text NOT NULL,
@@ -9,7 +12,7 @@ CREATE TABLE "conversations" (
 	CONSTRAINT "conversations_scope_check" CHECK ("conversations"."scope" in ('general', 'collection', 'document'))
 );
 --> statement-breakpoint
-CREATE TABLE "sandbox_leases" (
+CREATE TABLE IF NOT EXISTS "sandbox_leases" (
 	"user_id" text NOT NULL,
 	"conversation_id" text NOT NULL,
 	"sandbox_id" text NOT NULL,

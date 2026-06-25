@@ -73,21 +73,33 @@ cp apps/gateway/.env.example  apps/gateway/.env
 docker compose up --build
 ```
 
-Send a turn (SSE stream). `X-Member-Code: demo-member` matches the seeded KB so
-document search returns results:
+Create a conversation, then append a `user.message` event to stream the turn.
+`X-Member-Code: demo-member` matches the seeded KB so document search returns
+results. First create the conversation (its document scope is frozen here):
 
 ```sh
-curl -N http://localhost:3000/v1/chat \
+curl -sS http://localhost:3000/v1/conversations \
   -H 'Content-Type: application/json' \
   -H 'X-Member-Code: demo-member' \
   -H 'X-Partner-Code: demo-partner' \
-  -d '{"chatContent":"What is machine learning?"}'
+  -d '{}'
+# → {"conversationId":"<uuid>","scope":"general"}
+```
+
+Then append an event to the returned `conversationId` (SSE stream):
+
+```sh
+curl -N http://localhost:3000/v1/conversations/<conversationId>/events \
+  -H 'Content-Type: application/json' \
+  -H 'X-Member-Code: demo-member' \
+  -H 'X-Partner-Code: demo-partner' \
+  -d '{"type":"user.message","text":"What is machine learning?"}'
 ```
 
 The stream emits `conversation_id`, `run_id`, `sandbox_id`, `agent_session_id`,
-then `text_delta` events, then `done`. You can pass `conversationId` back to reuse
-the same thread id, but conversational *resume* (recalling prior turns) is not
-wired through the endpoint yet — see the persistence note below.
+then `text_delta` events, then `done`. Re-POST `events` to the same
+`conversationId` for another turn, but conversational *resume* (recalling prior
+turns) is not wired through the endpoint yet — see the persistence note below.
 
 ### Session-transcript persistence across a sandbox recycle (MYM-27)
 
