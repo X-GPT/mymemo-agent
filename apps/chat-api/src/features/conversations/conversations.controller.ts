@@ -1,7 +1,4 @@
 import type { AppDeps } from "@/deps";
-import type { ChatLogger } from "@/features/chat/chat.logger";
-import type { MymemoEventSender } from "@/features/chat/chat.streaming";
-import { createSseRunEventSink } from "@/features/chat/run-event-sink";
 import type {
 	ConversationRecord,
 	ConversationScope,
@@ -12,6 +9,9 @@ import {
 	ConversationBusyError,
 	runSandboxChat,
 } from "@/features/sandbox-orchestration";
+import type { RequestLogger } from "@/features/streaming/logger";
+import { createSseRunEventSink } from "@/features/streaming/run-event-sink";
+import type { MymemoEventSender } from "@/features/streaming/sse-sender";
 import type { InternalIdentity } from "./conversations.schema";
 
 /**
@@ -55,7 +55,7 @@ export async function runConversationTurn(
 	deps: AppDeps,
 	params: { conversation: ConversationRecord; message: string },
 	mymemoEventSender: MymemoEventSender,
-	logger: ChatLogger,
+	logger: RequestLogger,
 ) {
 	const { conversation, message } = params;
 	const { userId, conversationId, scope, collectionId, summaryId } =

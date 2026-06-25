@@ -4,8 +4,8 @@ import { streamSSE } from "hono/streaming";
 import { validator as zValidator } from "hono-openapi";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
-import { ChatLogger } from "@/features/chat/chat.logger";
-import { HonoSSESender } from "@/features/chat/chat.streaming";
+import { RequestLogger } from "@/features/streaming/logger";
+import { HonoSSESender } from "@/features/streaming/sse-sender";
 import {
 	createConversation,
 	runConversationTurn,
@@ -129,7 +129,7 @@ app.post(
 						c.var.deps,
 						{ conversation, message: event.text },
 						sender,
-						new ChatLogger(c.var.logger, identity.data.memberCode),
+						new RequestLogger(c.var.logger, identity.data.memberCode),
 					);
 				} finally {
 					clearInterval(keepaliveInterval);

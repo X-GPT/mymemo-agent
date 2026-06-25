@@ -1,8 +1,8 @@
 import { type LlmTokenClaims, mintLlmToken } from "@mymemo/llm-token";
 import type { ChatMessagesScope } from "@/config/env";
 import type { AppDeps } from "@/deps";
-import type { ChatLogger } from "@/features/chat/chat.logger";
 import { buildSandboxAgentPrompt } from "@/features/sandbox-agent";
+import type { RequestLogger } from "@/features/streaming/logger";
 import { SandboxCreationError } from "./errors";
 import { forwardChatTurnToSandbox, type TurnRequest } from "./sandbox-proxy";
 
@@ -31,7 +31,7 @@ export interface RunSandboxChatOptions {
 	onSandboxId: (sandboxId: string) => Promise<void>;
 	/** Fired once the in-sandbox daemon is confirmed up, before the turn is forwarded. */
 	onDaemonStarted: () => Promise<void>;
-	logger: ChatLogger;
+	logger: RequestLogger;
 }
 
 export type RunSandboxChatResult = { status: "completed" };

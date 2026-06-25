@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import type { AppDeps } from "@/deps";
-import type { EventMessage, MymemoEvent } from "@/features/chat/chat.events";
-import { ChatLogger } from "@/features/chat/chat.logger";
-import type { MymemoEventSender } from "@/features/chat/chat.streaming";
-import { runEventToClientEvents } from "@/features/chat/run-events-to-sse";
 import type {
 	ConversationRecord,
 	ConversationStore,
 } from "@/features/conversation-store";
+import type { EventMessage, MymemoEvent } from "@/features/streaming/events";
+import { RequestLogger } from "@/features/streaming/logger";
+import { runEventToClientEvents } from "@/features/streaming/run-events-to-sse";
+import type { MymemoEventSender } from "@/features/streaming/sse-sender";
 import type { RunEvent, RunRef } from "@/features/workspace-store";
 
 // Orchestration is mocked so no sandbox, gateway, database, or provider call is
@@ -61,7 +61,7 @@ function fakeDeps() {
 	return { deps, runEvents };
 }
 
-const logger = new ChatLogger(
+const logger = new RequestLogger(
 	{ info() {}, warn() {}, error() {} } as never,
 	"member-1",
 );

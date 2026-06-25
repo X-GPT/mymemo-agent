@@ -1,5 +1,5 @@
 import type { SSEStreamingApi } from "hono/streaming";
-import type { MymemoEvent } from "./chat.events";
+import type { MymemoEvent } from "./events";
 
 export interface Sender<T> {
 	send(data: T): Promise<void>;
@@ -17,7 +17,7 @@ export interface MymemoEventSender extends Sender<MymemoEvent> {
 // the keepalive setInterval doesn't await its sendPing. If hono ever adds
 // real async work before the enqueue in writeSSE, this class will need an
 // internal serialization queue. The `interleaved order` test in
-// chat.streaming.test.ts pins this behavior.
+// sse-sender.test.ts pins this behavior.
 export class HonoSSESender implements MymemoEventSender {
 	constructor(private stream: SSEStreamingApi) {}
 

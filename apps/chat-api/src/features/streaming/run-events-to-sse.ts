@@ -11,7 +11,7 @@
 
 import { AGENT_EVENT_TYPE_FIELD, RunEventType } from "@/features/run-state";
 import type { RunEvent } from "@/features/workspace-store";
-import type { EventMessage } from "./chat.events";
+import type { EventMessage } from "./events";
 
 /**
  * Derive the client SSE frame(s) for one recorded run event. Returns an empty

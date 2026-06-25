@@ -10,7 +10,7 @@ import {
 import { verifyLlmToken } from "@mymemo/llm-token";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
-import type { ChatLogger } from "@/features/chat/chat.logger";
+import type { RequestLogger } from "@/features/streaming/logger";
 import {
 	type RunSandboxChatOptions,
 	runSandboxChat,
@@ -26,7 +26,7 @@ const silentLogger = {
 	warn: () => {},
 	debug: () => {},
 	child: () => silentLogger,
-} as unknown as ChatLogger;
+} as unknown as RequestLogger;
 
 // Config is injected, not read from env — so the secret/url under test are fixed
 // here and can't be perturbed by another test file or Bun's .env auto-load.

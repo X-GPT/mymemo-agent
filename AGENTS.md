@@ -136,7 +136,7 @@ The **chat-api → daemon `/turn`** edge has no application-layer auth and the d
 |------|---------|
 | `src/features/conversations/` | `conversations.route.ts` (the two endpoints), `conversations.controller.ts` (`createConversation` freezes scope; `runConversationTurn` reads it back and hands the turn to the sandbox) |
 | `src/features/conversation-store/` | Durable conversation registry (frozen scope), Drizzle-backed over `mymemo_agent`; `createConversationStore` factory |
-| `src/features/chat/` | SSE / run-event plumbing reused by the conversation routes (`chat.streaming.ts`, `chat.events.ts`, `chat.logger.ts`, `run-event-sink.ts`, `run-events-to-sse.ts`) |
+| `src/features/streaming/` | SSE / run-event plumbing reused by the conversation routes (`sse-sender.ts`, `events.ts`, `logger.ts` → `RequestLogger`, `run-event-sink.ts`, `run-events-to-sse.ts`) |
 | `src/db/` | Drizzle schema (`schema.ts`: `conversations`, `sandbox_leases`), client (`client.ts`), and migration runner (`migrate.ts`) for the writable DB; migrations in `drizzle/` |
 | `src/features/sandbox-orchestration/` | `runSandboxChat`, sandbox manager, daemon proxy; mints the per-turn LLM token |
 | `src/features/sandbox-agent/` | Sandbox-side agent system prompt builder |

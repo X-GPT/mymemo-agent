@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import type { ChatLogger } from "@/features/chat/chat.logger";
 import type { LeaseRecord, LeaseRef, LeaseStore } from "@/features/lease-store";
+import type { RequestLogger } from "@/features/streaming/logger";
 import { ConversationBusyError, SandboxCreationError } from "./errors";
 import {
 	DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
@@ -13,7 +13,7 @@ const silentLogger = {
 	warn: () => {},
 	debug: () => {},
 	child: () => silentLogger,
-} as unknown as ChatLogger;
+} as unknown as RequestLogger;
 
 /** In-memory {@link LeaseStore} keyed exactly like the Postgres composite PK. */
 class FakeLeaseStore implements LeaseStore {

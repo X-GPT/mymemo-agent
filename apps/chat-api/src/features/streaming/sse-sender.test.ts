@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { SSEStreamingApi } from "hono/streaming";
-import { HonoSSESender } from "./chat.streaming";
+import { HonoSSESender } from "./sse-sender";
 
 describe("HonoSSESender", () => {
 	it("preserves wire order when send and sendPing are interleaved without awaits", async () => {
