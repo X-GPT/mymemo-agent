@@ -27,11 +27,11 @@ import type {
  * follow-ups (Tasks 14–15); `terminate` is the teardown hook they drive.
  *
  * Concurrency policy: **reject** — a second in-flight turn for a conversation
- * throws `ConversationBusyError`. The guard is per-process; the daemon's
- * single-turn lock 409s two turns reusing the *same* warm sandbox, but neither
- * covers a cross-replica race where both replicas `acquireFresh` and the
- * conflicting upsert orphans one. A DB-level guard (conditional insert / advisory
- * lock) would close that gap.
+ * throws `ConversationBusyError`. The per-process guard handles same-replica
+ * concurrency; the cross-replica first-turn race (both replicas see no lease and
+ * both `acquireFresh`) is closed by running the decide+create section under the
+ * store's `withClaim` advisory lock. The daemon's single-turn lock 409s two turns
+ * reusing the *same* warm sandbox once the lease row exists.
  */
 
 export interface AcquireOptions {
@@ -140,19 +140,34 @@ export class SandboxLeaseManager {
 		this.inFlight.add(key);
 
 		try {
-			// Read the pointer once. tryReuse may delete it (stale), so capture the
-			// recorded session first and carry it into a fresh create — a recycled
-			// sandbox should resume the conversation, not start blank.
-			const record = await this.deps.leaseStore.get(ref);
-			if (record) {
-				const reused = await this.tryReuse(ref, record, logger, opts);
-				if (reused) return reused;
+			// Cross-process claim around the read→reuse-or-create→write section. The
+			// in-process guard above only serializes this replica; without this, two
+			// replicas that both see no lease would each create a sandbox. Held only
+			// while deciding + creating — once the lease row exists, later concurrent
+			// turns find the warm sandbox and the daemon's single-turn lock rejects
+			// the extra one.
+			const claim = await this.deps.leaseStore.withClaim(ref, async () => {
+				// Read the pointer once. tryReuse may delete it (stale), so capture the
+				// recorded session first and carry it into a fresh create — a recycled
+				// sandbox should resume the conversation, not start blank.
+				const record = await this.deps.leaseStore.get(ref);
+				if (record) {
+					const reused = await this.tryReuse(ref, record, logger, opts);
+					if (reused) return reused;
+				}
+				return await this.acquireFresh(
+					ref,
+					logger,
+					resolveAgentSessionId(opts, record?.agentSessionId ?? null),
+				);
+			});
+			if (!claim.acquired) {
+				throw new ConversationBusyError(
+					`Conversation ${ref.conversationId} is being acquired elsewhere`,
+				);
 			}
-			return await this.acquireFresh(
-				ref,
-				logger,
-				resolveAgentSessionId(opts, record?.agentSessionId ?? null),
-			);
+			// `acquired` is true ⇒ the callback ran and returned a lease.
+			return claim.result as SandboxLease;
 		} catch (err) {
 			// Free the guard on any failure so the conversation isn't wedged; a
 			// successful acquire keeps the key held until `release`.

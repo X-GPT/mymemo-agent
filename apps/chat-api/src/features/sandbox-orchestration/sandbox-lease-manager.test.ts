@@ -33,6 +33,22 @@ class FakeLeaseStore implements LeaseStore {
 	async delete(ref: LeaseRef) {
 		this.records.delete(this.key(ref));
 	}
+	/** Keys with a claim currently held — stands in for the cross-process lock. */
+	readonly heldClaims = new Set<string>();
+	/** Simulate another replica/turn already holding the conversation's claim. */
+	holdClaim(ref: LeaseRef) {
+		this.heldClaims.add(this.key(ref));
+	}
+	async withClaim<T>(ref: LeaseRef, fn: () => Promise<T>) {
+		const k = this.key(ref);
+		if (this.heldClaims.has(k)) return { acquired: false };
+		this.heldClaims.add(k);
+		try {
+			return { acquired: true, result: await fn() };
+		} finally {
+			this.heldClaims.delete(k);
+		}
+	}
 }
 
 function makeDeps() {
@@ -355,6 +371,23 @@ describe("SandboxLeaseManager", () => {
 				"hard failure",
 			);
 			// Not wedged: a later acquire proceeds (fresh, since nothing persisted).
+			const ok = await d.manager.acquire(refA, silentLogger);
+			expect(ok.reused).toBe(false);
+		});
+
+		it("rejects as busy when another replica holds the conversation claim", async () => {
+			// Simulate a different replica/process already inside the claim for this
+			// conversation. The in-process guard can't see it; the cross-process
+			// claim must.
+			d.leaseStore.holdClaim(refA);
+
+			await expect(
+				d.manager.acquire(refA, silentLogger),
+			).rejects.toBeInstanceOf(ConversationBusyError);
+			// No sandbox was created behind the held claim.
+			expect(d.createSandbox).not.toHaveBeenCalled();
+			// Guard freed — once the other holder releases, this replica can acquire.
+			d.leaseStore.heldClaims.delete(`${refA.userId}\0${refA.conversationId}`);
 			const ok = await d.manager.acquire(refA, silentLogger);
 			expect(ok.reused).toBe(false);
 		});

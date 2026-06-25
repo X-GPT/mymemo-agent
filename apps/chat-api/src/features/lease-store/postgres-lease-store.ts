@@ -67,4 +67,47 @@ export class PostgresLeaseStore implements LeaseStore {
 				),
 			);
 	}
+
+	async withClaim<T>(
+		ref: LeaseRef,
+		fn: () => Promise<T>,
+	): Promise<{ acquired: boolean; result?: T }> {
+		// A non-blocking session-level advisory lock keyed by the conversation:
+		// lock + unlock must run on one connection, so reserve one from the shared
+		// Bun SQL pool for the duration of `fn`. Session-scoped, so Postgres
+		// auto-releases on a dropped connection (crash) — no TTL/stale sweep. Two
+		// int4 keys (one per id half) so the lock is keyed by the conversation; a
+		// hash collision only makes two unrelated conversations occasionally
+		// serialize — never a correctness problem.
+		const key1 = hashKey(ref.userId);
+		const key2 = hashKey(ref.conversationId);
+		const reserved = await this.db.$client.reserve();
+		try {
+			const rows = (await reserved`SELECT pg_try_advisory_lock(${key1}, ${key2}) AS locked`) as Array<{
+				locked: boolean;
+			}>;
+			if (!rows[0]?.locked) return { acquired: false };
+			try {
+				return { acquired: true, result: await fn() };
+			} finally {
+				await reserved`SELECT pg_advisory_unlock(${key1}, ${key2})`;
+			}
+		} finally {
+			reserved.release();
+		}
+	}
+}
+
+/**
+ * Deterministic 32-bit FNV-1a hash folded into the signed int4 range that
+ * `pg_advisory_lock` keys use. Stable across processes, so every replica maps a
+ * given id to the same lock key.
+ */
+function hashKey(value: string): number {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < value.length; i++) {
+		hash ^= value.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return hash | 0;
 }

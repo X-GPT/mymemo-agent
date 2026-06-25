@@ -1,4 +1,8 @@
-export { ConversationBusyError, SandboxCreationError } from "./errors";
+export {
+	ConversationBusyError,
+	ConversationScopeConflictError,
+	SandboxCreationError,
+} from "./errors";
 export {
 	type AcquireOptions,
 	type SandboxLease,

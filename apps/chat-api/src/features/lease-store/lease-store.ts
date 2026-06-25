@@ -51,4 +51,20 @@ export interface LeaseStore {
 	get(ref: LeaseRef): Promise<LeaseRecord | null>;
 	upsert(record: LeaseRecord): Promise<void>;
 	delete(ref: LeaseRef): Promise<void>;
+	/**
+	 * Run `fn` while holding a cross-process claim on `ref`'s conversation, so only
+	 * one acquirer anywhere can be deciding-to-reuse-or-creating for a conversation
+	 * at a time. Returns `{ acquired: false }` (without running `fn`) when another
+	 * holder has the claim — the caller treats that as `ConversationBusyError`.
+	 *
+	 * This closes the multi-replica first-turn race the in-process guard cannot:
+	 * two replicas that both see no lease would otherwise each create a sandbox.
+	 * The claim only needs to cover the read→reuse-or-create→write-pointer section;
+	 * once the warm lease row exists, later concurrent turns resolve to the same
+	 * sandbox and the daemon's single-turn lock rejects the extra one.
+	 */
+	withClaim<T>(
+		ref: LeaseRef,
+		fn: () => Promise<T>,
+	): Promise<{ acquired: boolean; result?: T }>;
 }

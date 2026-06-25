@@ -5,8 +5,10 @@ import {
 	type ConversationStore,
 	PostgresConversationStore,
 } from "./features/conversation-store";
+import { createLeaseStore } from "./features/lease-store";
 import { E2BSandboxProvider } from "./features/sandbox-orchestration/e2b-sandbox-provider";
 import { LocalContainerSandboxProvider } from "./features/sandbox-orchestration/local-container-sandbox-provider";
+import { SandboxLeaseManager } from "./features/sandbox-orchestration/sandbox-lease-manager";
 import type { SandboxProvider } from "./features/sandbox-orchestration/sandbox-provider";
 import {
 	createLocalWorkspaceStore,
@@ -25,6 +27,11 @@ export interface AppDeps {
 	workspaceStore: WorkspaceStore;
 	/** Durable conversation registry (source of truth for frozen scope). */
 	conversationStore: ConversationStore;
+	/**
+	 * Warm-sandbox leasing for the turn path. Every turn leases its sandbox
+	 * through this (reused across a conversation's turns, created on a miss).
+	 */
+	leaseManager: SandboxLeaseManager;
 }
 
 /** Hono environment: pino logger vars plus the injected `AppDeps`. */
@@ -37,8 +44,19 @@ export function createDeps(config: ApiConfig): AppDeps {
 			: new E2BSandboxProvider(config);
 	const workspaceStore = createLocalWorkspaceStore(config.workspaceStoreRoot);
 	// One Drizzle pool over the writable DB, shared by every store (the lease
-	// store reuses it once leasing is wired) rather than a pool per store.
+	// store reuses it) rather than a pool per store.
 	const database = createDatabase(config.databaseUrl);
 	const conversationStore = new PostgresConversationStore(database);
-	return { config, sandboxProvider, workspaceStore, conversationStore };
+	const leaseManager = new SandboxLeaseManager({
+		sandboxProvider,
+		leaseStore: createLeaseStore(database),
+		workspaceStore,
+	});
+	return {
+		config,
+		sandboxProvider,
+		workspaceStore,
+		conversationStore,
+		leaseManager,
+	};
 }
