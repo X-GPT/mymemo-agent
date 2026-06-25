@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 
-import {
-	ConversationBusyError,
-	ConversationScopeConflictError,
-} from "./errors";
+import { ConversationBusyError } from "./errors";
 import { forwardChatTurnToSandbox, type TurnRequest } from "./sandbox-proxy";
 
 function makeTurnRequest(overrides: Partial<TurnRequest> = {}): TurnRequest {
@@ -71,59 +68,6 @@ describe("forwardChatTurnToSandbox", () => {
 					onSessionId: async () => {},
 				}),
 			).rejects.toBeInstanceOf(ConversationBusyError);
-		} finally {
-			globalThis.fetch = originalFetch;
-		}
-	});
-
-	it("maps a 'Turn already in progress' 409 body to ConversationBusyError", async () => {
-		const originalFetch = globalThis.fetch;
-		globalThis.fetch = mock(() =>
-			Promise.resolve(
-				new Response(JSON.stringify({ error: "Turn already in progress" }), {
-					status: 409,
-				}),
-			),
-		) as unknown as typeof fetch;
-
-		try {
-			await expect(
-				forwardChatTurnToSandbox({
-					daemonUrl: "http://localhost:8080",
-					trafficAccessToken: "traffic-token",
-					turnRequest: makeTurnRequest(),
-					onTextDelta: async () => {},
-					onSessionId: async () => {},
-				}),
-			).rejects.toBeInstanceOf(ConversationBusyError);
-		} finally {
-			globalThis.fetch = originalFetch;
-		}
-	});
-
-	it("maps an immutable-scope 409 to a non-retryable ConversationScopeConflictError", async () => {
-		const originalFetch = globalThis.fetch;
-		globalThis.fetch = mock(() =>
-			Promise.resolve(
-				new Response(
-					JSON.stringify({ error: "Conversation scope is immutable" }),
-					{ status: 409 },
-				),
-			),
-		) as unknown as typeof fetch;
-
-		try {
-			const promise = forwardChatTurnToSandbox({
-				daemonUrl: "http://localhost:8080",
-				trafficAccessToken: "traffic-token",
-				turnRequest: makeTurnRequest(),
-				onTextDelta: async () => {},
-				onSessionId: async () => {},
-			});
-			await expect(promise).rejects.toBeInstanceOf(
-				ConversationScopeConflictError,
-			);
-			await expect(promise).rejects.not.toBeInstanceOf(ConversationBusyError);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

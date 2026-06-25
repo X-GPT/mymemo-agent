@@ -1,11 +1,5 @@
-import {
-	ConversationBusyError,
-	ConversationScopeConflictError,
-} from "./errors";
+import { ConversationBusyError } from "./errors";
 import { trafficAccessHeaders } from "./sandbox-provider";
-
-/** The daemon's 409 body for a turn that changes the conversation's scope. */
-const SCOPE_IMMUTABLE_ERROR = "Conversation scope is immutable";
 
 export interface TurnRequest {
 	request_id: string;
@@ -112,23 +106,10 @@ export async function forwardChatTurnToSandbox(
 		});
 
 		if (response.status === 409) {
-			// The daemon returns 409 for two unrelated conditions: a turn already in
-			// flight on this sandbox (retryable backpressure) and a turn that changes
-			// the conversation's immutable scope (never retryable). Reuse makes the
-			// latter reachable in prod, so distinguish them by body — otherwise a
-			// scope conflict tells the user to "try again", which can't succeed.
-			const errBody = await response.text().catch(() => "");
-			let daemonError: string | undefined;
-			try {
-				daemonError = (JSON.parse(errBody) as { error?: string }).error;
-			} catch {
-				daemonError = undefined;
-			}
-			if (daemonError === SCOPE_IMMUTABLE_ERROR) {
-				throw new ConversationScopeConflictError(
-					"This conversation's document scope is fixed; start a new conversation to change it",
-				);
-			}
+			// The daemon 409s when a turn is already in flight on this sandbox.
+			// (It also 409s on an immutable-scope mismatch as defense in depth, but
+			// scope is frozen per conversation and re-sent unchanged each turn, so
+			// chat-api never drives that case — it would only fire on a chat-api bug.)
 			throw new ConversationBusyError(
 				"Sandbox is busy processing another turn",
 			);

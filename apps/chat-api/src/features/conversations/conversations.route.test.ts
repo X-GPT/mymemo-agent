@@ -21,7 +21,6 @@ mock.module("@/features/sandbox-orchestration", () => ({
 		return { status: "completed" };
 	},
 	ConversationBusyError: class extends Error {},
-	ConversationScopeConflictError: class extends Error {},
 }));
 
 const { createApp } = await import("@/index");

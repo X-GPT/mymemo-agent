@@ -7,7 +7,6 @@ import type {
 import { createRun } from "@/features/run-state";
 import {
 	ConversationBusyError,
-	ConversationScopeConflictError,
 	runSandboxChat,
 } from "@/features/sandbox-orchestration";
 import type { RequestLogger } from "@/features/streaming/logger";
@@ -94,14 +93,7 @@ export async function runConversationTurn(
 		});
 		await run.markRunCompleted();
 	} catch (err) {
-		if (err instanceof ConversationScopeConflictError) {
-			// Client reused a conversation with a different document scope — a client
-			// mistake, not a transient fault, so retrying can never succeed.
-			logger.warn({
-				message: "Sandbox chat run rejected: conversation scope conflict",
-			});
-			await run.markRunFailed(new Error(err.message));
-		} else if (err instanceof ConversationBusyError) {
+		if (err instanceof ConversationBusyError) {
 			logger.warn({ message: "Sandbox chat run rejected: conversation busy" });
 			await run.markRunFailed(
 				new Error(

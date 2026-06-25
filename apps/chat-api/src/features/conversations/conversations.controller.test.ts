@@ -22,12 +22,10 @@ type RunOpts = {
 let runSandboxChatImpl: (opts: RunOpts) => Promise<unknown>;
 
 class FakeConversationBusyError extends Error {}
-class FakeConversationScopeConflictError extends Error {}
 
 mock.module("@/features/sandbox-orchestration", () => ({
 	runSandboxChat: (_deps: unknown, opts: RunOpts) => runSandboxChatImpl(opts),
 	ConversationBusyError: FakeConversationBusyError,
-	ConversationScopeConflictError: FakeConversationScopeConflictError,
 }));
 
 const { createConversation, runConversationTurn } = await import(
@@ -243,30 +241,6 @@ describe("runConversationTurn", () => {
 			type: "error",
 			message:
 				"Sandbox is busy processing another request. Please try again shortly.",
-		});
-	});
-
-	it("surfaces a non-retryable message on a conversation scope conflict", async () => {
-		runSandboxChatImpl = async () => {
-			throw new FakeConversationScopeConflictError(
-				"This conversation's document scope is fixed; start a new conversation to change it",
-			);
-		};
-		const { sender, messages } = fakeSender();
-		const { deps } = fakeDeps();
-
-		await runConversationTurn(
-			deps,
-			{ conversation, message: "hi" },
-			sender,
-			logger,
-		);
-
-		// Not the "try again shortly" backpressure message — this can't be retried.
-		expect(messages.at(-1)).toEqual({
-			type: "error",
-			message:
-				"This conversation's document scope is fixed; start a new conversation to change it",
 		});
 	});
 
