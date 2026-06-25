@@ -42,6 +42,12 @@ interface ForwardOptions {
 	turnRequest: TurnRequest;
 	onTextDelta: (text: string) => Promise<void>;
 	onSessionId: (id: string) => Promise<void>;
+	/**
+	 * Aborts the daemon call from outside (e.g. the lease heartbeat found the lease
+	 * was lost). Combined with the internal idle timeout — whichever fires first
+	 * aborts the streamed request.
+	 */
+	abortSignal?: AbortSignal;
 }
 
 /**
@@ -57,6 +63,7 @@ export async function forwardChatTurnToSandbox(
 		turnRequest,
 		onTextDelta,
 		onSessionId,
+		abortSignal,
 	} = options;
 
 	// Idle-based timeout over the streamed body, re-armed on every chunk —
@@ -68,6 +75,12 @@ export async function forwardChatTurnToSandbox(
 	// only trips if the daemon goes fully silent (e.g. the process died).
 	const IDLE_TIMEOUT_MS = 240_000;
 	const idleController = new AbortController();
+	// Fold an external abort (lease lost) into the same controller the fetch uses.
+	const onExternalAbort = () => idleController.abort(abortSignal?.reason);
+	if (abortSignal) {
+		if (abortSignal.aborted) idleController.abort(abortSignal.reason);
+		else abortSignal.addEventListener("abort", onExternalAbort, { once: true });
+	}
 	let idleTimer: ReturnType<typeof setTimeout> | undefined;
 	const armIdle = () => {
 		clearTimeout(idleTimer);
@@ -93,6 +106,10 @@ export async function forwardChatTurnToSandbox(
 		});
 
 		if (response.status === 409) {
+			// The daemon 409s when a turn is already in flight on this sandbox.
+			// (It also 409s on an immutable-scope mismatch as defense in depth, but
+			// scope is frozen per conversation and re-sent unchanged each turn, so
+			// chat-api never drives that case — it would only fire on a chat-api bug.)
 			throw new ConversationBusyError(
 				"Sandbox is busy processing another turn",
 			);
@@ -181,5 +198,6 @@ export async function forwardChatTurnToSandbox(
 		}
 	} finally {
 		clearTimeout(idleTimer);
+		abortSignal?.removeEventListener("abort", onExternalAbort);
 	}
 }

@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import { createDatabase } from "./db/client";
@@ -5,8 +6,10 @@ import {
 	type ConversationStore,
 	PostgresConversationStore,
 } from "./features/conversation-store";
+import { createLeaseStore } from "./features/lease-store";
 import { E2BSandboxProvider } from "./features/sandbox-orchestration/e2b-sandbox-provider";
 import { LocalContainerSandboxProvider } from "./features/sandbox-orchestration/local-container-sandbox-provider";
+import { SandboxLeaseManager } from "./features/sandbox-orchestration/sandbox-lease-manager";
 import type { SandboxProvider } from "./features/sandbox-orchestration/sandbox-provider";
 import {
 	createLocalWorkspaceStore,
@@ -25,6 +28,11 @@ export interface AppDeps {
 	workspaceStore: WorkspaceStore;
 	/** Durable conversation registry (source of truth for frozen scope). */
 	conversationStore: ConversationStore;
+	/**
+	 * Warm-sandbox leasing for the turn path. Every turn leases its sandbox
+	 * through this (reused across a conversation's turns, created on a miss).
+	 */
+	leaseManager: SandboxLeaseManager;
 }
 
 /** Hono environment: pino logger vars plus the injected `AppDeps`. */
@@ -37,8 +45,22 @@ export function createDeps(config: ApiConfig): AppDeps {
 			: new E2BSandboxProvider(config);
 	const workspaceStore = createLocalWorkspaceStore(config.workspaceStoreRoot);
 	// One Drizzle pool over the writable DB, shared by every store (the lease
-	// store reuses it once leasing is wired) rather than a pool per store.
+	// store reuses it) rather than a pool per store.
 	const database = createDatabase(config.databaseUrl);
 	const conversationStore = new PostgresConversationStore(database);
-	return { config, sandboxProvider, workspaceStore, conversationStore };
+	// Per-process identity for the ownership lease: stable for this process's
+	// lifetime, unique across replicas (and across a restart), so a crashed
+	// process's leases expire rather than being mistaken for a live owner's.
+	const ownerId = `${hostname()}:${process.pid}:${crypto.randomUUID()}`;
+	const leaseManager = new SandboxLeaseManager(
+		{ sandboxProvider, leaseStore: createLeaseStore(database), workspaceStore },
+		ownerId,
+	);
+	return {
+		config,
+		sandboxProvider,
+		workspaceStore,
+		conversationStore,
+		leaseManager,
+	};
 }

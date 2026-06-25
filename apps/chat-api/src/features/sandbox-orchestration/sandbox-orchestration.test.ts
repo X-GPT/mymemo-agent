@@ -10,7 +10,10 @@ import {
 import { verifyLlmToken } from "@mymemo/llm-token";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
+import type { LeaseRef, LeaseStore } from "@/features/lease-store";
 import type { RequestLogger } from "@/features/streaming/logger";
+import { ConversationBusyError } from "./errors";
+import { SandboxLeaseManager } from "./sandbox-lease-manager";
 import {
 	type RunSandboxChatOptions,
 	runSandboxChat,
@@ -38,8 +41,90 @@ const config: ApiConfig = {
 	gatewayPublicUrl: "https://gateway.test",
 	logLevel: "info",
 	workspaceStoreRoot: "/tmp/workspace-store-test",
-	databaseUrl: "postgresql://test:test@localhost:5432/test",
+	databaseUrl: "postgresql://test/mymemo_agent",
 };
+
+const DAEMON = {
+	url: "http://daemon:8080",
+	trafficAccessToken: "test-traffic-token",
+};
+
+interface Row {
+	ownerId: string | null;
+	fencingToken: number;
+	expiresAt: number | null;
+	sandboxId: string | null;
+	agentSessionId: string | null;
+}
+
+/** In-memory {@link LeaseStore} mirroring the Postgres CAS semantics. */
+class FakeLeaseStore implements LeaseStore {
+	readonly rows = new Map<string, Row>();
+	private key(ref: LeaseRef) {
+		return `${ref.userId}\0${ref.conversationId}`;
+	}
+	async claimLease(ref: LeaseRef, ownerId: string, ttlMs: number) {
+		const row = this.rows.get(this.key(ref));
+		const free =
+			!row ||
+			row.ownerId === null ||
+			(row.expiresAt !== null && row.expiresAt < Date.now());
+		if (row && !free) return null;
+		const token = (row?.fencingToken ?? 0) + 1;
+		const next: Row = {
+			ownerId,
+			fencingToken: token,
+			expiresAt: Date.now() + ttlMs,
+			sandboxId: row?.sandboxId ?? null,
+			agentSessionId: row?.agentSessionId ?? null,
+		};
+		this.rows.set(this.key(ref), next);
+		return {
+			fencingToken: token,
+			sandboxId: next.sandboxId,
+			agentSessionId: next.agentSessionId,
+		};
+	}
+	async renewLease(ref: LeaseRef, ownerId: string, token: number, ttlMs: number) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token)
+			return false;
+		row.expiresAt = Date.now() + ttlMs;
+		return true;
+	}
+	async releaseLease(
+		ref: LeaseRef,
+		ownerId: string,
+		token: number,
+		pointer: { sandboxId: string; agentSessionId: string | null },
+	) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token) return;
+		row.ownerId = null;
+		row.expiresAt = null;
+		row.sandboxId = pointer.sandboxId;
+		row.agentSessionId = pointer.agentSessionId;
+	}
+	async dropLease(ref: LeaseRef, ownerId: string, token: number) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token) return;
+		this.rows.delete(this.key(ref));
+	}
+	async get(ref: LeaseRef) {
+		const row = this.rows.get(this.key(ref));
+		return row
+			? {
+					userId: ref.userId,
+					conversationId: ref.conversationId,
+					sandboxId: row.sandboxId,
+					agentSessionId: row.agentSessionId,
+				}
+			: null;
+	}
+	async delete(ref: LeaseRef) {
+		this.rows.delete(this.key(ref));
+	}
+}
 
 function makeOptions(
 	overrides: Partial<RunSandboxChatOptions> = {},
@@ -64,38 +149,64 @@ function makeOptions(
 
 describe("runSandboxChat", () => {
 	let createSandbox: ReturnType<typeof mock>;
+	let connectSandbox: ReturnType<typeof mock>;
 	let ensureSandboxDaemon: ReturnType<typeof mock>;
+	let daemonEndpoint: ReturnType<typeof mock>;
+	let setSandboxTimeout: ReturnType<typeof mock>;
 	let killSandbox: ReturnType<typeof mock>;
 	let cancelSandbox: ReturnType<typeof mock>;
 	let hydrate: ReturnType<typeof mock>;
 	let sync: ReturnType<typeof mock>;
 	let forwardTurn: ReturnType<typeof spyOn>;
+	let leaseStore: FakeLeaseStore;
 	let deps: AppDeps;
 
 	beforeEach(() => {
-		const sandbox = createMockSandbox();
-		createSandbox = mock(async () => sandbox);
-		ensureSandboxDaemon = mock(async () => ({
-			url: "http://daemon:8080",
-			trafficAccessToken: "test-traffic-token",
-		}));
+		// A fresh create returns sbx-123; reuse reattaches to the same id.
+		createSandbox = mock(async () => createMockSandbox());
+		connectSandbox = mock(async (sandboxId: string) => ({ sandboxId }));
+		ensureSandboxDaemon = mock(async () => DAEMON);
+		daemonEndpoint = mock(() => DAEMON);
+		setSandboxTimeout = mock(async () => undefined);
 		killSandbox = mock(async () => undefined);
 		cancelSandbox = mock(async () => undefined);
 		hydrate = mock(async () => undefined);
 		sync = mock(async () => undefined);
+		leaseStore = new FakeLeaseStore();
+
+		const sandboxProvider = {
+			createSandbox,
+			connectSandbox,
+			daemonEndpoint,
+			setSandboxTimeout,
+			ensureSandboxDaemon,
+			killSandbox,
+			cancelSandbox,
+		};
+		const workspaceStore = {
+			hydrateConversationWorkspace: hydrate,
+			syncConversationWorkspace: sync,
+		};
+		const leaseManager = new SandboxLeaseManager(
+			{
+				// biome-ignore lint/suspicious/noExplicitAny: partial provider mock for the lease seam.
+				sandboxProvider: sandboxProvider as any,
+				leaseStore,
+				// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync are used.
+				workspaceStore: workspaceStore as any,
+			},
+			"owner-test",
+			// Heartbeat far longer than any test, so it never fires mid-test.
+			{ heartbeatIntervalMs: 1_000_000 },
+		);
 
 		deps = {
 			config,
-			sandboxProvider: {
-				createSandbox,
-				ensureSandboxDaemon,
-				killSandbox,
-				cancelSandbox,
-			},
-			workspaceStore: {
-				hydrateConversationWorkspace: hydrate,
-				syncConversationWorkspace: sync,
-			},
+			// biome-ignore lint/suspicious/noExplicitAny: orchestration only reads leaseManager + config.
+			sandboxProvider: sandboxProvider as any,
+			// biome-ignore lint/suspicious/noExplicitAny: orchestration no longer touches the store directly.
+			workspaceStore: workspaceStore as any,
+			leaseManager,
 		} as unknown as AppDeps;
 
 		// forwardChatTurnToSandbox stays a module import in runSandboxChat, so spy it.
@@ -110,12 +221,12 @@ describe("runSandboxChat", () => {
 		mock.restore();
 	});
 
-	it("forwards turn to daemon and returns completed", async () => {
+	it("leases a sandbox, forwards the turn to its daemon, and returns completed", async () => {
 		const result = await runSandboxChat(deps, makeOptions());
 
 		expect(result).toEqual({ status: "completed" });
-		expect(createSandbox).toHaveBeenCalled();
-		expect(ensureSandboxDaemon).toHaveBeenCalled();
+		expect(createSandbox).toHaveBeenCalledTimes(1);
+		expect(ensureSandboxDaemon).toHaveBeenCalledTimes(1);
 		expect(forwardTurn).toHaveBeenCalledWith(
 			expect.objectContaining({
 				daemonUrl: "http://daemon:8080",
@@ -209,10 +320,7 @@ describe("runSandboxChat", () => {
 			expect(opts.turnRequest.agent_session_id).toBe("client-session");
 		});
 
-		await runSandboxChat(
-			deps,
-			makeOptions({ agentSessionId: "client-session" }),
-		);
+		await runSandboxChat(deps, makeOptions({ agentSessionId: "client-session" }));
 	});
 
 	it("omits agent_session_id when no agentSessionId provided", async () => {
@@ -223,25 +331,49 @@ describe("runSandboxChat", () => {
 		await runSandboxChat(deps, makeOptions({ agentSessionId: null }));
 	});
 
-	it("always creates a fresh sandbox for the user", async () => {
+	it("reuses one warm sandbox across consecutive turns in a conversation", async () => {
+		await runSandboxChat(deps, makeOptions());
 		await runSandboxChat(deps, makeOptions());
 
-		expect(createSandbox).toHaveBeenCalledWith("user-1", expect.anything());
-		// Ephemeral: the sandbox is torn down once the turn completes.
-		expect(killSandbox).toHaveBeenCalled();
+		expect(createSandbox).toHaveBeenCalledTimes(1);
+		expect(connectSandbox).toHaveBeenCalledTimes(1);
+		expect(ensureSandboxDaemon).toHaveBeenCalledTimes(1);
 	});
 
-	it("kills the sandbox even when the turn fails", async () => {
-		forwardTurn.mockRejectedValue(new Error("daemon unreachable"));
+	it("does not share a sandbox across conversations", async () => {
+		await runSandboxChat(deps, makeOptions({ conversationId: "conv-1" }));
+		await runSandboxChat(deps, makeOptions({ conversationId: "conv-2" }));
 
-		await expect(runSandboxChat(deps, makeOptions())).rejects.toThrow(
-			"daemon unreachable",
-		);
-
-		expect(killSandbox).toHaveBeenCalled();
+		expect(createSandbox).toHaveBeenCalledTimes(2);
 	});
 
-	it("invokes onSandboxId with the resolved sandbox id", async () => {
+	it("keeps the sandbox warm on release — it does not kill it", async () => {
+		await runSandboxChat(deps, makeOptions());
+
+		expect(killSandbox).not.toHaveBeenCalled();
+		expect(
+			await leaseStore.get({ userId: "user-1", conversationId: "conv-1" }),
+		).not.toBeNull();
+	});
+
+	it("rejects a concurrent turn for the same conversation as busy", async () => {
+		let releaseForward: () => void = () => {};
+		const forwardGate = new Promise<void>((resolve) => {
+			releaseForward = resolve;
+		});
+		forwardTurn.mockImplementation(() => forwardGate);
+
+		const first = runSandboxChat(deps, makeOptions());
+		const second = runSandboxChat(deps, makeOptions());
+
+		await expect(second).rejects.toBeInstanceOf(ConversationBusyError);
+		expect(createSandbox).toHaveBeenCalledTimes(1);
+
+		releaseForward();
+		await first;
+	});
+
+	it("invokes onSandboxId with the leased sandbox id", async () => {
 		const received: string[] = [];
 		await runSandboxChat(
 			deps,
@@ -259,10 +391,7 @@ describe("runSandboxChat", () => {
 		const order: string[] = [];
 		ensureSandboxDaemon.mockImplementation(async () => {
 			order.push("ensureDaemon");
-			return {
-				url: "http://daemon:8080",
-				trafficAccessToken: "test-traffic-token",
-			};
+			return DAEMON;
 		});
 		forwardTurn.mockImplementation(async () => {
 			order.push("forward");
@@ -373,13 +502,12 @@ describe("runSandboxChat", () => {
 		expect(sync).toHaveBeenCalled();
 	});
 
-	it("does not let a sync failure mask the turn result or skip teardown", async () => {
+	it("does not let a sync failure mask the turn result", async () => {
 		sync.mockRejectedValue(new Error("durable store down"));
 
 		const result = await runSandboxChat(deps, makeOptions());
 
 		expect(result).toEqual({ status: "completed" });
-		expect(killSandbox).toHaveBeenCalled();
 	});
 
 	it("propagates proxy errors", async () => {

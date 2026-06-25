@@ -1,6 +1,7 @@
-import type { LeaseRecord, LeaseRef, LeaseStore } from "@/features/lease-store";
+import type { LeaseRef, LeaseStore } from "@/features/lease-store";
 import type { WorkspaceStore } from "@/features/workspace-store";
 import { ConversationBusyError, SandboxCreationError } from "./errors";
+import { LeaseHeartbeat } from "./lease-heartbeat";
 import type {
 	SandboxDaemonEndpoint,
 	SandboxHandle,
@@ -10,56 +11,67 @@ import type {
 
 /**
  * Sandbox leasing (Milestone 5). A sandbox is leased by `{userId, conversationId}`
- * and reused across turns while warm, instead of the per-turn create/kill of
- * `runSandboxChat`.
+ * and reused across turns while warm, instead of per-turn create/kill.
  *
- * The warm pointer lives in the durable {@link LeaseStore} (Postgres), not a
- * per-process Map, so a restarted process or second replica finds and reuses the
- * same sandbox. The store holds only the sandbox id + daemon endpoint (a live
- * handle is an unserializable network client), so reuse reattaches through
- * `SandboxProvider.connectSandbox`.
+ * Concurrency is an **ownership lease** in Postgres (see {@link LeaseStore}):
+ * `acquire` claims the conversation via an atomic CAS — granted only if the lease
+ * is free or expired — so two replicas can never both create a sandbox for one
+ * conversation, and a concurrent turn is rejected with `ConversationBusyError`.
+ * A {@link LeaseHeartbeat} renews the lease (and the sandbox's E2B timeout) while
+ * the turn runs, so a turn longer than the idle window isn't killed mid-stream;
+ * if the heartbeat finds the lease was stolen (this process stalled past the TTL)
+ * it aborts the turn. A crashed owner's lease simply expires and another replica
+ * takes over — no TTL-free advisory lock, no in-process guard.
  *
- * Idle has one clock: the sandbox's own E2B auto-shutdown timeout, reset to
- * `idleTimeoutMs` on every acquire/release. The idle window *is* the sandbox's
- * lifetime — E2B reaps an idle sandbox itself and the next acquire finds a stale
- * pointer and recreates — so `release` keeps it warm without leaking. A proactive
- * reaper, keep-alive for long turns, and health/version-drift recycle gating are
- * follow-ups (Tasks 14–15); `terminate` is the teardown hook they drive.
- *
- * Concurrency policy: **reject** — a second in-flight turn for a conversation
- * throws `ConversationBusyError`. The guard is per-process; the daemon's
- * single-turn lock 409s two turns reusing the *same* warm sandbox, but neither
- * covers a cross-replica race where both replicas `acquireFresh` and the
- * conflicting upsert orphans one. A DB-level guard (conditional insert / advisory
- * lock) would close that gap.
+ * `release` ends the turn: on success it keeps the sandbox warm and persists the
+ * pointer; on failure it drops the lease and kills the sandbox (so the next turn
+ * never reattaches a broken one). The warm sandbox's own E2B auto-shutdown
+ * timeout reaps it if no turn reuses it within the idle window. Health/version
+ * recycle gating before reuse is a follow-up (MYM-19); `terminate` is the
+ * unconditional teardown hook cancellation/recycle drive.
  */
 
+/** Default lease TTL: the deadline the heartbeat renews. Short, so a crashed
+ * owner frees its conversation quickly — the heartbeat decouples this from turn
+ * length, so long turns are fine. */
+export const DEFAULT_LEASE_TTL_MS = 30_000;
+/** How often the heartbeat renews the lease (well under the TTL). */
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
+/** Idle window before E2B auto-kills an inactive warm sandbox (between turns). */
+export const DEFAULT_SANDBOX_IDLE_TIMEOUT_MS = 5 * 60_000;
+
 export interface AcquireOptions {
-	/**
-	 * Claude SDK resume state to thread into the turn. On a fresh (non-reused)
-	 * sandbox this is what lets the daemon's SessionStore resume prior agent
-	 * context; on a warm reuse the live process already holds it.
-	 */
+	/** Claude SDK resume state to thread into the turn (overrides the recorded
+	 * session; an explicit `null` starts fresh). */
 	agentSessionId?: string | null;
+}
+
+export interface SandboxLeaseManagerOptions {
+	idleTimeoutMs?: number;
+	leaseTtlMs?: number;
+	heartbeatIntervalMs?: number;
 }
 
 /**
  * A held lease on a sandbox for one turn. The caller forwards the turn through
- * `sandbox` + `daemon`, then must `release` the lease.
+ * `sandbox` + `daemon` (passing `abortSignal` to the daemon call so a lost lease
+ * aborts it), then must `release` the lease.
  */
 export interface SandboxLease {
 	readonly userId: string;
 	readonly conversationId: string;
 	readonly sandbox: SandboxHandle;
 	readonly daemon: SandboxDaemonEndpoint;
-	/**
-	 * True when an existing warm sandbox was reused; false when this acquisition
-	 * created and hydrated a fresh one. Lets run events / logs distinguish warm
-	 * reuse from a fresh hydrate+resume.
-	 */
+	/** True when an existing warm sandbox was reused; false when freshly created. */
 	readonly reused: boolean;
 	/** Resume state threaded into the turn (null when starting fresh). */
 	readonly agentSessionId: string | null;
+	/** This hold's fencing token — guards the heartbeat/release writes. */
+	readonly fencingToken: number;
+	/** Aborts when the turn must stop (the lease was lost mid-turn). */
+	readonly abortSignal: AbortSignal;
+	/** Stops this turn's heartbeat. Internal — called by `release`. */
+	readonly stopHeartbeat: () => void;
 }
 
 export interface SandboxLeaseManagerDeps {
@@ -71,30 +83,6 @@ export interface SandboxLeaseManagerDeps {
 	>;
 }
 
-/**
- * Default idle window before E2B auto-kills an inactive warm sandbox. 5 minutes
- * matches the plan's idle policy (Task 14); a constructor option so config can
- * override it.
- */
-export const DEFAULT_SANDBOX_IDLE_TIMEOUT_MS = 5 * 60_000;
-
-/**
- * `userId` and `conversationId` are caller-supplied opaque strings. A naive
- * `${userId}:${conversationId}` join would collide (`a` + `b:c` vs `a:b` + `c`),
- * which would let one conversation's in-flight guard mask another's. A NUL
- * separator — which neither id can contain — keeps the key injective. (Durable
- * isolation is enforced separately by the store's composite primary key.)
- */
-function inFlightKey(ref: LeaseRef): string {
-	return `${ref.userId}\0${ref.conversationId}`;
-}
-
-/**
- * Resolve the session to thread into a turn. An explicit `opts.agentSessionId`
- * wins — *including an explicit `null`*, which means "start a fresh session", so
- * a caller can reset a warm conversation. Only when the caller omits the field
- * entirely (`undefined`) do we fall back to the conversation's recorded session.
- */
 function resolveAgentSessionId(
 	opts: AcquireOptions,
 	fallback: string | null,
@@ -103,114 +91,175 @@ function resolveAgentSessionId(
 }
 
 export class SandboxLeaseManager {
-	/** Keys of conversations with a turn currently in flight (reject policy). */
-	private readonly inFlight = new Set<string>();
+	private readonly idleTimeoutMs: number;
+	private readonly leaseTtlMs: number;
+	private readonly heartbeatIntervalMs: number;
 
 	constructor(
 		private readonly deps: SandboxLeaseManagerDeps,
-		/** Idle window the sandbox timeout is reset to on each acquire/release. */
-		private readonly idleTimeoutMs: number = DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
-	) {}
+		/** This process instance's identity — who holds a lease. Minted at boot. */
+		private readonly ownerId: string,
+		options: SandboxLeaseManagerOptions = {},
+	) {
+		this.idleTimeoutMs =
+			options.idleTimeoutMs ?? DEFAULT_SANDBOX_IDLE_TIMEOUT_MS;
+		this.leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+		this.heartbeatIntervalMs =
+			options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+	}
 
 	/**
-	 * Lease a sandbox for one turn of `{userId, conversationId}`.
-	 *
-	 * - A persisted warm lease whose sandbox still reattaches is reused
-	 *   (`reused: true`).
-	 * - A conversation whose turn is still in flight is rejected with
-	 *   `ConversationBusyError` (the reject concurrency policy).
-	 * - Otherwise — no lease, or a stale one whose sandbox is gone — the durable
-	 *   workspace is hydrated and a fresh sandbox + daemon are created
-	 *   (`reused: false`). A `SandboxCreationError` is retried once, matching the
-	 *   per-turn path's transient-create handling.
+	 * Lease a sandbox for one turn of `{userId, conversationId}`. Claims the
+	 * conversation's ownership lease (rejecting with `ConversationBusyError` when
+	 * another turn holds it), reuses the warm sandbox the claim points at or
+	 * creates a fresh one, and starts the heartbeat. A `SandboxCreationError` is
+	 * retried once. If the lease can't be made usable, the held lease is dropped so
+	 * the conversation isn't wedged owned-but-dead.
 	 */
 	async acquire(
 		ref: LeaseRef,
 		logger: SyncLogger,
 		opts: AcquireOptions = {},
 	): Promise<SandboxLease> {
-		const key = inFlightKey(ref);
-		// No await between the check and the add, so two concurrent acquires for the
-		// same conversation can't both pass: the second sees the in-flight key.
-		if (this.inFlight.has(key)) {
+		const claim = await this.deps.leaseStore.claimLease(
+			ref,
+			this.ownerId,
+			this.leaseTtlMs,
+		);
+		if (!claim) {
 			throw new ConversationBusyError(
 				`Conversation ${ref.conversationId} already has a turn in flight`,
 			);
 		}
-		this.inFlight.add(key);
+		const { fencingToken } = claim;
+		const agentSessionId = resolveAgentSessionId(opts, claim.agentSessionId);
 
 		try {
-			// Read the pointer once. tryReuse may delete it (stale), so capture the
-			// recorded session first and carry it into a fresh create — a recycled
-			// sandbox should resume the conversation, not start blank.
-			const record = await this.deps.leaseStore.get(ref);
-			if (record) {
-				const reused = await this.tryReuse(ref, record, logger, opts);
-				if (reused) return reused;
-			}
-			return await this.acquireFresh(
-				ref,
-				logger,
-				resolveAgentSessionId(opts, record?.agentSessionId ?? null),
+			const reused = claim.sandboxId
+				? await this.tryReuse(claim.sandboxId, logger)
+				: null;
+			const parts = reused ?? (await this.acquireFresh(ref, logger));
+
+			const controller = new AbortController();
+			const heartbeat = new LeaseHeartbeat(
+				() => this.beat(ref, fencingToken, parts.sandbox, logger),
+				() => {
+					logger.error({
+						msg: "Lease lost mid-turn, aborting",
+						userId: ref.userId,
+						conversationId: ref.conversationId,
+					});
+					controller.abort();
+				},
+				this.heartbeatIntervalMs,
 			);
+			heartbeat.start();
+
+			logger.info({
+				msg: parts.reused ? "Reusing warm sandbox lease" : "Leased fresh sandbox",
+				userId: ref.userId,
+				conversationId: ref.conversationId,
+				sandboxId: parts.sandbox.sandboxId,
+				reused: parts.reused,
+				resuming: agentSessionId !== null,
+			});
+
+			return {
+				userId: ref.userId,
+				conversationId: ref.conversationId,
+				sandbox: parts.sandbox,
+				daemon: parts.daemon,
+				reused: parts.reused,
+				agentSessionId,
+				fencingToken,
+				abortSignal: controller.signal,
+				stopHeartbeat: () => heartbeat.stop(),
+			};
 		} catch (err) {
-			// Free the guard on any failure so the conversation isn't wedged; a
-			// successful acquire keeps the key held until `release`.
-			this.inFlight.delete(key);
+			// We hold the lease but couldn't produce a usable sandbox — drop it so
+			// the conversation is immediately claimable again, not wedged.
+			await this.deps.leaseStore
+				.dropLease(ref, this.ownerId, fencingToken)
+				.catch(() => {});
 			throw err;
 		}
 	}
 
 	/**
-	 * End a turn's hold without tearing the sandbox down: sync the durable
-	 * workspace, then free the in-flight guard, leaving the sandbox warm. The guard
-	 * is held until the sync completes so the next turn can't start against the
-	 * same workspace before this turn's state is durably captured. A sync failure
-	 * is logged, not thrown (the turn already finished), but still releases the guard.
+	 * End a turn's hold. On success the sandbox is kept warm and the pointer
+	 * persisted; on failure the lease is dropped and the sandbox killed so the next
+	 * turn never reattaches a broken one. The owner+token guard means a hold stolen
+	 * mid-turn writes nothing. A cleanup error is logged, not thrown.
 	 */
-	async release(lease: SandboxLease, logger: SyncLogger): Promise<void> {
-		// Reset + sync run inside the try so the guard is freed in `finally` no
-		// matter what — a throw must not wedge the conversation as busy.
+	async release(
+		lease: SandboxLease,
+		logger: SyncLogger,
+		opts: { ok: boolean } = { ok: true },
+	): Promise<void> {
+		lease.stopHeartbeat();
+		const ref: LeaseRef = {
+			userId: lease.userId,
+			conversationId: lease.conversationId,
+		};
 		try {
-			// Reset the idle countdown from turn end; E2B auto-kills if no turn reuses.
-			await this.deps.sandboxProvider.setSandboxTimeout(
-				lease.sandbox,
-				this.idleTimeoutMs,
-				logger,
-			);
-			await this.deps.workspaceStore.syncConversationWorkspace({
-				userId: lease.userId,
-				conversationId: lease.conversationId,
-			});
+			if (opts.ok) {
+				// Reset the idle countdown from turn end, sync, persist + free the lease.
+				await this.deps.sandboxProvider.setSandboxTimeout(
+					lease.sandbox,
+					this.idleTimeoutMs,
+					logger,
+				);
+				await this.deps.workspaceStore.syncConversationWorkspace(ref);
+				await this.deps.leaseStore.releaseLease(
+					ref,
+					this.ownerId,
+					lease.fencingToken,
+					{
+						sandboxId: lease.sandbox.sandboxId,
+						agentSessionId: lease.agentSessionId,
+					},
+				);
+			} else {
+				// Failed turn: drop the lease and tear the sandbox down (an abandoned
+				// daemon turn keeps running otherwise, and the next turn would reattach
+				// a broken/busy sandbox). Sync first so any durable state is captured.
+				await this.deps.workspaceStore
+					.syncConversationWorkspace(ref)
+					.catch((err) => {
+						logger.error({
+							msg: "Workspace sync before terminate failed",
+							userId: ref.userId,
+							conversationId: ref.conversationId,
+							error: err instanceof Error ? err.message : String(err),
+						});
+					});
+				await this.deps.leaseStore.dropLease(ref, this.ownerId, lease.fencingToken);
+				await this.deps.sandboxProvider.killSandbox(
+					lease.userId,
+					lease.sandbox,
+					logger,
+				);
+			}
 		} catch (err) {
 			logger.error({
 				msg: "Lease release cleanup failed",
 				userId: lease.userId,
 				conversationId: lease.conversationId,
+				ok: opts.ok,
 				error: err instanceof Error ? err.message : String(err),
 			});
-		} finally {
-			this.inFlight.delete(inFlightKey(lease));
 		}
 	}
 
 	/**
-	 * Drop a lease and tear its sandbox down. The explicit teardown hook the idle
-	 * reaper (Task 14) and recycle conditions (Task 15) drive. Idempotent and
-	 * best-effort — an unknown lease is a no-op, and a sandbox already reaped
-	 * (connect throws) is still removed from the store — so cancellation racing
-	 * teardown never throws.
+	 * Unconditional teardown hook (cancellation / recycle): kill the sandbox the
+	 * lease points at and delete the row, regardless of owner. Idempotent and
+	 * best-effort — a missing row or already-reaped sandbox is a no-op.
 	 */
 	async terminate(ref: LeaseRef, logger: SyncLogger): Promise<void> {
-		// Hold the guard across teardown so a racing `acquire` can't lease the
-		// sandbox we're killing; clear it in `finally` so the conversation isn't
-		// wedged. (The reaper must not terminate genuinely in-flight leases —
-		// enforced where it is wired, Task 14.)
-		const key = inFlightKey(ref);
-		this.inFlight.add(key);
-		try {
-			const record = await this.deps.leaseStore.get(ref);
-			if (!record) return;
+		const record = await this.deps.leaseStore.get(ref);
+		if (!record) return;
+		if (record.sandboxId) {
 			try {
 				const handle = await this.deps.sandboxProvider.connectSandbox(
 					record.sandboxId,
@@ -218,8 +267,6 @@ export class SandboxLeaseManager {
 				);
 				await this.deps.sandboxProvider.killSandbox(ref.userId, handle, logger);
 			} catch (err) {
-				// connect threw → the sandbox is already gone (reaped / never existed),
-				// so dropping the pointer below is correct.
 				logger.info({
 					msg: "Sandbox already gone on terminate",
 					userId: ref.userId,
@@ -228,139 +275,101 @@ export class SandboxLeaseManager {
 					error: err instanceof Error ? err.message : String(err),
 				});
 			}
-			// Delete only after the kill attempt: deleting first would orphan the
-			// sandbox id before we tried to kill it.
-			await this.deps.leaseStore.delete(ref);
-		} finally {
-			this.inFlight.delete(key);
 		}
+		await this.deps.leaseStore.delete(ref);
+	}
+
+	/** One heartbeat: renew the lease and the sandbox's E2B timeout in parallel. */
+	private async beat(
+		ref: LeaseRef,
+		fencingToken: number,
+		sandbox: SandboxHandle,
+		logger: SyncLogger,
+	): Promise<boolean> {
+		const [held] = await Promise.all([
+			this.deps.leaseStore.renewLease(
+				ref,
+				this.ownerId,
+				fencingToken,
+				this.leaseTtlMs,
+			),
+			// Same beat renews the E2B timeout — this is the long-turn keep-alive.
+			// Best-effort: a failure leaves the prior timeout, never aborts the turn.
+			this.deps.sandboxProvider
+				.setSandboxTimeout(sandbox, this.idleTimeoutMs, logger)
+				.then(
+					() => undefined,
+					() => undefined,
+				),
+		]);
+		return held;
 	}
 
 	/**
-	 * Reattach to a persisted warm lease, or `null` when there is none / it is
-	 * stale (a stale pointer is deleted so the caller falls through to a fresh
-	 * create). The daemon endpoint is recomputed from the reattached handle, never
-	 * read from the store, so it can't be stale relative to the live sandbox.
-	 *
-	 * Staleness here is only "the VM no longer reattaches" — a VM that is up but
-	 * whose daemon died or whose bundle drifted is reused and fails at `/turn`.
-	 * Health / version-drift gating before reuse is Task 15.
+	 * Reattach to the warm sandbox the lease points at, or `null` when it no longer
+	 * reattaches (stale) — the caller then creates a fresh one. The daemon endpoint
+	 * is recomputed from the live handle, never read from the store. Daemon-health /
+	 * version-drift gating before reuse is a follow-up (MYM-19).
 	 */
 	private async tryReuse(
-		ref: LeaseRef,
-		record: LeaseRecord,
+		sandboxId: string,
 		logger: SyncLogger,
-		opts: AcquireOptions,
-	): Promise<SandboxLease | null> {
+	): Promise<{
+		sandbox: SandboxHandle;
+		daemon: SandboxDaemonEndpoint;
+		reused: boolean;
+	} | null> {
 		let sandbox: SandboxHandle;
 		try {
-			sandbox = await this.deps.sandboxProvider.connectSandbox(
-				record.sandboxId,
-				logger,
-			);
+			sandbox = await this.deps.sandboxProvider.connectSandbox(sandboxId, logger);
 		} catch (err) {
 			logger.info({
 				msg: "Warm lease is stale, recreating",
-				userId: ref.userId,
-				conversationId: ref.conversationId,
-				sandboxId: record.sandboxId,
+				sandboxId,
 				error: err instanceof Error ? err.message : String(err),
 			});
-			await this.deps.leaseStore.delete(ref);
 			return null;
 		}
-
-		// Reset the idle countdown: the sandbox may have been near expiry, and the
-		// new turn needs a full window so E2B doesn't kill it mid-turn.
 		await this.deps.sandboxProvider.setSandboxTimeout(
 			sandbox,
 			this.idleTimeoutMs,
 			logger,
 		);
-
-		// A reused live process already holds its resume state; honor an explicit
-		// override (including an explicit null = start fresh) but otherwise carry
-		// the conversation's recorded session forward.
-		const agentSessionId = resolveAgentSessionId(opts, record.agentSessionId);
-
-		// Reuse is a use: re-persist so `updated_at` advances. The idle reaper
-		// (Task 14) ages leases by that timestamp, so without this a continuously
-		// reused sandbox would look idle and be reaped mid-use. Also persists an
-		// explicit session override so the row doesn't drift from the live lease.
-		await this.deps.leaseStore.upsert({ ...record, agentSessionId });
-
-		logger.info({
-			msg: "Reusing warm sandbox lease",
-			userId: ref.userId,
-			conversationId: ref.conversationId,
-			sandboxId: record.sandboxId,
-			reused: true,
-			resuming: agentSessionId !== null,
-		});
 		return {
-			userId: ref.userId,
-			conversationId: ref.conversationId,
 			sandbox,
-			// Derived from the reattached handle, not the store — can't be stale.
 			daemon: this.deps.sandboxProvider.daemonEndpoint(sandbox),
 			reused: true,
-			agentSessionId,
 		};
 	}
 
 	/**
-	 * Create a fresh sandbox for the conversation, hydrate its durable workspace,
-	 * and persist the new warm-lease pointer.
+	 * Create a fresh sandbox for the conversation and hydrate its durable
+	 * workspace. The warm pointer is written at `release`, not here, so a crash
+	 * before release leaves only an expired lease (the half-created sandbox is
+	 * reaped by E2B). A created sandbox that can't be made usable is torn down.
 	 */
 	private async acquireFresh(
 		ref: LeaseRef,
 		logger: SyncLogger,
-		agentSessionId: string | null,
-	): Promise<SandboxLease> {
+	): Promise<{
+		sandbox: SandboxHandle;
+		daemon: SandboxDaemonEndpoint;
+		reused: boolean;
+	}> {
 		await this.deps.workspaceStore.hydrateConversationWorkspace(ref);
 		const sandbox = await this.createWithRetry(ref.userId, logger);
-
-		// The sandbox now exists; anything past this that throws must tear it down,
-		// or a created-but-unusable sandbox leaks (no caller `finally` here, since
-		// no lease was handed back).
 		try {
-			// Set the warm window explicitly rather than riding E2B's default, so the
-			// lease's idle policy and the sandbox's lifetime are one clock.
 			await this.deps.sandboxProvider.setSandboxTimeout(
 				sandbox,
 				this.idleTimeoutMs,
 				logger,
 			);
-
 			const daemon = await this.deps.sandboxProvider.ensureSandboxDaemon(
 				ref.userId,
 				sandbox,
 				logger,
 			);
-
-			await this.deps.leaseStore.upsert({
-				userId: ref.userId,
-				conversationId: ref.conversationId,
-				sandboxId: sandbox.sandboxId,
-				agentSessionId,
-			});
-
-			logger.info({
-				msg: "Leased fresh sandbox",
-				userId: ref.userId,
-				conversationId: ref.conversationId,
-				sandboxId: sandbox.sandboxId,
-				reused: false,
-				resuming: agentSessionId !== null,
-			});
-			return {
-				userId: ref.userId,
-				conversationId: ref.conversationId,
-				sandbox,
-				daemon,
-				reused: false,
-				agentSessionId,
-			};
+			return { sandbox, daemon, reused: false };
 		} catch (err) {
 			await this.deps.sandboxProvider.killSandbox(ref.userId, sandbox, logger);
 			throw err;

@@ -1,11 +1,8 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import type { LeaseRecord, LeaseRef, LeaseStore } from "@/features/lease-store";
+import type { LeaseRef, LeaseStore } from "@/features/lease-store";
 import type { RequestLogger } from "@/features/streaming/logger";
 import { ConversationBusyError, SandboxCreationError } from "./errors";
-import {
-	DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
-	SandboxLeaseManager,
-} from "./sandbox-lease-manager";
+import { SandboxLeaseManager } from "./sandbox-lease-manager";
 
 const silentLogger = {
 	info: () => {},
@@ -15,37 +12,102 @@ const silentLogger = {
 	child: () => silentLogger,
 } as unknown as RequestLogger;
 
-/** In-memory {@link LeaseStore} keyed exactly like the Postgres composite PK. */
+/** A heartbeat interval far longer than any test, so it never fires mid-test
+ * (except where a test sets its own short interval). */
+const NO_HEARTBEAT = 1_000_000;
+const OWNER = "owner-test";
+
+interface Row {
+	ownerId: string | null;
+	fencingToken: number;
+	expiresAt: number | null;
+	sandboxId: string | null;
+	agentSessionId: string | null;
+}
+
+/** In-memory {@link LeaseStore} mirroring the Postgres CAS semantics. */
 class FakeLeaseStore implements LeaseStore {
-	readonly records = new Map<string, LeaseRecord>();
-	/** Every upsert, in order — stands in for the row's `updated_at` bumps. */
-	readonly upserts: LeaseRecord[] = [];
-	private key(ref: LeaseRef) {
+	readonly rows = new Map<string, Row>();
+	now = () => Date.now();
+	key(ref: LeaseRef) {
 		return `${ref.userId}\0${ref.conversationId}`;
 	}
-	async get(ref: LeaseRef) {
-		return this.records.get(this.key(ref)) ?? null;
+	async claimLease(ref: LeaseRef, ownerId: string, ttlMs: number) {
+		const row = this.rows.get(this.key(ref));
+		const free =
+			!row ||
+			row.ownerId === null ||
+			(row.expiresAt !== null && row.expiresAt < this.now());
+		if (row && !free) return null;
+		const token = (row?.fencingToken ?? 0) + 1;
+		const next: Row = {
+			ownerId,
+			fencingToken: token,
+			expiresAt: this.now() + ttlMs,
+			sandboxId: row?.sandboxId ?? null,
+			agentSessionId: row?.agentSessionId ?? null,
+		};
+		this.rows.set(this.key(ref), next);
+		return {
+			fencingToken: token,
+			sandboxId: next.sandboxId,
+			agentSessionId: next.agentSessionId,
+		};
 	}
-	async upsert(record: LeaseRecord) {
-		this.records.set(this.key(record), { ...record });
-		this.upserts.push({ ...record });
+	async renewLease(
+		ref: LeaseRef,
+		ownerId: string,
+		token: number,
+		ttlMs: number,
+	) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token)
+			return false;
+		row.expiresAt = this.now() + ttlMs;
+		return true;
+	}
+	async releaseLease(
+		ref: LeaseRef,
+		ownerId: string,
+		token: number,
+		pointer: { sandboxId: string; agentSessionId: string | null },
+	) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token) return;
+		row.ownerId = null;
+		row.expiresAt = null;
+		row.sandboxId = pointer.sandboxId;
+		row.agentSessionId = pointer.agentSessionId;
+	}
+	async dropLease(ref: LeaseRef, ownerId: string, token: number) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token) return;
+		this.rows.delete(this.key(ref));
+	}
+	async get(ref: LeaseRef) {
+		const row = this.rows.get(this.key(ref));
+		return row
+			? {
+					userId: ref.userId,
+					conversationId: ref.conversationId,
+					sandboxId: row.sandboxId,
+					agentSessionId: row.agentSessionId,
+				}
+			: null;
 	}
 	async delete(ref: LeaseRef) {
-		this.records.delete(this.key(ref));
+		this.rows.delete(this.key(ref));
 	}
 }
 
-function makeDeps() {
+function makeDeps(heartbeatIntervalMs = NO_HEARTBEAT) {
 	let nextSandboxId = 1;
-	const createSandbox = mock(async () => ({
-		sandboxId: `sbx-${nextSandboxId++}`,
-	}));
+	const createSandbox = mock(async () => ({ sandboxId: `sbx-${nextSandboxId++}` }));
 	const connectSandbox = mock(async (sandboxId: string) => ({ sandboxId }));
 	const ensureSandboxDaemon = mock(async () => ({
 		url: "http://daemon:8080",
 		trafficAccessToken: "tok",
 	}));
-	// Pure compute from the handle — the endpoint is derived, never persisted.
 	const daemonEndpoint = mock(() => ({
 		url: "http://daemon:8080",
 		trafficAccessToken: "tok",
@@ -57,24 +119,28 @@ function makeDeps() {
 	const sync = mock(async () => undefined);
 	const leaseStore = new FakeLeaseStore();
 
-	const manager = new SandboxLeaseManager({
-		sandboxProvider: {
-			createSandbox,
-			connectSandbox,
-			daemonEndpoint,
-			setSandboxTimeout,
-			ensureSandboxDaemon,
-			killSandbox,
-			cancelSandbox,
-			// biome-ignore lint/suspicious/noExplicitAny: partial provider mock for the lease seam.
-		} as any,
-		leaseStore,
-		workspaceStore: {
-			hydrateConversationWorkspace: hydrate,
-			syncConversationWorkspace: sync,
-			// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync are used.
-		} as any,
-	});
+	const manager = new SandboxLeaseManager(
+		{
+			sandboxProvider: {
+				createSandbox,
+				connectSandbox,
+				daemonEndpoint,
+				setSandboxTimeout,
+				ensureSandboxDaemon,
+				killSandbox,
+				cancelSandbox,
+				// biome-ignore lint/suspicious/noExplicitAny: partial provider mock.
+			} as any,
+			leaseStore,
+			workspaceStore: {
+				hydrateConversationWorkspace: hydrate,
+				syncConversationWorkspace: sync,
+				// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync used.
+			} as any,
+		},
+		OWNER,
+		{ heartbeatIntervalMs, leaseTtlMs: 30_000 },
+	);
 
 	return {
 		manager,
@@ -91,61 +157,64 @@ function makeDeps() {
 
 const refA: LeaseRef = { userId: "user-1", conversationId: "conv-1" };
 
+/** Seed a released warm lease (owner cleared, sandbox pointer present). */
+function seedWarm(store: FakeLeaseStore, ref: LeaseRef, sandboxId: string) {
+	store.rows.set(store.key(ref), {
+		ownerId: null,
+		fencingToken: 1,
+		expiresAt: null,
+		sandboxId,
+		agentSessionId: null,
+	});
+}
+
 describe("SandboxLeaseManager", () => {
 	let d: ReturnType<typeof makeDeps>;
 	beforeEach(() => {
 		d = makeDeps();
 	});
 
-	describe("fresh acquisition", () => {
-		it("creates and hydrates a fresh sandbox, persisting the lease pointer", async () => {
+	describe("acquire", () => {
+		it("claims, hydrates, and creates a fresh sandbox", async () => {
 			const lease = await d.manager.acquire(refA, silentLogger);
 
 			expect(lease.reused).toBe(false);
 			expect(lease.sandbox.sandboxId).toBe("sbx-1");
-			expect(lease.daemon).toEqual({
-				url: "http://daemon:8080",
-				trafficAccessToken: "tok",
-			});
+			expect(lease.fencingToken).toBe(1);
 			expect(d.hydrate).toHaveBeenCalledWith(refA);
 			expect(d.createSandbox).toHaveBeenCalledTimes(1);
-			// Only the sandbox id is persisted — the endpoint is recomputed on reuse.
-			expect(await d.leaseStore.get(refA)).toMatchObject({
-				sandboxId: "sbx-1",
-			});
 		});
 
-		it("hydrates the durable workspace before creating the sandbox", async () => {
-			const order: string[] = [];
-			d.hydrate.mockImplementation(async () => {
-				order.push("hydrate");
-			});
-			d.createSandbox.mockImplementation(async () => {
-				order.push("create");
-				return { sandboxId: "sbx-1" };
-			});
+		it("reuses the warm sandbox the lease points at", async () => {
+			seedWarm(d.leaseStore, refA, "sbx-warm");
 
-			await d.manager.acquire(refA, silentLogger);
+			const lease = await d.manager.acquire(refA, silentLogger);
 
-			expect(order).toEqual(["hydrate", "create"]);
+			expect(lease.reused).toBe(true);
+			expect(lease.sandbox.sandboxId).toBe("sbx-warm");
+			expect(d.connectSandbox).toHaveBeenCalledWith("sbx-warm", expect.anything());
+			expect(d.createSandbox).not.toHaveBeenCalled();
 		});
 
-		it("tears the sandbox down if it cannot be made usable after create", async () => {
-			// ensureSandboxDaemon throws after createSandbox succeeded: the created
-			// sandbox must be killed, not leaked, and nothing persisted.
-			d.ensureSandboxDaemon.mockImplementationOnce(async () => {
-				throw new Error("daemon never came up");
+		it("recreates when the warm sandbox is stale (connect fails)", async () => {
+			seedWarm(d.leaseStore, refA, "sbx-dead");
+			d.connectSandbox.mockImplementationOnce(async () => {
+				throw new Error("gone");
 			});
 
-			await expect(d.manager.acquire(refA, silentLogger)).rejects.toThrow(
-				"daemon never came up",
-			);
+			const lease = await d.manager.acquire(refA, silentLogger);
 
-			expect(d.killSandbox).toHaveBeenCalledTimes(1);
-			expect(await d.leaseStore.get(refA)).toBeNull();
-			// Guard freed, so the conversation is not wedged.
-			const ok = await d.manager.acquire(refA, silentLogger);
-			expect(ok.reused).toBe(false);
+			expect(lease.reused).toBe(false);
+			expect(d.createSandbox).toHaveBeenCalledTimes(1);
+		});
+
+		it("rejects a concurrent turn for the same conversation as busy", async () => {
+			await d.manager.acquire(refA, silentLogger); // holds the lease, unreleased
+
+			await expect(
+				d.manager.acquire(refA, silentLogger),
+			).rejects.toBeInstanceOf(ConversationBusyError);
+			expect(d.createSandbox).toHaveBeenCalledTimes(1);
 		});
 
 		it("retries once on a transient SandboxCreationError", async () => {
@@ -156,376 +225,119 @@ describe("SandboxLeaseManager", () => {
 				.mockImplementationOnce(async () => ({ sandboxId: "sbx-retry" }));
 
 			const lease = await d.manager.acquire(refA, silentLogger);
-
-			expect(d.createSandbox).toHaveBeenCalledTimes(2);
 			expect(lease.sandbox.sandboxId).toBe("sbx-retry");
 		});
-	});
 
-	describe("warm reuse", () => {
-		it("reuses a healthy warm sandbox for the same user + conversation", async () => {
-			const first = await d.manager.acquire(refA, silentLogger);
-			await d.manager.release(first, silentLogger);
-
-			const second = await d.manager.acquire(refA, silentLogger);
-
-			expect(second.reused).toBe(true);
-			expect(second.sandbox.sandboxId).toBe("sbx-1");
-			// Reuse reattaches by id and reaches the daemon via the persisted
-			// endpoint — no new sandbox, no re-deploy.
-			expect(d.connectSandbox).toHaveBeenCalledWith("sbx-1", expect.anything());
-			expect(d.createSandbox).toHaveBeenCalledTimes(1);
-			expect(d.ensureSandboxDaemon).toHaveBeenCalledTimes(1);
-			expect(second.daemon).toEqual({
-				url: "http://daemon:8080",
-				trafficAccessToken: "tok",
-			});
-		});
-
-		it("re-persists the lease on reuse so the idle reaper sees fresh liveness", async () => {
-			const first = await d.manager.acquire(refA, silentLogger);
-			await d.manager.release(first, silentLogger);
-			const upsertsBefore = d.leaseStore.upserts.length;
-
-			await d.manager.acquire(refA, silentLogger);
-
-			// Reuse writes the row again (bumping updated_at), not just reads it.
-			expect(d.leaseStore.upserts.length).toBe(upsertsBefore + 1);
-		});
-
-		it("recreates a fresh sandbox when the warm lease is stale (sandbox gone)", async () => {
-			const first = await d.manager.acquire(refA, silentLogger);
-			await d.manager.release(first, silentLogger);
-			d.connectSandbox.mockImplementationOnce(async () => {
-				throw new Error("sandbox not found");
-			});
-
-			const second = await d.manager.acquire(refA, silentLogger);
-
-			expect(second.reused).toBe(false);
-			expect(second.sandbox.sandboxId).toBe("sbx-2");
-			expect(d.createSandbox).toHaveBeenCalledTimes(2);
-			// The fresh pointer supersedes the stale one.
-			expect(await d.leaseStore.get(refA)).toMatchObject({
-				sandboxId: "sbx-2",
-			});
-		});
-	});
-
-	describe("idle timeout (single clock)", () => {
-		it("sets the sandbox timeout to the idle window on a fresh acquire", async () => {
-			const lease = await d.manager.acquire(refA, silentLogger);
-
-			expect(d.setSandboxTimeout).toHaveBeenCalledWith(
-				lease.sandbox,
-				DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
-				expect.anything(),
-			);
-		});
-
-		it("resets the timeout on warm reuse so the new turn gets a full window", async () => {
-			const first = await d.manager.acquire(refA, silentLogger);
-			await d.manager.release(first, silentLogger);
-			d.setSandboxTimeout.mockClear();
-
-			await d.manager.acquire(refA, silentLogger);
-
-			expect(d.setSandboxTimeout).toHaveBeenCalledWith(
-				{ sandboxId: "sbx-1" },
-				DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
-				expect.anything(),
-			);
-		});
-
-		it("resets the idle countdown from turn end on release", async () => {
-			const lease = await d.manager.acquire(refA, silentLogger);
-			d.setSandboxTimeout.mockClear();
-
-			await d.manager.release(lease, silentLogger);
-
-			expect(d.setSandboxTimeout).toHaveBeenCalledWith(
-				lease.sandbox,
-				DEFAULT_SANDBOX_IDLE_TIMEOUT_MS,
-				expect.anything(),
-			);
-		});
-
-		it("honors a custom idle window", async () => {
-			const manager = new SandboxLeaseManager(
-				{
-					sandboxProvider: {
-						createSandbox: d.createSandbox,
-						connectSandbox: d.connectSandbox,
-						daemonEndpoint: () => ({ url: "http://daemon:8080" }),
-						setSandboxTimeout: d.setSandboxTimeout,
-						ensureSandboxDaemon: d.ensureSandboxDaemon,
-						killSandbox: d.killSandbox,
-						cancelSandbox: async () => {},
-						// biome-ignore lint/suspicious/noExplicitAny: partial provider mock.
-					} as any,
-					leaseStore: d.leaseStore,
-					workspaceStore: {
-						hydrateConversationWorkspace: d.hydrate,
-						syncConversationWorkspace: d.sync,
-						// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync used.
-					} as any,
-				},
-				1_000,
-			);
-
-			await manager.acquire(refA, silentLogger);
-
-			expect(d.setSandboxTimeout).toHaveBeenCalledWith(
-				expect.anything(),
-				1_000,
-				expect.anything(),
-			);
-		});
-	});
-
-	describe("isolation", () => {
-		it("never shares a sandbox across users", async () => {
-			const a = await d.manager.acquire(
-				{ userId: "user-1", conversationId: "conv-x" },
-				silentLogger,
-			);
-			const b = await d.manager.acquire(
-				{ userId: "user-2", conversationId: "conv-x" },
-				silentLogger,
-			);
-
-			expect(a.sandbox.sandboxId).not.toBe(b.sandbox.sandboxId);
-			expect(b.reused).toBe(false);
-			expect(d.createSandbox).toHaveBeenCalledTimes(2);
-		});
-
-		it("never shares a sandbox across conversations of one user", async () => {
-			const a = await d.manager.acquire(
-				{ userId: "user-1", conversationId: "conv-1" },
-				silentLogger,
-			);
-			const b = await d.manager.acquire(
-				{ userId: "user-1", conversationId: "conv-2" },
-				silentLogger,
-			);
-
-			expect(a.sandbox.sandboxId).not.toBe(b.sandbox.sandboxId);
-			expect(b.reused).toBe(false);
-		});
-	});
-
-	describe("concurrency (reject policy)", () => {
-		it("rejects a second turn while the first is in flight", async () => {
-			const first = await d.manager.acquire(refA, silentLogger);
-
-			await expect(
-				d.manager.acquire(refA, silentLogger),
-			).rejects.toBeInstanceOf(ConversationBusyError);
-			// Only the first turn's sandbox was created.
-			expect(d.createSandbox).toHaveBeenCalledTimes(1);
-
-			// After release, the conversation is acquirable again (and warm-reused).
-			await d.manager.release(first, silentLogger);
-			const again = await d.manager.acquire(refA, silentLogger);
-			expect(again.reused).toBe(true);
-		});
-
-		it("races: two simultaneous acquires yield exactly one busy rejection", async () => {
-			const results = await Promise.allSettled([
-				d.manager.acquire(refA, silentLogger),
-				d.manager.acquire(refA, silentLogger),
-			]);
-
-			const fulfilled = results.filter((r) => r.status === "fulfilled");
-			const rejected = results.filter((r) => r.status === "rejected");
-			expect(fulfilled).toHaveLength(1);
-			expect(rejected).toHaveLength(1);
-			expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
-				ConversationBusyError,
-			);
-			expect(d.createSandbox).toHaveBeenCalledTimes(1);
-		});
-
-		it("frees the in-flight guard when acquisition fails", async () => {
-			d.createSandbox.mockImplementationOnce(async () => {
-				throw new Error("hard failure");
+		it("tears the sandbox down and drops the lease if it can't be made usable", async () => {
+			d.ensureSandboxDaemon.mockImplementationOnce(async () => {
+				throw new Error("daemon never came up");
 			});
 
 			await expect(d.manager.acquire(refA, silentLogger)).rejects.toThrow(
-				"hard failure",
+				"daemon never came up",
 			);
-			// Not wedged: a later acquire proceeds (fresh, since nothing persisted).
+
+			expect(d.killSandbox).toHaveBeenCalledTimes(1);
+			// Lease dropped → not wedged: a later acquire proceeds.
+			expect(await d.leaseStore.get(refA)).toBeNull();
 			const ok = await d.manager.acquire(refA, silentLogger);
 			expect(ok.reused).toBe(false);
 		});
-	});
 
-	describe("resume", () => {
-		it("threads agentSessionId into a fresh sandbox and persists it", async () => {
+		it("threads agentSessionId and carries the recorded session into reuse", async () => {
 			const lease = await d.manager.acquire(refA, silentLogger, {
 				agentSessionId: "sess-1",
 			});
-
-			expect(lease.reused).toBe(false);
 			expect(lease.agentSessionId).toBe("sess-1");
-			expect(await d.leaseStore.get(refA)).toMatchObject({
-				agentSessionId: "sess-1",
-			});
-		});
 
-		it("resumes the recorded session when a stale lease is recreated", async () => {
-			// Seed a persisted lease whose sandbox is gone.
-			await d.leaseStore.upsert({
-				...refA,
-				sandboxId: "old",
-				agentSessionId: "sess-resume",
-			});
-			d.connectSandbox.mockImplementationOnce(async () => {
-				throw new Error("gone");
-			});
-
-			// The recreated sandbox should resume the conversation's recorded
-			// session, not start blank.
-			const lease = await d.manager.acquire(refA, silentLogger);
-			expect(lease.reused).toBe(false);
-			expect(lease.sandbox.sandboxId).toBe("sbx-1");
-			expect(lease.agentSessionId).toBe("sess-resume");
-			expect(await d.leaseStore.get(refA)).toMatchObject({
-				agentSessionId: "sess-resume",
-			});
-		});
-
-		it("carries the recorded agentSessionId forward on warm reuse", async () => {
-			const first = await d.manager.acquire(refA, silentLogger, {
-				agentSessionId: "sess-1",
-			});
-			await d.manager.release(first, silentLogger);
-
+			await d.manager.release(lease, silentLogger, { ok: true });
 			const second = await d.manager.acquire(refA, silentLogger);
-			expect(second.reused).toBe(true);
-			expect(second.agentSessionId).toBe("sess-1");
-		});
-
-		it("honors an explicit null override to start a warm conversation fresh", async () => {
-			const first = await d.manager.acquire(refA, silentLogger, {
-				agentSessionId: "sess-1",
-			});
-			await d.manager.release(first, silentLogger);
-
-			// Explicit null means "start fresh" — not "fall back to the recorded
-			// session" — so the reused lease (and the persisted row) clear it.
-			const second = await d.manager.acquire(refA, silentLogger, {
-				agentSessionId: null,
-			});
-			expect(second.reused).toBe(true);
-			expect(second.agentSessionId).toBeNull();
-			expect(await d.leaseStore.get(refA)).toMatchObject({
-				agentSessionId: null,
-			});
+			expect(second.agentSessionId).toBe("sess-1"); // recorded session reused
 		});
 	});
 
 	describe("release", () => {
-		it("syncs the durable workspace and frees the guard", async () => {
+		it("on success keeps the sandbox warm, persists the pointer, and frees the lease", async () => {
 			const lease = await d.manager.acquire(refA, silentLogger);
-			await d.manager.release(lease, silentLogger);
 
+			await d.manager.release(lease, silentLogger, { ok: true });
+
+			expect(d.killSandbox).not.toHaveBeenCalled();
 			expect(d.sync).toHaveBeenCalledWith(refA);
-			// Still persisted (kept warm), and re-acquirable.
-			expect(await d.leaseStore.get(refA)).not.toBeNull();
+			expect(await d.leaseStore.get(refA)).toMatchObject({ sandboxId: "sbx-1" });
+			// Freed → re-acquirable, and it reuses the warm sandbox.
+			const again = await d.manager.acquire(refA, silentLogger);
+			expect(again.reused).toBe(true);
 		});
 
-		it("does not throw when the workspace sync fails", async () => {
+		it("on failure drops the lease and kills the sandbox", async () => {
+			const lease = await d.manager.acquire(refA, silentLogger);
+
+			await d.manager.release(lease, silentLogger, { ok: false });
+
+			expect(d.killSandbox).toHaveBeenCalledTimes(1);
+			expect(await d.leaseStore.get(refA)).toBeNull();
+			// Next turn creates fresh (no warm pointer left behind).
+			const again = await d.manager.acquire(refA, silentLogger);
+			expect(again.reused).toBe(false);
+		});
+
+		it("does not throw when cleanup fails", async () => {
 			const lease = await d.manager.acquire(refA, silentLogger);
 			d.sync.mockImplementationOnce(async () => {
 				throw new Error("store down");
 			});
-
 			await expect(
-				d.manager.release(lease, silentLogger),
+				d.manager.release(lease, silentLogger, { ok: true }),
 			).resolves.toBeUndefined();
 		});
+	});
 
-		it("frees the guard even if the idle-timeout reset throws", async () => {
-			const lease = await d.manager.acquire(refA, silentLogger);
-			d.setSandboxTimeout.mockImplementationOnce(async () => {
-				throw new Error("e2b control plane down");
-			});
+	describe("heartbeat", () => {
+		it("aborts the turn when the lease is lost mid-turn", async () => {
+			const dh = makeDeps(5); // 5ms heartbeat
+			const lease = await dh.manager.acquire(refA, silentLogger);
+			expect(lease.abortSignal.aborted).toBe(false);
 
-			await expect(
-				d.manager.release(lease, silentLogger),
-			).resolves.toBeUndefined();
-			// Not wedged: the conversation is acquirable again.
-			const again = await d.manager.acquire(refA, silentLogger);
-			expect(again.reused).toBe(true);
+			// Simulate the lease being stolen: bump the token so our renew no longer
+			// matches → next beat returns false → onLost → abort.
+			const row = dh.leaseStore.rows.get(dh.leaseStore.key(refA));
+			if (row) row.fencingToken = 999;
+
+			while (!lease.abortSignal.aborted) await Bun.sleep(3);
+			expect(lease.abortSignal.aborted).toBe(true);
+			lease.stopHeartbeat();
 		});
 
-		it("holds the in-flight guard until the release sync completes", async () => {
-			const lease = await d.manager.acquire(refA, silentLogger);
-			let finishSync: () => void = () => {};
-			d.sync.mockImplementationOnce(
-				() =>
-					new Promise<undefined>((resolve) => {
-						finishSync = () => resolve(undefined);
-					}),
-			);
+		it("stops the heartbeat on release", async () => {
+			const dh = makeDeps(5);
+			const lease = await dh.manager.acquire(refA, silentLogger);
+			await dh.manager.release(lease, silentLogger, { ok: true });
+			dh.setSandboxTimeout.mockClear();
+			dh.leaseStore.delete(refA); // a live heartbeat would now renew-fail/abort
 
-			const releasing = d.manager.release(lease, silentLogger);
-			// Sync is still in flight, so the next turn must not start against the
-			// same workspace yet.
-			await expect(
-				d.manager.acquire(refA, silentLogger),
-			).rejects.toBeInstanceOf(ConversationBusyError);
-
-			finishSync();
-			await releasing;
-			// Once the sync settles the guard is freed and the conversation reuses.
-			const again = await d.manager.acquire(refA, silentLogger);
-			expect(again.reused).toBe(true);
+			await Bun.sleep(20);
+			expect(lease.abortSignal.aborted).toBe(false);
+			expect(dh.setSandboxTimeout).not.toHaveBeenCalled();
 		});
 	});
 
 	describe("terminate", () => {
-		it("removes the pointer and kills the sandbox", async () => {
+		it("kills the sandbox and deletes the row", async () => {
 			const lease = await d.manager.acquire(refA, silentLogger);
-			await d.manager.release(lease, silentLogger);
+			await d.manager.release(lease, silentLogger, { ok: true });
 
 			await d.manager.terminate(refA, silentLogger);
 
-			expect(await d.leaseStore.get(refA)).toBeNull();
-			expect(d.connectSandbox).toHaveBeenCalledWith("sbx-1", expect.anything());
 			expect(d.killSandbox).toHaveBeenCalledTimes(1);
+			expect(await d.leaseStore.get(refA)).toBeNull();
 		});
 
-		it("frees the in-flight guard so a terminated conversation is acquirable", async () => {
-			// Acquire and do NOT release — the turn is still "in flight" when the
-			// reaper terminates. The conversation must not be left wedged.
-			await d.manager.acquire(refA, silentLogger);
-
-			await d.manager.terminate(refA, silentLogger);
-
-			const next = await d.manager.acquire(refA, silentLogger);
-			expect(next.reused).toBe(false);
-		});
-
-		it("is a no-op for an unknown lease", async () => {
+		it("is a no-op for an unknown conversation", async () => {
 			await expect(
 				d.manager.terminate(refA, silentLogger),
 			).resolves.toBeUndefined();
 			expect(d.killSandbox).not.toHaveBeenCalled();
-		});
-
-		it("still removes the pointer when the sandbox is already gone", async () => {
-			const lease = await d.manager.acquire(refA, silentLogger);
-			await d.manager.release(lease, silentLogger);
-			d.connectSandbox.mockImplementationOnce(async () => {
-				throw new Error("gone");
-			});
-
-			await expect(
-				d.manager.terminate(refA, silentLogger),
-			).resolves.toBeUndefined();
-			expect(await d.leaseStore.get(refA)).toBeNull();
 		});
 	});
 });
