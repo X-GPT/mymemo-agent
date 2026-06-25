@@ -1,20 +1,21 @@
 /**
- * Durable sandbox-lease registry. A lease maps a conversation to the warm
- * sandbox currently serving it, so a turn can reuse a healthy sandbox instead of
- * creating a fresh one. The mapping must outlive a single chat-api process — a
- * restart or a second replica has to find the same warm sandbox — so it lives in
- * Postgres behind this seam rather than in a per-process Map.
+ * Durable sandbox-lease registry. One row per conversation carries two concerns:
  *
- * What is stored is the *pointer*, not the live sandbox: a sandbox handle is an
- * open network client that cannot be serialized. A reusing process reattaches to
- * the sandbox by id through the `SandboxProvider` and recomputes the daemon
- * endpoint from the reattached handle, so the store persists only the id (the
- * URL and per-sandbox edge token are derived, never written here — that keeps
- * the edge secret out of a durable store and the endpoint from going stale).
+ *  1. An **ownership lease** — the concurrency control. A turn `claimLease`s the
+ *     conversation (an atomic compare-and-set: take it only if free or expired),
+ *     heartbeats it forward via `renewLease` while running, and clears it on
+ *     `releaseLease`/`dropLease`. This serializes turns per conversation across
+ *     replicas without any advisory lock or in-process map: a crashed owner's
+ *     lease simply expires and another replica can steal it. A monotonic
+ *     `fencingToken` (bumped on every claim) scopes renew/release to the exact
+ *     hold that acquired it, so a stolen hold's late writes become no-ops.
  *
- * The lease is an optimization, not the source of truth — durable conversation
- * state (transcripts, docs, manifest) lives in `WorkspaceStore`. A lost or stale
- * lease only costs a fresh sandbox + hydrate, never correctness.
+ *  2. A **warm-sandbox pointer** — a disposable optimization. Only the sandbox
+ *     *id* (+ resume session) is stored; the daemon URL and per-sandbox edge
+ *     token are recomputed from the reattached handle, never persisted. The
+ *     pointer survives between turns so the next turn can reuse the sandbox. A
+ *     lost or stale pointer only costs a fresh sandbox + hydrate, never
+ *     correctness — durable conversation state lives in `WorkspaceStore`.
  */
 
 /** Identifies the conversation a lease belongs to, scoped to its owner. */
@@ -24,47 +25,80 @@ export interface LeaseRef {
 }
 
 /**
- * The persisted pointer to a conversation's warm sandbox. Holds only what a
- * reusing process needs to reattach and reach the daemon — no secrets beyond the
- * per-sandbox edge token, which is scoped to that one sandbox.
+ * Granted to the caller when `claimLease` wins ownership. `fencingToken`
+ * identifies this hold (passed back to `renewLease`/`releaseLease`/`dropLease`);
+ * `sandboxId`/`agentSessionId` are the existing warm pointer to reuse, or null on
+ * a freshly created row.
  */
+export interface LeaseClaim {
+	fencingToken: number;
+	sandboxId: string | null;
+	agentSessionId: string | null;
+}
+
+/** The warm pointer as read back by `get` (for the standalone teardown hook). */
 export interface LeaseRecord {
 	userId: string;
 	conversationId: string;
-	/**
-	 * The leased sandbox. A reusing process reattaches via the provider and
-	 * recomputes the daemon endpoint from the handle — the URL and edge token are
-	 * deliberately NOT stored.
-	 */
-	sandboxId: string;
-	/** Claude SDK resume state last threaded into this conversation, if any. */
+	sandboxId: string | null;
 	agentSessionId: string | null;
 }
 
 /**
  * Persistence seam for the lease registry, keyed by `{userId, conversationId}`.
- * Small on purpose: the lease manager owns the lifecycle, the store only reads
- * and writes the row. `upsert` replaces any existing row for the key so a fresh
- * sandbox cleanly supersedes a stale one.
+ * The lease manager owns the lifecycle; the store is just the atomic SQL.
  */
 export interface LeaseStore {
-	get(ref: LeaseRef): Promise<LeaseRecord | null>;
-	upsert(record: LeaseRecord): Promise<void>;
-	delete(ref: LeaseRef): Promise<void>;
 	/**
-	 * Run `fn` while holding a cross-process claim on `ref`'s conversation, so only
-	 * one acquirer anywhere can be deciding-to-reuse-or-creating for a conversation
-	 * at a time. Returns `{ acquired: false }` (without running `fn`) when another
-	 * holder has the claim — the caller treats that as `ConversationBusyError`.
-	 *
-	 * This closes the multi-replica first-turn race the in-process guard cannot:
-	 * two replicas that both see no lease would otherwise each create a sandbox.
-	 * The claim only needs to cover the read→reuse-or-create→write-pointer section;
-	 * once the warm lease row exists, later concurrent turns resolve to the same
-	 * sandbox and the daemon's single-turn lock rejects the extra one.
+	 * Atomically claim the conversation's lease for `ownerId`, taking it only if
+	 * it is free (released) or its lease has expired (previous owner crashed).
+	 * Sets the lease deadline to `now + ttlMs` and bumps the fencing token.
+	 * Returns the granted {@link LeaseClaim}, or `null` when another owner holds an
+	 * unexpired lease — which the caller surfaces as `ConversationBusyError`.
 	 */
-	withClaim<T>(
+	claimLease(
 		ref: LeaseRef,
-		fn: () => Promise<T>,
-	): Promise<{ acquired: boolean; result?: T }>;
+		ownerId: string,
+		ttlMs: number,
+	): Promise<LeaseClaim | null>;
+
+	/**
+	 * Heartbeat: extend the lease deadline to `now + ttlMs`, but only if this hold
+	 * (`ownerId` + `fencingToken`) still owns it. Returns `false` when the hold was
+	 * lost (stolen after an expiry), which tells the caller to abort its turn.
+	 */
+	renewLease(
+		ref: LeaseRef,
+		ownerId: string,
+		fencingToken: number,
+		ttlMs: number,
+	): Promise<boolean>;
+
+	/**
+	 * End a successful turn: clear ownership (leaving the sandbox warm for the next
+	 * turn) and persist the warm pointer. Guarded by `ownerId` + `fencingToken`, so
+	 * a hold that was stolen mid-turn cannot clobber the new owner's row.
+	 */
+	releaseLease(
+		ref: LeaseRef,
+		ownerId: string,
+		fencingToken: number,
+		pointer: { sandboxId: string; agentSessionId: string | null },
+	): Promise<void>;
+
+	/**
+	 * End a failed turn: delete the row so the next turn starts fresh. Same
+	 * owner+token guard as {@link releaseLease}. The caller kills the sandbox.
+	 */
+	dropLease(
+		ref: LeaseRef,
+		ownerId: string,
+		fencingToken: number,
+	): Promise<void>;
+
+	/** Read the warm pointer — for the unconditional teardown/recycle hook. */
+	get(ref: LeaseRef): Promise<LeaseRecord | null>;
+
+	/** Unconditional delete — for the teardown/recycle hook (not owner-scoped). */
+	delete(ref: LeaseRef): Promise<void>;
 }

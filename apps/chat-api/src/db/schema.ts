@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+	bigint,
 	check,
 	pgTable,
 	primaryKey,
@@ -16,27 +17,45 @@ import {
  */
 
 /**
- * Sandbox-lease registry (MYM-17). Maps one conversation to the warm sandbox
- * currently serving it. The composite primary key makes per-user / per-
- * conversation isolation a database invariant: two users, or two conversations,
- * can never resolve to one row and so can never share a leased sandbox.
+ * Sandbox-lease registry (MYM-17 / MYM-42). One row per conversation, keyed by
+ * `(user_id, conversation_id)` — the composite primary key makes per-user /
+ * per-conversation isolation a database invariant: two users, or two
+ * conversations, can never resolve to one row and so can never share a sandbox.
  *
- * Only the sandbox *id* is stored; the daemon URL and per-sandbox edge token are
- * recomputed from the reattached handle on reuse, never persisted.
+ * The row carries two concerns:
+ *  - **Ownership lease** (`owner_id`, `fencing_token`, `lease_expires_at`): the
+ *    concurrency control. A turn `claimLease` becomes owner via an atomic
+ *    `ON CONFLICT … WHERE expired/free` CAS, heartbeats `lease_expires_at`
+ *    forward while running, and clears ownership on release. A crashed owner's
+ *    lease simply expires and another replica can steal it. `fencing_token` is
+ *    bumped on every claim so a renew/release only affects the exact hold that
+ *    acquired it (a stolen hold becomes a no-op).
+ *  - **Warm-sandbox pointer** (`sandbox_id`, `agent_session_id`): a disposable
+ *    optimization that survives between turns. Nullable — a freshly claimed row
+ *    has no sandbox yet; only the sandbox *id* is stored (the daemon URL + edge
+ *    token are recomputed from the reattached handle on reuse, never persisted).
  */
 export const sandboxLeases = pgTable(
 	"sandbox_leases",
 	{
 		userId: text("user_id").notNull(),
 		conversationId: text("conversation_id").notNull(),
-		/** The leased sandbox; a reusing process reattaches to it by id. */
-		sandboxId: text("sandbox_id").notNull(),
+		/** Process instance currently holding the lease; NULL between turns. */
+		ownerId: text("owner_id"),
+		/** Monotonic per-conversation hold counter; bumped on every claim. */
+		fencingToken: bigint("fencing_token", { mode: "number" })
+			.notNull()
+			.default(0),
+		/** Lease deadline; heartbeated forward while a turn runs. Past = free. */
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		/** The warm sandbox; a reusing process reattaches to it by id. Nullable. */
+		sandboxId: text("sandbox_id"),
 		/** Claude SDK resume state last threaded into this conversation. */
 		agentSessionId: text("agent_session_id"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
-		/** Bumped on every upsert so the idle reaper can age leases out. */
+		/** Bumped on every write so the idle reaper can age leases out. */
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),

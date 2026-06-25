@@ -83,6 +83,10 @@ export async function runSandboxChat(
 		agentSessionId,
 	});
 
+	// Distinguishes a clean turn (release keeps the sandbox warm) from a failure
+	// (release drops the lease + kills the sandbox, so the next turn doesn't
+	// reattach a broken one and an abandoned daemon turn is torn down).
+	let ok = false;
 	try {
 		await onSandboxId(lease.sandbox.sandboxId);
 		// `acquire` already ensured the daemon (fresh lease) or reattached to it
@@ -152,14 +156,16 @@ export async function runSandboxChat(
 			// The proxy surfaces the daemon's Claude SDK session id, which we expose
 			// as the agent session id.
 			onSessionId: onAgentSessionId,
+			// Abort the daemon call if the heartbeat finds the lease was lost.
+			abortSignal: lease.abortSignal,
 		});
 
+		ok = true;
 		return { status: "completed" } as const;
 	} finally {
-		// End the turn's hold without tearing the sandbox down: `release` syncs the
-		// durable workspace and keeps the sandbox warm for the next turn. A sync
-		// failure is logged inside `release`, never thrown, so it can't mask the
-		// turn's own outcome.
-		await leaseManager.release(lease, logger);
+		// On success `release` keeps the sandbox warm + persists the pointer; on
+		// failure it drops the lease and kills the sandbox. Errors inside `release`
+		// are logged, never thrown, so they can't mask the turn's own outcome.
+		await leaseManager.release(lease, logger, { ok });
 	}
 }

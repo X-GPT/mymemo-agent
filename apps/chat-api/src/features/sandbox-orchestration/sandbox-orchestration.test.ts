@@ -10,7 +10,7 @@ import {
 import { verifyLlmToken } from "@mymemo/llm-token";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
-import type { LeaseRecord, LeaseRef, LeaseStore } from "@/features/lease-store";
+import type { LeaseRef, LeaseStore } from "@/features/lease-store";
 import type { RequestLogger } from "@/features/streaming/logger";
 import { ConversationBusyError } from "./errors";
 import { SandboxLeaseManager } from "./sandbox-lease-manager";
@@ -49,23 +49,80 @@ const DAEMON = {
 	trafficAccessToken: "test-traffic-token",
 };
 
-/** Minimal in-memory {@link LeaseStore}, keyed like the Postgres composite PK. */
+interface Row {
+	ownerId: string | null;
+	fencingToken: number;
+	expiresAt: number | null;
+	sandboxId: string | null;
+	agentSessionId: string | null;
+}
+
+/** In-memory {@link LeaseStore} mirroring the Postgres CAS semantics. */
 class FakeLeaseStore implements LeaseStore {
-	readonly records = new Map<string, LeaseRecord>();
+	readonly rows = new Map<string, Row>();
 	private key(ref: LeaseRef) {
 		return `${ref.userId}\0${ref.conversationId}`;
 	}
-	async get(ref: LeaseRef) {
-		return this.records.get(this.key(ref)) ?? null;
+	async claimLease(ref: LeaseRef, ownerId: string, ttlMs: number) {
+		const row = this.rows.get(this.key(ref));
+		const free =
+			!row ||
+			row.ownerId === null ||
+			(row.expiresAt !== null && row.expiresAt < Date.now());
+		if (row && !free) return null;
+		const token = (row?.fencingToken ?? 0) + 1;
+		const next: Row = {
+			ownerId,
+			fencingToken: token,
+			expiresAt: Date.now() + ttlMs,
+			sandboxId: row?.sandboxId ?? null,
+			agentSessionId: row?.agentSessionId ?? null,
+		};
+		this.rows.set(this.key(ref), next);
+		return {
+			fencingToken: token,
+			sandboxId: next.sandboxId,
+			agentSessionId: next.agentSessionId,
+		};
 	}
-	async upsert(record: LeaseRecord) {
-		this.records.set(this.key(record), { ...record });
+	async renewLease(ref: LeaseRef, ownerId: string, token: number, ttlMs: number) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token)
+			return false;
+		row.expiresAt = Date.now() + ttlMs;
+		return true;
+	}
+	async releaseLease(
+		ref: LeaseRef,
+		ownerId: string,
+		token: number,
+		pointer: { sandboxId: string; agentSessionId: string | null },
+	) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token) return;
+		row.ownerId = null;
+		row.expiresAt = null;
+		row.sandboxId = pointer.sandboxId;
+		row.agentSessionId = pointer.agentSessionId;
+	}
+	async dropLease(ref: LeaseRef, ownerId: string, token: number) {
+		const row = this.rows.get(this.key(ref));
+		if (!row || row.ownerId !== ownerId || row.fencingToken !== token) return;
+		this.rows.delete(this.key(ref));
+	}
+	async get(ref: LeaseRef) {
+		const row = this.rows.get(this.key(ref));
+		return row
+			? {
+					userId: ref.userId,
+					conversationId: ref.conversationId,
+					sandboxId: row.sandboxId,
+					agentSessionId: row.agentSessionId,
+				}
+			: null;
 	}
 	async delete(ref: LeaseRef) {
-		this.records.delete(this.key(ref));
-	}
-	async withClaim<T>(_ref: LeaseRef, fn: () => Promise<T>) {
-		return { acquired: true, result: await fn() };
+		this.rows.delete(this.key(ref));
 	}
 }
 
@@ -130,13 +187,18 @@ describe("runSandboxChat", () => {
 			hydrateConversationWorkspace: hydrate,
 			syncConversationWorkspace: sync,
 		};
-		const leaseManager = new SandboxLeaseManager({
-			// biome-ignore lint/suspicious/noExplicitAny: partial provider mock for the lease seam.
-			sandboxProvider: sandboxProvider as any,
-			leaseStore,
-			// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync are used.
-			workspaceStore: workspaceStore as any,
-		});
+		const leaseManager = new SandboxLeaseManager(
+			{
+				// biome-ignore lint/suspicious/noExplicitAny: partial provider mock for the lease seam.
+				sandboxProvider: sandboxProvider as any,
+				leaseStore,
+				// biome-ignore lint/suspicious/noExplicitAny: only hydrate/sync are used.
+				workspaceStore: workspaceStore as any,
+			},
+			"owner-test",
+			// Heartbeat far longer than any test, so it never fires mid-test.
+			{ heartbeatIntervalMs: 1_000_000 },
+		);
 
 		deps = {
 			config,

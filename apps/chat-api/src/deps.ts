@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import { createDatabase } from "./db/client";
@@ -47,11 +48,14 @@ export function createDeps(config: ApiConfig): AppDeps {
 	// store reuses it) rather than a pool per store.
 	const database = createDatabase(config.databaseUrl);
 	const conversationStore = new PostgresConversationStore(database);
-	const leaseManager = new SandboxLeaseManager({
-		sandboxProvider,
-		leaseStore: createLeaseStore(database),
-		workspaceStore,
-	});
+	// Per-process identity for the ownership lease: stable for this process's
+	// lifetime, unique across replicas (and across a restart), so a crashed
+	// process's leases expire rather than being mistaken for a live owner's.
+	const ownerId = `${hostname()}:${process.pid}:${crypto.randomUUID()}`;
+	const leaseManager = new SandboxLeaseManager(
+		{ sandboxProvider, leaseStore: createLeaseStore(database), workspaceStore },
+		ownerId,
+	);
 	return {
 		config,
 		sandboxProvider,
