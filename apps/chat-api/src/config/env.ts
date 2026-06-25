@@ -33,13 +33,14 @@ export interface ApiConfig {
 	workspaceStoreRoot: string;
 	/**
 	 * Writable connection to chat-api's own Postgres (`mymemo_agent`), distinct
-	 * from the gateway's read-only KB. Backs the sandbox-lease registry.
-	 * Optional: only consumed once leasing is wired into the turn path (Task 14),
-	 * so a deployment without it keeps the per-turn create/kill behavior.
+	 * from the gateway's read-only KB. Backs the conversation registry (frozen
+	 * scope) and the sandbox-lease registry. **Required** — the conversation
+	 * endpoints are the primary surface and cannot work without it, so it is
+	 * validated at config load rather than failing per-request.
 	 * DB_PASSWORD spliced in when passwordless; TLS applied (DB_SSL=disable to
 	 * turn off for a local non-TLS Postgres).
 	 */
-	databaseUrl?: string;
+	databaseUrl: string;
 }
 
 /**
@@ -106,6 +107,16 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	invariant(env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
 	invariant(env.GATEWAY_PUBLIC_URL, "GATEWAY_PUBLIC_URL is required");
 
+	// The conversation registry is the primary surface and cannot work without a
+	// writable DB; require it at load so a misconfigured deploy fails fast instead
+	// of booting green and 503-ing every request.
+	const databaseUrl = resolveDatabaseUrl(
+		env.DATABASE_URL,
+		env.DB_PASSWORD,
+		env.DB_SSL,
+	);
+	invariant(databaseUrl, "DATABASE_URL is required");
+
 	// Durable workspace store root. Optional with a writable fallback so it works
 	// out of the box, but the fallback is process-local and lost on container
 	// recycle — warn loudly so a missing volume mount in production surfaces here
@@ -131,10 +142,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		gatewayPublicUrl: env.GATEWAY_PUBLIC_URL.replace(/\/+$/, ""),
 		logLevel: env.LOG_LEVEL || "info",
 		workspaceStoreRoot,
-		databaseUrl: resolveDatabaseUrl(
-			env.DATABASE_URL,
-			env.DB_PASSWORD,
-			env.DB_SSL,
-		),
+		databaseUrl,
 	};
 }

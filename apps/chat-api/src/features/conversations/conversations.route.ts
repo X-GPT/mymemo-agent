@@ -20,6 +20,12 @@ import {
 
 const app = new Hono<AppEnv>();
 
+/** Shared request-body cap for both conversation endpoints. */
+const conversationBodyLimit = bodyLimit({
+	maxSize: MAX_REQUEST_BODY_BYTES,
+	onError: (c) => c.json({ error: "Request body too large" }, 413),
+});
+
 /** Parse + validate the trusted identity headers off the request. */
 function identityFromContext(c: {
 	req: { header: (k: string) => string | undefined };
@@ -36,10 +42,7 @@ function identityFromContext(c: {
 // POST /v1/conversations — create a conversation, freezing its document scope.
 app.post(
 	"/",
-	bodyLimit({
-		maxSize: MAX_REQUEST_BODY_BYTES,
-		onError: (c) => c.json({ error: "Request body too large" }, 413),
-	}),
+	conversationBodyLimit,
 	zValidator("json", CreateConversationBody, (result, c) => {
 		if (!result.success) {
 			return c.json(
@@ -56,13 +59,9 @@ app.post(
 				401,
 			);
 		}
-		const store = c.var.deps.conversationStore;
-		if (!store) {
-			return c.json({ error: "Conversation store not configured" }, 503);
-		}
 
 		const result = await createConversation(
-			store,
+			c.var.deps.conversationStore,
 			identity.data,
 			c.req.valid("json"),
 		);
@@ -74,10 +73,7 @@ app.post(
 // `user.message`) and stream the turn's events back as SSE.
 app.post(
 	"/:conversationId/events",
-	bodyLimit({
-		maxSize: MAX_REQUEST_BODY_BYTES,
-		onError: (c) => c.json({ error: "Request body too large" }, 413),
-	}),
+	conversationBodyLimit,
 	zValidator(
 		"param",
 		z.object({ conversationId: ConversationIdParam }),
@@ -101,9 +97,6 @@ app.post(
 			);
 		}
 		const store = c.var.deps.conversationStore;
-		if (!store) {
-			return c.json({ error: "Conversation store not configured" }, 503);
-		}
 
 		const { conversationId } = c.req.valid("param");
 		const event = c.req.valid("json");

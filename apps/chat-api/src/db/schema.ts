@@ -1,4 +1,11 @@
-import { pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import {
+	check,
+	pgTable,
+	primaryKey,
+	text,
+	timestamp,
+} from "drizzle-orm/pg-core";
 
 /**
  * Drizzle schema for chat-api's own writable database (`mymemo_agent`), distinct
@@ -60,5 +67,14 @@ export const conversations = pgTable(
 			.notNull()
 			.defaultNow(),
 	},
-	(t) => [primaryKey({ columns: [t.userId, t.conversationId] })],
+	(t) => [
+		primaryKey({ columns: [t.userId, t.conversationId] }),
+		// scope is the frozen security boundary; defend the legal values at the DB
+		// so a bad write (manual ops, a future writer, a bug) cannot forge a scope
+		// the read-side `as ConversationScope` cast would otherwise trust.
+		check(
+			"conversations_scope_check",
+			sql`${t.scope} in ('general', 'collection', 'document')`,
+		),
+	],
 );

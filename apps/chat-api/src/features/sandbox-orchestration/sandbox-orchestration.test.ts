@@ -38,6 +38,7 @@ const config: ApiConfig = {
 	gatewayPublicUrl: "https://gateway.test",
 	logLevel: "info",
 	workspaceStoreRoot: "/tmp/workspace-store-test",
+	databaseUrl: "postgresql://test:test@localhost:5432/test",
 };
 
 function makeOptions(

@@ -5,7 +5,8 @@ CREATE TABLE "conversations" (
 	"collection_id" text,
 	"summary_id" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "conversations_user_id_conversation_id_pk" PRIMARY KEY("user_id","conversation_id")
+	CONSTRAINT "conversations_user_id_conversation_id_pk" PRIMARY KEY("user_id","conversation_id"),
+	CONSTRAINT "conversations_scope_check" CHECK ("conversations"."scope" in ('general', 'collection', 'document'))
 );
 --> statement-breakpoint
 CREATE TABLE "sandbox_leases" (

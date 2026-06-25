@@ -1,5 +1,5 @@
 {
-  "id": "184e6b0c-5881-4a1d-afb3-0fdcccb17b3a",
+  "id": "50ae3a47-1162-4a29-83cc-5f8f47abefae",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -59,7 +59,12 @@
       },
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "conversations_scope_check": {
+          "name": "conversations_scope_check",
+          "value": "\"conversations\".\"scope\" in ('general', 'collection', 'document')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.sandbox_leases": {

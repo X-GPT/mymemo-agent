@@ -43,7 +43,7 @@ function fakeStore(seed: ConversationRecord[] = []) {
 	return { store, created };
 }
 
-function buildApp(conversationStore: ConversationStore | null) {
+function buildApp(conversationStore: ConversationStore) {
 	const deps = {
 		config: {},
 		sandboxProvider: {},
@@ -102,15 +102,6 @@ describe("POST /v1/conversations", () => {
 			body: JSON.stringify({ memberCode: "smuggled" }),
 		});
 		expect(res.status).toBe(400);
-	});
-
-	it("returns 503 when no conversation store is configured", async () => {
-		const res = await buildApp(null).request("/v1/conversations", {
-			method: "POST",
-			headers: identityHeaders,
-			body: JSON.stringify({}),
-		});
-		expect(res.status).toBe(503);
 	});
 });
 

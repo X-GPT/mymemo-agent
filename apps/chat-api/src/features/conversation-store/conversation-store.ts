@@ -1,3 +1,5 @@
+import type { ChatMessagesScope } from "@/config/env";
+
 /**
  * Durable conversation registry. A conversation record is the source of truth
  * for a conversation's immutable document scope — created once and never
@@ -9,8 +11,12 @@
  * outlive any sandbox.
  */
 
-/** The frozen document scope of a conversation. */
-export type ConversationScope = "general" | "collection" | "document";
+/**
+ * The frozen document scope of a conversation. Aliases the canonical
+ * {@link ChatMessagesScope} so the writable-DB layer and the turn path share one
+ * definition instead of two identical unions.
+ */
+export type ConversationScope = ChatMessagesScope;
 
 /** Identifies a conversation, scoped to its owner. */
 export interface ConversationRef {
