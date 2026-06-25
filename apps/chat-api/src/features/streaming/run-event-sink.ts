@@ -25,9 +25,9 @@
 
 import { type RunEventSink, RunEventType } from "@/features/run-state";
 import type { RunEvent, RunRef } from "@/features/workspace-store";
-import type { ChatLogger } from "./chat.logger";
-import type { MymemoEventSender } from "./chat.streaming";
+import type { RequestLogger } from "./logger";
 import { runEventToClientEvents } from "./run-events-to-sse";
+import type { MymemoEventSender } from "./sse-sender";
 
 const TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([
 	RunEventType.Completed,
@@ -38,7 +38,7 @@ const TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([
 export function createSseRunEventSink(
 	durable: RunEventSink,
 	sender: MymemoEventSender,
-	logger: ChatLogger,
+	logger: RequestLogger,
 ): RunEventSink {
 	return {
 		async appendRunEvent(ref: RunRef, event: RunEvent): Promise<void> {

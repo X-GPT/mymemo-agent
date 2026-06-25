@@ -14,6 +14,7 @@ const config: ApiConfig = {
 	gatewayPublicUrl: "http://gateway:8080",
 	logLevel: "info",
 	workspaceStoreRoot: "/tmp/unused",
+	databaseUrl: "postgresql://test:test@localhost:5432/test",
 };
 
 describe("LocalContainerSandboxProvider", () => {

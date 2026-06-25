@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { SSEStreamingApi } from "hono/streaming";
-import { HonoSSESender } from "./chat.streaming";
+import { HonoSSESender } from "./sse-sender";
 
 describe("HonoSSESender", () => {
 	it("preserves wire order when send and sendPing are interleaved without awaits", async () => {
 		// Simulates the keepalive setInterval firing between two send() calls
-		// in chat.controller.ts. With current hono (4.12.12) the WritableStream
+		// in the conversation event route. With current hono (4.12.12) the WritableStream
 		// queue plus microtask FIFO keep frames in invocation order even
 		// though sendPing is fire-and-forget in production. If hono ever adds
 		// async work before its writer.write() enqueue, this test will fail

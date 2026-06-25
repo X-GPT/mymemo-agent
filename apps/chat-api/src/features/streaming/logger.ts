@@ -1,6 +1,6 @@
 import type { PinoLogger } from "hono-pino";
 
-export class ChatLogger {
+export class RequestLogger {
 	constructor(
 		private logger: PinoLogger,
 		private memberCode: string,

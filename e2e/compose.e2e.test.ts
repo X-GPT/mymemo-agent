@@ -5,9 +5,10 @@
  * `sandbox` container: chat-api → sandbox-daemon → agent → gateway → postgres.
  * It proves two things over a real stack:
  *
- *   1. A chat turn streams the target SSE vocabulary (conversation_id, run_id,
- *      sandbox_id, text_delta…, done) and no error — the docker path stands in
- *      for E2B end to end.
+ *   1. Creating a conversation (POST /v1/conversations) then appending a
+ *      user.message event (POST /v1/conversations/:id/events) streams the target
+ *      SSE vocabulary (conversation_id, run_id, sandbox_id, text_delta…, done)
+ *      and no error — the docker path stands in for E2B end to end.
  *   2. The agent's in-process `search_documents` MCP tool actually hydrated a
  *      seeded document: after the turn, the conversation's docs manifest inside
  *      the sandbox container holds an entry for one of the seeded documents,
@@ -200,28 +201,55 @@ describe.skipIf(!RUN)(
 		});
 
 		it(
-			"streams a turn and hydrates a seeded document via search_documents",
+			"creates a conversation, streams a turn, and hydrates a seeded document via search_documents",
 			async () => {
-				const res = await fetch(`${CHAT_URL}/v1/chat`, {
+				// 0. Create the conversation (general scope — no collectionId/summaryId).
+				//    The conversation must exist in chat-api's writable DB before the
+				//    events turn; this also proves the migrate one-shot provisioned the
+				//    `conversations` table.
+				const createRes = await fetch(`${CHAT_URL}/v1/conversations`, {
 					method: "POST",
 					headers: {
 						"content-type": "application/json",
 						"x-member-code": MEMBER_CODE,
 						"x-partner-code": PARTNER_CODE,
 					},
-					// Force the document tool explicitly. The remote-search-by-default
-					// agent prompt is MYM-13 (not yet wired), so a soft "find my doc
-					// about X" lets the model answer from its own knowledge without ever
-					// calling search_documents. Instructing it to call the tool and not
-					// answer from memory makes the hydration deterministic here.
-					body: JSON.stringify({
-						chatContent:
-							"Use the search_documents tool to find my MyMemo document about " +
-							"machine learning, then tell me its title. You must call " +
-							"search_documents; do not answer from your own knowledge.",
-					}),
-					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+					body: JSON.stringify({}),
+					signal: AbortSignal.timeout(30_000),
 				});
+				const createBody = await createRes.text();
+				expect(
+					createRes.status,
+					`create conversation failed; body: ${createBody.slice(0, 500)}`,
+				).toBe(201);
+				const conversationId = JSON.parse(createBody).conversationId as string;
+				expect(conversationId.length).toBeGreaterThan(0);
+
+				// 1. Append a user.message event and stream the turn.
+				const res = await fetch(
+					`${CHAT_URL}/v1/conversations/${conversationId}/events`,
+					{
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							"x-member-code": MEMBER_CODE,
+							"x-partner-code": PARTNER_CODE,
+						},
+						// Force the document tool explicitly. The remote-search-by-default
+						// agent prompt is MYM-13 (not yet wired), so a soft "find my doc
+						// about X" lets the model answer from its own knowledge without ever
+						// calling search_documents. Instructing it to call the tool and not
+						// answer from memory makes the hydration deterministic here.
+						body: JSON.stringify({
+							type: "user.message",
+							text:
+								"Use the search_documents tool to find my MyMemo document about " +
+								"machine learning, then tell me its title. You must call " +
+								"search_documents; do not answer from your own knowledge.",
+						}),
+						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+					},
+				);
 
 				// Read the body once, up front: on a non-200 (e.g. the gateway 502s or
 				// chat-api 500s) surface it in the failure message instead of a bare
@@ -235,7 +263,7 @@ describe.skipIf(!RUN)(
 				const frames = parseSSE(bodyText);
 				const events = frames.map((f) => f.event).filter((e) => e !== "ping");
 
-				// 1. Protocol: the docker path streams the full target vocabulary and
+				// 2. Protocol: the docker path streams the full target vocabulary and
 				//    completes without surfacing an error.
 				expect(events).toContain("conversation_id");
 				expect(events).toContain("run_id");
@@ -244,12 +272,13 @@ describe.skipIf(!RUN)(
 				expect(events).toContain("done");
 				expect(events).not.toContain("error");
 
-				const conversationId = JSON.parse(
+				// The streamed conversation_id echoes the one we created.
+				const echoedConversationId = JSON.parse(
 					frames.find((f) => f.event === "conversation_id")!.data,
 				).conversationId as string;
+				expect(echoedConversationId).toBe(conversationId);
 				const runId = JSON.parse(frames.find((f) => f.event === "run_id")!.data)
 					.runId as string;
-				expect(conversationId.length).toBeGreaterThan(0);
 
 				// 2. Hydration: search_documents wrote a seeded document into this
 				//    conversation's docs manifest, attributed to this run.

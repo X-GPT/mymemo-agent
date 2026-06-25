@@ -1,5 +1,10 @@
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
+import { createDatabase } from "./db/client";
+import {
+	type ConversationStore,
+	PostgresConversationStore,
+} from "./features/conversation-store";
 import { E2BSandboxProvider } from "./features/sandbox-orchestration/e2b-sandbox-provider";
 import { LocalContainerSandboxProvider } from "./features/sandbox-orchestration/local-container-sandbox-provider";
 import type { SandboxProvider } from "./features/sandbox-orchestration/sandbox-provider";
@@ -18,6 +23,8 @@ export interface AppDeps {
 	config: ApiConfig;
 	sandboxProvider: SandboxProvider;
 	workspaceStore: WorkspaceStore;
+	/** Durable conversation registry (source of truth for frozen scope). */
+	conversationStore: ConversationStore;
 }
 
 /** Hono environment: pino logger vars plus the injected `AppDeps`. */
@@ -29,5 +36,9 @@ export function createDeps(config: ApiConfig): AppDeps {
 			? new LocalContainerSandboxProvider(config)
 			: new E2BSandboxProvider(config);
 	const workspaceStore = createLocalWorkspaceStore(config.workspaceStoreRoot);
-	return { config, sandboxProvider, workspaceStore };
+	// One Drizzle pool over the writable DB, shared by every store (the lease
+	// store reuses it once leasing is wired) rather than a pool per store.
+	const database = createDatabase(config.databaseUrl);
+	const conversationStore = new PostgresConversationStore(database);
+	return { config, sandboxProvider, workspaceStore, conversationStore };
 }
