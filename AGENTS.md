@@ -72,7 +72,8 @@ Source: [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/an
 
 MyMemo Monorepo (Bun workspaces) containing:
 - **chat-api** (`apps/chat-api/`) - AI chat service; orchestrates per-user E2B sandboxes
-- **sandbox-daemon** (`apps/sandbox-daemon/`) - in-sandbox HTTP daemon; bundled and shipped into E2B
+- **agent-worker** (`apps/agent-worker/`) - split-runtime Fargate worker (deployable skeleton; MYM-47). Owns the worker-only credentials chat-api must not hold (read-only KB, OpenRouter, E2B) and will run the Postgres-backed run queue loop + Claude Agent SDK in trusted Fargate. Today: validated config, structured logger, worker id, bounded-concurrency supervisor, graceful drain, `/health`. The queue/claim loop arrives in a later milestone
+- **sandbox-daemon** (`apps/sandbox-daemon/`) - in-sandbox HTTP daemon; bundled and shipped into E2B (prototype path)
 - **gateway** (`apps/gateway/`) - control plane; the only service holding BOTH the real `ANTHROPIC_API_KEY` and the read-only KB `DATABASE_URL`. Verifies the per-turn bearer token on every route, proxies the Anthropic Messages endpoints, and serves scope-enforced document search/fetch against the MyMemo KB Postgres
 - **mymemo-docs** (`apps/mymemo-docs/`) - CLI on the sandbox PATH that the agent uses to reach the gateway's document endpoints
 - **@mymemo/llm-token** (`packages/llm-token/`) - shared package
@@ -188,6 +189,24 @@ Optional:
 - `WORKSPACE_STORE_ROOT` — root dir of the durable workspace store (local filesystem `WorkspaceStore` adapter). Holds per-user/per-conversation work, output, and the docs manifest, plus per-run event logs, following the path model `users/{userId}/conversations/{conversationId}/…` and `users/{userId}/runs/{runId}/events.jsonl`. Defaults to `.workspace-store` under the process cwd (writable in the container). **For durability across container recycles, point this at a mounted persistent volume in production**
 - `DB_PASSWORD` — spliced into `AGENT_DATABASE_URL` when it is passwordless (the form the platform injects)
 - `DB_SSL` (default: on; set `disable` for a local non-TLS Postgres)
+
+### agent-worker
+
+The worker holds the credentials chat-api must **not** (read-only KB, OpenRouter, E2B). None of these are ever placed into E2B sandbox env (`src/sandbox-env.ts` accepts only the run binding, so secrets cannot structurally leak). Validated once at the entrypoint (`src/config/env.ts`); the process refuses to boot if any required value is missing.
+
+Required:
+- `AGENT_DATABASE_URL` — writable `mymemo_agent` DB (runs, run_events, conversation_runtime, worker state). Same DB chat-api uses; the worker is the coordination plane that claims/heartbeats/terminalizes runs
+- `KB_DATABASE_URL` — **read-only** KB DB (`mymemo_kb`) for scoped document search. A separate role/credential from `AGENT_DATABASE_URL`
+- `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` / `OPENROUTER_DEFAULT_MODEL` — direct OpenRouter (Anthropic-compatible) model traffic; trusted-worker-only
+- `E2B_API_KEY` — the untrusted filesystem/shell executor
+
+Optional:
+- `WORKER_MAX_CONCURRENT_RUNS` (default: `2`) — conservative per-task run concurrency; runs share the task's CPU/memory
+- `WORKER_HEARTBEAT_INTERVAL_MS` (default: `15000`) — how often an active run renews its lease
+- `WORKER_SHUTDOWN_TIMEOUT_MS` (default: `30000`) — grace period to drain active runs on SIGINT/SIGTERM before forcing exit
+- `PORT` (default: `8080`) — `/health` endpoint port
+- `LOG_LEVEL` (default: `info`)
+- `DB_PASSWORD` — spliced into `AGENT_DATABASE_URL` when passwordless; `DB_SSL` (default: on; `disable` for local non-TLS)
 
 ### gateway
 
