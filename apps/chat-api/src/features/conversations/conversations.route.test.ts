@@ -5,6 +5,8 @@ import type {
 	ConversationRecord,
 	ConversationStore,
 } from "@/features/conversation-store";
+import type { ExposureGate } from "@/features/exposure-gate";
+import type { InternalIdentity } from "./conversations.schema";
 
 // No sandbox is created: orchestration is mocked to drive the stream callbacks.
 type RunOpts = {
@@ -43,12 +45,28 @@ function fakeStore(seed: ConversationRecord[] = []) {
 	return { store, created };
 }
 
-function buildApp(conversationStore: ConversationStore) {
+/** Gate that records the identity it saw and returns a fixed decision. */
+function recordingGate(decision: boolean) {
+	const seen: InternalIdentity[] = [];
+	const gate: ExposureGate = {
+		async isAgentEnabled(identity) {
+			seen.push(identity);
+			return decision;
+		},
+	};
+	return { gate, seen };
+}
+
+function buildApp(
+	conversationStore: ConversationStore,
+	exposureGate: ExposureGate = recordingGate(true).gate,
+) {
 	const deps = {
 		config: {},
 		sandboxProvider: {},
 		workspaceStore: { async appendRunEvent() {} },
 		conversationStore,
+		exposureGate,
 	} as unknown as AppDeps;
 	return createApp({ logLevel: "silent" } as unknown as ApiConfig, deps);
 }
@@ -171,5 +189,96 @@ describe("POST /v1/conversations/:id/events", () => {
 			{ method: "POST", headers: identityHeaders, body: userMessage },
 		);
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("exposure gate (MYM-46)", () => {
+	const existing: ConversationRecord = {
+		userId: "member-1",
+		conversationId: "conv-1",
+		scope: "general",
+		collectionId: null,
+		summaryId: null,
+	};
+	const userMessage = JSON.stringify({ type: "user.message", text: "hi" });
+
+	it("allows conversation creation for an enabled identity", async () => {
+		const { store } = fakeStore();
+		const res = await buildApp(store, recordingGate(true).gate).request(
+			"/v1/conversations",
+			{
+				method: "POST",
+				headers: identityHeaders,
+				body: JSON.stringify({}),
+			},
+		);
+		expect(res.status).toBe(201);
+	});
+
+	it("denies conversation creation with 403 and writes nothing", async () => {
+		const { store, created } = fakeStore();
+		const res = await buildApp(store, recordingGate(false).gate).request(
+			"/v1/conversations",
+			{
+				method: "POST",
+				headers: identityHeaders,
+				body: JSON.stringify({}),
+			},
+		);
+		expect(res.status).toBe(403);
+		expect(created).toHaveLength(0);
+	});
+
+	it("denies user.message with 403 before opening the stream", async () => {
+		const { store } = fakeStore([existing]);
+		const res = await buildApp(store, recordingGate(false).gate).request(
+			"/v1/conversations/conv-1/events",
+			{ method: "POST", headers: identityHeaders, body: userMessage },
+		);
+		expect(res.status).toBe(403);
+		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
+	});
+
+	it("returns 404 (not 403) for a missing conversation even when gated, without consulting the gate", async () => {
+		const { store } = fakeStore();
+		const { gate, seen } = recordingGate(false);
+		const res = await buildApp(store, gate).request(
+			"/v1/conversations/missing/events",
+			{ method: "POST", headers: identityHeaders, body: userMessage },
+		);
+		// Ownership/existence (404) is resolved before the exposure gate, so a
+		// gated user probing a conversation they don't own gets the documented
+		// 404 — and the gate is never consulted for it.
+		expect(res.status).toBe(404);
+		expect(seen).toHaveLength(0);
+	});
+
+	it("evaluates the gate from identity headers, not the request body", async () => {
+		const { store } = fakeStore();
+		const { gate, seen } = recordingGate(true);
+		await buildApp(store, gate).request("/v1/conversations", {
+			method: "POST",
+			headers: identityHeaders,
+			// A smuggled identity in the body is rejected by .strict() upstream, but
+			// even structurally the gate only ever sees header-derived identity.
+			body: JSON.stringify({}),
+		});
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toMatchObject({
+			memberCode: "member-1",
+			partnerCode: "partner-1",
+		});
+	});
+
+	it("checks the gate only after identity is valid (401 short-circuits)", async () => {
+		const { store } = fakeStore();
+		const { gate, seen } = recordingGate(true);
+		const res = await buildApp(store, gate).request("/v1/conversations", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(res.status).toBe(401);
+		expect(seen).toHaveLength(0);
 	});
 });
