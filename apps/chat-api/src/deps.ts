@@ -6,6 +6,10 @@ import {
 	type ConversationStore,
 	PostgresConversationStore,
 } from "./features/conversation-store";
+import {
+	createExposureGate,
+	type ExposureGate,
+} from "./features/exposure-gate";
 import { createLeaseStore } from "./features/lease-store";
 import { E2BSandboxProvider } from "./features/sandbox-orchestration/e2b-sandbox-provider";
 import { LocalContainerSandboxProvider } from "./features/sandbox-orchestration/local-container-sandbox-provider";
@@ -33,6 +37,12 @@ export interface AppDeps {
 	 * through this (reused across a conversation's turns, created on a miss).
 	 */
 	leaseManager: SandboxLeaseManager;
+	/**
+	 * Server-side gate controlling who may create new agent work. Consulted on
+	 * the new-work paths (conversation create, `user.message`) after identity is
+	 * parsed and before any write. Fails closed.
+	 */
+	exposureGate: ExposureGate;
 }
 
 /** Hono environment: pino logger vars plus the injected `AppDeps`. */
@@ -62,5 +72,6 @@ export function createDeps(config: ApiConfig): AppDeps {
 		workspaceStore,
 		conversationStore,
 		leaseManager,
+		exposureGate: createExposureGate(config),
 	};
 }

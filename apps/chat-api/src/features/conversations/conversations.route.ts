@@ -60,6 +60,12 @@ app.post(
 			);
 		}
 
+		// New-work exposure gate: evaluated on the trusted identity (not the body)
+		// before any conversation write. Fails closed.
+		if (!(await c.var.deps.exposureGate.isAgentEnabled(identity.data))) {
+			return c.json({ error: "Agent is not enabled" }, 403);
+		}
+
 		const result = await createConversation(
 			c.var.deps.conversationStore,
 			identity.data,
@@ -102,13 +108,26 @@ app.post(
 		const event = c.req.valid("json");
 
 		// Existence + ownership gate before opening the stream: a missing or
-		// foreign conversation is a clean 404, not an SSE error frame.
+		// foreign conversation is a clean 404, not an SSE error frame. This runs
+		// before the exposure gate so the 404 ownership contract is preserved — a
+		// gated user probing a conversation they don't own still gets 404, not a
+		// 403 that would leak the existence of the gate over ownership.
 		const conversation = await store.get({
 			userId: identity.data.memberCode,
 			conversationId,
 		});
 		if (!conversation) {
 			return c.json({ error: "Conversation not found" }, 404);
+		}
+
+		// `user.message` is new work and is gated. When `user.interrupt` (a control
+		// event for an existing run) is added in a later milestone, it must bypass
+		// this gate — branch on `event.type` here at that point. Today the body is
+		// only `user.message`, so the gate is unconditional. Evaluated on the
+		// trusted identity, after the ownership check but before any run write;
+		// fails closed.
+		if (!(await c.var.deps.exposureGate.isAgentEnabled(identity.data))) {
+			return c.json({ error: "Agent is not enabled" }, 403);
 		}
 
 		return streamSSE(
