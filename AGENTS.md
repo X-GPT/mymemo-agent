@@ -104,7 +104,7 @@ The chat surface is **two endpoints** under `/v1` (mounted in `src/routes/v1.ts`
 1. `POST /v1/conversations` — create a conversation. With:
    - **JSON body** (`CreateConversationBody`, `.strict()`): optional `collectionId` / `summaryId`. Scope is **resolved once from these ids and frozen** onto the conversation record; it is never re-derived per turn.
    - **Identity headers** (`InternalIdentity`): `X-Member-Code` (required), `X-Partner-Code` (required), `X-Team-Code`, `X-Member-Name`, `X-Partner-Name` (all optional). `memberCode` is the conversation owner (`user_id`).
-   - Returns `201 { conversationId, scope }`. `conversationId` is **server-generated** (a UUID, path-safe by construction). Persisted via `conversationStore` to chat-api's writable `mymemo_agent` DB. `DATABASE_URL` is **required** — validated at config load, so a misconfigured deploy fails fast at startup rather than 503-ing per request.
+   - Returns `201 { conversationId, scope }`. `conversationId` is **server-generated** (a UUID, path-safe by construction). Persisted via `conversationStore` to chat-api's writable `mymemo_agent` DB. `AGENT_DATABASE_URL` is **required** — validated at config load, so a misconfigured deploy fails fast at startup rather than 503-ing per request.
 2. `POST /v1/conversations/:conversationId/events` — append an event and stream the turn. With:
    - **JSON body** (`ConversationEventBody`): a discriminated union over `type`. Today only `{ type: "user.message", text }`; extensible to `user.interrupt` / `user.tool_confirmation` without a contract rename. Unknown types → `400`.
    - Same identity headers. The `:conversationId` path param is re-validated as path-safe.
@@ -172,16 +172,18 @@ Required:
 - `E2B_API_KEY` — required only when `SANDBOX_PROVIDER=e2b` (the default); not needed for the local provider
 - `LLM_TOKEN_SECRET` — HMAC secret for minting per-turn tokens (shared with the gateway)
 - `GATEWAY_PUBLIC_URL` — base URL of the merged gateway; the sandbox agent points BOTH the Claude binary (→ `/v1/messages`) and the `mymemo-docs` CLI (→ `/v1/documents/*`) at it. **Must be reachable from inside the E2B sandbox**
-- `DATABASE_URL` — connection to chat-api's **own writable** Postgres (`mymemo_agent`), which backs the conversation registry (frozen scope) and the sandbox-lease registry. A **separate database and credential** from the gateway's read-only KB (`mymemo_kb`), even when co-located — chat-api never touches KB tables. **Required**: the conversation endpoints are the primary surface and cannot work without it, so it is validated at config load. The `conversations`/`sandbox_leases` tables are owned by Drizzle migrations (`src/db/schema.ts` → `drizzle/`); run `bun run db:migrate` (the compose `migrate` one-shot does this locally)
+- `AGENT_DATABASE_URL` — connection to chat-api's **own writable** Postgres (`mymemo_agent`), which backs the conversation registry (frozen scope) and the sandbox-lease registry. A **separate database and credential** from the gateway's read-only KB (`mymemo_kb`), even when co-located — chat-api never touches KB tables. Named `AGENT_DATABASE_URL` (not the generic `DATABASE_URL`, which names the read-only KB credential elsewhere) so the two trust domains never collide. **Required**: the conversation endpoints are the primary surface and cannot work without it, so it is validated at config load. The `conversations`/`sandbox_leases` tables are owned by Drizzle migrations (`src/db/schema.ts` → `drizzle/`); run `bun run db:migrate` (the compose `migrate` one-shot does this locally)
+- `STATSIG_SERVER_SECRET` — backs the production agent exposure gate (`mymemo_agent_split_runtime_enabled`). **Required unless `AGENT_EXPOSURE_BREAK_GLASS=true`** (the gate then opens without Statsig). Never sent to the sandbox or logged
 
 Optional:
 - `LOG_LEVEL` (default: `info`)
 - `PORT` (default: 3000)
+- `AGENT_EXPOSURE_BREAK_GLASS` (default: off) — operator break-glass for the agent exposure gate. When `true`, new agent work is allowed without Statsig (local dev, or an incident where Statsig is unavailable) and `STATSIG_SERVER_SECRET` is not required. When off (production default), the gate fails closed
 - `SANDBOX_PROVIDER` (default: `e2b`) — `e2b` leases sandboxes from E2B; `local` targets a long-lived daemon container for the docker-compose E2E harness (`compose.yaml`). Selected in `sandbox-orchestration/singleton.ts`
 - `LOCAL_SANDBOX_DAEMON_URL` (default: `http://sandbox:8080`) — base URL of the local daemon container (`SANDBOX_PROVIDER=local` only)
 - `E2B_TEMPLATE` (default: `sandbox-template-dev`)
 - `WORKSPACE_STORE_ROOT` — root dir of the durable workspace store (local filesystem `WorkspaceStore` adapter). Holds per-user/per-conversation work, output, and the docs manifest, plus per-run event logs, following the path model `users/{userId}/conversations/{conversationId}/…` and `users/{userId}/runs/{runId}/events.jsonl`. Defaults to `.workspace-store` under the process cwd (writable in the container). **For durability across container recycles, point this at a mounted persistent volume in production**
-- `DB_PASSWORD` — spliced into `DATABASE_URL` when it is passwordless (the form the platform injects)
+- `DB_PASSWORD` — spliced into `AGENT_DATABASE_URL` when it is passwordless (the form the platform injects)
 - `DB_SSL` (default: on; set `disable` for a local non-TLS Postgres)
 
 ### gateway

@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import invariant from "tiny-invariant";
 
 export type ChatMessagesScope = "general" | "collection" | "document";
 
@@ -7,6 +6,16 @@ export type SandboxProviderKind = "e2b" | "local";
 
 /** Subset of the process environment the API reads. */
 type Env = Record<string, string | undefined>;
+
+/**
+ * Assert a config invariant, throwing an Error whose message survives
+ * production builds. Deliberately NOT tiny-invariant: that strips the message
+ * when NODE_ENV=production, which would turn a misconfigured prod boot into an
+ * opaque "Invariant failed" instead of naming the missing variable.
+ */
+function assert(condition: unknown, message: string): asserts condition {
+	if (!condition) throw new Error(message);
+}
 
 /**
  * Typed, validated configuration for the chat-api. Built once from the
@@ -33,19 +42,34 @@ export interface ApiConfig {
 	workspaceStoreRoot: string;
 	/**
 	 * Writable connection to chat-api's own Postgres (`mymemo_agent`), distinct
-	 * from the gateway's read-only KB. Backs the conversation registry (frozen
-	 * scope) and the sandbox-lease registry. **Required** — the conversation
-	 * endpoints are the primary surface and cannot work without it, so it is
-	 * validated at config load rather than failing per-request.
-	 * DB_PASSWORD spliced in when passwordless; TLS applied (DB_SSL=disable to
-	 * turn off for a local non-TLS Postgres).
+	 * from the gateway's/worker's read-only KB. Backs the conversation registry
+	 * (frozen scope), the sandbox-lease registry, and (in the split runtime) the
+	 * run queue and event log. Sourced from `AGENT_DATABASE_URL` — never the
+	 * generic `DATABASE_URL`, which names the read-only KB elsewhere in the repo.
+	 * **Required** — the conversation endpoints are the primary surface and cannot
+	 * work without it, so it is validated at config load rather than failing
+	 * per-request. DB_PASSWORD spliced in when passwordless; TLS applied
+	 * (DB_SSL=disable to turn off for a local non-TLS Postgres).
 	 */
 	databaseUrl: string;
+	/**
+	 * Statsig server secret backing the production agent exposure gate (MYM-46).
+	 * Required unless operator break-glass is on; undefined only in that case.
+	 * Never sent to the sandbox or logged.
+	 */
+	statsigServerSecret: string | undefined;
+	/**
+	 * Operator break-glass for the agent exposure gate. When true, new agent work
+	 * is allowed without Statsig (local dev, or an incident where Statsig is
+	 * unavailable). When false (production default), the gate fails closed and a
+	 * Statsig secret is required. Identity-independent and explicit.
+	 */
+	agentExposureBreakGlass: boolean;
 }
 
 /**
- * If DATABASE_URL is passwordless (the form the platform injects) and
- * DB_PASSWORD is set, splice the password in. Mirrors the gateway's helper.
+ * If the DB URL is passwordless (the form the platform injects) and DB_PASSWORD
+ * is set, splice the password in. Mirrors the gateway's helper.
  */
 function withPassword(url: string, password: string | undefined): string {
 	if (!password) return url;
@@ -87,7 +111,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	// rather than silently falling back to e2b (a typo like `locl` would
 	// otherwise surface as a confusing "E2B_API_KEY required").
 	const rawSandboxProvider = env.SANDBOX_PROVIDER;
-	invariant(
+	assert(
 		rawSandboxProvider === undefined ||
 			rawSandboxProvider === "e2b" ||
 			rawSandboxProvider === "local",
@@ -99,23 +123,38 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	// E2B credentials are only needed for the E2B provider; the local provider
 	// reaches a container it does not create, so don't hard-require them there.
 	if (sandboxProvider === "e2b") {
-		invariant(
+		assert(
 			env.E2B_API_KEY,
 			"E2B_API_KEY is required when SANDBOX_PROVIDER=e2b",
 		);
 	}
-	invariant(env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
-	invariant(env.GATEWAY_PUBLIC_URL, "GATEWAY_PUBLIC_URL is required");
+	assert(env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
+	assert(env.GATEWAY_PUBLIC_URL, "GATEWAY_PUBLIC_URL is required");
 
 	// The conversation registry is the primary surface and cannot work without a
 	// writable DB; require it at load so a misconfigured deploy fails fast instead
-	// of booting green and 503-ing every request.
+	// of booting green and 503-ing every request. Sourced from AGENT_DATABASE_URL
+	// (the writable mymemo_agent DB), never the generic DATABASE_URL — that name
+	// is the read-only KB credential elsewhere in the repo, and conflating them
+	// would point chat-api at the wrong trust domain.
 	const databaseUrl = resolveDatabaseUrl(
-		env.DATABASE_URL,
+		env.AGENT_DATABASE_URL,
 		env.DB_PASSWORD,
 		env.DB_SSL,
 	);
-	invariant(databaseUrl, "DATABASE_URL is required");
+	assert(databaseUrl, "AGENT_DATABASE_URL is required");
+
+	// Agent exposure (MYM-46) fails closed in production: a Statsig secret is
+	// required unless an operator explicitly enables break-glass (local dev, or an
+	// incident where Statsig is unavailable). The worker-only secrets (OpenRouter,
+	// KB) are intentionally NOT read here — chat-api must not hold them.
+	const agentExposureBreakGlass = env.AGENT_EXPOSURE_BREAK_GLASS === "true";
+	if (!agentExposureBreakGlass) {
+		assert(
+			env.STATSIG_SERVER_SECRET,
+			"STATSIG_SERVER_SECRET is required (or set AGENT_EXPOSURE_BREAK_GLASS=true to open the gate without Statsig)",
+		);
+	}
 
 	// Durable workspace store root. Optional with a writable fallback so it works
 	// out of the box, but the fallback is process-local and lost on container
@@ -143,5 +182,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		logLevel: env.LOG_LEVEL || "info",
 		workspaceStoreRoot,
 		databaseUrl,
+		statsigServerSecret: env.STATSIG_SERVER_SECRET,
+		agentExposureBreakGlass,
 	};
 }

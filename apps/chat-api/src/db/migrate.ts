@@ -11,12 +11,12 @@ import { resolveDatabaseUrl } from "@/config/env";
  * same way the app does (DB_PASSWORD splice + DB_SSL) so both connect identically.
  */
 const databaseUrl = resolveDatabaseUrl(
-	Bun.env.DATABASE_URL,
+	Bun.env.AGENT_DATABASE_URL,
 	Bun.env.DB_PASSWORD,
 	Bun.env.DB_SSL,
 );
 if (!databaseUrl) {
-	console.error("DATABASE_URL is required to run migrations");
+	console.error("AGENT_DATABASE_URL is required to run migrations");
 	process.exit(1);
 }
 
