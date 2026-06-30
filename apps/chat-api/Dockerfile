@@ -21,7 +21,9 @@ RUN cd /temp/dev && bun install --frozen-lockfile
 COPY --from=manifests /usr/src/app /temp/prod
 RUN cd /temp/prod && bun install --frozen-lockfile --production
 
-# Copy source, prebuild daemon bundle, and run tests
+# Copy source and prebuild the daemon bundle (shipped into the release image).
+# Tests are NOT run here — CI (.github/workflows/ci.yml) is the test gate; the
+# image build just produces the runtime artifact.
 FROM base AS prerelease
 COPY --from=install /temp/dev/node_modules node_modules
 COPY apps/chat-api/ apps/chat-api/
@@ -32,7 +34,6 @@ COPY package.json .
 WORKDIR /usr/src/app/apps/chat-api
 ENV NODE_ENV=production
 RUN bun run build:daemon
-RUN bun test
 
 # Final release image
 FROM base AS release
