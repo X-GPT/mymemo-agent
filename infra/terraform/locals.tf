@@ -2,9 +2,11 @@ locals {
   common_name = "${var.name_prefix}-${var.environment}"
 
   service_security_group_name = "${local.common_name}-services"
+  alb_security_group_name     = "${local.common_name}-alb"
 
   chat_api_name     = "${local.common_name}-chat-api"
   agent_worker_name = "${local.common_name}-worker"
+  alb_name          = "${local.common_name}-alb"
 
   shared_service_outputs = data.terraform_remote_state.mymemo_service.outputs
 
@@ -14,16 +16,8 @@ locals {
   shared_ecs_cluster_arn_output  = try(local.shared_service_outputs.ecs_cluster_arn, null)
   shared_ecs_cluster_name_output = try(local.shared_service_outputs.ecs_cluster_name, null)
 
-  shared_alb_arn_output               = try(local.shared_service_outputs.alb_arn, null)
-  shared_alb_listener_arn_output      = try(local.shared_service_outputs.https_listener_arn, local.shared_service_outputs.alb_listener_arn, null)
-  shared_alb_security_group_id_output = try(local.shared_service_outputs.alb_security_group_id, null)
-
   shared_ecs_cluster_arn  = coalesce(local.shared_ecs_cluster_arn_output, one(data.aws_ecs_cluster.shared[*].arn))
   shared_ecs_cluster_name = coalesce(local.shared_ecs_cluster_name_output, one(data.aws_ecs_cluster.shared[*].cluster_name), try(regex("[^/]+$", local.shared_ecs_cluster_arn_output), null))
-
-  shared_alb_listener_arn      = coalesce(local.shared_alb_listener_arn_output, one(data.aws_lb_listener.shared_https[*].arn))
-  shared_alb_security_group_id = coalesce(local.shared_alb_security_group_id_output, try(one(one(data.aws_lb.shared[*].security_groups)), null))
-  shared_alb_dns_name          = try(coalesce(try(local.shared_service_outputs.alb_dns_name, null), try(one(data.aws_lb.shared[*].dns_name), null)), null)
 
   managed_agent_database_url = "postgresql://${var.agent_database_username}@${aws_db_instance.agent.address}:${aws_db_instance.agent.port}/${var.agent_database_name}"
 

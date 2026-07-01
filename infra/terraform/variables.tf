@@ -20,22 +20,10 @@ variable "tags" {
   default     = {}
 }
 
-variable "enable_alb_routing" {
-  description = "Whether to register chat-api behind the existing mymemo-service ALB."
-  type        = bool
-  default     = false
-}
-
-variable "chat_api_path_patterns" {
-  description = "Path patterns routed from the existing ALB listener to chat-api."
-  type        = list(string)
-  default     = ["/v1/conversations", "/v1/conversations/*"]
-}
-
-variable "chat_api_listener_rule_priority" {
-  description = "Priority for the agent chat-api listener rule on the existing ALB."
-  type        = number
-  default     = 420
+variable "agent_alb_certificate_arn" {
+  description = "Optional ACM certificate ARN for the agent-owned ALB HTTPS listener. When null, the ALB serves HTTP only."
+  type        = string
+  default     = null
 }
 
 variable "chat_api_image" {

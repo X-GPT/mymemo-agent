@@ -126,13 +126,10 @@ resource "aws_ecs_service" "chat_api" {
     assign_public_ip = var.assign_public_ip
   }
 
-  dynamic "load_balancer" {
-    for_each = var.enable_alb_routing ? [1] : []
-    content {
-      target_group_arn = aws_lb_target_group.chat_api[0].arn
-      container_name   = "chat-api"
-      container_port   = var.chat_api_port
-    }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.chat_api.arn
+    container_name   = "chat-api"
+    container_port   = var.chat_api_port
   }
 
   lifecycle {

@@ -7,9 +7,9 @@ tags = {
   ManagedBy   = "terraform"
 }
 
-# Existing mymemo-service shared infra is read from Terraform remote state.
-enable_alb_routing              = true
-chat_api_listener_rule_priority = 420
+# Existing mymemo-service VPC/subnets/ECS cluster are read from Terraform remote
+# state. The public ALB is owned by mymemo-agent.
+agent_alb_certificate_arn = null
 
 # Existing mymemo-service ECS subnets are public/default subnets with no
 # private NAT/VPC endpoint egress path. Public IP assignment is therefore an

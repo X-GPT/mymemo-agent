@@ -2,14 +2,13 @@
 
 This Terraform root owns the AWS resources for `mymemo-agent` while consuming
 the existing `mymemo-service` network. It deliberately does not create a VPC,
-subnets, ECS cluster, or shared ALB.
+subnets, or ECS cluster.
 
 ## Shared Network Contract
 
 Shared infrastructure is consumed from the `mymemo-service` Terraform remote
 state at `s3://mymemo-terraform-state-bucket/mymemo/staging.tfstate`. Do not
-duplicate VPC, subnet, ECS cluster, listener, or ALB security-group IDs in this
-repo's deploy config.
+duplicate VPC, subnet, or ECS cluster IDs in this repo's deploy config.
 
 The agent stack reads these from remote state when exposed by
 `mymemo-service`. For values that the current `mymemo-service` state does not
@@ -19,10 +18,6 @@ data sources instead of duplicating IDs in this repo.
 - ECS subnet IDs from `ecs_subnet_ids`
 - VPC ID from `vpc_id`
 - ECS cluster ARN from `ecs_cluster_arn`, falling back to `ecs_cluster_name`
-- HTTPS listener ARN from `https_listener_arn` or `alb_listener_arn`, falling
-  back to the shared ALB's port 443 listener
-- ALB security group ID from `alb_security_group_id`, falling back to the shared
-  ALB security groups
 
 Fallback AWS data sources are conditional: Terraform only evaluates them when
 the direct remote-state output is absent and the fallback input is present.
@@ -35,7 +30,7 @@ the direct remote-state output is absent and the fallback input is present.
 - ECS Fargate task definitions and services for chat-api and agent-worker
 - agent DB migration task definition
 - service security group inside the shared VPC
-- optional listener rule and target group on the existing ALB
+- public agent-owned ALB, ALB security group, listeners, and chat-api target group
 - IAM execution/task roles for the agent tasks
 - CloudWatch log groups and baseline alarms
 
@@ -120,8 +115,8 @@ settings:
   E2B sandboxes so the agent can call the gateway for LLM and document access.
 - `AGENT_SMOKE_BASE_URL` in `prod.env` is deploy verification config. The GitHub Actions
   runner calls this base URL after rollout to verify `chat-api` responds at
-  `/v1/conversations`. It can point at the same shared ALB DNS name if that ALB
-  routes the agent paths, but it is not consumed by the running ECS tasks.
+  `/v1/conversations`. It should point at the agent-owned ALB DNS name or a
+  custom domain alias for that ALB. It is not consumed by the running ECS tasks.
 
 The workflow does not require GitHub repository variables for Terraform inputs.
 The only credential handoff is GitHub OIDC assuming the deploy role:
@@ -153,6 +148,8 @@ The GitHub workflow does not rewrite long-lived application secret values.
 terraform -chdir=infra/terraform fmt -check
 terraform -chdir=infra/terraform init -backend=false
 terraform -chdir=infra/terraform validate
+terraform -chdir=infra/bootstrap-iam init -backend=false
+terraform -chdir=infra/bootstrap-iam validate
 terraform -chdir=infra/ecr init -backend=false
 terraform -chdir=infra/ecr validate
 ```

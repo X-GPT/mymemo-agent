@@ -10,17 +10,8 @@ data "terraform_remote_state" "mymemo_service" {
   }
 }
 
-data "aws_lb" "shared" {
-  count = local.shared_alb_arn_output != null && (local.shared_alb_listener_arn_output == null || local.shared_alb_security_group_id_output == null) ? 1 : 0
-
-  arn = local.shared_alb_arn_output
-}
-
-data "aws_lb_listener" "shared_https" {
-  count = local.shared_alb_listener_arn_output == null && local.shared_alb_arn_output != null ? 1 : 0
-
-  load_balancer_arn = data.aws_lb.shared[0].arn
-  port              = 443
+data "aws_vpc" "shared" {
+  id = local.shared_vpc_id
 }
 
 data "aws_ecs_cluster" "shared" {

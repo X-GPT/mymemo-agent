@@ -9,10 +9,8 @@ resource "aws_cloudwatch_log_group" "agent_worker" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "chat_api_unhealthy" {
-  count = var.enable_alb_routing ? 1 : 0
-
   alarm_name          = "${local.chat_api_name}-unhealthy-hosts"
-  alarm_description   = "chat-api has unhealthy targets behind the existing MyMemo ALB."
+  alarm_description   = "chat-api has unhealthy targets behind the agent ALB."
   namespace           = "AWS/ApplicationELB"
   metric_name         = "UnHealthyHostCount"
   statistic           = "Maximum"
@@ -22,7 +20,7 @@ resource "aws_cloudwatch_metric_alarm" "chat_api_unhealthy" {
   comparison_operator = "GreaterThanThreshold"
 
   dimensions = {
-    TargetGroup = aws_lb_target_group.chat_api[0].arn_suffix
+    TargetGroup = aws_lb_target_group.chat_api.arn_suffix
   }
 }
 

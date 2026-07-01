@@ -7,15 +7,14 @@ tags = {
   ManagedBy   = "terraform"
 }
 
-enable_alb_routing  = true
-# Existing mymemo-service shared infra is read from Terraform remote state.
+# Existing mymemo-service VPC/subnets/ECS cluster are read from Terraform remote
+# state. The public ALB is owned by mymemo-agent. Set an ACM certificate ARN to
+# enable HTTPS; null uses HTTP-only ALB DNS for bootstrap.
+agent_alb_certificate_arn = null
+
 # Existing ECS subnets are public/default subnets with no NAT/VPC endpoint egress
 # path, so public IP assignment is an inherited network constraint.
 assign_public_ip = true
-chat_api_path_patterns = [
-  "/v1/conversations",
-  "/v1/conversations/*",
-]
 
 chat_api_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-chat-api:REPLACE_WITH_GIT_SHA"
 agent_worker_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-worker:REPLACE_WITH_GIT_SHA"

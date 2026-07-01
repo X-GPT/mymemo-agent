@@ -92,6 +92,7 @@ describe("agent deployment config", () => {
 			'aws_region  = "us-west-2"',
 			'environment = "prod"',
 			"assign_public_ip = true",
+			"agent_alb_certificate_arn = null",
 			'gateway_public_url         = "REPLACE_ME_AGENT_GATEWAY_PUBLIC_URL"',
 			'openrouter_default_model   = "anthropic/claude-sonnet-4"',
 		]) {
@@ -247,15 +248,24 @@ describe("agent deployment config", () => {
 		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
 		const sharedState = readFileSync(join(terraformDir, "shared_state.tf"), "utf8");
 		const cloudwatch = readFileSync(join(terraformDir, "cloudwatch.tf"), "utf8");
+		const albConfig = readFileSync(join(terraformDir, "alb.tf"), "utf8");
+		const networkConfig = readFileSync(join(terraformDir, "network.tf"), "utf8");
+		const outputs = readFileSync(join(terraformDir, "outputs.tf"), "utf8");
 
 		expect(locals).toContain("shared_vpc_id         = local.shared_service_outputs.vpc_id");
 		expect(sharedState).not.toContain('data "aws_subnet" "shared_ecs_first"');
 		expect(sharedState).toContain('data "aws_ecs_cluster" "shared"');
 		expect(sharedState).toContain("count = local.shared_ecs_cluster_arn_output == null");
-		expect(sharedState).toContain('data "aws_lb" "shared"');
-		expect(sharedState).toContain("count = local.shared_alb_arn_output != null");
-		expect(sharedState).toContain('data "aws_lb_listener" "shared_https"');
-		expect(sharedState).toContain("count = local.shared_alb_listener_arn_output == null");
+		expect(sharedState).not.toContain('data "aws_lb" "shared"');
+		expect(sharedState).not.toContain('data "aws_lb_listener" "shared_https"');
+		expect(locals).not.toContain("shared_alb");
+		expect(albConfig).toContain('resource "aws_lb" "agent"');
+		expect(albConfig).toContain('resource "aws_lb_listener" "http"');
+		expect(albConfig).toContain('resource "aws_lb_listener" "https"');
+		expect(networkConfig).toContain('resource "aws_security_group" "alb"');
+		expect(networkConfig).toContain("source_security_group_id = aws_security_group.alb.id");
+		expect(outputs).toContain('output "agent_alb_dns_name"');
+		expect(outputs).toContain('output "agent_alb_url"');
 		expect(cloudwatch).toContain("ClusterName = local.shared_ecs_cluster_name");
 		expect(cloudwatch).not.toContain("outputs.ecs_cluster_name");
 	});

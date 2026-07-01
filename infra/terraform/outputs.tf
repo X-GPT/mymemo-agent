@@ -54,18 +54,25 @@ output "assign_public_ip" {
 }
 
 output "chat_api_target_group_arn" {
-  description = "Target group ARN when ALB routing is enabled."
-  value       = var.enable_alb_routing ? aws_lb_target_group.chat_api[0].arn : null
+  description = "Agent ALB target group ARN for chat-api."
+  value       = aws_lb_target_group.chat_api.arn
+}
+
+output "agent_alb_dns_name" {
+  description = "DNS name of the agent-owned public ALB."
+  value       = aws_lb.agent.dns_name
+}
+
+output "agent_alb_url" {
+  description = "HTTP bootstrap URL of the agent-owned public ALB. Null when HTTPS is enabled; use the custom DNS name matching the ACM certificate instead."
+  value       = var.agent_alb_certificate_arn == null ? "http://${aws_lb.agent.dns_name}" : null
 }
 
 output "shared_infra" {
-  description = "Shared mymemo-service infrastructure consumed through remote state and AWS data sources."
+  description = "Shared mymemo-service infrastructure consumed through remote state."
   value = {
-    vpc_id                = local.shared_vpc_id
-    ecs_subnet_ids        = local.shared_ecs_subnet_ids
-    ecs_cluster_arn       = local.shared_ecs_cluster_arn
-    alb_listener_arn      = local.shared_alb_listener_arn
-    alb_security_group_id = local.shared_alb_security_group_id
-    alb_dns_name          = local.shared_alb_dns_name
+    vpc_id          = local.shared_vpc_id
+    ecs_subnet_ids  = local.shared_ecs_subnet_ids
+    ecs_cluster_arn = local.shared_ecs_cluster_arn
   }
 }
