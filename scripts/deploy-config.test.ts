@@ -7,6 +7,7 @@ import { loadApiConfigFromEnv } from "../apps/chat-api/src/config/env";
 const root = process.cwd();
 const terraformDir = join(root, "infra", "terraform");
 const ecrTerraformDir = join(root, "infra", "ecr");
+const bootstrapIamTerraformDir = join(root, "infra", "bootstrap-iam");
 const exampleTfvars = readFileSync(
 	join(terraformDir, "examples", "prod.tfvars.example"),
 	"utf8",
@@ -214,10 +215,23 @@ describe("agent deployment config", () => {
 		expect(prepareScript).not.toContain("prod.env");
 		expect(releaseDeployWorkflow).toContain('AWS_ACCOUNT_ID: "637423444544"');
 		expect(releaseDeployWorkflow).toContain(
-			"arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-github-actions-deploy",
+			"arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy",
 		);
 		expect(releaseDeployWorkflow).toContain("DEPLOY_ENVIRONMENT: ${{ inputs.environment }}");
 		expect(releaseDeployWorkflow).toContain("GITHUB_RUN_ATTEMPT");
+	});
+
+	it("bootstrap IAM owns the agent-specific GitHub Actions deploy role", () => {
+		const combined = terraformFiles(bootstrapIamTerraformDir)
+			.map((path) => readFileSync(path, "utf8"))
+			.join("\n");
+
+		expect(combined).toContain('default     = "mymemo-agent-github-actions-deploy"');
+		expect(combined).toContain("token.actions.githubusercontent.com:sub");
+		expect(combined).toContain("repo:${var.github_owner}/${var.github_repository}:environment:${var.github_environment}");
+		expect(combined).toContain("sts:AssumeRoleWithWebIdentity");
+		expect(combined).toContain("mymemo-agent/bootstrap-iam-prod.tfstate");
+		expect(combined).not.toContain("mymemo-github-actions-deploy");
 	});
 
 	it("release deploy serializes runs and validates image tags before exporting env", () => {

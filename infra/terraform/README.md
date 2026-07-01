@@ -77,6 +77,17 @@ boundary should remove that from chat-api once sandbox creation moves fully to
 
 ## Release Deploy Config
 
+This repo owns its GitHub Actions deploy role in the one-time bootstrap root:
+
+```sh
+AWS_PROFILE=mymemo terraform -chdir=infra/bootstrap-iam init
+AWS_PROFILE=mymemo terraform -chdir=infra/bootstrap-iam apply
+```
+
+That creates `mymemo-agent-github-actions-deploy`, trusted only by the
+`X-GPT/mymemo-agent` GitHub environment named `prod`. Run this bootstrap locally
+with an admin AWS profile before the first GitHub Actions deploy.
+
 Terraform-owned production inputs live in checked-in
 `infra/terraform/prod.tfvars`. The GitHub Actions workflow sources
 `infra/deploy/prod.env` only for CI/deploy settings such as AWS account and
@@ -116,7 +127,7 @@ The workflow does not require GitHub repository variables for Terraform inputs.
 The only credential handoff is GitHub OIDC assuming the deploy role:
 
 ```text
-arn:aws:iam::637423444544:role/mymemo-github-actions-deploy
+arn:aws:iam::637423444544:role/mymemo-agent-github-actions-deploy
 ```
 
 Actual secret values stay out of git. AWS Secrets Manager is the long-term
