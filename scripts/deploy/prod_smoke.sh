@@ -9,7 +9,7 @@ load_deploy_config
 : "${AGENT_SMOKE_BASE_URL:?AGENT_SMOKE_BASE_URL is required}"
 
 if [[ "$AGENT_SMOKE_BASE_URL" == REPLACE_ME* ]]; then
-  echo "AGENT_SMOKE_BASE_URL is required; set it in $config" >&2
+  echo "AGENT_SMOKE_BASE_URL is required; set it in $DEPLOY_CONFIG_PATH" >&2
   exit 1
 fi
 

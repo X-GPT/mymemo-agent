@@ -85,7 +85,7 @@ if [[ -f "$secrets_config" ]]; then
   load_dotenv_file "$secrets_config"
 fi
 
-: "${AWS_REGION:?AWS_REGION is required in $config or env}"
+: "${AWS_REGION:?AWS_REGION is required in $DEPLOY_CONFIG_PATH or env}"
 
 aws_args=(--region "$AWS_REGION")
 if [[ -n "${AWS_PROFILE:-}" ]]; then

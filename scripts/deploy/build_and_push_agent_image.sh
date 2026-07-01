@@ -15,9 +15,6 @@ Required env:
   AWS_REGION
   AWS_ACCOUNT_ID
   IMAGE_TAG
-
-Optional env:
-  ECR_REPOSITORY_PREFIX  default: mymemo-agent
 USAGE
 }
 

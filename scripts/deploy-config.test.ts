@@ -220,6 +220,15 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain("GITHUB_RUN_ATTEMPT");
 	});
 
+	it("release deploy serializes runs and validates image tags before exporting env", () => {
+		expect(releaseDeployWorkflow).toContain("concurrency:");
+		expect(releaseDeployWorkflow).toContain("group: release-deploy-${{ inputs.environment }}");
+		expect(releaseDeployWorkflow).toContain("cancel-in-progress: false");
+		expect(releaseDeployWorkflow).toContain('if [[ ! "${image_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]');
+		expect(releaseDeployWorkflow).toContain("printf 'IMAGE_TAG=%s\\n'");
+		expect(releaseDeployWorkflow).not.toContain('echo "IMAGE_TAG=${REQUESTED_IMAGE_TAG}" >> "${GITHUB_ENV}"');
+	});
+
 	it("shared infrastructure fallbacks are explicit and conditional", () => {
 		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
 		const sharedState = readFileSync(join(terraformDir, "shared_state.tf"), "utf8");
@@ -264,6 +273,7 @@ describe("agent deployment config", () => {
 		);
 
 		expect(loader).toContain("load_deploy_config()");
+		expect(loader).toContain("DEPLOY_CONFIG_PATH=");
 		for (const script of [
 			"build_and_push_agent_image.sh",
 			"create_agent_secrets.sh",
@@ -276,6 +286,18 @@ describe("agent deployment config", () => {
 			expect(content).toContain("load_deploy_config");
 			expect(content).not.toContain('config="${DEPLOY_CONFIG:-infra/deploy/prod.env}"');
 		}
+		expect(createAgentSecretsScript).toContain("AWS_REGION is required in $DEPLOY_CONFIG_PATH or env");
+	});
+
+	it("image build script only documents supported ECR repositories", () => {
+		const buildScript = readFileSync(
+			join(root, "scripts", "deploy", "build_and_push_agent_image.sh"),
+			"utf8",
+		);
+
+		expect(buildScript).toContain('repository="mymemo-agent-chat-api"');
+		expect(buildScript).toContain('repository="mymemo-agent-worker"');
+		expect(buildScript).not.toContain("ECR_REPOSITORY_PREFIX");
 	});
 
 	it("secret bootstrap parses ignored values without sourcing them", () => {

@@ -11,6 +11,10 @@ on:
         required: true
         default: "prod"
 
+concurrency:
+  group: release-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
 env:
   AWS_REGION: us-west-2
   AWS_ACCOUNT_ID: "637423444544"
@@ -45,11 +49,18 @@ jobs:
           REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           if [[ -n "${REQUESTED_IMAGE_TAG}" ]]; then
-            echo "IMAGE_TAG=${REQUESTED_IMAGE_TAG}" >> "${GITHUB_ENV}"
+            image_tag="${REQUESTED_IMAGE_TAG}"
           else
             short_sha="${GITHUB_SHA::7}"
-            echo "IMAGE_TAG=release-${short_sha}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_ENV}"
+            image_tag="release-${short_sha}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           fi
+
+          if [[ ! "${image_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid image_tag. Use a Docker tag: 1-128 chars, starting with alphanumeric or underscore, then alphanumeric, underscore, dot, or dash." >&2
+            exit 1
+          fi
+
+          printf 'IMAGE_TAG=%s\n' "${image_tag}" >> "${GITHUB_ENV}"
 
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
