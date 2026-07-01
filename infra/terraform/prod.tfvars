@@ -9,7 +9,7 @@ tags = {
 
 # Existing mymemo-service VPC/subnets/ECS cluster are read from Terraform remote
 # state. The public ALB is owned by mymemo-agent.
-agent_alb_certificate_arn = null
+agent_alb_certificate_arn = "arn:aws:acm:us-west-2:637423444544:certificate/1cd62dfc-c199-40ed-9f96-7c8700574e47"
 
 # Existing mymemo-service ECS subnets are public/default subnets with no
 # private NAT/VPC endpoint egress path. Public IP assignment is therefore an

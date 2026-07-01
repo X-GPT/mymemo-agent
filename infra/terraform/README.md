@@ -118,6 +118,12 @@ settings:
   `/v1/conversations`. It should point at the agent-owned ALB DNS name or a
   custom domain alias for that ALB. It is not consumed by the running ECS tasks.
 
+The production config reuses the existing `*.mymemo.ai` ACM certificate in
+`us-west-2`, matching the `mymemo-service` pattern. DNS remains outside
+Terraform: create a Cloudflare CNAME such as `agent-api.mymemo.ai` pointing at
+`terraform -chdir=infra/terraform output -raw agent_alb_dns_name`, then set
+`AGENT_SMOKE_BASE_URL=https://agent-api.mymemo.ai`.
+
 The workflow does not require GitHub repository variables for Terraform inputs.
 The only credential handoff is GitHub OIDC assuming the deploy role:
 

@@ -92,7 +92,7 @@ describe("agent deployment config", () => {
 			'aws_region  = "us-west-2"',
 			'environment = "prod"',
 			"assign_public_ip = true",
-			"agent_alb_certificate_arn = null",
+			'agent_alb_certificate_arn = "arn:aws:acm:us-west-2:637423444544:certificate/1cd62dfc-c199-40ed-9f96-7c8700574e47"',
 			'gateway_public_url         = "REPLACE_ME_AGENT_GATEWAY_PUBLIC_URL"',
 			'openrouter_default_model   = "anthropic/claude-sonnet-4"',
 		]) {
