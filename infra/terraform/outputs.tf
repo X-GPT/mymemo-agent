@@ -13,6 +13,16 @@ output "agent_migration_task_definition_arn" {
   value       = aws_ecs_task_definition.agent_migration.arn
 }
 
+output "chat_api_task_definition_arn" {
+  description = "Task definition ARN for the chat-api release built by Terraform."
+  value       = aws_ecs_task_definition.chat_api.arn
+}
+
+output "agent_worker_task_definition_arn" {
+  description = "Task definition ARN for the agent-worker release built by Terraform."
+  value       = aws_ecs_task_definition.agent_worker.arn
+}
+
 output "agent_database_endpoint" {
   description = "Endpoint of the dedicated agent RDS instance."
   value       = aws_db_instance.agent.address
@@ -56,6 +66,6 @@ output "shared_infra" {
     ecs_cluster_arn       = local.shared_ecs_cluster_arn
     alb_listener_arn      = local.shared_alb_listener_arn
     alb_security_group_id = local.shared_alb_security_group_id
-    alb_dns_name          = data.aws_lb.shared.dns_name
+    alb_dns_name          = local.shared_alb_dns_name
   }
 }

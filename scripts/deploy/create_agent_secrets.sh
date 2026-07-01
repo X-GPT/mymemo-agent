@@ -34,11 +34,10 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-config="${DEPLOY_CONFIG:-infra/deploy/prod.env}"
-if [[ -f "$config" ]]; then
-  # shellcheck disable=SC1090
-  source "$config"
-fi
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/deploy/lib/load_config.sh
+source "$script_dir/lib/load_config.sh"
+load_deploy_config
 
 environment="${DEPLOY_ENVIRONMENT:-prod}"
 secrets_config="${DEPLOY_SECRETS_CONFIG:-infra/deploy/${environment}.secrets.env}"

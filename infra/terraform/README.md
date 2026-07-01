@@ -17,12 +17,15 @@ yet output directly, it derives them from existing remote-state outputs with AWS
 data sources instead of duplicating IDs in this repo.
 
 - ECS subnet IDs from `ecs_subnet_ids`
-- VPC ID from `vpc_id`, falling back to the shared ECS subnet VPC
+- VPC ID from `vpc_id`
 - ECS cluster ARN from `ecs_cluster_arn`, falling back to `ecs_cluster_name`
 - HTTPS listener ARN from `https_listener_arn` or `alb_listener_arn`, falling
   back to the shared ALB's port 443 listener
 - ALB security group ID from `alb_security_group_id`, falling back to the shared
   ALB security groups
+
+Fallback AWS data sources are conditional: Terraform only evaluates them when
+the direct remote-state output is absent and the fallback input is present.
 
 ## Agent-Owned Resources
 
@@ -86,6 +89,13 @@ terraform -chdir=infra/terraform plan -var-file=prod.tfvars
 
 Placeholder values such as `REPLACE_ME_*` in `prod.tfvars` or the generated
 image overlay fail the plan entrypoint before Terraform changes are proposed.
+
+ECS service `task_definition` changes are intentionally ignored by Terraform.
+`terraform apply` registers the new task definitions and updates infrastructure,
+but it does not roll running services onto the new image. The release workflow
+runs the agent database migration task first, then `roll_ecs_services.sh`
+updates each service to the Terraform-created task definition and waits for
+stability. This keeps schema-dependent images from starting before migrations.
 
 `assign_public_ip=true` is intentionally kept while the existing shared
 `mymemo-service` ECS subnets are public/default subnets with no NAT/VPC endpoint

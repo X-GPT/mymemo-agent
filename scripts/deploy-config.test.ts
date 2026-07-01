@@ -176,6 +176,23 @@ describe("agent deployment config", () => {
 		expect(migrationIndex).toBeLessThan(rolloutIndex);
 	});
 
+	it("terraform does not roll ECS services before migrations", () => {
+		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
+		const outputs = readFileSync(join(terraformDir, "outputs.tf"), "utf8");
+		const rolloutScript = readFileSync(
+			join(root, "scripts", "deploy", "roll_ecs_services.sh"),
+			"utf8",
+		);
+
+		expect(ecsConfig).toContain("ignore_changes = [task_definition]");
+		expect(outputs).toContain('output "chat_api_task_definition_arn"');
+		expect(outputs).toContain('output "agent_worker_task_definition_arn"');
+		expect(rolloutScript).toContain("terraform -chdir=infra/terraform output -raw chat_api_task_definition_arn");
+		expect(rolloutScript).toContain("terraform -chdir=infra/terraform output -raw agent_worker_task_definition_arn");
+		expect(rolloutScript).toContain('--task-definition "$chat_api_task_definition"');
+		expect(rolloutScript).toContain('--task-definition "$agent_worker_task_definition"');
+	});
+
 	it("release deploy plans with checked-in Terraform tfvars plus generated image overlay", () => {
 		const planScript = readFileSync(
 			join(root, "scripts", "deploy", "terraform_prod_in_place_plan.sh"),
@@ -196,8 +213,28 @@ describe("agent deployment config", () => {
 		expect(prepareScript).not.toContain("DEPLOY_CONFIG");
 		expect(prepareScript).not.toContain("prod.env");
 		expect(releaseDeployWorkflow).toContain('AWS_ACCOUNT_ID: "637423444544"');
+		expect(releaseDeployWorkflow).toContain(
+			"arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-github-actions-deploy",
+		);
 		expect(releaseDeployWorkflow).toContain("DEPLOY_ENVIRONMENT: ${{ inputs.environment }}");
 		expect(releaseDeployWorkflow).toContain("GITHUB_RUN_ATTEMPT");
+	});
+
+	it("shared infrastructure fallbacks are explicit and conditional", () => {
+		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
+		const sharedState = readFileSync(join(terraformDir, "shared_state.tf"), "utf8");
+		const cloudwatch = readFileSync(join(terraformDir, "cloudwatch.tf"), "utf8");
+
+		expect(locals).toContain("shared_vpc_id         = local.shared_service_outputs.vpc_id");
+		expect(sharedState).not.toContain('data "aws_subnet" "shared_ecs_first"');
+		expect(sharedState).toContain('data "aws_ecs_cluster" "shared"');
+		expect(sharedState).toContain("count = local.shared_ecs_cluster_arn_output == null");
+		expect(sharedState).toContain('data "aws_lb" "shared"');
+		expect(sharedState).toContain("count = local.shared_alb_arn_output != null");
+		expect(sharedState).toContain('data "aws_lb_listener" "shared_https"');
+		expect(sharedState).toContain("count = local.shared_alb_listener_arn_output == null");
+		expect(cloudwatch).toContain("ClusterName = local.shared_ecs_cluster_name");
+		expect(cloudwatch).not.toContain("outputs.ecs_cluster_name");
 	});
 
 	it("migration task uses Terraform network settings", () => {
@@ -218,6 +255,27 @@ describe("agent deployment config", () => {
 		expect(ecsConfig).toContain("desired_count   = var.chat_api_desired_count");
 		expect(ecsConfig).toContain("desired_count   = var.agent_worker_desired_count");
 		expect(ecsConfig).not.toContain("ignore_changes = [desired_count]");
+	});
+
+	it("deploy scripts share config loading", () => {
+		const loader = readFileSync(
+			join(root, "scripts", "deploy", "lib", "load_config.sh"),
+			"utf8",
+		);
+
+		expect(loader).toContain("load_deploy_config()");
+		for (const script of [
+			"build_and_push_agent_image.sh",
+			"create_agent_secrets.sh",
+			"prod_smoke.sh",
+			"roll_ecs_services.sh",
+			"run_agent_migration.sh",
+		]) {
+			const content = readFileSync(join(root, "scripts", "deploy", script), "utf8");
+			expect(content).toContain('source "$script_dir/lib/load_config.sh"');
+			expect(content).toContain("load_deploy_config");
+			expect(content).not.toContain('config="${DEPLOY_CONFIG:-infra/deploy/prod.env}"');
+		}
 	});
 
 	it("secret bootstrap parses ignored values without sourcing them", () => {

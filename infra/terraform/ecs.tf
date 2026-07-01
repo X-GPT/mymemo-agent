@@ -135,6 +135,9 @@ resource "aws_ecs_service" "chat_api" {
     }
   }
 
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
 
 resource "aws_ecs_service" "agent_worker" {
@@ -150,4 +153,7 @@ resource "aws_ecs_service" "agent_worker" {
     assign_public_ip = var.assign_public_ip
   }
 
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }

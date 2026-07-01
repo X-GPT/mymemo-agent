@@ -38,7 +38,7 @@ resource "aws_cloudwatch_metric_alarm" "chat_api_cpu_high" {
   comparison_operator = "GreaterThanThreshold"
 
   dimensions = {
-    ClusterName = data.terraform_remote_state.mymemo_service.outputs.ecs_cluster_name
+    ClusterName = local.shared_ecs_cluster_name
     ServiceName = aws_ecs_service.chat_api.name
   }
 }
@@ -55,7 +55,7 @@ resource "aws_cloudwatch_metric_alarm" "agent_worker_cpu_high" {
   comparison_operator = "GreaterThanThreshold"
 
   dimensions = {
-    ClusterName = data.terraform_remote_state.mymemo_service.outputs.ecs_cluster_name
+    ClusterName = local.shared_ecs_cluster_name
     ServiceName = aws_ecs_service.agent_worker.name
   }
 }
