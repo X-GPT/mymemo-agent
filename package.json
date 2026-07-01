@@ -2,7 +2,9 @@
 	"name": "mymemo-agent",
 	"module": "index.ts",
 	"scripts": {
-		"test": "bun run scripts/test-workspaces.ts"
+		"test": "bun test scripts/deploy-config.test.ts && bun run scripts/test-workspaces.ts",
+		"terraform:fmt": "terraform -chdir=infra/terraform fmt && terraform -chdir=infra/ecr fmt",
+		"terraform:validate": "terraform -chdir=infra/terraform validate && terraform -chdir=infra/ecr validate"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.11",
