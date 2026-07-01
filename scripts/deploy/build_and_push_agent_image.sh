@@ -13,7 +13,6 @@ Usage:
 
 Required env:
   AWS_REGION
-  AWS_ACCOUNT_ID
   IMAGE_TAG
 USAGE
 }
@@ -27,11 +26,11 @@ service="$1"
 case "$service" in
   chat-api)
     dockerfile="apps/chat-api/Dockerfile"
-    repository="mymemo-agent-chat-api"
+    output_name="chat_api_ecr_repository_url"
     ;;
   agent-worker)
     dockerfile="apps/agent-worker/Dockerfile"
-    repository="mymemo-agent-worker"
+    output_name="agent_worker_ecr_repository_url"
     ;;
   *)
     usage
@@ -40,11 +39,11 @@ case "$service" in
 esac
 
 : "${AWS_REGION:?AWS_REGION is required}"
-: "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID is required}"
 : "${IMAGE_TAG:?IMAGE_TAG is required}"
 
-registry="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-image="${registry}/${repository}:${IMAGE_TAG}"
+repository_url="$(terraform -chdir=infra/ecr output -raw "$output_name")"
+registry="${repository_url%%/*}"
+image="${repository_url}:${IMAGE_TAG}"
 
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "$registry"

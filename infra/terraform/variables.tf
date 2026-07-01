@@ -235,15 +235,3 @@ variable "e2b_api_key_secret_name" {
   type        = string
   default     = null
 }
-
-variable "extra_secret_arns" {
-  description = "Additional secret ARNs the ECS task execution role may read."
-  type        = list(string)
-  default     = []
-}
-
-variable "extra_task_policy_json" {
-  description = "Optional additional IAM policy JSON attached to the task role for existing AWS resources."
-  type        = string
-  default     = ""
-}

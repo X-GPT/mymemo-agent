@@ -131,6 +131,13 @@ The only credential handoff is GitHub OIDC assuming the deploy role:
 arn:aws:iam::637423444544:role/mymemo-agent-github-actions-deploy
 ```
 
+The deploy role itself is bootstrapped from `infra/bootstrap-iam/prod.tfvars`:
+
+```sh
+AWS_PROFILE=mymemo terraform -chdir=infra/bootstrap-iam init
+AWS_PROFILE=mymemo terraform -chdir=infra/bootstrap-iam apply -var-file=prod.tfvars
+```
+
 Actual secret values stay out of git. AWS Secrets Manager is the long-term
 source of truth; Terraform receives or derives only secret names, then resolves
 ARNs through AWS data sources. For local one-time bootstrap, copy

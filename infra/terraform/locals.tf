@@ -40,14 +40,14 @@ locals {
   openrouter_api_key_secret_arn = data.aws_secretsmanager_secret.openrouter_api_key.arn
   e2b_api_key_secret_arn        = data.aws_secretsmanager_secret.e2b_api_key.arn
 
-  all_secret_arns = distinct(compact(concat([
+  all_secret_arns = distinct(compact([
     local.agent_db_password_base_secret_arn,
     local.kb_database_url_secret_arn,
     local.llm_token_secret_arn,
     local.statsig_server_secret_arn,
     local.openrouter_api_key_secret_arn,
     local.e2b_api_key_secret_arn,
-  ], var.extra_secret_arns)))
+  ]))
 
   agent_db_password_secret = [
     {

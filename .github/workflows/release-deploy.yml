@@ -8,8 +8,14 @@ on:
         required: false
       environment:
         description: "Deployment environment"
+        type: choice
+        options:
+          - prod
         required: true
         default: "prod"
+      confirm_prod_apply:
+        description: "Type apply-mymemo-agent-prod to apply production Terraform changes."
+        required: true
 
 concurrency:
   group: release-deploy-${{ inputs.environment }}
@@ -62,13 +68,13 @@ jobs:
 
           printf 'IMAGE_TAG=%s\n' "${image_tag}" >> "${GITHUB_ENV}"
 
-      - name: Prepare Terraform variables
-        run: scripts/deploy/ci_prepare_tfvars.sh
-
       - name: Ensure ECR repositories
         run: |
           terraform -chdir=infra/ecr init
           terraform -chdir=infra/ecr apply -auto-approve
+
+      - name: Prepare Terraform variables
+        run: scripts/deploy/ci_prepare_tfvars.sh
 
       - name: Build and push chat-api image
         run: scripts/deploy/build_and_push_agent_image.sh chat-api
@@ -81,7 +87,7 @@ jobs:
 
       - name: Terraform apply
         env:
-          CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod
+          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
         run: scripts/deploy/terraform_prod_in_place_apply.sh
 
       - name: Run agent DB migrations

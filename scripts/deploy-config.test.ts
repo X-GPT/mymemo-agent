@@ -8,6 +8,10 @@ const root = process.cwd();
 const terraformDir = join(root, "infra", "terraform");
 const ecrTerraformDir = join(root, "infra", "ecr");
 const bootstrapIamTerraformDir = join(root, "infra", "bootstrap-iam");
+const bootstrapIamProdTfvars = readFileSync(
+	join(bootstrapIamTerraformDir, "prod.tfvars"),
+	"utf8",
+);
 const exampleTfvars = readFileSync(
 	join(terraformDir, "examples", "prod.tfvars.example"),
 	"utf8",
@@ -108,7 +112,6 @@ describe("agent deployment config", () => {
 	it("checked-in prod deploy env is limited to CI and smoke inputs", () => {
 		for (const required of [
 			"AWS_REGION=us-west-2",
-			"AWS_ACCOUNT_ID=637423444544",
 			"DEPLOY_ENVIRONMENT=prod",
 			"AGENT_SMOKE_BASE_URL=REPLACE_ME_AGENT_SMOKE_BASE_URL",
 		]) {
@@ -214,12 +217,21 @@ describe("agent deployment config", () => {
 		expect(prepareScript).not.toContain("agent_db_instance_class");
 		expect(prepareScript).not.toContain("DEPLOY_CONFIG");
 		expect(prepareScript).not.toContain("prod.env");
+		expect(prepareScript).not.toContain("AWS_ACCOUNT_ID");
+		expect(prepareScript).toContain("terraform -chdir=infra/ecr output -raw chat_api_ecr_repository_url");
+		expect(prepareScript).toContain("terraform -chdir=infra/ecr output -raw agent_worker_ecr_repository_url");
+		expect(prepareScript).toContain("Set both CHAT_API_IMAGE and AGENT_WORKER_IMAGE");
 		expect(releaseDeployWorkflow).toContain('AWS_ACCOUNT_ID: "637423444544"');
 		expect(releaseDeployWorkflow).toContain(
 			"arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy",
 		);
 		expect(releaseDeployWorkflow).toContain("DEPLOY_ENVIRONMENT: ${{ inputs.environment }}");
 		expect(releaseDeployWorkflow).toContain("GITHUB_RUN_ATTEMPT");
+		expect(releaseDeployWorkflow).toContain("type: choice");
+		expect(releaseDeployWorkflow).toContain("- prod");
+		expect(releaseDeployWorkflow).toContain("confirm_prod_apply");
+		expect(releaseDeployWorkflow).toContain("CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}");
+		expect(releaseDeployWorkflow).not.toContain("CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod");
 	});
 
 	it("bootstrap IAM owns the agent-specific GitHub Actions deploy role", () => {
@@ -228,6 +240,9 @@ describe("agent deployment config", () => {
 			.join("\n");
 
 		expect(combined).toContain('default     = "mymemo-agent-github-actions-deploy"');
+		expect(combined).toContain('variable "aws_account_id"');
+		expect(combined).not.toContain('default     = "637423444544"');
+		expect(bootstrapIamProdTfvars).toContain('aws_account_id = "637423444544"');
 		expect(combined).toContain("token.actions.githubusercontent.com:sub");
 		expect(combined).toContain("repo:${var.github_owner}/${var.github_repository}:environment:${var.github_environment}");
 		expect(combined).toContain("sts:AssumeRoleWithWebIdentity");
@@ -319,8 +334,12 @@ describe("agent deployment config", () => {
 			"utf8",
 		);
 
-		expect(buildScript).toContain('repository="mymemo-agent-chat-api"');
-		expect(buildScript).toContain('repository="mymemo-agent-worker"');
+		expect(buildScript).toContain('output_name="chat_api_ecr_repository_url"');
+		expect(buildScript).toContain('output_name="agent_worker_ecr_repository_url"');
+		expect(buildScript).toContain('terraform -chdir=infra/ecr output -raw "$output_name"');
+		expect(buildScript).not.toContain('repository="mymemo-agent-chat-api"');
+		expect(buildScript).not.toContain('repository="mymemo-agent-worker"');
+		expect(buildScript).not.toContain("AWS_ACCOUNT_ID");
 		expect(buildScript).not.toContain("ECR_REPOSITORY_PREFIX");
 	});
 
@@ -340,6 +359,9 @@ describe("agent deployment config", () => {
 		expect(combined).toContain("data.aws_secretsmanager_secret.llm_token.arn");
 		expect(combined).not.toContain('variable "llm_token_secret_arn"');
 		expect(combined).not.toContain("var.llm_token_secret_arn");
+		expect(combined).not.toContain('variable "extra_secret_arns"');
+		expect(combined).not.toContain('variable "extra_task_policy_json"');
+		expect(combined).not.toContain('resource "aws_iam_role_policy" "extra_task_policy"');
 	});
 
 	it("deployment env examples satisfy current app env loaders", () => {

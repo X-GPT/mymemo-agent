@@ -7,7 +7,6 @@ variable "aws_region" {
 variable "aws_account_id" {
   description = "AWS account ID that owns the deploy role."
   type        = string
-  default     = "637423444544"
 }
 
 variable "github_owner" {

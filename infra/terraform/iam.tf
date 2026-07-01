@@ -39,11 +39,3 @@ resource "aws_iam_role" "task" {
   name               = "${local.common_name}-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }
-
-resource "aws_iam_role_policy" "extra_task_policy" {
-  count = var.extra_task_policy_json == "" ? 0 : 1
-
-  name   = "${local.common_name}-extra-task-policy"
-  role   = aws_iam_role.task.id
-  policy = var.extra_task_policy_json
-}
