@@ -93,10 +93,11 @@ resource "aws_ecs_task_definition" "agent_migration" {
 
   container_definitions = jsonencode([
     {
-      name      = "agent-migration"
-      image     = var.chat_api_image
-      essential = true
-      command   = ["bun", "run", "db:migrate"]
+      name       = "agent-migration"
+      image      = var.chat_api_image
+      essential  = true
+      entryPoint = ["bun", "run"]
+      command    = ["db:migrate"]
       environment = concat([
         { name = "DB_SSL", value = var.db_ssl },
       ], local.agent_database_url_environment)

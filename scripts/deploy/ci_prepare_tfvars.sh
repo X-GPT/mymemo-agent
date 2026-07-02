@@ -17,13 +17,26 @@ require_value() {
   fi
 }
 
+require_url() {
+  local name="$1"
+  local value="${!name:-}"
+  require_value "$name"
+  if [[ ! "$value" =~ ^https?://[^[:space:]\"\\]+$ ]]; then
+    echo "$name must be an http(s) URL without whitespace, quotes, or backslashes" >&2
+    exit 1
+  fi
+}
+
 required=(
+  AWS_REGION
   DEPLOY_ENVIRONMENT
 )
 
 for name in "${required[@]}"; do
   require_value "$name"
 done
+
+require_url GATEWAY_PUBLIC_URL
 
 image_tag="${IMAGE_TAG:-}"
 chat_api_image="${CHAT_API_IMAGE:-}"
@@ -48,12 +61,16 @@ fi
 mkdir -p "$(dirname "$out")"
 
 cat >"$out" <<TFVARS
+aws_region         = "${AWS_REGION}"
 chat_api_image     = "${chat_api_image}"
 agent_worker_image = "${agent_worker_image}"
+gateway_public_url = "${GATEWAY_PUBLIC_URL}"
 TFVARS
 
 echo "Wrote $out"
 echo "Deploy config summary:"
 echo "  environment: ${DEPLOY_ENVIRONMENT}"
+echo "  region: ${AWS_REGION}"
+echo "  gateway URL: ${GATEWAY_PUBLIC_URL}"
 echo "  chat-api image: ${chat_api_image}"
 echo "  agent-worker image: ${agent_worker_image}"

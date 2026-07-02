@@ -93,15 +93,15 @@ describe("agent deployment config", () => {
 
 	it("checked-in prod tfvars owns repeatable Terraform inputs", () => {
 		for (const required of [
-			'aws_region  = "us-west-2"',
 			'environment = "prod"',
 			"assign_public_ip = true",
 			'agent_alb_certificate_arn = "arn:aws:acm:us-west-2:637423444544:certificate/1cd62dfc-c199-40ed-9f96-7c8700574e47"',
-			'gateway_public_url         = "REPLACE_ME_AGENT_GATEWAY_PUBLIC_URL"',
 			'openrouter_default_model   = "anthropic/claude-sonnet-4"',
 		]) {
 			expect(prodTfvars).toContain(required);
 		}
+		expect(prodTfvars).not.toContain("aws_region");
+		expect(prodTfvars).not.toContain("gateway_public_url");
 		expect(prodTfvars).toContain("mymemo-agent-prod-KB_DATABASE_URL");
 		expect(prodTfvars).not.toContain("CREATE_AGENT_DATABASE");
 		expect(prodTfvars).not.toContain("AGENT_DATABASE_URL_SECRET_ARN");
@@ -112,6 +112,7 @@ describe("agent deployment config", () => {
 	it("checked-in prod deploy env is limited to CI and smoke inputs", () => {
 		for (const required of [
 			"AWS_REGION=us-west-2",
+			"AWS_ACCOUNT_ID=637423444544",
 			"DEPLOY_ENVIRONMENT=prod",
 			"AGENT_SMOKE_BASE_URL=REPLACE_ME_AGENT_SMOKE_BASE_URL",
 		]) {
@@ -212,16 +213,21 @@ describe("agent deployment config", () => {
 		expect(planScript).toContain('generated_tfvars_file_abs=');
 		expect(planScript).toContain('terraform -chdir=infra/terraform plan -var-file="$tfvars_file_abs" -var-file="$generated_tfvars_file_abs"');
 		expect(planScript).toContain("generated.auto.tfvars");
+		expect(prepareScript).toContain("aws_region");
 		expect(prepareScript).toContain("chat_api_image");
-		expect(prepareScript).not.toContain("gateway_public_url");
+		expect(prepareScript).toContain("gateway_public_url");
+		expect(prepareScript).toContain("require_url GATEWAY_PUBLIC_URL");
 		expect(prepareScript).not.toContain("agent_db_instance_class");
 		expect(prepareScript).not.toContain("DEPLOY_CONFIG");
 		expect(prepareScript).not.toContain("prod.env");
-		expect(prepareScript).not.toContain("AWS_ACCOUNT_ID");
 		expect(prepareScript).toContain("terraform -chdir=infra/ecr output -raw chat_api_ecr_repository_url");
 		expect(prepareScript).toContain("terraform -chdir=infra/ecr output -raw agent_worker_ecr_repository_url");
 		expect(prepareScript).toContain("Set both CHAT_API_IMAGE and AGENT_WORKER_IMAGE");
-		expect(releaseDeployWorkflow).toContain('AWS_ACCOUNT_ID: "637423444544"');
+		expect(releaseDeployWorkflow).not.toContain("AWS_REGION: us-west-2");
+		expect(releaseDeployWorkflow).not.toContain('AWS_ACCOUNT_ID: "637423444544"');
+		expect(releaseDeployWorkflow).toContain("Load deploy config");
+		expect(releaseDeployWorkflow).toContain('source "${DEPLOY_CONFIG}"');
+		expect(releaseDeployWorkflow).toContain('terraform -chdir=infra/ecr apply -auto-approve -var="aws_region=${AWS_REGION}"');
 		expect(releaseDeployWorkflow).toContain(
 			"arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy",
 		);
@@ -230,6 +236,8 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain("type: choice");
 		expect(releaseDeployWorkflow).toContain("- prod");
 		expect(releaseDeployWorkflow).toContain("confirm_prod_apply");
+		expect(releaseDeployWorkflow).toContain("gateway_public_url");
+		expect(releaseDeployWorkflow).toContain("GATEWAY_PUBLIC_URL: ${{ inputs.gateway_public_url }}");
 		expect(releaseDeployWorkflow).toContain("CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}");
 		expect(releaseDeployWorkflow).not.toContain("CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod");
 	});
@@ -240,6 +248,9 @@ describe("agent deployment config", () => {
 			.join("\n");
 
 		expect(combined).toContain('default     = "mymemo-agent-github-actions-deploy"');
+		expect(combined).toContain('variable "aws_region"');
+		expect(combined).not.toContain('default     = "us-west-2"');
+		expect(bootstrapIamProdTfvars).toContain('aws_region     = "us-west-2"');
 		expect(combined).toContain('variable "aws_account_id"');
 		expect(combined).not.toContain('default     = "637423444544"');
 		expect(bootstrapIamProdTfvars).toContain('aws_account_id = "637423444544"');
@@ -281,6 +292,7 @@ describe("agent deployment config", () => {
 		expect(networkConfig).toContain("source_security_group_id = aws_security_group.alb.id");
 		expect(outputs).toContain('output "agent_alb_dns_name"');
 		expect(outputs).toContain('output "agent_alb_url"');
+		expect(cloudwatch).toContain("LoadBalancer = aws_lb.agent.arn_suffix");
 		expect(cloudwatch).toContain("ClusterName = local.shared_ecs_cluster_name");
 		expect(cloudwatch).not.toContain("outputs.ecs_cluster_name");
 	});
@@ -290,8 +302,12 @@ describe("agent deployment config", () => {
 			join(root, "scripts", "deploy", "run_agent_migration.sh"),
 			"utf8",
 		);
+		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
 		const outputs = readFileSync(join(terraformDir, "outputs.tf"), "utf8");
 
+		expect(ecsConfig).toContain('entryPoint = ["bun", "run"]');
+		expect(ecsConfig).toContain('command    = ["db:migrate"]');
+		expect(ecsConfig).not.toContain('command   = ["bun", "run", "db:migrate"]');
 		expect(outputs).toContain('output "assign_public_ip"');
 		expect(migrationScript).toContain("terraform -chdir=infra/terraform output -raw assign_public_ip");
 		expect(migrationScript).not.toContain("ASSIGN_PUBLIC_IP");
@@ -313,6 +329,8 @@ describe("agent deployment config", () => {
 
 		expect(loader).toContain("load_deploy_config()");
 		expect(loader).toContain("DEPLOY_CONFIG_PATH=");
+		expect(loader).toContain("set -a");
+		expect(loader).toContain("set +a");
 		for (const script of [
 			"build_and_push_agent_image.sh",
 			"create_agent_secrets.sh",
@@ -326,6 +344,15 @@ describe("agent deployment config", () => {
 			expect(content).not.toContain('config="${DEPLOY_CONFIG:-infra/deploy/prod.env}"');
 		}
 		expect(createAgentSecretsScript).toContain("AWS_REGION is required in $DEPLOY_CONFIG_PATH or env");
+	});
+
+	it("terraform roots require a version that supports S3 lockfiles", () => {
+		for (const dir of [terraformDir, ecrTerraformDir, bootstrapIamTerraformDir]) {
+			const versions = readFileSync(join(dir, "versions.tf"), "utf8");
+
+			expect(versions).toContain('required_version = ">= 1.10.0"');
+			expect(versions).toContain("use_lockfile = true");
+		}
 	});
 
 	it("image build script only documents supported ECR repositories", () => {

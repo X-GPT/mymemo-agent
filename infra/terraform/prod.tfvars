@@ -1,4 +1,3 @@
-aws_region  = "us-west-2"
 environment = "prod"
 
 tags = {
@@ -19,7 +18,6 @@ assign_public_ip = true
 chat_api_desired_count     = 1
 agent_worker_desired_count = 1
 
-gateway_public_url         = "REPLACE_ME_AGENT_GATEWAY_PUBLIC_URL"
 e2b_template               = "sandbox-template-prod"
 openrouter_base_url        = "https://openrouter.ai/api"
 openrouter_default_model   = "anthropic/claude-sonnet-4"

@@ -20,7 +20,8 @@ resource "aws_cloudwatch_metric_alarm" "chat_api_unhealthy" {
   comparison_operator = "GreaterThanThreshold"
 
   dimensions = {
-    TargetGroup = aws_lb_target_group.chat_api.arn_suffix
+    LoadBalancer = aws_lb.agent.arn_suffix
+    TargetGroup  = aws_lb_target_group.chat_api.arn_suffix
   }
 }
 

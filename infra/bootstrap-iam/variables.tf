@@ -1,7 +1,6 @@
 variable "aws_region" {
   description = "AWS region for the mymemo-agent GitHub deploy role."
   type        = string
-  default     = "us-west-2"
 }
 
 variable "aws_account_id" {

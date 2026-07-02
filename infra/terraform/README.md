@@ -76,7 +76,7 @@ This repo owns its GitHub Actions deploy role in the one-time bootstrap root:
 
 ```sh
 AWS_PROFILE=mymemo terraform -chdir=infra/bootstrap-iam init
-AWS_PROFILE=mymemo terraform -chdir=infra/bootstrap-iam apply
+AWS_PROFILE=mymemo terraform -chdir=infra/bootstrap-iam apply -var-file=prod.tfvars
 ```
 
 That creates `mymemo-agent-github-actions-deploy`, trusted only by the
@@ -85,16 +85,19 @@ with an admin AWS profile before the first GitHub Actions deploy.
 
 Terraform-owned production inputs live in checked-in
 `infra/terraform/prod.tfvars`. The GitHub Actions workflow sources
-`infra/deploy/prod.env` only for CI/deploy settings such as AWS account and
-smoke-test inputs, then generates `infra/terraform/generated.auto.tfvars` with
-the immutable image URIs for the current release. The plan step uses both:
+`infra/deploy/prod.env` for CI/deploy settings such as AWS region, AWS account,
+and smoke-test inputs, then generates `infra/terraform/generated.auto.tfvars`
+with release-specific Terraform values: AWS region, immutable image URIs, and
+the required `gateway_public_url` workflow input. The plan step uses both:
 
 ```sh
-terraform -chdir=infra/terraform plan -var-file=prod.tfvars
+terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars
 ```
 
 Placeholder values such as `REPLACE_ME_*` in `prod.tfvars` or the generated
 image overlay fail the plan entrypoint before Terraform changes are proposed.
+`gateway_public_url` is intentionally not checked in as a placeholder; provide
+the real gateway base URL when dispatching the release workflow.
 
 ECS service `task_definition` changes are intentionally ignored by Terraform.
 `terraform apply` registers the new task definitions and updates infrastructure,
@@ -111,8 +114,10 @@ networking pattern.
 `gateway_public_url` and `AGENT_SMOKE_BASE_URL` are intentionally different
 settings:
 
-- `gateway_public_url` in `prod.tfvars` is runtime application config. `chat-api` passes it to
-  E2B sandboxes so the agent can call the gateway for LLM and document access.
+- `gateway_public_url` is runtime application config provided as a required
+  release workflow input. `chat-api` passes it to E2B sandboxes so the agent can
+  call the gateway for LLM and document access. This is not the agent-owned ALB
+  URL unless that ALB is actually routing the gateway service.
 - `AGENT_SMOKE_BASE_URL` in `prod.env` is deploy verification config. The GitHub Actions
   runner calls this base URL after rollout to verify `chat-api` responds at
   `/v1/conversations`. It should point at the agent-owned ALB DNS name or a
@@ -166,3 +171,6 @@ terraform -chdir=infra/bootstrap-iam validate
 terraform -chdir=infra/ecr init -backend=false
 terraform -chdir=infra/ecr validate
 ```
+
+All Terraform roots require Terraform `>= 1.10.0` because the S3 backends use
+native S3 lockfiles via `use_lockfile = true`.
