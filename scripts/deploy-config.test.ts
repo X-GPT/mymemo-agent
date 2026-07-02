@@ -243,6 +243,7 @@ describe("agent deployment config", () => {
 		expect(prepareScript).toContain("aws_region");
 		expect(prepareScript).toContain("chat_api_image");
 		expect(prepareScript).toContain("gateway_public_url");
+		expect(prepareScript).toContain('if [[ -n "${GATEWAY_PUBLIC_URL:-}" ]]');
 		expect(prepareScript).toContain("require_url GATEWAY_PUBLIC_URL");
 		expect(prepareScript).not.toContain("agent_db_instance_class");
 		expect(prepareScript).not.toContain("DEPLOY_CONFIG");
@@ -264,6 +265,8 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain("- prod");
 		expect(releaseDeployWorkflow).toContain("confirm_prod_apply");
 		expect(releaseDeployWorkflow).toContain("gateway_public_url");
+		expect(releaseDeployWorkflow).toContain("Optional legacy sandbox gateway base URL");
+		expect(releaseDeployWorkflow).toContain("required: false");
 		expect(releaseDeployWorkflow).toContain("GATEWAY_PUBLIC_URL: ${{ inputs.gateway_public_url }}");
 		expect(releaseDeployWorkflow).toContain("CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}");
 		expect(releaseDeployWorkflow).not.toContain("CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod");
@@ -464,7 +467,6 @@ describe("agent deployment config", () => {
 			loadApiConfigFromEnv({
 				...common,
 				LLM_TOKEN_SECRET: "test-llm-token-secret",
-				GATEWAY_PUBLIC_URL: "https://agent-gateway.example.com",
 				STATSIG_SERVER_SECRET: "statsig-test-secret",
 				E2B_TEMPLATE: "sandbox-template-prod",
 			}),

@@ -36,7 +36,9 @@ for name in "${required[@]}"; do
   require_value "$name"
 done
 
-require_url GATEWAY_PUBLIC_URL
+if [[ -n "${GATEWAY_PUBLIC_URL:-}" ]]; then
+  require_url GATEWAY_PUBLIC_URL
+fi
 
 image_tag="${IMAGE_TAG:-}"
 chat_api_image="${CHAT_API_IMAGE:-}"
@@ -64,13 +66,16 @@ cat >"$out" <<TFVARS
 aws_region         = "${AWS_REGION}"
 chat_api_image     = "${chat_api_image}"
 agent_worker_image = "${agent_worker_image}"
-gateway_public_url = "${GATEWAY_PUBLIC_URL}"
 TFVARS
+
+if [[ -n "${GATEWAY_PUBLIC_URL:-}" ]]; then
+  printf 'gateway_public_url = "%s"\n' "${GATEWAY_PUBLIC_URL}" >>"$out"
+fi
 
 echo "Wrote $out"
 echo "Deploy config summary:"
 echo "  environment: ${DEPLOY_ENVIRONMENT}"
 echo "  region: ${AWS_REGION}"
-echo "  gateway URL: ${GATEWAY_PUBLIC_URL}"
+echo "  gateway URL: ${GATEWAY_PUBLIC_URL:-<unset>}"
 echo "  chat-api image: ${chat_api_image}"
 echo "  agent-worker image: ${agent_worker_image}"

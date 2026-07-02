@@ -235,6 +235,19 @@ describe("runSandboxChat", () => {
 		);
 	});
 
+	it("requires a gateway URL only when the legacy sandbox path runs", async () => {
+		deps = {
+			...deps,
+			config: { ...config, gatewayPublicUrl: undefined },
+		};
+
+		await expect(runSandboxChat(deps, makeOptions())).rejects.toThrow(
+			/GATEWAY_PUBLIC_URL is required while chat-api uses legacy sandbox orchestration/,
+		);
+		expect(createSandbox).not.toHaveBeenCalled();
+		expect(forwardTurn).not.toHaveBeenCalled();
+	});
+
 	it("mints verifiable per-audience llm and doc tokens bound to the user, sandbox, and run", async () => {
 		forwardTurn.mockImplementation(async (opts: ForwardOpts) => {
 			expect(opts.turnRequest.llm_base_url).toBe("https://gateway.test");

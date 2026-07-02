@@ -57,13 +57,16 @@ locals {
     }
   ]
 
+  legacy_gateway_environment = var.gateway_public_url == null || trimspace(var.gateway_public_url) == "" ? [] : [
+    { name = "GATEWAY_PUBLIC_URL", value = trimsuffix(var.gateway_public_url, "/") }
+  ]
+
   chat_api_environment = concat([
     { name = "PORT", value = tostring(var.chat_api_port) },
     { name = "LOG_LEVEL", value = var.log_level },
-    { name = "GATEWAY_PUBLIC_URL", value = var.gateway_public_url },
     { name = "E2B_TEMPLATE", value = var.e2b_template },
     { name = "DB_SSL", value = var.db_ssl },
-  ], local.agent_database_url_environment)
+  ], local.legacy_gateway_environment, local.agent_database_url_environment)
 
   chat_api_secrets = concat([
     { name = "LLM_TOKEN_SECRET", valueFrom = local.llm_token_secret_arn },

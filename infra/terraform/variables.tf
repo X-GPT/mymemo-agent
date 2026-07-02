@@ -111,8 +111,9 @@ variable "log_retention_days" {
 }
 
 variable "gateway_public_url" {
-  description = "Gateway URL reachable by chat-api and E2B sandboxes."
+  description = "Optional gateway URL for chat-api's legacy sandbox path. Split-runtime deployments should leave this unset."
   type        = string
+  default     = null
 }
 
 variable "e2b_template" {

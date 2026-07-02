@@ -14,8 +14,8 @@ on:
         description: "Type apply-mymemo-agent-prod to apply production Terraform changes."
         required: true
       gateway_public_url:
-        description: "Gateway base URL reachable by chat-api and E2B sandboxes."
-        required: true
+        description: "Optional legacy sandbox gateway base URL. Leave empty for split-runtime deploys."
+        required: false
 
 concurrency:
   group: release-deploy-${{ inputs.environment }}

@@ -34,8 +34,8 @@ export interface ApiConfig {
 	e2bTemplate: string;
 	/** HMAC secret for the per-turn tokens minted into each sandbox turn (shared with the gateway). */
 	llmTokenSecret: string;
-	/** Base URL of the merged gateway, reachable from the sandbox; trailing slash stripped. */
-	gatewayPublicUrl: string;
+	/** Base URL of the merged gateway for the legacy sandbox path; trailing slash stripped when set. */
+	gatewayPublicUrl: string | undefined;
 	/** pino log level. */
 	logLevel: string;
 	/** Root dir of the durable workspace store (local filesystem adapter). */
@@ -129,7 +129,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		);
 	}
 	assert(env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
-	assert(env.GATEWAY_PUBLIC_URL, "GATEWAY_PUBLIC_URL is required");
 
 	// The conversation registry is the primary surface and cannot work without a
 	// writable DB; require it at load so a misconfigured deploy fails fast instead
@@ -176,9 +175,10 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		).replace(/\/+$/, ""),
 		e2bTemplate: env.E2B_TEMPLATE || "sandbox-template-dev",
 		llmTokenSecret: env.LLM_TOKEN_SECRET,
-		// Trailing slash stripped so the binary's `${base}/v1/messages` never
-		// produces a double slash.
-		gatewayPublicUrl: env.GATEWAY_PUBLIC_URL.replace(/\/+$/, ""),
+		// Trailing slash stripped so the legacy sandbox path's
+		// `${base}/v1/messages` never produces a double slash. Optional because
+		// split-runtime deployments are moving execution out of chat-api.
+		gatewayPublicUrl: env.GATEWAY_PUBLIC_URL?.replace(/\/+$/, ""),
 		logLevel: env.LOG_LEVEL || "info",
 		workspaceStoreRoot,
 		databaseUrl,

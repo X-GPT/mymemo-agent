@@ -102,4 +102,11 @@ describe("loadApiConfigFromEnv — prototype provider path unchanged", () => {
 		expect(config.sandboxProvider).toBe("local");
 		expect(config.gatewayPublicUrl).toBe("https://gateway.test");
 	});
+
+	it("does not require GATEWAY_PUBLIC_URL for split-runtime boot", () => {
+		const env = baseEnv();
+		delete env.GATEWAY_PUBLIC_URL;
+		const config = loadApiConfigFromEnv(env);
+		expect(config.gatewayPublicUrl).toBeUndefined();
+	});
 });

@@ -22,11 +22,13 @@ agent_worker_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-
 chat_api_desired_count     = 1
 agent_worker_desired_count = 1
 
-gateway_public_url        = "https://agent-gateway.example.com"
 e2b_template              = "sandbox-template-prod"
 openrouter_base_url       = "https://openrouter.ai/api"
 openrouter_default_model  = "anthropic/claude-sonnet-4"
 worker_max_concurrent_runs = 2
+
+# Optional legacy sandbox path config. Leave unset for split-runtime deploys.
+# gateway_public_url = "https://agent-gateway.example.com"
 
 # Agent-owned writable Postgres. This Terraform root always creates a dedicated
 # RDS instance. The password is generated and stored by RDS in AWS Secrets

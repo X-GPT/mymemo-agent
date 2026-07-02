@@ -88,7 +88,8 @@ Terraform-owned production inputs live in checked-in
 `infra/deploy/prod.env` for CI/deploy settings such as AWS region, AWS account,
 and smoke-test inputs, then generates `infra/terraform/generated.auto.tfvars`
 with release-specific Terraform values: AWS region, immutable image URIs, and
-the required `gateway_public_url` workflow input. The plan step uses both:
+the optional legacy `gateway_public_url` workflow input when provided. The plan
+step uses both:
 
 ```sh
 terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars
@@ -96,8 +97,9 @@ terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.
 
 Placeholder values such as `REPLACE_ME_*` in `prod.tfvars` or the generated
 image overlay fail the plan entrypoint before Terraform changes are proposed.
-`gateway_public_url` is intentionally not checked in as a placeholder; provide
-the real gateway base URL when dispatching the release workflow.
+`gateway_public_url` is intentionally not checked in as a placeholder. Leave it
+empty for split-runtime deploys; provide it only when intentionally exercising
+the legacy chat-api-to-E2B sandbox path.
 
 ECS service `task_definition` changes are intentionally ignored by Terraform.
 `terraform apply` registers the new task definitions and updates infrastructure,
@@ -119,9 +121,10 @@ networking pattern.
 `gateway_public_url`, the agent internal ALB URL, and `AGENT_SMOKE_BASE_URL`
 are intentionally different settings:
 
-- `gateway_public_url` is runtime application config provided as a required
-  release workflow input. `chat-api` passes it to E2B sandboxes so the agent can
-  call the gateway for LLM and document access. It is not the agent ALB URL.
+- `gateway_public_url` is optional runtime application config for the legacy
+  sandbox path. When set, `chat-api` passes it to E2B sandboxes so the agent can
+  call the gateway for LLM and document access. Split-runtime deploys should
+  leave it unset; it is not the agent ALB URL.
 - `agent_internal_base_url` is a Terraform output for `mymemo-service` to call
   `chat-api` inside the shared VPC:
 
