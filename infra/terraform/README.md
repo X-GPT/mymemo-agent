@@ -101,10 +101,15 @@ the real gateway base URL when dispatching the release workflow.
 
 ECS service `task_definition` changes are intentionally ignored by Terraform.
 `terraform apply` registers the new task definitions and updates infrastructure,
-but it does not roll running services onto the new image. The release workflow
-runs the agent database migration task first, then `roll_ecs_services.sh`
-updates each service to the Terraform-created task definition and waits for
-stability. This keeps schema-dependent images from starting before migrations.
+but it does not roll existing running services onto the new image. For the first
+deploy only, the workflow detects that the ECS services are absent and applies a
+bootstrap plan with both service desired counts forced to `0`; that creates the
+RDS instance, task definitions, ALB, and ECS service shells without starting app
+containers. It then runs the agent database migration task, applies the normal
+desired counts from `prod.tfvars`, and calls `roll_ecs_services.sh` to wait for
+stability. Later deploys apply the new task definitions first, run migrations,
+then roll the existing services. This keeps schema-dependent images from
+starting before migrations.
 
 `assign_public_ip=true` is intentionally kept while the existing shared
 `mymemo-service` ECS subnets are public/default subnets with no NAT/VPC endpoint

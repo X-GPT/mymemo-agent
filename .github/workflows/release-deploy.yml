@@ -89,22 +89,52 @@ jobs:
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
 
+      - name: Detect first ECS service deploy
+        id: agent_deploy_state
+        run: |
+          first_deploy="$(scripts/deploy/detect_first_agent_deploy.sh)"
+          printf 'first_deploy=%s\n' "${first_deploy}" >> "${GITHUB_OUTPUT}"
+
       - name: Build and push chat-api image
         run: scripts/deploy/build_and_push_agent_image.sh chat-api
 
       - name: Build and push agent-worker image
         run: scripts/deploy/build_and_push_agent_image.sh agent-worker
 
+      - name: Terraform bootstrap plan
+        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        env:
+          BOOTSTRAP_ZERO_DESIRED_COUNT: true
+        run: scripts/deploy/terraform_prod_in_place_plan.sh agent-bootstrap.tfplan
+
+      - name: Terraform bootstrap apply
+        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        env:
+          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        run: scripts/deploy/terraform_prod_in_place_apply.sh agent-bootstrap.tfplan
+
       - name: Terraform plan
+        if: steps.agent_deploy_state.outputs.first_deploy != 'true'
         run: scripts/deploy/terraform_prod_in_place_plan.sh
 
       - name: Terraform apply
+        if: steps.agent_deploy_state.outputs.first_deploy != 'true'
         env:
           CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
         run: scripts/deploy/terraform_prod_in_place_apply.sh
 
       - name: Run agent DB migrations
         run: scripts/deploy/run_agent_migration.sh
+
+      - name: Terraform plan desired service counts
+        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        run: scripts/deploy/terraform_prod_in_place_plan.sh
+
+      - name: Terraform apply desired service counts
+        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        env:
+          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        run: scripts/deploy/terraform_prod_in_place_apply.sh
 
       - name: Roll ECS services
         run: scripts/deploy/roll_ecs_services.sh

@@ -172,14 +172,30 @@ describe("agent deployment config", () => {
 	});
 
 	it("release deploy runs migrations before rolling ECS services", () => {
+		const bootstrapPlanIndex = releaseDeployWorkflow.indexOf(
+			"scripts/deploy/terraform_prod_in_place_plan.sh agent-bootstrap.tfplan",
+		);
+		const bootstrapApplyIndex = releaseDeployWorkflow.indexOf(
+			"scripts/deploy/terraform_prod_in_place_apply.sh agent-bootstrap.tfplan",
+		);
 		const migrationIndex = releaseDeployWorkflow.indexOf(
 			"scripts/deploy/run_agent_migration.sh",
+		);
+		const desiredPlanIndex = releaseDeployWorkflow.indexOf(
+			"Terraform plan desired service counts",
 		);
 		const rolloutIndex = releaseDeployWorkflow.indexOf(
 			"scripts/deploy/roll_ecs_services.sh",
 		);
 
+		expect(releaseDeployWorkflow).toContain("Detect first ECS service deploy");
+		expect(releaseDeployWorkflow).toContain("scripts/deploy/detect_first_agent_deploy.sh");
+		expect(releaseDeployWorkflow).toContain("BOOTSTRAP_ZERO_DESIRED_COUNT: true");
+		expect(bootstrapPlanIndex).toBeGreaterThan(-1);
+		expect(bootstrapApplyIndex).toBeGreaterThan(bootstrapPlanIndex);
 		expect(migrationIndex).toBeGreaterThan(-1);
+		expect(bootstrapApplyIndex).toBeLessThan(migrationIndex);
+		expect(desiredPlanIndex).toBeGreaterThan(migrationIndex);
 		expect(rolloutIndex).toBeGreaterThan(-1);
 		expect(migrationIndex).toBeLessThan(rolloutIndex);
 		expect(releaseDeployWorkflow).not.toContain("scripts/deploy/prod_smoke.sh");
@@ -214,7 +230,13 @@ describe("agent deployment config", () => {
 
 		expect(planScript).toContain('tfvars_file="${TFVARS_FILE:-infra/terraform/prod.tfvars}"');
 		expect(planScript).toContain('generated_tfvars_file_abs=');
-		expect(planScript).toContain('terraform -chdir=infra/terraform plan -var-file="$tfvars_file_abs" -var-file="$generated_tfvars_file_abs"');
+		expect(planScript).toContain('plan_args=(');
+		expect(planScript).toContain('-var-file="$tfvars_file_abs"');
+		expect(planScript).toContain('-var-file="$generated_tfvars_file_abs"');
+		expect(planScript).toContain('BOOTSTRAP_ZERO_DESIRED_COUNT');
+		expect(planScript).toContain('-var="chat_api_desired_count=0"');
+		expect(planScript).toContain('-var="agent_worker_desired_count=0"');
+		expect(planScript).toContain('terraform -chdir=infra/terraform plan "${plan_args[@]}" -out="$plan_file"');
 		expect(planScript).toContain("generated.auto.tfvars");
 		expect(releaseDeployWorkflow).toContain("uses: hashicorp/setup-terraform@v3");
 		expect(releaseDeployWorkflow).toContain("terraform_wrapper: false");
@@ -362,18 +384,22 @@ describe("agent deployment config", () => {
 
 		expect(loader).toContain("load_deploy_config()");
 		expect(loader).toContain("DEPLOY_CONFIG_PATH=");
-		expect(loader).toContain("set -a");
-		expect(loader).toContain("set +a");
+		expect(loader).toContain('if [[ "${!key+x}" != x ]]');
+		expect(loader).toContain('export "$key"');
+		expect(loader).not.toContain("source \"$DEPLOY_CONFIG_PATH\"");
 		for (const script of [
 			"build_and_push_agent_image.sh",
 			"create_agent_secrets.sh",
+			"detect_first_agent_deploy.sh",
 			"prod_smoke.sh",
 			"roll_ecs_services.sh",
 			"run_agent_migration.sh",
 		]) {
 			const content = readFileSync(join(root, "scripts", "deploy", script), "utf8");
-			expect(content).toContain('source "$script_dir/lib/load_config.sh"');
-			expect(content).toContain("load_deploy_config");
+			if (script !== "detect_first_agent_deploy.sh") {
+				expect(content).toContain('source "$script_dir/lib/load_config.sh"');
+				expect(content).toContain("load_deploy_config");
+			}
 			expect(content).not.toContain('config="${DEPLOY_CONFIG:-infra/deploy/prod.env}"');
 		}
 		expect(createAgentSecretsScript).toContain("AWS_REGION is required in $DEPLOY_CONFIG_PATH or env");

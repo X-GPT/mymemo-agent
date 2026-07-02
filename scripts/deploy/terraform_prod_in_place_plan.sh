@@ -23,7 +23,19 @@ fi
 tfvars_file_abs="$(cd "$(dirname "$tfvars_file")" && pwd -P)/$(basename "$tfvars_file")"
 generated_tfvars_file_abs="$(cd "$(dirname "$generated_tfvars_file")" && pwd -P)/$(basename "$generated_tfvars_file")"
 
+plan_args=(
+  -var-file="$tfvars_file_abs"
+  -var-file="$generated_tfvars_file_abs"
+)
+
+if [[ "${BOOTSTRAP_ZERO_DESIRED_COUNT:-false}" == "true" ]]; then
+  plan_args+=(
+    -var="chat_api_desired_count=0"
+    -var="agent_worker_desired_count=0"
+  )
+fi
+
 terraform -chdir=infra/terraform init
 terraform -chdir=infra/terraform fmt -check
 terraform -chdir=infra/terraform validate
-terraform -chdir=infra/terraform plan -var-file="$tfvars_file_abs" -var-file="$generated_tfvars_file_abs" -out="$plan_file"
+terraform -chdir=infra/terraform plan "${plan_args[@]}" -out="$plan_file"
