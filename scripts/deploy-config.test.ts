@@ -216,6 +216,8 @@ describe("agent deployment config", () => {
 		expect(planScript).toContain('generated_tfvars_file_abs=');
 		expect(planScript).toContain('terraform -chdir=infra/terraform plan -var-file="$tfvars_file_abs" -var-file="$generated_tfvars_file_abs"');
 		expect(planScript).toContain("generated.auto.tfvars");
+		expect(releaseDeployWorkflow).toContain("uses: hashicorp/setup-terraform@v3");
+		expect(releaseDeployWorkflow).toContain("terraform_wrapper: false");
 		expect(prepareScript).toContain("aws_region");
 		expect(prepareScript).toContain("chat_api_image");
 		expect(prepareScript).toContain("gateway_public_url");
