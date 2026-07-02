@@ -20,12 +20,6 @@ variable "tags" {
   default     = {}
 }
 
-variable "agent_alb_certificate_arn" {
-  description = "Optional ACM certificate ARN for the agent-owned ALB HTTPS listener. When null, the ALB serves HTTP only."
-  type        = string
-  default     = null
-}
-
 variable "mymemo_service_api_security_group_ids" {
   description = "Security group IDs for mymemo-service API tasks allowed to call the internal agent ALB."
   type        = list(string)

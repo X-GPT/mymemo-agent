@@ -97,11 +97,11 @@ describe("agent deployment config", () => {
 			'environment = "prod"',
 			"assign_public_ip = true",
 			'mymemo_service_api_security_group_ids = ["sg-05d48e36ef8966c9e"]',
-			"agent_alb_certificate_arn = null",
 			'openrouter_default_model   = "anthropic/claude-sonnet-4"',
 		]) {
 			expect(prodTfvars).toContain(required);
 		}
+		expect(prodTfvars).not.toContain("agent_alb_certificate_arn");
 		expect(prodTfvars).not.toContain("aws_region");
 		expect(prodTfvars).not.toContain("gateway_public_url");
 		expect(prodTfvars).toContain("mymemo-agent-prod-KB_DATABASE_URL");
@@ -293,11 +293,14 @@ describe("agent deployment config", () => {
 		expect(albConfig).toContain('resource "aws_lb" "agent"');
 		expect(albConfig).toContain("internal           = true");
 		expect(albConfig).toContain('resource "aws_lb_listener" "http"');
-		expect(albConfig).toContain('resource "aws_lb_listener" "https"');
+		expect(albConfig).not.toContain('resource "aws_lb_listener" "http_redirect"');
+		expect(albConfig).not.toContain('resource "aws_lb_listener" "https"');
+		expect(albConfig).not.toContain("certificate_arn");
 		expect(networkConfig).toContain('resource "aws_security_group" "alb"');
 		expect(networkConfig).toContain("security_groups = local.trusted_caller_security_group_ids");
 		expect(networkConfig).not.toContain('description = "HTTP from the public internet"');
 		expect(networkConfig).not.toContain('description = "HTTPS from the public internet"');
+		expect(networkConfig).not.toContain('from_port       = 443');
 		expect(networkConfig).toContain("source_security_group_id = aws_security_group.alb.id");
 		expect(outputs).toContain('output "agent_internal_alb_dns_name"');
 		expect(outputs).toContain('output "agent_internal_base_url"');

@@ -11,14 +11,6 @@ resource "aws_security_group" "alb" {
     security_groups = local.trusted_caller_security_group_ids
   }
 
-  ingress {
-    description     = "HTTPS from mymemo-service API"
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    security_groups = local.trusted_caller_security_group_ids
-  }
-
   egress {
     description = "Forward requests to chat-api tasks"
     from_port   = var.chat_api_port

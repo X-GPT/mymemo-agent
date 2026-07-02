@@ -65,7 +65,7 @@ output "agent_internal_alb_dns_name" {
 
 output "agent_internal_base_url" {
   description = "Internal base URL for mymemo-service to call mymemo-agent chat-api."
-  value       = var.agent_alb_certificate_arn == null ? "http://${aws_lb.agent.dns_name}" : null
+  value       = "http://${aws_lb.agent.dns_name}"
 }
 
 output "agent_internal_allowed_caller_security_group_ids" {

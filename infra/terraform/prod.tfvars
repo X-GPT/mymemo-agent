@@ -11,9 +11,6 @@ tags = {
 # the mymemo-service API ECS service security group.
 mymemo_service_api_security_group_ids = ["sg-05d48e36ef8966c9e"]
 
-# Internal service-to-service traffic uses HTTP on the private ALB DNS name.
-agent_alb_certificate_arn = null
-
 # Existing mymemo-service ECS subnets are public/default subnets with no
 # private NAT/VPC endpoint egress path. Public IP assignment is therefore an
 # inherited network constraint, not the preferred production pattern.
