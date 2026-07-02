@@ -79,6 +79,12 @@ export async function runSandboxChat(
 		runId,
 	});
 
+	if (!config.gatewayPublicUrl) {
+		throw new Error(
+			"GATEWAY_PUBLIC_URL is required while chat-api uses legacy sandbox orchestration",
+		);
+	}
+
 	const lease = await leaseManager.acquire({ userId, conversationId }, logger, {
 		agentSessionId,
 	});

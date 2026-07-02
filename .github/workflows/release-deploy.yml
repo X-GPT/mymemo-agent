@@ -1,0 +1,140 @@
+name: Release deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment environment"
+        type: choice
+        options:
+          - prod
+        required: true
+        default: "prod"
+      confirm_prod_apply:
+        description: "Type apply-mymemo-agent-prod to apply production Terraform changes."
+        required: true
+      gateway_public_url:
+        description: "Optional legacy sandbox gateway base URL. Leave empty for split-runtime deploys."
+        required: false
+
+concurrency:
+  group: release-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  TF_INPUT: false
+  TF_IN_AUTOMATION: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+      DEPLOY_CONFIG: infra/deploy/${{ inputs.environment }}.env
+      GATEWAY_PUBLIC_URL: ${{ inputs.gateway_public_url }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load deploy config
+        run: |
+          set -euo pipefail
+          set -a
+          source "${DEPLOY_CONFIG}"
+          set +a
+
+          : "${AWS_REGION:?AWS_REGION is required in ${DEPLOY_CONFIG}}"
+          : "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID is required in ${DEPLOY_CONFIG}}"
+          : "${DEPLOY_ENVIRONMENT:?DEPLOY_ENVIRONMENT is required in ${DEPLOY_CONFIG}}"
+
+          {
+            printf 'AWS_REGION=%s\n' "${AWS_REGION}"
+            printf 'AWS_ACCOUNT_ID=%s\n' "${AWS_ACCOUNT_ID}"
+            printf 'DEPLOY_ENVIRONMENT=%s\n' "${DEPLOY_ENVIRONMENT}"
+          } >> "${GITHUB_ENV}"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.0
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Compute immutable image tag
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          image_tag="release-${short_sha}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+
+          if [[ ! "${image_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid image_tag. Use a Docker tag: 1-128 chars, starting with alphanumeric or underscore, then alphanumeric, underscore, dot, or dash." >&2
+            exit 1
+          fi
+
+          printf 'IMAGE_TAG=%s\n' "${image_tag}" >> "${GITHUB_ENV}"
+
+      - name: Ensure ECR repositories
+        run: |
+          terraform -chdir=infra/ecr init
+          terraform -chdir=infra/ecr apply -auto-approve -var="aws_region=${AWS_REGION}"
+
+      - name: Prepare Terraform variables
+        run: scripts/deploy/ci_prepare_tfvars.sh
+
+      - name: Detect first ECS service deploy
+        id: agent_deploy_state
+        run: |
+          first_deploy="$(scripts/deploy/detect_first_agent_deploy.sh)"
+          printf 'first_deploy=%s\n' "${first_deploy}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push chat-api image
+        run: scripts/deploy/build_and_push_agent_image.sh chat-api
+
+      - name: Build and push agent-worker image
+        run: scripts/deploy/build_and_push_agent_image.sh agent-worker
+
+      - name: Terraform bootstrap plan
+        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        env:
+          BOOTSTRAP_ZERO_DESIRED_COUNT: true
+        run: scripts/deploy/terraform_prod_in_place_plan.sh agent-bootstrap.tfplan
+
+      - name: Terraform bootstrap apply
+        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        env:
+          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        run: scripts/deploy/terraform_prod_in_place_apply.sh agent-bootstrap.tfplan
+
+      - name: Terraform plan
+        if: steps.agent_deploy_state.outputs.first_deploy != 'true'
+        run: scripts/deploy/terraform_prod_in_place_plan.sh
+
+      - name: Terraform apply
+        if: steps.agent_deploy_state.outputs.first_deploy != 'true'
+        env:
+          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        run: scripts/deploy/terraform_prod_in_place_apply.sh
+
+      - name: Run agent DB migrations
+        run: scripts/deploy/run_agent_migration.sh
+
+      - name: Terraform plan desired service counts
+        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        run: scripts/deploy/terraform_prod_in_place_plan.sh
+
+      - name: Terraform apply desired service counts
+        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        env:
+          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        run: scripts/deploy/terraform_prod_in_place_apply.sh
+
+      - name: Roll ECS services
+        run: scripts/deploy/roll_ecs_services.sh
