@@ -11,7 +11,7 @@ locals {
   shared_service_outputs = data.terraform_remote_state.mymemo_service.outputs
 
   shared_ecs_subnet_ids = tolist(local.shared_service_outputs.ecs_subnet_ids)
-  shared_vpc_id         = local.shared_service_outputs.vpc_id
+  shared_vpc_id         = data.aws_subnet.shared_ecs_first.vpc_id
 
   shared_ecs_cluster_arn_output  = try(local.shared_service_outputs.ecs_cluster_arn, null)
   shared_ecs_cluster_name_output = try(local.shared_service_outputs.ecs_cluster_name, null)
