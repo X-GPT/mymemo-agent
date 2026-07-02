@@ -6,12 +6,14 @@ no production migration requirement: the current daemon-based prototype does
 not need a compatibility rollout or traffic cutover plan.
 
 The deployable-from-day-one constraint means each milestone must fit the
-existing `mymemo-service` production deployment path on the `refactor` branch:
-Terraform-managed AWS in `infra/terraform`, GitHub Actions release deployment,
-RDS Postgres, ECS Fargate services, ALB routing, Secrets Manager, CloudWatch,
-and production smoke scripts. Early milestones may return controlled "not
-enabled" or queued synthetic responses for users outside the release gate, but
-they must boot cleanly and fail closed.
+existing MyMemo production AWS environment while keeping agent deployment code
+in this repo: Terraform-managed AWS under `mymemo-agent/infra/terraform`, GitHub
+Actions release deployment, RDS Postgres, ECS Fargate services, ALB routing,
+Secrets Manager, CloudWatch, and production smoke scripts. The agent Terraform
+must consume the same VPC/network context as `mymemo-service` through explicit
+inputs or reviewed outputs; it must not create a parallel VPC. Early milestones
+may return controlled "not enabled" or queued synthetic responses for users
+outside the release gate, but they must boot cleanly and fail closed.
 
 ## Assumptions
 
@@ -22,8 +24,9 @@ they must boot cleanly and fail closed.
   - `mymemo-agent` `agent-worker` as an ECS Fargate service for queue polling
     and agent execution.
   - E2B for untrusted filesystem and shell execution.
-- The service deploys alongside `mymemo-service`, reusing/extending the
-  existing Terraform stack rather than creating a separate deployment system.
+- The service deploys alongside `mymemo-service`, reusing the existing
+  `mymemo-service` VPC/network while owning agent Terraform and release wiring
+  in `mymemo-agent`.
 - The existing production RDS Postgres is the first queue, run-event store, run
   replay source, and operational ledger. Use separate database roles/schemas for
   writable agent state and read-only KB access.
@@ -103,7 +106,9 @@ delivered through the original run stream or the reconnect endpoint.
 
 The first deployable environment contains:
 
-- Extensions to the existing `mymemo-service/refactor` Terraform stack:
+- Agent-owned Terraform in `mymemo-agent/infra/terraform`, consuming the existing
+  `mymemo-service` VPC/subnet/security-group/ALB/cluster identifiers as explicit
+  deployment inputs:
   - ECR repositories for `mymemo-agent-chat-api` and `mymemo-agent-worker`
   - ECS Fargate service for `mymemo-agent-chat-api`
   - ECS Fargate service for `mymemo-agent-worker`
@@ -132,12 +137,13 @@ The first deployable environment contains:
 
 Deployment order:
 
-1. Extend `mymemo-service/infra/terraform` on `refactor` with the agent ECR
-   repositories, ECS services, task definitions, secrets, log groups, alarms,
-   ALB routing, and migration task.
-2. Extend `.github/workflows/release-deploy.yml` or add a sibling release job
-   so the existing release pipeline builds and pushes the agent images, prepares
-   tfvars, runs Terraform plan/apply, rolls ECS services, and runs smoke tests.
+1. Add `mymemo-agent/infra/terraform` with the agent ECR repositories, ECS
+   services, task definitions, secrets, log groups, alarms, ALB routing, and
+   migration task.
+2. Add or extend `.github/workflows/release-deploy.yml` in `mymemo-agent` so the
+   release pipeline builds and pushes the agent images, prepares tfvars with
+   reviewed `mymemo-service` network inputs, runs Terraform plan/apply, rolls ECS
+   services, and runs smoke tests.
 3. Build or verify the E2B executor template.
 4. Run agent DB migrations as part of the existing one-shot migration stage,
    before the agent services accept traffic.
@@ -150,8 +156,9 @@ Deployment order:
 8. Open the Statsig gate to the intended cohort.
 
 Manual console changes are not the planned deployment mechanism. They are
-acceptable only for temporary prototype spikes, and any retained setting must be
-backfilled into `mymemo-service/infra/terraform` before production exposure.
+acceptable only for temporary prototype spikes, and any retained agent setting
+must be backfilled into `mymemo-agent/infra/terraform` before production
+exposure.
 
 Rollback for early deployments is service-level plus exposure-level:
 
@@ -389,36 +396,51 @@ Verify:
 - workspace test runner includes `apps/agent-worker`.
 - worker image builds locally.
 
-### Task 0.4: Extend `mymemo-service` Terraform Deployment
+### Task 0.4: Add `mymemo-agent` Terraform Deployment Using the `mymemo-service` VPC
 
-Extend `/Users/chengchao/code/mymemo/mymemo-service/infra/terraform` rather
-than creating a parallel AWS deployment. Expected touch points:
+Add Terraform and release wiring in this repo. The agent Terraform must live
+under `mymemo-agent/infra/terraform`, consume the existing `mymemo-service`
+VPC/network/cluster identifiers through explicit inputs, and avoid creating a
+parallel VPC or separate AWS network stack. Expected touch points:
 
-- `ecr.tf` for agent image repositories
-- `ecs.tf` for `mymemo-agent-chat-api` and `mymemo-agent-worker` task
-  definitions/services, or dedicated `ecs_agent*.tf` files if that keeps the
-  existing file readable
-- `alb.tf` for agent path routing or service-to-service routing support
-- `iam.tf` for task-role access to E2B-related secrets and existing AWS
-  resources
-- `secrets.tf` for `STATSIG_SERVER_SECRET`, `OPENROUTER_API_KEY`,
-  `E2B_API_KEY`, and agent DB credentials
-- `cloudwatch.tf` for agent log groups and alarms
-- `ecs_migrations.tf` for agent DB migrations
-- `variables.tf` / `outputs.tf` for image tags, desired counts, service URLs,
-  and smoke-test inputs
+- `infra/terraform/ecr.tf` for agent image repositories
+- `infra/terraform/ecs.tf` for `mymemo-agent-chat-api` and
+  `mymemo-agent-worker` task definitions/services
+- `infra/terraform/alb.tf` for agent path routing on the existing MyMemo ALB or
+  service-to-service routing support
+- `infra/terraform/network.tf` for agent-owned service security groups inside
+  the existing VPC, not new VPC/subnet resources
+- `infra/terraform/iam.tf` for task-role access to E2B-related secrets and
+  existing AWS resources
+- `infra/terraform/variables.tf` / `outputs.tf` for shared-network inputs, image
+  tags, desired counts, service URLs, and smoke-test inputs
+- `infra/terraform/cloudwatch.tf` for agent log groups and alarms
+- agent DB migration task definition
+- example tfvars documenting the deployment contract with `mymemo-service`
+  networking
 
-Extend the existing deployment pipeline:
+Add the agent deployment pipeline:
 
 - `.github/workflows/release-deploy.yml` builds and pushes both agent images
-  alongside the existing backend image
-- `scripts/deploy/build_and_push_backend_image.sh` is copied or generalized for
-  agent images
-- `scripts/deploy/ci_prepare_tfvars.sh` writes agent image tags and desired
-  counts into the production tfvars material
+- `scripts/deploy/build_and_push_agent_image.sh` builds and pushes agent images
+- `mymemo-service` remote state is the reviewed shared-infra contract; agent
+  deploy config does not duplicate VPC/subnet/cluster/listener/security-group
+  IDs
+- `infra/terraform/prod.tfvars` is the reviewed Terraform contract for
+  agent-owned non-secret infrastructure/runtime inputs; Terraform resolves
+  conventional Secrets Manager names to ARNs internally
+- `infra/deploy/prod.env` is limited to CI/deploy shell settings such as AWS
+  account and smoke-test inputs
+- `infra/deploy/prod.secrets.env` is git-ignored local bootstrap input for
+  literal secret values, and `scripts/deploy/create_agent_secrets.sh` creates or
+  updates the conventional AWS Secrets Manager entries
+- `scripts/deploy/run_agent_migration.sh` runs the agent DB migration task after
+  Terraform apply and before ECS service rollout
+- `scripts/deploy/ci_prepare_tfvars.sh` reads CI-provided environment variables
+  and writes only the immutable agent image URIs into generated Terraform tfvars
 - `scripts/deploy/terraform_prod_in_place_plan.sh` and
-  `scripts/deploy/terraform_prod_in_place_apply.sh` remain the guarded
-  Terraform entrypoints
+  `scripts/deploy/terraform_prod_in_place_apply.sh` are guarded Terraform
+  entrypoints from this repo
 - `scripts/deploy/roll_ecs_services.sh` rolls the agent services too
 - `scripts/deploy/prod_smoke.sh` adds an allowlisted Statsig agent smoke test
 
@@ -426,15 +448,23 @@ Tests first:
 
 - configuration examples are parseable by the app env loaders.
 - smoke-test code can run against an in-process server or configured base URL.
-- Terraform variable examples include every required secret reference and no
-  literal secret values.
+- Terraform variable examples include every required shared-network input and
+  the conventional secret-name contract with no literal secret values.
+- checked-in `prod.tfvars` contains agent-owned non-secret Terraform config,
+  and checked-in `prod.env` contains CI/smoke settings only.
+- git-ignored secret bootstrap files are ignored, and checked-in examples never
+  contain literal secret values.
+- Terraform does not define a new VPC for the agent services.
 - `terraform -chdir=infra/terraform fmt -check` and `terraform validate` pass
-  from the `mymemo-service` repo.
+  from the `mymemo-agent` repo.
 
 Verify:
 
-- a production deploy through the existing `release` branch pipeline can update
-  the existing MyMemo stack and keep the Statsig gate closed by default.
+- a production deploy through the agent release path can update the agent
+  services in the existing MyMemo VPC and keep the Statsig gate closed by
+  default.
+- the deployment contract with `mymemo-service` networking is documented enough
+  that VPC/subnet/security-group changes are explicit and reviewable.
 
 ## Milestone 1: Postgres Run Store
 

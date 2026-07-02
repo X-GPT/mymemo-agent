@@ -1,0 +1,58 @@
+aws_region  = "us-east-1"
+environment = "prod"
+
+tags = {
+  Application = "mymemo-agent"
+  Environment = "prod"
+  ManagedBy   = "terraform"
+}
+
+# Existing mymemo-service VPC/subnets/ECS cluster are read from Terraform remote
+# state. The public ALB is owned by mymemo-agent. Use an ACM certificate in the
+# same region as the ALB. For domains under mymemo.ai, reuse the existing
+# wildcard *.mymemo.ai certificate ARN.
+agent_alb_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REPLACE_WITH_CERT_ID"
+
+# Existing ECS subnets are public/default subnets with no NAT/VPC endpoint egress
+# path, so public IP assignment is an inherited network constraint.
+assign_public_ip = true
+
+chat_api_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-chat-api:REPLACE_WITH_GIT_SHA"
+agent_worker_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-worker:REPLACE_WITH_GIT_SHA"
+
+chat_api_desired_count     = 1
+agent_worker_desired_count = 1
+
+gateway_public_url        = "https://agent-gateway.example.com"
+e2b_template              = "sandbox-template-prod"
+openrouter_base_url       = "https://openrouter.ai/api"
+openrouter_default_model  = "anthropic/claude-sonnet-4"
+worker_max_concurrent_runs = 2
+
+# Agent-owned writable Postgres. This Terraform root always creates a dedicated
+# RDS instance. The password is generated and stored by RDS in AWS Secrets
+# Manager; ECS receives AGENT_DATABASE_URL without a password plus a DB_PASSWORD
+# secret reference to the RDS-managed password.
+agent_database_name               = "mymemo_agent"
+agent_database_username           = "mymemo_agent"
+agent_db_instance_class           = "db.t4g.micro"
+agent_db_allocated_storage_gb     = 20
+agent_db_max_allocated_storage_gb = 100
+agent_db_engine_version           = "17.9"
+agent_db_backup_retention_days    = 7
+agent_db_deletion_protection      = true
+
+# Non-database secret values are created and rotated outside this example.
+# By default Terraform resolves conventional Secrets Manager names:
+# - <name_prefix>-<environment>-KB_DATABASE_URL
+# - <name_prefix>-<environment>-LLM_TOKEN_SECRET
+# - <name_prefix>-<environment>-STATSIG_SERVER_SECRET
+# - <name_prefix>-<environment>-OPENROUTER_API_KEY
+# - <name_prefix>-<environment>-E2B_API_KEY
+#
+# Override these only when an environment cannot use the convention.
+# kb_database_url_secret_name    = "mymemo-agent-prod-KB_DATABASE_URL"
+# llm_token_secret_name          = "mymemo-agent-prod-LLM_TOKEN_SECRET"
+# statsig_server_secret_name     = "mymemo-agent-prod-STATSIG_SERVER_SECRET"
+# openrouter_api_key_secret_name = "mymemo-agent-prod-OPENROUTER_API_KEY"
+# e2b_api_key_secret_name        = "mymemo-agent-prod-E2B_API_KEY"
