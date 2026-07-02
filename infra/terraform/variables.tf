@@ -26,6 +26,16 @@ variable "agent_alb_certificate_arn" {
   default     = null
 }
 
+variable "mymemo_service_api_security_group_ids" {
+  description = "Security group IDs for mymemo-service API tasks allowed to call the internal agent ALB."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.mymemo_service_api_security_group_ids) > 0
+    error_message = "At least one mymemo-service API security group ID is required."
+  }
+}
+
 variable "chat_api_image" {
   description = "Fully qualified chat-api container image URI including tag."
   type        = string

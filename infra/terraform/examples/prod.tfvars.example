@@ -8,10 +8,12 @@ tags = {
 }
 
 # Existing mymemo-service VPC/subnets/ECS cluster are read from Terraform remote
-# state. The public ALB is owned by mymemo-agent. Use an ACM certificate in the
-# same region as the ALB. For domains under mymemo.ai, reuse the existing
-# wildcard *.mymemo.ai certificate ARN.
-agent_alb_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REPLACE_WITH_CERT_ID"
+# state. The internal ALB is owned by mymemo-agent and accepts traffic only from
+# the configured mymemo-service API ECS service security group.
+mymemo_service_api_security_group_ids = ["sg-REPLACE_WITH_MYMEMO_SERVICE_API_SG"]
+
+# Internal service-to-service traffic uses HTTP on the private ALB DNS name.
+agent_alb_certificate_arn = null
 
 # Existing ECS subnets are public/default subnets with no NAT/VPC endpoint egress
 # path, so public IP assignment is an inherited network constraint.

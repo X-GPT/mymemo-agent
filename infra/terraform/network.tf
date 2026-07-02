@@ -1,22 +1,22 @@
 resource "aws_security_group" "alb" {
   name        = local.alb_security_group_name
-  description = "mymemo-agent public ALB inside the existing MyMemo VPC"
+  description = "mymemo-agent internal ALB inside the existing MyMemo VPC"
   vpc_id      = local.shared_vpc_id
 
   ingress {
-    description = "HTTP from the public internet"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    description     = "HTTP from mymemo-service API"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = local.trusted_caller_security_group_ids
   }
 
   ingress {
-    description = "HTTPS from the public internet"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    description     = "HTTPS from mymemo-service API"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = local.trusted_caller_security_group_ids
   }
 
   egress {

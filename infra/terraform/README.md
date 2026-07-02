@@ -30,7 +30,7 @@ the direct remote-state output is absent and the fallback input is present.
 - ECS Fargate task definitions and services for chat-api and agent-worker
 - agent DB migration task definition
 - service security group inside the shared VPC
-- public agent-owned ALB, ALB security group, listeners, and chat-api target group
+- internal agent-owned ALB, ALB security group, listeners, and chat-api target group
 - IAM execution/task roles for the agent tasks
 - CloudWatch log groups and baseline alarms
 
@@ -111,23 +111,28 @@ stability. This keeps schema-dependent images from starting before migrations.
 egress path. It is an inherited network constraint, not the preferred production
 networking pattern.
 
-`gateway_public_url` and `AGENT_SMOKE_BASE_URL` are intentionally different
-settings:
+`gateway_public_url`, the agent internal ALB URL, and `AGENT_SMOKE_BASE_URL`
+are intentionally different settings:
 
 - `gateway_public_url` is runtime application config provided as a required
   release workflow input. `chat-api` passes it to E2B sandboxes so the agent can
-  call the gateway for LLM and document access. This is not the agent-owned ALB
-  URL unless that ALB is actually routing the gateway service.
-- `AGENT_SMOKE_BASE_URL` in `prod.env` is deploy verification config. The GitHub Actions
-  runner calls this base URL after rollout to verify `chat-api` responds at
-  `/v1/conversations`. It should point at the agent-owned ALB DNS name or a
-  custom domain alias for that ALB. It is not consumed by the running ECS tasks.
+  call the gateway for LLM and document access. It is not the agent ALB URL.
+- `agent_internal_base_url` is a Terraform output for `mymemo-service` to call
+  `chat-api` inside the shared VPC:
 
-The production config reuses the existing `*.mymemo.ai` ACM certificate in
-`us-west-2`, matching the `mymemo-service` pattern. DNS remains outside
-Terraform: create a Cloudflare CNAME such as `agent-api.mymemo.ai` pointing at
-`terraform -chdir=infra/terraform output -raw agent_alb_dns_name`, then set
-`AGENT_SMOKE_BASE_URL=https://agent-api.mymemo.ai`.
+  ```sh
+  terraform -chdir=infra/terraform output -raw agent_internal_base_url
+  ```
+
+  Configure `mymemo-service` with that value and have it inject the trusted
+  `X-Member-*` / `X-Partner-*` identity headers.
+- `AGENT_SMOKE_BASE_URL` in `prod.env` is optional deploy verification config
+  for running `scripts/deploy/prod_smoke.sh` from inside the VPC. The
+  GitHub-hosted release workflow does not call this internal URL.
+
+The internal ALB accepts traffic only from the configured
+`mymemo_service_api_security_group_ids`. It is not exposed to the public
+internet, and no Cloudflare DNS record is needed for `chat-api`.
 
 The workflow does not require GitHub repository variables for Terraform inputs.
 The only credential handoff is GitHub OIDC assuming the deploy role:

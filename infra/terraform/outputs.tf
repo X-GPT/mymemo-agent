@@ -54,18 +54,23 @@ output "assign_public_ip" {
 }
 
 output "chat_api_target_group_arn" {
-  description = "Agent ALB target group ARN for chat-api."
+  description = "Internal agent ALB target group ARN for chat-api."
   value       = aws_lb_target_group.chat_api.arn
 }
 
-output "agent_alb_dns_name" {
-  description = "DNS name of the agent-owned public ALB."
+output "agent_internal_alb_dns_name" {
+  description = "DNS name of the agent-owned internal ALB."
   value       = aws_lb.agent.dns_name
 }
 
-output "agent_alb_url" {
-  description = "HTTP bootstrap URL of the agent-owned public ALB. Null when HTTPS is enabled; use the custom DNS name matching the ACM certificate instead."
+output "agent_internal_base_url" {
+  description = "Internal base URL for mymemo-service to call mymemo-agent chat-api."
   value       = var.agent_alb_certificate_arn == null ? "http://${aws_lb.agent.dns_name}" : null
+}
+
+output "agent_internal_allowed_caller_security_group_ids" {
+  description = "Security group IDs allowed to call the internal agent ALB."
+  value       = local.trusted_caller_security_group_ids
 }
 
 output "shared_infra" {

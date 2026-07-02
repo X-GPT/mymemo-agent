@@ -115,6 +115,3 @@ jobs:
 
       - name: Roll ECS services
         run: scripts/deploy/roll_ecs_services.sh
-
-      - name: Production smoke
-        run: scripts/deploy/prod_smoke.sh

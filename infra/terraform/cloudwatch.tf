@@ -10,7 +10,7 @@ resource "aws_cloudwatch_log_group" "agent_worker" {
 
 resource "aws_cloudwatch_metric_alarm" "chat_api_unhealthy" {
   alarm_name          = "${local.chat_api_name}-unhealthy-hosts"
-  alarm_description   = "chat-api has unhealthy targets behind the agent ALB."
+  alarm_description   = "chat-api has unhealthy targets behind the internal agent ALB."
   namespace           = "AWS/ApplicationELB"
   metric_name         = "UnHealthyHostCount"
   statistic           = "Maximum"

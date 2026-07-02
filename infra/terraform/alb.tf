@@ -1,7 +1,7 @@
 resource "aws_lb" "agent" {
   name               = substr(replace(local.alb_name, "_", "-"), 0, 32)
   load_balancer_type = "application"
-  internal           = false
+  internal           = true
   security_groups    = [aws_security_group.alb.id]
   subnets            = local.shared_ecs_subnet_ids
 }

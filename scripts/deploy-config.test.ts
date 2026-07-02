@@ -56,6 +56,7 @@ describe("agent deployment config", () => {
 		for (const required of [
 			"assign_public_ip",
 			"agent_db_instance_class",
+			"mymemo_service_api_security_group_ids",
 			"kb_database_url_secret_name",
 			"llm_token_secret_name",
 			"statsig_server_secret_name",
@@ -95,7 +96,8 @@ describe("agent deployment config", () => {
 		for (const required of [
 			'environment = "prod"',
 			"assign_public_ip = true",
-			'agent_alb_certificate_arn = "arn:aws:acm:us-west-2:637423444544:certificate/1cd62dfc-c199-40ed-9f96-7c8700574e47"',
+			'mymemo_service_api_security_group_ids = ["sg-05d48e36ef8966c9e"]',
+			"agent_alb_certificate_arn = null",
 			'openrouter_default_model   = "anthropic/claude-sonnet-4"',
 		]) {
 			expect(prodTfvars).toContain(required);
@@ -180,6 +182,7 @@ describe("agent deployment config", () => {
 		expect(migrationIndex).toBeGreaterThan(-1);
 		expect(rolloutIndex).toBeGreaterThan(-1);
 		expect(migrationIndex).toBeLessThan(rolloutIndex);
+		expect(releaseDeployWorkflow).not.toContain("scripts/deploy/prod_smoke.sh");
 	});
 
 	it("terraform does not roll ECS services before migrations", () => {
@@ -281,17 +284,24 @@ describe("agent deployment config", () => {
 		expect(locals).toContain("shared_vpc_id         = local.shared_service_outputs.vpc_id");
 		expect(sharedState).not.toContain('data "aws_subnet" "shared_ecs_first"');
 		expect(sharedState).toContain('data "aws_ecs_cluster" "shared"');
+		expect(sharedState).not.toContain('data "aws_ecs_service" "mymemo_service_api"');
 		expect(sharedState).toContain("count = local.shared_ecs_cluster_arn_output == null");
 		expect(sharedState).not.toContain('data "aws_lb" "shared"');
 		expect(sharedState).not.toContain('data "aws_lb_listener" "shared_https"');
 		expect(locals).not.toContain("shared_alb");
+		expect(locals).toContain("trusted_caller_security_group_ids = var.mymemo_service_api_security_group_ids");
 		expect(albConfig).toContain('resource "aws_lb" "agent"');
+		expect(albConfig).toContain("internal           = true");
 		expect(albConfig).toContain('resource "aws_lb_listener" "http"');
 		expect(albConfig).toContain('resource "aws_lb_listener" "https"');
 		expect(networkConfig).toContain('resource "aws_security_group" "alb"');
+		expect(networkConfig).toContain("security_groups = local.trusted_caller_security_group_ids");
+		expect(networkConfig).not.toContain('description = "HTTP from the public internet"');
+		expect(networkConfig).not.toContain('description = "HTTPS from the public internet"');
 		expect(networkConfig).toContain("source_security_group_id = aws_security_group.alb.id");
-		expect(outputs).toContain('output "agent_alb_dns_name"');
-		expect(outputs).toContain('output "agent_alb_url"');
+		expect(outputs).toContain('output "agent_internal_alb_dns_name"');
+		expect(outputs).toContain('output "agent_internal_base_url"');
+		expect(outputs).toContain('output "agent_internal_allowed_caller_security_group_ids"');
 		expect(cloudwatch).toContain("LoadBalancer = aws_lb.agent.arn_suffix");
 		expect(cloudwatch).toContain("ClusterName = local.shared_ecs_cluster_name");
 		expect(cloudwatch).not.toContain("outputs.ecs_cluster_name");

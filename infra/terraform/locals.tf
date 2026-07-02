@@ -16,8 +16,9 @@ locals {
   shared_ecs_cluster_arn_output  = try(local.shared_service_outputs.ecs_cluster_arn, null)
   shared_ecs_cluster_name_output = try(local.shared_service_outputs.ecs_cluster_name, null)
 
-  shared_ecs_cluster_arn  = coalesce(local.shared_ecs_cluster_arn_output, one(data.aws_ecs_cluster.shared[*].arn))
-  shared_ecs_cluster_name = coalesce(local.shared_ecs_cluster_name_output, one(data.aws_ecs_cluster.shared[*].cluster_name), try(regex("[^/]+$", local.shared_ecs_cluster_arn_output), null))
+  shared_ecs_cluster_arn            = coalesce(local.shared_ecs_cluster_arn_output, one(data.aws_ecs_cluster.shared[*].arn))
+  shared_ecs_cluster_name           = coalesce(local.shared_ecs_cluster_name_output, one(data.aws_ecs_cluster.shared[*].cluster_name), try(regex("[^/]+$", local.shared_ecs_cluster_arn_output), null))
+  trusted_caller_security_group_ids = var.mymemo_service_api_security_group_ids
 
   managed_agent_database_url = "postgresql://${var.agent_database_username}@${aws_db_instance.agent.address}:${aws_db_instance.agent.port}/${var.agent_database_name}"
 
