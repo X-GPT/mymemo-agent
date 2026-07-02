@@ -108,6 +108,54 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
+    sid = "AgentKmsUsage"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo",
+    ]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values = [
+        "rds.${var.aws_region}.amazonaws.com",
+        "secretsmanager.${var.aws_region}.amazonaws.com",
+      ]
+    }
+  }
+
+  statement {
+    sid = "AgentKmsGrantManagement"
+    actions = [
+      "kms:CreateGrant",
+      "kms:ListGrants",
+      "kms:RevokeGrant",
+    ]
+    resources = ["*"]
+
+    condition {
+      test     = "Bool"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["true"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values = [
+        "rds.${var.aws_region}.amazonaws.com",
+        "secretsmanager.${var.aws_region}.amazonaws.com",
+      ]
+    }
+  }
+
+  statement {
     sid = "AgentIamManagement"
     actions = [
       "iam:AttachRolePolicy",
