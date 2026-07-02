@@ -266,13 +266,31 @@ describe("agent deployment config", () => {
 		expect(combined).not.toContain("mymemo-github-actions-deploy");
 	});
 
-	it("release deploy serializes runs and validates image tags before exporting env", () => {
+	it("release deploy serializes runs and generates unique immutable image tags", () => {
 		expect(releaseDeployWorkflow).toContain("concurrency:");
 		expect(releaseDeployWorkflow).toContain("group: release-deploy-${{ inputs.environment }}");
 		expect(releaseDeployWorkflow).toContain("cancel-in-progress: false");
+		expect(releaseDeployWorkflow).not.toContain("inputs.image_tag");
+		expect(releaseDeployWorkflow).not.toContain("REQUESTED_IMAGE_TAG");
+		expect(releaseDeployWorkflow).toContain('image_tag="release-${short_sha}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"');
 		expect(releaseDeployWorkflow).toContain('if [[ ! "${image_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]');
 		expect(releaseDeployWorkflow).toContain("printf 'IMAGE_TAG=%s\\n'");
 		expect(releaseDeployWorkflow).not.toContain('echo "IMAGE_TAG=${REQUESTED_IMAGE_TAG}" >> "${GITHUB_ENV}"');
+	});
+
+	it("agent RDS tracks the PostgreSQL major version for auto-minor upgrades", () => {
+		const rdsConfig = readFileSync(join(terraformDir, "rds.tf"), "utf8");
+		const variables = readFileSync(join(terraformDir, "variables.tf"), "utf8");
+		const exampleTfvars = readFileSync(
+			join(terraformDir, "examples", "prod.tfvars.example"),
+			"utf8",
+		);
+
+		expect(rdsConfig).toContain("auto_minor_version_upgrade = true");
+		expect(variables).toContain('default     = "17"');
+		expect(prodTfvars).toContain('agent_db_engine_version           = "17"');
+		expect(exampleTfvars).toContain('agent_db_engine_version           = "17"');
+		expect(`${variables}\n${prodTfvars}\n${exampleTfvars}`).not.toContain('"17.9"');
 	});
 
 	it("shared infrastructure fallbacks are explicit and conditional", () => {

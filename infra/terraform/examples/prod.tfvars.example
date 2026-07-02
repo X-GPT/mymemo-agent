@@ -37,7 +37,7 @@ agent_database_username           = "mymemo_agent"
 agent_db_instance_class           = "db.t4g.micro"
 agent_db_allocated_storage_gb     = 20
 agent_db_max_allocated_storage_gb = 100
-agent_db_engine_version           = "17.9"
+agent_db_engine_version           = "17"
 agent_db_backup_retention_days    = 7
 agent_db_deletion_protection      = true
 

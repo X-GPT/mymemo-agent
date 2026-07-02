@@ -3,9 +3,6 @@ name: Release deploy
 on:
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "Image tag to build and deploy. Defaults to release-${short_sha}-${run_number}."
-        required: false
       environment:
         description: "Deployment environment"
         type: choice
@@ -73,15 +70,9 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Compute immutable image tag
-        env:
-          REQUESTED_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          if [[ -n "${REQUESTED_IMAGE_TAG}" ]]; then
-            image_tag="${REQUESTED_IMAGE_TAG}"
-          else
-            short_sha="${GITHUB_SHA::7}"
-            image_tag="release-${short_sha}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          fi
+          short_sha="${GITHUB_SHA::7}"
+          image_tag="release-${short_sha}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
 
           if [[ ! "${image_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
             echo "Invalid image_tag. Use a Docker tag: 1-128 chars, starting with alphanumeric or underscore, then alphanumeric, underscore, dot, or dash." >&2

@@ -195,7 +195,7 @@ variable "agent_db_max_allocated_storage_gb" {
 variable "agent_db_engine_version" {
   description = "PostgreSQL engine version for the dedicated agent database."
   type        = string
-  default     = "17.9"
+  default     = "17"
 }
 
 variable "agent_db_backup_retention_days" {
