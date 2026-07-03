@@ -2,10 +2,12 @@ import { sql } from "drizzle-orm";
 import {
 	bigint,
 	check,
+	jsonb,
 	pgTable,
 	primaryKey,
 	text,
 	timestamp,
+	uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -94,6 +96,79 @@ export const conversations = pgTable(
 		check(
 			"conversations_scope_check",
 			sql`${t.scope} in ('general', 'collection', 'document')`,
+		),
+	],
+);
+
+/**
+ * Minimal durable run queue for the split-runtime worker (MYM-49 milestone 1).
+ * A run is one backend execution attempt for a conversation. Execution
+ * ownership lives here, not in sandbox/runtime metadata: only the worker named
+ * by `locked_by` while `locked_until` is live may append owned run events in
+ * later transaction helpers.
+ */
+export const runs = pgTable(
+	"runs",
+	{
+		/** Primary/canonical external run id. */
+		runId: text("run_id").primaryKey(),
+		userId: text("user_id").notNull(),
+		conversationId: text("conversation_id").notNull(),
+		status: text("status").notNull(),
+		lockedBy: text("locked_by"),
+		lockedUntil: timestamp("locked_until", { withTimezone: true }),
+		heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+		cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+		fencingToken: bigint("fencing_token", { mode: "number" })
+			.notNull()
+			.default(0),
+		nextEventSeq: bigint("next_event_seq", { mode: "number" })
+			.notNull()
+			.default(1),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		terminalAt: timestamp("terminal_at", { withTimezone: true }),
+	},
+	(t) => [
+		check(
+			"runs_status_check",
+			sql`${t.status} in ('queued', 'running', 'cancel_requested', 'done', 'error', 'canceled')`,
+		),
+		uniqueIndex("runs_one_active_per_conversation")
+			.on(t.userId, t.conversationId)
+			.where(sql`${t.status} in ('queued', 'running', 'cancel_requested')`),
+	],
+);
+
+/**
+ * Durable, ordered run event log. Milestone 1 records events only; it does not
+ * define SSE frame names, payload shapes, or projection rules. `visibility` is a
+ * hint for a future projector: `internal` events are audit/control-only, while
+ * `client` events may be exposed by a later stream projection.
+ */
+export const runEvents = pgTable(
+	"run_events",
+	{
+		runId: text("run_id")
+			.notNull()
+			.references(() => runs.runId, { onDelete: "cascade" }),
+		seq: bigint("seq", { mode: "number" }).notNull(),
+		type: text("type").notNull(),
+		visibility: text("visibility").notNull(),
+		payload: jsonb("payload").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.runId, t.seq] }),
+		check(
+			"run_events_visibility_check",
+			sql`${t.visibility} in ('internal', 'client')`,
 		),
 	],
 );
