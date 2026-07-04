@@ -206,6 +206,22 @@ describe("run-store transaction helpers", () => {
 		).not.toContain("run_heartbeat");
 	});
 
+	it("heartbeatRunTx reports cancellation requests without extending ownership", async () => {
+		await createRun("run-1", "user-1", "conv-1");
+		const claimed = await claimRun();
+		const lockedUntil = (await getRun("run-1"))?.lockedUntil;
+		await requestRunCancellationTx(tdb.db, {
+			userId: "user-1",
+			conversationId: "conv-1",
+			runId: "run-1",
+		});
+
+		expect(await heartbeatRunTx(tdb.db, { ...claimed, ttlMs: TTL })).toEqual({
+			status: "cancel_requested",
+		});
+		expect((await getRun("run-1"))?.lockedUntil).toEqual(lockedUntil);
+	});
+
 	it("stale owner appends fail after the fencing token changes", async () => {
 		await createRun("run-1", "user-1", "conv-1");
 		const claimed = await claimRun();

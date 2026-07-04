@@ -79,6 +79,7 @@ export interface HeartbeatRunInput extends OwnedRunRef {
 
 export type HeartbeatRunResult =
 	| { status: "ok"; lockedUntil: Date }
+	| { status: "cancel_requested" }
 	| { status: "lost_ownership" };
 
 export interface RequestRunCancellationInput {
@@ -265,6 +266,19 @@ export async function heartbeatRunTx(
 	input: HeartbeatRunInput,
 ): Promise<HeartbeatRunResult> {
 	return db.transaction(async (tx) => {
+		const currentRows = await tx
+			.select({ status: runs.status })
+			.from(runs)
+			.where(ownedBy(input))
+			.limit(1)
+			.for("update");
+		const current = currentRows[0];
+		if (!current) return { status: "lost_ownership" };
+		if (current.status === "cancel_requested") {
+			return { status: "cancel_requested" };
+		}
+		if (current.status !== "running") return { status: "lost_ownership" };
+
 		const rows = await tx
 			.update(runs)
 			.set({
@@ -272,7 +286,7 @@ export async function heartbeatRunTx(
 				heartbeatAt: sql`now()`,
 				updatedAt: sql`now()`,
 			})
-			.where(ownedBy(input))
+			.where(and(ownedBy(input), eq(runs.status, "running")))
 			.returning({ lockedUntil: runs.lockedUntil });
 
 		const row = rows[0];
@@ -619,17 +633,25 @@ function asDate(value: Date | string): Date {
 }
 
 function isActiveRunUniqueViolation(error: unknown): boolean {
-	if (!error || typeof error !== "object") return false;
-	const maybe = error as {
-		code?: unknown;
-		constraint?: unknown;
-		cause?: unknown;
-	};
-	return (
-		(maybe.code === "23505" &&
-			maybe.constraint === "runs_one_active_per_conversation") ||
-		isActiveRunUniqueViolation(maybe.cause)
-	);
+	const seen = new WeakSet<object>();
+	let current: unknown = error;
+	while (current && typeof current === "object" && !seen.has(current)) {
+		seen.add(current);
+		const maybe = current as {
+			code?: unknown;
+			errno?: unknown;
+			constraint?: unknown;
+			cause?: unknown;
+		};
+		if (
+			(maybe.code === "23505" || maybe.errno === "23505") &&
+			maybe.constraint === "runs_one_active_per_conversation"
+		) {
+			return true;
+		}
+		current = maybe.cause;
+	}
+	return false;
 }
 
 async function executeRows<T>(tx: RunStoreTx, query: ReturnType<typeof sql>) {
