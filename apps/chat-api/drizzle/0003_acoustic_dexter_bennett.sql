@@ -1,0 +1,1 @@
+CREATE INDEX "runs_queued_claim_order" ON "runs" USING btree ("created_at","run_id") WHERE "runs"."status" = 'queued';

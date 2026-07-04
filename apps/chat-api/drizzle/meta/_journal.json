@@ -22,6 +22,13 @@
       "when": 1783060208776,
       "tag": "0002_brief_wolfsbane",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783150521296,
+      "tag": "0003_acoustic_dexter_bennett",
+      "breakpoints": true
     }
   ]
 }
