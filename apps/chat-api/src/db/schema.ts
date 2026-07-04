@@ -146,7 +146,7 @@ export const runs = pgTable(
 			.on(t.createdAt, t.runId)
 			.where(sql`${t.status} = 'queued'`),
 		index("runs_stale_recovery_order")
-			.on(t.lockedUntil)
+			.on(t.lockedUntil, t.createdAt, t.runId)
 			.where(sql`${t.status} in ('running', 'cancel_requested')`),
 	],
 );

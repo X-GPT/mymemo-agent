@@ -1,0 +1,2 @@
+DROP INDEX "runs_stale_recovery_order";--> statement-breakpoint
+CREATE INDEX "runs_stale_recovery_order" ON "runs" USING btree ("locked_until","created_at","run_id") WHERE "runs"."status" in ('running', 'cancel_requested');
