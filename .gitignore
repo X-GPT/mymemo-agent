@@ -49,3 +49,6 @@ worker-local
 *.tfstate
 *.tfstate.*
 .terraform/
+
+# worktrees
+worktrees
