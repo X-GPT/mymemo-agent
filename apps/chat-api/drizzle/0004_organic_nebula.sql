@@ -1,0 +1,1 @@
+CREATE INDEX "runs_stale_recovery_order" ON "runs" USING btree ("locked_until") WHERE "runs"."status" in ('running', 'cancel_requested');

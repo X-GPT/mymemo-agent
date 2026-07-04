@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
 	bigint,
 	check,
+	index,
 	jsonb,
 	pgTable,
 	primaryKey,
@@ -141,6 +142,12 @@ export const runs = pgTable(
 		uniqueIndex("runs_one_active_per_conversation")
 			.on(t.userId, t.conversationId)
 			.where(sql`${t.status} in ('queued', 'running', 'cancel_requested')`),
+		index("runs_queued_claim_order")
+			.on(t.createdAt, t.runId)
+			.where(sql`${t.status} = 'queued'`),
+		index("runs_stale_recovery_order")
+			.on(t.lockedUntil, t.createdAt, t.runId)
+			.where(sql`${t.status} in ('running', 'cancel_requested')`),
 	],
 );
 
