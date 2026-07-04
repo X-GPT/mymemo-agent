@@ -227,3 +227,17 @@ Optional:
 - `GATEWAY_PORT` (default: 8080)
 
 Compatibility note: the OpenRouter adapter is gated to the proven Claude-SDK-compatible surface — only `/v1/messages` forwards; `/v1/messages/count_tokens` is not part of OpenRouter's Anthropic-compatible surface and fails closed (404). `anthropic` remains the default until OpenRouter compatibility is verified end-to-end.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (X-GPT/mymemo-agent) via the `gh` CLI; external PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
