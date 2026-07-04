@@ -155,6 +155,22 @@ describe("run-store transaction helpers", () => {
 		]);
 	});
 
+	it("appendRunEventTx rejects terminal event types", async () => {
+		await createRun("run-1", "user-1", "conv-1");
+		const claimed = await claimRun();
+
+		expect(
+			await appendRunEventTx(tdb.db, {
+				mode: { kind: "owner_running", owner: claimed },
+				type: RUN_EVENT_TYPES.runDone,
+				visibility: "client",
+				payload: {},
+			}),
+		).toEqual({ status: "not_appendable" });
+		expect((await getRun("run-1"))?.nextEventSeq).toBe(3);
+		expect(await compactEvents("run-1")).toHaveLength(2);
+	});
+
 	it("heartbeatRunTx succeeds for the matching owner token and fails for wrong owner data", async () => {
 		await createRun("run-1", "user-1", "conv-1");
 		const claimed = await claimRun();
@@ -384,6 +400,36 @@ describe("run-store transaction helpers", () => {
 			await transitionRunTerminalTx(tdb.db, {
 				...claimed,
 				transition: "cancellation",
+			}),
+		).toEqual({
+			status: "transitioned",
+			runStatus: "canceled",
+			eventSeq: 4,
+		});
+		expect(await terminalEvents("run-1")).toEqual([
+			{
+				seq: 4,
+				type: RUN_EVENT_TYPES.runCanceled,
+				visibility: "client",
+				payload: {},
+			},
+		]);
+	});
+
+	it("failure after cancel_requested maps to canceled", async () => {
+		await createRun("run-1", "user-1", "conv-1");
+		const claimed = await claimRun();
+		await requestRunCancellationTx(tdb.db, {
+			userId: "user-1",
+			conversationId: "conv-1",
+			runId: "run-1",
+		});
+
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
+				...claimed,
+				transition: "failure",
+				message: "SDK interrupt failed",
 			}),
 		).toEqual({
 			status: "transitioned",

@@ -245,6 +245,8 @@ export async function appendRunEventTx(
 	db: Database,
 	input: AppendRunEventInput,
 ): Promise<AppendRunEventResult> {
+	if (isTerminalEventType(input.type)) return { status: "not_appendable" };
+
 	return db.transaction(async (tx) => {
 		const event = await appendRunEventInTx(tx, {
 			runId: input.mode.owner.runId,
@@ -362,7 +364,22 @@ export async function transitionRunTerminalTx(
 	input: TransitionRunTerminalInput,
 ): Promise<TransitionRunTerminalResult> {
 	return db.transaction(async (tx) => {
-		const spec = terminalSpec(input);
+		const currentRows = await tx
+			.select({ status: runs.status })
+			.from(runs)
+			.where(ownedBy(input))
+			.limit(1)
+			.for("update");
+		const current = currentRows[0];
+		if (!current) {
+			return { status: "lost_ownership_or_not_transitionable" };
+		}
+
+		const spec = terminalSpec(input, current.status);
+		if (!spec) {
+			return { status: "lost_ownership_or_not_transitionable" };
+		}
+
 		const updated = await tx
 			.update(runs)
 			.set({
@@ -373,7 +390,7 @@ export async function transitionRunTerminalTx(
 				terminalAt: sql`now()`,
 				updatedAt: sql`now()`,
 			})
-			.where(and(ownedBy(input), inArray(runs.status, spec.fromStatuses)))
+			.where(and(ownedBy(input), eq(runs.status, current.status)))
 			.returning({ runId: runs.runId });
 
 		if (!updated[0]) {
@@ -532,34 +549,53 @@ function runIdentity(input: {
 	);
 }
 
-function terminalSpec(input: TransitionRunTerminalInput): {
+function terminalSpec(
+	input: TransitionRunTerminalInput,
+	currentStatus: string,
+): {
 	status: ExtractTerminalStatus<RunStatus>;
-	fromStatuses: Array<Extract<RunStatus, "running" | "cancel_requested">>;
 	eventType: RunEventType;
 	payload: JsonPayload;
-} {
+} | null {
+	if (currentStatus !== "running" && currentStatus !== "cancel_requested") {
+		return null;
+	}
+
 	if (input.transition === "success") {
+		if (currentStatus !== "running") return null;
 		return {
 			status: "done",
-			fromStatuses: ["running"],
 			eventType: RUN_EVENT_TYPES.runDone,
 			payload: {},
 		};
 	}
 	if (input.transition === "failure") {
+		if (currentStatus === "cancel_requested") {
+			return {
+				status: "canceled",
+				eventType: RUN_EVENT_TYPES.runCanceled,
+				payload: {},
+			};
+		}
 		return {
 			status: "error",
-			fromStatuses: ["running", "cancel_requested"],
 			eventType: RUN_EVENT_TYPES.runError,
 			payload: { message: safeErrorMessage(input.message) },
 		};
 	}
 	return {
 		status: "canceled",
-		fromStatuses: ["running", "cancel_requested"],
 		eventType: RUN_EVENT_TYPES.runCanceled,
 		payload: {},
 	};
+}
+
+function isTerminalEventType(type: string): boolean {
+	return (
+		type === RUN_EVENT_TYPES.runDone ||
+		type === RUN_EVENT_TYPES.runError ||
+		type === RUN_EVENT_TYPES.runCanceled
+	);
 }
 
 function isTerminalStatus(
