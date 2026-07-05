@@ -33,7 +33,6 @@ export class HonoSSESender implements MymemoEventSender {
 		await this.stream.writeSSE({
 			data: JSON.stringify({}),
 			event: "ping",
-			id: crypto.randomUUID(),
 		});
 	}
 }
