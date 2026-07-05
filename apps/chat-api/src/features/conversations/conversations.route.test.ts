@@ -90,6 +90,7 @@ function fakeRunStore() {
 						runId,
 					},
 				},
+				{ seq: 2, type: RunEventType.Done, payload: {} },
 			]);
 			return { runId };
 		},
@@ -349,6 +350,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 				type: RunEventType.AssistantText,
 				payload: { text: "hello" },
 			},
+			{ seq: 3, type: RunEventType.Done, payload: {} },
 		]);
 
 		const res = await buildApp(
@@ -361,8 +363,9 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		});
 
 		expect(res.status).toBe(200);
-		const text = await readSseUntil(res, (chunk) =>
-			chunk.includes("text_delta"),
+		const text = await readSseUntil(
+			res,
+			(chunk) => chunk.includes("text_delta") && chunk.includes("done"),
 		);
 		expect(text).toContain("text_delta");
 		expect(text).toContain("hello");

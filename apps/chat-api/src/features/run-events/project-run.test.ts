@@ -45,6 +45,19 @@ class InstantNotifier implements RunNotifier {
 	}
 }
 
+class BlockingNotifier implements RunNotifier {
+	closed = 0;
+
+	async subscribe(): Promise<RunSubscription> {
+		return {
+			waitForWakeup: async () => new Promise<void>(() => {}),
+			close: async () => {
+				this.closed += 1;
+			},
+		};
+	}
+}
+
 async function drain(
 	gen: AsyncGenerator<ProjectedFrame>,
 ): Promise<ProjectedFrame[]> {
@@ -129,6 +142,30 @@ describe("projectRun", () => {
 			{ type: "text_delta", text: "late" },
 			{ type: "done" },
 		]);
+	});
+
+	it("stops while waiting when the client aborts", async () => {
+		const reader = new ScriptedReader([
+			[{ seq: 1, type: RunEventType.AssistantText, payload: { text: "one" } }],
+			[],
+		]);
+		const notifier = new BlockingNotifier();
+		const controller = new AbortController();
+		const gen = projectRun("run-1", 0, {
+			reader,
+			notifier,
+			signal: controller.signal,
+		});
+
+		expect(await gen.next()).toEqual({
+			done: false,
+			value: { seq: 1, frame: { type: "text_delta", text: "one" } },
+		});
+		const pending = gen.next();
+		controller.abort();
+
+		expect(await pending).toEqual({ done: true, value: undefined });
+		expect(notifier.closed).toBe(1);
 	});
 
 	it("maps run_canceled to canceled and closes (never error)", async () => {

@@ -178,6 +178,7 @@ app.post(
 					for await (const projected of projectRun(queuedRun.runId, 0, {
 						reader: c.var.deps.runEventReader,
 						notifier: c.var.deps.runNotifier,
+						signal: requestSignal,
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({
@@ -266,6 +267,7 @@ app.get(
 					for await (const projected of projectRun(runId, afterSeq, {
 						reader: c.var.deps.runEventReader,
 						notifier: c.var.deps.runNotifier,
+						signal: requestSignal,
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({
