@@ -77,11 +77,16 @@ SSE frames:
 ```text
 conversation_id
 run_id
-sandbox_id
-agent_session_id
 text_delta
 done | canceled | error
 ```
+
+The prototype-era `sandbox_id` and `agent_session_id` frames are not part of
+the split-runtime contract: both are internal runtime identifiers (the design
+doc classifies the agent session id as internal/runtime-facing), and in the
+split runtime they only exist after a worker claims the run, so they could
+never be reliable early frames. Operators find them in `run_events`, not in
+the client stream.
 
 3. Reconnect to an existing run without creating another backend attempt:
 
@@ -118,7 +123,9 @@ The first deployable environment contains:
   - IAM task-role permissions for E2B access, Secrets Manager reads, logs, and
     the existing S3/RDS resources only where needed
   - Secrets Manager entries for agent-only secrets
-  - scheduled recovery/cleanup/scaler jobs if they are separate from the worker
+  - no separate scheduled recovery/cleanup jobs: those loops are
+    worker-embedded (cleanup single-flighted via a Postgres advisory lock);
+    the Milestone 8 scaler is the only separate scheduled job
 - Postgres migration task integrated with the existing migration/deploy flow.
 - E2B template build/verification step containing only stable executor
   dependencies.
@@ -166,6 +173,30 @@ Rollback for early deployments is service-level plus exposure-level:
 - close the Statsig gate
 - keep DB migrations additive until the first public launch
 - keep E2B sandboxes and snapshots until cleanup verifies they are unreferenced
+
+## Prototype Path Decommissioning
+
+The daemon-based prototype path is replaced by a hard swap, not flag-switched
+coexistence: the two paths enforce "one active turn per conversation" with
+different authorities (`sandbox_leases` CAS vs the `runs` partial unique
+index), so a deployment where both are reachable has no single authority for
+that invariant (ADR-0002).
+
+Schedule:
+
+- Task 2.1 swaps the `user.message` handler from `runSandboxChat` to
+  queued-run insertion in one PR. chat-api's `sandbox-orchestration` and
+  `sandbox-agent` features, llm-token minting, the in-memory `run-state`
+  lifecycle module, and the WorkspaceStore-backed NDJSON run-event log are
+  deleted with the swap (the Postgres `runs`/`run_events` model replaces
+  them).
+- Milestone 3's synthetic worker restores a working end-to-end SSE demo; the
+  compose/e2e harness is rewritten against split-runtime semantics then.
+- `apps/gateway`, `apps/sandbox-daemon`, `apps/mymemo-docs`,
+  `packages/llm-token`, and the compose `gateway`/`sandbox` services are
+  deleted when Milestone 7 passes the full local harness.
+- `sandbox_leases` is dropped in the same migration that creates
+  `conversation_runtime` (Task 4.2).
 
 ## Statsig Exposure Gate
 
@@ -249,6 +280,14 @@ The database must enforce one active run per `{userId, conversationId}`.
 
 The durable, ordered event stream for audit, SSE projection, and reconnect.
 This is the source of truth for client replay.
+
+### `agent_sessions`
+
+Claude SDK session transcript mirror — the `SessionStore` adapter's backing
+table (one jsonb row per transcript entry, keyed by
+`projectKey/sessionId/subpath`, insertion-ordered). Worker-only; created at
+Milestone 7 with the continuity task. The per-conversation resume pointer
+lives in `conversation_runtime.agent_session_id`, not here.
 
 ### `document_access_events`
 
@@ -474,11 +513,14 @@ Goal: create the durable run queue and event log.
 
 Add:
 
-- `conversation_runtime`
-- `runs`
-- `run_events`
+- `runs` (landed via MYM-49)
+- `run_events` (landed via MYM-49)
 - `document_access_events`
-- `orphan_sandboxes`
+
+`conversation_runtime` and `orphan_sandboxes` are deliberately not part of
+this task: their shape is an output of the E2B semantics spike (Task 4.1,
+hoisted to run in parallel with Milestones 1-3), so they are created in
+Task 4.2 after the spike passes.
 
 Key DB invariants:
 
@@ -487,6 +529,35 @@ Key DB invariants:
 - check constraints for run statuses and checkpoint statuses
 - foreign-key or ownership-equivalent constraints where practical
 - indexes for queue claim, SSE replay, stale-run recovery, and cleanup scans
+
+`runs` carries no fencing token: a v1 run is claimed exactly once (failed runs
+do not requeue; stale runs are terminalized, never reclaimed), so
+`locked_by` + `locked_until` is the complete ownership fence. Remove the
+speculative `fencing_token` column from the landed MYM-49 schema. A token
+returns only with a future requeue feature that makes multiple holds per run
+possible — in the same PR as the requeue logic.
+
+`run_events` carries no `visibility` column: the projector's event-type→frame
+mapping is the single authority for client exposure, and unmapped types are
+skipped (fail-closed — a new internal event type cannot leak to clients
+without an explicit frame mapping). Remove the landed MYM-49 `visibility`
+column together with `fencing_token`. The design doc's append classes remain
+the write-side rule; they govern who may write, not what the client sees.
+
+Because nothing is in production, do both removals by regenerating the
+migration history as a clean baseline (erase `drizzle/`, regenerate one
+0000 migration) instead of stacking drop-migrations. Any previously migrated
+environment DB must be reset to the new baseline.
+
+This task also carries the driver decision: swap chat-api's Drizzle driver
+from `drizzle-orm/bun-sql` to `drizzle-orm/node-postgres` (`pg`) in
+`src/db/client.ts` and `src/db/migrate.ts`, adding the `pg` dependency — one
+driver everywhere, since `pg` must exist anyway for the `LISTEN` connections
+Bun.sql does not implement. Caveat found while validating: the resolved URL
+appends `sslmode=require`, which `pg` treats as verified TLS (it checks the
+server cert against the trust store) while Bun.sql is laxer — verify the
+first RDS connection after the swap, and if verification fails supply the
+RDS CA bundle or switch the URL policy to `sslmode=no-verify`.
 
 Tests first:
 
@@ -656,6 +727,13 @@ Goal: prove and wrap the E2B substrate before wiring it to the model.
 
 ### Task 4.1: Prototype E2B Semantics Gate
 
+This task is hoisted: it runs now, in parallel with Milestones 1-3, as a
+standalone script against real E2B. It depends on nothing from earlier
+milestones, it is the highest-risk unknown in the design, and
+`conversation_runtime`'s schema is its output. Validate against the pinned
+SDK (`e2b ^2.14.0`), not the design doc's older v2.6.0 citation, and update
+the design doc with the findings.
+
 Write explicit live tests or a documented spike for:
 
 - pause-on-timeout preserves files
@@ -664,13 +742,21 @@ Write explicit live tests or a documented spike for:
 - snapshot creation returns a reusable checkpoint id
 - fresh sandbox can restore from checkpoint
 - command timeout/cancel cleanup handles descendants or needs a wrapper
+- the cost/storage model: whether a paused sandbox is a distinct billed
+  object from a snapshot and what each costs at rest
 
 Acceptance:
 
 - if E2B SDK behavior is insufficient, create the sandbox-side command wrapper
   before enabling Bash.
+- the paused-sandbox retention policy (live-forever vs bounded idle lifetime
+  with snapshot restore) is decided from the measured cost model.
 
 ### Task 4.2: Add Conversation Runtime Store
+
+Create the `conversation_runtime` and `orphan_sandboxes` tables here (moved
+out of Task 1.1; their shape is confirmed by the Task 4.1 spike), and drop
+`sandbox_leases` in the same migration (ADR-0002).
 
 Implement fenced helpers for:
 
@@ -752,7 +838,7 @@ Before terminal success:
 1. verify no managed command is running
 2. snapshot if workspace is dirty
 3. persist snapshot metadata with ownership fence
-4. append `run_completed`
+4. append `run_done`
 
 Tests first:
 
@@ -796,12 +882,38 @@ Tests first:
 
 - general, collection, and document scopes produce the expected query filters.
 - `maxResults` is capped by worker config.
+- results carry `passageId` and `documentId` so hits stay citable and
+  loadable.
 - empty results are stable and model-readable.
 - document access events include run/conversation/user identifiers.
 
 Verify:
 
 - no document credential is sent to E2B.
+
+### Task 6.3: Add `LoadDocuments` Tool
+
+Materializes documents-as-files (ADR-0004): the worker copies scope-checked
+content into the conversation's reserved docs-cache directory in the sandbox
+and returns metadata only.
+
+Tests first:
+
+- the tool result contains `{documentId, title, path, truncated}` and never
+  document content; no document body appears in run events.
+- content is written under the reserved docs-cache directory; paths are
+  workspace-rooted.
+- out-of-scope, unknown, and non-active document ids produce bounded,
+  model-readable errors without leaking document existence across scopes.
+- per-document and per-call byte caps are enforced; truncation is marked in
+  the written file and the result.
+- re-loading an already-cached id overwrites the file (refresh-on-load).
+- loading does not mark the workspace dirty.
+- full-document loads are audited in `document_access_events`.
+
+Verify:
+
+- no document credential is sent to E2B; only file content lands on disk.
 
 ## Milestone 7: Claude Agent SDK Integration
 
@@ -849,6 +961,32 @@ Verify:
 
 - use a fake SDK stream for deterministic unit tests.
 
+### Task 7.3: Conversation Continuity via Postgres SessionStore
+
+Add the `agent_sessions` table, the `SessionStore` adapter (start from the
+SDK's Postgres reference implementation), and `agent_session_id` on
+`conversation_runtime` (ADR-0005).
+
+Tests first:
+
+- the adapter passes the SDK's SessionStore conformance suite.
+- `append` deduplicates by `entry.uuid` (retried batches re-deliver).
+- a run with no resume pointer starts a fresh session; a run with a pointer
+  resumes it through the store.
+- the pointer advances only in the terminal-success transition, under the
+  ownership fence; a stale worker cannot move it.
+- a run that observed `mirror_error` does not advance the pointer and still
+  terminates `done`.
+- the query working directory is deterministic per conversation, so
+  `projectKey` is stable across workers and turns.
+- conversation deletion deletes the conversation's transcripts.
+
+Verify:
+
+- live check: resume on a second worker process reproduces prior-turn
+  context; record whether a resumed query keeps or renews its session id
+  (the worker always stores the id from the result message).
+
 ## Milestone 8: Operations and Scaling
 
 Goal: keep the first deployed service safe under failure and load.
@@ -892,6 +1030,8 @@ Run against the deployed environment:
 - reconnect with `Last-Event-ID`
 - cancel a running turn
 - run a bounded shell command
+- search a scoped document, load it into the docs cache, and read it back
+  through file tools
 - create a file and verify it survives sandbox pause/reconnect
 - trigger worker restart during an active run and verify recovery
 

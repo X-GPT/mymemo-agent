@@ -6,15 +6,32 @@ This document defines the target split-runtime architecture for moving the
 agent control loop out of the E2B sandbox and into trusted Fargate workers,
 while keeping untrusted filesystem and shell execution inside E2B.
 
-The design is motivated by one primary problem in the current E2B-template
-model:
+The primary driver is the trust boundary, not upgrade mechanics. As long as
+the agent loop executes inside a prompt-injectable sandbox, every trusted
+capability must be compensated for from outside: the gateway, per-turn token
+minting, per-token audience separation, and a new token audience plus gateway
+route family for each future capability. Moving the loop into trusted Fargate
+deletes that compensating machinery instead of maintaining it. (See
+ADR-0001.)
+
+The trigger problem that exposed the cost of the current model:
 
 > Daemon, agent, and Claude Code binary upgrades require a new E2B template,
 > warm-sandbox drain, and workspace rehydration.
 
-The split-runtime design decouples agent/runtime upgrades from E2B template
-upgrades. Fargate becomes the volatile, frequently deployed agent runtime. E2B
-becomes the persistent remote workspace and shell executor.
+A narrower fix — fetching a versioned agent bundle at sandbox-hydration time —
+would solve upgrade coupling alone, but would keep the compensating machinery
+forever, add hydration latency, and add a supply-chain surface inside the
+sandbox. It was rejected.
+
+Because the trust boundary is the driver, falling back to the in-sandbox
+agent path is not an acceptable outcome if a prototype gate fails. Fallbacks
+must preserve the split — for example, a separate durable workspace store if
+E2B pause/snapshot semantics prove insufficient.
+
+The split-runtime design also decouples agent/runtime upgrades from E2B
+template upgrades. Fargate becomes the volatile, frequently deployed agent
+runtime. E2B becomes the persistent remote workspace and shell executor.
 
 ## Decision Summary
 
@@ -180,6 +197,7 @@ Bash(command, cwd?, timeout?)
 Grep(pattern, path?, include?, maxResults?)
 Glob(pattern, path?, includeHidden?, maxResults?)
 SearchDocuments(query, maxResults?)
+LoadDocuments(documentIds)
 ```
 
 `Grep` and `Glob` are included because their inputs can stay simple and
@@ -187,8 +205,16 @@ path-scoped. They are not required for expressiveness because the model can
 achieve them through `Bash`, but dedicated tools give cleaner path enforcement,
 structured output, and better audit logs.
 
-`SearchDocuments` is a model-facing MCP tool, but the database access behind it
-is trusted worker code, not an MCP server talking directly to Postgres.
+`SearchDocuments` and `LoadDocuments` are model-facing MCP tools, but the
+database access behind them is trusted worker code, not an MCP server talking
+directly to Postgres. They split the document workflow into
+documents-as-files (ADR-0004): `SearchDocuments` is discovery — passage
+snippets returned into model context, nothing written to disk.
+`LoadDocuments` is materialization — the worker copies scope-checked,
+size-capped document content into the conversation's docs cache on the
+sandbox filesystem and returns metadata only, so the agent reads documents
+with its normal file tools and document bodies never enter model context or
+run events.
 
 Suggested schemas:
 
@@ -235,6 +261,10 @@ type SearchDocumentsInput = {
 	query: string;
 	maxResults?: number;
 };
+
+type LoadDocumentsInput = {
+	documentIds: string[];
+};
 ```
 
 Defaults:
@@ -257,6 +287,10 @@ Bash: default timeout 5 minutes, system max 15 minutes
 Grep: max 100 matches unless lowered by the model
 Glob: max 500 paths unless lowered by the model
 SearchDocuments: max bounded by worker config
+LoadDocuments: per-document and per-call byte caps bounded by worker config;
+  a truncated document is marked as truncated in the written file and in the
+  tool result. Files are written under a reserved docs-cache directory in the
+  workspace (e.g. .mymemo/docs/); loading an already-cached id overwrites it
 ```
 
 The model may ask for lower limits, but the system owns the upper bounds.
@@ -329,7 +363,9 @@ Use E2B's command APIs for remote process execution:
 - `Bash` marks the workspace dirty conservatively because even failed
   commands can mutate files
 
-E2B's JavaScript SDK v2.6.0 documents the primary v1 executor primitives:
+E2B's JavaScript SDK documents the primary v1 executor primitives (originally
+verified against v2.6.0 docs; the repo pins `^2.14.0`, and the hoisted
+semantics spike re-verifies against the pinned version):
 `commands.run` supports `onStdout` / `onStderr` streaming callbacks and
 `timeoutMs`; background commands return a handle; running commands can be listed,
 reconnected with `commands.connect(pid)`, and killed with `commands.kill(pid)`.
@@ -517,6 +553,12 @@ as a separate select followed by an update in application code; the select,
 status recheck, ownership write, and returned claimed row must be one
 transactional helper so two workers cannot race through a stale candidate.
 
+Claim wake-up: `chat-api` sends a `NOTIFY` on a fixed channel when it inserts
+a queued run; workers hold a dedicated `LISTEN` connection and claim
+immediately on wake. Polling every 1-2 seconds is the correctness fallback —
+the same durable-first pattern as the SSE projector — so the claim-poll
+interval stays out of the p95 first-token budget.
+
 Workers heartbeat every 15 seconds while a run is active.
 
 Failed runs must not retry automatically in the first version. Mark the run
@@ -572,6 +614,25 @@ Cancellation rules:
   `command_canceled`, `command_cleanup_failed`, `command_cleanup_complete`, or
   `sandbox_tainted`.
 
+### Control Loop Placement
+
+Everything that keeps run state correct runs inside every worker; the one
+loop that manipulates the fleet from outside runs outside:
+
+- claim loop: per worker; `LISTEN` wake-up plus 1-2 second poll fallback.
+- stale-run recovery: per worker, at least every 15 seconds. Idempotent
+  through CAS terminal transitions, so concurrent recovery across the fleet
+  is safe. If the whole fleet is down, recovery pauses — nothing could
+  process runs anyway, and recovery runs before claiming when the fleet
+  returns.
+- cleanup (orphan sandboxes, snapshot retention, deleted-conversation
+  sandboxes, superseded session transcripts): per worker on a minutes-scale
+  timer, single-flighted across the fleet with a Postgres advisory lock.
+- scaler: a separate scheduled job (Milestone 8), never inside the fleet it
+  scales; until then, fixed `desiredCount`.
+
+No separate scheduled recovery/cleanup jobs exist in v1.
+
 Do not introduce a generic conversation-event inbox in v1. The only mid-run
 control event in v1 is cancellation, and the `runs` row is the simplest source
 of truth for that state. If future features add tool confirmations, approvals,
@@ -597,6 +658,7 @@ Postgres:
   conversation_runtime
   runs
   run_events
+  agent_sessions
 
 Postgres LISTEN/NOTIFY:
   live wake-up for SSE streaming
@@ -712,6 +774,7 @@ conversation_runtime:
   sandboxId
   latestSnapshotId
   workspaceCheckpointStatus
+  agentSessionId (Claude SDK resume pointer; see Conversation Continuity)
   runtime metadata for the persistent E2B workspace
 
 runs:
@@ -728,6 +791,10 @@ run_events:
 
 document_access_events:
   document access audit
+
+agent_sessions:
+  Claude SDK session transcript mirror (SessionStore adapter rows),
+  worker-only, keyed by projectKey/sessionId/subpath
 ```
 
 The split runtime does not need a separate active conversation lease table if
@@ -773,7 +840,7 @@ model/content events and may only be appended while the run is `running`.
 Cancellation cleanup/audit events may be appended by the owning worker after
 `cancel_requested` so command interruption, command-tree cleanup, and sandbox
 taint decisions remain durable. Terminal helpers own `run_canceled`,
-`run_failed`, and stale-run recovery. This prevents a stale worker from
+`run_error`, and stale-run recovery. This prevents a stale worker from
 appending messages after cancellation or recovery has terminalized the run while
 still preserving the cancellation audit trail.
 
@@ -805,6 +872,59 @@ WHERE user_id = $userId
 If the fenced update affects zero rows, the worker has lost ownership. It must
 stop the run, avoid emitting success, and let stale-run recovery or the current
 owner produce the terminal event.
+
+## Conversation Continuity
+
+Turn N+1 sees turns 1..N through Claude SDK session resume backed by the
+SDK's documented `SessionStore` adapter interface, implemented on the
+writable agent Postgres (ADR-0005). The prototype's implicit mechanism — SDK
+session files persisting on the per-conversation sandbox filesystem — does
+not survive the split: the SDK now runs in Fargate, its local session files
+are worker-ephemeral, and conversations are not pinned to workers.
+
+Mechanism:
+
+```text
+run starts:
+  read conversation_runtime.agent_session_id
+  query({ prompt, options: { sessionStore, resume: agentSessionId } })
+  (no pointer -> fresh session)
+
+during the run:
+  the SDK mirrors transcript entries to the Postgres session store
+  (best-effort, retried; failures surface as mirror_error messages)
+
+run succeeds:
+  store the result message's session id into
+  conversation_runtime.agent_session_id with the same ownership-fenced
+  update as other runtime metadata
+```
+
+Rules:
+
+- The session pointer advances only in the terminal-success transition,
+  under the ownership fence. A stale worker cannot move it; its transcript
+  appends land under its own session key and are harmless orphans.
+- If any `mirror_error` occurred during the run, do not advance the pointer.
+  The run still succeeds for the user; the next turn resumes from the
+  previous session and loses only that turn's model-side memory. Monitor
+  `mirror_error` as store data loss.
+- The adapter deduplicates appends by `entry.uuid` (retried batches can
+  re-deliver).
+- The worker runs each query with a deterministic, conversation-stable
+  working directory so the store's `projectKey` is identical across workers
+  and turns.
+- Point `CLAUDE_CONFIG_DIR` at a per-run temp directory: the local JSONL is
+  a throwaway mirror source, and `sessionStore` cannot be combined with
+  `persistSession: false` or `enableFileCheckpointing`.
+- Session transcripts never touch the sandbox. Sandbox-resident session
+  state would let prompt-injected code poison future trusted model context
+  (ADR-0005).
+- Retention is ours: conversation deletion deletes the conversation's
+  transcripts; periodic cleanup prunes transcripts of superseded sessions.
+- Verify during Milestone 7 whether a resumed query continues under the same
+  session id or reports a new one; the worker always stores the id reported
+  by the run's result message.
 
 ## Response Streaming
 
@@ -897,7 +1017,7 @@ Then insert `run_events(run_id, seq, type, payload, created_at)`. Worker event
 appends must use the appropriate ownership fence for their append class. Owned
 cancellation cleanup/audit appends may use `status IN ('running',
 'cancel_requested')`; model/content appends must stay `status = 'running'`.
-Terminal helpers for `run_canceled`, `run_failed`, and stale-run recovery may
+Terminal helpers for `run_canceled`, `run_error`, and stale-run recovery may
 use a different status/ownership predicate, but they still allocate sequence
 numbers through the same transactional counter. This handles events written by
 the worker, cancellation path, and stale-run recovery without sequence races.
@@ -1190,10 +1310,11 @@ makes operational lookup, debugging, and manual recovery easier.
 
 ### Snapshot Policy
 
-Snapshots are the recovery source of truth for user-created work files. Loaded
-KB document content is run context, not durable workspace state. The v1 design
-does not require loaded documents to be recoverable after the run. Create
-snapshots at conversation checkpoints, not after every file write.
+Snapshots are the recovery source of truth for user-created work files.
+Loaded KB document content lives in the conversation's docs cache —
+reconstructible from the KB and never required to be recoverable (ADR-0004);
+search snippets are run context only. Create snapshots at conversation
+checkpoints, not after every file write.
 
 Mark the workspace dirty when:
 
@@ -1201,10 +1322,16 @@ Mark the workspace dirty when:
 - `Edit` succeeds.
 - any `Bash` command is executed, regardless of exit code.
 
-`SearchDocuments` does not mark the workspace dirty because document results are
-not written into the durable workspace by default. If a later model-controlled
-command transforms a document into user work, that transformation is captured
-through `Write`, `Edit`, or `Bash` dirty tracking.
+Neither `SearchDocuments` nor `LoadDocuments` marks the workspace dirty.
+Search writes nothing to disk. `LoadDocuments` writes only into the docs
+cache, which is reconstructible from the KB and is not user work — dirty
+tracking decides when user work needs a checkpoint, and a cache never does by
+itself. When a snapshot happens for other reasons it includes whatever is in
+the docs cache; that is an accepted side effect, not a requirement — a
+restored sandbox may equally arrive with an empty or stale cache, and the
+agent reloads. If a model-controlled command transforms a loaded document
+into user work, that transformation is captured through `Write`, `Edit`, or
+`Bash` dirty tracking.
 
 Create/update the conversation snapshot:
 
@@ -1222,7 +1349,7 @@ If `workspaceDirty = true`, the snapshot must complete and the latest
 succeeded run. If snapshot creation or metadata persistence
 fails:
 
-- append `run_failed`
+- append `run_error`
 - keep the sandbox id in `conversation_runtime` if live recovery remains possible
 - return a user-visible persistence error
 - do not emit `done`
@@ -1268,9 +1395,14 @@ recovery. The product path always restores from `latest_snapshot_id`; use
 
 Paused sandbox cleanup policy:
 
-- Paused sandboxes may live as long as their conversation exists.
+- Paused sandboxes may live as long as their conversation exists. This is
+  provisional: the hoisted E2B spike measures whether a paused sandbox is
+  billed separately from a snapshot, and the retention policy (live-forever
+  vs bounded idle lifetime with snapshot restore) is decided from that cost
+  model.
 - Conversation deletion, user deletion, or workspace deletion must explicitly
-  kill the referenced E2B sandbox and clear `conversation_runtime.sandbox_id`.
+  kill the referenced E2B sandbox, clear `conversation_runtime.sandbox_id`,
+  and delete the conversation's transcripts from the session store.
 - A periodic cleanup job should kill sandboxes referenced by runtime rows whose
   conversation/user no longer exists.
 - A periodic orphan cleanup job should kill sandbox IDs recorded in
@@ -1283,7 +1415,7 @@ Snapshot failure state:
 
 ```text
 runs.status = error
-run_events includes run_failed with persistence_error
+run_events includes run_error with persistence_error
 conversation_runtime.sandbox_id remains if live/reconnectable
 latest_snapshot_id remains the previous successful checkpoint
 workspace_checkpoint_status = dirty_uncheckpointed
@@ -1365,41 +1497,64 @@ Extract the existing gateway document query and scope-guard logic into a shared
 package or shared internal module so `agent-worker` reuses the same
 parameterized SQL and scope rules with its own `KB_DATABASE_URL`.
 
-The model-facing document tool is:
+The model-facing document tools are:
 
 ```text
 SearchDocuments(query, maxResults?)
+LoadDocuments(documentIds)
 ```
 
 Implementation path:
 
 ```text
 Claude / Agent SDK
-  -> MCP tool: SearchDocuments
+  -> MCP tool: SearchDocuments | LoadDocuments
       -> agent-worker document module
           -> KB Postgres through KB_DATABASE_URL
-          -> returns scoped snippets or bounded excerpts
+          -> SearchDocuments returns scoped passage snippets into context
+          -> LoadDocuments writes scope-checked content into the sandbox
+             docs cache through the E2B files API and returns metadata only
 ```
 
-Result shape:
+Result shapes:
 
 ```ts
 type SearchDocumentsResult = {
-	documents: Array<{
+	passages: Array<{
+		passageId: string;
 		documentId: string;
 		title: string;
 		snippet: string;
 		score?: number;
 	}>;
 };
+
+type LoadDocumentsResult = {
+	documents: Array<{
+		documentId: string;
+		title: string;
+		path: string;
+		truncated: boolean;
+	}>;
+};
 ```
 
-Do not write loaded document content into the E2B workspace by default. V1
-treats document search results as current-run model context only. Do not store
-full document content in run events, audit rows, snapshots, or durable
-conversation metadata by default. If a user explicitly asks the agent to create
-a derived file from a document, that derived file is normal workspace state and
-is included in snapshots.
+`passageId` is the citation unit: search hits stay citable and point at the
+`documentId` to load.
+
+Search results are current-run model context only. Full document content
+reaches the agent exclusively through the docs cache (ADR-0004): because
+`LoadDocuments` returns metadata only, document bodies never enter model
+context, run events, or tool-result persistence. Do not store full document
+content in run events or audit rows. The docs cache is conversation-scoped:
+it persists across turns, rides pause/snapshot as a side effect, and dies
+with the conversation — a KB document copy lives at most as long as the
+conversation that loaded it. Loading an already-cached document overwrites it
+(refresh-on-load). User-created documents are editable and in scope, so a
+cached copy can be stale across turns; v1 accepts this rather than adding
+revalidation machinery. If a user explicitly asks the agent to create a
+derived file from a document, that derived file is normal workspace state
+outside the cache and is included in snapshots.
 
 Document access audit is stored in Postgres:
 
@@ -1430,7 +1585,12 @@ Do not store full document content in audit rows by default.
 
 ## Model Provider Path
 
-The target model path is direct OpenRouter access from `agent-worker`.
+The target model path is direct OpenRouter access from `agent-worker`. The
+reason is provider flexibility — avoiding vendor lock-in and enabling later
+routing to cheaper models — not cost or capability of the proxy itself
+(ADR-0003). Direct Anthropic is the named contingency: worker provider config
+must keep both shapes valid so a failed OpenRouter smoke test is fixed by an
+env flip, not an architecture change.
 
 ```text
 Claude Code / Claude Agent SDK in agent-worker
@@ -1493,6 +1653,21 @@ smoke test with the exact Claude Code / Claude Agent SDK version:
 - Run events must record tool calls and command lifecycle events.
 - Workers must not share mutable agent state across conversations.
 - The same conversation must not run concurrently on two workers.
+
+Sandbox network posture:
+
+- Inbound: none. The split runtime has no in-sandbox daemon, so nothing needs
+  to reach the sandbox over HTTP; all file/command operations travel through
+  the E2B control plane. The prototype's per-sandbox traffic-access-token
+  edge machinery is not carried forward.
+- Outbound: open internet egress is an accepted residual risk in v1. Package
+  installs and user code need it, and E2B provides no per-sandbox egress
+  firewall. The blast radius is bounded by invariants this design already
+  enforces: the sandbox holds no credentials, and a prompt-injected turn can
+  only exfiltrate data already inside its conversation's frozen scope — its
+  own workspace files and docs cache — never another user's data, another
+  conversation's documents, or any secret. Egress allowlisting/proxying is a
+  post-v1 revisit.
 
 ## Cost Model
 
@@ -1566,14 +1741,25 @@ Costs:
 
 Use:
 
-- Drizzle for schema, migrations, and ordinary database queries.
-- `pg` for dedicated `LISTEN/NOTIFY` connections and tightly controlled
-  transactional helpers that need driver-level connection control.
+- Drizzle for schema, migrations, ordinary queries, and the raw-SQL
+  transactional helpers (`claimNextRunTx` etc.), running over the `pg`
+  (node-postgres) driver everywhere in the split-runtime services.
+- One driver, `pg`, for everything — including the dedicated unpooled
+  `LISTEN` connections (chat-api projector wake-up; worker claim/cancel
+  wake-up), which Bun.sql does not implement. Uniformity was chosen over
+  keeping the incumbent Bun.sql data layer because nothing is in production
+  and most Bun.sql consumers are prototype-path code already scheduled for
+  deletion (ADR-0002), so the surviving surface migrates in one change
+  (scheduled with Task 1.1). The gateway keeps its raw Bun.sql client: it is
+  deleted at Milestone 7 and not worth touching.
 - E2B SDK directly for files, commands, pause/resume, snapshots, and sandbox
   lifecycle.
 - Claude Agent SDK / Claude Code runtime in `agent-worker`.
 - Claude Agent SDK local tool callbacks for v1 tool integration. Do not add an
   MCP server process in v1.
+- Claude Agent SDK `SessionStore` adapter on the agent Postgres for
+  conversation continuity (start from the SDK's Postgres reference adapter;
+  run its conformance suite).
 
 Avoid for v1:
 
@@ -1703,6 +1889,8 @@ Cover:
 - `Grep`
 - `Glob`
 - `SearchDocuments` with fixture-backed document data
+- `LoadDocuments` writes fixture documents into the docs cache and returns
+  metadata only
 
 For `Bash`, cover:
 
@@ -1835,8 +2023,9 @@ Acceptance criteria:
 - a user turn streams tokens through chat-api SSE
 - exactly one worker claims the run
 - tools execute in E2B, not Fargate shell
-- `SearchDocuments` enforces frozen scope without making loaded documents
-  durable workspace state
+- `SearchDocuments` and `LoadDocuments` enforce frozen scope; loaded content
+  lands only in the conversation docs cache, and document bodies never appear
+  in run events or tool results
 - dirty workspace snapshots after successful turn
 - paused sandbox resumes with files intact
 - killed sandbox recovers from latest snapshot or returns a clear recovery
@@ -1852,10 +2041,18 @@ Acceptance criteria:
 - E2B template dependencies: keep `rg`, shell/coreutils, Git, and language
   runtimes/package managers needed for user code. Do not install Claude Code,
   agent bundles, daemon bundles, provider credentials, or document credentials.
-- Model path: direct OpenRouter from `agent-worker`; no gateway in the v1 model
-  path.
+- Model path: direct OpenRouter from `agent-worker` for provider flexibility
+  (ADR-0003); no gateway in the v1 model path. Contingency if the SDK
+  compatibility smoke test fails: direct Anthropic via worker env flip, same
+  architecture.
 - Snapshot retention: keep latest and previous successful snapshot references in
   Postgres; clean unreferenced snapshots after 7 days.
+- Document materialization: `LoadDocuments` copies scope-checked KB content
+  into a conversation-scoped docs cache on the sandbox filesystem and returns
+  metadata only; `SearchDocuments` stays context-only discovery (ADR-0004).
+- Conversation continuity: Claude SDK session resume through a Postgres
+  `SessionStore` adapter; `conversation_runtime.agent_session_id` is the
+  fenced resume pointer (ADR-0005).
 
 ## Recommendation
 
