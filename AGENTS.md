@@ -202,6 +202,7 @@ Required:
 
 Optional:
 - `WORKER_MAX_CONCURRENT_RUNS` (default: `2`) — conservative per-task run concurrency; runs share the task's CPU/memory
+- `WORKER_DOCUMENT_SEARCH_MAX_RESULTS` (default: `8`) — per-call cap for the model-facing `SearchDocuments` tool before the scoped query client applies its hard backstop
 - `WORKER_HEARTBEAT_INTERVAL_MS` (default: `15000`) — how often an active run renews its lease
 - `WORKER_SHUTDOWN_TIMEOUT_MS` (default: `30000`) — grace period to drain active runs on SIGINT/SIGTERM before forcing exit
 - `PORT` (default: `8080`) — `/health` endpoint port
