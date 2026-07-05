@@ -1,6 +1,8 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
 import { runEvents, runs } from "@/db/schema";
+import type { ConversationRecord } from "@/features/conversation-store";
+import { RunEventType } from "@/features/run-events";
 
 /**
  * Narrow transaction helpers over `runs`/`run_events` — the only write path
@@ -35,7 +37,14 @@ export type RunRecord = Omit<typeof runs.$inferSelect, "status"> & {
  * caller; the partial unique index is the authority.
  */
 export class ActiveRunConflictError extends Error {
-	override name = "ActiveRunConflictError" as const;
+	override name = "ActiveRunConflictError";
+}
+
+export class ActiveRunExistsError extends ActiveRunConflictError {
+	override name = "ActiveRunExistsError" as const;
+	constructor(options?: ErrorOptions) {
+		super("Conversation already has an active run", options);
+	}
 }
 
 /**
@@ -50,6 +59,31 @@ export class RunFenceError extends Error {
 
 /** JSON body persisted with a run event. */
 export type RunEventPayload = Record<string, unknown>;
+
+export interface CreateQueuedRunInput {
+	conversation: ConversationRecord;
+	message: string;
+}
+
+export interface CreateQueuedRunResult {
+	runId: string;
+}
+
+export interface RunEventRecord {
+	runId: string;
+	seq: number;
+	type: string;
+	payload: unknown;
+}
+
+export interface RunStore {
+	createQueuedRun(input: CreateQueuedRunInput): Promise<CreateQueuedRunResult>;
+	getRun(input: {
+		userId: string;
+		conversationId: string;
+		runId: string;
+	}): Promise<RunRecord | null>;
+}
 
 /**
  * The two owned append classes (design doc "State Ownership"): `model` is
@@ -117,6 +151,100 @@ export async function createQueuedRunTx(
 			);
 		}
 		throw error;
+	}
+}
+
+export async function createQueuedRunStartedTx(
+	db: Database,
+	input: CreateQueuedRunInput & { runId: string },
+): Promise<RunRecord> {
+	const { conversation, message, runId } = input;
+	try {
+		return await db.transaction(async (tx) => {
+			const [row] = await tx
+				.insert(runs)
+				.values({
+					runId,
+					userId: conversation.userId,
+					conversationId: conversation.conversationId,
+					status: "queued",
+					nextEventSeq: 2,
+				})
+				.returning();
+			if (!row) throw new Error(`insert of run ${runId} returned no row`);
+			await tx.insert(runEvents).values({
+				runId,
+				seq: 1,
+				type: RunEventType.Started,
+				payload: {
+					userId: conversation.userId,
+					conversationId: conversation.conversationId,
+					runId,
+					message,
+					scope: conversation.scope,
+					collectionId: conversation.collectionId,
+					summaryId: conversation.summaryId,
+				},
+			});
+			return toRunRecord(row);
+		});
+	} catch (error) {
+		if (isActiveRunConflict(error)) {
+			throw new ActiveRunExistsError({ cause: error });
+		}
+		throw error;
+	}
+}
+
+export class PostgresRunStore implements RunStore {
+	constructor(private readonly db: Database) {}
+
+	async createQueuedRun(
+		input: CreateQueuedRunInput,
+	): Promise<CreateQueuedRunResult> {
+		const runId = crypto.randomUUID();
+		await createQueuedRunStartedTx(this.db, { ...input, runId });
+		return { runId };
+	}
+
+	async getRun(input: {
+		userId: string;
+		conversationId: string;
+		runId: string;
+	}): Promise<RunRecord | null> {
+		const rows = await this.db
+			.select()
+			.from(runs)
+			.where(
+				and(
+					eq(runs.userId, input.userId),
+					eq(runs.conversationId, input.conversationId),
+					eq(runs.runId, input.runId),
+				),
+			)
+			.limit(1);
+		return rows[0] ? toRunRecord(rows[0]) : null;
+	}
+
+	async listRunEventsAfter(input: {
+		runId: string;
+		afterSeq: number;
+	}): Promise<RunEventRecord[]> {
+		return this.db
+			.select({
+				runId: runEvents.runId,
+				seq: runEvents.seq,
+				type: runEvents.type,
+				payload: runEvents.payload,
+			})
+			.from(runEvents)
+			.where(
+				and(
+					eq(runEvents.runId, input.runId),
+					gt(runEvents.seq, input.afterSeq),
+				),
+			)
+			.orderBy(runEvents.seq);
 	}
 }
 

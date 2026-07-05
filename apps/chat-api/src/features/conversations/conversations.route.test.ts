@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
 import type {
@@ -6,24 +6,15 @@ import type {
 	ConversationStore,
 } from "@/features/conversation-store";
 import type { ExposureGate } from "@/features/exposure-gate";
+import { RunEventType } from "@/features/run-events";
+import type { RunEventReader, RunEventRow } from "@/features/run-events";
+import type { RunNotifier, RunSubscription } from "@/features/run-events";
+import {
+	ActiveRunExistsError,
+	type RunRecord,
+	type RunStore,
+} from "@/features/run-store";
 import type { InternalIdentity } from "./conversations.schema";
-
-// No sandbox is created: orchestration is mocked to drive the stream callbacks.
-type RunOpts = {
-	onSandboxId: (id: string) => Promise<void>;
-	onDaemonStarted: () => Promise<void>;
-	onAgentSessionId: (id: string) => Promise<void>;
-	onTextDelta: (text: string) => Promise<void>;
-};
-mock.module("@/features/sandbox-orchestration", () => ({
-	runSandboxChat: async (_deps: unknown, opts: RunOpts) => {
-		await opts.onSandboxId("sbx-1");
-		await opts.onDaemonStarted();
-		await opts.onTextDelta("Hello");
-		return { status: "completed" };
-	},
-	ConversationBusyError: class extends Error {},
-}));
 
 const { createApp } = await import("@/index");
 
@@ -60,15 +51,117 @@ function recordingGate(decision: boolean) {
 function buildApp(
 	conversationStore: ConversationStore,
 	exposureGate: ExposureGate = recordingGate(true).gate,
+	fakeRuns = fakeRunStore(),
 ) {
 	const deps = {
 		config: {},
-		sandboxProvider: {},
-		workspaceStore: { async appendRunEvent() {} },
 		conversationStore,
 		exposureGate,
+		runStore: fakeRuns.runStore,
+		runEventReader: fakeRuns.runEventReader,
+		runNotifier: fakeRuns.runNotifier,
 	} as unknown as AppDeps;
 	return createApp({ logLevel: "silent" } as unknown as ApiConfig, deps);
+}
+
+function fakeRunStore() {
+	const queued: Array<{ conversation: ConversationRecord; message: string }> =
+		[];
+	const eventsByRun = new Map<string, RunEventRow[]>();
+	const runOwners = new Map<
+		string,
+		{ userId: string; conversationId: string; status: string }
+	>();
+	const runStore: RunStore = {
+		async createQueuedRun(input) {
+			const runId = `run-${queued.length + 1}`;
+			queued.push(input);
+			runOwners.set(runId, {
+				userId: input.conversation.userId,
+				conversationId: input.conversation.conversationId,
+				status: "queued",
+			});
+			eventsByRun.set(runId, [
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: {
+						conversationId: input.conversation.conversationId,
+						runId,
+					},
+				},
+			]);
+			return { runId };
+		},
+		async getRun({ userId, conversationId, runId }) {
+			const owner = runOwners.get(runId);
+			if (
+				!owner ||
+				owner.userId !== userId ||
+				owner.conversationId !== conversationId
+			) {
+				return null;
+			}
+			return runRecord({ runId, ...owner });
+		},
+	};
+	const runEventReader: RunEventReader = {
+		async read(runId, afterSeq) {
+			return (eventsByRun.get(runId) ?? []).filter((e) => e.seq > afterSeq);
+		},
+	};
+	const runNotifier: RunNotifier = {
+		async subscribe(): Promise<RunSubscription> {
+			return {
+				async waitForWakeup() {},
+				async close() {},
+			};
+		},
+	};
+	return { runStore, runEventReader, runNotifier, queued, eventsByRun, runOwners };
+}
+
+function runRecord(input: {
+	runId: string;
+	userId: string;
+	conversationId: string;
+	status: string;
+}): RunRecord {
+	const now = new Date();
+	return {
+		runId: input.runId,
+		userId: input.userId,
+		conversationId: input.conversationId,
+		status: input.status as RunRecord["status"],
+		createdAt: now,
+		updatedAt: now,
+		lockedBy: null,
+		lockedUntil: null,
+		heartbeatAt: null,
+		cancelRequestedAt: null,
+		nextEventSeq: 1,
+		terminalAt: null,
+	};
+}
+
+async function readSseUntil(
+	res: Response,
+	predicate: (text: string) => boolean,
+) {
+	const reader = res.body?.getReader();
+	if (!reader) return "";
+	const decoder = new TextDecoder();
+	let text = "";
+	try {
+		while (!predicate(text)) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value);
+		}
+	} finally {
+		await reader.cancel();
+	}
+	return text;
 }
 
 const identityHeaders = {
@@ -133,18 +226,53 @@ describe("POST /v1/conversations/:id/events", () => {
 	};
 	const userMessage = JSON.stringify({ type: "user.message", text: "hi" });
 
-	it("streams the turn for an existing conversation", async () => {
+	it("queues and streams the run start for an existing conversation", async () => {
 		const { store } = fakeStore([existing]);
-		const res = await buildApp(store).request(
-			"/v1/conversations/conv-1/events",
-			{ method: "POST", headers: identityHeaders, body: userMessage },
-		);
+		const fakeRuns = fakeRunStore();
+		const { queued } = fakeRuns;
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: userMessage,
+		});
 
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-type")).toContain("text/event-stream");
-		const text = await res.text();
-		expect(text).toContain("text_delta");
-		expect(text).toContain("done");
+		const text = await readSseUntil(
+			res,
+			(chunk) => chunk.includes("conversation_id") && chunk.includes("run_id"),
+		);
+		expect(text).toContain("conversation_id");
+		expect(text).toContain("run_id");
+		expect(queued).toEqual([{ conversation: existing, message: "hi" }]);
+	});
+
+	it("returns busy backpressure before opening the stream", async () => {
+		const { store } = fakeStore([existing]);
+		const runStore: RunStore = {
+			async createQueuedRun() {
+				throw new ActiveRunExistsError();
+			},
+			async getRun() {
+				return null;
+			},
+		};
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			{ ...fakeRunStore(), runStore },
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: userMessage,
+		});
+
+		expect(res.status).toBe(409);
+		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
 	});
 
 	it("returns 404 when the conversation does not exist", async () => {
@@ -189,6 +317,80 @@ describe("POST /v1/conversations/:id/events", () => {
 			{ method: "POST", headers: identityHeaders, body: userMessage },
 		);
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("GET /v1/conversations/:id/runs/:runId/events", () => {
+	const existing: ConversationRecord = {
+		userId: "member-1",
+		conversationId: "conv-1",
+		scope: "general",
+		collectionId: null,
+		summaryId: null,
+	};
+
+	it("replays an owned run after Last-Event-ID without creating a new run", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const { queued, eventsByRun, runOwners } = fakeRuns;
+		runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "queued",
+		});
+		eventsByRun.set("run-1", [
+			{
+				seq: 1,
+				type: RunEventType.Started,
+				payload: { conversationId: "conv-1", runId: "run-1" },
+			},
+			{
+				seq: 2,
+				type: RunEventType.AssistantText,
+				payload: { text: "hello" },
+			},
+		]);
+
+		const res = await buildApp(
+			store,
+			recordingGate(false).gate,
+			fakeRuns,
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: { ...identityHeaders, "last-event-id": "1" },
+		});
+
+		expect(res.status).toBe(200);
+		const text = await readSseUntil(res, (chunk) =>
+			chunk.includes("text_delta"),
+		);
+		expect(text).toContain("text_delta");
+		expect(text).toContain("hello");
+		expect(text).not.toContain("conversation_id");
+		expect(queued).toHaveLength(0);
+	});
+
+	it("returns 404 for a foreign run before opening the stream", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const { runOwners } = fakeRuns;
+		runOwners.set("run-1", {
+			userId: "other-member",
+			conversationId: "conv-1",
+			status: "queued",
+		});
+
+		const res = await buildApp(
+			store,
+			recordingGate(false).gate,
+			fakeRuns,
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(res.status).toBe(404);
+		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
 	});
 });
 

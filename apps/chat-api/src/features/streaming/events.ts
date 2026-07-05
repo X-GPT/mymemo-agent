@@ -7,10 +7,9 @@ export type EventMessage =
 	| ErrorEvent
 	| TextDeltaEvent
 	| DoneEvent
+	| CanceledEvent
 	| ConversationIdEvent
-	| RunIdEvent
-	| AgentSessionIdEvent
-	| SandboxIdEvent;
+	| RunIdEvent;
 
 export interface ErrorEvent {
 	type: "error";
@@ -27,18 +26,6 @@ export interface RunIdEvent {
 	runId: string;
 }
 
-// Claude SDK resume state surfaced by the daemon. Internal continuity token,
-// distinct from the product-visible `conversation_id`.
-export interface AgentSessionIdEvent {
-	type: "agent_session_id";
-	agentSessionId: string;
-}
-
-export interface SandboxIdEvent {
-	type: "sandbox_id";
-	sandboxId: string;
-}
-
 export interface TextDeltaEvent {
 	type: "text_delta";
 	text: string;
@@ -46,4 +33,8 @@ export interface TextDeltaEvent {
 
 export interface DoneEvent {
 	type: "done";
+}
+
+export interface CanceledEvent {
+	type: "canceled";
 }
