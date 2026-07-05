@@ -35,6 +35,8 @@ export interface WorkerConfig {
 	e2bApiKey: string;
 	/** Conservative default run concurrency per worker task. */
 	maxConcurrentRuns: number;
+	/** Per-call cap for model-facing document search results. */
+	maxDocumentSearchResults: number;
 	/** How often an active run heartbeats its lease (ms). */
 	heartbeatIntervalMs: number;
 	/** Grace period to drain active runs on shutdown before forcing exit (ms). */
@@ -46,6 +48,7 @@ export interface WorkerConfig {
 }
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 2;
+const DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS = 8;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const DEFAULT_PORT = 8080;
@@ -116,6 +119,11 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			env.WORKER_MAX_CONCURRENT_RUNS,
 			DEFAULT_MAX_CONCURRENT_RUNS,
 			"WORKER_MAX_CONCURRENT_RUNS",
+		),
+		maxDocumentSearchResults: positiveIntOr(
+			env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS,
+			DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS,
+			"WORKER_DOCUMENT_SEARCH_MAX_RESULTS",
 		),
 		heartbeatIntervalMs: positiveIntOr(
 			env.WORKER_HEARTBEAT_INTERVAL_MS,

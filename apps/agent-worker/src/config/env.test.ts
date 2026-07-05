@@ -69,10 +69,12 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 	it("honors overrides for concurrency and intervals", () => {
 		const env = baseEnv();
 		env.WORKER_MAX_CONCURRENT_RUNS = "4";
+		env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS = "12";
 		env.WORKER_HEARTBEAT_INTERVAL_MS = "10000";
 		env.WORKER_SHUTDOWN_TIMEOUT_MS = "5000";
 		const config = loadWorkerConfigFromEnv(env);
 		expect(config.maxConcurrentRuns).toBe(4);
+		expect(config.maxDocumentSearchResults).toBe(12);
 		expect(config.heartbeatIntervalMs).toBe(10_000);
 		expect(config.shutdownTimeoutMs).toBe(5_000);
 	});
@@ -82,6 +84,14 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 		env.WORKER_MAX_CONCURRENT_RUNS = "0";
 		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
 			/WORKER_MAX_CONCURRENT_RUNS/,
+		);
+	});
+
+	it("rejects a non-positive document search limit override", () => {
+		const env = baseEnv();
+		env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS = "0";
+		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
+			/WORKER_DOCUMENT_SEARCH_MAX_RESULTS/,
 		);
 	});
 });
