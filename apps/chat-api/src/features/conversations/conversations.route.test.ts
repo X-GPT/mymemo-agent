@@ -6,9 +6,13 @@ import type {
 	ConversationStore,
 } from "@/features/conversation-store";
 import type { ExposureGate } from "@/features/exposure-gate";
+import type {
+	RunEventReader,
+	RunEventRow,
+	RunNotifier,
+	RunSubscription,
+} from "@/features/run-events";
 import { RunEventType } from "@/features/run-events";
-import type { RunEventReader, RunEventRow } from "@/features/run-events";
-import type { RunNotifier, RunSubscription } from "@/features/run-events";
 import {
 	ActiveRunExistsError,
 	type RunRecord,
@@ -46,6 +50,14 @@ function recordingGate(decision: boolean) {
 		},
 	};
 	return { gate, seen };
+}
+
+function gateThatFailsIfConsulted(): ExposureGate {
+	return {
+		async isAgentEnabled() {
+			throw new Error("exposure gate should not be consulted");
+		},
+	};
 }
 
 function buildApp(
@@ -132,7 +144,14 @@ function fakeRunStore() {
 			};
 		},
 	};
-	return { runStore, runEventReader, runNotifier, queued, eventsByRun, runOwners };
+	return {
+		runStore,
+		runEventReader,
+		runNotifier,
+		queued,
+		eventsByRun,
+		runOwners,
+	};
 }
 
 function runRecord(input: {
@@ -276,11 +295,10 @@ describe("POST /v1/conversations/:id/events", () => {
 				return null;
 			},
 		};
-		const res = await buildApp(
-			store,
-			recordingGate(true).gate,
-			{ ...fakeRunStore(), runStore },
-		).request("/v1/conversations/conv-1/events", {
+		const res = await buildApp(store, recordingGate(true).gate, {
+			...fakeRunStore(),
+			runStore,
+		}).request("/v1/conversations/conv-1/events", {
 			method: "POST",
 			headers: identityHeaders,
 			body: userMessage,
@@ -344,6 +362,51 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		summaryId: null,
 	};
 
+	it("validates identity headers before reconnecting", async () => {
+		const { store } = fakeStore([existing]);
+		const res = await buildApp(store).request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{ method: "GET" },
+		);
+
+		expect(res.status).toBe(401);
+	});
+
+	it("returns 404 for a missing or foreign conversation before opening the stream", async () => {
+		const missing = await buildApp(fakeStore().store).request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{ method: "GET", headers: identityHeaders },
+		);
+		expect(missing.status).toBe(404);
+		expect(missing.headers.get("content-type")).not.toContain(
+			"text/event-stream",
+		);
+
+		const { store } = fakeStore([existing]);
+		const foreign = await buildApp(store).request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{
+				method: "GET",
+				headers: { ...identityHeaders, "x-member-code": "intruder" },
+			},
+		);
+		expect(foreign.status).toBe(404);
+		expect(foreign.headers.get("content-type")).not.toContain(
+			"text/event-stream",
+		);
+	});
+
+	it("returns 404 for a missing run before opening the stream", async () => {
+		const { store } = fakeStore([existing]);
+		const res = await buildApp(store).request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{ method: "GET", headers: identityHeaders },
+		);
+
+		expect(res.status).toBe(404);
+		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
+	});
+
 	it("replays an owned run after Last-Event-ID without creating a new run", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
@@ -369,7 +432,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 
 		const res = await buildApp(
 			store,
-			recordingGate(false).gate,
+			gateThatFailsIfConsulted(),
 			fakeRuns,
 		).request("/v1/conversations/conv-1/runs/run-1/events", {
 			method: "GET",
@@ -385,6 +448,46 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(text).toContain("hello");
 		expect(text).not.toContain("conversation_id");
 		expect(queued).toHaveLength(0);
+	});
+
+	it("streams a terminal historical run to completion and closes", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const { eventsByRun, runOwners } = fakeRuns;
+		runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "done",
+		});
+		eventsByRun.set("run-1", [
+			{
+				seq: 1,
+				type: RunEventType.Started,
+				payload: { conversationId: "conv-1", runId: "run-1" },
+			},
+			{
+				seq: 2,
+				type: RunEventType.AssistantText,
+				payload: { text: "finished" },
+			},
+			{ seq: 3, type: RunEventType.Done, payload: {} },
+		]);
+
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: { ...identityHeaders, "last-event-id": "1" },
+		});
+
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toContain("text/event-stream");
+		const text = await res.text();
+		expect(text).toContain("text_delta");
+		expect(text).toContain("finished");
+		expect(text).toContain("done");
 	});
 
 	it("returns 204 when reconnecting after a terminal event", async () => {
