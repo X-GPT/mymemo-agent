@@ -363,11 +363,11 @@ Use E2B's command APIs for remote process execution:
 - `Bash` marks the workspace dirty conservatively because even failed
   commands can mutate files
 
-E2B's JavaScript SDK documents the primary v1 executor primitives (originally
-verified against v2.6.0 docs; the repo pins `^2.14.0`, and the hoisted
-semantics spike re-verifies against the pinned version):
-`commands.run` supports `onStdout` / `onStderr` streaming callbacks and
-`timeoutMs`; background commands return a handle; running commands can be listed,
+E2B's JavaScript SDK provides the primary v1 executor primitives (verified
+live by the Task 4.1 semantics spike against `e2b@2.19.0`, which satisfies the
+pinned `^2.14.0`): `commands.run` supports `onStdout` / `onStderr` streaming
+callbacks and `timeoutMs` (expiry raises `TimeoutError [deadline_exceeded]`);
+background commands return a handle; running commands can be listed,
 reconnected with `commands.connect(pid)`, and killed with `commands.kill(pid)`.
 Use these as the default implementation path before adding any in-sandbox
 executor daemon.
@@ -380,13 +380,13 @@ feedback, but it is not a correctness boundary. Shells, package-manager
 scripts, test runners, and child processes can still create descendants that
 survive the parent process.
 
-The remaining E2B command-semantics validation is process-tree cleanup. The SDK
-reference documents `commands.kill(pid)` as killing a PID, but the design must
-not assume this also kills every descendant. Before snapshotting or emitting a
-successful terminal event, the worker must prove that timeout/cancellation
-cleanup covers child processes, or run each `Bash` command through a small
-sandbox-side wrapper that creates an owned process group/session and kills that
-group on timeout, cancellation, or stale-run recovery.
+Process-tree cleanup is resolved: the Task 4.1 spike proved that neither
+`timeoutMs` expiry nor `commands.kill(pid)` covers descendants. In both cases
+a backgrounded child (`bash -c 'sleep 300 & wait'`) survived the kill,
+reparented to init. Every `Bash` command must therefore run through a small
+sandbox-side wrapper that creates an owned process group/session and kills
+that group on timeout, cancellation, or stale-run recovery — a required v1
+component, not a contingency.
 
 Command execution requirements:
 
@@ -1196,43 +1196,50 @@ one conversation -> one persistent E2B sandbox/workspace
 E2B idle timeout -> 5 minutes while no active run owns it
 E2B active-run timeout -> renewed/extended by the owning worker
 E2B lifecycle on timeout -> pause sandbox
-E2B pause mode -> filesystem-only by default
-max lifetime -> none
+E2B pause mode -> filesystem + memory (the SDK has no filesystem-only pause)
+max paused lifetime -> bounded idle window, then snapshot + kill (see below)
 ```
 
-Create sandboxes with E2B lifecycle pause if the deployed E2B SDK/runtime
-supports an automatic pause-on-timeout contract:
+Create sandboxes with E2B lifecycle pause. The pinned SDK supports an
+automatic pause-on-timeout contract (verified live by the Task 4.1 spike):
 
 ```ts
 const sandbox = await Sandbox.create(templateOrSnapshotId, {
 	timeoutMs: 5 * 60 * 1000,
-	lifecycle: {
-		onTimeout: { action: "pause", keepMemory: false },
-		autoResume: false,
-	},
+	lifecycle: { onTimeout: "pause", autoResume: false },
 });
 ```
 
-Use `keepMemory: false` because the split runtime only needs filesystem
-persistence. The agent loop and model state live in Fargate. V1 does not preserve
-in-sandbox background processes across idle pause.
+`lifecycle.onTimeout` is a flat `"pause" | "kill"` enum; there is no
+`keepMemory` option in the JS SDK — pause always saves filesystem plus memory
+(~4 s per GiB of RAM to pause, ~1 s to resume). The split runtime only needs
+the filesystem: the agent loop and model state live in Fargate, and V1 does
+not depend on in-sandbox background processes surviving idle pause even though
+memory happens to be preserved.
 
-The exact E2B pause/snapshot API shape is a prototype gate, not an assumption to
-copy blindly into production code. Before implementation, validate the deployed
-E2B JavaScript SDK and template runtime with a spike that proves:
+The exact E2B pause/snapshot API shape was a prototype gate. The Task 4.1
+spike (run 2026-07-05 against `e2b@2.19.0`,
+`apps/agent-worker/spikes/e2b-semantics/`) validated it:
 
-- a sandbox can pause on idle timeout without losing files
-- a paused sandbox can be reconnected or resumed
-- the worker can explicitly extend or renew timeout during an active run
-- snapshot creation returns a reusable checkpoint id
-- a fresh sandbox can be created from that checkpoint id
-- timeout/cancel cleanup and snapshot creation cannot race active commands
+- pause on idle timeout preserves files — observed `paused` about 1 s after
+  the deadline; files intact after reconnect
+- a paused sandbox resumes via `Sandbox.connect(sandboxId)` (~250 ms observed);
+  connect is the resume primitive — the JS SDK has no separate `resume()`
+- `setTimeout(ms)` extends the deadline but is absolute and can also reduce
+  it, so the worker renewal loop must compute monotonically increasing
+  deadlines; `Sandbox.connect(id, { timeoutMs })` only ever extends
+- `sandbox.createSnapshot()` returns a reusable `snapshotId`
+  (`<templateId>:<tag>`) — sub-second on a small sandbox — and leaves the
+  source sandbox running afterward
+- `Sandbox.create(snapshotId)` restores a fresh sandbox with files intact,
+  even after the source sandbox is killed
+- timeout/cancel cleanup does NOT cover descendants (see the command-execution
+  section: the sandbox-side process-group wrapper is required); keep the
+  worker-side barrier that no snapshot starts while a managed command runs —
+  snapshotting transiently pauses the sandbox even though it self-resumes
 
-If automatic pause-on-timeout is not available, use explicit worker-driven
-pause/checkpoint calls where supported. If E2B cannot provide a durable
-filesystem checkpoint with the required semantics, this design must fall back to
-a separate durable workspace store instead of treating E2B as the only source of
-truth for user-created files.
+E2B provides the durable filesystem checkpoint this design requires, so the
+fallback to a separate durable workspace store is not needed for v1.
 
 The 5-minute timeout is an idle policy, not a maximum turn duration. While a run
 is active, the owning worker must renew or reconnect/extend the sandbox timeout
@@ -1255,6 +1262,19 @@ connect fails:
 
 The paused sandbox is the normal durable workspace. The snapshot is a checkpoint
 fallback, not the main per-turn resume mechanism.
+
+Cost model and retention (decided by the Task 4.1 spike, per its acceptance
+criteria): E2B bills compute per second only while a sandbox is running —
+billing stops on pause, kill, or timeout. Paused state (filesystem + memory)
+and snapshots are both retained indefinitely with no auto-TTL, accruing
+storage until explicitly deleted (`Sandbox.kill` frees a paused sandbox;
+`Sandbox.deleteSnapshot` frees a checkpoint). The retention policy is
+therefore bounded idle lifetime with snapshot restore, not live-forever:
+while a conversation is warm, the paused sandbox is the resume path; the
+cleanup loop ensures a fresh snapshot exists, kills paused sandboxes idle past
+a configurable window (days-scale — resume-from-paused is ~250 ms while
+snapshot restore is a full sandbox create), and retains only the latest
+snapshot per conversation.
 
 Sandbox replacement is an external side effect followed by a fenced database
 write. If a worker creates a replacement sandbox and then loses run ownership
