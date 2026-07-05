@@ -46,8 +46,13 @@ function lastEventIdFromContext(c: {
 }): number {
 	const raw = c.req.header("last-event-id");
 	if (!raw) return 0;
+	if (!/^\d+$/.test(raw)) return 0;
 	const parsed = Number.parseInt(raw, 10);
 	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function isTerminalRunStatus(status: string): boolean {
+	return status === "done" || status === "error" || status === "canceled";
 }
 
 // POST /v1/conversations — create a conversation, freezing its document scope.
@@ -182,7 +187,7 @@ app.post(
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({
-							id: String(projected.seq),
+							id: projected.id,
 							message: projected.frame,
 						});
 					}
@@ -197,7 +202,6 @@ app.post(
 				});
 				const sender = new HonoSSESender(stream);
 				await sender.send({
-					id: crypto.randomUUID(),
 					message: { type: "error", message: error.message },
 				});
 			},
@@ -249,6 +253,10 @@ app.get(
 		}
 
 		const afterSeq = lastEventIdFromContext(c);
+		if (isTerminalRunStatus(run.status) && afterSeq >= run.nextEventSeq - 1) {
+			return new Response(null, { status: 204 });
+		}
+
 		const requestSignal = c.req.raw.signal;
 		return streamSSE(
 			c,
@@ -271,7 +279,7 @@ app.get(
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({
-							id: String(projected.seq),
+							id: projected.id,
 							message: projected.frame,
 						});
 					}
@@ -286,7 +294,6 @@ app.get(
 				});
 				const sender = new HonoSSESender(stream);
 				await sender.send({
-					id: crypto.randomUUID(),
 					message: { type: "error", message: error.message },
 				});
 			},

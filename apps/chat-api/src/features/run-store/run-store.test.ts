@@ -659,6 +659,22 @@ describe("markStaleRunsTx", () => {
 		expect(live?.status).toBe("running");
 	});
 
+	it("terminalizes old unclaimed queued runs as error", async () => {
+		await queueRun("run-queued", "conv-1");
+		await tdb.db
+			.update(runs)
+			.set({ createdAt: sql`now() - interval '2 minutes'` })
+			.where(eq(runs.runId, "run-queued"));
+
+		const recovered = await markStaleRunsTx(tdb.db);
+
+		expect(recovered.map((r) => [r.runId, r.status])).toEqual([
+			["run-queued", "error"],
+		]);
+		const events = await readEvents("run-queued");
+		expect(events.map((e) => e.type)).toEqual(["run_error"]);
+	});
+
 	it("never double-terminalizes: a second sweep finds nothing", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await expireOwnership("run-1");

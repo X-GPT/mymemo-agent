@@ -70,7 +70,12 @@ function fakeRunStore() {
 	const eventsByRun = new Map<string, RunEventRow[]>();
 	const runOwners = new Map<
 		string,
-		{ userId: string; conversationId: string; status: string }
+		{
+			userId: string;
+			conversationId: string;
+			status: string;
+			nextEventSeq?: number;
+		}
 	>();
 	const runStore: RunStore = {
 		async createQueuedRun(input) {
@@ -103,7 +108,15 @@ function fakeRunStore() {
 			) {
 				return null;
 			}
-			return runRecord({ runId, ...owner });
+			const maxSeq = Math.max(
+				0,
+				...(eventsByRun.get(runId) ?? []).map((event) => event.seq),
+			);
+			return runRecord({
+				runId,
+				nextEventSeq: maxSeq + 1,
+				...owner,
+			});
 		},
 	};
 	const runEventReader: RunEventReader = {
@@ -127,6 +140,7 @@ function runRecord(input: {
 	userId: string;
 	conversationId: string;
 	status: string;
+	nextEventSeq?: number;
 }): RunRecord {
 	const now = new Date();
 	return {
@@ -140,7 +154,7 @@ function runRecord(input: {
 		lockedUntil: null,
 		heartbeatAt: null,
 		cancelRequestedAt: null,
-		nextEventSeq: 1,
+		nextEventSeq: input.nextEventSeq ?? 1,
 		terminalAt: null,
 	};
 }
@@ -371,6 +385,39 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(text).toContain("hello");
 		expect(text).not.toContain("conversation_id");
 		expect(queued).toHaveLength(0);
+	});
+
+	it("returns 204 when reconnecting after a terminal event", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const { eventsByRun, runOwners } = fakeRuns;
+		runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "done",
+		});
+		eventsByRun.set("run-1", [
+			{
+				seq: 1,
+				type: RunEventType.Started,
+				payload: { conversationId: "conv-1", runId: "run-1" },
+			},
+			{ seq: 2, type: RunEventType.Done, payload: {} },
+		]);
+
+		const res = await buildApp(
+			store,
+			recordingGate(false).gate,
+			fakeRuns,
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: { ...identityHeaders, "last-event-id": "2" },
+		});
+
+		expect(res.status).toBe(204);
+		expect(res.headers.get("content-type") ?? "").not.toContain(
+			"text/event-stream",
+		);
 	});
 
 	it("returns 404 for a foreign run before opening the stream", async () => {

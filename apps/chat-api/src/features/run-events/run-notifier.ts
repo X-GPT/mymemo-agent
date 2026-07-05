@@ -142,10 +142,17 @@ export class PostgresRunNotifier implements RunNotifier {
 				const runId = parseRunNotification(msg.payload);
 				if (runId) this.registry.signal(runId);
 			});
+			client.on("error", () => {
+				if (this.client === client) this.client = null;
+				if (this.connecting) this.connecting = null;
+			});
 			await client.connect();
 			await client.query(`LISTEN ${RUN_EVENTS_CHANNEL}`);
 			this.client = client;
-		})();
+		})().catch((error) => {
+			this.connecting = null;
+			throw error;
+		});
 		return this.connecting;
 	}
 

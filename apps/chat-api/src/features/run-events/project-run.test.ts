@@ -95,8 +95,15 @@ describe("projectRun", () => {
 			{ type: "text_delta", text: "llo" },
 			{ type: "done" },
 		]);
-		// run_started's two frames share its event's seq (the reconnect cursor).
 		expect(projected.map((p) => p.seq).slice(0, 2)).toEqual([1, 1]);
+		// Only the final sibling from a fanned-out event advances Last-Event-ID.
+		expect(projected.map((p) => p.id)).toEqual([
+			undefined,
+			"1",
+			"2",
+			"3",
+			"4",
+		]);
 		expect(notifier.closed).toBe(1);
 	});
 
@@ -159,7 +166,7 @@ describe("projectRun", () => {
 
 		expect(await gen.next()).toEqual({
 			done: false,
-			value: { seq: 1, frame: { type: "text_delta", text: "one" } },
+			value: { seq: 1, id: "1", frame: { type: "text_delta", text: "one" } },
 		});
 		const pending = gen.next();
 		controller.abort();

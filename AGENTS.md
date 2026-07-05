@@ -116,7 +116,8 @@ The chat surface is **two endpoints** under `/v1` (mounted in `src/routes/v1.ts`
    - `conversation_id` — `{ conversationId }`, echoed at run start
    - `run_id` — `{ runId }`, identifies this single backend execution attempt
    - `text_delta` — `{ text }`, one event per streamed token chunk; the client concatenates these
-   - `done` — `{}`, marks end-of-stream, emitted only after the whole run (including workspace sync) succeeds
+   - `done` — `{}`, marks end-of-stream after the run succeeds
+   - `canceled` — `{}`, marks a user-canceled run
    - `error` — `{ message }`, surfaced on agent or transport failure
 
 ### Trust Boundary
@@ -127,7 +128,7 @@ Identity arrives via `X-*` headers, **not** the JSON body. chat-api does not aut
 
 The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-capable code). In the split runtime, chat-api does not mint sandbox credentials or hold provider/document/E2B secrets. The trusted `agent-worker` owns model traffic, scoped document access, and E2B execution; secrets must not be placed into E2B sandbox env.
 
-The **chat-api → daemon `/turn`** edge has no application-layer auth and the daemon holds no secret of its own (MYM-35). In prod each E2B sandbox is created with `allowPublicTraffic: false`, so its edge rejects any request to the daemon's public URL that lacks the per-sandbox `e2b-traffic-access-token` (held only by chat-api, sent on every daemon call); chat-api fails the sandbox create if that token is absent, so the restriction can't silently fail open. Locally the daemon container is unpublished on the compose network. The previous shared `DAEMON_AUTH_TOKEN` bearer was removed: it lived in the daemon's process env where the untrusted agent could read it via `/proc`, yet it was redundant with the edge and identical across all sandboxes.
+The former chat-api → sandbox-daemon `/turn` edge is removed from chat-api's live path. The trusted `agent-worker` will own E2B sandbox creation and any executor-to-sandbox traffic in the split runtime; chat-api only queues runs and projects durable run events.
 
 **Merge tradeoff (be aware):** the LLM proxy and the document reader used to be two separate services (`llm-gateway` + `document-gateway`), each holding exactly one credential. They are now one `gateway` process that holds BOTH `ANTHROPIC_API_KEY` and `DATABASE_URL` and has a single egress identity reaching both Anthropic and the KB Postgres. This is a wider blast radius — a compromise of the gateway now exposes both credentials at once — accepted as the cost of running one deployable control plane instead of two. Each per-turn token carries an `aud` claim (`llm` or `documents`) that the gateway enforces per route family, so an LLM token cannot reach the document routes and a document token cannot spend on the LLM — a leaked token is confined to one family. The merge widened the gateway's credential blast radius (above) but did not weaken this per-token audience separation.
 
@@ -139,7 +140,8 @@ The **chat-api → daemon `/turn`** edge has no application-layer auth and the d
 | `src/features/conversation-store/` | Durable conversation registry (frozen scope), Drizzle-backed over `mymemo_agent`; `createConversationStore` factory |
 | `src/features/exposure-gate/` | `ExposureGate` seam (`exposure-gate.ts`): `StatsigExposureGate` (fail-closed, Statsig-backed) + `BreakGlassExposureGate` (always-allow); `createExposureGate(config)` picks one. Gates new-work routes |
 | `src/features/run-store/` | Durable run queue/event-log store over `runs` and `run_events`; queues `user.message` turns and replays run events |
-| `src/features/streaming/` | SSE / run-event plumbing reused by the conversation routes (`sse-sender.ts`, `events.ts`, `run-event-projector.ts`, `run-events-to-sse.ts`) |
+| `src/features/run-events/` | Durable run-event projection and wake-up plumbing (`project-run.ts`, `project-run-event.ts`, `run-event-reader.ts`, `run-notifier.ts`) |
+| `src/features/streaming/` | SSE sender/types reused by the conversation routes (`sse-sender.ts`, `events.ts`) |
 | `src/db/` | Drizzle schema (`schema.ts`: `conversations`, `runs`, `run_events`, `sandbox_leases`), client (`client.ts`), and migration runner (`migrate.ts`) for the writable DB; migrations in `drizzle/` |
 | `src/config/env.ts` | Environment validation |
 | `apps/gateway/src/server.ts` | `createGateway(config, db)` — the merged control plane: registers health, then the document routes, then the catch-all LLM proxy (order is correctness-critical). Pure: config in, app out |

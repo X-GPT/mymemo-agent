@@ -1,5 +1,5 @@
 export interface MymemoEvent {
-	id: string;
+	id?: string;
 	message: EventMessage;
 }
 

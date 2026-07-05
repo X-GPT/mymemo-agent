@@ -528,13 +528,14 @@ export async function heartbeatRunTx(
 }
 
 /**
- * Stale-run recovery: terminalize every active run whose `locked_until` has
- * passed — `cancel_requested` becomes `canceled`, `running` becomes `error`
- * (a v1 run is never reclaimed). Each run's status CAS and terminal event
- * share the transaction, and candidates are taken `FOR UPDATE SKIP LOCKED`,
- * so concurrent recovery loops across the fleet split the work instead of
- * blocking, and a run can never be double-terminalized. Returns the runs it
- * recovered so the caller can clean up their sandbox side effects.
+ * Stale-run recovery: terminalize every active run that can no longer make
+ * progress. Expired `cancel_requested` becomes `canceled`; expired `running`
+ * and old unclaimed `queued` runs become `error` (a v1 run is never reclaimed).
+ * Each run's status CAS and terminal event share the transaction, and candidates
+ * are taken `FOR UPDATE SKIP LOCKED`, so concurrent recovery loops across the
+ * fleet split the work instead of blocking, and a run can never be
+ * double-terminalized. Returns the runs it recovered so the caller can clean up
+ * their sandbox side effects.
  */
 export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
 	return await db.transaction(async (tx) => {
@@ -542,13 +543,15 @@ export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
 			.select({ runId: runs.runId, status: runs.status })
 			.from(runs)
 			.where(
-				and(
-					inArray(runs.status, ["running", "cancel_requested"]),
-					// Complements the append fence exactly: appends require
-					// locked_until > now(), so anything at or past the deadline is
-					// unowned and recoverable.
-					sql`${runs.lockedUntil} <= now()`,
-				),
+				sql`(
+					${runs.status} in ('running', 'cancel_requested')
+					and ${runs.lockedUntil} <= now()
+				) or (
+					${runs.status} = 'queued'
+					and ${runs.createdAt} <= now() - interval '${sql.raw(
+						String(LOCK_DURATION_MS),
+					)} milliseconds'
+				)`,
 			)
 			.for("update", { skipLocked: true });
 
@@ -569,7 +572,7 @@ export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
 				.where(
 					and(
 						eq(runs.runId, candidate.runId),
-						inArray(runs.status, ["running", "cancel_requested"]),
+						inArray(runs.status, ["queued", "running", "cancel_requested"]),
 					),
 				)
 				.returning();

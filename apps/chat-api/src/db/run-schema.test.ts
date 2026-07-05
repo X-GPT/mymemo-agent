@@ -174,6 +174,16 @@ describe("run queue schema", () => {
 		]);
 	});
 
+	it("installs a trigger that notifies listeners when run events are inserted", async () => {
+		const { rows } = await tdb.db.execute(sql`
+			select tgname
+			from pg_trigger
+			where tgname = 'run_events_notify_insert'
+				and not tgisinternal
+		`);
+		expect(rows).toEqual([{ tgname: "run_events_notify_insert" }]);
+	});
+
 	it("rejects duplicate event sequence numbers", async () => {
 		await tdb.db.insert(runs).values({
 			runId: "run-1",

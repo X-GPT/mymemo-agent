@@ -22,11 +22,12 @@ export class HonoSSESender implements MymemoEventSender {
 	constructor(private stream: SSEStreamingApi) {}
 
 	async send(data: MymemoEvent) {
-		await this.stream.writeSSE({
+		const frame = {
 			data: JSON.stringify(data.message),
 			event: data.message.type,
-			id: data.id,
-		});
+			...(data.id ? { id: data.id } : {}),
+		};
+		await this.stream.writeSSE(frame);
 	}
 
 	async sendPing() {
