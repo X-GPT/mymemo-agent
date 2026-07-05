@@ -7,12 +7,9 @@ import { type ApiConfig, loadApiConfigFromEnv } from "./env";
  * secrets (OpenRouter, KB). These tests pin that boundary.
  */
 
-/** A minimal env that loads cleanly: the local provider needs no E2B key. */
+/** A minimal env that loads cleanly. */
 function baseEnv(): Record<string, string | undefined> {
 	return {
-		SANDBOX_PROVIDER: "local",
-		LLM_TOKEN_SECRET: "test-secret",
-		GATEWAY_PUBLIC_URL: "https://gateway.test",
 		AGENT_DATABASE_URL: "postgresql://u:p@localhost:5432/mymemo_agent",
 		STATSIG_SERVER_SECRET: "secret-statsig",
 		DB_SSL: "disable",
@@ -42,6 +39,8 @@ describe("loadApiConfigFromEnv — worker-secret boundary", () => {
 		// None of these are set; chat-api must not require them.
 		expect(env.OPENROUTER_API_KEY).toBeUndefined();
 		expect(env.KB_DATABASE_URL).toBeUndefined();
+		expect(env.E2B_API_KEY).toBeUndefined();
+		expect(env.LLM_TOKEN_SECRET).toBeUndefined();
 		expect(() => loadApiConfigFromEnv(env)).not.toThrow();
 	});
 
@@ -51,16 +50,22 @@ describe("loadApiConfigFromEnv — worker-secret boundary", () => {
 		env.OPENROUTER_BASE_URL = "https://openrouter.test";
 		env.OPENROUTER_DEFAULT_MODEL = "anthropic/claude";
 		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
+		env.E2B_API_KEY = "e2b-should-be-ignored";
+		env.LLM_TOKEN_SECRET = "llm-token-secret";
+		env.GATEWAY_PUBLIC_URL = "https://gateway.test";
 		const config = loadApiConfigFromEnv(env);
 		const serialized = JSON.stringify(config);
 		expect(serialized).not.toContain("sk-or-should-be-ignored");
 		expect(serialized).not.toContain("openrouter.test");
 		expect(serialized).not.toContain("mymemo_kb");
+		expect(serialized).not.toContain("e2b-should-be-ignored");
+		expect(serialized).not.toContain("llm-token-secret");
+		expect(serialized).not.toContain("gateway.test");
 		// And there is no openrouter/kb field by name.
-		expect(config as Record<string, unknown>).not.toHaveProperty(
+		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
 			"openrouterApiKey",
 		);
-		expect(config as Record<string, unknown>).not.toHaveProperty(
+		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
 			"kbDatabaseUrl",
 		);
 	});
@@ -87,26 +92,36 @@ describe("loadApiConfigFromEnv — Statsig exposure config", () => {
 		expect(config.agentExposureBreakGlass).toBe(false);
 		expect(config.statsigServerSecret).toBe("secret-statsig");
 	});
-});
-
-describe("loadApiConfigFromEnv — prototype provider path unchanged", () => {
-	it("still requires E2B_API_KEY when SANDBOX_PROVIDER=e2b", () => {
+	it("ignores legacy prototype provider settings", () => {
 		const env = baseEnv();
 		env.SANDBOX_PROVIDER = "e2b";
-		delete env.E2B_API_KEY;
-		expect(() => loadApiConfigFromEnv(env)).toThrow(/E2B_API_KEY/);
+		env.E2B_TEMPLATE = "legacy-template";
+		env.LOCAL_SANDBOX_DAEMON_URL = "http://sandbox:8080";
+		const config = loadApiConfigFromEnv(env);
+		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
+			"sandboxProvider",
+		);
+		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
+			"e2bTemplate",
+		);
 	});
 
 	it("returns a config typed as ApiConfig with the expected core fields", () => {
 		const config: ApiConfig = loadApiConfigFromEnv(baseEnv());
-		expect(config.sandboxProvider).toBe("local");
-		expect(config.gatewayPublicUrl).toBe("https://gateway.test");
+		expect(config.databaseUrl).toContain("mymemo_agent");
+	});
+});
+
+describe("loadApiConfigFromEnv — split-runtime core", () => {
+	it("returns a config typed as ApiConfig with the expected core fields", () => {
+		const config: ApiConfig = loadApiConfigFromEnv(baseEnv());
+		expect(config.logLevel).toBe("info");
 	});
 
-	it("does not require GATEWAY_PUBLIC_URL for split-runtime boot", () => {
+	it("does not require GATEWAY_PUBLIC_URL", () => {
 		const env = baseEnv();
 		delete env.GATEWAY_PUBLIC_URL;
 		const config = loadApiConfigFromEnv(env);
-		expect(config.gatewayPublicUrl).toBeUndefined();
+		expect(config.databaseUrl).toContain("mymemo_agent");
 	});
 });

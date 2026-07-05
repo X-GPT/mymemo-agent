@@ -1,8 +1,4 @@
-import { join } from "node:path";
-
 export type ChatMessagesScope = "general" | "collection" | "document";
-
-export type SandboxProviderKind = "e2b" | "local";
 
 /** Subset of the process environment the API reads. */
 type Env = Record<string, string | undefined>;
@@ -26,30 +22,18 @@ function assert(condition: unknown, message: string): asserts condition {
  * module singleton.
  */
 export interface ApiConfig {
-	/** `e2b` (default) leases a fresh sandbox per turn; `local` targets the harness daemon container. */
-	sandboxProvider: SandboxProviderKind;
-	/** Base URL of the local daemon container (SANDBOX_PROVIDER=local only). */
-	localSandboxDaemonUrl: string;
-	/** E2B template name (SANDBOX_PROVIDER=e2b only). */
-	e2bTemplate: string;
-	/** HMAC secret for the per-turn tokens minted into each sandbox turn (shared with the gateway). */
-	llmTokenSecret: string;
-	/** Base URL of the merged gateway for the legacy sandbox path; trailing slash stripped when set. */
-	gatewayPublicUrl: string | undefined;
 	/** pino log level. */
 	logLevel: string;
-	/** Root dir of the durable workspace store (local filesystem adapter). */
-	workspaceStoreRoot: string;
 	/**
 	 * Writable connection to chat-api's own Postgres (`mymemo_agent`), distinct
 	 * from the gateway's/worker's read-only KB. Backs the conversation registry
-	 * (frozen scope), the sandbox-lease registry, and (in the split runtime) the
-	 * run queue and event log. Sourced from `AGENT_DATABASE_URL` — never the
-	 * generic `DATABASE_URL`, which names the read-only KB elsewhere in the repo.
-	 * **Required** — the conversation endpoints are the primary surface and cannot
-	 * work without it, so it is validated at config load rather than failing
-	 * per-request. DB_PASSWORD spliced in when passwordless; TLS applied
-	 * (DB_SSL=disable to turn off for a local non-TLS Postgres).
+	 * (frozen scope), run queue, and run event log. Sourced from
+	 * `AGENT_DATABASE_URL` — never the generic `DATABASE_URL`, which names the
+	 * read-only KB elsewhere in the repo. **Required** — the conversation
+	 * endpoints are the primary surface and cannot work without it, so it is
+	 * validated at config load rather than failing per-request. DB_PASSWORD
+	 * spliced in when passwordless; TLS applied (DB_SSL=disable to turn off for a
+	 * local non-TLS Postgres).
 	 */
 	databaseUrl: string;
 	/**
@@ -103,33 +87,10 @@ export function resolveDatabaseUrl(
 
 /**
  * Parse + validate the environment into a typed config. Pure: env in, config
- * out. `E2B_API_KEY` is validated here but not surfaced — the E2B SDK reads it
- * straight from `process.env` at `Sandbox.create`.
+ * out. Worker-only secrets (OpenRouter, KB, E2B, model credentials) are
+ * intentionally not read here.
  */
 export function loadApiConfigFromEnv(env: Env): ApiConfig {
-	// Which sandbox provider runs the turn. Reject an unrecognized value loudly
-	// rather than silently falling back to e2b (a typo like `locl` would
-	// otherwise surface as a confusing "E2B_API_KEY required").
-	const rawSandboxProvider = env.SANDBOX_PROVIDER;
-	assert(
-		rawSandboxProvider === undefined ||
-			rawSandboxProvider === "e2b" ||
-			rawSandboxProvider === "local",
-		`SANDBOX_PROVIDER must be "e2b" or "local" (got: ${rawSandboxProvider})`,
-	);
-	const sandboxProvider: SandboxProviderKind =
-		rawSandboxProvider === "local" ? "local" : "e2b";
-
-	// E2B credentials are only needed for the E2B provider; the local provider
-	// reaches a container it does not create, so don't hard-require them there.
-	if (sandboxProvider === "e2b") {
-		assert(
-			env.E2B_API_KEY,
-			"E2B_API_KEY is required when SANDBOX_PROVIDER=e2b",
-		);
-	}
-	assert(env.LLM_TOKEN_SECRET, "LLM_TOKEN_SECRET is required");
-
 	// The conversation registry is the primary surface and cannot work without a
 	// writable DB; require it at load so a misconfigured deploy fails fast instead
 	// of booting green and 503-ing every request. Sourced from AGENT_DATABASE_URL
@@ -155,32 +116,8 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		);
 	}
 
-	// Durable workspace store root. Optional with a writable fallback so it works
-	// out of the box, but the fallback is process-local and lost on container
-	// recycle — warn loudly so a missing volume mount in production surfaces here
-	// instead of as silent data loss.
-	const workspaceStoreRoot =
-		env.WORKSPACE_STORE_ROOT || join(process.cwd(), ".workspace-store");
-	if (!env.WORKSPACE_STORE_ROOT) {
-		console.warn(
-			`WORKSPACE_STORE_ROOT is not set; durable workspace state will be written to ${workspaceStoreRoot} and will NOT survive container recycles. Set it to a mounted persistent volume in production.`,
-		);
-	}
-
 	return {
-		sandboxProvider,
-		// Same docker-compose network as chat-api; trailing slash stripped.
-		localSandboxDaemonUrl: (
-			env.LOCAL_SANDBOX_DAEMON_URL || "http://sandbox:8080"
-		).replace(/\/+$/, ""),
-		e2bTemplate: env.E2B_TEMPLATE || "sandbox-template-dev",
-		llmTokenSecret: env.LLM_TOKEN_SECRET,
-		// Trailing slash stripped so the legacy sandbox path's
-		// `${base}/v1/messages` never produces a double slash. Optional because
-		// split-runtime deployments are moving execution out of chat-api.
-		gatewayPublicUrl: env.GATEWAY_PUBLIC_URL?.replace(/\/+$/, ""),
 		logLevel: env.LOG_LEVEL || "info",
-		workspaceStoreRoot,
 		databaseUrl,
 		statsigServerSecret: env.STATSIG_SERVER_SECRET,
 		agentExposureBreakGlass,

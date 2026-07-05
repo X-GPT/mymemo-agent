@@ -53,5 +53,7 @@ describe("HonoSSESender", () => {
 			"ping",
 			"text_delta",
 		]);
+		const ids = Array.from(buf.matchAll(/^id: (.+)$/gm)).map((m) => m[1]);
+		expect(ids).toEqual(["a", "b", "c"]);
 	});
 });

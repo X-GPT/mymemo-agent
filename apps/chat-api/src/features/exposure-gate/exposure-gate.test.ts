@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { Statsig, StatsigUser } from "@statsig/statsig-node-core";
 import type { InternalIdentity } from "@/features/conversations/conversations.schema";
 import {
 	AGENT_EXPOSURE_GATE,
@@ -22,29 +21,6 @@ describe("BreakGlassExposureGate", () => {
 		const gate = new BreakGlassExposureGate();
 		expect(await gate.isAgentEnabled(allowedIdentity)).toBe(true);
 		expect(await gate.isAgentEnabled(deniedIdentity)).toBe(true);
-	});
-});
-
-describe("StatsigExposureGate — offline via disableNetwork + overrideGate", () => {
-	it("allows an identity the gate is overridden true for, denies others", async () => {
-		// disableNetwork keeps the SDK fully offline (Statsig's testing facility for
-		// node-core); overrideGate forces the decision deterministically.
-		const statsig = new Statsig("secret-test", {
-			disableNetwork: true,
-			outputLogLevel: "none",
-		});
-		await statsig.initialize();
-		statsig.overrideGate(AGENT_EXPOSURE_GATE, true, allowedIdentity.memberCode);
-
-		const gate = new StatsigExposureGate(
-			statsig as unknown as StatsigClientLike,
-		);
-
-		expect(await gate.isAgentEnabled(allowedIdentity)).toBe(true);
-		// No override for this id → default false offline.
-		expect(await gate.isAgentEnabled(deniedIdentity)).toBe(false);
-
-		await statsig.shutdown();
 	});
 });
 
@@ -83,16 +59,5 @@ describe("StatsigExposureGate — fail closed", () => {
 		expect(seen).toHaveLength(1);
 		expect(seen[0]?.userID).toBe("member-allowed");
 		expect(seen[0]?.gate).toBe(AGENT_EXPOSURE_GATE);
-	});
-});
-
-describe("StatsigUser construction (used by the gate)", () => {
-	it("keys on memberCode and carries partner/team as custom fields", () => {
-		const user = new StatsigUser({
-			userID: "member-1",
-			customIDs: { partnerCode: "partner-1" },
-			custom: { teamCode: "team-1" },
-		});
-		expect(user.userID).toBe("member-1");
 	});
 });

@@ -17,6 +17,7 @@ export const ConversationIdParam = z
 	.min(1)
 	.max(MAX_CONVERSATION_ID_LENGTH)
 	.regex(CONVERSATION_ID_PATTERN);
+export const RunIdParam = ConversationIdParam;
 
 // Body of `POST /v1/conversations`. The scope is *resolved* from these ids and
 // frozen onto the conversation; subsequent turns carry no scope. `.strict()`

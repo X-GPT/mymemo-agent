@@ -22,7 +22,7 @@ export interface ExposureGate {
  * via `AGENT_EXPOSURE_BREAK_GLASS=true`. Never the production default.
  */
 export class BreakGlassExposureGate implements ExposureGate {
-	async isAgentEnabled(): Promise<boolean> {
+	async isAgentEnabled(_identity: InternalIdentity): Promise<boolean> {
 		return true;
 	}
 }

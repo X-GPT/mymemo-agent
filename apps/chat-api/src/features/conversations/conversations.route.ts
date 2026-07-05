@@ -4,11 +4,12 @@ import { streamSSE } from "hono/streaming";
 import { validator as zValidator } from "hono-openapi";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
-import { RequestLogger } from "@/features/streaming/logger";
+import { projectRun } from "@/features/run-events";
+import { ActiveRunExistsError } from "@/features/run-store";
 import { HonoSSESender } from "@/features/streaming/sse-sender";
 import {
 	createConversation,
-	runConversationTurn,
+	queueConversationTurn,
 } from "./conversations.controller";
 import {
 	ConversationEventBody,
@@ -16,6 +17,7 @@ import {
 	CreateConversationBody,
 	InternalIdentity,
 	MAX_REQUEST_BODY_BYTES,
+	RunIdParam,
 } from "./conversations.schema";
 
 const app = new Hono<AppEnv>();
@@ -37,6 +39,20 @@ function identityFromContext(c: {
 		partnerCode: c.req.header("x-partner-code"),
 		partnerName: c.req.header("x-partner-name"),
 	});
+}
+
+function lastEventIdFromContext(c: {
+	req: { header: (k: string) => string | undefined };
+}): number {
+	const raw = c.req.header("last-event-id");
+	if (!raw) return 0;
+	if (!/^\d+$/.test(raw)) return 0;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function isTerminalRunStatus(status: string): boolean {
+	return status === "done" || status === "error" || status === "canceled";
 }
 
 // POST /v1/conversations — create a conversation, freezing its document scope.
@@ -130,6 +146,26 @@ app.post(
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
 
+		let queuedRun: { runId: string };
+		try {
+			queuedRun = await queueConversationTurn(c.var.deps, {
+				conversation,
+				message: event.text,
+			});
+		} catch (error) {
+			if (error instanceof ActiveRunExistsError) {
+				return c.json(
+					{
+						error:
+							"Conversation is busy processing another request. Please try again shortly.",
+					},
+					409,
+				);
+			}
+			throw error;
+		}
+
+		const requestSignal = c.req.raw.signal;
 		return streamSSE(
 			c,
 			async (stream) => {
@@ -144,12 +180,17 @@ app.post(
 				}, 5000);
 
 				try {
-					await runConversationTurn(
-						c.var.deps,
-						{ conversation, message: event.text },
-						sender,
-						new RequestLogger(c.var.logger, identity.data.memberCode),
-					);
+					for await (const projected of projectRun(queuedRun.runId, 0, {
+						reader: c.var.deps.runEventReader,
+						notifier: c.var.deps.runNotifier,
+						signal: requestSignal,
+					})) {
+						if (requestSignal.aborted) break;
+						await sender.send({
+							id: projected.id,
+							message: projected.frame,
+						});
+					}
 				} finally {
 					clearInterval(keepaliveInterval);
 				}
@@ -161,7 +202,98 @@ app.post(
 				});
 				const sender = new HonoSSESender(stream);
 				await sender.send({
-					id: crypto.randomUUID(),
+					message: { type: "error", message: error.message },
+				});
+			},
+		);
+	},
+);
+
+// GET /v1/conversations/:conversationId/runs/:runId/events — reconnect to an
+// existing owned run without creating another backend attempt.
+app.get(
+	"/:conversationId/runs/:runId/events",
+	zValidator(
+		"param",
+		z.object({
+			conversationId: ConversationIdParam,
+			runId: RunIdParam,
+		}),
+		(result, c) => {
+			if (!result.success) {
+				return c.json({ error: "Invalid conversation or run id" }, 400);
+			}
+		},
+	),
+	async (c) => {
+		const identity = identityFromContext(c);
+		if (!identity.success) {
+			return c.json(
+				{ error: "Missing or invalid internal identity headers" },
+				401,
+			);
+		}
+
+		const { conversationId, runId } = c.req.valid("param");
+		const conversation = await c.var.deps.conversationStore.get({
+			userId: identity.data.memberCode,
+			conversationId,
+		});
+		if (!conversation) {
+			return c.json({ error: "Conversation not found" }, 404);
+		}
+
+		const run = await c.var.deps.runStore.getRun({
+			userId: identity.data.memberCode,
+			conversationId,
+			runId,
+		});
+		if (!run) {
+			return c.json({ error: "Run not found" }, 404);
+		}
+
+		const afterSeq = lastEventIdFromContext(c);
+		if (isTerminalRunStatus(run.status) && afterSeq >= run.nextEventSeq - 1) {
+			return new Response(null, { status: 204 });
+		}
+
+		const requestSignal = c.req.raw.signal;
+		return streamSSE(
+			c,
+			async (stream) => {
+				const sender = new HonoSSESender(stream);
+				const keepaliveInterval = setInterval(() => {
+					sender.sendPing().catch((err) => {
+						c.var.logger.error({
+							message: "Failed to send keepalive ping",
+							error: err,
+						});
+					});
+				}, 5000);
+
+				try {
+					for await (const projected of projectRun(runId, afterSeq, {
+						reader: c.var.deps.runEventReader,
+						notifier: c.var.deps.runNotifier,
+						signal: requestSignal,
+					})) {
+						if (requestSignal.aborted) break;
+						await sender.send({
+							id: projected.id,
+							message: projected.frame,
+						});
+					}
+				} finally {
+					clearInterval(keepaliveInterval);
+				}
+			},
+			async (error, stream) => {
+				c.var.logger.error({
+					message: "Error in conversation run replay route",
+					error,
+				});
+				const sender = new HonoSSESender(stream);
+				await sender.send({
 					message: { type: "error", message: error.message },
 				});
 			},

@@ -66,4 +66,18 @@ CREATE INDEX "document_access_events_created_at_idx" ON "document_access_events"
 CREATE UNIQUE INDEX "runs_one_active_per_conversation" ON "runs" USING btree ("user_id","conversation_id") WHERE "runs"."status" in ('queued', 'running', 'cancel_requested');--> statement-breakpoint
 CREATE INDEX "runs_queue_claim_idx" ON "runs" USING btree ("created_at") WHERE "runs"."status" = 'queued';--> statement-breakpoint
 CREATE INDEX "runs_stale_recovery_idx" ON "runs" USING btree ("locked_until") WHERE "runs"."status" in ('running', 'cancel_requested');--> statement-breakpoint
-CREATE INDEX "runs_cleanup_idx" ON "runs" USING btree ("terminal_at") WHERE "runs"."status" in ('done', 'error', 'canceled');
+CREATE INDEX "runs_cleanup_idx" ON "runs" USING btree ("terminal_at") WHERE "runs"."status" in ('done', 'error', 'canceled');--> statement-breakpoint
+CREATE OR REPLACE FUNCTION notify_run_event_inserted()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+	PERFORM pg_notify('run_events', json_build_object('runId', NEW.run_id)::text);
+	RETURN NEW;
+END;
+$$;
+--> statement-breakpoint
+CREATE TRIGGER run_events_notify_insert
+AFTER INSERT ON "run_events"
+FOR EACH ROW
+EXECUTE FUNCTION notify_run_event_inserted();

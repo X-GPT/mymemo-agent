@@ -71,7 +71,7 @@ Source: [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/an
 ## Project Overview
 
 MyMemo Monorepo (Bun workspaces) containing:
-- **chat-api** (`apps/chat-api/`) - AI chat service; orchestrates per-user E2B sandboxes
+- **chat-api** (`apps/chat-api/`) - AI chat service; owns conversation creation, queued run insertion, and durable SSE projection over Postgres `run_events`
 - **agent-worker** (`apps/agent-worker/`) - split-runtime Fargate worker (deployable skeleton; MYM-47). Owns the worker-only credentials chat-api must not hold (read-only KB, OpenRouter, E2B) and will run the Postgres-backed run queue loop + Claude Agent SDK in trusted Fargate. Today: validated config, structured logger, worker id, bounded-concurrency supervisor, graceful drain, `/health`, the trusted-worker model client config (`src/model-client.ts`: OpenRouter env + default model for the Claude Agent SDK, per ADR-0003), and the scoped document query client (`src/documents/` — frozen-scope-guarded KB search/fetch over `KB_DATABASE_URL`, audited to `document_access_events`, bounded model-safe errors). The queue/claim loop arrives in a later milestone
 - **sandbox-daemon** (`apps/sandbox-daemon/`) - in-sandbox HTTP daemon; bundled and shipped into E2B (prototype path)
 - **gateway** (`apps/gateway/`) - control plane; the only service holding BOTH the real `ANTHROPIC_API_KEY` and the read-only KB `DATABASE_URL`. Verifies the per-turn bearer token on every route, proxies the Anthropic Messages endpoints, and serves scope-enforced document search/fetch against the MyMemo KB Postgres
@@ -110,15 +110,14 @@ The chat surface is **two endpoints** under `/v1` (mounted in `src/routes/v1.ts`
    - **JSON body** (`ConversationEventBody`): a discriminated union over `type`. Today only `{ type: "user.message", text }`; extensible to `user.interrupt` / `user.tool_confirmation` without a contract rename. Unknown types → `400`.
    - Same identity headers. The `:conversationId` path param is re-validated as path-safe.
    - The route loads the conversation (scoped to `memberCode`) and returns **`404`** if it does not exist or belongs to another member — a clean gate **before** the SSE stream opens. Then it reads the **frozen** scope from the record (the client cannot widen it) and streams the turn.
-3. Both endpoints live in `src/features/conversations/` — `conversations.route.ts` (validation + SSE), `conversations.controller.ts` (`createConversation`, `runConversationTurn`). No upstream API calls here.
-4. `runSandboxChat` is the sole agent path: it **leases** a warm sandbox for the turn's `{userId, conversationId}` through the `SandboxLeaseManager` (reusing a healthy warm sandbox across a conversation's turns, or creating + hydrating a fresh one on a miss) and forwards the turn (with the conversation's frozen scope) to its daemon. Concurrency is an **ownership lease** on the `sandbox_leases` row: `acquire` claims the conversation via an atomic CAS (granted only if the lease is free or expired — so two replicas can't both create a sandbox, and a concurrent turn is rejected with `ConversationBusyError`, surfaced as retryable backpressure), a heartbeat renews the lease + the sandbox's E2B timeout while the turn runs (keeping long turns alive and aborting if the lease is stolen), and `release` keeps the sandbox warm on success or drops the lease + kills the sandbox on failure. A crashed owner's lease simply expires and another replica takes over. The daemon's `bindConversationScope` records the scope on the first turn and rejects a mismatched scope on later turns — a backstop to chat-api being the authority (chat-api always sends the conversation's frozen scope, so it never drives that 409). `agentSessionId` is currently `null` (conversation continuity is a later milestone; a fresh agent session starts each turn). chat-api mints **two** short-lived `@mymemo/llm-token`s per turn, both bound to `{userId, sandboxId, requestId, conversationId, runId}`: an `aud: "llm"` token (no document scope) and an `aud: "documents"` token (carrying the turn's signed scope), and sends both (with `GATEWAY_PUBLIC_URL`) in the turn body. The daemon sets the LLM token as `ANTHROPIC_AUTH_TOKEN` (with `ANTHROPIC_BASE_URL`) on the agent process, so **the sandbox never holds a provider key** — all LLM calls route through the `gateway`, which validates the token's audience and injects the real `ANTHROPIC_API_KEY`. The agent accesses the user's documents on demand via the `mymemo-docs` CLI (on PATH in the sandbox template), which calls the same `gateway` with the **documents-audience** token (sent as `MYMEMO_DOC_GATEWAY_URL` + `MYMEMO_DOC_TOKEN`); the gateway enforces the turn's **signed scope** server-side. The Claude binary and the CLI reach the one merged gateway through two independent env vars that both point at `GATEWAY_PUBLIC_URL` (the binary hits `/v1/messages`, the CLI hits `/v1/documents/*`). Documents are **not** materialized to the sandbox filesystem.
+3. Both endpoints live in `src/features/conversations/` — `conversations.route.ts` (validation + SSE), `conversations.controller.ts` (`createConversation`, `queueConversationTurn`). No upstream API calls here.
+4. `queueConversationTurn` is the sole `user.message` path in chat-api. It creates a queued row in `runs` and appends `run_started` to `run_events` in one transaction through `PostgresRunStore`. Concurrency is enforced by the `runs_one_active_per_conversation` partial unique index over active statuses (`queued`, `running`, `cancel_requested`), so busy/backpressure is returned before the SSE stream opens. The turn body cannot carry scope; the queued run event records the frozen conversation scope read from the conversation store. Actual model execution, E2B sandbox use, document access, and terminal/text event appends are worker responsibilities.
 5. The client-visible SSE stream is a **projection of the run's recorded events** (each event is persisted durably, then mapped to its frame). Frames:
    - `conversation_id` — `{ conversationId }`, echoed at run start
    - `run_id` — `{ runId }`, identifies this single backend execution attempt
-   - `sandbox_id` — `{ sandboxId }`, the sandbox serving this turn (a warm sandbox leased for the conversation, or a freshly created one on a lease miss)
-   - `agent_session_id` — `{ sessionId }`, the daemon-assigned Claude SDK session for this turn
    - `text_delta` — `{ text }`, one event per streamed token chunk; the client concatenates these
-   - `done` — `{}`, marks end-of-stream, emitted only after the whole run (including workspace sync) succeeds
+   - `done` — `{}`, marks end-of-stream after the run succeeds
+   - `canceled` — `{}`, marks a user-canceled run
    - `error` — `{ message }`, surfaced on agent or transport failure
 
 ### Trust Boundary
@@ -127,9 +126,9 @@ Identity arrives via `X-*` headers, **not** the JSON body. chat-api does not aut
 
 **Exposure gate (`src/features/exposure-gate/`):** new agent work is gated by a server-side Statsig gate (`mymemo_agent_split_runtime_enabled`), evaluated on the **trusted identity** (never the body) **after** identity parse and **before** any conversation/run write, on both new-work paths (conversation create and `user.message`). Denied → `403 { error: "Agent is not enabled" }`. It **fails closed**: a Statsig init/eval failure denies new work (a buggy gate cannot fail open). It does **not** replace auth, ownership, DB invariants, or worker fencing, and reconnect/interrupt for existing owned runs must not depend on it. `STATSIG_SERVER_SECRET` backs the production `StatsigExposureGate`; `AGENT_EXPOSURE_BREAK_GLASS=true` swaps in an always-allow gate for local dev / incident response and requires no secret. The secret is never sent to the sandbox or logged.
 
-The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-capable code). It holds no provider key and no document credential — only two short-lived, single-user, signed bearer tokens, one per gateway route family (`aud: "llm"` and `aud: "documents"`), the documents-audience one carrying the turn's signed scope in its claims. The inbound edges from a sandbox are **sandbox → gateway** (for both LLM and document calls); the gateway holds the real credentials + `LLM_TOKEN_SECRET`, should only be reachable from sandboxes, and reaches only its two upstreams (`api.anthropic.com` and the MyMemo KB Postgres). Because scope is signed into the token and enforced by the gateway's document routes, a prompt-injected agent cannot read documents outside its turn's scope. chat-api mints the token; the gateway verifies it; the daemon never sees `LLM_TOKEN_SECRET`.
+The sandboxed agent is treated as untrusted (it runs prompt-injectable, Bash-capable code). In the split runtime, chat-api does not mint sandbox credentials or hold provider/document/E2B secrets. The trusted `agent-worker` owns model traffic, scoped document access, and E2B execution; secrets must not be placed into E2B sandbox env.
 
-The **chat-api → daemon `/turn`** edge has no application-layer auth and the daemon holds no secret of its own (MYM-35). In prod each E2B sandbox is created with `allowPublicTraffic: false`, so its edge rejects any request to the daemon's public URL that lacks the per-sandbox `e2b-traffic-access-token` (held only by chat-api, sent on every daemon call); chat-api fails the sandbox create if that token is absent, so the restriction can't silently fail open. Locally the daemon container is unpublished on the compose network. The previous shared `DAEMON_AUTH_TOKEN` bearer was removed: it lived in the daemon's process env where the untrusted agent could read it via `/proc`, yet it was redundant with the edge and identical across all sandboxes.
+The former chat-api → sandbox-daemon `/turn` edge is removed from chat-api's live path. The trusted `agent-worker` will own E2B sandbox creation and any executor-to-sandbox traffic in the split runtime; chat-api only queues runs and projects durable run events.
 
 **Merge tradeoff (be aware):** the LLM proxy and the document reader used to be two separate services (`llm-gateway` + `document-gateway`), each holding exactly one credential. They are now one `gateway` process that holds BOTH `ANTHROPIC_API_KEY` and `DATABASE_URL` and has a single egress identity reaching both Anthropic and the KB Postgres. This is a wider blast radius — a compromise of the gateway now exposes both credentials at once — accepted as the cost of running one deployable control plane instead of two. Each per-turn token carries an `aud` claim (`llm` or `documents`) that the gateway enforces per route family, so an LLM token cannot reach the document routes and a document token cannot spend on the LLM — a leaked token is confined to one family. The merge widened the gateway's credential blast radius (above) but did not weaken this per-token audience separation.
 
@@ -137,13 +136,13 @@ The **chat-api → daemon `/turn`** edge has no application-layer auth and the d
 
 | Path | Purpose |
 |------|---------|
-| `src/features/conversations/` | `conversations.route.ts` (the two endpoints), `conversations.controller.ts` (`createConversation` freezes scope; `runConversationTurn` reads it back and hands the turn to the sandbox) |
+| `src/features/conversations/` | `conversations.route.ts` (the two endpoints), `conversations.controller.ts` (`createConversation` freezes scope; `queueConversationTurn` creates queued runs) |
 | `src/features/conversation-store/` | Durable conversation registry (frozen scope), Drizzle-backed over `mymemo_agent`; `createConversationStore` factory |
 | `src/features/exposure-gate/` | `ExposureGate` seam (`exposure-gate.ts`): `StatsigExposureGate` (fail-closed, Statsig-backed) + `BreakGlassExposureGate` (always-allow); `createExposureGate(config)` picks one. Gates new-work routes |
-| `src/features/streaming/` | SSE / run-event plumbing reused by the conversation routes (`sse-sender.ts`, `events.ts`, `logger.ts` → `RequestLogger`, `run-event-sink.ts`, `run-events-to-sse.ts`) |
-| `src/db/` | Drizzle schema (`schema.ts`: `conversations`, `sandbox_leases`), client (`client.ts`), and migration runner (`migrate.ts`) for the writable DB; migrations in `drizzle/` |
-| `src/features/sandbox-orchestration/` | `runSandboxChat`, sandbox manager, daemon proxy; mints the per-turn LLM token |
-| `src/features/sandbox-agent/` | Sandbox-side agent system prompt builder |
+| `src/features/run-store/` | Durable run queue/event-log store over `runs` and `run_events`; queues `user.message` turns and replays run events |
+| `src/features/run-events/` | Durable run-event projection and wake-up plumbing (`project-run.ts`, `project-run-event.ts`, `run-event-reader.ts`, `run-notifier.ts`) |
+| `src/features/streaming/` | SSE sender/types reused by the conversation routes (`sse-sender.ts`, `events.ts`) |
+| `src/db/` | Drizzle schema (`schema.ts`: `conversations`, `runs`, `run_events`, `sandbox_leases`), client (`client.ts`), and migration runner (`migrate.ts`) for the writable DB; migrations in `drizzle/` |
 | `src/config/env.ts` | Environment validation |
 | `apps/gateway/src/server.ts` | `createGateway(config, db)` — the merged control plane: registers health, then the document routes, then the catch-all LLM proxy (order is correctness-critical). Pure: config in, app out |
 | `apps/gateway/src/auth/` | `bearer.ts` (the one shared `bearerClaims` token-verify seam + 401/403 helpers) and `claims.ts` (`requireDocumentClaims` scope guard) |
@@ -173,20 +172,13 @@ Resolved once at `POST /v1/conversations` and **frozen** onto the conversation r
 ### chat-api
 
 Required:
-- `E2B_API_KEY` — required only when `SANDBOX_PROVIDER=e2b` (the default); not needed for the local provider
-- `LLM_TOKEN_SECRET` — HMAC secret for minting per-turn tokens (shared with the gateway)
-- `GATEWAY_PUBLIC_URL` — base URL of the merged gateway; the sandbox agent points BOTH the Claude binary (→ `/v1/messages`) and the `mymemo-docs` CLI (→ `/v1/documents/*`) at it. **Must be reachable from inside the E2B sandbox**
-- `AGENT_DATABASE_URL` — connection to chat-api's **own writable** Postgres (`mymemo_agent`), which backs the conversation registry (frozen scope) and the sandbox-lease registry. A **separate database and credential** from the gateway's read-only KB (`mymemo_kb`), even when co-located — chat-api never touches KB tables. Named `AGENT_DATABASE_URL` (not the generic `DATABASE_URL`, which names the read-only KB credential elsewhere) so the two trust domains never collide. **Required**: the conversation endpoints are the primary surface and cannot work without it, so it is validated at config load. The `conversations`/`sandbox_leases` tables are owned by Drizzle migrations (`src/db/schema.ts` → `drizzle/`); run `bun run db:migrate` (the compose `migrate` one-shot does this locally)
+- `AGENT_DATABASE_URL` — connection to chat-api's **own writable** Postgres (`mymemo_agent`), which backs the conversation registry (frozen scope), run queue, and run event log. A **separate database and credential** from the gateway's read-only KB (`mymemo_kb`), even when co-located — chat-api never touches KB tables. Named `AGENT_DATABASE_URL` (not the generic `DATABASE_URL`, which names the read-only KB credential elsewhere) so the two trust domains never collide. **Required**: the conversation endpoints are the primary surface and cannot work without it, so it is validated at config load. The `conversations`/`runs`/`run_events` tables are owned by Drizzle migrations (`src/db/schema.ts` → `drizzle/`); run `bun run db:migrate` (the compose `migrate` one-shot does this locally)
 - `STATSIG_SERVER_SECRET` — backs the production agent exposure gate (`mymemo_agent_split_runtime_enabled`). **Required unless `AGENT_EXPOSURE_BREAK_GLASS=true`** (the gate then opens without Statsig). Never sent to the sandbox or logged
 
 Optional:
 - `LOG_LEVEL` (default: `info`)
 - `PORT` (default: 3000)
 - `AGENT_EXPOSURE_BREAK_GLASS` (default: off) — operator break-glass for the agent exposure gate. When `true`, new agent work is allowed without Statsig (local dev, or an incident where Statsig is unavailable) and `STATSIG_SERVER_SECRET` is not required. When off (production default), the gate fails closed
-- `SANDBOX_PROVIDER` (default: `e2b`) — `e2b` leases sandboxes from E2B; `local` targets a long-lived daemon container for the docker-compose E2E harness (`compose.yaml`). Selected in `sandbox-orchestration/singleton.ts`
-- `LOCAL_SANDBOX_DAEMON_URL` (default: `http://sandbox:8080`) — base URL of the local daemon container (`SANDBOX_PROVIDER=local` only)
-- `E2B_TEMPLATE` (default: `sandbox-template-dev`)
-- `WORKSPACE_STORE_ROOT` — root dir of the durable workspace store (local filesystem `WorkspaceStore` adapter). Holds per-user/per-conversation work, output, and the docs manifest, plus per-run event logs, following the path model `users/{userId}/conversations/{conversationId}/…` and `users/{userId}/runs/{runId}/events.jsonl`. Defaults to `.workspace-store` under the process cwd (writable in the container). **For durability across container recycles, point this at a mounted persistent volume in production**
 - `DB_PASSWORD` — spliced into `AGENT_DATABASE_URL` when it is passwordless (the form the platform injects)
 - `DB_SSL` (default: on; set `disable` for a local non-TLS Postgres)
 
@@ -214,7 +206,7 @@ Optional:
 Required:
 - `ANTHROPIC_API_KEY` — the real Anthropic provider key; lives **only** in this service. **Required only when `LLM_PROVIDER=anthropic`** (the default); an OpenRouter-only deployment does not need it
 - `DATABASE_URL` — read-only connection to the MyMemo KB Postgres; this **read-only KB credential** lives **only** in this service (chat-api has its own, separate `DATABASE_URL` for its writable `mymemo_agent` DB — it is never the KB credential)
-- `LLM_TOKEN_SECRET` — must match chat-api's
+- `LLM_TOKEN_SECRET` — shared signing secret for accepted `@mymemo/llm-token` bearer tokens
 
 Optional:
 - `UPSTREAM_BASE_URL` (default: `https://api.anthropic.com`) — Anthropic upstream base (`LLM_PROVIDER=anthropic` only)
