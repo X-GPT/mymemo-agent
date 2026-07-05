@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { loadWorkerConfigFromEnv } from "./config/env";
+import { buildModelClientConfig } from "./model-client";
 import { buildSandboxEnv } from "./sandbox-env";
 
 const binding = {
@@ -48,5 +49,21 @@ describe("buildSandboxEnv — credential boundary", () => {
 		]) {
 			expect(env as Record<string, unknown>).not.toHaveProperty(forbidden);
 		}
+	});
+
+	it("is disjoint from the model client env built for the same run", () => {
+		// Task 7.1: model headers are injected only in the trusted worker. The
+		// two env builders for one run must share no keys and no secret values,
+		// so an E2B tool call can never see the provider credential.
+		const modelClient = buildModelClientConfig({
+			apiKey: "sk-or-secret",
+			baseUrl: "https://openrouter.ai/api",
+			defaultModel: "anthropic/claude-sonnet-4",
+		});
+		const sandboxEnv = buildSandboxEnv(binding);
+		for (const key of Object.keys(modelClient.env)) {
+			expect(sandboxEnv).not.toHaveProperty(key);
+		}
+		expect(JSON.stringify(sandboxEnv)).not.toContain("sk-or-secret");
 	});
 });
