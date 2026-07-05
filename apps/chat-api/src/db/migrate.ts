@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { drizzle } from "drizzle-orm/bun-sql";
-import { migrate } from "drizzle-orm/bun-sql/migrator";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { resolveDatabaseUrl } from "@/config/env";
 
 /**

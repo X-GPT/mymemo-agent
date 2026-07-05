@@ -9,8 +9,8 @@ import * as schema from "./schema";
  * Test-only. Spins up an in-process Postgres (pglite) with every `drizzle/`
  * migration applied, wrapped in a Drizzle client, so the Postgres-backed stores
  * run their real SQL — composite PK, ON CONFLICT, defaults — without an external
- * database. Cast to {@link Database} because pglite and the bun-sql production
- * driver share the same query builder but differ in static type.
+ * database. Cast to {@link Database} because pglite and the node-postgres
+ * production driver share the same query builder but differ in static type.
  *
  * Always `close()` the returned handle (e.g. in `afterEach`): an unclosed pglite
  * instance leaks resources and makes `bun test` exit non-zero even when every
