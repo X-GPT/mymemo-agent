@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createTestDatabase, type TestDb } from "@/db/testing";
-import { runEvents, runs } from "./schema";
+import { documentAccessEvents, runEvents, runs } from "./schema";
 
 async function expectDbWriteToFail(write: () => PromiseLike<unknown>) {
 	let failed = false;
@@ -24,7 +24,7 @@ describe("run queue schema", () => {
 		await tdb.close();
 	});
 
-	it("creates runs with milestone-1 queue defaults", async () => {
+	it("creates runs with queue defaults", async () => {
 		const [run] = await tdb.db
 			.insert(runs)
 			.values({
@@ -44,12 +44,21 @@ describe("run queue schema", () => {
 			lockedUntil: null,
 			heartbeatAt: null,
 			cancelRequestedAt: null,
-			fencingToken: 0,
 			nextEventSeq: 1,
 			terminalAt: null,
 		});
 		expect(run?.createdAt).toBeInstanceOf(Date);
 		expect(run?.updatedAt).toBeInstanceOf(Date);
+	});
+
+	it("carries no fencing_token or visibility columns (rebaselined)", async () => {
+		const { rows } = await tdb.db.execute(sql`
+			select table_name, column_name
+			from information_schema.columns
+			where table_name in ('runs', 'run_events')
+				and column_name in ('fencing_token', 'visibility')
+		`);
+		expect(rows).toEqual([]);
 	});
 
 	it("rejects invalid run statuses", async () => {
@@ -79,12 +88,25 @@ describe("run queue schema", () => {
 				status: "running",
 			}),
 		);
+	});
 
+	it("terminal runs do not block a later run for the same conversation", async () => {
 		await tdb.db.insert(runs).values({
-			runId: "run-terminal",
+			runId: "run-finished",
 			userId: "user-1",
 			conversationId: "conv-1",
-			status: "done",
+			status: "queued",
+		});
+		await tdb.db
+			.update(runs)
+			.set({ status: "done" })
+			.where(eq(runs.runId, "run-finished"));
+
+		await tdb.db.insert(runs).values({
+			runId: "run-next",
+			userId: "user-1",
+			conversationId: "conv-1",
+			status: "queued",
 		});
 	});
 
@@ -105,7 +127,18 @@ describe("run queue schema", () => {
 		]);
 	});
 
-	it("records ordered run events with visibility hints", async () => {
+	it("has the queue-claim, stale-recovery, and cleanup indexes", async () => {
+		const { rows } = await tdb.db.execute(sql`
+			select indexname from pg_indexes where tablename = 'runs'
+		`);
+		const names = rows.map((row) => row.indexname);
+		expect(names).toContain("runs_queue_claim_idx");
+		expect(names).toContain("runs_stale_recovery_idx");
+		expect(names).toContain("runs_cleanup_idx");
+		expect(names).toContain("runs_one_active_per_conversation");
+	});
+
+	it("records ordered run events", async () => {
 		await tdb.db.insert(runs).values({
 			runId: "run-1",
 			userId: "user-1",
@@ -118,14 +151,12 @@ describe("run queue schema", () => {
 				runId: "run-1",
 				seq: 1,
 				type: "run_started",
-				visibility: "internal",
 				payload: { workerId: "worker-1" },
 			},
 			{
 				runId: "run-1",
 				seq: 2,
 				type: "text_delta",
-				visibility: "client",
 				payload: { text: "hello" },
 			},
 		]);
@@ -137,13 +168,13 @@ describe("run queue schema", () => {
 			.orderBy(runEvents.seq);
 
 		expect(events.map((event) => event.seq)).toEqual([1, 2]);
-		expect(events.map((event) => event.visibility)).toEqual([
-			"internal",
-			"client",
+		expect(events.map((event) => event.type)).toEqual([
+			"run_started",
+			"text_delta",
 		]);
 	});
 
-	it("rejects duplicate event sequence numbers and invalid visibility", async () => {
+	it("rejects duplicate event sequence numbers", async () => {
 		await tdb.db.insert(runs).values({
 			runId: "run-1",
 			userId: "user-1",
@@ -154,7 +185,6 @@ describe("run queue schema", () => {
 			runId: "run-1",
 			seq: 1,
 			type: "run_started",
-			visibility: "internal",
 			payload: {},
 		});
 
@@ -163,17 +193,78 @@ describe("run queue schema", () => {
 				runId: "run-1",
 				seq: 1,
 				type: "run_started_again",
-				visibility: "internal",
 				payload: {},
 			}),
 		);
-		await expectDbWriteToFail(() =>
-			tdb.db.insert(runEvents).values({
+	});
+});
+
+describe("document access audit schema", () => {
+	let tdb: TestDb;
+
+	beforeEach(async () => {
+		tdb = await createTestDatabase();
+	});
+
+	afterEach(async () => {
+		await tdb.close();
+	});
+
+	it("records document access rows with defaults", async () => {
+		const [event] = await tdb.db
+			.insert(documentAccessEvents)
+			.values({
 				runId: "run-1",
-				seq: 2,
-				type: "bad_visibility",
-				visibility: "debug",
-				payload: {},
+				conversationId: "conv-1",
+				userId: "user-1",
+				scopeType: "collection",
+				scopeId: "coll-1",
+				query: "quarterly report",
+				documentIds: ["doc-1", "doc-2"],
+			})
+			.returning();
+
+		expect(event).toMatchObject({
+			runId: "run-1",
+			conversationId: "conv-1",
+			userId: "user-1",
+			scopeType: "collection",
+			scopeId: "coll-1",
+			query: "quarterly report",
+			documentIds: ["doc-1", "doc-2"],
+		});
+		expect(event?.id).toBeGreaterThan(0);
+		expect(event?.createdAt).toBeInstanceOf(Date);
+	});
+
+	it("allows general scope without scope id or query", async () => {
+		const [event] = await tdb.db
+			.insert(documentAccessEvents)
+			.values({
+				runId: "run-1",
+				conversationId: "conv-1",
+				userId: "user-1",
+				scopeType: "general",
+				documentIds: [],
+			})
+			.returning();
+
+		expect(event).toMatchObject({
+			scopeType: "general",
+			scopeId: null,
+			query: null,
+			documentIds: [],
+		});
+	});
+
+	it("rejects invalid scope types", async () => {
+		await expectDbWriteToFail(() =>
+			tdb.db.insert(documentAccessEvents).values({
+				runId: "run-1",
+				conversationId: "conv-1",
+				userId: "user-1",
+				scopeType: "everything",
+				documentIds: [],
 			}),
 		);
 	});

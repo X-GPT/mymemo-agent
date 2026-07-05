@@ -1,7 +1,9 @@
 import { sql } from "drizzle-orm";
 import {
 	bigint,
+	bigserial,
 	check,
+	index,
 	jsonb,
 	pgTable,
 	primaryKey,
@@ -101,11 +103,15 @@ export const conversations = pgTable(
 );
 
 /**
- * Minimal durable run queue for the split-runtime worker (MYM-49 milestone 1).
- * A run is one backend execution attempt for a conversation. Execution
- * ownership lives here, not in sandbox/runtime metadata: only the worker named
- * by `locked_by` while `locked_until` is live may append owned run events in
- * later transaction helpers.
+ * Durable run queue for the split-runtime worker (milestone 1). A run is one
+ * backend execution attempt for a conversation. Execution ownership lives
+ * here, not in sandbox/runtime metadata: only the worker named by `locked_by`
+ * while `locked_until` is live may append owned run events in later
+ * transaction helpers. There is deliberately no fencing token: a v1 run is
+ * claimed exactly once (failed runs never requeue; stale runs are
+ * terminalized, never reclaimed), so `locked_by` + `locked_until` is the
+ * complete ownership fence — a token returns only with a future requeue
+ * feature, in the same PR as that feature.
  */
 export const runs = pgTable(
 	"runs",
@@ -119,9 +125,6 @@ export const runs = pgTable(
 		lockedUntil: timestamp("locked_until", { withTimezone: true }),
 		heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
 		cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
-		fencingToken: bigint("fencing_token", { mode: "number" })
-			.notNull()
-			.default(0),
 		nextEventSeq: bigint("next_event_seq", { mode: "number" })
 			.notNull()
 			.default(1),
@@ -141,14 +144,29 @@ export const runs = pgTable(
 		uniqueIndex("runs_one_active_per_conversation")
 			.on(t.userId, t.conversationId)
 			.where(sql`${t.status} in ('queued', 'running', 'cancel_requested')`),
+		// Queue claim: oldest queued run first (`FOR UPDATE SKIP LOCKED` scan).
+		index("runs_queue_claim_idx")
+			.on(t.createdAt)
+			.where(sql`${t.status} = 'queued'`),
+		// Stale-run recovery: active runs whose lock deadline has passed.
+		index("runs_stale_recovery_idx")
+			.on(t.lockedUntil)
+			.where(sql`${t.status} in ('running', 'cancel_requested')`),
+		// Cleanup/retention: terminal runs by when they finished.
+		index("runs_cleanup_idx")
+			.on(t.terminalAt)
+			.where(sql`${t.status} in ('done', 'error', 'canceled')`),
 	],
 );
 
 /**
  * Durable, ordered run event log. Milestone 1 records events only; it does not
- * define SSE frame names, payload shapes, or projection rules. `visibility` is a
- * hint for a future projector: `internal` events are audit/control-only, while
- * `client` events may be exposed by a later stream projection.
+ * define SSE frame names, payload shapes, or projection rules. There is no
+ * `visibility` column: the projector's event-type→frame mapping is the single
+ * authority for client exposure, and unmapped types are skipped (fail-closed —
+ * a new internal event type cannot leak to clients without an explicit frame
+ * mapping). The composite primary key doubles as the SSE replay index
+ * (`WHERE run_id = ? AND seq > ?` ordered by seq).
  */
 export const runEvents = pgTable(
 	"run_events",
@@ -158,17 +176,50 @@ export const runEvents = pgTable(
 			.references(() => runs.runId, { onDelete: "cascade" }),
 		seq: bigint("seq", { mode: "number" }).notNull(),
 		type: text("type").notNull(),
-		visibility: text("visibility").notNull(),
 		payload: jsonb("payload").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
 	},
+	(t) => [primaryKey({ columns: [t.runId, t.seq] })],
+);
+
+/**
+ * Audit ledger for trusted document access performed by agent-worker: which
+ * scoped documents a run searched or fetched, under which scope filter. Kept
+ * separate from `run_events` because its job differs — security/compliance
+ * queries, and retention/access controls that can diverge from chat-visible
+ * run events. For that same reason there is deliberately no FK to `runs`:
+ * audit rows must survive run cleanup, so cascade would erase the ledger and
+ * restrict would block retention. Full document content is never stored here.
+ */
+export const documentAccessEvents = pgTable(
+	"document_access_events",
+	{
+		id: bigserial("id", { mode: "number" }).primaryKey(),
+		runId: text("run_id").notNull(),
+		conversationId: text("conversation_id").notNull(),
+		userId: text("user_id").notNull(),
+		/** The scope filter the access was policy-checked against. */
+		scopeType: text("scope_type").notNull(),
+		/** Collection/summary id for scoped access; NULL for general scope. */
+		scopeId: text("scope_id"),
+		/** Search query text; NULL for direct fetch/load access. */
+		query: text("query"),
+		/** Document ids returned/fetched; empty array for a no-hit search. */
+		documentIds: text("document_ids").array().notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
 	(t) => [
-		primaryKey({ columns: [t.runId, t.seq] }),
 		check(
-			"run_events_visibility_check",
-			sql`${t.visibility} in ('internal', 'client')`,
+			"document_access_events_scope_type_check",
+			sql`${t.scopeType} in ('general', 'collection', 'document')`,
 		),
+		// Audit query path: "which documents did this run search or fetch?"
+		index("document_access_events_run_id_idx").on(t.runId),
+		// Retention sweeps age the ledger out by time, independent of runs.
+		index("document_access_events_created_at_idx").on(t.createdAt),
 	],
 );
