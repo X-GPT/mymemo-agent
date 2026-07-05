@@ -1,0 +1,72 @@
+import { describe, expect, it } from "bun:test";
+import { projectRunEvent } from "./project-run-event";
+import { RunEventType } from "./run-event-types";
+
+describe("projectRunEvent", () => {
+	it("fans run_started out to conversation_id then run_id, in that order", () => {
+		expect(
+			projectRunEvent(RunEventType.Started, {
+				conversationId: "conv-1",
+				runId: "run-1",
+			}),
+		).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+		]);
+	});
+
+	it("maps assistant_text to a text_delta frame", () => {
+		expect(projectRunEvent(RunEventType.AssistantText, { text: "hi" })).toEqual(
+			[{ type: "text_delta", text: "hi" }],
+		);
+	});
+
+	it("maps run_done to done", () => {
+		expect(projectRunEvent(RunEventType.Done, {})).toEqual([{ type: "done" }]);
+	});
+
+	it("maps run_canceled to canceled, never error", () => {
+		expect(projectRunEvent(RunEventType.Canceled, {})).toEqual([
+			{ type: "canceled" },
+		]);
+	});
+
+	it("maps run_error to an error frame carrying the message", () => {
+		expect(projectRunEvent(RunEventType.Error, { message: "boom" })).toEqual([
+			{ type: "error", message: "boom" },
+		]);
+	});
+
+	it("still emits a terminal error frame when the payload has no message", () => {
+		expect(projectRunEvent(RunEventType.Error, {})).toEqual([
+			{ type: "error", message: "Run failed" },
+		]);
+	});
+
+	it("skips unmapped internal event types (fail-closed)", () => {
+		expect(projectRunEvent("document_search", { query: "x" })).toEqual([]);
+		expect(projectRunEvent("daemon_started", {})).toEqual([]);
+		expect(projectRunEvent("some_future_event", { secret: "leak" })).toEqual(
+			[],
+		);
+	});
+
+	it("drops frames whose payload fields are the wrong shape", () => {
+		// run_started with a non-string conversationId keeps only the valid field.
+		expect(
+			projectRunEvent(RunEventType.Started, { conversationId: 42, runId: "r" }),
+		).toEqual([{ type: "run_id", runId: "r" }]);
+		// assistant_text without a string text produces nothing.
+		expect(projectRunEvent(RunEventType.AssistantText, { text: 7 })).toEqual(
+			[],
+		);
+	});
+
+	it("tolerates a null or non-object payload without throwing", () => {
+		expect(projectRunEvent(RunEventType.AssistantText, null)).toEqual([]);
+		expect(projectRunEvent(RunEventType.Started, "nope")).toEqual([]);
+		expect(projectRunEvent(RunEventType.Done, undefined)).toEqual([
+			{ type: "done" },
+		]);
+	});
+});
