@@ -95,3 +95,33 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 		);
 	});
 });
+
+describe("loadWorkerConfigFromEnv — LoadDocuments caps", () => {
+	it("defaults the document-load caps", () => {
+		const config = loadWorkerConfigFromEnv(baseEnv());
+		expect(config.documentLoad.maxDocuments).toBe(10);
+		expect(config.documentLoad.perDocumentMaxBytes).toBeGreaterThan(0);
+		expect(config.documentLoad.perCallMaxBytes).toBeGreaterThanOrEqual(
+			config.documentLoad.perDocumentMaxBytes,
+		);
+	});
+
+	it("honors document-load cap overrides", () => {
+		const env = baseEnv();
+		env.WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS = "3";
+		env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = "1000";
+		env.WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES = "4000";
+		const config = loadWorkerConfigFromEnv(env);
+		expect(config.documentLoad.maxDocuments).toBe(3);
+		expect(config.documentLoad.perDocumentMaxBytes).toBe(1_000);
+		expect(config.documentLoad.perCallMaxBytes).toBe(4_000);
+	});
+
+	it("rejects a non-positive document-load byte cap override", () => {
+		const env = baseEnv();
+		env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = "0";
+		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
+			/WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES/,
+		);
+	});
+});

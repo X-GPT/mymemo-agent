@@ -37,6 +37,15 @@ export interface WorkerConfig {
 	maxConcurrentRuns: number;
 	/** Per-call cap for model-facing document search results. */
 	maxDocumentSearchResults: number;
+	/** Caps for the model-facing LoadDocuments tool (documents-as-files). */
+	documentLoad: {
+		/** Most document ids one LoadDocuments call may materialize. */
+		maxDocuments: number;
+		/** Byte cap on a single cached document's content. */
+		perDocumentMaxBytes: number;
+		/** Byte cap on the summed content written by one LoadDocuments call. */
+		perCallMaxBytes: number;
+	};
 	/** How often an active run heartbeats its lease (ms). */
 	heartbeatIntervalMs: number;
 	/** Grace period to drain active runs on shutdown before forcing exit (ms). */
@@ -49,6 +58,11 @@ export interface WorkerConfig {
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 2;
 const DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS = 8;
+const DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS = 10;
+// The KB fetch already clips content at 50k chars; these byte caps are the
+// tool-side backstop so a heavy multibyte document cannot balloon on disk.
+const DEFAULT_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = 262_144;
+const DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES = 1_048_576;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const DEFAULT_PORT = 8080;
@@ -125,6 +139,23 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS,
 			"WORKER_DOCUMENT_SEARCH_MAX_RESULTS",
 		),
+		documentLoad: {
+			maxDocuments: positiveIntOr(
+				env.WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS,
+				DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS,
+				"WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS",
+			),
+			perDocumentMaxBytes: positiveIntOr(
+				env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES,
+				DEFAULT_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES,
+				"WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES",
+			),
+			perCallMaxBytes: positiveIntOr(
+				env.WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES,
+				DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES,
+				"WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES",
+			),
+		},
 		heartbeatIntervalMs: positiveIntOr(
 			env.WORKER_HEARTBEAT_INTERVAL_MS,
 			DEFAULT_HEARTBEAT_INTERVAL_MS,
