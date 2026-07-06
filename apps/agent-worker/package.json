@@ -10,10 +10,12 @@
 		"check": "biome check --write"
 	},
 	"dependencies": {
+		"@anthropic-ai/claude-agent-sdk": "0.2.117",
 		"@mymemo/agent-db": "workspace:*",
 		"drizzle-orm": "^0.45.2",
 		"pg": "^8.22.0",
-		"pino": "^9.14.0"
+		"pino": "^9.14.0",
+		"zod": "^4.1.12"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.11",

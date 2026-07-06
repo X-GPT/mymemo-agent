@@ -431,6 +431,32 @@ describe("RunLoop — snapshot barrier", () => {
 	});
 });
 
+describe("RunLoop — shutdown", () => {
+	it("interrupts in-flight runs on stop and terminalizes them as error", async () => {
+		const worker = buildWorker(1);
+		let sawAbort = false;
+		// A processor that mirrors the SDK consumer: it runs until the run is
+		// aborted, then throws — so shutdown never records a clean `done`.
+		const loop = buildLoop(worker, async (ctx) => {
+			await new Promise<void>((resolve) => {
+				if (ctx.signal.aborted) return resolve();
+				ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			sawAbort = ctx.signal.aborted;
+			throw new Error("interrupted by shutdown");
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick(); // claim + dispatch; processor blocks awaiting abort
+
+		await loop.stop(); // aborts the active run, then drains
+
+		expect(sawAbort).toBe(true);
+		const row = await readRun("run-1");
+		expect(row?.status).toBe("error");
+		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
+	});
+});
+
 describe("RunLoop — stale-run recovery", () => {
 	it("terminalizes stale running runs as error during a tick", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");

@@ -1,0 +1,113 @@
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+
+/**
+ * The subset of the Claude Agent SDK's `Query` handle the run supervisor
+ * consumes: an async stream of SDK messages plus `interrupt()`. The real
+ * `query()` result satisfies this structurally, and tests substitute a fake
+ * stream — so the supervision logic is verified without a live model (plan
+ * Task 7.2: "use a fake SDK stream for deterministic unit tests").
+ */
+export type SupervisedQuery = AsyncIterable<SDKMessage> & {
+	interrupt(): Promise<void>;
+};
+
+/**
+ * The run was interrupted (user cancel, ownership loss, or worker shutdown) and
+ * the SDK stream ended without raising. Thrown so the supervisor never records a
+ * clean `done` for work that did not complete on its own; the terminal
+ * transition remaps a user cancel to `canceled` and leaves the rest as `error`.
+ */
+export class QueryInterruptedError extends Error {
+	override name = "QueryInterruptedError" as const;
+	constructor() {
+		super("agent query interrupted");
+	}
+}
+
+/**
+ * The appendable assistant text of one SDK message, or `null` when the message
+ * carries none (tool calls, result/system messages, an empty assistant turn).
+ * Text blocks are concatenated so one assistant message maps to one content
+ * append.
+ */
+export function assistantTextFromMessage(message: SDKMessage): string | null {
+	if (message.type !== "assistant") return null;
+	const blocks = message.message.content;
+	if (!Array.isArray(blocks)) return null;
+	let text = "";
+	for (const block of blocks) {
+		if (block.type === "text" && typeof block.text === "string") {
+			text += block.text;
+		}
+	}
+	return text.length > 0 ? text : null;
+}
+
+/** The SDK reports a run failure either by throwing or — on a clean process
+ * exit — by emitting a terminal `result` message with `is_error: true`. This
+ * extracts the failure text from the latter so it is not mistaken for success;
+ * a normal successful result returns `null`. */
+export function resultErrorText(message: SDKMessage): string | null {
+	if (message.type !== "result" || !message.is_error) return null;
+	const text =
+		message.subtype === "success" ? message.result : message.errors.join("; ");
+	return text || "agent run failed";
+}
+
+/** An SDK run failure surfaced as a terminal error `result` (not a thrown
+ * stream error). Carries the SDK's failure text as the run's error message. */
+export class AgentResultError extends Error {
+	override name = "AgentResultError" as const;
+}
+
+export interface ConsumeAgentStreamParams {
+	query: SupervisedQuery;
+	/** Fires on cancel, ownership loss, or shutdown; interrupts the query. */
+	signal: AbortSignal;
+	/** Persists one assistant-text content event (fenced to `running` upstream). */
+	appendAssistantText: (text: string) => Promise<void>;
+}
+
+/**
+ * Consume a supervised SDK query, persisting assistant text as run content
+ * events, under the run's abort signal (plan Task 7.2).
+ *
+ * The moment the run is aborted it is no longer `running`, so:
+ *  - the query is interrupted (once), and
+ *  - any further content is ignored — never appended.
+ *
+ * The function resolves only when the stream completes on its own; it throws on
+ * an SDK error (so the supervisor terminalizes `error`) and on an
+ * interrupted-then-quietly-ended stream ({@link QueryInterruptedError}) so an
+ * interrupted turn is never mistaken for a clean success. Deciding the terminal
+ * status — `canceled` vs `error` — belongs to the supervisor, which knows
+ * whether the abort was a user cancel.
+ */
+export async function consumeAgentStream(
+	params: ConsumeAgentStreamParams,
+): Promise<void> {
+	const { query, signal, appendAssistantText } = params;
+
+	// Best-effort: interrupt only needs to reach the SDK. Swallow its rejection so
+	// a failed interrupt cannot become an unhandled rejection — the loop stops
+	// appending on the same signal regardless.
+	const interrupt = (): void => {
+		void query.interrupt().catch(() => {});
+	};
+	if (signal.aborted) interrupt();
+	else signal.addEventListener("abort", interrupt, { once: true });
+
+	try {
+		for await (const message of query) {
+			if (signal.aborted) continue;
+			const errorText = resultErrorText(message);
+			if (errorText !== null) throw new AgentResultError(errorText);
+			const text = assistantTextFromMessage(message);
+			if (text !== null) await appendAssistantText(text);
+		}
+	} finally {
+		signal.removeEventListener("abort", interrupt);
+	}
+
+	if (signal.aborted) throw new QueryInterruptedError();
+}
