@@ -14,6 +14,12 @@ data "aws_vpc" "shared" {
   id = local.shared_vpc_id
 }
 
+data "aws_subnet" "shared_ecs_first" {
+  count = local.shared_vpc_id_output == null ? 1 : 0
+
+  id = local.shared_ecs_subnet_ids[0]
+}
+
 data "aws_ecs_cluster" "shared" {
   count = local.shared_ecs_cluster_arn_output == null && local.shared_ecs_cluster_name_output != null ? 1 : 0
 
