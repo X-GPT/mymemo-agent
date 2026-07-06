@@ -83,12 +83,12 @@ export interface FileToolResult {
 	isError?: true;
 }
 
-interface WorkspacePath {
+export interface WorkspacePath {
 	absolutePath: string;
 	relativePath: string;
 }
 
-type WorkspacePathResult =
+export type WorkspacePathResult =
 	| { ok: true; path: WorkspacePath }
 	| { ok: false; error: string };
 
@@ -294,7 +294,7 @@ export async function runGlobFileTool(
 	}
 }
 
-function resolveWorkspacePath(
+export function resolveWorkspacePath(
 	inputPath: string | undefined,
 	workspaceRoot: string,
 ): WorkspacePathResult {
