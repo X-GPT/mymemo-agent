@@ -7,8 +7,6 @@ import {
 	it,
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
-import { runEvents, runs } from "@/db/schema";
-import { createTestDatabase, type TestDb } from "@/db/testing";
 import {
 	ActiveRunConflictError,
 	appendRunEventTx,
@@ -20,6 +18,8 @@ import {
 	requestRunCancellationTx,
 	transitionRunTerminalTx,
 } from "./run-store";
+import { runEvents, runs } from "./schema";
+import { createTestDatabase, type TestDb } from "./testing";
 
 let tdb: TestDb;
 

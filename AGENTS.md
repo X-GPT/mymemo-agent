@@ -72,10 +72,11 @@ Source: [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/an
 
 MyMemo Monorepo (Bun workspaces) containing:
 - **chat-api** (`apps/chat-api/`) - AI chat service; owns conversation creation, queued run insertion, and durable SSE projection over Postgres `run_events`
-- **agent-worker** (`apps/agent-worker/`) - split-runtime Fargate worker (deployable skeleton; MYM-47). Owns the worker-only credentials chat-api must not hold (read-only KB, OpenRouter, E2B) and will run the Postgres-backed run queue loop + Claude Agent SDK in trusted Fargate. Today: validated config, structured logger, worker id, bounded-concurrency supervisor, graceful drain, `/health`, the trusted-worker model client config (`src/model-client.ts`: OpenRouter env + default model for the Claude Agent SDK, per ADR-0003), and the scoped document query client (`src/documents/` — frozen-scope-guarded KB search/fetch over `KB_DATABASE_URL`, audited to `document_access_events`, bounded model-safe errors). The queue/claim loop arrives in a later milestone
+- **agent-worker** (`apps/agent-worker/`) - split-runtime Fargate worker (MYM-47). Owns the worker-only credentials chat-api must not hold (read-only KB, OpenRouter, E2B) and runs the Postgres-backed run queue loop + (later) Claude Agent SDK in trusted Fargate. Today: validated config, structured logger, worker id, bounded-concurrency supervisor, graceful drain, `/health`, the trusted-worker model client config (`src/model-client.ts`: OpenRouter env + default model for the Claude Agent SDK, per ADR-0003), the scoped document query client (`src/documents/` — frozen-scope-guarded KB search/fetch over `KB_DATABASE_URL`, audited to `document_access_events`, bounded model-safe errors), and the claim/heartbeat/terminalize control loop (`src/run-loop.ts`, Milestone 3): each tick heartbeats owned runs (renew `locked_until`, observe `cancel_requested`/ownership loss) and claims queued runs up to the supervisor's capacity, then processes them (Milestone 3 uses a synthetic one-text-event processor, `src/synthetic-processor.ts`). Real model execution + E2B arrive in later milestones
 - **sandbox-daemon** (`apps/sandbox-daemon/`) - in-sandbox HTTP daemon; bundled and shipped into E2B (prototype path)
 - **gateway** (`apps/gateway/`) - control plane; the only service holding BOTH the real `ANTHROPIC_API_KEY` and the read-only KB `DATABASE_URL`. Verifies the per-turn bearer token on every route, proxies the Anthropic Messages endpoints, and serves scope-enforced document search/fetch against the MyMemo KB Postgres
 - **mymemo-docs** (`apps/mymemo-docs/`) - CLI on the sandbox PATH that the agent uses to reach the gateway's document endpoints
+- **@mymemo/agent-db** (`packages/agent-db/`) - shared writable-DB data layer (`mymemo_agent`): the Drizzle schema, the `Database` client, the concurrency-critical run-store transaction helpers (`claimNextRunTx`/`appendRunEventTx`/`transitionRunTerminalTx`/`heartbeatRunTx`/`requestRunCancellationTx`/`markStaleRunsTx`/`createQueuedRunTx`), the `run_events.type` write-side vocabulary (`RunEventType`), the PGlite test harness, and the migrations. Imported by BOTH `chat-api` and `agent-worker` so the queue protocol AND the event vocabulary have one definition over one `pg` driver (design "Library Choices") — the worker writes `RunEventType.AssistantText`, chat-api's projector maps it to the `text_delta` frame. chat-api's `@/db/*` modules, `run-store.ts`, and `run-event-types.ts` re-export from it; run *admission* (`createQueuedRunStartedTx`, `PostgresRunStore`) and the client-frame projector stay in chat-api
 - **@mymemo/llm-token** (`packages/llm-token/`) - shared package
 
 ## Commands
@@ -140,10 +141,10 @@ The former chat-api → sandbox-daemon `/turn` edge is removed from chat-api's l
 | `src/features/conversations/` | `conversations.route.ts` (the two endpoints), `conversations.controller.ts` (`createConversation` freezes scope; `queueConversationTurn` creates queued runs) |
 | `src/features/conversation-store/` | Durable conversation registry (frozen scope), Drizzle-backed over `mymemo_agent`; `createConversationStore` factory |
 | `src/features/exposure-gate/` | `ExposureGate` seam (`exposure-gate.ts`): `StatsigExposureGate` (fail-closed, Statsig-backed) + `BreakGlassExposureGate` (always-allow); `createExposureGate(config)` picks one. Gates new-work routes |
-| `src/features/run-store/` | Durable run queue/event-log store over `runs` and `run_events`; queues `user.message` turns and replays run events |
+| `src/features/run-store/` | Run *admission* + read surface: `createQueuedRunStartedTx`, `PostgresRunStore`, `ActiveRunExistsError`. Re-exports the shared queue helpers from `@mymemo/agent-db/run-store` so the `@/features/run-store` surface is unchanged |
 | `src/features/run-events/` | Durable run-event projection and wake-up plumbing (`project-run.ts`, `project-run-event.ts`, `run-event-reader.ts`, `run-notifier.ts`) |
 | `src/features/streaming/` | SSE sender/types reused by the conversation routes (`sse-sender.ts`, `events.ts`) |
-| `src/db/` | Drizzle schema (`schema.ts`: `conversations`, `runs`, `run_events`, `conversation_runtime`, `orphan_sandboxes`), client (`client.ts`), and migration runner (`migrate.ts`) for the writable DB; migrations in `drizzle/` |
+| `src/db/` | Thin bindings to `@mymemo/agent-db`: `schema.ts`/`client.ts`/`testing.ts` re-export the shared schema/client/test-harness; `migrate.ts` applies the package's migrations via `MIGRATIONS_DIR`. The schema and `drizzle/` migrations live in the package, not here |
 | `src/features/conversation-runtime-store/` | Persistent E2B workspace metadata over `conversation_runtime` (sandbox pointer, snapshot rotation, checkpoint/taint state) — every mutation fenced on the claiming run's `locked_by`/`locked_until` — plus the unfenced `orphan_sandboxes` recovery ledger |
 | `src/config/env.ts` | Environment validation |
 | `apps/gateway/src/server.ts` | `createGateway(config, db)` — the merged control plane: registers health, then the document routes, then the catch-all LLM proxy (order is correctness-critical). Pure: config in, app out |
@@ -153,6 +154,8 @@ The former chat-api → sandbox-daemon `/turn` edge is removed from chat-api's l
 | `apps/gateway/src/db/` | `client.ts` (the `Db` seam / `createDb`) and `queries.ts` (parameterized FTS / scope-resolution SQL against the KB Postgres) |
 | `apps/gateway/src/env.ts` | `loadConfigFromEnv(env): GatewayConfig` — parse/validate env once into a typed config |
 | `apps/gateway/src/index.ts` | Entrypoint: the only place that reads `Bun.env`; builds config + db and serves the app |
+| `apps/agent-worker/src/run-loop.ts` | `RunLoop` — the worker control loop over the shared helpers: `tick()` heartbeats owned runs (renew/observe cancel) then claims+dispatches queued runs to capacity; `start()`/`stop()` schedule it and drain. `src/synthetic-processor.ts` is the Milestone 3 processor |
+| `packages/agent-db/` | Shared writable-DB data layer imported by chat-api + agent-worker: `src/schema.ts`, `src/client.ts` (`createDatabase`), `src/run-store.ts` (queue helpers), `src/run-events.ts` (`RunEventType` vocabulary), `src/testing.ts` (PGlite harness), `src/migrations.ts` (`MIGRATIONS_DIR`), `drizzle/` migrations |
 | `packages/llm-token/index.ts` | `mintLlmToken` / `verifyLlmToken` (shared, HMAC-signed) |
 
 ### Chat Scopes
@@ -168,6 +171,20 @@ Resolved once at `POST /v1/conversations` and **frozen** onto the conversation r
 - **Formatter**: Biome with tab indentation, double quotes
 - **Import organization**: Enabled via Biome
 - **Path aliases**: `@/*` maps to `./src/*`
+
+### Single Drizzle instance invariant
+
+`@mymemo/agent-db` exchanges Drizzle schema/SQL objects across the package
+boundary (chat-api and agent-worker call the shared helpers and also build their
+own SQL with `drizzle-orm`). Those objects only type-check when every workspace
+member resolves the **same** `drizzle-orm` instance. Bun forks `drizzle-orm`
+into distinct same-version instances when its optional-peer context differs, and
+`@electric-sql/pglite` (used by the package's PGlite test harness) is one such
+optional peer. So any workspace member that uses `drizzle-orm` must also carry
+`@electric-sql/pglite` as a devDependency to keep the context — and therefore
+the resolved instance — identical. Adding a new drizzle consumer, or dropping
+pglite from one, reintroduces the dual-instance type errors; keep the peer set
+aligned instead of casting around them.
 
 ## Environment Variables
 

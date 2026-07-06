@@ -1,0 +1,256 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
+import { runEvents, runs } from "@mymemo/agent-db/schema";
+import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import { eq, sql } from "drizzle-orm";
+import type { WorkerLogger } from "./logger";
+import { RunLoop, type RunProcessor } from "./run-loop";
+import { Worker } from "./worker";
+
+const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+
+let tdb: TestDb;
+
+beforeEach(async () => {
+	tdb = await createTestDatabase();
+});
+
+afterEach(async () => {
+	await tdb.close();
+});
+
+/** A promise whose resolution the test controls, to gate a processor. */
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((r) => {
+		resolve = r;
+	});
+	return { promise, resolve };
+}
+
+function buildWorker(maxConcurrentRuns: number, workerId = "worker-1") {
+	return new Worker({
+		workerId,
+		maxConcurrentRuns,
+		shutdownTimeoutMs: 1_000,
+		logger: silentLogger,
+	});
+}
+
+function buildLoop(worker: Worker, processor: RunProcessor) {
+	return new RunLoop({
+		db: tdb.db,
+		worker,
+		processor,
+		heartbeatIntervalMs: 15_000,
+		logger: silentLogger,
+	});
+}
+
+async function queueRun(runId: string, conversationId: string) {
+	await createQueuedRunTx(tdb.db, { runId, userId: "user-1", conversationId });
+}
+
+async function readRun(runId: string) {
+	const [row] = await tdb.db.select().from(runs).where(eq(runs.runId, runId));
+	return row;
+}
+
+async function readEventTypes(runId: string) {
+	const rows = await tdb.db
+		.select()
+		.from(runEvents)
+		.where(eq(runEvents.runId, runId))
+		.orderBy(runEvents.seq);
+	return rows.map((e) => e.type);
+}
+
+/** Appends one text delta then returns — the Milestone 3 synthetic turn. */
+const appendTextProcessor: RunProcessor = async (ctx) => {
+	await ctx.appendText(`synthetic ${ctx.run.runId}`);
+};
+
+describe("RunLoop — concurrency", () => {
+	it("claims at most the configured concurrency in one tick", async () => {
+		const worker = buildWorker(1);
+		// Block processing so a claimed run stays active across the assertions.
+		const gate = deferred();
+		const loop = buildLoop(worker, async () => {
+			await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await queueRun("run-2", "conv-2");
+
+		const claimed = await loop.tick();
+
+		expect(claimed).toBe(1);
+		expect(worker.activeCount).toBe(1);
+		// The second run is left queued for a later tick / another worker.
+		expect((await readRun("run-2"))?.status).toBe("queued");
+
+		gate.resolve();
+		await worker.drain();
+	});
+
+	it("claims the next run once a slot frees", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendTextProcessor);
+		await queueRun("run-1", "conv-1");
+		await queueRun("run-2", "conv-2");
+
+		expect(await loop.tick()).toBe(1);
+		await worker.drain();
+		expect(await loop.tick()).toBe(1);
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect((await readRun("run-2"))?.status).toBe("done");
+	});
+});
+
+describe("RunLoop — claim isolation", () => {
+	it("never hands the same run to two workers", async () => {
+		const workerA = buildWorker(2, "worker-a");
+		const workerB = buildWorker(2, "worker-b");
+		const gate = deferred();
+		const block: RunProcessor = async () => {
+			await gate.promise;
+		};
+		const loopA = buildLoop(workerA, block);
+		const loopB = new RunLoop({
+			db: tdb.db,
+			worker: workerB,
+			processor: block,
+			heartbeatIntervalMs: 15_000,
+			logger: silentLogger,
+		});
+		await queueRun("run-1", "conv-1");
+
+		const claimedA = await loopA.tick();
+		const claimedB = await loopB.tick();
+
+		expect(claimedA).toBe(1);
+		expect(claimedB).toBe(0);
+		expect((await readRun("run-1"))?.lockedBy).toBe("worker-a");
+
+		gate.resolve();
+		await workerA.drain();
+		await workerB.drain();
+	});
+});
+
+describe("RunLoop — heartbeat", () => {
+	it("renews the lock deadline for a run it owns", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		const loop = buildLoop(worker, async () => {
+			await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick(); // claim + dispatch (processor blocks)
+
+		// Pull the deadline near expiry so the fixed-duration renewal is visible.
+		await tdb.db
+			.update(runs)
+			.set({ lockedUntil: sql`now() + interval '1 second'` })
+			.where(eq(runs.runId, "run-1"));
+
+		await loop.tick(); // heartbeats the active run
+
+		const row = await readRun("run-1");
+		expect(row?.lockedBy).toBe("worker-1");
+		expect(row?.lockedUntil?.getTime()).toBeGreaterThan(Date.now() + 30_000);
+
+		gate.resolve();
+		await worker.drain();
+	});
+});
+
+describe("RunLoop — terminal outcomes", () => {
+	it("completes a synthetic run as done with a text event", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendTextProcessor);
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("done");
+		// The worker writes the shared `assistant_text` type; chat-api's projector
+		// maps it to the `text_delta` client frame.
+		expect(await readEventTypes("run-1")).toEqual([
+			"assistant_text",
+			"run_done",
+		]);
+	});
+
+	it("terminalizes a failed synthetic run as error with the message", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async () => {
+			throw new Error("synthetic boom");
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		const row = await readRun("run-1");
+		expect(row?.status).toBe("error");
+		const [event] = await tdb.db
+			.select()
+			.from(runEvents)
+			.where(eq(runEvents.runId, "run-1"));
+		expect(event?.type).toBe("run_error");
+		expect((event?.payload as { message?: string })?.message).toBe(
+			"synthetic boom",
+		);
+	});
+
+	it("terminalizes as canceled when cancellation is observed mid-processing", async () => {
+		const worker = buildWorker(1);
+		// A processor that runs until the run is aborted, without appending.
+		const loop = buildLoop(worker, async (ctx) => {
+			await new Promise<void>((resolve) => {
+				if (ctx.signal.aborted) return resolve();
+				ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick(); // claim + dispatch (processor now blocking on abort)
+
+		// User requests cancellation while the run is executing.
+		await tdb.db
+			.update(runs)
+			.set({ status: "cancel_requested", cancelRequestedAt: sql`now()` })
+			.where(eq(runs.runId, "run-1"));
+
+		await loop.tick(); // heartbeat observes cancel_requested → aborts the run
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("canceled");
+		expect(await readEventTypes("run-1")).toEqual(["run_canceled"]);
+	});
+});
+
+describe("RunLoop — synthetic end-to-end smoke", () => {
+	it("claims a queued run, streams a text event, and completes it", async () => {
+		const worker = buildWorker(2);
+		const loop = buildLoop(worker, appendTextProcessor);
+		// A conversation queued a run (chat-api's admission side, mirrored here).
+		await queueRun("run-smoke", "conv-smoke");
+
+		const claimed = await loop.tick();
+		await worker.drain();
+
+		expect(claimed).toBe(1);
+		const row = await readRun("run-smoke");
+		expect(row?.status).toBe("done");
+		expect(row?.lockedBy).toBeNull();
+		// The durable event log — the single SSE source — carries the streamed
+		// assistant text (projected to `text_delta`) ahead of the terminal frame.
+		expect(await readEventTypes("run-smoke")).toEqual([
+			"assistant_text",
+			"run_done",
+		]);
+	});
+});

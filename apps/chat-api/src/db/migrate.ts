@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { MIGRATIONS_DIR } from "@mymemo/agent-db/migrations";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { resolveDatabaseUrl } from "@/config/env";
@@ -7,8 +7,9 @@ import { resolveDatabaseUrl } from "@/config/env";
  * Standalone migration runner for the writable DB (`mymemo_agent`). Run
  * out-of-band in deploy/CI (or once locally after the DB is up) rather than on
  * every app boot, so multiple chat-api replicas never race to migrate. Applies
- * every pending migration under `drizzle/`. Resolves the connection string the
- * same way the app does (DB_PASSWORD splice + DB_SSL) so both connect identically.
+ * every pending migration owned by `@mymemo/agent-db`. Resolves the connection
+ * string the same way the app does (DB_PASSWORD splice + DB_SSL) so both connect
+ * identically.
  */
 const databaseUrl = resolveDatabaseUrl(
 	Bun.env.AGENT_DATABASE_URL,
@@ -21,6 +22,6 @@ if (!databaseUrl) {
 }
 
 const db = drizzle(databaseUrl);
-await migrate(db, { migrationsFolder: join(import.meta.dir, "../../drizzle") });
+await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
 console.log("migrations applied");
 process.exit(0);
