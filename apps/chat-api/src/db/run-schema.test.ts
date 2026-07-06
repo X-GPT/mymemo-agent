@@ -1,7 +1,32 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { createTestDatabase, type TestDb } from "@/db/testing";
 import { documentAccessEvents, runEvents, runs } from "./schema";
+
+let tdb: TestDb;
+
+// One PGlite (WASM) instance for the whole file — a per-test instance
+// multiplies WASM memory that is not reclaimed promptly and OOMs CI runners.
+// Tests are isolated by clearing the tables they touch instead.
+beforeAll(async () => {
+	tdb = await createTestDatabase();
+});
+
+afterAll(async () => {
+	await tdb.close();
+});
+
+beforeEach(async () => {
+	await tdb.db.delete(runs); // cascades run_events
+	await tdb.db.delete(documentAccessEvents);
+});
 
 async function expectDbWriteToFail(write: () => PromiseLike<unknown>) {
 	let failed = false;
@@ -14,16 +39,6 @@ async function expectDbWriteToFail(write: () => PromiseLike<unknown>) {
 }
 
 describe("run queue schema", () => {
-	let tdb: TestDb;
-
-	beforeEach(async () => {
-		tdb = await createTestDatabase();
-	});
-
-	afterEach(async () => {
-		await tdb.close();
-	});
-
 	it("creates runs with queue defaults", async () => {
 		const [run] = await tdb.db
 			.insert(runs)
@@ -210,16 +225,6 @@ describe("run queue schema", () => {
 });
 
 describe("document access audit schema", () => {
-	let tdb: TestDb;
-
-	beforeEach(async () => {
-		tdb = await createTestDatabase();
-	});
-
-	afterEach(async () => {
-		await tdb.close();
-	});
-
 	it("records document access rows with defaults", async () => {
 		const [event] = await tdb.db
 			.insert(documentAccessEvents)

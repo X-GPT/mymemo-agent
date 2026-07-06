@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { runEvents, runs } from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
@@ -16,12 +23,19 @@ import {
 
 let tdb: TestDb;
 
-beforeEach(async () => {
+// One PGlite (WASM) instance for the whole file — a per-test instance
+// multiplies WASM memory that is not reclaimed promptly and OOMs CI runners.
+// Tests are isolated by clearing the tables they touch instead.
+beforeAll(async () => {
 	tdb = await createTestDatabase();
 });
 
-afterEach(async () => {
+afterAll(async () => {
 	await tdb.close();
+});
+
+beforeEach(async () => {
+	await tdb.db.delete(runs); // cascades run_events
 });
 
 describe("createQueuedRunTx", () => {
