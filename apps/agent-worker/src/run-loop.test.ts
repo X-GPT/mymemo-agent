@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
+import {
+	appendRunEventTx,
+	claimNextRunTx,
+	createQueuedRunTx,
+	RunFenceError,
+	requestRunCancellationTx,
+} from "@mymemo/agent-db/run-store";
 import { runEvents, runs } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { eq, sql } from "drizzle-orm";
@@ -49,6 +55,26 @@ function buildLoop(worker: Worker, processor: RunProcessor) {
 
 async function queueRun(runId: string, conversationId: string) {
 	await createQueuedRunTx(tdb.db, { runId, userId: "user-1", conversationId });
+}
+
+async function claimRun(
+	runId: string,
+	conversationId: string,
+	workerId: string,
+) {
+	await queueRun(runId, conversationId);
+	const claimed = await claimNextRunTx(tdb.db, { workerId });
+	if (claimed?.runId !== runId) {
+		throw new Error(`test setup claimed ${claimed?.runId}, wanted ${runId}`);
+	}
+	return claimed;
+}
+
+async function expireOwnership(runId: string) {
+	await tdb.db
+		.update(runs)
+		.set({ lockedUntil: sql`now() - interval '1 second'` })
+		.where(eq(runs.runId, runId));
 }
 
 async function readRun(runId: string) {
@@ -262,6 +288,78 @@ describe("RunLoop — terminal outcomes", () => {
 
 		expect((await readRun("run-1"))?.status).toBe("canceled");
 		expect(await readEventTypes("run-1")).toEqual(["run_canceled"]);
+	});
+});
+
+describe("RunLoop — stale-run recovery", () => {
+	it("terminalizes stale running runs as error during a tick", async () => {
+		await claimRun("run-stale", "conv-1", "stale-worker");
+		await expireOwnership("run-stale");
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendTextProcessor);
+
+		const claimed = await loop.tick();
+		await worker.drain();
+
+		expect(claimed).toBe(0);
+		expect((await readRun("run-stale"))?.status).toBe("error");
+		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
+	});
+
+	it("terminalizes stale cancel-requested runs as canceled during a tick", async () => {
+		await claimRun("run-stale", "conv-1", "stale-worker");
+		await requestRunCancellationTx(tdb.db, {
+			runId: "run-stale",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await expireOwnership("run-stale");
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendTextProcessor);
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-stale"))?.status).toBe("canceled");
+		expect(await readEventTypes("run-stale")).toEqual(["run_canceled"]);
+	});
+
+	it("rejects stale worker appends after loop recovery terminalizes the run", async () => {
+		await claimRun("run-stale", "conv-1", "stale-worker");
+		await expireOwnership("run-stale");
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendTextProcessor);
+
+		await loop.tick();
+
+		await expect(
+			appendRunEventTx(tdb.db, {
+				runId: "run-stale",
+				workerId: "stale-worker",
+				type: "assistant_text",
+				payload: { text: "too late" },
+				appendClass: "model",
+			}),
+		).rejects.toBeInstanceOf(RunFenceError);
+		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
+	});
+
+	it("does not double-terminalize when recovery beats an active processor", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		const loop = buildLoop(worker, async () => {
+			await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick(); // claim + dispatch (processor blocks)
+		await expireOwnership("run-1");
+
+		await loop.tick(); // recovers stale run, then observes lost ownership
+		gate.resolve();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("error");
+		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
 	});
 });
 

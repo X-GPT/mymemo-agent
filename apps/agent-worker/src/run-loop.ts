@@ -4,6 +4,7 @@ import {
 	appendRunEventTx,
 	claimNextRunTx,
 	heartbeatRunTx,
+	markStaleRunsTx,
 	RunFenceError,
 	type RunRecord,
 	type TerminalRunStatus,
@@ -55,29 +56,34 @@ interface ActiveEntry {
 	state: RunEndState;
 }
 
+const STALE_RUN_RECOVERY_INTERVAL_MS = 15_000;
+
 /**
  * The agent-worker control loop over the shared run-store helpers. One `tick`:
- *  1. heartbeats every run this worker is executing — renewing `locked_until`
+ *  1. terminalizes stale runs through the shared recovery helper;
+ *  2. heartbeats every run this worker is executing — renewing `locked_until`
  *     and, in the same call, observing a `cancel_requested` or a lost ownership
  *     fence; and
- *  2. claims queued runs up to the supervisor's remaining capacity and
+ *  3. claims queued runs up to the supervisor's remaining capacity and
  *     dispatches each onto it.
  *
- * `tick` is the whole loop and is directly awaitable, so tests drive claim,
- * heartbeat, and terminalization deterministically (PGlite + explicit ticks,
- * no wall-clock timers — Bun lacks `setInterval` fake timers). `start` just
- * schedules `tick` on a timer; `stop` unschedules and drains in-flight runs.
+ * `tick` is the whole loop and is directly awaitable, so tests drive recovery,
+ * claim, heartbeat, and terminalization deterministically (PGlite + explicit
+ * ticks, no wall-clock timers — Bun lacks `setInterval` fake timers). `start`
+ * schedules both `tick` and the at-least-15s recovery sweep; `stop`
+ * unschedules them and drains in-flight runs.
  *
  * Ownership and single-terminalization are enforced by the DB fences in the
  * helpers, not here: two workers cannot claim one run (`FOR UPDATE SKIP
- * LOCKED`), a stale worker's appends/terminals are rejected (`locked_by` +
- * `locked_until`), and stale runs are recovered elsewhere. This loop's job is to
- * turn those helpers into a warm, bounded-concurrency service.
+ * LOCKED`), stale workers are fenced by `locked_by` + `locked_until`, and
+ * recovery CASes the same active statuses as worker terminalization. This
+ * loop's job is to turn those helpers into a warm, bounded-concurrency service.
  */
 export class RunLoop {
 	private readonly activeRuns = new Map<string, ActiveEntry>();
 	private running = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(private readonly opts: RunLoopOptions) {}
 
@@ -86,11 +92,12 @@ export class RunLoop {
 	}
 
 	/**
-	 * Run one control-loop iteration: heartbeat active runs, then claim and
-	 * dispatch queued runs up to capacity. Returns how many runs were claimed
-	 * this tick.
+	 * Run one control-loop iteration: recover stale runs, heartbeat active runs,
+	 * then claim and dispatch queued runs up to capacity. Returns how many runs
+	 * were claimed this tick.
 	 */
 	async tick(): Promise<number> {
+		await this.tryRecoverStaleRuns();
 		await this.heartbeatActive();
 		return this.claimAndDispatch();
 	}
@@ -117,6 +124,10 @@ export class RunLoop {
 			}
 		};
 		void runTick();
+		this.recoveryTimer = setTimeout(
+			() => void this.runRecoveryTimer(),
+			STALE_RUN_RECOVERY_INTERVAL_MS,
+		);
 	}
 
 	/** Stop scheduling new ticks and drain in-flight runs via the supervisor. */
@@ -126,7 +137,50 @@ export class RunLoop {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
+		if (this.recoveryTimer) {
+			clearTimeout(this.recoveryTimer);
+			this.recoveryTimer = undefined;
+		}
 		await this.opts.worker.shutdown();
+	}
+
+	private async runRecoveryTimer(): Promise<void> {
+		if (!this.running) return;
+		try {
+			await this.tryRecoverStaleRuns();
+		} finally {
+			if (this.running) {
+				this.recoveryTimer = setTimeout(
+					() => void this.runRecoveryTimer(),
+					STALE_RUN_RECOVERY_INTERVAL_MS,
+				);
+			}
+		}
+	}
+
+	private async tryRecoverStaleRuns(): Promise<void> {
+		try {
+			await this.recoverStaleRuns();
+		} catch (error) {
+			this.opts.logger.error({
+				message: "stale-run recovery failed",
+				workerId: this.workerId,
+				error: toMessage(error),
+			});
+		}
+	}
+
+	private async recoverStaleRuns(): Promise<void> {
+		const recovered = await markStaleRunsTx(this.opts.db);
+		if (recovered.length === 0) return;
+		this.opts.logger.warn({
+			message: "recovered stale runs",
+			workerId: this.workerId,
+			recoveredRuns: recovered.map((run) => ({
+				runId: run.runId,
+				status: run.status,
+			})),
+		});
 	}
 
 	private async heartbeatActive(): Promise<void> {
