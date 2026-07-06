@@ -1,22 +1,26 @@
-# Local end-to-end harness (MYM-31): the full chat-api → sandbox-daemon →
-# gateway path without E2B. The `sandbox` service replaces the E2B sandbox with a
-# long-lived container running the same daemon + agent bundles, and `postgres`
-# stands in for the MyMemo KB so the gateway can boot and serve document search.
+# Local end-to-end harness — split runtime (Milestone 3). The client contract is
+# chat-api's /v1 conversation API: create a conversation, POST a user.message,
+# and read the turn back as SSE. A queued turn is claimed and processed by the
+# agent-worker; chat-api projects the run's durable events (run_events) back to
+# the client. In Milestone 3 the worker runs a SYNTHETIC processor (one text
+# event per run), so this harness needs no provider/KB/E2B credentials to
+# demonstrate the full path: create conversation → user.message → agent-worker
+# claims the run → text_delta → done.
 #
-# Config split: non-secret wiring (provider selection, service URLs, ports, the
-# local DB connection) lives inline below, so reading a service's block shows
-# exactly what it gets. Secrets live in a per-service env file next to each app
-# (see each apps/<svc>/.env.example); copy each to .env and fill it in. One value
-# is shared and MUST match across the files that use it:
-#   LLM_TOKEN_SECRET   — chat-api (mints) + gateway (verifies)
+# Split-runtime services (non-secret wiring inline; local-only dev credentials):
+#   postgres      — the writable mymemo_agent DB (conversations/runs/run_events)
+#                   AND the read-only mymemo_kb (seeded for the retained doc path)
+#   migrate       — one-shot: applies the @mymemo/agent-db migrations, then exits
+#   chat-api      — creates conversations, queues runs, projects run events as SSE
+#   agent-worker  — claims queued runs, heartbeats, runs the synthetic turn
 #
-# The daemon's /turn has no application-layer auth (MYM-35): in prod the E2B
-# sandbox edge gates its public URL; here the `sandbox` container is unpublished
-# on the compose network, so it has no secret and no env file.
-#
-# Note: the agent runs without bwrap — the sandbox container is the isolation
-# boundary (see apps/sandbox-daemon/child-spawn.ts). dev and prod share one spawn
-# path.
+# Retained pending Milestone 7 (ADR-0002), NOT on the split-runtime path:
+#   gateway, sandbox — the prototype LLM proxy + in-sandbox daemon. Nothing on
+#   the split path depends on them; they are deleted when Milestone 7 passes the
+#   full local harness. gateway still needs apps/gateway/.env (ANTHROPIC_API_KEY)
+#   to boot, so to run just the split-runtime demo bring up the two split apps
+#   and let their deps (postgres, migrate) come along:
+#     docker compose up --build chat-api agent-worker
 
 services:
   chat-api:
@@ -26,29 +30,48 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Select the local provider: reach the long-lived daemon container instead
-      # of leasing an E2B sandbox per turn. E2B_API_KEY is not required here.
-      SANDBOX_PROVIDER: local
-      LOCAL_SANDBOX_DAEMON_URL: http://sandbox:8080
-      # Same compose network — no getHost tunneling, just the service name.
-      GATEWAY_PUBLIC_URL: http://gateway:8080
-      # chat-api's OWN writable database (mymemo_agent), separate from the
-      # gateway's read-only KB (mymemo_kb) on the same postgres instance. Holds
-      # the sandbox-lease registry. Local-only dev credential, so inline. Named
-      # AGENT_DATABASE_URL so it never collides with the KB's DATABASE_URL.
+      # chat-api's writable database (mymemo_agent): conversations, runs,
+      # run_events. Local-only dev credential, so inline. Named AGENT_DATABASE_URL
+      # so it never collides with the gateway's read-only KB DATABASE_URL.
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
       DB_SSL: disable
       LOG_LEVEL: info
       # Open the agent exposure gate locally without wiring Statsig (break-glass).
       AGENT_EXPOSURE_BREAK_GLASS: "true"
-    # Secrets: LLM_TOKEN_SECRET
-    env_file:
-      - apps/chat-api/.env
+    # No secrets: after the hard swap (ADR-0002) chat-api mints no tokens and
+    # holds no provider/KB credentials — it only queues runs and projects events.
     depends_on:
-      gateway:
-        condition: service_started
-      sandbox:
+      postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - mymemo-network
+
+  # Claims queued runs from the shared mymemo_agent DB, heartbeats ownership, and
+  # processes each with the Milestone 3 SYNTHETIC turn (one text_delta event),
+  # then terminalizes `done`. The worker-only credentials (KB, OpenRouter, E2B)
+  # are validated at boot but unused by the synthetic processor — placeholder
+  # values keep the worker booting until the document/model/E2B milestones.
+  agent-worker:
+    build:
+      context: .
+      dockerfile: apps/agent-worker/Dockerfile
+    environment:
+      AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
+      DB_SSL: disable
+      LOG_LEVEL: info
+      # The control loop ticks (claim + heartbeat) at this interval; keep it short
+      # locally so a queued run is picked up promptly (prod default is 15s).
+      WORKER_HEARTBEAT_INTERVAL_MS: "2000"
+      # Required at boot, unused by the synthetic processor (Milestones 6/7):
+      KB_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_kb
+      OPENROUTER_API_KEY: local-unused
+      OPENROUTER_BASE_URL: https://openrouter.ai/api
+      OPENROUTER_DEFAULT_MODEL: anthropic/claude-sonnet-4
+      E2B_API_KEY: local-unused
+    depends_on:
       postgres:
         condition: service_healthy
       migrate:
@@ -59,9 +82,11 @@ services:
 
   # One-shot: apply the writable DB (mymemo_agent) schema from Drizzle migrations,
   # then exit. The postgres init only creates the database; the tables are owned
-  # by migrations (apps/chat-api/src/db/schema.ts -> drizzle/). chat-api waits for
-  # this to complete so its lease/conversation tables exist before it serves.
-  # Reuses the chat-api image (which ships drizzle/); runs to completion, no restart.
+  # by migrations in the shared @mymemo/agent-db package
+  # (packages/agent-db/src/schema.ts -> packages/agent-db/drizzle/). chat-api waits
+  # for this to complete so its run/conversation tables exist before it serves.
+  # Reuses the chat-api image (which ships packages/agent-db/drizzle); runs to
+  # completion, no restart.
   migrate:
     build:
       context: .

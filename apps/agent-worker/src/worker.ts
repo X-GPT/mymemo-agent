@@ -46,6 +46,16 @@ export class Worker {
 	}
 
 	/**
+	 * Whether a new run may start right now — not draining and below the
+	 * concurrency cap. The claim loop checks this before claiming a run so it
+	 * never claims work it cannot immediately dispatch (an undispatched claim
+	 * would strand the run until stale-run recovery).
+	 */
+	get hasCapacity(): boolean {
+		return !this.draining && this.active.size < this.maxConcurrentRuns;
+	}
+
+	/**
 	 * Start a task if there is capacity and the worker is not draining. Returns
 	 * whether it started, so the caller (the future claim loop) can back off and
 	 * leave the run on the queue. Task failures are logged and isolated — one

@@ -26,6 +26,10 @@ FROM base AS release
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agent-worker/src apps/agent-worker/src
 COPY apps/agent-worker/package.json apps/agent-worker/tsconfig.json apps/agent-worker/
+# The shared writable-DB data layer (schema, client, run-store helpers). Its src
+# must be present so the worker's `@mymemo/agent-db` imports resolve through the
+# workspace symlink in node_modules.
+COPY packages/agent-db packages/agent-db
 COPY package.json .
 
 WORKDIR /usr/src/app/apps/agent-worker

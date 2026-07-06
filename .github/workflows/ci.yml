@@ -17,3 +17,39 @@ jobs:
           bun-version: 1.3.0
       - run: bun install --frozen-lockfile
       - run: bun run test
+
+  # Split-runtime integration: runs chat-api + agent-worker as real processes
+  # against a real Postgres (a service container — no image build), so the
+  # worker→projector seam is exercised end to end on every PR. This is what would
+  # have caught a run_events.type desync before merge. `e2e/integration.test.ts`
+  # is gated on AGENT_DATABASE_URL, so it only runs here (the unit `test` job
+  # above uses PGlite and never triggers it).
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mymemo
+          POSTGRES_PASSWORD: mymemo
+          POSTGRES_DB: mymemo_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mymemo -d mymemo_agent"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      AGENT_DATABASE_URL: postgresql://mymemo:mymemo@localhost:5432/mymemo_agent
+      DB_SSL: disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.0
+      - run: bun install --frozen-lockfile
+      # Apply the @mymemo/agent-db migrations to the service DB before the apps boot.
+      - run: bun run db:migrate
+        working-directory: apps/chat-api
+      - run: bun test e2e/integration.test.ts

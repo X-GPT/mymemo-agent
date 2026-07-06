@@ -1,13 +1,17 @@
+import { createDatabase } from "@mymemo/agent-db/client";
 import { loadWorkerConfigFromEnv } from "./config/env";
 import { startHealthServer } from "./health";
 import { createLogger } from "./logger";
+import { RunLoop } from "./run-loop";
+import { syntheticProcessor } from "./synthetic-processor";
 import { Worker } from "./worker";
 import { generateWorkerId } from "./worker-id";
 
-// Entrypoint: the only place that reads the environment. Boots the deployable
-// skeleton — validated config, structured logger, worker id, a health endpoint,
-// and graceful shutdown. The Postgres poll/claim loop is a later milestone
-// (MYM-55); until then the worker boots, serves health, and drains cleanly.
+// Entrypoint: the only place that reads the environment. Boots the worker —
+// validated config, structured logger, worker id, a health endpoint, the
+// Postgres-backed claim/heartbeat/terminalize loop (Milestone 3), and graceful
+// shutdown. Milestone 3 processes synthetic turns (one text event per run);
+// the Claude Agent SDK loop replaces the processor in a later milestone.
 const config = loadWorkerConfigFromEnv(Bun.env);
 const logger = createLogger(config.logLevel);
 const workerId = generateWorkerId();
@@ -18,7 +22,17 @@ const worker = new Worker({
 	shutdownTimeoutMs: config.shutdownTimeoutMs,
 	logger,
 });
+const db = createDatabase(config.agentDatabaseUrl);
+const runLoop = new RunLoop({
+	db,
+	worker,
+	processor: syntheticProcessor,
+	heartbeatIntervalMs: config.heartbeatIntervalMs,
+	logger,
+});
 const server = startHealthServer(worker, config.port, logger);
+
+runLoop.start();
 
 logger.info({
 	message: "agent-worker started",
@@ -32,7 +46,7 @@ async function handleShutdownSignal(signal: NodeJS.Signals): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	logger.info({ message: "Received shutdown signal", signal, workerId });
-	await worker.shutdown();
+	await runLoop.stop();
 	server.stop();
 	logger.info({ message: "agent-worker stopped", workerId });
 	process.exit(0);

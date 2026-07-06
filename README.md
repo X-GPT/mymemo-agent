@@ -36,7 +36,7 @@ See [apps/chat-api/README.md](./apps/chat-api/README.md) for chat-api documentat
 │   └── mymemo-docs/        # In-sandbox docs CLI
 ├── packages/               # Shared libraries (e.g. @mymemo/llm-token)
 ├── AGENTS.md               # Architecture & agent guidance
-├── compose.yaml            # Local end-to-end harness (chat-api + daemon + gateway + postgres)
+├── compose.yaml            # Local end-to-end harness (chat-api + agent-worker + postgres)
 └── README.md               # This file
 ```
 
@@ -46,36 +46,30 @@ Each project can be developed independently. Navigate to the respective project 
 
 ## Local end-to-end harness
 
-`compose.yaml` runs the full product path — **chat-api → sandbox-daemon →
-gateway** — locally, without E2B. E2B can't run on dev machines (no
-`E2B_API_KEY`, no userns on macOS), so the `sandbox` service replaces the E2B
-sandbox with a long-lived container that runs the same daemon + agent bundles
-(with the `claude` and `mymemo-docs` binaries baked in), and a `postgres`
-service stands in for the MyMemo KB so the gateway can boot and serve document
-search.
+`compose.yaml` runs the split-runtime path locally: **chat-api queues a run →
+agent-worker claims and processes it → chat-api projects the run's durable events
+back as SSE**. In Milestone 3 the worker runs a **synthetic** turn (one text
+event per run), so the demo needs no provider, KB, or E2B credentials — a
+`postgres` service backs the writable `mymemo_agent` DB, a one-shot `migrate`
+service applies the `@mymemo/agent-db` migrations, and the two split-runtime apps
+do the rest.
 
-chat-api selects this path via `SANDBOX_PROVIDER=local`
-(`apps/chat-api/src/features/sandbox-orchestration/`): instead of leasing a fresh
-E2B sandbox per turn, it points at the `sandbox` container over the compose
-network and only health-checks it. The default `SANDBOX_PROVIDER=e2b` is
-unchanged.
+The prototype `gateway` and `sandbox` services are still defined in
+`compose.yaml` but are **not** on the split-runtime path; they are retained until
+Milestone 7 (ADR-0002) and are documented under "Retained prototype path" below.
 
 ### Run it
 
-Each service reads its own `apps/<svc>/.env` (non-secret wiring stays inline in
-`compose.yaml`). Create them from the examples:
+The split-runtime demo needs no secrets — chat-api opens its exposure gate via
+`AGENT_EXPOSURE_BREAK_GLASS=true` (inline in `compose.yaml`). Bring up just the
+two split apps; their deps (`postgres`, `migrate`) come along:
 
 ```sh
-cp apps/chat-api/.env.example apps/chat-api/.env
-cp apps/gateway/.env.example  apps/gateway/.env
-# Fill in apps/gateway/.env's ANTHROPIC_API_KEY. Keep LLM_TOKEN_SECRET identical
-# across the chat-api and gateway files. The sandbox-daemon needs no secrets.
-docker compose up --build
+docker compose up --build chat-api agent-worker
 ```
 
 Create a conversation, then append a `user.message` event to stream the turn.
-`X-Member-Code: demo-member` matches the seeded KB so document search returns
-results. First create the conversation (its document scope is frozen here):
+First create the conversation (its document scope is frozen at creation):
 
 ```sh
 curl -sS http://localhost:3000/v1/conversations \
@@ -93,15 +87,35 @@ curl -N http://localhost:3000/v1/conversations/<conversationId>/events \
   -H 'Content-Type: application/json' \
   -H 'X-Member-Code: demo-member' \
   -H 'X-Partner-Code: demo-partner' \
-  -d '{"type":"user.message","text":"What is machine learning?"}'
+  -d '{"type":"user.message","text":"Hello, split runtime."}'
 ```
 
-The stream emits `conversation_id`, `run_id`, `sandbox_id`, `agent_session_id`,
-then `text_delta` events, then `done`. Re-POST `events` to the same
-`conversationId` for another turn, but conversational *resume* (recalling prior
-turns) is not wired through the endpoint yet — see the persistence note below.
+The stream emits `conversation_id`, `run_id`, one or more `text_delta` events
+(the worker's synthetic response), then `done`. The prototype-era `sandbox_id`
+and `agent_session_id` frames are **not** part of the split-runtime contract.
+Re-POST `events` to the same `conversationId` for another turn.
 
-### Session-transcript persistence across a sandbox recycle (MYM-27)
+This `compose.yaml` is a **manual** local stack for poking the running services
+by hand; it is not what gates correctness. That is `e2e/integration.test.ts`,
+which runs the same create → turn → assert-SSE flow with chat-api + agent-worker
+as real processes against a real Postgres — no image build — on every PR (the
+`integration` job in `.github/workflows/ci.yml`). Run it locally against any
+migrated Postgres:
+
+```sh
+AGENT_DATABASE_URL=postgres://mymemo:mymemo@localhost:5432/mymemo_agent \
+  DB_SSL=disable bun test e2e/integration.test.ts
+```
+
+### Retained prototype path (gateway + sandbox, until Milestone 7)
+
+The subsections below describe the **prototype** `gateway` + `sandbox` services,
+which the split-runtime demo above does not exercise. They still build and boot
+(the `gateway` needs `apps/gateway/.env`'s `ANTHROPIC_API_KEY`; copy it from
+`apps/gateway/.env.example`), and are deleted when Milestone 7 passes the full
+local harness (ADR-0002).
+
+#### Session-transcript persistence across a sandbox recycle (MYM-27)
 
 The daemon mirrors SDK transcripts to `AGENT_SESSION_STORE_ROOT=/session-store`,
 a named volume that outlives the container. After a turn, the transcript is keyed
@@ -131,7 +145,7 @@ is proven by `apps/sandbox-daemon` unit tests.
 
 `docker compose down -v` wipes the volumes (KB seed + transcripts) to start clean.
 
-### No bwrap (dev == prod)
+#### No bwrap (dev == prod)
 
 The agent runs **directly** (`bun /workspace/agent.js`) with no bwrap wrapper —
 the sandbox itself is the isolation boundary (the per-turn E2B sandbox in prod,
