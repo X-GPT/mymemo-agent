@@ -4,6 +4,7 @@ import type {
 	ConversationScope,
 	ConversationStore,
 } from "@/features/conversation-store";
+import type { RunCancellationResult } from "@/features/run-store";
 import type { InternalIdentity } from "./conversations.schema";
 
 /**
@@ -50,5 +51,22 @@ export async function queueConversationTurn(
 	return deps.runStore.createQueuedRun({
 		conversation: params.conversation,
 		message: params.message,
+	});
+}
+
+/**
+ * Request cancellation of an existing run (`user.interrupt`). The lookup is
+ * scoped by the already-ownership-checked `conversation` record, so a run
+ * belonging to another member or conversation is `not_found`, never a state
+ * change. Control events never create runs and never open SSE.
+ */
+export async function interruptConversationRun(
+	deps: AppDeps,
+	params: { conversation: ConversationRecord; runId: string },
+): Promise<RunCancellationResult> {
+	return deps.runStore.requestCancellation({
+		userId: params.conversation.userId,
+		conversationId: params.conversation.conversationId,
+		runId: params.runId,
 	});
 }
