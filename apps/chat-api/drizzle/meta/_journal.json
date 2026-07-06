@@ -8,6 +8,13 @@
       "when": 1783229094438,
       "tag": "0000_smooth_titanium_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783300007602,
+      "tag": "0001_wandering_namora",
+      "breakpoints": true
     }
   ]
 }

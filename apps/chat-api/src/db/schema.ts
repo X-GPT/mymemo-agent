@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
 	bigint,
 	bigserial,
+	boolean,
 	check,
 	index,
 	jsonb,
@@ -21,58 +22,88 @@ import {
  */
 
 /**
- * Sandbox-lease registry (MYM-17 / MYM-42). One row per conversation, keyed by
+ * Persistent E2B workspace metadata (Task 4.2 / ADR-0002): one row per
  * `(user_id, conversation_id)` — the composite primary key makes per-user /
- * per-conversation isolation a database invariant: two users, or two
- * conversations, can never resolve to one row and so can never share a sandbox.
- *
- * The row carries two concerns:
- *  - **Ownership lease** (`owner_id`, `fencing_token`, `lease_expires_at`): the
- *    concurrency control. A turn `claimLease` becomes owner via an atomic
- *    `ON CONFLICT … WHERE expired/free` CAS, heartbeats `lease_expires_at`
- *    forward while running, and clears ownership on release. A crashed owner's
- *    lease simply expires and another replica can steal it. `fencing_token` is
- *    bumped on every claim so a renew/release only affects the exact hold that
- *    acquired it (a stolen hold becomes a no-op).
- *  - **Warm-sandbox pointer** (`sandbox_id`, `agent_session_id`): a disposable
- *    optimization that survives between turns. Nullable — a freshly claimed row
- *    has no sandbox yet; only the sandbox *id* is stored (the daemon URL + edge
- *    token are recomputed from the reattached handle on reuse, never persisted).
+ * per-conversation isolation a database invariant. This row replaces the old
+ * `sandbox_leases` warm-pointer role only; unlike the lease it grants **no
+ * active execution ownership** — that lives exclusively in `runs`, and every
+ * mutation here must be fenced on the claiming run's `locked_by`/`locked_until`
+ * through the conversation-runtime-store helpers, so a worker that lost its
+ * run cannot overwrite pointers a recovered conversation now relies on.
  */
-export const sandboxLeases = pgTable(
-	"sandbox_leases",
+export const conversationRuntime = pgTable(
+	"conversation_runtime",
 	{
 		userId: text("user_id").notNull(),
 		conversationId: text("conversation_id").notNull(),
-		/** Process instance currently holding the lease; NULL between turns. */
-		ownerId: text("owner_id"),
-		/** Monotonic per-conversation hold counter; bumped on every claim. */
-		fencingToken: bigint("fencing_token", { mode: "number" })
-			.notNull()
-			.default(0),
-		/** Lease deadline; heartbeated forward while a turn runs. Past = free. */
-		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
-		/** The warm sandbox; a reusing process reattaches to it by id. Nullable. */
+		/** Current E2B sandbox (running or paused); NULL when none exists. */
 		sandboxId: text("sandbox_id"),
-		/** Claude SDK resume state last threaded into this conversation. */
-		agentSessionId: text("agent_session_id"),
+		/**
+		 * True when command cleanup could not be proven (stale-run recovery,
+		 * failed command-tree kill): the sandbox must not be snapshotted or
+		 * reused until cleanup proves otherwise. Reset whenever the pointer is
+		 * replaced or cleared — taint describes the current sandbox only.
+		 */
+		sandboxTainted: boolean("sandbox_tainted").notNull().default(false),
+		/** Newest successful checkpoint; the product restore path. */
+		latestSnapshotId: text("latest_snapshot_id"),
+		/** Prior successful checkpoint, kept for operator-driven rollback. */
+		previousSnapshotId: text("previous_snapshot_id"),
+		/**
+		 * 'clean' = the workspace holds no user work newer than
+		 * `latest_snapshot_id` (or is fresh); 'dirty_uncheckpointed' = a
+		 * checkpoint failed after user work, so the next turn must reconnect
+		 * and checkpoint before anything else.
+		 */
+		workspaceCheckpointStatus: text("workspace_checkpoint_status")
+			.notNull()
+			.default("clean"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
-		/** Bumped on every write so the idle reaper can age leases out. */
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
 	},
-	(t) => [primaryKey({ columns: [t.userId, t.conversationId] })],
+	(t) => [
+		primaryKey({ columns: [t.userId, t.conversationId] }),
+		check(
+			"conversation_runtime_checkpoint_status_check",
+			sql`${t.workspaceCheckpointStatus} in ('clean', 'dirty_uncheckpointed')`,
+		),
+	],
 );
+
+/**
+ * Recovery ledger for E2B sandboxes created but never safely stored as the
+ * current `conversation_runtime.sandbox_id` (run ownership lost before the
+ * fenced update, kill unconfirmed). Deliberately no FK to `runs` and no
+ * ownership fence on inserts: recording happens precisely when ownership was
+ * already lost, and the ledger must survive run cleanup — it is the only
+ * database record keeping a paid external resource inside ownership. The
+ * cleanup job kills entries after verifying they are not the current
+ * `conversation_runtime.sandbox_id`.
+ */
+export const orphanSandboxes = pgTable("orphan_sandboxes", {
+	/** PK: recording the same sandbox twice is an idempotent no-op. */
+	sandboxId: text("sandbox_id").primaryKey(),
+	userId: text("user_id").notNull(),
+	conversationId: text("conversation_id").notNull(),
+	runId: text("run_id").notNull(),
+	createdByWorkerId: text("created_by_worker_id").notNull(),
+	/** Why the sandbox escaped ownership, for operators (free text). */
+	reason: text("reason").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true })
+		.notNull()
+		.defaultNow(),
+});
 
 /**
  * Durable conversation record — the source of truth for a conversation's
  * immutable document scope, keyed like the lease by `(user_id, conversation_id)`.
- * Kept separate from `sandbox_leases` on purpose: the lease is a disposable
- * optimization the reaper may delete, whereas the scope is a correctness/
- * security boundary that must outlive any sandbox. Created once and never
+ * Kept separate from `conversation_runtime` on purpose: runtime rows are
+ * disposable workspace metadata cleanup may delete, whereas the scope is a
+ * correctness/security boundary that must outlive any sandbox. Created once and never
  * re-scoped (the scope columns are written at creation and read each turn).
  */
 export const conversations = pgTable(
