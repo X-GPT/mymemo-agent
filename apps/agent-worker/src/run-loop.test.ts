@@ -164,6 +164,39 @@ describe("RunLoop — heartbeat", () => {
 		gate.resolve();
 		await worker.drain();
 	});
+
+	it("abandons a run whose ownership it lost without terminalizing it", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		// A processor that ignores the abort signal — proves abandonment does not
+		// depend on the processor cooperating.
+		const loop = buildLoop(worker, async () => {
+			await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick(); // claim + dispatch (processor blocks)
+
+		// Another worker steals the run: the heartbeat fence (locked_by = us) is
+		// now rejected, so heartbeatRunTx returns null.
+		await tdb.db
+			.update(runs)
+			.set({
+				lockedBy: "worker-2",
+				lockedUntil: sql`now() + interval '60 seconds'`,
+			})
+			.where(eq(runs.runId, "run-1"));
+
+		await loop.tick(); // heartbeat observes the lost fence → abandons
+		gate.resolve();
+		await worker.drain();
+
+		// We must not terminalize a run we no longer own: no terminal event from
+		// us, and the thief's ownership is untouched (recovery is its problem now).
+		const row = await readRun("run-1");
+		expect(row?.status).toBe("running");
+		expect(row?.lockedBy).toBe("worker-2");
+		expect(await readEventTypes("run-1")).toEqual([]);
+	});
 });
 
 describe("RunLoop — terminal outcomes", () => {

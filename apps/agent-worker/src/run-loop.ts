@@ -151,7 +151,12 @@ export class RunLoop {
 			}
 			if (!renewed) {
 				// Ownership lost — expired, or recovery/another worker took it. The run
-				// is no longer ours to terminalize; abandon it locally.
+				// is no longer ours to terminalize; abandon it. Drop it from
+				// activeRuns now so later ticks stop heartbeating a run we no longer
+				// own (runClaimed's own delete then becomes a no-op); `finish()` still
+				// sees `lostOwnership` through the retained `entry` and skips the
+				// terminal transition.
+				this.activeRuns.delete(runId);
 				entry.state.lostOwnership = true;
 				entry.controller.abort();
 				continue;
