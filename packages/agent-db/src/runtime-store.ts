@@ -1,21 +1,24 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
-import type { Database } from "@/db/client";
-import { conversationRuntime, orphanSandboxes, runs } from "@/db/schema";
-import { RunFenceError } from "@/features/run-store";
+import type { Database } from "./client";
+import { RunFenceError } from "./run-store";
+import { conversationRuntime, orphanSandboxes, runs } from "./schema";
 
 /**
  * Narrow transaction helpers over `conversation_runtime` and
  * `orphan_sandboxes` — the only write path for persistent E2B workspace
- * metadata (design doc "State Ownership", Task 4.2). The table grants no
- * execution ownership of its own: every mutation is fenced on the claiming
- * run's ownership in `runs` (`status` active, `locked_by = workerId`,
- * `locked_until > now()`): every update carries the fence as an `EXISTS`
- * subquery inside the same statement that performs the write, and row
- * creation checks the same predicate `FOR SHARE` in its transaction — so a
- * worker that stalls past its lock cannot overwrite pointers a recovered
- * conversation now relies on. The one deliberate exception is orphan
- * recording, which exists precisely for the ownership-already-lost path.
+ * metadata (design doc "State Ownership", Task 4.2). Shared by chat-api (which
+ * owns run admission and conversation records) and agent-worker (which owns the
+ * snapshot barrier that writes checkpoints through these helpers, Task 5.3), so
+ * the fenced write protocol lives in exactly one place over one `pg` driver.
+ * The table grants no execution ownership of its own: every mutation is fenced
+ * on the claiming run's ownership in `runs` (`status` active,
+ * `locked_by = workerId`, `locked_until > now()`): every update carries the
+ * fence as an `EXISTS` subquery inside the same statement that performs the
+ * write, and row creation checks the same predicate `FOR SHARE` in its
+ * transaction — so a worker that stalls past its lock cannot overwrite pointers
+ * a recovered conversation now relies on. The one deliberate exception is
+ * orphan recording, which exists precisely for the ownership-already-lost path.
  *
  * `cancel_requested` is inside the fence (mirroring the run-store
  * "cancellation" append class): command cleanup during cancellation is where
