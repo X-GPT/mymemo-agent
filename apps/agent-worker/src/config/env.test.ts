@@ -96,6 +96,31 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 	});
 });
 
+describe("loadWorkerConfigFromEnv — cleanup loop", () => {
+	it("defaults the cleanup interval and a multi-day snapshot retention", () => {
+		const config = loadWorkerConfigFromEnv(baseEnv());
+		expect(config.cleanup.intervalMs).toBe(300_000);
+		expect(config.cleanup.snapshotRetentionMs).toBe(604_800_000);
+	});
+
+	it("honors cleanup overrides", () => {
+		const env = baseEnv();
+		env.WORKER_CLEANUP_INTERVAL_MS = "120000";
+		env.WORKER_SNAPSHOT_RETENTION_MS = "86400000";
+		const config = loadWorkerConfigFromEnv(env);
+		expect(config.cleanup.intervalMs).toBe(120_000);
+		expect(config.cleanup.snapshotRetentionMs).toBe(86_400_000);
+	});
+
+	it("rejects a non-positive cleanup interval override", () => {
+		const env = baseEnv();
+		env.WORKER_CLEANUP_INTERVAL_MS = "0";
+		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
+			/WORKER_CLEANUP_INTERVAL_MS/,
+		);
+	});
+});
+
 describe("loadWorkerConfigFromEnv — LoadDocuments caps", () => {
 	it("defaults the document-load caps", () => {
 		const config = loadWorkerConfigFromEnv(baseEnv());
