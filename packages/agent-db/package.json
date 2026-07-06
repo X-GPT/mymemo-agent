@@ -8,6 +8,7 @@
 		"./client": "./src/client.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",
+		"./queue-metrics": "./src/queue-metrics.ts",
 		"./testing": "./src/testing.ts",
 		"./migrations": "./src/migrations.ts"
 	},
