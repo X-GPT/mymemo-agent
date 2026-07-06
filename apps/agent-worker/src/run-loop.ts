@@ -11,7 +11,12 @@ import {
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 import type { WorkerLogger } from "./logger";
+import { runSnapshotBarrier, type TurnResult } from "./snapshot-barrier";
 import type { Worker } from "./worker";
+
+/** A processor that reports nothing is treated as a clean, sandbox-less turn:
+ * no user work to checkpoint. */
+const CLEAN_TURN: TurnResult = { workspaceDirty: false, sandbox: null };
 
 /**
  * What a claimed run's processing is handed. `appendText` is the bound
@@ -30,8 +35,17 @@ export interface RunProcessContext {
  * appends a single text event; later milestones swap in the Claude Agent SDK
  * loop. Injected so the control loop's claim/heartbeat/terminalize behavior is
  * tested independently of what a turn does.
+ *
+ * A processor may return a {@link TurnResult} describing what the turn left in
+ * the workspace (dirty state, the sandbox to checkpoint); returning nothing is
+ * treated as a clean, sandbox-less turn, so the Milestone 3 synthetic processor
+ * needs no change. The loop feeds the result to the snapshot barrier before a
+ * successful run terminalizes as `done`.
  */
-export type RunProcessor = (ctx: RunProcessContext) => Promise<void>;
+// biome-ignore lint/suspicious/noConfusingVoidType: `void` keeps a nothing-returning processor valid — `undefined` is not assignable from a void-returning async fn.
+type RunTurnResult = void | TurnResult;
+
+export type RunProcessor = (ctx: RunProcessContext) => Promise<RunTurnResult>;
 
 export interface RunLoopOptions {
 	db: Database;
@@ -255,20 +269,22 @@ export class RunLoop {
 	}
 
 	private async runClaimed(run: RunRecord, entry: ActiveEntry): Promise<void> {
+		let turnResult: TurnResult = CLEAN_TURN;
 		let failure: { error: unknown } | undefined;
 		try {
-			await this.opts.processor({
-				run,
-				signal: entry.controller.signal,
-				appendText: (text) => this.appendText(run.runId, text),
-			});
+			turnResult =
+				(await this.opts.processor({
+					run,
+					signal: entry.controller.signal,
+					appendText: (text) => this.appendText(run.runId, text),
+				})) ?? CLEAN_TURN;
 		} catch (error) {
 			failure = { error };
 		}
 		// Stop heartbeating this run before terminalizing: from here the loop owns
 		// the terminal transition and a concurrent heartbeat must not race it.
 		this.activeRuns.delete(run.runId);
-		await this.finish(run.runId, entry.state, failure);
+		await this.finish(run, entry.state, turnResult, failure);
 	}
 
 	private async appendText(runId: string, text: string): Promise<void> {
@@ -284,10 +300,12 @@ export class RunLoop {
 	}
 
 	private async finish(
-		runId: string,
+		run: RunRecord,
 		state: RunEndState,
+		turnResult: TurnResult,
 		failure?: { error: unknown },
 	): Promise<void> {
+		const runId = run.runId;
 		if (state.lostOwnership) {
 			this.opts.logger.warn({
 				message: "abandoning run after ownership loss",
@@ -296,17 +314,62 @@ export class RunLoop {
 			});
 			return;
 		}
-		// Cancellation wins over both success and failure: an SDK error raised while
-		// interrupting still surfaces to the user as `canceled`, never `error`.
-		const status: TerminalRunStatus = state.canceled
-			? "canceled"
-			: failure
-				? "error"
-				: "done";
-		const payload =
-			status === "error" && failure
-				? { message: toMessage(failure.error) }
-				: undefined;
+		// Cancellation wins over both success and failure, and short-circuits the
+		// snapshot barrier: an SDK error raised while interrupting still surfaces as
+		// `canceled`, and a canceled turn is never checkpointed as a clean success.
+		if (state.canceled) {
+			await this.terminalize(runId, "canceled");
+			return;
+		}
+		if (failure) {
+			await this.terminalize(runId, "error", {
+				message: toMessage(failure.error),
+			});
+			return;
+		}
+		// Success: clear the snapshot barrier before the terminal `done`. The
+		// barrier snapshots a dirty workspace and persists the checkpoint under the
+		// ownership fence; if it loses the fence mid-snapshot it returns `abandon`
+		// and recovery owns the terminal event.
+		const decision = await runSnapshotBarrier({
+			db: this.opts.db,
+			owner: {
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId,
+				workerId: this.workerId,
+			},
+			turnResult,
+			logger: this.opts.logger,
+		});
+		if ("abandon" in decision) {
+			this.opts.logger.warn({
+				message: "abandoning run after snapshot barrier",
+				workerId: this.workerId,
+				runId,
+				reason: decision.reason,
+			});
+			return;
+		}
+		await this.terminalize(
+			runId,
+			decision.terminal,
+			decision.terminal === "error" ? { message: decision.message } : undefined,
+		);
+	}
+
+	/**
+	 * Append the run's terminal event through the fenced run-store helper, with
+	 * the late-cancellation fallback the loop relies on: `done`/`error` lose to a
+	 * cancellation the terminal CAS observes (the run is already
+	 * `cancel_requested`), so on a fence rejection try `canceled` once; if even
+	 * that is fenced, stale-run recovery finishes the run.
+	 */
+	private async terminalize(
+		runId: string,
+		status: TerminalRunStatus,
+		payload?: { message: string },
+	): Promise<void> {
 		try {
 			await transitionRunTerminalTx(this.opts.db, {
 				runId,
@@ -316,9 +379,6 @@ export class RunLoop {
 			});
 		} catch (error) {
 			if (error instanceof RunFenceError) {
-				// A late cancellation (or ownership expiry) raced the terminal write.
-				// `done`/`error` are illegal once the run is `cancel_requested`, so try
-				// `canceled` once; if even that is fenced, stale-run recovery finishes it.
 				if (status !== "canceled" && (await this.tryTerminalCanceled(runId))) {
 					return;
 				}
