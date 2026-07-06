@@ -9,6 +9,7 @@ import { ActiveRunExistsError } from "@/features/run-store";
 import { HonoSSESender } from "@/features/streaming/sse-sender";
 import {
 	createConversation,
+	interruptConversationRun,
 	queueConversationTurn,
 } from "./conversations.controller";
 import {
@@ -91,8 +92,9 @@ app.post(
 	},
 );
 
-// POST /v1/conversations/:conversationId/events — send an event (today only
-// `user.message`) and stream the turn's events back as SSE.
+// POST /v1/conversations/:conversationId/events — send an event.
+// `user.message` queues a turn and streams its events back as SSE;
+// `user.interrupt` cancels an existing owned run and returns JSON.
 app.post(
 	"/:conversationId/events",
 	conversationBodyLimit,
@@ -136,12 +138,28 @@ app.post(
 			return c.json({ error: "Conversation not found" }, 404);
 		}
 
-		// `user.message` is new work and is gated. When `user.interrupt` (a control
-		// event for an existing run) is added in a later milestone, it must bypass
-		// this gate — branch on `event.type` here at that point. Today the body is
-		// only `user.message`, so the gate is unconditional. Evaluated on the
-		// trusted identity, after the ownership check but before any run write;
-		// fails closed.
+		// `user.interrupt` is a control event for an existing owned run: it must
+		// not depend on the new-work exposure gate, never creates a run, and
+		// returns JSON without opening SSE. The terminal `canceled` frame is
+		// delivered through the original run's stream or the reconnect endpoint.
+		// The design doc's pg_notify(runId) worker wake-up for the running case
+		// is deferred to the worker milestone — until then the worker observes
+		// `cancel_requested` through its heartbeat.
+		if (event.type === "user.interrupt") {
+			const result = await interruptConversationRun(c.var.deps, {
+				conversation,
+				runId: event.runId,
+			});
+			if (result.outcome === "not_found") {
+				return c.json({ error: "Run not found" }, 404);
+			}
+			const body = { runId: result.run.runId, status: result.run.status };
+			return c.json(body, result.outcome === "already_terminal" ? 409 : 202);
+		}
+
+		// `user.message` is new work and is gated. Evaluated on the trusted
+		// identity, after the ownership check but before any run write; fails
+		// closed.
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(identity.data))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}

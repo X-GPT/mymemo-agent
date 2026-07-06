@@ -7,6 +7,7 @@ import type {
 import type { CreateQueuedRunInput, RunStore } from "@/features/run-store";
 import {
 	createConversation,
+	interruptConversationRun,
 	queueConversationTurn,
 } from "./conversations.controller";
 
@@ -94,6 +95,9 @@ describe("queueConversationTurn", () => {
 			async getRun() {
 				return null;
 			},
+			async requestCancellation() {
+				return { outcome: "not_found" };
+			},
 		};
 		const deps = { runStore } as unknown as AppDeps;
 
@@ -116,6 +120,9 @@ describe("queueConversationTurn", () => {
 			async getRun() {
 				return null;
 			},
+			async requestCancellation() {
+				return { outcome: "not_found" };
+			},
 		};
 		const deps = { runStore } as unknown as AppDeps;
 		const docConversation: ConversationRecord = {
@@ -132,5 +139,38 @@ describe("queueConversationTurn", () => {
 		});
 
 		expect(calls[0]?.conversation).toEqual(docConversation);
+	});
+});
+
+describe("interruptConversationRun", () => {
+	it("scopes the cancellation to the owned conversation record", async () => {
+		const calls: Array<{
+			userId: string;
+			conversationId: string;
+			runId: string;
+		}> = [];
+		const runStore: RunStore = {
+			async createQueuedRun() {
+				throw new Error("interrupt must not create a run");
+			},
+			async getRun() {
+				return null;
+			},
+			async requestCancellation(input) {
+				calls.push(input);
+				return { outcome: "not_found" };
+			},
+		};
+		const deps = { runStore } as unknown as AppDeps;
+
+		const result = await interruptConversationRun(deps, {
+			conversation,
+			runId: "run-7",
+		});
+
+		expect(result).toEqual({ outcome: "not_found" });
+		expect(calls).toEqual([
+			{ userId: "member-1", conversationId: "conv-1", runId: "run-7" },
+		]);
 	});
 });

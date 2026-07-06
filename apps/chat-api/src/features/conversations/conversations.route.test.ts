@@ -89,6 +89,11 @@ function fakeRunStore() {
 			nextEventSeq?: number;
 		}
 	>();
+	const cancellations: Array<{
+		userId: string;
+		conversationId: string;
+		runId: string;
+	}> = [];
 	const runStore: RunStore = {
 		async createQueuedRun(input) {
 			const runId = `run-${queued.length + 1}`;
@@ -130,6 +135,32 @@ function fakeRunStore() {
 				...owner,
 			});
 		},
+		async requestCancellation({ userId, conversationId, runId }) {
+			cancellations.push({ userId, conversationId, runId });
+			const owner = runOwners.get(runId);
+			if (
+				!owner ||
+				owner.userId !== userId ||
+				owner.conversationId !== conversationId
+			) {
+				return { outcome: "not_found" };
+			}
+			if (owner.status === "queued") {
+				owner.status = "canceled";
+				return { outcome: "canceled", run: runRecord({ runId, ...owner }) };
+			}
+			if (owner.status === "running" || owner.status === "cancel_requested") {
+				owner.status = "cancel_requested";
+				return {
+					outcome: "cancel_requested",
+					run: runRecord({ runId, ...owner }),
+				};
+			}
+			return {
+				outcome: "already_terminal",
+				run: runRecord({ runId, ...owner }),
+			};
+		},
 	};
 	const runEventReader: RunEventReader = {
 		async read(runId, afterSeq) {
@@ -151,6 +182,7 @@ function fakeRunStore() {
 		queued,
 		eventsByRun,
 		runOwners,
+		cancellations,
 	};
 }
 
@@ -294,6 +326,9 @@ describe("POST /v1/conversations/:id/events", () => {
 			async getRun() {
 				return null;
 			},
+			async requestCancellation() {
+				return { outcome: "not_found" };
+			},
 		};
 		const res = await buildApp(store, recordingGate(true).gate, {
 			...fakeRunStore(),
@@ -337,7 +372,7 @@ describe("POST /v1/conversations/:id/events", () => {
 			{
 				method: "POST",
 				headers: identityHeaders,
-				body: JSON.stringify({ type: "user.interrupt" }),
+				body: JSON.stringify({ type: "user.tool_confirmation" }),
 			},
 		);
 		expect(res.status).toBe(400);
@@ -350,6 +385,178 @@ describe("POST /v1/conversations/:id/events", () => {
 			{ method: "POST", headers: identityHeaders, body: userMessage },
 		);
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("POST /v1/conversations/:id/events — user.interrupt", () => {
+	const existing: ConversationRecord = {
+		userId: "member-1",
+		conversationId: "conv-1",
+		scope: "general",
+		collectionId: null,
+		summaryId: null,
+	};
+
+	function interrupt(runId: string) {
+		return JSON.stringify({ type: "user.interrupt", runId });
+	}
+
+	it("cancels a queued run with JSON, never opening SSE", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "queued",
+		});
+
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: interrupt("run-1"),
+		});
+
+		expect(res.status).toBe(202);
+		expect(res.headers.get("content-type")).toContain("application/json");
+		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
+		expect(await res.json()).toEqual({ runId: "run-1", status: "canceled" });
+		// A control event never creates a new run, and the cancellation lookup is
+		// scoped to the owning member's conversation.
+		expect(fakeRuns.queued).toHaveLength(0);
+		expect(fakeRuns.cancellations).toEqual([
+			{ userId: "member-1", conversationId: "conv-1", runId: "run-1" },
+		]);
+	});
+
+	it("moves a running run to cancel_requested", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+		});
+
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: interrupt("run-1"),
+		});
+
+		expect(res.status).toBe(202);
+		expect(await res.json()).toEqual({
+			runId: "run-1",
+			status: "cancel_requested",
+		});
+	});
+
+	it("returns 409 with the current status for a terminal run", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "done",
+		});
+
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: interrupt("run-1"),
+		});
+
+		expect(res.status).toBe(409);
+		expect(await res.json()).toEqual({ runId: "run-1", status: "done" });
+	});
+
+	it("returns 404 for a missing or foreign run", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "other-member",
+			conversationId: "conv-1",
+			status: "running",
+		});
+
+		const app = buildApp(store, gateThatFailsIfConsulted(), fakeRuns);
+		const missing = await app.request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: interrupt("run-ghost"),
+		});
+		expect(missing.status).toBe(404);
+
+		const foreign = await app.request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: interrupt("run-1"),
+		});
+		expect(foreign.status).toBe(404);
+	});
+
+	it("returns 404 for a missing conversation without consulting the gate", async () => {
+		const res = await buildApp(
+			fakeStore().store,
+			gateThatFailsIfConsulted(),
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: interrupt("run-1"),
+		});
+		expect(res.status).toBe(404);
+	});
+
+	it("does not depend on the new-work exposure gate", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "queued",
+		});
+
+		// A gated-off user can still interrupt an existing owned run.
+		const res = await buildApp(
+			store,
+			recordingGate(false).gate,
+			fakeRuns,
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: interrupt("run-1"),
+		});
+		expect(res.status).toBe(202);
+	});
+
+	it("rejects a missing or path-unsafe runId with 400", async () => {
+		const { store } = fakeStore([existing]);
+		const app = buildApp(store);
+
+		const missing = await app.request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify({ type: "user.interrupt" }),
+		});
+		expect(missing.status).toBe(400);
+
+		const unsafe = await app.request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: interrupt("../escape"),
+		});
+		expect(unsafe.status).toBe(400);
 	});
 });
 

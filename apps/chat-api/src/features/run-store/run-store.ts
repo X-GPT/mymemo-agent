@@ -83,6 +83,13 @@ export interface RunStore {
 		conversationId: string;
 		runId: string;
 	}): Promise<RunRecord | null>;
+	/** Record a user cancellation request for an owned run
+	 * (see {@link requestRunCancellationTx}). */
+	requestCancellation(input: {
+		userId: string;
+		conversationId: string;
+		runId: string;
+	}): Promise<RunCancellationResult>;
 }
 
 /**
@@ -224,6 +231,14 @@ export class PostgresRunStore implements RunStore {
 			)
 			.limit(1);
 		return rows[0] ? toRunRecord(rows[0]) : null;
+	}
+
+	async requestCancellation(input: {
+		userId: string;
+		conversationId: string;
+		runId: string;
+	}): Promise<RunCancellationResult> {
+		return requestRunCancellationTx(this.db, input);
 	}
 
 	async listRunEventsAfter(input: {

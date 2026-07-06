@@ -31,9 +31,9 @@ export const CreateConversationBody = z
 export type CreateConversationBody = z.infer<typeof CreateConversationBody>;
 
 // Body of `POST /v1/conversations/:id/events`. A discriminated union over
-// `type`, mirroring the Managed Agents event model: today only `user.message`,
-// extensible later to `user.interrupt`, `user.tool_confirmation`, etc. without a
-// contract rename.
+// `type`, mirroring the Managed Agents event model: `user.message` queues a new
+// turn, `user.interrupt` cancels an existing owned run; extensible later to
+// `user.tool_confirmation`, etc. without a contract rename.
 const UserMessageEvent = z
 	.object({
 		type: z.literal("user.message"),
@@ -41,8 +41,19 @@ const UserMessageEvent = z
 	})
 	.strict();
 
+// A control event for an existing run — it never creates a run and never opens
+// SSE. `runId` is server-generated, so it gets the same path-safe validation as
+// the path params even though it arrives in the body.
+const UserInterruptEvent = z
+	.object({
+		type: z.literal("user.interrupt"),
+		runId: RunIdParam,
+	})
+	.strict();
+
 export const ConversationEventBody = z.discriminatedUnion("type", [
 	UserMessageEvent,
+	UserInterruptEvent,
 ]);
 export type ConversationEventBody = z.infer<typeof ConversationEventBody>;
 

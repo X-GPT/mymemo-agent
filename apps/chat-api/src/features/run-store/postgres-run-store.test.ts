@@ -88,6 +88,30 @@ describe("PostgresRunStore", () => {
 		]);
 	});
 
+	it("requests cancellation scoped to the owning user and conversation", async () => {
+		const { runId } = await store.createQueuedRun({
+			conversation,
+			message: "hello",
+		});
+
+		await expect(
+			store.requestCancellation({
+				userId: "other",
+				conversationId: "conv-1",
+				runId,
+			}),
+		).resolves.toEqual({ outcome: "not_found" });
+
+		const result = await store.requestCancellation({
+			userId: "user-1",
+			conversationId: "conv-1",
+			runId,
+		});
+		expect(result.outcome).toBe("canceled");
+		if (result.outcome !== "canceled") throw new Error("unreachable");
+		expect(result.run.status).toBe("canceled");
+	});
+
 	it("gets a run only for its owning user and conversation", async () => {
 		const { runId } = await store.createQueuedRun({
 			conversation,
