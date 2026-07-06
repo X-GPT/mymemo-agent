@@ -143,7 +143,8 @@ The former chat-api → sandbox-daemon `/turn` edge is removed from chat-api's l
 | `src/features/run-store/` | Durable run queue/event-log store over `runs` and `run_events`; queues `user.message` turns and replays run events |
 | `src/features/run-events/` | Durable run-event projection and wake-up plumbing (`project-run.ts`, `project-run-event.ts`, `run-event-reader.ts`, `run-notifier.ts`) |
 | `src/features/streaming/` | SSE sender/types reused by the conversation routes (`sse-sender.ts`, `events.ts`) |
-| `src/db/` | Drizzle schema (`schema.ts`: `conversations`, `runs`, `run_events`, `sandbox_leases`), client (`client.ts`), and migration runner (`migrate.ts`) for the writable DB; migrations in `drizzle/` |
+| `src/db/` | Drizzle schema (`schema.ts`: `conversations`, `runs`, `run_events`, `conversation_runtime`, `orphan_sandboxes`), client (`client.ts`), and migration runner (`migrate.ts`) for the writable DB; migrations in `drizzle/` |
+| `src/features/conversation-runtime-store/` | Persistent E2B workspace metadata over `conversation_runtime` (sandbox pointer, snapshot rotation, checkpoint/taint state) — every mutation fenced on the claiming run's `locked_by`/`locked_until` — plus the unfenced `orphan_sandboxes` recovery ledger |
 | `src/config/env.ts` | Environment validation |
 | `apps/gateway/src/server.ts` | `createGateway(config, db)` — the merged control plane: registers health, then the document routes, then the catch-all LLM proxy (order is correctness-critical). Pure: config in, app out |
 | `apps/gateway/src/auth/` | `bearer.ts` (the one shared `bearerClaims` token-verify seam + 401/403 helpers) and `claims.ts` (`requireDocumentClaims` scope guard) |
