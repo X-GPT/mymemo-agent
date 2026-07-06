@@ -326,8 +326,12 @@ describe("agent deployment config", () => {
 		const networkConfig = readFileSync(join(terraformDir, "network.tf"), "utf8");
 		const outputs = readFileSync(join(terraformDir, "outputs.tf"), "utf8");
 
-		expect(locals).toContain("shared_vpc_id         = local.shared_service_outputs.vpc_id");
-		expect(sharedState).not.toContain('data "aws_subnet" "shared_ecs_first"');
+		expect(locals).toContain("shared_vpc_id_output = try(local.shared_service_outputs.vpc_id, null)");
+		expect(locals).toContain(
+			"shared_vpc_id        = coalesce(local.shared_vpc_id_output, one(data.aws_subnet.shared_ecs_first[*].vpc_id))",
+		);
+		expect(sharedState).toContain('data "aws_subnet" "shared_ecs_first"');
+		expect(sharedState).toContain("count = local.shared_vpc_id_output == null ? 1 : 0");
 		expect(sharedState).toContain('data "aws_ecs_cluster" "shared"');
 		expect(sharedState).not.toContain('data "aws_ecs_service" "mymemo_service_api"');
 		expect(sharedState).toContain("count = local.shared_ecs_cluster_arn_output == null");
