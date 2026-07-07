@@ -155,6 +155,14 @@ export class RunLoop {
 			clearTimeout(this.recoveryTimer);
 			this.recoveryTimer = undefined;
 		}
+		// Interrupt every in-flight run before draining: aborting the run's
+		// controller is what makes its processor interrupt the live SDK query and
+		// cancel any active E2B command (plan Task 7.2). This is not a user cancel,
+		// so `state.canceled` stays false — an interrupted turn drains to `error`,
+		// never a false `done`. Snapshot the map: a finishing run deletes itself.
+		for (const entry of [...this.activeRuns.values()]) {
+			entry.controller.abort();
+		}
 		await this.opts.worker.shutdown();
 	}
 
