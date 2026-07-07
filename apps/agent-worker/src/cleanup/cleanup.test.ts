@@ -8,10 +8,15 @@ import {
 	it,
 } from "bun:test";
 import {
+	agentSessions,
 	conversationRuntime,
 	conversations,
 	orphanSandboxes,
 } from "@mymemo/agent-db/schema";
+import {
+	appendAgentSessionEntriesTx,
+	loadAgentSessionEntriesTx,
+} from "@mymemo/agent-db/session-store";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { and, eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
@@ -65,6 +70,7 @@ afterEach(async () => {
 	await tdb.db.delete(orphanSandboxes);
 	await tdb.db.delete(conversationRuntime);
 	await tdb.db.delete(conversations);
+	await tdb.db.delete(agentSessions);
 });
 
 function pass(overrides?: Partial<CleanupPassOptions>) {
@@ -287,6 +293,41 @@ describe("deleted-conversation cleanup", () => {
 		]);
 		expect(await runtimeRow("user-1", "conv-gone")).toBeUndefined();
 		expect(summary.deletedRuntimesRemoved).toBe(1);
+	});
+
+	it("deletes the deleted conversation's transcripts and keeps a surviving conversation's", async () => {
+		// A deleted conversation (no `conversations` row) with a stored transcript.
+		await insertRuntime({ userId: "user-1", conversationId: "conv-gone" });
+		await appendAgentSessionEntriesTx(
+			tdb.db,
+			{ conversationId: "conv-gone", projectKey: "p", sessionId: "sess-gone" },
+			[{ type: "user", uuid: "a" }],
+		);
+		// A surviving conversation whose transcript must be untouched.
+		await insertConversation("user-1", "conv-live");
+		await insertRuntime({ userId: "user-1", conversationId: "conv-live" });
+		await appendAgentSessionEntriesTx(
+			tdb.db,
+			{ conversationId: "conv-live", projectKey: "p", sessionId: "sess-live" },
+			[{ type: "user", uuid: "b" }],
+		);
+
+		await pass();
+
+		expect(
+			await loadAgentSessionEntriesTx(tdb.db, {
+				conversationId: "conv-gone",
+				projectKey: "p",
+				sessionId: "sess-gone",
+			}),
+		).toBeNull();
+		expect(
+			await loadAgentSessionEntriesTx(tdb.db, {
+				conversationId: "conv-live",
+				projectKey: "p",
+				sessionId: "sess-live",
+			}),
+		).toHaveLength(1);
 	});
 
 	it("records an orphan and still clears the pointer when the kill fails", async () => {

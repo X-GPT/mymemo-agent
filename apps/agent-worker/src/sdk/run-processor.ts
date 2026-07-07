@@ -32,15 +32,29 @@ export interface SdkRunProcessorDeps {
  *
  * Text appends, terminal transitions, and the ownership fence all belong to the
  * loop and the run store; this processor only turns SDK output into
- * `ctx.appendText` calls and lets errors and interruptions propagate.
+ * `ctx.appendText` calls, reports the session to resume from next turn, and lets
+ * errors and interruptions propagate.
  */
 export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 	return async (ctx) => {
 		const query = await deps.startRunQuery(ctx.run, ctx.signal);
-		await consumeAgentStream({
+		const outcome = await consumeAgentStream({
 			query,
 			signal: ctx.signal,
 			appendAssistantText: ctx.appendText,
 		});
+		return {
+			// Real dirty/sandbox state arrives with E2B provisioning; until then a
+			// query touches no worker-managed E2B workspace here.
+			workspaceDirty: false,
+			sandbox: null,
+			// Advance the conversation's resume pointer only when the SDK produced a
+			// session id and no `mirror_error` left the stored transcript unreliable
+			// (ADR-0005); otherwise the run still succeeds but the pointer holds.
+			agentSession:
+				outcome.sessionId !== null && !outcome.mirrorErrorObserved
+					? { sessionId: outcome.sessionId }
+					: null,
+		};
 	};
 }

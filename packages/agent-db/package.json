@@ -9,6 +9,7 @@
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",
 		"./runtime-store": "./src/runtime-store.ts",
+		"./session-store": "./src/session-store.ts",
 		"./testing": "./src/testing.ts",
 		"./migrations": "./src/migrations.ts"
 	},

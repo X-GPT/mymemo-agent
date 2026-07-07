@@ -431,6 +431,57 @@ describe("RunLoop — snapshot barrier", () => {
 	});
 });
 
+describe("RunLoop — agent session pointer", () => {
+	it("advances the resume pointer on a successful turn that reports a session", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			// The runtime row is created while the run is owned (as E2B provisioning
+			// will), so the fenced pointer advance in `finish()` has a row to update.
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			return {
+				workspaceDirty: false,
+				sandbox: null,
+				agentSession: { sessionId: "session-abc" },
+			};
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(await readRuntime("conv-1")).toMatchObject({
+			agentSessionId: "session-abc",
+		});
+	});
+
+	it("terminalizes done without advancing the pointer when the turn reported a mirror error", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			// A mirror_error turn drops the session id → agentSession is null.
+			return { workspaceDirty: false, sandbox: null, agentSession: null };
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(await readRuntime("conv-1")).toMatchObject({ agentSessionId: null });
+	});
+});
+
 describe("RunLoop — shutdown", () => {
 	it("interrupts in-flight runs on stop and terminalizes them as error", async () => {
 		const worker = buildWorker(1);

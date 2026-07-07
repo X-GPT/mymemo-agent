@@ -14,6 +14,7 @@ import {
 	RunFenceError,
 } from "./run-store";
 import {
+	advanceAgentSessionPointerTx,
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
 	markRuntimeCheckpointStatusTx,
@@ -220,6 +221,56 @@ describe("updateRuntimeSandboxTx", () => {
 				conversationId: OWNER.conversationId,
 			}),
 		).toMatchObject({ sandboxId: "sbx-1" });
+	});
+});
+
+describe("advanceAgentSessionPointerTx", () => {
+	it("advances the resume pointer while the run is owned", async () => {
+		await claimOwnedRun();
+		await createConversationRuntimeTx(tdb.db, OWNER);
+
+		const runtime = await advanceAgentSessionPointerTx(tdb.db, {
+			...OWNER,
+			agentSessionId: "session-abc",
+		});
+
+		expect(runtime.agentSessionId).toBe("session-abc");
+	});
+
+	it("rejects the advance after run ownership is lost, leaving the pointer put", async () => {
+		await claimOwnedRun();
+		await createConversationRuntimeTx(tdb.db, OWNER);
+		await advanceAgentSessionPointerTx(tdb.db, {
+			...OWNER,
+			agentSessionId: "session-first",
+		});
+		await expireOwnership();
+
+		await expect(
+			advanceAgentSessionPointerTx(tdb.db, {
+				...OWNER,
+				agentSessionId: "session-stale",
+			}),
+		).rejects.toBeInstanceOf(RunFenceError);
+		expect(
+			await loadConversationRuntimeTx(tdb.db, {
+				userId: OWNER.userId,
+				conversationId: OWNER.conversationId,
+			}),
+		).toMatchObject({ agentSessionId: "session-first" });
+	});
+
+	it("rejects the advance by a worker that does not hold the run", async () => {
+		await claimOwnedRun();
+		await createConversationRuntimeTx(tdb.db, OWNER);
+
+		await expect(
+			advanceAgentSessionPointerTx(tdb.db, {
+				...OWNER,
+				workerId: "worker-2",
+				agentSessionId: "session-thief",
+			}),
+		).rejects.toBeInstanceOf(RunFenceError);
 	});
 });
 

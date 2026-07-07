@@ -4,6 +4,7 @@ import {
 	conversations,
 	orphanSandboxes,
 } from "@mymemo/agent-db/schema";
+import { deleteConversationAgentSessionsTx } from "@mymemo/agent-db/session-store";
 import { and, eq, gte, isNotNull, isNull, lt } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 
@@ -296,6 +297,13 @@ async function sweepDeletedConversations(
 			retained++;
 			continue;
 		}
+		// Retention is ours (ADR-0005): a deleted conversation's SDK transcripts go
+		// with its runtime row. A pure DB delete (no external resource) with no FK
+		// cascade to lean on, so it is done explicitly here, in the cleanup that
+		// owns the conversation's other retained state.
+		await deleteConversationAgentSessionsTx(db, {
+			conversationId: row.conversationId,
+		});
 		await db
 			.delete(conversationRuntime)
 			.where(

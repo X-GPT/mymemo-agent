@@ -3,8 +3,10 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
 	assistantTextFromMessage,
 	consumeAgentStream,
+	isMirrorError,
 	QueryInterruptedError,
 	type SupervisedQuery,
+	sessionIdFromResult,
 } from "./agent-stream";
 
 /** A minimal assistant message carrying the given text blocks. */
@@ -20,13 +22,27 @@ function assistantMessage(...texts: string[]): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
-/** A `result` message — the SDK's final message, which carries no appendable text. */
-function resultMessage(): SDKMessage {
+/** A `result` message — the SDK's final message, which carries no appendable
+ * text but does carry the `session_id` the worker stores as the resume pointer. */
+function resultMessage(sessionId?: string): SDKMessage {
 	return {
 		type: "result",
 		subtype: "success",
 		is_error: false,
 		result: "done",
+		...(sessionId ? { session_id: sessionId } : {}),
+	} as unknown as SDKMessage;
+}
+
+/** A `mirror_error` system message — a dropped transcript-mirror batch. */
+function mirrorErrorMessage(): SDKMessage {
+	return {
+		type: "system",
+		subtype: "mirror_error",
+		error: "append timed out",
+		key: { projectKey: "p", sessionId: "s" },
+		uuid: "u",
+		session_id: "s",
 	} as unknown as SDKMessage;
 }
 
@@ -89,6 +105,25 @@ describe("assistantTextFromMessage", () => {
 
 	it("returns null for non-assistant messages", () => {
 		expect(assistantTextFromMessage(resultMessage())).toBeNull();
+	});
+});
+
+describe("sessionIdFromResult", () => {
+	it("returns the session id of a result message", () => {
+		expect(sessionIdFromResult(resultMessage("session-1"))).toBe("session-1");
+	});
+
+	it("returns null for a result with no session id and for non-result messages", () => {
+		expect(sessionIdFromResult(resultMessage())).toBeNull();
+		expect(sessionIdFromResult(assistantMessage("x"))).toBeNull();
+	});
+});
+
+describe("isMirrorError", () => {
+	it("is true only for a mirror_error system message", () => {
+		expect(isMirrorError(mirrorErrorMessage())).toBe(true);
+		expect(isMirrorError(resultMessage())).toBe(false);
+		expect(isMirrorError(assistantMessage("x"))).toBe(false);
 	});
 });
 
@@ -178,11 +213,11 @@ describe("consumeAgentStream", () => {
 		expect(query.interrupts).toBe(0);
 	});
 
-	it("does not throw on a normal successful result", async () => {
+	it("resolves with the session id from the result and no mirror error on a clean run", async () => {
 		const controller = new AbortController();
 		const query = fakeQuery([
 			{ message: assistantMessage("answer") },
-			{ message: resultMessage() },
+			{ message: resultMessage("session-42") },
 		]);
 
 		await expect(
@@ -191,7 +226,27 @@ describe("consumeAgentStream", () => {
 				signal: controller.signal,
 				appendAssistantText: async () => {},
 			}),
-		).resolves.toBeUndefined();
+		).resolves.toEqual({ sessionId: "session-42", mirrorErrorObserved: false });
+	});
+
+	it("flags a mirror_error observed anywhere in the stream", async () => {
+		const controller = new AbortController();
+		const query = fakeQuery([
+			{ message: assistantMessage("partial") },
+			{ message: mirrorErrorMessage() },
+			{ message: resultMessage("session-7") },
+		]);
+
+		const outcome = await consumeAgentStream({
+			query,
+			signal: controller.signal,
+			appendAssistantText: async () => {},
+		});
+
+		expect(outcome).toEqual({
+			sessionId: "session-7",
+			mirrorErrorObserved: true,
+		});
 	});
 
 	it("propagates an SDK stream error as a throw", async () => {

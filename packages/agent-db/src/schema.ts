@@ -59,6 +59,15 @@ export const conversationRuntime = pgTable(
 		workspaceCheckpointStatus: text("workspace_checkpoint_status")
 			.notNull()
 			.default("clean"),
+		/**
+		 * The Claude Agent SDK session to resume this conversation from (ADR-0005):
+		 * the id the worker stores from the SDK's terminal result message. NULL
+		 * until the first successful turn — a run with no pointer starts a fresh
+		 * agent session. It advances ONLY in the run's terminal-success transition,
+		 * under the same ownership fence as the rest of this row, so a stale worker
+		 * cannot move it; a run that observed a `mirror_error` leaves it unchanged.
+		 */
+		agentSessionId: text("agent_session_id"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -214,6 +223,70 @@ export const runEvents = pgTable(
 			.defaultNow(),
 	},
 	(t) => [primaryKey({ columns: [t.runId, t.seq] })],
+);
+
+/**
+ * The Claude Agent SDK session-transcript mirror — the backing table for the
+ * worker's `SessionStore` adapter (ADR-0005, Task 7.3). One row per transcript
+ * entry (a JSONL line the SDK mirrors after its local write), insertion-ordered
+ * by the `bigserial` id so a session replays in the order it was appended.
+ *
+ * The SDK identifies a transcript by `(projectKey, sessionId, subpath)` and the
+ * adapter stores all three, but the stable identity the adapter binds every call
+ * to is `conversation_id`: `project_key` is the SDK's cwd-derived view of the
+ * same conversation (kept stable by a deterministic per-conversation query cwd,
+ * and recorded here for fidelity), while `conversation_id` is what makes
+ * conversation-scoped deletion exact without reconstructing the SDK's cwd→key
+ * sanitization. `subpath` is `''` for the main transcript and a non-empty
+ * `subagents/agent-…` key for subagent transcripts.
+ *
+ * Worker-only: chat-api never reads or writes it. No FK to `conversations` —
+ * transcript retention is the adapter's job (deletion runs in the periodic
+ * cleanup that owns snapshots), and a cascade would couple the two.
+ */
+export const agentSessions = pgTable(
+	"agent_sessions",
+	{
+		/** Insertion order within a transcript; the replay sort key. */
+		id: bigserial("id", { mode: "number" }).primaryKey(),
+		conversationId: text("conversation_id").notNull(),
+		projectKey: text("project_key").notNull(),
+		sessionId: text("session_id").notNull(),
+		/** `''` = main transcript; a `subagents/agent-…` key = subagent transcript. */
+		subpath: text("subpath").notNull().default(""),
+		/**
+		 * The entry's `uuid` when it carries one, else NULL. Dedup keys on it so a
+		 * re-delivered batch (the SDK's at-most-once mirror may retry a failed
+		 * append) does not double-insert; entries without a uuid cannot be deduped
+		 * and always insert (NULLs are distinct in the unique index below).
+		 */
+		uuid: text("uuid"),
+		/** The opaque JSONL transcript line, round-tripped as-is. */
+		entry: jsonb("entry").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		// Dedup by entry uuid within a transcript. Non-partial on purpose: Postgres
+		// treats NULL as distinct, so uuid-less entries never collide and always
+		// insert, while `ON CONFLICT DO NOTHING` drops a re-delivered uuid.
+		uniqueIndex("agent_sessions_dedup_idx").on(
+			t.conversationId,
+			t.sessionId,
+			t.subpath,
+			t.uuid,
+		),
+		// Load/listSubkeys: read one transcript's entries in insertion order.
+		index("agent_sessions_transcript_idx").on(
+			t.conversationId,
+			t.sessionId,
+			t.subpath,
+			t.id,
+		),
+		// Conversation-scoped deletion (conversation delete / periodic cleanup).
+		index("agent_sessions_conversation_idx").on(t.conversationId),
+	],
 );
 
 /**

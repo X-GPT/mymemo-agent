@@ -36,6 +36,14 @@ export interface TurnResult {
 	 * v1 (foreground-only `Bash`) this should never happen; if it does, the
 	 * sandbox cannot be proven clean and must not be snapshotted. */
 	managedCommandRunning?: boolean;
+	/**
+	 * The agent session to record as the conversation's resume pointer once the
+	 * turn terminalizes `done` (ADR-0005). Present only when the SDK produced a
+	 * session id AND no `mirror_error` made the mirrored transcript unreliable —
+	 * a dropped-mirror turn omits it, so the pointer does not advance yet the run
+	 * still succeeds. Absent for synthetic / sandbox-less turns that ran no query.
+	 */
+	agentSession?: { sessionId: string } | null;
 }
 
 /**
