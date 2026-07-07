@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { createTestDatabase } from "@/db/testing";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { conversations } from "@/db/schema";
+import { createTestDatabase, type TestDb } from "@/db/testing";
 import type { ConversationRecord } from "./conversation-store";
 import { PostgresConversationStore } from "./postgres-conversation-store";
 
@@ -12,16 +13,22 @@ const collectionConversation: ConversationRecord = {
 };
 
 describe("PostgresConversationStore", () => {
+	let tdb: TestDb;
 	let store: PostgresConversationStore;
-	let close: () => Promise<void>;
 
-	beforeEach(async () => {
-		const tdb = await createTestDatabase();
-		close = tdb.close;
+	// One PGlite instance for the whole file (spin-up is the slow part); each test
+	// starts from an empty conversations table via delete, keeping isolation
+	// without the cost.
+	beforeAll(async () => {
+		tdb = await createTestDatabase();
 		store = new PostgresConversationStore(tdb.db);
 	});
 
-	afterEach(() => close());
+	afterAll(() => tdb.close());
+
+	afterEach(async () => {
+		await tdb.db.delete(conversations);
+	});
 
 	it("get returns null when the conversation does not exist", async () => {
 		expect(

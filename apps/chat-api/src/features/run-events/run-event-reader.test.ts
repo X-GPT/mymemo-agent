@@ -1,7 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
 import type { Database } from "@/db/client";
 import { runEvents, runs } from "@/db/schema";
-import { createTestDatabase } from "@/db/testing";
+import { createTestDatabase, type TestDb } from "@/db/testing";
 import { DrizzleRunEventReader } from "./run-event-reader";
 
 async function seedRun(db: Database, runId: string, conversationId = "conv-1") {
@@ -24,19 +31,24 @@ async function appendEvent(
 }
 
 describe("DrizzleRunEventReader", () => {
+	let tdb: TestDb;
 	let db: Database;
-	let close: () => Promise<void>;
 	let reader: DrizzleRunEventReader;
 
-	beforeEach(async () => {
-		const tdb = await createTestDatabase();
+	// One PGlite instance for the whole file (spin-up is the slow part); each
+	// test starts from empty tables via delete, keeping isolation without the cost.
+	beforeAll(async () => {
+		tdb = await createTestDatabase();
 		db = tdb.db;
-		close = tdb.close;
 		reader = new DrizzleRunEventReader(db);
-		await seedRun(db, "run-1");
 	});
 
-	afterEach(() => close());
+	afterAll(() => tdb.close());
+
+	beforeEach(async () => {
+		await db.delete(runs); // cascades run_events
+		await seedRun(db, "run-1");
+	});
 
 	it("returns events with seq greater than the cursor, ordered by seq", async () => {
 		await appendEvent(db, "run-1", 2, "assistant_text", { text: "b" });

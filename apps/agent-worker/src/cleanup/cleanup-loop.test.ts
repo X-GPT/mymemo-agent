@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
 import { orphanSandboxes } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { WorkerLogger } from "../logger";
@@ -39,8 +46,18 @@ class FakePool implements AdvisoryLockPool {
 let tdb: TestDb;
 let janitor: FakeJanitor;
 
-beforeEach(async () => {
+// One PGlite instance for the whole file (spin-up is the slow part); each test
+// starts from a single fresh orphan row via delete + re-seed.
+beforeAll(async () => {
 	tdb = await createTestDatabase();
+});
+
+afterAll(async () => {
+	await tdb.close();
+});
+
+beforeEach(async () => {
+	await tdb.db.delete(orphanSandboxes);
 	janitor = new FakeJanitor();
 	await tdb.db.insert(orphanSandboxes).values({
 		sandboxId: "sbx-orphan",
@@ -50,10 +67,6 @@ beforeEach(async () => {
 		createdByWorkerId: "worker-old",
 		reason: "test",
 	});
-});
-
-afterEach(async () => {
-	await tdb.close();
 });
 
 function buildLoop(pool: AdvisoryLockPool) {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import {
 	appendRunEventTx,
 	claimNextRunTx,
@@ -11,7 +11,7 @@ import {
 	loadConversationRuntimeTx,
 	updateRuntimeSandboxTx,
 } from "@mymemo/agent-db/runtime-store";
-import { runEvents, runs } from "@mymemo/agent-db/schema";
+import { conversationRuntime, runEvents, runs } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
@@ -23,12 +23,19 @@ const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
 let tdb: TestDb;
 
-beforeEach(async () => {
+// One PGlite instance for the whole file (spin-up is the slow part); each test
+// starts from empty tables via delete, keeping isolation without the cost.
+beforeAll(async () => {
 	tdb = await createTestDatabase();
 });
 
-afterEach(async () => {
+afterAll(async () => {
 	await tdb.close();
+});
+
+afterEach(async () => {
+	await tdb.db.delete(runs); // cascades run_events
+	await tdb.db.delete(conversationRuntime);
 });
 
 /** A promise whose resolution the test controls, to gate a processor. */
