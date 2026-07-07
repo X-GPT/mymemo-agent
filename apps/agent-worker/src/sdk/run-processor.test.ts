@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
 import { runEvents, runs } from "@mymemo/agent-db/schema";
@@ -14,12 +14,18 @@ const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
 let tdb: TestDb;
 
-beforeEach(async () => {
+// One PGlite instance for the whole file (spin-up is the slow part); each test
+// starts from empty tables via delete, keeping isolation without the cost.
+beforeAll(async () => {
 	tdb = await createTestDatabase();
 });
 
-afterEach(async () => {
+afterAll(async () => {
 	await tdb.close();
+});
+
+afterEach(async () => {
+	await tdb.db.delete(runs); // cascades run_events
 });
 
 function assistantMessage(text: string): SDKMessage {

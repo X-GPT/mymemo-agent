@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type {
 	SessionKey,
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
+import { agentSessions } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import {
 	buildAgentSessionQueryConfig,
@@ -13,12 +14,19 @@ import {
 
 let tdb: TestDb;
 
-beforeEach(async () => {
+// One PGlite instance for the whole file (spin-up is the slow part); each test
+// starts from empty tables via delete, keeping isolation without the cost — the
+// agent_sessions dedup index would otherwise swallow the reused conv/session ids.
+beforeAll(async () => {
 	tdb = await createTestDatabase();
 });
 
-afterEach(async () => {
+afterAll(async () => {
 	await tdb.close();
+});
+
+afterEach(async () => {
+	await tdb.db.delete(agentSessions);
 });
 
 /** A main-transcript key for `conv-1`. projectKey is deliberately arbitrary —

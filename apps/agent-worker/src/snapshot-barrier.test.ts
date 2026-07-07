@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { claimNextRunTx, createQueuedRunTx } from "@mymemo/agent-db/run-store";
 import {
 	createConversationRuntimeTx,
@@ -7,7 +7,7 @@ import {
 	type RunOwnershipRef,
 	updateRuntimeSandboxTx,
 } from "@mymemo/agent-db/runtime-store";
-import { runs } from "@mymemo/agent-db/schema";
+import { conversationRuntime, runs } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
@@ -21,12 +21,19 @@ const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
 let tdb: TestDb;
 
-beforeEach(async () => {
+// One PGlite instance for the whole file (spin-up is the slow part); each test
+// starts from empty tables via delete, keeping isolation without the cost.
+beforeAll(async () => {
 	tdb = await createTestDatabase();
 });
 
-afterEach(async () => {
+afterAll(async () => {
 	await tdb.close();
+});
+
+afterEach(async () => {
+	await tdb.db.delete(runs);
+	await tdb.db.delete(conversationRuntime);
 });
 
 const OWNER: RunOwnershipRef = {

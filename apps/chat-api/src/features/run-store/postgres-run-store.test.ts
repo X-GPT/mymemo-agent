@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { conversations, runEvents, runs } from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
@@ -17,13 +17,20 @@ describe("PostgresRunStore", () => {
 	let tdb: TestDb;
 	let store: PostgresRunStore;
 
-	beforeEach(async () => {
+	// One PGlite instance for the whole file (spin-up is the slow part); each
+	// test starts from an empty runs table via delete, keeping isolation without
+	// the cost. The conversation seed is stable, so it is inserted once.
+	beforeAll(async () => {
 		tdb = await createTestDatabase();
 		store = new PostgresRunStore(tdb.db);
 		await tdb.db.insert(conversations).values(conversation);
 	});
 
-	afterEach(() => tdb.close());
+	afterAll(() => tdb.close());
+
+	afterEach(async () => {
+		await tdb.db.delete(runs); // cascades run_events; keeps the conversation seed
+	});
 
 	it("creates one queued run and records run_started transactionally", async () => {
 		const result = await store.createQueuedRun({

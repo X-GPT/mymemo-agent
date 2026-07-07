@@ -38,6 +38,25 @@ export async function createTestDatabase(): Promise<TestDb> {
 	}
 	return {
 		db: drizzle(client, { schema }) as unknown as Database,
-		close: () => client.close(),
+		close: async () => {
+			try {
+				await client.close();
+			} finally {
+				// pglite's close() shuts Postgres down but keeps the Emscripten
+				// module — and its ~1GB WASM linear memory — referenced via
+				// `client.mod`. Test files hold their handle in a module-level
+				// `let tdb` that lives for the whole `bun test` process, so each
+				// closed-but-referenced instance stays pinned (~465MB, GC-immune)
+				// and peak memory climbs one corpse per pglite file until a later
+				// `new PGlite()` cannot allocate and fails to initialize — the flaky
+				// CI OOM. Dropping `client.mod` unpins the WASM memory even while the
+				// handle is referenced; the forced GC then reclaims it deterministically
+				// (measured: pinned arrayBuffers 2.3GB -> 0 with the null, unchanged
+				// without it). Runs in `finally` so it still fires if close() throws
+				// (e.g. a double-close raising "PGlite is closed").
+				(client as { mod?: unknown }).mod = undefined;
+				if (typeof Bun !== "undefined") Bun.gc(true);
+			}
+		},
 	};
 }
