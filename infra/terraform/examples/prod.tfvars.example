@@ -27,9 +27,6 @@ openrouter_base_url       = "https://openrouter.ai/api"
 openrouter_default_model  = "anthropic/claude-sonnet-4"
 worker_max_concurrent_runs = 2
 
-# Optional legacy sandbox path config. Leave unset for split-runtime deploys.
-# gateway_public_url = "https://agent-gateway.example.com"
-
 # Agent-owned writable Postgres. This Terraform root always creates a dedicated
 # RDS instance. The password is generated and stored by RDS in AWS Secrets
 # Manager; ECS receives AGENT_DATABASE_URL without a password plus a DB_PASSWORD
@@ -46,14 +43,12 @@ agent_db_deletion_protection      = true
 # Non-database secret values are created and rotated outside this example.
 # By default Terraform resolves conventional Secrets Manager names:
 # - <name_prefix>-<environment>-KB_DATABASE_URL
-# - <name_prefix>-<environment>-LLM_TOKEN_SECRET
 # - <name_prefix>-<environment>-STATSIG_SERVER_SECRET
 # - <name_prefix>-<environment>-OPENROUTER_API_KEY
 # - <name_prefix>-<environment>-E2B_API_KEY
 #
 # Override these only when an environment cannot use the convention.
 # kb_database_url_secret_name    = "mymemo-agent-prod-KB_DATABASE_URL"
-# llm_token_secret_name          = "mymemo-agent-prod-LLM_TOKEN_SECRET"
 # statsig_server_secret_name     = "mymemo-agent-prod-STATSIG_SERVER_SECRET"
 # openrouter_api_key_secret_name = "mymemo-agent-prod-OPENROUTER_API_KEY"
 # e2b_api_key_secret_name        = "mymemo-agent-prod-E2B_API_KEY"

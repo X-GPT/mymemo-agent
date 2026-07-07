@@ -13,9 +13,6 @@ on:
       confirm_prod_apply:
         description: "Type apply-mymemo-agent-prod to apply production Terraform changes."
         required: true
-      gateway_public_url:
-        description: "Optional legacy sandbox gateway base URL. Leave empty for split-runtime deploys."
-        required: false
 
 concurrency:
   group: release-deploy-${{ inputs.environment }}
@@ -32,7 +29,6 @@ jobs:
     env:
       DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
       DEPLOY_CONFIG: infra/deploy/${{ inputs.environment }}.env
-      GATEWAY_PUBLIC_URL: ${{ inputs.gateway_public_url }}
     permissions:
       contents: read
       id-token: write

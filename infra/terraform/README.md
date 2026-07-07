@@ -48,7 +48,6 @@ Manager names to ARNs at plan/apply time, and ECS task definitions consume those
 resolved ARNs:
 
 - `KB_DATABASE_URL`
-- `LLM_TOKEN_SECRET`
 - `STATSIG_SERVER_SECRET`
 - `OPENROUTER_API_KEY`
 - `E2B_API_KEY`
@@ -87,9 +86,8 @@ Terraform-owned production inputs live in checked-in
 `infra/terraform/prod.tfvars`. The GitHub Actions workflow sources
 `infra/deploy/prod.env` for CI/deploy settings such as AWS region, AWS account,
 and smoke-test inputs, then generates `infra/terraform/generated.auto.tfvars`
-with release-specific Terraform values: AWS region, immutable image URIs, and
-the optional legacy `gateway_public_url` workflow input when provided. The plan
-step uses both:
+with release-specific Terraform values: AWS region and immutable image URIs. The
+plan step uses both:
 
 ```sh
 terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars
@@ -97,9 +95,6 @@ terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.
 
 Placeholder values such as `REPLACE_ME_*` in `prod.tfvars` or the generated
 image overlay fail the plan entrypoint before Terraform changes are proposed.
-`gateway_public_url` is intentionally not checked in as a placeholder. Leave it
-empty for split-runtime deploys; provide it only when intentionally exercising
-the legacy chat-api-to-E2B sandbox path.
 
 ECS service `task_definition` changes are intentionally ignored by Terraform.
 `terraform apply` registers the new task definitions and updates infrastructure,
@@ -118,13 +113,9 @@ starting before migrations.
 egress path. It is an inherited network constraint, not the preferred production
 networking pattern.
 
-`gateway_public_url`, the agent internal ALB URL, and `AGENT_SMOKE_BASE_URL`
-are intentionally different settings:
+The agent internal ALB URL and `AGENT_SMOKE_BASE_URL` are intentionally
+different settings:
 
-- `gateway_public_url` is optional runtime application config for the legacy
-  sandbox path. When set, `chat-api` passes it to E2B sandboxes so the agent can
-  call the gateway for LLM and document access. Split-runtime deploys should
-  leave it unset; it is not the agent ALB URL.
 - `agent_internal_base_url` is a Terraform output for `mymemo-service` to call
   `chat-api` inside the shared VPC:
 

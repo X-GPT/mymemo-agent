@@ -32,13 +32,11 @@ locals {
   agent_db_password_base_secret_arn = aws_db_instance.agent.master_user_secret[0].secret_arn
 
   kb_database_url_secret_name    = coalesce(var.kb_database_url_secret_name, "${local.common_name}-KB_DATABASE_URL")
-  llm_token_secret_name          = coalesce(var.llm_token_secret_name, "${local.common_name}-LLM_TOKEN_SECRET")
   statsig_server_secret_name     = coalesce(var.statsig_server_secret_name, "${local.common_name}-STATSIG_SERVER_SECRET")
   openrouter_api_key_secret_name = coalesce(var.openrouter_api_key_secret_name, "${local.common_name}-OPENROUTER_API_KEY")
   e2b_api_key_secret_name        = coalesce(var.e2b_api_key_secret_name, "${local.common_name}-E2B_API_KEY")
 
   kb_database_url_secret_arn    = data.aws_secretsmanager_secret.kb_database_url.arn
-  llm_token_secret_arn          = data.aws_secretsmanager_secret.llm_token.arn
   statsig_server_secret_arn     = data.aws_secretsmanager_secret.statsig_server.arn
   openrouter_api_key_secret_arn = data.aws_secretsmanager_secret.openrouter_api_key.arn
   e2b_api_key_secret_arn        = data.aws_secretsmanager_secret.e2b_api_key.arn
@@ -46,7 +44,6 @@ locals {
   all_secret_arns = distinct(compact([
     local.agent_db_password_base_secret_arn,
     local.kb_database_url_secret_arn,
-    local.llm_token_secret_arn,
     local.statsig_server_secret_arn,
     local.openrouter_api_key_secret_arn,
     local.e2b_api_key_secret_arn,
@@ -59,19 +56,14 @@ locals {
     }
   ]
 
-  legacy_gateway_environment = var.gateway_public_url == null || trimspace(var.gateway_public_url) == "" ? [] : [
-    { name = "GATEWAY_PUBLIC_URL", value = trimsuffix(var.gateway_public_url, "/") }
-  ]
-
   chat_api_environment = concat([
     { name = "PORT", value = tostring(var.chat_api_port) },
     { name = "LOG_LEVEL", value = var.log_level },
     { name = "E2B_TEMPLATE", value = var.e2b_template },
     { name = "DB_SSL", value = var.db_ssl },
-  ], local.legacy_gateway_environment, local.agent_database_url_environment)
+  ], local.agent_database_url_environment)
 
   chat_api_secrets = concat([
-    { name = "LLM_TOKEN_SECRET", valueFrom = local.llm_token_secret_arn },
     { name = "STATSIG_SERVER_SECRET", valueFrom = local.statsig_server_secret_arn },
     { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
   ], local.agent_db_password_secret)

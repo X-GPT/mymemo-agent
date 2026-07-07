@@ -11,7 +11,7 @@ import * as schema from "./schema";
  * CA bundle or switch the URL policy to `sslmode=no-verify`.
  * This is the single data-access seam for the writable DB shared by chat-api and
  * agent-worker; stores receive a `Database` and never open their own connection.
- * The gateway/KB read-only credential is a separate connection, not Drizzle-managed.
+ * The worker's read-only KB credential is a separate connection, not Drizzle-managed.
  */
 export type Database = ReturnType<typeof createDatabase>;
 

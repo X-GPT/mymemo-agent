@@ -17,7 +17,6 @@ Inputs:
   NAME_PREFIX            default: mymemo-agent; must match Terraform name_prefix
 
 Secret value inputs, from DEPLOY_SECRETS_CONFIG or environment:
-  LLM_TOKEN_SECRET_VALUE
   STATSIG_SERVER_SECRET_VALUE
   OPENROUTER_API_KEY_VALUE
   E2B_API_KEY_VALUE
@@ -123,19 +122,12 @@ upsert_secret() {
   echo "$secret_name"
 }
 
-require_secret_value LLM_TOKEN_SECRET_VALUE
 require_secret_value STATSIG_SERVER_SECRET_VALUE
 require_secret_value OPENROUTER_API_KEY_VALUE
 require_secret_value E2B_API_KEY_VALUE
 
 name_prefix="${NAME_PREFIX:-mymemo-agent}"
 prefix="${name_prefix}-${environment}"
-
-llm_token_secret_name="$(
-  upsert_secret "${prefix}-LLM_TOKEN_SECRET" \
-    "$LLM_TOKEN_SECRET_VALUE" \
-    "LLM token HMAC secret for mymemo-agent ${environment}"
-)"
 
 statsig_server_secret_name="$(
   upsert_secret "${prefix}-STATSIG_SERVER_SECRET" \
@@ -166,7 +158,6 @@ fi
 
 echo "Agent Secrets Manager entries are ready."
 echo "Terraform will resolve these names:"
-echo "  LLM_TOKEN_SECRET: ${llm_token_secret_name}"
 echo "  STATSIG_SERVER_SECRET: ${statsig_server_secret_name}"
 echo "  OPENROUTER_API_KEY: ${openrouter_api_key_secret_name}"
 echo "  E2B_API_KEY: ${e2b_api_key_secret_name}"

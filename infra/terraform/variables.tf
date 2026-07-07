@@ -110,12 +110,6 @@ variable "log_retention_days" {
   default     = 30
 }
 
-variable "gateway_public_url" {
-  description = "Optional gateway URL for chat-api's legacy sandbox path. Split-runtime deployments should leave this unset."
-  type        = string
-  default     = null
-}
-
 variable "e2b_template" {
   description = "E2B template used by chat-api while it still owns sandbox creation."
   type        = string
@@ -213,12 +207,6 @@ variable "agent_db_deletion_protection" {
 
 variable "kb_database_url_secret_name" {
   description = "Secrets Manager secret name containing KB_DATABASE_URL for agent-worker. Defaults to <name_prefix>-<environment>-KB_DATABASE_URL."
-  type        = string
-  default     = null
-}
-
-variable "llm_token_secret_name" {
-  description = "Secrets Manager secret name containing LLM_TOKEN_SECRET. Defaults to <name_prefix>-<environment>-LLM_TOKEN_SECRET."
   type        = string
   default     = null
 }

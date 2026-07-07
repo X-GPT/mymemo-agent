@@ -58,7 +58,6 @@ describe("agent deployment config", () => {
 			"agent_db_instance_class",
 			"mymemo_service_api_security_group_ids",
 			"kb_database_url_secret_name",
-			"llm_token_secret_name",
 			"statsig_server_secret_name",
 			"openrouter_api_key_secret_name",
 			"e2b_api_key_secret_name",
@@ -164,7 +163,6 @@ describe("agent deployment config", () => {
 	it("local secret bootstrap files are ignored and examples are empty", () => {
 		expect(gitignore).toContain("infra/deploy/*.secrets.env");
 		expect(gitignore).toContain("infra/terraform/generated.auto.tfvars");
-		expect(prodSecretsExample).toContain("LLM_TOKEN_SECRET_VALUE=");
 		expect(prodSecretsExample).toContain("OPENROUTER_API_KEY_VALUE=");
 		expect(prodSecretsExample).not.toMatch(/=. +/);
 		expect(prodSecretsExample).not.toMatch(/sk-(ant|or)-[A-Za-z0-9]/);
@@ -242,9 +240,7 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain("terraform_wrapper: false");
 		expect(prepareScript).toContain("aws_region");
 		expect(prepareScript).toContain("chat_api_image");
-		expect(prepareScript).toContain("gateway_public_url");
-		expect(prepareScript).toContain('if [[ -n "${GATEWAY_PUBLIC_URL:-}" ]]');
-		expect(prepareScript).toContain("require_url GATEWAY_PUBLIC_URL");
+		expect(prepareScript).not.toContain("gateway_public_url");
 		expect(prepareScript).not.toContain("agent_db_instance_class");
 		expect(prepareScript).not.toContain("DEPLOY_CONFIG");
 		expect(prepareScript).not.toContain("prod.env");
@@ -264,10 +260,8 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain("type: choice");
 		expect(releaseDeployWorkflow).toContain("- prod");
 		expect(releaseDeployWorkflow).toContain("confirm_prod_apply");
-		expect(releaseDeployWorkflow).toContain("gateway_public_url");
-		expect(releaseDeployWorkflow).toContain("Optional legacy sandbox gateway base URL");
-		expect(releaseDeployWorkflow).toContain("required: false");
-		expect(releaseDeployWorkflow).toContain("GATEWAY_PUBLIC_URL: ${{ inputs.gateway_public_url }}");
+		expect(releaseDeployWorkflow).not.toContain("gateway_public_url");
+		expect(releaseDeployWorkflow).not.toContain("GATEWAY_PUBLIC_URL");
 		expect(releaseDeployWorkflow).toContain("CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}");
 		expect(releaseDeployWorkflow).not.toContain("CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod");
 	});
@@ -447,9 +441,11 @@ describe("agent deployment config", () => {
 			.map((path) => readFileSync(path, "utf8"))
 			.join("\n");
 
-		expect(combined).toContain('data "aws_secretsmanager_secret" "llm_token"');
-		expect(combined).toContain("llm_token_secret_name");
-		expect(combined).toContain("data.aws_secretsmanager_secret.llm_token.arn");
+		expect(combined).toContain('data "aws_secretsmanager_secret" "statsig_server"');
+		expect(combined).toContain("statsig_server_secret_name");
+		expect(combined).toContain("data.aws_secretsmanager_secret.statsig_server.arn");
+		expect(combined).not.toContain('data "aws_secretsmanager_secret" "llm_token"');
+		expect(combined).not.toContain("llm_token_secret_name");
 		expect(combined).not.toContain('variable "llm_token_secret_arn"');
 		expect(combined).not.toContain("var.llm_token_secret_arn");
 		expect(combined).not.toContain('variable "extra_secret_arns"');
@@ -470,7 +466,6 @@ describe("agent deployment config", () => {
 		expect(() =>
 			loadApiConfigFromEnv({
 				...common,
-				LLM_TOKEN_SECRET: "test-llm-token-secret",
 				STATSIG_SERVER_SECRET: "statsig-test-secret",
 				E2B_TEMPLATE: "sandbox-template-prod",
 			}),

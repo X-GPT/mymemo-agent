@@ -13,8 +13,6 @@ build
 # Default durable workspace store root (WORKSPACE_STORE_ROOT)
 .workspace-store
 
-# Generated: bundled mymemo-docs CLI (source is sandbox-template/mymemo-docs.ts)
-sandbox-template/mymemo-docs
 .turbo
 .vercel
 .wrangler

@@ -36,7 +36,6 @@ agent_db_deletion_protection      = true
 # Secret values live in AWS Secrets Manager. Terraform resolves these
 # conventional names internally unless an environment overrides *_secret_name:
 # - mymemo-agent-prod-KB_DATABASE_URL
-# - mymemo-agent-prod-LLM_TOKEN_SECRET
 # - mymemo-agent-prod-STATSIG_SERVER_SECRET
 # - mymemo-agent-prod-OPENROUTER_API_KEY
 # - mymemo-agent-prod-E2B_API_KEY

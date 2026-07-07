@@ -2,24 +2,18 @@
 	"name": "chat-api",
 	"scripts": {
 		"test": "bun test",
-		"dev": "bun run build:daemon && bun run --hot src/index.ts",
-		"build:daemon": "cd ../sandbox-daemon && bun run build",
+		"dev": "bun run --hot src/index.ts",
 		"format": "biome format --write",
 		"lint": "biome lint --write",
 		"check": "biome check --write",
-		"db:migrate": "bun run src/db/migrate.ts",
-		"smoke:gateway": "bun run scripts/smoke-gateway.ts",
-		"e2b:build:dev": "cd sandbox-template && bun run build.dev.ts",
-		"e2b:build:prod": "cd sandbox-template && bun run build.prod.ts"
+		"db:migrate": "bun run src/db/migrate.ts"
 	},
 	"dependencies": {
 		"@hono/standard-validator": "^0.1.5",
 		"@mymemo/agent-db": "workspace:*",
-		"@mymemo/llm-token": "workspace:*",
 		"@scalar/hono-api-reference": "^0.9.22",
 		"@statsig/statsig-node-core": "^0.19.8",
 		"drizzle-orm": "^0.45.2",
-		"e2b": "^2.14.0",
 		"hono": "^4.10.1",
 		"hono-openapi": "^1.1.0",
 		"hono-pino": "^0.10.3",
