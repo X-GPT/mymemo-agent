@@ -21,9 +21,18 @@ const DEFAULT_MIN_TASKS = 1;
 const DEFAULT_TARGET_CONCURRENT_RUNS_PER_TASK = 2;
 const DEFAULT_SCALE_IN_COOLDOWN_MS = 10 * 60 * 1000;
 
+/**
+ * Append `sslmode=no-verify` unless TLS is disabled or the URL already sets it.
+ * We want the connection encrypted but not CA-verified: RDS presents the Amazon
+ * RDS CA, which is not in Node's default trust store. node-postgres's
+ * pg-connection-string aliases `sslmode=require` to `verify-full` (strict
+ * CA-chain verification), so `require` fails with SELF_SIGNED_CERT_IN_CHAIN;
+ * `no-verify` maps to `rejectUnauthorized: false`. Do not change back to
+ * `require` without also shipping the RDS CA bundle (e.g. NODE_EXTRA_CA_CERTS).
+ */
 function withSsl(url: string, enabled: boolean): string {
 	if (!enabled || /[?&]sslmode=/.test(url)) return url;
-	return `${url}${url.includes("?") ? "&" : "?"}sslmode=require`;
+	return `${url}${url.includes("?") ? "&" : "?"}sslmode=no-verify`;
 }
 
 function withPassword(url: string, password: string | undefined): string {
