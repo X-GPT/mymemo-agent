@@ -10,6 +10,7 @@
 		"./run-events": "./src/run-events.ts",
 		"./queue-metrics": "./src/queue-metrics.ts",
 		"./runtime-store": "./src/runtime-store.ts",
+		"./session-store": "./src/session-store.ts",
 		"./testing": "./src/testing.ts",
 		"./migrations": "./src/migrations.ts"
 	},

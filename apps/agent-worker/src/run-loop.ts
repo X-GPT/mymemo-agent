@@ -10,6 +10,7 @@ import {
 	type TerminalRunStatus,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
+import { advanceAgentSessionPointerTx } from "@mymemo/agent-db/runtime-store";
 import type { WorkerLogger } from "./logger";
 import { runSnapshotBarrier, type TurnResult } from "./snapshot-barrier";
 import type { Worker } from "./worker";
@@ -359,11 +360,47 @@ export class RunLoop {
 			});
 			return;
 		}
+		// The terminal-success transition also advances the conversation's resume
+		// pointer, under the ownership fence (ADR-0005). Only on `done`, and only
+		// when the turn reported a session to resume from — a `mirror_error` turn
+		// carries none, so the pointer holds and the run still terminalizes `done`.
+		if (decision.terminal === "done" && turnResult.agentSession) {
+			await this.advanceSessionPointer(run, turnResult.agentSession.sessionId);
+		}
 		await this.terminalize(
 			runId,
 			decision.terminal,
 			decision.terminal === "error" ? { message: decision.message } : undefined,
 		);
+	}
+
+	/**
+	 * Advance the conversation's Claude Agent SDK resume pointer through the fenced
+	 * runtime helper. Best-effort (ADR-0005): a failure — the fence lost to
+	 * recovery, or a transient DB error — only leaves the next turn resuming from
+	 * the previous session, losing this turn's model-side memory; the user-visible
+	 * run still succeeds, so the terminal `done` must not be blocked by it.
+	 */
+	private async advanceSessionPointer(
+		run: RunRecord,
+		agentSessionId: string,
+	): Promise<void> {
+		try {
+			await advanceAgentSessionPointerTx(this.opts.db, {
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId: run.runId,
+				workerId: this.workerId,
+				agentSessionId,
+			});
+		} catch (error) {
+			this.opts.logger.warn({
+				message: "could not advance agent session pointer",
+				workerId: this.workerId,
+				runId: run.runId,
+				error: toMessage(error),
+			});
+		}
 	}
 
 	/**

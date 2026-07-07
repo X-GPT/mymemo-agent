@@ -244,6 +244,24 @@ export async function markRuntimeSandboxTaintedTx(
 	});
 }
 
+/**
+ * Advance the conversation's Claude Agent SDK resume pointer to `agentSessionId`
+ * (ADR-0005, Task 7.3). Fenced like every other runtime mutation, so this is
+ * exactly what makes "the pointer advances only in the terminal-success
+ * transition, and a stale worker cannot move it" true: a worker that lost the
+ * run gets a {@link RunFenceError} and the pointer stays where the owner left
+ * it. The caller advances it only after a turn terminalizes `done` with a clean
+ * mirror; a `mirror_error` turn simply never calls this.
+ */
+export async function advanceAgentSessionPointerTx(
+	db: Database,
+	input: RunOwnershipRef & { agentSessionId: string },
+): Promise<ConversationRuntimeRecord> {
+	return await fencedRuntimeUpdate(db, input, "agent session pointer advance", {
+		agentSessionId: input.agentSessionId,
+	});
+}
+
 /** A persisted orphan-ledger row. */
 export type OrphanSandboxRecord = typeof orphanSandboxes.$inferSelect;
 
