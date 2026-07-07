@@ -4,13 +4,19 @@ import {
 	appendRunEventTx,
 	claimNextRunTx,
 	heartbeatRunTx,
+	markStaleRunsTx,
 	RunFenceError,
 	type RunRecord,
 	type TerminalRunStatus,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 import type { WorkerLogger } from "./logger";
+import { runSnapshotBarrier, type TurnResult } from "./snapshot-barrier";
 import type { Worker } from "./worker";
+
+/** A processor that reports nothing is treated as a clean, sandbox-less turn:
+ * no user work to checkpoint. */
+const CLEAN_TURN: TurnResult = { workspaceDirty: false, sandbox: null };
 
 /**
  * What a claimed run's processing is handed. `appendText` is the bound
@@ -29,8 +35,17 @@ export interface RunProcessContext {
  * appends a single text event; later milestones swap in the Claude Agent SDK
  * loop. Injected so the control loop's claim/heartbeat/terminalize behavior is
  * tested independently of what a turn does.
+ *
+ * A processor may return a {@link TurnResult} describing what the turn left in
+ * the workspace (dirty state, the sandbox to checkpoint); returning nothing is
+ * treated as a clean, sandbox-less turn, so the Milestone 3 synthetic processor
+ * needs no change. The loop feeds the result to the snapshot barrier before a
+ * successful run terminalizes as `done`.
  */
-export type RunProcessor = (ctx: RunProcessContext) => Promise<void>;
+// biome-ignore lint/suspicious/noConfusingVoidType: `void` keeps a nothing-returning processor valid — `undefined` is not assignable from a void-returning async fn.
+type RunTurnResult = void | TurnResult;
+
+export type RunProcessor = (ctx: RunProcessContext) => Promise<RunTurnResult>;
 
 export interface RunLoopOptions {
 	db: Database;
@@ -55,29 +70,34 @@ interface ActiveEntry {
 	state: RunEndState;
 }
 
+const STALE_RUN_RECOVERY_INTERVAL_MS = 15_000;
+
 /**
  * The agent-worker control loop over the shared run-store helpers. One `tick`:
- *  1. heartbeats every run this worker is executing — renewing `locked_until`
+ *  1. terminalizes stale runs through the shared recovery helper;
+ *  2. heartbeats every run this worker is executing — renewing `locked_until`
  *     and, in the same call, observing a `cancel_requested` or a lost ownership
  *     fence; and
- *  2. claims queued runs up to the supervisor's remaining capacity and
+ *  3. claims queued runs up to the supervisor's remaining capacity and
  *     dispatches each onto it.
  *
- * `tick` is the whole loop and is directly awaitable, so tests drive claim,
- * heartbeat, and terminalization deterministically (PGlite + explicit ticks,
- * no wall-clock timers — Bun lacks `setInterval` fake timers). `start` just
- * schedules `tick` on a timer; `stop` unschedules and drains in-flight runs.
+ * `tick` is the whole loop and is directly awaitable, so tests drive recovery,
+ * claim, heartbeat, and terminalization deterministically (PGlite + explicit
+ * ticks, no wall-clock timers — Bun lacks `setInterval` fake timers). `start`
+ * schedules both `tick` and the at-least-15s recovery sweep; `stop`
+ * unschedules them and drains in-flight runs.
  *
  * Ownership and single-terminalization are enforced by the DB fences in the
  * helpers, not here: two workers cannot claim one run (`FOR UPDATE SKIP
- * LOCKED`), a stale worker's appends/terminals are rejected (`locked_by` +
- * `locked_until`), and stale runs are recovered elsewhere. This loop's job is to
- * turn those helpers into a warm, bounded-concurrency service.
+ * LOCKED`), stale workers are fenced by `locked_by` + `locked_until`, and
+ * recovery CASes the same active statuses as worker terminalization. This
+ * loop's job is to turn those helpers into a warm, bounded-concurrency service.
  */
 export class RunLoop {
 	private readonly activeRuns = new Map<string, ActiveEntry>();
 	private running = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(private readonly opts: RunLoopOptions) {}
 
@@ -86,11 +106,12 @@ export class RunLoop {
 	}
 
 	/**
-	 * Run one control-loop iteration: heartbeat active runs, then claim and
-	 * dispatch queued runs up to capacity. Returns how many runs were claimed
-	 * this tick.
+	 * Run one control-loop iteration: recover stale runs, heartbeat active runs,
+	 * then claim and dispatch queued runs up to capacity. Returns how many runs
+	 * were claimed this tick.
 	 */
 	async tick(): Promise<number> {
+		await this.tryRecoverStaleRuns();
 		await this.heartbeatActive();
 		return this.claimAndDispatch();
 	}
@@ -117,6 +138,10 @@ export class RunLoop {
 			}
 		};
 		void runTick();
+		this.recoveryTimer = setTimeout(
+			() => void this.runRecoveryTimer(),
+			STALE_RUN_RECOVERY_INTERVAL_MS,
+		);
 	}
 
 	/** Stop scheduling new ticks and drain in-flight runs via the supervisor. */
@@ -126,7 +151,50 @@ export class RunLoop {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
+		if (this.recoveryTimer) {
+			clearTimeout(this.recoveryTimer);
+			this.recoveryTimer = undefined;
+		}
 		await this.opts.worker.shutdown();
+	}
+
+	private async runRecoveryTimer(): Promise<void> {
+		if (!this.running) return;
+		try {
+			await this.tryRecoverStaleRuns();
+		} finally {
+			if (this.running) {
+				this.recoveryTimer = setTimeout(
+					() => void this.runRecoveryTimer(),
+					STALE_RUN_RECOVERY_INTERVAL_MS,
+				);
+			}
+		}
+	}
+
+	private async tryRecoverStaleRuns(): Promise<void> {
+		try {
+			await this.recoverStaleRuns();
+		} catch (error) {
+			this.opts.logger.error({
+				message: "stale-run recovery failed",
+				workerId: this.workerId,
+				error: toMessage(error),
+			});
+		}
+	}
+
+	private async recoverStaleRuns(): Promise<void> {
+		const recovered = await markStaleRunsTx(this.opts.db);
+		if (recovered.length === 0) return;
+		this.opts.logger.warn({
+			message: "recovered stale runs",
+			workerId: this.workerId,
+			recoveredRuns: recovered.map((run) => ({
+				runId: run.runId,
+				status: run.status,
+			})),
+		});
 	}
 
 	private async heartbeatActive(): Promise<void> {
@@ -201,20 +269,22 @@ export class RunLoop {
 	}
 
 	private async runClaimed(run: RunRecord, entry: ActiveEntry): Promise<void> {
+		let turnResult: TurnResult = CLEAN_TURN;
 		let failure: { error: unknown } | undefined;
 		try {
-			await this.opts.processor({
-				run,
-				signal: entry.controller.signal,
-				appendText: (text) => this.appendText(run.runId, text),
-			});
+			turnResult =
+				(await this.opts.processor({
+					run,
+					signal: entry.controller.signal,
+					appendText: (text) => this.appendText(run.runId, text),
+				})) ?? CLEAN_TURN;
 		} catch (error) {
 			failure = { error };
 		}
 		// Stop heartbeating this run before terminalizing: from here the loop owns
 		// the terminal transition and a concurrent heartbeat must not race it.
 		this.activeRuns.delete(run.runId);
-		await this.finish(run.runId, entry.state, failure);
+		await this.finish(run, entry.state, turnResult, failure);
 	}
 
 	private async appendText(runId: string, text: string): Promise<void> {
@@ -230,10 +300,12 @@ export class RunLoop {
 	}
 
 	private async finish(
-		runId: string,
+		run: RunRecord,
 		state: RunEndState,
+		turnResult: TurnResult,
 		failure?: { error: unknown },
 	): Promise<void> {
+		const runId = run.runId;
 		if (state.lostOwnership) {
 			this.opts.logger.warn({
 				message: "abandoning run after ownership loss",
@@ -242,17 +314,62 @@ export class RunLoop {
 			});
 			return;
 		}
-		// Cancellation wins over both success and failure: an SDK error raised while
-		// interrupting still surfaces to the user as `canceled`, never `error`.
-		const status: TerminalRunStatus = state.canceled
-			? "canceled"
-			: failure
-				? "error"
-				: "done";
-		const payload =
-			status === "error" && failure
-				? { message: toMessage(failure.error) }
-				: undefined;
+		// Cancellation wins over both success and failure, and short-circuits the
+		// snapshot barrier: an SDK error raised while interrupting still surfaces as
+		// `canceled`, and a canceled turn is never checkpointed as a clean success.
+		if (state.canceled) {
+			await this.terminalize(runId, "canceled");
+			return;
+		}
+		if (failure) {
+			await this.terminalize(runId, "error", {
+				message: toMessage(failure.error),
+			});
+			return;
+		}
+		// Success: clear the snapshot barrier before the terminal `done`. The
+		// barrier snapshots a dirty workspace and persists the checkpoint under the
+		// ownership fence; if it loses the fence mid-snapshot it returns `abandon`
+		// and recovery owns the terminal event.
+		const decision = await runSnapshotBarrier({
+			db: this.opts.db,
+			owner: {
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId,
+				workerId: this.workerId,
+			},
+			turnResult,
+			logger: this.opts.logger,
+		});
+		if ("abandon" in decision) {
+			this.opts.logger.warn({
+				message: "abandoning run after snapshot barrier",
+				workerId: this.workerId,
+				runId,
+				reason: decision.reason,
+			});
+			return;
+		}
+		await this.terminalize(
+			runId,
+			decision.terminal,
+			decision.terminal === "error" ? { message: decision.message } : undefined,
+		);
+	}
+
+	/**
+	 * Append the run's terminal event through the fenced run-store helper, with
+	 * the late-cancellation fallback the loop relies on: `done`/`error` lose to a
+	 * cancellation the terminal CAS observes (the run is already
+	 * `cancel_requested`), so on a fence rejection try `canceled` once; if even
+	 * that is fenced, stale-run recovery finishes the run.
+	 */
+	private async terminalize(
+		runId: string,
+		status: TerminalRunStatus,
+		payload?: { message: string },
+	): Promise<void> {
 		try {
 			await transitionRunTerminalTx(this.opts.db, {
 				runId,
@@ -262,9 +379,6 @@ export class RunLoop {
 			});
 		} catch (error) {
 			if (error instanceof RunFenceError) {
-				// A late cancellation (or ownership expiry) raced the terminal write.
-				// `done`/`error` are illegal once the run is `cancel_requested`, so try
-				// `canceled` once; if even that is fenced, stale-run recovery finishes it.
 				if (status !== "canceled" && (await this.tryTerminalCanceled(runId))) {
 					return;
 				}

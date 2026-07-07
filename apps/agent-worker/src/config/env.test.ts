@@ -95,3 +95,58 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 		);
 	});
 });
+
+describe("loadWorkerConfigFromEnv — cleanup loop", () => {
+	it("defaults the cleanup interval and a multi-day snapshot retention", () => {
+		const config = loadWorkerConfigFromEnv(baseEnv());
+		expect(config.cleanup.intervalMs).toBe(300_000);
+		expect(config.cleanup.snapshotRetentionMs).toBe(604_800_000);
+	});
+
+	it("honors cleanup overrides", () => {
+		const env = baseEnv();
+		env.WORKER_CLEANUP_INTERVAL_MS = "120000";
+		env.WORKER_SNAPSHOT_RETENTION_MS = "86400000";
+		const config = loadWorkerConfigFromEnv(env);
+		expect(config.cleanup.intervalMs).toBe(120_000);
+		expect(config.cleanup.snapshotRetentionMs).toBe(86_400_000);
+	});
+
+	it("rejects a non-positive cleanup interval override", () => {
+		const env = baseEnv();
+		env.WORKER_CLEANUP_INTERVAL_MS = "0";
+		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
+			/WORKER_CLEANUP_INTERVAL_MS/,
+		);
+	});
+});
+
+describe("loadWorkerConfigFromEnv — LoadDocuments caps", () => {
+	it("defaults the document-load caps", () => {
+		const config = loadWorkerConfigFromEnv(baseEnv());
+		expect(config.documentLoad.maxDocuments).toBe(10);
+		expect(config.documentLoad.perDocumentMaxBytes).toBeGreaterThan(0);
+		expect(config.documentLoad.perCallMaxBytes).toBeGreaterThanOrEqual(
+			config.documentLoad.perDocumentMaxBytes,
+		);
+	});
+
+	it("honors document-load cap overrides", () => {
+		const env = baseEnv();
+		env.WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS = "3";
+		env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = "1000";
+		env.WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES = "4000";
+		const config = loadWorkerConfigFromEnv(env);
+		expect(config.documentLoad.maxDocuments).toBe(3);
+		expect(config.documentLoad.perDocumentMaxBytes).toBe(1_000);
+		expect(config.documentLoad.perCallMaxBytes).toBe(4_000);
+	});
+
+	it("rejects a non-positive document-load byte cap override", () => {
+		const env = baseEnv();
+		env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = "0";
+		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
+			/WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES/,
+		);
+	});
+});

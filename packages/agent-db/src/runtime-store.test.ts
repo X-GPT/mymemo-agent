@@ -7,14 +7,12 @@ import {
 	it,
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
-import { conversationRuntime, orphanSandboxes, runs } from "@/db/schema";
-import { createTestDatabase, type TestDb } from "@/db/testing";
 import {
 	claimNextRunTx,
 	createQueuedRunTx,
 	markStaleRunsTx,
 	RunFenceError,
-} from "@/features/run-store";
+} from "./run-store";
 import {
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
@@ -23,7 +21,9 @@ import {
 	recordOrphanSandboxTx,
 	recordRuntimeSnapshotTx,
 	updateRuntimeSandboxTx,
-} from "./conversation-runtime-store";
+} from "./runtime-store";
+import { conversationRuntime, orphanSandboxes, runs } from "./schema";
+import { createTestDatabase, type TestDb } from "./testing";
 
 let tdb: TestDb;
 

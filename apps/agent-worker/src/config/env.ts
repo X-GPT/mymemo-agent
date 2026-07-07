@@ -37,10 +37,30 @@ export interface WorkerConfig {
 	maxConcurrentRuns: number;
 	/** Per-call cap for model-facing document search results. */
 	maxDocumentSearchResults: number;
+	/** Caps for the model-facing LoadDocuments tool (documents-as-files). */
+	documentLoad: {
+		/** Most document ids one LoadDocuments call may materialize. */
+		maxDocuments: number;
+		/** Byte cap on a single cached document's content. */
+		perDocumentMaxBytes: number;
+		/** Byte cap on the summed content written by one LoadDocuments call. */
+		perCallMaxBytes: number;
+	};
 	/** How often an active run heartbeats its lease (ms). */
 	heartbeatIntervalMs: number;
 	/** Grace period to drain active runs on shutdown before forcing exit (ms). */
 	shutdownTimeoutMs: number;
+	/** Worker-embedded orphan/snapshot cleanup loop (Task 8.1). */
+	cleanup: {
+		/** How often the single-flighted cleanup pass is attempted (ms). */
+		intervalMs: number;
+		/**
+		 * Idle window before a conversation's superseded snapshot is deleted (ms).
+		 * The spike's retention decision is days, not minutes: resume-from-paused
+		 * is cheap, so there is no rush to reclaim a rollback snapshot.
+		 */
+		snapshotRetentionMs: number;
+	};
 	/** pino log level. */
 	logLevel: string;
 	/** Port the health endpoint listens on. */
@@ -49,8 +69,15 @@ export interface WorkerConfig {
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 2;
 const DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS = 8;
+const DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS = 10;
+// The KB fetch already clips content at 50k chars; these byte caps are the
+// tool-side backstop so a heavy multibyte document cannot balloon on disk.
+const DEFAULT_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = 262_144;
+const DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES = 1_048_576;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
+const DEFAULT_CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
+const DEFAULT_SNAPSHOT_RETENTION_MS = 604_800_000; // 7 days
 const DEFAULT_PORT = 8080;
 
 /** Append `sslmode=require` unless TLS is disabled or the URL already sets it. */
@@ -125,6 +152,23 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS,
 			"WORKER_DOCUMENT_SEARCH_MAX_RESULTS",
 		),
+		documentLoad: {
+			maxDocuments: positiveIntOr(
+				env.WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS,
+				DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS,
+				"WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS",
+			),
+			perDocumentMaxBytes: positiveIntOr(
+				env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES,
+				DEFAULT_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES,
+				"WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES",
+			),
+			perCallMaxBytes: positiveIntOr(
+				env.WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES,
+				DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES,
+				"WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES",
+			),
+		},
 		heartbeatIntervalMs: positiveIntOr(
 			env.WORKER_HEARTBEAT_INTERVAL_MS,
 			DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -135,6 +179,18 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			DEFAULT_SHUTDOWN_TIMEOUT_MS,
 			"WORKER_SHUTDOWN_TIMEOUT_MS",
 		),
+		cleanup: {
+			intervalMs: positiveIntOr(
+				env.WORKER_CLEANUP_INTERVAL_MS,
+				DEFAULT_CLEANUP_INTERVAL_MS,
+				"WORKER_CLEANUP_INTERVAL_MS",
+			),
+			snapshotRetentionMs: positiveIntOr(
+				env.WORKER_SNAPSHOT_RETENTION_MS,
+				DEFAULT_SNAPSHOT_RETENTION_MS,
+				"WORKER_SNAPSHOT_RETENTION_MS",
+			),
+		},
 		logLevel: env.LOG_LEVEL || "info",
 		port: positiveIntOr(env.PORT, DEFAULT_PORT, "PORT"),
 	};
