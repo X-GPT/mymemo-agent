@@ -1,9 +1,9 @@
--- Local KB seed for the docker-compose E2E harness (MYM-31).
+-- Local KB seed for the docker-compose harness (MYM-31).
 --
--- The gateway requires a DATABASE_URL to boot, and its document routes read this
--- schema (see apps/gateway/src/db/queries.ts). This mirrors the schema exercised by
--- apps/gateway/src/index.integration.test.ts and adds a small fixture so
--- `mymemo-docs search`/`fetch` return real results for the seeded member.
+-- The agent-worker's scoped document client reads this read-only KB schema
+-- (apps/agent-worker/src/documents/) over KB_DATABASE_URL. This seed provides the
+-- schema plus a small fixture so the worker's document search/load tools return
+-- real results for the seeded member in local development.
 --
 -- Scope model:
 --   workspace_id = member_code   (the X-Member-Code header chat-api forwards)
@@ -78,7 +78,7 @@ INSERT INTO document (id, workspace_id, title, canonical_markdown, status) VALUE
    E'# Intro to Machine Learning\n\nMachine learning is a subset of artificial intelligence that lets systems learn patterns from data instead of being explicitly programmed. Common families include supervised learning, unsupervised learning, and reinforcement learning.',
    'active'),
   ('doc-mymemo-overview', 'demo-member', 'MyMemo Overview',
-   E'# MyMemo Overview\n\nMyMemo is a personal knowledge base. The agent answers questions by searching your documents through a scoped gateway and never holds a provider key directly.',
+   E'# MyMemo Overview\n\nMyMemo is a personal knowledge base. The agent answers questions by searching your documents through a scoped, read-only document client.',
    'active');
 
 INSERT INTO passage (id, document_id, workspace_id, passage_text, search_tsv, status) VALUES

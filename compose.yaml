@@ -14,13 +14,9 @@
 #   chat-api      — creates conversations, queues runs, projects run events as SSE
 #   agent-worker  — claims queued runs, heartbeats, runs the synthetic turn
 #
-# Retained pending Milestone 7 (ADR-0002), NOT on the split-runtime path:
-#   gateway, sandbox — the prototype LLM proxy + in-sandbox daemon. Nothing on
-#   the split path depends on them; they are deleted when Milestone 7 passes the
-#   full local harness. gateway still needs apps/gateway/.env (ANTHROPIC_API_KEY)
-#   to boot, so to run just the split-runtime demo bring up the two split apps
-#   and let their deps (postgres, migrate) come along:
-#     docker compose up --build chat-api agent-worker
+# The prototype gateway/sandbox services were removed once the split runtime
+# replaced them end to end (ADR-0002). Bring the demo up with:
+#     docker compose up --build
 
 services:
   chat-api:
@@ -32,7 +28,7 @@ services:
     environment:
       # chat-api's writable database (mymemo_agent): conversations, runs,
       # run_events. Local-only dev credential, so inline. Named AGENT_DATABASE_URL
-      # so it never collides with the gateway's read-only KB DATABASE_URL.
+      # so it never collides with the worker's read-only KB DATABASE_URL.
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
       DB_SSL: disable
       LOG_LEVEL: info
@@ -104,57 +100,10 @@ services:
     networks:
       - mymemo-network
 
-  # Control plane: the only service holding BOTH the real provider key
-  # (ANTHROPIC_API_KEY) and the KB DATABASE_URL. Locally it talks to the
-  # `postgres` service over the compose network with TLS disabled. The DB
-  # connection is a local-only dev credential, so it is inline (not a secret).
-  gateway:
-    build:
-      context: .
-      dockerfile: apps/gateway/Dockerfile
-    ports:
-      - "8080:8080"
-    environment:
-      DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_kb
-      DB_SSL: disable
-      GATEWAY_PORT: "8080"
-    # Secrets: ANTHROPIC_API_KEY, LLM_TOKEN_SECRET
-    env_file:
-      - apps/gateway/.env
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - mymemo-network
-
-  # Replaces the E2B sandbox: a long-lived daemon container with the daemon +
-  # agent bundles and the claude / mymemo-docs binaries baked in. The session
-  # store is on a named volume so SDK transcripts survive `docker compose restart
-  # sandbox`; the container's local ~/.claude does not.
-  sandbox:
-    build:
-      context: .
-      dockerfile: apps/sandbox-daemon/Dockerfile
-    environment:
-      AGENT_SESSION_STORE_ROOT: /session-store
-    # No secrets: /turn has no app-layer auth (MYM-35); the container is
-    # unpublished on the compose network.
-    volumes:
-      - session-store:/session-store
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
-    restart: unless-stopped
-    networks:
-      - mymemo-network
-
-  # The gateway requires a DATABASE_URL to boot. Seeded with the KB schema + FTS
-  # and a small fixture (see apps/gateway/db/init.sql) so document search/fetch
-  # return results for the seeded member. Local-only dev credentials, inline.
+  # The worker's read-only KB (mymemo_kb) is seeded here with the KB schema + FTS
+  # and a small fixture (see apps/agent-worker/db/init.sql) so document
+  # search/fetch return results for the seeded member. Local-only dev
+  # credentials, inline.
   postgres:
     image: postgres:16
     environment:
@@ -163,9 +112,9 @@ services:
       POSTGRES_DB: mymemo_kb
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Two databases on one instance: the gateway's read-only KB (mymemo_kb,
-      # seeded here) and chat-api's writable mymemo_agent (lease registry).
-      - ./apps/gateway/db/init.sql:/docker-entrypoint-initdb.d/00-kb.sql:ro
+      # Two databases on one instance: the worker's read-only KB (mymemo_kb,
+      # seeded here) and chat-api's writable mymemo_agent.
+      - ./apps/agent-worker/db/init.sql:/docker-entrypoint-initdb.d/00-kb.sql:ro
       - ./apps/chat-api/db/init.sql:/docker-entrypoint-initdb.d/10-chat-api.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mymemo -d mymemo_kb"]
@@ -183,4 +132,3 @@ networks:
 
 volumes:
   pgdata:
-  session-store:

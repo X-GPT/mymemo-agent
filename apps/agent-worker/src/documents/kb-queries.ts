@@ -1,10 +1,9 @@
 import type { Db } from "./db";
 
 /**
- * Read-side of the MyMemo knowledge base, FTS-only — the parameterized SQL is
- * ported from the gateway document module (`apps/gateway/src/db/queries.ts`),
- * which this worker path replaces at the Milestone 7 hard swap (ADR-0002).
- * Keep the two in sync until the gateway is deleted.
+ * Read-side of the MyMemo knowledge base, FTS-only. This worker path is the sole
+ * implementation of scoped document access since the split runtime replaced the
+ * prototype gateway's document module (ADR-0002).
  *
  * Scope mapping (derived from the platform's compat layer):
  *   - workspace_id  = the user's member_code (personal workspace)

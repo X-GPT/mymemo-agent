@@ -21,20 +21,14 @@ RUN cd /temp/dev && bun install --frozen-lockfile
 COPY --from=manifests /usr/src/app /temp/prod
 RUN cd /temp/prod && bun install --frozen-lockfile --production
 
-# Copy source and prebuild the daemon bundle (shipped into the release image).
-# Tests are NOT run here — CI (.github/workflows/ci.yml) is the test gate; the
-# image build just produces the runtime artifact.
+# Assemble the source for the release image. Tests are NOT run here — CI
+# (.github/workflows/ci.yml) is the test gate; the image build just produces the
+# runtime artifact.
 FROM base AS prerelease
 COPY --from=install /temp/dev/node_modules node_modules
 COPY apps/chat-api/ apps/chat-api/
-COPY apps/sandbox-daemon/ apps/sandbox-daemon/
 COPY packages/agent-db/ packages/agent-db/
-COPY packages/llm-token/ packages/llm-token/
 COPY package.json .
-
-WORKDIR /usr/src/app/apps/chat-api
-ENV NODE_ENV=production
-RUN bun run build:daemon
 
 # Final release image
 FROM base AS release
@@ -42,14 +36,12 @@ COPY --from=install /temp/prod/node_modules node_modules
 COPY --from=prerelease /usr/src/app/apps/chat-api/src apps/chat-api/src
 COPY --from=prerelease /usr/src/app/apps/chat-api/package.json apps/chat-api/
 COPY --from=prerelease /usr/src/app/apps/chat-api/tsconfig.json apps/chat-api/
-COPY --from=prerelease /usr/src/app/apps/sandbox-daemon/dist apps/sandbox-daemon/dist
 # The shared writable-DB data layer. Ships its `drizzle/` migrations so the image
 # can run `bun run db:migrate` (the compose `migrate` one-shot, or a prod deploy
 # step) — the runner reads SQL from `packages/agent-db/drizzle`; drizzle-kit is
 # not needed at runtime — and its `src/` so chat-api's `@mymemo/agent-db` imports
 # resolve through the workspace symlink in node_modules.
 COPY --from=prerelease /usr/src/app/packages/agent-db packages/agent-db
-COPY --from=prerelease /usr/src/app/packages/llm-token packages/llm-token
 COPY --from=prerelease /usr/src/app/package.json .
 
 WORKDIR /usr/src/app/apps/chat-api

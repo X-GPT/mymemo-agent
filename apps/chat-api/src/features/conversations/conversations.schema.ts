@@ -5,11 +5,10 @@ const MAX_MESSAGE_LENGTH = 50_000;
 
 export const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
 
-// conversationId is server-generated (a UUID) at create time and used as a
-// sandbox filesystem path segment (/workspace/conversations/{conversationId}/…),
+// conversationId is server-generated (a UUID) at create time and used by the
+// worker as a sandbox filesystem path segment (the per-conversation query cwd),
 // so when it arrives back as a path param on the events route it must be
-// re-validated as path-safe. This contract MUST stay in sync with the
-// sandbox-daemon's validation (apps/sandbox-daemon/workspace.ts).
+// re-validated as path-safe.
 const MAX_CONVERSATION_ID_LENGTH = 128;
 const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 export const ConversationIdParam = z

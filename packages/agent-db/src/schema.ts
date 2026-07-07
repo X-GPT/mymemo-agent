@@ -15,7 +15,7 @@ import {
 
 /**
  * Drizzle schema for the writable agent database (`mymemo_agent`), distinct from
- * the gateway's read-only KB. This file is the single source of truth for the
+ * the worker's read-only KB. This file is the single source of truth for the
  * writable DB shared by `chat-api` (run creation, SSE projection) and
  * `agent-worker` (the claim/heartbeat/terminalize loop): types are inferred from
  * it, and `drizzle-kit generate` emits the SQL migrations under `drizzle/` from
