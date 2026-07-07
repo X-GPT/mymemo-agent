@@ -1,4 +1,7 @@
 import { createDatabase } from "@mymemo/agent-db/client";
+import type { AdvisoryLockPool } from "./cleanup/advisory-lock";
+import { CleanupLoop } from "./cleanup/cleanup-loop";
+import { createE2bSandboxJanitor } from "./cleanup/e2b-janitor";
 import { loadWorkerConfigFromEnv } from "./config/env";
 import { startHealthServer } from "./health";
 import { createLogger } from "./logger";
@@ -30,9 +33,24 @@ const runLoop = new RunLoop({
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 	logger,
 });
+// Worker-embedded orphan/snapshot cleanup (Task 8.1). Single-flighted across
+// replicas by a Postgres advisory lock taken on a dedicated connection from
+// Drizzle's underlying pg pool (`db.$client`). The pass only calls E2B once
+// real orphans/snapshots exist, so it is a no-op until the executor path is
+// creating sandboxes.
+const cleanupLoop = new CleanupLoop({
+	db,
+	pool: db.$client as unknown as AdvisoryLockPool,
+	janitor: createE2bSandboxJanitor(config.e2bApiKey),
+	workerId,
+	config: { snapshotRetentionMs: config.cleanup.snapshotRetentionMs },
+	intervalMs: config.cleanup.intervalMs,
+	logger,
+});
 const server = startHealthServer(worker, config.port, logger);
 
 runLoop.start();
+cleanupLoop.start();
 
 logger.info({
 	message: "agent-worker started",
@@ -46,6 +64,7 @@ async function handleShutdownSignal(signal: NodeJS.Signals): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	logger.info({ message: "Received shutdown signal", signal, workerId });
+	cleanupLoop.stop();
 	await runLoop.stop();
 	server.stop();
 	logger.info({ message: "agent-worker stopped", workerId });

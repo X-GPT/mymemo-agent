@@ -218,6 +218,8 @@ Optional:
 - `WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS` (default: `10`), `WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES` (default: `262144`), `WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES` (default: `1048576`) — caps for the model-facing `LoadDocuments` tool (documents-as-files, ADR-0004): the max ids per call, and the per-document / per-call byte caps on content materialized into the conversation's reserved docs cache
 - `WORKER_HEARTBEAT_INTERVAL_MS` (default: `15000`) — how often an active run renews its lease
 - `WORKER_SHUTDOWN_TIMEOUT_MS` (default: `30000`) — grace period to drain active runs on SIGINT/SIGTERM before forcing exit
+- `WORKER_CLEANUP_INTERVAL_MS` (default: `300000`) — how often the worker-embedded orphan/snapshot cleanup loop (Task 8.1) attempts a pass; the pass is single-flighted across replicas by a Postgres advisory lock, so only one worker runs it at a time
+- `WORKER_SNAPSHOT_RETENTION_MS` (default: `604800000`, 7 days) — idle window (measured against `conversation_runtime.updated_at`) before a conversation's superseded (`previous`) snapshot is deleted, keeping the `latest` restore path
 - `PORT` (default: `8080`) — `/health` endpoint port
 - `LOG_LEVEL` (default: `info`)
 - `DB_PASSWORD` — spliced into `AGENT_DATABASE_URL` when passwordless; `DB_SSL` (default: on; `disable` for local non-TLS)
