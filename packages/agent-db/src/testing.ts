@@ -38,6 +38,17 @@ export async function createTestDatabase(): Promise<TestDb> {
 	}
 	return {
 		db: drizzle(client, { schema }) as unknown as Database,
-		close: () => client.close(),
+		close: async () => {
+			await client.close();
+			// pglite holds its Postgres heap in WASM linear memory that `close()`
+			// releases only for the WASM instance — the ~1GB backing ArrayBuffer is
+			// reclaimed lazily by the JS GC. A suite that spins up one instance per
+			// test leaves those closed corpses uncollected, so peak memory climbs
+			// until a later `new PGlite()` cannot allocate and fails to initialize
+			// (a flaky, GC-timing-dependent CI OOM). Forcing a collection here caps
+			// peak at a single live instance; it costs ~17ms next to pglite's ~1.5s
+			// spin-up, so it is free relative to the test it guards.
+			if (typeof Bun !== "undefined") Bun.gc(true);
+		},
 	};
 }
