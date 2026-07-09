@@ -97,19 +97,16 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 });
 
 describe("loadWorkerConfigFromEnv — cleanup loop", () => {
-	it("defaults the cleanup interval and a multi-day snapshot retention", () => {
+	it("defaults the cleanup interval", () => {
 		const config = loadWorkerConfigFromEnv(baseEnv());
 		expect(config.cleanup.intervalMs).toBe(300_000);
-		expect(config.cleanup.snapshotRetentionMs).toBe(604_800_000);
 	});
 
-	it("honors cleanup overrides", () => {
+	it("honors the cleanup interval override", () => {
 		const env = baseEnv();
 		env.WORKER_CLEANUP_INTERVAL_MS = "120000";
-		env.WORKER_SNAPSHOT_RETENTION_MS = "86400000";
 		const config = loadWorkerConfigFromEnv(env);
 		expect(config.cleanup.intervalMs).toBe(120_000);
-		expect(config.cleanup.snapshotRetentionMs).toBe(86_400_000);
 	});
 
 	it("rejects a non-positive cleanup interval override", () => {

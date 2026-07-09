@@ -9,14 +9,12 @@ import {
 import {
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
-	updateRuntimeSandboxTx,
 } from "@mymemo/agent-db/runtime-store";
 import { conversationRuntime, runEvents, runs } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
 import { RunLoop, type RunProcessor } from "./run-loop";
-import type { SnapshotSandbox } from "./snapshot-barrier";
 import { Worker } from "./worker";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
@@ -108,31 +106,6 @@ async function readEventTypes(runId: string) {
 const appendTextProcessor: RunProcessor = async (ctx) => {
 	await ctx.appendText(`synthetic ${ctx.run.runId}`);
 };
-
-/** A checkpoint seam that counts calls, for the snapshot-barrier integration. */
-function countingSandbox(impl?: () => Promise<string>) {
-	const state = { calls: 0 };
-	const sandbox: SnapshotSandbox = {
-		async createSnapshot() {
-			state.calls++;
-			return impl ? await impl() : "snap-1";
-		},
-	};
-	return { sandbox, state };
-}
-
-/** Stand up the owned conversation's runtime row + sandbox pointer from inside
- * a processor — the state a real turn reaches before it reports dirty work. */
-async function standUpRuntime(runId: string, conversationId: string) {
-	const owner = {
-		userId: "user-1",
-		conversationId,
-		runId,
-		workerId: "worker-1",
-	};
-	await createConversationRuntimeTx(tdb.db, owner);
-	await updateRuntimeSandboxTx(tdb.db, { ...owner, sandboxId: "sbx-1" });
-}
 
 async function readRuntime(conversationId: string) {
 	return loadConversationRuntimeTx(tdb.db, {
@@ -336,108 +309,6 @@ describe("RunLoop — terminal outcomes", () => {
 	});
 });
 
-describe("RunLoop — snapshot barrier", () => {
-	it("completes a clean turn as done without taking a snapshot", async () => {
-		const worker = buildWorker(1);
-		const { sandbox, state } = countingSandbox();
-		const loop = buildLoop(worker, async (ctx) => {
-			await ctx.appendText(`clean ${ctx.run.runId}`);
-			return { workspaceDirty: false, sandbox };
-		});
-		await queueRun("run-1", "conv-1");
-
-		await loop.tick();
-		await worker.drain();
-
-		expect((await readRun("run-1"))?.status).toBe("done");
-		expect(await readEventTypes("run-1")).toEqual([
-			"assistant_text",
-			"run_done",
-		]);
-		expect(state.calls).toBe(0);
-	});
-
-	it("snapshots a dirty turn once and records the checkpoint before done", async () => {
-		const worker = buildWorker(1);
-		const { sandbox, state } = countingSandbox(async () => "snap-99");
-		const loop = buildLoop(worker, async (ctx) => {
-			await standUpRuntime(ctx.run.runId, ctx.run.conversationId);
-			await ctx.appendText(`work ${ctx.run.runId}`);
-			return { workspaceDirty: true, sandbox };
-		});
-		await queueRun("run-1", "conv-1");
-
-		await loop.tick();
-		await worker.drain();
-
-		expect((await readRun("run-1"))?.status).toBe("done");
-		expect(await readEventTypes("run-1")).toEqual([
-			"assistant_text",
-			"run_done",
-		]);
-		expect(state.calls).toBe(1);
-		expect(await readRuntime("conv-1")).toMatchObject({
-			latestSnapshotId: "snap-99",
-			workspaceCheckpointStatus: "clean",
-		});
-	});
-
-	it("terminalizes as error and marks dirty_uncheckpointed when the snapshot fails", async () => {
-		const worker = buildWorker(1);
-		const { sandbox } = countingSandbox(async () => {
-			throw new Error("e2b snapshot failed");
-		});
-		const loop = buildLoop(worker, async (ctx) => {
-			await standUpRuntime(ctx.run.runId, ctx.run.conversationId);
-			await ctx.appendText(`work ${ctx.run.runId}`);
-			return { workspaceDirty: true, sandbox };
-		});
-		await queueRun("run-1", "conv-1");
-
-		await loop.tick();
-		await worker.drain();
-
-		expect((await readRun("run-1"))?.status).toBe("error");
-		expect(await readEventTypes("run-1")).toEqual([
-			"assistant_text",
-			"run_error",
-		]);
-		expect(await readRuntime("conv-1")).toMatchObject({
-			latestSnapshotId: null,
-			workspaceCheckpointStatus: "dirty_uncheckpointed",
-		});
-	});
-
-	it("lets cancellation win over a dirty successful turn without snapshotting", async () => {
-		const worker = buildWorker(1);
-		const { sandbox, state } = countingSandbox();
-		// The turn runs until aborted, then reports dirty work — a would-be
-		// successful checkpoint that cancellation must beat at the terminal.
-		const loop = buildLoop(worker, async (ctx) => {
-			await standUpRuntime(ctx.run.runId, ctx.run.conversationId);
-			await new Promise<void>((resolve) => {
-				if (ctx.signal.aborted) return resolve();
-				ctx.signal.addEventListener("abort", () => resolve(), { once: true });
-			});
-			return { workspaceDirty: true, sandbox };
-		});
-		await queueRun("run-1", "conv-1");
-		await loop.tick(); // claim + dispatch (processor blocks on abort)
-
-		await tdb.db
-			.update(runs)
-			.set({ status: "cancel_requested", cancelRequestedAt: sql`now()` })
-			.where(eq(runs.runId, "run-1"));
-
-		await loop.tick(); // heartbeat observes cancel_requested → aborts the run
-		await worker.drain();
-
-		expect((await readRun("run-1"))?.status).toBe("canceled");
-		expect(await readEventTypes("run-1")).toEqual(["run_canceled"]);
-		expect(state.calls).toBe(0);
-	});
-});
-
 describe("RunLoop — agent session pointer", () => {
 	it("advances the resume pointer on a successful turn that reports a session", async () => {
 		const worker = buildWorker(1);
@@ -450,11 +321,7 @@ describe("RunLoop — agent session pointer", () => {
 				runId: ctx.run.runId,
 				workerId: "worker-1",
 			});
-			return {
-				workspaceDirty: false,
-				sandbox: null,
-				agentSession: { sessionId: "session-abc" },
-			};
+			return { agentSession: { sessionId: "session-abc" } };
 		});
 		await queueRun("run-1", "conv-1");
 
@@ -477,7 +344,7 @@ describe("RunLoop — agent session pointer", () => {
 				workerId: "worker-1",
 			});
 			// A mirror_error turn drops the session id → agentSession is null.
-			return { workspaceDirty: false, sandbox: null, agentSession: null };
+			return { agentSession: null };
 		});
 		await queueRun("run-1", "conv-1");
 

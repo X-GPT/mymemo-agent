@@ -12,12 +12,27 @@ import {
 } from "@mymemo/agent-db/run-store";
 import { advanceAgentSessionPointerTx } from "@mymemo/agent-db/runtime-store";
 import type { WorkerLogger } from "./logger";
-import { runSnapshotBarrier, type TurnResult } from "./snapshot-barrier";
 import type { Worker } from "./worker";
 
-/** A processor that reports nothing is treated as a clean, sandbox-less turn:
- * no user work to checkpoint. */
-const CLEAN_TURN: TurnResult = { workspaceDirty: false, sandbox: null };
+/**
+ * What a processor reports back about the turn it just ran. Workspace files
+ * need no end-of-turn handling (ADR-0007): the sandbox idle-pauses once the
+ * turn stops renewing it, and the paused sandbox *is* the persisted workspace.
+ */
+export interface TurnResult {
+	/**
+	 * The agent session to record as the conversation's resume pointer once the
+	 * turn terminalizes `done` (ADR-0005). Present only when the SDK produced a
+	 * session id AND no `mirror_error` made the mirrored transcript unreliable —
+	 * a dropped-mirror turn omits it, so the pointer does not advance yet the run
+	 * still succeeds. Absent for synthetic turns that ran no query.
+	 */
+	agentSession?: { sessionId: string } | null;
+}
+
+/** A processor that reports nothing is normalized to a turn with no session
+ * pointer to advance (the Milestone 3 synthetic turn). */
+const EMPTY_TURN: TurnResult = {};
 
 /**
  * What a claimed run's processing is handed. `appendText` is the bound
@@ -37,11 +52,9 @@ export interface RunProcessContext {
  * loop. Injected so the control loop's claim/heartbeat/terminalize behavior is
  * tested independently of what a turn does.
  *
- * A processor may return a {@link TurnResult} describing what the turn left in
- * the workspace (dirty state, the sandbox to checkpoint); returning nothing is
- * treated as a clean, sandbox-less turn, so the Milestone 3 synthetic processor
- * needs no change. The loop feeds the result to the snapshot barrier before a
- * successful run terminalizes as `done`.
+ * A processor may return a {@link TurnResult} naming the agent session to
+ * resume from next turn; returning nothing is treated as a turn with no
+ * session to record, so the Milestone 3 synthetic processor needs no change.
  */
 // biome-ignore lint/suspicious/noConfusingVoidType: `void` keeps a nothing-returning processor valid — `undefined` is not assignable from a void-returning async fn.
 type RunTurnResult = void | TurnResult;
@@ -278,7 +291,7 @@ export class RunLoop {
 	}
 
 	private async runClaimed(run: RunRecord, entry: ActiveEntry): Promise<void> {
-		let turnResult: TurnResult = CLEAN_TURN;
+		let turnResult: TurnResult = EMPTY_TURN;
 		let failure: { error: unknown } | undefined;
 		try {
 			turnResult =
@@ -286,7 +299,7 @@ export class RunLoop {
 					run,
 					signal: entry.controller.signal,
 					appendText: (text) => this.appendText(run.runId, text),
-				})) ?? CLEAN_TURN;
+				})) ?? EMPTY_TURN;
 		} catch (error) {
 			failure = { error };
 		}
@@ -323,9 +336,8 @@ export class RunLoop {
 			});
 			return;
 		}
-		// Cancellation wins over both success and failure, and short-circuits the
-		// snapshot barrier: an SDK error raised while interrupting still surfaces as
-		// `canceled`, and a canceled turn is never checkpointed as a clean success.
+		// Cancellation wins over both success and failure: an SDK error raised
+		// while interrupting still surfaces as `canceled`.
 		if (state.canceled) {
 			await this.terminalize(runId, "canceled");
 			return;
@@ -336,42 +348,17 @@ export class RunLoop {
 			});
 			return;
 		}
-		// Success: clear the snapshot barrier before the terminal `done`. The
-		// barrier snapshots a dirty workspace and persists the checkpoint under the
-		// ownership fence; if it loses the fence mid-snapshot it returns `abandon`
-		// and recovery owns the terminal event.
-		const decision = await runSnapshotBarrier({
-			db: this.opts.db,
-			owner: {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId,
-				workerId: this.workerId,
-			},
-			turnResult,
-			logger: this.opts.logger,
-		});
-		if ("abandon" in decision) {
-			this.opts.logger.warn({
-				message: "abandoning run after snapshot barrier",
-				workerId: this.workerId,
-				runId,
-				reason: decision.reason,
-			});
-			return;
-		}
-		// The terminal-success transition also advances the conversation's resume
-		// pointer, under the ownership fence (ADR-0005). Only on `done`, and only
-		// when the turn reported a session to resume from — a `mirror_error` turn
-		// carries none, so the pointer holds and the run still terminalizes `done`.
-		if (decision.terminal === "done" && turnResult.agentSession) {
+		// Success: terminalize `done` directly — there is no end-of-turn
+		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
+		// itself the persisted workspace. The terminal-success transition also
+		// advances the conversation's resume pointer, under the ownership fence
+		// (ADR-0005). Only when the turn reported a session to resume from — a
+		// `mirror_error` turn carries none, so the pointer holds and the run still
+		// terminalizes `done`.
+		if (turnResult.agentSession) {
 			await this.advanceSessionPointer(run, turnResult.agentSession.sessionId);
 		}
-		await this.terminalize(
-			runId,
-			decision.terminal,
-			decision.terminal === "error" ? { message: decision.message } : undefined,
-		);
+		await this.terminalize(runId, "done");
 	}
 
 	/**

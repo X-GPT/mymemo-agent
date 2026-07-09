@@ -8,9 +8,9 @@ import { conversationRuntime, orphanSandboxes, runs } from "./schema";
  * Narrow transaction helpers over `conversation_runtime` and
  * `orphan_sandboxes` — the only write path for persistent E2B workspace
  * metadata (design doc "State Ownership", Task 4.2). Shared by chat-api (which
- * owns run admission and conversation records) and agent-worker (which owns the
- * snapshot barrier that writes checkpoints through these helpers, Task 5.3), so
- * the fenced write protocol lives in exactly one place over one `pg` driver.
+ * owns run admission and conversation records) and agent-worker (which mutates
+ * the sandbox and session pointers through these helpers), so the fenced write
+ * protocol lives in exactly one place over one `pg` driver.
  * The table grants no execution ownership of its own: every mutation is fenced
  * on the claiming run's ownership in `runs` (`status` active,
  * `locked_by = workerId`, `locked_until > now()`): every update carries the
@@ -28,20 +28,8 @@ import { conversationRuntime, orphanSandboxes, runs } from "./schema";
 /** Run statuses under which the owning worker may mutate runtime metadata. */
 const OWNED_ACTIVE_STATUSES = ["running", "cancel_requested"] as const;
 
-/**
- * 'clean' = the workspace holds no user work newer than `latest_snapshot_id`
- * (or is fresh); 'dirty_uncheckpointed' = a checkpoint failed after user
- * work, so the next turn must reconnect and checkpoint before anything else.
- */
-export type WorkspaceCheckpointStatus = "clean" | "dirty_uncheckpointed";
-
-/** A persisted runtime row. `workspaceCheckpointStatus` is narrowed from
- * text: rows are only ever written through these helpers, which accept the
- * typed union, and the DB check constraint defends the legal values. */
-export type ConversationRuntimeRecord = Omit<
-	typeof conversationRuntime.$inferSelect,
-	"workspaceCheckpointStatus"
-> & { workspaceCheckpointStatus: WorkspaceCheckpointStatus };
+/** A persisted runtime row. */
+export type ConversationRuntimeRecord = typeof conversationRuntime.$inferSelect;
 
 /**
  * The identity a fenced mutation acts under: the conversation's runtime row
@@ -100,11 +88,11 @@ export async function loadConversationRuntimeTx(
 			),
 		)
 		.limit(1);
-	return row ? toRuntimeRecord(row) : null;
+	return row ?? null;
 }
 
 /**
- * Create the conversation's runtime row (empty pointers, `clean`). The fence
+ * Create the conversation's runtime row (empty pointers). The fence
  * is checked `FOR SHARE` in the same transaction as the insert, so stale-run
  * recovery cannot terminalize the authorizing run between check and insert.
  * Idempotent: if a previous attempt already created the row, the existing row
@@ -128,7 +116,7 @@ export async function createConversationRuntimeTx(
 			.values({ userId: owner.userId, conversationId: owner.conversationId })
 			.onConflictDoNothing()
 			.returning();
-		if (inserted) return toRuntimeRecord(inserted);
+		if (inserted) return inserted;
 
 		const [existing] = await tx
 			.select()
@@ -144,7 +132,7 @@ export async function createConversationRuntimeTx(
 				`runtime row for conversation ${owner.conversationId} vanished mid-transaction`,
 			);
 		}
-		return toRuntimeRecord(existing);
+		return existing;
 	});
 }
 
@@ -188,52 +176,13 @@ async function fencedRuntimeUpdate(
 		)
 		.returning();
 	if (!row) fenceRejected(owner, operation);
-	return toRuntimeRecord(row);
-}
-
-/**
- * Record a successful checkpoint: the new snapshot becomes latest, the prior
- * latest is kept as previous (operator-driven rollback only), and the
- * workspace is clean by definition — the snapshot covers everything in it.
- * One UPDATE, so the rotation reads the pre-update column values atomically.
- * Rotation only happens when the id actually changes: re-recording the
- * current latest (a retry, or E2B's repeating `templateId:tag` ids) must not
- * collapse both pointers onto one id and orphan the real rollback snapshot.
- */
-export async function recordRuntimeSnapshotTx(
-	db: Database,
-	input: RunOwnershipRef & { snapshotId: string },
-): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, input, "snapshot record", {
-		previousSnapshotId: sql`case
-			when ${conversationRuntime.latestSnapshotId} is distinct from ${input.snapshotId}
-			then ${conversationRuntime.latestSnapshotId}
-			else ${conversationRuntime.previousSnapshotId}
-		end`,
-		latestSnapshotId: input.snapshotId,
-		workspaceCheckpointStatus: "clean",
-	});
-}
-
-/**
- * Mark the workspace checkpoint status without touching the snapshot ids —
- * the checkpoint-failure path (`dirty_uncheckpointed`) must leave
- * `latest_snapshot_id` as the last known-good checkpoint, and a restore path
- * marks `clean` after standing a sandbox up from it.
- */
-export async function markRuntimeCheckpointStatusTx(
-	db: Database,
-	input: RunOwnershipRef & { status: WorkspaceCheckpointStatus },
-): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, input, "checkpoint status mark", {
-		workspaceCheckpointStatus: input.status,
-	});
+	return row;
 }
 
 /**
  * Mark the current sandbox tainted (command cleanup unproven): the pointer is
  * kept so cleanup can find and kill it, but the sandbox must not be
- * snapshotted or reused until replaced via {@link updateRuntimeSandboxTx}.
+ * reused until replaced via {@link updateRuntimeSandboxTx}.
  */
 export async function markRuntimeSandboxTaintedTx(
 	db: Database,
@@ -293,14 +242,4 @@ export async function recordOrphanSandboxTx(
 		);
 	}
 	return existing;
-}
-
-function toRuntimeRecord(
-	row: typeof conversationRuntime.$inferSelect,
-): ConversationRuntimeRecord {
-	return {
-		...row,
-		workspaceCheckpointStatus:
-			row.workspaceCheckpointStatus as WorkspaceCheckpointStatus,
-	};
 }

@@ -31,23 +31,13 @@ const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 /** Records janitor calls; can be told to fail specific ids to prove retry. */
 class FakeJanitor implements SandboxJanitor {
 	killed: string[] = [];
-	deletedSnapshots: string[] = [];
 	killFailIds = new Set<string>();
-	deleteFailIds = new Set<string>();
 
 	async killSandbox(sandboxId: string): Promise<void> {
 		if (this.killFailIds.has(sandboxId)) throw new Error("E2B kill failed");
 		this.killed.push(sandboxId);
 	}
-	async deleteSnapshot(snapshotId: string): Promise<void> {
-		if (this.deleteFailIds.has(snapshotId))
-			throw new Error("E2B delete failed");
-		this.deletedSnapshots.push(snapshotId);
-	}
 }
-
-const HOUR_MS = 3_600_000;
-const RETENTION_MS = 60_000;
 
 let tdb: TestDb;
 let janitor: FakeJanitor;
@@ -78,7 +68,6 @@ function pass(overrides?: Partial<CleanupPassOptions>) {
 		db: tdb.db,
 		janitor,
 		workerId: "worker-1",
-		config: { snapshotRetentionMs: RETENTION_MS },
 		logger: silentLogger,
 		...overrides,
 	});
@@ -94,9 +83,6 @@ async function insertRuntime(row: {
 	userId: string;
 	conversationId: string;
 	sandboxId?: string | null;
-	latestSnapshotId?: string | null;
-	previousSnapshotId?: string | null;
-	updatedAt?: Date;
 }) {
 	await tdb.db.insert(conversationRuntime).values(row);
 }
@@ -188,109 +174,18 @@ describe("orphan sandbox cleanup", () => {
 	});
 });
 
-describe("unreferenced snapshot retention", () => {
-	it("deletes an idle conversation's superseded snapshot, keeping latest", async () => {
-		await insertConversation("user-1", "conv-1");
-		await insertRuntime({
-			userId: "user-1",
-			conversationId: "conv-1",
-			latestSnapshotId: "snap-latest",
-			previousSnapshotId: "snap-previous",
-			updatedAt: new Date(Date.now() - HOUR_MS),
-		});
-
-		const summary = await pass();
-
-		expect(janitor.deletedSnapshots).toEqual(["snap-previous"]);
-		const row = await runtimeRow("user-1", "conv-1");
-		expect(row?.previousSnapshotId).toBeNull();
-		expect(row?.latestSnapshotId).toBe("snap-latest");
-		expect(summary.snapshotsDeleted).toBe(1);
-	});
-
-	it("leaves a recently-active conversation's snapshot until retention elapses", async () => {
-		await insertConversation("user-1", "conv-1");
-		await insertRuntime({
-			userId: "user-1",
-			conversationId: "conv-1",
-			latestSnapshotId: "snap-latest",
-			previousSnapshotId: "snap-previous",
-			// default updatedAt = now(): well within the retention window.
-		});
-
-		const summary = await pass();
-
-		expect(janitor.deletedSnapshots).toEqual([]);
-		const row = await runtimeRow("user-1", "conv-1");
-		expect(row?.previousSnapshotId).toBe("snap-previous");
-		expect(summary.snapshotsDeleted).toBe(0);
-	});
-
-	it("never deletes a snapshot still referenced as another conversation's latest", async () => {
-		await insertConversation("user-1", "conv-idle");
-		await insertConversation("user-1", "conv-active");
-		await insertRuntime({
-			userId: "user-1",
-			conversationId: "conv-idle",
-			previousSnapshotId: "snap-shared",
-			updatedAt: new Date(Date.now() - HOUR_MS),
-		});
-		await insertRuntime({
-			userId: "user-1",
-			conversationId: "conv-active",
-			latestSnapshotId: "snap-shared",
-		});
-
-		await pass();
-
-		expect(janitor.deletedSnapshots).toEqual([]);
-		const idle = await runtimeRow("user-1", "conv-idle");
-		expect(idle?.previousSnapshotId).toBe("snap-shared");
-	});
-
-	it("retries a failed snapshot delete: the pointer survives for a later pass", async () => {
-		await insertConversation("user-1", "conv-1");
-		await insertRuntime({
-			userId: "user-1",
-			conversationId: "conv-1",
-			previousSnapshotId: "snap-flaky",
-			updatedAt: new Date(Date.now() - HOUR_MS),
-		});
-		janitor.deleteFailIds.add("snap-flaky");
-
-		const first = await pass();
-		expect(first.snapshotsFailed).toBe(1);
-		expect((await runtimeRow("user-1", "conv-1"))?.previousSnapshotId).toBe(
-			"snap-flaky",
-		);
-
-		janitor.deleteFailIds.clear();
-		const second = await pass();
-		expect(second.snapshotsDeleted).toBe(1);
-		expect(
-			(await runtimeRow("user-1", "conv-1"))?.previousSnapshotId,
-		).toBeNull();
-	});
-});
-
 describe("deleted-conversation cleanup", () => {
-	it("kills sandbox + snapshots then removes the runtime row", async () => {
+	it("kills the sandbox then removes the runtime row", async () => {
 		// No conversations row => the conversation was deleted.
 		await insertRuntime({
 			userId: "user-1",
 			conversationId: "conv-gone",
 			sandboxId: "sbx-gone",
-			latestSnapshotId: "snap-latest",
-			previousSnapshotId: "snap-previous",
 		});
 
 		const summary = await pass();
 
 		expect(janitor.killed).toEqual(["sbx-gone"]);
-		expect(janitor.deletedSnapshots.sort()).toEqual([
-			"snap-latest",
-			"snap-previous",
-		]);
 		expect(await runtimeRow("user-1", "conv-gone")).toBeUndefined();
 		expect(summary.deletedRuntimesRemoved).toBe(1);
 	});
@@ -347,59 +242,18 @@ describe("deleted-conversation cleanup", () => {
 		expect(summary.deletedRuntimesRemoved).toBe(1);
 	});
 
-	it("retains the runtime row when a snapshot delete fails", async () => {
-		await insertRuntime({
-			userId: "user-1",
-			conversationId: "conv-gone",
-			sandboxId: "sbx-gone",
-			latestSnapshotId: "snap-stuck",
-		});
-		janitor.deleteFailIds.add("snap-stuck");
-
-		const summary = await pass();
-
-		expect(janitor.killed).toEqual(["sbx-gone"]);
-		expect(await runtimeRow("user-1", "conv-gone")).toBeDefined();
-		expect(summary.deletedRuntimesRetained).toBe(1);
-		expect(summary.deletedRuntimesRemoved).toBe(0);
-	});
-
 	it("leaves runtime rows of still-existing conversations untouched", async () => {
 		await insertConversation("user-1", "conv-live");
 		await insertRuntime({
 			userId: "user-1",
 			conversationId: "conv-live",
 			sandboxId: "sbx-live",
-			latestSnapshotId: "snap-live",
 		});
 
 		const summary = await pass();
 
 		expect(janitor.killed).toEqual([]);
-		expect(janitor.deletedSnapshots).toEqual([]);
 		expect(await runtimeRow("user-1", "conv-live")).toBeDefined();
 		expect(summary.deletedRuntimesRemoved).toBe(0);
-	});
-
-	it("does not delete a snapshot a surviving conversation still references", async () => {
-		await insertConversation("user-1", "conv-live");
-		await insertRuntime({
-			userId: "user-1",
-			conversationId: "conv-live",
-			latestSnapshotId: "snap-shared",
-		});
-		// Deleted conversation shares the snapshot id (repeating templateId:tag).
-		await insertRuntime({
-			userId: "user-1",
-			conversationId: "conv-gone",
-			latestSnapshotId: "snap-shared",
-		});
-
-		await pass();
-
-		expect(janitor.deletedSnapshots).toEqual([]);
-		// The deleted row is still removed; the live conversation keeps the snapshot.
-		expect(await runtimeRow("user-1", "conv-gone")).toBeUndefined();
-		expect(await runtimeRow("user-1", "conv-live")).toBeDefined();
 	});
 });

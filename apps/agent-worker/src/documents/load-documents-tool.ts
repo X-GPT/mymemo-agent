@@ -33,11 +33,7 @@ export interface LoadDocumentsLimits {
 	perCallMaxBytes: number;
 }
 
-/**
- * The narrow sandbox seam LoadDocuments needs: write-only. It deliberately does
- * NOT carry `markWorkspaceDirty` — a cache reconstructible from the KB never
- * dirties user work (ADR-0004), so the tool structurally cannot flip that bit.
- */
+/** The narrow sandbox seam LoadDocuments needs: write-only (ADR-0004). */
 export interface LoadDocumentsCacheWriter {
 	writeFile(input: { path: string; content: string }): Promise<void>;
 }

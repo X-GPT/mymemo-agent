@@ -105,7 +105,6 @@ function buildDeps(overrides: Partial<RunToolDeps> = {}): {
 	commandClient: ReturnType<typeof fakeCommandClient>;
 	documentClient: ReturnType<typeof fakeDocumentClient>;
 	audits: CommandAuditEvent[];
-	dirtied: number;
 	tainted: string[];
 } {
 	const fileClient = fakeFileClient();
@@ -113,7 +112,6 @@ function buildDeps(overrides: Partial<RunToolDeps> = {}): {
 	const documentClient = fakeDocumentClient();
 	const audits: CommandAuditEvent[] = [];
 	const tainted: string[] = [];
-	let dirtied = 0;
 	const deps: RunToolDeps = {
 		binding: BINDING,
 		workspaceRoot: WORKSPACE_ROOT,
@@ -141,9 +139,6 @@ function buildDeps(overrides: Partial<RunToolDeps> = {}): {
 			perDocumentMaxBytes: 262_144,
 			perCallMaxBytes: 1_048_576,
 		},
-		async markWorkspaceDirty() {
-			dirtied++;
-		},
 		async markSandboxTainted(reason) {
 			tainted.push(reason);
 		},
@@ -158,9 +153,6 @@ function buildDeps(overrides: Partial<RunToolDeps> = {}): {
 		commandClient,
 		documentClient,
 		audits,
-		get dirtied() {
-			return dirtied;
-		},
 		tainted,
 	};
 }
@@ -248,7 +240,7 @@ describe("buildRunTools — file tools operate in the run workspace", () => {
 		expect(ctx.fileClient.reads).toEqual([`${WORKSPACE_ROOT}/notes.txt`]);
 	});
 
-	it("marks the workspace dirty after a successful Write", async () => {
+	it("routes Write through the run's sandbox file client", async () => {
 		const ctx = buildDeps();
 		await toolsByName(ctx.deps).Write?.handler(
 			{ path: "notes.txt", content: "hello" },
@@ -256,7 +248,6 @@ describe("buildRunTools — file tools operate in the run workspace", () => {
 		);
 
 		expect(ctx.fileClient.writes).toHaveLength(1);
-		expect(ctx.dirtied).toBe(1);
 	});
 });
 

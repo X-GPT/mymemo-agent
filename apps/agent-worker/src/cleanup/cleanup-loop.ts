@@ -6,7 +6,6 @@ import {
 	tryWithAdvisoryLock,
 } from "./advisory-lock";
 import {
-	type CleanupConfig,
 	type CleanupSummary,
 	runCleanupPass,
 	type SandboxJanitor,
@@ -18,7 +17,6 @@ export interface CleanupLoopOptions {
 	pool: AdvisoryLockPool;
 	janitor: SandboxJanitor;
 	workerId: string;
-	config: CleanupConfig;
 	/** How often {@link CleanupLoop.start} attempts a pass. */
 	intervalMs: number;
 	logger: WorkerLogger;
@@ -57,7 +55,6 @@ export class CleanupLoop {
 						db: this.opts.db,
 						janitor: this.opts.janitor,
 						workerId: this.opts.workerId,
-						config: this.opts.config,
 						logger: this.opts.logger,
 					}),
 			);

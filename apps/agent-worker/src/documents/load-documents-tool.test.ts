@@ -21,15 +21,11 @@ const limits = {
 	perCallMaxBytes: 4_000,
 };
 
-/** Records the sandbox calls the tool makes; the extra dirty spy must stay untouched. */
+/** Records the sandbox calls the tool makes. */
 class FakeCacheWriter implements LoadDocumentsCacheWriter {
 	readonly writes: { path: string; content: string }[] = [];
 	readonly calls: string[] = [];
 	writeError: Error | undefined;
-	/** Not part of the writer contract; present so the test can prove it is never called. */
-	markWorkspaceDirty = () => {
-		this.calls.push("markWorkspaceDirty");
-	};
 
 	async writeFile(input: { path: string; content: string }): Promise<void> {
 		this.calls.push("writeFile");
@@ -285,21 +281,6 @@ describe("LoadDocuments tool", () => {
 			"/workspace/.mymemo/docs/doc-1.md",
 			"/workspace/.mymemo/docs/doc-1.md",
 		]);
-	});
-
-	it("never marks the workspace dirty", async () => {
-		const client = makeClient(async ({ documentId }) =>
-			doc({ documentId, content: "body" }),
-		);
-		const sandbox = new FakeCacheWriter();
-
-		await runLoadDocumentsTool(
-			{ documentIds: ["doc-1"] },
-			baseContext(client, sandbox),
-		);
-
-		// The tool touches only writeFile; nothing can flip the dirty bit.
-		expect(sandbox.calls).toEqual(["writeFile"]);
 	});
 
 	it("rejects a document id that is not a safe filename before fetching", async () => {

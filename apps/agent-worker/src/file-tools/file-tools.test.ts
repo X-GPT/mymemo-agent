@@ -56,7 +56,6 @@ const baseContext = {
 		commandMaxOutputBytes: 16_384,
 		commandTimeoutMs: 10_000,
 	},
-	markWorkspaceDirty: async () => {},
 };
 
 function parseResult(result: { content: { text: string }[] }) {
@@ -121,70 +120,47 @@ describe("Read file tool", () => {
 });
 
 describe("Write file tool", () => {
-	it("marks the workspace dirty only after the sandbox write succeeds", async () => {
+	it("writes the file through the sandbox client", async () => {
 		const client = new FakeSandboxFileClient();
-		const events: string[] = [];
 
 		const result = await runWriteFileTool(
 			{ path: "notes.txt", content: "hello" },
-			{
-				...baseContext,
-				client,
-				markWorkspaceDirty: async () => {
-					events.push("dirty");
-				},
-			},
+			{ ...baseContext, client },
 		);
 
 		expect(result.isError).toBeUndefined();
 		expect(client.writes).toEqual([
 			{ path: "/workspace/notes.txt", content: "hello" },
 		]);
-		expect(events).toEqual(["dirty"]);
 		expect(parseResult(result)).toEqual({
 			path: "notes.txt",
 			bytesWritten: 5,
 		});
 	});
 
-	it("does not mark the workspace dirty when the sandbox write fails", async () => {
+	it("returns a bounded error when the sandbox write fails", async () => {
 		const client = new FakeSandboxFileClient();
 		client.writeError = new Error("E2B write exploded with a long detail");
-		let dirty = false;
 
 		const result = await runWriteFileTool(
 			{ path: "notes.txt", content: "hello" },
-			{
-				...baseContext,
-				client,
-				markWorkspaceDirty: async () => {
-					dirty = true;
-				},
-			},
+			{ ...baseContext, client },
 		);
 
 		expect(result.isError).toBe(true);
 		expect(result.content[0]?.text).toBe(
 			"Write failed: E2B write exploded with a long detail",
 		);
-		expect(dirty).toBe(false);
 	});
 });
 
 describe("Edit file tool", () => {
-	it("replaces all exact matches and marks dirty after the write succeeds", async () => {
+	it("replaces all exact matches", async () => {
 		const client = new FakeSandboxFileClient("hello hello");
-		let dirty = false;
 
 		const result = await runEditFileTool(
 			{ path: "notes.txt", oldText: "hello", newText: "hi" },
-			{
-				...baseContext,
-				client,
-				markWorkspaceDirty: async () => {
-					dirty = true;
-				},
-			},
+			{ ...baseContext, client },
 		);
 
 		expect(result.isError).toBeUndefined();
@@ -194,31 +170,22 @@ describe("Edit file tool", () => {
 		expect(client.writes).toEqual([
 			{ path: "/workspace/notes.txt", content: "hi hi" },
 		]);
-		expect(dirty).toBe(true);
 		expect(parseResult(result)).toEqual({
 			path: "notes.txt",
 			replacements: 2,
 		});
 	});
 
-	it("does not mark dirty when the replacement write fails", async () => {
+	it("returns an error when the replacement write fails", async () => {
 		const client = new FakeSandboxFileClient("hello");
 		client.writeError = new Error("E2B write failed");
-		let dirty = false;
 
 		const result = await runEditFileTool(
 			{ path: "notes.txt", oldText: "hello", newText: "hi" },
-			{
-				...baseContext,
-				client,
-				markWorkspaceDirty: async () => {
-					dirty = true;
-				},
-			},
+			{ ...baseContext, client },
 		);
 
 		expect(result.isError).toBe(true);
-		expect(dirty).toBe(false);
 	});
 });
 

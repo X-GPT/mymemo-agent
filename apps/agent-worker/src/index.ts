@@ -33,17 +33,16 @@ const runLoop = new RunLoop({
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 	logger,
 });
-// Worker-embedded orphan/snapshot cleanup (Task 8.1). Single-flighted across
-// replicas by a Postgres advisory lock taken on a dedicated connection from
-// Drizzle's underlying pg pool (`db.$client`). The pass only calls E2B once
-// real orphans/snapshots exist, so it is a no-op until the executor path is
-// creating sandboxes.
+// Worker-embedded orphan/deleted-conversation cleanup (Task 8.1, ADR-0007).
+// Single-flighted across replicas by a Postgres advisory lock taken on a
+// dedicated connection from Drizzle's underlying pg pool (`db.$client`). The
+// pass only calls E2B once real orphans exist, so it is a no-op until the
+// executor path is creating sandboxes.
 const cleanupLoop = new CleanupLoop({
 	db,
 	pool: db.$client as unknown as AdvisoryLockPool,
 	janitor: createE2bSandboxJanitor(config.e2bApiKey),
 	workerId,
-	config: { snapshotRetentionMs: config.cleanup.snapshotRetentionMs },
 	intervalMs: config.cleanup.intervalMs,
 	logger,
 });
