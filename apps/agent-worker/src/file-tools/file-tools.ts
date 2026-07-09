@@ -43,7 +43,6 @@ export interface FileToolContext {
 	client: SandboxFileClient;
 	workspaceRoot: string;
 	limits: FileToolLimits;
-	markWorkspaceDirty(): Promise<void>;
 }
 
 export interface ReadFileToolInput {
@@ -153,7 +152,6 @@ export async function runWriteFileTool(
 			path: resolved.path.absolutePath,
 			content: input.content,
 		});
-		await context.markWorkspaceDirty();
 		return toolText({
 			path: resolved.path.relativePath,
 			bytesWritten: utf8ByteLength(input.content),
@@ -191,7 +189,6 @@ export async function runEditFileTool(
 			path: resolved.path.absolutePath,
 			content: byteWindow.text.split(input.oldText).join(input.newText),
 		});
-		await context.markWorkspaceDirty();
 		return toolText({
 			path: resolved.path.relativePath,
 			replacements,

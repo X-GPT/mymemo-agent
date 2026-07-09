@@ -50,16 +50,10 @@ export interface WorkerConfig {
 	heartbeatIntervalMs: number;
 	/** Grace period to drain active runs on shutdown before forcing exit (ms). */
 	shutdownTimeoutMs: number;
-	/** Worker-embedded orphan/snapshot cleanup loop (Task 8.1). */
+	/** Worker-embedded orphan/deleted-conversation cleanup loop (Task 8.1). */
 	cleanup: {
 		/** How often the single-flighted cleanup pass is attempted (ms). */
 		intervalMs: number;
-		/**
-		 * Idle window before a conversation's superseded snapshot is deleted (ms).
-		 * The spike's retention decision is days, not minutes: resume-from-paused
-		 * is cheap, so there is no rush to reclaim a rollback snapshot.
-		 */
-		snapshotRetentionMs: number;
 	};
 	/** pino log level. */
 	logLevel: string;
@@ -77,7 +71,6 @@ const DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES = 1_048_576;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
-const DEFAULT_SNAPSHOT_RETENTION_MS = 604_800_000; // 7 days
 const DEFAULT_PORT = 8080;
 
 /**
@@ -192,11 +185,6 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 				env.WORKER_CLEANUP_INTERVAL_MS,
 				DEFAULT_CLEANUP_INTERVAL_MS,
 				"WORKER_CLEANUP_INTERVAL_MS",
-			),
-			snapshotRetentionMs: positiveIntOr(
-				env.WORKER_SNAPSHOT_RETENTION_MS,
-				DEFAULT_SNAPSHOT_RETENTION_MS,
-				"WORKER_SNAPSHOT_RETENTION_MS",
 			),
 		},
 		logLevel: env.LOG_LEVEL || "info",

@@ -20,7 +20,6 @@ class FakeJanitor implements SandboxJanitor {
 	async killSandbox(id: string): Promise<void> {
 		this.killed.push(id);
 	}
-	async deleteSnapshot(): Promise<void> {}
 }
 
 /** Grants or withholds the lock; can also fail `connect` to prove isolation. */
@@ -75,7 +74,6 @@ function buildLoop(pool: AdvisoryLockPool) {
 		pool,
 		janitor,
 		workerId: "worker-1",
-		config: { snapshotRetentionMs: 60_000 },
 		intervalMs: 60_000,
 		logger: silentLogger,
 	});

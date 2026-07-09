@@ -142,7 +142,6 @@ function makeContext(
 			maxStderrBytes: 65_536,
 		},
 		signal,
-		markWorkspaceDirty: async () => {},
 		markSandboxTainted: async (reason: string) => {
 			taints.push(reason);
 		},

@@ -168,8 +168,9 @@ export async function deleteAgentSessionTx(
 
 /**
  * Delete every transcript for a conversation. The conversation-scoped retention
- * path (ADR-0005): conversation deletion drops the conversation's model-side
- * memory, run by the periodic cleanup that owns snapshots.
+ * path (ADR-0005, amended by ADR-0007): conversation deletion drops the
+ * conversation's model-side memory, run by the periodic cleanup loop's
+ * deleted-conversation sweep.
  */
 export async function deleteConversationAgentSessionsTx(
 	db: Database,

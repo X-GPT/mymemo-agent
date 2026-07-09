@@ -76,7 +76,6 @@ export interface RunToolDeps {
 		perDocumentMaxBytes: number;
 		perCallMaxBytes: number;
 	};
-	markWorkspaceDirty(): Promise<void>;
 	markSandboxTainted(reason: string): Promise<void>;
 	recordCommandAudit(event: CommandAuditEvent): Promise<void>;
 }
@@ -103,7 +102,6 @@ export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
 		client: deps.fileClient,
 		workspaceRoot: deps.workspaceRoot,
 		limits: deps.fileLimits,
-		markWorkspaceDirty: deps.markWorkspaceDirty,
 	};
 
 	return [
@@ -173,7 +171,6 @@ export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
 						binding: deps.binding,
 						limits: deps.bashLimits,
 						signal: deps.signal,
-						markWorkspaceDirty: deps.markWorkspaceDirty,
 						markSandboxTainted: deps.markSandboxTainted,
 						recordCommandAudit: deps.recordCommandAudit,
 					}),

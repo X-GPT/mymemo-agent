@@ -91,12 +91,10 @@ export interface BashToolContext {
 	limits: BashToolLimits;
 	/** Fires when the run is canceled or ownership is lost; kills the command. */
 	signal: AbortSignal;
-	markWorkspaceDirty(): Promise<void>;
 	/**
 	 * Records that this sandbox failed command-tree cleanup. The seam is wired to
-	 * `conversation_runtime.sandbox_tainted`; Task 5.3's snapshot barrier reads
-	 * that flag and forces `error` over `done`, so a sandbox with escaped
-	 * processes is never snapshotted or reported as a clean success.
+	 * `conversation_runtime.sandbox_tainted`; provisioning never reuses a tainted
+	 * sandbox (ADR-0007) — the next turn replaces it and orphan-records it.
 	 */
 	markSandboxTainted(reason: string): Promise<void>;
 	recordCommandAudit(event: CommandAuditEvent): Promise<void>;
@@ -267,9 +265,6 @@ export async function runBashTool(
 		cleanupOk = false;
 		cleanupError = boundedErrorMessage(error);
 	}
-
-	// A command that ran may have mutated the workspace even if it failed.
-	await context.markWorkspaceDirty();
 
 	const outcome: CommandOutcome = canceled
 		? "canceled"

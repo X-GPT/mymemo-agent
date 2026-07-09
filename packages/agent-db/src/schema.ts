@@ -41,24 +41,11 @@ export const conversationRuntime = pgTable(
 		sandboxId: text("sandbox_id"),
 		/**
 		 * True when command cleanup could not be proven (stale-run recovery,
-		 * failed command-tree kill): the sandbox must not be snapshotted or
-		 * reused until cleanup proves otherwise. Reset whenever the pointer is
-		 * replaced or cleared — taint describes the current sandbox only.
+		 * failed command-tree kill): the sandbox must not be reused until
+		 * replaced. Reset whenever the pointer is replaced or cleared — taint
+		 * describes the current sandbox only.
 		 */
 		sandboxTainted: boolean("sandbox_tainted").notNull().default(false),
-		/** Newest successful checkpoint; the product restore path. */
-		latestSnapshotId: text("latest_snapshot_id"),
-		/** Prior successful checkpoint, kept for operator-driven rollback. */
-		previousSnapshotId: text("previous_snapshot_id"),
-		/**
-		 * 'clean' = the workspace holds no user work newer than
-		 * `latest_snapshot_id` (or is fresh); 'dirty_uncheckpointed' = a
-		 * checkpoint failed after user work, so the next turn must reconnect
-		 * and checkpoint before anything else.
-		 */
-		workspaceCheckpointStatus: text("workspace_checkpoint_status")
-			.notNull()
-			.default("clean"),
 		/**
 		 * The Claude Agent SDK session to resume this conversation from (ADR-0005):
 		 * the id the worker stores from the SDK's terminal result message. NULL
@@ -75,13 +62,7 @@ export const conversationRuntime = pgTable(
 			.notNull()
 			.defaultNow(),
 	},
-	(t) => [
-		primaryKey({ columns: [t.userId, t.conversationId] }),
-		check(
-			"conversation_runtime_checkpoint_status_check",
-			sql`${t.workspaceCheckpointStatus} in ('clean', 'dirty_uncheckpointed')`,
-		),
-	],
+	(t) => [primaryKey({ columns: [t.userId, t.conversationId] })],
 );
 
 /**
@@ -242,7 +223,8 @@ export const runEvents = pgTable(
  *
  * Worker-only: chat-api never reads or writes it. No FK to `conversations` —
  * transcript retention is the adapter's job (deletion runs in the periodic
- * cleanup that owns snapshots), and a cascade would couple the two.
+ * cleanup loop's deleted-conversation sweep), and a cascade would couple the
+ * two.
  */
 export const agentSessions = pgTable(
 	"agent_sessions",

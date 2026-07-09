@@ -44,10 +44,6 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 			appendAssistantText: ctx.appendText,
 		});
 		return {
-			// Real dirty/sandbox state arrives with E2B provisioning; until then a
-			// query touches no worker-managed E2B workspace here.
-			workspaceDirty: false,
-			sandbox: null,
 			// Advance the conversation's resume pointer only when the SDK produced a
 			// session id and no `mirror_error` left the stored transcript unreliable
 			// (ADR-0005); otherwise the run still succeeds but the pointer holds.

@@ -17,10 +17,8 @@ import {
 	advanceAgentSessionPointerTx,
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
-	markRuntimeCheckpointStatusTx,
 	markRuntimeSandboxTaintedTx,
 	recordOrphanSandboxTx,
-	recordRuntimeSnapshotTx,
 	updateRuntimeSandboxTx,
 } from "./runtime-store";
 import { conversationRuntime, orphanSandboxes, runs } from "./schema";
@@ -53,6 +51,15 @@ async function tableExists(name: string): Promise<boolean> {
 	return result.rows.length > 0;
 }
 
+async function columnExists(table: string, column: string): Promise<boolean> {
+	const result = await tdb.db.execute(
+		sql`select 1 from information_schema.columns
+			where table_schema = 'public'
+				and table_name = ${table} and column_name = ${column}`,
+	);
+	return result.rows.length > 0;
+}
+
 describe("migration", () => {
 	it("creates conversation_runtime and orphan_sandboxes and drops sandbox_leases", async () => {
 		// ADR-0002: the prototype path's lease authority dies in the same
@@ -60,6 +67,21 @@ describe("migration", () => {
 		expect(await tableExists("conversation_runtime")).toBe(true);
 		expect(await tableExists("orphan_sandboxes")).toBe(true);
 		expect(await tableExists("sandbox_leases")).toBe(false);
+	});
+
+	it("drops the snapshot columns from conversation_runtime", async () => {
+		// ADR-0007: workspace persistence is the paused sandbox itself; the
+		// snapshot checkpoint layer (and its columns) is removed outright.
+		expect(await columnExists("conversation_runtime", "sandbox_id")).toBe(true);
+		expect(
+			await columnExists("conversation_runtime", "latest_snapshot_id"),
+		).toBe(false);
+		expect(
+			await columnExists("conversation_runtime", "previous_snapshot_id"),
+		).toBe(false);
+		expect(
+			await columnExists("conversation_runtime", "workspace_checkpoint_status"),
+		).toBe(false);
 	});
 });
 
@@ -114,9 +136,7 @@ describe("createConversationRuntimeTx", () => {
 			conversationId: OWNER.conversationId,
 			sandboxId: null,
 			sandboxTainted: false,
-			latestSnapshotId: null,
-			previousSnapshotId: null,
-			workspaceCheckpointStatus: "clean",
+			agentSessionId: null,
 		});
 		expect(
 			await loadConversationRuntimeTx(tdb.db, {
@@ -269,122 +289,6 @@ describe("advanceAgentSessionPointerTx", () => {
 				...OWNER,
 				workerId: "worker-2",
 				agentSessionId: "session-thief",
-			}),
-		).rejects.toBeInstanceOf(RunFenceError);
-	});
-});
-
-describe("recordRuntimeSnapshotTx", () => {
-	it("rotates latest to previous and marks the workspace clean", async () => {
-		await claimOwnedRun();
-		await createConversationRuntimeTx(tdb.db, OWNER);
-
-		const first = await recordRuntimeSnapshotTx(tdb.db, {
-			...OWNER,
-			snapshotId: "snap-1",
-		});
-		expect(first).toMatchObject({
-			latestSnapshotId: "snap-1",
-			previousSnapshotId: null,
-			workspaceCheckpointStatus: "clean",
-		});
-
-		const second = await recordRuntimeSnapshotTx(tdb.db, {
-			...OWNER,
-			snapshotId: "snap-2",
-		});
-		expect(second).toMatchObject({
-			latestSnapshotId: "snap-2",
-			previousSnapshotId: "snap-1",
-			workspaceCheckpointStatus: "clean",
-		});
-	});
-
-	it("re-recording the same snapshot id keeps the rollback pointer", async () => {
-		// A retried checkpoint (or E2B's repeating `templateId:tag` ids, per the
-		// spike) must not rotate latest into previous — that would leave both
-		// pointers equal and orphan the real rollback snapshot for cleanup.
-		await claimOwnedRun();
-		await createConversationRuntimeTx(tdb.db, OWNER);
-		await recordRuntimeSnapshotTx(tdb.db, { ...OWNER, snapshotId: "snap-1" });
-		await recordRuntimeSnapshotTx(tdb.db, { ...OWNER, snapshotId: "snap-2" });
-
-		const retried = await recordRuntimeSnapshotTx(tdb.db, {
-			...OWNER,
-			snapshotId: "snap-2",
-		});
-
-		expect(retried).toMatchObject({
-			latestSnapshotId: "snap-2",
-			previousSnapshotId: "snap-1",
-			workspaceCheckpointStatus: "clean",
-		});
-	});
-
-	it("clears a dirty_uncheckpointed mark once a checkpoint succeeds", async () => {
-		await claimOwnedRun();
-		await createConversationRuntimeTx(tdb.db, OWNER);
-		await markRuntimeCheckpointStatusTx(tdb.db, {
-			...OWNER,
-			status: "dirty_uncheckpointed",
-		});
-
-		const runtime = await recordRuntimeSnapshotTx(tdb.db, {
-			...OWNER,
-			snapshotId: "snap-1",
-		});
-
-		expect(runtime.workspaceCheckpointStatus).toBe("clean");
-	});
-
-	it("rejects the snapshot record after run ownership is lost", async () => {
-		await claimOwnedRun();
-		await createConversationRuntimeTx(tdb.db, OWNER);
-		await recordRuntimeSnapshotTx(tdb.db, { ...OWNER, snapshotId: "snap-1" });
-		await expireOwnership();
-
-		await expect(
-			recordRuntimeSnapshotTx(tdb.db, { ...OWNER, snapshotId: "snap-2" }),
-		).rejects.toBeInstanceOf(RunFenceError);
-		expect(
-			await loadConversationRuntimeTx(tdb.db, {
-				userId: OWNER.userId,
-				conversationId: OWNER.conversationId,
-			}),
-		).toMatchObject({ latestSnapshotId: "snap-1", previousSnapshotId: null });
-	});
-});
-
-describe("markRuntimeCheckpointStatusTx", () => {
-	it("marks dirty_uncheckpointed without touching the snapshot ids", async () => {
-		// Acceptance: checkpoint failure leaves the latest snapshot unchanged —
-		// the last successful checkpoint stays the recovery source of truth.
-		await claimOwnedRun();
-		await createConversationRuntimeTx(tdb.db, OWNER);
-		await recordRuntimeSnapshotTx(tdb.db, { ...OWNER, snapshotId: "snap-1" });
-		await recordRuntimeSnapshotTx(tdb.db, { ...OWNER, snapshotId: "snap-2" });
-
-		const runtime = await markRuntimeCheckpointStatusTx(tdb.db, {
-			...OWNER,
-			status: "dirty_uncheckpointed",
-		});
-
-		expect(runtime).toMatchObject({
-			workspaceCheckpointStatus: "dirty_uncheckpointed",
-			latestSnapshotId: "snap-2",
-			previousSnapshotId: "snap-1",
-		});
-	});
-
-	it("rejects the mark after run ownership is lost", async () => {
-		await claimOwnedRun();
-		await createConversationRuntimeTx(tdb.db, OWNER);
-		await expireOwnership();
-
-		await expect(
-			markRuntimeCheckpointStatusTx(tdb.db, {
-				...OWNER,
-				status: "dirty_uncheckpointed",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
 	});

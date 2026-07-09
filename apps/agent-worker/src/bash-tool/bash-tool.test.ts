@@ -89,11 +89,9 @@ function makeContext(
 	context: BashToolContext;
 	audits: CommandAuditEvent[];
 	taints: string[];
-	dirtyCount: () => number;
 } {
 	const audits: CommandAuditEvent[] = [];
 	const taints: string[] = [];
-	let dirty = 0;
 	const context: BashToolContext = {
 		client: overrides.client,
 		workspaceRoot: overrides.workspaceRoot ?? "/workspace",
@@ -104,9 +102,6 @@ function makeContext(
 			maxStderrBytes: 65_536,
 		},
 		signal: overrides.signal ?? new AbortController().signal,
-		markWorkspaceDirty: async () => {
-			dirty++;
-		},
 		markSandboxTainted: async (reason: string) => {
 			taints.push(reason);
 		},
@@ -114,7 +109,7 @@ function makeContext(
 			audits.push(event);
 		},
 	};
-	return { context, audits, taints, dirtyCount: () => dirty };
+	return { context, audits, taints };
 }
 
 function parseResult(result: { content: { text: string }[] }) {
@@ -126,7 +121,7 @@ function parseResult(result: { content: { text: string }[] }) {
 describe("runBashTool", () => {
 	it("runs a command and returns bounded exit/stdout/stderr with outcome", async () => {
 		const client = new FakeCommandClient({ result: OK_OUTCOME });
-		const { context, dirtyCount } = makeContext({ client });
+		const { context } = makeContext({ client });
 
 		const result = await runBashTool({ command: "echo hello" }, context);
 
@@ -141,7 +136,6 @@ describe("runBashTool", () => {
 		});
 		expect(client.starts).toHaveLength(1);
 		expect(client.sessions[0]?.reaped).toBe(1);
-		expect(dirtyCount()).toBe(1);
 	});
 
 	it("clamps the requested timeout to the system maximum", async () => {

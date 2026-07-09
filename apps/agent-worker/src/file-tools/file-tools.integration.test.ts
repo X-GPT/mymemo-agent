@@ -105,7 +105,6 @@ describe("command-backed file tools", () => {
 			client: new LocalCommandSandboxFileClient(),
 			workspaceRoot,
 			limits,
-			markWorkspaceDirty: async () => {},
 		};
 
 		const grepResult = await runGrepFileTool(
