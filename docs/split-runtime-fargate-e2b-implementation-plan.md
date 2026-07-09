@@ -1049,33 +1049,52 @@ Goal: replace the synthetic processor with a real Claude Agent SDK query per
 run, backed by a provisioned E2B sandbox, and remove the snapshot layer
 (ADR-0006, ADR-0007). Tasks are ordered; Task 9.1 gates the rest.
 
-### Task 9.1: SDK Runtime Spike (gate)
+### Task 9.1: SDK Runtime Spike (gate) — DONE 2026-07-09
 
 Throwaway `spikes/sdk-runtime/` proof runner (same lifecycle as the Task 4.1
-E2B spike: findings → this plan + ADR-0006, then delete the directory). It
-retires the assumptions the wiring — and already-written code — rest on:
+E2B spike: findings → this plan + ADR-0006, then delete the directory). Ran
+against real OpenRouter (`anthropic/claude-sonnet-4`) and the built
+linux/amd64 worker image; SDK `0.2.117`. Verdicts:
 
-- s1: `query({ executable: 'bun', env, model })` spawns the CLI and completes a
-  trivial turn against OpenRouter; `ANTHROPIC_API_KEY: ""` does not break auth.
-- s2: `Options.env` merges over the subprocess env (keeps `PATH`) rather than
-  replacing it — else the env builder must spread `process.env`.
-- s3: the CLI resolves after `bun install --production`, run inside the built
-  image (the prune/`PATH` trap; needs `docker run`).
-- s4: `tools: []` + `settingSources: []` + an in-process MCP server +
-  `allowedTools` + `dontAsk` → the `mcp__mymemo-executor__*` tools are callable,
-  nothing prompts or hangs, and no built-in executes.
-- s5: `interrupt()` halts an in-flight query.
-- s6: the terminal `result` carries `session_id` + `is_error` + `subtype`/
-  `result`/`errors` as `agent-stream.ts` assumes — and whether a `mirror_error`
-  system message is a real emitted shape or a phantom the continuity logic
-  guards for nothing.
-- s7: a custom `SessionStore` + `resume` loads the prior transcript, and
-  `projectKey` is stable across two same-cwd queries.
+- s1 **PASS**: `query()` completes a trivial turn against OpenRouter in ~4–7 s;
+  `ANTHROPIC_API_KEY: ""` + `ANTHROPIC_AUTH_TOKEN` Bearer auth works. But the
+  spawned "CLI" is the SDK's **native platform binary** (its optional
+  `…-{platform}-{arch}[-musl]` packages; no `cli.js` in 0.2.117), so
+  `executable: 'bun' | 'node'` is inert on the default path — the bun-vs-node
+  question dissolves.
+- s2 **REPLACES**: `Options.env` replaces the subprocess env (a one-var env
+  reached the CLI as exactly that var; no `PATH`/`HOME`). The query env
+  builder must spread `process.env` under the model-client vars and set an
+  ephemeral `CLAUDE_CONFIG_DIR`.
+- s3 **musl-first trap**: `bun install --production` in the Debian image
+  installs both linux-x64 variants, the SDK resolves **musl before glibc**,
+  and the musl binary cannot exec on glibc — a real in-image `query()` failed
+  at spawn. Fix proven in-image: pin `pathToClaudeCodeExecutable` to the glibc
+  platform binary (resolved with `{ paths: [<sdk dir>] }`), after which a full
+  live in-image turn passed. Resolve + verify once at worker boot.
+- s4 **PASS**: `tools: []` + `settingSources: []` + in-process MCP server +
+  `allowedTools` + `dontAsk` is fail-closed: init tool list contains only the
+  MCP tools, the allowlisted tool runs, an unlisted tool is auto-denied
+  without prompting or hanging (`result.permission_denials` records it).
+- s5 **PASS with a wiring rule**: `interrupt()` halts a **string-prompt** turn
+  and the stream self-terminates (~3 s) via an `is_error` result + thrown
+  stream error — `RunLoop.finish` already remaps abort+throw to `canceled`. A
+  **held-open streaming input never ends** after interrupt; `startRunQuery`
+  must pass the user message as a plain string.
+- s6 **PASS**: the terminal `result` carries `session_id`/`is_error`/`subtype`
+  with `result` (success) / `errors` (error) as `agent-stream.ts` assumes;
+  `mirror_error` is a **real emitted shape** (a rejecting `SessionStore.append`
+  produced `system/mirror_error` messages), not a phantom.
+- s7 **PASS**: a custom `SessionStore` + `resume` restored the transcript on a
+  simulated fresh worker (fresh `CLAUDE_CONFIG_DIR`); `projectKey` is the
+  dash-sanitized cwd and byte-stable across same-cwd queries; the resumed turn
+  keeps the same `session_id`.
 
-Acceptance:
+Acceptance (met):
 
-- s1–s7 pass, or the finding flips a decision (e.g. `executable: 'node'` +
-  `node` in the image) and is recorded before wiring proceeds.
+- s1–s7 answered; the s2/s3 flips and the s5 wiring rule are recorded here and
+  in ADR-0006, and are folded into Tasks 9.5–9.7 below. The spike directory is
+  deleted.
 
 ### Task 9.2: Build the Custom E2B Template
 
@@ -1145,9 +1164,14 @@ Tests first:
   `error`, never `done`.
 - the query is built with `tools: []`, `settingSources: []`,
   `permissionMode: 'dontAsk'`, `allowedTools` = the MCP tool names, the static
-  system prompt, `env`/`model` from `buildModelClientConfig`, `mcpServers` = the
-  run's executor tools, the linked `abortController`, and `sessionStore`/`cwd`/
-  `resume` from `buildAgentSessionQueryConfig`.
+  system prompt, `env`/`model` from `buildModelClientConfig` — the model-client
+  vars spread over `process.env` plus an ephemeral `CLAUDE_CONFIG_DIR`, because
+  `Options.env` replaces the subprocess env (spike s2) — the boot-verified
+  `pathToClaudeCodeExecutable` (spike s3), `mcpServers` = the run's executor
+  tools, the linked `abortController`, `sessionStore`/`cwd`/`resume` from
+  `buildAgentSessionQueryConfig`, and the user message as a **plain string**
+  prompt — never a held-open input stream, which hangs after `interrupt()`
+  (spike s5).
 - the processor returns real `{ workspaceDirty: false, sandbox: null }` (no
   snapshots), `managedCommandRunning: false`, and the resume `agentSession`.
 
@@ -1161,6 +1185,11 @@ Verify:
 Tests first:
 
 - `index.ts` wires `createSdkRunProcessor(startRunQuery)`, not the synthetic one.
+- boot resolves `pathToClaudeCodeExecutable` to the SDK's **glibc** linux
+  platform binary (`require.resolve("@anthropic-ai/claude-agent-sdk-linux-
+  {arch}/claude", { paths: [<sdk package dir>] })`) and fails fast if it is
+  missing or does not exec (spike s3: the SDK's own musl-first default fails
+  in the Debian-based image).
 - config adds `WORKER_E2B_TEMPLATE`, `WORKER_SANDBOX_IDLE_MS` (default 5 min),
   and env-configurable `WORKER_FILE_GREP_MAX_RESULTS`,
   `WORKER_FILE_GLOB_MAX_RESULTS`, `WORKER_FILE_READ_MAX_BYTES`,
@@ -1182,6 +1211,8 @@ Acceptance:
   create conversation → `user.message` → a turn with a tool call hitting E2B →
   assistant text streamed as `run_events` → `run_done`; a second turn resumes
   the session and reconnects to the same sandbox with files intact.
-- a credential-free image check: `docker run <image>` resolves the SDK CLI
-  under `bun` (the prune/`PATH` regression guard the spike proved once).
+- a credential-free image check: `docker run <image>` resolves **and execs**
+  the pinned glibc SDK CLI binary (`--version`) — the musl-first
+  platform-binary trap and `--production` prune regression guard the spike
+  proved once.
 

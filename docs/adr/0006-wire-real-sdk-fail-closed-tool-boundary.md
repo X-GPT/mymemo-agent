@@ -27,20 +27,49 @@ executor tools (`mcp__mymemo-executor__*`), which route to E2B:
   preset): the tool surface is bespoke, and the preset assumes native tools we
   disabled. It states the role, that the executor tools act on the E2B workspace
   (`/home/user`), and that `SearchDocuments`/`LoadDocuments` reach the scoped KB.
-- OpenRouter via `env` + `model` from `buildModelClientConfig` (ADR-0003), the
-  provisioned run's tools as `mcpServers`, the linked `abortController`, and the
-  user message (read from the run's `run_started` event) as the prompt.
+- OpenRouter via `env` + `model` from `buildModelClientConfig` (ADR-0003) —
+  with the model-client vars spread **over `process.env`**, because `Options.env`
+  replaces the subprocess env (spike s2) — the provisioned run's tools as
+  `mcpServers`, the linked `abortController`, the boot-verified
+  `pathToClaudeCodeExecutable` (spike s3), and the user message (read from the
+  run's `run_started` event) as a **plain string** prompt (spike s5).
 
 Real model execution against a pinned external dependency in our exact runtime
 is not proven by documentation. A throwaway `spikes/sdk-runtime/` spike (same
-lifecycle as the Task 4.1 E2B spike) gates this work: it proves `query()` spawns
-under `executable: 'bun'` and completes a turn against OpenRouter, that
-`Options.env` merges rather than replaces the subprocess env, that the CLI
-resolves after `bun install --production`, that the MCP tools are callable with
-nothing prompting, that `interrupt()` halts a query, and that the `result`/
-`mirror_error` message shapes and `SessionStore` resume that `agent-stream.ts`
-and `session-store.ts` already assume are real. Findings finalize the
-`executable` choice and fold back into the plan before the wiring is built.
+lifecycle as the Task 4.1 E2B spike) gated this work; it ran 2026-07-09 against
+real OpenRouter and the built worker image (per-proof verdicts in plan Task
+9.1). The boundary held exactly as designed: the `system/init` tool list
+contained only the MCP executor tools, the allowlisted tool executed, an
+unlisted tool was auto-denied without prompting or hanging (visible in
+`result.permission_denials`), and the `result`/`mirror_error` shapes and
+`SessionStore` resume that `agent-stream.ts` and `session-store.ts` assume are
+all real. Three findings amend the wiring and are binding on it:
+
+- **The CLI is a native platform binary; `executable: 'bun' | 'node'` is
+  inert.** The SDK spawns `@anthropic-ai/claude-agent-sdk-{platform}-{arch}
+  [-musl]/claude` (its optional platform packages — no `cli.js` exists in
+  0.2.117), so no JS runtime runs the CLI and the bun-vs-node question
+  dissolves. But on linux the SDK tries **musl before glibc**, `bun install
+  --production` puts both variants in the Debian-based image, and the musl
+  binary cannot exec on glibc — so default resolution **fails inside the built
+  image**. The worker must pin `pathToClaudeCodeExecutable` to the glibc
+  platform binary — resolved from the SDK package's own module context
+  (`require.resolve(..., { paths: [sdkDir] })`; the platform packages are the
+  SDK's optional deps, not ours) — and verify it once at boot, fail-fast. A
+  live in-image turn passed with the pinned path.
+- **`Options.env` replaces the subprocess env, it does not merge.** A query
+  env of one canary var reached the CLI as exactly that var (plus an injected
+  `CLAUDE_CODE_ENTRYPOINT`) — no `PATH`, no `HOME`. The query env is therefore
+  `{ ...process.env, ...buildModelClientConfig(...).env }` plus an ephemeral
+  `CLAUDE_CONFIG_DIR` for the CLI's local transcript copy (the `sessionStore`
+  mirror is a dual-write; the local copy still gets written).
+- **The prompt must be a plain string (or an input stream that completes) —
+  never held open.** `interrupt()` halts a string-prompt turn and the stream
+  self-terminates in ~3 s, ending with an `is_error` result whose text is
+  internal diagnostics and a thrown stream error — which `RunLoop.finish`
+  already remaps to `canceled` (cancellation wins over failure). With a
+  held-open streaming input, generation halts but the stream **never ends**
+  and the consuming worker would hang until stale-run recovery.
 
 ## Considered Options
 
@@ -64,11 +93,14 @@ and `session-store.ts` already assume are real. Findings finalize the
 - The client-visible tool surface is exactly the eight `mcp__mymemo-executor__*`
   tools; the SDK subprocess in Fargate executes no model-controlled shell or
   file operation.
-- The spike is task #1 and may flip `executable: 'bun'` to `'node'` (adding a
-  runtime to the image). Nothing downstream is built until it passes.
+- The spike ran and passed with the three amendments above. No runtime is added
+  to the image; the `executable` question is retired. The image instead ships
+  the SDK's glibc linux platform package and the worker pins + boot-verifies
+  `pathToClaudeCodeExecutable` to it.
 - A durable smoke test (real `query()` against OpenRouter + E2B, run against the
   built image) becomes the regression guard the spike's one-time proof hands off
-  to; the in-image run is what catches the `--production` prune/`PATH` trap.
+  to; the in-image run is what catches the platform-binary resolution trap
+  (musl-first) and any `--production` prune regression.
 - On a failed turn the client `error` frame carries a **generic** message; the
   full error is logged worker-side. Wiring the real SDK is what first fills the
   failure with uncontrolled provider/E2B/exception text, which must not reach the
