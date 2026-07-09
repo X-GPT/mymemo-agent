@@ -49,6 +49,14 @@ An indexed chunk of a document — the search and citation unit. A passage
 points at its document.
 _Avoid_: chunk, excerpt
 
+**Workspace**:
+The conversation's sandbox filesystem (E2B `/home/user`) where the model's
+file and shell tools act. It *is* the paused E2B sandbox between turns —
+persistence is best-effort: reconnect restores it, but a lost sandbox starts
+the next turn empty. Not the Fargate query cwd (that is only a stable
+projectKey anchor), and not durable like the agent session.
+_Avoid_: sandbox (that is the runtime; the workspace is its filesystem)
+
 **Docs cache**:
 The reserved directory in a conversation's sandbox workspace where loaded
 document content is materialized. Reconstructible from the KB, persists

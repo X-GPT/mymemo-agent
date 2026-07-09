@@ -1042,3 +1042,146 @@ Exit criteria:
 - run-event replay is the only SSE source.
 - no provider, KB, or broad document credential is present in E2B.
 - cleanup jobs are enabled and conservative.
+
+## Milestone 9: Wire the Real SDK Run Loop
+
+Goal: replace the synthetic processor with a real Claude Agent SDK query per
+run, backed by a provisioned E2B sandbox, and remove the snapshot layer
+(ADR-0006, ADR-0007). Tasks are ordered; Task 9.1 gates the rest.
+
+### Task 9.1: SDK Runtime Spike (gate)
+
+Throwaway `spikes/sdk-runtime/` proof runner (same lifecycle as the Task 4.1
+E2B spike: findings → this plan + ADR-0006, then delete the directory). It
+retires the assumptions the wiring — and already-written code — rest on:
+
+- s1: `query({ executable: 'bun', env, model })` spawns the CLI and completes a
+  trivial turn against OpenRouter; `ANTHROPIC_API_KEY: ""` does not break auth.
+- s2: `Options.env` merges over the subprocess env (keeps `PATH`) rather than
+  replacing it — else the env builder must spread `process.env`.
+- s3: the CLI resolves after `bun install --production`, run inside the built
+  image (the prune/`PATH` trap; needs `docker run`).
+- s4: `tools: []` + `settingSources: []` + an in-process MCP server +
+  `allowedTools` + `dontAsk` → the `mcp__mymemo-executor__*` tools are callable,
+  nothing prompts or hangs, and no built-in executes.
+- s5: `interrupt()` halts an in-flight query.
+- s6: the terminal `result` carries `session_id` + `is_error` + `subtype`/
+  `result`/`errors` as `agent-stream.ts` assumes — and whether a `mirror_error`
+  system message is a real emitted shape or a phantom the continuity logic
+  guards for nothing.
+- s7: a custom `SessionStore` + `resume` loads the prior transcript, and
+  `projectKey` is stable across two same-cwd queries.
+
+Acceptance:
+
+- s1–s7 pass, or the finding flips a decision (e.g. `executable: 'node'` +
+  `node` in the image) and is recorded before wiring proceeds.
+
+### Task 9.2: Build the Custom E2B Template
+
+`Grep`/`Glob` shell out to `rg` and `python3`, which the `base` template lacks.
+
+- an E2B template that installs `rg`, confirms `python3`, and pins the toolchain.
+- its id is `WORKER_E2B_TEMPLATE` (validated at config load).
+
+Acceptance:
+
+- a sandbox created from the template runs `rg --version` and `python3 --version`.
+
+### Task 9.3: Remove Snapshots (ADR-0007)
+
+Rip out the snapshot layer before building provisioning on the simpler model.
+
+Tests first:
+
+- `RunLoop.finish()` terminalizes `done` without a snapshot barrier.
+- provisioning has no restore-from-snapshot path.
+
+Changes:
+
+- delete `snapshot-barrier.ts` and its call in `finish()`; drop the dirty flag
+  and the `dirty_uncheckpointed` state and recovery.
+- migration: drop `latest_snapshot_id`, `previous_snapshot_id`,
+  `workspace_checkpoint_status` from `conversation_runtime`; remove the runtime
+  helpers that write them and `WORKER_SNAPSHOT_RETENTION_MS`.
+- retarget the cleanup loop to orphan + deleted-conversation sweeps only.
+
+### Task 9.4: SandboxProvisioner and E2B Clients
+
+The E2B-facing seam `startRunQuery` composes with (unit tests inject a fake).
+
+Tests first:
+
+- promote `E2BCommandClient` from `bash-tool.e2b.test.ts` to production; the
+  test imports the production class.
+- a new `E2BFileClient` (`SandboxFileClient` over `sandbox.files` +
+  `sandbox.commands.run`) passes the file-tools integration contract.
+- `provisionForRun` returns `{ sandboxId, isNew, workspaceRoot, commandClient,
+  fileClient, renew(), dispose() }`; `dispose()` stops renewal (the sandbox
+  idle-pauses), never kills the live workspace.
+
+Verify:
+
+- a live E2B test (skipped without `E2B_API_KEY`) exercises the real file
+  client: `rg`-backed `Grep`, `python3`-backed `Glob`, read/write round-trip.
+
+### Task 9.5: startRunQuery Orchestration
+
+Compose provisioning, the fence, session config, and the query.
+
+Tests first:
+
+- reads the run's `run_started` event (new `loadRunStartedTx` helper) for the
+  message + frozen scope; message → prompt, scope → `documentScope`.
+- provisioning: ensure the runtime row (idempotent `createConversationRuntimeTx`)
+  → connect if `sandboxId` set and not tainted → else create fresh; a new
+  sandbox is written via fenced `updateRuntimeSandboxTx`.
+- on `RunFenceError` after creating a new sandbox: `dispose`/kill it,
+  `recordOrphanSandboxTx` on kill failure, abandon the run.
+- a tainted pointer goes straight to a fresh sandbox and orphan-records the old
+  one; every pointer replace orphan-records the prior sandbox.
+- a per-run renewal timer pushes `setTimeout(now + WORKER_SANDBOX_IDLE_MS)` on a
+  monotonic deadline; renewal failure aborts a linked controller → the run ends
+  `error`, never `done`.
+- the query is built with `tools: []`, `settingSources: []`,
+  `permissionMode: 'dontAsk'`, `allowedTools` = the MCP tool names, the static
+  system prompt, `env`/`model` from `buildModelClientConfig`, `mcpServers` = the
+  run's executor tools, the linked `abortController`, and `sessionStore`/`cwd`/
+  `resume` from `buildAgentSessionQueryConfig`.
+- the processor returns real `{ workspaceDirty: false, sandbox: null }` (no
+  snapshots), `managedCommandRunning: false`, and the resume `agentSession`.
+
+Verify:
+
+- unit tests inject a fake `SandboxProvisioner` + fake SDK query (no
+  credentials); the fence/orphan/renewal logic is deterministic.
+
+### Task 9.6: Swap the Processor, Config, and Image
+
+Tests first:
+
+- `index.ts` wires `createSdkRunProcessor(startRunQuery)`, not the synthetic one.
+- config adds `WORKER_E2B_TEMPLATE`, `WORKER_SANDBOX_IDLE_MS` (default 5 min),
+  and env-configurable `WORKER_FILE_GREP_MAX_RESULTS`,
+  `WORKER_FILE_GLOB_MAX_RESULTS`, `WORKER_FILE_READ_MAX_BYTES`,
+  `WORKER_BASH_TIMEOUT_MS`, `WORKER_BASH_MAX_OUTPUT_BYTES` (each with a default).
+- `finish()`'s failure branch logs the full error worker-side and writes a
+  generic client `error` message.
+- command audit binds to the structured logger with the full run binding.
+
+Changes:
+
+- Dockerfile: `mkdir -p /workspace && chown bun:bun /workspace` before
+  `USER bun`; the worker `mkdir -p`s the per-conversation cwd before `query()`.
+
+### Task 9.7: Live Smoke and Image Check
+
+Acceptance:
+
+- a live smoke test (real `query()` against OpenRouter + E2B, credentialed):
+  create conversation → `user.message` → a turn with a tool call hitting E2B →
+  assistant text streamed as `run_events` → `run_done`; a second turn resumes
+  the session and reconnects to the same sandbox with files intact.
+- a credential-free image check: `docker run <image>` resolves the SDK CLI
+  under `bun` (the prune/`PATH` regression guard the spike proved once).
+
