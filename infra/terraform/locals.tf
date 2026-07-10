@@ -30,6 +30,7 @@ locals {
 
   agent_db_password_secret_arn      = "${aws_db_instance.agent.master_user_secret[0].secret_arn}:password::"
   agent_db_password_base_secret_arn = aws_db_instance.agent.master_user_secret[0].secret_arn
+  live_redis_url_secret_arn         = aws_secretsmanager_secret.live_redis_url.arn
 
   kb_database_url_secret_name    = coalesce(var.kb_database_url_secret_name, "${local.common_name}-KB_DATABASE_URL")
   statsig_server_secret_name     = coalesce(var.statsig_server_secret_name, "${local.common_name}-STATSIG_SERVER_SECRET")
@@ -47,6 +48,7 @@ locals {
     local.statsig_server_secret_arn,
     local.openrouter_api_key_secret_arn,
     local.e2b_api_key_secret_arn,
+    local.live_redis_url_secret_arn,
   ]))
 
   agent_db_password_secret = [
@@ -66,6 +68,7 @@ locals {
   chat_api_secrets = concat([
     { name = "STATSIG_SERVER_SECRET", valueFrom = local.statsig_server_secret_arn },
     { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
+    { name = "REDIS_URL", valueFrom = local.live_redis_url_secret_arn },
   ], local.agent_db_password_secret)
 
   agent_worker_environment = concat([
@@ -84,5 +87,6 @@ locals {
     { name = "KB_DATABASE_URL", valueFrom = local.kb_database_url_secret_arn },
     { name = "OPENROUTER_API_KEY", valueFrom = local.openrouter_api_key_secret_arn },
     { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
+    { name = "REDIS_URL", valueFrom = local.live_redis_url_secret_arn },
   ], local.agent_db_password_secret)
 }

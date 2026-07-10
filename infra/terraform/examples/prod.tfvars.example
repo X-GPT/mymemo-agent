@@ -33,6 +33,11 @@ openrouter_base_url       = "https://openrouter.ai/api"
 openrouter_default_model  = "anthropic/claude-sonnet-4"
 worker_max_concurrent_runs = 2
 
+# Disposable Pub/Sub only: one small node, with replication and backups disabled
+# in redis.tf.
+live_redis_node_type      = "cache.t4g.micro"
+live_redis_engine_version = "7.1"
+
 # Agent-owned writable Postgres. This Terraform root always creates a dedicated
 # RDS instance. The password is generated and stored by RDS in AWS Secrets
 # Manager; ECS receives AGENT_DATABASE_URL without a password plus a DB_PASSWORD
