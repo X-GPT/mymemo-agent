@@ -91,12 +91,48 @@ This `compose.yaml` is a **manual** local stack for poking the running services
 by hand; it is not what gates correctness. That is `e2e/integration.test.ts`,
 which runs the same create → turn → assert-SSE projection flow with chat-api and
 a deterministic test-only event-writer process against a real Postgres on every
-PR. Task 9.7 adds the credentialed live smoke for the production SDK worker.
+PR.
 Run the projection integration locally against any migrated Postgres:
 
 ```sh
 AGENT_DATABASE_URL=postgres://mymemo:mymemo@localhost:5432/mymemo_agent \
   DB_SSL=disable bun test e2e/integration.test.ts
 ```
+
+### Live runtime smoke
+
+The credentialed smoke drives the real worker across two runs of one
+conversation. The first run creates an opaque file in E2B and returns only its
+SHA-256; the second must resume the prior agent session, reconnect to the same
+workspace, read the file, and stream contents matching that hash before the
+`done` outcome. Against the local compose stack:
+
+```sh
+AGENT_SMOKE_BASE_URL=http://localhost:3000 \
+  AGENT_SMOKE_EXPECT_GATE_CLOSED=false \
+  bun run scripts/smoke/agent-conversation-smoke.ts
+```
+
+For production, run `scripts/deploy/prod_smoke.sh` from inside the VPC with
+`AGENT_SMOKE_BASE_URL` configured and the checked-in `codex-smoke` identity
+allowlisted in Statsig. OpenRouter and E2B credentials stay in the deployed
+worker; the smoke caller receives none of them. To check only the default-closed
+gate, set `AGENT_SMOKE_EXPECT_GATE_CLOSED=true`.
+
+### Worker image check
+
+Every PR builds the final production-pruned worker image and runs this same
+credential-free gate; release deployment also runs it after build and before
+push:
+
+```sh
+docker build --platform linux/amd64 \
+  -f apps/agent-worker/Dockerfile \
+  -t mymemo-agent-worker:image-check .
+scripts/smoke/agent-worker-image-check.sh mymemo-agent-worker:image-check
+```
+
+The container check resolves the SDK-owned glibc Claude CLI and executes its
+`--version` command with no network or runtime credentials.
 
 `docker compose down -v` wipes the volumes (the KB seed + writable DB) to start clean.
