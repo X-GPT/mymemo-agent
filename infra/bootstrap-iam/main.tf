@@ -91,6 +91,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "ec2:RevokeSecurityGroupEgress",
       "ec2:RevokeSecurityGroupIngress",
       "ecs:*",
+      "elasticache:*",
       "elasticloadbalancing:*",
       "logs:*",
       "rds:*",

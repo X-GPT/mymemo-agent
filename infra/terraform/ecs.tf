@@ -123,7 +123,7 @@ resource "aws_ecs_service" "chat_api" {
 
   network_configuration {
     subnets          = local.shared_ecs_subnet_ids
-    security_groups  = [aws_security_group.services.id]
+    security_groups  = [aws_security_group.services.id, aws_security_group.live_redis_clients.id]
     assign_public_ip = var.assign_public_ip
   }
 
@@ -147,7 +147,7 @@ resource "aws_ecs_service" "agent_worker" {
 
   network_configuration {
     subnets          = local.shared_ecs_subnet_ids
-    security_groups  = [aws_security_group.services.id]
+    security_groups  = [aws_security_group.services.id, aws_security_group.live_redis_clients.id]
     assign_public_ip = var.assign_public_ip
   }
 

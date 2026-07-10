@@ -30,6 +30,11 @@ openrouter_base_url        = "https://openrouter.ai/api"
 openrouter_default_model   = "anthropic/claude-sonnet-4"
 worker_max_concurrent_runs = 2
 
+# Disposable Pub/Sub only: one small node, with replication and backups disabled
+# in redis.tf.
+live_redis_node_type      = "cache.t4g.micro"
+live_redis_engine_version = "7.1"
+
 agent_database_name               = "mymemo_agent"
 agent_database_username           = "mymemo_agent"
 agent_db_instance_class           = "db.t4g.micro"

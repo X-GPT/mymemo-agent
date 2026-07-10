@@ -52,6 +52,52 @@ describe("agent deployment config", () => {
 		expect(combined).toContain("shared_ecs_subnet_ids");
 	});
 
+	it("provisions the disposable Redis live lane inside the trusted service network", () => {
+		const redisConfig = readFileSync(join(terraformDir, "redis.tf"), "utf8");
+		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
+		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
+		const migrationStart = ecsConfig.indexOf(
+			'resource "aws_ecs_task_definition" "agent_migration"',
+		);
+		const migrationEnd = ecsConfig.indexOf(
+			'resource "aws_ecs_service" "chat_api"',
+			migrationStart,
+		);
+		const migrationConfig = ecsConfig.slice(migrationStart, migrationEnd);
+
+		expect(redisConfig).toContain('resource "aws_elasticache_replication_group" "live"');
+		expect(redisConfig).toMatch(/num_cache_clusters\s*=\s*1/);
+		expect(redisConfig).toMatch(/automatic_failover_enabled\s*=\s*false/);
+		expect(redisConfig).toMatch(/multi_az_enabled\s*=\s*false/);
+		expect(redisConfig).toMatch(/snapshot_retention_limit\s*=\s*0/);
+		expect(redisConfig).toMatch(/transit_encryption_enabled\s*=\s*true/);
+		expect(redisConfig).toMatch(/transit_encryption_mode\s*=\s*"required"/);
+		expect(redisConfig).toMatch(/at_rest_encryption_enabled\s*=\s*true/);
+		expect(redisConfig).toMatch(/auth_token\s*=\s*random_password\.live_redis\.result/);
+		expect(redisConfig).toContain("subnet_ids = local.shared_ecs_subnet_ids");
+		expect(redisConfig).toContain(
+			"source_security_group_id = aws_security_group.live_redis_clients.id",
+		);
+		expect(redisConfig).toContain('resource "aws_secretsmanager_secret" "live_redis_url"');
+		expect(redisConfig).toContain(
+			'"rediss://default:${urlencode(random_password.live_redis.result)}@',
+		);
+		expect(locals.match(/name\s*=\s*"REDIS_URL"/g)).toHaveLength(2);
+		expect(ecsConfig.match(/aws_security_group\.live_redis_clients\.id/g)).toHaveLength(2);
+		expect(migrationConfig).toContain("secrets = local.agent_db_password_secret");
+	});
+
+	it("documents the Redis live lane as optional transport infrastructure", () => {
+		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");
+
+		expect(readme).toContain(
+			"Redis availability must not participate in chat-api or agent-worker readiness",
+		);
+		expect(readme).toContain(
+			"The durable Postgres path remains sufficient for successful Runs",
+		);
+	});
+
 	it("example tfvars include required deploy inputs and optional secret-name overrides", () => {
 		for (const required of [
 			"assign_public_ip",
@@ -62,6 +108,8 @@ describe("agent deployment config", () => {
 			"statsig_server_secret_name",
 			"openrouter_api_key_secret_name",
 			"e2b_api_key_secret_name",
+			"live_redis_node_type",
+			"live_redis_engine_version",
 		]) {
 			expect(exampleTfvars).toContain(required);
 		}

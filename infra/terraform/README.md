@@ -27,6 +27,7 @@ the direct remote-state output is absent and the fallback input is present.
 - ECR repositories for `mymemo-agent-chat-api` and `mymemo-agent-worker` in the
   separate `infra/ecr` Terraform root
 - dedicated RDS Postgres instance for writable agent state
+- single-node ElastiCache Redis replication group for disposable live previews
 - ECS Fargate task definitions and services for chat-api and agent-worker
 - agent DB migration task definition
 - service security group inside the shared VPC
@@ -42,6 +43,13 @@ receives `AGENT_DATABASE_URL` without a password plus `DB_PASSWORD` from the
 RDS-managed secret. This is the writable agent state database for conversations,
 leases, run state, and migrations. It is separate from the read-only KB database
 URL used by `agent-worker`.
+
+Terraform also generates the live preview cache authentication token and stores
+the complete `rediss://` connection URL in the Terraform-managed
+`<name_prefix>-<environment>-REDIS_URL` Secrets Manager secret. ECS injects that
+secret as `REDIS_URL` into `chat-api` and `agent-worker` only. It is not added to
+the migration task or any E2B sandbox configuration, and neither the credential
+nor the complete URL is exposed as a Terraform output.
 
 Other secret values are not committed. Terraform resolves conventional Secrets
 Manager names to ARNs at plan/apply time, and ECS task definitions consume those
@@ -68,6 +76,27 @@ Replace it with a read-only KB role before broad exposure.
 validates that variable when `SANDBOX_PROVIDER=e2b`. The final split-runtime
 boundary should remove that from chat-api once sandbox creation moves fully to
 `agent-worker`.
+
+## Redis Live Preview Lane
+
+The Redis cache is transport infrastructure for provisional Assistant text,
+not a source of truth. It is a single small node with no replicas, Multi-AZ
+failover, automatic snapshots, final snapshot, or backup retention. The cache
+is reachable on its TLS port only from a dedicated client security group
+attached to the trusted `chat-api` and `agent-worker` services; the migration
+task does not receive that group. ElastiCache does not receive a public address
+or a public ingress rule. Authentication and in-transit encryption are
+mandatory.
+
+Before the first cache plan in an existing environment, reapply
+`infra/bootstrap-iam` with the admin profile as shown below. That updates the
+GitHub Actions deploy role with the ElastiCache permissions used by this root.
+
+Redis availability must not participate in chat-api or agent-worker readiness.
+Missing, invalid, or unreachable Redis configuration must degrade only live
+previews and must not prevent either service from booting or staying healthy.
+The durable Postgres path remains sufficient for successful Runs, durable
+Assistant messages, terminal Outcomes, and replay.
 
 ## Release Deploy Config
 

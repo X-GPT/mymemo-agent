@@ -108,6 +108,24 @@ variable "agent_worker_port" {
   default     = 8080
 }
 
+variable "live_redis_port" {
+  description = "TLS port for the disposable Redis live preview lane."
+  type        = number
+  default     = 6379
+}
+
+variable "live_redis_node_type" {
+  description = "ElastiCache node type for ephemeral Pub/Sub traffic."
+  type        = string
+  default     = "cache.t4g.micro"
+}
+
+variable "live_redis_engine_version" {
+  description = "Redis engine version for the ephemeral live preview lane."
+  type        = string
+  default     = "7.1"
+}
+
 variable "assign_public_ip" {
   description = "Inherited existing-network constraint: current mymemo-service ECS subnets are public/default subnets with no NAT/VPC endpoint egress path, so agent ECS tasks need public IPs."
   type        = bool
