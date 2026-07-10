@@ -1,0 +1,17 @@
+import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+
+describe("agent-worker production composition", () => {
+	it("hard-swaps the synthetic processor for the real SDK query path", () => {
+		// The entrypoint is intentionally side-effectful, so importing it would boot
+		// external clients. Pin the composition contract in source; Task 9.7 owns
+		// the credentialed behavioral smoke against real OpenRouter and E2B.
+		const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+
+		expect(source).toContain("const startRunQuery = createStartRunQuery({");
+		expect(source).toContain(
+			"processor: createSdkRunProcessor({ startRunQuery, logger })",
+		);
+		expect(source).not.toContain("syntheticProcessor");
+	});
+});

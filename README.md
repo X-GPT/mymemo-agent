@@ -44,16 +44,17 @@ Each project can be developed independently. Navigate to the respective project 
 
 `compose.yaml` runs the split-runtime path locally: **chat-api queues a run →
 agent-worker claims and processes it → chat-api projects the run's durable events
-back as SSE**. In Milestone 3 the worker runs a **synthetic** turn (one text
-event per run), so the demo needs no provider, KB, or E2B credentials — a
-`postgres` service backs the writable `mymemo_agent` DB, a one-shot `migrate`
-service applies the `@mymemo/agent-db` migrations, and the two split-runtime apps
-do the rest.
+back as SSE**. The worker runs a real Claude Agent SDK turn through OpenRouter
+and an E2B workspace. A `postgres` service backs the writable `mymemo_agent` DB,
+a one-shot `migrate` service applies the `@mymemo/agent-db` migrations, and the
+two split-runtime apps do the rest.
 
 ### Run it
 
-The split-runtime demo needs no secrets — chat-api opens its exposure gate via
-`AGENT_EXPOSURE_BREAK_GLASS=true` (inline in `compose.yaml`). Bring the stack up:
+Build the worker's E2B template, then export `OPENROUTER_API_KEY` and
+`E2B_API_KEY` (and optionally override `WORKER_E2B_TEMPLATE`). Chat-api opens
+its exposure gate locally via `AGENT_EXPOSURE_BREAK_GLASS=true` in
+`compose.yaml`. Bring the stack up:
 
 ```sh
 docker compose up --build
@@ -82,16 +83,16 @@ curl -N http://localhost:3000/v1/conversations/<conversationId>/events \
 ```
 
 The stream emits `conversation_id`, `run_id`, one or more `text_delta` events
-(the worker's synthetic response), then `done`. The prototype-era `sandbox_id`
-and `agent_session_id` frames are **not** part of the split-runtime contract.
+from the real agent, then `done`. The prototype-era `sandbox_id` and
+`agent_session_id` frames are **not** part of the split-runtime contract.
 Re-POST `events` to the same `conversationId` for another turn.
 
 This `compose.yaml` is a **manual** local stack for poking the running services
 by hand; it is not what gates correctness. That is `e2e/integration.test.ts`,
-which runs the same create → turn → assert-SSE flow with chat-api + agent-worker
-as real processes against a real Postgres — no image build — on every PR (the
-`integration` job in `.github/workflows/ci.yml`). Run it locally against any
-migrated Postgres:
+which runs the same create → turn → assert-SSE projection flow with chat-api and
+a deterministic test-only event-writer process against a real Postgres on every
+PR. Task 9.7 adds the credentialed live smoke for the production SDK worker.
+Run the projection integration locally against any migrated Postgres:
 
 ```sh
 AGENT_DATABASE_URL=postgres://mymemo:mymemo@localhost:5432/mymemo_agent \
@@ -99,4 +100,3 @@ AGENT_DATABASE_URL=postgres://mymemo:mymemo@localhost:5432/mymemo_agent \
 ```
 
 `docker compose down -v` wipes the volumes (the KB seed + writable DB) to start clean.
-

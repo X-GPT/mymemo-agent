@@ -32,6 +32,11 @@ COPY apps/agent-worker/package.json apps/agent-worker/tsconfig.json apps/agent-w
 COPY packages/agent-db packages/agent-db
 COPY package.json .
 
+# The SDK cwd is a Fargate-side, per-conversation session anchor. Prepare the
+# conversations root while privileged; each query creates its own child.
+RUN mkdir -p /workspace/conversations \
+ && chown -R bun:bun /workspace
+
 WORKDIR /usr/src/app/apps/agent-worker
 USER bun
 EXPOSE 8080/tcp

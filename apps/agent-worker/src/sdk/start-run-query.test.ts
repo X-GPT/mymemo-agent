@@ -252,6 +252,10 @@ function buildHarness(
 	});
 	const killed: string[] = [];
 	const captured: { prompt?: unknown; options?: Options } = {};
+	const preparedWorkingDirectories: string[] = [];
+	const startupOrder: string[] = [];
+	const createdClaudeConfigDirs: string[] = [];
+	const disposedClaudeConfigDirs: string[] = [];
 	let underlying: SupervisedQuery = immediateQuery();
 	const deps: StartRunQueryDeps = {
 		db: tdb.db,
@@ -273,7 +277,16 @@ function buildHarness(
 			model: "anthropic/claude-test",
 		},
 		pathToClaudeCodeExecutable: "/opt/sdk/cli/claude",
-		claudeConfigDir: "/tmp/ephemeral-claude-config",
+		async createClaudeConfigDir() {
+			const path = `/tmp/ephemeral-claude-config-${createdClaudeConfigDirs.length + 1}`;
+			createdClaudeConfigDirs.push(path);
+			return {
+				path,
+				async dispose() {
+					disposedClaudeConfigDirs.push(path);
+				},
+			};
+		},
 		processEnv: {
 			PATH: "/usr/bin",
 			HOME: "/home/worker",
@@ -296,7 +309,12 @@ function buildHarness(
 			perDocumentMaxBytes: 1024,
 			perCallMaxBytes: 4096,
 		},
+		async ensureWorkingDirectory(path) {
+			preparedWorkingDirectories.push(path);
+			startupOrder.push("working-directory");
+		},
 		query: (params) => {
+			startupOrder.push("query");
 			captured.prompt = params.prompt;
 			captured.options = params.options;
 			return underlying;
@@ -309,6 +327,10 @@ function buildHarness(
 		handle,
 		killed,
 		captured,
+		preparedWorkingDirectories,
+		startupOrder,
+		createdClaudeConfigDirs,
+		disposedClaudeConfigDirs,
 		setQuery(query: SupervisedQuery) {
 			underlying = query;
 		},
@@ -376,7 +398,28 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		expect(env?.ANTHROPIC_AUTH_TOKEN).toBe("or-key");
 		expect(env?.ANTHROPIC_API_KEY).toBe("");
 		// ...and the ephemeral config dir must win over any ambient one.
-		expect(env?.CLAUDE_CONFIG_DIR).toBe("/tmp/ephemeral-claude-config");
+		expect(env?.CLAUDE_CONFIG_DIR).toBe("/tmp/ephemeral-claude-config-1");
+	});
+
+	it("uses and disposes a fresh Claude config directory for every query", async () => {
+		const h = buildHarness();
+		const firstRun = await createClaimedRun({
+			runId: "run-1",
+			conversationId: "conv-1",
+		});
+		await consume(await h.startRunQuery(firstRun, freshSignal()));
+
+		const secondRun = await createClaimedRun({
+			runId: "run-2",
+			conversationId: "conv-2",
+		});
+		await consume(await h.startRunQuery(secondRun, freshSignal()));
+
+		expect(h.createdClaudeConfigDirs).toEqual([
+			"/tmp/ephemeral-claude-config-1",
+			"/tmp/ephemeral-claude-config-2",
+		]);
+		expect(h.disposedClaudeConfigDirs).toEqual(h.createdClaudeConfigDirs);
 	});
 
 	it("exposes the run's executor tools as the in-process MCP server", async () => {
@@ -406,6 +449,21 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 			conversationWorkingDirectory("conv-1"),
 		);
 		expect(h.captured.options?.resume).toBeUndefined();
+	});
+
+	it("creates the conversation working directory before starting the query", async () => {
+		const h = buildHarness();
+		const run = await createClaimedRun({
+			runId: "run-1",
+			conversationId: "conv-1",
+		});
+
+		await h.startRunQuery(run, freshSignal());
+
+		expect(h.preparedWorkingDirectories).toEqual([
+			conversationWorkingDirectory("conv-1"),
+		]);
+		expect(h.startupOrder).toEqual(["working-directory", "query"]);
 	});
 
 	it("resumes the conversation's stored agent session", async () => {

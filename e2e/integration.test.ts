@@ -1,13 +1,13 @@
 /**
- * Split-runtime integration test (Milestone 3) — real Postgres, real processes.
+ * Split-runtime projection integration — real Postgres, real processes.
  *
  * Runs the actual client path across two real processes talking to a real
- * Postgres: chat-api queues a run, the agent-worker claims it and runs the
- * SYNTHETIC turn (one text event), and chat-api projects the run's durable
- * events back over SSE. Unlike the PGlite unit tests — which exercise each side
- * in isolation — this crosses the worker→projector seam over one database, so a
- * writer/projector desync (e.g. the worker writing the wrong `run_events.type`)
- * fails here instead of reaching a client.
+ * Postgres: chat-api queues a run, a test-only worker process claims it and
+ * appends one text event, and chat-api projects the durable events back over
+ * SSE. Unlike the PGlite unit tests — which exercise each side in isolation —
+ * this crosses the writer→projector seam over one database, so a vocabulary
+ * desync fails here instead of reaching a client. The production worker always
+ * runs the real SDK; Task 9.7 owns its credentialed end-to-end smoke proof.
  *
  * It needs no image build: the two apps run as `bun` subprocesses and Postgres
  * is provided externally (a GitHub Actions `services: postgres` container in CI,
@@ -26,7 +26,6 @@
  *
  * Overridable knobs:
  *   CHAT_API_PORT        chat-api listen port  (default 3100)
- *   AGENT_WORKER_PORT    worker /health port   (default 8099)
  *   INTEGRATION_TIMEOUT_MS  per-turn ceiling   (default 30000)
  */
 
@@ -45,7 +44,6 @@ const RUN = Boolean(DB_URL);
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const CHAT_PORT = Number(process.env.CHAT_API_PORT ?? 3100);
-const WORKER_PORT = Number(process.env.AGENT_WORKER_PORT ?? 8099);
 const CHAT_URL = `http://localhost:${CHAT_PORT}`;
 const rawTurnTimeout = Number(process.env.INTEGRATION_TIMEOUT_MS);
 const TURN_TIMEOUT_MS =
@@ -92,6 +90,16 @@ function spawnApp(name: string, env: Record<string, string>) {
 	});
 }
 
+/** Spawn the deterministic test-only queue/event writer. */
+function spawnEventWriter(env: Record<string, string>) {
+	return Bun.spawn(["bun", "run", "e2e/synthetic-worker.ts"], {
+		cwd: REPO_ROOT,
+		env: { ...process.env, ...env },
+		stdout: "inherit",
+		stderr: "inherit",
+	});
+}
+
 async function chatApiHealthy(): Promise<boolean> {
 	try {
 		const res = await fetch(`${CHAT_URL}/health`, {
@@ -118,20 +126,9 @@ let worker: Bun.Subprocess | undefined;
 describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
 	beforeAll(async () => {
 		const dbUrl = DB_URL as string;
-		// The worker's KB/OpenRouter/E2B credentials are validated at boot but
-		// unused by the synthetic processor — placeholders keep it booting. A short
-		// tick makes it claim the queued run promptly.
-		worker = spawnApp("agent-worker", {
+		worker = spawnEventWriter({
 			AGENT_DATABASE_URL: dbUrl,
 			DB_SSL: "disable",
-			KB_DATABASE_URL: dbUrl,
-			OPENROUTER_API_KEY: "integration-unused",
-			OPENROUTER_BASE_URL: "https://openrouter.ai/api",
-			OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
-			E2B_API_KEY: "integration-unused",
-			WORKER_E2B_TEMPLATE: "integration-unused",
-			WORKER_HEARTBEAT_INTERVAL_MS: "500",
-			PORT: String(WORKER_PORT),
 			LOG_LEVEL: "warn",
 		});
 		chat = spawnApp("chat-api", {
@@ -156,7 +153,7 @@ describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
 	});
 
 	it(
-		"creates a conversation, queues a run, and streams the worker's synthetic turn to done",
+		"creates a conversation, queues a run, and projects durable worker events to done",
 		async () => {
 			// Create the conversation (general scope). Proves migrations provisioned
 			// the `conversations` table and chat-api's writable DB is reachable.
@@ -178,8 +175,8 @@ describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
 			const conversationId = JSON.parse(createBody).conversationId as string;
 			expect(conversationId.length).toBeGreaterThan(0);
 
-			// Append a user.message and stream the turn. The worker claims the queued
-			// run, appends the synthetic assistant text, and terminalizes `done`;
+			// Append a user.message and stream the turn. The test worker claims the
+			// queued run, appends assistant text, and terminalizes `done`;
 			// chat-api projects those durable events over SSE.
 			const res = await fetch(
 				`${CHAT_URL}/v1/conversations/${conversationId}/events`,
@@ -223,8 +220,8 @@ describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
 				.runId as string;
 			expect(runId.length).toBeGreaterThan(0);
 
-			// The streamed text is the worker's synthetic response for this run —
-			// proof it crossed the worker→projector seam, not produced by chat-api.
+			// The streamed text is the test worker's response for this run — proof it
+			// crossed the worker→projector seam, not produced by chat-api.
 			const streamedText = frames
 				.filter((f) => f.event === "text_delta")
 				.map((f) => JSON.parse(f.data).text as string)

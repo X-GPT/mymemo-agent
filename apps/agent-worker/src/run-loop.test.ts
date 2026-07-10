@@ -261,10 +261,23 @@ describe("RunLoop — terminal outcomes", () => {
 		]);
 	});
 
-	it("terminalizes a failed synthetic run as error with the message", async () => {
+	it("logs a failed run but persists only a generic client message", async () => {
 		const worker = buildWorker(1);
-		const loop = buildLoop(worker, async () => {
-			throw new Error("synthetic boom");
+		const errors: Record<string, unknown>[] = [];
+		const logger: WorkerLogger = {
+			...silentLogger,
+			error(event) {
+				errors.push(event);
+			},
+		};
+		const loop = new RunLoop({
+			db: tdb.db,
+			worker,
+			processor: async () => {
+				throw new Error("provider leaked a secret detail");
+			},
+			heartbeatIntervalMs: 15_000,
+			logger,
 		});
 		await queueRun("run-1", "conv-1");
 
@@ -279,8 +292,17 @@ describe("RunLoop — terminal outcomes", () => {
 			.where(eq(runEvents.runId, "run-1"));
 		expect(event?.type).toBe("run_error");
 		expect((event?.payload as { message?: string })?.message).toBe(
-			"synthetic boom",
+			"Run failed",
 		);
+		expect(JSON.stringify(event?.payload)).not.toContain("secret detail");
+		expect(errors).toContainEqual({
+			message: "run failed",
+			workerId: "worker-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+			runId: "run-1",
+			error: "provider leaked a secret detail",
+		});
 	});
 
 	it("terminalizes as canceled when cancellation is observed mid-processing", async () => {
