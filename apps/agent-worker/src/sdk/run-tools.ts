@@ -50,6 +50,32 @@ function toCallToolResult(result: ExecutorToolResult): CallToolResult {
 		: { content: result.content };
 }
 
+/** The in-process MCP server name every executor tool is exposed under. */
+export const EXECUTOR_SERVER_NAME = "mymemo-executor";
+
+/** The short names of the executor tools {@link buildRunTools} builds. */
+const EXECUTOR_TOOL_NAMES = [
+	"Read",
+	"Write",
+	"Edit",
+	"Grep",
+	"Glob",
+	"Bash",
+	"SearchDocuments",
+	"LoadDocuments",
+] as const;
+
+/**
+ * The fail-closed query allowlist (ADR-0006): exactly the executor tools, in
+ * the `mcp__<server>__<tool>` form the SDK's `allowedTools` matches against.
+ * Any tool outside this list is denied under `permissionMode: 'dontAsk'` —
+ * never prompted, never executed. A test pins this to what
+ * {@link buildRunTools} actually builds so the two cannot drift.
+ */
+export const EXECUTOR_ALLOWED_TOOLS = EXECUTOR_TOOL_NAMES.map(
+	(name) => `mcp__${EXECUTOR_SERVER_NAME}__${name}`,
+);
+
 /**
  * Everything one claimed run needs to expose its executor tools to the Claude
  * Agent SDK. Assembled per run from the run binding, the provisioned sandbox
@@ -218,7 +244,7 @@ export function createRunMcpServer(
 	deps: RunToolDeps,
 ): McpSdkServerConfigWithInstance {
 	return createSdkMcpServer({
-		name: "mymemo-executor",
+		name: EXECUTOR_SERVER_NAME,
 		tools: buildRunTools(deps),
 	});
 }

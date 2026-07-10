@@ -123,6 +123,60 @@ export async function createQueuedRunTx(
 	}
 }
 
+/**
+ * What a run's `run_started` event recorded about the turn: the user message
+ * (the query prompt) and the conversation's frozen scope columns, exactly as
+ * chat-api's admission transaction wrote them. The scope stays in row form
+ * here — the worker parses it into its typed scope (fail-closed) at the edge
+ * where document access is built.
+ */
+export interface RunStartedEvent {
+	message: string;
+	scope: string;
+	collectionId: string | null;
+	summaryId: string | null;
+}
+
+/**
+ * Load the run's `run_started` event — the durable record of what the user
+ * asked for (design: the worker reads the turn from the log, never from a
+ * request body). Throws when the event is missing or its payload carries no
+ * string message/scope: a run that cannot say what was asked must fail, not
+ * run an empty prompt.
+ */
+export async function loadRunStartedTx(
+	db: Database,
+	input: { runId: string },
+): Promise<RunStartedEvent> {
+	const [row] = await db
+		.select({ payload: runEvents.payload })
+		.from(runEvents)
+		.where(
+			and(
+				eq(runEvents.runId, input.runId),
+				eq(runEvents.type, RunEventType.Started),
+			),
+		)
+		.orderBy(runEvents.seq)
+		.limit(1);
+	if (!row) {
+		throw new Error(`run ${input.runId} has no run_started event`);
+	}
+	const payload = row.payload as Record<string, unknown>;
+	const { message, scope, collectionId, summaryId } = payload;
+	if (typeof message !== "string" || typeof scope !== "string") {
+		throw new Error(
+			`run ${input.runId} has a malformed run_started payload: message/scope missing`,
+		);
+	}
+	return {
+		message,
+		scope,
+		collectionId: typeof collectionId === "string" ? collectionId : null,
+		summaryId: typeof summaryId === "string" ? summaryId : null,
+	};
+}
+
 /** How far ahead a claim/heartbeat pushes `locked_until` (design: 60s hold,
  * 15s heartbeat — four missed heartbeats before a run is recoverable). */
 const LOCK_DURATION_MS = 60_000;

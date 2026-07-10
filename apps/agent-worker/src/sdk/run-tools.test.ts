@@ -12,6 +12,8 @@ import type { RunBinding } from "../sandbox-env";
 import {
 	buildRunTools,
 	createRunMcpServer,
+	EXECUTOR_ALLOWED_TOOLS,
+	EXECUTOR_SERVER_NAME,
 	type RunToolDeps,
 } from "./run-tools";
 
@@ -176,6 +178,16 @@ describe("buildRunTools — surface", () => {
 			"SearchDocuments",
 			"Write",
 		]);
+	});
+
+	// The fail-closed allowlist (ADR-0006) is built from these exports; if a
+	// tool is added or renamed without updating them, the query would silently
+	// deny it — so the constants are pinned to what buildRunTools actually builds.
+	it("EXECUTOR_ALLOWED_TOOLS names exactly the built tools, MCP-qualified", () => {
+		const built = buildRunTools(buildDeps().deps).map(
+			(t) => `mcp__${EXECUTOR_SERVER_NAME}__${t.name}`,
+		);
+		expect([...EXECUTOR_ALLOWED_TOOLS].sort()).toEqual([...built].sort());
 	});
 });
 
