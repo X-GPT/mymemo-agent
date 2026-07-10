@@ -72,9 +72,8 @@ const EXECUTOR_TOOL_NAMES = [
  * never prompted, never executed. A test pins this to what
  * {@link buildRunTools} actually builds so the two cannot drift.
  */
-export const EXECUTOR_ALLOWED_TOOLS = EXECUTOR_TOOL_NAMES.map(
-	(name) => `mcp__${EXECUTOR_SERVER_NAME}__${name}`,
-);
+export const EXECUTOR_ALLOWED_TOOLS: readonly string[] =
+	EXECUTOR_TOOL_NAMES.map((name) => `mcp__${EXECUTOR_SERVER_NAME}__${name}`);
 
 /**
  * Everything one claimed run needs to expose its executor tools to the Claude

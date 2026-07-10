@@ -55,7 +55,7 @@ export const MYMEMO_SYSTEM_PROMPT =
 	"Your only tools are the MyMemo executor tools. Read, Write, Edit, Grep, Glob, and Bash act on the " +
 	`conversation's sandboxed workspace rooted at ${SANDBOX_WORKSPACE_ROOT} — never on the machine running you. ` +
 	"SearchDocuments and LoadDocuments reach the user's MyMemo knowledge base, limited to this conversation's " +
-	"scope; LoadDocuments writes documents into the workspace docs cache and returns their paths so you can " +
+	"scope; LoadDocuments writes documents into the workspace's docs cache and returns their paths so you can " +
 	"read and cite them.\n\n" +
 	"Ground claims about the user's documents in what SearchDocuments and LoadDocuments return, and keep " +
 	"responses concise.";
