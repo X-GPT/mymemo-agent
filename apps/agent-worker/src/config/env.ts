@@ -1,3 +1,9 @@
+import {
+	type BashToolLimits,
+	DEFAULT_BASH_TOOL_LIMITS,
+} from "../bash-tool/bash-tool";
+import type { FileToolLimits } from "../file-tools/file-tools";
+
 /** Subset of the process environment the worker reads. */
 type Env = Record<string, string | undefined>;
 
@@ -40,6 +46,12 @@ export interface WorkerConfig {
 	 * Required so a misconfigured worker fails at boot, not per run.
 	 */
 	e2bTemplate: string;
+	/** How long an unrenewed E2B sandbox stays active before idle-pausing. */
+	sandboxIdleMs: number;
+	/** Bounds for the model-facing workspace file tools. */
+	fileLimits: FileToolLimits;
+	/** Bounds for one model-facing Bash invocation. */
+	bashLimits: BashToolLimits;
 	/** Conservative default run concurrency per worker task. */
 	maxConcurrentRuns: number;
 	/** Per-call cap for model-facing document search results. */
@@ -69,6 +81,13 @@ export interface WorkerConfig {
 }
 
 const DEFAULT_MAX_CONCURRENT_RUNS = 2;
+const DEFAULT_SANDBOX_IDLE_MS = 300_000;
+const DEFAULT_FILE_READ_MAX_BYTES = 65_536;
+const DEFAULT_FILE_READ_MAX_LINES = 2_000;
+const DEFAULT_FILE_GREP_MAX_RESULTS = 100;
+const DEFAULT_FILE_GLOB_MAX_RESULTS = 500;
+const DEFAULT_FILE_COMMAND_MAX_OUTPUT_BYTES = 65_536;
+const DEFAULT_FILE_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS = 8;
 const DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS = 10;
 // The KB fetch already clips content at 50k chars; these byte caps are the
@@ -135,6 +154,11 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 	assert(env.WORKER_E2B_TEMPLATE, "WORKER_E2B_TEMPLATE is required");
 
 	const sslEnabled = env.DB_SSL !== "disable";
+	const bashMaxOutputBytes = positiveIntOr(
+		env.WORKER_BASH_MAX_OUTPUT_BYTES,
+		DEFAULT_BASH_TOOL_LIMITS.maxStdoutBytes,
+		"WORKER_BASH_MAX_OUTPUT_BYTES",
+	);
 
 	return {
 		// DB_PASSWORD is the writable agent role's password in the platform's
@@ -152,6 +176,40 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 		},
 		e2bApiKey: env.E2B_API_KEY,
 		e2bTemplate: env.WORKER_E2B_TEMPLATE,
+		sandboxIdleMs: positiveIntOr(
+			env.WORKER_SANDBOX_IDLE_MS,
+			DEFAULT_SANDBOX_IDLE_MS,
+			"WORKER_SANDBOX_IDLE_MS",
+		),
+		fileLimits: {
+			readMaxBytes: positiveIntOr(
+				env.WORKER_FILE_READ_MAX_BYTES,
+				DEFAULT_FILE_READ_MAX_BYTES,
+				"WORKER_FILE_READ_MAX_BYTES",
+			),
+			readMaxLines: DEFAULT_FILE_READ_MAX_LINES,
+			grepMaxResults: positiveIntOr(
+				env.WORKER_FILE_GREP_MAX_RESULTS,
+				DEFAULT_FILE_GREP_MAX_RESULTS,
+				"WORKER_FILE_GREP_MAX_RESULTS",
+			),
+			globMaxResults: positiveIntOr(
+				env.WORKER_FILE_GLOB_MAX_RESULTS,
+				DEFAULT_FILE_GLOB_MAX_RESULTS,
+				"WORKER_FILE_GLOB_MAX_RESULTS",
+			),
+			commandMaxOutputBytes: DEFAULT_FILE_COMMAND_MAX_OUTPUT_BYTES,
+			commandTimeoutMs: DEFAULT_FILE_COMMAND_TIMEOUT_MS,
+		},
+		bashLimits: {
+			systemMaxTimeoutMs: positiveIntOr(
+				env.WORKER_BASH_TIMEOUT_MS,
+				DEFAULT_BASH_TOOL_LIMITS.systemMaxTimeoutMs,
+				"WORKER_BASH_TIMEOUT_MS",
+			),
+			maxStdoutBytes: bashMaxOutputBytes,
+			maxStderrBytes: bashMaxOutputBytes,
+		},
 		maxConcurrentRuns: positiveIntOr(
 			env.WORKER_MAX_CONCURRENT_RUNS,
 			DEFAULT_MAX_CONCURRENT_RUNS,

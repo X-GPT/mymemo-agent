@@ -103,6 +103,51 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 	});
 });
 
+describe("loadWorkerConfigFromEnv — SDK execution limits", () => {
+	it("defaults the sandbox, file, and Bash limits", () => {
+		const config = loadWorkerConfigFromEnv(baseEnv());
+
+		expect(config.sandboxIdleMs).toBe(300_000);
+		expect(config.fileLimits).toEqual({
+			readMaxBytes: 65_536,
+			readMaxLines: 2_000,
+			grepMaxResults: 100,
+			globMaxResults: 500,
+			commandMaxOutputBytes: 65_536,
+			commandTimeoutMs: 30_000,
+		});
+		expect(config.bashLimits).toEqual({
+			systemMaxTimeoutMs: 120_000,
+			maxStdoutBytes: 65_536,
+			maxStderrBytes: 65_536,
+		});
+	});
+
+	it("honors sandbox, file, and Bash limit overrides", () => {
+		const env = baseEnv();
+		env.WORKER_SANDBOX_IDLE_MS = "600000";
+		env.WORKER_FILE_GREP_MAX_RESULTS = "25";
+		env.WORKER_FILE_GLOB_MAX_RESULTS = "75";
+		env.WORKER_FILE_READ_MAX_BYTES = "32768";
+		env.WORKER_BASH_TIMEOUT_MS = "45000";
+		env.WORKER_BASH_MAX_OUTPUT_BYTES = "8192";
+
+		const config = loadWorkerConfigFromEnv(env);
+
+		expect(config.sandboxIdleMs).toBe(600_000);
+		expect(config.fileLimits).toMatchObject({
+			grepMaxResults: 25,
+			globMaxResults: 75,
+			readMaxBytes: 32_768,
+		});
+		expect(config.bashLimits).toEqual({
+			systemMaxTimeoutMs: 45_000,
+			maxStdoutBytes: 8_192,
+			maxStderrBytes: 8_192,
+		});
+	});
+});
+
 describe("loadWorkerConfigFromEnv — cleanup loop", () => {
 	it("defaults the cleanup interval", () => {
 		const config = loadWorkerConfigFromEnv(baseEnv());

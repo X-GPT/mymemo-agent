@@ -85,6 +85,7 @@ interface ActiveEntry {
 }
 
 const STALE_RUN_RECOVERY_INTERVAL_MS = 15_000;
+const GENERIC_RUN_ERROR_MESSAGE = "Run failed";
 
 /**
  * The agent-worker control loop over the shared run-store helpers. One `tick`:
@@ -343,8 +344,16 @@ export class RunLoop {
 			return;
 		}
 		if (failure) {
+			this.opts.logger.error({
+				message: "run failed",
+				workerId: this.workerId,
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId,
+				error: toMessage(failure.error),
+			});
 			await this.terminalize(runId, "error", {
-				message: toMessage(failure.error),
+				message: GENERIC_RUN_ERROR_MESSAGE,
 			});
 			return;
 		}

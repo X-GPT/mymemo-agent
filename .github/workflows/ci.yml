@@ -22,12 +22,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test
 
-  # Split-runtime integration: runs chat-api + agent-worker as real processes
-  # against a real Postgres (a service container — no image build), so the
-  # worker→projector seam is exercised end to end on every PR. This is what would
-  # have caught a run_events.type desync before merge. `e2e/integration.test.ts`
-  # is gated on AGENT_DATABASE_URL, so it only runs here (the unit `test` job
-  # above uses PGlite and never triggers it).
+  # Split-runtime projection integration: runs chat-api plus a deterministic
+  # test-only queue/event writer against a real Postgres, so the durable event
+  # vocabulary → projector seam is exercised on every PR without live provider
+  # credentials. Task 9.7 owns the production SDK path's credentialed smoke.
+  # `e2e/integration.test.ts` is gated on AGENT_DATABASE_URL.
   integration:
     runs-on: ubuntu-latest
     services:

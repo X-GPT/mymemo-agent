@@ -31,7 +31,10 @@ import {
 	type RunToolDeps,
 } from "./run-tools";
 import { startSandboxRenewal } from "./sandbox-renewal";
-import { buildAgentSessionQueryConfig } from "./session-store";
+import {
+	buildAgentSessionQueryConfig,
+	conversationWorkingDirectory,
+} from "./session-store";
 
 /**
  * The orchestration behind the {@link StartRunQuery} seam (spec Milestone 9,
@@ -84,6 +87,11 @@ export type RunQueryFn = (params: {
 	options: Options;
 }) => SupervisedQuery;
 
+interface ClaudeConfigDirectory {
+	path: string;
+	dispose(): Promise<void>;
+}
+
 export interface StartRunQueryDeps {
 	db: Database;
 	workerId: string;
@@ -94,9 +102,9 @@ export interface StartRunQueryDeps {
 	modelClient: ModelClientConfig;
 	/** The boot-verified pinned glibc CLI binary (spike s3). */
 	pathToClaudeCodeExecutable: string;
-	/** Ephemeral dir for the CLI's local transcript copy; the Postgres session
-	 * store is the durable mirror (spike s2, ADR-0005). */
-	claudeConfigDir: string;
+	/** Create one throwaway directory per query for the CLI's local transcript
+	 * copy; the Postgres session store is the durable mirror (ADR-0005). */
+	createClaudeConfigDir(): Promise<ClaudeConfigDirectory>;
 	/** The worker process env the model-client vars are spread over — the SDK
 	 * query env REPLACES the subprocess env, so it must ride along (spike s2). */
 	processEnv: Record<string, string | undefined>;
@@ -110,6 +118,8 @@ export interface StartRunQueryDeps {
 		perDocumentMaxBytes: number;
 		perCallMaxBytes: number;
 	};
+	/** Prepare the Fargate-side cwd that anchors the SDK session project key. */
+	ensureWorkingDirectory(path: string): Promise<void>;
 	query: RunQueryFn;
 	logger: WorkerLogger;
 }
@@ -128,6 +138,13 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 		};
 
 		const { provisioned, runtime } = await provisionWorkspace(deps, owner);
+		let claudeConfigDir: ClaudeConfigDirectory;
+		try {
+			claudeConfigDir = await deps.createClaudeConfigDir();
+		} catch (error) {
+			provisioned.dispose();
+			throw error;
+		}
 
 		// One controller links every way this turn can be told to stop: the
 		// supervisor's signal (cancel, ownership loss, shutdown) and a renewal
@@ -152,15 +169,22 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				controller.abort();
 			},
 		});
-		const settle = (): void => {
+		let settled = false;
+		const settle = async (): Promise<void> => {
+			if (settled) return;
+			settled = true;
 			renewal.stop();
 			// The paused sandbox IS the persisted workspace (ADR-0007): dispose
 			// only stops keeping it awake.
 			provisioned.dispose();
 			signal.removeEventListener("abort", abortQuery);
+			await claudeConfigDir.dispose();
 		};
 
 		try {
+			await deps.ensureWorkingDirectory(
+				conversationWorkingDirectory(run.conversationId),
+			);
 			const options = buildQueryOptions(deps, {
 				run,
 				owner,
@@ -168,11 +192,12 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				provisioned,
 				documentScope,
 				controller,
+				claudeConfigDir: claudeConfigDir.path,
 			});
 			const underlying = deps.query({ prompt: started.message, options });
 			return superviseTurn(underlying, settle, () => renewalFailure);
 		} catch (error) {
-			settle();
+			await settle();
 			throw error;
 		}
 	};
@@ -298,9 +323,18 @@ function buildQueryOptions(
 		provisioned: ProvisionedSandbox;
 		documentScope: RunToolDeps["documentScope"];
 		controller: AbortController;
+		claudeConfigDir: string;
 	},
 ): Options {
-	const { run, owner, runtime, provisioned, documentScope, controller } = input;
+	const {
+		run,
+		owner,
+		runtime,
+		provisioned,
+		documentScope,
+		controller,
+		claudeConfigDir,
+	} = input;
 	const binding: RunBinding = {
 		userId: run.userId,
 		conversationId: run.conversationId,
@@ -327,8 +361,12 @@ function buildQueryOptions(
 			});
 			await markRuntimeSandboxTaintedTx(deps.db, owner);
 		},
-		recordCommandAudit: async (event) => {
-			deps.logger.info({ message: "bash command audit", ...event });
+		recordCommandAudit: async ({ binding: commandBinding, ...event }) => {
+			deps.logger.info({
+				message: "bash command audit",
+				...commandBinding,
+				...event,
+			});
 		},
 	};
 	const sessionConfig = buildAgentSessionQueryConfig({
@@ -353,7 +391,7 @@ function buildQueryOptions(
 		env: {
 			...deps.processEnv,
 			...deps.modelClient.env,
-			CLAUDE_CONFIG_DIR: deps.claudeConfigDir,
+			CLAUDE_CONFIG_DIR: claudeConfigDir,
 		},
 		pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable,
 		mcpServers: { [EXECUTOR_SERVER_NAME]: createRunMcpServer(toolDeps) },
@@ -375,7 +413,7 @@ function buildQueryOptions(
  */
 function superviseTurn(
 	underlying: SupervisedQuery,
-	settle: () => void,
+	settle: () => Promise<void>,
 	renewalFailure: () => { error: unknown } | null,
 ): SupervisedQuery {
 	return {
@@ -396,7 +434,7 @@ function superviseTurn(
 				}
 				throw error;
 			} finally {
-				settle();
+				await settle();
 			}
 		},
 	};

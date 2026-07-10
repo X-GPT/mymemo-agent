@@ -161,7 +161,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect(sawSignal).toBe(true);
 	});
 
-	it("terminalizes as error with the SDK error message", async () => {
+	it("terminalizes an SDK failure with the generic client message", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async () =>
 			scriptedQuery([
@@ -184,8 +184,9 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const terminal = events.at(-1);
 		expect(terminal?.type).toBe("run_error");
 		expect((terminal?.payload as { message: string }).message).toBe(
-			"model exploded",
+			"Run failed",
 		);
+		expect(JSON.stringify(terminal?.payload)).not.toContain("model exploded");
 	});
 
 	it("ignores content after cancel_requested and terminalizes as canceled", async () => {
