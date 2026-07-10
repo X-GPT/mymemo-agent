@@ -156,8 +156,12 @@ async function countProcesses(
 	sandbox: Sandbox,
 	pattern: string,
 ): Promise<number> {
+	// Bracket the first character ("[s]leep 3131") so the pattern does not match
+	// the shell envd runs this very command through — its command line carries
+	// the pattern text and would otherwise inflate every count by one.
+	const selfExcluding = `[${pattern.slice(0, 1)}]${pattern.slice(1)}`;
 	const result = await sandbox.commands.run(
-		`pgrep -f -c ${JSON.stringify(pattern)} || true`,
+		`pgrep -f -c ${JSON.stringify(selfExcluding)} || true`,
 	);
 	return Number.parseInt(result.stdout.trim() || "0", 10);
 }
