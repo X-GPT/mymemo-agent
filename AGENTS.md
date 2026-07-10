@@ -199,6 +199,7 @@ Required:
 - `KB_DATABASE_URL` — **read-only** KB DB (`mymemo_kb`) for scoped document search. A separate role/credential from `AGENT_DATABASE_URL`
 - `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` / `OPENROUTER_DEFAULT_MODEL` — direct OpenRouter (Anthropic-compatible) model traffic; trusted-worker-only
 - `E2B_API_KEY` — the untrusted filesystem/shell executor
+- `WORKER_E2B_TEMPLATE` — the custom E2B template run sandboxes are created from (Task 9.2, `apps/agent-worker/e2b-template/`): it ships the Grep/Glob toolchain — `rg` installed (the stock `base` template lacks it), `python3` confirmed — with the base image and ripgrep pinned. Build/verify with `bun run template:build` / `bun run template:verify`
 
 Optional:
 - `WORKER_MAX_CONCURRENT_RUNS` (default: `2`) — conservative per-task run concurrency; runs share the task's CPU/memory

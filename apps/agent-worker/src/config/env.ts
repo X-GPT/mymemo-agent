@@ -33,6 +33,13 @@ export interface WorkerConfig {
 	};
 	/** E2B API key for the untrusted filesystem/shell executor. */
 	e2bApiKey: string;
+	/**
+	 * E2B template id/alias run sandboxes are created from. The custom template
+	 * (apps/agent-worker/e2b-template/) ships the Grep/Glob runtime toolchain —
+	 * `rg` installed (the stock `base` template lacks it), `python3` confirmed.
+	 * Required so a misconfigured worker fails at boot, not per run.
+	 */
+	e2bTemplate: string;
 	/** Conservative default run concurrency per worker task. */
 	maxConcurrentRuns: number;
 	/** Per-call cap for model-facing document search results. */
@@ -125,6 +132,7 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 	assert(env.OPENROUTER_BASE_URL, "OPENROUTER_BASE_URL is required");
 	assert(env.OPENROUTER_DEFAULT_MODEL, "OPENROUTER_DEFAULT_MODEL is required");
 	assert(env.E2B_API_KEY, "E2B_API_KEY is required");
+	assert(env.WORKER_E2B_TEMPLATE, "WORKER_E2B_TEMPLATE is required");
 
 	const sslEnabled = env.DB_SSL !== "disable";
 
@@ -143,6 +151,7 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			defaultModel: env.OPENROUTER_DEFAULT_MODEL,
 		},
 		e2bApiKey: env.E2B_API_KEY,
+		e2bTemplate: env.WORKER_E2B_TEMPLATE,
 		maxConcurrentRuns: positiveIntOr(
 			env.WORKER_MAX_CONCURRENT_RUNS,
 			DEFAULT_MAX_CONCURRENT_RUNS,

@@ -14,6 +14,7 @@ function baseEnv(): Record<string, string | undefined> {
 		OPENROUTER_BASE_URL: "https://openrouter.ai/api",
 		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
 		E2B_API_KEY: "e2b-test",
+		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 		DB_SSL: "disable",
 	};
 }
@@ -26,6 +27,7 @@ describe("loadWorkerConfigFromEnv — required settings", () => {
 		"OPENROUTER_BASE_URL",
 		"OPENROUTER_DEFAULT_MODEL",
 		"E2B_API_KEY",
+		"WORKER_E2B_TEMPLATE",
 	];
 
 	it("loads cleanly with all required settings present", () => {
@@ -44,6 +46,11 @@ describe("loadWorkerConfigFromEnv — required settings", () => {
 		const config = loadWorkerConfigFromEnv(baseEnv());
 		expect(config.agentDatabaseUrl).toContain("mymemo_agent");
 		expect(config.kbDatabaseUrl).toContain("mymemo_kb");
+	});
+
+	it("surfaces the E2B template the worker provisions sandboxes from", () => {
+		const config = loadWorkerConfigFromEnv(baseEnv());
+		expect(config.e2bTemplate).toBe("mymemo-agent-sandbox");
 	});
 
 	it("surfaces the OpenRouter provider config", () => {

@@ -67,6 +67,7 @@ services:
       OPENROUTER_BASE_URL: https://openrouter.ai/api
       OPENROUTER_DEFAULT_MODEL: anthropic/claude-sonnet-4
       E2B_API_KEY: local-unused
+      WORKER_E2B_TEMPLATE: local-unused
     depends_on:
       postgres:
         condition: service_healthy

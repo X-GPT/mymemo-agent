@@ -116,6 +116,12 @@ variable "e2b_template" {
   default     = "sandbox-template-dev"
 }
 
+variable "worker_e2b_template" {
+  description = "Custom E2B template agent-worker creates run sandboxes from (apps/agent-worker/e2b-template/); ships the Grep/Glob toolchain (rg, python3)."
+  type        = string
+  default     = "mymemo-agent-sandbox"
+}
+
 variable "openrouter_base_url" {
   description = "OpenRouter base URL used by agent-worker."
   type        = string
