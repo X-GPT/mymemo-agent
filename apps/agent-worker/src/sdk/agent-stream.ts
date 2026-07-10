@@ -1,4 +1,6 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { AssistantTextPayload } from "@mymemo/agent-db/run-events";
+import { AssistantMessageAssembler } from "./assistant-message-assembler";
 
 /**
  * The subset of the Claude Agent SDK's `Query` handle the run supervisor
@@ -22,25 +24,6 @@ export class QueryInterruptedError extends Error {
 	constructor() {
 		super("agent query interrupted");
 	}
-}
-
-/**
- * The appendable assistant text of one SDK message, or `null` when the message
- * carries none (tool calls, result/system messages, an empty assistant turn).
- * Text blocks are concatenated so one assistant message maps to one content
- * append.
- */
-export function assistantTextFromMessage(message: SDKMessage): string | null {
-	if (message.type !== "assistant") return null;
-	const blocks = message.message.content;
-	if (!Array.isArray(blocks)) return null;
-	let text = "";
-	for (const block of blocks) {
-		if (block.type === "text" && typeof block.text === "string") {
-			text += block.text;
-		}
-	}
-	return text.length > 0 ? text : null;
 }
 
 /** The SDK reports a run failure either by throwing or — on a clean process
@@ -93,8 +76,10 @@ export interface ConsumeAgentStreamParams {
 	query: SupervisedQuery;
 	/** Fires on cancel, ownership loss, or shutdown; interrupts the query. */
 	signal: AbortSignal;
-	/** Persists one assistant-text content event (fenced to `running` upstream). */
-	appendAssistantText: (text: string) => Promise<void>;
+	/** Persists one complete Assistant message (fenced to `running` upstream). */
+	appendAssistantMessage: (message: AssistantTextPayload) => Promise<void>;
+	/** Payload-free signal that disables Live preview for the rest of the Run. */
+	onPartialCompleteMismatch?: () => void;
 }
 
 /**
@@ -115,11 +100,14 @@ export interface ConsumeAgentStreamParams {
 export async function consumeAgentStream(
 	params: ConsumeAgentStreamParams,
 ): Promise<AgentStreamOutcome> {
-	const { query, signal, appendAssistantText } = params;
+	const { query, signal, appendAssistantMessage } = params;
 	const outcome: AgentStreamOutcome = {
 		sessionId: null,
 		mirrorErrorObserved: false,
 	};
+	const assembler = new AssistantMessageAssembler({
+		onPartialCompleteMismatch: params.onPartialCompleteMismatch,
+	});
 
 	// Best-effort: interrupt only needs to reach the SDK. Swallow its rejection so
 	// a failed interrupt cannot become an unhandled rejection — the loop stops
@@ -140,14 +128,27 @@ export async function consumeAgentStream(
 
 			if (signal.aborted) continue;
 			const errorText = resultErrorText(message);
-			if (errorText !== null) throw new AgentResultError(errorText);
-			const text = assistantTextFromMessage(message);
-			if (text !== null) await appendAssistantText(text);
+			if (errorText !== null) {
+				assembler.abandon();
+				throw new AgentResultError(errorText);
+			}
+			if (message.type === "assistant" && message.error) {
+				assembler.abandon();
+				throw new AgentResultError(
+					`assistant response rejected: ${message.error}`,
+				);
+			}
+			const commit = assembler.accept(message);
+			if (commit !== null) await appendAssistantMessage(commit);
 		}
 	} finally {
 		signal.removeEventListener("abort", interrupt);
 	}
 
-	if (signal.aborted) throw new QueryInterruptedError();
+	if (signal.aborted) {
+		assembler.abandon();
+		throw new QueryInterruptedError();
+	}
+	assembler.finish();
 	return outcome;
 }

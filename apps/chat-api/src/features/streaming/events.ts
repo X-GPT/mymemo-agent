@@ -5,7 +5,7 @@ export interface MymemoEvent {
 
 export type EventMessage =
 	| ErrorEvent
-	| TextDeltaEvent
+	| TextCommitEvent
 	| DoneEvent
 	| CanceledEvent
 	| ConversationIdEvent
@@ -26,8 +26,9 @@ export interface RunIdEvent {
 	runId: string;
 }
 
-export interface TextDeltaEvent {
-	type: "text_delta";
+export interface TextCommitEvent {
+	type: "text_commit";
+	messageId: string;
 	text: string;
 }
 

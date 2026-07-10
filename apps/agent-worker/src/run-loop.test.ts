@@ -102,9 +102,12 @@ async function readEventTypes(runId: string) {
 	return rows.map((e) => e.type);
 }
 
-/** Appends one text delta then returns — the Milestone 3 synthetic turn. */
-const appendTextProcessor: RunProcessor = async (ctx) => {
-	await ctx.appendText(`synthetic ${ctx.run.runId}`);
+/** Appends one complete Assistant message then returns. */
+const appendMessageProcessor: RunProcessor = async (ctx) => {
+	await ctx.appendAssistantMessage({
+		messageId: `message-${ctx.run.runId}`,
+		text: `synthetic ${ctx.run.runId}`,
+	});
 };
 
 async function readRuntime(conversationId: string) {
@@ -138,7 +141,7 @@ describe("RunLoop — concurrency", () => {
 
 	it("claims the next run once a slot frees", async () => {
 		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendTextProcessor);
+		const loop = buildLoop(worker, appendMessageProcessor);
 		await queueRun("run-1", "conv-1");
 		await queueRun("run-2", "conv-2");
 
@@ -244,21 +247,27 @@ describe("RunLoop — heartbeat", () => {
 });
 
 describe("RunLoop — terminal outcomes", () => {
-	it("completes a synthetic run as done with a text event", async () => {
+	it("ends a synthetic run as done with one durable Assistant message", async () => {
 		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendTextProcessor);
+		const loop = buildLoop(worker, appendMessageProcessor);
 		await queueRun("run-1", "conv-1");
 
 		await loop.tick();
 		await worker.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("done");
-		// The worker writes the shared `assistant_text` type; chat-api's projector
-		// maps it to the `text_delta` client frame.
 		expect(await readEventTypes("run-1")).toEqual([
 			"assistant_text",
 			"run_done",
 		]);
+		const [message] = await tdb.db
+			.select()
+			.from(runEvents)
+			.where(eq(runEvents.type, "assistant_text"));
+		expect(message?.payload).toEqual({
+			messageId: "message-run-1",
+			text: "synthetic run-1",
+		});
 	});
 
 	it("logs a failed run but persists only a generic client message", async () => {
@@ -409,7 +418,7 @@ describe("RunLoop — stale-run recovery", () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await expireOwnership("run-stale");
 		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendTextProcessor);
+		const loop = buildLoop(worker, appendMessageProcessor);
 
 		const claimed = await loop.tick();
 		await worker.drain();
@@ -428,7 +437,7 @@ describe("RunLoop — stale-run recovery", () => {
 		});
 		await expireOwnership("run-stale");
 		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendTextProcessor);
+		const loop = buildLoop(worker, appendMessageProcessor);
 
 		await loop.tick();
 		await worker.drain();
@@ -441,7 +450,7 @@ describe("RunLoop — stale-run recovery", () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await expireOwnership("run-stale");
 		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendTextProcessor);
+		const loop = buildLoop(worker, appendMessageProcessor);
 
 		await loop.tick();
 
@@ -450,7 +459,7 @@ describe("RunLoop — stale-run recovery", () => {
 				runId: "run-stale",
 				workerId: "stale-worker",
 				type: "assistant_text",
-				payload: { text: "too late" },
+				payload: { messageId: "message-too-late", text: "too late" },
 				appendClass: "model",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
@@ -477,9 +486,9 @@ describe("RunLoop — stale-run recovery", () => {
 });
 
 describe("RunLoop — synthetic end-to-end smoke", () => {
-	it("claims a queued run, streams a text event, and completes it", async () => {
+	it("claims a queued run, commits an Assistant message, and ends it as done", async () => {
 		const worker = buildWorker(2);
-		const loop = buildLoop(worker, appendTextProcessor);
+		const loop = buildLoop(worker, appendMessageProcessor);
 		// A conversation queued a run (chat-api's admission side, mirrored here).
 		await queueRun("run-smoke", "conv-smoke");
 
@@ -490,8 +499,8 @@ describe("RunLoop — synthetic end-to-end smoke", () => {
 		const row = await readRun("run-smoke");
 		expect(row?.status).toBe("done");
 		expect(row?.lockedBy).toBeNull();
-		// The durable event log — the single SSE source — carries the streamed
-		// assistant text (projected to `text_delta`) ahead of the terminal frame.
+		// The durable event log carries the complete Assistant message ahead of the
+		// terminal frame.
 		expect(await readEventTypes("run-smoke")).toEqual([
 			"assistant_text",
 			"run_done",

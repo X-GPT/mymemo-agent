@@ -105,13 +105,18 @@ describe("PostgresRunStore", () => {
 		await tdb.db.insert(runEvents).values({
 			runId,
 			seq: 2,
-			type: "text_delta",
-			payload: { text: "hi" },
+			type: "assistant_text",
+			payload: { messageId: "message-1", text: "hi" },
 		});
 
 		const replay = await store.listRunEventsAfter({ runId, afterSeq: 1 });
 		expect(replay).toEqual([
-			{ runId, seq: 2, type: "text_delta", payload: { text: "hi" } },
+			{
+				runId,
+				seq: 2,
+				type: "assistant_text",
+				payload: { messageId: "message-1", text: "hi" },
+			},
 		]);
 	});
 

@@ -16,7 +16,7 @@ if (!Number.isInteger(turnTimeoutMs) || turnTimeoutMs <= 0) {
 const TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 	"conversation_id",
 	"run_id",
-	"text_delta",
+	"text_commit",
 	"done",
 ]);
 
@@ -182,7 +182,7 @@ async function sendTurn(
 		"runId",
 	);
 	const text = frames
-		.filter((frame) => frame.event === "text_delta")
+		.filter((frame) => frame.event === "text_commit")
 		.map((frame) => stringField(frame, "text"))
 		.join("");
 	if (!text.trim()) throw new Error("event stream contained no assistant text");

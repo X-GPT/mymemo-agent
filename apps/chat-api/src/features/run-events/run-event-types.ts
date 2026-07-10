@@ -35,13 +35,13 @@ export const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
 
 /**
  * The client-visible SSE frames. `type` is also the SSE `event:` name. This is
- * the whole split-runtime client vocabulary — `conversation_id`, `run_id`,
- * `text_delta`, and one terminal frame per outcome (`done | canceled | error`).
+ * the Postgres-only client vocabulary — `conversation_id`, `run_id`, the
+ * authoritative `text_commit`, and one terminal frame per outcome.
  */
 export type ClientFrame =
 	| { type: "conversation_id"; conversationId: string }
 	| { type: "run_id"; runId: string }
-	| { type: "text_delta"; text: string }
+	| { type: "text_commit"; messageId: string; text: string }
 	| { type: "done" }
 	| { type: "canceled" }
 	| { type: "error"; message: string };

@@ -82,8 +82,8 @@ curl -N http://localhost:3000/v1/conversations/<conversationId>/events \
   -d '{"type":"user.message","text":"Hello, split runtime."}'
 ```
 
-The stream emits `conversation_id`, `run_id`, one or more `text_delta` events
-from the real agent, then `done`. The prototype-era `sandbox_id` and
+The stream emits `conversation_id`, `run_id`, one or more durable `text_commit`
+events from the real agent, then `done`. The prototype-era `sandbox_id` and
 `agent_session_id` frames are **not** part of the split-runtime contract.
 Re-POST `events` to the same `conversationId` for another turn.
 

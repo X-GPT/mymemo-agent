@@ -24,16 +24,15 @@ export interface SdkRunProcessorDeps {
 
 /**
  * The Milestone 7 run processor: start the run's SDK query and consume its
- * stream under supervision, persisting assistant text as run content events
- * (plan Task 7.2). It slots into the same {@link RunProcessor} seam the
+ * stream under supervision, persisting complete Assistant messages as Run
+ * events (plan Task 7.2). It slots into the same {@link RunProcessor} seam the
  * synthetic processor used, so the control loop's claim/heartbeat/terminalize
  * behavior — including mapping this processor's throw to `error` and a
  * supervisor-observed cancel to `canceled` — is unchanged.
  *
- * Text appends, terminal transitions, and the ownership fence all belong to the
- * loop and the run store; this processor only turns SDK output into
- * `ctx.appendText` calls, reports the session to resume from next turn, and lets
- * errors and interruptions propagate.
+ * Message appends, terminal transitions, and the ownership fence all belong to
+ * the loop and run store; this processor only assembles SDK provider envelopes,
+ * reports the session to resume from next turn, and lets errors propagate.
  */
 export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 	return async (ctx) => {
@@ -41,7 +40,15 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 		const outcome = await consumeAgentStream({
 			query,
 			signal: ctx.signal,
-			appendAssistantText: ctx.appendText,
+			appendAssistantMessage: ctx.appendAssistantMessage,
+			onPartialCompleteMismatch: () => {
+				deps.logger.warn({
+					message: "assistant Live preview disabled after text mismatch",
+					userId: ctx.run.userId,
+					conversationId: ctx.run.conversationId,
+					runId: ctx.run.runId,
+				});
+			},
 		});
 		return {
 			// Advance the conversation's resume pointer only when the SDK produced a

@@ -7,6 +7,7 @@ import {
 	it,
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
+import { RunEventType } from "./run-events";
 import {
 	ActiveRunConflictError,
 	appendRunEventTx,
@@ -192,15 +193,15 @@ describe("appendRunEventTx", () => {
 		const first = await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: "text_delta",
-			payload: { text: "hel" },
+			type: RunEventType.AssistantText,
+			payload: { messageId: "message-1", text: "hel" },
 			appendClass: "model",
 		});
 		const second = await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: "text_delta",
-			payload: { text: "lo" },
+			type: RunEventType.AssistantText,
+			payload: { messageId: "message-2", text: "lo" },
 			appendClass: "model",
 		});
 
@@ -208,10 +209,13 @@ describe("appendRunEventTx", () => {
 		expect(second.seq).toBe(2);
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.seq, e.type])).toEqual([
-			[1, "text_delta"],
-			[2, "text_delta"],
+			[1, RunEventType.AssistantText],
+			[2, RunEventType.AssistantText],
 		]);
-		expect(events[0]?.payload).toEqual({ text: "hel" });
+		expect(events[0]?.payload).toEqual({
+			messageId: "message-1",
+			text: "hel",
+		});
 	});
 
 	it("rejects a model append on a run that is not running", async () => {
@@ -221,7 +225,7 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: "text_delta",
+				type: RunEventType.AssistantText,
 				payload: {},
 				appendClass: "model",
 			}),
@@ -235,7 +239,7 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-2",
-				type: "text_delta",
+				type: RunEventType.AssistantText,
 				payload: {},
 				appendClass: "model",
 			}),
@@ -250,7 +254,7 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: "text_delta",
+				type: RunEventType.AssistantText,
 				payload: {},
 				appendClass: "model",
 			}),
@@ -268,7 +272,7 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: "text_delta",
+				type: RunEventType.AssistantText,
 				payload: {},
 				appendClass: "model",
 			}),
@@ -327,8 +331,8 @@ describe("transitionRunTerminalTx", () => {
 		await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: "text_delta",
-			payload: { text: "hi" },
+			type: RunEventType.AssistantText,
+			payload: { messageId: "message-1", text: "hi" },
 			appendClass: "model",
 		});
 
@@ -347,7 +351,7 @@ describe("transitionRunTerminalTx", () => {
 		expect(run.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.seq, e.type])).toEqual([
-			[1, "text_delta"],
+			[1, RunEventType.AssistantText],
 			[2, "run_done"],
 		]);
 	});
@@ -711,7 +715,7 @@ describe("markStaleRunsTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: "text_delta",
+				type: RunEventType.AssistantText,
 				payload: {},
 				appendClass: "model",
 			}),

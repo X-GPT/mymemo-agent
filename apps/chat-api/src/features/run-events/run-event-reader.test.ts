@@ -51,7 +51,10 @@ describe("DrizzleRunEventReader", () => {
 	});
 
 	it("returns events with seq greater than the cursor, ordered by seq", async () => {
-		await appendEvent(db, "run-1", 2, "assistant_text", { text: "b" });
+		await appendEvent(db, "run-1", 2, "assistant_text", {
+			messageId: "message-1",
+			text: "b",
+		});
 		await appendEvent(db, "run-1", 1, "run_started", { runId: "run-1" });
 		await appendEvent(db, "run-1", 3, "run_done", {});
 
@@ -59,14 +62,21 @@ describe("DrizzleRunEventReader", () => {
 
 		expect(rows).toEqual([
 			{ seq: 1, type: "run_started", payload: { runId: "run-1" } },
-			{ seq: 2, type: "assistant_text", payload: { text: "b" } },
+			{
+				seq: 2,
+				type: "assistant_text",
+				payload: { messageId: "message-1", text: "b" },
+			},
 			{ seq: 3, type: "run_done", payload: {} },
 		]);
 	});
 
 	it("skips events at or below the cursor", async () => {
 		await appendEvent(db, "run-1", 1, "run_started", { runId: "run-1" });
-		await appendEvent(db, "run-1", 2, "assistant_text", { text: "a" });
+		await appendEvent(db, "run-1", 2, "assistant_text", {
+			messageId: "message-1",
+			text: "a",
+		});
 		await appendEvent(db, "run-1", 3, "run_done", {});
 
 		expect(await reader.read("run-1", 2)).toEqual([
@@ -76,11 +86,21 @@ describe("DrizzleRunEventReader", () => {
 
 	it("does not return events belonging to another run", async () => {
 		await seedRun(db, "run-2", "conv-2");
-		await appendEvent(db, "run-1", 1, "assistant_text", { text: "mine" });
-		await appendEvent(db, "run-2", 1, "assistant_text", { text: "theirs" });
+		await appendEvent(db, "run-1", 1, "assistant_text", {
+			messageId: "message-1",
+			text: "mine",
+		});
+		await appendEvent(db, "run-2", 1, "assistant_text", {
+			messageId: "message-2",
+			text: "theirs",
+		});
 
 		expect(await reader.read("run-1", 0)).toEqual([
-			{ seq: 1, type: "assistant_text", payload: { text: "mine" } },
+			{
+				seq: 1,
+				type: "assistant_text",
+				payload: { messageId: "message-1", text: "mine" },
+			},
 		]);
 	});
 

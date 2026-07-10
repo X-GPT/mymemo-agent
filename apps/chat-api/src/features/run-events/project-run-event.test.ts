@@ -15,10 +15,13 @@ describe("projectRunEvent", () => {
 		]);
 	});
 
-	it("maps assistant_text to a text_delta frame", () => {
-		expect(projectRunEvent(RunEventType.AssistantText, { text: "hi" })).toEqual(
-			[{ type: "text_delta", text: "hi" }],
-		);
+	it("maps a complete assistant_text payload to text_commit", () => {
+		expect(
+			projectRunEvent(RunEventType.AssistantText, {
+				messageId: "message-1",
+				text: "hi",
+			}),
+		).toEqual([{ type: "text_commit", messageId: "message-1", text: "hi" }]);
 	});
 
 	it("maps run_done to done", () => {
@@ -56,10 +59,14 @@ describe("projectRunEvent", () => {
 		expect(
 			projectRunEvent(RunEventType.Started, { conversationId: 42, runId: "r" }),
 		).toEqual([{ type: "run_id", runId: "r" }]);
-		// assistant_text without a string text produces nothing.
+		// assistant_text requires both authoritative payload fields; legacy
+		// text-only rows are deliberately not backfilled or projected.
 		expect(projectRunEvent(RunEventType.AssistantText, { text: 7 })).toEqual(
 			[],
 		);
+		expect(
+			projectRunEvent(RunEventType.AssistantText, { text: "legacy" }),
+		).toEqual([]);
 	});
 
 	it("tolerates a null or non-object payload without throwing", () => {
