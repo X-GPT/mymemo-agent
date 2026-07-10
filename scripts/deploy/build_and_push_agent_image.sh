@@ -49,6 +49,9 @@ aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "$registry"
 
 docker build --platform linux/amd64 -f "$dockerfile" -t "$image" .
+if [[ "$service" == "agent-worker" ]]; then
+  "$script_dir/../smoke/agent-worker-image-check.sh" "$image"
+fi
 docker push "$image"
 
 echo "$image"

@@ -22,6 +22,21 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test
 
+  # Build the final production-pruned image and exercise the SDK's native CLI
+  # inside it. This needs no runtime credentials and catches both optional-dep
+  # pruning and the Debian/glibc vs musl platform-binary trap.
+  worker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build agent-worker image
+        run: >-
+          docker build --platform linux/amd64
+          -f apps/agent-worker/Dockerfile
+          -t mymemo-agent-worker:image-check .
+      - name: Exec-verify pinned Claude CLI
+        run: scripts/smoke/agent-worker-image-check.sh mymemo-agent-worker:image-check
+
   # Split-runtime projection integration: runs chat-api plus a deterministic
   # test-only queue/event writer against a real Postgres, so the durable event
   # vocabulary → projector seam is exercised on every PR without live provider

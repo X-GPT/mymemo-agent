@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadWorkerConfigFromEnv } from "../apps/agent-worker/src/config/env";
 import { loadApiConfigFromEnv } from "../apps/chat-api/src/config/env";
@@ -117,6 +117,7 @@ describe("agent deployment config", () => {
 			"AWS_ACCOUNT_ID=637423444544",
 			"DEPLOY_ENVIRONMENT=prod",
 			"AGENT_SMOKE_BASE_URL=REPLACE_ME_AGENT_SMOKE_BASE_URL",
+			"AGENT_SMOKE_EXPECT_GATE_CLOSED=false",
 		]) {
 			expect(prodDeployEnv).toContain(required);
 		}
@@ -429,6 +430,38 @@ describe("agent deployment config", () => {
 		expect(buildScript).not.toContain('repository="mymemo-agent-worker"');
 		expect(buildScript).not.toContain("AWS_ACCOUNT_ID");
 		expect(buildScript).not.toContain("ECR_REPOSITORY_PREFIX");
+	});
+
+	it("exec-verifies the SDK CLI in every built worker image before push", () => {
+		const checkPath = join(
+			root,
+			"scripts",
+			"smoke",
+			"agent-worker-image-check.sh",
+		);
+		expect(existsSync(checkPath)).toBe(true);
+		const checkScript = readFileSync(checkPath, "utf8");
+		const buildScript = readFileSync(
+			join(root, "scripts", "deploy", "build_and_push_agent_image.sh"),
+			"utf8",
+		);
+		const ciWorkflow = readFileSync(
+			join(root, ".github", "workflows", "ci.yml"),
+			"utf8",
+		);
+
+		expect(checkScript).toContain("docker run --rm");
+		expect(checkScript).toContain("--network none");
+		expect(checkScript).toContain("--entrypoint bun");
+		expect(checkScript).toContain("resolveAndVerifyClaudeCodeExecutable");
+		expect(ciWorkflow).toContain("agent-worker-image-check.sh");
+
+		const buildIndex = buildScript.indexOf("docker build");
+		const checkIndex = buildScript.indexOf("agent-worker-image-check.sh");
+		const pushIndex = buildScript.indexOf("docker push");
+		expect(buildIndex).toBeGreaterThan(-1);
+		expect(checkIndex).toBeGreaterThan(buildIndex);
+		expect(checkIndex).toBeLessThan(pushIndex);
 	});
 
 	it("secret bootstrap parses ignored values without sourcing them", () => {
