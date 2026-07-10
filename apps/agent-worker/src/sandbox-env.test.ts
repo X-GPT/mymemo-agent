@@ -30,6 +30,7 @@ describe("buildSandboxEnv — credential boundary", () => {
 			OPENROUTER_BASE_URL: "https://openrouter.ai/api",
 			OPENROUTER_DEFAULT_MODEL: "anthropic/claude",
 			E2B_API_KEY: "e2b-secret",
+			WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 			DB_SSL: "disable",
 		});
 		// ...but buildSandboxEnv's signature only accepts the binding, so secrets

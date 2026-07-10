@@ -129,6 +129,7 @@ describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
 			OPENROUTER_BASE_URL: "https://openrouter.ai/api",
 			OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
 			E2B_API_KEY: "integration-unused",
+			WORKER_E2B_TEMPLATE: "integration-unused",
 			WORKER_HEARTBEAT_INTERVAL_MS: "500",
 			PORT: String(WORKER_PORT),
 			LOG_LEVEL: "warn",

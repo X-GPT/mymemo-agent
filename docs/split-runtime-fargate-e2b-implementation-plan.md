@@ -1096,7 +1096,7 @@ Acceptance (met):
   in ADR-0006, and are folded into Tasks 9.5–9.7 below. The spike directory is
   deleted.
 
-### Task 9.2: Build the Custom E2B Template
+### Task 9.2: Build the Custom E2B Template — DONE 2026-07-10
 
 `Grep`/`Glob` shell out to `rg` and `python3`, which the `base` template lacks.
 
@@ -1106,6 +1106,13 @@ Acceptance (met):
 Acceptance:
 
 - a sandbox created from the template runs `rg --version` and `python3 --version`.
+
+Built with the e2b Template SDK (`apps/agent-worker/e2b-template/`,
+`bun run template:build` / `template:verify`) as alias `mymemo-agent-sandbox`:
+`e2bdev/base` pinned by manifest digest, ripgrep 14.1.1 installed from the
+sha256-verified release deb, python3 confirmed at build time (the base ships
+3.11.6 — only `rg` was missing). Acceptance verified live 2026-07-10: a
+sandbox created from the template ran both commands.
 
 ### Task 9.3: Remove Snapshots (ADR-0007)
 

@@ -97,6 +97,7 @@ describe("agent deployment config", () => {
 			"assign_public_ip = true",
 			'mymemo_service_api_security_group_ids = ["sg-05d48e36ef8966c9e"]',
 			'openrouter_default_model   = "anthropic/claude-sonnet-4"',
+			'worker_e2b_template        = "mymemo-agent-sandbox"',
 		]) {
 			expect(prodTfvars).toContain(required);
 		}
@@ -478,6 +479,7 @@ describe("agent deployment config", () => {
 				OPENROUTER_API_KEY: "openrouter-test-key",
 				OPENROUTER_BASE_URL: "https://openrouter.ai/api",
 				OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
+				WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 			}),
 		).not.toThrow();
 	});

@@ -73,6 +73,7 @@ locals {
     { name = "LOG_LEVEL", value = var.log_level },
     { name = "OPENROUTER_BASE_URL", value = var.openrouter_base_url },
     { name = "OPENROUTER_DEFAULT_MODEL", value = var.openrouter_default_model },
+    { name = "WORKER_E2B_TEMPLATE", value = var.worker_e2b_template },
     { name = "WORKER_MAX_CONCURRENT_RUNS", value = tostring(var.worker_max_concurrent_runs) },
     { name = "WORKER_HEARTBEAT_INTERVAL_MS", value = tostring(var.worker_heartbeat_interval_ms) },
     { name = "WORKER_SHUTDOWN_TIMEOUT_MS", value = tostring(var.worker_shutdown_timeout_ms) },
