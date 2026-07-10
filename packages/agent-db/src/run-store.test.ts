@@ -13,6 +13,7 @@ import {
 	claimNextRunTx,
 	createQueuedRunTx,
 	heartbeatRunTx,
+	loadRunStartedTx,
 	markStaleRunsTx,
 	RunFenceError,
 	requestRunCancellationTx,
@@ -715,5 +716,78 @@ describe("markStaleRunsTx", () => {
 				appendClass: "model",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
+	});
+});
+
+describe("loadRunStartedTx", () => {
+	/** Insert a run_started event the way chat-api's admission transaction does:
+	 * seq 1, with the counter already advanced past it. */
+	async function insertRunStarted(runId: string, payload: object) {
+		await tdb.db
+			.update(runs)
+			.set({ nextEventSeq: 2 })
+			.where(eq(runs.runId, runId));
+		await tdb.db.insert(runEvents).values({
+			runId,
+			seq: 1,
+			type: "run_started",
+			payload,
+		});
+	}
+
+	it("loads the user message and frozen scope columns", async () => {
+		await queueRun("run-1", "conv-1");
+		await insertRunStarted("run-1", {
+			userId: "user-1",
+			conversationId: "conv-1",
+			runId: "run-1",
+			message: "summarize my notes",
+			scope: "collection",
+			collectionId: "col-9",
+			summaryId: null,
+		});
+
+		const started = await loadRunStartedTx(tdb.db, { runId: "run-1" });
+
+		expect(started).toEqual({
+			message: "summarize my notes",
+			scope: "collection",
+			collectionId: "col-9",
+			summaryId: null,
+		});
+	});
+
+	it("normalizes absent scope ids to null", async () => {
+		await queueRun("run-1", "conv-1");
+		await insertRunStarted("run-1", {
+			message: "hello",
+			scope: "general",
+		});
+
+		const started = await loadRunStartedTx(tdb.db, { runId: "run-1" });
+
+		expect(started).toEqual({
+			message: "hello",
+			scope: "general",
+			collectionId: null,
+			summaryId: null,
+		});
+	});
+
+	it("throws when the run has no run_started event", async () => {
+		await queueRun("run-1", "conv-1");
+
+		await expect(loadRunStartedTx(tdb.db, { runId: "run-1" })).rejects.toThrow(
+			/run_started/,
+		);
+	});
+
+	it("throws when the payload carries no string message or scope", async () => {
+		await queueRun("run-1", "conv-1");
+		await insertRunStarted("run-1", { scope: "general" });
+
+		await expect(loadRunStartedTx(tdb.db, { runId: "run-1" })).rejects.toThrow(
+			/run_started/,
+		);
 	});
 });

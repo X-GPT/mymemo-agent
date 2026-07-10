@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { loadRunStartedTx } from "@mymemo/agent-db/run-store";
 import { eq } from "drizzle-orm";
 import { conversations, runEvents, runs } from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
@@ -63,6 +64,25 @@ describe("PostgresRunStore", () => {
 			runId: result.runId,
 			conversationId: "conv-1",
 			message: "hello",
+			scope: "collection",
+			collectionId: "col-1",
+			summaryId: null,
+		});
+	});
+
+	// Guards the write/read contract across the trust boundary: the worker's
+	// orchestration loads the turn through the shared helper, so what admission
+	// writes must be exactly what it reads back.
+	it("round-trips the run_started payload through loadRunStartedTx", async () => {
+		const { runId } = await store.createQueuedRun({
+			conversation,
+			message: "summarize my notes",
+		});
+
+		const started = await loadRunStartedTx(tdb.db, { runId });
+
+		expect(started).toEqual({
+			message: "summarize my notes",
 			scope: "collection",
 			collectionId: "col-1",
 			summaryId: null,
