@@ -14,6 +14,20 @@ resource "aws_security_group_rule" "agent_services_to_agent_db" {
   protocol                 = "tcp"
 }
 
+# The KB database lives in the existing mymemo-service RDS instance, whose
+# security group is owned by that stack and admits only its own ECS tasks.
+# agent-worker reads the KB over KB_DATABASE_URL, so this stack attaches the
+# one ingress rule that lets agent services reach it.
+resource "aws_security_group_rule" "agent_services_to_kb_db" {
+  type                     = "ingress"
+  description              = "Agent ECS services to existing KB Postgres (worker document search)"
+  security_group_id        = var.kb_database_security_group_id
+  source_security_group_id = aws_security_group.services.id
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+}
+
 resource "aws_db_subnet_group" "agent" {
   name       = "${local.common_name}-db"
   subnet_ids = local.shared_ecs_subnet_ids

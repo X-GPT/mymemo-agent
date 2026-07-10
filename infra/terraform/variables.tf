@@ -30,6 +30,16 @@ variable "mymemo_service_api_security_group_ids" {
   }
 }
 
+variable "kb_database_security_group_id" {
+  description = "Security group ID of the existing mymemo-service RDS instance hosting the KB database. Owned by the mymemo-service stack; this stack only attaches an ingress rule so agent-worker can reach the KB over KB_DATABASE_URL."
+  type        = string
+
+  validation {
+    condition     = length(var.kb_database_security_group_id) > 0
+    error_message = "The KB database security group ID is required."
+  }
+}
+
 variable "chat_api_image" {
   description = "Fully qualified chat-api container image URI including tag."
   type        = string

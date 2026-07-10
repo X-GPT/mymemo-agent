@@ -11,6 +11,11 @@ tags = {
 # the mymemo-service API ECS service security group.
 mymemo_service_api_security_group_ids = ["sg-05d48e36ef8966c9e"]
 
+# Security group on the existing mymemo-service RDS instance (mymemo-staging-pg)
+# hosting the KB database. mymemo-agent attaches an ingress rule to it so
+# agent-worker can reach the KB over KB_DATABASE_URL.
+kb_database_security_group_id = "sg-0c7084b87f3e109d7"
+
 # Existing mymemo-service ECS subnets are public/default subnets with no
 # private NAT/VPC endpoint egress path. Public IP assignment is therefore an
 # inherited network constraint, not the preferred production pattern.

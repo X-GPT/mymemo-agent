@@ -57,6 +57,7 @@ describe("agent deployment config", () => {
 			"assign_public_ip",
 			"agent_db_instance_class",
 			"mymemo_service_api_security_group_ids",
+			"kb_database_security_group_id",
 			"kb_database_url_secret_name",
 			"statsig_server_secret_name",
 			"openrouter_api_key_secret_name",
@@ -96,6 +97,7 @@ describe("agent deployment config", () => {
 			'environment = "prod"',
 			"assign_public_ip = true",
 			'mymemo_service_api_security_group_ids = ["sg-05d48e36ef8966c9e"]',
+			'kb_database_security_group_id = "sg-0c7084b87f3e109d7"',
 			'openrouter_default_model   = "anthropic/claude-sonnet-4"',
 			'worker_e2b_template        = "mymemo-agent-sandbox"',
 		]) {
