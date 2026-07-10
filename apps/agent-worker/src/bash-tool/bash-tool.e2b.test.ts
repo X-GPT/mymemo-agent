@@ -4,24 +4,14 @@
 // init). Skipped unless E2B_API_KEY is set, so CI without E2B credentials
 // passes; run locally with `E2B_API_KEY=... bun test bash-tool.e2b`.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { CommandExitError, Sandbox, TimeoutError } from "e2b";
+import { Sandbox } from "e2b";
+import { E2BCommandClient } from "../e2b/command-client";
 import {
 	type BashToolContext,
 	type CommandAuditEvent,
-	type ManagedCommandSpec,
-	type RawCommandOutcome,
 	runBashTool,
-	type SandboxCommandClient,
-	type SandboxCommandSession,
 } from "./bash-tool";
-import {
-	buildKillGroupCommand,
-	buildReapCommand,
-	DEFAULT_COMMAND_CONTROL_DIR,
-	parseReapSurvivors,
-	WRAPPER_PROGRAM,
-	wrapperEnv,
-} from "./bash-wrapper";
+import { DEFAULT_COMMAND_CONTROL_DIR } from "./bash-wrapper";
 
 const LIVE = !!process.env.E2B_API_KEY;
 const TEMPLATE = process.env.E2B_TEMPLATE ?? "base";
@@ -30,96 +20,6 @@ const TEST_TIMEOUT_MS = 180_000;
 
 const sleep = (ms: number): Promise<void> =>
 	new Promise((resolve) => setTimeout(resolve, ms));
-
-/** A real E2B-backed command client, built on the shared wrapper module. This
- * is the substrate the pure `runBashTool` handler is designed against; it lives
- * in the test (like the file-tools integration client) until the sandbox
- * lifecycle is wired in a later milestone. */
-class E2BCommandClient implements SandboxCommandClient {
-	constructor(
-		private readonly sandbox: Sandbox,
-		private readonly controlDir: string,
-	) {}
-
-	start(spec: ManagedCommandSpec): SandboxCommandSession {
-		const outcome = this.run(spec);
-		return {
-			outcome,
-			kill: async () => {
-				await this.sandbox.commands.run(
-					buildKillGroupCommand({
-						commandId: spec.commandId,
-						controlDir: this.controlDir,
-						graceMs: 1_000,
-					}),
-				);
-			},
-			reap: async () => {
-				const result = await this.sandbox.commands.run(
-					buildReapCommand({
-						commandId: spec.commandId,
-						controlDir: this.controlDir,
-					}),
-				);
-				return { survivors: parseReapSurvivors(result.stdout) };
-			},
-		};
-	}
-
-	private async run(spec: ManagedCommandSpec): Promise<RawCommandOutcome> {
-		let stdout = "";
-		let stderr = "";
-		try {
-			const result = await this.sandbox.commands.run(WRAPPER_PROGRAM, {
-				cwd: spec.cwd,
-				envs: wrapperEnv({
-					command: spec.command,
-					commandId: spec.commandId,
-					controlDir: this.controlDir,
-				}),
-				// Backstop beyond the tool's own timer so a truly hung command is
-				// still bounded even if the group kill is somehow ineffective.
-				timeoutMs: spec.timeoutMs + 5_000,
-				onStdout: (data) => {
-					stdout += data;
-				},
-				onStderr: (data) => {
-					stderr += data;
-				},
-			});
-			return {
-				exitCode: result.exitCode,
-				stdout,
-				stderr,
-				stdoutTruncated: false,
-				stderrTruncated: false,
-				timedOut: false,
-			};
-		} catch (error) {
-			if (error instanceof CommandExitError) {
-				return {
-					exitCode: error.exitCode,
-					stdout,
-					stderr,
-					stdoutTruncated: false,
-					stderrTruncated: false,
-					timedOut: false,
-				};
-			}
-			if (error instanceof TimeoutError) {
-				return {
-					exitCode: null,
-					stdout,
-					stderr,
-					stdoutTruncated: false,
-					stderrTruncated: false,
-					timedOut: true,
-				};
-			}
-			throw error;
-		}
-	}
-}
 
 function makeContext(
 	sandbox: Sandbox,
