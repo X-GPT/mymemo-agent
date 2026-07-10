@@ -54,7 +54,7 @@ export async function createTestDatabase(): Promise<TestDb> {
 				// (measured: pinned arrayBuffers 2.3GB -> 0 with the null, unchanged
 				// without it). Runs in `finally` so it still fires if close() throws
 				// (e.g. a double-close raising "PGlite is closed").
-				(client as { mod?: unknown }).mod = undefined;
+				(client as unknown as { mod?: unknown }).mod = undefined;
 				if (typeof Bun !== "undefined") Bun.gc(true);
 			}
 		},
