@@ -333,7 +333,7 @@ function isInsideWorkspace(
 	);
 }
 
-function takeUtf8Bytes(
+export function takeUtf8Bytes(
 	text: string,
 	maxBytes: number,
 ): { text: string; truncated: boolean } {

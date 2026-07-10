@@ -1,17 +1,16 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { afterEach, describe, it } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-	type FileToolLimits,
-	runGlobFileTool,
-	runGrepFileTool,
-	type SandboxFileClient,
-	type SandboxFileCommand,
-	type SandboxFileCommandResult,
-	type SandboxFileRead,
-	type SandboxFileWrite,
+import type {
+	FileToolLimits,
+	SandboxFileClient,
+	SandboxFileCommand,
+	SandboxFileCommandResult,
+	SandboxFileRead,
+	SandboxFileWrite,
 } from "./file-tools";
+import { runFileToolsContract } from "./testing";
 
 class LocalCommandSandboxFileClient implements SandboxFileClient {
 	async readFile(input: SandboxFileRead): Promise<string> {
@@ -69,12 +68,6 @@ afterEach(async () => {
 	}
 });
 
-function parseResult(result: { content: { text: string }[] }) {
-	const [first] = result.content;
-	if (!first) throw new Error("missing tool content");
-	return JSON.parse(first.text);
-}
-
 function boundOutput(
 	text: string,
 	maxBytes: number,
@@ -96,38 +89,11 @@ function boundOutput(
 describe("command-backed file tools", () => {
 	it("runs grep and glob against the real command path with bounded sorted results", async () => {
 		workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "mymemo-file-tools-"));
-		await mkdir(path.join(workspaceRoot, "src"));
-		await Bun.write(path.join(workspaceRoot, "notes.txt"), "alpha\nbeta\n");
-		await Bun.write(path.join(workspaceRoot, "src", "memo.txt"), "alpha\n");
-		await Bun.write(path.join(workspaceRoot, ".hidden.txt"), "alpha\n");
 
-		const context = {
+		await runFileToolsContract({
 			client: new LocalCommandSandboxFileClient(),
 			workspaceRoot,
 			limits,
-		};
-
-		const grepResult = await runGrepFileTool(
-			{ pattern: "alpha", maxResults: 10 },
-			context,
-		);
-		expect(grepResult.isError).toBeUndefined();
-		expect(parseResult(grepResult)).toEqual({
-			matches: [
-				{ path: "notes.txt", line: 1, column: 1, text: "alpha" },
-				{ path: "src/memo.txt", line: 1, column: 1, text: "alpha" },
-			],
-			truncated: false,
-		});
-
-		const globResult = await runGlobFileTool(
-			{ pattern: "**/*.txt", maxResults: 10 },
-			context,
-		);
-		expect(globResult.isError).toBeUndefined();
-		expect(parseResult(globResult)).toEqual({
-			paths: ["notes.txt", "src/memo.txt"],
-			truncated: false,
 		});
 	});
 });
