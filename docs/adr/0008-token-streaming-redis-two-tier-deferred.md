@@ -135,6 +135,14 @@ provisional presentation from authoritative transcript storage.
   needs no retention. (`NOTIFY` is unsuitable — 8 KB payload cap, not built for
   high-frequency token streams.)
 
+## Client reconciliation
+
+`text_delta` is provisional and contains `{ messageId, deltaIndex, text }`.
+`text_commit` is authoritative and contains `{ messageId, text }`. A client
+appends contiguous deltas to a provisional message and atomically replaces it
+when the matching commit arrives. A commit without preview creates the message;
+late deltas cannot resurrect it. Terminal outcomes clear uncommitted previews.
+
 ## Projector module boundary
 
 `projectRun` remains one deep module that owns durable polling, the prepared
