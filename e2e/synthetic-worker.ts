@@ -22,7 +22,10 @@ const worker = new Worker({
 	logger,
 });
 const processor: RunProcessor = async (ctx) => {
-	await ctx.appendText(`Synthetic response for run ${ctx.run.runId}`);
+	await ctx.appendAssistantMessage({
+		messageId: `message-${ctx.run.runId}`,
+		text: `Synthetic response for run ${ctx.run.runId}`,
+	});
 };
 const runLoop = new RunLoop({
 	db: createDatabase(agentDatabaseUrl),

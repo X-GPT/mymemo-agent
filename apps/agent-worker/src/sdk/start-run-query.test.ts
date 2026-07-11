@@ -366,6 +366,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		await h.startRunQuery(run, freshSignal());
 
 		const options = h.captured.options;
+		expect(options?.includePartialMessages).toBe(true);
 		expect(options?.tools).toEqual([]);
 		expect(options?.settingSources).toEqual([]);
 		expect(options?.permissionMode).toBe("dontAsk");

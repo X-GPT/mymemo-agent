@@ -1,5 +1,8 @@
 import type { Database } from "@mymemo/agent-db/client";
-import { RunEventType } from "@mymemo/agent-db/run-events";
+import {
+	type AssistantTextPayload,
+	RunEventType,
+} from "@mymemo/agent-db/run-events";
 import {
 	appendRunEventTx,
 	claimNextRunTx,
@@ -35,22 +38,21 @@ export interface TurnResult {
 const EMPTY_TURN: TurnResult = {};
 
 /**
- * What a claimed run's processing is handed. `appendText` is the bound
- * model-content append for this owned run (fenced by the run store); `signal`
- * fires when the loop observes cancellation or loses ownership, so long-running
- * processing can stop promptly.
+ * What a claimed run's processing is handed. `appendAssistantMessage` is the
+ * bound durable-message append for this owned run (fenced by the run store);
+ * `signal` fires when the loop observes cancellation or loses ownership, so
+ * long-running processing can stop promptly.
  */
 export interface RunProcessContext {
 	run: RunRecord;
 	signal: AbortSignal;
-	appendText(text: string): Promise<void>;
+	appendAssistantMessage(message: AssistantTextPayload): Promise<void>;
 }
 
 /**
- * Produces one claimed run's turn. Milestone 3 uses a synthetic processor that
- * appends a single text event; later milestones swap in the Claude Agent SDK
- * loop. Injected so the control loop's claim/heartbeat/terminalize behavior is
- * tested independently of what a turn does.
+ * Produces one claimed run's turn. Injected so the control loop's
+ * claim/heartbeat/terminalize behavior is tested independently of what a turn
+ * does.
  *
  * A processor may return a {@link TurnResult} naming the agent session to
  * resume from next turn; returning nothing is treated as a turn with no
@@ -299,7 +301,8 @@ export class RunLoop {
 				(await this.opts.processor({
 					run,
 					signal: entry.controller.signal,
-					appendText: (text) => this.appendText(run.runId, text),
+					appendAssistantMessage: (message) =>
+						this.appendAssistantMessage(run.runId, message),
 				})) ?? EMPTY_TURN;
 		} catch (error) {
 			failure = { error };
@@ -310,14 +313,17 @@ export class RunLoop {
 		await this.finish(run, entry.state, turnResult, failure);
 	}
 
-	private async appendText(runId: string, text: string): Promise<void> {
+	private async appendAssistantMessage(
+		runId: string,
+		message: AssistantTextPayload,
+	): Promise<void> {
 		await appendRunEventTx(this.opts.db, {
 			runId,
 			workerId: this.workerId,
-			// The shared vocabulary type the projector maps to the `text_delta`
-			// client frame — never the frame name itself, or the projector drops it.
+			// The shared vocabulary type the projector maps to `text_commit` — never
+			// the frame name itself, or the projector drops it.
 			type: RunEventType.AssistantText,
-			payload: { text },
+			payload: message,
 			appendClass: "model",
 		});
 	}

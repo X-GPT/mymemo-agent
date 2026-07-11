@@ -3,8 +3,8 @@
  *
  * Runs the actual client path across two real processes talking to a real
  * Postgres: chat-api queues a run, a test-only worker process claims it and
- * appends one text event, and chat-api projects the durable events back over
- * SSE. Unlike the PGlite unit tests — which exercise each side in isolation —
+ * appends one complete Assistant message, and chat-api projects the durable
+ * events back over SSE. Unlike the PGlite unit tests — which exercise each side in isolation —
  * this crosses the writer→projector seam over one database, so a vocabulary
  * desync fails here instead of reaching a client. The production worker always
  * runs the real SDK; Task 9.7 owns its credentialed end-to-end smoke proof.
@@ -77,6 +77,12 @@ function parseSSE(raw: string): SSEFrame[] {
 		if (event) frames.push({ event, data });
 	}
 	return frames;
+}
+
+function requiredFrame(frames: SSEFrame[], event: string): SSEFrame {
+	const frame = frames.find((candidate) => candidate.event === event);
+	if (!frame) throw new Error(`SSE response omitted ${event}`);
+	return frame;
 }
 
 /** Spawn `bun run src/index.ts` for an app under apps/<name>. Output is inherited
@@ -207,23 +213,23 @@ describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
 			// part of the contract (a prototype-era internal identifier).
 			expect(events).toContain("conversation_id");
 			expect(events).toContain("run_id");
-			expect(events).toContain("text_delta");
+			expect(events).toContain("text_commit");
 			expect(events).toContain("done");
 			expect(events).not.toContain("error");
 			expect(events).not.toContain("sandbox_id");
 
 			const echoedConversationId = JSON.parse(
-				frames.find((f) => f.event === "conversation_id")!.data,
+				requiredFrame(frames, "conversation_id").data,
 			).conversationId as string;
 			expect(echoedConversationId).toBe(conversationId);
-			const runId = JSON.parse(frames.find((f) => f.event === "run_id")!.data)
+			const runId = JSON.parse(requiredFrame(frames, "run_id").data)
 				.runId as string;
 			expect(runId.length).toBeGreaterThan(0);
 
-			// The streamed text is the test worker's response for this run — proof it
+			// The committed text is the test worker's response for this run — proof it
 			// crossed the worker→projector seam, not produced by chat-api.
 			const streamedText = frames
-				.filter((f) => f.event === "text_delta")
+				.filter((f) => f.event === "text_commit")
 				.map((f) => JSON.parse(f.data).text as string)
 				.join("");
 			expect(streamedText).toContain("Synthetic response");

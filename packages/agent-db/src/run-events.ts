@@ -13,8 +13,8 @@
 export const RunEventType = {
 	/** First event of a run. Payload `{ conversationId, runId, ... }`. */
 	Started: "run_started",
-	/** A chunk of streamed assistant text. Payload `{ text }`. Projected to the
-	 * `text_delta` client frame. */
+	/** One complete Assistant message. Payload `{ messageId, text }`. Projected
+	 * to the durable `text_commit` client frame. */
 	AssistantText: "assistant_text",
 	/** Terminal: the run finished successfully. */
 	Done: "run_done",
@@ -25,3 +25,25 @@ export const RunEventType = {
 } as const;
 
 export type RunEventType = (typeof RunEventType)[keyof typeof RunEventType];
+
+/** The durable payload for one complete Assistant message. */
+export interface AssistantTextPayload {
+	[key: string]: unknown;
+	messageId: string;
+	text: string;
+}
+
+export function isAssistantTextPayload(
+	value: unknown,
+): value is AssistantTextPayload {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"messageId" in value &&
+		typeof value.messageId === "string" &&
+		value.messageId.length > 0 &&
+		"text" in value &&
+		typeof value.text === "string" &&
+		value.text.length > 0
+	);
+}

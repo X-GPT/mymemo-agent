@@ -71,7 +71,7 @@ function frames(projected: ProjectedFrame[]) {
 }
 
 describe("projectRun", () => {
-	it("replays from seq 0 as conversation_id, run_id, text deltas, then terminal, in order", async () => {
+	it("replays committed Assistant messages with durable cursors", async () => {
 		const reader = new ScriptedReader([
 			[
 				{
@@ -79,8 +79,16 @@ describe("projectRun", () => {
 					type: RunEventType.Started,
 					payload: { conversationId: "conv-1", runId: "run-1" },
 				},
-				{ seq: 2, type: RunEventType.AssistantText, payload: { text: "he" } },
-				{ seq: 3, type: RunEventType.AssistantText, payload: { text: "llo" } },
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "hello" },
+				},
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "again" },
+				},
 				{ seq: 4, type: RunEventType.Done, payload: {} },
 			],
 		]);
@@ -91,26 +99,24 @@ describe("projectRun", () => {
 		expect(frames(projected)).toEqual([
 			{ type: "conversation_id", conversationId: "conv-1" },
 			{ type: "run_id", runId: "run-1" },
-			{ type: "text_delta", text: "he" },
-			{ type: "text_delta", text: "llo" },
+			{ type: "text_commit", messageId: "message-1", text: "hello" },
+			{ type: "text_commit", messageId: "message-2", text: "again" },
 			{ type: "done" },
 		]);
 		expect(projected.map((p) => p.seq).slice(0, 2)).toEqual([1, 1]);
 		// Only the final sibling from a fanned-out event advances Last-Event-ID.
-		expect(projected.map((p) => p.id)).toEqual([
-			undefined,
-			"1",
-			"2",
-			"3",
-			"4",
-		]);
+		expect(projected.map((p) => p.id)).toEqual([undefined, "1", "2", "3", "4"]);
 		expect(notifier.closed).toBe(1);
 	});
 
 	it("replays from a Last-Event-ID cursor, starting the read past already-seen events", async () => {
 		const reader = new ScriptedReader([
 			[
-				{ seq: 3, type: RunEventType.AssistantText, payload: { text: "tail" } },
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "tail" },
+				},
 				{ seq: 4, type: RunEventType.Done, payload: {} },
 			],
 		]);
@@ -121,7 +127,7 @@ describe("projectRun", () => {
 
 		expect(reader.cursors[0]).toBe(2);
 		expect(frames(projected)).toEqual([
-			{ type: "text_delta", text: "tail" },
+			{ type: "text_commit", messageId: "message-2", text: "tail" },
 			{ type: "done" },
 		]);
 	});
@@ -133,7 +139,11 @@ describe("projectRun", () => {
 		const reader = new ScriptedReader([
 			[],
 			[
-				{ seq: 1, type: RunEventType.AssistantText, payload: { text: "late" } },
+				{
+					seq: 1,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "late" },
+				},
 				{ seq: 2, type: RunEventType.Done, payload: {} },
 			],
 		]);
@@ -146,14 +156,20 @@ describe("projectRun", () => {
 		expect(notifier.waits).toBe(1); // waited once between the two reads
 		expect(reader.cursors).toEqual([0, 0]); // nothing emitted yet on the re-read
 		expect(frames(projected)).toEqual([
-			{ type: "text_delta", text: "late" },
+			{ type: "text_commit", messageId: "message-1", text: "late" },
 			{ type: "done" },
 		]);
 	});
 
 	it("stops while waiting when the client aborts", async () => {
 		const reader = new ScriptedReader([
-			[{ seq: 1, type: RunEventType.AssistantText, payload: { text: "one" } }],
+			[
+				{
+					seq: 1,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "one" },
+				},
+			],
 			[],
 		]);
 		const notifier = new BlockingNotifier();
@@ -166,7 +182,11 @@ describe("projectRun", () => {
 
 		expect(await gen.next()).toEqual({
 			done: false,
-			value: { seq: 1, id: "1", frame: { type: "text_delta", text: "one" } },
+			value: {
+				seq: 1,
+				id: "1",
+				frame: { type: "text_commit", messageId: "message-1", text: "one" },
+			},
 		});
 		const pending = gen.next();
 		controller.abort();
@@ -205,7 +225,11 @@ describe("projectRun", () => {
 		const reader = new ScriptedReader([
 			[
 				{ seq: 1, type: "document_search", payload: { query: "secret" } },
-				{ seq: 2, type: RunEventType.AssistantText, payload: { text: "ok" } },
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "ok" },
+				},
 				{ seq: 3, type: "daemon_started", payload: {} },
 				{ seq: 4, type: RunEventType.Done, payload: {} },
 			],
@@ -217,7 +241,10 @@ describe("projectRun", () => {
 					projectRun("run-1", 0, { reader, notifier: new InstantNotifier() }),
 				),
 			),
-		).toEqual([{ type: "text_delta", text: "ok" }, { type: "done" }]);
+		).toEqual([
+			{ type: "text_commit", messageId: "message-1", text: "ok" },
+			{ type: "done" },
+		]);
 	});
 
 	it("stops reading once a terminal event is seen (no read past the terminal)", async () => {
@@ -228,7 +255,7 @@ describe("projectRun", () => {
 				{
 					seq: 2,
 					type: RunEventType.AssistantText,
-					payload: { text: "after" },
+					payload: { messageId: "message-late", text: "after" },
 				},
 			],
 		]);
@@ -267,7 +294,7 @@ describe("projectRun over the real reader", () => {
 				runId: "run-1",
 				seq: 2,
 				type: RunEventType.AssistantText,
-				payload: { text: "hi" },
+				payload: { messageId: "message-1", text: "hi" },
 			},
 			{ runId: "run-1", seq: 3, type: RunEventType.Done, payload: {} },
 		]);
@@ -285,7 +312,7 @@ describe("projectRun over the real reader", () => {
 		expect(full).toEqual([
 			{ type: "conversation_id", conversationId: "conv-1" },
 			{ type: "run_id", runId: "run-1" },
-			{ type: "text_delta", text: "hi" },
+			{ type: "text_commit", messageId: "message-1", text: "hi" },
 			{ type: "done" },
 		]);
 

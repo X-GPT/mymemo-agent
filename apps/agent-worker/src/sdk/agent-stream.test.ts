@@ -1,40 +1,33 @@
 import { describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
-	assistantTextFromMessage,
+	AgentResultError,
 	consumeAgentStream,
 	isMirrorError,
 	QueryInterruptedError,
 	type SupervisedQuery,
 	sessionIdFromResult,
 } from "./agent-stream";
+import { AssistantEnvelopeProtocolError } from "./assistant-message-assembler";
+import { assistantBlock, textEnvelope } from "./testing/sdk-message-fixtures";
 
-/** A minimal assistant message carrying the given text blocks. */
-function assistantMessage(...texts: string[]): SDKMessage {
-	return {
-		type: "assistant",
-		message: {
-			content: texts.map((text) => ({ type: "text", text })),
-		},
-		parent_tool_use_id: null,
-		uuid: "u",
-		session_id: "s",
-	} as unknown as SDKMessage;
+function messageAt(messages: SDKMessage[], index: number): SDKMessage {
+	const message = messages[index];
+	if (!message)
+		throw new Error(`test fixture has no message at index ${index}`);
+	return message;
 }
 
-/** A `result` message — the SDK's final message, which carries no appendable
- * text but does carry the `session_id` the worker stores as the resume pointer. */
 function resultMessage(sessionId?: string): SDKMessage {
 	return {
 		type: "result",
 		subtype: "success",
 		is_error: false,
-		result: "done",
+		result: "terminal result echo",
 		...(sessionId ? { session_id: sessionId } : {}),
 	} as unknown as SDKMessage;
 }
 
-/** A `mirror_error` system message — a dropped transcript-mirror batch. */
 function mirrorErrorMessage(): SDKMessage {
 	return {
 		type: "system",
@@ -46,8 +39,6 @@ function mirrorErrorMessage(): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
-/** A terminal `result` that reports a failure without the stream throwing — the
- * SDK's clean-exit error path (`is_error: true`). */
 function errorResultMessage(subtype: string, text: string): SDKMessage {
 	return subtype === "success"
 		? ({
@@ -64,24 +55,15 @@ function errorResultMessage(subtype: string, text: string): SDKMessage {
 			} as unknown as SDKMessage);
 }
 
-/**
- * A fake {@link SupervisedQuery}: yields the given steps in order, records
- * `interrupt()` calls, and lets a step run an arbitrary side effect (e.g. abort
- * the run's signal) before the next message is produced — so a test can drive
- * cancellation deterministically between messages. A `throwAt` step makes the
- * underlying stream reject, standing in for an SDK failure.
- */
 type Step =
 	| { message: SDKMessage; before?: () => void }
 	| { throw: unknown; before?: () => void };
 
 function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
-	const state = { interrupts: 0 };
 	const query = {
 		interrupts: 0,
 		async interrupt() {
-			state.interrupts++;
-			query.interrupts = state.interrupts;
+			query.interrupts++;
 		},
 		async *[Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
 			for (const step of steps) {
@@ -94,28 +76,13 @@ function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
 	return query;
 }
 
-describe("assistantTextFromMessage", () => {
-	it("concatenates the text blocks of an assistant message", () => {
-		expect(assistantTextFromMessage(assistantMessage("a", "b"))).toBe("ab");
-	});
-
-	it("returns null for an assistant message with no text", () => {
-		expect(assistantTextFromMessage(assistantMessage())).toBeNull();
-	});
-
-	it("returns null for non-assistant messages", () => {
-		expect(assistantTextFromMessage(resultMessage())).toBeNull();
-	});
-});
-
 describe("sessionIdFromResult", () => {
-	it("returns the session id of a result message", () => {
+	it("returns the session id only from a result message", () => {
 		expect(sessionIdFromResult(resultMessage("session-1"))).toBe("session-1");
-	});
-
-	it("returns null for a result with no session id and for non-result messages", () => {
 		expect(sessionIdFromResult(resultMessage())).toBeNull();
-		expect(sessionIdFromResult(assistantMessage("x"))).toBeNull();
+		expect(
+			sessionIdFromResult(messageAt(textEnvelope({ completeText: "x" }), 0)),
+		).toBeNull();
 	});
 });
 
@@ -123,71 +90,82 @@ describe("isMirrorError", () => {
 	it("is true only for a mirror_error system message", () => {
 		expect(isMirrorError(mirrorErrorMessage())).toBe(true);
 		expect(isMirrorError(resultMessage())).toBe(false);
-		expect(isMirrorError(assistantMessage("x"))).toBe(false);
+		expect(
+			isMirrorError(messageAt(textEnvelope({ completeText: "x" }), 0)),
+		).toBe(false);
 	});
 });
 
 describe("consumeAgentStream", () => {
-	it("appends assistant text for each assistant message while running", async () => {
-		const appended: string[] = [];
+	it("commits only the complete provider envelope and ignores the result echo", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
 		const controller = new AbortController();
 		const query = fakeQuery([
-			{ message: assistantMessage("hello ") },
-			{ message: resultMessage() },
-			{ message: assistantMessage("world") },
+			...textEnvelope({ completeText: "complete text" }).map((message) => ({
+				message,
+			})),
+			{ message: resultMessage("session-42") },
+		]);
+
+		await expect(
+			consumeAgentStream({
+				query,
+				signal: controller.signal,
+				appendAssistantMessage: async (message) => {
+					appended.push(message);
+				},
+			}),
+		).resolves.toEqual({
+			sessionId: "session-42",
+			mirrorErrorObserved: false,
+		});
+		expect(appended).toHaveLength(1);
+		expect(appended[0]).toMatchObject({ text: "complete text" });
+		expect(query.interrupts).toBe(0);
+	});
+
+	it("does not commit completed block evidence before message_stop", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
+		const envelope = textEnvelope({ completeText: "complete text" });
+		const query = fakeQuery([
+			...envelope.slice(0, 5).map((message) => ({ message })),
+			{
+				message: messageAt(envelope, 5),
+				before: () => expect(appended).toEqual([]),
+			},
 		]);
 
 		await consumeAgentStream({
 			query,
-			signal: controller.signal,
-			appendAssistantText: async (t) => {
-				appended.push(t);
+			signal: new AbortController().signal,
+			appendAssistantMessage: async (message) => {
+				appended.push(message);
 			},
 		});
 
-		expect(appended).toEqual(["hello ", "world"]);
-		expect(query.interrupts).toBe(0);
+		expect(appended).toHaveLength(1);
+		expect(appended[0]).toMatchObject({ text: "complete text" });
 	});
 
-	it("ignores normal content after cancel_requested and interrupts the query", async () => {
-		const appended: string[] = [];
+	it("abandons an open envelope after abort and interrupts the query once", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
 		const controller = new AbortController();
-		// The first append triggers cancellation; everything after is ignored.
+		const envelope = textEnvelope({ completeText: "completed prefix" });
 		const query = fakeQuery([
-			{ message: assistantMessage("kept") },
+			...envelope.slice(0, 4).map((message) => ({ message })),
 			{
-				message: assistantMessage("dropped"),
+				message: messageAt(envelope, 4),
 				before: () => controller.abort(),
 			},
-			{ message: assistantMessage("also dropped") },
+			{ message: messageAt(envelope, 5) },
 		]);
 
 		await expect(
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantText: async (t) => {
-					appended.push(t);
-				},
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
-
-		expect(appended).toEqual(["kept"]);
-		expect(query.interrupts).toBe(1);
-	});
-
-	it("interrupts and appends nothing when the run is already aborted at start", async () => {
-		const appended: string[] = [];
-		const controller = new AbortController();
-		controller.abort();
-		const query = fakeQuery([{ message: assistantMessage("never") }]);
-
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendAssistantText: async (t) => {
-					appended.push(t);
+				appendAssistantMessage: async (message) => {
+					appended.push(message);
 				},
 			}),
 		).rejects.toBeInstanceOf(QueryInterruptedError);
@@ -196,64 +174,118 @@ describe("consumeAgentStream", () => {
 		expect(query.interrupts).toBe(1);
 	});
 
-	it("throws on a clean-exit error result so an errored run is not marked done", async () => {
+	it("interrupts and commits nothing when already aborted at start", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
 		const controller = new AbortController();
+		controller.abort();
+		const query = fakeQuery(
+			textEnvelope({ completeText: "never" }).map((message) => ({ message })),
+		);
+
+		await expect(
+			consumeAgentStream({
+				query,
+				signal: controller.signal,
+				appendAssistantMessage: async (message) => {
+					appended.push(message);
+				},
+			}),
+		).rejects.toBeInstanceOf(QueryInterruptedError);
+
+		expect(appended).toEqual([]);
+		expect(query.interrupts).toBe(1);
+	});
+
+	it("abandons an open envelope on an SDK error result", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
+		const controller = new AbortController();
+		const envelope = textEnvelope({ completeText: "uncommitted" });
 		const query = fakeQuery([
-			{ message: assistantMessage("thinking") },
+			...envelope.slice(0, 4).map((message) => ({ message })),
 			{ message: errorResultMessage("error_during_execution", "rate limited") },
+			{ throw: new Error("iterator rejected after result") },
 		]);
 
 		await expect(
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantText: async () => {},
+				appendAssistantMessage: async (message) => {
+					appended.push(message);
+				},
 			}),
 		).rejects.toThrow("rate limited");
+		expect(appended).toEqual([]);
 		expect(query.interrupts).toBe(0);
 	});
 
-	it("resolves with the session id from the result and no mirror error on a clean run", async () => {
+	it("fails closed when a nominally successful stream ends before message_stop", async () => {
 		const controller = new AbortController();
+		const envelope = textEnvelope({ completeText: "uncommitted" });
+		const query = fakeQuery(
+			envelope.slice(0, 5).map((message) => ({ message })),
+		);
+
+		await expect(
+			consumeAgentStream({
+				query,
+				signal: controller.signal,
+				appendAssistantMessage: async () => {},
+			}),
+		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
+	});
+
+	it("treats an error-bearing Assistant callback as provider rejection", async () => {
+		const controller = new AbortController();
+		const envelope = textEnvelope({ completeText: "rejected" });
+		const rejected = assistantBlock(
+			"provider-1",
+			{ type: "text", text: "rejected" },
+			"authentication_failed",
+		);
 		const query = fakeQuery([
-			{ message: assistantMessage("answer") },
-			{ message: resultMessage("session-42") },
+			...envelope.slice(0, 3).map((message) => ({ message })),
+			{ message: rejected },
 		]);
 
 		await expect(
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantText: async () => {},
+				appendAssistantMessage: async () => {},
 			}),
-		).resolves.toEqual({ sessionId: "session-42", mirrorErrorObserved: false });
+		).rejects.toBeInstanceOf(AgentResultError);
 	});
 
-	it("flags a mirror_error observed anywhere in the stream", async () => {
+	it("reports a mirror error without losing a clean session outcome", async () => {
 		const controller = new AbortController();
 		const query = fakeQuery([
-			{ message: assistantMessage("partial") },
+			...textEnvelope({ completeText: "answer" }).map((message) => ({
+				message,
+			})),
 			{ message: mirrorErrorMessage() },
 			{ message: resultMessage("session-7") },
 		]);
 
-		const outcome = await consumeAgentStream({
-			query,
-			signal: controller.signal,
-			appendAssistantText: async () => {},
-		});
-
-		expect(outcome).toEqual({
+		await expect(
+			consumeAgentStream({
+				query,
+				signal: controller.signal,
+				appendAssistantMessage: async () => {},
+			}),
+		).resolves.toEqual({
 			sessionId: "session-7",
 			mirrorErrorObserved: true,
 		});
 	});
 
-	it("propagates an SDK stream error as a throw", async () => {
+	it("propagates iterator rejection without committing an open envelope", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
 		const controller = new AbortController();
 		const boom = new Error("model exploded");
+		const envelope = textEnvelope({ completeText: "uncommitted" });
 		const query = fakeQuery([
-			{ message: assistantMessage("partial") },
+			...envelope.slice(0, 4).map((message) => ({ message })),
 			{ throw: boom },
 		]);
 
@@ -261,10 +293,12 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantText: async () => {},
+				appendAssistantMessage: async (message) => {
+					appended.push(message);
+				},
 			}),
 		).rejects.toBe(boom);
-		// Not aborted: no interrupt was requested.
+		expect(appended).toEqual([]);
 		expect(query.interrupts).toBe(0);
 	});
 });

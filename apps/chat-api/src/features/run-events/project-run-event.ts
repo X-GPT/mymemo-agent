@@ -1,3 +1,4 @@
+import { isAssistantTextPayload } from "@mymemo/agent-db/run-events";
 import { type ClientFrame, RunEventType } from "./run-event-types";
 
 /**
@@ -32,8 +33,14 @@ export function projectRunEvent(type: string, payload: unknown): ClientFrame[] {
 			return out;
 		}
 		case RunEventType.AssistantText:
-			return typeof fields.text === "string"
-				? [{ type: "text_delta", text: fields.text }]
+			return isAssistantTextPayload(payload)
+				? [
+						{
+							type: "text_commit",
+							messageId: payload.messageId,
+							text: payload.text,
+						},
+					]
 				: [];
 		case RunEventType.Done:
 			return [{ type: "done" }];

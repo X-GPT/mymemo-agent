@@ -38,8 +38,12 @@ function sseTurn(input: {
 		},
 		{
 			id: "2",
-			event: "text_delta",
-			data: { type: "text_delta", text: input.text },
+			event: "text_commit",
+			data: {
+				type: "text_commit",
+				messageId: `message-${input.runId}`,
+				text: input.text,
+			},
 		},
 	];
 	if (input.includeDone !== false) {

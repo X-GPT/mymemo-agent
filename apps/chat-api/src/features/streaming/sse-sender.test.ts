@@ -28,17 +28,21 @@ describe("HonoSSESender", () => {
 		const writes = [
 			sender.send({
 				id: "a",
-				message: { type: "text_delta", text: "first" },
+				message: { type: "text_commit", messageId: "message-1", text: "first" },
 			}),
 			sender.sendPing(),
 			sender.send({
 				id: "b",
-				message: { type: "text_delta", text: "second" },
+				message: {
+					type: "text_commit",
+					messageId: "message-2",
+					text: "second",
+				},
 			}),
 			sender.sendPing(),
 			sender.send({
 				id: "c",
-				message: { type: "text_delta", text: "third" },
+				message: { type: "text_commit", messageId: "message-3", text: "third" },
 			}),
 		];
 		await Promise.all(writes);
@@ -47,11 +51,11 @@ describe("HonoSSESender", () => {
 
 		const events = Array.from(buf.matchAll(/event: (\S+)/g)).map((m) => m[1]);
 		expect(events).toEqual([
-			"text_delta",
+			"text_commit",
 			"ping",
-			"text_delta",
+			"text_commit",
 			"ping",
-			"text_delta",
+			"text_commit",
 		]);
 		const ids = Array.from(buf.matchAll(/^id: (.+)$/gm)).map((m) => m[1]);
 		expect(ids).toEqual(["a", "b", "c"]);

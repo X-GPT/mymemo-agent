@@ -632,7 +632,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 			{
 				seq: 2,
 				type: RunEventType.AssistantText,
-				payload: { text: "hello" },
+				payload: { messageId: "message-1", text: "hello" },
 			},
 			{ seq: 3, type: RunEventType.Done, payload: {} },
 		]);
@@ -649,10 +649,13 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(res.status).toBe(200);
 		const text = await readSseUntil(
 			res,
-			(chunk) => chunk.includes("text_delta") && chunk.includes("done"),
+			(chunk) => chunk.includes("text_commit") && chunk.includes("done"),
 		);
-		expect(text).toContain("text_delta");
+		expect(text).toContain("event: text_commit");
+		expect(text).toContain("id: 2");
+		expect(text).toContain("message-1");
 		expect(text).toContain("hello");
+		expect(text).not.toContain("text_delta");
 		expect(text).not.toContain("conversation_id");
 		expect(queued).toHaveLength(0);
 	});
@@ -675,7 +678,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 			{
 				seq: 2,
 				type: RunEventType.AssistantText,
-				payload: { text: "finished" },
+				payload: { messageId: "message-1", text: "finished" },
 			},
 			{ seq: 3, type: RunEventType.Done, payload: {} },
 		]);
@@ -692,9 +695,12 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-type")).toContain("text/event-stream");
 		const text = await res.text();
-		expect(text).toContain("text_delta");
+		expect(text).toContain("event: text_commit");
+		expect(text).toContain("id: 2");
+		expect(text).toContain("message-1");
 		expect(text).toContain("finished");
 		expect(text).toContain("done");
+		expect(text).not.toContain("text_delta");
 	});
 
 	it("returns 204 when reconnecting after a terminal event", async () => {
