@@ -17,7 +17,7 @@ export interface RunEventRow {
  */
 export interface RunEventReader {
 	/** Events for `runId` with `seq > afterSeq`, ordered by ascending `seq`. */
-	read(runId: string, afterSeq: number): Promise<RunEventRow[]>;
+	read(runId: string, afterSeq: number, limit?: number): Promise<RunEventRow[]>;
 }
 
 /** Drizzle adapter over `run_events`. The composite PK `(run_id, seq)` is the
@@ -25,8 +25,12 @@ export interface RunEventReader {
 export class DrizzleRunEventReader implements RunEventReader {
 	constructor(private readonly db: Database) {}
 
-	async read(runId: string, afterSeq: number): Promise<RunEventRow[]> {
-		return this.db
+	async read(
+		runId: string,
+		afterSeq: number,
+		limit?: number,
+	): Promise<RunEventRow[]> {
+		const query = this.db
 			.select({
 				seq: runEvents.seq,
 				type: runEvents.type,
@@ -35,5 +39,7 @@ export class DrizzleRunEventReader implements RunEventReader {
 			.from(runEvents)
 			.where(and(eq(runEvents.runId, runId), gt(runEvents.seq, afterSeq)))
 			.orderBy(asc(runEvents.seq));
+
+		return limit === undefined ? query : query.limit(limit);
 	}
 }

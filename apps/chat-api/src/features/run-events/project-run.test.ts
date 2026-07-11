@@ -17,14 +17,20 @@ import type { RunNotifier, RunSubscription } from "./run-notifier";
  */
 class ScriptedReader implements RunEventReader {
 	readonly cursors: number[] = [];
+	readonly limits: Array<number | undefined> = [];
 	private readonly batches: RunEventRow[][];
 
 	constructor(batches: RunEventRow[][]) {
 		this.batches = [...batches];
 	}
 
-	async read(_runId: string, afterSeq: number): Promise<RunEventRow[]> {
+	async read(
+		_runId: string,
+		afterSeq: number,
+		limit?: number,
+	): Promise<RunEventRow[]> {
 		this.cursors.push(afterSeq);
+		this.limits.push(limit);
 		return this.batches.shift() ?? [];
 	}
 }
@@ -416,21 +422,20 @@ describe("projectRun", () => {
 	it("ends a slow connection before its durable backlog can grow unbounded", async () => {
 		const signals: string[] = [];
 		let closes = 0;
-		const reader = new ScriptedReader([
-			[
-				{
-					seq: 1,
-					type: RunEventType.Started,
-					payload: { conversationId: "conv-1", runId: "run-1" },
-				},
-				{
-					seq: 2,
-					type: RunEventType.AssistantText,
-					payload: { messageId: "message-1", text: "replay me" },
-				},
-				{ seq: 3, type: RunEventType.Done, payload: {} },
-			],
-		]);
+		const durableRows: RunEventRow[] = [
+			{
+				seq: 1,
+				type: RunEventType.Started,
+				payload: { conversationId: "conv-1", runId: "run-1" },
+			},
+			{
+				seq: 2,
+				type: RunEventType.AssistantText,
+				payload: { messageId: "message-1", text: "replay me" },
+			},
+			{ seq: 3, type: RunEventType.Done, payload: {} },
+		];
+		const reader = new ScriptedReader([durableRows]);
 
 		const projected = frames(
 			await drain(
@@ -456,6 +461,22 @@ describe("projectRun", () => {
 		]);
 		expect(signals).toContain("durable_backlog");
 		expect(closes).toBe(1);
+		expect(reader.limits).toEqual([1]);
+
+		const replayed = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader: new ScriptedReader([durableRows]),
+					notifier: new InstantNotifier(),
+				}),
+			),
+		);
+		expect(replayed).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{ type: "text_commit", messageId: "message-1", text: "replay me" },
+			{ type: "done" },
+		]);
 	});
 
 	it("bounds committed-message reconciliation by disabling optional Live preview", async () => {

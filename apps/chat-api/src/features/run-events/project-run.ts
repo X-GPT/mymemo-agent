@@ -211,6 +211,8 @@ async function produceRun(
 	const pollTimeoutMs = deps.pollTimeoutMs ?? 1000;
 	const maxPreviewQueueMessages =
 		deps.maxPreviewQueueMessages ?? DEFAULT_MAX_PREVIEW_QUEUE_MESSAGES;
+	const maxDurableQueueMessages =
+		deps.maxDurableQueueMessages ?? DEFAULT_MAX_DURABLE_QUEUE_MESSAGES;
 	const durableSubscription = await deps.notifier.subscribe(runId);
 	const previewStates = new Map<string, PreviewState>();
 	const suppressedMessageIds = new Set<string>();
@@ -263,7 +265,11 @@ async function produceRun(
 		let lastSeq = fromSeq;
 		for (;;) {
 			if (signal.aborted) return;
-			const rows = await deps.reader.read(runId, lastSeq);
+			const rows = await deps.reader.read(
+				runId,
+				lastSeq,
+				maxDurableQueueMessages,
+			);
 			for (const row of rows) {
 				lastSeq = row.seq;
 				const frames = projectRunEvent(row.type, row.payload);

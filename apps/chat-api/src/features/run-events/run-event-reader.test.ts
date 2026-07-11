@@ -84,6 +84,27 @@ describe("DrizzleRunEventReader", () => {
 		]);
 	});
 
+	it("limits each read so projector pagination is memory-bounded", async () => {
+		await appendEvent(db, "run-1", 1, "run_started", { runId: "run-1" });
+		await appendEvent(db, "run-1", 2, "assistant_text", {
+			messageId: "message-1",
+			text: "a",
+		});
+		await appendEvent(db, "run-1", 3, "run_done", {});
+
+		expect(await reader.read("run-1", 0, 2)).toEqual([
+			{ seq: 1, type: "run_started", payload: { runId: "run-1" } },
+			{
+				seq: 2,
+				type: "assistant_text",
+				payload: { messageId: "message-1", text: "a" },
+			},
+		]);
+		expect(await reader.read("run-1", 2, 2)).toEqual([
+			{ seq: 3, type: "run_done", payload: {} },
+		]);
+	});
+
 	it("does not return events belonging to another run", async () => {
 		await seedRun(db, "run-2", "conv-2");
 		await appendEvent(db, "run-1", 1, "assistant_text", {
