@@ -4,6 +4,10 @@ import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
 import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
 import { conversationRuntime, runEvents, runs } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import {
+	InMemoryLiveTextTransport,
+	type LiveTextPublisher,
+} from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
@@ -166,11 +170,16 @@ function buildLoop(
 	worker: Worker,
 	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
+	liveTextPublisher?: LiveTextPublisher,
 ) {
 	return new RunLoop({
 		db: tdb.db,
 		worker,
-		processor: createSdkRunProcessor({ startRunQuery, logger }),
+		processor: createSdkRunProcessor({
+			startRunQuery,
+			logger,
+			liveTextPublisher,
+		}),
 		heartbeatIntervalMs: 15_000,
 		logger,
 	});
@@ -227,6 +236,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	it("keeps sequential envelopes separate, ignores non-text blocks, and skips empty messages", async () => {
 		const worker = buildWorker();
+		const transport = new InMemoryLiveTextTransport();
+		const subscription = await transport.subscribe("run-1");
 		const messages = [
 			...providerEnvelope("provider-1", [
 				{ type: "text", completeText: "ALPHA|" },
@@ -240,7 +251,12 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			]),
 			resultMessage(),
 		];
-		const loop = buildLoop(worker, async () => messageQuery(messages));
+		const loop = buildLoop(
+			worker,
+			async () => messageQuery(messages),
+			silentLogger,
+			transport,
+		);
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
@@ -263,6 +279,14 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		}>;
 		expect(commits.map(({ text }) => text)).toEqual(["ALPHA|BETA", "GAMMA"]);
 		expect(new Set(commits.map(({ messageId }) => messageId)).size).toBe(2);
+		expect(subscription.readAvailable()).toEqual(
+			commits.map(({ messageId, text }) => ({
+				runId: "run-1",
+				messageId,
+				deltaIndex: 0,
+				text,
+			})),
+		);
 	});
 
 	for (const fixture of [
@@ -425,6 +449,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			},
 		};
 		const worker = buildWorker();
+		const transport = new InMemoryLiveTextTransport();
+		const subscription = await transport.subscribe("run-1");
 		const loop = buildLoop(
 			worker,
 			async () =>
@@ -440,6 +466,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					}),
 				]),
 			logger,
+			transport,
 		);
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -467,6 +494,12 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		]);
 		expect(JSON.stringify(warnings)).not.toContain("PREVIEW");
 		expect(JSON.stringify(warnings)).not.toContain("COMMIT");
+		expect(
+			subscription.readAvailable().map(({ deltaIndex, text }) => ({
+				deltaIndex,
+				text,
+			})),
+		).toEqual([{ deltaIndex: 0, text: "PREVIEW" }]);
 	});
 
 	it("passes the claimed run and abort signal to startRunQuery", async () => {

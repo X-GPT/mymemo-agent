@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { InMemoryLiveTextTransport } from "@mymemo/live-text";
 import type { Database } from "@/db/client";
 import { runEvents, runs } from "@/db/schema";
 import { createTestDatabase } from "@/db/testing";
@@ -71,6 +72,190 @@ function frames(projected: ProjectedFrame[]) {
 }
 
 describe("projectRun", () => {
+	it("merges prepared cursorless previews before authoritative commits", async () => {
+		const liveText = new InMemoryLiveTextTransport();
+		const liveSubscription = await liveText.subscribe("run-1");
+		for (const message of [
+			{ messageId: "message-1", deltaIndex: 0, text: "hel" },
+			{ messageId: "message-1", deltaIndex: 1, text: "lo" },
+			{ messageId: "message-2", deltaIndex: 0, text: "again" },
+		]) {
+			await liveText.publish({ runId: "run-1", ...message });
+		}
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "hello" },
+				},
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "again" },
+				},
+				{ seq: 4, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = await drain(
+			projectRun("run-1", 0, {
+				reader,
+				notifier: new InstantNotifier(),
+				liveSubscription,
+			}),
+		);
+
+		expect(projected.map(({ id, frame }) => ({ id, frame }))).toEqual([
+			{
+				id: undefined,
+				frame: { type: "conversation_id", conversationId: "conv-1" },
+			},
+			{
+				id: "1",
+				frame: { type: "run_id", runId: "run-1" },
+			},
+			{
+				id: undefined,
+				frame: {
+					type: "text_delta",
+					messageId: "message-1",
+					deltaIndex: 0,
+					text: "hel",
+				},
+			},
+			{
+				id: undefined,
+				frame: {
+					type: "text_delta",
+					messageId: "message-1",
+					deltaIndex: 1,
+					text: "lo",
+				},
+			},
+			{
+				id: undefined,
+				frame: {
+					type: "text_delta",
+					messageId: "message-2",
+					deltaIndex: 0,
+					text: "again",
+				},
+			},
+			{
+				id: "2",
+				frame: { type: "text_commit", messageId: "message-1", text: "hello" },
+			},
+			{
+				id: "3",
+				frame: { type: "text_commit", messageId: "message-2", text: "again" },
+			},
+			{ id: "4", frame: { type: "done" } },
+		]);
+	});
+
+	it("suppresses queued and late preview after the authoritative commit", async () => {
+		const liveText = new InMemoryLiveTextTransport();
+		const liveSubscription = await liveText.subscribe("run-1");
+		await liveText.publish({
+			runId: "run-1",
+			messageId: "message-1",
+			deltaIndex: 0,
+			text: "provisional",
+		});
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "authoritative" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		expect(
+			frames(
+				await drain(
+					projectRun("run-1", 0, {
+						reader,
+						notifier: new InstantNotifier(),
+						liveSubscription,
+					}),
+				),
+			),
+		).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{
+				type: "text_commit",
+				messageId: "message-1",
+				text: "authoritative",
+			},
+			{ type: "done" },
+		]);
+	});
+
+	it("degrades to durable projection when the Live subscription fails", async () => {
+		let closes = 0;
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "durable" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = await drain(
+			projectRun("run-1", 0, {
+				reader,
+				notifier: new InstantNotifier(),
+				liveSubscription: {
+					readAvailable() {
+						throw new Error("Live transport disconnected");
+					},
+					async waitForMessage() {
+						throw new Error("must not wait after read failure");
+					},
+					async close() {
+						closes++;
+						throw new Error("Live close failed");
+					},
+				},
+			}),
+		);
+
+		expect(frames(projected)).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{ type: "text_commit", messageId: "message-1", text: "durable" },
+			{ type: "done" },
+		]);
+		expect(closes).toBe(1);
+	});
+
 	it("replays committed Assistant messages with durable cursors", async () => {
 		const reader = new ScriptedReader([
 			[

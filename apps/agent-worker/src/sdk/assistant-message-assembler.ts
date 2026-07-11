@@ -32,6 +32,10 @@ export interface AssistantMessageAssemblerOptions {
 	onPartialCompleteMismatch?: () => void;
 }
 
+export type AssistantAssembly =
+	| { type: "partial_text"; messageId: string; text: string }
+	| { type: "message_stop"; commit: AssistantTextPayload | null };
+
 /**
  * Deterministically assembles complete Assistant messages from one ordered SDK
  * stream. Partial provider text is evidence only; completed SDK content blocks
@@ -54,7 +58,7 @@ export class AssistantMessageAssembler {
 		return this.#livePreviewEnabled;
 	}
 
-	accept(message: SDKMessage): AssistantTextPayload | null {
+	accept(message: SDKMessage): AssistantAssembly | null {
 		if (message.type === "assistant") {
 			this.#acceptCompletedBlock(message);
 			return null;
@@ -70,8 +74,7 @@ export class AssistantMessageAssembler {
 				this.#startBlock(event.index, event.content_block.type);
 				return null;
 			case "content_block_delta":
-				this.#acceptDelta(event.index, event.delta);
-				return null;
+				return this.#acceptDelta(event.index, event.delta);
 			case "content_block_stop":
 				this.#stopBlock(event.index);
 				return null;
@@ -87,7 +90,7 @@ export class AssistantMessageAssembler {
 				return null;
 			}
 			case "message_stop":
-				return this.#stopEnvelope();
+				return { type: "message_stop", commit: this.#stopEnvelope() };
 		}
 	}
 
@@ -148,7 +151,10 @@ export class AssistantMessageAssembler {
 		active.activeBlock = { index, type, completed: false };
 	}
 
-	#acceptDelta(index: number, delta: ContentBlockDelta): void {
+	#acceptDelta(
+		index: number,
+		delta: ContentBlockDelta,
+	): AssistantAssembly | null {
 		const block = this.#requireBlock("content_block_delta", index);
 		if (block.completed) {
 			this.#violation("content block delta arrived after assistant completion");
@@ -158,12 +164,18 @@ export class AssistantMessageAssembler {
 				this.#violation("text delta did not match its content block");
 			}
 			const active = this.#active;
-			if (active !== null) active.partialText += delta.text;
-			return;
+			if (active === null) return null;
+			active.partialText += delta.text;
+			return {
+				type: "partial_text",
+				messageId: active.messageId,
+				text: delta.text,
+			};
 		}
 		if (block.type === "text") {
 			this.#violation("non-text delta arrived for a text block");
 		}
+		return null;
 	}
 
 	#acceptCompletedBlock(

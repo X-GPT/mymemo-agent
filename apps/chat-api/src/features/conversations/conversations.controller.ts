@@ -46,11 +46,12 @@ export async function createConversation(
  */
 export async function queueConversationTurn(
 	deps: AppDeps,
-	params: { conversation: ConversationRecord; message: string },
+	params: { conversation: ConversationRecord; message: string; runId?: string },
 ): Promise<{ runId: string }> {
 	return deps.runStore.createQueuedRun({
 		conversation: params.conversation,
 		message: params.message,
+		runId: params.runId,
 	});
 }
 

@@ -11,6 +11,7 @@
 	"dependencies": {
 		"@hono/standard-validator": "^0.1.5",
 		"@mymemo/agent-db": "workspace:*",
+		"@mymemo/live-text": "workspace:*",
 		"@scalar/hono-api-reference": "^0.9.22",
 		"@statsig/statsig-node-core": "^0.19.8",
 		"drizzle-orm": "^0.45.2",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { InMemoryLiveTextTransport } from "@mymemo/live-text";
 import {
 	AgentResultError,
 	consumeAgentStream,
@@ -9,7 +10,11 @@ import {
 	sessionIdFromResult,
 } from "./agent-stream";
 import { AssistantEnvelopeProtocolError } from "./assistant-message-assembler";
-import { assistantBlock, textEnvelope } from "./testing/sdk-message-fixtures";
+import {
+	assistantBlock,
+	streamEvent,
+	textEnvelope,
+} from "./testing/sdk-message-fixtures";
 
 function messageAt(messages: SDKMessage[], index: number): SDKMessage {
 	const message = messages[index];
@@ -97,6 +102,70 @@ describe("isMirrorError", () => {
 });
 
 describe("consumeAgentStream", () => {
+	it("publishes coalesced indexed preview before each sequential Assistant commit", async () => {
+		const transport = new InMemoryLiveTextTransport();
+		const subscription = await transport.subscribe("run-1");
+		const order: string[] = [];
+		const messages = [
+			streamEvent({
+				type: "message_start",
+				message: { id: "provider-1", content: [] },
+			}),
+			streamEvent({
+				type: "content_block_start",
+				index: 0,
+				content_block: { type: "text", text: "" },
+			}),
+			streamEvent({
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "text_delta", text: "hel" },
+			}),
+			streamEvent({
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "text_delta", text: "lo" },
+			}),
+			assistantBlock("provider-1", { type: "text", text: "hello" }),
+			streamEvent({ type: "content_block_stop", index: 0 }),
+			streamEvent({ type: "message_stop" }),
+			...textEnvelope({
+				providerMessageId: "provider-2",
+				completeText: "again",
+			}),
+		];
+
+		await consumeAgentStream({
+			runId: "run-1",
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			liveTextPublisher: {
+				async publish(message) {
+					order.push(`preview:${message.text}`);
+					await transport.publish(message);
+				},
+			},
+			appendAssistantMessage: async (message) => {
+				order.push(`commit:${message.text}`);
+			},
+		});
+
+		const preview = subscription.readAvailable();
+		expect(
+			preview.map(({ deltaIndex, text }) => ({ deltaIndex, text })),
+		).toEqual([
+			{ deltaIndex: 0, text: "hello" },
+			{ deltaIndex: 0, text: "again" },
+		]);
+		expect(preview[0]?.messageId).not.toBe(preview[1]?.messageId);
+		expect(order).toEqual([
+			"preview:hello",
+			"commit:hello",
+			"preview:again",
+			"commit:again",
+		]);
+	});
+
 	it("commits only the complete provider envelope and ignores the result echo", async () => {
 		const appended: Array<{ messageId: string; text: string }> = [];
 		const controller = new AbortController();
@@ -221,6 +290,8 @@ describe("consumeAgentStream", () => {
 
 	it("fails closed when a nominally successful stream ends before message_stop", async () => {
 		const controller = new AbortController();
+		const liveText = new InMemoryLiveTextTransport();
+		const subscription = await liveText.subscribe("run-1");
 		const envelope = textEnvelope({ completeText: "uncommitted" });
 		const query = fakeQuery(
 			envelope.slice(0, 5).map((message) => ({ message })),
@@ -228,11 +299,15 @@ describe("consumeAgentStream", () => {
 
 		await expect(
 			consumeAgentStream({
+				runId: "run-1",
 				query,
 				signal: controller.signal,
+				liveTextPublisher: liveText,
 				appendAssistantMessage: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
+		await Bun.sleep(60);
+		expect(subscription.readAvailable()).toEqual([]);
 	});
 
 	it("treats an error-bearing Assistant callback as provider rejection", async () => {

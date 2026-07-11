@@ -5,6 +5,7 @@ import { validator as zValidator } from "hono-openapi";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import { projectRun } from "@/features/run-events";
+import { prepareLiveTextSubscription } from "@/features/run-events/prepare-live-text-subscription";
 import { ActiveRunExistsError } from "@/features/run-store";
 import { HonoSSESender } from "@/features/streaming/sse-sender";
 import {
@@ -164,13 +165,20 @@ app.post(
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
 
+		const runId = crypto.randomUUID();
+		const liveSubscription = await prepareLiveTextSubscription(
+			c.var.deps.liveTextSubscriber,
+			runId,
+		);
 		let queuedRun: { runId: string };
 		try {
 			queuedRun = await queueConversationTurn(c.var.deps, {
 				conversation,
 				message: event.text,
+				runId,
 			});
 		} catch (error) {
+			await liveSubscription?.close().catch(() => {});
 			if (error instanceof ActiveRunExistsError) {
 				return c.json(
 					{
@@ -201,6 +209,7 @@ app.post(
 					for await (const projected of projectRun(queuedRun.runId, 0, {
 						reader: c.var.deps.runEventReader,
 						notifier: c.var.deps.runNotifier,
+						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
 					})) {
 						if (requestSignal.aborted) break;
