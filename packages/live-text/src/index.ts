@@ -14,12 +14,20 @@ export const LiveTextMessageSchema = z
 
 export type LiveTextMessage = z.infer<typeof LiveTextMessageSchema>;
 
+export type LiveTextDropReport =
+	| { type: "message_ids"; messageIds: string[] }
+	| { type: "tracking_overflow" };
+
 export interface LiveTextPublisher {
-	publish(message: LiveTextMessage): Promise<void>;
+	publish(
+		message: LiveTextMessage,
+		options?: { signal?: AbortSignal },
+	): Promise<void>;
 }
 
 export interface LiveTextSubscription {
 	readAvailable(): LiveTextMessage[];
+	readDroppedMessages(): LiveTextDropReport;
 	waitForMessage(options?: {
 		timeoutMs?: number;
 		signal?: AbortSignal;
@@ -33,7 +41,9 @@ export interface LiveTextSubscriber {
 
 class InMemoryLiveTextSubscription implements LiveTextSubscription {
 	readonly #buffer: LiveTextMessage[] = [];
+	readonly #droppedMessageIds = new Set<string>();
 	readonly #waiters = new Set<(available: boolean) => void>();
+	#droppedMessageIdsOverflowed = false;
 	#closed = false;
 
 	constructor(
@@ -43,7 +53,23 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 	) {}
 
 	enqueue(message: LiveTextMessage): void {
-		if (this.#closed || this.#buffer.length >= this.maxBufferedMessages) return;
+		if (this.#closed) return;
+		if (this.#buffer.length >= this.maxBufferedMessages) {
+			if (
+				!this.#droppedMessageIdsOverflowed &&
+				!this.#droppedMessageIds.has(message.messageId)
+			) {
+				if (this.#droppedMessageIds.size >= this.maxBufferedMessages) {
+					this.#droppedMessageIds.clear();
+					this.#droppedMessageIdsOverflowed = true;
+				} else {
+					this.#droppedMessageIds.add(message.messageId);
+				}
+			}
+			for (const wake of this.#waiters) wake(true);
+			this.#waiters.clear();
+			return;
+		}
 		this.#buffer.push(message);
 		for (const wake of this.#waiters) wake(true);
 		this.#waiters.clear();
@@ -52,6 +78,18 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 	readAvailable(): LiveTextMessage[] {
 		if (this.#closed) return [];
 		return this.#buffer.splice(0);
+	}
+
+	readDroppedMessages(): LiveTextDropReport {
+		if (this.#closed) return { type: "message_ids", messageIds: [] };
+		if (this.#droppedMessageIdsOverflowed) {
+			this.#droppedMessageIdsOverflowed = false;
+			this.#droppedMessageIds.clear();
+			return { type: "tracking_overflow" };
+		}
+		const messageIds = [...this.#droppedMessageIds];
+		this.#droppedMessageIds.clear();
+		return { type: "message_ids", messageIds };
 	}
 
 	async waitForMessage(
@@ -85,6 +123,8 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#buffer.length = 0;
+		this.#droppedMessageIds.clear();
+		this.#droppedMessageIdsOverflowed = false;
 		for (const wake of this.#waiters) wake(false);
 		this.#waiters.clear();
 		this.onClose();
@@ -106,8 +146,13 @@ export class InMemoryLiveTextTransport
 		}
 	}
 
-	async publish(message: LiveTextMessage): Promise<void> {
+	async publish(
+		message: LiveTextMessage,
+		options: { signal?: AbortSignal } = {},
+	): Promise<void> {
+		if (options.signal?.aborted) return;
 		const parsed = LiveTextMessageSchema.parse(message);
+		if (options.signal?.aborted) return;
 		for (const subscription of this.#subscriptions.get(parsed.runId) ?? []) {
 			subscription.enqueue(parsed);
 		}
@@ -131,8 +176,16 @@ export class InMemoryLiveTextTransport
 	}
 }
 
+export class LiveTextDisabledError extends Error {
+	override name = "LiveTextDisabledError" as const;
+
+	constructor() {
+		super("Live text is disabled");
+	}
+}
+
 export const disabledLiveTextSubscriber: LiveTextSubscriber = {
 	async subscribe() {
-		throw new Error("Live text is disabled");
+		throw new LiveTextDisabledError();
 	},
 };

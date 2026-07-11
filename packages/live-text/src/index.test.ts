@@ -94,4 +94,59 @@ describe("InMemoryLiveTextTransport", () => {
 
 		await expect(waiting).resolves.toBe(false);
 	});
+
+	it("reports dropped message ids when the per-connection buffer overflows", async () => {
+		const transport = new InMemoryLiveTextTransport(1);
+		const subscription = await transport.subscribe("run-1");
+
+		await transport.publish({
+			runId: "run-1",
+			messageId: "message-1",
+			deltaIndex: 0,
+			text: "prefix",
+		});
+		await transport.publish({
+			runId: "run-1",
+			messageId: "message-1",
+			deltaIndex: 1,
+			text: "dropped",
+		});
+
+		expect(subscription.readDroppedMessages()).toEqual({
+			type: "message_ids",
+			messageIds: ["message-1"],
+		});
+		expect(subscription.readDroppedMessages()).toEqual({
+			type: "message_ids",
+			messageIds: [],
+		});
+		expect(subscription.readAvailable()).toHaveLength(1);
+	});
+
+	it("bounds dropped-id tracking when many messages overflow one connection", async () => {
+		const transport = new InMemoryLiveTextTransport(1);
+		const subscription = await transport.subscribe("run-1");
+		await transport.publish({
+			runId: "run-1",
+			messageId: "buffered",
+			deltaIndex: 0,
+			text: "buffered",
+		});
+		for (const messageId of ["dropped-1", "dropped-2"]) {
+			await transport.publish({
+				runId: "run-1",
+				messageId,
+				deltaIndex: 0,
+				text: "dropped",
+			});
+		}
+
+		expect(subscription.readDroppedMessages()).toEqual({
+			type: "tracking_overflow",
+		});
+		expect(subscription.readDroppedMessages()).toEqual({
+			type: "message_ids",
+			messageIds: [],
+		});
+	});
 });

@@ -1,8 +1,12 @@
 import { expect, it } from "bun:test";
-import type { LiveTextSubscription } from "@mymemo/live-text";
+import {
+	disabledLiveTextSubscriber,
+	type LiveTextSubscription,
+} from "@mymemo/live-text";
 import { prepareLiveTextSubscription } from "./prepare-live-text-subscription";
 
 it("falls back when subscription setup throws synchronously", async () => {
+	const signals: string[] = [];
 	await expect(
 		prepareLiveTextSubscription(
 			{
@@ -11,8 +15,26 @@ it("falls back when subscription setup throws synchronously", async () => {
 				},
 			},
 			"run-1",
+			{
+				onSignal: (signal) => {
+					signals.push(signal);
+					throw new Error("telemetry unavailable");
+				},
+			},
 		),
 	).resolves.toBeNull();
+	expect(signals).toEqual(["degraded"]);
+});
+
+it("reports disabled configuration without surfacing an error", async () => {
+	const signals: string[] = [];
+
+	await expect(
+		prepareLiveTextSubscription(disabledLiveTextSubscriber, "run-1", {
+			onSignal: (signal) => signals.push(signal),
+		}),
+	).resolves.toBeNull();
+	expect(signals).toEqual(["disabled"]);
 });
 
 it("falls back after a bounded wait and closes a subscription that arrives late", async () => {
@@ -27,12 +49,13 @@ it("falls back after a bounded wait and closes a subscription that arrives late"
 			},
 		},
 		"run-1",
-		1,
+		{ timeoutMs: 1 },
 	);
 
 	await expect(prepared).resolves.toBeNull();
 	resolveSubscription?.({
 		readAvailable: () => [],
+		readDroppedMessages: () => ({ type: "message_ids", messageIds: [] }),
 		waitForMessage: async () => false,
 		close: async () => {
 			closes++;

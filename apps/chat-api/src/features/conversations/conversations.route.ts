@@ -57,6 +57,13 @@ function isTerminalRunStatus(status: string): boolean {
 	return status === "done" || status === "error" || status === "canceled";
 }
 
+function liveTextSignalHandler(
+	logger: { warn: (event: Record<string, unknown>) => void },
+	message: string,
+): (signal: string) => void {
+	return (signal) => logger.warn({ message, signal });
+}
+
 // POST /v1/conversations — create a conversation, freezing its document scope.
 app.post(
 	"/",
@@ -169,6 +176,12 @@ app.post(
 		const liveSubscription = await prepareLiveTextSubscription(
 			c.var.deps.liveTextSubscriber,
 			runId,
+			{
+				onSignal: liveTextSignalHandler(
+					c.var.logger,
+					"Live preview setup state changed",
+				),
+			},
 		);
 		let queuedRun: { runId: string };
 		try {
@@ -211,6 +224,10 @@ app.post(
 						notifier: c.var.deps.runNotifier,
 						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
+						onLiveTextSignal: liveTextSignalHandler(
+							c.var.logger,
+							"Live preview projection state changed",
+						),
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({
@@ -283,6 +300,18 @@ app.get(
 		if (isTerminalRunStatus(run.status) && afterSeq >= run.nextEventSeq - 1) {
 			return new Response(null, { status: 204 });
 		}
+		const liveSubscription = isTerminalRunStatus(run.status)
+			? null
+			: await prepareLiveTextSubscription(
+					c.var.deps.liveTextSubscriber,
+					runId,
+					{
+						onSignal: liveTextSignalHandler(
+							c.var.logger,
+							"Live preview setup state changed",
+						),
+					},
+				);
 
 		const requestSignal = c.req.raw.signal;
 		return streamSSE(
@@ -302,7 +331,12 @@ app.get(
 					for await (const projected of projectRun(runId, afterSeq, {
 						reader: c.var.deps.runEventReader,
 						notifier: c.var.deps.runNotifier,
+						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
+						onLiveTextSignal: liveTextSignalHandler(
+							c.var.logger,
+							"Live preview projection state changed",
+						),
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({

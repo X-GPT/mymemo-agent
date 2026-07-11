@@ -17,15 +17,27 @@ import type { RunNotifier, RunSubscription } from "./run-notifier";
  */
 class ScriptedReader implements RunEventReader {
 	readonly cursors: number[] = [];
+	readonly limits: number[] = [];
 	private readonly batches: RunEventRow[][];
 
 	constructor(batches: RunEventRow[][]) {
 		this.batches = [...batches];
 	}
 
-	async read(_runId: string, afterSeq: number): Promise<RunEventRow[]> {
+	async read(
+		_runId: string,
+		afterSeq: number,
+		limit: number,
+	): Promise<RunEventRow[]> {
+		if (!Number.isSafeInteger(limit) || limit < 1) {
+			throw new Error("Run event read limit must be a positive integer");
+		}
 		this.cursors.push(afterSeq);
-		return this.batches.shift() ?? [];
+		this.limits.push(limit);
+		const batch = this.batches.shift() ?? [];
+		if (batch.length <= limit) return batch;
+		this.batches.unshift(batch.slice(limit));
+		return batch.slice(0, limit);
 	}
 }
 
@@ -59,6 +71,40 @@ class BlockingNotifier implements RunNotifier {
 	}
 }
 
+class TriggerNotifier implements RunNotifier {
+	closed = 0;
+	#pending = false;
+	#resolve: (() => void) | undefined;
+
+	async subscribe(): Promise<RunSubscription> {
+		return {
+			waitForWakeup: async () => {
+				if (this.#pending) {
+					this.#pending = false;
+					return;
+				}
+				await new Promise<void>((resolve) => {
+					this.#resolve = resolve;
+				});
+			},
+			close: async () => {
+				this.closed++;
+				this.#resolve?.();
+			},
+		};
+	}
+
+	wake(): void {
+		if (this.#resolve) {
+			const resolve = this.#resolve;
+			this.#resolve = undefined;
+			resolve();
+			return;
+		}
+		this.#pending = true;
+	}
+}
+
 async function drain(
 	gen: AsyncGenerator<ProjectedFrame>,
 ): Promise<ProjectedFrame[]> {
@@ -69,6 +115,10 @@ async function drain(
 
 function frames(projected: ProjectedFrame[]) {
 	return projected.map((p) => p.frame);
+}
+
+function emptyDropReport() {
+	return { type: "message_ids" as const, messageIds: [] };
 }
 
 describe("projectRun", () => {
@@ -208,6 +258,635 @@ describe("projectRun", () => {
 		]);
 	});
 
+	it("suppresses an incomplete preview when its connection buffer overflows", async () => {
+		const liveText = new InMemoryLiveTextTransport(1);
+		const liveSubscription = await liveText.subscribe("run-1");
+		await liveText.publish({
+			runId: "run-1",
+			messageId: "message-1",
+			deltaIndex: 0,
+			text: "prefix",
+		});
+		await liveText.publish({
+			runId: "run-1",
+			messageId: "message-1",
+			deltaIndex: 1,
+			text: "dropped",
+		});
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "prefixdropped" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		expect(
+			frames(
+				await drain(
+					projectRun("run-1", 0, {
+						reader,
+						notifier: new InstantNotifier(),
+						liveSubscription,
+						onLiveTextSignal: (signal) => signals.push(signal),
+					}),
+				),
+			),
+		).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{ type: "text_commit", messageId: "message-1", text: "prefixdropped" },
+			{ type: "done" },
+		]);
+		expect(signals).toContain("queue_overflow");
+	});
+
+	it("bounds preview waiting behind a slow SSE consumer without delaying commits", async () => {
+		const liveText = new InMemoryLiveTextTransport();
+		const liveSubscription = await liveText.subscribe("run-1");
+		for (const messageId of ["message-1", "message-2"]) {
+			await liveText.publish({
+				runId: "run-1",
+				messageId,
+				deltaIndex: 0,
+				text: `preview ${messageId}`,
+			});
+		}
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "complete first" },
+				},
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "complete second" },
+				},
+				{ seq: 4, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription,
+					maxPreviewQueueMessages: 1,
+					onLiveTextSignal: (signal) => {
+						signals.push(signal);
+						throw new Error("telemetry unavailable");
+					},
+				}),
+			),
+		);
+
+		expect(
+			projected
+				.filter((frame) => frame.type === "text_commit")
+				.map((frame) => frame.text),
+		).toEqual(["complete first", "complete second"]);
+		expect(signals).toContain("queue_overflow");
+	});
+
+	it("bounds reconciliation state even when the SSE consumer keeps up", async () => {
+		const liveBatches = [
+			[{ runId: "run-1", messageId: "message-1", deltaIndex: 0, text: "a" }],
+			[{ runId: "run-1", messageId: "message-1", deltaIndex: 1, text: "b" }],
+			[{ runId: "run-1", messageId: "message-1", deltaIndex: 2, text: "c" }],
+		];
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[],
+			[],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "abc" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription: {
+						readAvailable: () => liveBatches.shift() ?? [],
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => true,
+						close: async () => {},
+					},
+					maxPreviewQueueMessages: 2,
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(
+			projected.filter((frame) => frame.type === "text_delta"),
+		).toHaveLength(2);
+		expect(signals).toContain("queue_overflow");
+		expect(projected).toContainEqual({
+			type: "text_commit",
+			messageId: "message-1",
+			text: "abc",
+		});
+	});
+
+	it("ends a slow connection before its durable backlog can grow unbounded", async () => {
+		const signals: string[] = [];
+		let closes = 0;
+		const durableRows: RunEventRow[] = [
+			{
+				seq: 1,
+				type: RunEventType.Started,
+				payload: { conversationId: "conv-1", runId: "run-1" },
+			},
+			{
+				seq: 2,
+				type: RunEventType.AssistantText,
+				payload: { messageId: "message-1", text: "replay me" },
+			},
+			{ seq: 3, type: RunEventType.Done, payload: {} },
+		];
+		const reader = new ScriptedReader([durableRows]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					maxDurableQueueMessages: 1,
+					liveSubscription: {
+						readAvailable: () => [],
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => false,
+						close: async () => {
+							closes++;
+						},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+		]);
+		expect(signals).toContain("durable_backlog");
+		expect(closes).toBe(1);
+		expect(reader.limits).toEqual([1]);
+
+		const replayed = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader: new ScriptedReader([durableRows]),
+					notifier: new InstantNotifier(),
+				}),
+			),
+		);
+		expect(replayed).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{ type: "text_commit", messageId: "message-1", text: "replay me" },
+			{ type: "done" },
+		]);
+	});
+
+	it("bounds committed-message reconciliation by disabling optional Live preview", async () => {
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "first" },
+				},
+			],
+			[
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "second" },
+				},
+				{ seq: 4, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					maxPreviewQueueMessages: 1,
+					liveSubscription: {
+						readAvailable: () => [],
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => true,
+						close: async () => {},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(
+			projected
+				.filter((frame) => frame.type === "text_commit")
+				.map((frame) => frame.text),
+		).toEqual(["first", "second"]);
+		expect(signals).toContain("reconciliation_overflow");
+	});
+
+	it("ignores a consistent duplicate but suppresses an inconsistent duplicate", async () => {
+		const liveText = new InMemoryLiveTextTransport();
+		const liveSubscription = await liveText.subscribe("run-1");
+		for (const message of [
+			{ messageId: "message-1", deltaIndex: 0, text: "a" },
+			{ messageId: "message-1", deltaIndex: 0, text: "a" },
+			{ messageId: "message-1", deltaIndex: 1, text: "b" },
+			{ messageId: "message-2", deltaIndex: 0, text: "x" },
+			{ messageId: "message-2", deltaIndex: 0, text: "different" },
+			{ messageId: "message-2", deltaIndex: 1, text: "ignored" },
+		]) {
+			await liveText.publish({ runId: "run-1", ...message });
+		}
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "ab" },
+				},
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "xignored" },
+				},
+				{ seq: 4, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription,
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected.filter((frame) => frame.type === "text_delta")).toEqual([
+			{ type: "text_delta", messageId: "message-1", deltaIndex: 0, text: "a" },
+			{ type: "text_delta", messageId: "message-1", deltaIndex: 1, text: "b" },
+		]);
+		expect(signals).toEqual(["duplicate_inconsistency"]);
+	});
+
+	it("suppresses malformed preview for its message and continues durable projection", async () => {
+		let read = false;
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "complete" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription: {
+						readAvailable: () => {
+							if (read) return [];
+							read = true;
+							return [
+								{
+									runId: "run-1",
+									messageId: "message-1",
+									deltaIndex: "bad",
+									text: "must not escape",
+								},
+							] as never;
+						},
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => true,
+						close: async () => {},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{ type: "text_commit", messageId: "message-1", text: "complete" },
+			{ type: "done" },
+		]);
+		expect(signals).toEqual(["malformed_message"]);
+	});
+
+	it("suppresses nonzero first indexes and mid-message gaps", async () => {
+		const liveText = new InMemoryLiveTextTransport();
+		const liveSubscription = await liveText.subscribe("run-1");
+		for (const message of [
+			{ messageId: "message-1", deltaIndex: 4, text: "suffix" },
+			{ messageId: "message-2", deltaIndex: 0, text: "prefix" },
+			{ messageId: "message-2", deltaIndex: 2, text: "after gap" },
+		]) {
+			await liveText.publish({ runId: "run-1", ...message });
+		}
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "complete first" },
+				},
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "complete second" },
+				},
+				{ seq: 4, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription,
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected.filter((frame) => frame.type === "text_delta")).toEqual(
+			[],
+		);
+		expect(signals).toEqual(["gap", "gap"]);
+		expect(
+			projected
+				.filter((frame) => frame.type === "text_commit")
+				.map(({ text }) => text),
+		).toEqual(["complete first", "complete second"]);
+	});
+
+	it("signals and ignores a delayed delta after its durable commit", async () => {
+		const signals: string[] = [];
+		let read = false;
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "authoritative" },
+				},
+			],
+			[{ seq: 3, type: RunEventType.Done, payload: {} }],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription: {
+						readAvailable: () => {
+							if (read) return [];
+							read = true;
+							return [
+								{
+									runId: "run-1",
+									messageId: "message-1",
+									deltaIndex: 0,
+									text: "late",
+								},
+							];
+						},
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => true,
+						close: async () => {},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{ type: "text_commit", messageId: "message-1", text: "authoritative" },
+			{ type: "done" },
+		]);
+		expect(signals).toEqual(["late_delta"]);
+	});
+
+	it("disables later Live preview after partial and complete text mismatch", async () => {
+		const liveBatches = [
+			[
+				{
+					runId: "run-1",
+					messageId: "message-1",
+					deltaIndex: 0,
+					text: "partial",
+				},
+			],
+			[
+				{
+					runId: "run-1",
+					messageId: "message-2",
+					deltaIndex: 0,
+					text: "must be suppressed",
+				},
+			],
+		];
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "authoritative" },
+				},
+			],
+			[
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "second commit" },
+				},
+				{ seq: 4, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription: {
+						readAvailable: () => liveBatches.shift() ?? [],
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => true,
+						close: async () => {},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{
+				type: "text_delta",
+				messageId: "message-1",
+				deltaIndex: 0,
+				text: "partial",
+			},
+			{ type: "text_commit", messageId: "message-1", text: "authoritative" },
+			{ type: "text_commit", messageId: "message-2", text: "second commit" },
+			{ type: "done" },
+		]);
+		expect(signals).toContain("partial_complete_mismatch");
+	});
+
+	it("lets a terminal event purge queued preview while the client is slow", async () => {
+		const liveText = new InMemoryLiveTextTransport();
+		const liveSubscription = await liveText.subscribe("run-1");
+		for (const [deltaIndex, text] of ["first", "queued"].entries()) {
+			await liveText.publish({
+				runId: "run-1",
+				messageId: "message-1",
+				deltaIndex,
+				text,
+			});
+		}
+		const notifier = new TriggerNotifier();
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[{ seq: 2, type: RunEventType.Done, payload: {} }],
+		]);
+		const gen = projectRun("run-1", 0, {
+			reader,
+			notifier,
+			liveSubscription,
+			onLiveTextSignal: (signal) => signals.push(signal),
+		});
+
+		await gen.next();
+		await gen.next();
+		expect((await gen.next()).value?.frame).toMatchObject({
+			type: "text_delta",
+			text: "first",
+		});
+		notifier.wake();
+		for (
+			let attempt = 0;
+			attempt < 10 && reader.cursors.length < 2;
+			attempt++
+		) {
+			await Bun.sleep(1);
+		}
+
+		expect(reader.cursors).toHaveLength(2);
+		expect((await gen.next()).value?.frame).toEqual({ type: "done" });
+		expect(signals).toContain("terminal_open_preview");
+	});
+
 	it("degrades to durable projection when the Live subscription fails", async () => {
 		let closes = 0;
 		const reader = new ScriptedReader([
@@ -236,6 +915,7 @@ describe("projectRun", () => {
 					readAvailable() {
 						throw new Error("Live transport disconnected");
 					},
+					readDroppedMessages: emptyDropReport,
 					async waitForMessage() {
 						throw new Error("must not wait after read failure");
 					},
@@ -254,6 +934,96 @@ describe("projectRun", () => {
 			{ type: "done" },
 		]);
 		expect(closes).toBe(1);
+	});
+
+	it("keeps a healthy Live subscription after an ordinary idle timeout", async () => {
+		let reads = 0;
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "after idle" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+		const signals: string[] = [];
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new BlockingNotifier(),
+					pollTimeoutMs: 1,
+					liveSubscription: {
+						readAvailable: () => {
+							reads++;
+							return reads === 2
+								? [
+										{
+											runId: "run-1",
+											messageId: "message-1",
+											deltaIndex: 0,
+											text: "after idle",
+										},
+									]
+								: [];
+						},
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => false,
+						close: async () => {},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected).toContainEqual({
+			type: "text_delta",
+			messageId: "message-1",
+			deltaIndex: 0,
+			text: "after idle",
+		});
+		expect(signals).not.toContain("subscriber_failure");
+	});
+
+	it("waits for asynchronous Live cleanup after yielding the terminal frame", async () => {
+		let resolveClose: () => void = () => {};
+		const closeFinished = new Promise<void>((resolve) => {
+			resolveClose = resolve;
+		});
+		const reader = new ScriptedReader([
+			[{ seq: 1, type: RunEventType.Done, payload: {} }],
+		]);
+		const gen = projectRun("run-1", 1, {
+			reader,
+			notifier: new InstantNotifier(),
+			liveSubscription: {
+				readAvailable: () => [],
+				readDroppedMessages: emptyDropReport,
+				waitForMessage: async () => false,
+				close: async () => closeFinished,
+			},
+		});
+
+		expect((await gen.next()).value?.frame).toEqual({ type: "done" });
+		const finished = gen.next();
+		expect(
+			await Promise.race([
+				finished.then(() => "finished"),
+				Bun.sleep(5).then(() => "closing"),
+			]),
+		).toBe("closing");
+		resolveClose();
+		await expect(finished).resolves.toEqual({ done: true, value: undefined });
 	});
 
 	it("replays committed Assistant messages with durable cursors", async () => {

@@ -166,6 +166,44 @@ describe("consumeAgentStream", () => {
 		]);
 	});
 
+	it("commits exact durable text and releases a stalled publisher without blocking the SDK stream", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
+		let publicationAborted = false;
+		const outcome = await consumeAgentStream({
+			runId: "run-1",
+			query: fakeQuery(
+				textEnvelope({ completeText: "authoritative" }).map((message) => ({
+					message,
+				})),
+			),
+			signal: new AbortController().signal,
+			liveTextPublisher: {
+				async publish(_message, options) {
+					await new Promise<void>((resolve) => {
+						options?.signal?.addEventListener(
+							"abort",
+							() => {
+								publicationAborted = true;
+								resolve();
+							},
+							{ once: true },
+						);
+					});
+				},
+			},
+			appendAssistantMessage: async (message) => {
+				appended.push(message);
+			},
+		});
+
+		expect(outcome).toEqual({
+			sessionId: null,
+			mirrorErrorObserved: false,
+		});
+		expect(appended.map(({ text }) => text)).toEqual(["authoritative"]);
+		expect(publicationAborted).toBe(true);
+	});
+
 	it("commits only the complete provider envelope and ignores the result echo", async () => {
 		const appended: Array<{ messageId: string; text: string }> = [];
 		const controller = new AbortController();
