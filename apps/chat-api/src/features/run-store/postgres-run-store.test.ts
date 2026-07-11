@@ -70,6 +70,19 @@ describe("PostgresRunStore", () => {
 		});
 	});
 
+	it("admits a caller-prepared Run id transactionally", async () => {
+		const result = await store.createQueuedRun({
+			conversation,
+			message: "hello",
+			runId: "prepared-run-id",
+		});
+
+		expect(result).toEqual({ runId: "prepared-run-id" });
+		await expect(
+			loadRunStartedTx(tdb.db, { runId: "prepared-run-id" }),
+		).resolves.toMatchObject({ message: "hello" });
+	});
+
 	// Guards the write/read contract across the trust boundary: the worker's
 	// orchestration loads the turn through the shared helper, so what admission
 	// writes must be exactly what it reads back.

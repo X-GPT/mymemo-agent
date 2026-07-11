@@ -1,3 +1,7 @@
+import {
+	disabledLiveTextSubscriber,
+	type LiveTextSubscriber,
+} from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import { createDatabase } from "./db/client";
@@ -33,6 +37,8 @@ export interface AppDeps {
 	runEventReader: RunEventReader;
 	/** Run-event wake-up source for live SSE projection. */
 	runNotifier: RunNotifier;
+	/** Optional ephemeral Assistant-text preview lane. */
+	liveTextSubscriber: LiveTextSubscriber;
 	/**
 	 * Server-side gate controlling who may create new agent work. Consulted on
 	 * the new-work paths (conversation create, `user.message`) after identity is
@@ -57,6 +63,7 @@ export function createDeps(config: ApiConfig): AppDeps {
 		runStore,
 		runEventReader,
 		runNotifier,
+		liveTextSubscriber: disabledLiveTextSubscriber,
 		exposureGate: createExposureGate(config),
 	};
 }

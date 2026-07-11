@@ -1,3 +1,4 @@
+import type { LiveTextMessage, LiveTextSubscription } from "@mymemo/live-text";
 import { projectRunEvent } from "./project-run-event";
 import type { RunEventReader } from "./run-event-reader";
 import type { ClientFrame } from "./run-event-types";
@@ -11,7 +12,7 @@ import type { RunNotifier } from "./run-notifier";
  * keeps the previous durable id and replay can deliver the whole fanout again.
  */
 export interface ProjectedFrame {
-	seq: number;
+	seq?: number;
 	id?: string;
 	frame: ClientFrame;
 }
@@ -26,6 +27,8 @@ export interface ProjectRunDeps {
 	 * notifications; keep it short (1-2s). Default 1000ms.
 	 */
 	pollTimeoutMs?: number;
+	/** Prepared before Run admission on the original request only. */
+	liveSubscription?: LiveTextSubscription;
 }
 
 /**
@@ -47,7 +50,23 @@ export async function* projectRun(
 	deps: ProjectRunDeps,
 ): AsyncGenerator<ProjectedFrame> {
 	const pollTimeoutMs = deps.pollTimeoutMs ?? 1000;
-	const subscription = await deps.notifier.subscribe(runId);
+	const durableSubscription = await deps.notifier.subscribe(runId);
+	const expectedDeltaIndex = new Map<string, number>();
+	const suppressedMessageIds = new Set<string>();
+	const committedMessageIds = new Set<string>();
+	let liveSubscription = deps.liveSubscription;
+	let previewReady = false;
+	let durableWakeup: Promise<boolean> | undefined;
+	const disableLiveSubscription = async () => {
+		const subscription = liveSubscription;
+		liveSubscription = undefined;
+		if (!subscription) return;
+		try {
+			await subscription.close();
+		} catch {
+			// Live preview is optional; durable projection stays authoritative.
+		}
+	};
 	try {
 		let lastSeq = fromSeq;
 		for (;;) {
@@ -56,6 +75,13 @@ export async function* projectRun(
 			for (const row of rows) {
 				lastSeq = row.seq;
 				const frames = projectRunEvent(row.type, row.payload);
+				for (const frame of frames) {
+					if (frame.type === "text_commit") {
+						committedMessageIds.add(frame.messageId);
+						expectedDeltaIndex.delete(frame.messageId);
+						suppressedMessageIds.delete(frame.messageId);
+					}
+				}
 				for (const [index, frame] of frames.entries()) {
 					const isLastSibling = index === frames.length - 1;
 					yield {
@@ -66,13 +92,93 @@ export async function* projectRun(
 					if (deps.signal?.aborted) return;
 				}
 				if (TERMINAL_RUN_EVENT_TYPES.has(row.type)) return;
+				if (frames.some((frame) => frame.type === "run_id"))
+					previewReady = true;
 			}
-			if (!(await waitForWakeup(subscription, pollTimeoutMs, deps.signal))) {
+			if (previewReady && liveSubscription) {
+				let available: LiveTextMessage[];
+				try {
+					available = liveSubscription.readAvailable();
+				} catch {
+					await disableLiveSubscription();
+					available = [];
+				}
+				for (const message of available) {
+					if (
+						message.runId !== runId ||
+						committedMessageIds.has(message.messageId) ||
+						suppressedMessageIds.has(message.messageId)
+					) {
+						continue;
+					}
+					const expected = expectedDeltaIndex.get(message.messageId) ?? 0;
+					if (message.deltaIndex !== expected) {
+						expectedDeltaIndex.delete(message.messageId);
+						suppressedMessageIds.add(message.messageId);
+						continue;
+					}
+					expectedDeltaIndex.set(message.messageId, expected + 1);
+					yield {
+						frame: {
+							type: "text_delta",
+							messageId: message.messageId,
+							deltaIndex: message.deltaIndex,
+							text: message.text,
+						},
+					};
+					if (deps.signal?.aborted) return;
+				}
+			}
+			if (!liveSubscription) {
+				if (
+					!(await waitForWakeup(
+						durableSubscription,
+						pollTimeoutMs,
+						deps.signal,
+					))
+				) {
+					return;
+				}
+				continue;
+			}
+
+			durableWakeup ??= waitForWakeup(
+				durableSubscription,
+				pollTimeoutMs,
+				deps.signal,
+			);
+			const liveWaitController = new AbortController();
+			const onAbort = () => liveWaitController.abort();
+			deps.signal?.addEventListener("abort", onAbort, { once: true });
+			const currentLiveSubscription = liveSubscription;
+			const winner = await Promise.race([
+				durableWakeup.then((open) => ({ source: "durable" as const, open })),
+				currentLiveSubscription
+					.waitForMessage({
+						timeoutMs: pollTimeoutMs,
+						signal: liveWaitController.signal,
+					})
+					.then(
+						(open) => ({ source: "live" as const, open, failed: false }),
+						() => ({ source: "live" as const, open: false, failed: true }),
+					),
+			]);
+			liveWaitController.abort();
+			deps.signal?.removeEventListener("abort", onAbort);
+			if (winner.source === "durable") durableWakeup = undefined;
+			if (winner.source === "live" && winner.failed) {
+				await disableLiveSubscription();
+			}
+			if (!winner.open && deps.signal?.aborted) {
 				return;
 			}
 		}
 	} finally {
-		await subscription.close();
+		try {
+			await durableSubscription.close();
+		} finally {
+			await disableLiveSubscription();
+		}
 	}
 }
 

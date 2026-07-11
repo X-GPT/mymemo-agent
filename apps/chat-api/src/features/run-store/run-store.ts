@@ -60,6 +60,8 @@ export class ActiveRunExistsError extends ActiveRunConflictError {
 export interface CreateQueuedRunInput {
 	conversation: ConversationRecord;
 	message: string;
+	/** A Live subscription may be prepared for this id before admission. */
+	runId?: string;
 }
 
 export interface CreateQueuedRunResult {
@@ -145,7 +147,7 @@ export class PostgresRunStore implements RunStore {
 	async createQueuedRun(
 		input: CreateQueuedRunInput,
 	): Promise<CreateQueuedRunResult> {
-		const runId = crypto.randomUUID();
+		const runId = input.runId ?? crypto.randomUUID();
 		await createQueuedRunStartedTx(this.db, { ...input, runId });
 		return { runId };
 	}

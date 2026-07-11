@@ -1,4 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import {
+	disabledLiveTextSubscriber,
+	InMemoryLiveTextTransport,
+	type LiveTextSubscriber,
+} from "@mymemo/live-text";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
 import type {
@@ -64,6 +69,7 @@ function buildApp(
 	conversationStore: ConversationStore,
 	exposureGate: ExposureGate = recordingGate(true).gate,
 	fakeRuns = fakeRunStore(),
+	liveTextSubscriber: LiveTextSubscriber = disabledLiveTextSubscriber,
 ) {
 	const deps = {
 		config: {},
@@ -72,6 +78,7 @@ function buildApp(
 		runStore: fakeRuns.runStore,
 		runEventReader: fakeRuns.runEventReader,
 		runNotifier: fakeRuns.runNotifier,
+		liveTextSubscriber,
 	} as unknown as AppDeps;
 	return createApp({ logLevel: "silent" } as unknown as ApiConfig, deps);
 }
@@ -96,8 +103,11 @@ function fakeRunStore() {
 	}> = [];
 	const runStore: RunStore = {
 		async createQueuedRun(input) {
-			const runId = `run-${queued.length + 1}`;
-			queued.push(input);
+			const runId = input.runId ?? `run-${queued.length + 1}`;
+			queued.push({
+				conversation: input.conversation,
+				message: input.message,
+			});
 			runOwners.set(runId, {
 				userId: input.conversation.userId,
 				conversationId: input.conversation.conversationId,
@@ -315,6 +325,132 @@ describe("POST /v1/conversations/:id/events", () => {
 		expect(text).toContain("conversation_id");
 		expect(text).toContain("run_id");
 		expect(queued).toEqual([{ conversation: existing, message: "hi" }]);
+	});
+
+	it("subscribes before admitting the same Run id and streams cursorless preview before its commit", async () => {
+		const { store } = fakeStore([existing]);
+		const liveText = new InMemoryLiveTextTransport();
+		const order: string[] = [];
+		let admittedRunId = "";
+		let reads = 0;
+		const runStore: RunStore = {
+			async createQueuedRun(input) {
+				order.push("admit");
+				admittedRunId = input.runId ?? "";
+				await liveText.publish({
+					runId: admittedRunId,
+					messageId: "message-1",
+					deltaIndex: 0,
+					text: "hel",
+				});
+				return { runId: admittedRunId };
+			},
+			async getRun() {
+				return null;
+			},
+			async requestCancellation() {
+				return { outcome: "not_found" };
+			},
+		};
+		const fakeRuns = {
+			...fakeRunStore(),
+			runStore,
+			runEventReader: {
+				async read() {
+					reads++;
+					return reads === 1
+						? [
+								{
+									seq: 1,
+									type: RunEventType.Started,
+									payload: {
+										conversationId: "conv-1",
+										runId: admittedRunId,
+									},
+								},
+							]
+						: [
+								{
+									seq: 2,
+									type: RunEventType.AssistantText,
+									payload: { messageId: "message-1", text: "hello" },
+								},
+								{ seq: 3, type: RunEventType.Done, payload: {} },
+							];
+				},
+			} satisfies RunEventReader,
+		};
+		const subscriber: LiveTextSubscriber = {
+			async subscribe(runId) {
+				order.push("subscribe");
+				return liveText.subscribe(runId);
+			},
+		};
+
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+			subscriber,
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: userMessage,
+		});
+		const text = await readSseUntil(res, (chunk) => chunk.includes("done"));
+
+		expect(order).toEqual(["subscribe", "admit"]);
+		expect(admittedRunId).toMatch(/^[0-9a-f-]{36}$/);
+		expect(text.indexOf("event: run_id")).toBeLessThan(
+			text.indexOf("event: text_delta"),
+		);
+		expect(text.indexOf("event: text_delta")).toBeLessThan(
+			text.indexOf("event: text_commit"),
+		);
+		expect(text).toContain('"deltaIndex":0');
+		expect(text).not.toMatch(/id: .*\nevent: text_delta/);
+		expect(text).toContain("id: 2");
+	});
+
+	it("closes the prepared Live subscription when admission conflicts", async () => {
+		const { store } = fakeStore([existing]);
+		let closes = 0;
+		const subscriber: LiveTextSubscriber = {
+			async subscribe() {
+				return {
+					readAvailable: () => [],
+					waitForMessage: async () => false,
+					close: async () => {
+						closes++;
+					},
+				};
+			},
+		};
+		const runStore: RunStore = {
+			async createQueuedRun() {
+				throw new ActiveRunExistsError();
+			},
+			async getRun() {
+				return null;
+			},
+			async requestCancellation() {
+				return { outcome: "not_found" };
+			},
+		};
+
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			{ ...fakeRunStore(), runStore },
+			subscriber,
+		).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: userMessage,
+		});
+
+		expect(res.status).toBe(409);
+		expect(closes).toBe(1);
 	});
 
 	it("returns busy backpressure before opening the stream", async () => {

@@ -5,6 +5,7 @@ export interface MymemoEvent {
 
 export type EventMessage =
 	| ErrorEvent
+	| TextDeltaEvent
 	| TextCommitEvent
 	| DoneEvent
 	| CanceledEvent
@@ -29,6 +30,13 @@ export interface RunIdEvent {
 export interface TextCommitEvent {
 	type: "text_commit";
 	messageId: string;
+	text: string;
+}
+
+export interface TextDeltaEvent {
+	type: "text_delta";
+	messageId: string;
+	deltaIndex: number;
 	text: string;
 }
 

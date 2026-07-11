@@ -41,6 +41,12 @@ export const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
 export type ClientFrame =
 	| { type: "conversation_id"; conversationId: string }
 	| { type: "run_id"; runId: string }
+	| {
+			type: "text_delta";
+			messageId: string;
+			deltaIndex: number;
+			text: string;
+	  }
 	| { type: "text_commit"; messageId: string; text: string }
 	| { type: "done" }
 	| { type: "canceled" }

@@ -1,6 +1,8 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AssistantTextPayload } from "@mymemo/agent-db/run-events";
+import type { LiveTextPublisher } from "@mymemo/live-text";
 import { AssistantMessageAssembler } from "./assistant-message-assembler";
+import { LiveTextPreview } from "./live-text-preview";
 
 /**
  * The subset of the Claude Agent SDK's `Query` handle the run supervisor
@@ -73,11 +75,14 @@ export interface AgentStreamOutcome {
 }
 
 export interface ConsumeAgentStreamParams {
+	runId?: string;
 	query: SupervisedQuery;
 	/** Fires on cancel, ownership loss, or shutdown; interrupts the query. */
 	signal: AbortSignal;
 	/** Persists one complete Assistant message (fenced to `running` upstream). */
 	appendAssistantMessage: (message: AssistantTextPayload) => Promise<void>;
+	liveTextPublisher?: LiveTextPublisher;
+	liveTextCoalesceWindowMs?: number;
 	/** Payload-free signal that disables Live preview for the rest of the Run. */
 	onPartialCompleteMismatch?: () => void;
 }
@@ -106,8 +111,23 @@ export async function consumeAgentStream(
 		mirrorErrorObserved: false,
 	};
 	const assembler = new AssistantMessageAssembler({
-		onPartialCompleteMismatch: params.onPartialCompleteMismatch,
+		onPartialCompleteMismatch: () => {
+			preview?.disable();
+			params.onPartialCompleteMismatch?.();
+		},
 	});
+	const preview =
+		params.liveTextPublisher && params.runId
+			? new LiveTextPreview({
+					runId: params.runId,
+					publisher: params.liveTextPublisher,
+					coalesceWindowMs: params.liveTextCoalesceWindowMs,
+				})
+			: undefined;
+	const abandonOpenMessage = () => {
+		assembler.abandon();
+		preview?.abandon();
+	};
 
 	// Best-effort: interrupt only needs to reach the SDK. Swallow its rejection so
 	// a failed interrupt cannot become an unhandled rejection — the loop stops
@@ -129,26 +149,36 @@ export async function consumeAgentStream(
 			if (signal.aborted) continue;
 			const errorText = resultErrorText(message);
 			if (errorText !== null) {
-				assembler.abandon();
 				throw new AgentResultError(errorText);
 			}
 			if (message.type === "assistant" && message.error) {
-				assembler.abandon();
 				throw new AgentResultError(
 					`assistant response rejected: ${message.error}`,
 				);
 			}
-			const commit = assembler.accept(message);
-			if (commit !== null) await appendAssistantMessage(commit);
+			if (
+				message.type === "stream_event" &&
+				message.event.type === "message_stop"
+			) {
+				await preview?.flushMessage();
+			}
+			const assembled = assembler.accept(message);
+			if (assembled?.type === "partial_text") {
+				preview?.append(assembled.messageId, assembled.text);
+			} else if (
+				assembled?.type === "message_stop" &&
+				assembled.commit !== null
+			) {
+				await appendAssistantMessage(assembled.commit);
+			}
 		}
+		if (signal.aborted) throw new QueryInterruptedError();
+		assembler.finish();
+		return outcome;
+	} catch (error) {
+		abandonOpenMessage();
+		throw error;
 	} finally {
 		signal.removeEventListener("abort", interrupt);
 	}
-
-	if (signal.aborted) {
-		assembler.abandon();
-		throw new QueryInterruptedError();
-	}
-	assembler.finish();
-	return outcome;
 }

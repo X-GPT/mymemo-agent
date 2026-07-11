@@ -14,6 +14,7 @@
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "0.2.117",
 		"@mymemo/agent-db": "workspace:*",
+		"@mymemo/live-text": "workspace:*",
 		"drizzle-orm": "^0.45.2",
 		"e2b": "^2.14.0",
 		"pg": "^8.22.0",

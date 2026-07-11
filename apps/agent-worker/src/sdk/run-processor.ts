@@ -1,4 +1,5 @@
 import type { RunRecord } from "@mymemo/agent-db/run-store";
+import type { LiveTextPublisher } from "@mymemo/live-text";
 import type { WorkerLogger } from "../logger";
 import type { RunProcessor } from "../run-loop";
 import { consumeAgentStream, type SupervisedQuery } from "./agent-stream";
@@ -20,6 +21,7 @@ export type StartRunQuery = (
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
 	logger: WorkerLogger;
+	liveTextPublisher?: LiveTextPublisher;
 }
 
 /**
@@ -38,9 +40,11 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 	return async (ctx) => {
 		const query = await deps.startRunQuery(ctx.run, ctx.signal);
 		const outcome = await consumeAgentStream({
+			runId: ctx.run.runId,
 			query,
 			signal: ctx.signal,
 			appendAssistantMessage: ctx.appendAssistantMessage,
+			liveTextPublisher: deps.liveTextPublisher,
 			onPartialCompleteMismatch: () => {
 				deps.logger.warn({
 					message: "assistant Live preview disabled after text mismatch",
