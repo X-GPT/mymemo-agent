@@ -529,6 +529,19 @@ describe("agent deployment config", () => {
 		expect(buildScript).not.toContain("ECR_REPOSITORY_PREFIX");
 	});
 
+	it("ships the Live text workspace package in both runtime images", () => {
+		for (const dockerfile of [
+			join(root, "apps", "chat-api", "Dockerfile"),
+			join(root, "apps", "agent-worker", "Dockerfile"),
+		]) {
+			const releaseStage = readFileSync(dockerfile, "utf8").split(
+				"FROM base AS release",
+			)[1];
+
+			expect(releaseStage).toMatch(/^COPY .*packages\/live-text/m);
+		}
+	});
+
 	it("exec-verifies the SDK CLI in every built worker image before push", () => {
 		const checkPath = join(
 			root,
