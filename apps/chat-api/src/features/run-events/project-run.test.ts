@@ -29,9 +29,15 @@ class ScriptedReader implements RunEventReader {
 		afterSeq: number,
 		limit: number,
 	): Promise<RunEventRow[]> {
+		if (!Number.isSafeInteger(limit) || limit < 1) {
+			throw new Error("Run event read limit must be a positive integer");
+		}
 		this.cursors.push(afterSeq);
 		this.limits.push(limit);
-		return this.batches.shift() ?? [];
+		const batch = this.batches.shift() ?? [];
+		if (batch.length <= limit) return batch;
+		this.batches.unshift(batch.slice(limit));
+		return batch.slice(0, limit);
 	}
 }
 
