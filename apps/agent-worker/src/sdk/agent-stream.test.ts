@@ -310,6 +310,30 @@ describe("consumeAgentStream", () => {
 		expect(subscription.readAvailable()).toEqual([]);
 	});
 
+	it("does not publish pending preview when message_stop fails envelope validation", async () => {
+		const liveText = new InMemoryLiveTextTransport();
+		const subscription = await liveText.subscribe("run-1");
+		const envelope = textEnvelope({
+			completeText: "uncommitted",
+			partialText: "preview",
+		});
+		const query = fakeQuery([
+			...envelope.slice(0, 3).map((message) => ({ message })),
+			{ message: streamEvent({ type: "message_stop" }) },
+		]);
+
+		await expect(
+			consumeAgentStream({
+				runId: "run-1",
+				query,
+				signal: new AbortController().signal,
+				liveTextPublisher: liveText,
+				appendAssistantMessage: async () => {},
+			}),
+		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
+		expect(subscription.readAvailable()).toEqual([]);
+	});
+
 	it("treats an error-bearing Assistant callback as provider rejection", async () => {
 		const controller = new AbortController();
 		const envelope = textEnvelope({ completeText: "rejected" });

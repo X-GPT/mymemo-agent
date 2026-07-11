@@ -42,7 +42,8 @@ export async function createConversation(
  * Queue one `user.message` turn against an existing conversation. Scope comes
  * from the frozen `conversation` record (not the request), so the client cannot
  * widen it. The queued run and its `run_started` event are written before the
- * SSE stream opens; the stream then projects the durable `run_events` log.
+ * SSE stream opens; the stream then projects the durable `run_events` log and
+ * may merge the prepared, cursorless Live preview subscription.
  */
 export async function queueConversationTurn(
 	deps: AppDeps,

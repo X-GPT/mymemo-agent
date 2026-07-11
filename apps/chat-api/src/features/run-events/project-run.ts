@@ -32,13 +32,15 @@ export interface ProjectRunDeps {
 }
 
 /**
- * Project a run's durable event log into the client SSE stream. Run-event replay
- * is the only SSE source: on every turn the loop reads `run_events` past the
- * cursor, emits the mapped frames, then waits for a `LISTEN/NOTIFY` wake-up or a
- * short poll timeout. Because it always reads before waiting, a missed
- * notification costs latency, never an event. The loop closes as soon as it
- * reads a terminal event — detection is by event *type*, so a terminal event
- * with an odd payload still ends the stream after emitting its frame.
+ * Project a run's durable event log into the client SSE stream, optionally
+ * merging cursorless Live preview on the original request. Durable Run events
+ * remain the only authoritative and replayable source: on every turn the loop
+ * reads `run_events` past the cursor, emits the mapped frames, then waits for a
+ * durable or Live wake-up (or a short poll timeout). Because it always reads
+ * before waiting, a missed durable notification costs latency, never an event.
+ * The loop closes as soon as it reads a terminal event — detection is by event
+ * *type*, so a terminal event with an odd payload still ends the stream after
+ * emitting its frame.
  *
  * The event-type→frame mapping ({@link projectRunEvent}) is the single authority
  * for client exposure: unmapped internal event types yield no frame and cannot
