@@ -58,7 +58,7 @@ describe("DrizzleRunEventReader", () => {
 		await appendEvent(db, "run-1", 1, "run_started", { runId: "run-1" });
 		await appendEvent(db, "run-1", 3, "run_done", {});
 
-		const rows = await reader.read("run-1", 0);
+		const rows = await reader.read("run-1", 0, 100);
 
 		expect(rows).toEqual([
 			{ seq: 1, type: "run_started", payload: { runId: "run-1" } },
@@ -79,7 +79,7 @@ describe("DrizzleRunEventReader", () => {
 		});
 		await appendEvent(db, "run-1", 3, "run_done", {});
 
-		expect(await reader.read("run-1", 2)).toEqual([
+		expect(await reader.read("run-1", 2, 100)).toEqual([
 			{ seq: 3, type: "run_done", payload: {} },
 		]);
 	});
@@ -116,7 +116,7 @@ describe("DrizzleRunEventReader", () => {
 			text: "theirs",
 		});
 
-		expect(await reader.read("run-1", 0)).toEqual([
+		expect(await reader.read("run-1", 0, 100)).toEqual([
 			{
 				seq: 1,
 				type: "assistant_text",
@@ -126,6 +126,12 @@ describe("DrizzleRunEventReader", () => {
 	});
 
 	it("returns an empty array when there are no new events", async () => {
-		expect(await reader.read("run-1", 0)).toEqual([]);
+		expect(await reader.read("run-1", 0, 100)).toEqual([]);
+	});
+
+	it("rejects a non-positive page size", async () => {
+		expect(reader.read("run-1", 0, 0)).rejects.toThrow(
+			"Run event read limit must be a positive integer",
+		);
 	});
 });

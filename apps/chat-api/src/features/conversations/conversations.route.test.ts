@@ -177,8 +177,10 @@ function fakeRunStore() {
 		},
 	};
 	const runEventReader: RunEventReader = {
-		async read(runId, afterSeq) {
-			return (eventsByRun.get(runId) ?? []).filter((e) => e.seq > afterSeq);
+		async read(runId, afterSeq, limit) {
+			return (eventsByRun.get(runId) ?? [])
+				.filter((e) => e.seq > afterSeq)
+				.slice(0, limit);
 		},
 	};
 	const runNotifier: RunNotifier = {
@@ -412,10 +414,10 @@ describe("POST /v1/conversations/:id/events", () => {
 		});
 		let readCount = 0;
 		const runEventReader: RunEventReader = {
-			async read(runId, afterSeq) {
+			async read(runId, afterSeq, limit) {
 				const currentRead = ++readCount;
 				if (currentRead > 1) await laterReadsReleased;
-				const rows = await durableReader.read(runId, afterSeq);
+				const rows = await durableReader.read(runId, afterSeq, limit);
 				if (currentRead === 1) resolveFirstRead();
 				return rows;
 			},
@@ -967,12 +969,12 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		]);
 		let reads = 0;
 		const runEventReader: RunEventReader = {
-			async read(runId, afterSeq) {
+			async read(runId, afterSeq, limit) {
 				reads++;
 				if (reads === 1) return [];
-				return (eventsByRun.get(runId) ?? []).filter(
-					(event) => event.seq > afterSeq,
-				);
+				return (eventsByRun.get(runId) ?? [])
+					.filter((event) => event.seq > afterSeq)
+					.slice(0, limit);
 			},
 		};
 		const liveText = new InMemoryLiveTextTransport();

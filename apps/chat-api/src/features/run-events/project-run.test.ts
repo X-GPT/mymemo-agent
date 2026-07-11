@@ -17,7 +17,7 @@ import type { RunNotifier, RunSubscription } from "./run-notifier";
  */
 class ScriptedReader implements RunEventReader {
 	readonly cursors: number[] = [];
-	readonly limits: Array<number | undefined> = [];
+	readonly limits: number[] = [];
 	private readonly batches: RunEventRow[][];
 
 	constructor(batches: RunEventRow[][]) {
@@ -27,7 +27,7 @@ class ScriptedReader implements RunEventReader {
 	async read(
 		_runId: string,
 		afterSeq: number,
-		limit?: number,
+		limit: number,
 	): Promise<RunEventRow[]> {
 		this.cursors.push(afterSeq);
 		this.limits.push(limit);
