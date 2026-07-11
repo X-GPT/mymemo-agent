@@ -1,8 +1,17 @@
 import type { RunRecord } from "@mymemo/agent-db/run-store";
-import type { LiveTextPublisher } from "@mymemo/live-text";
+import type { LiveTextPublisher, LiveTextTelemetry } from "@mymemo/live-text";
+import {
+	createWorkerLiveTextTelemetry,
+	reportWorkerLiveTextPreviewSignal,
+} from "../live-text";
 import type { WorkerLogger } from "../logger";
 import type { RunProcessor } from "../run-loop";
-import { consumeAgentStream, type SupervisedQuery } from "./agent-stream";
+import {
+	type AgentStreamOutcome,
+	consumeAgentStream,
+	type SupervisedQuery,
+} from "./agent-stream";
+import { AssistantEnvelopeProtocolError } from "./assistant-message-assembler";
 
 /**
  * Start a Claude Agent SDK query for one claimed run. This is the seam between
@@ -22,6 +31,7 @@ export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
 	logger: WorkerLogger;
 	liveTextPublisher?: LiveTextPublisher;
+	liveTextTelemetry?: LiveTextTelemetry;
 }
 
 /**
@@ -37,35 +47,30 @@ export interface SdkRunProcessorDeps {
  * reports the session to resume from next turn, and lets errors propagate.
  */
 export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
+	const telemetry =
+		deps.liveTextTelemetry ?? createWorkerLiveTextTelemetry(deps.logger);
 	return async (ctx) => {
-		if (!deps.liveTextPublisher) {
-			try {
-				deps.logger.info({ message: "Live preview disabled" });
-			} catch {
-				// Live telemetry must never change the Run outcome.
-			}
-		}
 		const query = await deps.startRunQuery(ctx.run, ctx.signal);
-		const outcome = await consumeAgentStream({
-			runId: ctx.run.runId,
-			query,
-			signal: ctx.signal,
-			appendAssistantMessage: ctx.appendAssistantMessage,
-			liveTextPublisher: deps.liveTextPublisher,
-			onLiveTextSignal: (signal) => {
-				const event = {
-					message: "Live preview transport state changed",
-					signal,
-				};
-				if (signal === "recovered") deps.logger.info(event);
-				else deps.logger.warn(event);
-			},
-			onPartialCompleteMismatch: () => {
-				deps.logger.warn({
-					message: "assistant Live preview disabled after text mismatch",
-				});
-			},
-		});
+		let outcome: AgentStreamOutcome;
+		try {
+			outcome = await consumeAgentStream({
+				runId: ctx.run.runId,
+				query,
+				signal: ctx.signal,
+				appendAssistantMessage: ctx.appendAssistantMessage,
+				liveTextPublisher: deps.liveTextPublisher,
+				onLiveTextSignal: (signal) =>
+					reportWorkerLiveTextPreviewSignal(telemetry, signal),
+				onPartialCompleteMismatch: () => {
+					telemetry.record("mismatch", "partial_complete");
+				},
+			});
+		} catch (error) {
+			if (error instanceof AssistantEnvelopeProtocolError) {
+				telemetry.record("impossible_ordering", "provider_envelope");
+			}
+			throw error;
+		}
 		return {
 			// Advance the conversation's resume pointer only when the SDK produced a
 			// session id and no `mirror_error` left the stored transcript unreliable

@@ -98,6 +98,13 @@ previews and must not prevent either service from booting or staying healthy.
 The durable Postgres path remains sufficient for successful Runs, durable
 Assistant messages, terminal Outcomes, and replay.
 
+Set `live_preview_enabled=false` to omit `REDIS_URL` from both trusted service
+task definitions without deleting the cache. Live telemetry is converted into
+CloudWatch metrics with bounded service/signal/outcome dimensions; the alarms
+require repeated five-minute breaches and never feed service health. See
+[`docs/runbooks/live-preview.md`](../../docs/runbooks/live-preview.md) for
+diagnosis, disable, and restore procedures.
+
 ## Release Deploy Config
 
 This repo owns its GitHub Actions deploy role in the one-time bootstrap root:

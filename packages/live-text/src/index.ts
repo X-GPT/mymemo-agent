@@ -1,6 +1,8 @@
 import { createClient } from "redis";
 import { z } from "zod";
 
+export * from "./telemetry";
+
 export const LIVE_TEXT_MAX_CHUNK_LENGTH = 16_384;
 export const LIVE_TEXT_MAX_WIRE_BYTES = 100_000;
 const LIVE_TEXT_MAX_ID_LENGTH = 128;

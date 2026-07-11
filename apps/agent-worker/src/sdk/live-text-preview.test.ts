@@ -16,16 +16,19 @@ function deferred<T>() {
 it("publishes coalesced chunks with monotonic indexes within the 50 ms ceiling", async () => {
 	const transport = new InMemoryLiveTextTransport();
 	const subscription = await transport.subscribe("run-1");
+	const signals: unknown[] = [];
 	const preview = new LiveTextPreview({
 		runId: "run-1",
 		publisher: transport,
 		coalesceWindowMs: 5,
+		onSignal: (signal) => signals.push(signal),
 	});
 
 	preview.append("message-1", "A");
 	await Bun.sleep(10);
 	preview.append("message-1", "B");
 	await preview.flushMessage();
+	await Bun.sleep(0);
 
 	expect(subscription.readAvailable()).toEqual([
 		{
@@ -41,6 +44,9 @@ it("publishes coalesced chunks with monotonic indexes within the 50 ms ceiling",
 			text: "B",
 		},
 	]);
+	expect(signals).toEqual([{ type: "attempted" }, { type: "delivered" }]);
+	expect(JSON.stringify(signals)).not.toContain("message-1");
+	expect(JSON.stringify(signals)).not.toContain("A");
 	expect(
 		() =>
 			new LiveTextPreview({
@@ -53,9 +59,11 @@ it("publishes coalesced chunks with monotonic indexes within the 50 ms ceiling",
 
 it("abandons only the current preview after publication fails", async () => {
 	const published: LiveTextMessage[] = [];
+	const signals: unknown[] = [];
 	let attempts = 0;
 	const preview = new LiveTextPreview({
 		runId: "run-1",
+		onSignal: (signal) => signals.push(signal),
 		publisher: {
 			async publish(message) {
 				attempts++;
@@ -69,10 +77,20 @@ it("abandons only the current preview after publication fails", async () => {
 	await preview.flushMessage();
 	preview.append("message-2", "visible");
 	await preview.flushMessage();
+	await Bun.sleep(0);
 
 	expect(published).toEqual([
 		{ messageId: "message-2", deltaIndex: 0, text: "visible", runId: "run-1" },
 	]);
+	expect(signals).toEqual([
+		{ type: "attempted" },
+		{ type: "dropped", reason: "publisher_failure" },
+		{ type: "attempted" },
+		{ type: "recovered", reason: "publisher_failure" },
+		{ type: "delivered" },
+	]);
+	expect(JSON.stringify(signals)).not.toContain("lost");
+	expect(JSON.stringify(signals)).not.toContain("visible");
 });
 
 it("does not wait for a stalled publisher when a message completes", async () => {
@@ -104,7 +122,7 @@ it("does not wait for a stalled publisher when a message completes", async () =>
 it("bounds queued publications and recovers on the next Assistant message", async () => {
 	const firstPublish = deferred<void>();
 	const published: LiveTextMessage[] = [];
-	const signals: string[] = [];
+	const signals: unknown[] = [];
 	let attempts = 0;
 	const preview = new LiveTextPreview({
 		runId: "run-1",
@@ -127,7 +145,13 @@ it("bounds queued publications and recovers on the next Assistant message", asyn
 	await preview.flushMessage();
 	await Bun.sleep(0);
 
-	expect(signals).toEqual(["queue_overflow", "recovered"]);
+	expect(signals).toEqual([
+		{ type: "attempted" },
+		{ type: "dropped", reason: "queue_overflow" },
+		{ type: "attempted" },
+		{ type: "recovered", reason: "queue_overflow" },
+		{ type: "delivered" },
+	]);
 	expect(published.map(({ messageId, text }) => ({ messageId, text }))).toEqual(
 		[
 			{ messageId: "message-1", text: "A".repeat(16_384) },

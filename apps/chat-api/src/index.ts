@@ -1,3 +1,4 @@
+import { createLiveTextTelemetry } from "@mymemo/live-text";
 import { Hono } from "hono";
 import { requestId } from "hono/request-id";
 import { pinoLogger } from "hono-pino";
@@ -37,17 +38,10 @@ export function createApp(
 // closed before the process exits.
 const productionConfig = loadApiConfigFromEnv(Bun.env);
 const productionLogger = pino({ level: productionConfig.logLevel });
-const productionDeps = createDeps(productionConfig, (signal) => {
-	const event = {
-		message: "Live preview Redis transport state changed",
-		signal,
-	};
-	if (signal === "disabled" || signal === "recovered") {
-		productionLogger.info(event);
-	} else {
-		productionLogger.warn(event);
-	}
-});
+const productionDeps = createDeps(
+	productionConfig,
+	createLiveTextTelemetry("chat-api", productionLogger),
+);
 const productionApp = createApp(productionConfig, productionDeps);
 let shuttingDown = false;
 async function closeProductionLiveText(): Promise<void> {

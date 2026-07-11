@@ -1,5 +1,8 @@
 import { expect, it } from "bun:test";
-import { createWorkerLiveTextTransport } from "./live-text";
+import {
+	createWorkerLiveTextTelemetry,
+	createWorkerLiveTextTransport,
+} from "./live-text";
 
 const logger = {
 	info() {},
@@ -15,12 +18,18 @@ it("keeps the worker Live lane disabled without valid Redis configuration", () =
 		warn() {},
 	};
 	expect(
-		createWorkerLiveTextTransport(undefined, recordingLogger),
+		createWorkerLiveTextTransport(
+			undefined,
+			createWorkerLiveTextTelemetry(recordingLogger),
+		),
 	).toBeUndefined();
 	expect(signals).toEqual([
 		{
-			message: "Live preview Redis transport state changed",
+			message: "Live preview signal",
+			service: "agent-worker",
 			signal: "disabled",
+			reason: "configuration",
+			count: 1,
 		},
 	]);
 });
@@ -28,7 +37,7 @@ it("keeps the worker Live lane disabled without valid Redis configuration", () =
 it("constructs the lazy production publisher when Redis is configured", async () => {
 	const transport = createWorkerLiveTextTransport(
 		"rediss://default:secret@redis.internal:6379",
-		logger,
+		createWorkerLiveTextTelemetry(logger),
 	);
 	expect(transport).toBeDefined();
 	await transport?.close();

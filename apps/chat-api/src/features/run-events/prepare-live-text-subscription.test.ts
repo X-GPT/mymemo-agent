@@ -23,7 +23,7 @@ it("falls back when subscription setup throws synchronously", async () => {
 			},
 		),
 	).resolves.toBeNull();
-	expect(signals).toEqual(["degraded"]);
+	expect(signals).toEqual(["subscription_failure"]);
 });
 
 it("reports disabled configuration without surfacing an error", async () => {
@@ -40,6 +40,7 @@ it("reports disabled configuration without surfacing an error", async () => {
 it("falls back after a bounded wait and closes a subscription that arrives late", async () => {
 	let resolveSubscription: ((value: LiveTextSubscription) => void) | undefined;
 	let closes = 0;
+	const signals: string[] = [];
 	const prepared = prepareLiveTextSubscription(
 		{
 			async subscribe() {
@@ -49,7 +50,7 @@ it("falls back after a bounded wait and closes a subscription that arrives late"
 			},
 		},
 		"run-1",
-		{ timeoutMs: 1 },
+		{ timeoutMs: 1, onSignal: (signal) => signals.push(signal) },
 	);
 
 	await expect(prepared).resolves.toBeNull();
@@ -63,4 +64,24 @@ it("falls back after a bounded wait and closes a subscription that arrives late"
 	});
 	await Bun.sleep(0);
 	expect(closes).toBe(1);
+	expect(signals).toEqual(["subscription_timeout"]);
+});
+
+it("reports recovery when a subscription is prepared", async () => {
+	const signals: string[] = [];
+	const subscription: LiveTextSubscription = {
+		readAvailable: () => [],
+		readDroppedMessages: () => ({ type: "message_ids", messageIds: [] }),
+		waitForMessage: async () => false,
+		close: async () => {},
+	};
+
+	await expect(
+		prepareLiveTextSubscription(
+			{ subscribe: async () => subscription },
+			"run-1",
+			{ onSignal: (signal) => signals.push(signal) },
+		),
+	).resolves.toBe(subscription);
+	expect(signals).toEqual(["recovered"]);
 });

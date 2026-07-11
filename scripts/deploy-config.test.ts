@@ -82,7 +82,15 @@ describe("agent deployment config", () => {
 		expect(redisConfig).toContain(
 			'"rediss://default:${urlencode(random_password.live_redis.result)}@',
 		);
-		expect(locals.match(/name\s*=\s*"REDIS_URL"/g)).toHaveLength(2);
+		expect(locals.match(/name\s*=\s*"REDIS_URL"/g)).toHaveLength(1);
+		expect(locals).toMatch(
+			/live_redis_url_secret\s*=\s*var\.live_preview_enabled\s*\?/,
+		);
+		expect(
+			locals.match(
+				/\],\s*local\.live_redis_url_secret,\s*local\.agent_db_password_secret\)/g,
+			),
+		).toHaveLength(2);
 		expect(ecsConfig.match(/aws_security_group\.live_redis_clients\.id/g)).toHaveLength(2);
 		expect(migrationConfig).toContain("secrets = local.agent_db_password_secret");
 	});
@@ -95,6 +103,35 @@ describe("agent deployment config", () => {
 		);
 		expect(readme).toContain(
 			"The durable Postgres path remains sufficient for successful Runs",
+		);
+	});
+
+	it("alarms on sustained payload-free Live signals without health coupling", () => {
+		const cloudwatch = readFileSync(join(terraformDir, "cloudwatch.tf"), "utf8");
+		const ecs = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
+
+		for (const resource of [
+			"live_preview_degraded",
+			"live_preview_drops",
+			"live_preview_overflow",
+		]) {
+			expect(cloudwatch).toContain(
+				`resource "aws_cloudwatch_metric_alarm" "${resource}"`,
+			);
+		}
+		expect(cloudwatch.match(/datapoints_to_alarm\s*=\s*2/g)).toHaveLength(3);
+		expect(
+			cloudwatch.match(/evaluation_periods\s*=\s*3/g)?.length,
+		).toBeGreaterThanOrEqual(3);
+		expect(cloudwatch).toContain('treat_missing_data  = "notBreaching"');
+		expect(cloudwatch).toContain('Service = "$.service"');
+		expect(cloudwatch).toContain('Signal  = "$.signal"');
+		expect(cloudwatch).toContain('Outcome = "$.outcome"');
+		expect(cloudwatch).not.toMatch(
+			/ConversationId|RunId|MessageId|text|payload|REDIS_URL/,
+		);
+		expect(ecs).not.toMatch(
+			/live_preview_(degraded|drops|overflow)|LivePreview/,
 		);
 	});
 

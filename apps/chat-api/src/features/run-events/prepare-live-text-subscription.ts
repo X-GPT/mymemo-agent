@@ -7,7 +7,11 @@ import { LiveTextDisabledError } from "@mymemo/live-text";
 export const LIVE_TEXT_SUBSCRIBE_TIMEOUT_MS = 100;
 const TIMED_OUT = Symbol("live text subscription timed out");
 
-export type LiveTextSetupSignal = "degraded" | "disabled";
+export type LiveTextSetupSignal =
+	| "disabled"
+	| "recovered"
+	| "subscription_failure"
+	| "subscription_timeout";
 
 function emitSignal(
 	onSignal: ((signal: LiveTextSetupSignal) => void) | undefined,
@@ -35,7 +39,9 @@ export async function prepareLiveTextSubscription(
 	} catch (error) {
 		emitSignal(
 			options.onSignal,
-			error instanceof LiveTextDisabledError ? "disabled" : "degraded",
+			error instanceof LiveTextDisabledError
+				? "disabled"
+				: "subscription_failure",
 		);
 		return null;
 	}
@@ -45,14 +51,19 @@ export async function prepareLiveTextSubscription(
 	});
 	try {
 		const result = await Promise.race([prepared, timeout]);
-		if (result !== TIMED_OUT) return result;
-		emitSignal(options.onSignal, "degraded");
+		if (result !== TIMED_OUT) {
+			emitSignal(options.onSignal, "recovered");
+			return result;
+		}
+		emitSignal(options.onSignal, "subscription_timeout");
 		void prepared.then((subscription) => subscription.close()).catch(() => {});
 		return null;
 	} catch (error) {
 		emitSignal(
 			options.onSignal,
-			error instanceof LiveTextDisabledError ? "disabled" : "degraded",
+			error instanceof LiveTextDisabledError
+				? "disabled"
+				: "subscription_failure",
 		);
 		return null;
 	} finally {

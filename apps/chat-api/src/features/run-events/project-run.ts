@@ -50,6 +50,9 @@ export type ProjectRunLiveTextSignal =
 	| "impossible_ordering"
 	| "late_delta"
 	| "malformed_message"
+	| "message_attempted"
+	| "message_delivered"
+	| "message_dropped"
 	| "partial_complete_mismatch"
 	| "queue_overflow"
 	| "reconciliation_overflow"
@@ -217,6 +220,7 @@ async function produceRun(
 	const previewStates = new Map<string, PreviewState>();
 	const suppressedMessageIds = new Set<string>();
 	const committedMessageIds = new Set<string>();
+	const activeOutcomeMessageIds = new Set<string>();
 	let liveSubscription = deps.liveSubscription;
 	let liveSubscriptionClose = Promise.resolve();
 	let previewReady = fromSeq > 0;
@@ -245,6 +249,9 @@ async function produceRun(
 	const suppressMessage = (messageId: string) => {
 		previewStates.delete(messageId);
 		output.purgePreview(messageId);
+		if (activeOutcomeMessageIds.delete(messageId)) {
+			emitSignal("message_dropped");
+		}
 		if (suppressedMessageIds.has(messageId)) return;
 		if (suppressedMessageIds.size >= maxPreviewQueueMessages) {
 			emitSignal("queue_overflow");
@@ -256,6 +263,10 @@ async function produceRun(
 		suppressedMessageIds.add(messageId);
 	};
 	const disableLiveForRun = () => {
+		for (const _messageId of activeOutcomeMessageIds) {
+			emitSignal("message_dropped");
+		}
+		activeOutcomeMessageIds.clear();
 		previewStates.clear();
 		suppressedMessageIds.clear();
 		output.clearPreview();
@@ -292,8 +303,16 @@ async function produceRun(
 							!suppressedMessageIds.has(frame.messageId) &&
 							state.chunks.join("") !== frame.text
 						) {
+							if (activeOutcomeMessageIds.delete(frame.messageId)) {
+								emitSignal("message_dropped");
+							}
 							emitSignal("partial_complete_mismatch");
 							disableLiveForRun();
+						} else if (
+							state &&
+							activeOutcomeMessageIds.delete(frame.messageId)
+						) {
+							emitSignal("message_delivered");
 						}
 						previewStates.delete(frame.messageId);
 						suppressedMessageIds.delete(frame.messageId);
@@ -372,6 +391,10 @@ async function produceRun(
 					}
 					if (suppressedMessageIds.has(message.messageId)) {
 						continue;
+					}
+					if (!activeOutcomeMessageIds.has(message.messageId)) {
+						activeOutcomeMessageIds.add(message.messageId);
+						emitSignal("message_attempted");
 					}
 					let state = previewStates.get(message.messageId);
 					if (!state) {

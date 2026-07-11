@@ -1,7 +1,9 @@
 import {
+	createLiveTextTelemetry,
 	createRedisLiveTextTransport,
 	disabledLiveTextSubscriber,
 	type LiveTextSubscriber,
+	type LiveTextTelemetry,
 	type LiveTextTransport,
 	type RedisLiveTextSignal,
 } from "@mymemo/live-text";
@@ -22,6 +24,7 @@ import {
 	type RunEventReader,
 	type RunNotifier,
 } from "./features/run-events";
+import { reportChatLiveTextRuntimeSignal } from "./features/run-events/live-text-telemetry";
 import { PostgresRunStore, type RunStore } from "./features/run-store";
 
 /**
@@ -42,6 +45,8 @@ export interface AppDeps {
 	runNotifier: RunNotifier;
 	/** Optional ephemeral Assistant-text preview lane. */
 	liveTextSubscriber: LiveTextSubscriber;
+	/** Cardinality-safe, payload-free Live-lane observability. */
+	liveTextTelemetry: LiveTextTelemetry;
 	/** Close optional Live transport resources during service shutdown. */
 	closeLiveText?: () => Promise<void>;
 	/**
@@ -59,7 +64,10 @@ export type LiveTextRuntimeSignal = RedisLiveTextSignal | "disabled";
 
 export function createDeps(
 	config: ApiConfig,
-	onLiveTextSignal?: (signal: LiveTextRuntimeSignal) => void,
+	liveTextTelemetry: LiveTextTelemetry = createLiveTextTelemetry("chat-api", {
+		info() {},
+		warn() {},
+	}),
 ): AppDeps {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
@@ -68,11 +76,7 @@ export function createDeps(
 	const runEventReader = new DrizzleRunEventReader(database);
 	const runNotifier = new PostgresRunNotifier(config.databaseUrl);
 	const emitLiveTextSignal = (signal: LiveTextRuntimeSignal) => {
-		try {
-			onLiveTextSignal?.(signal);
-		} catch {
-			// Telemetry is optional and must never affect boot or request handling.
-		}
+		reportChatLiveTextRuntimeSignal(liveTextTelemetry, signal);
 	};
 	const liveTextTransport: LiveTextTransport | undefined =
 		config.liveTextRedisUrl === undefined
@@ -89,6 +93,7 @@ export function createDeps(
 		runEventReader,
 		runNotifier,
 		liveTextSubscriber: liveTextTransport ?? disabledLiveTextSubscriber,
+		liveTextTelemetry,
 		closeLiveText: liveTextTransport
 			? () => liveTextTransport.close()
 			: undefined,

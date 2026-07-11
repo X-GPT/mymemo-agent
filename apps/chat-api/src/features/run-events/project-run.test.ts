@@ -125,6 +125,7 @@ describe("projectRun", () => {
 	it("merges prepared cursorless previews before authoritative commits", async () => {
 		const liveText = new InMemoryLiveTextTransport();
 		const liveSubscription = await liveText.subscribe("run-1");
+		const signals: string[] = [];
 		for (const message of [
 			{ messageId: "message-1", deltaIndex: 0, text: "hel" },
 			{ messageId: "message-1", deltaIndex: 1, text: "lo" },
@@ -160,6 +161,7 @@ describe("projectRun", () => {
 				reader,
 				notifier: new InstantNotifier(),
 				liveSubscription,
+				onLiveTextSignal: (signal) => signals.push(signal),
 			}),
 		);
 
@@ -208,6 +210,12 @@ describe("projectRun", () => {
 				frame: { type: "text_commit", messageId: "message-2", text: "again" },
 			},
 			{ id: "4", frame: { type: "done" } },
+		]);
+		expect(signals).toEqual([
+			"message_attempted",
+			"message_attempted",
+			"message_delivered",
+			"message_delivered",
 		]);
 	});
 
@@ -589,7 +597,13 @@ describe("projectRun", () => {
 			{ type: "text_delta", messageId: "message-1", deltaIndex: 0, text: "a" },
 			{ type: "text_delta", messageId: "message-1", deltaIndex: 1, text: "b" },
 		]);
-		expect(signals).toEqual(["duplicate_inconsistency"]);
+		expect(signals).toEqual([
+			"message_attempted",
+			"message_attempted",
+			"message_dropped",
+			"duplicate_inconsistency",
+			"message_delivered",
+		]);
 	});
 
 	it("suppresses malformed preview for its message and continues durable projection", async () => {
@@ -747,7 +761,14 @@ describe("projectRun", () => {
 		expect(projected.filter((frame) => frame.type === "text_delta")).toEqual(
 			[],
 		);
-		expect(signals).toEqual(["gap", "gap"]);
+		expect(signals).toEqual([
+			"message_attempted",
+			"message_dropped",
+			"gap",
+			"message_attempted",
+			"message_dropped",
+			"gap",
+		]);
 		expect(
 			projected
 				.filter((frame) => frame.type === "text_commit")
