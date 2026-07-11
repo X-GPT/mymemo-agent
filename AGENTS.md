@@ -95,6 +95,10 @@ docker build -t chat-api .
 docker-compose up    # Local development
 ```
 
+### AWS CLI
+
+Always use the `mymemo` profile: `aws --profile mymemo ...`
+
 ## Architecture (chat-api)
 
 ### Request Flow
