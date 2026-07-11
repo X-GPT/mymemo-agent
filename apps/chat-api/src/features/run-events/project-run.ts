@@ -30,7 +30,7 @@ export interface ProjectRunDeps {
 	 * notifications; keep it short (1-2s). Default 1000ms.
 	 */
 	pollTimeoutMs?: number;
-	/** Prepared before Run admission on the original request only. */
+	/** Prepared before admission, or after authorizing an active reconnect. */
 	liveSubscription?: LiveTextSubscription;
 	/** Bound on provisional frames waiting for a slow SSE consumer. */
 	maxPreviewQueueMessages?: number;
@@ -128,8 +128,9 @@ class ProjectionOutput {
 
 /**
  * Project a run's durable event log into the client SSE stream, optionally
- * merging cursorless Live preview on the original request. Durable Run events
- * remain the only authoritative and replayable source: on every turn the loop
+ * merging cursorless Live preview on the original request or an authorized
+ * active-Run reconnect. Durable Run events remain the only authoritative and
+ * replayable source: on every turn the loop
  * reads `run_events` past the cursor, emits the mapped frames, then waits for a
  * durable or Live wake-up (or a short poll timeout). Because it always reads
  * before waiting, a missed durable notification costs latency, never an event.
@@ -198,6 +199,7 @@ async function produceRun(
 	const suppressedMessageIds = new Set<string>();
 	const committedMessageIds = new Set<string>();
 	let liveSubscription = deps.liveSubscription;
+	let liveSubscriptionClose = Promise.resolve();
 	let previewReady = fromSeq > 0;
 	let durableWakeup: Promise<boolean> | undefined;
 	const emitSignal = (liveSignal: ProjectRunLiveTextSignal) => {
@@ -208,15 +210,27 @@ async function produceRun(
 		liveSubscription = undefined;
 		if (!subscription) return;
 		try {
-			void subscription.close().catch(() => {});
+			const closing = subscription.close().catch(() => {});
+			liveSubscriptionClose = Promise.all([
+				liveSubscriptionClose,
+				closing,
+			]).then(() => {});
 		} catch {
 			// Live preview is optional; durable projection stays authoritative.
 		}
 	};
 	const suppressMessage = (messageId: string) => {
 		previewStates.delete(messageId);
-		suppressedMessageIds.add(messageId);
 		output.purgePreview(messageId);
+		if (suppressedMessageIds.has(messageId)) return;
+		if (suppressedMessageIds.size >= maxPreviewQueueMessages) {
+			emitSignal("queue_overflow");
+			suppressedMessageIds.clear();
+			output.clearPreview();
+			disableLiveSubscription();
+			return;
+		}
+		suppressedMessageIds.add(messageId);
 	};
 	const disableLiveForRun = () => {
 		previewStates.clear();
@@ -272,18 +286,27 @@ async function produceRun(
 			if (previewReady && liveSubscription) {
 				let available: unknown[];
 				try {
-					for (const messageId of liveSubscription.readDroppedMessageIds?.() ??
-						[]) {
-						suppressMessage(messageId);
+					const subscription = liveSubscription;
+					const droppedMessageIds =
+						subscription.readDroppedMessageIds?.() ?? [];
+					if (droppedMessageIds === null) {
 						emitSignal("queue_overflow");
+						disableLiveForRun();
+						available = [];
+					} else {
+						for (const messageId of droppedMessageIds) {
+							suppressMessage(messageId);
+							emitSignal("queue_overflow");
+						}
+						available = liveSubscription ? subscription.readAvailable() : [];
 					}
-					available = liveSubscription.readAvailable();
 				} catch {
 					emitSignal("subscriber_failure");
 					disableLiveSubscription();
 					available = [];
 				}
 				for (const rawMessage of available) {
+					if (!liveSubscription) break;
 					const parsed = LiveTextMessageSchema.safeParse(rawMessage);
 					if (!parsed.success) {
 						emitSignal("malformed_message");
@@ -330,6 +353,11 @@ async function produceRun(
 					if (message.deltaIndex > state.expectedDeltaIndex) {
 						suppressMessage(message.messageId);
 						emitSignal("gap");
+						continue;
+					}
+					if (state.chunks.length >= maxPreviewQueueMessages) {
+						suppressMessage(message.messageId);
+						emitSignal("queue_overflow");
 						continue;
 					}
 					state.chunks.push(message.text);
@@ -387,7 +415,7 @@ async function produceRun(
 			liveWaitController.abort();
 			signal.removeEventListener("abort", onAbort);
 			if (winner.source === "durable") durableWakeup = undefined;
-			if (winner.source === "live" && (winner.failed || !winner.open)) {
+			if (winner.source === "live" && winner.failed) {
 				emitSignal("subscriber_failure");
 				disableLiveSubscription();
 			}
@@ -400,6 +428,7 @@ async function produceRun(
 			await durableSubscription.close();
 		} finally {
 			disableLiveSubscription();
+			await liveSubscriptionClose;
 		}
 	}
 }

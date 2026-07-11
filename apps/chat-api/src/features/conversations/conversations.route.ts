@@ -57,6 +57,13 @@ function isTerminalRunStatus(status: string): boolean {
 	return status === "done" || status === "error" || status === "canceled";
 }
 
+function liveTextSignalHandler(
+	logger: { warn: (event: Record<string, unknown>) => void },
+	message: string,
+): (signal: string) => void {
+	return (signal) => logger.warn({ message, signal });
+}
+
 // POST /v1/conversations — create a conversation, freezing its document scope.
 app.post(
 	"/",
@@ -170,12 +177,10 @@ app.post(
 			c.var.deps.liveTextSubscriber,
 			runId,
 			{
-				onSignal: (signal) => {
-					c.var.logger.warn({
-						message: "Live preview setup state changed",
-						signal,
-					});
-				},
+				onSignal: liveTextSignalHandler(
+					c.var.logger,
+					"Live preview setup state changed",
+				),
 			},
 		);
 		let queuedRun: { runId: string };
@@ -219,12 +224,10 @@ app.post(
 						notifier: c.var.deps.runNotifier,
 						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
-						onLiveTextSignal: (signal) => {
-							c.var.logger.warn({
-								message: "Live preview projection state changed",
-								signal,
-							});
-						},
+						onLiveTextSignal: liveTextSignalHandler(
+							c.var.logger,
+							"Live preview projection state changed",
+						),
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({
@@ -303,12 +306,10 @@ app.get(
 					c.var.deps.liveTextSubscriber,
 					runId,
 					{
-						onSignal: (signal) => {
-							c.var.logger.warn({
-								message: "Live preview setup state changed",
-								signal,
-							});
-						},
+						onSignal: liveTextSignalHandler(
+							c.var.logger,
+							"Live preview setup state changed",
+						),
 					},
 				);
 
@@ -332,12 +333,10 @@ app.get(
 						notifier: c.var.deps.runNotifier,
 						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
-						onLiveTextSignal: (signal) => {
-							c.var.logger.warn({
-								message: "Live preview projection state changed",
-								signal,
-							});
-						},
+						onLiveTextSignal: liveTextSignalHandler(
+							c.var.logger,
+							"Live preview projection state changed",
+						),
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({

@@ -351,6 +351,60 @@ describe("projectRun", () => {
 		expect(signals).toContain("queue_overflow");
 	});
 
+	it("bounds reconciliation state even when the SSE consumer keeps up", async () => {
+		const liveBatches = [
+			[{ runId: "run-1", messageId: "message-1", deltaIndex: 0, text: "a" }],
+			[{ runId: "run-1", messageId: "message-1", deltaIndex: 1, text: "b" }],
+			[{ runId: "run-1", messageId: "message-1", deltaIndex: 2, text: "c" }],
+		];
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[],
+			[],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "abc" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription: {
+						readAvailable: () => liveBatches.shift() ?? [],
+						waitForMessage: async () => true,
+						close: async () => {},
+					},
+					maxPreviewQueueMessages: 2,
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(
+			projected.filter((frame) => frame.type === "text_delta"),
+		).toHaveLength(2);
+		expect(signals).toContain("queue_overflow");
+		expect(projected).toContainEqual({
+			type: "text_commit",
+			messageId: "message-1",
+			text: "abc",
+		});
+	});
+
 	it("ignores a consistent duplicate but suppresses an inconsistent duplicate", async () => {
 		const liveText = new InMemoryLiveTextTransport();
 		const liveSubscription = await liveText.subscribe("run-1");
@@ -744,6 +798,94 @@ describe("projectRun", () => {
 			{ type: "done" },
 		]);
 		expect(closes).toBe(1);
+	});
+
+	it("keeps a healthy Live subscription after an ordinary idle timeout", async () => {
+		let reads = 0;
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "after idle" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+		const signals: string[] = [];
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new BlockingNotifier(),
+					pollTimeoutMs: 1,
+					liveSubscription: {
+						readAvailable: () => {
+							reads++;
+							return reads === 2
+								? [
+										{
+											runId: "run-1",
+											messageId: "message-1",
+											deltaIndex: 0,
+											text: "after idle",
+										},
+									]
+								: [];
+						},
+						waitForMessage: async () => false,
+						close: async () => {},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected).toContainEqual({
+			type: "text_delta",
+			messageId: "message-1",
+			deltaIndex: 0,
+			text: "after idle",
+		});
+		expect(signals).not.toContain("subscriber_failure");
+	});
+
+	it("waits for asynchronous Live cleanup after yielding the terminal frame", async () => {
+		let resolveClose: () => void = () => {};
+		const closeFinished = new Promise<void>((resolve) => {
+			resolveClose = resolve;
+		});
+		const reader = new ScriptedReader([
+			[{ seq: 1, type: RunEventType.Done, payload: {} }],
+		]);
+		const gen = projectRun("run-1", 1, {
+			reader,
+			notifier: new InstantNotifier(),
+			liveSubscription: {
+				readAvailable: () => [],
+				waitForMessage: async () => false,
+				close: async () => closeFinished,
+			},
+		});
+
+		expect((await gen.next()).value?.frame).toEqual({ type: "done" });
+		const finished = gen.next();
+		expect(
+			await Promise.race([
+				finished.then(() => "finished"),
+				Bun.sleep(5).then(() => "closing"),
+			]),
+		).toBe("closing");
+		resolveClose();
+		await expect(finished).resolves.toEqual({ done: true, value: undefined });
 	});
 
 	it("replays committed Assistant messages with durable cursors", async () => {

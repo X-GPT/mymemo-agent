@@ -23,8 +23,8 @@ export interface LiveTextPublisher {
 
 export interface LiveTextSubscription {
 	readAvailable(): LiveTextMessage[];
-	/** Message ids whose preview was dropped since the previous read. */
-	readDroppedMessageIds?(): string[];
+	/** Message ids dropped since the previous read; null means tracking overflowed. */
+	readDroppedMessageIds?(): string[] | null;
 	waitForMessage(options?: {
 		timeoutMs?: number;
 		signal?: AbortSignal;
@@ -40,6 +40,7 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 	readonly #buffer: LiveTextMessage[] = [];
 	readonly #droppedMessageIds = new Set<string>();
 	readonly #waiters = new Set<(available: boolean) => void>();
+	#droppedMessageIdsOverflowed = false;
 	#closed = false;
 
 	constructor(
@@ -51,7 +52,17 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 	enqueue(message: LiveTextMessage): void {
 		if (this.#closed) return;
 		if (this.#buffer.length >= this.maxBufferedMessages) {
-			this.#droppedMessageIds.add(message.messageId);
+			if (
+				!this.#droppedMessageIdsOverflowed &&
+				!this.#droppedMessageIds.has(message.messageId)
+			) {
+				if (this.#droppedMessageIds.size >= this.maxBufferedMessages) {
+					this.#droppedMessageIds.clear();
+					this.#droppedMessageIdsOverflowed = true;
+				} else {
+					this.#droppedMessageIds.add(message.messageId);
+				}
+			}
 			for (const wake of this.#waiters) wake(true);
 			this.#waiters.clear();
 			return;
@@ -66,8 +77,13 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 		return this.#buffer.splice(0);
 	}
 
-	readDroppedMessageIds(): string[] {
+	readDroppedMessageIds(): string[] | null {
 		if (this.#closed) return [];
+		if (this.#droppedMessageIdsOverflowed) {
+			this.#droppedMessageIdsOverflowed = false;
+			this.#droppedMessageIds.clear();
+			return null;
+		}
 		const messageIds = [...this.#droppedMessageIds];
 		this.#droppedMessageIds.clear();
 		return messageIds;
@@ -105,6 +121,7 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 		this.#closed = true;
 		this.#buffer.length = 0;
 		this.#droppedMessageIds.clear();
+		this.#droppedMessageIdsOverflowed = false;
 		for (const wake of this.#waiters) wake(false);
 		this.#waiters.clear();
 		this.onClose();

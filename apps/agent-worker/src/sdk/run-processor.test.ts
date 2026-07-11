@@ -194,6 +194,30 @@ function buildWorker() {
 	});
 }
 
+function stalledPublisher() {
+	let resolveStarted: () => void = () => {};
+	const started = new Promise<void>((resolve) => {
+		resolveStarted = resolve;
+	});
+	let aborted = false;
+	const publisher: LiveTextPublisher = {
+		async publish(_message, options) {
+			resolveStarted();
+			await new Promise<void>((resolve) => {
+				options?.signal?.addEventListener(
+					"abort",
+					() => {
+						aborted = true;
+						resolve();
+					},
+					{ once: true },
+				);
+			});
+		},
+	};
+	return { publisher, started, wasAborted: () => aborted };
+}
+
 async function readRun(runId: string) {
 	const [row] = await tdb.db.select().from(runs).where(eq(runs.runId, runId));
 	return row;
@@ -615,11 +639,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("abandons an open message after cancel_requested and terminalizes as canceled", async () => {
 		const worker = buildWorker();
 		let query: (SupervisedQuery & { interrupts: number }) | undefined;
-		let resolvePublishStarted: () => void = () => {};
-		const publishStarted = new Promise<void>((resolve) => {
-			resolvePublishStarted = resolve;
-		});
-		let publicationAborted = false;
+		const live = stalledPublisher();
 		const loop = buildLoop(
 			worker,
 			async (_run, signal) => {
@@ -627,21 +647,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				return query;
 			},
 			silentLogger,
-			{
-				async publish(_message, options) {
-					resolvePublishStarted();
-					await new Promise<void>((resolve) => {
-						options?.signal?.addEventListener(
-							"abort",
-							() => {
-								publicationAborted = true;
-								resolve();
-							},
-							{ once: true },
-						);
-					});
-				},
-			},
+			live.publisher,
 		);
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -650,7 +656,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick(); // claim + dispatch; processor streams "before cancel"
-		await publishStarted;
+		await live.started;
 
 		// User cancels the running run.
 		await tdb.db
@@ -665,7 +671,65 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const types = (await readEvents("run-1")).map((e) => e.type);
 		expect(types).toEqual(["run_canceled"]);
 		expect(query?.interrupts).toBeGreaterThanOrEqual(1);
-		expect(publicationAborted).toBe(true);
+		expect(live.wasAborted()).toBe(true);
+	});
+
+	it("discards pending preview after ownership loss without terminalizing", async () => {
+		const worker = buildWorker();
+		const live = stalledPublisher();
+		const loop = buildLoop(
+			worker,
+			async (_run, signal) => cancelableQuery(signal, "x".repeat(16_384)),
+			silentLogger,
+			live.publisher,
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await live.started;
+		await tdb.db
+			.update(runs)
+			.set({
+				lockedBy: "worker-2",
+				lockedUntil: sql`now() + interval '60 seconds'`,
+			})
+			.where(eq(runs.runId, "run-1"));
+		await loop.tick();
+		await worker.drain();
+
+		expect(live.wasAborted()).toBe(true);
+		expect((await readRun("run-1"))?.lockedBy).toBe("worker-2");
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
+	it("discards pending preview when shutdown aborts the active Run", async () => {
+		const worker = buildWorker();
+		const live = stalledPublisher();
+		const loop = buildLoop(
+			worker,
+			async (_run, signal) => cancelableQuery(signal, "x".repeat(16_384)),
+			silentLogger,
+			live.publisher,
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await live.started;
+		await loop.stop();
+
+		expect(live.wasAborted()).toBe(true);
+		expect((await readRun("run-1"))?.status).toBe("error");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_error",
+		]);
 	});
 
 	it("advances the agent-session pointer only after a valid successful stream", async () => {
