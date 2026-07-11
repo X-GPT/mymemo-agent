@@ -9,7 +9,6 @@ const TIMED_OUT = Symbol("live text subscription timed out");
 
 export type LiveTextSetupSignal =
 	| "disabled"
-	| "recovered"
 	| "subscription_failure"
 	| "subscription_timeout";
 
@@ -51,10 +50,7 @@ export async function prepareLiveTextSubscription(
 	});
 	try {
 		const result = await Promise.race([prepared, timeout]);
-		if (result !== TIMED_OUT) {
-			emitSignal(options.onSignal, "recovered");
-			return result;
-		}
+		if (result !== TIMED_OUT) return result;
 		emitSignal(options.onSignal, "subscription_timeout");
 		void prepared.then((subscription) => subscription.close()).catch(() => {});
 		return null;

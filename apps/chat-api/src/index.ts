@@ -48,6 +48,7 @@ async function closeProductionLiveText(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	await productionDeps.closeLiveText?.().catch(() => {});
+	productionDeps.liveTextTelemetry.close();
 	process.exit(0);
 }
 process.once("SIGINT", () => void closeProductionLiveText());

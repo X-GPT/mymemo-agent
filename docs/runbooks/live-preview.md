@@ -15,6 +15,10 @@ The CloudWatch namespace `<name-prefix>-<environment>/LivePreview` contains:
   sustained queue overflow. Each alarm requires two breaching 5-minute periods
   out of three, so one short reconnect does not alarm by default.
 
+Production must set `alarm_action_arns` to SNS topics with confirmed incident
+subscriptions. An empty list still creates visible CloudWatch alarms but does
+not page an operator; do not call that configuration production-ready.
+
 Use this Logs Insights query across the chat-api and agent-worker log groups:
 
 ```text
@@ -28,7 +32,9 @@ Interpret the bounded signals as follows:
 
 - `disabled`: `REDIS_URL` is intentionally absent or invalid for that service.
 - `degraded` without a later `recovered` for the same service and reason:
-  the Live path is still unavailable. A nearby `recovered` is a short reconnect.
+  the Live path is still unavailable. Active degradation repeats a payload-free
+  heartbeat every five minutes so a prolonged outage can alarm; a nearby
+  `recovered` stops the heartbeat and is a short reconnect.
 - `attempted`, `delivered`, and `dropped`: compare these outcomes per service.
   `agent-worker` measures publication; `chat-api` measures projection and
   reconciliation.
@@ -66,9 +72,13 @@ those as metric dimensions or Logs Insights grouping fields.
 Use the Terraform kill switch; it removes `REDIS_URL` from both ECS task
 definitions while leaving Redis provisioned for a quick restore:
 
+First prepare `infra/terraform/generated.auto.tfvars` with the currently
+deployed image URIs as described in the Terraform README. Then save and apply
+the reviewed plan:
+
 ```bash
-terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var="live_preview_enabled=false"
-terraform -chdir=infra/terraform apply -var-file=prod.tfvars -var="live_preview_enabled=false"
+terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars -var="live_preview_enabled=false" -out=/tmp/live-preview-disable.tfplan
+terraform -chdir=infra/terraform apply /tmp/live-preview-disable.tfplan
 ```
 
 Review the plan before apply. It should update the two trusted service task
@@ -83,8 +93,8 @@ Set the same variable back to `true`, review the plan, apply, and wait for both
 services to roll:
 
 ```bash
-terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var="live_preview_enabled=true"
-terraform -chdir=infra/terraform apply -var-file=prod.tfvars -var="live_preview_enabled=true"
+terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars -var="live_preview_enabled=true" -out=/tmp/live-preview-restore.tfplan
+terraform -chdir=infra/terraform apply /tmp/live-preview-restore.tfplan
 ```
 
 Run a new conversation turn. Confirm `attempted` and `delivered` outcomes in

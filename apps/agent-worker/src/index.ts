@@ -132,6 +132,7 @@ async function handleShutdownSignal(signal: NodeJS.Signals): Promise<void> {
 	cleanupLoop.stop();
 	await runLoop.stop();
 	await liveTextTransport?.close().catch(() => {});
+	liveTextTelemetry.close();
 	server.stop();
 	logger.info({ message: "agent-worker stopped", workerId });
 	process.exit(0);

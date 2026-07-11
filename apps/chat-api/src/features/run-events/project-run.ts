@@ -34,6 +34,8 @@ export interface ProjectRunDeps {
 	liveSubscription?: LiveTextSubscription;
 	/** Bound on provisional frames waiting for a slow SSE consumer. */
 	maxPreviewQueueMessages?: number;
+	/** Bound on per-message reconciliation state retained for the Live lane. */
+	maxPreviewStateMessages?: number;
 	/** Bound on durable frames before this replayable connection is ended. */
 	maxDurableQueueMessages?: number;
 	/** Payload-free, fixed-vocabulary Live preview degradation signal. */
@@ -41,11 +43,11 @@ export interface ProjectRunDeps {
 }
 
 export const DEFAULT_MAX_PREVIEW_QUEUE_MESSAGES = 64;
+export const DEFAULT_MAX_PREVIEW_STATE_MESSAGES = 64;
 export const DEFAULT_MAX_DURABLE_QUEUE_MESSAGES = 256;
 
 export type ProjectRunLiveTextSignal =
 	| "duplicate_inconsistency"
-	| "durable_backlog"
 	| "gap"
 	| "impossible_ordering"
 	| "late_delta"
@@ -56,6 +58,7 @@ export type ProjectRunLiveTextSignal =
 	| "partial_complete_mismatch"
 	| "queue_overflow"
 	| "reconciliation_overflow"
+	| "slow_client"
 	| "subscriber_failure"
 	| "terminal_open_preview";
 
@@ -67,6 +70,7 @@ interface PreviewState {
 class ProjectionOutput {
 	readonly #durable: ProjectedFrame[] = [];
 	readonly #preview: ProjectedFrame[] = [];
+	readonly #emittedPreviewMessageIds = new Set<string>();
 	readonly #waiters = new Set<() => void>();
 	#finished = false;
 	#error: unknown;
@@ -103,6 +107,15 @@ class ProjectionOutput {
 		this.#preview.length = 0;
 	}
 
+	hasEmittedPreview(messageId: string): boolean {
+		return this.#emittedPreviewMessageIds.has(messageId);
+	}
+
+	clearEmittedPreview(messageId?: string): void {
+		if (messageId === undefined) this.#emittedPreviewMessageIds.clear();
+		else this.#emittedPreviewMessageIds.delete(messageId);
+	}
+
 	hasPreview(): boolean {
 		return this.#preview.length > 0;
 	}
@@ -118,7 +131,12 @@ class ProjectionOutput {
 			const durable = this.#durable.shift();
 			if (durable) return durable;
 			const preview = this.#preview.shift();
-			if (preview) return preview;
+			if (preview) {
+				if (preview.frame.type === "text_delta") {
+					this.#emittedPreviewMessageIds.add(preview.frame.messageId);
+				}
+				return preview;
+			}
 			if (this.#error !== undefined) throw this.#error;
 			if (this.#finished || signal.aborted) return undefined;
 			await new Promise<void>((resolve) => {
@@ -164,11 +182,15 @@ export async function* projectRun(
 		deps.maxPreviewQueueMessages ?? DEFAULT_MAX_PREVIEW_QUEUE_MESSAGES;
 	const maxDurableQueueMessages =
 		deps.maxDurableQueueMessages ?? DEFAULT_MAX_DURABLE_QUEUE_MESSAGES;
+	const maxPreviewStateMessages =
+		deps.maxPreviewStateMessages ?? DEFAULT_MAX_PREVIEW_STATE_MESSAGES;
 	if (
 		!Number.isSafeInteger(maxPreviewQueueMessages) ||
 		maxPreviewQueueMessages < 1 ||
 		!Number.isSafeInteger(maxDurableQueueMessages) ||
-		maxDurableQueueMessages < 1
+		maxDurableQueueMessages < 1 ||
+		!Number.isSafeInteger(maxPreviewStateMessages) ||
+		maxPreviewStateMessages < 1
 	) {
 		throw new Error("Projection queue bounds must be positive integers");
 	}
@@ -212,8 +234,8 @@ async function produceRun(
 	signal: AbortSignal,
 ): Promise<void> {
 	const pollTimeoutMs = deps.pollTimeoutMs ?? 1000;
-	const maxPreviewQueueMessages =
-		deps.maxPreviewQueueMessages ?? DEFAULT_MAX_PREVIEW_QUEUE_MESSAGES;
+	const maxPreviewStateMessages =
+		deps.maxPreviewStateMessages ?? DEFAULT_MAX_PREVIEW_STATE_MESSAGES;
 	const maxDurableQueueMessages =
 		deps.maxDurableQueueMessages ?? DEFAULT_MAX_DURABLE_QUEUE_MESSAGES;
 	const durableSubscription = await deps.notifier.subscribe(runId);
@@ -252,8 +274,9 @@ async function produceRun(
 		if (activeOutcomeMessageIds.delete(messageId)) {
 			emitSignal("message_dropped");
 		}
+		output.clearEmittedPreview(messageId);
 		if (suppressedMessageIds.has(messageId)) return;
-		if (suppressedMessageIds.size >= maxPreviewQueueMessages) {
+		if (suppressedMessageIds.size >= maxPreviewStateMessages) {
 			emitSignal("queue_overflow");
 			suppressedMessageIds.clear();
 			output.clearPreview();
@@ -270,6 +293,7 @@ async function produceRun(
 		previewStates.clear();
 		suppressedMessageIds.clear();
 		output.clearPreview();
+		output.clearEmittedPreview();
 		disableLiveSubscription();
 	};
 	try {
@@ -289,7 +313,7 @@ async function produceRun(
 						if (
 							liveSubscription &&
 							!committedMessageIds.has(frame.messageId) &&
-							committedMessageIds.size >= maxPreviewQueueMessages
+							committedMessageIds.size >= maxPreviewStateMessages
 						) {
 							emitSignal("reconciliation_overflow");
 							committedMessageIds.clear();
@@ -312,8 +336,13 @@ async function produceRun(
 							state &&
 							activeOutcomeMessageIds.delete(frame.messageId)
 						) {
-							emitSignal("message_delivered");
+							emitSignal(
+								output.hasEmittedPreview(frame.messageId)
+									? "message_delivered"
+									: "message_dropped",
+							);
 						}
+						output.clearEmittedPreview(frame.messageId);
 						previewStates.delete(frame.messageId);
 						suppressedMessageIds.delete(frame.messageId);
 					}
@@ -334,7 +363,6 @@ async function produceRun(
 							frame,
 						})
 					) {
-						emitSignal("durable_backlog");
 						disableLiveForRun();
 						return;
 					}
@@ -403,7 +431,7 @@ async function produceRun(
 							emitSignal("gap");
 							continue;
 						}
-						if (previewStates.size >= maxPreviewQueueMessages) {
+						if (previewStates.size >= maxPreviewStateMessages) {
 							emitSignal("queue_overflow");
 							disableLiveForRun();
 							break;
@@ -423,7 +451,7 @@ async function produceRun(
 						emitSignal("gap");
 						continue;
 					}
-					if (state.chunks.length >= maxPreviewQueueMessages) {
+					if (state.chunks.length >= maxPreviewStateMessages) {
 						suppressMessage(message.messageId);
 						emitSignal("queue_overflow");
 						continue;
@@ -440,6 +468,7 @@ async function produceRun(
 							},
 						})
 					) {
+						emitSignal("slow_client");
 						suppressMessage(message.messageId);
 						emitSignal("queue_overflow");
 					}
@@ -492,6 +521,7 @@ async function produceRun(
 			}
 		}
 	} finally {
+		disableLiveForRun();
 		try {
 			await durableSubscription.close();
 		} finally {

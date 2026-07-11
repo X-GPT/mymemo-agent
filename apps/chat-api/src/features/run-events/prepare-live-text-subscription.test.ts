@@ -67,7 +67,7 @@ it("falls back after a bounded wait and closes a subscription that arrives late"
 	expect(signals).toEqual(["subscription_timeout"]);
 });
 
-it("reports recovery when a subscription is prepared", async () => {
+it("does not mistake a healthy subscription attempt for outage recovery", async () => {
 	const signals: string[] = [];
 	const subscription: LiveTextSubscription = {
 		readAvailable: () => [],
@@ -83,5 +83,5 @@ it("reports recovery when a subscription is prepared", async () => {
 			{ onSignal: (signal) => signals.push(signal) },
 		),
 	).resolves.toBe(subscription);
-	expect(signals).toEqual(["recovered"]);
+	expect(signals).toEqual([]);
 });

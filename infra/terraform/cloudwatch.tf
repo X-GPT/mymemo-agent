@@ -66,7 +66,7 @@ resource "aws_cloudwatch_metric_alarm" "live_preview_degraded" {
   period              = 300
   evaluation_periods  = 3
   datapoints_to_alarm = 2
-  threshold           = 2
+  threshold           = 1
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns

@@ -68,3 +68,28 @@ it("cannot let a failing logger affect Live delivery", () => {
 		telemetry.recovered("subscription");
 	}).not.toThrow();
 });
+
+it("heartbeats an active degradation until its recovery transition", async () => {
+	const events: Record<string, unknown>[] = [];
+	const telemetry = createLiveTextTelemetry(
+		"chat-api",
+		{
+			info: (event) => events.push(event),
+			warn: (event) => events.push(event),
+		},
+		{ degradedHeartbeatMs: 5 },
+	);
+
+	telemetry.degraded("redis_connection");
+	await Bun.sleep(12);
+	telemetry.recovered("redis_connection");
+	const countAfterRecovery = events.length;
+	await Bun.sleep(8);
+	telemetry.close();
+
+	expect(
+		events.filter(({ signal }) => signal === "degraded").length,
+	).toBeGreaterThanOrEqual(2);
+	expect(events.filter(({ signal }) => signal === "recovered")).toHaveLength(1);
+	expect(events).toHaveLength(countAfterRecovery);
+});

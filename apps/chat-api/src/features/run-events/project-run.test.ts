@@ -376,6 +376,7 @@ describe("projectRun", () => {
 				.map((frame) => frame.text),
 		).toEqual(["complete first", "complete second"]);
 		expect(signals).toContain("queue_overflow");
+		expect(signals).toContain("slow_client");
 	});
 
 	it("bounds reconciliation state even when the SSE consumer keeps up", async () => {
@@ -416,7 +417,7 @@ describe("projectRun", () => {
 						waitForMessage: async () => true,
 						close: async () => {},
 					},
-					maxPreviewQueueMessages: 2,
+					maxPreviewStateMessages: 2,
 					onLiveTextSignal: (signal) => signals.push(signal),
 				}),
 			),
@@ -473,7 +474,7 @@ describe("projectRun", () => {
 		expect(projected).toEqual([
 			{ type: "conversation_id", conversationId: "conv-1" },
 		]);
-		expect(signals).toContain("durable_backlog");
+		expect(signals).toEqual([]);
 		expect(closes).toBe(1);
 		expect(reader.limits).toEqual([1]);
 
@@ -525,7 +526,7 @@ describe("projectRun", () => {
 				projectRun("run-1", 0, {
 					reader,
 					notifier: new InstantNotifier(),
-					maxPreviewQueueMessages: 1,
+					maxPreviewStateMessages: 1,
 					liveSubscription: {
 						readAvailable: () => [],
 						readDroppedMessages: emptyDropReport,
@@ -1219,6 +1220,44 @@ describe("projectRun", () => {
 
 		expect(await pending).toEqual({ done: true, value: undefined });
 		expect(notifier.closed).toBe(1);
+	});
+
+	it("resolves an attempted preview as dropped when the client disconnects", async () => {
+		const liveText = new InMemoryLiveTextTransport();
+		const liveSubscription = await liveText.subscribe("run-1");
+		await liveText.publish({
+			runId: "run-1",
+			messageId: "message-1",
+			deltaIndex: 0,
+			text: "partial",
+		});
+		const controller = new AbortController();
+		const signals: string[] = [];
+		const gen = projectRun("run-1", 0, {
+			reader: new ScriptedReader([
+				[
+					{
+						seq: 1,
+						type: RunEventType.Started,
+						payload: { conversationId: "conv-1", runId: "run-1" },
+					},
+				],
+				[],
+			]),
+			notifier: new BlockingNotifier(),
+			liveSubscription,
+			signal: controller.signal,
+			onLiveTextSignal: (signal) => signals.push(signal),
+		});
+
+		expect((await gen.next()).value?.frame.type).toBe("conversation_id");
+		expect((await gen.next()).value?.frame.type).toBe("run_id");
+		expect((await gen.next()).value?.frame.type).toBe("text_delta");
+		const pending = gen.next();
+		controller.abort();
+		await pending;
+
+		expect(signals).toEqual(["message_attempted", "message_dropped"]);
 	});
 
 	it("maps run_canceled to canceled and closes (never error)", async () => {

@@ -31,19 +31,16 @@ export function reportWorkerLiveTextPreviewSignal(
 		return;
 	}
 	if (signal.type === "recovered") {
-		telemetry.recovered(
-			signal.reason === "publisher_failure" ? "publisher" : "worker_queue",
-		);
+		// Per-message recovery is not service recovery. Redis transport state owns
+		// the process-wide degraded/recovered transition.
 		return;
 	}
 
 	switch (signal.reason) {
 		case "publisher_failure":
-			telemetry.degraded("publisher");
 			telemetry.record("dropped", "publisher", "dropped");
 			break;
 		case "queue_overflow":
-			telemetry.degraded("worker_queue");
 			telemetry.record("queue_overflow", "worker_queue", "dropped");
 			break;
 		case "mismatch":

@@ -18,7 +18,6 @@ it("maps every chat-api Live degradation path to bounded payload-free signals", 
 	reportChatLiveTextRuntimeSignal(telemetry, "recovered");
 	reportChatLiveTextRuntimeSignal(telemetry, "invalid_message");
 	reportChatLiveTextSetupSignal(telemetry, "subscription_timeout");
-	reportChatLiveTextSetupSignal(telemetry, "recovered");
 	for (const signal of [
 		"message_attempted",
 		"message_delivered",
@@ -26,7 +25,7 @@ it("maps every chat-api Live degradation path to bounded payload-free signals", 
 		"gap",
 		"malformed_message",
 		"queue_overflow",
-		"durable_backlog",
+		"slow_client",
 		"partial_complete_mismatch",
 		"impossible_ordering",
 	] as const) {
@@ -38,8 +37,7 @@ it("maps every chat-api Live degradation path to bounded payload-free signals", 
 		"degraded",
 		"recovered",
 		"malformed",
-		"degraded",
-		"recovered",
+		"dropped",
 		"attempted",
 		"delivered",
 		"dropped",

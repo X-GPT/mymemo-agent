@@ -585,13 +585,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			{
 				message: "Live preview signal",
 				service: "agent-worker",
-				signal: "degraded",
-				reason: "publisher",
-				count: 1,
-			},
-			{
-				message: "Live preview signal",
-				service: "agent-worker",
 				signal: "dropped",
 				reason: "publisher",
 				outcome: "dropped",

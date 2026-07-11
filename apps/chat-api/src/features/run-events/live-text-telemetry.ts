@@ -24,12 +24,9 @@ export function reportChatLiveTextSetupSignal(
 	if (signal === "disabled") {
 		telemetry.disabled("configuration");
 	} else if (signal === "subscription_timeout") {
-		telemetry.degraded("subscription_timeout");
+		telemetry.record("dropped", "subscription_timeout");
 	} else if (signal === "subscription_failure") {
-		telemetry.degraded("subscription");
-	} else {
-		telemetry.recovered("subscription_timeout");
-		telemetry.recovered("subscription");
+		telemetry.record("dropped", "subscription");
 	}
 }
 
@@ -59,14 +56,14 @@ export function reportChatLiveTextProjectionSignal(
 		case "reconciliation_overflow":
 			telemetry.record("queue_overflow", "reconciliation_state");
 			break;
-		case "durable_backlog":
-			telemetry.record("slow_client", "durable_backlog");
+		case "slow_client":
+			telemetry.record("slow_client", "connection_buffer");
 			break;
 		case "partial_complete_mismatch":
 			telemetry.record("mismatch", "partial_complete");
 			break;
 		case "subscriber_failure":
-			telemetry.degraded("subscription");
+			telemetry.record("dropped", "subscription");
 			break;
 		case "duplicate_inconsistency":
 			telemetry.record("impossible_ordering", "duplicate_delta");
