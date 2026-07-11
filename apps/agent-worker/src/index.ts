@@ -10,6 +10,7 @@ import { loadWorkerConfigFromEnv } from "./config/env";
 import { createDocumentSearch } from "./documents/client";
 import { createE2bSandboxProvisioner } from "./e2b/sandbox-provisioner";
 import { startHealthServer } from "./health";
+import { createWorkerLiveTextTransport } from "./live-text";
 import { createLogger } from "./logger";
 import { buildModelClientConfig } from "./model-client";
 import { RunLoop } from "./run-loop";
@@ -26,6 +27,10 @@ import { generateWorkerId } from "./worker-id";
 const config = loadWorkerConfigFromEnv(Bun.env);
 const logger = createLogger(config.logLevel);
 const workerId = generateWorkerId();
+const liveTextTransport = createWorkerLiveTextTransport(
+	config.liveTextRedisUrl,
+	logger,
+);
 // Verify the native CLI before constructing a run loop: a missing or wrong-libc
 // binary must crash boot before this process can claim work.
 const pathToClaudeCodeExecutable = resolveAndVerifyClaudeCodeExecutable();
@@ -81,7 +86,11 @@ const startRunQuery = createStartRunQuery({
 const runLoop = new RunLoop({
 	db,
 	worker,
-	processor: createSdkRunProcessor({ startRunQuery, logger }),
+	processor: createSdkRunProcessor({
+		startRunQuery,
+		logger,
+		liveTextPublisher: liveTextTransport,
+	}),
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 	logger,
 });
@@ -117,6 +126,7 @@ async function handleShutdownSignal(signal: NodeJS.Signals): Promise<void> {
 	logger.info({ message: "Received shutdown signal", signal, workerId });
 	cleanupLoop.stop();
 	await runLoop.stop();
+	await liveTextTransport?.close().catch(() => {});
 	server.stop();
 	logger.info({ message: "agent-worker stopped", workerId });
 	process.exit(0);

@@ -3,7 +3,29 @@ import {
 	InMemoryLiveTextTransport,
 	LIVE_TEXT_MAX_CHUNK_LENGTH,
 	LiveTextMessageSchema,
+	resolveLiveTextRedisUrl,
 } from "./index";
+
+describe("resolveLiveTextRedisUrl", () => {
+	it("accepts only an authenticated TLS Redis URL", () => {
+		expect(
+			resolveLiveTextRedisUrl("rediss://default:secret@redis.internal:6379"),
+		).toBe("rediss://default:secret@redis.internal:6379");
+		expect(
+			resolveLiveTextRedisUrl("rediss://:secret@redis.internal:6379"),
+		).toBe("rediss://:secret@redis.internal:6379");
+		for (const invalid of [
+			undefined,
+			"",
+			"not a URL",
+			"redis://default:secret@redis.internal:6379",
+			"rediss://redis.internal:6379",
+			"rediss://default@redis.internal:6379",
+		]) {
+			expect(resolveLiveTextRedisUrl(invalid)).toBeUndefined();
+		}
+	});
+});
 
 describe("LiveTextMessageSchema", () => {
 	it("accepts the bounded provisional wire message and rejects extra or oversized data", () => {

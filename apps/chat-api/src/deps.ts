@@ -1,6 +1,9 @@
 import {
+	createRedisLiveTextTransport,
 	disabledLiveTextSubscriber,
 	type LiveTextSubscriber,
+	type LiveTextTransport,
+	type RedisLiveTextSignal,
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
@@ -39,6 +42,8 @@ export interface AppDeps {
 	runNotifier: RunNotifier;
 	/** Optional ephemeral Assistant-text preview lane. */
 	liveTextSubscriber: LiveTextSubscriber;
+	/** Close optional Live transport resources during service shutdown. */
+	closeLiveText?: () => Promise<void>;
 	/**
 	 * Server-side gate controlling who may create new agent work. Consulted on
 	 * the new-work paths (conversation create, `user.message`) after identity is
@@ -50,20 +55,43 @@ export interface AppDeps {
 /** Hono environment: pino logger vars plus the injected `AppDeps`. */
 export type AppEnv = PinoEnv & { Variables: { deps: AppDeps } };
 
-export function createDeps(config: ApiConfig): AppDeps {
+export type LiveTextRuntimeSignal = RedisLiveTextSignal | "disabled";
+
+export function createDeps(
+	config: ApiConfig,
+	onLiveTextSignal?: (signal: LiveTextRuntimeSignal) => void,
+): AppDeps {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
 	const conversationStore = new PostgresConversationStore(database);
 	const runStore = new PostgresRunStore(database);
 	const runEventReader = new DrizzleRunEventReader(database);
 	const runNotifier = new PostgresRunNotifier(config.databaseUrl);
+	const emitLiveTextSignal = (signal: LiveTextRuntimeSignal) => {
+		try {
+			onLiveTextSignal?.(signal);
+		} catch {
+			// Telemetry is optional and must never affect boot or request handling.
+		}
+	};
+	const liveTextTransport: LiveTextTransport | undefined =
+		config.liveTextRedisUrl === undefined
+			? undefined
+			: createRedisLiveTextTransport({
+					url: config.liveTextRedisUrl,
+					onSignal: emitLiveTextSignal,
+				});
+	if (!liveTextTransport) emitLiveTextSignal("disabled");
 	return {
 		config,
 		conversationStore,
 		runStore,
 		runEventReader,
 		runNotifier,
-		liveTextSubscriber: disabledLiveTextSubscriber,
+		liveTextSubscriber: liveTextTransport ?? disabledLiveTextSubscriber,
+		closeLiveText: liveTextTransport
+			? () => liveTextTransport.close()
+			: undefined,
 		exposureGate: createExposureGate(config),
 	};
 }

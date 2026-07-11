@@ -125,3 +125,25 @@ describe("loadApiConfigFromEnv — split-runtime core", () => {
 		expect(config.databaseUrl).toContain("mymemo_agent");
 	});
 });
+
+describe("loadApiConfigFromEnv — optional Live Redis lane", () => {
+	it("enables Live preview only for an authenticated TLS URL", () => {
+		const env = baseEnv();
+		env.REDIS_URL = "rediss://default:secret@redis.internal:6379";
+		expect(loadApiConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
+	});
+
+	it("degrades missing, malformed, or insecure Redis configuration", () => {
+		for (const redisUrl of [
+			undefined,
+			"not a URL",
+			"redis://default:secret@redis.internal:6379",
+			"rediss://redis.internal:6379",
+		]) {
+			const env = baseEnv();
+			env.REDIS_URL = redisUrl;
+			expect(() => loadApiConfigFromEnv(env)).not.toThrow();
+			expect(loadApiConfigFromEnv(env).liveTextRedisUrl).toBeUndefined();
+		}
+	});
+});

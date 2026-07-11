@@ -199,3 +199,25 @@ describe("loadWorkerConfigFromEnv — LoadDocuments caps", () => {
 		);
 	});
 });
+
+describe("loadWorkerConfigFromEnv — optional Live Redis lane", () => {
+	it("enables Live preview only for an authenticated TLS URL", () => {
+		const env = baseEnv();
+		env.REDIS_URL = "rediss://default:secret@redis.internal:6379";
+		expect(loadWorkerConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
+	});
+
+	it("degrades missing, malformed, or insecure Redis configuration", () => {
+		for (const redisUrl of [
+			undefined,
+			"not a URL",
+			"redis://default:secret@redis.internal:6379",
+			"rediss://redis.internal:6379",
+		]) {
+			const env = baseEnv();
+			env.REDIS_URL = redisUrl;
+			expect(() => loadWorkerConfigFromEnv(env)).not.toThrow();
+			expect(loadWorkerConfigFromEnv(env).liveTextRedisUrl).toBeUndefined();
+		}
+	});
+});

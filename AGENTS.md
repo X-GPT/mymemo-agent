@@ -190,6 +190,10 @@ Optional:
 - `AGENT_EXPOSURE_BREAK_GLASS` (default: off) — operator break-glass for the agent exposure gate. When `true`, new agent work is allowed without Statsig (local dev, or an incident where Statsig is unavailable) and `STATSIG_SERVER_SECRET` is not required. When off (production default), the gate fails closed
 - `DB_PASSWORD` — spliced into `AGENT_DATABASE_URL` when it is passwordless (the form the platform injects)
 - `DB_SSL` (default: on; set `disable` for a local non-TLS Postgres)
+- `REDIS_URL` — optional authenticated `rediss://` secret for cursorless Live
+  preview. Missing, malformed, insecure, or unreachable configuration disables
+  only the Live lane; boot, health, and durable Postgres projection remain
+  operational. Never logged or passed into E2B
 
 ### agent-worker
 
@@ -214,6 +218,10 @@ Optional:
 - `WORKER_CLEANUP_INTERVAL_MS` (default: `300000`) — how often the worker-embedded orphan/deleted-conversation cleanup loop (Task 8.1, ADR-0007) attempts a pass; the pass is single-flighted across replicas by a Postgres advisory lock, so only one worker runs it at a time
 - `PORT` (default: `8080`) — `/health` endpoint port
 - `LOG_LEVEL` (default: `info`)
+- `REDIS_URL` — optional authenticated `rediss://` secret for cursorless Live
+  preview. Missing, malformed, insecure, or unreachable configuration disables
+  only the Live lane; boot, health, and Run execution remain operational. Never
+  logged or passed into E2B
 - `DB_PASSWORD` — spliced into `AGENT_DATABASE_URL` when passwordless; `DB_SSL` (default: on; `disable` for local non-TLS)
 
 ## Agent skills
