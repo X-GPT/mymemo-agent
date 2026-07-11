@@ -94,4 +94,26 @@ describe("InMemoryLiveTextTransport", () => {
 
 		await expect(waiting).resolves.toBe(false);
 	});
+
+	it("reports dropped message ids when the per-connection buffer overflows", async () => {
+		const transport = new InMemoryLiveTextTransport(1);
+		const subscription = await transport.subscribe("run-1");
+
+		await transport.publish({
+			runId: "run-1",
+			messageId: "message-1",
+			deltaIndex: 0,
+			text: "prefix",
+		});
+		await transport.publish({
+			runId: "run-1",
+			messageId: "message-1",
+			deltaIndex: 1,
+			text: "dropped",
+		});
+
+		expect(subscription.readDroppedMessageIds?.()).toEqual(["message-1"]);
+		expect(subscription.readDroppedMessageIds?.()).toEqual([]);
+		expect(subscription.readAvailable()).toHaveLength(1);
+	});
 });

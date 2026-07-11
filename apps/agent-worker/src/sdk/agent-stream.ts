@@ -2,7 +2,10 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AssistantTextPayload } from "@mymemo/agent-db/run-events";
 import type { LiveTextPublisher } from "@mymemo/live-text";
 import { AssistantMessageAssembler } from "./assistant-message-assembler";
-import { LiveTextPreview } from "./live-text-preview";
+import {
+	LiveTextPreview,
+	type LiveTextPreviewSignal,
+} from "./live-text-preview";
 
 /**
  * The subset of the Claude Agent SDK's `Query` handle the run supervisor
@@ -83,6 +86,8 @@ export interface ConsumeAgentStreamParams {
 	appendAssistantMessage: (message: AssistantTextPayload) => Promise<void>;
 	liveTextPublisher?: LiveTextPublisher;
 	liveTextCoalesceWindowMs?: number;
+	/** Payload-free, fixed-vocabulary Live preview transport signal. */
+	onLiveTextSignal?: (signal: LiveTextPreviewSignal) => void;
 	/** Payload-free signal that disables Live preview for the rest of the Run. */
 	onPartialCompleteMismatch?: () => void;
 }
@@ -122,6 +127,7 @@ export async function consumeAgentStream(
 					runId: params.runId,
 					publisher: params.liveTextPublisher,
 					coalesceWindowMs: params.liveTextCoalesceWindowMs,
+					onSignal: params.onLiveTextSignal,
 				})
 			: undefined;
 	const abandonOpenMessage = () => {
@@ -174,5 +180,6 @@ export async function consumeAgentStream(
 		throw error;
 	} finally {
 		signal.removeEventListener("abort", interrupt);
+		preview?.close();
 	}
 }

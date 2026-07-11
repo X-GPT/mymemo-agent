@@ -379,7 +379,26 @@ describe("POST /v1/conversations/:id/events", () => {
 		const subscriber: LiveTextSubscriber = {
 			async subscribe(runId) {
 				order.push("subscribe");
-				return liveText.subscribe(runId);
+				const subscription = await liveText.subscribe(runId);
+				await liveText.publish({
+					runId,
+					messageId: "message-1",
+					deltaIndex: 0,
+					text: "hel",
+				});
+				await liveText.publish({
+					runId,
+					messageId: "message-1",
+					deltaIndex: 1,
+					text: "lo",
+				});
+				await liveText.publish({
+					runId,
+					messageId: "message-2",
+					deltaIndex: 0,
+					text: "again",
+				});
+				return subscription;
 			},
 		};
 		const durableReader = new DrizzleRunEventReader(tdb.db);
@@ -426,26 +445,24 @@ describe("POST /v1/conversations/:id/events", () => {
 			const admittedRunId = admittedRuns[0]?.runId;
 			if (!admittedRunId) throw new Error("route did not admit a Run");
 			expect(admittedRunId).toMatch(/^[0-9a-f-]{36}$/);
-			await liveText.publish({
-				runId: admittedRunId,
-				messageId: "message-1",
-				deltaIndex: 0,
-				text: "hel",
+			let resolvePreview: () => void = () => {};
+			const previewReceived = new Promise<void>((resolve) => {
+				resolvePreview = resolve;
 			});
-			await liveText.publish({
-				runId: admittedRunId,
-				messageId: "message-1",
-				deltaIndex: 1,
-				text: "lo",
-			});
-			await liveText.publish({
-				runId: admittedRunId,
-				messageId: "message-2",
-				deltaIndex: 0,
-				text: "again",
-			});
-			const body = res.text();
+			const body = (async () => {
+				const reader = res.body?.getReader();
+				if (!reader) return "";
+				const decoder = new TextDecoder();
+				let text = "";
+				for (;;) {
+					const { value, done } = await reader.read();
+					if (done) return text;
+					text += decoder.decode(value);
+					if (text.includes("text_delta")) resolvePreview();
+				}
+			})();
 			await firstRead;
+			await previewReceived;
 			await tdb.db.insert(runEvents).values([
 				{
 					runId: admittedRunId,
@@ -915,6 +932,108 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(text).not.toContain("text_delta");
 		expect(text).not.toContain("conversation_id");
 		expect(queued).toHaveLength(0);
+	});
+
+	it("suppresses a mid-message reconnect preview but accepts the next complete message", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const { eventsByRun, runOwners } = fakeRuns;
+		runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+		});
+		eventsByRun.set("run-1", [
+			{
+				seq: 1,
+				type: RunEventType.Started,
+				payload: { conversationId: "conv-1", runId: "run-1" },
+			},
+			{
+				seq: 2,
+				type: RunEventType.AssistantText,
+				payload: { messageId: "message-1", text: "complete first" },
+			},
+			{
+				seq: 3,
+				type: RunEventType.AssistantText,
+				payload: { messageId: "message-2", text: "complete second" },
+			},
+			{ seq: 4, type: RunEventType.Done, payload: {} },
+		]);
+		let reads = 0;
+		const runEventReader: RunEventReader = {
+			async read(runId, afterSeq) {
+				reads++;
+				if (reads === 1) return [];
+				return (eventsByRun.get(runId) ?? []).filter(
+					(event) => event.seq > afterSeq,
+				);
+			},
+		};
+		const liveText = new InMemoryLiveTextTransport();
+		const subscriber: LiveTextSubscriber = {
+			async subscribe(runId) {
+				const subscription = await liveText.subscribe(runId);
+				await liveText.publish({
+					runId,
+					messageId: "message-1",
+					deltaIndex: 5,
+					text: "suffix must be suppressed",
+				});
+				await liveText.publish({
+					runId,
+					messageId: "message-2",
+					deltaIndex: 0,
+					text: "complete second",
+				});
+				return subscription;
+			},
+		};
+
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			{ ...fakeRuns, runEventReader },
+			subscriber,
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: { ...identityHeaders, "last-event-id": "1" },
+		});
+
+		expect(res.status).toBe(200);
+		const frames = parseSseFrames(await res.text());
+		expect(frames).toEqual([
+			{
+				event: "text_delta",
+				data: {
+					type: "text_delta",
+					messageId: "message-2",
+					deltaIndex: 0,
+					text: "complete second",
+				},
+			},
+			{
+				id: "2",
+				event: "text_commit",
+				data: {
+					type: "text_commit",
+					messageId: "message-1",
+					text: "complete first",
+				},
+			},
+			{
+				id: "3",
+				event: "text_commit",
+				data: {
+					type: "text_commit",
+					messageId: "message-2",
+					text: "complete second",
+				},
+			},
+			{ id: "4", event: "done", data: { type: "done" } },
+		]);
+		expect(JSON.stringify(frames)).not.toContain("suffix must be suppressed");
 	});
 
 	it("streams a terminal historical run to completion and closes", async () => {

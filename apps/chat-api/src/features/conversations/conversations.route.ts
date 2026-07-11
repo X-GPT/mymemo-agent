@@ -169,6 +169,14 @@ app.post(
 		const liveSubscription = await prepareLiveTextSubscription(
 			c.var.deps.liveTextSubscriber,
 			runId,
+			{
+				onSignal: (signal) => {
+					c.var.logger.warn({
+						message: "Live preview setup state changed",
+						signal,
+					});
+				},
+			},
 		);
 		let queuedRun: { runId: string };
 		try {
@@ -211,6 +219,12 @@ app.post(
 						notifier: c.var.deps.runNotifier,
 						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
+						onLiveTextSignal: (signal) => {
+							c.var.logger.warn({
+								message: "Live preview projection state changed",
+								signal,
+							});
+						},
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({
@@ -283,6 +297,20 @@ app.get(
 		if (isTerminalRunStatus(run.status) && afterSeq >= run.nextEventSeq - 1) {
 			return new Response(null, { status: 204 });
 		}
+		const liveSubscription = isTerminalRunStatus(run.status)
+			? null
+			: await prepareLiveTextSubscription(
+					c.var.deps.liveTextSubscriber,
+					runId,
+					{
+						onSignal: (signal) => {
+							c.var.logger.warn({
+								message: "Live preview setup state changed",
+								signal,
+							});
+						},
+					},
+				);
 
 		const requestSignal = c.req.raw.signal;
 		return streamSSE(
@@ -302,7 +330,14 @@ app.get(
 					for await (const projected of projectRun(runId, afterSeq, {
 						reader: c.var.deps.runEventReader,
 						notifier: c.var.deps.runNotifier,
+						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
+						onLiveTextSignal: (signal) => {
+							c.var.logger.warn({
+								message: "Live preview projection state changed",
+								signal,
+							});
+						},
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({

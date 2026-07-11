@@ -15,11 +15,16 @@ export const LiveTextMessageSchema = z
 export type LiveTextMessage = z.infer<typeof LiveTextMessageSchema>;
 
 export interface LiveTextPublisher {
-	publish(message: LiveTextMessage): Promise<void>;
+	publish(
+		message: LiveTextMessage,
+		options?: { signal?: AbortSignal },
+	): Promise<void>;
 }
 
 export interface LiveTextSubscription {
 	readAvailable(): LiveTextMessage[];
+	/** Message ids whose preview was dropped since the previous read. */
+	readDroppedMessageIds?(): string[];
 	waitForMessage(options?: {
 		timeoutMs?: number;
 		signal?: AbortSignal;
@@ -33,6 +38,7 @@ export interface LiveTextSubscriber {
 
 class InMemoryLiveTextSubscription implements LiveTextSubscription {
 	readonly #buffer: LiveTextMessage[] = [];
+	readonly #droppedMessageIds = new Set<string>();
 	readonly #waiters = new Set<(available: boolean) => void>();
 	#closed = false;
 
@@ -43,7 +49,13 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 	) {}
 
 	enqueue(message: LiveTextMessage): void {
-		if (this.#closed || this.#buffer.length >= this.maxBufferedMessages) return;
+		if (this.#closed) return;
+		if (this.#buffer.length >= this.maxBufferedMessages) {
+			this.#droppedMessageIds.add(message.messageId);
+			for (const wake of this.#waiters) wake(true);
+			this.#waiters.clear();
+			return;
+		}
 		this.#buffer.push(message);
 		for (const wake of this.#waiters) wake(true);
 		this.#waiters.clear();
@@ -52,6 +64,13 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 	readAvailable(): LiveTextMessage[] {
 		if (this.#closed) return [];
 		return this.#buffer.splice(0);
+	}
+
+	readDroppedMessageIds(): string[] {
+		if (this.#closed) return [];
+		const messageIds = [...this.#droppedMessageIds];
+		this.#droppedMessageIds.clear();
+		return messageIds;
 	}
 
 	async waitForMessage(
@@ -85,6 +104,7 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#buffer.length = 0;
+		this.#droppedMessageIds.clear();
 		for (const wake of this.#waiters) wake(false);
 		this.#waiters.clear();
 		this.onClose();
@@ -106,8 +126,13 @@ export class InMemoryLiveTextTransport
 		}
 	}
 
-	async publish(message: LiveTextMessage): Promise<void> {
+	async publish(
+		message: LiveTextMessage,
+		options: { signal?: AbortSignal } = {},
+	): Promise<void> {
+		if (options.signal?.aborted) return;
 		const parsed = LiveTextMessageSchema.parse(message);
+		if (options.signal?.aborted) return;
 		for (const subscription of this.#subscriptions.get(parsed.runId) ?? []) {
 			subscription.enqueue(parsed);
 		}
@@ -131,8 +156,16 @@ export class InMemoryLiveTextTransport
 	}
 }
 
+export class LiveTextDisabledError extends Error {
+	override name = "LiveTextDisabledError" as const;
+
+	constructor() {
+		super("Live text is disabled");
+	}
+}
+
 export const disabledLiveTextSubscriber: LiveTextSubscriber = {
 	async subscribe() {
-		throw new Error("Live text is disabled");
+		throw new LiveTextDisabledError();
 	},
 };

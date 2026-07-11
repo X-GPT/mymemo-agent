@@ -4,40 +4,71 @@ import {
 } from "@mymemo/live-text";
 
 export const LIVE_TEXT_COALESCE_WINDOW_MS = 50;
+export const LIVE_TEXT_MAX_QUEUED_MESSAGES = 32;
+
+export type LiveTextPreviewSignal =
+	| "publisher_failure"
+	| "queue_overflow"
+	| "recovered";
+
+interface QueuedPreview {
+	messageId: string;
+	deltaIndex: number;
+	text: string;
+}
 
 export class LiveTextPreview {
 	readonly #runId: string;
 	readonly #publisher: LiveTextPublisher;
 	readonly #coalesceWindowMs: number;
+	readonly #maxQueuedMessages: number;
+	readonly #onSignal?: (signal: LiveTextPreviewSignal) => void;
+	readonly #queue: QueuedPreview[] = [];
+	readonly #failedMessageIds = new Set<string>();
 	#messageId: string | null = null;
 	#deltaIndex = 0;
 	#pendingText = "";
 	#timer: ReturnType<typeof setTimeout> | undefined;
-	#publishChain: Promise<void> = Promise.resolve();
-	#failedMessageId: string | null = null;
+	#publishing = false;
+	#publishController: AbortController | undefined;
+	#inFlightMessageId: string | null = null;
+	#degraded = false;
 	#disabled = false;
+	#closed = false;
 
 	constructor(options: {
 		runId: string;
 		publisher: LiveTextPublisher;
 		coalesceWindowMs?: number;
+		maxQueuedMessages?: number;
+		onSignal?: (signal: LiveTextPreviewSignal) => void;
 	}) {
 		this.#runId = options.runId;
 		this.#publisher = options.publisher;
 		this.#coalesceWindowMs =
 			options.coalesceWindowMs ?? LIVE_TEXT_COALESCE_WINDOW_MS;
+		this.#maxQueuedMessages =
+			options.maxQueuedMessages ?? LIVE_TEXT_MAX_QUEUED_MESSAGES;
+		this.#onSignal = options.onSignal;
 		if (
 			this.#coalesceWindowMs < 0 ||
 			this.#coalesceWindowMs > LIVE_TEXT_COALESCE_WINDOW_MS
 		) {
 			throw new Error("Live text coalescing must be between 0 and 50 ms");
 		}
+		if (
+			!Number.isSafeInteger(this.#maxQueuedMessages) ||
+			this.#maxQueuedMessages < 1
+		) {
+			throw new Error("Live text queue bound must be a positive integer");
+		}
 	}
 
 	append(messageId: string, text: string): void {
 		if (
+			this.#closed ||
 			this.#disabled ||
-			this.#failedMessageId === messageId ||
+			this.#failedMessageIds.has(messageId) ||
 			text.length === 0
 		)
 			return;
@@ -61,23 +92,42 @@ export class LiveTextPreview {
 	async flushMessage(): Promise<void> {
 		this.#clearTimer();
 		this.#enqueuePending();
-		await this.#publishChain;
+		const completedMessageId = this.#messageId;
 		this.#messageId = null;
 		this.#deltaIndex = 0;
-		this.#failedMessageId = null;
+		if (
+			completedMessageId !== null &&
+			this.#inFlightMessageId !== completedMessageId
+		) {
+			this.#failedMessageIds.delete(completedMessageId);
+		}
 	}
 
 	disable(): void {
-		this.abandon();
 		this.#disabled = true;
+		this.#discardAll();
 	}
 
 	abandon(): void {
 		this.#clearTimer();
 		this.#pendingText = "";
-		this.#failedMessageId = this.#messageId;
+		const messageId = this.#messageId;
+		if (messageId !== null) {
+			this.#failedMessageIds.add(messageId);
+			this.#discardQueuedMessage(messageId);
+			if (this.#inFlightMessageId === messageId) {
+				this.#publishController?.abort();
+			}
+		}
 		this.#messageId = null;
 		this.#deltaIndex = 0;
+	}
+
+	close(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#discardAll();
+		this.#failedMessageIds.clear();
 	}
 
 	#enqueuePending(): void {
@@ -89,22 +139,100 @@ export class LiveTextPreview {
 
 	#enqueue(text: string): void {
 		const messageId = this.#messageId;
-		if (this.#disabled || messageId === null || text.length === 0) return;
+		if (
+			this.#closed ||
+			this.#disabled ||
+			messageId === null ||
+			this.#failedMessageIds.has(messageId) ||
+			text.length === 0
+		)
+			return;
 		const deltaIndex = this.#deltaIndex++;
-		this.#publishChain = this.#publishChain.then(async () => {
-			if (this.#disabled || this.#failedMessageId === messageId) return;
-			try {
-				await this.#publisher.publish({
-					runId: this.#runId,
-					messageId,
-					deltaIndex,
-					text,
-				});
-			} catch {
-				// Preview is optional. A transport failure must never fail the Run.
-				this.#failedMessageId = messageId;
+		if (this.#queue.length >= this.#maxQueuedMessages) {
+			this.#failMessage(messageId, "queue_overflow");
+			return;
+		}
+		this.#queue.push({ messageId, deltaIndex, text });
+		this.#pump();
+	}
+
+	#pump(): void {
+		if (this.#closed || this.#disabled || this.#publishing) return;
+		const next = this.#queue.shift();
+		if (!next) return;
+		if (this.#failedMessageIds.has(next.messageId)) {
+			this.#pump();
+			return;
+		}
+
+		this.#publishing = true;
+		this.#inFlightMessageId = next.messageId;
+		const controller = new AbortController();
+		this.#publishController = controller;
+		let publication: Promise<void>;
+		try {
+			publication = this.#publisher.publish(
+				{ runId: this.#runId, ...next },
+				{ signal: controller.signal },
+			);
+		} catch {
+			publication = Promise.reject(new Error("Live text publisher threw"));
+		}
+		void publication
+			.then(
+				() => {
+					if (
+						!controller.signal.aborted &&
+						!this.#failedMessageIds.has(next.messageId) &&
+						this.#degraded
+					) {
+						this.#degraded = false;
+						this.#onSignal?.("recovered");
+					}
+				},
+				() => {
+					if (!controller.signal.aborted) {
+						this.#failMessage(next.messageId, "publisher_failure");
+					}
+				},
+			)
+			.finally(() => {
+				this.#publishing = false;
+				this.#inFlightMessageId = null;
+				if (this.#publishController === controller) {
+					this.#publishController = undefined;
+				}
+				if (this.#messageId !== next.messageId) {
+					this.#failedMessageIds.delete(next.messageId);
+				}
+				this.#pump();
+			});
+	}
+
+	#failMessage(messageId: string, signal: LiveTextPreviewSignal): void {
+		if (this.#failedMessageIds.has(messageId)) return;
+		this.#failedMessageIds.add(messageId);
+		this.#degraded = true;
+		if (this.#messageId === messageId) this.#pendingText = "";
+		this.#discardQueuedMessage(messageId);
+		this.#onSignal?.(signal);
+	}
+
+	#discardQueuedMessage(messageId: string): void {
+		for (let index = this.#queue.length - 1; index >= 0; index--) {
+			if (this.#queue[index]?.messageId === messageId) {
+				this.#queue.splice(index, 1);
 			}
-		});
+		}
+	}
+
+	#discardAll(): void {
+		this.#clearTimer();
+		this.#pendingText = "";
+		this.#queue.length = 0;
+		this.#publishController?.abort();
+		this.#messageId = null;
+		this.#deltaIndex = 0;
 	}
 
 	#clearTimer(): void {

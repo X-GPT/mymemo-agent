@@ -38,6 +38,9 @@ export interface SdkRunProcessorDeps {
  */
 export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 	return async (ctx) => {
+		if (!deps.liveTextPublisher) {
+			deps.logger.info({ message: "Live preview disabled" });
+		}
 		const query = await deps.startRunQuery(ctx.run, ctx.signal);
 		const outcome = await consumeAgentStream({
 			runId: ctx.run.runId,
@@ -45,12 +48,17 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 			signal: ctx.signal,
 			appendAssistantMessage: ctx.appendAssistantMessage,
 			liveTextPublisher: deps.liveTextPublisher,
+			onLiveTextSignal: (signal) => {
+				const event = {
+					message: "Live preview transport state changed",
+					signal,
+				};
+				if (signal === "recovered") deps.logger.info(event);
+				else deps.logger.warn(event);
+			},
 			onPartialCompleteMismatch: () => {
 				deps.logger.warn({
 					message: "assistant Live preview disabled after text mismatch",
-					userId: ctx.run.userId,
-					conversationId: ctx.run.conversationId,
-					runId: ctx.run.runId,
 				});
 			},
 		});
