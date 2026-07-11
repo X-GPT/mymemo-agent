@@ -29,8 +29,21 @@ _Avoid_: lease (that word belongs to the decommissioned prototype path)
 
 **Run event**:
 One record in a run's durable, ordered event log — the source of truth for
-what happened during a run and the only source for anything streamed to the
-client.
+what happened during a run and the only source for replay. A live preview may
+be streamed separately while a run is active, but it never outranks the
+durable record.
+
+**Live preview**:
+Provisional assistant text shown while its durable assistant message is still
+being produced. It may be incomplete or missed; it is committed by the durable
+message, or discarded if the run ends before that message completes.
+_Avoid_: transcript, run event, token stream
+
+**Assistant message**:
+One complete model-authored provider response within a run, regardless of how
+many content blocks carry it. Its durable text commits any live preview of that
+response and is the form used for replay.
+_Avoid_: text delta, token stream
 
 **Outcome**:
 The single way a run ends: `done`, `error`, or `canceled`. One word per
