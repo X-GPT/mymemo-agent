@@ -126,6 +126,18 @@ variable "live_redis_engine_version" {
   default     = "7.1"
 }
 
+variable "live_preview_enabled" {
+  description = "Inject REDIS_URL into trusted agent services. Set false to disable only the optional Live preview lane while leaving Redis provisioned."
+  type        = bool
+  default     = true
+}
+
+variable "alarm_action_arns" {
+  description = "Optional SNS topic ARNs notified by Live preview CloudWatch alarms."
+  type        = list(string)
+  default     = []
+}
+
 variable "assign_public_ip" {
   description = "Inherited existing-network constraint: current mymemo-service ECS subnets are public/default subnets with no NAT/VPC endpoint egress path, so agent ECS tasks need public IPs."
   type        = bool

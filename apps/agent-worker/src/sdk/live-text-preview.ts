@@ -6,10 +6,21 @@ import {
 export const LIVE_TEXT_COALESCE_WINDOW_MS = 50;
 export const LIVE_TEXT_MAX_QUEUED_MESSAGES = 32;
 
-export type LiveTextPreviewSignal =
+export type LiveTextPreviewDropReason =
+	| "mismatch"
 	| "publisher_failure"
 	| "queue_overflow"
-	| "recovered";
+	| "run_aborted"
+	| "run_ended";
+
+export type LiveTextPreviewSignal =
+	| { type: "attempted" }
+	| { type: "delivered" }
+	| { type: "dropped"; reason: LiveTextPreviewDropReason }
+	| {
+			type: "recovered";
+			reason: "publisher_failure" | "queue_overflow";
+	  };
 
 interface QueuedPreview {
 	messageId: string;
@@ -25,6 +36,9 @@ export class LiveTextPreview {
 	readonly #onSignal?: (signal: LiveTextPreviewSignal) => void;
 	readonly #queue: QueuedPreview[] = [];
 	readonly #failedMessageIds = new Set<string>();
+	readonly #attemptedMessageIds = new Set<string>();
+	readonly #completedMessageIds = new Set<string>();
+	readonly #resolvedMessageIds = new Set<string>();
 	#messageId: string | null = null;
 	#deltaIndex = 0;
 	#pendingText = "";
@@ -32,7 +46,7 @@ export class LiveTextPreview {
 	#publishing = false;
 	#publishController: AbortController | undefined;
 	#inFlightMessageId: string | null = null;
-	#degraded = false;
+	#degradedReason: "publisher_failure" | "queue_overflow" | undefined;
 	#disabled = false;
 	#closed = false;
 
@@ -75,6 +89,10 @@ export class LiveTextPreview {
 		if (this.#messageId !== null && this.#messageId !== messageId) {
 			throw new Error("Live text message changed before message_stop");
 		}
+		if (!this.#attemptedMessageIds.has(messageId)) {
+			this.#attemptedMessageIds.add(messageId);
+			this.#emitSignal({ type: "attempted" });
+		}
 		this.#messageId = messageId;
 		this.#pendingText += text;
 		while (this.#pendingText.length >= LIVE_TEXT_MAX_CHUNK_LENGTH) {
@@ -95,6 +113,10 @@ export class LiveTextPreview {
 		const completedMessageId = this.#messageId;
 		this.#messageId = null;
 		this.#deltaIndex = 0;
+		if (completedMessageId !== null) {
+			this.#completedMessageIds.add(completedMessageId);
+			this.#maybeMarkDelivered(completedMessageId);
+		}
 		if (
 			completedMessageId !== null &&
 			this.#inFlightMessageId !== completedMessageId
@@ -103,30 +125,19 @@ export class LiveTextPreview {
 		}
 	}
 
-	disable(): void {
+	disable(reason: LiveTextPreviewDropReason = "mismatch"): void {
 		this.#disabled = true;
-		this.#discardAll();
+		this.#discardAll(reason);
 	}
 
 	abandon(): void {
-		this.#clearTimer();
-		this.#pendingText = "";
-		const messageId = this.#messageId;
-		if (messageId !== null) {
-			this.#failedMessageIds.add(messageId);
-			this.#discardQueuedMessage(messageId);
-			if (this.#inFlightMessageId === messageId) {
-				this.#publishController?.abort();
-			}
-		}
-		this.#messageId = null;
-		this.#deltaIndex = 0;
+		this.#discardAll("run_aborted");
 	}
 
 	close(): void {
 		if (this.#closed) return;
 		this.#closed = true;
-		this.#discardAll();
+		this.#discardAll("run_ended");
 		this.#failedMessageIds.clear();
 	}
 
@@ -184,10 +195,11 @@ export class LiveTextPreview {
 					if (
 						!controller.signal.aborted &&
 						!this.#failedMessageIds.has(next.messageId) &&
-						this.#degraded
+						this.#degradedReason !== undefined
 					) {
-						this.#degraded = false;
-						this.#emitSignal("recovered");
+						const reason = this.#degradedReason;
+						this.#degradedReason = undefined;
+						this.#emitSignal({ type: "recovered", reason });
 					}
 				},
 				() => {
@@ -205,17 +217,21 @@ export class LiveTextPreview {
 				if (this.#messageId !== next.messageId) {
 					this.#failedMessageIds.delete(next.messageId);
 				}
+				this.#maybeMarkDelivered(next.messageId);
 				this.#pump();
 			});
 	}
 
-	#failMessage(messageId: string, signal: LiveTextPreviewSignal): void {
+	#failMessage(
+		messageId: string,
+		reason: "publisher_failure" | "queue_overflow",
+	): void {
 		if (this.#failedMessageIds.has(messageId)) return;
 		this.#failedMessageIds.add(messageId);
-		this.#degraded = true;
+		this.#degradedReason = reason;
 		if (this.#messageId === messageId) this.#pendingText = "";
 		this.#discardQueuedMessage(messageId);
-		this.#emitSignal(signal);
+		this.#markDropped(messageId, reason);
 	}
 
 	#emitSignal(signal: LiveTextPreviewSignal): void {
@@ -234,13 +250,41 @@ export class LiveTextPreview {
 		}
 	}
 
-	#discardAll(): void {
+	#discardAll(reason: LiveTextPreviewDropReason): void {
 		this.#clearTimer();
 		this.#pendingText = "";
 		this.#queue.length = 0;
 		this.#publishController?.abort();
 		this.#messageId = null;
 		this.#deltaIndex = 0;
+		for (const messageId of this.#attemptedMessageIds) {
+			this.#markDropped(messageId, reason);
+		}
+	}
+
+	#maybeMarkDelivered(messageId: string): void {
+		if (
+			!this.#completedMessageIds.has(messageId) ||
+			this.#failedMessageIds.has(messageId) ||
+			this.#resolvedMessageIds.has(messageId) ||
+			this.#inFlightMessageId === messageId ||
+			this.#queue.some((queued) => queued.messageId === messageId)
+		) {
+			return;
+		}
+		this.#resolvedMessageIds.add(messageId);
+		this.#emitSignal({ type: "delivered" });
+	}
+
+	#markDropped(messageId: string, reason: LiveTextPreviewDropReason): void {
+		if (
+			!this.#attemptedMessageIds.has(messageId) ||
+			this.#resolvedMessageIds.has(messageId)
+		) {
+			return;
+		}
+		this.#resolvedMessageIds.add(messageId);
+		this.#emitSignal({ type: "dropped", reason });
 	}
 
 	#clearTimer(): void {

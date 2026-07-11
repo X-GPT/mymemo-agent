@@ -5,6 +5,10 @@ import { validator as zValidator } from "hono-openapi";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import { projectRun } from "@/features/run-events";
+import {
+	reportChatLiveTextProjectionSignal,
+	reportChatLiveTextSetupSignal,
+} from "@/features/run-events/live-text-telemetry";
 import { prepareLiveTextSubscription } from "@/features/run-events/prepare-live-text-subscription";
 import { ActiveRunExistsError } from "@/features/run-store";
 import { HonoSSESender } from "@/features/streaming/sse-sender";
@@ -55,13 +59,6 @@ function lastEventIdFromContext(c: {
 
 function isTerminalRunStatus(status: string): boolean {
 	return status === "done" || status === "error" || status === "canceled";
-}
-
-function liveTextSignalHandler(
-	logger: { warn: (event: Record<string, unknown>) => void },
-	message: string,
-): (signal: string) => void {
-	return (signal) => logger.warn({ message, signal });
 }
 
 // POST /v1/conversations — create a conversation, freezing its document scope.
@@ -177,10 +174,8 @@ app.post(
 			c.var.deps.liveTextSubscriber,
 			runId,
 			{
-				onSignal: liveTextSignalHandler(
-					c.var.logger,
-					"Live preview setup state changed",
-				),
+				onSignal: (signal) =>
+					reportChatLiveTextSetupSignal(c.var.deps.liveTextTelemetry, signal),
 			},
 		);
 		let queuedRun: { runId: string };
@@ -224,10 +219,11 @@ app.post(
 						notifier: c.var.deps.runNotifier,
 						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
-						onLiveTextSignal: liveTextSignalHandler(
-							c.var.logger,
-							"Live preview projection state changed",
-						),
+						onLiveTextSignal: (signal) =>
+							reportChatLiveTextProjectionSignal(
+								c.var.deps.liveTextTelemetry,
+								signal,
+							),
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({
@@ -306,10 +302,11 @@ app.get(
 					c.var.deps.liveTextSubscriber,
 					runId,
 					{
-						onSignal: liveTextSignalHandler(
-							c.var.logger,
-							"Live preview setup state changed",
-						),
+						onSignal: (signal) =>
+							reportChatLiveTextSetupSignal(
+								c.var.deps.liveTextTelemetry,
+								signal,
+							),
 					},
 				);
 
@@ -333,10 +330,11 @@ app.get(
 						notifier: c.var.deps.runNotifier,
 						liveSubscription: liveSubscription ?? undefined,
 						signal: requestSignal,
-						onLiveTextSignal: liveTextSignalHandler(
-							c.var.logger,
-							"Live preview projection state changed",
-						),
+						onLiveTextSignal: (signal) =>
+							reportChatLiveTextProjectionSignal(
+								c.var.deps.liveTextTelemetry,
+								signal,
+							),
 					})) {
 						if (requestSignal.aborted) break;
 						await sender.send({

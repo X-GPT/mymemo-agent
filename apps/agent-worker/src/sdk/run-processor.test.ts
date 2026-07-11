@@ -444,9 +444,16 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		},
 	]) {
 		it(`fails the Run closed for ${fixture.name}`, async () => {
+			const warnings: Record<string, unknown>[] = [];
+			const logger: WorkerLogger = {
+				...silentLogger,
+				warn: (event) => warnings.push(event),
+			};
 			const worker = buildWorker();
-			const loop = buildLoop(worker, async () =>
-				messageQuery(fixture.messages),
+			const loop = buildLoop(
+				worker,
+				async () => messageQuery(fixture.messages),
+				logger,
 			);
 			await createQueuedRunTx(tdb.db, {
 				runId: "run-1",
@@ -461,6 +468,14 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			const events = await readEvents("run-1");
 			expect(events.map((event) => event.type)).toEqual(["run_error"]);
 			expect(events[0]?.payload).toEqual({ message: "Run failed" });
+			expect(warnings).toContainEqual({
+				message: "Live preview signal",
+				service: "agent-worker",
+				signal: "impossible_ordering",
+				reason: "provider_envelope",
+				count: 1,
+			});
+			expect(JSON.stringify(warnings)).not.toContain("complete");
 		});
 	}
 
@@ -511,7 +526,19 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		).toEqual(["COMMIT", "NEXT"]);
 		expect(warnings).toEqual([
 			{
-				message: "assistant Live preview disabled after text mismatch",
+				message: "Live preview signal",
+				service: "agent-worker",
+				signal: "dropped",
+				reason: "partial_complete",
+				outcome: "dropped",
+				count: 1,
+			},
+			{
+				message: "Live preview signal",
+				service: "agent-worker",
+				signal: "mismatch",
+				reason: "partial_complete",
+				count: 1,
 			},
 		]);
 		expect(JSON.stringify(warnings)).not.toContain("PREVIEW");
@@ -556,8 +583,12 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		).toEqual(["authoritative answer"]);
 		expect(warnings).toEqual([
 			{
-				message: "Live preview transport state changed",
-				signal: "publisher_failure",
+				message: "Live preview signal",
+				service: "agent-worker",
+				signal: "dropped",
+				reason: "publisher",
+				outcome: "dropped",
+				count: 1,
 			},
 		]);
 		expect(JSON.stringify(warnings)).not.toContain("authoritative answer");

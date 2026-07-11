@@ -58,6 +58,10 @@ locals {
     }
   ]
 
+  live_redis_url_secret = var.live_preview_enabled ? [
+    { name = "REDIS_URL", valueFrom = local.live_redis_url_secret_arn }
+  ] : []
+
   chat_api_environment = concat([
     { name = "PORT", value = tostring(var.chat_api_port) },
     { name = "LOG_LEVEL", value = var.log_level },
@@ -68,8 +72,7 @@ locals {
   chat_api_secrets = concat([
     { name = "STATSIG_SERVER_SECRET", valueFrom = local.statsig_server_secret_arn },
     { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
-    { name = "REDIS_URL", valueFrom = local.live_redis_url_secret_arn },
-  ], local.agent_db_password_secret)
+  ], local.live_redis_url_secret, local.agent_db_password_secret)
 
   agent_worker_environment = concat([
     { name = "PORT", value = tostring(var.agent_worker_port) },
@@ -87,6 +90,5 @@ locals {
     { name = "KB_DATABASE_URL", valueFrom = local.kb_database_url_secret_arn },
     { name = "OPENROUTER_API_KEY", valueFrom = local.openrouter_api_key_secret_arn },
     { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
-    { name = "REDIS_URL", valueFrom = local.live_redis_url_secret_arn },
-  ], local.agent_db_password_secret)
+  ], local.live_redis_url_secret, local.agent_db_password_secret)
 }

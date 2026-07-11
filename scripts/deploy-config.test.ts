@@ -82,7 +82,15 @@ describe("agent deployment config", () => {
 		expect(redisConfig).toContain(
 			'"rediss://default:${urlencode(random_password.live_redis.result)}@',
 		);
-		expect(locals.match(/name\s*=\s*"REDIS_URL"/g)).toHaveLength(2);
+		expect(locals.match(/name\s*=\s*"REDIS_URL"/g)).toHaveLength(1);
+		expect(locals).toMatch(
+			/live_redis_url_secret\s*=\s*var\.live_preview_enabled\s*\?/,
+		);
+		expect(
+			locals.match(
+				/\],\s*local\.live_redis_url_secret,\s*local\.agent_db_password_secret\)/g,
+			),
+		).toHaveLength(2);
 		expect(ecsConfig.match(/aws_security_group\.live_redis_clients\.id/g)).toHaveLength(2);
 		expect(migrationConfig).toContain("secrets = local.agent_db_password_secret");
 	});
@@ -95,6 +103,42 @@ describe("agent deployment config", () => {
 		);
 		expect(readme).toContain(
 			"The durable Postgres path remains sufficient for successful Runs",
+		);
+	});
+
+	it("alarms on sustained payload-free Live signals without health coupling", () => {
+		const cloudwatch = readFileSync(join(terraformDir, "cloudwatch.tf"), "utf8");
+		const ecs = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
+
+		for (const resource of [
+			"live_preview_degraded",
+			"live_preview_widespread_degraded",
+			"live_preview_drops",
+			"live_preview_overflow",
+		]) {
+			expect(cloudwatch).toContain(
+				`resource "aws_cloudwatch_metric_alarm" "${resource}"`,
+			);
+		}
+		expect(cloudwatch.match(/datapoints_to_alarm\s*=\s*2/g)).toHaveLength(4);
+		expect(cloudwatch).toMatch(
+			/resource "aws_cloudwatch_metric_alarm" "live_preview_widespread_degraded"[\s\S]*?evaluation_periods\s*=\s*3[\s\S]*?datapoints_to_alarm\s*=\s*2[\s\S]*?threshold\s*=\s*2/,
+		);
+		expect(cloudwatch).toContain(
+			'expression  = "IF(FILL(chat, 0) > 0, 1, 0) + IF(FILL(worker, 0) > 0, 1, 0)"',
+		);
+		expect(
+			cloudwatch.match(/evaluation_periods\s*=\s*3/g)?.length,
+		).toBeGreaterThanOrEqual(3);
+		expect(cloudwatch).toContain('treat_missing_data  = "notBreaching"');
+		expect(cloudwatch).toContain('Service = "$.service"');
+		expect(cloudwatch).toContain('Signal  = "$.signal"');
+		expect(cloudwatch).toContain('Outcome = "$.outcome"');
+		expect(cloudwatch).not.toMatch(
+			/ConversationId|RunId|MessageId|text|payload|REDIS_URL/,
+		);
+		expect(ecs).not.toMatch(
+			/live_preview_(degraded|drops|overflow)|LivePreview/,
 		);
 	});
 
@@ -155,6 +199,9 @@ describe("agent deployment config", () => {
 		expect(prodTfvars).not.toContain("aws_region");
 		expect(prodTfvars).not.toContain("gateway_public_url");
 		expect(prodTfvars).toContain("mymemo-agent-prod-KB_DATABASE_URL");
+		expect(prodTfvars).toContain(
+			'alarm_action_arns = ["arn:aws:sns:us-west-2:637423444544:mymemo-staging-alarms"]',
+		);
 		expect(prodTfvars).not.toContain("CREATE_AGENT_DATABASE");
 		expect(prodTfvars).not.toContain("AGENT_DATABASE_URL_SECRET_ARN");
 		expect(prodTfvars).not.toContain("DB_PASSWORD_SECRET_ARN");

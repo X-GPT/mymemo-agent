@@ -1,39 +1,87 @@
 import {
+	createLiveTextTelemetry,
 	createRedisLiveTextTransport,
+	type LiveTextTelemetry,
 	type LiveTextTransport,
 	type RedisLiveTextSignal,
 } from "@mymemo/live-text";
+import type { LiveTextPreviewSignal } from "./sdk/live-text-preview";
 
 interface LiveTextLogger {
 	info(event: Record<string, unknown>): void;
 	warn(event: Record<string, unknown>): void;
 }
 
+export function createWorkerLiveTextTelemetry(
+	logger: LiveTextLogger,
+): LiveTextTelemetry {
+	return createLiveTextTelemetry("agent-worker", logger);
+}
+
+export function reportWorkerLiveTextPreviewSignal(
+	telemetry: LiveTextTelemetry,
+	signal: LiveTextPreviewSignal,
+): void {
+	if (signal.type === "attempted") {
+		telemetry.record("attempted", "message_publication", "attempted");
+		return;
+	}
+	if (signal.type === "delivered") {
+		telemetry.record("delivered", "message_publication", "delivered");
+		return;
+	}
+	if (signal.type === "recovered") {
+		// Record the per-run transition without clearing process-wide Redis state.
+		telemetry.recordRecovery(
+			signal.reason === "publisher_failure" ? "publisher" : "worker_queue",
+		);
+		return;
+	}
+
+	switch (signal.reason) {
+		case "publisher_failure":
+			telemetry.record("dropped", "publisher", "dropped");
+			break;
+		case "queue_overflow":
+			telemetry.record("queue_overflow", "worker_queue", "dropped");
+			break;
+		case "mismatch":
+			telemetry.record("dropped", "partial_complete", "dropped");
+			break;
+		case "run_aborted":
+			telemetry.record("dropped", "run_aborted", "dropped");
+			break;
+		case "run_ended":
+			telemetry.record("dropped", "run_ended", "dropped");
+			break;
+	}
+}
+
+export function reportWorkerLiveTextRuntimeSignal(
+	telemetry: LiveTextTelemetry,
+	signal: RedisLiveTextSignal,
+): void {
+	if (signal === "degraded") {
+		telemetry.degraded("redis_connection");
+	} else if (signal === "recovered") {
+		telemetry.recovered("redis_connection");
+	} else {
+		telemetry.record("malformed", "adapter_message", "dropped");
+	}
+}
+
 /** Select the lazy production publisher only for validated Redis config. */
 export function createWorkerLiveTextTransport(
 	redisUrl: string | undefined,
-	logger: LiveTextLogger,
+	telemetry: LiveTextTelemetry,
 ): LiveTextTransport | undefined {
 	if (redisUrl === undefined) {
-		try {
-			logger.info({
-				message: "Live preview Redis transport state changed",
-				signal: "disabled",
-			});
-		} catch {
-			// Telemetry is optional and must never affect worker boot.
-		}
+		telemetry.disabled("configuration");
 		return undefined;
 	}
 	return createRedisLiveTextTransport({
 		url: redisUrl,
-		onSignal: (signal: RedisLiveTextSignal) => {
-			const event = {
-				message: "Live preview Redis transport state changed",
-				signal,
-			};
-			if (signal === "recovered") logger.info(event);
-			else logger.warn(event);
-		},
+		onSignal: (signal: RedisLiveTextSignal) =>
+			reportWorkerLiveTextRuntimeSignal(telemetry, signal),
 	});
 }

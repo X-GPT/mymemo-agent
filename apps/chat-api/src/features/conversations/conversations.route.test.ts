@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	createLiveTextTelemetry,
 	disabledLiveTextSubscriber,
 	InMemoryLiveTextTransport,
 	type LiveTextSubscriber,
@@ -30,6 +31,10 @@ import {
 import type { InternalIdentity } from "./conversations.schema";
 
 const { createApp } = await import("@/index");
+const silentLiveTextTelemetry = createLiveTextTelemetry("chat-api", {
+	info() {},
+	warn() {},
+});
 
 /** In-memory ConversationStore for the HTTP layer. */
 function fakeStore(seed: ConversationRecord[] = []) {
@@ -83,6 +88,7 @@ function buildApp(
 		runEventReader: fakeRuns.runEventReader,
 		runNotifier: fakeRuns.runNotifier,
 		liveTextSubscriber,
+		liveTextTelemetry: silentLiveTextTelemetry,
 	} as unknown as AppDeps;
 	return createApp({ logLevel: "silent" } as unknown as ApiConfig, deps);
 }
@@ -431,6 +437,7 @@ describe("POST /v1/conversations/:id/events", () => {
 			runEventReader,
 			runNotifier: fakeRunStore().runNotifier,
 			liveTextSubscriber: subscriber,
+			liveTextTelemetry: silentLiveTextTelemetry,
 		} as unknown as AppDeps;
 		const res = await createApp(
 			{ logLevel: "silent" } as unknown as ApiConfig,

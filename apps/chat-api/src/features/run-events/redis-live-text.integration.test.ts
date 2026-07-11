@@ -175,7 +175,9 @@ async function runWorkerThroughRedis(options: {
 	const logger: WorkerLogger = {
 		...silentLogger,
 		warn(event) {
-			if (event.signal === "publisher_failure") publisherFailed.resolve();
+			if (event.signal === "dropped" && event.reason === "publisher") {
+				publisherFailed.resolve();
+			}
 		},
 	};
 
