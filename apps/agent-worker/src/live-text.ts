@@ -31,8 +31,10 @@ export function reportWorkerLiveTextPreviewSignal(
 		return;
 	}
 	if (signal.type === "recovered") {
-		// Per-message recovery is not service recovery. Redis transport state owns
-		// the process-wide degraded/recovered transition.
+		// Record the per-run transition without clearing process-wide Redis state.
+		telemetry.recordRecovery(
+			signal.reason === "publisher_failure" ? "publisher" : "worker_queue",
+		);
 		return;
 	}
 

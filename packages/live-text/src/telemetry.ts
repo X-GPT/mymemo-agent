@@ -57,6 +57,7 @@ export interface LiveTextTelemetry {
 	disabled(reason: LiveTextReason): void;
 	degraded(reason: LiveTextReason): void;
 	recovered(reason: LiveTextReason): void;
+	recordRecovery(reason: LiveTextReason): void;
 	record(
 		signal: Exclude<LiveTextSignal, "disabled" | "degraded" | "recovered">,
 		reason: LiveTextReason,
@@ -146,6 +147,10 @@ export function createLiveTextTelemetry(
 			if (!degradedReasons.delete(reason)) return;
 			emit("recovered", reason);
 			if (degradedReasons.size === 0) stopHeartbeat();
+		},
+		recordRecovery(reason) {
+			if (closed) return;
+			emit("recovered", reason);
 		},
 		record(signal, reason, outcome) {
 			if (closed) return;

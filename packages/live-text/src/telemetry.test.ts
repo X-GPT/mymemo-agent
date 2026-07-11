@@ -13,6 +13,7 @@ it("emits payload-free bounded signals and deduplicates state transitions", () =
 	telemetry.degraded("redis_connection");
 	telemetry.degraded("redis_connection");
 	telemetry.record("queue_overflow", "worker_queue", "dropped");
+	telemetry.recordRecovery("worker_queue");
 	telemetry.recovered("redis_connection");
 	telemetry.recovered("redis_connection");
 
@@ -37,6 +38,13 @@ it("emits payload-free bounded signals and deduplicates state transitions", () =
 			signal: "queue_overflow",
 			reason: "worker_queue",
 			outcome: "dropped",
+			count: 1,
+		},
+		{
+			message: "Live preview signal",
+			service: "agent-worker",
+			signal: "recovered",
+			reason: "worker_queue",
 			count: 1,
 		},
 		{

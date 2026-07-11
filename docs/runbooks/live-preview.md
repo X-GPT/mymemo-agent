@@ -12,8 +12,11 @@ The CloudWatch namespace `<name-prefix>-<environment>/LivePreview` contains:
 - `Signals`, dimensioned only by bounded `Service` and `Signal` values;
 - `MessageOutcomes`, dimensioned only by `Service` and `Outcome`; and
 - per-service alarms for repeated degradation, sustained dropped outcomes, and
-  sustained queue overflow. Each alarm requires two breaching 5-minute periods
-  out of three, so one short reconnect does not alarm by default.
+  sustained queue overflow; and
+- a cross-service alarm when both services report degradation.
+
+Each alarm requires two breaching 5-minute periods out of three, so one short
+reconnect does not alarm by default.
 
 Production must set `alarm_action_arns` to SNS topics with confirmed incident
 subscriptions. An empty list still creates visible CloudWatch alarms but does

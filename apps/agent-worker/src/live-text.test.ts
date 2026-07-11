@@ -96,6 +96,8 @@ it("maps every worker Live path to bounded payload-free signals", () => {
 		{ signal: "dropped", reason: "partial_complete", outcome: "dropped" },
 		{ signal: "dropped", reason: "run_aborted", outcome: "dropped" },
 		{ signal: "dropped", reason: "run_ended", outcome: "dropped" },
+		{ signal: "recovered", reason: "publisher", outcome: undefined },
+		{ signal: "recovered", reason: "worker_queue", outcome: undefined },
 	]);
 	expect(events.every(({ service }) => service === "agent-worker")).toBe(true);
 	expect(JSON.stringify(events)).not.toContain("preview text");

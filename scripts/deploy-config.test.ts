@@ -120,9 +120,9 @@ describe("agent deployment config", () => {
 				`resource "aws_cloudwatch_metric_alarm" "${resource}"`,
 			);
 		}
-		expect(cloudwatch.match(/datapoints_to_alarm\s*=\s*2/g)).toHaveLength(3);
+		expect(cloudwatch.match(/datapoints_to_alarm\s*=\s*2/g)).toHaveLength(4);
 		expect(cloudwatch).toMatch(
-			/resource "aws_cloudwatch_metric_alarm" "live_preview_widespread_degraded"[\s\S]*?evaluation_periods\s*=\s*1[\s\S]*?threshold\s*=\s*2/,
+			/resource "aws_cloudwatch_metric_alarm" "live_preview_widespread_degraded"[\s\S]*?evaluation_periods\s*=\s*3[\s\S]*?datapoints_to_alarm\s*=\s*2[\s\S]*?threshold\s*=\s*2/,
 		);
 		expect(cloudwatch).toContain(
 			'expression  = "IF(FILL(chat, 0) > 0, 1, 0) + IF(FILL(worker, 0) > 0, 1, 0)"',

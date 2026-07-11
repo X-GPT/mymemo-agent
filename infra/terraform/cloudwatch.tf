@@ -80,9 +80,9 @@ resource "aws_cloudwatch_metric_alarm" "live_preview_degraded" {
 
 resource "aws_cloudwatch_metric_alarm" "live_preview_widespread_degraded" {
   alarm_name          = "${local.common_name}-live-preview-widespread-degraded"
-  alarm_description   = "Multiple agent services entered Live-only degradation in one period; durable Postgres delivery and service health remain authoritative."
-  evaluation_periods  = 1
-  datapoints_to_alarm = 1
+  alarm_description   = "Multiple agent services repeatedly entered Live-only degradation; durable Postgres delivery and service health remain authoritative."
+  evaluation_periods  = 3
+  datapoints_to_alarm = 2
   threshold           = 2
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
