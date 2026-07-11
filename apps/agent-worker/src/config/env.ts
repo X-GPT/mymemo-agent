@@ -1,3 +1,4 @@
+import { resolveLiveTextRedisUrl } from "@mymemo/live-text";
 import {
 	type BashToolLimits,
 	DEFAULT_BASH_TOOL_LIMITS,
@@ -46,6 +47,8 @@ export interface WorkerConfig {
 	 * Required so a misconfigured worker fails at boot, not per run.
 	 */
 	e2bTemplate: string;
+	/** Optional authenticated TLS Redis secret for best-effort Live preview. */
+	liveTextRedisUrl: string | undefined;
 	/** How long an unrenewed E2B sandbox stays active before idle-pausing. */
 	sandboxIdleMs: number;
 	/** Bounds for the model-facing workspace file tools. */
@@ -176,6 +179,7 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 		},
 		e2bApiKey: env.E2B_API_KEY,
 		e2bTemplate: env.WORKER_E2B_TEMPLATE,
+		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL),
 		sandboxIdleMs: positiveIntOr(
 			env.WORKER_SANDBOX_IDLE_MS,
 			DEFAULT_SANDBOX_IDLE_MS,

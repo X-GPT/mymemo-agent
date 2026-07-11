@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { requestId } from "hono/request-id";
 import { pinoLogger } from "hono-pino";
+import pino from "pino";
 import { type ApiConfig, loadApiConfigFromEnv } from "./config/env";
 import { type AppDeps, type AppEnv, createDeps } from "./deps";
 import routes from "./routes";
@@ -31,5 +32,31 @@ export function createApp(
 }
 
 // Entrypoint: the only place that reads the environment. `bun run src/index.ts`
-// serves this default export.
-export default createApp(loadApiConfigFromEnv(Bun.env));
+// serves this default export. Redis remains lazy and optional; the signal hook
+// only guarantees that any resources opened by active Live subscriptions are
+// closed before the process exits.
+const productionConfig = loadApiConfigFromEnv(Bun.env);
+const productionLogger = pino({ level: productionConfig.logLevel });
+const productionDeps = createDeps(productionConfig, (signal) => {
+	const event = {
+		message: "Live preview Redis transport state changed",
+		signal,
+	};
+	if (signal === "disabled" || signal === "recovered") {
+		productionLogger.info(event);
+	} else {
+		productionLogger.warn(event);
+	}
+});
+const productionApp = createApp(productionConfig, productionDeps);
+let shuttingDown = false;
+async function closeProductionLiveText(): Promise<void> {
+	if (shuttingDown) return;
+	shuttingDown = true;
+	await productionDeps.closeLiveText?.().catch(() => {});
+	process.exit(0);
+}
+process.once("SIGINT", () => void closeProductionLiveText());
+process.once("SIGTERM", () => void closeProductionLiveText());
+
+export default productionApp;

@@ -649,6 +649,56 @@ describe("projectRun", () => {
 		expect(signals).toEqual(["malformed_message"]);
 	});
 
+	it("drops an adapter-rejected wire message before it can reach SSE", async () => {
+		let reported = false;
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "durable" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					liveSubscription: {
+						readAvailable: () => [],
+						readDroppedMessages: () => {
+							if (reported) return emptyDropReport();
+							reported = true;
+							return { type: "invalid_wire_message" };
+						},
+						waitForMessage: async () => true,
+						close: async () => {},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{ type: "text_commit", messageId: "message-1", text: "durable" },
+			{ type: "done" },
+		]);
+		expect(signals).toEqual(["malformed_message"]);
+	});
+
 	it("suppresses nonzero first indexes and mid-message gaps", async () => {
 		const liveText = new InMemoryLiveTextTransport();
 		const liveSubscription = await liveText.subscribe("run-1");

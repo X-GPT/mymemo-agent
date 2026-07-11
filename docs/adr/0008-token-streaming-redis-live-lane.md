@@ -3,10 +3,10 @@
 Status: accepted (2026-07-10); implementation in progress
 
 The durable-message increment, private Redis infrastructure, transport-neutral
-Live preview path, and loss-tolerance rules are implemented. The worker appends
-one `assistant_text` event per complete Assistant message, and chat-api projects
-it as the authoritative, replayable `text_commit`. Production Redis adapters,
-live-lane observability, and end-to-end cutover proof remain to be implemented.
+Live preview path, loss-tolerance rules, and production Redis adapters are
+implemented. The worker appends one `assistant_text` event per complete
+Assistant message, and chat-api projects it as the authoritative, replayable
+`text_commit`. Coordinated client rollout remains a release concern.
 
 Smooth token streaming cannot use the durable tier for every fragment: one
 `text_delta` per token would mean hundreds of fenced `appendRunEventTx` and
@@ -203,8 +203,8 @@ the specification and its tests.
 ## Consequences
 
 - Infrastructure includes a private, authenticated, TLS-protected Redis instance
-  reachable only by the trusted services. Production adapter composition still
-  needs to connect worker publication and chat-api subscription to that instance.
+  reachable only by the trusted services. The worker publisher and chat-api
+  subscriber connect to it through optional, lazy production adapters.
 - Knowingly breaks the "run-event replay is the only SSE source" exit criterion
   for the **live** path only; replay stays a pure projection. This is the
   accepted trade recorded here.
@@ -215,8 +215,8 @@ the specification and its tests.
   coordinated hard cutover: no legacy payload detection, dual emission, or
   compatibility window. The old meaning of `text_delta` as a complete durable
   assistant message is not preserved.
-- The durable envelope assembler, private Redis infrastructure, in-memory
-  transport/projector slice, and loss-tolerance increment are implemented. The
-  production Redis adapters, observability, and end-to-end cutover proof remain.
+- The durable envelope assembler, private Redis infrastructure, in-memory and
+  production transports, projector slice, loss-tolerance increment, and
+  disposable-Redis cutover proof are implemented.
   Production implementation must retain the live partial-message spike and
   deterministic envelope-assembler cases as conformance tests.

@@ -1,3 +1,5 @@
+import { resolveLiveTextRedisUrl } from "@mymemo/live-text";
+
 export type ChatMessagesScope = "general" | "collection" | "document";
 
 /** Subset of the process environment the API reads. */
@@ -49,6 +51,8 @@ export interface ApiConfig {
 	 * Statsig secret is required. Identity-independent and explicit.
 	 */
 	agentExposureBreakGlass: boolean;
+	/** Optional authenticated TLS Redis secret for best-effort Live preview. */
+	liveTextRedisUrl: string | undefined;
 }
 
 /**
@@ -129,5 +133,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		databaseUrl,
 		statsigServerSecret: env.STATSIG_SERVER_SECRET,
 		agentExposureBreakGlass,
+		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL),
 	};
 }

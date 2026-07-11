@@ -330,7 +330,11 @@ async function produceRun(
 				try {
 					const subscription = liveSubscription;
 					const droppedMessages = subscription.readDroppedMessages();
-					if (droppedMessages.type === "tracking_overflow") {
+					if (droppedMessages.type === "invalid_wire_message") {
+						emitSignal("malformed_message");
+						disableLiveForRun();
+						available = [];
+					} else if (droppedMessages.type === "tracking_overflow") {
 						emitSignal("queue_overflow");
 						disableLiveForRun();
 						available = [];
