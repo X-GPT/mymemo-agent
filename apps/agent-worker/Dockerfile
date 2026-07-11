@@ -30,6 +30,7 @@ COPY apps/agent-worker/package.json apps/agent-worker/tsconfig.json apps/agent-w
 # must be present so the worker's `@mymemo/agent-db` imports resolve through the
 # workspace symlink in node_modules.
 COPY packages/agent-db packages/agent-db
+COPY packages/live-text packages/live-text
 COPY package.json .
 
 # The SDK cwd is a Fargate-side, per-conversation session anchor. Prepare the
