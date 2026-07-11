@@ -39,6 +39,16 @@ appends contiguous deltas to a provisional message and atomically replaces it
 when the matching commit arrives. A commit without preview creates the message;
 late deltas cannot resurrect it. Terminal outcomes clear uncommitted previews.
 
+## Projector module boundary
+
+`projectRun` remains one deep module that owns durable polling, the prepared
+Live subscription lifecycle, per-message reconciliation, and two-source wake-up
+arbitration behind one client-stream interface. Those concerns jointly enforce
+one ordering and authority contract for one caller. Extracting a one-caller Live
+helper now would expose a shallow internal interface without a second adapter or
+reuse point; revisit the seam only if another projection policy or transport
+adapter needs the same reconciliation behavior.
+
 ## Availability and security
 
 Redis is additive. Missing configuration, connection or publish failure,

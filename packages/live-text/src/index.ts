@@ -136,7 +136,3 @@ export const disabledLiveTextSubscriber: LiveTextSubscriber = {
 		throw new Error("Live text is disabled");
 	},
 };
-
-export const disabledLiveTextPublisher: LiveTextPublisher = {
-	async publish() {},
-};

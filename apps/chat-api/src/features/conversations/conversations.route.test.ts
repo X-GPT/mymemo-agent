@@ -5,11 +5,14 @@ import {
 	type LiveTextSubscriber,
 } from "@mymemo/live-text";
 import type { ApiConfig } from "@/config/env";
+import { runEvents, runs } from "@/db/schema";
+import { createTestDatabase } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import type {
 	ConversationRecord,
 	ConversationStore,
 } from "@/features/conversation-store";
+import { PostgresConversationStore } from "@/features/conversation-store";
 import type { ExposureGate } from "@/features/exposure-gate";
 import type {
 	RunEventReader,
@@ -17,9 +20,10 @@ import type {
 	RunNotifier,
 	RunSubscription,
 } from "@/features/run-events";
-import { RunEventType } from "@/features/run-events";
+import { DrizzleRunEventReader, RunEventType } from "@/features/run-events";
 import {
 	ActiveRunExistsError,
+	PostgresRunStore,
 	type RunRecord,
 	type RunStore,
 } from "@/features/run-store";
@@ -240,6 +244,34 @@ async function readSseUntil(
 	return text;
 }
 
+function parseSseFrames(text: string): Array<{
+	id?: string;
+	event: string;
+	data: unknown;
+}> {
+	return text
+		.trim()
+		.split("\n\n")
+		.filter(Boolean)
+		.map((block) => {
+			const fields = new Map(
+				block.split("\n").map((line) => {
+					const separator = line.indexOf(": ");
+					return [line.slice(0, separator), line.slice(separator + 2)];
+				}),
+			);
+			const event = fields.get("event");
+			const data = fields.get("data");
+			if (!event || !data) throw new Error(`malformed SSE block: ${block}`);
+			const id = fields.get("id");
+			return {
+				...(id ? { id } : {}),
+				event,
+				data: JSON.parse(data),
+			};
+		});
+}
+
 const identityHeaders = {
 	"content-type": "application/json",
 	"x-member-code": "member-1",
@@ -327,58 +359,22 @@ describe("POST /v1/conversations/:id/events", () => {
 		expect(queued).toEqual([{ conversation: existing, message: "hi" }]);
 	});
 
-	it("subscribes before admitting the same Run id and streams cursorless preview before its commit", async () => {
-		const { store } = fakeStore([existing]);
+	it("streams two sequential Assistant previews through exact commits and done at the route boundary", async () => {
+		const tdb = await createTestDatabase();
+		const conversationStore = new PostgresConversationStore(tdb.db);
+		await conversationStore.create(existing);
 		const liveText = new InMemoryLiveTextTransport();
 		const order: string[] = [];
-		let admittedRunId = "";
-		let reads = 0;
+		const durableRunStore = new PostgresRunStore(tdb.db);
 		const runStore: RunStore = {
+			...durableRunStore,
 			async createQueuedRun(input) {
 				order.push("admit");
-				admittedRunId = input.runId ?? "";
-				await liveText.publish({
-					runId: admittedRunId,
-					messageId: "message-1",
-					deltaIndex: 0,
-					text: "hel",
-				});
-				return { runId: admittedRunId };
+				return durableRunStore.createQueuedRun(input);
 			},
-			async getRun() {
-				return null;
-			},
-			async requestCancellation() {
-				return { outcome: "not_found" };
-			},
-		};
-		const fakeRuns = {
-			...fakeRunStore(),
-			runStore,
-			runEventReader: {
-				async read() {
-					reads++;
-					return reads === 1
-						? [
-								{
-									seq: 1,
-									type: RunEventType.Started,
-									payload: {
-										conversationId: "conv-1",
-										runId: admittedRunId,
-									},
-								},
-							]
-						: [
-								{
-									seq: 2,
-									type: RunEventType.AssistantText,
-									payload: { messageId: "message-1", text: "hello" },
-								},
-								{ seq: 3, type: RunEventType.Done, payload: {} },
-							];
-				},
-			} satisfies RunEventReader,
+			getRun: (input) => durableRunStore.getRun(input),
+			requestCancellation: (input) =>
+				durableRunStore.requestCancellation(input),
 		};
 		const subscriber: LiveTextSubscriber = {
 			async subscribe(runId) {
@@ -386,30 +382,155 @@ describe("POST /v1/conversations/:id/events", () => {
 				return liveText.subscribe(runId);
 			},
 		};
+		const durableReader = new DrizzleRunEventReader(tdb.db);
+		let resolveFirstRead: () => void = () => {};
+		const firstRead = new Promise<void>((resolve) => {
+			resolveFirstRead = resolve;
+		});
+		let releaseLaterReads: () => void = () => {};
+		const laterReadsReleased = new Promise<void>((resolve) => {
+			releaseLaterReads = resolve;
+		});
+		let readCount = 0;
+		const runEventReader: RunEventReader = {
+			async read(runId, afterSeq) {
+				const currentRead = ++readCount;
+				if (currentRead > 1) await laterReadsReleased;
+				const rows = await durableReader.read(runId, afterSeq);
+				if (currentRead === 1) resolveFirstRead();
+				return rows;
+			},
+		};
 
-		const res = await buildApp(
-			store,
-			recordingGate(true).gate,
-			fakeRuns,
-			subscriber,
+		const deps = {
+			config: {},
+			conversationStore,
+			exposureGate: recordingGate(true).gate,
+			runStore,
+			runEventReader,
+			runNotifier: fakeRunStore().runNotifier,
+			liveTextSubscriber: subscriber,
+		} as unknown as AppDeps;
+		const res = await createApp(
+			{ logLevel: "silent" } as unknown as ApiConfig,
+			deps,
 		).request("/v1/conversations/conv-1/events", {
 			method: "POST",
 			headers: identityHeaders,
 			body: userMessage,
 		});
-		const text = await readSseUntil(res, (chunk) => chunk.includes("done"));
+		try {
+			const admittedRuns = await tdb.db
+				.select({ runId: runs.runId })
+				.from(runs);
+			const admittedRunId = admittedRuns[0]?.runId;
+			if (!admittedRunId) throw new Error("route did not admit a Run");
+			expect(admittedRunId).toMatch(/^[0-9a-f-]{36}$/);
+			await liveText.publish({
+				runId: admittedRunId,
+				messageId: "message-1",
+				deltaIndex: 0,
+				text: "hel",
+			});
+			await liveText.publish({
+				runId: admittedRunId,
+				messageId: "message-1",
+				deltaIndex: 1,
+				text: "lo",
+			});
+			await liveText.publish({
+				runId: admittedRunId,
+				messageId: "message-2",
+				deltaIndex: 0,
+				text: "again",
+			});
+			const body = res.text();
+			await firstRead;
+			await tdb.db.insert(runEvents).values([
+				{
+					runId: admittedRunId,
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "hello" },
+				},
+				{
+					runId: admittedRunId,
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "again" },
+				},
+				{
+					runId: admittedRunId,
+					seq: 4,
+					type: RunEventType.Done,
+					payload: {},
+				},
+			]);
+			releaseLaterReads();
 
-		expect(order).toEqual(["subscribe", "admit"]);
-		expect(admittedRunId).toMatch(/^[0-9a-f-]{36}$/);
-		expect(text.indexOf("event: run_id")).toBeLessThan(
-			text.indexOf("event: text_delta"),
-		);
-		expect(text.indexOf("event: text_delta")).toBeLessThan(
-			text.indexOf("event: text_commit"),
-		);
-		expect(text).toContain('"deltaIndex":0');
-		expect(text).not.toMatch(/id: .*\nevent: text_delta/);
-		expect(text).toContain("id: 2");
+			const frames = parseSseFrames(await body);
+			expect(order).toEqual(["subscribe", "admit"]);
+			expect(frames).toEqual([
+				{
+					event: "conversation_id",
+					data: { type: "conversation_id", conversationId: "conv-1" },
+				},
+				{
+					id: "1",
+					event: "run_id",
+					data: { type: "run_id", runId: admittedRunId },
+				},
+				{
+					event: "text_delta",
+					data: {
+						type: "text_delta",
+						messageId: "message-1",
+						deltaIndex: 0,
+						text: "hel",
+					},
+				},
+				{
+					event: "text_delta",
+					data: {
+						type: "text_delta",
+						messageId: "message-1",
+						deltaIndex: 1,
+						text: "lo",
+					},
+				},
+				{
+					event: "text_delta",
+					data: {
+						type: "text_delta",
+						messageId: "message-2",
+						deltaIndex: 0,
+						text: "again",
+					},
+				},
+				{
+					id: "2",
+					event: "text_commit",
+					data: {
+						type: "text_commit",
+						messageId: "message-1",
+						text: "hello",
+					},
+				},
+				{
+					id: "3",
+					event: "text_commit",
+					data: {
+						type: "text_commit",
+						messageId: "message-2",
+						text: "again",
+					},
+				},
+				{ id: "4", event: "done", data: { type: "done" } },
+			]);
+		} finally {
+			releaseLaterReads();
+			await tdb.close();
+		}
 	});
 
 	it("closes the prepared Live subscription when admission conflicts", async () => {

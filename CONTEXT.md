@@ -29,8 +29,9 @@ _Avoid_: lease (that word belongs to the decommissioned prototype path)
 
 **Run event**:
 One record in a run's durable, ordered event log — the source of truth for
-what happened during a run and the only source for anything streamed to the
-client.
+what happened during a run and the only source for authoritative, replayable
+client frames. Cursorless Live preview is ephemeral evidence, never a Run
+event, and may be lost without changing the Run outcome or transcript.
 
 **Outcome**:
 The single way a run ends: `done`, `error`, or `canceled`. One word per

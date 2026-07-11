@@ -440,7 +440,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 	}
 
-	it("commits completed text on mismatch and emits a payload-free disable signal", async () => {
+	it("commits completed text on mismatch without forcing pending preview", async () => {
 		const warnings: Record<string, unknown>[] = [];
 		const logger: WorkerLogger = {
 			...silentLogger,
@@ -494,12 +494,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		]);
 		expect(JSON.stringify(warnings)).not.toContain("PREVIEW");
 		expect(JSON.stringify(warnings)).not.toContain("COMMIT");
-		expect(
-			subscription.readAvailable().map(({ deltaIndex, text }) => ({
-				deltaIndex,
-				text,
-			})),
-		).toEqual([{ deltaIndex: 0, text: "PREVIEW" }]);
+		expect(subscription.readAvailable()).toEqual([]);
 	});
 
 	it("passes the claimed run and abort signal to startRunQuery", async () => {

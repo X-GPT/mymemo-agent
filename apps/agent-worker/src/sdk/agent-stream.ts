@@ -156,20 +156,14 @@ export async function consumeAgentStream(
 					`assistant response rejected: ${message.error}`,
 				);
 			}
-			if (
-				message.type === "stream_event" &&
-				message.event.type === "message_stop"
-			) {
-				await preview?.flushMessage();
-			}
 			const assembled = assembler.accept(message);
 			if (assembled?.type === "partial_text") {
 				preview?.append(assembled.messageId, assembled.text);
-			} else if (
-				assembled?.type === "message_stop" &&
-				assembled.commit !== null
-			) {
-				await appendAssistantMessage(assembled.commit);
+			} else if (assembled?.type === "message_stop") {
+				await preview?.flushMessage();
+				if (assembled.commit !== null) {
+					await appendAssistantMessage(assembled.commit);
+				}
 			}
 		}
 		if (signal.aborted) throw new QueryInterruptedError();
