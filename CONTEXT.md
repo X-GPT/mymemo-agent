@@ -33,6 +33,18 @@ what happened during a run and the only source for authoritative, replayable
 client frames. Cursorless Live preview is ephemeral evidence, never a Run
 event, and may be lost without changing the Run outcome or transcript.
 
+**Live preview**:
+Provisional assistant text shown while its durable assistant message is still
+being produced. It may be incomplete or missed; it is committed by the durable
+message, or discarded if the run ends before that message completes.
+_Avoid_: transcript, run event, token stream
+
+**Assistant message**:
+One complete model-authored provider response within a run, regardless of how
+many content blocks carry it. Its durable text commits any live preview of that
+response and is the form used for replay.
+_Avoid_: text delta, token stream
+
 **Outcome**:
 The single way a run ends: `done`, `error`, or `canceled`. One word per
 outcome at every layer — status `done`, run event `run_done`, client frame
