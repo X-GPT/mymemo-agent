@@ -78,6 +78,59 @@ resource "aws_cloudwatch_metric_alarm" "live_preview_degraded" {
   }
 }
 
+resource "aws_cloudwatch_metric_alarm" "live_preview_widespread_degraded" {
+  alarm_name          = "${local.common_name}-live-preview-widespread-degraded"
+  alarm_description   = "Multiple agent services entered Live-only degradation in one period; durable Postgres delivery and service health remain authoritative."
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  threshold           = 2
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
+
+  metric_query {
+    id          = "widespread"
+    expression  = "IF(FILL(chat, 0) > 0, 1, 0) + IF(FILL(worker, 0) > 0, 1, 0)"
+    label       = "Services degraded"
+    return_data = true
+  }
+
+  metric_query {
+    id          = "chat"
+    return_data = false
+
+    metric {
+      namespace   = "${local.common_name}/LivePreview"
+      metric_name = "Signals"
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        Service = "chat-api"
+        Signal  = "degraded"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "worker"
+    return_data = false
+
+    metric {
+      namespace   = "${local.common_name}/LivePreview"
+      metric_name = "Signals"
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        Service = "agent-worker"
+        Signal  = "degraded"
+      }
+    }
+  }
+}
+
 resource "aws_cloudwatch_metric_alarm" "live_preview_drops" {
   for_each = local.live_preview_log_groups
 

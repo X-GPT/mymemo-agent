@@ -35,7 +35,7 @@ export interface ProjectRunDeps {
 	/** Bound on provisional frames waiting for a slow SSE consumer. */
 	maxPreviewQueueMessages?: number;
 	/** Bound on per-message reconciliation state retained for the Live lane. */
-	maxPreviewStateMessages?: number;
+	maxPreviewStateEntries?: number;
 	/** Bound on durable frames before this replayable connection is ended. */
 	maxDurableQueueMessages?: number;
 	/** Payload-free, fixed-vocabulary Live preview degradation signal. */
@@ -43,7 +43,7 @@ export interface ProjectRunDeps {
 }
 
 export const DEFAULT_MAX_PREVIEW_QUEUE_MESSAGES = 64;
-export const DEFAULT_MAX_PREVIEW_STATE_MESSAGES = 64;
+export const DEFAULT_MAX_PREVIEW_STATE_ENTRIES = 64;
 export const DEFAULT_MAX_DURABLE_QUEUE_MESSAGES = 256;
 
 export type ProjectRunLiveTextSignal =
@@ -182,15 +182,15 @@ export async function* projectRun(
 		deps.maxPreviewQueueMessages ?? DEFAULT_MAX_PREVIEW_QUEUE_MESSAGES;
 	const maxDurableQueueMessages =
 		deps.maxDurableQueueMessages ?? DEFAULT_MAX_DURABLE_QUEUE_MESSAGES;
-	const maxPreviewStateMessages =
-		deps.maxPreviewStateMessages ?? DEFAULT_MAX_PREVIEW_STATE_MESSAGES;
+	const maxPreviewStateEntries =
+		deps.maxPreviewStateEntries ?? DEFAULT_MAX_PREVIEW_STATE_ENTRIES;
 	if (
 		!Number.isSafeInteger(maxPreviewQueueMessages) ||
 		maxPreviewQueueMessages < 1 ||
 		!Number.isSafeInteger(maxDurableQueueMessages) ||
 		maxDurableQueueMessages < 1 ||
-		!Number.isSafeInteger(maxPreviewStateMessages) ||
-		maxPreviewStateMessages < 1
+		!Number.isSafeInteger(maxPreviewStateEntries) ||
+		maxPreviewStateEntries < 1
 	) {
 		throw new Error("Projection queue bounds must be positive integers");
 	}
@@ -234,8 +234,8 @@ async function produceRun(
 	signal: AbortSignal,
 ): Promise<void> {
 	const pollTimeoutMs = deps.pollTimeoutMs ?? 1000;
-	const maxPreviewStateMessages =
-		deps.maxPreviewStateMessages ?? DEFAULT_MAX_PREVIEW_STATE_MESSAGES;
+	const maxPreviewStateEntries =
+		deps.maxPreviewStateEntries ?? DEFAULT_MAX_PREVIEW_STATE_ENTRIES;
 	const maxDurableQueueMessages =
 		deps.maxDurableQueueMessages ?? DEFAULT_MAX_DURABLE_QUEUE_MESSAGES;
 	const durableSubscription = await deps.notifier.subscribe(runId);
@@ -276,7 +276,7 @@ async function produceRun(
 		}
 		output.clearEmittedPreview(messageId);
 		if (suppressedMessageIds.has(messageId)) return;
-		if (suppressedMessageIds.size >= maxPreviewStateMessages) {
+		if (suppressedMessageIds.size >= maxPreviewStateEntries) {
 			emitSignal("queue_overflow");
 			suppressedMessageIds.clear();
 			output.clearPreview();
@@ -313,7 +313,7 @@ async function produceRun(
 						if (
 							liveSubscription &&
 							!committedMessageIds.has(frame.messageId) &&
-							committedMessageIds.size >= maxPreviewStateMessages
+							committedMessageIds.size >= maxPreviewStateEntries
 						) {
 							emitSignal("reconciliation_overflow");
 							committedMessageIds.clear();
@@ -431,7 +431,7 @@ async function produceRun(
 							emitSignal("gap");
 							continue;
 						}
-						if (previewStates.size >= maxPreviewStateMessages) {
+						if (previewStates.size >= maxPreviewStateEntries) {
 							emitSignal("queue_overflow");
 							disableLiveForRun();
 							break;
@@ -451,7 +451,7 @@ async function produceRun(
 						emitSignal("gap");
 						continue;
 					}
-					if (state.chunks.length >= maxPreviewStateMessages) {
+					if (state.chunks.length >= maxPreviewStateEntries) {
 						suppressMessage(message.messageId);
 						emitSignal("queue_overflow");
 						continue;

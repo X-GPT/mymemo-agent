@@ -101,7 +101,9 @@ Assistant messages, terminal Outcomes, and replay.
 Set `live_preview_enabled=false` to omit `REDIS_URL` from both trusted service
 task definitions without deleting the cache. Live telemetry is converted into
 CloudWatch metrics with bounded service/signal/outcome dimensions; the alarms
-require repeated five-minute breaches and never feed service health. See
+detect both repeated per-service breaches and multiple services degrading in
+the same five-minute period, and never feed service health. Production must set
+`alarm_action_arns` to an SNS topic with a confirmed incident subscription. See
 [`docs/runbooks/live-preview.md`](../../docs/runbooks/live-preview.md) for
 diagnosis, disable, and restore procedures.
 

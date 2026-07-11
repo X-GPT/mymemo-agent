@@ -55,6 +55,19 @@ export function reportWorkerLiveTextPreviewSignal(
 	}
 }
 
+export function reportWorkerLiveTextRuntimeSignal(
+	telemetry: LiveTextTelemetry,
+	signal: RedisLiveTextSignal,
+): void {
+	if (signal === "degraded") {
+		telemetry.degraded("redis_connection");
+	} else if (signal === "recovered") {
+		telemetry.recovered("redis_connection");
+	} else {
+		telemetry.record("malformed", "adapter_message", "dropped");
+	}
+}
+
 /** Select the lazy production publisher only for validated Redis config. */
 export function createWorkerLiveTextTransport(
 	redisUrl: string | undefined,
@@ -66,14 +79,7 @@ export function createWorkerLiveTextTransport(
 	}
 	return createRedisLiveTextTransport({
 		url: redisUrl,
-		onSignal: (signal: RedisLiveTextSignal) => {
-			if (signal === "degraded") {
-				telemetry.degraded("redis_connection");
-			} else if (signal === "recovered") {
-				telemetry.recovered("redis_connection");
-			} else {
-				telemetry.record("malformed", "adapter_message", "dropped");
-			}
-		},
+		onSignal: (signal: RedisLiveTextSignal) =>
+			reportWorkerLiveTextRuntimeSignal(telemetry, signal),
 	});
 }

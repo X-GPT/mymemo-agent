@@ -79,13 +79,16 @@ the reviewed plan:
 ```bash
 terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars -var="live_preview_enabled=false" -out=/tmp/live-preview-disable.tfplan
 terraform -chdir=infra/terraform apply /tmp/live-preview-disable.tfplan
+AWS_PROFILE=mymemo scripts/deploy/roll_ecs_services.sh
 ```
 
 Review the plan before apply. It should update the two trusted service task
 definitions only; it must not expose the Redis secret or introduce content- or
-identifier-bearing monitoring dimensions. After the ECS rollout, expect one
-`disabled` signal from each service and continue verifying `text_commit` plus
-terminal outcomes.
+identifier-bearing monitoring dimensions. The rollout command is required:
+Terraform registers the task definitions, while the ECS services intentionally
+ignore task-definition drift until that script updates them. After the rollout,
+expect one `disabled` signal from each service and continue verifying
+`text_commit` plus terminal outcomes.
 
 ## Restore the Redis lane
 
@@ -95,11 +98,13 @@ services to roll:
 ```bash
 terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars -var="live_preview_enabled=true" -out=/tmp/live-preview-restore.tfplan
 terraform -chdir=infra/terraform apply /tmp/live-preview-restore.tfplan
+AWS_PROFILE=mymemo scripts/deploy/roll_ecs_services.sh
 ```
 
-Run a new conversation turn. Confirm `attempted` and `delivered` outcomes in
-both services, one or more cursorless `text_delta` frames, the exact
-cursor-bearing `text_commit`, and `done`.
+The rollout is required for the same task-definition reason as disable. Then run
+a new conversation turn. Confirm `attempted` and `delivered` outcomes in both
+services, one or more cursorless `text_delta` frames, the exact cursor-bearing
+`text_commit`, and `done`.
 
 ## Recognize a Postgres-path incident
 

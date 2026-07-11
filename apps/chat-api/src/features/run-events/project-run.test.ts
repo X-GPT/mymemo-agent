@@ -417,7 +417,7 @@ describe("projectRun", () => {
 						waitForMessage: async () => true,
 						close: async () => {},
 					},
-					maxPreviewStateMessages: 2,
+					maxPreviewStateEntries: 2,
 					onLiveTextSignal: (signal) => signals.push(signal),
 				}),
 			),
@@ -526,7 +526,7 @@ describe("projectRun", () => {
 				projectRun("run-1", 0, {
 					reader,
 					notifier: new InstantNotifier(),
-					maxPreviewStateMessages: 1,
+					maxPreviewStateEntries: 1,
 					liveSubscription: {
 						readAvailable: () => [],
 						readDroppedMessages: emptyDropReport,

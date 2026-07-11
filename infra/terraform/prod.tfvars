@@ -35,6 +35,9 @@ worker_max_concurrent_runs = 2
 live_redis_node_type      = "cache.t4g.micro"
 live_redis_engine_version = "7.1"
 
+# Established account alarm channel used by the shared staging infrastructure.
+alarm_action_arns = ["arn:aws:sns:us-west-2:637423444544:mymemo-staging-alarms"]
+
 agent_database_name               = "mymemo_agent"
 agent_database_username           = "mymemo_agent"
 agent_db_instance_class           = "db.t4g.micro"

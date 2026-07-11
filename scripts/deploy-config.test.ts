@@ -112,6 +112,7 @@ describe("agent deployment config", () => {
 
 		for (const resource of [
 			"live_preview_degraded",
+			"live_preview_widespread_degraded",
 			"live_preview_drops",
 			"live_preview_overflow",
 		]) {
@@ -120,6 +121,12 @@ describe("agent deployment config", () => {
 			);
 		}
 		expect(cloudwatch.match(/datapoints_to_alarm\s*=\s*2/g)).toHaveLength(3);
+		expect(cloudwatch).toMatch(
+			/resource "aws_cloudwatch_metric_alarm" "live_preview_widespread_degraded"[\s\S]*?evaluation_periods\s*=\s*1[\s\S]*?threshold\s*=\s*2/,
+		);
+		expect(cloudwatch).toContain(
+			'expression  = "IF(FILL(chat, 0) > 0, 1, 0) + IF(FILL(worker, 0) > 0, 1, 0)"',
+		);
 		expect(
 			cloudwatch.match(/evaluation_periods\s*=\s*3/g)?.length,
 		).toBeGreaterThanOrEqual(3);
@@ -192,6 +199,9 @@ describe("agent deployment config", () => {
 		expect(prodTfvars).not.toContain("aws_region");
 		expect(prodTfvars).not.toContain("gateway_public_url");
 		expect(prodTfvars).toContain("mymemo-agent-prod-KB_DATABASE_URL");
+		expect(prodTfvars).toContain(
+			'alarm_action_arns = ["arn:aws:sns:us-west-2:637423444544:mymemo-staging-alarms"]',
+		);
 		expect(prodTfvars).not.toContain("CREATE_AGENT_DATABASE");
 		expect(prodTfvars).not.toContain("AGENT_DATABASE_URL_SECRET_ARN");
 		expect(prodTfvars).not.toContain("DB_PASSWORD_SECRET_ARN");

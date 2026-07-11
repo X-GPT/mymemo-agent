@@ -38,6 +38,9 @@ worker_max_concurrent_runs = 2
 live_redis_node_type      = "cache.t4g.micro"
 live_redis_engine_version = "7.1"
 
+# SNS topics must already have confirmed incident subscriptions.
+# alarm_action_arns = ["arn:aws:sns:us-east-1:123456789012:mymemo-prod-alarms"]
+
 # Agent-owned writable Postgres. This Terraform root always creates a dedicated
 # RDS instance. The password is generated and stored by RDS in AWS Secrets
 # Manager; ECS receives AGENT_DATABASE_URL without a password plus a DB_PASSWORD
