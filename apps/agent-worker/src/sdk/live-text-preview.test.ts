@@ -162,3 +162,23 @@ it("aborts an outstanding publication and releases its queue on close", async ()
 
 	await expect(aborted.promise).resolves.toBeUndefined();
 });
+
+it("keeps queue degradation non-fatal when the signal callback throws", () => {
+	const preview = new LiveTextPreview({
+		runId: "run-1",
+		maxQueuedMessages: 1,
+		onSignal() {
+			throw new Error("telemetry unavailable");
+		},
+		publisher: {
+			async publish() {
+				await new Promise<void>(() => {});
+			},
+		},
+	});
+
+	expect(() =>
+		preview.append("message-1", "x".repeat(16_384 * 3)),
+	).not.toThrow();
+	preview.close();
+});

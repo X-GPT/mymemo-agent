@@ -14,6 +14,10 @@ export const LiveTextMessageSchema = z
 
 export type LiveTextMessage = z.infer<typeof LiveTextMessageSchema>;
 
+export type LiveTextDropReport =
+	| { type: "message_ids"; messageIds: string[] }
+	| { type: "tracking_overflow" };
+
 export interface LiveTextPublisher {
 	publish(
 		message: LiveTextMessage,
@@ -23,8 +27,7 @@ export interface LiveTextPublisher {
 
 export interface LiveTextSubscription {
 	readAvailable(): LiveTextMessage[];
-	/** Message ids dropped since the previous read; null means tracking overflowed. */
-	readDroppedMessageIds?(): string[] | null;
+	readDroppedMessages(): LiveTextDropReport;
 	waitForMessage(options?: {
 		timeoutMs?: number;
 		signal?: AbortSignal;
@@ -77,16 +80,16 @@ class InMemoryLiveTextSubscription implements LiveTextSubscription {
 		return this.#buffer.splice(0);
 	}
 
-	readDroppedMessageIds(): string[] | null {
-		if (this.#closed) return [];
+	readDroppedMessages(): LiveTextDropReport {
+		if (this.#closed) return { type: "message_ids", messageIds: [] };
 		if (this.#droppedMessageIdsOverflowed) {
 			this.#droppedMessageIdsOverflowed = false;
 			this.#droppedMessageIds.clear();
-			return null;
+			return { type: "tracking_overflow" };
 		}
 		const messageIds = [...this.#droppedMessageIds];
 		this.#droppedMessageIds.clear();
-		return messageIds;
+		return { type: "message_ids", messageIds };
 	}
 
 	async waitForMessage(

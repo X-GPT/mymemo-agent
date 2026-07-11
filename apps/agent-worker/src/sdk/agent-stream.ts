@@ -118,7 +118,11 @@ export async function consumeAgentStream(
 	const assembler = new AssistantMessageAssembler({
 		onPartialCompleteMismatch: () => {
 			preview?.disable();
-			params.onPartialCompleteMismatch?.();
+			try {
+				params.onPartialCompleteMismatch?.();
+			} catch {
+				// Telemetry is optional and cannot change the Run outcome.
+			}
 		},
 	});
 	const preview =

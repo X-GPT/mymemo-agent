@@ -470,6 +470,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			...silentLogger,
 			warn(event) {
 				warnings.push(event);
+				throw new Error("telemetry unavailable");
 			},
 		};
 		const worker = buildWorker();

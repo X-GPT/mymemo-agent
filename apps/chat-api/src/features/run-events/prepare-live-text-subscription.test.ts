@@ -15,7 +15,12 @@ it("falls back when subscription setup throws synchronously", async () => {
 				},
 			},
 			"run-1",
-			{ onSignal: (signal) => signals.push(signal) },
+			{
+				onSignal: (signal) => {
+					signals.push(signal);
+					throw new Error("telemetry unavailable");
+				},
+			},
 		),
 	).resolves.toBeNull();
 	expect(signals).toEqual(["degraded"]);
@@ -50,6 +55,7 @@ it("falls back after a bounded wait and closes a subscription that arrives late"
 	await expect(prepared).resolves.toBeNull();
 	resolveSubscription?.({
 		readAvailable: () => [],
+		readDroppedMessages: () => ({ type: "message_ids", messageIds: [] }),
 		waitForMessage: async () => false,
 		close: async () => {
 			closes++;

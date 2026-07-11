@@ -557,6 +557,10 @@ describe("POST /v1/conversations/:id/events", () => {
 			async subscribe() {
 				return {
 					readAvailable: () => [],
+					readDroppedMessages: () => ({
+						type: "message_ids",
+						messageIds: [],
+					}),
 					waitForMessage: async () => false,
 					close: async () => {
 						closes++;

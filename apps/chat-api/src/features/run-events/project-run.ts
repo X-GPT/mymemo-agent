@@ -34,20 +34,25 @@ export interface ProjectRunDeps {
 	liveSubscription?: LiveTextSubscription;
 	/** Bound on provisional frames waiting for a slow SSE consumer. */
 	maxPreviewQueueMessages?: number;
+	/** Bound on durable frames before this replayable connection is ended. */
+	maxDurableQueueMessages?: number;
 	/** Payload-free, fixed-vocabulary Live preview degradation signal. */
 	onLiveTextSignal?: (signal: ProjectRunLiveTextSignal) => void;
 }
 
 export const DEFAULT_MAX_PREVIEW_QUEUE_MESSAGES = 64;
+export const DEFAULT_MAX_DURABLE_QUEUE_MESSAGES = 256;
 
 export type ProjectRunLiveTextSignal =
 	| "duplicate_inconsistency"
+	| "durable_backlog"
 	| "gap"
 	| "impossible_ordering"
 	| "late_delta"
 	| "malformed_message"
 	| "partial_complete_mismatch"
 	| "queue_overflow"
+	| "reconciliation_overflow"
 	| "subscriber_failure"
 	| "terminal_open_preview";
 
@@ -63,11 +68,16 @@ class ProjectionOutput {
 	#finished = false;
 	#error: unknown;
 
-	constructor(private readonly maxPreviewQueueMessages: number) {}
+	constructor(
+		private readonly maxPreviewQueueMessages: number,
+		private readonly maxDurableQueueMessages: number,
+	) {}
 
-	pushDurable(frame: ProjectedFrame): void {
+	pushDurable(frame: ProjectedFrame): boolean {
+		if (this.#durable.length >= this.maxDurableQueueMessages) return false;
 		this.#durable.push(frame);
 		this.#wake();
+		return true;
 	}
 
 	pushPreview(frame: ProjectedFrame): boolean {
@@ -149,13 +159,20 @@ export async function* projectRun(
 ): AsyncGenerator<ProjectedFrame> {
 	const maxPreviewQueueMessages =
 		deps.maxPreviewQueueMessages ?? DEFAULT_MAX_PREVIEW_QUEUE_MESSAGES;
+	const maxDurableQueueMessages =
+		deps.maxDurableQueueMessages ?? DEFAULT_MAX_DURABLE_QUEUE_MESSAGES;
 	if (
 		!Number.isSafeInteger(maxPreviewQueueMessages) ||
-		maxPreviewQueueMessages < 1
+		maxPreviewQueueMessages < 1 ||
+		!Number.isSafeInteger(maxDurableQueueMessages) ||
+		maxDurableQueueMessages < 1
 	) {
-		throw new Error("Preview queue bound must be a positive integer");
+		throw new Error("Projection queue bounds must be positive integers");
 	}
-	const output = new ProjectionOutput(maxPreviewQueueMessages);
+	const output = new ProjectionOutput(
+		maxPreviewQueueMessages,
+		maxDurableQueueMessages,
+	);
 	const controller = new AbortController();
 	const onAbort = () => controller.abort();
 	if (deps.signal?.aborted) controller.abort();
@@ -203,7 +220,11 @@ async function produceRun(
 	let previewReady = fromSeq > 0;
 	let durableWakeup: Promise<boolean> | undefined;
 	const emitSignal = (liveSignal: ProjectRunLiveTextSignal) => {
-		deps.onLiveTextSignal?.(liveSignal);
+		try {
+			deps.onLiveTextSignal?.(liveSignal);
+		} catch {
+			// Telemetry is optional and cannot change durable projection.
+		}
 	};
 	const disableLiveSubscription = () => {
 		const subscription = liveSubscription;
@@ -248,7 +269,16 @@ async function produceRun(
 				const frames = projectRunEvent(row.type, row.payload);
 				for (const frame of frames) {
 					if (frame.type === "text_commit") {
-						committedMessageIds.add(frame.messageId);
+						if (
+							liveSubscription &&
+							!committedMessageIds.has(frame.messageId) &&
+							committedMessageIds.size >= maxPreviewQueueMessages
+						) {
+							emitSignal("reconciliation_overflow");
+							committedMessageIds.clear();
+							disableLiveForRun();
+						}
+						if (liveSubscription) committedMessageIds.add(frame.messageId);
 						output.purgePreview(frame.messageId);
 						const state = previewStates.get(frame.messageId);
 						if (
@@ -272,11 +302,17 @@ async function produceRun(
 				}
 				for (const [index, frame] of frames.entries()) {
 					const isLastSibling = index === frames.length - 1;
-					output.pushDurable({
-						seq: row.seq,
-						id: isLastSibling ? String(row.seq) : undefined,
-						frame,
-					});
+					if (
+						!output.pushDurable({
+							seq: row.seq,
+							id: isLastSibling ? String(row.seq) : undefined,
+							frame,
+						})
+					) {
+						emitSignal("durable_backlog");
+						disableLiveForRun();
+						return;
+					}
 					if (signal.aborted) return;
 				}
 				if (isTerminal) return;
@@ -287,14 +323,13 @@ async function produceRun(
 				let available: unknown[];
 				try {
 					const subscription = liveSubscription;
-					const droppedMessageIds =
-						subscription.readDroppedMessageIds?.() ?? [];
-					if (droppedMessageIds === null) {
+					const droppedMessages = subscription.readDroppedMessages();
+					if (droppedMessages.type === "tracking_overflow") {
 						emitSignal("queue_overflow");
 						disableLiveForRun();
 						available = [];
 					} else {
-						for (const messageId of droppedMessageIds) {
+						for (const messageId of droppedMessages.messageIds) {
 							suppressMessage(messageId);
 							emitSignal("queue_overflow");
 						}

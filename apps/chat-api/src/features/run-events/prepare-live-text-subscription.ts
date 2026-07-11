@@ -9,6 +9,17 @@ const TIMED_OUT = Symbol("live text subscription timed out");
 
 export type LiveTextSetupSignal = "degraded" | "disabled";
 
+function emitSignal(
+	onSignal: ((signal: LiveTextSetupSignal) => void) | undefined,
+	signal: LiveTextSetupSignal,
+): void {
+	try {
+		onSignal?.(signal);
+	} catch {
+		// Telemetry is optional and cannot fail request admission.
+	}
+}
+
 export async function prepareLiveTextSubscription(
 	subscriber: LiveTextSubscriber,
 	runId: string,
@@ -22,7 +33,8 @@ export async function prepareLiveTextSubscription(
 	try {
 		prepared = subscriber.subscribe(runId);
 	} catch (error) {
-		options.onSignal?.(
+		emitSignal(
+			options.onSignal,
 			error instanceof LiveTextDisabledError ? "disabled" : "degraded",
 		);
 		return null;
@@ -34,11 +46,12 @@ export async function prepareLiveTextSubscription(
 	try {
 		const result = await Promise.race([prepared, timeout]);
 		if (result !== TIMED_OUT) return result;
-		options.onSignal?.("degraded");
+		emitSignal(options.onSignal, "degraded");
 		void prepared.then((subscription) => subscription.close()).catch(() => {});
 		return null;
 	} catch (error) {
-		options.onSignal?.(
+		emitSignal(
+			options.onSignal,
 			error instanceof LiveTextDisabledError ? "disabled" : "degraded",
 		);
 		return null;

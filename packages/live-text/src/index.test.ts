@@ -112,8 +112,14 @@ describe("InMemoryLiveTextTransport", () => {
 			text: "dropped",
 		});
 
-		expect(subscription.readDroppedMessageIds?.()).toEqual(["message-1"]);
-		expect(subscription.readDroppedMessageIds?.()).toEqual([]);
+		expect(subscription.readDroppedMessages()).toEqual({
+			type: "message_ids",
+			messageIds: ["message-1"],
+		});
+		expect(subscription.readDroppedMessages()).toEqual({
+			type: "message_ids",
+			messageIds: [],
+		});
 		expect(subscription.readAvailable()).toHaveLength(1);
 	});
 
@@ -135,7 +141,12 @@ describe("InMemoryLiveTextTransport", () => {
 			});
 		}
 
-		expect(subscription.readDroppedMessageIds?.()).toBeNull();
-		expect(subscription.readDroppedMessageIds?.()).toEqual([]);
+		expect(subscription.readDroppedMessages()).toEqual({
+			type: "tracking_overflow",
+		});
+		expect(subscription.readDroppedMessages()).toEqual({
+			type: "message_ids",
+			messageIds: [],
+		});
 	});
 });

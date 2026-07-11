@@ -187,7 +187,7 @@ export class LiveTextPreview {
 						this.#degraded
 					) {
 						this.#degraded = false;
-						this.#onSignal?.("recovered");
+						this.#emitSignal("recovered");
 					}
 				},
 				() => {
@@ -215,7 +215,15 @@ export class LiveTextPreview {
 		this.#degraded = true;
 		if (this.#messageId === messageId) this.#pendingText = "";
 		this.#discardQueuedMessage(messageId);
-		this.#onSignal?.(signal);
+		this.#emitSignal(signal);
+	}
+
+	#emitSignal(signal: LiveTextPreviewSignal): void {
+		try {
+			this.#onSignal?.(signal);
+		} catch {
+			// Telemetry is optional and cannot change the Run outcome.
+		}
 	}
 
 	#discardQueuedMessage(messageId: string): void {

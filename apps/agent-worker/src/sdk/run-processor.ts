@@ -39,7 +39,11 @@ export interface SdkRunProcessorDeps {
 export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 	return async (ctx) => {
 		if (!deps.liveTextPublisher) {
-			deps.logger.info({ message: "Live preview disabled" });
+			try {
+				deps.logger.info({ message: "Live preview disabled" });
+			} catch {
+				// Live telemetry must never change the Run outcome.
+			}
 		}
 		const query = await deps.startRunQuery(ctx.run, ctx.signal);
 		const outcome = await consumeAgentStream({

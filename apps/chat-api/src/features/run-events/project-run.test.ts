@@ -105,6 +105,10 @@ function frames(projected: ProjectedFrame[]) {
 	return projected.map((p) => p.frame);
 }
 
+function emptyDropReport() {
+	return { type: "message_ids" as const, messageIds: [] };
+}
+
 describe("projectRun", () => {
 	it("merges prepared cursorless previews before authoritative commits", async () => {
 		const liveText = new InMemoryLiveTextTransport();
@@ -338,7 +342,10 @@ describe("projectRun", () => {
 					notifier: new InstantNotifier(),
 					liveSubscription,
 					maxPreviewQueueMessages: 1,
-					onLiveTextSignal: (signal) => signals.push(signal),
+					onLiveTextSignal: (signal) => {
+						signals.push(signal);
+						throw new Error("telemetry unavailable");
+					},
 				}),
 			),
 		);
@@ -385,6 +392,7 @@ describe("projectRun", () => {
 					notifier: new InstantNotifier(),
 					liveSubscription: {
 						readAvailable: () => liveBatches.shift() ?? [],
+						readDroppedMessages: emptyDropReport,
 						waitForMessage: async () => true,
 						close: async () => {},
 					},
@@ -403,6 +411,103 @@ describe("projectRun", () => {
 			messageId: "message-1",
 			text: "abc",
 		});
+	});
+
+	it("ends a slow connection before its durable backlog can grow unbounded", async () => {
+		const signals: string[] = [];
+		let closes = 0;
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "replay me" },
+				},
+				{ seq: 3, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					maxDurableQueueMessages: 1,
+					liveSubscription: {
+						readAvailable: () => [],
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => false,
+						close: async () => {
+							closes++;
+						},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(projected).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+		]);
+		expect(signals).toContain("durable_backlog");
+		expect(closes).toBe(1);
+	});
+
+	it("bounds committed-message reconciliation by disabling optional Live preview", async () => {
+		const signals: string[] = [];
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+			],
+			[
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "first" },
+				},
+			],
+			[
+				{
+					seq: 3,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "second" },
+				},
+				{ seq: 4, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = frames(
+			await drain(
+				projectRun("run-1", 0, {
+					reader,
+					notifier: new InstantNotifier(),
+					maxPreviewQueueMessages: 1,
+					liveSubscription: {
+						readAvailable: () => [],
+						readDroppedMessages: emptyDropReport,
+						waitForMessage: async () => true,
+						close: async () => {},
+					},
+					onLiveTextSignal: (signal) => signals.push(signal),
+				}),
+			),
+		);
+
+		expect(
+			projected
+				.filter((frame) => frame.type === "text_commit")
+				.map((frame) => frame.text),
+		).toEqual(["first", "second"]);
+		expect(signals).toContain("reconciliation_overflow");
 	});
 
 	it("ignores a consistent duplicate but suppresses an inconsistent duplicate", async () => {
@@ -499,6 +604,7 @@ describe("projectRun", () => {
 								},
 							] as never;
 						},
+						readDroppedMessages: emptyDropReport,
 						waitForMessage: async () => true,
 						close: async () => {},
 					},
@@ -609,6 +715,7 @@ describe("projectRun", () => {
 								},
 							];
 						},
+						readDroppedMessages: emptyDropReport,
 						waitForMessage: async () => true,
 						close: async () => {},
 					},
@@ -678,6 +785,7 @@ describe("projectRun", () => {
 					notifier: new InstantNotifier(),
 					liveSubscription: {
 						readAvailable: () => liveBatches.shift() ?? [],
+						readDroppedMessages: emptyDropReport,
 						waitForMessage: async () => true,
 						close: async () => {},
 					},
@@ -780,6 +888,7 @@ describe("projectRun", () => {
 					readAvailable() {
 						throw new Error("Live transport disconnected");
 					},
+					readDroppedMessages: emptyDropReport,
 					async waitForMessage() {
 						throw new Error("must not wait after read failure");
 					},
@@ -841,6 +950,7 @@ describe("projectRun", () => {
 									]
 								: [];
 						},
+						readDroppedMessages: emptyDropReport,
 						waitForMessage: async () => false,
 						close: async () => {},
 					},
@@ -871,6 +981,7 @@ describe("projectRun", () => {
 			notifier: new InstantNotifier(),
 			liveSubscription: {
 				readAvailable: () => [],
+				readDroppedMessages: emptyDropReport,
 				waitForMessage: async () => false,
 				close: async () => closeFinished,
 			},
