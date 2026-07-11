@@ -215,6 +215,7 @@ describe("agent deployment config", () => {
 			"DEPLOY_ENVIRONMENT=prod",
 			"AGENT_SMOKE_BASE_URL=REPLACE_ME_AGENT_SMOKE_BASE_URL",
 			"AGENT_SMOKE_EXPECT_GATE_CLOSED=false",
+			"AGENT_SMOKE_PREVIEW_MODE=required",
 		]) {
 			expect(prodDeployEnv).toContain(required);
 		}

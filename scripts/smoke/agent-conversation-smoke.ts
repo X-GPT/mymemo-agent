@@ -1,11 +1,16 @@
 #!/usr/bin/env bun
 
 import { createHash, randomUUID } from "node:crypto";
+import {
+	type ClientContractMessage,
+	createClientContractFixture,
+} from "./client-contract";
 
 const baseUrl = requiredEnv("AGENT_SMOKE_BASE_URL").replace(/\/+$/, "");
 const memberCode = Bun.env.AGENT_SMOKE_MEMBER_CODE || "agent-smoke-member";
 const partnerCode = Bun.env.AGENT_SMOKE_PARTNER_CODE || "agent-smoke-partner";
 const expectGateClosed = Bun.env.AGENT_SMOKE_EXPECT_GATE_CLOSED !== "false";
+const previewMode = parsePreviewMode(Bun.env.AGENT_SMOKE_PREVIEW_MODE);
 const rawTurnTimeout = Bun.env.AGENT_SMOKE_TURN_TIMEOUT_MS;
 const turnTimeoutMs =
 	rawTurnTimeout === undefined ? 180_000 : Number(rawTurnTimeout);
@@ -16,11 +21,13 @@ if (!Number.isInteger(turnTimeoutMs) || turnTimeoutMs <= 0) {
 const TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 	"conversation_id",
 	"run_id",
+	"text_delta",
 	"text_commit",
 	"done",
 ]);
 
 interface SSEFrame {
+	id?: string;
 	event: string;
 	data: string;
 }
@@ -131,9 +138,20 @@ if (actualWorkspaceHash !== expectedWorkspaceHash.toLowerCase()) {
 		"second run returned workspace contents that do not match the first run's SHA-256",
 	);
 }
+if (firstTurn.text !== `TURN1_SHA256=${actualWorkspaceHash}`) {
+	throw new Error(
+		"first run commit was not the exact requested Assistant message",
+	);
+}
+const expectedSecondText = `SESSION_MARKER=${sessionMarker}\nWORKSPACE_MARKER=${workspaceMarker}`;
+if (secondTurn.text !== expectedSecondText) {
+	throw new Error(
+		"second run commit was not the exact requested Assistant message",
+	);
+}
 
 console.log(
-	`agent live smoke passed: conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}`,
+	`agent live smoke passed: preview=${previewMode}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}`,
 );
 
 async function sendTurn(
@@ -167,6 +185,73 @@ async function sendTurn(
 	if (events.at(-1) !== "done") {
 		throw new Error(`event stream did not end in done: ${events.join(", ")}`);
 	}
+	const conversationIndex = events.indexOf("conversation_id");
+	const runIndex = events.indexOf("run_id");
+	const firstTextIndex = events.findIndex(
+		(event) => event === "text_delta" || event === "text_commit",
+	);
+	if (
+		conversationIndex < 0 ||
+		runIndex < 0 ||
+		firstTextIndex < 0 ||
+		conversationIndex >= runIndex ||
+		runIndex >= firstTextIndex
+	) {
+		throw new Error(
+			`event stream did not identify the Conversation and Run before text: ${events.join(", ")}`,
+		);
+	}
+	const previewFrames = frames.filter((frame) => frame.event === "text_delta");
+	const commitFrames = frames.filter((frame) => frame.event === "text_commit");
+	if (commitFrames.length !== 1) {
+		throw new Error(
+			`event stream contained ${commitFrames.length} commits; expected exactly one provider-complete Assistant message`,
+		);
+	}
+	if (previewMode === "required" && previewFrames.length === 0) {
+		throw new Error("event stream contained no required Live preview");
+	}
+	if (previewMode === "forbidden" && previewFrames.length > 0) {
+		throw new Error(
+			"Redis-disabled stream unexpectedly contained Live preview",
+		);
+	}
+	if (previewMode === "required") {
+		const firstPreviewIndex = frames.findIndex(
+			(frame) => frame.event === "text_delta",
+		);
+		const firstCommitIndex = frames.findIndex(
+			(frame) => frame.event === "text_commit",
+		);
+		if (firstPreviewIndex < 0 || firstPreviewIndex >= firstCommitIndex) {
+			throw new Error("Live preview did not arrive before its durable commit");
+		}
+		const commitMessageId = stringField(commitFrames[0], "messageId");
+		if (
+			previewFrames.some(
+				(frame) => stringField(frame, "messageId") !== commitMessageId,
+			)
+		) {
+			throw new Error("Live preview did not belong to the committed message");
+		}
+	}
+
+	const client = createClientContractFixture();
+	for (const frame of frames) {
+		client.receive({ ...frame, data: parseFrameData(frame) });
+	}
+	const snapshot = client.snapshot();
+	if (snapshot.terminal !== "done") {
+		throw new Error("client fixture did not observe the done outcome");
+	}
+	if (snapshot.messages.some((message) => message.provisional)) {
+		throw new Error("client fixture retained provisional Assistant text");
+	}
+	if (snapshot.messages.length !== 1) {
+		throw new Error(
+			"client fixture did not retain exactly one committed message",
+		);
+	}
 
 	const echoedConversationId = stringField(
 		frames.find((frame) => frame.event === "conversation_id"),
@@ -181,27 +266,86 @@ async function sendTurn(
 		frames.find((frame) => frame.event === "run_id"),
 		"runId",
 	);
-	const text = frames
-		.filter((frame) => frame.event === "text_commit")
-		.map((frame) => stringField(frame, "text"))
-		.join("");
+	const runCursor = frames.find((frame) => frame.event === "run_id")?.id;
+	if (!runCursor)
+		throw new Error("run_id frame did not carry a durable cursor");
+	const text = snapshot.messages.map((message) => message.text).join("");
 	if (!text.trim()) throw new Error("event stream contained no assistant text");
+	await replayTurn(conversationId, runId, runCursor, snapshot.messages);
 	return { runId, text };
+}
+
+async function replayTurn(
+	conversationId: string,
+	runId: string,
+	afterCursor: string,
+	expectedMessages: ClientContractMessage[],
+): Promise<void> {
+	const response = await fetch(
+		`${baseUrl}/v1/conversations/${conversationId}/runs/${runId}/events`,
+		{
+			headers: { ...headers(), "Last-Event-ID": afterCursor },
+			signal: AbortSignal.timeout(turnTimeoutMs),
+		},
+	);
+	const body = await response.text();
+	if (!response.ok) {
+		throw new Error(
+			`expected reconnect stream 2xx, got ${response.status}: ${body}`,
+		);
+	}
+	if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+		throw new Error("reconnect response was not an SSE stream");
+	}
+
+	const frames = parseSSE(body).filter((frame) => frame.event !== "ping");
+	const replayedEvents = frames.map((frame) => frame.event);
+	if (
+		replayedEvents.some((event) =>
+			["conversation_id", "run_id", "text_delta"].includes(event),
+		)
+	) {
+		throw new Error(
+			`durable reconnect attempted to replay non-durable frames: ${replayedEvents.join(", ")}`,
+		);
+	}
+	if (replayedEvents.at(-1) !== "done") {
+		throw new Error(
+			`durable reconnect did not end in done: ${replayedEvents.join(", ")}`,
+		);
+	}
+
+	const client = createClientContractFixture();
+	for (const frame of frames) {
+		client.receive({ ...frame, data: parseFrameData(frame) });
+	}
+	const snapshot = client.snapshot();
+	if (snapshot.terminal !== "done") {
+		throw new Error("reconnected client fixture did not observe done");
+	}
+	if (JSON.stringify(snapshot.messages) !== JSON.stringify(expectedMessages)) {
+		throw new Error(
+			"durable reconnect did not replay the exact committed messages",
+		);
+	}
 }
 
 function parseSSE(raw: string): SSEFrame[] {
 	const frames: SSEFrame[] = [];
 	for (const block of raw.replaceAll("\r\n", "\n").split("\n\n")) {
+		let id: string | undefined;
 		let event = "";
 		const data: string[] = [];
 		for (const line of block.split("\n")) {
-			if (line.startsWith("event:")) {
+			if (line.startsWith("id:")) {
+				id = line.slice("id:".length).trim();
+			} else if (line.startsWith("event:")) {
 				event = line.slice("event:".length).trim();
 			} else if (line.startsWith("data:")) {
 				data.push(line.slice("data:".length).trimStart());
 			}
 		}
-		if (event) frames.push({ event, data: data.join("\n") });
+		if (event) frames.push({ id, event, data: data.join("\n") });
 	}
 	return frames;
 }
@@ -209,12 +353,7 @@ function parseSSE(raw: string): SSEFrame[] {
 function stringField(frame: SSEFrame | undefined, field: string): string {
 	if (!frame)
 		throw new Error(`event stream did not include the ${field} frame`);
-	let value: unknown;
-	try {
-		value = JSON.parse(frame.data);
-	} catch {
-		throw new Error(`${frame.event} frame did not contain JSON data`);
-	}
+	const value = parseFrameData(frame);
 	if (
 		typeof value !== "object" ||
 		value === null ||
@@ -223,4 +362,22 @@ function stringField(frame: SSEFrame | undefined, field: string): string {
 		throw new Error(`${frame.event} frame did not contain string ${field}`);
 	}
 	return (value as Record<string, string>)[field] as string;
+}
+
+function parseFrameData(frame: SSEFrame): unknown {
+	try {
+		return JSON.parse(frame.data);
+	} catch {
+		throw new Error(`${frame.event} frame did not contain JSON data`);
+	}
+}
+
+type PreviewMode = "optional" | "required" | "forbidden";
+
+function parsePreviewMode(value: string | undefined): PreviewMode {
+	if (value === undefined || value === "optional") return "optional";
+	if (value === "required" || value === "forbidden") return value;
+	throw new Error(
+		"AGENT_SMOKE_PREVIEW_MODE must be optional, required, or forbidden",
+	);
 }

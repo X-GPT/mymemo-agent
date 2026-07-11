@@ -20,40 +20,65 @@ function sseTurn(input: {
 	runId: string;
 	text: string;
 	includeDone?: boolean;
+	includePreview?: boolean;
+	includeLifecycle?: boolean;
+	commitTexts?: string[];
 }): Response {
 	const frames: Array<{
-		id: string;
+		id?: string;
 		event: string;
 		data: Record<string, unknown>;
-	}> = [
-		{
+	}> = [];
+	if (input.includeLifecycle !== false) {
+		frames.push({
 			id: "1",
 			event: "conversation_id",
 			data: { type: "conversation_id", conversationId: input.conversationId },
-		},
-		{
+		});
+		frames.push({
 			id: "1",
 			event: "run_id",
 			data: { type: "run_id", runId: input.runId },
-		},
-		{
-			id: "2",
+		});
+	}
+	if (input.includePreview) {
+		frames.push({
+			event: "text_delta",
+			data: {
+				type: "text_delta",
+				messageId: `message-${input.runId}`,
+				deltaIndex: 0,
+				text: input.text.slice(0, Math.ceil(input.text.length / 2)),
+			},
+		});
+	}
+	const commitTexts = input.commitTexts ?? [input.text];
+	for (const [index, text] of commitTexts.entries()) {
+		frames.push({
+			id: String(index + 2),
 			event: "text_commit",
 			data: {
 				type: "text_commit",
-				messageId: `message-${input.runId}`,
-				text: input.text,
+				messageId:
+					commitTexts.length === 1
+						? `message-${input.runId}`
+						: `message-${input.runId}-${index}`,
+				text,
 			},
-		},
-	];
+		});
+	}
 	if (input.includeDone !== false) {
-		frames.push({ id: "3", event: "done", data: { type: "done" } });
+		frames.push({
+			id: String(commitTexts.length + 2),
+			event: "done",
+			data: { type: "done" },
+		});
 	}
 	return new Response(
 		`${frames
 			.map(
 				(frame) =>
-					`id: ${frame.id}\nevent: ${frame.event}\ndata: ${JSON.stringify(frame.data)}`,
+					`${frame.id === undefined ? "" : `id: ${frame.id}\n`}event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}`,
 			)
 			.join("\n\n")}\n\n`,
 		{ headers: { "content-type": "text/event-stream" } },
@@ -69,6 +94,8 @@ describe("agent conversation live smoke", () => {
 			.digest("hex");
 		const messages: UserMessage[] = [];
 		const identityHeaders: Array<[string | null, string | null]> = [];
+		const responsesByRun = new Map<string, string>();
+		const reconnectCursors: string[] = [];
 
 		const server = Bun.serve({
 			port: await availablePort(),
@@ -88,13 +115,34 @@ describe("agent conversation live smoke", () => {
 				if (url.pathname === `/v1/conversations/${conversationId}/events`) {
 					messages.push((await request.json()) as UserMessage);
 					const turn = messages.length;
+					const runId = `run-${turn}`;
+					const text =
+						turn === 1
+							? `TURN1_SHA256=${workspaceHash}`
+							: `SESSION_MARKER=${extractSessionMarker(messages[0]?.text)}\nWORKSPACE_MARKER=${workspaceMarker}`;
+					responsesByRun.set(runId, text);
 					return sseTurn({
 						conversationId,
-						runId: `run-${turn}`,
-						text:
-							turn === 1
-								? `TURN1_SHA256=${workspaceHash}`
-								: `SESSION_MARKER=${extractSessionMarker(messages[0]?.text)}\nWORKSPACE_MARKER=${workspaceMarker}`,
+						runId,
+						includePreview: true,
+						text,
+					});
+				}
+				const reconnect = url.pathname.match(
+					new RegExp(
+						`^/v1/conversations/${conversationId}/runs/(run-[0-9]+)/events$`,
+					),
+				);
+				if (request.method === "GET" && reconnect) {
+					reconnectCursors.push(request.headers.get("last-event-id") ?? "");
+					const runId = reconnect[1] as string;
+					const text = responsesByRun.get(runId);
+					if (!text) return new Response("not found", { status: 404 });
+					return sseTurn({
+						conversationId,
+						runId,
+						text,
+						includeLifecycle: false,
 					});
 				}
 
@@ -105,6 +153,7 @@ describe("agent conversation live smoke", () => {
 
 		const { exitCode, stdout, stderr } = await runSmoke(
 			`http://127.0.0.1:${server.port}`,
+			{ AGENT_SMOKE_PREVIEW_MODE: "required" },
 		);
 
 		expect(stderr).toBe("");
@@ -128,7 +177,10 @@ describe("agent conversation live smoke", () => {
 			["live-smoke-member", "live-smoke-partner"],
 			["live-smoke-member", "live-smoke-partner"],
 			["live-smoke-member", "live-smoke-partner"],
+			["live-smoke-member", "live-smoke-partner"],
+			["live-smoke-member", "live-smoke-partner"],
 		]);
+		expect(reconnectCursors).toEqual(["1", "1"]);
 	});
 
 	it("rejects a non-positive turn timeout before making a request", async () => {
@@ -140,6 +192,70 @@ describe("agent conversation live smoke", () => {
 		expect(stderr).toContain(
 			"AGENT_SMOKE_TURN_TIMEOUT_MS must be a positive integer",
 		);
+	});
+
+	it("proves exact durable delivery and replay with Redis preview disabled", async () => {
+		const conversationId = "00000000-0000-4000-8000-000000000235";
+		const workspaceMarker = "workspace-fedcba9876543210fedcba9876543210";
+		const workspaceHash = createHash("sha256")
+			.update(workspaceMarker)
+			.digest("hex");
+		const messages: UserMessage[] = [];
+		const responsesByRun = new Map<string, string>();
+		const reconnectCursors: string[] = [];
+
+		const server = Bun.serve({
+			port: await availablePort(),
+			async fetch(request) {
+				const url = new URL(request.url);
+				if (url.pathname === "/v1/conversations") {
+					return Response.json(
+						{ conversationId, scope: "general" },
+						{ status: 201 },
+					);
+				}
+				if (url.pathname === `/v1/conversations/${conversationId}/events`) {
+					messages.push((await request.json()) as UserMessage);
+					const turn = messages.length;
+					const runId = `disabled-run-${turn}`;
+					const text =
+						turn === 1
+							? `TURN1_SHA256=${workspaceHash}`
+							: `SESSION_MARKER=${extractSessionMarker(messages[0]?.text)}\nWORKSPACE_MARKER=${workspaceMarker}`;
+					responsesByRun.set(runId, text);
+					return sseTurn({ conversationId, runId, text });
+				}
+				const reconnect = url.pathname.match(
+					new RegExp(
+						`^/v1/conversations/${conversationId}/runs/(disabled-run-[0-9]+)/events$`,
+					),
+				);
+				if (request.method === "GET" && reconnect) {
+					reconnectCursors.push(request.headers.get("last-event-id") ?? "");
+					const runId = reconnect[1] as string;
+					const text = responsesByRun.get(runId);
+					if (!text) return new Response("not found", { status: 404 });
+					return sseTurn({
+						conversationId,
+						runId,
+						text,
+						includeLifecycle: false,
+					});
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+
+		const { exitCode, stdout, stderr } = await runSmoke(
+			`http://127.0.0.1:${server.port}`,
+			{ AGENT_SMOKE_PREVIEW_MODE: "forbidden" },
+		);
+
+		expect(stderr).toBe("");
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("preview=forbidden");
+		expect(reconnectCursors).toEqual(["1", "1"]);
 	});
 
 	it("rejects an assistant stream that never records the done outcome", async () => {
@@ -170,6 +286,40 @@ describe("agent conversation live smoke", () => {
 
 		expect(exitCode).not.toBe(0);
 		expect(stderr).toContain("event stream did not end in done");
+	});
+
+	it("rejects a provider-complete response split across multiple commits", async () => {
+		const conversationId = "00000000-0000-4000-8000-000000000236";
+		const exact =
+			"TURN1_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const server = Bun.serve({
+			port: await availablePort(),
+			fetch(request) {
+				const url = new URL(request.url);
+				if (url.pathname === "/v1/conversations") {
+					return Response.json(
+						{ conversationId, scope: "general" },
+						{ status: 201 },
+					);
+				}
+				return sseTurn({
+					conversationId,
+					runId: "split-run",
+					text: exact,
+					commitTexts: [exact.slice(0, 20), exact.slice(20)],
+				});
+			},
+		});
+		servers.push(server);
+
+		const { exitCode, stderr } = await runSmoke(
+			`http://127.0.0.1:${server.port}`,
+		);
+
+		expect(exitCode).not.toBe(0);
+		expect(stderr).toContain(
+			"expected exactly one provider-complete Assistant message",
+		);
 	});
 });
 

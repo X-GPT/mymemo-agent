@@ -22,6 +22,10 @@ Production must set `alarm_action_arns` to SNS topics with confirmed incident
 subscriptions. An empty list still creates visible CloudWatch alarms but does
 not page an operator; do not call that configuration production-ready.
 
+The release evidence and two staging passes for the hard client-contract
+cutover are recorded in
+[ADR-0008 hard-cutover verification](../verification/adr-0008-hard-cutover.md).
+
 Use this Logs Insights query across the chat-api and agent-worker log groups:
 
 ```text
