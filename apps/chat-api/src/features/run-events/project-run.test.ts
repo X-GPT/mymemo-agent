@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
 import { InMemoryLiveTextTransport } from "@mymemo/live-text";
-import type { Database } from "@/db/client";
 import { runEvents, runs } from "@/db/schema";
-import { createTestDatabase } from "@/db/testing";
+import { createTestDatabase, type TestDb } from "@/db/testing";
 import { type ProjectedFrame, projectRun } from "./project-run";
 import type { RunEventReader, RunEventRow } from "./run-event-reader";
 import { DrizzleRunEventReader } from "./run-event-reader";
@@ -1335,13 +1341,23 @@ describe("projectRun", () => {
 });
 
 describe("projectRun over the real reader", () => {
-	let db: Database;
-	let close: () => Promise<void>;
+	let tdb: TestDb;
+
+	// One PGlite (WASM) instance for the whole describe — a per-test instance
+	// multiplies WASM memory that is not reclaimed promptly and adds boot
+	// attempts, each a chance to hit the flaky WASM boot trap. Tests are
+	// isolated by resetting the rows instead.
+	beforeAll(async () => {
+		tdb = await createTestDatabase();
+	});
+
+	afterAll(async () => {
+		await tdb.close();
+	});
 
 	beforeEach(async () => {
-		const tdb = await createTestDatabase();
-		db = tdb.db;
-		close = tdb.close;
+		const { db } = tdb;
+		await db.delete(runs); // cascades run_events
 		await db.insert(runs).values({
 			runId: "run-1",
 			userId: "user-1",
@@ -1365,10 +1381,8 @@ describe("projectRun over the real reader", () => {
 		]);
 	});
 
-	afterEach(() => close());
-
 	it("projects durable rows end to end, honoring the reconnect cursor", async () => {
-		const reader = new DrizzleRunEventReader(db);
+		const reader = new DrizzleRunEventReader(tdb.db);
 		const notifier = new InstantNotifier();
 
 		const full = frames(
