@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { InMemoryLiveTextTransport } from "@mymemo/live-text";
+import type { ModelContent } from "../run-loop";
 import {
 	AgentResultError,
 	consumeAgentStream,
@@ -81,6 +82,25 @@ function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
 	return query;
 }
 
+type AssistantCommit = Extract<
+	ModelContent,
+	{ kind: "assistant_message" }
+>["payload"];
+
+/** These fixtures only ever commit Assistant messages through the
+ * discriminated model-content seam; any other kind is a bug — fail loudly
+ * rather than silently dropping it. */
+function onAssistantCommit(
+	handle: (payload: AssistantCommit) => void,
+): (content: ModelContent) => Promise<void> {
+	return async (content) => {
+		if (content.kind !== "assistant_message") {
+			throw new Error(`unexpected model content kind: ${content.kind}`);
+		}
+		handle(content.payload);
+	};
+}
+
 describe("sessionIdFromResult", () => {
 	it("returns the session id only from a result message", () => {
 		expect(sessionIdFromResult(resultMessage("session-1"))).toBe("session-1");
@@ -145,9 +165,9 @@ describe("consumeAgentStream", () => {
 					await transport.publish(message);
 				},
 			},
-			appendAssistantMessage: async (message) => {
-				order.push(`commit:${message.text}`);
-			},
+			appendModelContent: onAssistantCommit((message) =>
+				order.push(`commit:${message.text}`),
+			),
 		});
 
 		const preview = subscription.readAvailable();
@@ -191,9 +211,9 @@ describe("consumeAgentStream", () => {
 					});
 				},
 			},
-			appendAssistantMessage: async (message) => {
-				appended.push(message);
-			},
+			appendModelContent: onAssistantCommit((message) =>
+				appended.push(message),
+			),
 		});
 
 		expect(outcome).toEqual({
@@ -218,9 +238,9 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantMessage: async (message) => {
-					appended.push(message);
-				},
+				appendModelContent: onAssistantCommit((message) =>
+					appended.push(message),
+				),
 			}),
 		).resolves.toEqual({
 			sessionId: "session-42",
@@ -245,9 +265,9 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query,
 			signal: new AbortController().signal,
-			appendAssistantMessage: async (message) => {
-				appended.push(message);
-			},
+			appendModelContent: onAssistantCommit((message) =>
+				appended.push(message),
+			),
 		});
 
 		expect(appended).toHaveLength(1);
@@ -271,9 +291,9 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantMessage: async (message) => {
-					appended.push(message);
-				},
+				appendModelContent: onAssistantCommit((message) =>
+					appended.push(message),
+				),
 			}),
 		).rejects.toBeInstanceOf(QueryInterruptedError);
 
@@ -293,9 +313,9 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantMessage: async (message) => {
-					appended.push(message);
-				},
+				appendModelContent: onAssistantCommit((message) =>
+					appended.push(message),
+				),
 			}),
 		).rejects.toBeInstanceOf(QueryInterruptedError);
 
@@ -317,9 +337,9 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantMessage: async (message) => {
-					appended.push(message);
-				},
+				appendModelContent: onAssistantCommit((message) =>
+					appended.push(message),
+				),
 			}),
 		).rejects.toThrow("rate limited");
 		expect(appended).toEqual([]);
@@ -341,7 +361,7 @@ describe("consumeAgentStream", () => {
 				query,
 				signal: controller.signal,
 				liveTextPublisher: liveText,
-				appendAssistantMessage: async () => {},
+				appendModelContent: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
 		await Bun.sleep(60);
@@ -366,7 +386,7 @@ describe("consumeAgentStream", () => {
 				query,
 				signal: new AbortController().signal,
 				liveTextPublisher: liveText,
-				appendAssistantMessage: async () => {},
+				appendModelContent: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
 		expect(subscription.readAvailable()).toEqual([]);
@@ -389,7 +409,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantMessage: async () => {},
+				appendModelContent: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AgentResultError);
 	});
@@ -408,7 +428,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantMessage: async () => {},
+				appendModelContent: async () => {},
 			}),
 		).resolves.toEqual({
 			sessionId: "session-7",
@@ -430,9 +450,9 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendAssistantMessage: async (message) => {
-					appended.push(message);
-				},
+				appendModelContent: onAssistantCommit((message) =>
+					appended.push(message),
+				),
 			}),
 		).rejects.toBe(boom);
 		expect(appended).toEqual([]);

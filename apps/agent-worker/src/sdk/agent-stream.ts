@@ -1,6 +1,6 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AssistantTextPayload } from "@mymemo/agent-db/run-events";
 import type { LiveTextPublisher } from "@mymemo/live-text";
+import type { ModelContent } from "../run-loop";
 import { AssistantMessageAssembler } from "./assistant-message-assembler";
 import {
 	LiveTextPreview,
@@ -82,8 +82,9 @@ export interface ConsumeAgentStreamParams {
 	query: SupervisedQuery;
 	/** Fires on cancel, ownership loss, or shutdown; interrupts the query. */
 	signal: AbortSignal;
-	/** Persists one complete Assistant message (fenced to `running` upstream). */
-	appendAssistantMessage: (message: AssistantTextPayload) => Promise<void>;
+	/** Persists one piece of model content — an Assistant message, a Tool
+	 * invocation, or a Tool result (fenced to `running` upstream). */
+	appendModelContent: (content: ModelContent) => Promise<void>;
 	liveTextPublisher?: LiveTextPublisher;
 	liveTextCoalesceWindowMs?: number;
 	/** Payload-free, fixed-vocabulary Live preview transport signal. */
@@ -110,7 +111,7 @@ export interface ConsumeAgentStreamParams {
 export async function consumeAgentStream(
 	params: ConsumeAgentStreamParams,
 ): Promise<AgentStreamOutcome> {
-	const { query, signal, appendAssistantMessage } = params;
+	const { query, signal, appendModelContent } = params;
 	const outcome: AgentStreamOutcome = {
 		sessionId: null,
 		mirrorErrorObserved: false,
@@ -172,7 +173,10 @@ export async function consumeAgentStream(
 			} else if (assembled?.type === "message_stop") {
 				await preview?.flushMessage();
 				if (assembled.commit !== null) {
-					await appendAssistantMessage(assembled.commit);
+					await appendModelContent({
+						kind: "assistant_message",
+						payload: assembled.commit,
+					});
 				}
 			}
 		}
