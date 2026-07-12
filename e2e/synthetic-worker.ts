@@ -22,9 +22,12 @@ const worker = new Worker({
 	logger,
 });
 const processor: RunProcessor = async (ctx) => {
-	await ctx.appendAssistantMessage({
-		messageId: `message-${ctx.run.runId}`,
-		text: `Synthetic response for run ${ctx.run.runId}`,
+	await ctx.appendModelContent({
+		kind: "assistant_message",
+		payload: {
+			messageId: `message-${ctx.run.runId}`,
+			text: `Synthetic response for run ${ctx.run.runId}`,
+		},
 	});
 };
 const runLoop = new RunLoop({
