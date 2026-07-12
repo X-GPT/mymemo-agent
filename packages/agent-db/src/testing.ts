@@ -16,7 +16,7 @@ import * as schema from "./schema";
  * Shared by chat-api and agent-worker tests: both replay this package's
  * migrations, so the two apps exercise the identical writable-DB schema.
  *
- * Always `close()` the returned handle (e.g. in `afterEach`): an unclosed pglite
+ * Always `close()` the returned handle (e.g. in `afterAll`): an unclosed pglite
  * instance leaks resources and makes `bun test` exit non-zero even when every
  * assertion passes.
  */
@@ -25,38 +25,84 @@ export interface TestDb {
 	close: () => Promise<void>;
 }
 
-export async function createTestDatabase(): Promise<TestDb> {
-	const client = new PGlite();
+// Bun's JSC intermittently traps with `RuntimeError: access to a null
+// reference` inside pglite's WASM while a fresh instance boots: initdb
+// re-enters the postgres main module through Emscripten's dynamic-linking
+// function table and observes a null funcref. It is rare (order of one boot
+// per thousand on CI runners), Bun-specific, and unfixed upstream
+// (https://github.com/electric-sql/pglite/issues/831), and it has only ever
+// been seen during instance creation — never after `waitReady` resolves. So
+// creation retries on exactly that trap, on a fresh instance each time;
+// deterministic failures (migration SQL errors, missing files) rethrow on the
+// first attempt. Capped at one retry: bun:test enforces its 5s default
+// timeout on `beforeAll` hooks, and two boots (~2.5s on CI runners) leave
+// comfortable headroom where a third would ride that limit.
+const BOOT_ATTEMPTS = 2;
+
+function isWasmBootTrap(err: unknown): boolean {
+	return (
+		err instanceof WebAssembly.RuntimeError ||
+		(err instanceof Error && err.name === "RuntimeError")
+	);
+}
+
+async function releaseClient(client: PGlite): Promise<void> {
+	try {
+		await client.close();
+	} finally {
+		// pglite's close() shuts Postgres down but keeps the Emscripten
+		// module — and its ~1GB WASM linear memory — referenced via
+		// `client.mod`. Test files hold their handle in a module-level
+		// `let tdb` that lives for the whole `bun test` process, so each
+		// closed-but-referenced instance stays pinned (~465MB, GC-immune)
+		// and peak memory climbs one corpse per pglite file until a later
+		// `new PGlite()` cannot allocate and fails to initialize — the flaky
+		// CI OOM. Dropping `client.mod` unpins the WASM memory even while the
+		// handle is referenced; the forced GC then reclaims it deterministically
+		// (measured: pinned arrayBuffers 2.3GB -> 0 with the null, unchanged
+		// without it). Runs in `finally` so it still fires if close() throws
+		// (e.g. a double-close raising "PGlite is closed").
+		(client as unknown as { mod?: unknown }).mod = undefined;
+		if (typeof Bun !== "undefined") Bun.gc(true);
+	}
+}
+
+async function bootWithMigrations(createClient: () => PGlite): Promise<PGlite> {
 	const files = readdirSync(MIGRATIONS_DIR)
 		.filter((f) => f.endsWith(".sql"))
 		.sort();
-	for (const file of files) {
-		const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-		for (const stmt of sql.split("--> statement-breakpoint")) {
-			if (stmt.trim()) await client.exec(stmt);
+	for (let attempt = 1; ; attempt++) {
+		let client: PGlite | undefined;
+		try {
+			client = createClient();
+			await client.waitReady;
+			for (const file of files) {
+				const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
+				for (const stmt of sql.split("--> statement-breakpoint")) {
+					if (stmt.trim()) await client.exec(stmt);
+				}
+			}
+			return client;
+		} catch (err) {
+			if (client) await releaseClient(client).catch(() => {});
+			if (!isWasmBootTrap(err) || attempt >= BOOT_ATTEMPTS) throw err;
+			// Deliberately loud: keeps the upstream flake's frequency observable
+			// in CI logs instead of silently absorbed.
+			console.warn(
+				`pglite WASM boot trap (attempt ${attempt}/${BOOT_ATTEMPTS}), retrying:`,
+				err,
+			);
 		}
 	}
+}
+
+export async function createTestDatabase(
+	// Seam for the harness's own tests; real callers take the default.
+	createClient: () => PGlite = () => new PGlite(),
+): Promise<TestDb> {
+	const client = await bootWithMigrations(createClient);
 	return {
 		db: drizzle(client, { schema }) as unknown as Database,
-		close: async () => {
-			try {
-				await client.close();
-			} finally {
-				// pglite's close() shuts Postgres down but keeps the Emscripten
-				// module — and its ~1GB WASM linear memory — referenced via
-				// `client.mod`. Test files hold their handle in a module-level
-				// `let tdb` that lives for the whole `bun test` process, so each
-				// closed-but-referenced instance stays pinned (~465MB, GC-immune)
-				// and peak memory climbs one corpse per pglite file until a later
-				// `new PGlite()` cannot allocate and fails to initialize — the flaky
-				// CI OOM. Dropping `client.mod` unpins the WASM memory even while the
-				// handle is referenced; the forced GC then reclaims it deterministically
-				// (measured: pinned arrayBuffers 2.3GB -> 0 with the null, unchanged
-				// without it). Runs in `finally` so it still fires if close() throws
-				// (e.g. a double-close raising "PGlite is closed").
-				(client as unknown as { mod?: unknown }).mod = undefined;
-				if (typeof Bun !== "undefined") Bun.gc(true);
-			}
-		},
+		close: () => releaseClient(client),
 	};
 }
