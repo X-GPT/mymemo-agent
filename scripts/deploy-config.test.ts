@@ -336,7 +336,7 @@ describe("agent deployment config", () => {
 		expect(planScript).toContain('-var="agent_worker_desired_count=0"');
 		expect(planScript).toContain('terraform -chdir=infra/terraform plan "${plan_args[@]}" -out="$plan_file"');
 		expect(planScript).toContain("generated.auto.tfvars");
-		expect(releaseDeployWorkflow).toContain("uses: hashicorp/setup-terraform@v3");
+		expect(releaseDeployWorkflow).toContain("uses: hashicorp/setup-terraform@v4");
 		expect(releaseDeployWorkflow).toContain("terraform_wrapper: false");
 		expect(prepareScript).toContain("aws_region");
 		expect(prepareScript).toContain("chat_api_image");
