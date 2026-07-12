@@ -104,9 +104,12 @@ async function readEventTypes(runId: string) {
 
 /** Appends one complete Assistant message then returns. */
 const appendMessageProcessor: RunProcessor = async (ctx) => {
-	await ctx.appendAssistantMessage({
-		messageId: `message-${ctx.run.runId}`,
-		text: `synthetic ${ctx.run.runId}`,
+	await ctx.appendModelContent({
+		kind: "assistant_message",
+		payload: {
+			messageId: `message-${ctx.run.runId}`,
+			text: `synthetic ${ctx.run.runId}`,
+		},
 	});
 };
 
@@ -482,6 +485,65 @@ describe("RunLoop — stale-run recovery", () => {
 
 		expect((await readRun("run-1"))?.status).toBe("error");
 		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
+	});
+});
+
+describe("RunLoop — model-content append", () => {
+	it("maps each model-content kind to its durable event type", async () => {
+		const worker = buildWorker(1);
+		// One turn recording a Tool invocation, its result, then the Assistant
+		// message — the loop, not the processor, owns the kind→type mapping.
+		const loop = buildLoop(worker, async (ctx) => {
+			await ctx.appendModelContent({
+				kind: "tool_use",
+				payload: {
+					tool: "Bash",
+					arguments: { command: "ls" },
+					truncated: false,
+				},
+			});
+			await ctx.appendModelContent({
+				kind: "tool_result",
+				payload: {
+					tool: "Bash",
+					result: { exitCode: 0 },
+					isError: false,
+					truncated: false,
+				},
+			});
+			await ctx.appendModelContent({
+				kind: "assistant_message",
+				payload: { messageId: "message-1", text: "listed" },
+			});
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("done");
+		const events = await tdb.db
+			.select()
+			.from(runEvents)
+			.where(eq(runEvents.runId, "run-1"))
+			.orderBy(runEvents.seq);
+		expect(events.map((e) => e.type)).toEqual([
+			"tool_use",
+			"tool_result",
+			"assistant_text",
+			"run_done",
+		]);
+		expect(events[0]?.payload).toEqual({
+			tool: "Bash",
+			arguments: { command: "ls" },
+			truncated: false,
+		});
+		expect(events[1]?.payload).toEqual({
+			tool: "Bash",
+			result: { exitCode: 0 },
+			isError: false,
+			truncated: false,
+		});
 	});
 });
 

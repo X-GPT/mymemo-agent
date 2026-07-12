@@ -279,6 +279,89 @@ describe("appendRunEventTx", () => {
 		).rejects.toBeInstanceOf(RunFenceError);
 	});
 
+	it("sequences tool events with assistant text under the model class", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+
+		const toolUse = await appendRunEventTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			type: RunEventType.ToolUse,
+			payload: { tool: "Bash", arguments: { command: "ls" }, truncated: false },
+			appendClass: "model",
+		});
+		const toolResult = await appendRunEventTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			type: RunEventType.ToolResult,
+			payload: {
+				tool: "Bash",
+				result: { exitCode: 0 },
+				isError: false,
+				truncated: false,
+			},
+			appendClass: "model",
+		});
+		const text = await appendRunEventTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			type: RunEventType.AssistantText,
+			payload: { messageId: "message-1", text: "done" },
+			appendClass: "model",
+		});
+
+		expect([toolUse.seq, toolResult.seq, text.seq]).toEqual([1, 2, 3]);
+		expect((await readEvents("run-1")).map((e) => [e.seq, e.type])).toEqual([
+			[1, RunEventType.ToolUse],
+			[2, RunEventType.ToolResult],
+			[3, RunEventType.AssistantText],
+		]);
+	});
+
+	// Tool events ride the same `model` append class as assistant text, so the
+	// same fence rejects them once the run leaves `running`…
+	it("rejects a tool-event model append after cancellation is requested", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db
+			.update(runs)
+			.set({ status: "cancel_requested" })
+			.where(eq(runs.runId, "run-1"));
+
+		await expect(
+			appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				type: RunEventType.ToolUse,
+				payload: {
+					tool: "Read",
+					arguments: { path: "notes.md" },
+					truncated: false,
+				},
+				appendClass: "model",
+			}),
+		).rejects.toBeInstanceOf(RunFenceError);
+	});
+
+	// …or the worker no longer owns it.
+	it("rejects a tool-event append from a worker that lost ownership", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await expireOwnership("run-1");
+
+		await expect(
+			appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				type: RunEventType.ToolResult,
+				payload: {
+					tool: "Read",
+					result: { preview: "…" },
+					isError: false,
+					truncated: true,
+				},
+				appendClass: "model",
+			}),
+		).rejects.toBeInstanceOf(RunFenceError);
+	});
+
 	it("allows cancellation audit appends while running or cancel_requested", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 

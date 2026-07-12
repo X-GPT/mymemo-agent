@@ -2,6 +2,8 @@ import type { Database } from "@mymemo/agent-db/client";
 import {
 	type AssistantTextPayload,
 	RunEventType,
+	type ToolResultPayload,
+	type ToolUsePayload,
 } from "@mymemo/agent-db/run-events";
 import {
 	appendRunEventTx,
@@ -38,15 +40,37 @@ export interface TurnResult {
 const EMPTY_TURN: TurnResult = {};
 
 /**
- * What a claimed run's processing is handed. `appendAssistantMessage` is the
- * bound durable-message append for this owned run (fenced by the run store);
- * `signal` fires when the loop observes cancellation or loses ownership, so
- * long-running processing can stop promptly.
+ * One piece of durable model content a processor can record while its run is
+ * `running`: a complete Assistant message, a Tool invocation, or a Tool result
+ * (ADR-0009). The payload is already the client-safe shape — the loop persists
+ * it verbatim under the event type its kind maps to.
+ */
+export type ModelContent =
+	| { kind: "assistant_message"; payload: AssistantTextPayload }
+	| { kind: "tool_use"; payload: ToolUsePayload }
+	| { kind: "tool_result"; payload: ToolResultPayload };
+
+/** The loop owns the kind→event-type mapping in exactly one place, so a
+ * processor can never write a payload under a mismatched vocabulary type. */
+const MODEL_CONTENT_EVENT_TYPES = {
+	// The shared vocabulary type the projector maps to `text_commit` — never
+	// the frame name itself, or the projector drops it.
+	assistant_message: RunEventType.AssistantText,
+	tool_use: RunEventType.ToolUse,
+	tool_result: RunEventType.ToolResult,
+} as const satisfies Record<ModelContent["kind"], RunEventType>;
+
+/**
+ * What a claimed run's processing is handed. `appendModelContent` is the bound
+ * durable model-content append for this owned run (fenced by the run store to
+ * `running`, all kinds alike); `signal` fires when the loop observes
+ * cancellation or loses ownership, so long-running processing can stop
+ * promptly.
  */
 export interface RunProcessContext {
 	run: RunRecord;
 	signal: AbortSignal;
-	appendAssistantMessage(message: AssistantTextPayload): Promise<void>;
+	appendModelContent(content: ModelContent): Promise<void>;
 }
 
 /**
@@ -301,8 +325,8 @@ export class RunLoop {
 				(await this.opts.processor({
 					run,
 					signal: entry.controller.signal,
-					appendAssistantMessage: (message) =>
-						this.appendAssistantMessage(run.runId, message),
+					appendModelContent: (content) =>
+						this.appendModelContent(run.runId, content),
 				})) ?? EMPTY_TURN;
 		} catch (error) {
 			failure = { error };
@@ -313,17 +337,15 @@ export class RunLoop {
 		await this.finish(run, entry.state, turnResult, failure);
 	}
 
-	private async appendAssistantMessage(
+	private async appendModelContent(
 		runId: string,
-		message: AssistantTextPayload,
+		content: ModelContent,
 	): Promise<void> {
 		await appendRunEventTx(this.opts.db, {
 			runId,
 			workerId: this.workerId,
-			// The shared vocabulary type the projector maps to `text_commit` — never
-			// the frame name itself, or the projector drops it.
-			type: RunEventType.AssistantText,
-			payload: message,
+			type: MODEL_CONTENT_EVENT_TYPES[content.kind],
+			payload: content.payload,
 			appendClass: "model",
 		});
 	}
