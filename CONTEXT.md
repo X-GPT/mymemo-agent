@@ -45,6 +45,23 @@ many content blocks carry it. Its durable text commits any live preview of that
 response and is the form used for replay.
 _Avoid_: text delta, token stream
 
+**Tool invocation**:
+One agent request to execute a model-facing tool, recorded as a durable run
+event and identified in the user-visible history by the tool name and a
+bounded, client-safe projection of its arguments. Its result is recorded as a
+separate chronological item rather than updating the invocation.
+_Avoid_: tool call
+
+**Tool result**:
+The bounded, client-safe projection of returned content or an error indication
+from a tool invocation, recorded as an append-only durable run event in the
+user-visible history. It carries no client-facing correlation identifier, and
+content is exposed only as a capped, non-authoritative preview, even when a
+short source happens to fit completely. An invocation has no result when the
+run terminates before the tool returns. An error result does not end the run;
+the agent may continue after inspecting it.
+_Avoid_: tool response
+
 **Outcome**:
 The single way a run ends: `done`, `error`, or `canceled`. One word per
 outcome at every layer — status `done`, run event `run_done`, client frame

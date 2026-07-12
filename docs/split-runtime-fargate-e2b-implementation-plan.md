@@ -299,6 +299,9 @@ This is separate from `run_events` because it has a different job:
   fetch?"
 - rows can include document ids, scope filters, result counts, and policy
   decisions without exposing that detail to the client SSE stream
+- ADR-0009 deliberately exposes a bounded search-query preview plus bounded
+  title/snippet projections through client tool events; the audit row itself,
+  document ids, scope filters, and policy decisions remain non-client data
 - retention and access controls can differ from chat-visible run events
 
 If product policy later decides document access does not need separate
