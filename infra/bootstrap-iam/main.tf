@@ -83,13 +83,21 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "cloudwatch:*",
       "ec2:AuthorizeSecurityGroupEgress",
       "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:CreateInstanceConnectEndpoint",
       "ec2:CreateSecurityGroup",
       "ec2:CreateTags",
+      "ec2:DeleteInstanceConnectEndpoint",
       "ec2:DeleteSecurityGroup",
       "ec2:DeleteTags",
       "ec2:Describe*",
+      "ec2:ModifyInstanceAttribute",
+      "ec2:ModifyInstanceConnectEndpoint",
       "ec2:RevokeSecurityGroupEgress",
       "ec2:RevokeSecurityGroupIngress",
+      "ec2:RunInstances",
+      "ec2:StartInstances",
+      "ec2:StopInstances",
+      "ec2:TerminateInstances",
       "ecs:*",
       "elasticache:*",
       "elasticloadbalancing:*",
@@ -106,6 +114,18 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "secretsmanager:UpdateSecret",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid       = "AgentEc2InstanceConnectServiceLinkedRole"
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["arn:aws:iam::*:role/aws-service-role/ec2-instance-connect.amazonaws.com/AWSServiceRoleForEC2InstanceConnect"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values   = ["ec2-instance-connect.amazonaws.com"]
+    }
   }
 
   statement {
