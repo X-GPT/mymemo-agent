@@ -1,3 +1,5 @@
+import type { PublicToolName } from "@mymemo/agent-db/run-events";
+
 export interface MymemoEvent {
 	id?: string;
 	message: EventMessage;
@@ -47,7 +49,7 @@ export interface TextDeltaEvent {
  * no correlation id; the matching result is a separate chronological item. */
 export interface ToolUseEvent {
 	type: "tool_use";
-	tool: string;
+	tool: PublicToolName;
 	arguments: Record<string, unknown>;
 	truncated: boolean;
 }
@@ -56,7 +58,7 @@ export interface ToolUseEvent {
  * message; a run may terminate after an invocation with no result. */
 export interface ToolResultEvent {
 	type: "tool_result";
-	tool: string;
+	tool: PublicToolName;
 	result: Record<string, unknown>;
 	isError: boolean;
 	truncated: boolean;

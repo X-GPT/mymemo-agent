@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	isToolResultPayload,
 	isToolUsePayload,
+	type PublicToolName,
 } from "@mymemo/agent-db/run-events";
 import {
 	allowlistedExecutorToolNames,
@@ -55,6 +56,8 @@ describe("publicToolName", () => {
 		// Another server's prefixed tool must never become client-visible.
 		expect(publicToolName("mcp__other-server__Bash")).toBeNull();
 		expect(publicToolName("WebSearch")).toBeNull();
+		// Inherited object properties are not allowlisted tool names.
+		expect(publicToolName("constructor")).toBeNull();
 		expect(publicToolName("")).toBeNull();
 		expect(publicToolName(undefined)).toBeNull();
 		expect(publicToolName(42)).toBeNull();
@@ -76,6 +79,68 @@ describe("publicToolName", () => {
 	});
 });
 
+describe("shared tool payload vocabulary", () => {
+	const toolUseCases = [
+		["Bash", { command: "echo hi" }],
+		["Read", { path: "notes.md" }],
+		["Write", { path: "notes.md", content: "x" }],
+		["Edit", { path: "src/app.ts", oldText: "a", newText: "b" }],
+		["Grep", { pattern: "x" }],
+		["Glob", { pattern: "*" }],
+	] satisfies ReadonlyArray<readonly [PublicToolName, unknown]>;
+
+	for (const [tool, input] of toolUseCases) {
+		it(`${tool} tool-use projection satisfies the shared guard`, () => {
+			const projected = projectToolUse(tool, input);
+			if (!projected.ok) throw new Error("expected a projected payload");
+			expect(isToolUsePayload(projected.payload)).toBe(true);
+		});
+	}
+
+	const toolResultCases = [
+		["Bash", completedBashResult()],
+		["Write", { path: "notes.md", bytesWritten: 42 }],
+		["Edit", { path: "src/app.ts", replacements: 1 }],
+		[
+			"Read",
+			{
+				path: "src/index.ts",
+				content: "line one\nline two",
+				startLine: 1,
+				linesRead: 2,
+				truncated: false,
+			},
+		],
+		[
+			"Grep",
+			{
+				matches: [
+					{
+						path: "src/app.ts",
+						line: 12,
+						column: 3,
+						text: "// TODO: fix",
+					},
+				],
+				truncated: false,
+			},
+		],
+		["Glob", { paths: ["a.ts"], truncated: false }],
+	] satisfies ReadonlyArray<readonly [PublicToolName, Record<string, unknown>]>;
+
+	for (const [tool, result] of toolResultCases) {
+		it(`${tool} tool-result projection satisfies the shared guard`, () => {
+			const projected = projectToolResult(
+				tool,
+				executorResultContent(result),
+				false,
+			);
+			if (!projected.ok) throw new Error("expected a projected payload");
+			expect(isToolResultPayload(projected.payload)).toBe(true);
+		});
+	}
+});
+
 describe("projectToolUse — Bash", () => {
 	it("exposes the command preview, cwd, and timeout", () => {
 		const projected = projectToolUse("Bash", {
@@ -92,12 +157,6 @@ describe("projectToolUse — Bash", () => {
 				truncated: false,
 			},
 		});
-	});
-
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolUse("Bash", { command: "echo hi" });
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolUsePayload(projected.payload)).toBe(true);
 	});
 
 	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
@@ -165,12 +224,6 @@ describe("projectToolUse — Read", () => {
 				truncated: false,
 			},
 		});
-	});
-
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolUse("Read", { path: "notes.md" });
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolUsePayload(projected.payload)).toBe(true);
 	});
 
 	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
@@ -295,16 +348,6 @@ describe("projectToolResult — Bash", () => {
 				truncated: false,
 			},
 		});
-	});
-
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolResult(
-			"Bash",
-			executorResultContent(completedBashResult()),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolResultPayload(projected.payload)).toBe(true);
 	});
 
 	it("projects a nonzero exit as a returned result, not a tool error", () => {
@@ -639,15 +682,6 @@ describe("projectToolUse — Write", () => {
 		});
 	});
 
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolUse("Write", {
-			path: "notes.md",
-			content: "x",
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolUsePayload(projected.payload)).toBe(true);
-	});
-
 	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
 		const projected = projectToolUse("Write", {
 			path: 42,
@@ -694,16 +728,6 @@ describe("projectToolResult — Write", () => {
 		});
 	});
 
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolResult(
-			"Write",
-			executorResultContent({ path: "notes.md", bytesWritten: 42 }),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolResultPayload(projected.payload)).toBe(true);
-	});
-
 	it("omits results whose text is not the known executor shape", () => {
 		expect(
 			projectToolResult("Write", [{ type: "text", text: "ok" }], false).ok,
@@ -747,16 +771,6 @@ describe("projectToolUse — Edit", () => {
 				truncated: false,
 			},
 		});
-	});
-
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolUse("Edit", {
-			path: "src/app.ts",
-			oldText: "a",
-			newText: "b",
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolUsePayload(projected.payload)).toBe(true);
 	});
 
 	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
@@ -806,16 +820,6 @@ describe("projectToolResult — Edit", () => {
 				truncated: false,
 			},
 		});
-	});
-
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolResult(
-			"Edit",
-			executorResultContent({ path: "src/app.ts", replacements: 1 }),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolResultPayload(projected.payload)).toBe(true);
 	});
 
 	it("omits results whose text is not the known executor shape", () => {
@@ -873,16 +877,6 @@ describe("projectToolResult — Read", () => {
 				truncated: false,
 			},
 		});
-	});
-
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolResult(
-			"Read",
-			executorResultContent(completedReadResult()),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolResultPayload(projected.payload)).toBe(true);
 	});
 
 	it("caps a huge content preview and marks the preview incomplete", () => {
@@ -987,12 +981,6 @@ describe("projectToolUse — Grep", () => {
 		});
 	});
 
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolUse("Grep", { pattern: "x" });
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolUsePayload(projected.payload)).toBe(true);
-	});
-
 	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
 		const projected = projectToolUse("Grep", {
 			pattern: /TODO/,
@@ -1054,16 +1042,6 @@ describe("projectToolResult — Grep", () => {
 				truncated: false,
 			},
 		});
-	});
-
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolResult(
-			"Grep",
-			executorResultContent({ matches: [grepMatch()], truncated: false }),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolResultPayload(projected.payload)).toBe(true);
 	});
 
 	it("bounds a long match list and marks the list incomplete", () => {
@@ -1182,12 +1160,6 @@ describe("projectToolUse — Glob", () => {
 		});
 	});
 
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolUse("Glob", { pattern: "*" });
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolUsePayload(projected.payload)).toBe(true);
-	});
-
 	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
 		const projected = projectToolUse("Glob", {
 			pattern: 7,
@@ -1232,16 +1204,6 @@ describe("projectToolResult — Glob", () => {
 				truncated: false,
 			},
 		});
-	});
-
-	it("produces payloads that satisfy the shared vocabulary guard", () => {
-		const projected = projectToolResult(
-			"Glob",
-			executorResultContent({ paths: ["a.ts"], truncated: false }),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolResultPayload(projected.payload)).toBe(true);
 	});
 
 	it("bounds a long path list and marks the list incomplete", () => {

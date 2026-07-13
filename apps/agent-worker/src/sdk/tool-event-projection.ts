@@ -58,29 +58,28 @@ const TOOL_FAILED_RESULT = { message: "Tool failed" } as const;
  * events are omitted. A drift pin ties this map's domain to the executor tools
  * the worker actually builds.
  */
-const PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME: Readonly<
-	Record<string, PublicToolName>
-> = {
-	[`mcp__${EXECUTOR_SERVER_NAME}__Read`]: "Read",
-	[`mcp__${EXECUTOR_SERVER_NAME}__Write`]: "Write",
-	[`mcp__${EXECUTOR_SERVER_NAME}__Edit`]: "Edit",
-	[`mcp__${EXECUTOR_SERVER_NAME}__Grep`]: "Grep",
-	[`mcp__${EXECUTOR_SERVER_NAME}__Glob`]: "Glob",
-	[`mcp__${EXECUTOR_SERVER_NAME}__Bash`]: "Bash",
-	[`mcp__${EXECUTOR_SERVER_NAME}__SearchDocuments`]: "SearchDocuments",
-	[`mcp__${EXECUTOR_SERVER_NAME}__LoadDocuments`]: "LoadDocuments",
-};
+const PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME: ReadonlyMap<string, PublicToolName> =
+	new Map<string, PublicToolName>([
+		[`mcp__${EXECUTOR_SERVER_NAME}__Read`, "Read"],
+		[`mcp__${EXECUTOR_SERVER_NAME}__Write`, "Write"],
+		[`mcp__${EXECUTOR_SERVER_NAME}__Edit`, "Edit"],
+		[`mcp__${EXECUTOR_SERVER_NAME}__Grep`, "Grep"],
+		[`mcp__${EXECUTOR_SERVER_NAME}__Glob`, "Glob"],
+		[`mcp__${EXECUTOR_SERVER_NAME}__Bash`, "Bash"],
+		[`mcp__${EXECUTOR_SERVER_NAME}__SearchDocuments`, "SearchDocuments"],
+		[`mcp__${EXECUTOR_SERVER_NAME}__LoadDocuments`, "LoadDocuments"],
+	]);
 
 /** The allowlist's domain, for the drift pin against the built executor tools. */
 export function allowlistedExecutorToolNames(): string[] {
-	return Object.keys(PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME);
+	return [...PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME.keys()];
 }
 
 /** Map an SDK tool-use block's name to its public name, or `null` when the
  * name is not an allowlisted executor tool (log and omit upstream). */
 export function publicToolName(toolName: unknown): PublicToolName | null {
 	if (typeof toolName !== "string") return null;
-	return PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME[toolName] ?? null;
+	return PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME.get(toolName) ?? null;
 }
 
 /** One projected tool event, or the log-worthy reason it must be omitted. */
