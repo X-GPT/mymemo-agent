@@ -56,14 +56,24 @@ function providerEnvelope(
 		}),
 	];
 	for (const [index, block] of blocks.entries()) {
+		// A tool_use block carries the real SDK shape but a non-allowlisted name,
+		// so it is omitted from the client stream rather than committed (ADR-0009).
+		const blockShape =
+			block.type === "text"
+				? { type: "text", text: "" }
+				: block.type === "tool_use"
+					? {
+							type: "tool_use",
+							id: `toolu-${index}`,
+							name: "WebSearch",
+							input: {},
+						}
+					: { type: block.type };
 		messages.push(
 			streamEvent({
 				type: "content_block_start",
 				index,
-				content_block:
-					block.type === "text"
-						? { type: "text", text: "" }
-						: { type: block.type },
+				content_block: blockShape,
 			}),
 		);
 		if (block.type === "text") {
@@ -88,7 +98,7 @@ function providerEnvelope(
 					index,
 					delta: { type: "input_json_delta", partial_json: "{}" },
 				}),
-				assistantBlock(providerMessageId, { type: block.type }),
+				assistantBlock(providerMessageId, blockShape),
 			);
 		}
 		messages.push(streamEvent({ type: "content_block_stop", index }));

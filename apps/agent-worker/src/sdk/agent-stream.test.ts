@@ -15,6 +15,8 @@ import {
 	assistantBlock,
 	streamEvent,
 	textEnvelope,
+	toolEnvelope,
+	toolResultUserMessage,
 } from "./testing/sdk-message-fixtures";
 
 function messageAt(messages: SDKMessage[], index: number): SDKMessage {
@@ -86,6 +88,42 @@ type AssistantCommit = Extract<
 	ModelContent,
 	{ kind: "assistant_message" }
 >["payload"];
+
+/** Record every model-content append, whatever its kind, in stream order. */
+function captureModelContent(
+	appended: ModelContent[],
+): (content: ModelContent) => Promise<void> {
+	return async (content) => {
+		appended.push(content);
+	};
+}
+
+function spyLogger() {
+	const warnings: Record<string, unknown>[] = [];
+	return {
+		logger: {
+			info: () => {},
+			warn: (obj: Record<string, unknown>) => {
+				warnings.push(obj);
+			},
+			error: () => {},
+		},
+		warnings,
+	};
+}
+
+/** The structured JSON text the executor Bash tool returns on success. */
+function bashResultText(overrides: Record<string, unknown>): string {
+	return JSON.stringify({
+		exitCode: 0,
+		stdout: "",
+		stderr: "",
+		stdoutTruncated: false,
+		stderrTruncated: false,
+		outcome: "completed",
+		...overrides,
+	});
+}
 
 /** These fixtures only ever commit Assistant messages through the
  * discriminated model-content seam; any other kind is a bug — fail loudly
@@ -434,6 +472,509 @@ describe("consumeAgentStream", () => {
 			sessionId: "session-7",
 			mirrorErrorObserved: true,
 		});
+	});
+
+	it("appends text first, tool uses in block order, then results in block order", async () => {
+		const appended: ModelContent[] = [];
+		const { logger, warnings } = spyLogger();
+		const messages = [
+			...toolEnvelope({
+				text: "Let me check.",
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "ls", cwd: "src", timeoutMs: 10_000 },
+					},
+					{
+						toolUseId: "toolu-2",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "pwd" },
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-1", text: bashResultText({ stdout: "a.ts\n" }) },
+				{
+					toolUseId: "toolu-2",
+					text: bashResultText({ stdout: "/workspace\n" }),
+				},
+			]),
+			resultMessage("session-1"),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+			logger,
+		});
+
+		expect(
+			appended.map((content) =>
+				content.kind === "assistant_message"
+					? content.kind
+					: `${content.kind}:${JSON.stringify(
+							content.kind === "tool_use"
+								? content.payload.arguments.command
+								: content.payload.result.stdout,
+						)}`,
+			),
+		).toEqual([
+			"assistant_message",
+			'tool_use:"ls"',
+			'tool_use:"pwd"',
+			'tool_result:"a.ts\\n"',
+			'tool_result:"/workspace\\n"',
+		]);
+		expect(appended[1]).toEqual({
+			kind: "tool_use",
+			payload: {
+				tool: "Bash",
+				arguments: { command: "ls", cwd: "src", timeoutMs: 10_000 },
+				truncated: false,
+			},
+		});
+		expect(appended[3]).toEqual({
+			kind: "tool_result",
+			payload: {
+				tool: "Bash",
+				result: {
+					exitCode: 0,
+					stdout: "a.ts\n",
+					stderr: "",
+					stdoutTruncated: false,
+					stderrTruncated: false,
+					outcome: "completed",
+				},
+				isError: false,
+				truncated: false,
+			},
+		});
+		expect(warnings).toEqual([]);
+	});
+
+	it("appends only ordered tool uses for a textless envelope", async () => {
+		const appended: ModelContent[] = [];
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "true" },
+					},
+				],
+			}),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+		});
+
+		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+	});
+
+	it("appends no tool event before message_stop commits the envelope", async () => {
+		const appended: ModelContent[] = [];
+		const envelope = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-1",
+					name: "mcp__mymemo-executor__Bash",
+					input: { command: "ls" },
+				},
+			],
+		});
+		const query = fakeQuery([
+			...envelope.slice(0, -1).map((message) => ({ message })),
+			{
+				message: messageAt(envelope, envelope.length - 1),
+				before: () => expect(appended).toEqual([]),
+			},
+		]);
+
+		await consumeAgentStream({
+			query,
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+		});
+
+		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+	});
+
+	it("ignores replay-flagged user messages entirely", async () => {
+		const appended: ModelContent[] = [];
+		const { logger, warnings } = spyLogger();
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "ls" },
+					},
+				],
+			}),
+			toolResultUserMessage(
+				[{ toolUseId: "toolu-1", text: bashResultText({}) }],
+				{ isReplay: true },
+			),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+			logger,
+		});
+
+		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(warnings).toEqual([]);
+	});
+
+	it("omits and logs a result naming an unknown tool-use id", async () => {
+		const appended: ModelContent[] = [];
+		const { logger, warnings } = spyLogger();
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "ls" },
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-unseen", text: bashResultText({}) },
+			]),
+		];
+
+		await consumeAgentStream({
+			runId: "run-1",
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+			logger,
+		});
+
+		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatchObject({ toolUseId: "toolu-unseen" });
+	});
+
+	it("omits and logs a second result for an already-matched id", async () => {
+		const appended: ModelContent[] = [];
+		const { logger, warnings } = spyLogger();
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "ls" },
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-1", text: bashResultText({}) },
+			]),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-1", text: bashResultText({}) },
+			]),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+			logger,
+		});
+
+		expect(appended.map((content) => content.kind)).toEqual([
+			"tool_use",
+			"tool_result",
+		]);
+		expect(warnings).toHaveLength(1);
+	});
+
+	it("omits and logs a non-allowlisted tool and its orphaned result", async () => {
+		const appended: ModelContent[] = [];
+		const { logger, warnings } = spyLogger();
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__other-server__Bash",
+						input: { command: "ls" },
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-1", text: bashResultText({}) },
+			]),
+			resultMessage(),
+		];
+
+		const outcome = await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+			logger,
+		});
+
+		// The run continues and completes; visibility degrades, correctness does not.
+		expect(outcome.mirrorErrorObserved).toBe(false);
+		expect(appended).toEqual([]);
+		expect(warnings).toHaveLength(2);
+		expect(warnings[0]).toMatchObject({ toolName: "mcp__other-server__Bash" });
+		expect(warnings[1]).toMatchObject({ toolUseId: "toolu-1" });
+	});
+
+	it("omits and logs an executor tool without a projection and continues", async () => {
+		const appended: ModelContent[] = [];
+		const { logger, warnings } = spyLogger();
+		const messages = [
+			...toolEnvelope({
+				text: "Reading the file.",
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Read",
+						input: { path: "notes.md" },
+					},
+				],
+			}),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+			logger,
+		});
+
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+		]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatchObject({ tool: "Read" });
+	});
+
+	it("projects an error-flagged result as the fixed safe message", async () => {
+		const appended: ModelContent[] = [];
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "ls" },
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{
+					toolUseId: "toolu-1",
+					text: "Bash failed: connect ECONNREFUSED 10.0.0.7:5432",
+					isError: true,
+				},
+			]),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+		});
+
+		expect(appended[1]).toEqual({
+			kind: "tool_result",
+			payload: {
+				tool: "Bash",
+				result: { message: "Tool failed" },
+				isError: true,
+				truncated: false,
+			},
+		});
+	});
+
+	it("discards buffered tool blocks when the envelope is abandoned by abort", async () => {
+		const appended: ModelContent[] = [];
+		const controller = new AbortController();
+		const envelope = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-1",
+					name: "mcp__mymemo-executor__Bash",
+					input: { command: "ls" },
+				},
+			],
+		});
+		// Abort while the tool block is complete but the envelope is still open.
+		const query = fakeQuery([
+			...envelope.slice(0, -1).map((message) => ({ message })),
+			{
+				message: messageAt(envelope, envelope.length - 1),
+				before: () => controller.abort(),
+			},
+		]);
+
+		await expect(
+			consumeAgentStream({
+				query,
+				signal: controller.signal,
+				appendModelContent: captureModelContent(appended),
+			}),
+		).rejects.toBeInstanceOf(QueryInterruptedError);
+
+		expect(appended).toEqual([]);
+	});
+
+	it("appends no tool result after the run is aborted", async () => {
+		const appended: ModelContent[] = [];
+		const controller = new AbortController();
+		const envelope = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-1",
+					name: "mcp__mymemo-executor__Bash",
+					input: { command: "ls" },
+				},
+			],
+		});
+		const query = fakeQuery([
+			...envelope.map((message) => ({ message })),
+			{
+				message: toolResultUserMessage([
+					{ toolUseId: "toolu-1", text: bashResultText({}) },
+				]),
+				before: () => controller.abort(),
+			},
+		]);
+
+		await expect(
+			consumeAgentStream({
+				query,
+				signal: controller.signal,
+				appendModelContent: captureModelContent(appended),
+			}),
+		).rejects.toBeInstanceOf(QueryInterruptedError);
+
+		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+	});
+
+	it("leaves the history resultless when the stream ends without a result", async () => {
+		const appended: ModelContent[] = [];
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "sleep 600" },
+					},
+				],
+			}),
+			resultMessage("session-1"),
+		];
+
+		const outcome = await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+		});
+
+		// No result is ever fabricated; the supervisor's terminal frame closes the
+		// stream after the resultless invocation.
+		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(outcome.sessionId).toBe("session-1");
+	});
+
+	it("propagates a failed tool-use append so the run terminalizes error", async () => {
+		const boom = new Error("append rejected by fence");
+		const messages = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-1",
+					name: "mcp__mymemo-executor__Bash",
+					input: { command: "ls" },
+				},
+			],
+		});
+
+		await expect(
+			consumeAgentStream({
+				query: fakeQuery(messages.map((message) => ({ message }))),
+				signal: new AbortController().signal,
+				appendModelContent: async (content) => {
+					if (content.kind === "tool_use") throw boom;
+				},
+			}),
+		).rejects.toBe(boom);
+	});
+
+	it("propagates a failed tool-result append so the run terminalizes error", async () => {
+		const boom = new Error("append rejected by fence");
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "ls" },
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-1", text: bashResultText({}) },
+			]),
+		];
+
+		await expect(
+			consumeAgentStream({
+				query: fakeQuery(messages.map((message) => ({ message }))),
+				signal: new AbortController().signal,
+				appendModelContent: async (content) => {
+					if (content.kind === "tool_result") throw boom;
+				},
+			}),
+		).rejects.toBe(boom);
+	});
+
+	it("rejects a completed tool_use block without an id or name as a protocol violation", async () => {
+		const providerMessageId = "provider-message-1";
+		const messages = [
+			streamEvent({
+				type: "message_start",
+				message: { id: providerMessageId, content: [] },
+			}),
+			streamEvent({
+				type: "content_block_start",
+				index: 0,
+				content_block: {
+					type: "tool_use",
+					id: "toolu-1",
+					name: "x",
+					input: {},
+				},
+			}),
+			assistantBlock(providerMessageId, { type: "tool_use", input: {} }),
+			streamEvent({ type: "content_block_stop", index: 0 }),
+			streamEvent({ type: "message_stop" }),
+		];
+
+		await expect(
+			consumeAgentStream({
+				query: fakeQuery(messages.map((message) => ({ message }))),
+				signal: new AbortController().signal,
+				appendModelContent: async () => {},
+			}),
+		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
 	});
 
 	it("propagates iterator rejection without committing an open envelope", async () => {

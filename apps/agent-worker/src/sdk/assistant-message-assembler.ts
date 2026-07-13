@@ -21,6 +21,7 @@ interface ActiveEnvelope {
 	messageDeltaSeen: boolean;
 	partialText: string;
 	completedText: string;
+	toolUses: CompletedToolUse[];
 }
 
 export class AssistantEnvelopeProtocolError extends Error {
@@ -32,9 +33,32 @@ export interface AssistantMessageAssemblerOptions {
 	onPartialCompleteMismatch?: () => void;
 }
 
+/**
+ * One completed `tool_use` content block, buffered in content-block order: the
+ * SDK id (worker-internal, for associating the later result), the tool name as
+ * the SDK reports it, and the raw model-authored input. Nothing here is
+ * client-safe yet — allowlisting and projection happen at commit, before any
+ * append (ADR-0009).
+ */
+export interface CompletedToolUse {
+	id: string;
+	name: string;
+	input: unknown;
+}
+
+/**
+ * What one provider envelope commits at its `message_stop`: the single complete
+ * Assistant message (or `null` for a textless envelope) and the envelope's
+ * completed tool_use blocks in content-block order.
+ */
+export interface EnvelopeCommit {
+	text: AssistantTextPayload | null;
+	toolUses: CompletedToolUse[];
+}
+
 export type AssistantAssembly =
 	| { type: "partial_text"; messageId: string; text: string }
-	| { type: "message_stop"; commit: AssistantTextPayload | null };
+	| { type: "message_stop"; commit: EnvelopeCommit };
 
 /**
  * Deterministically assembles complete Assistant messages from one ordered SDK
@@ -131,6 +155,7 @@ export class AssistantMessageAssembler {
 			messageDeltaSeen: false,
 			partialText: "",
 			completedText: "",
+			toolUses: [],
 		};
 	}
 
@@ -206,6 +231,20 @@ export class AssistantMessageAssembler {
 				this.#violation("completed text block had no string text");
 			}
 			active.completedText += completed.text;
+		} else if (completed.type === "tool_use") {
+			if (
+				typeof completed.id !== "string" ||
+				completed.id.length === 0 ||
+				typeof completed.name !== "string" ||
+				completed.name.length === 0
+			) {
+				this.#violation("completed tool_use block had no id or name");
+			}
+			active.toolUses.push({
+				id: completed.id,
+				name: completed.name,
+				input: completed.input,
+			});
 		}
 	}
 
@@ -220,7 +259,7 @@ export class AssistantMessageAssembler {
 		active.nextBlockIndex++;
 	}
 
-	#stopEnvelope(): AssistantTextPayload | null {
+	#stopEnvelope(): EnvelopeCommit {
 		const active = this.#requireEnvelope("message_stop");
 		if (active.activeBlock !== null) {
 			this.#violation("message_stop arrived before content_block_stop");
@@ -230,9 +269,13 @@ export class AssistantMessageAssembler {
 			this.#onPartialCompleteMismatch();
 		}
 		this.#active = null;
-		return active.completedText.length > 0
-			? { messageId: active.messageId, text: active.completedText }
-			: null;
+		return {
+			text:
+				active.completedText.length > 0
+					? { messageId: active.messageId, text: active.completedText }
+					: null,
+			toolUses: active.toolUses,
+		};
 	}
 
 	#requireEnvelope(eventName: string): ActiveEnvelope {

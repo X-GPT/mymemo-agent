@@ -46,6 +46,94 @@ describe("projectRunEvent", () => {
 		]);
 	});
 
+	it("maps a guard-valid tool_use payload to a tool_use frame", () => {
+		expect(
+			projectRunEvent(RunEventType.ToolUse, {
+				tool: "Bash",
+				arguments: { command: "ls -la", cwd: "src", timeoutMs: 30_000 },
+				truncated: false,
+			}),
+		).toEqual([
+			{
+				type: "tool_use",
+				tool: "Bash",
+				arguments: { command: "ls -la", cwd: "src", timeoutMs: 30_000 },
+				truncated: false,
+			},
+		]);
+	});
+
+	it("maps a guard-valid tool_result payload to a tool_result frame", () => {
+		expect(
+			projectRunEvent(RunEventType.ToolResult, {
+				tool: "Bash",
+				result: { exitCode: 2, stdout: "", stderr: "no such file" },
+				isError: false,
+				truncated: true,
+			}),
+		).toEqual([
+			{
+				type: "tool_result",
+				tool: "Bash",
+				result: { exitCode: 2, stdout: "", stderr: "no such file" },
+				isError: false,
+				truncated: true,
+			},
+		]);
+	});
+
+	it("maps the fixed error result payload unchanged", () => {
+		expect(
+			projectRunEvent(RunEventType.ToolResult, {
+				tool: "Bash",
+				result: { message: "Tool failed" },
+				isError: true,
+				truncated: false,
+			}),
+		).toEqual([
+			{
+				type: "tool_result",
+				tool: "Bash",
+				result: { message: "Tool failed" },
+				isError: true,
+				truncated: false,
+			},
+		]);
+	});
+
+	it("drops malformed tool payloads without emitting a frame", () => {
+		// Missing fields.
+		expect(
+			projectRunEvent(RunEventType.ToolUse, { tool: "Bash", truncated: false }),
+		).toEqual([]);
+		expect(
+			projectRunEvent(RunEventType.ToolResult, {
+				tool: "Bash",
+				result: {},
+				isError: false,
+			}),
+		).toEqual([]);
+		// A non-public tool name must never reach the client stream.
+		expect(
+			projectRunEvent(RunEventType.ToolUse, {
+				tool: "mcp__mymemo-executor__Bash",
+				arguments: {},
+				truncated: false,
+			}),
+		).toEqual([]);
+		// Wrong-typed fields and non-object payloads.
+		expect(
+			projectRunEvent(RunEventType.ToolResult, {
+				tool: "Bash",
+				result: "raw text",
+				isError: false,
+				truncated: false,
+			}),
+		).toEqual([]);
+		expect(projectRunEvent(RunEventType.ToolUse, null)).toEqual([]);
+		expect(projectRunEvent(RunEventType.ToolResult, undefined)).toEqual([]);
+	});
+
 	it("skips unmapped internal event types (fail-closed)", () => {
 		expect(projectRunEvent("document_search", { query: "x" })).toEqual([]);
 		expect(projectRunEvent("daemon_started", {})).toEqual([]);

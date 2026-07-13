@@ -1,11 +1,21 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { PublicToolName } from "@mymemo/agent-db/run-events";
 import type { LiveTextPublisher } from "@mymemo/live-text";
+import type { WorkerLogger } from "../logger";
 import type { ModelContent } from "../run-loop";
-import { AssistantMessageAssembler } from "./assistant-message-assembler";
+import {
+	AssistantMessageAssembler,
+	type EnvelopeCommit,
+} from "./assistant-message-assembler";
 import {
 	LiveTextPreview,
 	type LiveTextPreviewSignal,
 } from "./live-text-preview";
+import {
+	projectToolResult,
+	projectToolUse,
+	publicToolName,
+} from "./tool-event-projection";
 
 /**
  * The subset of the Claude Agent SDK's `Query` handle the run supervisor
@@ -85,6 +95,10 @@ export interface ConsumeAgentStreamParams {
 	/** Persists one piece of model content — an Assistant message, a Tool
 	 * invocation, or a Tool result (fenced to `running` upstream). */
 	appendModelContent: (content: ModelContent) => Promise<void>;
+	/** Receives the omission logs ADR-0009 requires (unknown tool names,
+	 * unmatched result ids, unprojectable payloads). Optional: omissions
+	 * degrade visibility, never correctness. */
+	logger?: WorkerLogger;
 	liveTextPublisher?: LiveTextPublisher;
 	liveTextCoalesceWindowMs?: number;
 	/** Payload-free, fixed-vocabulary Live preview transport signal. */
@@ -94,8 +108,18 @@ export interface ConsumeAgentStreamParams {
 }
 
 /**
- * Consume a supervised SDK query, persisting assistant text as run content
- * events, under the run's abort signal (plan Task 7.2).
+ * Consume a supervised SDK query, persisting assistant text and client-safe
+ * tool events as run content events, under the run's abort signal (plan Task
+ * 7.2, ADR-0009).
+ *
+ * At one envelope's `message_stop`, its single Assistant message (when it has
+ * visible text) is appended first, then its `tool_use` events in content-block
+ * order. A `tool_result` derives only from a complete, non-replay SDK user
+ * message, associated to its invocation through a per-run in-memory id map —
+ * results for ids with no appended invocation are logged and omitted, and a
+ * result is never fabricated. Omissions (non-allowlisted tools, unprojectable
+ * payloads) degrade visibility only; a failed append of a valid tool event
+ * fails the run exactly like assistant text.
  *
  * The moment the run is aborted it is no longer `running`, so:
  *  - the query is interrupted (once), and
@@ -140,6 +164,82 @@ export async function consumeAgentStream(
 		preview?.abandon();
 	};
 
+	// Worker-internal association from SDK tool-use id to public tool name,
+	// established only when the invocation's event is appended — so a result for
+	// an omitted or unknown invocation is itself omitted (ADR-0009).
+	const toolNamesByUseId = new Map<string, PublicToolName>();
+
+	const commitEnvelope = async (commit: EnvelopeCommit): Promise<void> => {
+		if (commit.text !== null) {
+			await appendModelContent({
+				kind: "assistant_message",
+				payload: commit.text,
+			});
+		}
+		for (const toolUse of commit.toolUses) {
+			const tool = publicToolName(toolUse.name);
+			if (tool === null) {
+				params.logger?.warn({
+					message: "tool invocation omitted: tool is not client-visible",
+					runId: params.runId,
+					toolName: toolUse.name,
+				});
+				continue;
+			}
+			const projected = projectToolUse(tool, toolUse.input);
+			if (!projected.ok) {
+				params.logger?.warn({
+					message: "tool invocation omitted",
+					runId: params.runId,
+					tool,
+					reason: projected.reason,
+				});
+				continue;
+			}
+			await appendModelContent({
+				kind: "tool_use",
+				payload: projected.payload,
+			});
+			toolNamesByUseId.set(toolUse.id, tool);
+		}
+	};
+
+	const appendToolResults = async (
+		userMessage: Extract<SDKMessage, { type: "user" }>,
+	): Promise<void> => {
+		for (const block of toolResultBlocks(userMessage)) {
+			const tool =
+				block.toolUseId !== null
+					? toolNamesByUseId.get(block.toolUseId)
+					: undefined;
+			if (block.toolUseId === null || tool === undefined) {
+				params.logger?.warn({
+					message: "tool result omitted: no appended invocation matches its id",
+					runId: params.runId,
+					toolUseId: block.toolUseId,
+				});
+				continue;
+			}
+			// One result per invocation: a second result for the same id is
+			// unmatched, logged, and omitted.
+			toolNamesByUseId.delete(block.toolUseId);
+			const projected = projectToolResult(tool, block.content, block.isError);
+			if (!projected.ok) {
+				params.logger?.warn({
+					message: "tool result omitted",
+					runId: params.runId,
+					tool,
+					reason: projected.reason,
+				});
+				continue;
+			}
+			await appendModelContent({
+				kind: "tool_result",
+				payload: projected.payload,
+			});
+		}
+	};
+
 	// Best-effort: interrupt only needs to reach the SDK. Swallow its rejection so
 	// a failed interrupt cannot become an unhandled rejection — the loop stops
 	// appending on the same signal regardless.
@@ -167,17 +267,20 @@ export async function consumeAgentStream(
 					`assistant response rejected: ${message.error}`,
 				);
 			}
+			if (message.type === "user") {
+				// Replay-flagged messages are resumed-transcript context from earlier
+				// turns; they never create tool events in this run's history.
+				if (!isReplayUserMessage(message)) {
+					await appendToolResults(message);
+				}
+				continue;
+			}
 			const assembled = assembler.accept(message);
 			if (assembled?.type === "partial_text") {
 				preview?.append(assembled.messageId, assembled.text);
 			} else if (assembled?.type === "message_stop") {
 				await preview?.flushMessage();
-				if (assembled.commit !== null) {
-					await appendModelContent({
-						kind: "assistant_message",
-						payload: assembled.commit,
-					});
-				}
+				await commitEnvelope(assembled.commit);
 			}
 		}
 		if (signal.aborted) throw new QueryInterruptedError();
@@ -190,4 +293,43 @@ export async function consumeAgentStream(
 		signal.removeEventListener("abort", interrupt);
 		preview?.close();
 	}
+}
+
+/** The SDK marks user messages replayed from a resumed session transcript with
+ * `isReplay: true`; only the non-replay variant reports this run's tool work. */
+function isReplayUserMessage(
+	message: Extract<SDKMessage, { type: "user" }>,
+): boolean {
+	return "isReplay" in message && message.isReplay === true;
+}
+
+interface SdkToolResultBlock {
+	/** `null` when the block carried no usable id (omit + log upstream). */
+	toolUseId: string | null;
+	content: unknown;
+	isError: boolean;
+}
+
+/** The `tool_result` blocks of one complete SDK user message, in block order.
+ * Read defensively: the payload is provider data, not a trusted shape. */
+function toolResultBlocks(
+	message: Extract<SDKMessage, { type: "user" }>,
+): SdkToolResultBlock[] {
+	const content = message.message?.content;
+	if (!Array.isArray(content)) return [];
+	const blocks: SdkToolResultBlock[] = [];
+	for (const item of content) {
+		if (typeof item !== "object" || item === null) continue;
+		const block = item as unknown as Record<string, unknown>;
+		if (block.type !== "tool_result") continue;
+		blocks.push({
+			toolUseId:
+				typeof block.tool_use_id === "string" && block.tool_use_id.length > 0
+					? block.tool_use_id
+					: null,
+			content: block.content,
+			isError: block.is_error === true,
+		});
+	}
+	return blocks;
 }

@@ -1,4 +1,8 @@
-import { isAssistantTextPayload } from "@mymemo/agent-db/run-events";
+import {
+	isAssistantTextPayload,
+	isToolResultPayload,
+	isToolUsePayload,
+} from "@mymemo/agent-db/run-events";
 import { type ClientFrame, RunEventType } from "./run-event-types";
 
 /**
@@ -39,6 +43,32 @@ export function projectRunEvent(type: string, payload: unknown): ClientFrame[] {
 							type: "text_commit",
 							messageId: payload.messageId,
 							text: payload.text,
+						},
+					]
+				: [];
+		// The recorded tool payloads ARE the client-safe projection (ADR-0009 —
+		// projected once, worker-side, before append); after the shared guard
+		// validates the shape, the frame forwards the payload fields verbatim.
+		case RunEventType.ToolUse:
+			return isToolUsePayload(payload)
+				? [
+						{
+							type: "tool_use",
+							tool: payload.tool,
+							arguments: payload.arguments,
+							truncated: payload.truncated,
+						},
+					]
+				: [];
+		case RunEventType.ToolResult:
+			return isToolResultPayload(payload)
+				? [
+						{
+							type: "tool_result",
+							tool: payload.tool,
+							result: payload.result,
+							isError: payload.isError,
+							truncated: payload.truncated,
 						},
 					]
 				: [];

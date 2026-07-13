@@ -16,6 +16,7 @@ import {
 	EXECUTOR_SERVER_NAME,
 	type RunToolDeps,
 } from "./run-tools";
+import { allowlistedExecutorToolNames } from "./tool-event-projection";
 
 const BINDING: RunBinding = {
 	userId: "user-1",
@@ -188,6 +189,17 @@ describe("buildRunTools — surface", () => {
 			(t) => `mcp__${EXECUTOR_SERVER_NAME}__${t.name}`,
 		);
 		expect([...EXECUTOR_ALLOWED_TOOLS].sort()).toEqual([...built].sort());
+	});
+
+	// Same drift pin for the ADR-0009 client projection: a ninth executor tool
+	// must force an explicit projection decision (a name in the allowlist, with
+	// or without a per-tool projection yet) rather than silently shipping a tool
+	// the client stream can never show.
+	it("the tool-event projection allowlist names exactly the built tools", () => {
+		const built = buildRunTools(buildDeps().deps).map(
+			(t) => `mcp__${EXECUTOR_SERVER_NAME}__${t.name}`,
+		);
+		expect(allowlistedExecutorToolNames().sort()).toEqual([...built].sort());
 	});
 });
 
