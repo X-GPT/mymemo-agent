@@ -168,10 +168,18 @@ export async function consumeAgentStream(
 	// established only when the invocation's event is appended — so a result for
 	// an omitted or unknown invocation is itself omitted (ADR-0009).
 	const toolNamesByUseId = new Map<string, PublicToolName>();
+	const appendWhileRunning = async (content: ModelContent): Promise<void> => {
+		if (signal.aborted) throw new QueryInterruptedError();
+		await appendModelContent(content);
+		// The append itself is not abortable. Recheck after it settles so shutdown
+		// cannot let the rest of the envelope append while the DB Run is still
+		// fenced as running.
+		if (signal.aborted) throw new QueryInterruptedError();
+	};
 
 	const commitEnvelope = async (commit: EnvelopeCommit): Promise<void> => {
 		if (commit.text !== null) {
-			await appendModelContent({
+			await appendWhileRunning({
 				kind: "assistant_message",
 				payload: commit.text,
 			});
@@ -196,7 +204,7 @@ export async function consumeAgentStream(
 				});
 				continue;
 			}
-			await appendModelContent({
+			await appendWhileRunning({
 				kind: "tool_use",
 				payload: projected.payload,
 			});
@@ -233,7 +241,7 @@ export async function consumeAgentStream(
 				});
 				continue;
 			}
-			await appendModelContent({
+			await appendWhileRunning({
 				kind: "tool_result",
 				payload: projected.payload,
 			});

@@ -1026,6 +1026,85 @@ describe("consumeAgentStream", () => {
 		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
 	});
 
+	it("stops appending tool events when shutdown aborts a stalled append", async () => {
+		const appended: ModelContent[] = [];
+		const controller = new AbortController();
+		let markAppendStarted!: () => void;
+		const appendStarted = new Promise<void>((resolve) => {
+			markAppendStarted = resolve;
+		});
+		let releaseAppend!: () => void;
+		const appendGate = new Promise<void>((resolve) => {
+			releaseAppend = resolve;
+		});
+		const messages = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-1",
+					name: "mcp__mymemo-executor__Bash",
+					input: { command: "first" },
+				},
+				{
+					toolUseId: "toolu-2",
+					name: "mcp__mymemo-executor__Bash",
+					input: { command: "second" },
+				},
+			],
+		});
+		const query = fakeQuery(messages.map((message) => ({ message })));
+
+		const consuming = consumeAgentStream({
+			query,
+			signal: controller.signal,
+			appendModelContent: async (content) => {
+				appended.push(content);
+				if (appended.length === 1) {
+					markAppendStarted();
+					await appendGate;
+				}
+			},
+		});
+
+		await appendStarted;
+		controller.abort();
+		releaseAppend();
+
+		await expect(consuming).rejects.toBeInstanceOf(QueryInterruptedError);
+		expect(query.interrupts).toBe(1);
+		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+	});
+
+	it("logs and omits a tool invocation with malformed required arguments", async () => {
+		const appended: ModelContent[] = [];
+		const { logger, warnings } = spyLogger();
+		const messages = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-1",
+					name: "mcp__mymemo-executor__Bash",
+					input: { command: 42 },
+				},
+			],
+		});
+
+		await consumeAgentStream({
+			runId: "run-1",
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+			logger,
+		});
+
+		expect(appended).toEqual([]);
+		expect(warnings).toEqual([
+			expect.objectContaining({
+				message: "tool invocation omitted",
+				runId: "run-1",
+				tool: "Bash",
+			}),
+		]);
+	});
+
 	it("leaves the history resultless when the stream ends without a result", async () => {
 		const appended: ModelContent[] = [];
 		const messages = [

@@ -101,9 +101,18 @@ export function projectToolUse(
 	if (tool === "LoadDocuments") {
 		return projectLoadDocumentsUse(input);
 	}
-	const projected = projectToolUseArguments(tool, isRecord(input) ? input : {});
+	if (!isRecord(input)) {
+		return {
+			ok: false,
+			reason: `${tool} arguments did not match the executor shape`,
+		};
+	}
+	const projected = projectToolUseArguments(tool, input);
 	if (projected === null) {
-		return { ok: false, reason: `no argument projection for tool ${tool}` };
+		return {
+			ok: false,
+			reason: `${tool} arguments did not match the executor shape`,
+		};
 	}
 	return fitOrOmit({
 		tool,
@@ -155,8 +164,8 @@ interface ProjectedArguments {
 	clipped: boolean;
 }
 
-/** Dispatch to the per-tool argument projection; `null` for tools without one
- * yet, whose invocations are logged and omitted upstream. */
+/** Dispatch to the per-tool argument projection; `null` when required
+ * arguments do not match the executor schema. */
 function projectToolUseArguments(
 	tool: PublicToolName,
 	fields: Record<string, unknown>,
@@ -181,7 +190,8 @@ function projectToolUseArguments(
 
 function bashToolUseArguments(
 	fields: Record<string, unknown>,
-): ProjectedArguments {
+): ProjectedArguments | null {
+	if (typeof fields.command !== "string") return null;
 	const args: Record<string, unknown> = {};
 	let clipped = putClampedString(
 		args,
@@ -198,7 +208,8 @@ function bashToolUseArguments(
 
 function readToolUseArguments(
 	fields: Record<string, unknown>,
-): ProjectedArguments {
+): ProjectedArguments | null {
+	if (typeof fields.path !== "string") return null;
 	const args: Record<string, unknown> = {};
 	const clipped = putClampedString(
 		args,
@@ -213,7 +224,10 @@ function readToolUseArguments(
 
 function writeToolUseArguments(
 	fields: Record<string, unknown>,
-): ProjectedArguments {
+): ProjectedArguments | null {
+	if (typeof fields.path !== "string" || typeof fields.content !== "string") {
+		return null;
+	}
 	const args: Record<string, unknown> = {};
 	let clipped = putClampedString(
 		args,
@@ -227,7 +241,14 @@ function writeToolUseArguments(
 
 function editToolUseArguments(
 	fields: Record<string, unknown>,
-): ProjectedArguments {
+): ProjectedArguments | null {
+	if (
+		typeof fields.path !== "string" ||
+		typeof fields.oldText !== "string" ||
+		typeof fields.newText !== "string"
+	) {
+		return null;
+	}
 	const args: Record<string, unknown> = {};
 	let clipped = putClampedString(
 		args,
@@ -242,7 +263,8 @@ function editToolUseArguments(
 
 function grepToolUseArguments(
 	fields: Record<string, unknown>,
-): ProjectedArguments {
+): ProjectedArguments | null {
+	if (typeof fields.pattern !== "string") return null;
 	const args: Record<string, unknown> = {};
 	let clipped = putClampedString(
 		args,
@@ -267,7 +289,8 @@ function grepToolUseArguments(
 
 function globToolUseArguments(
 	fields: Record<string, unknown>,
-): ProjectedArguments {
+): ProjectedArguments | null {
+	if (typeof fields.pattern !== "string") return null;
 	const args: Record<string, unknown> = {};
 	let clipped = putClampedString(
 		args,

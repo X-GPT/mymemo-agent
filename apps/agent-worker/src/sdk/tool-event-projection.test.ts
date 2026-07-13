@@ -159,22 +159,14 @@ describe("projectToolUse — Bash", () => {
 		});
 	});
 
-	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
-		const projected = projectToolUse("Bash", {
-			command: 42,
-			cwd: ["src"],
-			timeoutMs: "soon",
-			env: { SECRET: "leak" },
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(projected.payload.arguments).toEqual({});
+	it("omits invocations with missing or wrong-typed required arguments", () => {
+		for (const input of [{}, { command: 42 }]) {
+			expect(projectToolUse("Bash", input).ok).toBe(false);
+		}
 	});
 
-	it("projects a non-record input as empty arguments", () => {
-		const projected = projectToolUse("Bash", "rm -rf /");
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(projected.payload.arguments).toEqual({});
-		expect(projected.payload.truncated).toBe(false);
+	it("omits a non-record input", () => {
+		expect(projectToolUse("Bash", "rm -rf /").ok).toBe(false);
 	});
 
 	it("caps a huge command to a bounded preview and flags truncation", () => {
@@ -226,15 +218,10 @@ describe("projectToolUse — Read", () => {
 		});
 	});
 
-	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
-		const projected = projectToolUse("Read", {
-			path: 42,
-			offset: "ten",
-			limit: Number.POSITIVE_INFINITY,
-			follow: true,
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(projected.payload.arguments).toEqual({});
+	it("omits invocations with missing or wrong-typed required arguments", () => {
+		for (const input of [{}, { path: 42 }]) {
+			expect(projectToolUse("Read", input).ok).toBe(false);
+		}
 	});
 
 	it("caps a huge path to a bounded preview and flags truncation", () => {
@@ -682,13 +669,14 @@ describe("projectToolUse — Write", () => {
 		});
 	});
 
-	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
-		const projected = projectToolUse("Write", {
-			path: 42,
-			content: ["not", "text"],
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(projected.payload.arguments).toEqual({});
+	it("omits invocations with missing or wrong-typed required arguments", () => {
+		for (const input of [
+			{},
+			{ path: 42, content: "text" },
+			{ path: "notes.md", content: ["not", "text"] },
+		]) {
+			expect(projectToolUse("Write", input).ok).toBe(false);
+		}
 	});
 
 	it("caps a huge content preview but reports the full byte count", () => {
@@ -773,14 +761,15 @@ describe("projectToolUse — Edit", () => {
 		});
 	});
 
-	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
-		const projected = projectToolUse("Edit", {
-			path: null,
-			oldText: 1,
-			newText: ["b"],
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(projected.payload.arguments).toEqual({});
+	it("omits invocations with missing or wrong-typed required arguments", () => {
+		for (const input of [
+			{},
+			{ path: null, oldText: "a", newText: "b" },
+			{ path: "app.ts", oldText: 1, newText: "b" },
+			{ path: "app.ts", oldText: "a", newText: ["b"] },
+		]) {
+			expect(projectToolUse("Edit", input).ok).toBe(false);
+		}
 	});
 
 	it("caps huge text previews but reports the full byte counts", () => {
@@ -981,16 +970,10 @@ describe("projectToolUse — Grep", () => {
 		});
 	});
 
-	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
-		const projected = projectToolUse("Grep", {
-			pattern: /TODO/,
-			path: 1,
-			include: null,
-			caseSensitive: "yes",
-			maxResults: "many",
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(projected.payload.arguments).toEqual({});
+	it("omits invocations with missing or wrong-typed required arguments", () => {
+		for (const input of [{}, { pattern: /TODO/ }]) {
+			expect(projectToolUse("Grep", input).ok).toBe(false);
+		}
 	});
 
 	it("caps a huge pattern to a bounded preview and flags truncation", () => {
@@ -1160,15 +1143,10 @@ describe("projectToolUse — Glob", () => {
 		});
 	});
 
-	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
-		const projected = projectToolUse("Glob", {
-			pattern: 7,
-			path: false,
-			includeHidden: "yes",
-			maxResults: Number.NaN,
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(projected.payload.arguments).toEqual({});
+	it("omits invocations with missing or wrong-typed required arguments", () => {
+		for (const input of [{}, { pattern: 7 }]) {
+			expect(projectToolUse("Glob", input).ok).toBe(false);
+		}
 	});
 
 	it("caps a huge pattern to a bounded preview and flags truncation", () => {
