@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+	isToolResultPayload,
+	isToolUsePayload,
+} from "@mymemo/agent-db/run-events";
 import { InMemoryLiveTextTransport } from "@mymemo/live-text";
 import type { ModelContent } from "../run-loop";
 import {
@@ -554,6 +558,72 @@ describe("consumeAgentStream", () => {
 		expect(warnings).toEqual([]);
 	});
 
+	it("streams a file-tool invocation and result end to end as guard-valid payloads", async () => {
+		const appended: ModelContent[] = [];
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-edit-1",
+						name: "mcp__mymemo-executor__Edit",
+						input: {
+							path: "src/app.ts",
+							oldText: "const a",
+							newText: "const alpha",
+						},
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{
+					toolUseId: "toolu-edit-1",
+					text: JSON.stringify({ path: "src/app.ts", replacements: 2 }),
+				},
+			]),
+			resultMessage("session-file-1"),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+		});
+
+		expect(appended).toEqual([
+			{
+				kind: "tool_use",
+				payload: {
+					tool: "Edit",
+					arguments: {
+						path: "src/app.ts",
+						oldText: "const a",
+						oldTextBytes: 7,
+						newText: "const alpha",
+						newTextBytes: 11,
+					},
+					truncated: false,
+				},
+			},
+			{
+				kind: "tool_result",
+				payload: {
+					tool: "Edit",
+					result: { path: "src/app.ts", replacements: 2 },
+					isError: false,
+					truncated: false,
+				},
+			},
+		]);
+		// Guard-valid means chat-api's projector will map these durable payloads
+		// to the tool_use/tool_result client frames (the tracer's projector cases).
+		const [use, result] = appended;
+		if (use?.kind !== "tool_use" || result?.kind !== "tool_result") {
+			throw new Error("expected a tool_use then a tool_result");
+		}
+		expect(isToolUsePayload(use.payload)).toBe(true);
+		expect(isToolResultPayload(result.payload)).toBe(true);
+	});
+
 	it("appends only ordered tool uses for a textless envelope", async () => {
 		const appended: ModelContent[] = [];
 		const messages = [
@@ -740,12 +810,12 @@ describe("consumeAgentStream", () => {
 		const { logger, warnings } = spyLogger();
 		const messages = [
 			...toolEnvelope({
-				text: "Reading the file.",
+				text: "Searching the knowledge base.",
 				toolUses: [
 					{
 						toolUseId: "toolu-1",
-						name: "mcp__mymemo-executor__Read",
-						input: { path: "notes.md" },
+						name: "mcp__mymemo-executor__SearchDocuments",
+						input: { query: "quarterly report" },
 					},
 				],
 			}),
@@ -762,7 +832,7 @@ describe("consumeAgentStream", () => {
 			"assistant_message",
 		]);
 		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toMatchObject({ tool: "Read" });
+		expect(warnings[0]).toMatchObject({ tool: "SearchDocuments" });
 	});
 
 	it("projects an error-flagged result as the fixed safe message", async () => {
