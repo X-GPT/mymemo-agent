@@ -32,6 +32,8 @@ interface SessionScript {
 	result?: RawCommandOutcome;
 	/** Reject `outcome` with this error instead of resolving. */
 	outcomeError?: Error;
+	/** Reject `kill()` after applying its scripted process outcome. */
+	killError?: Error;
 	survivors?: number;
 	reapError?: Error;
 }
@@ -60,6 +62,7 @@ class FakeSession implements SandboxCommandSession {
 		if (this.script.resolve === "on-kill") {
 			this.settle(this.script.result ?? OK_OUTCOME);
 		}
+		if (this.script.killError) throw this.script.killError;
 	}
 
 	async reap(): Promise<{ survivors: number }> {
@@ -264,6 +267,31 @@ describe("runBashTool", () => {
 
 		expect(client.sessions[0]?.killed).toBe(1);
 		expect(parseResult(result).outcome).toBe("canceled");
+	});
+
+	it("contains a rejected cancel request when reap proves cleanup", async () => {
+		const controller = new AbortController();
+		const client = new FakeCommandClient({
+			resolve: "on-kill",
+			result: { ...OK_OUTCOME, exitCode: null },
+			killError: new Error(
+				"13: [internal] protocol error: received unsupported compressed output",
+			),
+		});
+		const { context, taints } = makeContext({
+			client,
+			signal: controller.signal,
+		});
+
+		const running = runBashTool({ command: "sleep 300" }, context);
+		await Promise.resolve();
+		controller.abort();
+		const result = await running;
+
+		expect(client.sessions[0]?.killed).toBe(1);
+		expect(client.sessions[0]?.reaped).toBe(1);
+		expect(parseResult(result).outcome).toBe("canceled");
+		expect(taints).toEqual([]);
 	});
 
 	it("taints the sandbox and refuses a clean result when survivors remain", async () => {
