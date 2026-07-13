@@ -16,8 +16,8 @@ function jsonBytes(value: unknown): number {
 	return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
-/** The canonical MCP content the executor Bash tool returns on success. */
-function bashResultContent(result: Record<string, unknown>): unknown {
+/** The canonical MCP content every executor tool returns on success. */
+function executorResultContent(result: Record<string, unknown>): unknown {
 	return [{ type: "text", text: JSON.stringify(result, null, 2) }];
 }
 
@@ -149,18 +149,61 @@ describe("projectToolUse — Bash", () => {
 	});
 
 	it("fails closed for executor tools without an argument projection yet", () => {
-		for (const tool of [
-			"Read",
-			"Write",
-			"Edit",
-			"Grep",
-			"Glob",
-			"SearchDocuments",
-			"LoadDocuments",
-		] as const) {
-			const projected = projectToolUse(tool, { path: "file.txt" });
+		for (const tool of ["SearchDocuments", "LoadDocuments"] as const) {
+			const projected = projectToolUse(tool, { query: "hello" });
 			expect(projected.ok).toBe(false);
 		}
+	});
+});
+
+describe("projectToolUse — Read", () => {
+	it("exposes the path and line window", () => {
+		const projected = projectToolUse("Read", {
+			path: "src/index.ts",
+			offset: 10,
+			limit: 50,
+		});
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Read",
+				arguments: { path: "src/index.ts", offset: 10, limit: 50 },
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolUse("Read", { path: "notes.md" });
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolUsePayload(projected.payload)).toBe(true);
+	});
+
+	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
+		const projected = projectToolUse("Read", {
+			path: 42,
+			offset: "ten",
+			limit: Number.POSITIVE_INFINITY,
+			follow: true,
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.arguments).toEqual({});
+	});
+
+	it("caps a huge path to a bounded preview and flags truncation", () => {
+		const projected = projectToolUse("Read", {
+			path: `${"deep/".repeat(20_000)}file.ts`,
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect(projected.payload.truncated).toBe(true);
+		expect((projected.payload.arguments.path as string).length).toBeLessThan(
+			100_000,
+		);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
 	});
 });
 
@@ -168,7 +211,7 @@ describe("projectToolResult — Bash", () => {
 	it("re-projects the executor result field by field", () => {
 		const projected = projectToolResult(
 			"Bash",
-			bashResultContent(completedBashResult()),
+			executorResultContent(completedBashResult()),
 			false,
 		);
 
@@ -193,7 +236,7 @@ describe("projectToolResult — Bash", () => {
 	it("produces payloads that satisfy the shared vocabulary guard", () => {
 		const projected = projectToolResult(
 			"Bash",
-			bashResultContent(completedBashResult()),
+			executorResultContent(completedBashResult()),
 			false,
 		);
 		if (!projected.ok) throw new Error("expected a projected payload");
@@ -203,7 +246,7 @@ describe("projectToolResult — Bash", () => {
 	it("projects a nonzero exit as a returned result, not a tool error", () => {
 		const projected = projectToolResult(
 			"Bash",
-			bashResultContent(
+			executorResultContent(
 				completedBashResult({ exitCode: 2, stderr: "not found\n" }),
 			),
 			false,
@@ -217,7 +260,7 @@ describe("projectToolResult — Bash", () => {
 	it("preserves a null exit code from a killed command", () => {
 		const projected = projectToolResult(
 			"Bash",
-			bashResultContent(
+			executorResultContent(
 				completedBashResult({ exitCode: null, outcome: "timeout" }),
 			),
 			false,
@@ -230,7 +273,7 @@ describe("projectToolResult — Bash", () => {
 	it("caps huge stdout/stderr previews and flags truncation", () => {
 		const projected = projectToolResult(
 			"Bash",
-			bashResultContent(
+			executorResultContent(
 				completedBashResult({
 					stdout: "a".repeat(60_000),
 					stderr: "b".repeat(60_000),
@@ -254,7 +297,7 @@ describe("projectToolResult — Bash", () => {
 	it("keeps the executor's own truncation flags when the preview fits", () => {
 		const projected = projectToolResult(
 			"Bash",
-			bashResultContent(
+			executorResultContent(
 				completedBashResult({ stdout: "prefix", stdoutTruncated: true }),
 			),
 			false,
@@ -280,13 +323,16 @@ describe("projectToolResult — Bash", () => {
 			projectToolResult("Bash", [{ type: "text", text: "not json" }], false).ok,
 		).toBe(false);
 		expect(
-			projectToolResult("Bash", bashResultContent({ exitCode: "zero" }), false)
-				.ok,
+			projectToolResult(
+				"Bash",
+				executorResultContent({ exitCode: "zero" }),
+				false,
+			).ok,
 		).toBe(false);
 		expect(
 			projectToolResult(
 				"Bash",
-				bashResultContent(completedBashResult({ stdout: 42 })),
+				executorResultContent(completedBashResult({ stdout: 42 })),
 				false,
 			).ok,
 		).toBe(false);
@@ -337,11 +383,713 @@ describe("projectToolResult — Bash", () => {
 
 	it("fails closed for executor tools without a result projection yet", () => {
 		const projected = projectToolResult(
-			"Read",
+			"SearchDocuments",
 			[{ type: "text", text: JSON.stringify({ preview: "..." }) }],
 			false,
 		);
 		expect(projected.ok).toBe(false);
+	});
+});
+
+describe("projectToolUse — Write", () => {
+	it("exposes the path, a content preview, and the full byte count", () => {
+		const projected = projectToolUse("Write", {
+			path: "notes.md",
+			content: "héllo wörld",
+		});
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Write",
+				arguments: {
+					path: "notes.md",
+					content: "héllo wörld",
+					// UTF-8 bytes of the full content, not its character count.
+					contentBytes: 13,
+				},
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolUse("Write", {
+			path: "notes.md",
+			content: "x",
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolUsePayload(projected.payload)).toBe(true);
+	});
+
+	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
+		const projected = projectToolUse("Write", {
+			path: 42,
+			content: ["not", "text"],
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.arguments).toEqual({});
+	});
+
+	it("caps a huge content preview but reports the full byte count", () => {
+		const projected = projectToolUse("Write", {
+			path: "big.txt",
+			content: "x".repeat(100_000),
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect(projected.payload.truncated).toBe(true);
+		expect(projected.payload.arguments.contentBytes).toBe(100_000);
+		expect((projected.payload.arguments.content as string).length).toBeLessThan(
+			100_000,
+		);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+});
+
+describe("projectToolResult — Write", () => {
+	it("re-projects the executor result field by field", () => {
+		const projected = projectToolResult(
+			"Write",
+			executorResultContent({ path: "notes.md", bytesWritten: 42 }),
+			false,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Write",
+				result: { path: "notes.md", bytesWritten: 42 },
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolResult(
+			"Write",
+			executorResultContent({ path: "notes.md", bytesWritten: 42 }),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolResultPayload(projected.payload)).toBe(true);
+	});
+
+	it("omits results whose text is not the known executor shape", () => {
+		expect(
+			projectToolResult("Write", [{ type: "text", text: "ok" }], false).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Write",
+				executorResultContent({ path: "notes.md", bytesWritten: "42" }),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Write",
+				executorResultContent({ bytesWritten: 42 }),
+				false,
+			).ok,
+		).toBe(false);
+	});
+});
+
+describe("projectToolUse — Edit", () => {
+	it("exposes the path, both text previews, and their byte counts", () => {
+		const projected = projectToolUse("Edit", {
+			path: "src/app.ts",
+			oldText: "const a",
+			newText: "const alpha",
+		});
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Edit",
+				arguments: {
+					path: "src/app.ts",
+					oldText: "const a",
+					oldTextBytes: 7,
+					newText: "const alpha",
+					newTextBytes: 11,
+				},
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolUse("Edit", {
+			path: "src/app.ts",
+			oldText: "a",
+			newText: "b",
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolUsePayload(projected.payload)).toBe(true);
+	});
+
+	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
+		const projected = projectToolUse("Edit", {
+			path: null,
+			oldText: 1,
+			newText: ["b"],
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.arguments).toEqual({});
+	});
+
+	it("caps huge text previews but reports the full byte counts", () => {
+		const projected = projectToolUse("Edit", {
+			path: "big.txt",
+			oldText: "a".repeat(50_000),
+			newText: "b".repeat(60_000),
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect(projected.payload.truncated).toBe(true);
+		expect(projected.payload.arguments.oldTextBytes).toBe(50_000);
+		expect(projected.payload.arguments.newTextBytes).toBe(60_000);
+		expect((projected.payload.arguments.oldText as string).length).toBeLessThan(
+			50_000,
+		);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+});
+
+describe("projectToolResult — Edit", () => {
+	it("re-projects the executor result field by field", () => {
+		const projected = projectToolResult(
+			"Edit",
+			executorResultContent({ path: "src/app.ts", replacements: 3 }),
+			false,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Edit",
+				result: { path: "src/app.ts", replacements: 3 },
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolResult(
+			"Edit",
+			executorResultContent({ path: "src/app.ts", replacements: 1 }),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolResultPayload(projected.payload)).toBe(true);
+	});
+
+	it("omits results whose text is not the known executor shape", () => {
+		expect(
+			projectToolResult("Edit", [{ type: "text", text: "done" }], false).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Edit",
+				executorResultContent({ path: "src/app.ts", replacements: "3" }),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Edit",
+				executorResultContent({ replacements: 3 }),
+				false,
+			).ok,
+		).toBe(false);
+	});
+});
+
+describe("projectToolResult — Read", () => {
+	function completedReadResult(overrides: Record<string, unknown> = {}) {
+		return {
+			path: "src/index.ts",
+			content: "line one\nline two",
+			startLine: 1,
+			linesRead: 2,
+			truncated: false,
+			...overrides,
+		};
+	}
+
+	it("re-projects the executor result field by field", () => {
+		const projected = projectToolResult(
+			"Read",
+			executorResultContent(completedReadResult()),
+			false,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Read",
+				result: {
+					path: "src/index.ts",
+					content: "line one\nline two",
+					startLine: 1,
+					linesRead: 2,
+					truncated: false,
+				},
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolResult(
+			"Read",
+			executorResultContent(completedReadResult()),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolResultPayload(projected.payload)).toBe(true);
+	});
+
+	it("caps a huge content preview and marks the preview incomplete", () => {
+		const projected = projectToolResult(
+			"Read",
+			executorResultContent(
+				completedReadResult({ content: "a".repeat(60_000), linesRead: 1 }),
+			),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect(projected.payload.truncated).toBe(true);
+		// A preview clipped by projection is no longer the full read window,
+		// exactly as when the executor's own caps truncated it.
+		expect(projected.payload.result.truncated).toBe(true);
+		expect((projected.payload.result.content as string).length).toBeLessThan(
+			60_000,
+		);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+
+	it("keeps the executor's own truncated flag when the preview fits", () => {
+		const projected = projectToolResult(
+			"Read",
+			executorResultContent(completedReadResult({ truncated: true })),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.result.truncated).toBe(true);
+		// The event itself was not clipped by projection.
+		expect(projected.payload.truncated).toBe(false);
+	});
+
+	it("omits results whose text is not the known executor shape", () => {
+		expect(
+			projectToolResult("Read", [{ type: "text", text: "not json" }], false).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Read",
+				executorResultContent(completedReadResult({ path: 42 })),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Read",
+				executorResultContent(completedReadResult({ startLine: "1" })),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Read",
+				executorResultContent(completedReadResult({ linesRead: null })),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Read",
+				executorResultContent(completedReadResult({ truncated: "no" })),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Read",
+				executorResultContent(completedReadResult({ content: 42 })),
+				false,
+			).ok,
+		).toBe(false);
+	});
+});
+
+describe("projectToolUse — Grep", () => {
+	it("exposes the search arguments", () => {
+		const projected = projectToolUse("Grep", {
+			pattern: "TODO\\(",
+			path: "src",
+			include: "*.ts",
+			caseSensitive: false,
+			maxResults: 50,
+		});
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Grep",
+				arguments: {
+					pattern: "TODO\\(",
+					path: "src",
+					include: "*.ts",
+					caseSensitive: false,
+					maxResults: 50,
+				},
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolUse("Grep", { pattern: "x" });
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolUsePayload(projected.payload)).toBe(true);
+	});
+
+	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
+		const projected = projectToolUse("Grep", {
+			pattern: /TODO/,
+			path: 1,
+			include: null,
+			caseSensitive: "yes",
+			maxResults: "many",
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.arguments).toEqual({});
+	});
+
+	it("caps a huge pattern to a bounded preview and flags truncation", () => {
+		const projected = projectToolUse("Grep", {
+			pattern: "a|".repeat(50_000),
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect(projected.payload.truncated).toBe(true);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+});
+
+describe("projectToolResult — Grep", () => {
+	function grepMatch(overrides: Record<string, unknown> = {}) {
+		return {
+			path: "src/app.ts",
+			line: 12,
+			column: 3,
+			text: "// TODO: fix",
+			...overrides,
+		};
+	}
+
+	it("re-projects the executor matches field by field", () => {
+		const projected = projectToolResult(
+			"Grep",
+			executorResultContent({
+				matches: [grepMatch(), grepMatch({ path: "src/db.ts", line: 40 })],
+				truncated: false,
+			}),
+			false,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Grep",
+				result: {
+					matches: [
+						{ path: "src/app.ts", line: 12, column: 3, text: "// TODO: fix" },
+						{ path: "src/db.ts", line: 40, column: 3, text: "// TODO: fix" },
+					],
+					truncated: false,
+				},
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolResult(
+			"Grep",
+			executorResultContent({ matches: [grepMatch()], truncated: false }),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolResultPayload(projected.payload)).toBe(true);
+	});
+
+	it("bounds a long match list and marks the list incomplete", () => {
+		const matches = Array.from({ length: 100 }, (_, i) =>
+			grepMatch({ path: `src/file-${i}.ts`, line: i + 1 }),
+		);
+		const projected = projectToolResult(
+			"Grep",
+			executorResultContent({ matches, truncated: false }),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect((projected.payload.result.matches as unknown[]).length).toBe(20);
+		expect(projected.payload.result.truncated).toBe(true);
+		expect(projected.payload.truncated).toBe(true);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+
+	it("caps per-match text previews and flags truncation", () => {
+		const projected = projectToolResult(
+			"Grep",
+			executorResultContent({
+				matches: [grepMatch({ text: "x".repeat(10_000) })],
+				truncated: false,
+			}),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect(projected.payload.truncated).toBe(true);
+		const [match] = projected.payload.result.matches as {
+			text: string;
+		}[];
+		if (!match) throw new Error("expected one projected match");
+		expect(match.text.length).toBeLessThan(10_000);
+		// The match list itself is still complete.
+		expect(projected.payload.result.truncated).toBe(false);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+
+	it("keeps the executor's own truncated flag when everything fits", () => {
+		const projected = projectToolResult(
+			"Grep",
+			executorResultContent({ matches: [grepMatch()], truncated: true }),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.result.truncated).toBe(true);
+		expect(projected.payload.truncated).toBe(false);
+	});
+
+	it("omits results whose text is not the known executor shape", () => {
+		expect(
+			projectToolResult(
+				"Grep",
+				executorResultContent({ matches: "none", truncated: false }),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Grep",
+				executorResultContent({
+					matches: [grepMatch({ line: "12" })],
+					truncated: false,
+				}),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Grep",
+				executorResultContent({
+					matches: [{ line: 1, column: 1, text: "no path" }],
+					truncated: false,
+				}),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Grep",
+				executorResultContent({ matches: [grepMatch()] }),
+				false,
+			).ok,
+		).toBe(false);
+	});
+});
+
+describe("projectToolUse — Glob", () => {
+	it("exposes the glob arguments", () => {
+		const projected = projectToolUse("Glob", {
+			pattern: "**/*.test.ts",
+			path: "apps",
+			includeHidden: true,
+			maxResults: 100,
+		});
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Glob",
+				arguments: {
+					pattern: "**/*.test.ts",
+					path: "apps",
+					includeHidden: true,
+					maxResults: 100,
+				},
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolUse("Glob", { pattern: "*" });
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolUsePayload(projected.payload)).toBe(true);
+	});
+
+	it("omits missing or wrong-typed argument fields instead of forwarding them", () => {
+		const projected = projectToolUse("Glob", {
+			pattern: 7,
+			path: false,
+			includeHidden: "yes",
+			maxResults: Number.NaN,
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.arguments).toEqual({});
+	});
+
+	it("caps a huge pattern to a bounded preview and flags truncation", () => {
+		const projected = projectToolUse("Glob", {
+			pattern: "*/".repeat(50_000),
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect(projected.payload.truncated).toBe(true);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+});
+
+describe("projectToolResult — Glob", () => {
+	it("re-projects the executor path list field by field", () => {
+		const projected = projectToolResult(
+			"Glob",
+			executorResultContent({
+				paths: ["a.ts", "lib/b.ts"],
+				truncated: false,
+			}),
+			false,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "Glob",
+				result: { paths: ["a.ts", "lib/b.ts"], truncated: false },
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("produces payloads that satisfy the shared vocabulary guard", () => {
+		const projected = projectToolResult(
+			"Glob",
+			executorResultContent({ paths: ["a.ts"], truncated: false }),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolResultPayload(projected.payload)).toBe(true);
+	});
+
+	it("bounds a long path list and marks the list incomplete", () => {
+		const paths = Array.from({ length: 500 }, (_, i) => `src/file-${i}.ts`);
+		const projected = projectToolResult(
+			"Glob",
+			executorResultContent({ paths, truncated: false }),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect((projected.payload.result.paths as unknown[]).length).toBe(40);
+		expect(projected.payload.result.truncated).toBe(true);
+		expect(projected.payload.truncated).toBe(true);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+
+	it("caps a huge per-item path preview and flags truncation", () => {
+		const projected = projectToolResult(
+			"Glob",
+			executorResultContent({
+				paths: [`${"deep/".repeat(20_000)}file.ts`],
+				truncated: false,
+			}),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+
+		expect(projected.payload.truncated).toBe(true);
+		const [first] = projected.payload.result.paths as string[];
+		if (!first) throw new Error("expected one projected path");
+		expect(first.length).toBeLessThan(100_000);
+		// The path list itself is still complete.
+		expect(projected.payload.result.truncated).toBe(false);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+
+	it("keeps the executor's own truncated flag when everything fits", () => {
+		const projected = projectToolResult(
+			"Glob",
+			executorResultContent({ paths: ["a.ts"], truncated: true }),
+			false,
+		);
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.result.truncated).toBe(true);
+		expect(projected.payload.truncated).toBe(false);
+	});
+
+	it("omits results whose text is not the known executor shape", () => {
+		expect(
+			projectToolResult(
+				"Glob",
+				executorResultContent({ paths: "a.ts", truncated: false }),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Glob",
+				executorResultContent({ paths: ["a.ts", 42], truncated: false }),
+				false,
+			).ok,
+		).toBe(false);
+		expect(
+			projectToolResult(
+				"Glob",
+				executorResultContent({ paths: ["a.ts"] }),
+				false,
+			).ok,
+		).toBe(false);
 	});
 });
 
