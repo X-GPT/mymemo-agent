@@ -27,6 +27,7 @@ describe("hard-cutover client contract", () => {
 			messages: [
 				{ messageId: "message-1", text: "provisional", provisional: true },
 			],
+			toolEvents: [],
 			terminal: undefined,
 		});
 
@@ -57,6 +58,7 @@ describe("hard-cutover client contract", () => {
 					provisional: false,
 				},
 			],
+			toolEvents: [],
 			terminal: undefined,
 		});
 	});
@@ -149,10 +151,109 @@ describe("hard-cutover client contract", () => {
 
 			expect(client.snapshot()).toEqual({
 				messages: [],
+				toolEvents: [],
 				terminal,
 			});
 		});
 	}
+
+	it("records tool events as chronological items in arrival order", () => {
+		const client = createClientContractFixture();
+
+		client.receive({
+			id: "2",
+			event: "tool_use",
+			data: {
+				type: "tool_use",
+				tool: "Bash",
+				arguments: { command: "ls -la", cwd: "src", timeoutMs: 30_000 },
+				truncated: false,
+			},
+		});
+		client.receive({
+			id: "3",
+			event: "tool_result",
+			data: {
+				type: "tool_result",
+				tool: "Bash",
+				result: { exitCode: 0, stdout: "a.ts\n" },
+				isError: false,
+				truncated: false,
+			},
+		});
+		client.receive({
+			id: "4",
+			event: "tool_result",
+			data: {
+				type: "tool_result",
+				tool: "Bash",
+				result: { message: "Tool failed" },
+				isError: true,
+				truncated: false,
+			},
+		});
+
+		expect(client.snapshot().toolEvents).toEqual([
+			{ kind: "tool_use", tool: "Bash" },
+			{ kind: "tool_result", tool: "Bash", isError: false },
+			{ kind: "tool_result", tool: "Bash", isError: true },
+		]);
+	});
+
+	it("rejects cursorless or malformed tool frames", () => {
+		const client = createClientContractFixture();
+
+		// Tool events are durable-only: no live lane, so every frame must carry
+		// its run-event cursor.
+		expect(() =>
+			client.receive({
+				event: "tool_use",
+				data: {
+					type: "tool_use",
+					tool: "Bash",
+					arguments: {},
+					truncated: false,
+				},
+			}),
+		).toThrow("tool_use must carry a durable cursor");
+		expect(() =>
+			client.receive({
+				id: "2",
+				event: "tool_use",
+				data: { type: "tool_use", arguments: {}, truncated: false },
+			}),
+		).toThrow("invalid tool_use frame");
+		expect(() =>
+			client.receive({
+				id: "2",
+				event: "tool_result",
+				data: {
+					type: "tool_result",
+					tool: "Bash",
+					result: "raw text",
+					isError: false,
+					truncated: false,
+				},
+			}),
+		).toThrow("invalid tool_result frame");
+	});
+
+	it("ignores tool frames after the terminal outcome", () => {
+		const client = createClientContractFixture();
+		client.receive({ id: "9", event: "done", data: { type: "done" } });
+		client.receive({
+			id: "10",
+			event: "tool_use",
+			data: {
+				type: "tool_use",
+				tool: "Bash",
+				arguments: {},
+				truncated: false,
+			},
+		});
+
+		expect(client.snapshot().toolEvents).toEqual([]);
+	});
 
 	it("rejects cursor-bearing preview and the former text-only durable delta", () => {
 		const client = createClientContractFixture();

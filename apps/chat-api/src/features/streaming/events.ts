@@ -7,6 +7,8 @@ export type EventMessage =
 	| ErrorEvent
 	| TextDeltaEvent
 	| TextCommitEvent
+	| ToolUseEvent
+	| ToolResultEvent
 	| DoneEvent
 	| CanceledEvent
 	| ConversationIdEvent
@@ -38,6 +40,26 @@ export interface TextDeltaEvent {
 	messageId: string;
 	deltaIndex: number;
 	text: string;
+}
+
+/** One Tool invocation (ADR-0009): the short public tool name and the bounded,
+ * client-safe projection of its arguments. Append-only and self-describing —
+ * no correlation id; the matching result is a separate chronological item. */
+export interface ToolUseEvent {
+	type: "tool_use";
+	tool: string;
+	arguments: Record<string, unknown>;
+	truncated: boolean;
+}
+
+/** One Tool result (ADR-0009). An `isError` result carries the fixed safe
+ * message; a run may terminate after an invocation with no result. */
+export interface ToolResultEvent {
+	type: "tool_result";
+	tool: string;
+	result: Record<string, unknown>;
+	isError: boolean;
+	truncated: boolean;
 }
 
 export interface DoneEvent {

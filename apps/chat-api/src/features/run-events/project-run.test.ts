@@ -1142,6 +1142,130 @@ describe("projectRun", () => {
 		expect(notifier.closed).toBe(1);
 	});
 
+	it("replays a Bash-invoking run in sequence order with durable cursors", async () => {
+		const toolUse = {
+			tool: "Bash" as const,
+			arguments: { command: "ls -la", cwd: "src", timeoutMs: 30_000 },
+			truncated: false,
+		};
+		const toolResult = {
+			tool: "Bash" as const,
+			result: {
+				exitCode: 0,
+				stdout: "a.ts\n",
+				stderr: "",
+				stdoutTruncated: false,
+				stderrTruncated: false,
+				outcome: "completed",
+			},
+			isError: false,
+			truncated: false,
+		};
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.Started,
+					payload: { conversationId: "conv-1", runId: "run-1" },
+				},
+				{
+					seq: 2,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-1", text: "Let me check." },
+				},
+				{ seq: 3, type: RunEventType.ToolUse, payload: toolUse },
+				{ seq: 4, type: RunEventType.ToolResult, payload: toolResult },
+				{
+					seq: 5,
+					type: RunEventType.AssistantText,
+					payload: { messageId: "message-2", text: "One file." },
+				},
+				{ seq: 6, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = await drain(
+			projectRun("run-1", 0, { reader, notifier: new InstantNotifier() }),
+		);
+
+		expect(frames(projected)).toEqual([
+			{ type: "conversation_id", conversationId: "conv-1" },
+			{ type: "run_id", runId: "run-1" },
+			{ type: "text_commit", messageId: "message-1", text: "Let me check." },
+			{ type: "tool_use", ...toolUse },
+			{ type: "tool_result", ...toolResult },
+			{ type: "text_commit", messageId: "message-2", text: "One file." },
+			{ type: "done" },
+		]);
+		// Every tool frame is durable: it carries its run-event sequence as the SSE
+		// id and advances the reconnect cursor exactly like text_commit.
+		expect(projected.map((p) => p.id)).toEqual([
+			undefined,
+			"1",
+			"2",
+			"3",
+			"4",
+			"5",
+			"6",
+		]);
+	});
+
+	it("closes the stream on the terminal frame after a resultless invocation", async () => {
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.ToolUse,
+					payload: {
+						tool: "Bash",
+						arguments: { command: "sleep 600" },
+						truncated: false,
+					},
+				},
+				{
+					seq: 2,
+					type: RunEventType.Error,
+					payload: { message: "Run failed" },
+				},
+			],
+		]);
+
+		const projected = await drain(
+			projectRun("run-1", 0, { reader, notifier: new InstantNotifier() }),
+		);
+
+		// The invocation stays resultless — no fabricated tool_result — and the
+		// run's terminal frame ends the stream.
+		expect(frames(projected)).toEqual([
+			{
+				type: "tool_use",
+				tool: "Bash",
+				arguments: { command: "sleep 600" },
+				truncated: false,
+			},
+			{ type: "error", message: "Run failed" },
+		]);
+	});
+
+	it("drops a malformed tool payload row without emitting a frame or closing", async () => {
+		const reader = new ScriptedReader([
+			[
+				{
+					seq: 1,
+					type: RunEventType.ToolUse,
+					payload: { tool: "NotATool", arguments: {}, truncated: false },
+				},
+				{ seq: 2, type: RunEventType.Done, payload: {} },
+			],
+		]);
+
+		const projected = await drain(
+			projectRun("run-1", 0, { reader, notifier: new InstantNotifier() }),
+		);
+
+		expect(frames(projected)).toEqual([{ type: "done" }]);
+	});
+
 	it("replays from a Last-Event-ID cursor, starting the read past already-seen events", async () => {
 		const reader = new ScriptedReader([
 			[

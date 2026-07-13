@@ -22,6 +22,33 @@ const worker = new Worker({
 	logger,
 });
 const processor: RunProcessor = async (ctx) => {
+	// One Bash-shaped Tool invocation and result ahead of the Assistant message,
+	// in ADR-0009's commit order, so the integration test proves the tool-event
+	// vocabulary crosses the writer→projector seam like assistant text.
+	await ctx.appendModelContent({
+		kind: "tool_use",
+		payload: {
+			tool: "Bash",
+			arguments: { command: `echo ${ctx.run.runId}`, timeoutMs: 10_000 },
+			truncated: false,
+		},
+	});
+	await ctx.appendModelContent({
+		kind: "tool_result",
+		payload: {
+			tool: "Bash",
+			result: {
+				exitCode: 0,
+				stdout: `${ctx.run.runId}\n`,
+				stderr: "",
+				stdoutTruncated: false,
+				stderrTruncated: false,
+				outcome: "completed",
+			},
+			isError: false,
+			truncated: false,
+		},
+	});
 	await ctx.appendModelContent({
 		kind: "assistant_message",
 		payload: {

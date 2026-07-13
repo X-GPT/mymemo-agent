@@ -10,10 +10,17 @@ export interface ClientContractMessage {
 	provisional: boolean;
 }
 
+/** One rendered Tool item (ADR-0009): append-only and self-describing — a
+ * result is a separate chronological item, never an update to its invocation. */
+export type ClientContractToolEvent =
+	| { kind: "tool_use"; tool: string }
+	| { kind: "tool_result"; tool: string; isError: boolean };
+
 export type ClientContractTerminal = "done" | "canceled" | "error";
 
 export interface ClientContractSnapshot {
 	messages: ClientContractMessage[];
+	toolEvents: ClientContractToolEvent[];
 	terminal: ClientContractTerminal | undefined;
 }
 
@@ -29,6 +36,7 @@ export interface ClientContractFixture {
 export function createClientContractFixture(): ClientContractFixture {
 	const messages = new Map<string, StoredMessage>();
 	const committedMessageIds = new Set<string>();
+	const toolEvents: ClientContractToolEvent[] = [];
 	let terminal: ClientContractTerminal | undefined;
 
 	return {
@@ -39,7 +47,10 @@ export function createClientContractFixture(): ClientContractFixture {
 			}
 			if (
 				terminal !== undefined &&
-				(frame.event === "text_delta" || frame.event === "text_commit")
+				(frame.event === "text_delta" ||
+					frame.event === "text_commit" ||
+					frame.event === "tool_use" ||
+					frame.event === "tool_result")
 			) {
 				return;
 			}
@@ -91,6 +102,31 @@ export function createClientContractFixture(): ClientContractFixture {
 					committedMessageIds.add(messageId);
 					return;
 				}
+				case "tool_use": {
+					requireCursor(frame);
+					const tool = requireString(data, "tool", frame.event);
+					if (
+						!isPlainRecord(data.arguments) ||
+						typeof data.truncated !== "boolean"
+					) {
+						throw new Error(`invalid ${frame.event} frame`);
+					}
+					toolEvents.push({ kind: "tool_use", tool });
+					return;
+				}
+				case "tool_result": {
+					requireCursor(frame);
+					const tool = requireString(data, "tool", frame.event);
+					if (
+						!isPlainRecord(data.result) ||
+						typeof data.isError !== "boolean" ||
+						typeof data.truncated !== "boolean"
+					) {
+						throw new Error(`invalid ${frame.event} frame`);
+					}
+					toolEvents.push({ kind: "tool_result", tool, isError: data.isError });
+					return;
+				}
 				case "done":
 				case "canceled":
 				case "error":
@@ -116,6 +152,7 @@ export function createClientContractFixture(): ClientContractFixture {
 						provisional,
 					}),
 				),
+				toolEvents: [...toolEvents],
 				terminal,
 			};
 		},
@@ -123,10 +160,14 @@ export function createClientContractFixture(): ClientContractFixture {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+	if (!isPlainRecord(value)) {
 		throw new Error("client frame data must be an object");
 	}
-	return value as Record<string, unknown>;
+	return value;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requireString(

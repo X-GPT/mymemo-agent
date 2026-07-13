@@ -59,22 +59,26 @@ const MEMBER_CODE = "demo-member";
 const PARTNER_CODE = "demo-partner";
 
 interface SSEFrame {
+	id?: string;
 	event: string;
 	data: string;
 }
 
-/** Parse an SSE body into {event, data} frames (mirrors chat.route.test.ts). */
+/** Parse an SSE body into {id, event, data} frames (mirrors chat.route.test.ts). */
 function parseSSE(raw: string): SSEFrame[] {
 	const frames: SSEFrame[] = [];
 	for (const block of raw.split("\n\n")) {
+		let id: string | undefined;
 		let event = "";
 		let data = "";
 		for (const line of block.split("\n")) {
-			if (line.startsWith("event:")) event = line.slice("event:".length).trim();
+			if (line.startsWith("id:")) id = line.slice("id:".length).trim();
+			else if (line.startsWith("event:"))
+				event = line.slice("event:".length).trim();
 			else if (line.startsWith("data:"))
 				data = line.slice("data:".length).trim();
 		}
-		if (event) frames.push({ event, data });
+		if (event) frames.push({ id, event, data });
 	}
 	return frames;
 }
@@ -234,6 +238,45 @@ describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
 				.join("");
 			expect(streamedText).toContain("Synthetic response");
 			expect(streamedText).toContain(runId);
+
+			// The tool events crossed the same seam (ADR-0009): the worker's recorded
+			// payloads arrive as same-named durable frames, in append order, each
+			// carrying its run-event sequence as the SSE id.
+			const nonPing = frames.filter((f) => f.event !== "ping");
+			const toolUseIndex = nonPing.findIndex((f) => f.event === "tool_use");
+			const toolResultIndex = nonPing.findIndex(
+				(f) => f.event === "tool_result",
+			);
+			const commitIndex = nonPing.findIndex((f) => f.event === "text_commit");
+			expect(toolUseIndex).toBeGreaterThan(-1);
+			expect(toolResultIndex).toBe(toolUseIndex + 1);
+			expect(commitIndex).toBe(toolResultIndex + 1);
+
+			const toolUseFrame = requiredFrame(frames, "tool_use");
+			expect(JSON.parse(toolUseFrame.data)).toEqual({
+				type: "tool_use",
+				tool: "Bash",
+				arguments: { command: `echo ${runId}`, timeoutMs: 10_000 },
+				truncated: false,
+			});
+			const toolResultFrame = requiredFrame(frames, "tool_result");
+			expect(JSON.parse(toolResultFrame.data)).toEqual({
+				type: "tool_result",
+				tool: "Bash",
+				result: {
+					exitCode: 0,
+					stdout: `${runId}\n`,
+					stderr: "",
+					stdoutTruncated: false,
+					stderrTruncated: false,
+					outcome: "completed",
+				},
+				isError: false,
+				truncated: false,
+			});
+			// Both frames are durable: consecutive run-event sequences as SSE ids.
+			expect(Number(toolUseFrame.id)).toBeGreaterThan(0);
+			expect(Number(toolResultFrame.id)).toBe(Number(toolUseFrame.id) + 1);
 		},
 		TURN_TIMEOUT_MS + 15_000,
 	);

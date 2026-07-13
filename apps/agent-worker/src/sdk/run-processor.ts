@@ -58,6 +58,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				query,
 				signal: ctx.signal,
 				appendModelContent: ctx.appendModelContent,
+				logger: deps.logger,
 				liveTextPublisher: deps.liveTextPublisher,
 				onLiveTextSignal: (signal) =>
 					reportWorkerLiveTextPreviewSignal(telemetry, signal),

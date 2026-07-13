@@ -3,6 +3,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
 	type ClientContractMessage,
+	type ClientContractToolEvent,
 	createClientContractFixture,
 } from "./client-contract";
 
@@ -23,6 +24,8 @@ const TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 	"run_id",
 	"text_delta",
 	"text_commit",
+	"tool_use",
+	"tool_result",
 	"done",
 ]);
 
@@ -271,7 +274,13 @@ async function sendTurn(
 		throw new Error("run_id frame did not carry a durable cursor");
 	const text = snapshot.messages.map((message) => message.text).join("");
 	if (!text.trim()) throw new Error("event stream contained no assistant text");
-	await replayTurn(conversationId, runId, runCursor, snapshot.messages);
+	await replayTurn(
+		conversationId,
+		runId,
+		runCursor,
+		snapshot.messages,
+		snapshot.toolEvents,
+	);
 	return { runId, text };
 }
 
@@ -280,6 +289,7 @@ async function replayTurn(
 	runId: string,
 	afterCursor: string,
 	expectedMessages: ClientContractMessage[],
+	expectedToolEvents: ClientContractToolEvent[],
 ): Promise<void> {
 	const response = await fetch(
 		`${baseUrl}/v1/conversations/${conversationId}/runs/${runId}/events`,
@@ -327,6 +337,13 @@ async function replayTurn(
 		throw new Error(
 			"durable reconnect did not replay the exact committed messages",
 		);
+	}
+	// Tool events are durable run events too: a reconnect replays exactly the
+	// invocations and results the live stream showed, in order (ADR-0009).
+	if (
+		JSON.stringify(snapshot.toolEvents) !== JSON.stringify(expectedToolEvents)
+	) {
+		throw new Error("durable reconnect did not replay the exact tool events");
 	}
 }
 
