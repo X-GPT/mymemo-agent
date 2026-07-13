@@ -624,6 +624,124 @@ describe("consumeAgentStream", () => {
 		expect(isToolResultPayload(result.payload)).toBe(true);
 	});
 
+	it("streams document-tool invocations and results as safe guard-valid payloads", async () => {
+		const appended: ModelContent[] = [];
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-search-1",
+						name: "mcp__mymemo-executor__SearchDocuments",
+						input: {
+							query: "quarterly roadmap",
+							maxResults: 8,
+							scope: "collection-secret",
+						},
+					},
+					{
+						toolUseId: "toolu-load-1",
+						name: "mcp__mymemo-executor__LoadDocuments",
+						input: {
+							documentIds: ["document-good-secret", "document-bad-secret"],
+						},
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{
+					toolUseId: "toolu-search-1",
+					text: JSON.stringify({
+						passages: [
+							{
+								passageId: "passage-secret",
+								documentId: "document-secret",
+								title: "Q3 Roadmap",
+								snippet: "Launch milestones",
+							},
+						],
+					}),
+				},
+				{
+					toolUseId: "toolu-load-1",
+					text: JSON.stringify({
+						loaded: [
+							{
+								documentId: "document-good-secret",
+								title: "Q3 Roadmap",
+								path: "/workspace/.mymemo/docs/document-good-secret.md",
+								truncated: false,
+							},
+						],
+						errors: [
+							{
+								documentId: "document-bad-secret",
+								error: "scope collection-secret denied",
+							},
+						],
+					}),
+				},
+			]),
+			resultMessage("session-documents-1"),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContent: captureModelContent(appended),
+		});
+
+		expect(appended).toEqual([
+			{
+				kind: "tool_use",
+				payload: {
+					tool: "SearchDocuments",
+					arguments: { query: "quarterly roadmap" },
+					truncated: false,
+				},
+			},
+			{
+				kind: "tool_use",
+				payload: {
+					tool: "LoadDocuments",
+					arguments: { requestedCount: 2 },
+					truncated: false,
+				},
+			},
+			{
+				kind: "tool_result",
+				payload: {
+					tool: "SearchDocuments",
+					result: {
+						passages: [{ title: "Q3 Roadmap", snippet: "Launch milestones" }],
+					},
+					isError: false,
+					truncated: false,
+				},
+			},
+			{
+				kind: "tool_result",
+				payload: {
+					tool: "LoadDocuments",
+					result: {
+						loadedCount: 1,
+						loaded: [{ title: "Q3 Roadmap" }],
+						failedCount: 1,
+						failureSummary: "Some documents could not be loaded",
+					},
+					isError: false,
+					truncated: false,
+				},
+			},
+		]);
+		for (const content of appended) {
+			if (content.kind === "tool_use") {
+				expect(isToolUsePayload(content.payload)).toBe(true);
+			} else if (content.kind === "tool_result") {
+				expect(isToolResultPayload(content.payload)).toBe(true);
+			}
+		}
+	});
+
 	it("appends only ordered tool uses for a textless envelope", async () => {
 		const appended: ModelContent[] = [];
 		const messages = [
@@ -803,36 +921,6 @@ describe("consumeAgentStream", () => {
 		expect(warnings).toHaveLength(2);
 		expect(warnings[0]).toMatchObject({ toolName: "mcp__other-server__Bash" });
 		expect(warnings[1]).toMatchObject({ toolUseId: "toolu-1" });
-	});
-
-	it("omits and logs an executor tool without a projection and continues", async () => {
-		const appended: ModelContent[] = [];
-		const { logger, warnings } = spyLogger();
-		const messages = [
-			...toolEnvelope({
-				text: "Searching the knowledge base.",
-				toolUses: [
-					{
-						toolUseId: "toolu-1",
-						name: "mcp__mymemo-executor__SearchDocuments",
-						input: { query: "quarterly report" },
-					},
-				],
-			}),
-		];
-
-		await consumeAgentStream({
-			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
-			logger,
-		});
-
-		expect(appended.map((content) => content.kind)).toEqual([
-			"assistant_message",
-		]);
-		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toMatchObject({ tool: "SearchDocuments" });
 	});
 
 	it("projects an error-flagged result as the fixed safe message", async () => {

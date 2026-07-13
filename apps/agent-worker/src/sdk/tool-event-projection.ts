@@ -15,9 +15,7 @@ import { EXECUTOR_SERVER_NAME } from "./run-tools";
  * and the run continues (fail closed — a surprising shape degrades visibility,
  * not correctness).
  *
- * Bash (the ADR-0009 tracer bullet) and the five file tools — Read, Write,
- * Edit, Grep, Glob — have projections; the two document tools are allowlisted
- * names whose events are omitted until their projections land.
+ * All eight executor tools have bounded client projections.
  */
 
 /** Hard cap on one tool event: 16 KiB of UTF-8 JSON after projection. An event
@@ -27,6 +25,7 @@ export const TOOL_EVENT_MAX_JSON_BYTES = 16_384;
 /** Serialized-JSON budgets per preview field, chosen so a fully populated
  * event for any projected tool stays well under the event cap by construction. */
 const COMMAND_PREVIEW_MAX_JSON_BYTES = 2_048;
+const QUERY_PREVIEW_MAX_JSON_BYTES = 2_048;
 const CWD_PREVIEW_MAX_JSON_BYTES = 512;
 const OUTPUT_PREVIEW_MAX_JSON_BYTES = 6_144;
 const OUTCOME_MAX_JSON_BYTES = 64;
@@ -34,6 +33,8 @@ const PATH_PREVIEW_MAX_JSON_BYTES = 512;
 const READ_CONTENT_PREVIEW_MAX_JSON_BYTES = 6_144;
 const TEXT_PREVIEW_MAX_JSON_BYTES = 2_048;
 const PATTERN_PREVIEW_MAX_JSON_BYTES = 1_024;
+const DOCUMENT_TITLE_PREVIEW_MAX_JSON_BYTES = 512;
+const DOCUMENT_SNIPPET_PREVIEW_MAX_JSON_BYTES = 2_048;
 
 /** List budgets: count bounds and per-item previews sized so the largest list
  * event stays comfortably under the cap (Grep worst case ≈ 12 KiB). */
@@ -41,6 +42,9 @@ const GREP_RESULT_MAX_MATCHES = 20;
 const GLOB_RESULT_MAX_PATHS = 40;
 const LIST_PATH_PREVIEW_MAX_JSON_BYTES = 256;
 const MATCH_TEXT_PREVIEW_MAX_JSON_BYTES = 256;
+const SEARCH_PASSAGE_PREVIEW_MAX_ITEMS = 5;
+const LOAD_TITLE_PREVIEW_MAX_ITEMS = 10;
+const LOAD_FAILURE_SUMMARY = "Some documents could not be loaded";
 
 /** The fixed error result (ADR-0009): the tool boundary flattens validation and
  * infrastructure failures into one text shape, so no raw error text is ever
@@ -92,6 +96,12 @@ export function projectToolUse(
 	tool: PublicToolName,
 	input: unknown,
 ): ToolEventProjection<ToolUsePayload> {
+	if (tool === "SearchDocuments") {
+		return projectSearchDocumentsUse(input);
+	}
+	if (tool === "LoadDocuments") {
+		return projectLoadDocumentsUse(input);
+	}
 	const projected = projectToolUseArguments(tool, isRecord(input) ? input : {});
 	if (projected === null) {
 		return { ok: false, reason: `no argument projection for tool ${tool}` };
@@ -100,6 +110,43 @@ export function projectToolUse(
 		tool,
 		arguments: projected.args,
 		truncated: projected.clipped,
+	});
+}
+
+function projectSearchDocumentsUse(
+	input: unknown,
+): ToolEventProjection<ToolUsePayload> {
+	if (!isRecord(input) || typeof input.query !== "string") {
+		return {
+			ok: false,
+			reason: "SearchDocuments arguments did not match the executor shape",
+		};
+	}
+	const query = clampJsonString(input.query, QUERY_PREVIEW_MAX_JSON_BYTES);
+	return fitOrOmit({
+		tool: "SearchDocuments",
+		arguments: { query: query.text },
+		truncated: query.clipped,
+	});
+}
+
+function projectLoadDocumentsUse(
+	input: unknown,
+): ToolEventProjection<ToolUsePayload> {
+	if (
+		!isRecord(input) ||
+		!Array.isArray(input.documentIds) ||
+		!input.documentIds.every((documentId) => typeof documentId === "string")
+	) {
+		return {
+			ok: false,
+			reason: "LoadDocuments arguments did not match the executor shape",
+		};
+	}
+	return fitOrOmit({
+		tool: "LoadDocuments",
+		arguments: { requestedCount: input.documentIds.length },
+		truncated: false,
 	});
 }
 
@@ -322,6 +369,10 @@ export function projectToolResult(
 			return projectGlobResult(content);
 		case "Bash":
 			return projectBashResult(content);
+		case "SearchDocuments":
+			return projectSearchDocumentsResult(content);
+		case "LoadDocuments":
+			return projectLoadDocumentsResult(content);
 		default:
 			return { ok: false, reason: `no result projection for tool ${tool}` };
 	}
@@ -462,6 +513,73 @@ function projectBashResult(
 	});
 }
 
+function projectSearchDocumentsResult(
+	content: unknown,
+): ToolEventProjection<ToolResultPayload> {
+	const raw = parseSearchDocumentsResult(content);
+	if (raw === null) {
+		return {
+			ok: false,
+			reason: "SearchDocuments result did not match the executor shape",
+		};
+	}
+	let clipped = raw.length > SEARCH_PASSAGE_PREVIEW_MAX_ITEMS;
+	const passages = raw
+		.slice(0, SEARCH_PASSAGE_PREVIEW_MAX_ITEMS)
+		.map((passage) => {
+			const title = clampJsonString(
+				passage.title,
+				DOCUMENT_TITLE_PREVIEW_MAX_JSON_BYTES,
+			);
+			const snippet = clampJsonString(
+				passage.snippet,
+				DOCUMENT_SNIPPET_PREVIEW_MAX_JSON_BYTES,
+			);
+			clipped ||= title.clipped || snippet.clipped;
+			return { title: title.text, snippet: snippet.text };
+		});
+	return fitOrOmit({
+		tool: "SearchDocuments",
+		result: { passages },
+		isError: false,
+		truncated: clipped,
+	});
+}
+
+function projectLoadDocumentsResult(
+	content: unknown,
+): ToolEventProjection<ToolResultPayload> {
+	const raw = parseLoadDocumentsResult(content);
+	if (raw === null) {
+		return {
+			ok: false,
+			reason: "LoadDocuments result did not match the executor shape",
+		};
+	}
+	let clipped = raw.loadedTitles.length > LOAD_TITLE_PREVIEW_MAX_ITEMS;
+	const loaded = raw.loadedTitles
+		.slice(0, LOAD_TITLE_PREVIEW_MAX_ITEMS)
+		.map((rawTitle) => {
+			const title = clampJsonString(
+				rawTitle,
+				DOCUMENT_TITLE_PREVIEW_MAX_JSON_BYTES,
+			);
+			clipped ||= title.clipped;
+			return { title: title.text };
+		});
+	return fitOrOmit({
+		tool: "LoadDocuments",
+		result: {
+			loadedCount: raw.loadedTitles.length,
+			loaded,
+			failedCount: raw.failedCount,
+			...(raw.failedCount > 0 ? { failureSummary: LOAD_FAILURE_SUMMARY } : {}),
+		},
+		isError: false,
+		truncated: clipped,
+	});
+}
+
 function projectReadResult(
 	content: unknown,
 ): ToolEventProjection<ToolResultPayload> {
@@ -492,6 +610,57 @@ function projectReadResult(
 		isError: false,
 		truncated: clipped,
 	});
+}
+
+interface RawSearchPassage {
+	title: string;
+	snippet: string;
+}
+
+function parseSearchDocumentsResult(
+	content: unknown,
+): RawSearchPassage[] | null {
+	const parsed = parseExecutorResult(content);
+	if (parsed === null || !Array.isArray(parsed.passages)) return null;
+	const passages: RawSearchPassage[] = [];
+	for (const passage of parsed.passages) {
+		if (
+			!isRecord(passage) ||
+			typeof passage.title !== "string" ||
+			typeof passage.snippet !== "string"
+		) {
+			return null;
+		}
+		passages.push({ title: passage.title, snippet: passage.snippet });
+	}
+	return passages;
+}
+
+interface RawLoadDocumentsResult {
+	loadedTitles: string[];
+	failedCount: number;
+}
+
+function parseLoadDocumentsResult(
+	content: unknown,
+): RawLoadDocumentsResult | null {
+	const parsed = parseExecutorResult(content);
+	if (
+		parsed === null ||
+		!Array.isArray(parsed.loaded) ||
+		!Array.isArray(parsed.errors)
+	) {
+		return null;
+	}
+	const loadedTitles: string[] = [];
+	for (const loaded of parsed.loaded) {
+		if (!isRecord(loaded) || typeof loaded.title !== "string") return null;
+		loadedTitles.push(loaded.title);
+	}
+	for (const error of parsed.errors) {
+		if (!isRecord(error) || typeof error.error !== "string") return null;
+	}
+	return { loadedTitles, failedCount: parsed.errors.length };
 }
 
 /** The executor Bash tool's structured success result (see `runBashTool`). */

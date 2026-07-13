@@ -147,13 +147,6 @@ describe("projectToolUse — Bash", () => {
 			TOOL_EVENT_MAX_JSON_BYTES,
 		);
 	});
-
-	it("fails closed for executor tools without an argument projection yet", () => {
-		for (const tool of ["SearchDocuments", "LoadDocuments"] as const) {
-			const projected = projectToolUse(tool, { query: "hello" });
-			expect(projected.ok).toBe(false);
-		}
-	});
 });
 
 describe("projectToolUse — Read", () => {
@@ -204,6 +197,77 @@ describe("projectToolUse — Read", () => {
 		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
 			TOOL_EVENT_MAX_JSON_BYTES,
 		);
+	});
+});
+
+describe("projectToolUse — SearchDocuments", () => {
+	it("exposes only the query preview", () => {
+		const projected = projectToolUse("SearchDocuments", {
+			query: "quarterly roadmap",
+			maxResults: 8,
+			scope: { type: "collection", collectionId: "collection-secret" },
+		});
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "SearchDocuments",
+				arguments: { query: "quarterly roadmap" },
+				truncated: false,
+			},
+		});
+	});
+
+	it("omits malformed inputs instead of persisting empty arguments", () => {
+		for (const input of [undefined, "query", {}, { query: 42 }]) {
+			expect(projectToolUse("SearchDocuments", input).ok).toBe(false);
+		}
+	});
+
+	it("caps an oversized query into one guard-valid event", () => {
+		const projected = projectToolUse("SearchDocuments", {
+			query: "\u0001".repeat(100_000),
+		});
+
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.truncated).toBe(true);
+		expect(isToolUsePayload(projected.payload)).toBe(true);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+});
+
+describe("projectToolUse — LoadDocuments", () => {
+	it("exposes only the requested document count", () => {
+		const projected = projectToolUse("LoadDocuments", {
+			documentIds: ["document-secret-1", "document-secret-2"],
+			scope: { type: "document", summaryId: "scope-secret" },
+			cachePath: ".mymemo/docs/document-secret-1.md",
+		});
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "LoadDocuments",
+				arguments: { requestedCount: 2 },
+				truncated: false,
+			},
+		});
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(isToolUsePayload(projected.payload)).toBe(true);
+	});
+
+	it("omits malformed inputs instead of counting arbitrary array members", () => {
+		for (const input of [
+			undefined,
+			["document-secret"],
+			{},
+			{ documentIds: "document-secret" },
+			{ documentIds: ["document-secret", 42] },
+		]) {
+			expect(projectToolUse("LoadDocuments", input).ok).toBe(false);
+		}
 	});
 });
 
@@ -380,14 +444,176 @@ describe("projectToolResult — Bash", () => {
 			});
 		}
 	});
+});
 
-	it("fails closed for executor tools without a result projection yet", () => {
+describe("projectToolResult — SearchDocuments", () => {
+	it("exposes only bounded title and snippet previews", () => {
 		const projected = projectToolResult(
 			"SearchDocuments",
-			[{ type: "text", text: JSON.stringify({ preview: "..." }) }],
+			executorResultContent({
+				passages: [
+					{
+						passageId: "passage-secret",
+						documentId: "document-secret",
+						title: "Roadmap",
+						snippet: "Ship the durable tool timeline.",
+						scope: { type: "collection", collectionId: "scope-secret" },
+					},
+				],
+				policy: { decision: "allow", rule: "internal-only" },
+			}),
 			false,
 		);
-		expect(projected.ok).toBe(false);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "SearchDocuments",
+				result: {
+					passages: [
+						{
+							title: "Roadmap",
+							snippet: "Ship the durable tool timeline.",
+						},
+					],
+				},
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("projects a no-hit result without inheriting its internal message", () => {
+		const projected = projectToolResult(
+			"SearchDocuments",
+			executorResultContent({
+				passages: [],
+				message: "No MyMemo document passages matched the query.",
+				audit: { scope: "collection-secret", policy: "allow" },
+			}),
+			false,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "SearchDocuments",
+				result: { passages: [] },
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("bounds the passage list and previews within one guard-valid event", () => {
+		const projected = projectToolResult(
+			"SearchDocuments",
+			executorResultContent({
+				passages: Array.from({ length: 20 }, (_, index) => ({
+					passageId: `passage-${index}`,
+					documentId: `document-${index}`,
+					title: `Title ${index} ${"t".repeat(10_000)}`,
+					snippet: `Snippet ${index} ${"s".repeat(20_000)}`,
+				})),
+			}),
+			false,
+		);
+
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.result.passages).toHaveLength(5);
+		expect(projected.payload.truncated).toBe(true);
+		expect(isToolResultPayload(projected.payload)).toBe(true);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+});
+
+describe("projectToolResult — LoadDocuments", () => {
+	it("exposes bounded titles and a fixed failure count summary", () => {
+		const projected = projectToolResult(
+			"LoadDocuments",
+			executorResultContent({
+				loaded: [
+					{
+						documentId: "document-good-secret",
+						title: "Roadmap",
+						path: ".mymemo/docs/document-good-secret.md",
+						truncated: false,
+					},
+				],
+				errors: [
+					{
+						documentId: "document-bad-secret",
+						error: "document is outside scope collection-secret",
+					},
+				],
+			}),
+			false,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "LoadDocuments",
+				result: {
+					loadedCount: 1,
+					loaded: [{ title: "Roadmap" }],
+					failedCount: 1,
+					failureSummary: "Some documents could not be loaded",
+				},
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("bounds title previews and the list within one guard-valid event", () => {
+		const projected = projectToolResult(
+			"LoadDocuments",
+			executorResultContent({
+				loaded: Array.from({ length: 30 }, (_, index) => ({
+					documentId: `document-secret-${index}`,
+					title: `Title ${index} ${"t".repeat(10_000)}`,
+					path: `.mymemo/docs/document-secret-${index}.md`,
+					truncated: false,
+				})),
+				errors: [],
+			}),
+			false,
+		);
+
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.result.loadedCount).toBe(30);
+		expect(projected.payload.result.loaded).toHaveLength(10);
+		expect(projected.payload.truncated).toBe(true);
+		expect(isToolResultPayload(projected.payload)).toBe(true);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+
+	it("uses the fixed whole-call error shape without parsing raw text", () => {
+		const projected = projectToolResult(
+			"LoadDocuments",
+			[
+				{
+					type: "text",
+					text: "LoadDocuments failed for document-secret at .mymemo/docs/secret.md",
+				},
+			],
+			true,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "LoadDocuments",
+				result: { message: "Tool failed" },
+				isError: true,
+				truncated: false,
+			},
+		});
 	});
 });
 
