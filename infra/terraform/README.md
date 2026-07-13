@@ -27,6 +27,8 @@ the direct remote-state output is absent and the fallback input is present.
 - ECR repositories for `mymemo-agent-chat-api` and `mymemo-agent-worker` in the
   separate `infra/ecr` Terraform root
 - dedicated RDS Postgres instance for writable agent state
+- EC2 Instance Connect Endpoint and private EC2 bridge for operator access to
+  the agent and KB databases
 - single-node ElastiCache Redis replication group for disposable live previews
 - ECS Fargate task definitions and services for chat-api and agent-worker
 - agent DB migration task definition
@@ -177,6 +179,101 @@ different settings:
 The internal ALB accepts traffic only from the configured
 `mymemo_service_api_security_group_ids`. It is not exposed to the public
 internet, and no Cloudflare DNS record is needed for `chat-api`.
+
+## Operator Database Access
+
+The EC2 Instance Connect Endpoint provides IAM-authorized SSH access to a
+private Amazon Linux bridge with no public IP. The endpoint security group can
+reach only port 22 on that bridge, and the bridge can reach only port 5432 on
+the agent and KB database security groups. PostgreSQL is accessed through SSH
+local forwarding; EICE does not tunnel directly to database ports. Client IP
+preservation is disabled, while CloudTrail still records the caller and SSH
+tunnel request.
+
+The commands below require AWS CLI v2, `jq`, and `psql`. Run them from the
+repository root with the `mymemo` profile. Keep each SSH process running while
+using `psql` from a second terminal.
+
+```sh
+export AWS_PROFILE=mymemo
+export AWS_REGION=us-west-2
+EICE_ID="$(terraform -chdir=infra/terraform output -raw database_access_endpoint_id)"
+BRIDGE_INSTANCE_ID="$(terraform -chdir=infra/terraform output -raw database_access_bridge_instance_id)"
+```
+
+To connect to the agent database, start the tunnel on local port 15432:
+
+```sh
+AGENT_DB_HOST="$(terraform -chdir=infra/terraform output -raw agent_database_endpoint)"
+
+aws ec2-instance-connect ssh \
+  --instance-id "$BRIDGE_INSTANCE_ID" \
+  --os-user ec2-user \
+  --connection-type eice \
+  --eice-options "endpointId=$EICE_ID,maxTunnelDuration=3600" \
+  --local-forwarding "15432:$AGENT_DB_HOST:5432"
+```
+
+Then connect from a second terminal. The RDS-managed password is passed to
+`psql` only for the lifetime of the command:
+
+```sh
+export AWS_PROFILE=mymemo
+export AWS_REGION=us-west-2
+AGENT_DB_SECRET_ARN="$(terraform -chdir=infra/terraform output -raw agent_database_password_secret_arn)"
+AGENT_DB_SECRET="$(aws secretsmanager get-secret-value \
+  --secret-id "$AGENT_DB_SECRET_ARN" \
+  --query SecretString \
+  --output text)"
+
+PGPASSWORD="$(printf '%s' "$AGENT_DB_SECRET" | jq -r .password)" \
+  psql "host=127.0.0.1 port=15432 dbname=mymemo_agent user=mymemo_agent sslmode=require"
+
+unset AGENT_DB_SECRET AGENT_DB_SECRET_ARN
+```
+
+To connect to the KB database, start a separate tunnel on local port 25432:
+
+```sh
+export AWS_PROFILE=mymemo
+export AWS_REGION=us-west-2
+EICE_ID="$(terraform -chdir=infra/terraform output -raw database_access_endpoint_id)"
+BRIDGE_INSTANCE_ID="$(terraform -chdir=infra/terraform output -raw database_access_bridge_instance_id)"
+KB_DB_HOST="$(aws rds describe-db-instances \
+  --db-instance-identifier mymemo-staging-pg \
+  --query 'DBInstances[0].Endpoint.Address' \
+  --output text)"
+
+aws ec2-instance-connect ssh \
+  --instance-id "$BRIDGE_INSTANCE_ID" \
+  --os-user ec2-user \
+  --connection-type eice \
+  --eice-options "endpointId=$EICE_ID,maxTunnelDuration=3600" \
+  --local-forwarding "25432:$KB_DB_HOST:5432"
+```
+
+Then read the existing KB connection URL and rebuild only its authority host
+and port for the local tunnel. This preserves the encoded credentials, database
+name, and query parameters without depending on whether the original URL
+explicitly includes port 5432:
+
+```sh
+export AWS_PROFILE=mymemo
+export AWS_REGION=us-west-2
+KB_DATABASE_URL="$(aws secretsmanager get-secret-value \
+  --secret-id mymemo-agent-prod-KB_DATABASE_URL \
+  --query SecretString \
+  --output text)"
+KB_DATABASE_URL_PREFIX="${KB_DATABASE_URL%%@*}@"
+KB_DATABASE_URL_AFTER_AUTHORITY="${KB_DATABASE_URL#*@}"
+KB_DATABASE_URL_PATH="/${KB_DATABASE_URL_AFTER_AUTHORITY#*/}"
+KB_TUNNEL_DATABASE_URL="${KB_DATABASE_URL_PREFIX}127.0.0.1:25432${KB_DATABASE_URL_PATH}"
+
+PGSSLMODE=require psql "$KB_TUNNEL_DATABASE_URL"
+
+unset KB_DATABASE_URL KB_DATABASE_URL_PREFIX KB_DATABASE_URL_AFTER_AUTHORITY
+unset KB_DATABASE_URL_PATH KB_TUNNEL_DATABASE_URL
+```
 
 The workflow does not require GitHub repository variables for Terraform inputs.
 The only credential handoff is GitHub OIDC assuming the deploy role:

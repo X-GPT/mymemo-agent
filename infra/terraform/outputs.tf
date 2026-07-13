@@ -33,6 +33,21 @@ output "agent_database_password_secret_arn" {
   value       = aws_db_instance.agent.master_user_secret[0].secret_arn
 }
 
+output "database_access_endpoint_id" {
+  description = "EC2 Instance Connect Endpoint ID for operator access to the agent and KB databases."
+  value       = aws_ec2_instance_connect_endpoint.database_access.id
+}
+
+output "database_access_endpoint_dns_name" {
+  description = "DNS name of the EC2 Instance Connect Endpoint for operator database access."
+  value       = aws_ec2_instance_connect_endpoint.database_access.dns_name
+}
+
+output "database_access_bridge_instance_id" {
+  description = "Private EC2 instance used for SSH local forwarding to the agent and KB databases."
+  value       = aws_instance.database_bridge.id
+}
+
 output "service_security_group_id" {
   description = "Security group attached to the agent ECS services."
   value       = aws_security_group.services.id
