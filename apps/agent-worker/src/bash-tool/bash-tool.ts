@@ -225,19 +225,30 @@ export async function runBashTool(
 
 	let canceled = false;
 	let timedOut = false;
+	let killError: unknown;
+	let killCompletion: Promise<void> | undefined;
+	const requestKill = (): void => {
+		if (killCompletion) return;
+		// Abort/timer callbacks cannot await. Attach the rejection handler now so
+		// an E2B transport error cannot escape as an unhandled promise; the
+		// mandatory reap below remains the proof that cleanup succeeded.
+		killCompletion = session.kill().catch((error) => {
+			killError = error;
+		});
+	};
 	const onAbort = (): void => {
 		canceled = true;
-		void session.kill();
+		requestKill();
 	};
 	if (context.signal.aborted) {
 		canceled = true;
-		void session.kill();
+		requestKill();
 	} else {
 		context.signal.addEventListener("abort", onAbort, { once: true });
 	}
 	const timer = setTimeout(() => {
 		timedOut = true;
-		void session.kill();
+		requestKill();
 	}, timeoutMs);
 
 	let raw: RawCommandOutcome | undefined;
@@ -250,6 +261,7 @@ export async function runBashTool(
 		clearTimeout(timer);
 		context.signal.removeEventListener("abort", onAbort);
 	}
+	await killCompletion;
 
 	// Cleanup is mandatory and runs on every path, including a client failure: a
 	// half-started process group must never outlive the tool call.
@@ -264,6 +276,9 @@ export async function runBashTool(
 	} catch (error) {
 		cleanupOk = false;
 		cleanupError = boundedErrorMessage(error);
+	}
+	if (!cleanupOk && killError !== undefined) {
+		cleanupError = `kill failed: ${boundedErrorMessage(killError)}; ${cleanupError}`;
 	}
 
 	const outcome: CommandOutcome = canceled
