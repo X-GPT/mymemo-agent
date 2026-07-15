@@ -479,6 +479,7 @@ describe("agent deployment config", () => {
 		expect(combined).toContain("sts:AssumeRoleWithWebIdentity");
 		expect(combined).toContain("mymemo-agent/bootstrap-iam-prod.tfstate");
 		expect(combined).not.toContain("mymemo-github-actions-deploy");
+		expect(combined).toContain('"iam:ListInstanceProfilesForRole"');
 		expect(combined).toContain('sid = "ArtifactBucketManagement"');
 		for (const action of [
 			"s3:CreateBucket",
