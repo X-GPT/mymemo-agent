@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
+import { createArtifactPublisher } from "./artifacts/artifact-publication";
+import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
 import type { AdvisoryLockPool } from "./cleanup/advisory-lock";
 import { CleanupLoop } from "./cleanup/cleanup-loop";
 import { createE2bSandboxJanitor } from "./cleanup/e2b-janitor";
@@ -46,6 +48,10 @@ const worker = new Worker({
 	logger,
 });
 const db = createDatabase(config.agentDatabaseUrl);
+const artifactPublisher = createArtifactPublisher({
+	db,
+	objectStore: createS3ArtifactObjectStore(config.artifact),
+});
 const sandboxJanitor = createE2bSandboxJanitor(config.e2bApiKey);
 const startRunQuery = createStartRunQuery({
 	db,
@@ -82,6 +88,7 @@ const startRunQuery = createStartRunQuery({
 	documentSearchMaxResults: config.maxDocumentSearchResults,
 	documentListMaxResults: config.maxDocumentListResults,
 	documentLoad: config.documentLoad,
+	artifactPublisher,
 	ensureWorkingDirectory: async (path) => {
 		await mkdir(path, { recursive: true });
 	},

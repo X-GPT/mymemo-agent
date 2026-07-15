@@ -9,6 +9,11 @@ import {
 	recordOrphanSandboxTx,
 	updateRuntimeSandboxTx,
 } from "@mymemo/agent-db/runtime-store";
+import {
+	type ArtifactAwareQuery,
+	type ArtifactPublisher,
+	withArtifactPublication,
+} from "../artifacts/artifact-publication";
 import type { BashToolLimits } from "../bash-tool/bash-tool";
 import type { SandboxJanitor } from "../cleanup/cleanup";
 import type { ScopedDocumentQueryClient } from "../documents/client";
@@ -60,7 +65,8 @@ export const MYMEMO_SYSTEM_PROMPT =
 	"ListDocuments, SearchDocuments, and LoadDocuments reach the user's MyMemo knowledge base, limited to this " +
 	"conversation's scope. Use ListDocuments for inventory and exact count questions, SearchDocuments for relevant " +
 	"passages, and LoadDocuments to write chosen documents into the workspace's docs cache and return their paths " +
-	"so you can read and cite them.\n\n" +
+	"so you can read and cite them. Put user-requested downloadable outputs under /home/user/artifacts/ and keep " +
+	"scratch work elsewhere in the workspace.\n\n" +
 	"Ground claims about the user's documents in what ListDocuments, SearchDocuments, and LoadDocuments return, and keep " +
 	"responses concise.";
 
@@ -120,6 +126,7 @@ export interface StartRunQueryDeps {
 		perDocumentMaxBytes: number;
 		perCallMaxBytes: number;
 	};
+	artifactPublisher: ArtifactPublisher;
 	/** Prepare the Fargate-side cwd that anchors the SDK session project key. */
 	ensureWorkingDirectory(path: string): Promise<void>;
 	query: RunQueryFn;
@@ -187,6 +194,11 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			await deps.ensureWorkingDirectory(
 				conversationWorkingDirectory(run.conversationId),
 			);
+			const artifactPublication = await deps.artifactPublisher.begin({
+				run,
+				workspace: provisioned.artifactWorkspace,
+				signal: controller.signal,
+			});
 			const options = buildQueryOptions(deps, {
 				run,
 				owner,
@@ -197,7 +209,11 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				claudeConfigDir: claudeConfigDir.path,
 			});
 			const underlying = deps.query({ prompt: started.message, options });
-			return superviseTurn(underlying, settle, () => renewalFailure);
+			return superviseTurn(
+				withArtifactPublication(underlying, artifactPublication),
+				settle,
+				() => renewalFailure,
+			);
 		} catch (error) {
 			await settle();
 			throw error;
@@ -421,9 +437,16 @@ function superviseTurn(
 	underlying: SupervisedQuery,
 	settle: () => Promise<void>,
 	renewalFailure: () => { error: unknown } | null,
-): SupervisedQuery {
+): SupervisedQuery & Partial<ArtifactAwareQuery> {
+	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
+		...(artifactQuery.getArtifactPublication
+			? {
+					getArtifactPublication: () =>
+						artifactQuery.getArtifactPublication?.() ?? null,
+				}
+			: {}),
 		async *[Symbol.asyncIterator]() {
 			try {
 				for await (const message of underlying) {

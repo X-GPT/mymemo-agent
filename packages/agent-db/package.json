@@ -5,6 +5,7 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./schema": "./src/schema.ts",
+		"./artifact-store": "./src/artifact-store.ts",
 		"./client": "./src/client.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",

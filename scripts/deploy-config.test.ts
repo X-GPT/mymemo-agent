@@ -52,7 +52,7 @@ describe("agent deployment config", () => {
 		expect(combined).toContain("shared_ecs_subnet_ids");
 	});
 
-	it("separates application task roles and grants artifact reads only to chat-api", () => {
+	it("separates application task roles and grants least-privilege artifact access", () => {
 		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
 		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
 		const terraformConfig = terraformFiles()
@@ -85,21 +85,28 @@ describe("agent deployment config", () => {
 				terraformConfig.match(
 					new RegExp(`\\baws_iam_role\\.${role}\\.(?:arn|id|name)\\b`, "g"),
 				),
-			).toHaveLength(role === "chat_api_task" ? 2 : 1);
+			).toHaveLength(
+				role === "chat_api_task" || role === "agent_worker_task" ? 2 : 1,
+			);
 		}
 		expect(iamConfig).not.toContain('resource "aws_iam_role" "task"');
 		expect(iamConfig).toContain('actions   = ["s3:GetObject"]');
 		expect(iamConfig).toContain("role   = aws_iam_role.chat_api_task.id");
-		expect(iamConfig).not.toMatch(/s3:(PutObject|DeleteObject|ListBucket)/);
+		expect(iamConfig).toContain('actions   = ["s3:PutObject"]');
+		expect(iamConfig).toContain("role   = aws_iam_role.agent_worker_task.id");
+		expect(iamConfig).toMatch(
+			/data "aws_iam_policy_document" "agent_worker_artifact_write" \{[\s\S]*?actions\s*=\s*\["s3:PutObject"\][\s\S]*?resources\s*=\s*\["\$\{aws_s3_bucket\.artifacts\.arn\}\/\*"\][\s\S]*?\}/,
+		);
+		expect(iamConfig).not.toMatch(/s3:(DeleteObject|ListBucket)/);
 		expect(iamConfig).not.toMatch(
-			/role\s*=\s*aws_iam_role\.(?:agent_worker_task|agent_migration_task)\.(?:id|name)[\s\S]*?s3:/,
+			/role\s*=\s*aws_iam_role\.agent_migration_task\.(?:id|name)[\s\S]*?s3:/,
 		);
 		expect(
 			iamConfig.match(/role\s*=\s*aws_iam_role\.task_execution\.(?:name|id)/g),
 		).toHaveLength(2);
 	});
 
-	it("provisions the private Downloadable artifact bucket and chat-api read contract", () => {
+	it("provisions the private Downloadable artifact bucket and task access", () => {
 		const artifactsConfig = readFileSync(
 			join(terraformDir, "artifacts.tf"),
 			"utf8",
@@ -142,7 +149,8 @@ describe("agent deployment config", () => {
 		);
 		expect(chatEnvironment).toContain('{ name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket }');
 		expect(chatEnvironment).toContain('{ name = "AWS_REGION", value = var.aws_region }');
-		expect(workerEnvironment).not.toContain("ARTIFACT_BUCKET");
+		expect(workerEnvironment).toContain('{ name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket }');
+		expect(workerEnvironment).toContain('{ name = "AWS_REGION", value = var.aws_region }');
 		expect(migrationConfig).not.toContain("ARTIFACT_BUCKET");
 	});
 

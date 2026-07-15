@@ -1,0 +1,202 @@
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import {
+	publishArtifactsAndTransitionRunDoneTx,
+	recordArtifactObjectsTx,
+} from "./artifact-store";
+import { claimNextRunTx, createQueuedRunTx } from "./run-store";
+import {
+	artifactObjects,
+	conversationArtifacts,
+	conversationRuntime,
+	conversations,
+	runEvents,
+	runs,
+} from "./schema";
+import { createTestDatabase, type TestDb } from "./testing";
+
+let tdb: TestDb;
+
+beforeAll(async () => {
+	tdb = await createTestDatabase();
+});
+
+afterAll(async () => {
+	await tdb.close();
+});
+
+afterEach(async () => {
+	await tdb.db.delete(artifactObjects);
+	await tdb.db.delete(runs);
+	await tdb.db.delete(conversationRuntime);
+	await tdb.db.delete(conversations);
+});
+
+describe("Downloadable artifact publication", () => {
+	it("makes staged metadata current in the same transaction as run_done", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		await recordArtifactObjectsTx(tdb.db, {
+			objects: [
+				{
+					objectKey: "objects/opaque-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+					runId: "run-1",
+					path: "report.txt",
+				},
+			],
+		});
+
+		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
+
+		await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+			artifacts: [
+				{
+					artifactId: "artifact-1",
+					path: "report.txt",
+					objectKey: "objects/opaque-1",
+					sizeBytes: 12,
+					contentType: "application/octet-stream",
+				},
+			],
+		});
+
+		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([
+			expect.objectContaining({
+				artifactId: "artifact-1",
+				path: "report.txt",
+				objectKey: "objects/opaque-1",
+				sizeBytes: 12,
+			}),
+		]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([
+			expect.objectContaining({
+				objectKey: "objects/opaque-1",
+				status: "current",
+			}),
+		]);
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("done");
+		expect(
+			(await tdb.db.select().from(runEvents)).map((event) => event.type),
+		).toEqual(["run_done"]);
+	});
+
+	it("replaces a current path without changing its artifact id or creation time", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
+		for (const [runId, objectKey, artifactId] of [
+			["run-1", "objects/one", "artifact-stable"],
+			["run-2", "objects/two", "artifact-ignored"],
+		] as const) {
+			await createQueuedRunTx(tdb.db, {
+				runId,
+				userId: "user-1",
+				conversationId: "conv-1",
+			});
+			await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+			await recordArtifactObjectsTx(tdb.db, {
+				objects: [
+					{
+						objectKey,
+						userId: "user-1",
+						conversationId: "conv-1",
+						runId,
+						path: "report.txt",
+					},
+				],
+			});
+			await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+				runId,
+				workerId: "worker-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+				artifacts: [
+					{
+						artifactId,
+						path: "report.txt",
+						objectKey,
+						sizeBytes: runId === "run-1" ? 3 : 7,
+						contentType: "application/octet-stream",
+					},
+				],
+			});
+		}
+
+		const [current] = await tdb.db.select().from(conversationArtifacts);
+		expect(current).toMatchObject({
+			artifactId: "artifact-stable",
+			objectKey: "objects/two",
+			sizeBytes: 7,
+		});
+		const ledger = await tdb.db
+			.select()
+			.from(artifactObjects)
+			.orderBy(artifactObjects.objectKey);
+		expect(
+			ledger.map(({ objectKey, status }) => ({ objectKey, status })),
+		).toEqual([
+			{ objectKey: "objects/one", status: "superseded" },
+			{ objectKey: "objects/two", status: "current" },
+		]);
+	});
+
+	it("rolls back session continuity when artifact persistence fails", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			agentSessionId: "session-old",
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+
+		await expect(
+			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+				agentSessionId: "session-new",
+				artifacts: [
+					{
+						artifactId: "artifact-1",
+						path: "report.txt",
+						objectKey: "objects/not-ledgered",
+						sizeBytes: 1,
+						contentType: "application/octet-stream",
+					},
+				],
+			}),
+		).rejects.toThrow(/ledger/);
+
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("session-old");
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("running");
+		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
+	});
+});

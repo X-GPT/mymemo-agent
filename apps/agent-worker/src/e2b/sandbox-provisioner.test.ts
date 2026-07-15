@@ -109,6 +109,7 @@ describe("createSandboxProvisioner", () => {
 		expect(provisioned.workspaceRoot).toBe(SANDBOX_WORKSPACE_ROOT);
 		expect(provisioned.commandClient).toBeDefined();
 		expect(provisioned.fileClient).toBeDefined();
+		expect(provisioned.artifactWorkspace).toBeDefined();
 	});
 
 	it("creates a fresh sandbox when the conversation has none", async () => {

@@ -15,6 +15,8 @@ function baseEnv(): Record<string, string | undefined> {
 		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
 		E2B_API_KEY: "e2b-test",
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
+		ARTIFACT_BUCKET: "private-artifacts",
+		AWS_REGION: "us-west-2",
 		DB_SSL: "disable",
 	};
 }
@@ -28,6 +30,8 @@ describe("loadWorkerConfigFromEnv — required settings", () => {
 		"OPENROUTER_DEFAULT_MODEL",
 		"E2B_API_KEY",
 		"WORKER_E2B_TEMPLATE",
+		"ARTIFACT_BUCKET",
+		"AWS_REGION",
 	];
 
 	it("loads cleanly with all required settings present", () => {
@@ -51,6 +55,13 @@ describe("loadWorkerConfigFromEnv — required settings", () => {
 	it("surfaces the E2B template the worker provisions sandboxes from", () => {
 		const config = loadWorkerConfigFromEnv(baseEnv());
 		expect(config.e2bTemplate).toBe("mymemo-agent-sandbox");
+	});
+
+	it("surfaces the private artifact bucket configuration", () => {
+		expect(loadWorkerConfigFromEnv(baseEnv()).artifact).toEqual({
+			bucket: "private-artifacts",
+			region: "us-west-2",
+		});
 	});
 
 	it("surfaces the OpenRouter provider config", () => {

@@ -281,46 +281,57 @@ export async function appendRunEventTx(
  */
 export async function transitionRunTerminalTx(
 	db: Database,
-	input: {
-		runId: string;
-		workerId: string;
-		status: TerminalRunStatus;
-		payload?: RunEventPayload;
-	},
+	input: TerminalTransitionInput,
 ): Promise<RunRecord> {
-	return await db.transaction(async (tx) => {
-		const [row] = await tx
-			.update(runs)
-			.set({
-				status: input.status,
-				nextEventSeq: sql`${runs.nextEventSeq} + 1`,
-				lockedBy: null,
-				lockedUntil: null,
-				terminalAt: sql`now()`,
-				updatedAt: sql`now()`,
-			})
-			.where(
-				and(
-					eq(runs.runId, input.runId),
-					inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
-					eq(runs.lockedBy, input.workerId),
-					sql`${runs.lockedUntil} > now()`,
-				),
-			)
-			.returning();
-		if (!row) {
-			throw new RunFenceError(
-				`terminal transition of run ${input.runId} to ${input.status} rejected: ` +
-					`run is already terminal, not transitionable to ${input.status}, or worker ${input.workerId} no longer owns it`,
-			);
-		}
-		await insertTerminalEvent(tx, row, input.status, input.payload ?? {});
-		return toRunRecord(row);
-	});
+	return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
 }
 
 /** A Drizzle client scoped to one open transaction. */
-type DbTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type DbTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+export interface TerminalTransitionInput {
+	runId: string;
+	workerId: string;
+	status: TerminalRunStatus;
+	payload?: RunEventPayload;
+}
+
+/**
+ * Transaction-scoped form of {@link transitionRunTerminalTx}. Artifact
+ * publication uses it so current metadata and `run_done` share one commit.
+ */
+export async function transitionRunTerminalInTx(
+	tx: DbTx,
+	input: TerminalTransitionInput,
+): Promise<RunRecord> {
+	const [row] = await tx
+		.update(runs)
+		.set({
+			status: input.status,
+			nextEventSeq: sql`${runs.nextEventSeq} + 1`,
+			lockedBy: null,
+			lockedUntil: null,
+			terminalAt: sql`now()`,
+			updatedAt: sql`now()`,
+		})
+		.where(
+			and(
+				eq(runs.runId, input.runId),
+				inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
+				eq(runs.lockedBy, input.workerId),
+				sql`${runs.lockedUntil} > now()`,
+			),
+		)
+		.returning();
+	if (!row) {
+		throw new RunFenceError(
+			`terminal transition of run ${input.runId} to ${input.status} rejected: ` +
+				`run is already terminal, not transitionable to ${input.status}, or worker ${input.workerId} no longer owns it`,
+		);
+	}
+	await insertTerminalEvent(tx, row, input.status, input.payload ?? {});
+	return toRunRecord(row);
+}
 
 /**
  * Insert the one terminal event for a run row a terminal CAS just returned —
