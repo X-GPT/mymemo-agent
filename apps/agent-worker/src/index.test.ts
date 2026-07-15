@@ -9,6 +9,11 @@ describe("agent-worker production composition", () => {
 		const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 
 		expect(source).toContain("const startRunQuery = createStartRunQuery({");
+		expect(source).toContain(
+			"const artifactPublisher = createArtifactPublisher({",
+		);
+		expect(source).toContain("createS3ArtifactObjectStore(config.artifact)");
+		expect(source).toContain("artifactPublisher,");
 		expect(source).toContain("processor: createSdkRunProcessor({");
 		expect(source).toContain("liveTextPublisher: liveTextTransport");
 		expect(source).toContain("await liveTextTransport?.close()");

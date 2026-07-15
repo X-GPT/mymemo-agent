@@ -1,5 +1,9 @@
 import type { RunRecord } from "@mymemo/agent-db/run-store";
 import type { LiveTextPublisher, LiveTextTelemetry } from "@mymemo/live-text";
+import type {
+	ArtifactAwareQuery,
+	ArtifactPublication,
+} from "../artifacts/artifact-publication";
 import {
 	createWorkerLiveTextTelemetry,
 	reportWorkerLiveTextPreviewSignal,
@@ -25,7 +29,7 @@ import { AssistantEnvelopeProtocolError } from "./assistant-message-assembler";
 export type StartRunQuery = (
 	run: RunRecord,
 	signal: AbortSignal,
-) => Promise<SupervisedQuery>;
+) => Promise<SupervisedQuery & Partial<ArtifactAwareQuery>>;
 
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
@@ -80,6 +84,9 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				outcome.sessionId !== null && !outcome.mirrorErrorObserved
 					? { sessionId: outcome.sessionId }
 					: null,
+			artifactPublication:
+				(query.getArtifactPublication?.() as ArtifactPublication | null) ??
+				null,
 		};
 	};
 }

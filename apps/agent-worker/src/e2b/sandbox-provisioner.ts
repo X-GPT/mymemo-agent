@@ -1,4 +1,6 @@
 import { Sandbox } from "e2b";
+import type { ArtifactWorkspace } from "../artifacts/artifact-publication";
+import { createE2bArtifactWorkspace } from "../artifacts/artifact-workspace";
 import type { SandboxCommandClient } from "../bash-tool/bash-tool";
 import { DEFAULT_COMMAND_CONTROL_DIR } from "../bash-tool/bash-wrapper";
 import type { SandboxFileClient } from "../file-tools/file-tools";
@@ -39,6 +41,7 @@ export interface ProvisionedSandbox {
 	workspaceRoot: string;
 	commandClient: SandboxCommandClient;
 	fileClient: SandboxFileClient;
+	artifactWorkspace: ArtifactWorkspace;
 	/** Extend the sandbox's idle window to now + the configured idle timeout. */
 	renew(): Promise<void>;
 	/**
@@ -125,6 +128,7 @@ function provisionedHandle(
 		workspaceRoot: SANDBOX_WORKSPACE_ROOT,
 		commandClient: new E2BCommandClient(sandbox, DEFAULT_COMMAND_CONTROL_DIR),
 		fileClient: new E2BFileClient(sandbox),
+		artifactWorkspace: createE2bArtifactWorkspace(sandbox),
 		renew: async () => {
 			if (disposed) return;
 			await sandbox.setTimeout(sandboxIdleMs);

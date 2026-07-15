@@ -22,6 +22,7 @@ import {
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { eq } from "drizzle-orm";
+import type { ArtifactPublisher } from "../artifacts/artifact-publication";
 import {
 	DEFAULT_BASH_TOOL_LIMITS,
 	type SandboxCommandClient,
@@ -216,6 +217,7 @@ function fakeProvisioner(config: FakeProvisionConfig) {
 		sandboxId: config.sandboxId,
 		isNew: config.isNew,
 		workspaceRoot: "/home/user",
+		artifactWorkspace: {} as never,
 		commandClient: {} as SandboxCommandClient,
 		fileClient: {} as SandboxFileClient,
 		renews: 0,
@@ -243,6 +245,7 @@ function buildHarness(
 		provision?: Partial<FakeProvisionConfig>;
 		killError?: Error;
 		sandboxIdleMs?: number;
+		artifactPublisher?: ArtifactPublisher;
 	} = {},
 ) {
 	const { provisioner, calls, handle } = fakeProvisioner({
@@ -309,6 +312,17 @@ function buildHarness(
 			maxDocuments: 10,
 			perDocumentMaxBytes: 1024,
 			perCallMaxBytes: 4096,
+		},
+		artifactPublisher: opts.artifactPublisher ?? {
+			async begin() {
+				startupOrder.push("artifact-baseline");
+				return {
+					async publish() {
+						startupOrder.push("artifact-publish");
+						return null;
+					},
+				};
+			},
 		},
 		async ensureWorkingDirectory(path) {
 			preparedWorkingDirectories.push(path);
@@ -386,6 +400,12 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		expect(MYMEMO_SYSTEM_PROMPT).toContain("count");
 		expect(MYMEMO_SYSTEM_PROMPT).toContain("SearchDocuments");
 		expect(MYMEMO_SYSTEM_PROMPT).toContain("LoadDocuments");
+	});
+
+	it("reserves the artifact root for downloadable outputs", () => {
+		expect(MYMEMO_SYSTEM_PROMPT).toContain("/home/user/artifacts/");
+		expect(MYMEMO_SYSTEM_PROMPT).toMatch(/downloadable/i);
+		expect(MYMEMO_SYSTEM_PROMPT).toMatch(/scratch/i);
 	});
 
 	it("spreads the model-client env over the process env plus the ephemeral config dir", async () => {
@@ -472,7 +492,29 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		expect(h.preparedWorkingDirectories).toEqual([
 			conversationWorkingDirectory("conv-1"),
 		]);
-		expect(h.startupOrder).toEqual(["working-directory", "query"]);
+		expect(h.startupOrder).toEqual([
+			"working-directory",
+			"artifact-baseline",
+			"query",
+		]);
+	});
+
+	it("captures the artifact baseline before the query and publishes before settling", async () => {
+		const h = buildHarness();
+		const run = await createClaimedRun({
+			runId: "run-1",
+			conversationId: "conv-1",
+		});
+
+		await consume(await h.startRunQuery(run, freshSignal()));
+
+		expect(h.startupOrder).toEqual([
+			"working-directory",
+			"artifact-baseline",
+			"query",
+			"artifact-publish",
+		]);
+		expect(h.handle.disposed).toBe(true);
 	});
 
 	it("resumes the conversation's stored agent session", async () => {
@@ -701,6 +743,84 @@ describe("createStartRunQuery — fenced provisioning", () => {
 });
 
 describe("createStartRunQuery — renewal and abort linkage", () => {
+	it("keeps renewing the sandbox until artifact publication finishes", async () => {
+		let releasePublication!: () => void;
+		let announcePublication!: () => void;
+		const publicationStarted = new Promise<void>((resolve) => {
+			announcePublication = resolve;
+		});
+		const publicationGate = new Promise<void>((resolve) => {
+			releasePublication = resolve;
+		});
+		const h = buildHarness({
+			provision: { sandboxId: "sb-1", isNew: true },
+			sandboxIdleMs: 20,
+			artifactPublisher: {
+				async begin() {
+					return {
+						async publish() {
+							announcePublication();
+							await publicationGate;
+							return null;
+						},
+					};
+				},
+			},
+		});
+		const run = await createClaimedRun({
+			runId: "run-1",
+			conversationId: "conv-1",
+		});
+
+		const consumed = consume(await h.startRunQuery(run, freshSignal()));
+		await publicationStarted;
+		await until(() => h.handle.renews >= 2);
+		expect(h.handle.disposed).toBe(false);
+
+		releasePublication();
+		await consumed;
+		expect(h.handle.disposed).toBe(true);
+	});
+
+	it("aborts artifact publication when sandbox renewal fails", async () => {
+		let publishSignal: AbortSignal | undefined;
+		const h = buildHarness({
+			provision: {
+				sandboxId: "sb-1",
+				isNew: true,
+				renewError: new Error("sandbox gone"),
+			},
+			sandboxIdleMs: 10,
+			artifactPublisher: {
+				async begin({ signal }) {
+					publishSignal = signal;
+					return {
+						async publish() {
+							await new Promise<never>((_resolve, reject) => {
+								if (signal.aborted) return reject(new Error("aborted"));
+								signal.addEventListener(
+									"abort",
+									() => reject(new Error("aborted")),
+									{ once: true },
+								);
+							});
+						},
+					};
+				},
+			},
+		});
+		const run = await createClaimedRun({
+			runId: "run-1",
+			conversationId: "conv-1",
+		});
+
+		await expect(
+			consume(await h.startRunQuery(run, freshSignal())),
+		).rejects.toThrow(/renewal/);
+		expect(publishSignal?.aborted).toBe(true);
+		expect(h.handle.disposed).toBe(true);
+	});
+
 	it("renews the sandbox while the query runs and stops once the stream ends", async () => {
 		const h = buildHarness({
 			provision: { sandboxId: "sb-1", isNew: true },

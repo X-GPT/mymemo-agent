@@ -169,6 +169,38 @@ export const conversationArtifacts = pgTable(
 );
 
 /**
+ * Internal lifecycle ledger for every private object a Run intends to upload.
+ * Rows are inserted before object-store I/O so a worker crash cannot create an
+ * untracked object. Current reachability still comes from
+ * `conversation_artifacts`; this ledger exists for crash-safe cleanup, not as
+ * user-visible version history (ADR-0010).
+ */
+export const artifactObjects = pgTable(
+	"artifact_objects",
+	{
+		objectKey: text("object_key").primaryKey(),
+		userId: text("user_id").notNull(),
+		conversationId: text("conversation_id").notNull(),
+		runId: text("run_id").notNull(),
+		path: text("path").notNull(),
+		status: text("status").notNull().default("pending"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		committedAt: timestamp("committed_at", { withTimezone: true }),
+		supersededAt: timestamp("superseded_at", { withTimezone: true }),
+	},
+	(t) => [
+		index("artifact_objects_run_idx").on(t.runId),
+		index("artifact_objects_status_idx").on(t.status),
+		check(
+			"artifact_objects_status_check",
+			sql`${t.status} in ('pending', 'current', 'superseded')`,
+		),
+	],
+);
+
+/**
  * Durable run queue for the split-runtime worker (milestone 1). A run is one
  * backend execution attempt for a conversation. Execution ownership lives
  * here, not in sandbox/runtime metadata: only the worker named by `locked_by`

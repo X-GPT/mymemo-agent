@@ -43,6 +43,13 @@
       "when": 1784109978021,
       "tag": "0005_parched_domino",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784113676130,
+      "tag": "0006_fancy_trauma",
+      "breakpoints": true
     }
   ]
 }

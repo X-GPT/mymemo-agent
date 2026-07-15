@@ -15,6 +15,7 @@
       "name": "agent-worker",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.2.117",
+        "@aws-sdk/client-s3": "^3.883.0",
         "@mymemo/agent-db": "workspace:*",
         "@mymemo/live-text": "workspace:*",
         "drizzle-orm": "^0.45.2",

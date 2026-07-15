@@ -31,6 +31,8 @@ describe("buildSandboxEnv — credential boundary", () => {
 			OPENROUTER_DEFAULT_MODEL: "anthropic/claude",
 			E2B_API_KEY: "e2b-secret",
 			WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
+			ARTIFACT_BUCKET: "private-artifacts",
+			AWS_REGION: "us-west-2",
 			DB_SSL: "disable",
 		});
 		// ...but buildSandboxEnv's signature only accepts the binding, so secrets
@@ -47,6 +49,8 @@ describe("buildSandboxEnv — credential boundary", () => {
 			"ANTHROPIC_API_KEY",
 			"ANTHROPIC_AUTH_TOKEN",
 			"E2B_API_KEY",
+			"ARTIFACT_BUCKET",
+			"AWS_REGION",
 		]) {
 			expect(env as Record<string, unknown>).not.toHaveProperty(forbidden);
 		}

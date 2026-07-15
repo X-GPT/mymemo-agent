@@ -47,6 +47,11 @@ export interface WorkerConfig {
 	 * Required so a misconfigured worker fails at boot, not per run.
 	 */
 	e2bTemplate: string;
+	/** Private durable object store for successful-Run Downloadable artifacts. */
+	artifact: {
+		bucket: string;
+		region: string;
+	};
 	/** Optional authenticated TLS Redis secret for best-effort Live preview. */
 	liveTextRedisUrl: string | undefined;
 	/** How long an unrenewed E2B sandbox stays active before idle-pausing. */
@@ -158,6 +163,8 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 	assert(env.OPENROUTER_DEFAULT_MODEL, "OPENROUTER_DEFAULT_MODEL is required");
 	assert(env.E2B_API_KEY, "E2B_API_KEY is required");
 	assert(env.WORKER_E2B_TEMPLATE, "WORKER_E2B_TEMPLATE is required");
+	assert(env.ARTIFACT_BUCKET, "ARTIFACT_BUCKET is required");
+	assert(env.AWS_REGION, "AWS_REGION is required");
 
 	const sslEnabled = env.DB_SSL !== "disable";
 	const bashMaxOutputBytes = positiveIntOr(
@@ -182,6 +189,10 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 		},
 		e2bApiKey: env.E2B_API_KEY,
 		e2bTemplate: env.WORKER_E2B_TEMPLATE,
+		artifact: {
+			bucket: env.ARTIFACT_BUCKET,
+			region: env.AWS_REGION,
+		},
 		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL),
 		sandboxIdleMs: positiveIntOr(
 			env.WORKER_SANDBOX_IDLE_MS,

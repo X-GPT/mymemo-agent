@@ -58,6 +58,19 @@ resource "aws_iam_role" "agent_worker_task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }
 
+data "aws_iam_policy_document" "agent_worker_artifact_write" {
+  statement {
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "agent_worker_artifact_write" {
+  name   = "${local.common_name}-artifact-write"
+  role   = aws_iam_role.agent_worker_task.id
+  policy = data.aws_iam_policy_document.agent_worker_artifact_write.json
+}
+
 resource "aws_iam_role" "agent_migration_task" {
   name               = "${local.common_name}-migration-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json

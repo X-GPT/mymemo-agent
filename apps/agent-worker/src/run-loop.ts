@@ -1,3 +1,7 @@
+import {
+	type PublishedArtifact,
+	publishArtifactsAndTransitionRunDoneTx,
+} from "@mymemo/agent-db/artifact-store";
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	type AssistantTextPayload,
@@ -33,6 +37,8 @@ export interface TurnResult {
 	 * still succeeds. Absent for synthetic turns that ran no query.
 	 */
 	agentSession?: { sessionId: string } | null;
+	/** Changed files already ledgered and uploaded under fresh private keys. */
+	artifactPublication?: { artifacts: PublishedArtifact[] } | null;
 }
 
 /** A processor that reports nothing is normalized to a turn with no session
@@ -392,10 +398,66 @@ export class RunLoop {
 		// (ADR-0005). Only when the turn reported a session to resume from — a
 		// `mirror_error` turn carries none, so the pointer holds and the run still
 		// terminalizes `done`.
+		if (turnResult.artifactPublication) {
+			await this.publishArtifactsAndFinish(run, turnResult);
+			return;
+		}
 		if (turnResult.agentSession) {
 			await this.advanceSessionPointer(run, turnResult.agentSession.sessionId);
 		}
 		await this.terminalize(runId, "done");
+	}
+
+	private async publishArtifactsAndFinish(
+		run: RunRecord,
+		turnResult: TurnResult,
+	): Promise<void> {
+		const publication = turnResult.artifactPublication;
+		if (!publication) return;
+		try {
+			const result = await publishArtifactsAndTransitionRunDoneTx(
+				this.opts.db,
+				{
+					runId: run.runId,
+					workerId: this.workerId,
+					userId: run.userId,
+					conversationId: run.conversationId,
+					artifacts: publication.artifacts,
+					agentSessionId: turnResult.agentSession?.sessionId,
+				},
+			);
+			if (
+				turnResult.agentSession &&
+				result.agentSessionPointerAdvanced === false
+			) {
+				this.opts.logger.warn({
+					message: "could not advance agent session pointer",
+					workerId: this.workerId,
+					runId: run.runId,
+				});
+			}
+		} catch (error) {
+			if (error instanceof RunFenceError) {
+				if (await this.tryTerminalCanceled(run.runId)) return;
+				this.opts.logger.warn({
+					message: "could not publish artifacts; leaving to stale-run recovery",
+					workerId: this.workerId,
+					runId: run.runId,
+				});
+				return;
+			}
+			this.opts.logger.error({
+				message: "run failed",
+				workerId: this.workerId,
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId: run.runId,
+				error: toMessage(error),
+			});
+			await this.terminalize(run.runId, "error", {
+				message: GENERIC_RUN_ERROR_MESSAGE,
+			});
+		}
 	}
 
 	/**

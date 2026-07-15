@@ -2,6 +2,8 @@
 // NOT re-exported here: it imports pglite (a devDependency), which is absent
 // from production installs, so pulling it into the root barrel would break
 // production imports. Import the test harness from `@mymemo/agent-db/testing`.
+
+export * from "./artifact-store";
 export * from "./client";
 export * from "./migrations";
 export * from "./queue-metrics";
