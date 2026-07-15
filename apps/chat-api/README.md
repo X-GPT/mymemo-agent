@@ -132,6 +132,8 @@ When running the development server, interactive API documentation is available 
 | `OPENAI_API_KEY` | OpenAI API key for chat functionality | Yes |
 | `E2B_API_KEY` | API key for the sandbox prototype script | Yes (for prototype) |
 | `E2B_TEMPLATE` | E2B sandbox template for the prototype script | Yes (for prototype) |
+| `ARTIFACT_BUCKET` | Private S3 bucket for durable Downloadable artifact objects | Yes |
+| `AWS_REGION` | AWS region containing the artifact bucket | Yes |
 | `PORT` | Server port (default: 3000) | No |
 | `PROTECTED_API_PREFIX` | Path prefix used when forwarding chat entities (e.g. `/beta-api` or `/api`) | No |
 | `PROTECTED_API_ORIGIN` | Origin (protocol + host[:port]) for the protected service (default: `http://127.0.0.1`) | No |

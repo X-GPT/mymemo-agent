@@ -5,6 +5,9 @@
 // the Drizzle client connects lazily, so a non-connecting placeholder is enough.
 Bun.env.AGENT_DATABASE_URL =
 	Bun.env.AGENT_DATABASE_URL ?? "postgresql://test:test@localhost:5432/test";
+Bun.env.ARTIFACT_BUCKET =
+	Bun.env.ARTIFACT_BUCKET ?? "mymemo-agent-test-artifacts";
+Bun.env.AWS_REGION = Bun.env.AWS_REGION ?? "us-west-2";
 // Run tests with the exposure gate in break-glass mode. This lets config load
 // without a Statsig secret AND, crucially, makes the entrypoint's default export
 // (`createApp(loadApiConfigFromEnv(Bun.env))`, evaluated whenever a test imports

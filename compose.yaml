@@ -29,6 +29,8 @@ services:
       # run_events. Local-only dev credential, so inline. Named AGENT_DATABASE_URL
       # so it never collides with the worker's read-only KB DATABASE_URL.
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
+      ARTIFACT_BUCKET: mymemo-agent-local-artifacts
+      AWS_REGION: us-west-2
       DB_SSL: disable
       LOG_LEVEL: info
       # Open the agent exposure gate locally without wiring Statsig (break-glass).

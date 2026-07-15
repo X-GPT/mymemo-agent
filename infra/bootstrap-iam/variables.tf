@@ -38,6 +38,12 @@ variable "terraform_state_bucket" {
   default     = "mymemo-terraform-state-bucket"
 }
 
+variable "artifact_bucket_name" {
+  description = "S3 bucket managed by the deploy role for Downloadable artifacts."
+  type        = string
+  default     = "mymemo-agent-prod-artifacts"
+}
+
 variable "tags" {
   description = "Tags applied to bootstrap IAM resources."
   type        = map(string)

@@ -9,6 +9,8 @@
 		"db:migrate": "bun run src/db/migrate.ts"
 	},
 	"dependencies": {
+		"@aws-sdk/client-s3": "^3.883.0",
+		"@aws-sdk/s3-request-presigner": "^3.883.0",
 		"@hono/standard-validator": "^0.1.5",
 		"@mymemo/agent-db": "workspace:*",
 		"@mymemo/live-text": "workspace:*",

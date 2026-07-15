@@ -26,6 +26,10 @@ function assert(condition: unknown, message: string): asserts condition {
 export interface ApiConfig {
 	/** pino log level. */
 	logLevel: string;
+	/** Private S3 bucket holding durable Downloadable artifact objects. */
+	artifactBucket: string;
+	/** AWS region containing the private Downloadable artifact bucket. */
+	artifactRegion: string;
 	/**
 	 * Writable connection to chat-api's own Postgres (`mymemo_agent`), distinct
 	 * from the gateway's/worker's read-only KB. Backs the conversation registry
@@ -116,6 +120,11 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	);
 	assert(databaseUrl, "AGENT_DATABASE_URL is required");
 
+	const artifactBucket = env.ARTIFACT_BUCKET?.trim();
+	assert(artifactBucket, "ARTIFACT_BUCKET is required");
+	const artifactRegion = env.AWS_REGION?.trim();
+	assert(artifactRegion, "AWS_REGION is required");
+
 	// Agent exposure (MYM-46) fails closed in production: a Statsig secret is
 	// required unless an operator explicitly enables break-glass (local dev, or an
 	// incident where Statsig is unavailable). The worker-only secrets (OpenRouter,
@@ -131,6 +140,8 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	return {
 		logLevel: env.LOG_LEVEL || "info",
 		databaseUrl,
+		artifactBucket,
+		artifactRegion,
 		statsigServerSecret: env.STATSIG_SERVER_SECRET,
 		agentExposureBreakGlass,
 		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL),

@@ -10,6 +10,14 @@ import {
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import { createDatabase } from "./db/client";
+import type {
+	ArtifactDownloadSigner,
+	ArtifactMetadataStore,
+} from "./features/artifacts";
+import {
+	createS3ArtifactDownloadSigner,
+	PostgresArtifactMetadataStore,
+} from "./features/artifacts";
 import {
 	type ConversationStore,
 	PostgresConversationStore,
@@ -35,6 +43,10 @@ import { PostgresRunStore, type RunStore } from "./features/run-store";
  */
 export interface AppDeps {
 	config: ApiConfig;
+	/** Authoritative current Downloadable artifact metadata in Postgres. */
+	artifactMetadataStore: ArtifactMetadataStore;
+	/** Creates short-lived direct-download URLs after ownership authorization. */
+	artifactDownloadSigner: ArtifactDownloadSigner;
 	/** Durable conversation registry (source of truth for frozen scope). */
 	conversationStore: ConversationStore;
 	/** Durable split-runtime run queue and event log. */
@@ -88,6 +100,11 @@ export function createDeps(
 	if (!liveTextTransport) emitLiveTextSignal("disabled");
 	return {
 		config,
+		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
+		artifactDownloadSigner: createS3ArtifactDownloadSigner({
+			bucket: config.artifactBucket,
+			region: config.artifactRegion,
+		}),
 		conversationStore,
 		runStore,
 		runEventReader,

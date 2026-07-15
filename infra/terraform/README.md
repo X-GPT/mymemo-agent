@@ -30,12 +30,19 @@ the direct remote-state output is absent and the fallback input is present.
 - EC2 Instance Connect Endpoint and private EC2 bridge for operator access to
   the agent and KB databases
 - single-node ElastiCache Redis replication group for disposable live previews
+- private S3 bucket for durable Downloadable artifact objects
 - ECS Fargate task definitions and services for chat-api and agent-worker
 - agent DB migration task definition
 - service security group inside the shared VPC
 - internal agent-owned ALB, ALB security group, listeners, and chat-api target group
 - IAM execution/task roles for the agent tasks
 - CloudWatch log groups and baseline alarms
+
+The artifact bucket blocks all public access, enforces bucket-owner ownership,
+uses SSE-S3 encryption, denies non-TLS requests, has versioning disabled, and
+defines no CORS policy. Only the `chat-api` application role can read an
+ownership-checked current object for presigning; it cannot write, delete, or
+list bucket contents.
 
 ## Secrets
 

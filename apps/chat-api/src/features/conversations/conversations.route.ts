@@ -21,10 +21,10 @@ import {
 	ConversationEventBody,
 	ConversationIdParam,
 	CreateConversationBody,
-	InternalIdentity,
 	MAX_REQUEST_BODY_BYTES,
 	RunIdParam,
 } from "./conversations.schema";
+import { identityFromContext } from "./internal-identity";
 
 const app = new Hono<AppEnv>();
 
@@ -33,19 +33,6 @@ const conversationBodyLimit = bodyLimit({
 	maxSize: MAX_REQUEST_BODY_BYTES,
 	onError: (c) => c.json({ error: "Request body too large" }, 413),
 });
-
-/** Parse + validate the trusted identity headers off the request. */
-function identityFromContext(c: {
-	req: { header: (k: string) => string | undefined };
-}) {
-	return InternalIdentity.safeParse({
-		memberCode: c.req.header("x-member-code"),
-		memberName: c.req.header("x-member-name"),
-		teamCode: c.req.header("x-team-code"),
-		partnerCode: c.req.header("x-partner-code"),
-		partnerName: c.req.header("x-partner-name"),
-	});
-}
 
 function lastEventIdFromContext(c: {
 	req: { header: (k: string) => string | undefined };

@@ -11,6 +11,8 @@ import { type ApiConfig, loadApiConfigFromEnv } from "./env";
 function baseEnv(): Record<string, string | undefined> {
 	return {
 		AGENT_DATABASE_URL: "postgresql://u:p@localhost:5432/mymemo_agent",
+		ARTIFACT_BUCKET: "mymemo-agent-test-artifacts",
+		AWS_REGION: "us-west-2",
 		STATSIG_SERVER_SECRET: "secret-statsig",
 		DB_SSL: "disable",
 	};
@@ -30,6 +32,26 @@ describe("loadApiConfigFromEnv — agent DB ownership", () => {
 		const config = loadApiConfigFromEnv(env);
 		expect(config.databaseUrl).toContain("mymemo_agent");
 		expect(config.databaseUrl).not.toContain("mymemo_kb");
+	});
+});
+
+describe("loadApiConfigFromEnv — Downloadable artifact storage", () => {
+	it("requires the private artifact bucket and its AWS region", () => {
+		const missingBucket = baseEnv();
+		delete missingBucket.ARTIFACT_BUCKET;
+		expect(() => loadApiConfigFromEnv(missingBucket)).toThrow(
+			/ARTIFACT_BUCKET/,
+		);
+
+		const missingRegion = baseEnv();
+		delete missingRegion.AWS_REGION;
+		expect(() => loadApiConfigFromEnv(missingRegion)).toThrow(/AWS_REGION/);
+	});
+
+	it("exposes the validated bucket and region to trusted chat-api composition", () => {
+		const config = loadApiConfigFromEnv(baseEnv());
+		expect(config.artifactBucket).toBe("mymemo-agent-test-artifacts");
+		expect(config.artifactRegion).toBe("us-west-2");
 	});
 });
 
