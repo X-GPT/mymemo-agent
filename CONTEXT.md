@@ -103,6 +103,14 @@ the next turn empty. Not the Fargate query cwd (that is only a stable
 projectKey anchor), and not durable like the agent session.
 _Avoid_: sandbox (that is the runtime; the workspace is its filesystem)
 
+**Downloadable artifact**:
+A file deliberately published from a conversation's workspace for durable,
+user-visible listing and download, identified by its conversation-relative
+artifact path. Publishing that path again replaces the artifact; ordinary
+workspace files and the docs cache are not downloadable artifacts merely
+because they exist.
+_Avoid_: created file, attachment
+
 **Docs cache**:
 The reserved directory in a conversation's sandbox workspace where loaded
 searchable-document content is materialized. Reconstructible from the KB,
