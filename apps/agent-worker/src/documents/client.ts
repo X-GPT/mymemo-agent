@@ -1,11 +1,18 @@
 import type { WorkerLogger } from "../logger";
-import { type DocumentAccessBinding, recordDocumentAccess } from "./audit";
+import {
+	type DocumentAccessBinding,
+	type DocumentAccessOperation,
+	recordDocumentAccess,
+} from "./audit";
 import { createAgentDb, createKbDb, type Db } from "./db";
 import { DocumentQueryError, DocumentScopeError } from "./errors";
 import {
+	type DocumentListCursor,
+	type DocumentListPage,
 	documentInCollection,
 	type FetchedDocument,
 	fetchDocument,
+	listDocuments,
 	resolveDocumentId,
 	type SearchHit,
 	searchPassages,
@@ -16,10 +23,18 @@ import type { FrozenConversationScope } from "./scope";
  * The scoped document query client (plan Task 6.1): the single trusted path
  * from the worker's agent loop to the read-only KB. Applies the conversation's
  * frozen scope server-side before any query and audits every access to
- * `document_access_events`. Model-facing tools (SearchDocuments/LoadDocuments)
- * call these named methods only — no Db handle ever reaches tool code.
+ * `document_access_events`. Model-facing tools (ListDocuments,
+ * SearchDocuments, and LoadDocuments) call these named methods only — no Db
+ * handle ever reaches tool code.
  */
 export interface ScopedDocumentQueryClient {
+	listDocuments(input: {
+		binding: DocumentAccessBinding;
+		scope: FrozenConversationScope;
+		limit: number;
+		after: DocumentListCursor | null;
+	}): Promise<DocumentListPage>;
+
 	searchDocuments(input: {
 		binding: DocumentAccessBinding;
 		scope: FrozenConversationScope;
@@ -123,18 +138,59 @@ export function createScopedDocumentQueryClient(
 	async function audit(
 		binding: DocumentAccessBinding,
 		scope: FrozenConversationScope,
+		operation: DocumentAccessOperation,
 		query: string | null,
 		documentIds: string[],
+		resultCount: number,
 	): Promise<void> {
 		await recordDocumentAccess(agentDb, {
 			binding,
 			scope,
+			operation,
 			query,
 			documentIds,
+			resultCount,
 		});
 	}
 
 	return {
+		async listDocuments({ binding, scope, limit, after }) {
+			try {
+				let documentIds: string[] | null = null;
+				let collectionId: string | null = null;
+				if (scope.type === "document") {
+					const documentId = await resolveFrozenDocumentId(scope, binding);
+					if (!documentId) {
+						const empty = { total: 0, documents: [], next: null };
+						await audit(binding, scope, "list", null, [], 0);
+						return empty;
+					}
+					documentIds = [documentId];
+				} else if (scope.type === "collection") {
+					collectionId = scope.collectionId;
+				}
+
+				const page = await listDocuments(kbDb, {
+					workspaceId: binding.userId,
+					documentIds,
+					collectionId,
+					limit,
+					after,
+				});
+				await audit(
+					binding,
+					scope,
+					"list",
+					null,
+					page.documents.map((document) => document.documentId),
+					page.total,
+				);
+				return page;
+			} catch (error) {
+				throw bounded("document list failed", error, binding);
+			}
+		},
+
 		async searchDocuments({ binding, scope, query, maxResults }) {
 			try {
 				// Derive the query narrowing from the frozen scope ONLY — the input
@@ -145,7 +201,7 @@ export function createScopedDocumentQueryClient(
 					const docId = await resolveFrozenDocumentId(scope, binding);
 					// Unresolvable document scope fails closed: no passage query runs.
 					if (!docId) {
-						await audit(binding, scope, query, []);
+						await audit(binding, scope, "search", query, [], 0);
 						return { passages: [] };
 					}
 					documentIds = [docId];
@@ -160,7 +216,14 @@ export function createScopedDocumentQueryClient(
 					collectionId,
 					limit: clampSearchLimit(maxResults),
 				});
-				await audit(binding, scope, query, hitDocumentIds(passages));
+				await audit(
+					binding,
+					scope,
+					"search",
+					query,
+					hitDocumentIds(passages),
+					passages.length,
+				);
 				return { passages };
 			} catch (error) {
 				throw bounded("document search failed", error, binding);
@@ -189,7 +252,7 @@ export function createScopedDocumentQueryClient(
 					maxChars: MAX_DOCUMENT_CHARS,
 				});
 				if (!doc) throw documentNotAvailable();
-				await audit(binding, scope, null, [documentId]);
+				await audit(binding, scope, "load", null, [documentId], 1);
 				return doc;
 			} catch (error) {
 				throw bounded("document fetch failed", error, binding);

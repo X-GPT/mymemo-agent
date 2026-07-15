@@ -200,6 +200,26 @@ describe("loadWorkerConfigFromEnv — LoadDocuments caps", () => {
 	});
 });
 
+describe("loadWorkerConfigFromEnv — ListDocuments cap", () => {
+	it("defaults the document-list page cap to twenty", () => {
+		expect(loadWorkerConfigFromEnv(baseEnv()).maxDocumentListResults).toBe(20);
+	});
+
+	it("honors the document-list page cap override", () => {
+		const env = baseEnv();
+		env.WORKER_DOCUMENT_LIST_MAX_RESULTS = "35";
+		expect(loadWorkerConfigFromEnv(env).maxDocumentListResults).toBe(35);
+	});
+
+	it("rejects a non-positive document-list page cap override", () => {
+		const env = baseEnv();
+		env.WORKER_DOCUMENT_LIST_MAX_RESULTS = "0";
+		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
+			/WORKER_DOCUMENT_LIST_MAX_RESULTS/,
+		);
+	});
+});
+
 describe("loadWorkerConfigFromEnv — optional Live Redis lane", () => {
 	it("enables Live preview only for an authenticated TLS URL", () => {
 		const env = baseEnv();

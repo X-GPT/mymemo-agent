@@ -29,6 +29,7 @@ type PublicToolName =
 	| "Glob"
 	| "Bash"
 	| "SearchDocuments"
+	| "ListDocuments"
 	| "LoadDocuments";
 
 type ToolUseEvent = {
@@ -61,9 +62,11 @@ input, executor output, document audit rows, or transcript entries:
   exit code, capped stdout/stderr previews, outcome and truncation flags. A
   nonzero process exit is a returned command result, not a tool error.
 - `SearchDocuments` exposes a capped query and bounded title/snippet previews;
-  `LoadDocuments` exposes the requested count and bounded title/error summaries.
-  Document ids, passage ids, scope/policy details and docs-cache paths remain
-  internal.
+  `ListDocuments` exposes the requested limit, whether pagination continued,
+  the exact scoped total, returned count, whether more results remain, and a
+  bounded title preview; `LoadDocuments` exposes the requested count and
+  bounded title/error summaries. Document ids, passage ids, pagination cursors,
+  scope/policy details and docs-cache paths remain internal.
 
 The document-query preview is a deliberate, narrow exception to the earlier
 implementation-plan rule that document-access details stay out of client SSE.

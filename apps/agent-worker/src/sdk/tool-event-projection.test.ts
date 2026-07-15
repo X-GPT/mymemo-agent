@@ -42,6 +42,9 @@ describe("publicToolName", () => {
 		expect(publicToolName("mcp__mymemo-executor__Edit")).toBe("Edit");
 		expect(publicToolName("mcp__mymemo-executor__Grep")).toBe("Grep");
 		expect(publicToolName("mcp__mymemo-executor__Glob")).toBe("Glob");
+		expect(publicToolName("mcp__mymemo-executor__ListDocuments")).toBe(
+			"ListDocuments",
+		);
 		expect(publicToolName("mcp__mymemo-executor__SearchDocuments")).toBe(
 			"SearchDocuments",
 		);
@@ -63,7 +66,7 @@ describe("publicToolName", () => {
 		expect(publicToolName(42)).toBeNull();
 	});
 
-	it("allowlists exactly the eight executor tool names", () => {
+	it("allowlists exactly the nine executor tool names", () => {
 		expect(allowlistedExecutorToolNames().sort()).toEqual(
 			[
 				"mcp__mymemo-executor__Bash",
@@ -71,6 +74,7 @@ describe("publicToolName", () => {
 				"mcp__mymemo-executor__Glob",
 				"mcp__mymemo-executor__Grep",
 				"mcp__mymemo-executor__LoadDocuments",
+				"mcp__mymemo-executor__ListDocuments",
 				"mcp__mymemo-executor__Read",
 				"mcp__mymemo-executor__SearchDocuments",
 				"mcp__mymemo-executor__Write",
@@ -275,6 +279,25 @@ describe("projectToolUse — SearchDocuments", () => {
 		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
 			TOOL_EVENT_MAX_JSON_BYTES,
 		);
+	});
+});
+
+describe("projectToolUse — ListDocuments", () => {
+	it("exposes the limit and cursor presence without exposing the cursor", () => {
+		const projected = projectToolUse("ListDocuments", {
+			limit: 20,
+			cursor: "pagination-secret",
+			scope: { type: "collection", collectionId: "scope-secret" },
+		});
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "ListDocuments",
+				arguments: { limit: 20, cursorProvided: true },
+				truncated: false,
+			},
+		});
 	});
 });
 
@@ -556,6 +579,86 @@ describe("projectToolResult — SearchDocuments", () => {
 		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
 			TOOL_EVENT_MAX_JSON_BYTES,
 		);
+	});
+});
+
+describe("projectToolResult — ListDocuments", () => {
+	it("exposes counts, page state, and bounded titles without identifiers or cursors", () => {
+		const projected = projectToolResult(
+			"ListDocuments",
+			executorResultContent({
+				total: 42,
+				documents: [
+					{
+						documentId: "document-secret",
+						title: "Roadmap",
+						sourceType: "google_drive",
+						language: "en",
+						createdAt: "2026-07-15T00:00:00.000Z",
+					},
+				],
+				nextCursor: "cursor-secret",
+			}),
+			false,
+		);
+
+		expect(projected).toEqual({
+			ok: true,
+			payload: {
+				tool: "ListDocuments",
+				result: {
+					total: 42,
+					returnedCount: 1,
+					hasMore: true,
+					documents: [{ title: "Roadmap" }],
+				},
+				isError: false,
+				truncated: false,
+			},
+		});
+	});
+
+	it("bounds title previews and the list within one guard-valid event", () => {
+		const projected = projectToolResult(
+			"ListDocuments",
+			executorResultContent({
+				total: 30,
+				documents: Array.from({ length: 30 }, (_, index) => ({
+					documentId: `document-secret-${index}`,
+					title: `Title ${index} ${"t".repeat(10_000)}`,
+					sourceType: "upload",
+					language: null,
+					createdAt: "2026-07-15T00:00:00.000Z",
+				})),
+				nextCursor: null,
+			}),
+			false,
+		);
+
+		if (!projected.ok) throw new Error("expected a projected payload");
+		expect(projected.payload.result.returnedCount).toBe(30);
+		expect(projected.payload.result.documents).toHaveLength(10);
+		expect(projected.payload.result.hasMore).toBe(false);
+		expect(projected.payload.truncated).toBe(true);
+		expect(isToolResultPayload(projected.payload)).toBe(true);
+		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
+			TOOL_EVENT_MAX_JSON_BYTES,
+		);
+	});
+
+	it("omits malformed inventory results", () => {
+		for (const result of [
+			{},
+			{ total: "42", documents: [], nextCursor: null },
+			{ total: 42, documents: "secret", nextCursor: null },
+			{ total: 42, documents: [{ title: 42 }], nextCursor: null },
+			{ total: 42, documents: [], nextCursor: 42 },
+		]) {
+			expect(
+				projectToolResult("ListDocuments", executorResultContent(result), false)
+					.ok,
+			).toBe(false);
+		}
 	});
 });
 

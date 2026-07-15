@@ -78,14 +78,21 @@ function fakeCommandClient(): SandboxCommandClient & {
 }
 
 function fakeDocumentClient(): ScopedDocumentQueryClient & {
+	listCalls: unknown[];
 	searchCalls: unknown[];
 	fetchCalls: unknown[];
 } {
+	const listCalls: unknown[] = [];
 	const searchCalls: unknown[] = [];
 	const fetchCalls: unknown[] = [];
 	return {
+		listCalls,
 		searchCalls,
 		fetchCalls,
+		async listDocuments(input) {
+			listCalls.push(input);
+			return { total: 0, documents: [], next: null };
+		},
 		async searchDocuments(input) {
 			searchCalls.push(input);
 			return { passages: [] };
@@ -137,6 +144,7 @@ function buildDeps(overrides: Partial<RunToolDeps> = {}): {
 			maxStderrBytes: 65_536,
 		},
 		documentSearchMaxResults: 8,
+		documentListMaxResults: 20,
 		documentLoad: {
 			maxDocuments: 10,
 			perDocumentMaxBytes: 262_144,
@@ -174,6 +182,7 @@ describe("buildRunTools — surface", () => {
 			"Edit",
 			"Glob",
 			"Grep",
+			"ListDocuments",
 			"LoadDocuments",
 			"Read",
 			"SearchDocuments",
@@ -227,6 +236,22 @@ describe("buildRunTools — run binding", () => {
 				runId: BINDING.runId,
 			},
 			scope: { type: "general" },
+		});
+	});
+
+	it("binds ListDocuments to the document access binding and frozen scope", async () => {
+		const ctx = buildDeps();
+		await toolsByName(ctx.deps).ListDocuments?.handler({ limit: 5 }, {});
+
+		expect(ctx.documentClient.listCalls).toHaveLength(1);
+		expect(ctx.documentClient.listCalls[0]).toMatchObject({
+			binding: {
+				userId: BINDING.userId,
+				conversationId: BINDING.conversationId,
+				runId: BINDING.runId,
+			},
+			scope: { type: "general" },
+			limit: 5,
 		});
 	});
 

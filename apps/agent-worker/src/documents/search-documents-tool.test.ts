@@ -12,6 +12,9 @@ function makeClient(
 	searchDocuments: ScopedDocumentQueryClient["searchDocuments"],
 ): ScopedDocumentQueryClient {
 	return {
+		async listDocuments() {
+			throw new Error("not used");
+		},
 		searchDocuments,
 		async fetchDocumentInScope() {
 			throw new Error("not used");

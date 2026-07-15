@@ -55,7 +55,7 @@ export function isAssistantTextPayload(
 }
 
 /**
- * The eight short public tool names a client may see (ADR-0009). Tool events
+ * The nine short public tool names a client may see (ADR-0009). Tool events
  * carry these — never the executor's prefixed tool names — and the guards fail
  * closed on anything else, so an internal name cannot reach the client stream.
  */
@@ -66,6 +66,7 @@ export const PUBLIC_TOOL_NAMES = [
 	"Grep",
 	"Glob",
 	"Bash",
+	"ListDocuments",
 	"SearchDocuments",
 	"LoadDocuments",
 ] as const;

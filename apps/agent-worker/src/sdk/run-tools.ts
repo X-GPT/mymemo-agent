@@ -12,6 +12,7 @@ import {
 	type SandboxCommandClient,
 } from "../bash-tool/bash-tool";
 import type { ScopedDocumentQueryClient } from "../documents/client";
+import { runListDocumentsTool } from "../documents/list-documents-tool";
 import { runLoadDocumentsTool } from "../documents/load-documents-tool";
 import type { FrozenConversationScope } from "../documents/scope";
 import { runSearchDocumentsTool } from "../documents/search-documents-tool";
@@ -61,6 +62,7 @@ const EXECUTOR_TOOL_NAMES = [
 	"Grep",
 	"Glob",
 	"Bash",
+	"ListDocuments",
 	"SearchDocuments",
 	"LoadDocuments",
 ] as const;
@@ -96,6 +98,7 @@ export interface RunToolDeps {
 	fileLimits: FileToolLimits;
 	bashLimits: BashToolLimits;
 	documentSearchMaxResults: number;
+	documentListMaxResults: number;
 	documentLoad: {
 		maxDocuments: number;
 		perDocumentMaxBytes: number;
@@ -198,6 +201,20 @@ export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
 						signal: deps.signal,
 						markSandboxTainted: deps.markSandboxTainted,
 						recordCommandAudit: deps.recordCommandAudit,
+					}),
+				),
+		),
+		tool(
+			"ListDocuments",
+			"Count and browse the searchable documents in this conversation's scope, newest first.",
+			{ limit: z.number().optional(), cursor: z.string().optional() },
+			async (input) =>
+				toCallToolResult(
+					await runListDocumentsTool(input, {
+						client: deps.documentClient,
+						binding: documentBinding(deps.binding),
+						scope: deps.documentScope,
+						maxResults: deps.documentListMaxResults,
 					}),
 				),
 		),

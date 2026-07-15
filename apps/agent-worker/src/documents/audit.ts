@@ -12,6 +12,8 @@ export interface DocumentAccessBinding {
 	runId: string;
 }
 
+export type DocumentAccessOperation = "search" | "list" | "load";
+
 /** The collection/summary id the scope was policy-checked against, if any. */
 function scopeId(scope: FrozenConversationScope): string | null {
 	switch (scope.type) {
@@ -26,31 +28,37 @@ function scopeId(scope: FrozenConversationScope): string | null {
 
 /**
  * Append one row to the `document_access_events` ledger (owned by chat-api's
- * Drizzle migrations). `query` is null for direct fetch/load access;
- * `documentIds` is empty for a no-hit search. Full document content is never
- * written here.
+ * Drizzle migrations). `query` is present only for search; `documentIds` is
+ * empty for an empty page or no-hit search. Full document content is never
+ * written here. `resultCount` records passages for search, the exact scoped
+ * total for list, and one for a successful load.
  */
 export async function recordDocumentAccess(
 	agentDb: Db,
 	entry: {
 		binding: DocumentAccessBinding;
 		scope: FrozenConversationScope;
+		operation: DocumentAccessOperation;
 		query: string | null;
 		documentIds: string[];
+		resultCount: number;
 	},
 ): Promise<void> {
 	await agentDb.query(
 		`INSERT INTO document_access_events
-		   (run_id, conversation_id, user_id, scope_type, scope_id, query, document_ids)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		   (run_id, conversation_id, user_id, operation, scope_type, scope_id,
+		    query, document_ids, result_count)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		[
 			entry.binding.runId,
 			entry.binding.conversationId,
 			entry.binding.userId,
+			entry.operation,
 			entry.scope.type,
 			scopeId(entry.scope),
 			entry.query,
 			entry.documentIds,
+			entry.resultCount,
 		],
 	);
 }
