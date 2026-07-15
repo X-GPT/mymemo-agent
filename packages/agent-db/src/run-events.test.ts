@@ -35,6 +35,13 @@ describe("isToolUsePayload", () => {
 		expect(
 			isToolUsePayload({ tool: "Glob", arguments: {}, truncated: true }),
 		).toBe(true);
+		expect(
+			isToolUsePayload({
+				tool: "ListDocuments",
+				arguments: { limit: 20, cursorProvided: false },
+				truncated: false,
+			}),
+		).toBe(true);
 	});
 
 	it("rejects payloads with a missing field", () => {
@@ -50,7 +57,7 @@ describe("isToolUsePayload", () => {
 	});
 
 	it("rejects payloads with a wrong-type field", () => {
-		// Only the eight short public names are client-visible (ADR-0009); a
+		// Only the nine short public names are client-visible (ADR-0009); a
 		// prefixed executor name or an unknown tool must fail closed.
 		expect(
 			isToolUsePayload({

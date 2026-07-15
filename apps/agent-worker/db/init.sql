@@ -19,12 +19,24 @@
 -- ---------------------------------------------------------------------------
 CREATE TABLE workspace (id TEXT PRIMARY KEY);
 
+CREATE TABLE source_asset (
+  id           TEXT PRIMARY KEY,
+  workspace_id TEXT,
+  status       TEXT,
+  created_at   TIMESTAMPTZ
+);
+
 CREATE TABLE document (
   id                TEXT PRIMARY KEY,
+  source_asset_id   TEXT,
   workspace_id      TEXT,
+  version           INTEGER,
   title             TEXT,
+  source_type       TEXT,
+  language          TEXT,
   canonical_markdown TEXT,
-  status            TEXT
+  status            TEXT,
+  created_at        TIMESTAMPTZ
 );
 
 CREATE TABLE passage (
@@ -61,6 +73,8 @@ CREATE TABLE passage_collection (
 CREATE INDEX passage_search_tsv_idx ON passage USING GIN (search_tsv);
 CREATE INDEX passage_workspace_idx ON passage (workspace_id);
 CREATE INDEX document_workspace_idx ON document (workspace_id);
+CREATE INDEX document_source_asset_version_idx
+  ON document (source_asset_id, version DESC);
 
 -- ---------------------------------------------------------------------------
 -- Fixture data
@@ -73,13 +87,20 @@ CREATE INDEX document_workspace_idx ON document (workspace_id);
 -- ---------------------------------------------------------------------------
 INSERT INTO workspace (id) VALUES ('demo-member');
 
-INSERT INTO document (id, workspace_id, title, canonical_markdown, status) VALUES
-  ('doc-ml-intro', 'demo-member', 'Intro to Machine Learning',
+INSERT INTO source_asset (id, workspace_id, status, created_at) VALUES
+  ('asset-ml-intro', 'demo-member', 'ready', '2026-01-02T00:00:00Z'),
+  ('asset-mymemo-overview', 'demo-member', 'ready', '2026-01-01T00:00:00Z');
+
+INSERT INTO document (
+  id, source_asset_id, workspace_id, version, title, source_type, language,
+  canonical_markdown, status, created_at
+) VALUES
+  ('doc-ml-intro', 'asset-ml-intro', 'demo-member', 1, 'Intro to Machine Learning', 'markdown', 'en',
    E'# Intro to Machine Learning\n\nMachine learning is a subset of artificial intelligence that lets systems learn patterns from data instead of being explicitly programmed. Common families include supervised learning, unsupervised learning, and reinforcement learning.',
-   'active'),
-  ('doc-mymemo-overview', 'demo-member', 'MyMemo Overview',
+   'active', '2026-01-02T00:00:00Z'),
+  ('doc-mymemo-overview', 'asset-mymemo-overview', 'demo-member', 1, 'MyMemo Overview', 'markdown', 'en',
    E'# MyMemo Overview\n\nMyMemo is a personal knowledge base. The agent answers questions by searching your documents through a scoped, read-only document client.',
-   'active');
+   'active', '2026-01-01T00:00:00Z');
 
 INSERT INTO passage (id, document_id, workspace_id, passage_text, search_tsv, status) VALUES
   ('psg-ml-1', 'doc-ml-intro', 'demo-member',

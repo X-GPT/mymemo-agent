@@ -59,6 +59,8 @@ export interface WorkerConfig {
 	maxConcurrentRuns: number;
 	/** Per-call cap for model-facing document search results. */
 	maxDocumentSearchResults: number;
+	/** Per-page cap for model-facing document inventory results. */
+	maxDocumentListResults: number;
 	/** Caps for the model-facing LoadDocuments tool (documents-as-files). */
 	documentLoad: {
 		/** Most document ids one LoadDocuments call may materialize. */
@@ -92,6 +94,7 @@ const DEFAULT_FILE_GLOB_MAX_RESULTS = 500;
 const DEFAULT_FILE_COMMAND_MAX_OUTPUT_BYTES = 65_536;
 const DEFAULT_FILE_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS = 8;
+const DEFAULT_DOCUMENT_LIST_MAX_RESULTS = 20;
 const DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS = 10;
 // The KB fetch already clips content at 50k chars; these byte caps are the
 // tool-side backstop so a heavy multibyte document cannot balloon on disk.
@@ -223,6 +226,11 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS,
 			DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS,
 			"WORKER_DOCUMENT_SEARCH_MAX_RESULTS",
+		),
+		maxDocumentListResults: positiveIntOr(
+			env.WORKER_DOCUMENT_LIST_MAX_RESULTS,
+			DEFAULT_DOCUMENT_LIST_MAX_RESULTS,
+			"WORKER_DOCUMENT_LIST_MAX_RESULTS",
 		),
 		documentLoad: {
 			maxDocuments: positiveIntOr(

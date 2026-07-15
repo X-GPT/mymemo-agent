@@ -67,7 +67,7 @@ async function drain(
 }
 
 describe("durable tool-event conformance", () => {
-	it("projects one mixed eight-tool Run with ordered, guarded, reconnectable frames", async () => {
+	it("projects one mixed nine-tool Run with ordered, guarded, reconnectable frames", async () => {
 		const messages = [
 			...toolEnvelope({
 				text: "I will inspect the workspace and documents.",
@@ -123,6 +123,11 @@ describe("durable tool-event conformance", () => {
 						input: { command: "bun test", cwd: "apps", timeoutMs: 30_000 },
 					},
 					{
+						toolUseId: "toolu-list",
+						name: executorToolName("ListDocuments"),
+						input: { limit: 20, cursor: "inventory-cursor-secret" },
+					},
+					{
 						toolUseId: "toolu-search",
 						name: executorToolName("SearchDocuments"),
 						input: {
@@ -134,6 +139,22 @@ describe("durable tool-event conformance", () => {
 				],
 			}),
 			toolResultUserMessage([
+				{
+					toolUseId: "toolu-list",
+					text: executorResult({
+						total: 42,
+						documents: [
+							{
+								documentId: "inventory-document-secret",
+								title: "Inventory title",
+								sourceType: "pdf",
+								language: "en",
+								createdAt: "2026-07-15T00:00:00.000Z",
+							},
+						],
+						nextCursor: "next-inventory-cursor-secret",
+					}),
+				},
 				{
 					toolUseId: "toolu-search",
 					text: executorResult({
@@ -267,8 +288,8 @@ describe("durable tool-event conformance", () => {
 		expect(rows.map((row) => row.type)).toEqual([
 			RunEventType.Started,
 			RunEventType.AssistantText,
-			...Array<RunEventType>(7).fill(RunEventType.ToolUse),
-			...Array<RunEventType>(7).fill(RunEventType.ToolResult),
+			...Array<RunEventType>(8).fill(RunEventType.ToolUse),
+			...Array<RunEventType>(8).fill(RunEventType.ToolResult),
 			RunEventType.ToolUse,
 			RunEventType.Done,
 		]);
@@ -278,7 +299,7 @@ describe("durable tool-event conformance", () => {
 				row.type === RunEventType.ToolUse ||
 				row.type === RunEventType.ToolResult,
 		);
-		expect(toolRows).toHaveLength(15);
+		expect(toolRows).toHaveLength(17);
 		for (const row of toolRows) {
 			const guardValid =
 				row.type === RunEventType.ToolUse
@@ -396,8 +417,26 @@ describe("durable tool-event conformance", () => {
 			},
 			{
 				type: "tool_use",
+				tool: "ListDocuments",
+				arguments: { limit: 20, cursorProvided: true },
+				truncated: false,
+			},
+			{
+				type: "tool_use",
 				tool: "SearchDocuments",
 				arguments: { query: "quarterly roadmap" },
+				truncated: false,
+			},
+			{
+				type: "tool_result",
+				tool: "ListDocuments",
+				result: {
+					total: 42,
+					returnedCount: 1,
+					hasMore: true,
+					documents: [{ title: "Inventory title" }],
+				},
+				isError: false,
 				truncated: false,
 			},
 			{
@@ -504,6 +543,8 @@ describe("durable tool-event conformance", () => {
 			"16",
 			"17",
 			"18",
+			"19",
+			"20",
 		]);
 
 		const writeUse = frames.find(
@@ -519,14 +560,16 @@ describe("durable tool-event conformance", () => {
 		expect(serializedFrames).not.toContain("database password");
 		expect(serializedFrames).not.toContain("unknown-tool-secret");
 		expect(serializedFrames).not.toContain("unknown-result-secret");
+		expect(serializedFrames).not.toContain("inventory-cursor-secret");
+		expect(serializedFrames).not.toContain("inventory-document-secret");
 
 		const reconnected = await drain(
-			projectRun(RUN_ID, 16, { reader, notifier: new InstantNotifier() }),
+			projectRun(RUN_ID, 18, { reader, notifier: new InstantNotifier() }),
 		);
 		expect(reconnected).toEqual([
 			{
-				seq: 17,
-				id: "17",
+				seq: 19,
+				id: "19",
 				frame: {
 					type: "tool_use",
 					tool: "LoadDocuments",
@@ -534,7 +577,7 @@ describe("durable tool-event conformance", () => {
 					truncated: false,
 				},
 			},
-			{ seq: 18, id: "18", frame: { type: "done" } },
+			{ seq: 20, id: "20", frame: { type: "done" } },
 		]);
 	});
 });

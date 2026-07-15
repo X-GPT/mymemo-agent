@@ -80,6 +80,7 @@ const startRunQuery = createStartRunQuery({
 	fileLimits: config.fileLimits,
 	bashLimits: config.bashLimits,
 	documentSearchMaxResults: config.maxDocumentSearchResults,
+	documentListMaxResults: config.maxDocumentListResults,
 	documentLoad: config.documentLoad,
 	ensureWorkingDirectory: async (path) => {
 		await mkdir(path, { recursive: true });

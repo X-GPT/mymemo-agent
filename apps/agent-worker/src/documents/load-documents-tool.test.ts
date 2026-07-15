@@ -42,6 +42,9 @@ function makeClient(
 	const fetchCalls: FetchArgs[] = [];
 	return {
 		fetchCalls,
+		async listDocuments() {
+			throw new Error("not used");
+		},
 		async searchDocuments() {
 			throw new Error("not used");
 		},

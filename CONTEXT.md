@@ -68,15 +68,31 @@ outcome at every layer — status `done`, run event `run_done`, client frame
 `done`; likewise `error`/`run_error` and `canceled`/`run_canceled`.
 _Avoid_: completed, failed, finished, succeeded
 
-**Document**:
-An item in the MyMemo knowledge base: an ingested summary (immutable once
-created) or a user-created document (editable). Documents can be
-deactivated; queries only ever see active ones.
-_Avoid_: file (that word means workspace files in the sandbox)
+**Searchable document**:
+An immutable item in the MyMemo knowledge base whose identity is stable across
+indexed versions. Searchable documents can be deactivated; a conversation's
+document inventory counts each active one once within its frozen scope.
+_Avoid_: document (ambiguous), workspace document, file
+
+**Indexed document version**:
+One immutable indexed representation of a searchable document. Reindexing can
+create a new version without creating another document-inventory item. The
+highest active version is the searchable document's current version.
+_Avoid_: searchable document (that is the stable item across versions)
+
+**Workspace document**:
+An editable document created inside a conversation's workspace. It is user
+work and never belongs to the searchable document inventory.
+_Avoid_: searchable document, knowledge-base document
+
+**Document inventory**:
+The distinct active searchable documents visible within a conversation's
+frozen scope. Inventory counts and browsing never widen beyond that scope.
+_Avoid_: library (that can imply every document owned by the user)
 
 **Passage**:
-An indexed chunk of a document — the search and citation unit. A passage
-points at its document.
+An indexed chunk of a searchable document — the search and citation unit. A
+passage points at its searchable document.
 _Avoid_: chunk, excerpt
 
 **Workspace**:
@@ -89,13 +105,14 @@ _Avoid_: sandbox (that is the runtime; the workspace is its filesystem)
 
 **Docs cache**:
 The reserved directory in a conversation's sandbox workspace where loaded
-document content is materialized. Reconstructible from the KB, persists
-across turns, never user work, dies with the conversation.
+searchable-document content is materialized. Reconstructible from the KB,
+persists across turns, never user work, dies with the conversation.
 _Avoid_: document store, workspace docs
 
 **Load**:
-Materializing a document's full content into the docs cache, disk-only, with
-a metadata-only result. Re-loading a document refreshes its cached copy.
+Materializing a searchable document's full content into the docs cache,
+disk-only, with a metadata-only result. Re-loading a searchable document
+refreshes its cached copy.
 _Avoid_: fetch (the prototype path's word for content-into-context)
 
 **Agent session**:

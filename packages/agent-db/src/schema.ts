@@ -5,6 +5,7 @@ import {
 	boolean,
 	check,
 	index,
+	integer,
 	jsonb,
 	pgTable,
 	primaryKey,
@@ -273,10 +274,11 @@ export const agentSessions = pgTable(
 
 /**
  * Audit ledger for trusted document access performed by agent-worker: which
- * scoped documents a run searched or fetched, under which scope filter. Kept
- * separate from `run_events` because its job differs — security/compliance
- * queries, and retention/access controls that can diverge from chat-visible
- * run events. For that same reason there is deliberately no FK to `runs`:
+ * scoped documents a run listed, searched, or loaded, under which scope
+ * filter. Kept separate from `run_events` because its job differs —
+ * security/compliance queries, and retention/access controls that can diverge
+ * from chat-visible run events. For that same reason there is deliberately no
+ * FK to `runs`:
  * audit rows must survive run cleanup, so cascade would erase the ledger and
  * restrict would block retention. Full document content is never stored here.
  */
@@ -287,24 +289,32 @@ export const documentAccessEvents = pgTable(
 		runId: text("run_id").notNull(),
 		conversationId: text("conversation_id").notNull(),
 		userId: text("user_id").notNull(),
+		/** 'search' | 'list' | 'load'. */
+		operation: text("operation").notNull(),
 		/** The scope filter the access was policy-checked against. */
 		scopeType: text("scope_type").notNull(),
 		/** Collection/summary id for scoped access; NULL for general scope. */
 		scopeId: text("scope_id"),
-		/** Search query text; NULL for direct fetch/load access. */
+		/** Search query text; NULL for list/load access. */
 		query: text("query"),
-		/** Document ids returned/fetched; empty array for a no-hit search. */
+		/** Page/search/load document ids; empty for an empty list/search result. */
 		documentIds: text("document_ids").array().notNull(),
+		/** Operation-defined count returned to the model; NULL on historical rows. */
+		resultCount: integer("result_count"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
 	},
 	(t) => [
 		check(
+			"document_access_events_operation_check",
+			sql`${t.operation} in ('search', 'list', 'load')`,
+		),
+		check(
 			"document_access_events_scope_type_check",
 			sql`${t.scopeType} in ('general', 'collection', 'document')`,
 		),
-		// Audit query path: "which documents did this run search or fetch?"
+		// Audit query path: "which documents did this run list, search, or load?"
 		index("document_access_events_run_id_idx").on(t.runId),
 		// Retention sweeps age the ledger out by time, independent of runs.
 		index("document_access_events_created_at_idx").on(t.createdAt),

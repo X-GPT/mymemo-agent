@@ -232,10 +232,12 @@ describe("document access audit schema", () => {
 				runId: "run-1",
 				conversationId: "conv-1",
 				userId: "user-1",
+				operation: "search",
 				scopeType: "collection",
 				scopeId: "coll-1",
 				query: "quarterly report",
 				documentIds: ["doc-1", "doc-2"],
+				resultCount: 3,
 			})
 			.returning();
 
@@ -243,10 +245,12 @@ describe("document access audit schema", () => {
 			runId: "run-1",
 			conversationId: "conv-1",
 			userId: "user-1",
+			operation: "search",
 			scopeType: "collection",
 			scopeId: "coll-1",
 			query: "quarterly report",
 			documentIds: ["doc-1", "doc-2"],
+			resultCount: 3,
 		});
 		expect(event?.id).toBeGreaterThan(0);
 		expect(event?.createdAt).toBeInstanceOf(Date);
@@ -259,16 +263,19 @@ describe("document access audit schema", () => {
 				runId: "run-1",
 				conversationId: "conv-1",
 				userId: "user-1",
+				operation: "list",
 				scopeType: "general",
 				documentIds: [],
 			})
 			.returning();
 
 		expect(event).toMatchObject({
+			operation: "list",
 			scopeType: "general",
 			scopeId: null,
 			query: null,
 			documentIds: [],
+			resultCount: null,
 		});
 	});
 
@@ -278,7 +285,21 @@ describe("document access audit schema", () => {
 				runId: "run-1",
 				conversationId: "conv-1",
 				userId: "user-1",
+				operation: "search",
 				scopeType: "everything",
+				documentIds: [],
+			}),
+		);
+	});
+
+	it("rejects invalid operations", async () => {
+		await expectDbWriteToFail(() =>
+			tdb.db.insert(documentAccessEvents).values({
+				runId: "run-1",
+				conversationId: "conv-1",
+				userId: "user-1",
+				operation: "enumerate",
+				scopeType: "general",
 				documentIds: [],
 			}),
 		);

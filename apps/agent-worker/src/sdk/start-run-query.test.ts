@@ -304,6 +304,7 @@ function buildHarness(
 		},
 		bashLimits: DEFAULT_BASH_TOOL_LIMITS,
 		documentSearchMaxResults: 8,
+		documentListMaxResults: 20,
 		documentLoad: {
 			maxDocuments: 10,
 			perDocumentMaxBytes: 1024,
@@ -378,6 +379,13 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		expect(options?.model).toBe("anthropic/claude-test");
 		expect(options?.pathToClaudeCodeExecutable).toBe("/opt/sdk/cli/claude");
 		expect(options?.abortController).toBeInstanceOf(AbortController);
+	});
+
+	it("teaches the model to use inventory separately from passage search and loading", () => {
+		expect(MYMEMO_SYSTEM_PROMPT).toContain("ListDocuments");
+		expect(MYMEMO_SYSTEM_PROMPT).toContain("count");
+		expect(MYMEMO_SYSTEM_PROMPT).toContain("SearchDocuments");
+		expect(MYMEMO_SYSTEM_PROMPT).toContain("LoadDocuments");
 	});
 
 	it("spreads the model-client env over the process env plus the ephemeral config dir", async () => {

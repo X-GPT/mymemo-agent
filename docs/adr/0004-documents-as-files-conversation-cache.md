@@ -22,8 +22,8 @@ of model context, run events, and tool-result persistence entirely.
 - **Turn-scoped cache** (materialize, delete before end-of-turn checkpoint) —
   rejected: re-copies the same content every turn, which is pure waste for
   `document`-scope conversations that exist to work over one document. KB
-  summaries are immutable once created, which removes the staleness argument
-  for aggressive expiry.
+  searchable documents are immutable, which removes the staleness argument for
+  aggressive expiry.
 - **Conversation-scoped cache** (chosen).
 
 ## Consequences
@@ -33,10 +33,11 @@ of model context, run events, and tool-result persistence entirely.
   a side effect; conversation-deletion cleanup (which kills the sandbox and
   snapshots) is the deletion path. A document deleted (deactivated) in the KB
   keeps its cached copies until the conversations that loaded it are deleted.
-- Staleness: user-created documents are editable and are reachable through
-  conversation scope, so a cached copy can go stale across turns. V1 accepts
-  this; `LoadDocuments` is refresh-on-load (re-loading an id overwrites the
-  cached file), and no turn-start revalidation machinery is added.
+- Searchable documents are immutable. Editable workspace documents are a
+  separate kind of document and are never returned by the document query tools
+  or copied into this cache. `LoadDocuments` remains refresh-on-load:
+  re-loading an id overwrites the cached file without requiring turn-start
+  revalidation machinery.
 - The cache never marks the workspace dirty: dirty tracking decides when
   user work needs a checkpoint, and a cache reconstructible from the KB never
   does by itself. A restored sandbox may arrive with an empty or stale cache;

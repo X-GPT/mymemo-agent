@@ -104,6 +104,8 @@ describe("searchDocuments — scope-derived query filters", () => {
 		expect(search).toBeDefined();
 		expect(search?.params[0]).toBe("member-1");
 		expect(search?.params[1]).toBe("hello");
+		expect(search?.text).toContain("DISTINCT ON (d.source_asset_id)");
+		expect(search?.text).toContain("d.version DESC");
 		expect(search?.text).not.toContain("passage_collection");
 		expect(search?.text).not.toContain("document_id IN");
 	});
@@ -134,6 +136,8 @@ describe("searchDocuments — scope-derived query filters", () => {
 
 		const resolve = kb.calls.find((c) => c.text.includes("content_asset"));
 		expect(resolve?.params).toEqual(["12345", "member-1"]);
+		expect(resolve?.text).toContain("JOIN document mapped");
+		expect(resolve?.text).toContain("current_doc.version DESC");
 		const search = kb.calls.find(isSearch);
 		expect(search?.text).toContain("document_id IN");
 		expect(search?.params).toContain("kb-doc-9");
@@ -156,10 +160,12 @@ describe("searchDocuments — scope-derived query filters", () => {
 			"run-1",
 			"conv-1",
 			"member-1",
+			"search",
 			"document",
 			"12345",
 			"hello",
 			[],
+			0,
 		]);
 	});
 });
@@ -200,6 +206,183 @@ describe("searchDocuments — result bounds", () => {
 	});
 });
 
+describe("listDocuments — logical inventory", () => {
+	it("returns the exact total and one newest-first page of current versions", async () => {
+		kb.respond((text) =>
+			text.includes("jsonb_agg")
+				? [
+						{
+							total: 2,
+							documents: [
+								{
+									documentId: "doc-v3",
+									sourceAssetId: "asset-1",
+									title: "Newest",
+									sourceType: "pdf",
+									language: "en",
+									createdAt: "2026-07-10T12:00:00.000Z",
+								},
+								{
+									documentId: "doc-v8",
+									sourceAssetId: "asset-2",
+									title: "Older",
+									sourceType: "note",
+									language: "zh",
+									createdAt: "2026-06-01T08:00:00.000Z",
+								},
+							],
+						},
+					]
+				: [],
+		);
+
+		const result = await client.listDocuments({
+			binding,
+			scope: { type: "general" },
+			limit: 1,
+			after: null,
+		});
+
+		expect(result).toEqual({
+			total: 2,
+			documents: [
+				{
+					documentId: "doc-v3",
+					title: "Newest",
+					sourceType: "pdf",
+					language: "en",
+					createdAt: "2026-07-10T12:00:00.000Z",
+				},
+			],
+			next: {
+				createdAt: "2026-07-10T12:00:00.000Z",
+				sourceAssetId: "asset-1",
+			},
+		});
+		const query = kb.calls.find((call) => call.text.includes("jsonb_agg"));
+		expect(query?.text).toContain("DISTINCT ON (d.source_asset_id)");
+		expect(query?.text).toContain("d.version DESC");
+		expect(query?.text).toContain("sa.status = 'ready'");
+		expect(query?.params).toEqual(["member-1", 2]);
+	});
+
+	it("audits the list operation, returned page ids, and exact disclosed total", async () => {
+		kb.respond((text) =>
+			text.includes("jsonb_agg")
+				? [
+						{
+							total: 42,
+							documents: [
+								{
+									documentId: "doc-v3",
+									sourceAssetId: "asset-1",
+									title: "Newest",
+									sourceType: "pdf",
+									language: "en",
+									createdAt: "2026-07-10T12:00:00.000Z",
+								},
+							],
+						},
+					]
+				: [],
+		);
+
+		await client.listDocuments({
+			binding,
+			scope: { type: "general" },
+			limit: 20,
+			after: null,
+		});
+
+		const audits = agent.calls.filter(isAuditInsert);
+		expect(audits).toHaveLength(1);
+		expect(audits[0]?.params).toEqual([
+			"run-1",
+			"conv-1",
+			"member-1",
+			"list",
+			"general",
+			null,
+			null,
+			["doc-v3"],
+			42,
+		]);
+	});
+
+	it("derives collection scope and cursor filters without accepting model filters", async () => {
+		await client.listDocuments({
+			binding,
+			scope: { type: "collection", collectionId: "coll-7" },
+			limit: 5,
+			after: {
+				createdAt: "2026-07-10T12:00:00.000Z",
+				sourceAssetId: "asset-1",
+			},
+		});
+
+		const query = kb.calls.find((call) => call.text.includes("jsonb_agg"));
+		expect(query?.text).toContain("passage_collection");
+		expect(query?.text).toContain("p.status = 'active'");
+		expect(query?.text).toContain('(sd."createdAt", sd."sourceAssetId") <');
+		expect(query?.params).toEqual([
+			"member-1",
+			"coll-7",
+			"2026-07-10T12:00:00.000Z",
+			"asset-1",
+			6,
+		]);
+	});
+
+	it("fails a missing document scope closed without running an inventory query", async () => {
+		const result = await client.listDocuments({
+			binding,
+			scope: { type: "document", summaryId: "12345" },
+			limit: 20,
+			after: null,
+		});
+
+		expect(result).toEqual({ total: 0, documents: [], next: null });
+		expect(kb.calls.some((call) => call.text.includes("jsonb_agg"))).toBe(
+			false,
+		);
+		expect(agent.calls.filter(isAuditInsert)[0]?.params).toEqual([
+			"run-1",
+			"conv-1",
+			"member-1",
+			"list",
+			"document",
+			"12345",
+			null,
+			[],
+			0,
+		]);
+	});
+
+	it("reduces inventory query failures to a fixed model-safe message", async () => {
+		client = createScopedDocumentQueryClient({
+			kbDb: {
+				async query() {
+					throw new Error("postgresql://reader:secret@kb.internal/mymemo_kb");
+				},
+			},
+			agentDb: agent.db,
+			logger: noopLogger,
+		});
+
+		const rejection = await rejectionOf(
+			client.listDocuments({
+				binding,
+				scope: { type: "general" },
+				limit: 20,
+				after: null,
+			}),
+		);
+		expect(rejection).toBeInstanceOf(DocumentQueryError);
+		expect(rejection.message).toBe("document list failed");
+		expect(rejection.message).not.toContain("secret");
+	});
+});
+
 describe("searchDocuments — audit ledger", () => {
 	it("writes one audit row carrying binding, scope, query, and returned document ids", async () => {
 		kb.respond((text) =>
@@ -221,15 +404,18 @@ describe("searchDocuments — audit ledger", () => {
 		const audits = agent.calls.filter(isAuditInsert);
 		expect(audits).toHaveLength(1);
 		// Column order documented on recordDocumentAccess:
-		// (run_id, conversation_id, user_id, scope_type, scope_id, query, document_ids)
+		// (run_id, conversation_id, user_id, operation, scope_type, scope_id,
+		//  query, document_ids, result_count)
 		expect(audits[0]?.params).toEqual([
 			"run-1",
 			"conv-1",
 			"member-1",
+			"search",
 			"general",
 			null,
 			"hello",
 			["d1", "d2"], // deduplicated, in first-hit order
+			3,
 		]);
 	});
 
@@ -244,7 +430,9 @@ describe("searchDocuments — audit ledger", () => {
 
 		const audits = agent.calls.filter(isAuditInsert);
 		expect(audits).toHaveLength(1);
-		expect(audits[0]?.params?.[6]).toEqual([]);
+		expect(audits[0]?.params?.[3]).toBe("search");
+		expect(audits[0]?.params?.[7]).toEqual([]);
+		expect(audits[0]?.params?.[8]).toBe(0);
 	});
 });
 
@@ -306,7 +494,7 @@ describe("searchDocuments — bounded errors", () => {
 	});
 });
 
-const isFetch = (c: Call) => /FROM document\b/.test(c.text);
+const isFetch = (c: Call) => c.text.includes("canonical_markdown");
 const OUT_OF_SCOPE = "document is not available in this conversation's scope";
 
 function respondFetch(row: {
@@ -342,10 +530,14 @@ describe("fetchDocumentInScope — scope guard and audit", () => {
 		const fetch = kb.calls.find(isFetch);
 		expect(fetch?.params?.[0]).toBe("d1");
 		expect(fetch?.params?.[1]).toBe("member-1"); // workspace pin
+		expect(fetch?.text).toContain("NOT EXISTS");
+		expect(fetch?.text).toContain("newer.version > d.version");
 		const audits = agent.calls.filter(isAuditInsert);
 		expect(audits).toHaveLength(1);
-		expect(audits[0]?.params?.[5]).toBeNull(); // query is null for a fetch
-		expect(audits[0]?.params?.[6]).toEqual(["d1"]);
+		expect(audits[0]?.params?.[3]).toBe("load");
+		expect(audits[0]?.params?.[6]).toBeNull();
+		expect(audits[0]?.params?.[7]).toEqual(["d1"]);
+		expect(audits[0]?.params?.[8]).toBe(1);
 	});
 
 	it("document scope: rejects a document other than the frozen one before any fetch", async () => {

@@ -15,7 +15,7 @@ import { EXECUTOR_SERVER_NAME } from "./run-tools";
  * and the run continues (fail closed — a surprising shape degrades visibility,
  * not correctness).
  *
- * All eight executor tools have bounded client projections.
+ * All nine executor tools have bounded client projections.
  */
 
 /** Hard cap on one tool event: 16 KiB of UTF-8 JSON after projection. An event
@@ -43,6 +43,7 @@ const GLOB_RESULT_MAX_PATHS = 40;
 const LIST_PATH_PREVIEW_MAX_JSON_BYTES = 256;
 const MATCH_TEXT_PREVIEW_MAX_JSON_BYTES = 256;
 const SEARCH_PASSAGE_PREVIEW_MAX_ITEMS = 5;
+const LIST_DOCUMENT_TITLE_PREVIEW_MAX_ITEMS = 10;
 const LOAD_TITLE_PREVIEW_MAX_ITEMS = 10;
 const LOAD_FAILURE_SUMMARY = "Some documents could not be loaded";
 
@@ -52,7 +53,7 @@ const LOAD_FAILURE_SUMMARY = "Some documents could not be loaded";
 const TOOL_FAILED_RESULT = { message: "Tool failed" } as const;
 
 /**
- * The allowlist from the executor server's prefixed tool names to the eight
+ * The allowlist from the executor server's prefixed tool names to the nine
  * short public names. Only names in this map may ever reach the client stream;
  * unknown, built-in, or permission-denied tool names map to `null` and their
  * events are omitted. A drift pin ties this map's domain to the executor tools
@@ -66,6 +67,7 @@ const PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME: ReadonlyMap<string, PublicToolName> =
 		[`mcp__${EXECUTOR_SERVER_NAME}__Grep`, "Grep"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__Glob`, "Glob"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__Bash`, "Bash"],
+		[`mcp__${EXECUTOR_SERVER_NAME}__ListDocuments`, "ListDocuments"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__SearchDocuments`, "SearchDocuments"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__LoadDocuments`, "LoadDocuments"],
 	]);
@@ -97,6 +99,9 @@ export function projectToolUse(
 ): ToolEventProjection<ToolUsePayload> {
 	if (tool === "SearchDocuments") {
 		return projectSearchDocumentsUse(input);
+	}
+	if (tool === "ListDocuments") {
+		return projectListDocumentsUse(input);
 	}
 	if (tool === "LoadDocuments") {
 		return projectLoadDocumentsUse(input);
@@ -135,6 +140,29 @@ function projectSearchDocumentsUse(
 		tool: "SearchDocuments",
 		arguments: { query: query.text },
 		truncated: query.clipped,
+	});
+}
+
+function projectListDocumentsUse(
+	input: unknown,
+): ToolEventProjection<ToolUsePayload> {
+	if (
+		!isRecord(input) ||
+		(input.limit !== undefined && !isFiniteNumber(input.limit)) ||
+		(input.cursor !== undefined && typeof input.cursor !== "string")
+	) {
+		return {
+			ok: false,
+			reason: "ListDocuments arguments did not match the executor shape",
+		};
+	}
+	return fitOrOmit({
+		tool: "ListDocuments",
+		arguments: {
+			...(input.limit === undefined ? {} : { limit: input.limit }),
+			cursorProvided: typeof input.cursor === "string",
+		},
+		truncated: false,
 	});
 }
 
@@ -391,6 +419,8 @@ export function projectToolResult(
 			return projectGlobResult(content);
 		case "Bash":
 			return projectBashResult(content);
+		case "ListDocuments":
+			return projectListDocumentsResult(content);
 		case "SearchDocuments":
 			return projectSearchDocumentsResult(content);
 		case "LoadDocuments":
@@ -568,6 +598,40 @@ function projectSearchDocumentsResult(
 	});
 }
 
+function projectListDocumentsResult(
+	content: unknown,
+): ToolEventProjection<ToolResultPayload> {
+	const raw = parseListDocumentsResult(content);
+	if (raw === null) {
+		return {
+			ok: false,
+			reason: "ListDocuments result did not match the executor shape",
+		};
+	}
+	let clipped = raw.titles.length > LIST_DOCUMENT_TITLE_PREVIEW_MAX_ITEMS;
+	const documents = raw.titles
+		.slice(0, LIST_DOCUMENT_TITLE_PREVIEW_MAX_ITEMS)
+		.map((rawTitle) => {
+			const title = clampJsonString(
+				rawTitle,
+				DOCUMENT_TITLE_PREVIEW_MAX_JSON_BYTES,
+			);
+			clipped ||= title.clipped;
+			return { title: title.text };
+		});
+	return fitOrOmit({
+		tool: "ListDocuments",
+		result: {
+			total: raw.total,
+			returnedCount: raw.titles.length,
+			hasMore: raw.hasMore,
+			documents,
+		},
+		isError: false,
+		truncated: clipped,
+	});
+}
+
 function projectLoadDocumentsResult(
 	content: unknown,
 ): ToolEventProjection<ToolResultPayload> {
@@ -637,6 +701,38 @@ function projectReadResult(
 interface RawSearchPassage {
 	title: string;
 	snippet: string;
+}
+
+interface RawListDocumentsResult {
+	total: number;
+	titles: string[];
+	hasMore: boolean;
+}
+
+function parseListDocumentsResult(
+	content: unknown,
+): RawListDocumentsResult | null {
+	const parsed = parseExecutorResult(content);
+	if (
+		parsed === null ||
+		!isFiniteNumber(parsed.total) ||
+		!Number.isInteger(parsed.total) ||
+		parsed.total < 0 ||
+		!Array.isArray(parsed.documents) ||
+		!(parsed.nextCursor === null || typeof parsed.nextCursor === "string")
+	) {
+		return null;
+	}
+	const titles: string[] = [];
+	for (const document of parsed.documents) {
+		if (!isRecord(document) || typeof document.title !== "string") return null;
+		titles.push(document.title);
+	}
+	return {
+		total: parsed.total,
+		titles,
+		hasMore: parsed.nextCursor !== null,
+	};
 }
 
 function parseSearchDocumentsResult(
