@@ -5,7 +5,7 @@ resource "aws_ecs_task_definition" "chat_api" {
   cpu                      = var.chat_api_cpu
   memory                   = var.chat_api_memory
   execution_role_arn       = aws_iam_role.task_execution.arn
-  task_role_arn            = aws_iam_role.task.arn
+  task_role_arn            = aws_iam_role.chat_api_task.arn
 
   container_definitions = jsonencode([
     {
@@ -47,7 +47,7 @@ resource "aws_ecs_task_definition" "agent_worker" {
   cpu                      = var.agent_worker_cpu
   memory                   = var.agent_worker_memory
   execution_role_arn       = aws_iam_role.task_execution.arn
-  task_role_arn            = aws_iam_role.task.arn
+  task_role_arn            = aws_iam_role.agent_worker_task.arn
 
   container_definitions = jsonencode([
     {
@@ -89,7 +89,7 @@ resource "aws_ecs_task_definition" "agent_migration" {
   cpu                      = 512
   memory                   = 1024
   execution_role_arn       = aws_iam_role.task_execution.arn
-  task_role_arn            = aws_iam_role.task.arn
+  task_role_arn            = aws_iam_role.agent_migration_task.arn
 
   container_definitions = jsonencode([
     {
