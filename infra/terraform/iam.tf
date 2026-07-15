@@ -35,7 +35,17 @@ resource "aws_iam_role_policy" "task_execution_read_secrets" {
   policy = data.aws_iam_policy_document.read_secrets.json
 }
 
-resource "aws_iam_role" "task" {
-  name               = "${local.common_name}-task"
+resource "aws_iam_role" "chat_api_task" {
+  name               = "${local.common_name}-chat-api-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
+}
+
+resource "aws_iam_role" "agent_worker_task" {
+  name               = "${local.common_name}-worker-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
+}
+
+resource "aws_iam_role" "agent_migration_task" {
+  name               = "${local.common_name}-migration-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }

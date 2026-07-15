@@ -52,6 +52,48 @@ describe("agent deployment config", () => {
 		expect(combined).toContain("shared_ecs_subnet_ids");
 	});
 
+	it("separates application task roles without adding artifact permissions", () => {
+		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
+		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
+		const terraformConfig = terraformFiles()
+			.map((path) => readFileSync(path, "utf8"))
+			.join("\n");
+		const taskRoles = [
+			"chat_api_task",
+			"agent_worker_task",
+			"agent_migration_task",
+		];
+
+		expect(ecsConfig).toMatch(
+			/resource "aws_ecs_task_definition" "chat_api" \{[\s\S]*?execution_role_arn\s*=\s*aws_iam_role\.task_execution\.arn[\s\S]*?task_role_arn\s*=\s*aws_iam_role\.chat_api_task\.arn/,
+		);
+		expect(ecsConfig).toMatch(
+			/resource "aws_ecs_task_definition" "agent_worker" \{[\s\S]*?execution_role_arn\s*=\s*aws_iam_role\.task_execution\.arn[\s\S]*?task_role_arn\s*=\s*aws_iam_role\.agent_worker_task\.arn/,
+		);
+		expect(ecsConfig).toMatch(
+			/resource "aws_ecs_task_definition" "agent_migration" \{[\s\S]*?execution_role_arn\s*=\s*aws_iam_role\.task_execution\.arn[\s\S]*?task_role_arn\s*=\s*aws_iam_role\.agent_migration_task\.arn/,
+		);
+		expect(
+			ecsConfig.match(
+				/execution_role_arn\s*=\s*aws_iam_role\.task_execution\.arn/g,
+			),
+		).toHaveLength(3);
+
+		for (const role of taskRoles) {
+			expect(iamConfig).toContain(`resource "aws_iam_role" "${role}"`);
+			expect(
+				terraformConfig.match(
+					new RegExp(`\\baws_iam_role\\.${role}\\.(?:arn|id|name)\\b`, "g"),
+				),
+			).toHaveLength(1);
+		}
+		expect(iamConfig).not.toContain('resource "aws_iam_role" "task"');
+		expect(terraformConfig).not.toMatch(/\bs3:/i);
+		expect(
+			iamConfig.match(/role\s*=\s*aws_iam_role\.task_execution\.(?:name|id)/g),
+		).toHaveLength(2);
+	});
+
 	it("provisions the disposable Redis live lane inside the trusted service network", () => {
 		const redisConfig = readFileSync(join(terraformDir, "redis.tf"), "utf8");
 		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
