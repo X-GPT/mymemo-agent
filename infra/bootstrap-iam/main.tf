@@ -213,6 +213,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "iam:GetRole",
       "iam:GetRolePolicy",
       "iam:ListAttachedRolePolicies",
+      "iam:ListInstanceProfilesForRole",
       "iam:ListPolicyVersions",
       "iam:ListRolePolicies",
       "iam:PassRole",
