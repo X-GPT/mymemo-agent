@@ -52,7 +52,7 @@ describe("agent deployment config", () => {
 		expect(combined).toContain("shared_ecs_subnet_ids");
 	});
 
-	it("separates application task roles without adding artifact permissions", () => {
+	it("separates application task roles and grants artifact reads only to chat-api", () => {
 		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
 		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
 		const terraformConfig = terraformFiles()
@@ -85,13 +85,65 @@ describe("agent deployment config", () => {
 				terraformConfig.match(
 					new RegExp(`\\baws_iam_role\\.${role}\\.(?:arn|id|name)\\b`, "g"),
 				),
-			).toHaveLength(1);
+			).toHaveLength(role === "chat_api_task" ? 2 : 1);
 		}
 		expect(iamConfig).not.toContain('resource "aws_iam_role" "task"');
-		expect(terraformConfig).not.toMatch(/\bs3:/i);
+		expect(iamConfig).toContain('actions   = ["s3:GetObject"]');
+		expect(iamConfig).toContain("role   = aws_iam_role.chat_api_task.id");
+		expect(iamConfig).not.toMatch(/s3:(PutObject|DeleteObject|ListBucket)/);
+		expect(iamConfig).not.toMatch(
+			/role\s*=\s*aws_iam_role\.(?:agent_worker_task|agent_migration_task)\.(?:id|name)[\s\S]*?s3:/,
+		);
 		expect(
 			iamConfig.match(/role\s*=\s*aws_iam_role\.task_execution\.(?:name|id)/g),
 		).toHaveLength(2);
+	});
+
+	it("provisions the private Downloadable artifact bucket and chat-api read contract", () => {
+		const artifactsConfig = readFileSync(
+			join(terraformDir, "artifacts.tf"),
+			"utf8",
+		);
+		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
+		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
+		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
+		const migrationStart = ecsConfig.indexOf(
+			'resource "aws_ecs_task_definition" "agent_migration"',
+		);
+		const migrationConfig = ecsConfig.slice(migrationStart);
+		const chatEnvironmentStart = locals.indexOf("chat_api_environment");
+		const workerEnvironmentStart = locals.indexOf("agent_worker_environment");
+		const chatEnvironment = locals.slice(
+			chatEnvironmentStart,
+			workerEnvironmentStart,
+		);
+		const workerEnvironment = locals.slice(workerEnvironmentStart);
+
+		expect(artifactsConfig).toContain('resource "aws_s3_bucket" "artifacts"');
+		expect(artifactsConfig).toMatch(
+			/resource "aws_s3_bucket_public_access_block" "artifacts"[\s\S]*?block_public_acls\s*=\s*true[\s\S]*?block_public_policy\s*=\s*true[\s\S]*?ignore_public_acls\s*=\s*true[\s\S]*?restrict_public_buckets\s*=\s*true/,
+		);
+		expect(artifactsConfig).toMatch(
+			/resource "aws_s3_bucket_ownership_controls" "artifacts"[\s\S]*?object_ownership\s*=\s*"BucketOwnerEnforced"/,
+		);
+		expect(artifactsConfig).toMatch(
+			/resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts"[\s\S]*?sse_algorithm\s*=\s*"AES256"/,
+		);
+		expect(artifactsConfig).toMatch(
+			/resource "aws_s3_bucket_versioning" "artifacts"[\s\S]*?status\s*=\s*"Disabled"/,
+		);
+		expect(artifactsConfig).toContain('variable = "aws:SecureTransport"');
+		expect(artifactsConfig).toContain('values   = ["false"]');
+		expect(artifactsConfig).not.toContain("aws_s3_bucket_cors_configuration");
+
+		expect(iamConfig).toContain('actions   = ["s3:GetObject"]');
+		expect(iamConfig).toContain(
+			'resources = ["${aws_s3_bucket.artifacts.arn}/*"]',
+		);
+		expect(chatEnvironment).toContain('{ name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket }');
+		expect(chatEnvironment).toContain('{ name = "AWS_REGION", value = var.aws_region }');
+		expect(workerEnvironment).not.toContain("ARTIFACT_BUCKET");
+		expect(migrationConfig).not.toContain("ARTIFACT_BUCKET");
 	});
 
 	it("provisions the disposable Redis live lane inside the trusted service network", () => {
@@ -416,15 +468,35 @@ describe("agent deployment config", () => {
 		expect(combined).toContain('default     = "mymemo-agent-github-actions-deploy"');
 		expect(combined).toContain('variable "aws_region"');
 		expect(combined).not.toContain('default     = "us-west-2"');
-		expect(bootstrapIamProdTfvars).toContain('aws_region     = "us-west-2"');
+		expect(bootstrapIamProdTfvars).toMatch(/aws_region\s*=\s*"us-west-2"/);
 		expect(combined).toContain('variable "aws_account_id"');
 		expect(combined).not.toContain('default     = "637423444544"');
-		expect(bootstrapIamProdTfvars).toContain('aws_account_id = "637423444544"');
+		expect(bootstrapIamProdTfvars).toMatch(
+			/aws_account_id\s*=\s*"637423444544"/,
+		);
 		expect(combined).toContain("token.actions.githubusercontent.com:sub");
 		expect(combined).toContain("repo:${var.github_owner}/${var.github_repository}:environment:${var.github_environment}");
 		expect(combined).toContain("sts:AssumeRoleWithWebIdentity");
 		expect(combined).toContain("mymemo-agent/bootstrap-iam-prod.tfstate");
 		expect(combined).not.toContain("mymemo-github-actions-deploy");
+		expect(combined).toContain('sid = "ArtifactBucketManagement"');
+		for (const action of [
+			"s3:CreateBucket",
+			"s3:PutBucketOwnershipControls",
+			"s3:PutBucketPolicy",
+			"s3:PutBucketPublicAccessBlock",
+			"s3:PutBucketTagging",
+			"s3:PutBucketVersioning",
+			"s3:PutEncryptionConfiguration",
+		]) {
+			expect(combined).toContain(`"${action}"`);
+		}
+		expect(combined).toContain(
+			'"arn:aws:s3:::${var.artifact_bucket_name}"',
+		);
+		expect(bootstrapIamProdTfvars).toContain(
+			'artifact_bucket_name = "mymemo-agent-prod-artifacts"',
+		);
 	});
 
 	it("release deploy serializes runs and generates unique immutable image tags", () => {
@@ -644,6 +716,8 @@ describe("agent deployment config", () => {
 		const common = {
 			AGENT_DATABASE_URL:
 				"postgresql://agent:agent@db.example.com:5432/mymemo_agent",
+			ARTIFACT_BUCKET: "mymemo-agent-prod-artifacts",
+			AWS_REGION: "us-west-2",
 			DB_SSL: "require",
 			DB_PASSWORD: undefined,
 			LOG_LEVEL: "info",

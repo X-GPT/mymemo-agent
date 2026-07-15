@@ -4,6 +4,7 @@ import {
 	bigserial,
 	boolean,
 	check,
+	foreignKey,
 	index,
 	integer,
 	jsonb,
@@ -122,6 +123,48 @@ export const conversations = pgTable(
 			"conversations_scope_check",
 			sql`${t.scope} in ('general', 'collection', 'document')`,
 		),
+	],
+);
+
+/**
+ * The current Downloadable artifact at each normalized conversation-relative
+ * path (ADR-0010). Postgres is the read-model authority: clients never list S3
+ * objects directly. Replacing an artifact updates this row in place so its
+ * opaque `artifact_id`, path identity, and `created_at` remain stable while the
+ * current object reference and metadata change.
+ */
+export const conversationArtifacts = pgTable(
+	"conversation_artifacts",
+	{
+		artifactId: text("artifact_id").primaryKey(),
+		userId: text("user_id").notNull(),
+		conversationId: text("conversation_id").notNull(),
+		/** Normalized POSIX path relative to `/home/user/artifacts/`. */
+		path: text("path").notNull(),
+		/** Private object-store reference; never exposed in list responses. */
+		objectKey: text("object_key").notNull(),
+		sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+		/** Trusted server-selected type, not sandbox-provided metadata. */
+		contentType: text("content_type").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		uniqueIndex("conversation_artifacts_owner_conversation_path_idx").on(
+			t.userId,
+			t.conversationId,
+			t.path,
+		),
+		foreignKey({
+			columns: [t.userId, t.conversationId],
+			foreignColumns: [conversations.userId, conversations.conversationId],
+			name: "conversation_artifacts_conversation_fk",
+		}).onDelete("cascade"),
+		check("conversation_artifacts_size_bytes_check", sql`${t.sizeBytes} >= 0`),
 	],
 );
 

@@ -30,7 +30,7 @@ import {
 } from "@/features/run-store";
 import type { InternalIdentity } from "./conversations.schema";
 
-const { createApp } = await import("@/index");
+const { createApp } = await import("@/app");
 const silentLiveTextTelemetry = createLiveTextTelemetry("chat-api", {
 	info() {},
 	warn() {},

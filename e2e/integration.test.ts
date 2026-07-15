@@ -143,6 +143,8 @@ describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
 		});
 		chat = spawnApp("chat-api", {
 			AGENT_DATABASE_URL: dbUrl,
+			ARTIFACT_BUCKET: "mymemo-agent-integration-artifacts",
+			AWS_REGION: "us-west-2",
 			DB_SSL: "disable",
 			AGENT_EXPOSURE_BREAK_GLASS: "true",
 			PORT: String(CHAT_PORT),

@@ -10,6 +10,8 @@ function config(liveTextRedisUrl: string | undefined): ApiConfig {
 	return {
 		logLevel: "silent",
 		databaseUrl: "postgresql://u:p@localhost:5432/mymemo_agent",
+		artifactBucket: "mymemo-agent-test-artifacts",
+		artifactRegion: "us-west-2",
 		statsigServerSecret: "statsig-test",
 		agentExposureBreakGlass: false,
 		liveTextRedisUrl,

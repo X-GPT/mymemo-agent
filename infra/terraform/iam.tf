@@ -40,6 +40,19 @@ resource "aws_iam_role" "chat_api_task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }
 
+data "aws_iam_policy_document" "chat_api_artifact_read" {
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "chat_api_artifact_read" {
+  name   = "${local.common_name}-artifact-read"
+  role   = aws_iam_role.chat_api_task.id
+  policy = data.aws_iam_policy_document.chat_api_artifact_read.json
+}
+
 resource "aws_iam_role" "agent_worker_task" {
   name               = "${local.common_name}-worker-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json

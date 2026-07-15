@@ -54,6 +54,25 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
+    sid = "ArtifactBucketManagement"
+    actions = [
+      "s3:CreateBucket",
+      "s3:DeleteBucket",
+      "s3:DeleteBucketPolicy",
+      "s3:GetBucket*",
+      "s3:GetEncryptionConfiguration",
+      "s3:ListBucket",
+      "s3:PutBucketOwnershipControls",
+      "s3:PutBucketPolicy",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketTagging",
+      "s3:PutBucketVersioning",
+      "s3:PutEncryptionConfiguration",
+    ]
+    resources = ["arn:aws:s3:::${var.artifact_bucket_name}"]
+  }
+
+  statement {
     sid = "EcrRepositoryManagement"
     actions = [
       "ecr:BatchCheckLayerAvailability",

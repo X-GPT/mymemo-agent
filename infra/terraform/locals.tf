@@ -65,6 +65,8 @@ locals {
   chat_api_environment = concat([
     { name = "PORT", value = tostring(var.chat_api_port) },
     { name = "LOG_LEVEL", value = var.log_level },
+    { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket },
+    { name = "AWS_REGION", value = var.aws_region },
     { name = "E2B_TEMPLATE", value = var.e2b_template },
     { name = "DB_SSL", value = var.db_ssl },
   ], local.agent_database_url_environment)
