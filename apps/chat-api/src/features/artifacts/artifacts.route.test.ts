@@ -173,7 +173,7 @@ describe("GET /v1/conversations/:conversationId/artifacts", () => {
 	});
 });
 
-describe("GET /v1/conversations/:conversationId/artifacts/:artifactId", () => {
+describe("GET /v1/conversations/:conversationId/artifacts/:artifactId/download-url", () => {
 	it("returns a fresh five-minute attachment download URL for the current object", async () => {
 		const harness = buildApp({
 			artifacts: [
@@ -185,11 +185,11 @@ describe("GET /v1/conversations/:conversationId/artifacts/:artifactId", () => {
 		});
 
 		const first = await harness.app.request(
-			"/v1/conversations/conversation-1/artifacts/stable-artifact-id",
+			"/v1/conversations/conversation-1/artifacts/stable-artifact-id/download-url",
 			{ headers: identityHeaders },
 		);
 		const second = await harness.app.request(
-			"/v1/conversations/conversation-1/artifacts/stable-artifact-id",
+			"/v1/conversations/conversation-1/artifacts/stable-artifact-id/download-url",
 			{ headers: identityHeaders },
 		);
 
@@ -223,7 +223,7 @@ describe("GET /v1/conversations/:conversationId/artifacts/:artifactId", () => {
 	it("returns 404 for a missing or foreign conversation before artifact lookup", async () => {
 		const harness = buildApp({ conversationExists: false });
 		const response = await harness.app.request(
-			"/v1/conversations/conversation-1/artifacts/foreign-artifact",
+			"/v1/conversations/conversation-1/artifacts/foreign-artifact/download-url",
 			{ headers: identityHeaders },
 		);
 
@@ -235,7 +235,7 @@ describe("GET /v1/conversations/:conversationId/artifacts/:artifactId", () => {
 	it("returns 404 without signing when the owned conversation has no such artifact", async () => {
 		const harness = buildApp();
 		const response = await harness.app.request(
-			"/v1/conversations/conversation-1/artifacts/missing-artifact",
+			"/v1/conversations/conversation-1/artifacts/missing-artifact/download-url",
 			{ headers: identityHeaders },
 		);
 
@@ -301,7 +301,7 @@ describe("seeded current-artifact HTTP path", () => {
 			});
 
 			const download = await app.request(
-				"/v1/conversations/conversation-1/artifacts/seeded-artifact",
+				"/v1/conversations/conversation-1/artifacts/seeded-artifact/download-url",
 				{ headers: identityHeaders },
 			);
 			expect(download.status).toBe(200);

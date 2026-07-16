@@ -60,7 +60,7 @@ app.get(
 );
 
 app.get(
-	"/:conversationId/artifacts/:artifactId",
+	"/:conversationId/artifacts/:artifactId/download-url",
 	zValidator(
 		"param",
 		z.object({

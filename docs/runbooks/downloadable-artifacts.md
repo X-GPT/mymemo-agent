@@ -61,8 +61,9 @@ presigned URLs, or provider error details.
 current set from Postgres. The response is path-sorted and contains only
 `artifactId`, `path`, `sizeBytes`, `contentType`, `createdAt`, and `updatedAt`.
 
-`GET /v1/conversations/:conversationId/artifacts/:artifactId` reauthorizes the
-conversation owner and returns `{ downloadUrl }` with a fresh presigned S3 URL.
+`GET /v1/conversations/:conversationId/artifacts/:artifactId/download-url`
+reauthorizes the conversation owner and returns `{ downloadUrl }` with a fresh
+presigned S3 URL.
 The URL expires after five minutes and forces `Content-Disposition: attachment`;
 generated HTML, images, scripts, PDFs, and archives are never rendered inline
 by this contract. V1 does not malware-scan outputs, so clients must label and
