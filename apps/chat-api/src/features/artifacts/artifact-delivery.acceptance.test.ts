@@ -301,10 +301,10 @@ describe("Downloadable artifact delivery acceptance", () => {
 				`/v1/conversations/conversation-1/artifacts/${firstChart.artifactId}`,
 				{ headers: identityHeaders },
 			);
-			expect(firstDownload.status).toBe(302);
-			expect(firstDownload.headers.get("location")).toBe(
-				"https://objects.example/download-1",
-			);
+			expect(firstDownload.status).toBe(200);
+			expect(await firstDownload.json()).toEqual({
+				downloadUrl: "https://objects.example/download-1",
+			});
 			expect(http.signInputs[0]).toEqual({
 				objectKey: firstChart.objectKey,
 				expiresInSeconds: 300,
@@ -342,7 +342,10 @@ describe("Downloadable artifact delivery acceptance", () => {
 				`/v1/conversations/conversation-1/artifacts/${firstReport.artifactId}`,
 				{ headers: identityHeaders },
 			);
-			expect(currentDownload.status).toBe(302);
+			expect(currentDownload.status).toBe(200);
+			expect(await currentDownload.json()).toEqual({
+				downloadUrl: "https://objects.example/download-2",
+			});
 			expect(http.signInputs.at(-1)?.objectKey).toBe(overwritten?.objectKey);
 			const overwrittenList = await artifactList(http.app);
 			expect(JSON.stringify(overwrittenList.body)).not.toContain(

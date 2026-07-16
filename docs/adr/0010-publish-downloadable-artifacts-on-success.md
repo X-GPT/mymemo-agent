@@ -70,18 +70,19 @@ customer-managed KMS key is not required for v1.
 
 Downloads do not proxy object bytes through `chat-api` or `mymemo-service`.
 After the internal request passes the same conversation-ownership gate as the
-rest of the API, `chat-api` returns a short-lived `302` redirect to a presigned
-S3 `GetObject` URL for that one artifact. A listing never contains a reusable
+rest of the API, `chat-api` returns `{ downloadUrl }` containing a presigned S3
+`GetObject` URL for that one artifact. A listing never contains a reusable
 download URL; every download request reauthorizes ownership and creates a fresh
-redirect. Each presigned URL expires after five minutes.
+URL. Each presigned URL expires after five minutes.
 
 `mymemo-service` remains a thin authenticated adapter: it forwards the trusted
-identity headers, relays the list response unchanged, and passes the download
-`302` and `Location` header back to the browser without following it. It does
-not duplicate artifact metadata, receive S3 permissions, or sign URLs.
-`mymemo-web` initiates the download through normal link/navigation rather than
-fetching a blob, so the browser follows the redirect and the private bucket
-needs no CORS policy.
+identity headers, relays the list response unchanged, and consumes the returned
+`downloadUrl`. With same-origin session-cookie authentication it may turn that
+URL into a browser-facing redirect; with bearer-header authentication it returns
+the URL as JSON so `mymemo-web` can fetch it while authenticated and then
+navigate to it. It does not duplicate artifact metadata, receive S3 permissions,
+sign URLs, or proxy object bytes. Neither browser flow fetches the artifact as a
+blob, so the private bucket needs no CORS policy.
 
 The HTTP resource uses a stable opaque `artifactId`. The list endpoint returns
 that id, and the download endpoint addresses

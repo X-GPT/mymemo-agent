@@ -87,13 +87,14 @@ app.get(
 		});
 		if (!artifact) return c.json({ error: "Artifact not found" }, 404);
 
-		const location = await c.var.deps.artifactDownloadSigner.createDownloadUrl({
-			objectKey: artifact.objectKey,
-			expiresInSeconds: 5 * 60,
-			responseContentDisposition: attachmentContentDisposition(artifact.path),
-			responseContentType: artifact.contentType,
-		});
-		return c.redirect(location, 302);
+		const downloadUrl =
+			await c.var.deps.artifactDownloadSigner.createDownloadUrl({
+				objectKey: artifact.objectKey,
+				expiresInSeconds: 5 * 60,
+				responseContentDisposition: attachmentContentDisposition(artifact.path),
+				responseContentType: artifact.contentType,
+			});
+		return c.json({ downloadUrl });
 	},
 );
 

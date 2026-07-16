@@ -257,12 +257,16 @@ describe("agent deployment config", () => {
 			"untrusted generated files",
 			"mymemo-service",
 			"mymemo-web",
+			"downloadUrl",
 			"normal browser navigation",
 		]) {
 			expect(artifactOperationsRunbook).toContain(requiredContract);
 		}
 		expect(artifactOperationsRunbook).toMatch(
-			/without following the\s+redirect/,
+			/With same-origin\s+session-cookie authentication/,
+		);
+		expect(artifactOperationsRunbook).toContain(
+			"With bearer-header authentication",
 		);
 	});
 

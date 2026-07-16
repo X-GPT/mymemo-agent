@@ -62,11 +62,11 @@ current set from Postgres. The response is path-sorted and contains only
 `artifactId`, `path`, `sizeBytes`, `contentType`, `createdAt`, and `updatedAt`.
 
 `GET /v1/conversations/:conversationId/artifacts/:artifactId` reauthorizes the
-conversation owner and returns a fresh `302` to S3. The presigned URL expires
-after five minutes and forces `Content-Disposition: attachment`; generated
-HTML, images, scripts, PDFs, and archives are never rendered inline by this
-contract. V1 does not malware-scan outputs, so clients must label and handle
-them as untrusted generated files.
+conversation owner and returns `{ downloadUrl }` with a fresh presigned S3 URL.
+The URL expires after five minutes and forces `Content-Disposition: attachment`;
+generated HTML, images, scripts, PDFs, and archives are never rendered inline
+by this contract. V1 does not malware-scan outputs, so clients must label and
+handle them as untrusted generated files.
 
 Overwriting one path preserves its stable `artifactId` and immediately makes
 only the new object current. The superseded object is retained for ten minutes
@@ -133,22 +133,25 @@ lifecycle tables.
 
 After deployment, verify that both services boot with `ARTIFACT_BUCKET` and
 `AWS_REGION`, then exercise one Run that writes a small file and confirm `done`,
-list, and attachment redirect behavior. Never follow or log the presigned URL
+list, and signed attachment URL behavior. Never follow or log the presigned URL
 as part of automated diagnostics.
 
 ## Downstream integration contract
 
 `mymemo-service` authenticates the web request, forwards the trusted
 `X-Member-*` and `X-Partner-*` identity headers, relays the list response
-unchanged, and relays the download `302` plus `Location` without following the
-redirect. It must not proxy object bytes, persist artifact metadata, sign URLs,
-or receive artifact-bucket permissions.
+unchanged, and consumes the returned `downloadUrl`. With same-origin
+session-cookie authentication it may turn that URL into a browser-facing
+redirect. With bearer-header authentication it returns the URL as JSON so an
+authenticated web fetch can obtain it before browser navigation. It must not
+proxy object bytes, persist artifact metadata, sign URLs, or receive
+artifact-bucket permissions.
 
 `mymemo-web` refreshes the list after the existing `done` frame. It starts a
-download through a link or other normal browser navigation so the browser
-follows the redirect directly to S3. It must not fetch the object as a
-JavaScript blob or require bucket CORS, and it should present every item as an
-untrusted generated file.
+cookie-authenticated download through a link or other normal browser navigation;
+for bearer authentication it fetches the signed URL and then navigates to it.
+It must not fetch the object as a JavaScript blob or require bucket CORS, and it
+should present every item as an untrusted generated file.
 
 The downstream service and web changes live in their own repositories; no
 `mymemo-service` or `mymemo-web` implementation belongs in this repository.
