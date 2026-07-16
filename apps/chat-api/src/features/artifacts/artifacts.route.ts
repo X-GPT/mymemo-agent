@@ -94,6 +94,7 @@ app.get(
 				responseContentDisposition: attachmentContentDisposition(artifact.path),
 				responseContentType: artifact.contentType,
 			});
+		c.header("Cache-Control", "private, no-store");
 		return c.json({ downloadUrl });
 	},
 );

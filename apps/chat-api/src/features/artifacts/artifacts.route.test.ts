@@ -194,6 +194,7 @@ describe("GET /v1/conversations/:conversationId/artifacts/:artifactId", () => {
 		);
 
 		expect(first.status).toBe(200);
+		expect(first.headers.get("cache-control")).toBe("private, no-store");
 		expect(await first.json()).toEqual({
 			downloadUrl: "https://objects.example/signed-1",
 		});
