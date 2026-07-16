@@ -1,4 +1,4 @@
-# Token streaming via a Redis live lane
+# Live preview via a Redis live lane
 
 Status: accepted (2026-07-10); implementation in progress
 
@@ -8,10 +8,10 @@ implemented. The worker appends one `assistant_text` event per complete
 Assistant message, and chat-api projects it as the authoritative, replayable
 `text_commit`. Coordinated client rollout remains a release concern.
 
-Smooth token streaming cannot use the durable tier for every fragment: one
+A smooth Live preview cannot use the durable tier for every fragment: one
 `text_delta` per token would mean hundreds of fenced `appendRunEventTx` and
-`NOTIFY` transactions per turn. The accepted design therefore separates
-provisional presentation from authoritative transcript storage.
+`NOTIFY` transactions per turn. The accepted design therefore separates the
+provisional Live preview from authoritative Assistant-message storage.
 
 ## Decision
 
@@ -79,8 +79,8 @@ provisional presentation from authoritative transcript storage.
   failure still admits the run immediately onto the Postgres-only path, and a
   failed admission closes the unused subscription. Reconnects retain the weaker
   best-effort behavior below.
-- Redis text is a **provisional live preview**, not committed transcript. Every
-  open connection must converge in place to the exact complete
+- Redis text is a **provisional live preview**, not a committed Assistant
+  message. Every open connection must converge in place to the exact complete
   `assistant_text` recorded in Postgres, including when it joins mid-message or
   Redis fails mid-message. The durable message therefore cannot simply be
   suppressed during live tailing: the client protocol must support a
@@ -93,9 +93,10 @@ provisional presentation from authoritative transcript storage.
 - Every terminal frame discards any uncommitted preview. For `error` and
   `canceled`, this is the normal fate of an interrupted assistant message. A
   `done` with an uncommitted preview is an invariant violation that chat-api
-  records before discarding it. Partial text is never retained in the live
-  transcript when no corresponding durable event exists; preserving
-  interrupted output would require a separate deliberate durable-event design.
+  records before discarding it. Partial text is never retained in the
+  user-visible history when no corresponding durable Run event exists;
+  preserving interrupted output would require a separate deliberate
+  durable-event design.
 - Pub/sub remains retention-free. chat-api forwards a message's live preview
   only while it observes a contiguous `deltaIndex` sequence beginning at zero.
   If a reconnect joins mid-message, or any delta is missed, it suppresses that
@@ -133,7 +134,7 @@ provisional presentation from authoritative transcript storage.
   services and are never passed into E2B.
 - Pub/sub, not Redis Streams: the durable tier is Postgres, so the live lane
   needs no retention. (`NOTIFY` is unsuitable — 8 KB payload cap, not built for
-  high-frequency token streams.)
+  high-frequency `text_delta` publication.)
 
 ## Client reconciliation
 
