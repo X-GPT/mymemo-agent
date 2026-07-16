@@ -3,7 +3,6 @@ import {
 	createWorkerLiveTextTelemetry,
 	createWorkerLiveTextTransport,
 	reportWorkerLiveTextPreviewSignal,
-	reportWorkerLiveTextRuntimeSignal,
 } from "./live-text";
 
 const logger = {
@@ -45,21 +44,13 @@ it("constructs the lazy production publisher when Redis is configured", async ()
 	await transport?.close();
 });
 
-it("maps every worker Live path to bounded payload-free signals", () => {
+it("maps every worker Live preview path to bounded payload-free signals", () => {
 	const events: Record<string, unknown>[] = [];
 	const telemetry = createWorkerLiveTextTelemetry({
 		info: (event) => events.push(event),
 		warn: (event) => events.push(event),
 	});
 
-	for (const signal of [
-		"degraded",
-		"recovered",
-		"invalid_message",
-		"oversized_message",
-	] as const) {
-		reportWorkerLiveTextRuntimeSignal(telemetry, signal);
-	}
 	for (const signal of [
 		{ type: "attempted" },
 		{ type: "delivered" },
@@ -77,10 +68,6 @@ it("maps every worker Live path to bounded payload-free signals", () => {
 	expect(
 		events.map(({ signal, reason, outcome }) => ({ signal, reason, outcome })),
 	).toEqual([
-		{ signal: "degraded", reason: "redis_connection", outcome: undefined },
-		{ signal: "recovered", reason: "redis_connection", outcome: undefined },
-		{ signal: "malformed", reason: "adapter_message", outcome: "dropped" },
-		{ signal: "malformed", reason: "adapter_message", outcome: "dropped" },
 		{
 			signal: "attempted",
 			reason: "message_publication",

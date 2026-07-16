@@ -1,4 +1,8 @@
-import type { LiveTextTelemetry, RedisLiveTextSignal } from "@mymemo/live-text";
+import {
+	type LiveTextTelemetry,
+	type RedisLiveTextSignal,
+	reportRedisLiveTextSignal,
+} from "@mymemo/live-text";
 import type { LiveTextSetupSignal } from "./prepare-live-text-subscription";
 import type { ProjectRunLiveTextSignal } from "./project-run";
 
@@ -8,13 +12,9 @@ export function reportChatLiveTextRuntimeSignal(
 ): void {
 	if (signal === "disabled") {
 		telemetry.disabled("configuration");
-	} else if (signal === "degraded") {
-		telemetry.degraded("redis_connection");
-	} else if (signal === "recovered") {
-		telemetry.recovered("redis_connection");
-	} else {
-		telemetry.record("malformed", "adapter_message", "dropped");
+		return;
 	}
+	reportRedisLiveTextSignal(telemetry, signal);
 }
 
 export function reportChatLiveTextSetupSignal(

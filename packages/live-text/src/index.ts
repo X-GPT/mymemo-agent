@@ -1,5 +1,6 @@
 import { createClient } from "redis";
 import { z } from "zod";
+import type { LiveTextTelemetry } from "./telemetry";
 
 export * from "./telemetry";
 
@@ -99,20 +100,17 @@ class BufferedLiveTextSubscription implements LiveTextSubscription {
 					this.#droppedMessageIds.add(message.messageId);
 				}
 			}
-			for (const wake of this.#waiters) wake(true);
-			this.#waiters.clear();
+			this.#wake(true);
 			return;
 		}
 		this.#buffer.push(message);
-		for (const wake of this.#waiters) wake(true);
-		this.#waiters.clear();
+		this.#wake(true);
 	}
 
 	dropInvalidWireMessage(): void {
 		if (this.#closed) return;
 		this.#invalidWireMessageDropped = true;
-		for (const wake of this.#waiters) wake(true);
-		this.#waiters.clear();
+		this.#wake(true);
 	}
 
 	readAvailable(): LiveTextMessage[] {
@@ -170,9 +168,13 @@ class BufferedLiveTextSubscription implements LiveTextSubscription {
 		this.#droppedMessageIds.clear();
 		this.#droppedMessageIdsOverflowed = false;
 		this.#invalidWireMessageDropped = false;
-		for (const wake of this.#waiters) wake(false);
-		this.#waiters.clear();
+		this.#wake(false);
 		await this.onClose();
+	}
+
+	#wake(available: boolean): void {
+		for (const waiter of this.#waiters) waiter(available);
+		this.#waiters.clear();
 	}
 }
 
@@ -239,6 +241,20 @@ export type RedisLiveTextSignal =
 	| "recovered"
 	| "invalid_message"
 	| "oversized_message";
+
+/** Map a Redis transport signal to its bounded payload-free telemetry event. */
+export function reportRedisLiveTextSignal(
+	telemetry: LiveTextTelemetry,
+	signal: RedisLiveTextSignal,
+): void {
+	if (signal === "degraded") {
+		telemetry.degraded("redis_connection");
+	} else if (signal === "recovered") {
+		telemetry.recovered("redis_connection");
+	} else {
+		telemetry.record("malformed", "adapter_message", "dropped");
+	}
+}
 
 export interface RedisLiveTextTransportOptions {
 	/** Authenticated rediss:// production secret, or redis:// in disposable tests. */
