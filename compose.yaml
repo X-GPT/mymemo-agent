@@ -17,7 +17,27 @@
 # replaced them end to end (ADR-0002). Bring the demo up with:
 #     docker compose up --build
 
+x-artifact-aws-environment: &artifact-aws-environment
+  ARTIFACT_BUCKET: "mymemo-agent-local-artifacts"
+  AWS_REGION: "us-west-2"
+  AWS_PROFILE: "${AWS_PROFILE:-}"
+  AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+  AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+  AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
+
 services:
+  # One-shot: create the dedicated local artifact bucket if needed, then
+  # re-apply its private-access controls and seven-day object expiry policy.
+  artifact-bucket:
+    image: amazon/aws-cli:2
+    entrypoint: ["/bin/sh", "/local/ensure-artifact-bucket.sh"]
+    environment:
+      <<: *artifact-aws-environment
+    volumes:
+      - ./scripts/local:/local:ro
+      - ${HOME}/.aws:/root/.aws:ro
+    restart: "no"
+
   chat-api:
     build:
       context: .
@@ -25,19 +45,22 @@ services:
     ports:
       - "3000:3000"
     environment:
+      <<: *artifact-aws-environment
       # chat-api's writable database (mymemo_agent): conversations, runs,
       # run_events. Local-only dev credential, so inline. Named AGENT_DATABASE_URL
       # so it never collides with the worker's read-only KB DATABASE_URL.
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
-      ARTIFACT_BUCKET: mymemo-agent-local-artifacts
-      AWS_REGION: us-west-2
       DB_SSL: disable
       LOG_LEVEL: info
       # Open the agent exposure gate locally without wiring Statsig (break-glass).
       AGENT_EXPOSURE_BREAK_GLASS: "true"
-    # No secrets: after the hard swap (ADR-0002) chat-api mints no tokens and
-    # holds no provider/KB credentials — it only queues runs and projects events.
+    # The mounted developer AWS profile is trusted-runtime-only and signs
+    # artifact downloads. Chat-api still receives no provider/KB/E2B secrets.
+    volumes:
+      - ${HOME}/.aws:/home/bun/.aws:ro
     depends_on:
+      artifact-bucket:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       migrate:
@@ -53,6 +76,7 @@ services:
       context: .
       dockerfile: apps/agent-worker/Dockerfile
     environment:
+      <<: *artifact-aws-environment
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
       DB_SSL: disable
       LOG_LEVEL: info
@@ -65,7 +89,13 @@ services:
       OPENROUTER_DEFAULT_MODEL: ${OPENROUTER_DEFAULT_MODEL:-anthropic/claude-sonnet-4}
       E2B_API_KEY: ${E2B_API_KEY:?Set E2B_API_KEY}
       WORKER_E2B_TEMPLATE: ${WORKER_E2B_TEMPLATE:-mymemo-agent-sandbox}
+    # AWS credentials remain in this trusted worker. buildSandboxEnv accepts
+    # only the Run binding, so none of them are copied into the E2B sandbox.
+    volumes:
+      - ${HOME}/.aws:/home/bun/.aws:ro
     depends_on:
+      artifact-bucket:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       migrate:

@@ -1,0 +1,17 @@
+{
+	"Rules": [
+		{
+			"ID": "expire-local-artifacts",
+			"Status": "Enabled",
+			"Filter": {
+				"Prefix": ""
+			},
+			"Expiration": {
+				"Days": 7
+			},
+			"AbortIncompleteMultipartUpload": {
+				"DaysAfterInitiation": 1
+			}
+		}
+	]
+}
