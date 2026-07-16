@@ -1,6 +1,9 @@
 import { Sandbox } from "e2b";
 import type { ArtifactWorkspace } from "../artifacts/artifact-publication";
-import { createE2bArtifactWorkspace } from "../artifacts/artifact-workspace";
+import {
+	type ArtifactSandbox,
+	createE2bArtifactWorkspace,
+} from "../artifacts/artifact-workspace";
 import type { SandboxCommandClient } from "../bash-tool/bash-tool";
 import { DEFAULT_COMMAND_CONTROL_DIR } from "../bash-tool/bash-wrapper";
 import type { SandboxFileClient } from "../file-tools/file-tools";
@@ -62,8 +65,10 @@ export interface SandboxProvisioner {
 }
 
 /** The slice of an E2B `Sandbox` a provisioned handle holds. */
-export interface ProvisionerSandbox extends CommandSandbox, FileSandbox {
+export interface ProvisionerSandbox extends CommandSandbox {
 	readonly sandboxId: string;
+	commands: CommandSandbox["commands"] & ArtifactSandbox["commands"];
+	files: FileSandbox["files"] & ArtifactSandbox["files"];
 	setTimeout(timeoutMs: number): Promise<void>;
 }
 
