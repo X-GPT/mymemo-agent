@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
+	createLiveTextTelemetry,
 	InMemoryLiveTextTransport,
 	LIVE_TEXT_MAX_CHUNK_LENGTH,
 	LiveTextMessageSchema,
+	reportRedisLiveTextSignal,
 	resolveLiveTextRedisUrl,
 } from "./index";
 
@@ -170,5 +172,38 @@ describe("InMemoryLiveTextTransport", () => {
 			type: "message_ids",
 			messageIds: [],
 		});
+	});
+});
+
+describe("reportRedisLiveTextSignal", () => {
+	it("maps every Redis transport signal to a bounded payload-free event", () => {
+		const events: Record<string, unknown>[] = [];
+		const telemetry = createLiveTextTelemetry("agent-worker", {
+			info: (event) => events.push(event),
+			warn: (event) => events.push(event),
+		});
+
+		for (const signal of [
+			"degraded",
+			"recovered",
+			"invalid_message",
+			"oversized_message",
+		] as const) {
+			reportRedisLiveTextSignal(telemetry, signal);
+		}
+
+		expect(
+			events.map(({ signal, reason, outcome }) => ({
+				signal,
+				reason,
+				outcome,
+			})),
+		).toEqual([
+			{ signal: "degraded", reason: "redis_connection", outcome: undefined },
+			{ signal: "recovered", reason: "redis_connection", outcome: undefined },
+			{ signal: "malformed", reason: "adapter_message", outcome: "dropped" },
+			{ signal: "malformed", reason: "adapter_message", outcome: "dropped" },
+		]);
+		telemetry.close();
 	});
 });
