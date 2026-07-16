@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { WorkerLogger } from "../logger";
 import {
+	createE2bSandboxProvisioner,
 	createSandboxProvisioner,
+	type E2bSandboxFactory,
 	type ProvisionerSandbox,
 	SANDBOX_WORKSPACE_ROOT,
 	type SandboxProvisionerDeps,
@@ -96,6 +98,72 @@ const input = {
 };
 
 describe("createSandboxProvisioner", () => {
+	it("passes only E2B config and owner metadata across the production SDK boundary", async () => {
+		const created = makeFakeSandbox("sbx-created");
+		const createCalls: Parameters<E2bSandboxFactory["create"]>[] = [];
+		const factory: E2bSandboxFactory = {
+			async connect() {
+				throw new Error("unexpected connect");
+			},
+			async create(...args) {
+				createCalls.push(args);
+				return created.sandbox;
+			},
+		};
+		const trustedOnlyEnvironment = {
+			AWS_ACCESS_KEY_ID: "artifact-aws-access-key",
+			AWS_SECRET_ACCESS_KEY: "artifact-aws-secret-key",
+			AWS_SESSION_TOKEN: "artifact-aws-session-token",
+			ARTIFACT_BUCKET: "artifact-private-bucket",
+			AWS_REGION: "artifact-private-region",
+			ARTIFACT_PRESIGNED_URL:
+				"https://objects.example/private?X-Amz-Signature=artifact-secret",
+		};
+		const previousEnvironment = Object.fromEntries(
+			Object.keys(trustedOnlyEnvironment).map((key) => [key, process.env[key]]),
+		);
+		Object.assign(process.env, trustedOnlyEnvironment);
+
+		try {
+			const { logger } = makeLogger();
+			const provisioner = createE2bSandboxProvisioner(
+				{
+					apiKey: "e2b-only-key",
+					template: "artifact-test-template",
+					sandboxIdleMs: 300_000,
+					logger,
+				},
+				factory,
+			);
+
+			await provisioner.provisionForRun({ ...input, sandboxId: null });
+
+			expect(createCalls).toEqual([
+				[
+					"artifact-test-template",
+					{
+						apiKey: "e2b-only-key",
+						timeoutMs: 300_000,
+						lifecycle: { onTimeout: "pause" },
+						metadata: {
+							userId: "user-1",
+							conversationId: "conv-1",
+						},
+					},
+				],
+			]);
+			const serializedBoundary = JSON.stringify(createCalls);
+			for (const trustedOnlyValue of Object.values(trustedOnlyEnvironment)) {
+				expect(serializedBoundary).not.toContain(trustedOnlyValue);
+			}
+		} finally {
+			for (const [key, value] of Object.entries(previousEnvironment)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
 	it("connects to the conversation's sandbox when the pointer is set and not tainted", async () => {
 		const { deps, connectCalls, createCalls } = makeDeps();
 		const provisioner = createSandboxProvisioner(deps);

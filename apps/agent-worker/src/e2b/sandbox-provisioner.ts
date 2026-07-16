@@ -153,20 +153,44 @@ export interface E2bSandboxProvisionerConfig {
 	logger: WorkerLogger;
 }
 
+/** The exact trusted-worker calls made to the E2B SDK, injectable so boundary
+ * tests can prove which options and metadata leave the worker process. */
+export interface E2bSandboxFactory {
+	connect(
+		sandboxId: string,
+		options: { apiKey: string; timeoutMs: number },
+	): Promise<ProvisionerSandbox>;
+	create(
+		template: string,
+		options: {
+			apiKey: string;
+			timeoutMs: number;
+			lifecycle: { onTimeout: "pause" };
+			metadata: { userId: string; conversationId: string };
+		},
+	): Promise<ProvisionerSandbox>;
+}
+
+const defaultE2bSandboxFactory: E2bSandboxFactory = {
+	connect: (sandboxId, options) => Sandbox.connect(sandboxId, options),
+	create: (template, options) => Sandbox.create(template, options),
+};
+
 /** {@link createSandboxProvisioner} wired to the real E2B SDK. */
 export function createE2bSandboxProvisioner(
 	config: E2bSandboxProvisionerConfig,
+	factory: E2bSandboxFactory = defaultE2bSandboxFactory,
 ): SandboxProvisioner {
 	return createSandboxProvisioner({
 		sandboxIdleMs: config.sandboxIdleMs,
 		logger: config.logger,
 		connectSandbox: (sandboxId) =>
-			Sandbox.connect(sandboxId, {
+			factory.connect(sandboxId, {
 				apiKey: config.apiKey,
 				timeoutMs: config.sandboxIdleMs,
 			}),
 		createSandbox: (input) =>
-			Sandbox.create(config.template, {
+			factory.create(config.template, {
 				apiKey: config.apiKey,
 				timeoutMs: config.sandboxIdleMs,
 				// Idle timeout pauses the workspace instead of killing it; the next

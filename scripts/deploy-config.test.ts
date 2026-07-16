@@ -31,6 +31,10 @@ const createAgentSecretsScript = readFileSync(
 	join(root, "scripts", "deploy", "create_agent_secrets.sh"),
 	"utf8",
 );
+const artifactOperationsRunbook = readFileSync(
+	join(root, "docs", "runbooks", "downloadable-artifacts.md"),
+	"utf8",
+);
 
 function terraformFiles(dir = terraformDir): string[] {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -137,6 +141,9 @@ describe("agent deployment config", () => {
 			workerEnvironmentStart,
 		);
 		const workerEnvironment = locals.slice(workerEnvironmentStart);
+		const terraformConfig = terraformFiles()
+			.map((path) => readFileSync(path, "utf8"))
+			.join("\n");
 
 		expect(artifactsConfig).toContain('resource "aws_s3_bucket" "artifacts"');
 		expect(artifactsConfig).toMatch(
@@ -154,12 +161,20 @@ describe("agent deployment config", () => {
 		expect(artifactsConfig).toMatch(
 			/resource "aws_s3_bucket_lifecycle_configuration" "artifacts"[\s\S]*?id\s*=\s*"abort-incomplete-multipart-uploads"[\s\S]*?status\s*=\s*"Enabled"[\s\S]*?abort_incomplete_multipart_upload[\s\S]*?days_after_initiation\s*=\s*1/,
 		);
-		expect(artifactsConfig).not.toMatch(
+		expect(terraformConfig).not.toMatch(
 			/\b(?:expiration|noncurrent_version_expiration|expired_object_delete_marker)\b/,
 		);
 		expect(artifactsConfig).toContain('variable = "aws:SecureTransport"');
 		expect(artifactsConfig).toContain('values   = ["false"]');
-		expect(artifactsConfig).not.toContain("aws_s3_bucket_cors_configuration");
+		expect(terraformConfig).not.toContain("aws_s3_bucket_cors_configuration");
+		expect(terraformConfig).not.toMatch(/\bcors_rule\s*\{/);
+		expect(terraformConfig).not.toMatch(
+			/aws_kms|kms_master_key_id|SSEKMSKeyId/,
+		);
+		expect(
+			terraformConfig.match(/resource\s+"aws_s3_bucket_versioning"/g),
+		).toHaveLength(1);
+		expect(terraformConfig).not.toMatch(/\bversioning\s*\{/);
 
 		expect(iamConfig).toContain('actions   = ["s3:GetObject"]');
 		expect(iamConfig).toContain(
@@ -223,6 +238,31 @@ describe("agent deployment config", () => {
 		);
 		expect(readme).toContain(
 			"The durable Postgres path remains sufficient for successful Runs",
+		);
+	});
+
+	it("documents the Downloadable artifact operator and downstream contracts", () => {
+		for (const requiredContract of [
+			"ARTIFACT_BUCKET",
+			"AWS_REGION",
+			"/home/user/artifacts/",
+			"100 MiB",
+			"100 current artifact paths",
+			"1 GiB",
+			"five minutes",
+			"ten minutes",
+			"conversation lifetime",
+			"Run failed",
+			"Content-Disposition: attachment",
+			"untrusted generated files",
+			"mymemo-service",
+			"mymemo-web",
+			"normal browser navigation",
+		]) {
+			expect(artifactOperationsRunbook).toContain(requiredContract);
+		}
+		expect(artifactOperationsRunbook).toMatch(
+			/without following the\s+redirect/,
 		);
 	});
 

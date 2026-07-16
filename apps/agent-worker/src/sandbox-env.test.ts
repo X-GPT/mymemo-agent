@@ -21,7 +21,7 @@ describe("buildSandboxEnv — credential boundary", () => {
 		});
 	});
 
-	it("carries no provider or KB secret even when the worker holds them", () => {
+	it("carries no trusted-runtime secret or artifact access material", () => {
 		// The worker config holds OpenRouter/KB/E2B secrets...
 		const config = loadWorkerConfigFromEnv({
 			AGENT_DATABASE_URL: "postgresql://u:p@localhost:5432/mymemo_agent",
@@ -51,6 +51,10 @@ describe("buildSandboxEnv — credential boundary", () => {
 			"E2B_API_KEY",
 			"ARTIFACT_BUCKET",
 			"AWS_REGION",
+			"AWS_ACCESS_KEY_ID",
+			"AWS_SECRET_ACCESS_KEY",
+			"AWS_SESSION_TOKEN",
+			"ARTIFACT_PRESIGNED_URL",
 		]) {
 			expect(env as Record<string, unknown>).not.toHaveProperty(forbidden);
 		}

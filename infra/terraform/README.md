@@ -42,7 +42,9 @@ The artifact bucket blocks all public access, enforces bucket-owner ownership,
 uses SSE-S3 encryption, denies non-TLS requests, has versioning disabled, and
 defines no CORS policy. Only the `chat-api` application role can read an
 ownership-checked current object for presigning; it cannot write, delete, or
-list bucket contents.
+list bucket contents. Publication, retention, cleanup, and downstream handoff
+procedures are documented in the
+[Downloadable artifact runbook](../../docs/runbooks/downloadable-artifacts.md).
 
 ## Secrets
 
