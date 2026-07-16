@@ -298,7 +298,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 			expect(firstChart).toBeDefined();
 			if (!firstChart) throw new Error("published chart is missing");
 			const firstDownload = await http.app.request(
-				`/v1/conversations/conversation-1/artifacts/${firstChart.artifactId}`,
+				`/v1/conversations/conversation-1/artifacts/${firstChart.artifactId}/download-url`,
 				{ headers: identityHeaders },
 			);
 			expect(firstDownload.status).toBe(200);
@@ -339,7 +339,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 			expect(delivery.storedObjects.has(firstReport.objectKey)).toBe(true);
 
 			const currentDownload = await http.app.request(
-				`/v1/conversations/conversation-1/artifacts/${firstReport.artifactId}`,
+				`/v1/conversations/conversation-1/artifacts/${firstReport.artifactId}/download-url`,
 				{ headers: identityHeaders },
 			);
 			expect(currentDownload.status).toBe(200);

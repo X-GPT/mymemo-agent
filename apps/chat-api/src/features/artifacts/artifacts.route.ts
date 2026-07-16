@@ -60,7 +60,7 @@ app.get(
 );
 
 app.get(
-	"/:conversationId/artifacts/:artifactId",
+	"/:conversationId/artifacts/:artifactId/download-url",
 	zValidator(
 		"param",
 		z.object({
@@ -94,6 +94,7 @@ app.get(
 				responseContentDisposition: attachmentContentDisposition(artifact.path),
 				responseContentType: artifact.contentType,
 			});
+		c.header("Cache-Control", "private, no-store");
 		return c.json({ downloadUrl });
 	},
 );

@@ -86,7 +86,7 @@ blob, so the private bucket needs no CORS policy.
 
 The HTTP resource uses a stable opaque `artifactId`. The list endpoint returns
 that id, and the download endpoint addresses
-`/v1/conversations/:conversationId/artifacts/:artifactId`; overwriting the
+`/v1/conversations/:conversationId/artifacts/:artifactId/download-url`; overwriting the
 artifact at a path retains its id. The path remains user-visible metadata and
 the conversation-scoped uniqueness key, but it is not embedded in a route.
 
