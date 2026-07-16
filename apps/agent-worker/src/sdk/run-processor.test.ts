@@ -452,6 +452,67 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				streamEvent({ type: "message_stop" }),
 			],
 		},
+		// Both fixtures are otherwise-complete envelopes that would end the Run
+		// `done` if their structurally impossible delta passed silently — the
+		// nominally-successful malformed shape issue #244 requires to fail closed.
+		{
+			name: "a thinking delta inside a tool_use block",
+			messages: [
+				streamEvent({
+					type: "message_start",
+					message: { id: "provider-1", content: [] },
+				}),
+				streamEvent({
+					type: "content_block_start",
+					index: 0,
+					content_block: {
+						type: "tool_use",
+						id: "toolu-0",
+						name: "WebSearch",
+						input: {},
+					},
+				}),
+				streamEvent({
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "thinking_delta", thinking: "…" },
+				}),
+				assistantBlock("provider-1", {
+					type: "tool_use",
+					id: "toolu-0",
+					name: "WebSearch",
+					input: {},
+				}),
+				streamEvent({ type: "content_block_stop", index: 0 }),
+				streamEvent({ type: "message_stop" }),
+			],
+		},
+		{
+			name: "an input_json delta inside a thinking block",
+			messages: [
+				streamEvent({
+					type: "message_start",
+					message: { id: "provider-1", content: [] },
+				}),
+				streamEvent({
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "thinking", thinking: "", signature: "" },
+				}),
+				streamEvent({
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "input_json_delta", partial_json: "{}" },
+				}),
+				assistantBlock("provider-1", {
+					type: "thinking",
+					thinking: "",
+					signature: "",
+				}),
+				streamEvent({ type: "content_block_stop", index: 0 }),
+				streamEvent({ type: "message_stop" }),
+			],
+		},
 	]) {
 		it(`fails the Run closed for ${fixture.name}`, async () => {
 			const warnings: Record<string, unknown>[] = [];
