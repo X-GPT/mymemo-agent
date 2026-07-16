@@ -50,10 +50,10 @@ The post-upsert current set is limited to:
 - 1 GiB total current artifact bytes per conversation.
 
 Validation, quota, upload, ownership, cancellation, or persistence failure
-leaves the prior current set unchanged. A failed Run exposes only the generic
-`Run failed` message to the client. Internal structured diagnostics identify a
-bounded failure category or stage without object bodies, presigned URLs, or
-provider error details.
+leaves the prior current set unchanged. A Run with an `error` Outcome exposes
+only the generic `Run failed` message to the client. Internal structured
+diagnostics identify a bounded failure category or stage without object bodies,
+presigned URLs, or provider error details.
 
 ## Download and retention behavior
 
