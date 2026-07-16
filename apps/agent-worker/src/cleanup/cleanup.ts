@@ -1,29 +1,29 @@
 import type { Database } from "@mymemo/agent-db/client";
 import {
+	artifactObjects,
+	conversationArtifacts,
 	conversationRuntime,
 	conversations,
 	orphanSandboxes,
+	runs,
 } from "@mymemo/agent-db/schema";
 import { deleteConversationAgentSessionsTx } from "@mymemo/agent-db/session-store";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 
 /**
  * Runtime hygiene for external E2B resources Postgres cannot delete
  * transactionally (design doc "Why Cleanup Exists", Task 8.1; retargeted by
- * ADR-0007): orphaned sandboxes, and runtime rows for deleted
- * conversations/users. Exactly these two sweeps — both cost-independent; there
- * is deliberately no idle reaper for paused sandboxes (a paused sandbox *is*
- * the conversation's workspace and persists at no documented cost on the
- * current tier). The database is the source of truth for what is *referenced*;
- * the janitor reconciles E2B against it. The one rule everything here obeys:
- * never kill a sandbox still referenced by `conversation_runtime`.
+ * ADR-0007 and ADR-0010): orphaned sandboxes, runtime rows for deleted
+ * conversations/users, and unreachable Downloadable artifact objects. There
+ * is deliberately no idle reaper for paused sandboxes or age-based expiry for
+ * current artifacts. The database is the source of truth for what is
+ * referenced; janitors reconcile external resources against it.
  *
- * The pass is deliberately unfenced (it runs when no run owns a conversation)
- * but conservative, idempotent, and per-row isolated: every E2B call is
- * idempotent (kill of an already-gone resource resolves), a failing row is
- * left in place to retry on the next pass, and a failing sweep never aborts
- * the other — so cleanup can never block unrelated user runs.
+ * The pass itself is not fenced to a Run, but it is conservative, idempotent,
+ * and per-row isolated: deleting an already-gone provider resource resolves,
+ * a failing row is left in place to retry on the next pass, and a failing
+ * sweep never aborts another — so cleanup cannot block unrelated user Runs.
  */
 
 /**
@@ -37,6 +37,12 @@ export interface SandboxJanitor {
 	killSandbox(sandboxId: string): Promise<void>;
 }
 
+/** The one S3 operation lifecycle cleanup is allowed to perform. */
+export interface ArtifactObjectJanitor {
+	/** Delete one private object by its opaque ledger key. */
+	deleteObject(objectKey: string): Promise<void>;
+}
+
 /** Per-pass tallies, returned for structured logging and asserted by tests. */
 export interface CleanupSummary {
 	orphanSandboxesKilled: number;
@@ -44,14 +50,19 @@ export interface CleanupSummary {
 	orphanSandboxesSkippedReferenced: number;
 	deletedRuntimesRemoved: number;
 	deletedRuntimesRetained: number;
+	artifactObjectsDeleted: number;
+	artifactObjectsFailed: number;
 }
 
 export interface CleanupPassOptions {
 	db: Database;
-	janitor: SandboxJanitor;
+	sandboxJanitor: SandboxJanitor;
+	artifactJanitor: ArtifactObjectJanitor;
 	/** Records who recorded an orphan when a deleted-conversation kill fails. */
 	workerId: string;
 	logger: WorkerLogger;
+	/** Fixed pass time for deterministic eligibility checks in tests. */
+	now?: Date;
 }
 
 function zeroSummary(): CleanupSummary {
@@ -61,11 +72,13 @@ function zeroSummary(): CleanupSummary {
 		orphanSandboxesSkippedReferenced: 0,
 		deletedRuntimesRemoved: 0,
 		deletedRuntimesRetained: 0,
+		artifactObjectsDeleted: 0,
+		artifactObjectsFailed: 0,
 	};
 }
 
 /**
- * One cleanup pass: the two sweeps, each isolated so a whole-sweep failure
+ * One cleanup pass: the three sweeps, each isolated so a whole-sweep failure
  * (e.g. a transient DB error) is logged and the remaining sweep still runs.
  * Returns the merged per-sweep tallies.
  */
@@ -79,8 +92,81 @@ export async function runCleanupPass(
 	await runSweep(options.logger, "deleted-conversations", async () => {
 		Object.assign(summary, await sweepDeletedConversations(options));
 	});
+	await runSweep(options.logger, "artifact-objects", async () => {
+		Object.assign(summary, await sweepArtifactObjects(options));
+	});
 	return summary;
 }
+
+async function sweepArtifactObjects(
+	options: CleanupPassOptions,
+): Promise<Partial<CleanupSummary>> {
+	const now = options.now ?? new Date();
+	const supersededCutoff = new Date(now.getTime() - SUPERSEDED_GRACE_MS);
+	const candidates = await options.db
+		.select({ objectKey: artifactObjects.objectKey })
+		.from(artifactObjects)
+		.leftJoin(
+			conversationArtifacts,
+			eq(conversationArtifacts.objectKey, artifactObjects.objectKey),
+		)
+		.leftJoin(
+			conversations,
+			and(
+				eq(conversations.userId, artifactObjects.userId),
+				eq(conversations.conversationId, artifactObjects.conversationId),
+			),
+		)
+		.leftJoin(runs, eq(runs.runId, artifactObjects.runId))
+		.where(
+			and(
+				or(
+					and(
+						eq(artifactObjects.status, "pending"),
+						or(
+							isNull(runs.runId),
+							inArray(runs.status, ["done", "error", "canceled"]),
+							and(
+								inArray(runs.status, ["running", "cancel_requested"]),
+								or(isNull(runs.lockedUntil), lte(runs.lockedUntil, now)),
+							),
+						),
+					),
+					and(
+						eq(artifactObjects.status, "superseded"),
+						or(
+							isNull(conversations.conversationId),
+							lte(artifactObjects.supersededAt, supersededCutoff),
+						),
+					),
+					eq(artifactObjects.status, "current"),
+				),
+				isNull(conversationArtifacts.objectKey),
+			),
+		);
+
+	let deleted = 0;
+	let failed = 0;
+	for (const object of candidates) {
+		try {
+			await options.artifactJanitor.deleteObject(object.objectKey);
+			await options.db
+				.delete(artifactObjects)
+				.where(eq(artifactObjects.objectKey, object.objectKey));
+			deleted++;
+		} catch (error) {
+			failed++;
+			options.logger.warn({
+				message: "artifact object delete failed; will retry",
+				objectKey: object.objectKey,
+				error: toMessage(error),
+			});
+		}
+	}
+	return { artifactObjectsDeleted: deleted, artifactObjectsFailed: failed };
+}
+
+const SUPERSEDED_GRACE_MS = 10 * 60 * 1_000;
 
 async function runSweep(
 	logger: WorkerLogger,
@@ -108,7 +194,7 @@ async function runSweep(
 async function sweepOrphanSandboxes(
 	options: CleanupPassOptions,
 ): Promise<Partial<CleanupSummary>> {
-	const { db, janitor, logger } = options;
+	const { db, sandboxJanitor, logger } = options;
 	const orphans = await db.select().from(orphanSandboxes);
 	if (orphans.length === 0) return {};
 
@@ -126,7 +212,7 @@ async function sweepOrphanSandboxes(
 			continue;
 		}
 		try {
-			await janitor.killSandbox(orphan.sandboxId);
+			await sandboxJanitor.killSandbox(orphan.sandboxId);
 		} catch (error) {
 			failed++;
 			logger.warn({
@@ -226,9 +312,9 @@ async function handleDeletedSandbox(
 	sandboxId: string,
 	owner: { userId: string; conversationId: string; workerId: string },
 ): Promise<boolean> {
-	const { db, janitor, logger } = options;
+	const { db, sandboxJanitor, logger } = options;
 	try {
-		await janitor.killSandbox(sandboxId);
+		await sandboxJanitor.killSandbox(sandboxId);
 		return true;
 	} catch (killError) {
 		try {

@@ -6,6 +6,7 @@ import {
 	tryWithAdvisoryLock,
 } from "./advisory-lock";
 import {
+	type ArtifactObjectJanitor,
 	type CleanupSummary,
 	runCleanupPass,
 	type SandboxJanitor,
@@ -15,7 +16,8 @@ export interface CleanupLoopOptions {
 	db: Database;
 	/** Dedicated-connection source for the single-flight advisory lock. */
 	pool: AdvisoryLockPool;
-	janitor: SandboxJanitor;
+	sandboxJanitor: SandboxJanitor;
+	artifactJanitor: ArtifactObjectJanitor;
 	workerId: string;
 	/** How often {@link CleanupLoop.start} attempts a pass. */
 	intervalMs: number;
@@ -23,7 +25,7 @@ export interface CleanupLoopOptions {
 }
 
 /**
- * The worker-embedded cleanup loop (Task 8.1). On a timer it attempts one
+ * The worker-embedded cleanup loop (Task 8.1, extended by ADR-0010). On a timer it attempts one
  * {@link runCleanupPass} under the Postgres advisory lock, so across replicas at
  * most one pass runs at a time. It is intentionally independent of the run loop
  * — its own timer, its own error isolation — so a cleanup failure can never
@@ -53,7 +55,8 @@ export class CleanupLoop {
 				() =>
 					runCleanupPass({
 						db: this.opts.db,
-						janitor: this.opts.janitor,
+						sandboxJanitor: this.opts.sandboxJanitor,
+						artifactJanitor: this.opts.artifactJanitor,
 						workerId: this.opts.workerId,
 						logger: this.opts.logger,
 					}),

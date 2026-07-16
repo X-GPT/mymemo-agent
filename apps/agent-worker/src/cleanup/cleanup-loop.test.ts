@@ -6,7 +6,7 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { orphanSandboxes } from "@mymemo/agent-db/schema";
+import { artifactObjects, orphanSandboxes } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { WorkerLogger } from "../logger";
 import type { AdvisoryLockClient, AdvisoryLockPool } from "./advisory-lock";
@@ -19,6 +19,13 @@ class FakeJanitor implements SandboxJanitor {
 	killed: string[] = [];
 	async killSandbox(id: string): Promise<void> {
 		this.killed.push(id);
+	}
+}
+
+class FakeArtifactJanitor {
+	deleted: string[] = [];
+	async deleteObject(objectKey: string): Promise<void> {
+		this.deleted.push(objectKey);
 	}
 }
 
@@ -44,6 +51,7 @@ class FakePool implements AdvisoryLockPool {
 
 let tdb: TestDb;
 let janitor: FakeJanitor;
+let artifactJanitor: FakeArtifactJanitor;
 
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from a single fresh orphan row via delete + re-seed.
@@ -56,8 +64,10 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	await tdb.db.delete(artifactObjects);
 	await tdb.db.delete(orphanSandboxes);
 	janitor = new FakeJanitor();
+	artifactJanitor = new FakeArtifactJanitor();
 	await tdb.db.insert(orphanSandboxes).values({
 		sandboxId: "sbx-orphan",
 		userId: "user-1",
@@ -66,13 +76,21 @@ beforeEach(async () => {
 		createdByWorkerId: "worker-old",
 		reason: "test",
 	});
+	await tdb.db.insert(artifactObjects).values({
+		objectKey: "objects/abandoned",
+		userId: "user-1",
+		conversationId: "conv-1",
+		runId: "run-gone",
+		path: "report.txt",
+	});
 });
 
 function buildLoop(pool: AdvisoryLockPool) {
 	return new CleanupLoop({
 		db: tdb.db,
 		pool,
-		janitor,
+		sandboxJanitor: janitor,
+		artifactJanitor,
 		workerId: "worker-1",
 		intervalMs: 60_000,
 		logger: silentLogger,
@@ -87,6 +105,7 @@ describe("CleanupLoop.runOnce", () => {
 
 		expect(summary?.orphanSandboxesKilled).toBe(1);
 		expect(janitor.killed).toEqual(["sbx-orphan"]);
+		expect(artifactJanitor.deleted).toEqual(["objects/abandoned"]);
 	});
 
 	it("skips the pass when another replica holds the lock", async () => {
