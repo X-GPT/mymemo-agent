@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Database } from "./client";
-import { RunFenceError } from "./run-store";
+import { type DbTx, RunFenceError } from "./run-store";
 import { conversationRuntime, orphanSandboxes, runs } from "./schema";
 
 /**
@@ -159,7 +159,7 @@ export async function updateRuntimeSandboxTx(
  * own), surfaced as {@link RunFenceError}.
  */
 async function fencedRuntimeUpdate(
-	db: Database,
+	db: Pick<Database, "update">,
 	owner: RunOwnershipRef,
 	operation: string,
 	set: PgUpdateSetSource<typeof conversationRuntime>,
@@ -207,6 +207,20 @@ export async function advanceAgentSessionPointerTx(
 	input: RunOwnershipRef & { agentSessionId: string },
 ): Promise<ConversationRuntimeRecord> {
 	return await fencedRuntimeUpdate(db, input, "agent session pointer advance", {
+		agentSessionId: input.agentSessionId,
+	});
+}
+
+/**
+ * Transaction-scoped form of {@link advanceAgentSessionPointerTx}. Artifact
+ * publication uses it so the canonical runtime fence and `run_done` share the
+ * caller's transaction.
+ */
+export async function advanceAgentSessionPointerInTx(
+	tx: DbTx,
+	input: RunOwnershipRef & { agentSessionId: string },
+): Promise<ConversationRuntimeRecord> {
+	return await fencedRuntimeUpdate(tx, input, "agent session pointer advance", {
 		agentSessionId: input.agentSessionId,
 	});
 }

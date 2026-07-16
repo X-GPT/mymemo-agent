@@ -59,10 +59,12 @@ describe("Downloadable artifact publication", () => {
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 
 		await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
-			userId: "user-1",
-			conversationId: "conv-1",
+			owner: {
+				runId: "run-1",
+				workerId: "worker-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+			},
 			artifacts: [
 				{
 					artifactId: "artifact-1",
@@ -122,10 +124,12 @@ describe("Downloadable artifact publication", () => {
 				],
 			});
 			await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-				runId,
-				workerId: "worker-1",
-				userId: "user-1",
-				conversationId: "conv-1",
+				owner: {
+					runId,
+					workerId: "worker-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+				},
 				artifacts: [
 					{
 						artifactId,
@@ -176,10 +180,12 @@ describe("Downloadable artifact publication", () => {
 
 		await expect(
 			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
-				userId: "user-1",
-				conversationId: "conv-1",
+				owner: {
+					runId: "run-1",
+					workerId: "worker-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+				},
 				agentSessionId: "session-new",
 				artifacts: [
 					{

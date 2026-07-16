@@ -14,6 +14,7 @@ import {
 	RunFenceError,
 } from "./run-store";
 import {
+	advanceAgentSessionPointerInTx,
 	advanceAgentSessionPointerTx,
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
@@ -245,6 +246,27 @@ describe("updateRuntimeSandboxTx", () => {
 });
 
 describe("advanceAgentSessionPointerTx", () => {
+	it("participates in its caller's transaction", async () => {
+		await claimOwnedRun();
+		await createConversationRuntimeTx(tdb.db, OWNER);
+
+		await expect(
+			tdb.db.transaction(async (tx) => {
+				await advanceAgentSessionPointerInTx(tx, {
+					...OWNER,
+					agentSessionId: "session-rolled-back",
+				});
+				throw new Error("roll back outer transaction");
+			}),
+		).rejects.toThrow("roll back outer transaction");
+		expect(
+			await loadConversationRuntimeTx(tdb.db, {
+				userId: OWNER.userId,
+				conversationId: OWNER.conversationId,
+			}),
+		).toMatchObject({ agentSessionId: null });
+	});
+
 	it("advances the resume pointer while the run is owned", async () => {
 		await claimOwnedRun();
 		await createConversationRuntimeTx(tdb.db, OWNER);

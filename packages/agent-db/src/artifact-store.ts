@@ -2,10 +2,10 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
 import { type RunRecord, transitionRunTerminalInTx } from "./run-store";
 import {
-	artifactObjects,
-	conversationArtifacts,
-	conversationRuntime,
-} from "./schema";
+	advanceAgentSessionPointerInTx,
+	type RunOwnershipRef,
+} from "./runtime-store";
+import { artifactObjects, conversationArtifacts } from "./schema";
 
 export const MAX_CURRENT_ARTIFACT_PATHS = 100;
 export const MAX_ARTIFACT_SIZE_BYTES = 100 * 1_024 * 1_024;
@@ -62,10 +62,7 @@ export async function recordArtifactObjectsTx(
 export async function publishArtifactsAndTransitionRunDoneTx(
 	db: Database,
 	input: {
-		runId: string;
-		workerId: string;
-		userId: string;
-		conversationId: string;
+		owner: RunOwnershipRef;
 		artifacts: PublishedArtifact[];
 		agentSessionId?: string;
 	},
@@ -87,31 +84,22 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 			.from(conversationArtifacts)
 			.where(
 				and(
-					eq(conversationArtifacts.userId, input.userId),
-					eq(conversationArtifacts.conversationId, input.conversationId),
+					eq(conversationArtifacts.userId, input.owner.userId),
+					eq(conversationArtifacts.conversationId, input.owner.conversationId),
 				),
 			)
 			.for("update");
 		validatePostUpsertQuota(currentArtifacts, input.artifacts);
 
 		let agentSessionPointerAdvanced: boolean | null = null;
-		if (input.agentSessionId !== undefined) {
+		const agentSessionId = input.agentSessionId;
+		if (agentSessionId !== undefined) {
 			try {
 				await tx.transaction(async (savepoint) => {
-					const [runtime] = await savepoint
-						.update(conversationRuntime)
-						.set({
-							agentSessionId: input.agentSessionId,
-							updatedAt: sql`now()`,
-						})
-						.where(
-							and(
-								eq(conversationRuntime.userId, input.userId),
-								eq(conversationRuntime.conversationId, input.conversationId),
-							),
-						)
-						.returning({ conversationId: conversationRuntime.conversationId });
-					if (!runtime) throw new Error("conversation runtime row is missing");
+					await advanceAgentSessionPointerInTx(savepoint, {
+						...input.owner,
+						agentSessionId,
+					});
 				});
 				agentSessionPointerAdvanced = true;
 			} catch {
@@ -131,9 +119,9 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 			.where(
 				and(
 					inArray(artifactObjects.objectKey, objectKeys),
-					eq(artifactObjects.userId, input.userId),
-					eq(artifactObjects.conversationId, input.conversationId),
-					eq(artifactObjects.runId, input.runId),
+					eq(artifactObjects.userId, input.owner.userId),
+					eq(artifactObjects.conversationId, input.owner.conversationId),
+					eq(artifactObjects.runId, input.owner.runId),
 					eq(artifactObjects.status, "pending"),
 				),
 			)
@@ -149,8 +137,8 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 				.insert(conversationArtifacts)
 				.values({
 					...artifact,
-					userId: input.userId,
-					conversationId: input.conversationId,
+					userId: input.owner.userId,
+					conversationId: input.owner.conversationId,
 				})
 				.onConflictDoUpdate({
 					target: [
@@ -178,8 +166,8 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 		}
 
 		const run = await transitionRunTerminalInTx(tx, {
-			runId: input.runId,
-			workerId: input.workerId,
+			runId: input.owner.runId,
+			workerId: input.owner.workerId,
 			status: "done",
 		});
 		return { run, agentSessionPointerAdvanced };
