@@ -174,7 +174,7 @@ describe("GET /v1/conversations/:conversationId/artifacts", () => {
 });
 
 describe("GET /v1/conversations/:conversationId/artifacts/:artifactId", () => {
-	it("returns a fresh five-minute attachment redirect for the current object", async () => {
+	it("returns a fresh five-minute attachment download URL for the current object", async () => {
 		const harness = buildApp({
 			artifacts: [
 				artifact({
@@ -193,13 +193,13 @@ describe("GET /v1/conversations/:conversationId/artifacts/:artifactId", () => {
 			{ headers: identityHeaders },
 		);
 
-		expect(first.status).toBe(302);
-		expect(first.headers.get("location")).toBe(
-			"https://objects.example/signed-1",
-		);
-		expect(second.headers.get("location")).toBe(
-			"https://objects.example/signed-2",
-		);
+		expect(first.status).toBe(200);
+		expect(await first.json()).toEqual({
+			downloadUrl: "https://objects.example/signed-1",
+		});
+		expect(await second.json()).toEqual({
+			downloadUrl: "https://objects.example/signed-2",
+		});
 		expect(harness.signInputs).toEqual([
 			{
 				objectKey: "private/current-object",
@@ -303,10 +303,10 @@ describe("seeded current-artifact HTTP path", () => {
 				"/v1/conversations/conversation-1/artifacts/seeded-artifact",
 				{ headers: identityHeaders },
 			);
-			expect(download.status).toBe(302);
-			expect(download.headers.get("location")).toBe(
-				"https://objects.example/seeded-download",
-			);
+			expect(download.status).toBe(200);
+			expect(await download.json()).toEqual({
+				downloadUrl: "https://objects.example/seeded-download",
+			});
 			expect(signInputs[0]).toMatchObject({
 				objectKey: "private/seeded-object",
 				expiresInSeconds: 300,
