@@ -9,9 +9,12 @@ import {
 } from "bun:test";
 import {
 	agentSessions,
+	artifactObjects,
+	conversationArtifacts,
 	conversationRuntime,
 	conversations,
 	orphanSandboxes,
+	runs,
 } from "@mymemo/agent-db/schema";
 import {
 	appendAgentSessionEntriesTx,
@@ -39,8 +42,21 @@ class FakeJanitor implements SandboxJanitor {
 	}
 }
 
+class FakeArtifactJanitor {
+	deleted: string[] = [];
+	deleteFailKeys = new Set<string>();
+
+	async deleteObject(objectKey: string): Promise<void> {
+		if (this.deleteFailKeys.has(objectKey)) {
+			throw new Error("S3 delete failed");
+		}
+		this.deleted.push(objectKey);
+	}
+}
+
 let tdb: TestDb;
 let janitor: FakeJanitor;
+let artifactJanitor: FakeArtifactJanitor;
 
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from empty tables via truncate, keeping isolation without the cost.
@@ -54,10 +70,13 @@ afterAll(async () => {
 
 beforeEach(() => {
 	janitor = new FakeJanitor();
+	artifactJanitor = new FakeArtifactJanitor();
 });
 
 afterEach(async () => {
+	await tdb.db.delete(artifactObjects);
 	await tdb.db.delete(orphanSandboxes);
+	await tdb.db.delete(runs);
 	await tdb.db.delete(conversationRuntime);
 	await tdb.db.delete(conversations);
 	await tdb.db.delete(agentSessions);
@@ -66,12 +85,266 @@ afterEach(async () => {
 function pass(overrides?: Partial<CleanupPassOptions>) {
 	return runCleanupPass({
 		db: tdb.db,
-		janitor,
+		sandboxJanitor: janitor,
+		artifactJanitor,
 		workerId: "worker-1",
 		logger: silentLogger,
 		...overrides,
 	});
 }
+
+describe("Downloadable artifact object cleanup", () => {
+	it("deletes an abandoned pending object and removes its ledger row", async () => {
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/abandoned",
+			userId: "user-1",
+			conversationId: "conv-gone",
+			runId: "run-gone",
+			path: "report.txt",
+		});
+
+		await pass();
+
+		expect(artifactJanitor.deleted).toEqual(["objects/abandoned"]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
+	});
+
+	it("never deletes a currently referenced object regardless of lifecycle status", async () => {
+		await insertConversation("user-1", "conv-live");
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/referenced",
+			userId: "user-1",
+			conversationId: "conv-live",
+			runId: "run-gone",
+			path: "report.txt",
+			status: "pending",
+		});
+		await tdb.db.insert(conversationArtifacts).values({
+			artifactId: "artifact-1",
+			userId: "user-1",
+			conversationId: "conv-live",
+			path: "report.txt",
+			objectKey: "objects/referenced",
+			sizeBytes: 12,
+			contentType: "text/plain",
+		});
+
+		await pass();
+
+		expect(artifactJanitor.deleted).toEqual([]);
+		expect(await tdb.db.select().from(artifactObjects)).toHaveLength(1);
+	});
+
+	it("deletes a pending object owned by a terminal Run", async () => {
+		await tdb.db.insert(runs).values({
+			runId: "run-terminal",
+			userId: "user-1",
+			conversationId: "conv-gone",
+			status: "error",
+			terminalAt: new Date("2026-07-16T00:00:00.000Z"),
+		});
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/terminal",
+			userId: "user-1",
+			conversationId: "conv-gone",
+			runId: "run-terminal",
+			path: "report.txt",
+		});
+
+		await pass();
+
+		expect(artifactJanitor.deleted).toEqual(["objects/terminal"]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
+	});
+
+	it("deletes a pending object after its owning Run becomes stale", async () => {
+		await tdb.db.insert(runs).values({
+			runId: "run-stale",
+			userId: "user-1",
+			conversationId: "conv-gone",
+			status: "running",
+			lockedBy: "worker-gone",
+			lockedUntil: new Date("2026-07-16T00:09:59.000Z"),
+		});
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/stale",
+			userId: "user-1",
+			conversationId: "conv-gone",
+			runId: "run-stale",
+			path: "report.txt",
+		});
+
+		await pass({ now: new Date("2026-07-16T00:10:00.000Z") });
+
+		expect(artifactJanitor.deleted).toEqual(["objects/stale"]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
+	});
+
+	it("keeps a pending object while its owning Run has a live lock", async () => {
+		await insertConversation("user-1", "conv-live");
+		await tdb.db.insert(runs).values({
+			runId: "run-active",
+			userId: "user-1",
+			conversationId: "conv-live",
+			status: "running",
+			lockedBy: "worker-live",
+			lockedUntil: new Date("2026-07-16T00:10:01.000Z"),
+		});
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/uploading",
+			userId: "user-1",
+			conversationId: "conv-live",
+			runId: "run-active",
+			path: "report.txt",
+		});
+
+		await pass({ now: new Date("2026-07-16T00:10:00.000Z") });
+
+		expect(artifactJanitor.deleted).toEqual([]);
+		expect(await tdb.db.select().from(artifactObjects)).toHaveLength(1);
+	});
+
+	it("deletes a superseded object once its ten-minute grace has elapsed", async () => {
+		await insertConversation("user-1", "conv-live");
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/superseded",
+			userId: "user-1",
+			conversationId: "conv-live",
+			runId: "run-old",
+			path: "report.txt",
+			status: "superseded",
+			supersededAt: new Date("2026-07-16T00:00:00.000Z"),
+		});
+
+		await pass({ now: new Date("2026-07-16T00:10:00.000Z") });
+
+		expect(artifactJanitor.deleted).toEqual(["objects/superseded"]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
+	});
+
+	it("keeps a superseded object until the full grace period elapses", async () => {
+		await insertConversation("user-1", "conv-live");
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/still-graceful",
+			userId: "user-1",
+			conversationId: "conv-live",
+			runId: "run-old",
+			path: "report.txt",
+			status: "superseded",
+			supersededAt: new Date("2026-07-16T00:00:00.001Z"),
+		});
+
+		await pass({ now: new Date("2026-07-16T00:10:00.000Z") });
+
+		expect(artifactJanitor.deleted).toEqual([]);
+		expect(await tdb.db.select().from(artifactObjects)).toHaveLength(1);
+	});
+
+	it("waives supersession grace after the conversation is deleted", async () => {
+		await insertConversation("user-1", "conv-delete");
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/recently-superseded",
+			userId: "user-1",
+			conversationId: "conv-delete",
+			runId: "run-old",
+			path: "report.txt",
+			status: "superseded",
+			supersededAt: new Date("2026-07-16T00:09:59.999Z"),
+		});
+		await tdb.db
+			.delete(conversations)
+			.where(eq(conversations.conversationId, "conv-delete"));
+
+		await pass({ now: new Date("2026-07-16T00:10:00.000Z") });
+
+		expect(artifactJanitor.deleted).toEqual(["objects/recently-superseded"]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
+	});
+
+	it("deletes a formerly current object after its conversation is deleted", async () => {
+		await insertConversation("user-1", "conv-delete");
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/deleted-conversation",
+			userId: "user-1",
+			conversationId: "conv-delete",
+			runId: "run-old",
+			path: "report.txt",
+			status: "current",
+			committedAt: new Date("2026-07-16T00:00:00.000Z"),
+		});
+		await tdb.db.insert(conversationArtifacts).values({
+			artifactId: "artifact-delete",
+			userId: "user-1",
+			conversationId: "conv-delete",
+			path: "report.txt",
+			objectKey: "objects/deleted-conversation",
+			sizeBytes: 12,
+			contentType: "text/plain",
+		});
+
+		await tdb.db
+			.delete(conversations)
+			.where(eq(conversations.conversationId, "conv-delete"));
+		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
+
+		await pass();
+
+		expect(artifactJanitor.deleted).toEqual(["objects/deleted-conversation"]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
+	});
+
+	it("retains failed deletes and retries them on a later pass", async () => {
+		await tdb.db.insert(artifactObjects).values({
+			objectKey: "objects/flaky",
+			userId: "user-1",
+			conversationId: "conv-gone",
+			runId: "run-gone",
+			path: "report.txt",
+		});
+		artifactJanitor.deleteFailKeys.add("objects/flaky");
+
+		const first = await pass();
+		expect(first.artifactObjectsFailed).toBe(1);
+		expect(await tdb.db.select().from(artifactObjects)).toHaveLength(1);
+
+		artifactJanitor.deleteFailKeys.clear();
+		const second = await pass();
+		expect(second.artifactObjectsDeleted).toBe(1);
+		expect(artifactJanitor.deleted).toEqual(["objects/flaky"]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
+	});
+
+	it("isolates a failing object from healthy objects in the same pass", async () => {
+		await tdb.db.insert(artifactObjects).values([
+			{
+				objectKey: "objects/bad",
+				userId: "user-1",
+				conversationId: "conv-gone",
+				runId: "run-gone",
+				path: "bad.txt",
+			},
+			{
+				objectKey: "objects/good",
+				userId: "user-1",
+				conversationId: "conv-gone",
+				runId: "run-gone",
+				path: "good.txt",
+			},
+		]);
+		artifactJanitor.deleteFailKeys.add("objects/bad");
+
+		const summary = await pass();
+
+		expect(artifactJanitor.deleted).toEqual(["objects/good"]);
+		expect(summary.artifactObjectsDeleted).toBe(1);
+		expect(summary.artifactObjectsFailed).toBe(1);
+		expect(
+			(await tdb.db.select().from(artifactObjects)).map(
+				(object) => object.objectKey,
+			),
+		).toEqual(["objects/bad"]);
+	});
+});
 
 async function insertConversation(userId: string, conversationId: string) {
 	await tdb.db

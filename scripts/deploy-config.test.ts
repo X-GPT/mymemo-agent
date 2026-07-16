@@ -55,6 +55,14 @@ describe("agent deployment config", () => {
 	it("separates application task roles and grants least-privilege artifact access", () => {
 		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
 		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
+		const workerArtifactPolicy = iamConfig.slice(
+			iamConfig.indexOf(
+				'data "aws_iam_policy_document" "agent_worker_artifact_write"',
+			),
+			iamConfig.indexOf(
+				'resource "aws_iam_role_policy" "agent_worker_artifact_write"',
+			),
+		);
 		const terraformConfig = terraformFiles()
 			.map((path) => readFileSync(path, "utf8"))
 			.join("\n");
@@ -92,12 +100,16 @@ describe("agent deployment config", () => {
 		expect(iamConfig).not.toContain('resource "aws_iam_role" "task"');
 		expect(iamConfig).toContain('actions   = ["s3:GetObject"]');
 		expect(iamConfig).toContain("role   = aws_iam_role.chat_api_task.id");
-		expect(iamConfig).toContain('actions   = ["s3:PutObject"]');
+		expect(workerArtifactPolicy).toMatch(
+			/actions\s*=\s*\[\s*"s3:PutObject",\s*"s3:DeleteObject",\s*\]/,
+		);
 		expect(iamConfig).toContain("role   = aws_iam_role.agent_worker_task.id");
 		expect(iamConfig).toMatch(
-			/data "aws_iam_policy_document" "agent_worker_artifact_write" \{[\s\S]*?actions\s*=\s*\["s3:PutObject"\][\s\S]*?resources\s*=\s*\["\$\{aws_s3_bucket\.artifacts\.arn\}\/\*"\][\s\S]*?\}/,
+			/data "aws_iam_policy_document" "agent_worker_artifact_write" \{[\s\S]*?actions\s*=\s*\[\s*"s3:PutObject",\s*"s3:DeleteObject",\s*\][\s\S]*?resources\s*=\s*\["\$\{aws_s3_bucket\.artifacts\.arn\}\/\*"\][\s\S]*?\}/,
 		);
-		expect(iamConfig).not.toMatch(/s3:(DeleteObject|ListBucket)/);
+		expect(workerArtifactPolicy).not.toMatch(
+			/s3:(GetObject|ListBucket|DeleteObjectVersion|GetObjectVersion|ListBucketVersions)/,
+		);
 		expect(iamConfig).not.toMatch(
 			/role\s*=\s*aws_iam_role\.agent_migration_task\.(?:id|name)[\s\S]*?s3:/,
 		);
@@ -138,6 +150,12 @@ describe("agent deployment config", () => {
 		);
 		expect(artifactsConfig).toMatch(
 			/resource "aws_s3_bucket_versioning" "artifacts"[\s\S]*?status\s*=\s*"Disabled"/,
+		);
+		expect(artifactsConfig).toMatch(
+			/resource "aws_s3_bucket_lifecycle_configuration" "artifacts"[\s\S]*?id\s*=\s*"abort-incomplete-multipart-uploads"[\s\S]*?status\s*=\s*"Enabled"[\s\S]*?abort_incomplete_multipart_upload[\s\S]*?days_after_initiation\s*=\s*1/,
+		);
+		expect(artifactsConfig).not.toMatch(
+			/\b(?:expiration|noncurrent_version_expiration|expired_object_delete_marker)\b/,
 		);
 		expect(artifactsConfig).toContain('variable = "aws:SecureTransport"');
 		expect(artifactsConfig).toContain('values   = ["false"]');
@@ -495,6 +513,7 @@ describe("agent deployment config", () => {
 			"s3:GetLifecycleConfiguration",
 			"s3:GetObjectLockConfiguration",
 			"s3:GetReplicationConfiguration",
+			"s3:PutLifecycleConfiguration",
 			"s3:PutBucketOwnershipControls",
 			"s3:PutBucketPolicy",
 			"s3:PutBucketPublicAccessBlock",

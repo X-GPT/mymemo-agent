@@ -8,6 +8,7 @@ import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-stor
 import type { AdvisoryLockPool } from "./cleanup/advisory-lock";
 import { CleanupLoop } from "./cleanup/cleanup-loop";
 import { createE2bSandboxJanitor } from "./cleanup/e2b-janitor";
+import { createS3ArtifactObjectJanitor } from "./cleanup/s3-artifact-janitor";
 import { loadWorkerConfigFromEnv } from "./config/env";
 import { createDocumentSearch } from "./documents/client";
 import { createE2bSandboxProvisioner } from "./e2b/sandbox-provisioner";
@@ -53,6 +54,7 @@ const artifactPublisher = createArtifactPublisher({
 	objectStore: createS3ArtifactObjectStore(config.artifact),
 });
 const sandboxJanitor = createE2bSandboxJanitor(config.e2bApiKey);
+const artifactObjectJanitor = createS3ArtifactObjectJanitor(config.artifact);
 const startRunQuery = createStartRunQuery({
 	db,
 	workerId,
@@ -107,15 +109,16 @@ const runLoop = new RunLoop({
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 	logger,
 });
-// Worker-embedded orphan/deleted-conversation cleanup (Task 8.1, ADR-0007).
+// Worker-embedded external-resource cleanup (Task 8.1, ADR-0007/ADR-0010).
 // Single-flighted across replicas by a Postgres advisory lock taken on a
 // dedicated connection from Drizzle's underlying pg pool (`db.$client`). The
-// pass only calls E2B once real orphans exist, so it is a no-op until the
-// executor path is creating sandboxes.
+// The pass reconciles E2B sandboxes and S3 artifact objects from Postgres
+// ledgers; it never lists either provider.
 const cleanupLoop = new CleanupLoop({
 	db,
 	pool: db.$client as unknown as AdvisoryLockPool,
-	janitor: sandboxJanitor,
+	sandboxJanitor,
+	artifactJanitor: artifactObjectJanitor,
 	workerId,
 	intervalMs: config.cleanup.intervalMs,
 	logger,

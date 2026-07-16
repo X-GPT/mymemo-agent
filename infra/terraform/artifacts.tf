@@ -37,6 +37,21 @@ resource "aws_s3_bucket_versioning" "artifacts" {
   }
 }
 
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    id     = "abort-incomplete-multipart-uploads"
+    status = "Enabled"
+
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+}
+
 data "aws_iam_policy_document" "artifacts_tls_only" {
   statement {
     sid     = "DenyInsecureTransport"

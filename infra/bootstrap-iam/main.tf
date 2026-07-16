@@ -72,6 +72,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "s3:PutBucketTagging",
       "s3:PutBucketVersioning",
       "s3:PutEncryptionConfiguration",
+      "s3:PutLifecycleConfiguration",
     ]
     resources = ["arn:aws:s3:::${var.artifact_bucket_name}"]
   }
