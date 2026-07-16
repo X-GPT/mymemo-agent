@@ -128,7 +128,7 @@ export const conversations = pgTable(
 
 /**
  * The current Downloadable artifact at each normalized conversation-relative
- * path (ADR-0010). Postgres is the read-model authority: clients never list S3
+ * path (ADR-0011). Postgres is the read-model authority: clients never list S3
  * objects directly. Replacing an artifact updates this row in place so its
  * opaque `artifact_id`, path identity, and `created_at` remain stable while the
  * current object reference and metadata change.
@@ -173,7 +173,7 @@ export const conversationArtifacts = pgTable(
  * Rows are inserted before object-store I/O so a worker crash cannot create an
  * untracked object. Current reachability still comes from
  * `conversation_artifacts`; this ledger exists for crash-safe cleanup, not as
- * user-visible version history (ADR-0010).
+ * user-visible version history (ADR-0011).
  */
 export const artifactObjects = pgTable(
 	"artifact_objects",

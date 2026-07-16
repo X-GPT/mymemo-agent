@@ -14,7 +14,7 @@ import type { WorkerLogger } from "../logger";
 /**
  * Runtime hygiene for external E2B resources Postgres cannot delete
  * transactionally (design doc "Why Cleanup Exists", Task 8.1; retargeted by
- * ADR-0007 and ADR-0010): orphaned sandboxes, runtime rows for deleted
+ * ADR-0007 and ADR-0011): orphaned sandboxes, runtime rows for deleted
  * conversations/users, and unreachable Downloadable artifact objects. There
  * is deliberately no idle reaper for paused sandboxes or age-based expiry for
  * current artifacts. The database is the source of truth for what is
