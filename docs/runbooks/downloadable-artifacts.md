@@ -3,7 +3,7 @@
 Downloadable artifacts are durable, user-visible files deliberately written
 under `/home/user/artifacts/` in a conversation workspace. The architecture and
 security decisions are recorded in
-[ADR-0010](../adr/0010-publish-downloadable-artifacts-on-success.md). This
+[ADR-0011](../adr/0011-publish-downloadable-artifacts-on-success.md). This
 runbook covers deployment, failure handling, retention, and the downstream
 integration contract.
 
