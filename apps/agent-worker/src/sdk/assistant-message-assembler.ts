@@ -61,6 +61,39 @@ export type AssistantAssembly =
 	| { type: "message_stop"; commit: EnvelopeCommit };
 
 /**
+ * The delta subtypes the pinned SDK protocol allows inside each known content
+ * block type. A delta arriving in a known block outside its set is structurally
+ * impossible, so the envelope is invalid and the Run must fail closed rather
+ * than end `done`. Result-style blocks arrive complete and stream no deltas.
+ * `citations_delta` appears nowhere: this pipeline never requests citations
+ * (documents reach the model as files, ADR-0004), so a citing delta is equally
+ * impossible. Unknown block types are deliberately absent — they remain
+ * tolerated as opaque interleaved content whose delta vocabulary this pinned
+ * protocol cannot know (ADR-0008), except that visible text (`text_delta`)
+ * may only ever arrive in a `text` block.
+ */
+const KNOWN_BLOCK_DELTA_TYPES: ReadonlyMap<string, readonly string[]> = new Map<
+	string,
+	readonly string[]
+>([
+	["text", ["text_delta"]],
+	["tool_use", ["input_json_delta"]],
+	["server_tool_use", ["input_json_delta"]],
+	["mcp_tool_use", ["input_json_delta"]],
+	["thinking", ["thinking_delta", "signature_delta"]],
+	["compaction", ["compaction_delta"]],
+	["redacted_thinking", []],
+	["container_upload", []],
+	["web_search_tool_result", []],
+	["web_fetch_tool_result", []],
+	["code_execution_tool_result", []],
+	["bash_code_execution_tool_result", []],
+	["text_editor_code_execution_tool_result", []],
+	["tool_search_tool_result", []],
+	["mcp_tool_result", []],
+]);
+
+/**
  * Deterministically assembles complete Assistant messages from one ordered SDK
  * stream. Partial provider text is evidence only; completed SDK content blocks
  * are the durable source and `message_stop` is the sole commit boundary.
@@ -197,8 +230,12 @@ export class AssistantMessageAssembler {
 				text: delta.text,
 			};
 		}
-		if (block.type === "text") {
-			this.#violation("non-text delta arrived for a text block");
+		const allowedDeltaTypes = KNOWN_BLOCK_DELTA_TYPES.get(block.type);
+		if (
+			allowedDeltaTypes !== undefined &&
+			!allowedDeltaTypes.includes(delta.type)
+		) {
+			this.#violation("content block delta subtype did not match its block");
 		}
 		return null;
 	}

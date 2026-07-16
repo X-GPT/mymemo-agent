@@ -434,6 +434,185 @@ describe("consumeAgentStream", () => {
 		expect(subscription.readAvailable()).toEqual([]);
 	});
 
+	// Issue #244: a nominally successful stream with invalid envelope structure
+	// fails closed. Each fixture is an otherwise-complete, well-boundaried
+	// envelope whose only defect is a delta subtype that is structurally
+	// impossible for its block type — so it must reject for the pairing itself,
+	// not for a truncated stream.
+	for (const fixture of [
+		{
+			name: "a thinking delta inside a tool_use block",
+			block: { type: "tool_use", id: "toolu-1", name: "WebSearch", input: {} },
+			delta: { type: "thinking_delta", thinking: "…" },
+		},
+		{
+			name: "an input_json delta inside a thinking block",
+			block: { type: "thinking", thinking: "", signature: "" },
+			delta: { type: "input_json_delta", partial_json: "{}" },
+		},
+		{
+			name: "a signature delta inside a tool_use block",
+			block: { type: "tool_use", id: "toolu-1", name: "WebSearch", input: {} },
+			delta: { type: "signature_delta", signature: "sig" },
+		},
+		{
+			name: "a citations delta inside a text block",
+			block: { type: "text", text: "" },
+			delta: { type: "citations_delta", citation: {} },
+		},
+		{
+			name: "a delta inside a delta-less redacted_thinking block",
+			block: { type: "redacted_thinking", data: "opaque" },
+			delta: { type: "thinking_delta", thinking: "…" },
+		},
+		{
+			name: "a delta inside a delta-less web_search_tool_result block",
+			block: {
+				type: "web_search_tool_result",
+				tool_use_id: "srvtoolu-1",
+				content: [],
+			},
+			delta: { type: "input_json_delta", partial_json: "{}" },
+		},
+	]) {
+		it(`rejects ${fixture.name} as a protocol violation`, async () => {
+			const appended: ModelContent[] = [];
+			const query = fakeQuery(
+				[
+					streamEvent({
+						type: "message_start",
+						message: { id: "provider-1", content: [] },
+					}),
+					streamEvent({
+						type: "content_block_start",
+						index: 0,
+						content_block: fixture.block,
+					}),
+					streamEvent({
+						type: "content_block_delta",
+						index: 0,
+						delta: fixture.delta,
+					}),
+					assistantBlock("provider-1", fixture.block),
+					streamEvent({ type: "content_block_stop", index: 0 }),
+					streamEvent({ type: "message_stop" }),
+				].map((message) => ({ message })),
+			);
+
+			await expect(
+				consumeAgentStream({
+					query,
+					signal: new AbortController().signal,
+					appendModelContent: captureModelContent(appended),
+				}),
+			).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
+			expect(appended).toEqual([]);
+		});
+	}
+
+	it("accepts protocol-valid thinking deltas and still commits the envelope's text", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
+		const query = fakeQuery(
+			[
+				streamEvent({
+					type: "message_start",
+					message: { id: "provider-1", content: [] },
+				}),
+				streamEvent({
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "thinking", thinking: "", signature: "" },
+				}),
+				streamEvent({
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "thinking_delta", thinking: "…" },
+				}),
+				streamEvent({
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "signature_delta", signature: "sig" },
+				}),
+				assistantBlock("provider-1", {
+					type: "thinking",
+					thinking: "…",
+					signature: "sig",
+				}),
+				streamEvent({ type: "content_block_stop", index: 0 }),
+				streamEvent({
+					type: "content_block_start",
+					index: 1,
+					content_block: { type: "text", text: "" },
+				}),
+				streamEvent({
+					type: "content_block_delta",
+					index: 1,
+					delta: { type: "text_delta", text: "visible" },
+				}),
+				assistantBlock("provider-1", { type: "text", text: "visible" }),
+				streamEvent({ type: "content_block_stop", index: 1 }),
+				streamEvent({ type: "message_stop" }),
+			].map((message) => ({ message })),
+		);
+
+		await consumeAgentStream({
+			query,
+			signal: new AbortController().signal,
+			appendModelContent: onAssistantCommit((message) =>
+				appended.push(message),
+			),
+		});
+
+		expect(appended.map(({ text }) => text)).toEqual(["visible"]);
+	});
+
+	it("tolerates deltas inside an unknown block type as opaque content", async () => {
+		const appended: Array<{ messageId: string; text: string }> = [];
+		const query = fakeQuery(
+			[
+				streamEvent({
+					type: "message_start",
+					message: { id: "provider-1", content: [] },
+				}),
+				streamEvent({
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "novel_block" },
+				}),
+				streamEvent({
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "thinking_delta", thinking: "…" },
+				}),
+				assistantBlock("provider-1", { type: "novel_block" }),
+				streamEvent({ type: "content_block_stop", index: 0 }),
+				streamEvent({
+					type: "content_block_start",
+					index: 1,
+					content_block: { type: "text", text: "" },
+				}),
+				streamEvent({
+					type: "content_block_delta",
+					index: 1,
+					delta: { type: "text_delta", text: "still committed" },
+				}),
+				assistantBlock("provider-1", { type: "text", text: "still committed" }),
+				streamEvent({ type: "content_block_stop", index: 1 }),
+				streamEvent({ type: "message_stop" }),
+			].map((message) => ({ message })),
+		);
+
+		await consumeAgentStream({
+			query,
+			signal: new AbortController().signal,
+			appendModelContent: onAssistantCommit((message) =>
+				appended.push(message),
+			),
+		});
+
+		expect(appended.map(({ text }) => text)).toEqual(["still committed"]);
+	});
+
 	it("treats an error-bearing Assistant callback as provider rejection", async () => {
 		const controller = new AbortController();
 		const envelope = textEnvelope({ completeText: "rejected" });
