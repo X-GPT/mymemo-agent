@@ -58,25 +58,34 @@ Before starting the harness:
 - Export `OPENROUTER_API_KEY` and `E2B_API_KEY`. Optionally override
   `OPENROUTER_BASE_URL`, `OPENROUTER_DEFAULT_MODEL`, or
   `WORKER_E2B_TEMPLATE`.
-- Provide AWS credentials that may create and configure the dev bucket and
-  get, put, and delete its objects. Compose mounts `~/.aws` read-only; to use
-  the repository's usual profile, export `AWS_PROFILE=mymemo` and authenticate
-  it first when needed (for example, `aws sso login --profile mymemo`). To use
-  exported credentials instead, leave `AWS_PROFILE` unset and set
-  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and, for temporary credentials,
+- Provide AWS credentials that can access the shared Terraform state, provision
+  the dev artifact bucket, and get, put, and delete its objects. Compose mounts
+  `~/.aws` read-only; to use the repository's usual profile, export
+  `AWS_PROFILE=mymemo` and authenticate it first when needed (for example,
+  `aws sso login --profile mymemo`). To use exported credentials instead,
+  leave `AWS_PROFILE` unset and set `AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY`, and, for temporary credentials,
   `AWS_SESSION_TOKEN`.
 
-The one-shot `artifact-bucket` service creates
-`mymemo-agent-local-artifacts` if it is missing, blocks public access, enforces
-bucket-owner ownership, and expires objects after seven days. The fixed bucket
-name must be available to the AWS account behind the selected credentials.
+Provision the shared dev infrastructure once, and re-apply it whenever
+`infra/dev` changes. These commands use the `mymemo` profile; omit the
+`AWS_PROFILE=mymemo` prefix when using exported credentials:
 
-Compose passes these AWS credentials only to the bucket initializer and the
-two trusted runtimes. The worker's structurally restricted sandbox environment
-does not pass them to the E2B sandbox. This shared developer credential is a
-local-harness convenience only; deployed chat-api and agent-worker tasks keep
-their separate least-privilege artifact roles. Chat-api opens its exposure gate
-locally via `AGENT_EXPOSURE_BREAK_GLASS=true` in `compose.yaml`.
+```sh
+AWS_PROFILE=mymemo terraform -chdir=infra/dev init
+AWS_PROFILE=mymemo terraform -chdir=infra/dev apply
+```
+
+This separate dev Terraform state owns the fixed
+`mymemo-agent-local-artifacts` bucket, blocks public access, enforces
+bucket-owner ownership and encryption, and expires objects after seven days.
+
+Compose passes the developer AWS credentials only to the two trusted runtimes.
+The worker's structurally restricted sandbox environment does not pass them to
+the E2B sandbox. This shared developer credential is a local-harness convenience
+only; deployed chat-api and agent-worker tasks keep their separate
+least-privilege artifact roles. Chat-api opens its exposure gate locally via
+`AGENT_EXPOSURE_BREAK_GLASS=true` in `compose.yaml`.
 
 Bring the stack up with one command:
 

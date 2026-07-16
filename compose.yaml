@@ -26,18 +26,6 @@ x-artifact-aws-environment: &artifact-aws-environment
   AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
 
 services:
-  # One-shot: create the dedicated local artifact bucket if needed, then
-  # re-apply its private-access controls and seven-day object expiry policy.
-  artifact-bucket:
-    image: amazon/aws-cli:2
-    entrypoint: ["/bin/sh", "/local/ensure-artifact-bucket.sh"]
-    environment:
-      <<: *artifact-aws-environment
-    volumes:
-      - ./scripts/local:/local:ro
-      - ${HOME}/.aws:/root/.aws:ro
-    restart: "no"
-
   chat-api:
     build:
       context: .
@@ -59,8 +47,6 @@ services:
     volumes:
       - ${HOME}/.aws:/home/bun/.aws:ro
     depends_on:
-      artifact-bucket:
-        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       migrate:
@@ -94,8 +80,6 @@ services:
     volumes:
       - ${HOME}/.aws:/home/bun/.aws:ro
     depends_on:
-      artifact-bucket:
-        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       migrate:
