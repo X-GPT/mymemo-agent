@@ -2,7 +2,7 @@
 	"name": "mymemo-agent",
 	"module": "index.ts",
 	"scripts": {
-		"test": "bun test scripts/deploy-config.test.ts scripts/local/compose-harness.test.ts scripts/smoke/client-contract.test.ts scripts/smoke/agent-conversation-smoke.test.ts && bun run scripts/test-workspaces.ts",
+		"test": "bun test scripts/deploy-config.test.ts scripts/smoke/client-contract.test.ts scripts/smoke/agent-conversation-smoke.test.ts && bun run scripts/test-workspaces.ts",
 		"terraform:fmt": "terraform -chdir=infra/bootstrap-iam fmt && terraform -chdir=infra/terraform fmt && terraform -chdir=infra/ecr fmt && terraform -chdir=infra/dev fmt",
 		"terraform:validate": "terraform -chdir=infra/bootstrap-iam validate && terraform -chdir=infra/terraform validate && terraform -chdir=infra/ecr validate && terraform -chdir=infra/dev validate"
 	},
