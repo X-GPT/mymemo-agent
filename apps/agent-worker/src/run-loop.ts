@@ -1,4 +1,5 @@
 import {
+	ArtifactQuotaError,
 	type PublishedArtifact,
 	publishArtifactsAndTransitionRunDoneTx,
 } from "@mymemo/agent-db/artifact-store";
@@ -20,6 +21,8 @@ import {
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 import { advanceAgentSessionPointerTx } from "@mymemo/agent-db/runtime-store";
+import { ArtifactValidationError } from "./artifacts/artifact-manifest";
+import { ArtifactPublicationError } from "./artifacts/artifact-publication";
 import type { WorkerLogger } from "./logger";
 import type { Worker } from "./worker";
 
@@ -384,7 +387,7 @@ export class RunLoop {
 				userId: run.userId,
 				conversationId: run.conversationId,
 				runId,
-				error: toMessage(failure.error),
+				...artifactFailureLogFields(failure.error),
 			});
 			await this.terminalize(runId, "error", {
 				message: GENERIC_RUN_ERROR_MESSAGE,
@@ -452,7 +455,15 @@ export class RunLoop {
 				userId: run.userId,
 				conversationId: run.conversationId,
 				runId: run.runId,
-				error: toMessage(error),
+				...(error instanceof ArtifactQuotaError
+					? artifactFailureLogFields(error)
+					: {
+							error: "artifact metadata publication failed",
+							artifactFailure: {
+								category: "publication",
+								stage: "metadata",
+							},
+						}),
 			});
 			await this.terminalize(run.runId, "error", {
 				message: GENERIC_RUN_ERROR_MESSAGE,
@@ -541,4 +552,37 @@ export class RunLoop {
 
 function toMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function artifactFailureLogFields(error: unknown): Record<string, unknown> {
+	if (error instanceof ArtifactQuotaError) {
+		return {
+			error: error.message,
+			artifactFailure: {
+				category: "quota",
+				quota: error.quota,
+				actual: error.actual,
+				limit: error.limit,
+			},
+		};
+	}
+	if (error instanceof ArtifactValidationError) {
+		return {
+			error: error.message,
+			artifactFailure: {
+				category: "validation",
+				reason: error.code,
+			},
+		};
+	}
+	if (error instanceof ArtifactPublicationError) {
+		return {
+			error: error.message,
+			artifactFailure: {
+				category: "publication",
+				stage: error.stage,
+			},
+		};
+	}
+	return { error: toMessage(error) };
 }

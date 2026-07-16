@@ -61,8 +61,9 @@ resource "aws_iam_role" "agent_worker_task" {
 data "aws_iam_policy_document" "agent_worker_artifact_write" {
   statement {
     actions = [
-      "s3:PutObject",
+      "s3:AbortMultipartUpload",
       "s3:DeleteObject",
+      "s3:PutObject",
     ]
     resources = ["${aws_s3_bucket.artifacts.arn}/*"]
   }

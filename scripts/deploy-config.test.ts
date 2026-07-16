@@ -101,11 +101,11 @@ describe("agent deployment config", () => {
 		expect(iamConfig).toContain('actions   = ["s3:GetObject"]');
 		expect(iamConfig).toContain("role   = aws_iam_role.chat_api_task.id");
 		expect(workerArtifactPolicy).toMatch(
-			/actions\s*=\s*\[\s*"s3:PutObject",\s*"s3:DeleteObject",\s*\]/,
+			/actions\s*=\s*\[\s*"s3:AbortMultipartUpload",\s*"s3:DeleteObject",\s*"s3:PutObject",\s*\]/,
 		);
 		expect(iamConfig).toContain("role   = aws_iam_role.agent_worker_task.id");
 		expect(iamConfig).toMatch(
-			/data "aws_iam_policy_document" "agent_worker_artifact_write" \{[\s\S]*?actions\s*=\s*\[\s*"s3:PutObject",\s*"s3:DeleteObject",\s*\][\s\S]*?resources\s*=\s*\["\$\{aws_s3_bucket\.artifacts\.arn\}\/\*"\][\s\S]*?\}/,
+			/data "aws_iam_policy_document" "agent_worker_artifact_write" \{[\s\S]*?actions\s*=\s*\[\s*"s3:AbortMultipartUpload",\s*"s3:DeleteObject",\s*"s3:PutObject",\s*\][\s\S]*?resources\s*=\s*\["\$\{aws_s3_bucket\.artifacts\.arn\}\/\*"\][\s\S]*?\}/,
 		);
 		expect(workerArtifactPolicy).not.toMatch(
 			/s3:(GetObject|ListBucket|DeleteObjectVersion|GetObjectVersion|ListBucketVersions)/,

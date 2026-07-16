@@ -796,7 +796,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 					publishSignal = signal;
 					return {
 						async publish() {
-							await new Promise<never>((_resolve, reject) => {
+							return await new Promise<never>((_resolve, reject) => {
 								if (signal.aborted) return reject(new Error("aborted"));
 								signal.addEventListener(
 									"abort",

@@ -7,6 +7,28 @@ import {
 	conversationRuntime,
 } from "./schema";
 
+export const MAX_CURRENT_ARTIFACT_PATHS = 100;
+export const MAX_ARTIFACT_SIZE_BYTES = 100 * 1_024 * 1_024;
+export const MAX_CONVERSATION_ARTIFACT_BYTES = 1_024 * 1_024 * 1_024;
+
+export type ArtifactQuota =
+	| "artifact_size_bytes"
+	| "conversation_path_count"
+	| "conversation_size_bytes";
+
+/** Bounded quota detail safe for structured worker logs. */
+export class ArtifactQuotaError extends Error {
+	override readonly name = "ArtifactQuotaError";
+
+	constructor(
+		readonly quota: ArtifactQuota,
+		readonly actual: number,
+		readonly limit: number,
+	) {
+		super(`artifact quota exceeded: ${quota}`);
+	}
+}
+
 export interface StagedArtifactObject {
 	objectKey: string;
 	userId: string;
@@ -54,7 +76,24 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 	if (input.artifacts.length === 0) {
 		throw new Error("artifact publication requires at least one staged object");
 	}
+	validatePublishedArtifacts(input.artifacts);
 	return await db.transaction(async (tx) => {
+		const currentArtifacts = await tx
+			.select({
+				path: conversationArtifacts.path,
+				objectKey: conversationArtifacts.objectKey,
+				sizeBytes: conversationArtifacts.sizeBytes,
+			})
+			.from(conversationArtifacts)
+			.where(
+				and(
+					eq(conversationArtifacts.userId, input.userId),
+					eq(conversationArtifacts.conversationId, input.conversationId),
+				),
+			)
+			.for("update");
+		validatePostUpsertQuota(currentArtifacts, input.artifacts);
+
 		let agentSessionPointerAdvanced: boolean | null = null;
 		if (input.agentSessionId !== undefined) {
 			try {
@@ -80,16 +119,10 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 			}
 		}
 		const paths = input.artifacts.map((artifact) => artifact.path);
-		const existing = await tx
-			.select({ objectKey: conversationArtifacts.objectKey })
-			.from(conversationArtifacts)
-			.where(
-				and(
-					eq(conversationArtifacts.userId, input.userId),
-					eq(conversationArtifacts.conversationId, input.conversationId),
-					inArray(conversationArtifacts.path, paths),
-				),
-			);
+		const changedPaths = new Set(paths);
+		const existing = currentArtifacts.filter((artifact) =>
+			changedPaths.has(artifact.path),
+		);
 
 		const objectKeys = input.artifacts.map((artifact) => artifact.objectKey);
 		const promoted = await tx
@@ -151,4 +184,52 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 		});
 		return { run, agentSessionPointerAdvanced };
 	});
+}
+
+function validatePublishedArtifacts(artifacts: PublishedArtifact[]): void {
+	const paths = new Set<string>();
+	for (const artifact of artifacts) {
+		if (!Number.isSafeInteger(artifact.sizeBytes) || artifact.sizeBytes < 0) {
+			throw new Error("artifact publication contains an invalid size");
+		}
+		if (artifact.sizeBytes > MAX_ARTIFACT_SIZE_BYTES) {
+			throw new ArtifactQuotaError(
+				"artifact_size_bytes",
+				artifact.sizeBytes,
+				MAX_ARTIFACT_SIZE_BYTES,
+			);
+		}
+		if (paths.has(artifact.path)) {
+			throw new Error("artifact publication contains duplicate paths");
+		}
+		paths.add(artifact.path);
+	}
+}
+
+function validatePostUpsertQuota(
+	current: Array<{ path: string; sizeBytes: number }>,
+	changed: PublishedArtifact[],
+): void {
+	const resultingSizes = new Map(
+		current.map((artifact) => [artifact.path, artifact.sizeBytes]),
+	);
+	for (const artifact of changed) {
+		resultingSizes.set(artifact.path, artifact.sizeBytes);
+	}
+	if (resultingSizes.size > MAX_CURRENT_ARTIFACT_PATHS) {
+		throw new ArtifactQuotaError(
+			"conversation_path_count",
+			resultingSizes.size,
+			MAX_CURRENT_ARTIFACT_PATHS,
+		);
+	}
+	let totalSize = 0;
+	for (const size of resultingSizes.values()) totalSize += size;
+	if (totalSize > MAX_CONVERSATION_ARTIFACT_BYTES) {
+		throw new ArtifactQuotaError(
+			"conversation_size_bytes",
+			totalSize,
+			MAX_CONVERSATION_ARTIFACT_BYTES,
+		);
+	}
 }
