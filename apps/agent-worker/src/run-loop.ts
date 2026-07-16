@@ -20,7 +20,10 @@ import {
 	type TerminalRunStatus,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
-import { advanceAgentSessionPointerTx } from "@mymemo/agent-db/runtime-store";
+import {
+	advanceAgentSessionPointerTx,
+	type RunOwnershipRef,
+} from "@mymemo/agent-db/runtime-store";
 import { ArtifactValidationError } from "./artifacts/artifact-manifest";
 import { ArtifactPublicationError } from "./artifacts/artifact-publication";
 import type { WorkerLogger } from "./logger";
@@ -401,18 +404,27 @@ export class RunLoop {
 		// (ADR-0005). Only when the turn reported a session to resume from — a
 		// `mirror_error` turn carries none, so the pointer holds and the run still
 		// terminalizes `done`.
+		const owner: RunOwnershipRef = {
+			userId: run.userId,
+			conversationId: run.conversationId,
+			runId: run.runId,
+			workerId: this.workerId,
+		};
 		if (turnResult.artifactPublication) {
-			await this.publishArtifactsAndFinish(run, turnResult);
+			await this.publishArtifactsAndFinish(owner, turnResult);
 			return;
 		}
 		if (turnResult.agentSession) {
-			await this.advanceSessionPointer(run, turnResult.agentSession.sessionId);
+			await this.advanceSessionPointer(
+				owner,
+				turnResult.agentSession.sessionId,
+			);
 		}
 		await this.terminalize(runId, "done");
 	}
 
 	private async publishArtifactsAndFinish(
-		run: RunRecord,
+		owner: RunOwnershipRef,
 		turnResult: TurnResult,
 	): Promise<void> {
 		const publication = turnResult.artifactPublication;
@@ -421,10 +433,7 @@ export class RunLoop {
 			const result = await publishArtifactsAndTransitionRunDoneTx(
 				this.opts.db,
 				{
-					runId: run.runId,
-					workerId: this.workerId,
-					userId: run.userId,
-					conversationId: run.conversationId,
+					owner,
 					artifacts: publication.artifacts,
 					agentSessionId: turnResult.agentSession?.sessionId,
 				},
@@ -436,25 +445,25 @@ export class RunLoop {
 				this.opts.logger.warn({
 					message: "could not advance agent session pointer",
 					workerId: this.workerId,
-					runId: run.runId,
+					runId: owner.runId,
 				});
 			}
 		} catch (error) {
 			if (error instanceof RunFenceError) {
-				if (await this.tryTerminalCanceled(run.runId)) return;
+				if (await this.tryTerminalCanceled(owner.runId)) return;
 				this.opts.logger.warn({
 					message: "could not publish artifacts; leaving to stale-run recovery",
 					workerId: this.workerId,
-					runId: run.runId,
+					runId: owner.runId,
 				});
 				return;
 			}
 			this.opts.logger.error({
 				message: "run failed",
 				workerId: this.workerId,
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
+				userId: owner.userId,
+				conversationId: owner.conversationId,
+				runId: owner.runId,
 				...(error instanceof ArtifactQuotaError
 					? artifactFailureLogFields(error)
 					: {
@@ -465,7 +474,7 @@ export class RunLoop {
 							},
 						}),
 			});
-			await this.terminalize(run.runId, "error", {
+			await this.terminalize(owner.runId, "error", {
 				message: GENERIC_RUN_ERROR_MESSAGE,
 			});
 		}
@@ -479,22 +488,19 @@ export class RunLoop {
 	 * run still succeeds, so the terminal `done` must not be blocked by it.
 	 */
 	private async advanceSessionPointer(
-		run: RunRecord,
+		owner: RunOwnershipRef,
 		agentSessionId: string,
 	): Promise<void> {
 		try {
 			await advanceAgentSessionPointerTx(this.opts.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: this.workerId,
+				...owner,
 				agentSessionId,
 			});
 		} catch (error) {
 			this.opts.logger.warn({
 				message: "could not advance agent session pointer",
 				workerId: this.workerId,
-				runId: run.runId,
+				runId: owner.runId,
 				error: toMessage(error),
 			});
 		}
