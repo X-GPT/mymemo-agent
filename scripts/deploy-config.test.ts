@@ -491,6 +491,10 @@ describe("agent deployment config", () => {
 		expect(combined).toContain('sid = "ArtifactBucketManagement"');
 		for (const action of [
 			"s3:CreateBucket",
+			"s3:GetAccelerateConfiguration",
+			"s3:GetLifecycleConfiguration",
+			"s3:GetObjectLockConfiguration",
+			"s3:GetReplicationConfiguration",
 			"s3:PutBucketOwnershipControls",
 			"s3:PutBucketPolicy",
 			"s3:PutBucketPublicAccessBlock",
