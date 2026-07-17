@@ -11,6 +11,7 @@ const baseUrl = requiredEnv("AGENT_SMOKE_BASE_URL").replace(/\/+$/, "");
 const memberCode = Bun.env.AGENT_SMOKE_MEMBER_CODE || "agent-smoke-member";
 const partnerCode = Bun.env.AGENT_SMOKE_PARTNER_CODE || "agent-smoke-partner";
 const expectGateClosed = Bun.env.AGENT_SMOKE_EXPECT_GATE_CLOSED !== "false";
+const suite = parseSuite(Bun.env.AGENT_SMOKE_SUITE);
 const previewMode = parsePreviewMode(Bun.env.AGENT_SMOKE_PREVIEW_MODE);
 const rawTurnTimeout = Bun.env.AGENT_SMOKE_TURN_TIMEOUT_MS;
 const turnTimeoutMs =
@@ -39,6 +40,14 @@ interface TurnResult {
 	runId: string;
 	text: string;
 }
+
+interface ArtifactMetadata {
+	artifactId?: unknown;
+	path?: unknown;
+	sizeBytes?: unknown;
+}
+
+const CORE_ARTIFACT_PATH = "smoke/core-check.txt";
 
 function requiredEnv(name: string): string {
 	const value = Bun.env[name];
@@ -153,9 +162,117 @@ if (secondTurn.text !== expectedSecondText) {
 	);
 }
 
-console.log(
-	`agent live smoke passed: preview=${previewMode}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}`,
+const artifactContent = `mymemo-core-artifact-${randomUUID()}`;
+const artifactTurn = await sendTurn(
+	conversationId,
+	[
+		"Create exactly one Downloadable artifact for this automated smoke test.",
+		`ARTIFACT_PATH=/home/user/artifacts/${CORE_ARTIFACT_PATH}`,
+		`ARTIFACT_CONTENT=${artifactContent}`,
+		"Use the Write tool to write the ARTIFACT_CONTENT value as the file's exact UTF-8 contents, with no trailing newline.",
+		"Do not create any other file under /home/user/artifacts.",
+		"Reply with exactly ARTIFACT_WRITTEN and nothing else.",
+	].join("\n"),
 );
+await verifyArtifact(conversationId, artifactContent);
+
+console.log(
+	`agent live smoke passed: suite=${suite}; preview=${previewMode}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}, ${artifactTurn.runId}`,
+);
+
+async function verifyArtifact(
+	conversationId: string,
+	expectedContent: string,
+): Promise<void> {
+	const listResponse = await fetch(
+		`${baseUrl}/v1/conversations/${conversationId}/artifacts`,
+		{
+			headers: headers(),
+			signal: AbortSignal.timeout(turnTimeoutMs),
+		},
+	);
+	if (listResponse.status !== 200) {
+		throw new Error(
+			`expected artifact list 200, got ${listResponse.status}: ${await listResponse.text()}`,
+		);
+	}
+	const listBody = (await listResponse.json()) as { artifacts?: unknown };
+	if (!Array.isArray(listBody.artifacts) || listBody.artifacts.length !== 1) {
+		throw new Error("artifact list did not contain exactly one artifact");
+	}
+	const artifact = listBody.artifacts[0] as ArtifactMetadata;
+	if (artifact.path !== CORE_ARTIFACT_PATH) {
+		throw new Error(
+			`artifact list path was ${String(artifact.path)}, expected ${CORE_ARTIFACT_PATH}`,
+		);
+	}
+	if (typeof artifact.artifactId !== "string" || !artifact.artifactId) {
+		throw new Error("artifact list did not include a valid artifactId");
+	}
+	if (!Number.isInteger(artifact.sizeBytes) || Number(artifact.sizeBytes) < 0) {
+		throw new Error("artifact list did not include a valid sizeBytes");
+	}
+
+	const urlResponse = await fetch(
+		`${baseUrl}/v1/conversations/${conversationId}/artifacts/${encodeURIComponent(artifact.artifactId)}/download-url`,
+		{
+			headers: headers(),
+			redirect: "manual",
+			signal: AbortSignal.timeout(turnTimeoutMs),
+		},
+	);
+	if (urlResponse.status !== 200) {
+		throw new Error(
+			`expected artifact download URL 200, got ${urlResponse.status}: ${await urlResponse.text()}`,
+		);
+	}
+	const urlBody = (await urlResponse.json()) as { downloadUrl?: unknown };
+	if (typeof urlBody.downloadUrl !== "string" || !urlBody.downloadUrl) {
+		throw new Error(
+			"artifact download response did not include string downloadUrl",
+		);
+	}
+
+	const downloadResponse = await fetch(urlBody.downloadUrl, {
+		signal: AbortSignal.timeout(turnTimeoutMs),
+	});
+	if (!downloadResponse.ok) {
+		throw new Error(
+			`expected signed artifact download 2xx, got ${downloadResponse.status}: ${await downloadResponse.text()}`,
+		);
+	}
+	if (
+		!/^attachment(?:;|$)/i.test(
+			downloadResponse.headers.get("content-disposition")?.trim() ?? "",
+		)
+	) {
+		throw new Error("signed artifact download was not an attachment");
+	}
+	const downloadedBytes = new Uint8Array(await downloadResponse.arrayBuffer());
+	if (artifact.sizeBytes !== downloadedBytes.byteLength) {
+		throw new Error(
+			`artifact list size ${String(artifact.sizeBytes)} did not match downloaded object size ${downloadedBytes.byteLength}`,
+		);
+	}
+	if (!matchesRequestedContent(downloadedBytes, expectedContent)) {
+		throw new Error(
+			"downloaded artifact bytes did not match requested content",
+		);
+	}
+}
+
+function matchesRequestedContent(
+	actual: Uint8Array,
+	expectedContent: string,
+): boolean {
+	const expected = new TextEncoder().encode(expectedContent);
+	const allowedLength =
+		actual.byteLength === expected.byteLength ||
+		(actual.byteLength === expected.byteLength + 1 &&
+			actual.at(-1) === "\n".charCodeAt(0));
+	if (!allowedLength) return false;
+	return expected.every((byte, index) => actual[index] === byte);
+}
 
 async function sendTurn(
 	conversationId: string,
@@ -390,6 +507,14 @@ function parseFrameData(frame: SSEFrame): unknown {
 }
 
 type PreviewMode = "optional" | "required" | "forbidden";
+
+type SmokeSuite = "core" | "full";
+
+function parseSuite(value: string | undefined): SmokeSuite {
+	if (value === undefined || value === "core") return "core";
+	if (value === "full") return "full";
+	throw new Error("AGENT_SMOKE_SUITE must be core or full");
+}
 
 function parsePreviewMode(value: string | undefined): PreviewMode {
 	if (value === undefined || value === "optional") return "optional";

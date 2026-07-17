@@ -134,16 +134,17 @@ AGENT_DATABASE_URL=postgres://mymemo:mymemo@localhost:5432/mymemo_agent \
 
 ### Live runtime smoke
 
-The credentialed smoke drives the real worker across two runs of one
-conversation. The first run creates an opaque file in E2B and returns only its
-SHA-256; the second must resume the prior agent session, reconnect to the same
-workspace, read the file, and stream contents matching that hash before the
-`done` outcome. Against the local compose stack:
+The credentialed smoke drives the real worker across three runs of one
+Conversation. The first two prove Agent-session resume, Workspace persistence,
+exact Assistant commits, and byte-exact durable replay. The third writes a
+unique Downloadable artifact, lists it after `done`, obtains a fresh signed URL,
+and downloads the exact attachment without identity headers.
+
+With the local compose stack running, execute the full pre-merge suite with one
+command:
 
 ```sh
-AGENT_SMOKE_BASE_URL=http://localhost:3000 \
-  AGENT_SMOKE_EXPECT_GATE_CLOSED=false \
-  bun run scripts/smoke/agent-conversation-smoke.ts
+bun run smoke:local
 ```
 
 For production, run `scripts/deploy/prod_smoke.sh` from inside the VPC with
@@ -151,6 +152,10 @@ For production, run `scripts/deploy/prod_smoke.sh` from inside the VPC with
 allowlisted in Statsig. OpenRouter and E2B credentials stay in the deployed
 worker; the smoke caller receives none of them. To check only the default-closed
 gate, set `AGENT_SMOKE_EXPECT_GATE_CLOSED=true`.
+
+`AGENT_SMOKE_SUITE` defaults to `core`; `full` is the local superset used by
+`smoke:local`. See [the two-target smoke verification guide](./docs/verification/e2e-smoke.md)
+for suite contents, target selection, and deterministic harness tests.
 
 ### Worker image check
 
