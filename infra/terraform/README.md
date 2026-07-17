@@ -177,9 +177,10 @@ different settings:
 - `AGENT_SMOKE_BASE_URL` in `prod.env` is optional deploy verification config
   for running `scripts/deploy/prod_smoke.sh` from inside the VPC. The
   GitHub-hosted release workflow does not call this internal URL. The checked-in
-  smoke identity must be allowlisted in Statsig: the script drives two real runs,
-  verifies agent-session resume and E2B workspace persistence, and reconnects
-  each Run from its durable cursor. `AGENT_SMOKE_PREVIEW_MODE=required` proves
+  smoke identity must be allowlisted in Statsig: the default `core` suite drives
+  three real Runs, verifies Agent-session resume and Workspace persistence,
+  reconnects each Run from its durable cursor, and checks Downloadable-artifact
+  listing plus signed attachment delivery. `AGENT_SMOKE_PREVIEW_MODE=required` proves
   the Live-enabled contract; after disabling the lane, override it with
   `AGENT_SMOKE_PREVIEW_MODE=forbidden` to prove exact Postgres-only delivery. Set
   `AGENT_SMOKE_EXPECT_GATE_CLOSED=true` only when checking the default-deny path
