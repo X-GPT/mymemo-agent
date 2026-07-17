@@ -134,11 +134,14 @@ AGENT_DATABASE_URL=postgres://mymemo:mymemo@localhost:5432/mymemo_agent \
 
 ### Live runtime smoke
 
-The credentialed smoke drives the real worker across three runs of one
-Conversation. The first two prove Agent-session resume, Workspace persistence,
-exact Assistant commits, and byte-exact durable replay. The third writes a
-unique Downloadable artifact, lists it after `done`, obtains a fresh signed URL,
-and downloads the exact attachment without identity headers.
+The credentialed smoke's `core` suite drives the real worker across three Runs
+of one Conversation. The first two prove Agent-session resume, Workspace
+persistence, exact Assistant commits, and byte-exact durable replay. The third
+writes a unique Downloadable artifact, lists it after `done`, obtains a fresh
+signed URL, and downloads the exact attachment without identity headers. The
+local `full` suite adds one interrupted Run and two seeded searchable-document
+Runs that prove inventory, search, docs-cache load, file read-back, and durable
+Tool history.
 
 With the local compose stack running, execute the full pre-merge suite with one
 command:
