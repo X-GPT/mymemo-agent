@@ -402,10 +402,12 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		expect(MYMEMO_SYSTEM_PROMPT).toContain("LoadDocuments");
 	});
 
-	it("reserves the artifact root for downloadable outputs", () => {
+	it("reserves the artifact root for user deliverables", () => {
+		// The prompt interpolates ARTIFACT_ROOT; the literal here is deliberate so
+		// moving the artifact root is a conscious client-contract change.
 		expect(MYMEMO_SYSTEM_PROMPT).toContain("/home/user/artifacts/");
+		expect(MYMEMO_SYSTEM_PROMPT).toMatch(/a note/i);
 		expect(MYMEMO_SYSTEM_PROMPT).toMatch(/downloadable/i);
-		expect(MYMEMO_SYSTEM_PROMPT).toMatch(/scratch/i);
 	});
 
 	it("spreads the model-client env over the process env plus the ephemeral config dir", async () => {
