@@ -14,6 +14,7 @@ import {
 	type ArtifactPublisher,
 	withArtifactPublication,
 } from "../artifacts/artifact-publication";
+import { ARTIFACT_ROOT } from "../artifacts/artifact-workspace";
 import type { BashToolLimits } from "../bash-tool/bash-tool";
 import type { SandboxJanitor } from "../cleanup/cleanup";
 import type { ScopedDocumentQueryClient } from "../documents/client";
@@ -65,8 +66,9 @@ export const MYMEMO_SYSTEM_PROMPT =
 	"ListDocuments, SearchDocuments, and LoadDocuments reach the user's MyMemo knowledge base, limited to this " +
 	"conversation's scope. Use ListDocuments for inventory and exact count questions, SearchDocuments for relevant " +
 	"passages, and LoadDocuments to write chosen documents into the workspace's docs cache and return their paths " +
-	"so you can read and cite them. Put user-requested downloadable outputs under /home/user/artifacts/ and keep " +
-	"scratch work elsewhere in the workspace.\n\n" +
+	"so you can read and cite them. When the user asks you to create a file for them — a note, a document, a report, " +
+	`any deliverable — write it under ${ARTIFACT_ROOT}/; only files in that tree become visible and downloadable to ` +
+	"the user. Keep temporary and intermediate work elsewhere in the workspace.\n\n" +
 	"Ground claims about the user's documents in what ListDocuments, SearchDocuments, and LoadDocuments return, and keep " +
 	"responses concise.";
 
