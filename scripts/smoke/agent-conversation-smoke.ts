@@ -2,6 +2,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { PublicToolName } from "../../packages/agent-db/src/run-events";
 import {
 	type ClientContractMessage,
 	type ClientContractTerminal,
@@ -14,6 +15,12 @@ const partnerCode = Bun.env.AGENT_SMOKE_PARTNER_CODE || "agent-smoke-partner";
 const expectGateClosed = Bun.env.AGENT_SMOKE_EXPECT_GATE_CLOSED !== "false";
 const suite = parseSuite(Bun.env.AGENT_SMOKE_SUITE);
 const previewMode = parsePreviewMode(Bun.env.AGENT_SMOKE_PREVIEW_MODE);
+const FIXTURE_MEMBER_CODE = "demo-member";
+if (suite === "full" && memberCode !== FIXTURE_MEMBER_CODE) {
+	throw new Error(
+		"AGENT_SMOKE_SUITE=full requires AGENT_SMOKE_MEMBER_CODE=demo-member (the seeded local fixture member)",
+	);
+}
 const rawTurnTimeout = Bun.env.AGENT_SMOKE_TURN_TIMEOUT_MS;
 const turnTimeoutMs =
 	rawTurnTimeout === undefined ? 180_000 : Number(rawTurnTimeout);
@@ -48,6 +55,7 @@ interface SSEFrame {
 interface TurnResult {
 	runId: string;
 	text: string;
+	toolFrames: DurableToolFrame[];
 }
 
 interface DurableToolFrame {
@@ -72,6 +80,9 @@ interface ArtifactMetadata {
 }
 
 const CORE_ARTIFACT_PATH = "smoke/core-check.txt";
+const FIXTURE_SEARCHABLE_DOCUMENT_COUNT = 2;
+const FIXTURE_SEARCHABLE_DOCUMENT_TITLE = "MyMemo Overview";
+const FIXTURE_SEARCHABLE_DOCUMENT_HEADING = "# MyMemo Overview";
 
 function requiredEnv(name: string): string {
 	const value = Bun.env[name];
@@ -184,7 +195,7 @@ const artifactTurn = await sendTurn(
 );
 await verifyArtifact(conversationId, artifactContent);
 
-let interruptEvidence = "";
+let fullSuiteEvidence = "";
 if (suite === "full") {
 	const interruptConversationId = await requireCreatedConversation(
 		await requestConversationCreate(),
@@ -192,11 +203,19 @@ if (suite === "full") {
 	const interruptedTurn = await verifyRunningRunCancellation(
 		interruptConversationId,
 	);
-	interruptEvidence = `; interrupt conversation ${interruptConversationId}; run ${interruptedTurn.runId}`;
+	fullSuiteEvidence = `; interrupt conversation ${interruptConversationId}; run ${interruptedTurn.runId}`;
+
+	const searchableDocumentConversationId = await requireCreatedConversation(
+		await requestConversationCreate(),
+	);
+	const searchableDocumentTurns = await verifySearchableDocumentTools(
+		searchableDocumentConversationId,
+	);
+	fullSuiteEvidence += `; searchable-document conversation ${searchableDocumentConversationId}; runs ${searchableDocumentTurns.inventoryRunId}, ${searchableDocumentTurns.contentRunId}`;
 }
 
 console.log(
-	`agent live smoke passed: suite=${suite}; preview=${previewMode}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}, ${artifactTurn.runId}${interruptEvidence}`,
+	`agent live smoke passed: suite=${suite}; preview=${previewMode}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}, ${artifactTurn.runId}${fullSuiteEvidence}`,
 );
 
 function requestConversationCreate(): Promise<Response> {
@@ -303,6 +322,161 @@ async function verifyArtifact(
 	if (!matchesRequestedContent(downloadedBytes, expectedContent)) {
 		throw new Error(
 			"downloaded artifact bytes did not match requested content",
+		);
+	}
+}
+
+async function verifySearchableDocumentTools(conversationId: string): Promise<{
+	inventoryRunId: string;
+	contentRunId: string;
+}> {
+	const inventoryTurn = await sendTurn(
+		conversationId,
+		[
+			"Run the local seeded searchable-document inventory check.",
+			"Use ListDocuments exactly once with limit=20 and no cursor to inventory all searchable documents in this Conversation's scope.",
+			"Do not use any other tool.",
+			"Reply with exactly DOCUMENT_COUNT=<the exact total returned by ListDocuments> and nothing else.",
+		].join("\n"),
+	);
+	const expectedInventoryText = `DOCUMENT_COUNT=${FIXTURE_SEARCHABLE_DOCUMENT_COUNT}`;
+	if (inventoryTurn.text !== expectedInventoryText) {
+		throw new Error(
+			`searchable-document inventory did not report the fixture-exact count: ${inventoryTurn.text}`,
+		);
+	}
+	requireToolHistory(inventoryTurn, "searchable-document inventory", [
+		{
+			tool: "ListDocuments",
+			arguments: { limit: 20, cursorProvided: false },
+			result: {
+				total: FIXTURE_SEARCHABLE_DOCUMENT_COUNT,
+				returnedCount: FIXTURE_SEARCHABLE_DOCUMENT_COUNT,
+				hasMore: false,
+				documents: [
+					{ title: "Intro to Machine Learning" },
+					{ title: FIXTURE_SEARCHABLE_DOCUMENT_TITLE },
+				],
+			},
+		},
+	]);
+
+	const contentTurn = await sendTurn(
+		conversationId,
+		[
+			"Run the local seeded searchable-document search, load, and read check.",
+			"Use SearchDocuments exactly once with this exact query: personal knowledge base",
+			"Use LoadDocuments exactly once to load the matching searchable document into the docs cache.",
+			"Use Read exactly once with the cache path returned by LoadDocuments, offset=1, and limit=1 to read the first markdown heading from that file.",
+			"Do not use any other tool.",
+			"Reply with exactly these two lines, replacing both placeholders:",
+			"DOCUMENT_TITLE=<the matching searchable document title>",
+			"FIRST_HEADING=<the first markdown heading, including its leading #>",
+		].join("\n"),
+	);
+	const expectedContentText = `DOCUMENT_TITLE=${FIXTURE_SEARCHABLE_DOCUMENT_TITLE}\nFIRST_HEADING=${FIXTURE_SEARCHABLE_DOCUMENT_HEADING}`;
+	if (contentTurn.text !== expectedContentText) {
+		throw new Error(
+			`searchable-document content check did not report the fixture-exact title and heading: ${contentTurn.text}`,
+		);
+	}
+	requireToolHistory(contentTurn, "searchable-document content", [
+		{
+			tool: "SearchDocuments",
+			arguments: { query: "personal knowledge base" },
+			result: {
+				passages: [
+					{
+						title: FIXTURE_SEARCHABLE_DOCUMENT_TITLE,
+						snippet:
+							"MyMemo is a personal knowledge base that answers questions by searching your documents.",
+					},
+				],
+			},
+		},
+		{
+			tool: "LoadDocuments",
+			arguments: { requestedCount: 1 },
+			result: {
+				loadedCount: 1,
+				loaded: [{ title: FIXTURE_SEARCHABLE_DOCUMENT_TITLE }],
+				failedCount: 0,
+			},
+		},
+		{
+			tool: "Read",
+			arguments: {
+				path: ".mymemo/docs/doc-mymemo-overview.md",
+				offset: 1,
+				limit: 1,
+			},
+			result: {
+				path: ".mymemo/docs/doc-mymemo-overview.md",
+				content: FIXTURE_SEARCHABLE_DOCUMENT_HEADING,
+				startLine: 1,
+				linesRead: 1,
+				truncated: true,
+			},
+		},
+	]);
+
+	return {
+		inventoryRunId: inventoryTurn.runId,
+		contentRunId: contentTurn.runId,
+	};
+}
+
+interface ExpectedToolExchange {
+	tool: PublicToolName;
+	arguments: Record<string, unknown>;
+	result: Record<string, unknown>;
+}
+
+function requireToolHistory(
+	turn: TurnResult,
+	label: string,
+	expected: ExpectedToolExchange[],
+): void {
+	const expectedFrames = expected.flatMap(
+		({ tool, arguments: expectedArguments, result }) =>
+			[
+				{
+					event: "tool_use",
+					data: {
+						type: "tool_use",
+						tool,
+						arguments: expectedArguments,
+						truncated: false,
+					},
+				},
+				{
+					event: "tool_result",
+					data: {
+						type: "tool_result",
+						tool,
+						result,
+						isError: false,
+						truncated: false,
+					},
+				},
+			] satisfies Array<{ event: DurableToolFrame["event"]; data: unknown }>,
+	);
+	const actualFrames = turn.toolFrames.map(({ event, data }) => ({
+		event,
+		data,
+	}));
+	if (!isDeepStrictEqual(actualFrames, expectedFrames)) {
+		const actualTools = turn.toolFrames.flatMap((frame) =>
+			frame.event === "tool_use" &&
+			typeof frame.data === "object" &&
+			frame.data !== null &&
+			"tool" in frame.data &&
+			typeof frame.data.tool === "string"
+				? [frame.data.tool]
+				: [],
+		);
+		throw new Error(
+			`${label} Run did not record the required Tool invocations and successful results: expected ${expected.map(({ tool }) => tool).join(", ")}; got ${actualTools.join(", ") || "none"}`,
 		);
 	}
 }
@@ -619,7 +793,7 @@ async function sendTurn(
 		messages: snapshot.messages,
 		toolFrames: durableToolFrames(frames),
 	});
-	return { runId, text };
+	return { runId, text, toolFrames: durableToolFrames(frames) };
 }
 
 async function replayTurn(expectation: ReplayExpectation): Promise<void> {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
+import type { PublicToolName } from "../../packages/agent-db/src/run-events";
 
 const root = resolve(import.meta.dir, "../..");
 const servers: Bun.Server<unknown>[] = [];
@@ -29,12 +30,14 @@ interface StubRequest {
 interface SmokeStubOptions {
 	conversationId: string;
 	interruptConversationId?: string;
+	searchableDocumentConversationId?: string;
 	workspaceMarker: string;
 	runIdPrefix: string;
 	includePreview?: boolean;
 	interruptIncludePreview?: boolean;
 	replayInterruptToolCommand?: string;
 	artifactContent?: (requestedContent: string) => string;
+	failSearchableDocumentRead?: boolean;
 }
 
 interface SmokeStub {
@@ -62,13 +65,40 @@ function sseResponse(frames: StubSSEFrame[]): Response {
 }
 
 function bashToolUseFrame(command: string): StubSSEFrame {
+	return toolUseFrame("2", "Bash", { command });
+}
+
+function toolUseFrame(
+	id: string,
+	tool: PublicToolName,
+	argumentsValue: Record<string, unknown>,
+): StubSSEFrame {
 	return {
-		id: "2",
+		id,
 		event: "tool_use",
 		data: {
 			type: "tool_use",
-			tool: "Bash",
-			arguments: { command },
+			tool,
+			arguments: argumentsValue,
+			truncated: false,
+		},
+	};
+}
+
+function toolResultFrame(
+	id: string,
+	tool: PublicToolName,
+	result: Record<string, unknown>,
+	isError = false,
+): StubSSEFrame {
+	return {
+		id,
+		event: "tool_result",
+		data: {
+			type: "tool_result",
+			tool,
+			result,
+			isError,
 			truncated: false,
 		},
 	};
@@ -82,6 +112,7 @@ function sseTurn(input: {
 	includePreview?: boolean;
 	includeLifecycle?: boolean;
 	commitTexts?: string[];
+	toolFrames?: StubSSEFrame[];
 }): Response {
 	const frames: StubSSEFrame[] = [];
 	if (input.includeLifecycle !== false) {
@@ -96,6 +127,8 @@ function sseTurn(input: {
 			data: { type: "run_id", runId: input.runId },
 		});
 	}
+	const toolFrames = input.toolFrames ?? [];
+	frames.push(...toolFrames);
 	if (input.includePreview) {
 		frames.push({
 			event: "text_delta",
@@ -110,7 +143,7 @@ function sseTurn(input: {
 	const commitTexts = input.commitTexts ?? [input.text];
 	for (const [index, text] of commitTexts.entries()) {
 		frames.push({
-			id: String(index + 2),
+			id: String(index + 2 + toolFrames.length),
 			event: "text_commit",
 			data: {
 				type: "text_commit",
@@ -124,7 +157,7 @@ function sseTurn(input: {
 	}
 	if (input.includeDone !== false) {
 		frames.push({
-			id: String(commitTexts.length + 2),
+			id: String(commitTexts.length + 2 + toolFrames.length),
 			event: "done",
 			data: { type: "done" },
 		});
@@ -200,19 +233,35 @@ describe("agent conversation live smoke", () => {
 		expect(stderr).not.toContain("Unable to connect");
 	});
 
+	it("rejects a non-fixture member before starting the full suite", async () => {
+		const { exitCode, stderr } = await runSmoke("http://127.0.0.1:1", {
+			AGENT_SMOKE_SUITE: "full",
+		});
+
+		expect(exitCode).not.toBe(0);
+		expect(stderr).toContain(
+			"AGENT_SMOKE_SUITE=full requires AGENT_SMOKE_MEMBER_CODE=demo-member",
+		);
+		expect(stderr).not.toContain("Unable to connect");
+	});
+
 	it("interrupts a held-open full-suite Run after its first Tool invocation and replays canceled history", async () => {
 		const conversationId = "00000000-0000-4000-8000-000000000235";
 		const interruptConversationId = "00000000-0000-4000-8000-000000000236";
+		const searchableDocumentConversationId =
+			"00000000-0000-4000-8000-000000000237";
 		const workspaceMarker = "workspace-fedcba9876543210fedcba9876543210";
 		const stub = await startSmokeStub({
 			conversationId,
 			interruptConversationId,
+			searchableDocumentConversationId,
 			workspaceMarker,
 			runIdPrefix: "disabled-run",
 			artifactContent: (content) => `${content}\n`,
 		});
 
 		const { exitCode, stdout, stderr } = await runSmoke(stub.baseUrl, {
+			AGENT_SMOKE_MEMBER_CODE: "demo-member",
 			AGENT_SMOKE_PREVIEW_MODE: "forbidden",
 			AGENT_SMOKE_SUITE: "full",
 		});
@@ -223,11 +272,18 @@ describe("agent conversation live smoke", () => {
 		expect(stdout).toContain("preview=forbidden");
 		expect(stdout).toContain(interruptConversationId);
 		expect(stdout).toContain("disabled-run-interrupt");
+		expect(stdout).toContain(searchableDocumentConversationId);
+		expect(stdout).toContain("disabled-run-searchable-document-inventory");
+		expect(stdout).toContain("disabled-run-searchable-document-content");
 		expect(extractArtifactRequest(stub.messages[2]?.text).relativePath).toBe(
 			"smoke/core-check.txt",
 		);
 		expect(stub.messages[3]?.text).toContain("Bash");
 		expect(stub.messages[3]?.text).toContain("sleep 120");
+		expect(stub.messages[4]?.text).toContain("ListDocuments");
+		expect(stub.messages[5]?.text).toContain("SearchDocuments");
+		expect(stub.messages[5]?.text).toContain("LoadDocuments");
+		expect(stub.messages[5]?.text).toContain("Read");
 		expect(stub.interrupts).toEqual([
 			{
 				type: "user.interrupt",
@@ -235,13 +291,14 @@ describe("agent conversation live smoke", () => {
 				afterToolUse: true,
 			},
 		]);
-		expect(stub.reconnectCursors).toEqual(["1", "1", "1", "1"]);
+		expect(stub.reconnectCursors).toEqual(["1", "1", "1", "1", "1", "1"]);
 	});
 
 	it("discards provisional Assistant text when the interrupted Run is canceled", async () => {
 		const stub = await startSmokeStub({
 			conversationId: "00000000-0000-4000-8000-000000000238",
 			interruptConversationId: "00000000-0000-4000-8000-000000000239",
+			searchableDocumentConversationId: "00000000-0000-4000-8000-000000000242",
 			workspaceMarker: "workspace-22222222222222222222222222222222",
 			runIdPrefix: "preview-run",
 			includePreview: true,
@@ -249,6 +306,7 @@ describe("agent conversation live smoke", () => {
 		});
 
 		const { exitCode, stderr } = await runSmoke(stub.baseUrl, {
+			AGENT_SMOKE_MEMBER_CODE: "demo-member",
 			AGENT_SMOKE_PREVIEW_MODE: "required",
 			AGENT_SMOKE_SUITE: "full",
 		});
@@ -264,6 +322,27 @@ describe("agent conversation live smoke", () => {
 		]);
 	});
 
+	it("rejects searchable-document content when Read returns an error", async () => {
+		const stub = await startSmokeStub({
+			conversationId: "00000000-0000-4000-8000-000000000243",
+			interruptConversationId: "00000000-0000-4000-8000-000000000244",
+			searchableDocumentConversationId: "00000000-0000-4000-8000-000000000245",
+			workspaceMarker: "workspace-44444444444444444444444444444444",
+			runIdPrefix: "missing-read-run",
+			failSearchableDocumentRead: true,
+		});
+
+		const { exitCode, stderr } = await runSmoke(stub.baseUrl, {
+			AGENT_SMOKE_MEMBER_CODE: "demo-member",
+			AGENT_SMOKE_SUITE: "full",
+		});
+
+		expect(exitCode).not.toBe(0);
+		expect(stderr).toContain(
+			"searchable-document content Run did not record the required Tool invocations and successful results",
+		);
+	});
+
 	it("rejects canceled replay whose Tool payload differs from the live stream", async () => {
 		const stub = await startSmokeStub({
 			conversationId: "00000000-0000-4000-8000-000000000240",
@@ -274,6 +353,7 @@ describe("agent conversation live smoke", () => {
 		});
 
 		const { exitCode, stderr } = await runSmoke(stub.baseUrl, {
+			AGENT_SMOKE_MEMBER_CODE: "demo-member",
 			AGENT_SMOKE_SUITE: "full",
 		});
 
@@ -372,6 +452,10 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 	const reconnectCursors: string[] = [];
 	const requests: StubRequest[] = [];
 	const responsesByRun = new Map<string, string>();
+	const searchableDocumentResponsesByRun = new Map<
+		string,
+		{ text: string; toolFrames: StubSSEFrame[] }
+	>();
 	const workspaceHash = createHash("sha256")
 		.update(input.workspaceMarker)
 		.digest("hex");
@@ -379,6 +463,7 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 	const signedPath = `/signed/${artifactId}`;
 	let downloadedContent = "";
 	let conversationCreates = 0;
+	let searchableDocumentTurns = 0;
 	let interruptToolUseSent = false;
 	let interruptController:
 		| ReadableStreamDefaultController<Uint8Array>
@@ -395,10 +480,11 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 				partnerCode: request.headers.get("x-partner-code"),
 			});
 			if (url.pathname === "/v1/conversations") {
-				const conversationId =
-					conversationCreates++ === 0
-						? input.conversationId
-						: input.interruptConversationId;
+				const conversationId = [
+					input.conversationId,
+					input.interruptConversationId,
+					input.searchableDocumentConversationId,
+				][conversationCreates++];
 				if (!conversationId) {
 					return new Response("unexpected Conversation create", {
 						status: 500,
@@ -428,6 +514,84 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 					runId,
 					includePreview: input.includePreview,
 					text,
+				});
+			}
+
+			if (
+				input.searchableDocumentConversationId &&
+				request.method === "POST" &&
+				url.pathname ===
+					`/v1/conversations/${input.searchableDocumentConversationId}/events`
+			) {
+				messages.push((await request.json()) as UserMessage);
+				searchableDocumentTurns += 1;
+				const isInventory = searchableDocumentTurns === 1;
+				const runId = `${input.runIdPrefix}-searchable-document-${isInventory ? "inventory" : "content"}`;
+				const text = isInventory
+					? "DOCUMENT_COUNT=2"
+					: "DOCUMENT_TITLE=MyMemo Overview\nFIRST_HEADING=# MyMemo Overview";
+				const toolFrames = isInventory
+					? [
+							toolUseFrame("2", "ListDocuments", {
+								limit: 20,
+								cursorProvided: false,
+							}),
+							toolResultFrame("3", "ListDocuments", {
+								total: 2,
+								returnedCount: 2,
+								hasMore: false,
+								documents: [
+									{ title: "Intro to Machine Learning" },
+									{ title: "MyMemo Overview" },
+								],
+							}),
+						]
+					: [
+							toolUseFrame("2", "SearchDocuments", {
+								query: "personal knowledge base",
+							}),
+							toolResultFrame("3", "SearchDocuments", {
+								passages: [
+									{
+										title: "MyMemo Overview",
+										snippet:
+											"MyMemo is a personal knowledge base that answers questions by searching your documents.",
+									},
+								],
+							}),
+							toolUseFrame("4", "LoadDocuments", { requestedCount: 1 }),
+							toolResultFrame("5", "LoadDocuments", {
+								loadedCount: 1,
+								loaded: [{ title: "MyMemo Overview" }],
+								failedCount: 0,
+							}),
+							toolUseFrame("6", "Read", {
+								path: ".mymemo/docs/doc-mymemo-overview.md",
+								offset: 1,
+								limit: 1,
+							}),
+							toolResultFrame(
+								"7",
+								"Read",
+								input.failSearchableDocumentRead
+									? { message: "Tool failed" }
+									: {
+											path: ".mymemo/docs/doc-mymemo-overview.md",
+											content: "# MyMemo Overview",
+											startLine: 1,
+											linesRead: 1,
+											truncated: true,
+										},
+								input.failSearchableDocumentRead,
+							),
+						];
+				searchableDocumentResponsesByRun.set(runId, { text, toolFrames });
+				return sseTurn({
+					conversationId: input.searchableDocumentConversationId,
+					runId,
+					includePreview: input.includePreview,
+					text,
+					toolFrames,
 				});
 			}
 
@@ -525,6 +689,32 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 						data: { type: "canceled" },
 					},
 				]);
+			}
+
+			const searchableDocumentReconnectPrefix =
+				input.searchableDocumentConversationId
+					? `/v1/conversations/${input.searchableDocumentConversationId}/runs/`
+					: undefined;
+			if (
+				searchableDocumentReconnectPrefix &&
+				request.method === "GET" &&
+				url.pathname.startsWith(searchableDocumentReconnectPrefix) &&
+				url.pathname.endsWith("/events")
+			) {
+				reconnectCursors.push(request.headers.get("last-event-id") ?? "");
+				const runId = url.pathname.slice(
+					searchableDocumentReconnectPrefix.length,
+					-"/events".length,
+				);
+				const response = searchableDocumentResponsesByRun.get(runId);
+				if (!response) return new Response("not found", { status: 404 });
+				return sseTurn({
+					conversationId: input.searchableDocumentConversationId,
+					runId,
+					text: response.text,
+					toolFrames: response.toolFrames,
+					includeLifecycle: false,
+				});
 			}
 
 			const reconnectPrefix = `/v1/conversations/${input.conversationId}/runs/`;

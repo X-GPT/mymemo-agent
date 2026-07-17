@@ -29,9 +29,14 @@ value fails before the first HTTP request.
   after the first Tool invocation arrives. It requires the running-Run
   `cancel_requested` response, a `canceled` live outcome with no surviving
   provisional Assistant text, and a reconnect that exactly replays the live
-  committed messages and Tool events before ending `canceled`.
-  [#304](https://github.com/X-GPT/mymemo-agent/issues/304) adds the remaining
-  seeded-document checks to this set.
+  committed messages and Tool events before ending `canceled`. A third
+  Conversation performs two searchable-document Runs against the local KB seed: the first
+  reports the exact inventory count through `ListDocuments`; the second uses
+  `SearchDocuments`, `LoadDocuments`, and `Read` to report the seeded title and
+  first markdown heading. The smoke requires those Tool invocations in durable
+  history and proves their exact replay. Because these assertions are coupled
+  to the local fixture, `full` refuses to start unless
+  `AGENT_SMOKE_MEMBER_CODE=demo-member`.
 
 `AGENT_SMOKE_PREVIEW_MODE` is independent of the suite. Use `required` to prove
 the Redis Live-preview lane, `forbidden` to prove Postgres-only delivery, or the
@@ -73,7 +78,9 @@ servers. The tests cover both required-preview and forbidden-preview artifact
 happy paths, a held-open stream canceled only after its Tool invocation,
 canceled durable replay, provisional-text discard, and rejection of a changed
 replayed Tool payload, the allowed single trailing newline, identity-free
-signed-object fetching, tampered object bytes, and environment validation:
+signed-object fetching, tampered object bytes, both seeded searchable-document
+Runs, rejection of a failed `Read` Tool result, and
+fixture-member/environment validation:
 
 ```sh
 bun test scripts/smoke/agent-conversation-smoke.test.ts
