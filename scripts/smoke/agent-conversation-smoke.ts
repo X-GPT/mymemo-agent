@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
 	type ClientContractMessage,
-	type ClientContractToolEvent,
+	type ClientContractTerminal,
 	createClientContractFixture,
 } from "./client-contract";
 
@@ -20,14 +21,22 @@ if (!Number.isInteger(turnTimeoutMs) || turnTimeoutMs <= 0) {
 	throw new Error("AGENT_SMOKE_TURN_TIMEOUT_MS must be a positive integer");
 }
 
-const TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
+const TURN_HISTORY_EVENT_TYPES = [
 	"conversation_id",
 	"run_id",
 	"text_delta",
 	"text_commit",
 	"tool_use",
 	"tool_result",
+] as const;
+
+const TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
+	...TURN_HISTORY_EVENT_TYPES,
 	"done",
+]);
+const INTERRUPTED_TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
+	...TURN_HISTORY_EVENT_TYPES,
+	"canceled",
 ]);
 
 interface SSEFrame {
@@ -39,6 +48,21 @@ interface SSEFrame {
 interface TurnResult {
 	runId: string;
 	text: string;
+}
+
+interface DurableToolFrame {
+	id?: string;
+	event: "tool_use" | "tool_result";
+	data: unknown;
+}
+
+interface ReplayExpectation {
+	conversationId: string;
+	runId: string;
+	afterCursor: string;
+	messages: ClientContractMessage[];
+	toolFrames: DurableToolFrame[];
+	terminal?: ClientContractTerminal;
 }
 
 interface ArtifactMetadata {
@@ -63,12 +87,7 @@ function headers(): HeadersInit {
 	};
 }
 
-const create = await fetch(`${baseUrl}/v1/conversations`, {
-	method: "POST",
-	headers: headers(),
-	body: "{}",
-	signal: AbortSignal.timeout(turnTimeoutMs),
-});
+const create = await requestConversationCreate();
 
 if (expectGateClosed) {
 	if (create.status !== 403) {
@@ -80,18 +99,7 @@ if (expectGateClosed) {
 	process.exit(0);
 }
 
-if (create.status !== 201) {
-	throw new Error(
-		`expected conversation create 201, got ${create.status}: ${await create.text()}`,
-	);
-}
-
-const { conversationId } = (await create.json()) as { conversationId?: string };
-if (!conversationId) {
-	throw new Error(
-		"conversation create response did not include conversationId",
-	);
-}
+const conversationId = await requireCreatedConversation(create);
 
 const sessionMarker = `agent-session-${randomUUID()}`;
 const firstTurn = await sendTurn(
@@ -176,9 +184,47 @@ const artifactTurn = await sendTurn(
 );
 await verifyArtifact(conversationId, artifactContent);
 
+let interruptEvidence = "";
+if (suite === "full") {
+	const interruptConversationId = await requireCreatedConversation(
+		await requestConversationCreate(),
+	);
+	const interruptedTurn = await verifyRunningRunCancellation(
+		interruptConversationId,
+	);
+	interruptEvidence = `; interrupt conversation ${interruptConversationId}; run ${interruptedTurn.runId}`;
+}
+
 console.log(
-	`agent live smoke passed: suite=${suite}; preview=${previewMode}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}, ${artifactTurn.runId}`,
+	`agent live smoke passed: suite=${suite}; preview=${previewMode}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}, ${artifactTurn.runId}${interruptEvidence}`,
 );
+
+function requestConversationCreate(): Promise<Response> {
+	return fetch(`${baseUrl}/v1/conversations`, {
+		method: "POST",
+		headers: headers(),
+		body: "{}",
+		signal: AbortSignal.timeout(turnTimeoutMs),
+	});
+}
+
+async function requireCreatedConversation(response: Response): Promise<string> {
+	if (response.status !== 201) {
+		throw new Error(
+			`expected conversation create 201, got ${response.status}: ${await response.text()}`,
+		);
+	}
+
+	const { conversationId } = (await response.json()) as {
+		conversationId?: string;
+	};
+	if (!conversationId) {
+		throw new Error(
+			"conversation create response did not include conversationId",
+		);
+	}
+	return conversationId;
+}
 
 async function verifyArtifact(
 	conversationId: string,
@@ -272,6 +318,181 @@ function matchesRequestedContent(
 			actual.at(-1) === "\n".charCodeAt(0));
 	if (!allowedLength) return false;
 	return expected.every((byte, index) => actual[index] === byte);
+}
+
+async function verifyRunningRunCancellation(
+	conversationId: string,
+): Promise<{ runId: string }> {
+	const response = await fetch(
+		`${baseUrl}/v1/conversations/${conversationId}/events`,
+		{
+			method: "POST",
+			headers: headers(),
+			body: JSON.stringify({
+				type: "user.message",
+				text: [
+					"Run the local full-suite cancellation check.",
+					"Immediately use the Bash tool to run exactly this command: sleep 120",
+					"Do not use any other tool.",
+					"Do not reply until the command finishes.",
+				].join("\n"),
+			}),
+			signal: AbortSignal.timeout(turnTimeoutMs),
+		},
+	);
+	if (!response.ok) {
+		throw new Error(
+			`expected interrupt-check event stream 2xx, got ${response.status}: ${await response.text()}`,
+		);
+	}
+	if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+		throw new Error("interrupt-check event response was not an SSE stream");
+	}
+
+	const frames: SSEFrame[] = [];
+	const client = createClientContractFixture();
+	let runId: string | undefined;
+	let runCursor: string | undefined;
+	let interruptSent = false;
+
+	await readSSEIncrementally(response, async (frame) => {
+		if (frame.event === "ping") return;
+		if (!INTERRUPTED_TURN_EVENT_TYPES.has(frame.event)) {
+			throw new Error(
+				`interrupted event stream included unexpected ${frame.event}`,
+			);
+		}
+		frames.push(frame);
+		client.receive({ ...frame, data: parseFrameData(frame) });
+
+		if (frame.event === "run_id") {
+			runId = stringField(frame, "runId");
+			runCursor = frame.id;
+			if (!runCursor) {
+				throw new Error("interrupt-check run_id frame had no durable cursor");
+			}
+		}
+		if (frame.event === "tool_use" && !interruptSent) {
+			if (!runId) {
+				throw new Error(
+					"Tool invocation arrived before the interrupt-check run id",
+				);
+			}
+			const tool = stringField(frame, "tool");
+			if (tool !== "Bash") {
+				throw new Error(
+					`interrupt-check first Tool invocation was ${tool}, expected Bash`,
+				);
+			}
+			interruptSent = true;
+			await requestRunningRunCancellation(conversationId, runId);
+		}
+	});
+
+	if (!interruptSent || !runId || !runCursor) {
+		throw new Error(
+			"interrupted event stream ended before the first Tool invocation",
+		);
+	}
+	const events = frames.map((frame) => frame.event);
+	const conversationIndex = events.indexOf("conversation_id");
+	const runIndex = events.indexOf("run_id");
+	const toolUseIndex = events.indexOf("tool_use");
+	if (
+		conversationIndex < 0 ||
+		runIndex < 0 ||
+		toolUseIndex < 0 ||
+		conversationIndex >= runIndex ||
+		runIndex >= toolUseIndex
+	) {
+		throw new Error(
+			`interrupted event stream did not identify the Conversation and Run before the Tool invocation: ${events.join(", ")}`,
+		);
+	}
+	const echoedConversationId = stringField(
+		frames.find((frame) => frame.event === "conversation_id"),
+		"conversationId",
+	);
+	if (echoedConversationId !== conversationId) {
+		throw new Error(
+			`interrupted event stream echoed conversation ${echoedConversationId}, expected ${conversationId}`,
+		);
+	}
+	if (
+		events.at(-1) !== "canceled" ||
+		events.filter((event) => event === "canceled").length !== 1
+	) {
+		throw new Error(
+			`interrupted event stream did not end in one canceled outcome: ${events.join(", ")}`,
+		);
+	}
+
+	const snapshot = client.snapshot();
+	if (snapshot.terminal !== "canceled") {
+		throw new Error("client fixture did not observe the canceled outcome");
+	}
+	if (snapshot.messages.some((message) => message.provisional)) {
+		throw new Error(
+			"client fixture retained provisional Assistant text after cancellation",
+		);
+	}
+	if (
+		!snapshot.toolEvents.some(
+			(event) => event.kind === "tool_use" && event.tool === "Bash",
+		)
+	) {
+		throw new Error("client fixture did not retain the Bash Tool invocation");
+	}
+
+	await replayTurn({
+		conversationId,
+		runId,
+		afterCursor: runCursor,
+		messages: snapshot.messages,
+		toolFrames: durableToolFrames(frames),
+		terminal: "canceled",
+	});
+	return { runId };
+}
+
+async function requestRunningRunCancellation(
+	conversationId: string,
+	runId: string,
+): Promise<void> {
+	const response = await fetch(
+		`${baseUrl}/v1/conversations/${conversationId}/events`,
+		{
+			method: "POST",
+			headers: headers(),
+			body: JSON.stringify({ type: "user.interrupt", runId }),
+			signal: AbortSignal.timeout(turnTimeoutMs),
+		},
+	);
+	const rawBody = await response.text();
+	if (response.status !== 202) {
+		throw new Error(
+			`expected running Run interrupt 202, got ${response.status}: ${rawBody}`,
+		);
+	}
+
+	let body: unknown;
+	try {
+		body = JSON.parse(rawBody);
+	} catch {
+		throw new Error("running Run interrupt response was not JSON");
+	}
+	if (
+		typeof body !== "object" ||
+		body === null ||
+		Array.isArray(body) ||
+		Object.keys(body).sort().join(",") !== "runId,status" ||
+		(body as Record<string, unknown>).runId !== runId ||
+		(body as Record<string, unknown>).status !== "cancel_requested"
+	) {
+		throw new Error(
+			"running Run interrupt response was not the accepted cancel_requested shape",
+		);
+	}
 }
 
 async function sendTurn(
@@ -391,27 +612,25 @@ async function sendTurn(
 		throw new Error("run_id frame did not carry a durable cursor");
 	const text = snapshot.messages.map((message) => message.text).join("");
 	if (!text.trim()) throw new Error("event stream contained no assistant text");
-	await replayTurn(
+	await replayTurn({
 		conversationId,
 		runId,
-		runCursor,
-		snapshot.messages,
-		snapshot.toolEvents,
-	);
+		afterCursor: runCursor,
+		messages: snapshot.messages,
+		toolFrames: durableToolFrames(frames),
+	});
 	return { runId, text };
 }
 
-async function replayTurn(
-	conversationId: string,
-	runId: string,
-	afterCursor: string,
-	expectedMessages: ClientContractMessage[],
-	expectedToolEvents: ClientContractToolEvent[],
-): Promise<void> {
+async function replayTurn(expectation: ReplayExpectation): Promise<void> {
+	const expectedTerminal = expectation.terminal ?? "done";
 	const response = await fetch(
-		`${baseUrl}/v1/conversations/${conversationId}/runs/${runId}/events`,
+		`${baseUrl}/v1/conversations/${expectation.conversationId}/runs/${expectation.runId}/events`,
 		{
-			headers: { ...headers(), "Last-Event-ID": afterCursor },
+			headers: {
+				...headers(),
+				"Last-Event-ID": expectation.afterCursor,
+			},
 			signal: AbortSignal.timeout(turnTimeoutMs),
 		},
 	);
@@ -436,9 +655,20 @@ async function replayTurn(
 			`durable reconnect attempted to replay non-durable frames: ${replayedEvents.join(", ")}`,
 		);
 	}
-	if (replayedEvents.at(-1) !== "done") {
+	if (replayedEvents.at(-1) !== expectedTerminal) {
 		throw new Error(
-			`durable reconnect did not end in done: ${replayedEvents.join(", ")}`,
+			`durable reconnect did not end in ${expectedTerminal}: ${replayedEvents.join(", ")}`,
+		);
+	}
+	const replayedTerminals = replayedEvents.filter((event) =>
+		["done", "canceled", "error"].includes(event),
+	);
+	if (
+		replayedTerminals.length !== 1 ||
+		replayedTerminals[0] !== expectedTerminal
+	) {
+		throw new Error(
+			`durable reconnect did not contain exactly one ${expectedTerminal} outcome: ${replayedEvents.join(", ")}`,
 		);
 	}
 
@@ -447,21 +677,65 @@ async function replayTurn(
 		client.receive({ ...frame, data: parseFrameData(frame) });
 	}
 	const snapshot = client.snapshot();
-	if (snapshot.terminal !== "done") {
-		throw new Error("reconnected client fixture did not observe done");
+	if (snapshot.terminal !== expectedTerminal) {
+		throw new Error(
+			`reconnected client fixture did not observe ${expectedTerminal}`,
+		);
 	}
-	if (JSON.stringify(snapshot.messages) !== JSON.stringify(expectedMessages)) {
+	if (!isDeepStrictEqual(snapshot.messages, expectation.messages)) {
 		throw new Error(
 			"durable reconnect did not replay the exact committed messages",
 		);
 	}
 	// Tool events are durable run events too: a reconnect replays exactly the
 	// invocations and results the live stream showed, in order (ADR-0009).
-	if (
-		JSON.stringify(snapshot.toolEvents) !== JSON.stringify(expectedToolEvents)
-	) {
-		throw new Error("durable reconnect did not replay the exact tool events");
+	if (!isDeepStrictEqual(durableToolFrames(frames), expectation.toolFrames)) {
+		throw new Error("durable reconnect did not replay the exact Tool events");
 	}
+}
+
+function durableToolFrames(frames: SSEFrame[]): DurableToolFrame[] {
+	return frames.flatMap((frame) => {
+		if (frame.event !== "tool_use" && frame.event !== "tool_result") return [];
+		return [
+			{
+				id: frame.id,
+				event: frame.event,
+				data: parseFrameData(frame),
+			},
+		];
+	});
+}
+
+async function readSSEIncrementally(
+	response: Response,
+	onFrame: (frame: SSEFrame) => Promise<void>,
+): Promise<void> {
+	if (!response.body) throw new Error("event response had no body");
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+
+	const dispatch = async (block: string): Promise<void> => {
+		for (const frame of parseSSE(block)) await onFrame(frame);
+	};
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (value) buffer += decoder.decode(value, { stream: true });
+
+		let boundary = /\r?\n\r?\n/.exec(buffer);
+		while (boundary?.index !== undefined) {
+			const block = buffer.slice(0, boundary.index);
+			buffer = buffer.slice(boundary.index + boundary[0].length);
+			await dispatch(block);
+			boundary = /\r?\n\r?\n/.exec(buffer);
+		}
+		if (done) break;
+	}
+
+	buffer += decoder.decode();
+	if (buffer.trim()) await dispatch(buffer);
 }
 
 function parseSSE(raw: string): SSEFrame[] {

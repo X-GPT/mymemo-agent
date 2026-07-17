@@ -15,6 +15,11 @@ interface UserMessage {
 	text: string;
 }
 
+interface UserInterrupt {
+	type: "user.interrupt";
+	runId: string;
+}
+
 interface StubRequest {
 	pathname: string;
 	memberCode: string | null;
@@ -23,17 +28,50 @@ interface StubRequest {
 
 interface SmokeStubOptions {
 	conversationId: string;
+	interruptConversationId?: string;
 	workspaceMarker: string;
 	runIdPrefix: string;
 	includePreview?: boolean;
+	interruptIncludePreview?: boolean;
+	replayInterruptToolCommand?: string;
 	artifactContent?: (requestedContent: string) => string;
 }
 
 interface SmokeStub {
 	baseUrl: string;
 	messages: UserMessage[];
+	interrupts: Array<UserInterrupt & { afterToolUse: boolean }>;
 	reconnectCursors: string[];
 	requests: StubRequest[];
+}
+
+interface StubSSEFrame {
+	id?: string;
+	event: string;
+	data: Record<string, unknown>;
+}
+
+function serializeSSEFrame(frame: StubSSEFrame): string {
+	return `${frame.id === undefined ? "" : `id: ${frame.id}\n`}event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`;
+}
+
+function sseResponse(frames: StubSSEFrame[]): Response {
+	return new Response(frames.map(serializeSSEFrame).join(""), {
+		headers: { "content-type": "text/event-stream" },
+	});
+}
+
+function bashToolUseFrame(command: string): StubSSEFrame {
+	return {
+		id: "2",
+		event: "tool_use",
+		data: {
+			type: "tool_use",
+			tool: "Bash",
+			arguments: { command },
+			truncated: false,
+		},
+	};
 }
 
 function sseTurn(input: {
@@ -45,11 +83,7 @@ function sseTurn(input: {
 	includeLifecycle?: boolean;
 	commitTexts?: string[];
 }): Response {
-	const frames: Array<{
-		id?: string;
-		event: string;
-		data: Record<string, unknown>;
-	}> = [];
+	const frames: StubSSEFrame[] = [];
 	if (input.includeLifecycle !== false) {
 		frames.push({
 			id: "1",
@@ -95,15 +129,7 @@ function sseTurn(input: {
 			data: { type: "done" },
 		});
 	}
-	return new Response(
-		`${frames
-			.map(
-				(frame) =>
-					`${frame.id === undefined ? "" : `id: ${frame.id}\n`}event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}`,
-			)
-			.join("\n\n")}\n\n`,
-		{ headers: { "content-type": "text/event-stream" } },
-	);
+	return sseResponse(frames);
 }
 
 describe("agent conversation live smoke", () => {
@@ -174,11 +200,13 @@ describe("agent conversation live smoke", () => {
 		expect(stderr).not.toContain("Unable to connect");
 	});
 
-	it("runs the full suite's core checks with Redis preview disabled", async () => {
+	it("interrupts a held-open full-suite Run after its first Tool invocation and replays canceled history", async () => {
 		const conversationId = "00000000-0000-4000-8000-000000000235";
+		const interruptConversationId = "00000000-0000-4000-8000-000000000236";
 		const workspaceMarker = "workspace-fedcba9876543210fedcba9876543210";
 		const stub = await startSmokeStub({
 			conversationId,
+			interruptConversationId,
 			workspaceMarker,
 			runIdPrefix: "disabled-run",
 			artifactContent: (content) => `${content}\n`,
@@ -193,11 +221,66 @@ describe("agent conversation live smoke", () => {
 		expect(exitCode).toBe(0);
 		expect(stdout).toContain("suite=full");
 		expect(stdout).toContain("preview=forbidden");
+		expect(stdout).toContain(interruptConversationId);
+		expect(stdout).toContain("disabled-run-interrupt");
 		expect(extractArtifactRequest(stub.messages[2]?.text).relativePath).toBe(
 			"smoke/core-check.txt",
 		);
-		expect(identityFromRequest(stub.requests.at(-1))).toEqual([null, null]);
-		expect(stub.reconnectCursors).toEqual(["1", "1", "1"]);
+		expect(stub.messages[3]?.text).toContain("Bash");
+		expect(stub.messages[3]?.text).toContain("sleep 120");
+		expect(stub.interrupts).toEqual([
+			{
+				type: "user.interrupt",
+				runId: "disabled-run-interrupt",
+				afterToolUse: true,
+			},
+		]);
+		expect(stub.reconnectCursors).toEqual(["1", "1", "1", "1"]);
+	});
+
+	it("discards provisional Assistant text when the interrupted Run is canceled", async () => {
+		const stub = await startSmokeStub({
+			conversationId: "00000000-0000-4000-8000-000000000238",
+			interruptConversationId: "00000000-0000-4000-8000-000000000239",
+			workspaceMarker: "workspace-22222222222222222222222222222222",
+			runIdPrefix: "preview-run",
+			includePreview: true,
+			interruptIncludePreview: true,
+		});
+
+		const { exitCode, stderr } = await runSmoke(stub.baseUrl, {
+			AGENT_SMOKE_PREVIEW_MODE: "required",
+			AGENT_SMOKE_SUITE: "full",
+		});
+
+		expect(stderr).toBe("");
+		expect(exitCode).toBe(0);
+		expect(stub.interrupts).toEqual([
+			{
+				type: "user.interrupt",
+				runId: "preview-run-interrupt",
+				afterToolUse: true,
+			},
+		]);
+	});
+
+	it("rejects canceled replay whose Tool payload differs from the live stream", async () => {
+		const stub = await startSmokeStub({
+			conversationId: "00000000-0000-4000-8000-000000000240",
+			interruptConversationId: "00000000-0000-4000-8000-000000000241",
+			workspaceMarker: "workspace-33333333333333333333333333333333",
+			runIdPrefix: "tampered-tool-run",
+			replayInterruptToolCommand: "sleep 1",
+		});
+
+		const { exitCode, stderr } = await runSmoke(stub.baseUrl, {
+			AGENT_SMOKE_SUITE: "full",
+		});
+
+		expect(exitCode).not.toBe(0);
+		expect(stderr).toContain(
+			"durable reconnect did not replay the exact Tool events",
+		);
 	});
 
 	it("rejects a signed artifact whose bytes do not match the request", async () => {
@@ -285,6 +368,7 @@ describe("agent conversation live smoke", () => {
 
 async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 	const messages: UserMessage[] = [];
+	const interrupts: Array<UserInterrupt & { afterToolUse: boolean }> = [];
 	const reconnectCursors: string[] = [];
 	const requests: StubRequest[] = [];
 	const responsesByRun = new Map<string, string>();
@@ -294,6 +378,11 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 	const artifactId = `${input.runIdPrefix}-artifact`;
 	const signedPath = `/signed/${artifactId}`;
 	let downloadedContent = "";
+	let conversationCreates = 0;
+	let interruptToolUseSent = false;
+	let interruptController:
+		| ReadableStreamDefaultController<Uint8Array>
+		| undefined;
 	const port = await availablePort();
 
 	const server = Bun.serve({
@@ -306,8 +395,17 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 				partnerCode: request.headers.get("x-partner-code"),
 			});
 			if (url.pathname === "/v1/conversations") {
+				const conversationId =
+					conversationCreates++ === 0
+						? input.conversationId
+						: input.interruptConversationId;
+				if (!conversationId) {
+					return new Response("unexpected Conversation create", {
+						status: 500,
+					});
+				}
 				return Response.json(
-					{ conversationId: input.conversationId, scope: "general" },
+					{ conversationId, scope: "general" },
 					{ status: 201 },
 				);
 			}
@@ -331,6 +429,102 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 					includePreview: input.includePreview,
 					text,
 				});
+			}
+
+			if (
+				input.interruptConversationId &&
+				request.method === "POST" &&
+				url.pathname ===
+					`/v1/conversations/${input.interruptConversationId}/events`
+			) {
+				const event = (await request.json()) as UserMessage | UserInterrupt;
+				const runId = `${input.runIdPrefix}-interrupt`;
+				if (event.type === "user.interrupt") {
+					interrupts.push({ ...event, afterToolUse: interruptToolUseSent });
+					if (event.runId !== runId || !interruptController) {
+						return new Response("Run not found", { status: 404 });
+					}
+					interruptController.enqueue(
+						new TextEncoder().encode(
+							serializeSSEFrame({
+								id: "3",
+								event: "canceled",
+								data: { type: "canceled" },
+							}),
+						),
+					);
+					interruptController.close();
+					interruptController = undefined;
+					return Response.json(
+						{ runId, status: "cancel_requested" },
+						{ status: 202 },
+					);
+				}
+
+				messages.push(event);
+				const frames: StubSSEFrame[] = [
+					{
+						id: "1",
+						event: "conversation_id",
+						data: {
+							type: "conversation_id",
+							conversationId: input.interruptConversationId,
+						},
+					},
+					{
+						id: "1",
+						event: "run_id",
+						data: { type: "run_id", runId },
+					},
+				];
+				if (input.interruptIncludePreview) {
+					frames.push({
+						event: "text_delta",
+						data: {
+							type: "text_delta",
+							messageId: `message-${runId}`,
+							deltaIndex: 0,
+							text: "discard this provisional text",
+						},
+					});
+				}
+				const toolUseFrame = bashToolUseFrame("sleep 120");
+				const encoder = new TextEncoder();
+				const stream = new ReadableStream<Uint8Array>({
+					start(controller) {
+						interruptController = controller;
+						for (const frame of frames) {
+							controller.enqueue(encoder.encode(serializeSSEFrame(frame)));
+						}
+						setTimeout(() => {
+							if (interruptController !== controller) return;
+							controller.enqueue(
+								encoder.encode(serializeSSEFrame(toolUseFrame)),
+							);
+							interruptToolUseSent = true;
+						}, 10);
+					},
+				});
+				return new Response(stream, {
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+
+			if (
+				input.interruptConversationId &&
+				request.method === "GET" &&
+				url.pathname ===
+					`/v1/conversations/${input.interruptConversationId}/runs/${input.runIdPrefix}-interrupt/events`
+			) {
+				reconnectCursors.push(request.headers.get("last-event-id") ?? "");
+				return sseResponse([
+					bashToolUseFrame(input.replayInterruptToolCommand ?? "sleep 120"),
+					{
+						id: "3",
+						event: "canceled",
+						data: { type: "canceled" },
+					},
+				]);
 			}
 
 			const reconnectPrefix = `/v1/conversations/${input.conversationId}/runs/`;
@@ -400,6 +594,7 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 	return {
 		baseUrl: `http://127.0.0.1:${port}`,
 		messages,
+		interrupts,
 		reconnectCursors,
 		requests,
 	};
