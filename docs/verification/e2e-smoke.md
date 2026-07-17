@@ -5,7 +5,9 @@ The Conversation smoke is one public-contract client with two targets. It uses
 deployed internal ALB; it does not read databases, logs, or runtime internals.
 This guide records the verification strategy from
 [#300](https://github.com/X-GPT/mymemo-agent/issues/300) and the core artifact
-check from [#302](https://github.com/X-GPT/mymemo-agent/issues/302).
+check from [#302](https://github.com/X-GPT/mymemo-agent/issues/302), plus the
+local cancellation check from
+[#303](https://github.com/X-GPT/mymemo-agent/issues/303).
 
 ## Check sets
 
@@ -21,11 +23,15 @@ value fails before the first HTTP request.
   downloaded object, obtains `{ downloadUrl }`, and fetches the URL without
   identity headers. The response must be an attachment whose bytes match the
   request, with exactly one trailing newline tolerated.
-- `full` is the local pre-merge superset. It currently includes all `core`
-  checks; [#303](https://github.com/X-GPT/mymemo-agent/issues/303) and
-  [#304](https://github.com/X-GPT/mymemo-agent/issues/304) extend it with the
-  local-only interrupt and seeded-document checks. Use `full` now so those
-  checks join the pre-merge command without changing operator habits.
+- `full` is the local pre-merge superset. After the `core` checks it creates a
+  second Conversation, asks its Run to start an immediate long-running Bash
+  command, reads the live SSE incrementally, and sends `user.interrupt` only
+  after the first Tool invocation arrives. It requires the running-Run
+  `cancel_requested` response, a `canceled` live outcome with no surviving
+  provisional Assistant text, and a reconnect that exactly replays the live
+  committed messages and Tool events before ending `canceled`.
+  [#304](https://github.com/X-GPT/mymemo-agent/issues/304) adds the remaining
+  seeded-document checks to this set.
 
 `AGENT_SMOKE_PREVIEW_MODE` is independent of the suite. Use `required` to prove
 the Redis Live-preview lane, `forbidden` to prove Postgres-only delivery, or the
@@ -64,8 +70,10 @@ the assertion that failed.
 
 The suite logic is tested through its CLI against loopback stub Conversation
 servers. The tests cover both required-preview and forbidden-preview artifact
-happy paths, the allowed single trailing newline, identity-free signed-object
-fetching, tampered object bytes, and environment validation:
+happy paths, a held-open stream canceled only after its Tool invocation,
+canceled durable replay, provisional-text discard, and rejection of a changed
+replayed Tool payload, the allowed single trailing newline, identity-free
+signed-object fetching, tampered object bytes, and environment validation:
 
 ```sh
 bun test scripts/smoke/agent-conversation-smoke.test.ts
