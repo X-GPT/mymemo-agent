@@ -1,6 +1,6 @@
 locals {
   github_oidc_provider_arn = "arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com"
-  github_environment_sub   = "repo:${var.github_owner}/${var.github_repository}:environment:${var.github_environment}"
+  github_ref_sub           = "repo:${var.github_owner}/${var.github_repository}:ref:${var.github_deploy_ref}"
 }
 
 data "aws_iam_openid_connect_provider" "github" {
@@ -26,7 +26,7 @@ data "aws_iam_policy_document" "github_actions_assume_role" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [local.github_environment_sub]
+      values   = [local.github_ref_sub]
     }
   }
 }

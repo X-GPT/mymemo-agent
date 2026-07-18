@@ -20,10 +20,12 @@ variable "github_repository" {
   default     = "mymemo-agent"
 }
 
-variable "github_environment" {
-  description = "GitHub Actions environment allowed to assume this deploy role."
+# Ref-pinned (not environment-pinned) so the release workflow needs no GitHub
+# environment features, which are plan-gated on private repositories.
+variable "github_deploy_ref" {
+  description = "Git ref whose GitHub Actions runs are allowed to assume this deploy role."
   type        = string
-  default     = "prod"
+  default     = "refs/heads/main"
 }
 
 variable "deploy_role_name" {

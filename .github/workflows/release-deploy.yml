@@ -1,6 +1,22 @@
 name: Release deploy
 
+# Trunk-based continuous deploy with hybrid lanes (private-repo friendly: no
+# GitHub environment features are used — the deploy role's OIDC trust is
+# pinned to runs on refs/heads/main instead, see infra/bootstrap-iam):
+# - Every CI-green push to main deploys that exact commit automatically.
+# - The plan job builds and pushes images, then classifies the Terraform plan
+#   (scripts/deploy/classify_terraform_plan.sh). An app-only plan — just the
+#   image-tag task-definition roll — applies unattended. Any other change
+#   fails the automatic run with instructions; a human applies it by
+#   re-running via workflow_dispatch with the typed confirm phrase.
+# - workflow_dispatch (from main only; other refs cannot assume the deploy
+#   role) also covers bootstrap, re-deploys, and incident response.
+
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
@@ -11,29 +27,39 @@ on:
         required: true
         default: "prod"
       confirm_prod_apply:
-        description: "Type apply-mymemo-agent-prod to apply production Terraform changes."
+        description: "Type apply-mymemo-agent-prod to apply infra-lane (non-app) Terraform changes."
         required: true
 
 concurrency:
-  group: release-deploy-${{ inputs.environment }}
+  group: release-deploy-${{ inputs.environment || 'prod' }}
   cancel-in-progress: false
 
 env:
   TF_INPUT: false
   TF_IN_AUTOMATION: true
+  DEPLOY_ENVIRONMENT: ${{ inputs.environment || 'prod' }}
+  DEPLOY_CONFIG: infra/deploy/${{ inputs.environment || 'prod' }}.env
+  # The commit CI validated (workflow_run) or the dispatched ref's head — the
+  # only commit this workflow builds, plans, and applies.
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
-  deploy:
+  plan:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    env:
-      DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
-      DEPLOY_CONFIG: infra/deploy/${{ inputs.environment }}.env
     permissions:
       contents: read
       id-token: write
+    outputs:
+      image_tag: ${{ steps.image_tag.outputs.image_tag }}
+      chat_api_image: ${{ steps.images.outputs.chat_api_image }}
+      agent_worker_image: ${{ steps.images.outputs.agent_worker_image }}
+      first_deploy: ${{ steps.agent_deploy_state.outputs.first_deploy }}
+      lane: ${{ steps.classify.outputs.lane }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
 
       - name: Load deploy config
         run: |
@@ -66,8 +92,9 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Compute immutable image tag
+        id: image_tag
         run: |
-          short_sha="${GITHUB_SHA::7}"
+          short_sha="${DEPLOY_SHA::7}"
           image_tag="release-${short_sha}-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
 
           if [[ ! "${image_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
@@ -76,11 +103,20 @@ jobs:
           fi
 
           printf 'IMAGE_TAG=%s\n' "${image_tag}" >> "${GITHUB_ENV}"
+          printf 'image_tag=%s\n' "${image_tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Ensure ECR repositories
         run: |
           terraform -chdir=infra/ecr init
           terraform -chdir=infra/ecr apply -auto-approve -var="aws_region=${AWS_REGION}"
+
+      - name: Resolve image references
+        id: images
+        run: |
+          chat_api_repository_url="$(terraform -chdir=infra/ecr output -raw chat_api_ecr_repository_url)"
+          agent_worker_repository_url="$(terraform -chdir=infra/ecr output -raw agent_worker_ecr_repository_url)"
+          printf 'chat_api_image=%s:%s\n' "${chat_api_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
+          printf 'agent_worker_image=%s:%s\n' "${agent_worker_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
@@ -97,39 +133,126 @@ jobs:
       - name: Build and push agent-worker image
         run: scripts/deploy/build_and_push_agent_image.sh agent-worker
 
+      - name: Terraform plan
+        run: scripts/deploy/terraform_prod_in_place_plan.sh
+
+      - name: Classify plan into a deploy lane
+        id: classify
+        env:
+          FIRST_DEPLOY: ${{ steps.agent_deploy_state.outputs.first_deploy }}
+        run: |
+          if [[ "${FIRST_DEPLOY}" == "true" ]]; then
+            lane="infra"
+          else
+            lane="$(scripts/deploy/classify_terraform_plan.sh)"
+          fi
+          echo "Deploy lane: ${lane}"
+          printf 'lane=%s\n' "${lane}" >> "${GITHUB_OUTPUT}"
+
+  deploy:
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE_TAG: ${{ needs.plan.outputs.image_tag }}
+      # Pin the exact images the plan job pushed so this job never resolves
+      # ECR outputs (ci_prepare_tfvars.sh short-circuits on these).
+      CHAT_API_IMAGE: ${{ needs.plan.outputs.chat_api_image }}
+      AGENT_WORKER_IMAGE: ${{ needs.plan.outputs.agent_worker_image }}
+      FIRST_DEPLOY: ${{ needs.plan.outputs.first_deploy }}
+      # App lane: human intent is the CI-green merge, so the phrase is
+      # supplied automatically. Infra lane: the operator must have typed it
+      # into the workflow_dispatch input (validated by the apply script).
+      CONFIRM_AGENT_PROD_APPLY: ${{ needs.plan.outputs.lane == 'app' && 'apply-mymemo-agent-prod' || inputs.confirm_prod_apply }}
+    steps:
+      # A failed run (rather than a skip) so infra changes waiting for a human
+      # are impossible to miss.
+      - name: Require manual dispatch for infra changes
+        if: needs.plan.outputs.lane == 'infra' && github.event_name != 'workflow_dispatch'
+        run: |
+          echo "This deploy includes non-app Terraform changes (or is the bootstrap deploy) and cannot apply unattended." >&2
+          echo "Review the plan in the plan job's log, then run the 'Release deploy' workflow manually from main with confirm_prod_apply=apply-mymemo-agent-prod." >&2
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Load deploy config
+        run: |
+          set -euo pipefail
+          set -a
+          source "${DEPLOY_CONFIG}"
+          set +a
+
+          : "${AWS_REGION:?AWS_REGION is required in ${DEPLOY_CONFIG}}"
+          : "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID is required in ${DEPLOY_CONFIG}}"
+          : "${DEPLOY_ENVIRONMENT:?DEPLOY_ENVIRONMENT is required in ${DEPLOY_CONFIG}}"
+
+          {
+            printf 'AWS_REGION=%s\n' "${AWS_REGION}"
+            printf 'AWS_ACCOUNT_ID=%s\n' "${AWS_ACCOUNT_ID}"
+            printf 'DEPLOY_ENVIRONMENT=%s\n' "${DEPLOY_ENVIRONMENT}"
+          } >> "${GITHUB_ENV}"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.0
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Prepare Terraform variables
+        run: scripts/deploy/ci_prepare_tfvars.sh
+
       - name: Terraform bootstrap plan
-        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        if: env.FIRST_DEPLOY == 'true'
         env:
           BOOTSTRAP_ZERO_DESIRED_COUNT: true
         run: scripts/deploy/terraform_prod_in_place_plan.sh agent-bootstrap.tfplan
 
       - name: Terraform bootstrap apply
-        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
-        env:
-          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        if: env.FIRST_DEPLOY == 'true'
         run: scripts/deploy/terraform_prod_in_place_apply.sh agent-bootstrap.tfplan
 
       - name: Terraform plan
-        if: steps.agent_deploy_state.outputs.first_deploy != 'true'
+        if: env.FIRST_DEPLOY != 'true'
         run: scripts/deploy/terraform_prod_in_place_plan.sh
 
+      # The plan is recomputed in this job (a saved plan file may embed
+      # sensitive values, so it is never passed between jobs as an artifact).
+      # Re-classify so state drift between the jobs cannot smuggle infra
+      # changes through the unattended lane.
+      - name: Confirm plan still qualifies for the unattended lane
+        if: env.FIRST_DEPLOY != 'true' && needs.plan.outputs.lane == 'app'
+        run: |
+          lane="$(scripts/deploy/classify_terraform_plan.sh)"
+          if [[ "${lane}" != "app" ]]; then
+            echo "Plan gained non-app changes after lane selection; re-run the workflow so it requires manual confirmation." >&2
+            exit 1
+          fi
+
       - name: Terraform apply
-        if: steps.agent_deploy_state.outputs.first_deploy != 'true'
-        env:
-          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        if: env.FIRST_DEPLOY != 'true'
         run: scripts/deploy/terraform_prod_in_place_apply.sh
 
       - name: Run agent DB migrations
         run: scripts/deploy/run_agent_migration.sh
 
       - name: Terraform plan desired service counts
-        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
+        if: env.FIRST_DEPLOY == 'true'
         run: scripts/deploy/terraform_prod_in_place_plan.sh
 
       - name: Terraform apply desired service counts
-        if: steps.agent_deploy_state.outputs.first_deploy == 'true'
-        env:
-          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        if: env.FIRST_DEPLOY == 'true'
         run: scripts/deploy/terraform_prod_in_place_apply.sh
 
       - name: Roll ECS services

@@ -5,5 +5,5 @@ output "deploy_role_arn" {
 
 output "github_oidc_subject" {
   description = "GitHub OIDC subject allowed to assume the deploy role."
-  value       = local.github_environment_sub
+  value       = local.github_ref_sub
 }
