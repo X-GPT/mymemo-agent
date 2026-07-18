@@ -519,14 +519,18 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain(
 			"arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy",
 		);
-		expect(releaseDeployWorkflow).toContain("DEPLOY_ENVIRONMENT: ${{ inputs.environment }}");
+		expect(releaseDeployWorkflow).toContain("DEPLOY_ENVIRONMENT: ${{ inputs.environment || 'prod' }}");
 		expect(releaseDeployWorkflow).toContain("GITHUB_RUN_ATTEMPT");
 		expect(releaseDeployWorkflow).toContain("type: choice");
 		expect(releaseDeployWorkflow).toContain("- prod");
 		expect(releaseDeployWorkflow).toContain("confirm_prod_apply");
 		expect(releaseDeployWorkflow).not.toContain("gateway_public_url");
 		expect(releaseDeployWorkflow).not.toContain("GATEWAY_PUBLIC_URL");
-		expect(releaseDeployWorkflow).toContain("CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}");
+		// The phrase is auto-supplied only for the unattended app lane; the infra
+		// lane still requires the operator-typed dispatch input.
+		expect(releaseDeployWorkflow).toContain(
+			"CONFIRM_AGENT_PROD_APPLY: ${{ needs.plan.outputs.lane == 'app' && 'apply-mymemo-agent-prod' || inputs.confirm_prod_apply }}",
+		);
 		expect(releaseDeployWorkflow).not.toContain("CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod");
 	});
 
@@ -545,7 +549,12 @@ describe("agent deployment config", () => {
 			/aws_account_id\s*=\s*"637423444544"/,
 		);
 		expect(combined).toContain("token.actions.githubusercontent.com:sub");
-		expect(combined).toContain("repo:${var.github_owner}/${var.github_repository}:environment:${var.github_environment}");
+		// Ref-pinned, not environment-pinned: no GitHub environment features are
+		// used (plan-gated on private repos) and only runs on main can assume
+		// the deploy role.
+		expect(combined).toContain("repo:${var.github_owner}/${var.github_repository}:ref:${var.github_deploy_ref}");
+		expect(combined).toContain('default     = "refs/heads/main"');
+		expect(combined).not.toContain(":environment:");
 		expect(combined).toContain("sts:AssumeRoleWithWebIdentity");
 		expect(combined).toContain("mymemo-agent/bootstrap-iam-prod.tfstate");
 		expect(combined).not.toContain("mymemo-github-actions-deploy");
@@ -577,7 +586,7 @@ describe("agent deployment config", () => {
 
 	it("release deploy serializes runs and generates unique immutable image tags", () => {
 		expect(releaseDeployWorkflow).toContain("concurrency:");
-		expect(releaseDeployWorkflow).toContain("group: release-deploy-${{ inputs.environment }}");
+		expect(releaseDeployWorkflow).toContain("group: release-deploy-${{ inputs.environment || 'prod' }}");
 		expect(releaseDeployWorkflow).toContain("cancel-in-progress: false");
 		expect(releaseDeployWorkflow).not.toContain("inputs.image_tag");
 		expect(releaseDeployWorkflow).not.toContain("REQUESTED_IMAGE_TAG");
@@ -585,6 +594,43 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain('if [[ ! "${image_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]');
 		expect(releaseDeployWorkflow).toContain("printf 'IMAGE_TAG=%s\\n'");
 		expect(releaseDeployWorkflow).not.toContain('echo "IMAGE_TAG=${REQUESTED_IMAGE_TAG}" >> "${GITHUB_ENV}"');
+	});
+
+	it("release deploy auto-deploys CI-green main through classified lanes", () => {
+		const classifyScript = readFileSync(
+			join(root, "scripts", "deploy", "classify_terraform_plan.sh"),
+			"utf8",
+		);
+
+		// Auto trigger: only a green CI run on main, deploying the exact commit
+		// CI validated rather than main's tip at run time.
+		expect(releaseDeployWorkflow).toContain("workflow_run:");
+		expect(releaseDeployWorkflow).toContain("workflows: [CI]");
+		expect(releaseDeployWorkflow).toContain("branches: [main]");
+		expect(releaseDeployWorkflow).toContain("github.event.workflow_run.conclusion == 'success'");
+		expect(releaseDeployWorkflow).toContain(
+			"DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}",
+		);
+		expect(releaseDeployWorkflow).toContain("ref: ${{ env.DEPLOY_SHA }}");
+
+		// App-only plans (the image-tag roll) apply unattended; infra plans fail
+		// the automatic run and require a manual dispatch with the confirm phrase.
+		expect(releaseDeployWorkflow).toContain("scripts/deploy/classify_terraform_plan.sh");
+		expect(releaseDeployWorkflow).toContain(
+			"if: needs.plan.outputs.lane == 'infra' && github.event_name != 'workflow_dispatch'",
+		);
+		expect(classifyScript).toContain('. != "aws_ecs_task_definition" and . != "aws_ecs_service"');
+		expect(classifyScript).toContain('["no-op", "read"]');
+
+		// The deploy job re-plans and re-classifies so drift between the jobs
+		// cannot smuggle infra changes through the unattended lane.
+		expect(releaseDeployWorkflow).toContain(
+			"if: env.FIRST_DEPLOY != 'true' && needs.plan.outputs.lane == 'app'",
+		);
+
+		// No GitHub environment features anywhere (plan-gated on private repos);
+		// the OIDC trust is ref-pinned instead.
+		expect(releaseDeployWorkflow).not.toContain("\n    environment:");
 	});
 
 	it("agent RDS tracks the PostgreSQL major version for auto-minor upgrades", () => {
