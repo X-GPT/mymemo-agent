@@ -15,3 +15,8 @@ export interface WorkerLogger {
 export function createLogger(level: string): WorkerLogger {
 	return pino({ level });
 }
+
+/** Render an unknown thrown value as a log-safe message string. */
+export function toMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}

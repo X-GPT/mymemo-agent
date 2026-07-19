@@ -26,7 +26,8 @@ import {
 } from "@mymemo/agent-db/runtime-store";
 import { ArtifactValidationError } from "./artifacts/artifact-manifest";
 import { ArtifactPublicationError } from "./artifacts/artifact-publication";
-import type { WorkerLogger } from "./logger";
+import { toMessage, type WorkerLogger } from "./logger";
+import { DoorbellTicker, type RunDoorbell } from "./run-doorbell";
 import type { Worker } from "./worker";
 
 /**
@@ -105,6 +106,8 @@ export interface RunLoopOptions {
 	processor: RunProcessor;
 	/** How often {@link RunLoop.start}'s timer fires a tick (heartbeat + claim). */
 	heartbeatIntervalMs: number;
+	/** Optional doorbell whose ring triggers an immediate tick. */
+	doorbell?: RunDoorbell;
 	logger: WorkerLogger;
 }
 
@@ -151,6 +154,7 @@ export class RunLoop {
 	private running = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+	private doorbellUnsubscribe: (() => void) | undefined;
 
 	constructor(private readonly opts: RunLoopOptions) {}
 
@@ -195,11 +199,41 @@ export class RunLoop {
 			() => void this.runRecoveryTimer(),
 			STALE_RUN_RECOVERY_INTERVAL_MS,
 		);
+		if (this.opts.doorbell) {
+			// Rings coalesce so a burst of admissions costs one trailing claim pass,
+			// and doorbell ticks never run concurrently with each other. A doorbell
+			// tick MAY overlap a timer tick — that is safe: claiming is `FOR UPDATE
+			// SKIP LOCKED` and heartbeats/terminals are fenced, so overlap costs a
+			// redundant query, never a double claim.
+			const ticker = new DoorbellTicker(
+				async () => {
+					await this.tick();
+				},
+				(error) => {
+					this.opts.logger.error({
+						message: "doorbell tick failed",
+						workerId: this.workerId,
+						error: toMessage(error),
+					});
+				},
+			);
+			const unsubscribe = this.opts.doorbell.subscribe(() => {
+				if (this.running) ticker.ring();
+			});
+			this.doorbellUnsubscribe = () => {
+				ticker.stop();
+				unsubscribe();
+			};
+		}
 	}
 
 	/** Stop scheduling new ticks and drain in-flight runs via the supervisor. */
 	async stop(): Promise<void> {
 		this.running = false;
+		if (this.doorbellUnsubscribe) {
+			this.doorbellUnsubscribe();
+			this.doorbellUnsubscribe = undefined;
+		}
 		if (this.timer) {
 			clearTimeout(this.timer);
 			this.timer = undefined;
@@ -554,10 +588,6 @@ export class RunLoop {
 			return false;
 		}
 	}
-}
-
-function toMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
 
 function artifactFailureLogFields(error: unknown): Record<string, unknown> {
