@@ -569,3 +569,95 @@ describe("RunLoop — synthetic end-to-end smoke", () => {
 		]);
 	});
 });
+
+/** Poll until `condition` holds; fail fast with a named timeout otherwise. */
+async function waitUntil(
+	condition: () => Promise<boolean> | boolean,
+	label: string,
+	timeoutMs = 4_000,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!(await condition())) {
+		if (Date.now() > deadline) {
+			throw new Error(`timed out waiting for ${label}`);
+		}
+		await Bun.sleep(5);
+	}
+}
+
+/** A test doorbell: the test rings it and observes (un)subscription. */
+function buildDoorbell() {
+	let onRing: (() => void) | null = null;
+	let unsubscribed = false;
+	return {
+		doorbell: {
+			subscribe(callback: () => void): () => void {
+				onRing = callback;
+				return () => {
+					unsubscribed = true;
+					onRing = null;
+				};
+			},
+		},
+		ring: () => onRing?.(),
+		get unsubscribed() {
+			return unsubscribed;
+		},
+	};
+}
+
+describe("RunLoop — doorbell", () => {
+	it("claims a queued run when the doorbell rings, without waiting for the timer", async () => {
+		const worker = buildWorker(1);
+		const bell = buildDoorbell();
+		const loop = new RunLoop({
+			db: tdb.db,
+			worker,
+			processor: appendMessageProcessor,
+			// The timer cannot fire within the test window: only start()'s
+			// immediate tick and the doorbell can claim.
+			heartbeatIntervalMs: 3_600_000,
+			logger: silentLogger,
+			doorbell: bell.doorbell,
+		});
+		// The sentinel absorbs the immediate start() tick; with capacity 1 its
+		// claim loop exits before another run could be claimed.
+		await queueRun("run-sentinel", "conv-sentinel");
+		loop.start();
+		await waitUntil(
+			async () => (await readRun("run-sentinel"))?.status === "done",
+			"sentinel run to finish",
+		);
+
+		// Queued after every scheduled tick has completed: only a ring claims it.
+		await queueRun("run-target", "conv-target");
+		bell.ring();
+
+		await waitUntil(
+			async () => (await readRun("run-target"))?.status === "done",
+			"doorbell ring to claim and finish the target run",
+		);
+		await loop.stop();
+	});
+
+	it("unsubscribes from the doorbell on stop, so a late ring claims nothing", async () => {
+		const worker = buildWorker(1);
+		const bell = buildDoorbell();
+		const loop = new RunLoop({
+			db: tdb.db,
+			worker,
+			processor: appendMessageProcessor,
+			heartbeatIntervalMs: 3_600_000,
+			logger: silentLogger,
+			doorbell: bell.doorbell,
+		});
+		loop.start();
+		await loop.stop();
+
+		expect(bell.unsubscribed).toBe(true);
+		await queueRun("run-late", "conv-late");
+		bell.ring();
+		await Bun.sleep(20);
+		expect((await readRun("run-late"))?.status).toBe("queued");
+	});
+});

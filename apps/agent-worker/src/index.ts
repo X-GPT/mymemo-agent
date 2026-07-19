@@ -19,6 +19,7 @@ import {
 } from "./live-text";
 import { createLogger } from "./logger";
 import { buildModelClientConfig } from "./model-client";
+import { PostgresRunDoorbell } from "./run-doorbell";
 import { RunLoop } from "./run-loop";
 import { resolveAndVerifyClaudeCodeExecutable } from "./sdk/claude-code-executable";
 import { createSdkRunProcessor } from "./sdk/run-processor";
@@ -107,6 +108,10 @@ const runLoop = new RunLoop({
 		liveTextTelemetry,
 	}),
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
+	// Admission commits ring this doorbell (the `runs_notify_queued` trigger),
+	// so pickup latency is milliseconds instead of a poll interval; the timer
+	// tick above remains the source of truth if the LISTEN connection drops.
+	doorbell: new PostgresRunDoorbell(config.agentDatabaseUrl, logger),
 	logger,
 });
 // Worker-embedded external-resource cleanup (Task 8.1, ADR-0007/ADR-0011).
