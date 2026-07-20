@@ -7,11 +7,15 @@ import {
 	it,
 } from "bun:test";
 import type { Database } from "@/db/client";
-import { runEvents, runs } from "@/db/schema";
+import { conversations, runEvents, runs } from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
 import { DrizzleRunEventReader } from "./run-event-reader";
 
 async function seedRun(db: Database, runId: string, conversationId = "conv-1") {
+	await db
+		.insert(conversations)
+		.values({ userId: "user-1", conversationId, scope: "general" })
+		.onConflictDoNothing();
 	await db.insert(runs).values({
 		runId,
 		userId: "user-1",
@@ -47,6 +51,7 @@ describe("DrizzleRunEventReader", () => {
 
 	beforeEach(async () => {
 		await db.delete(runs); // cascades run_events
+		await db.delete(conversations);
 		await seedRun(db, "run-1");
 	});
 

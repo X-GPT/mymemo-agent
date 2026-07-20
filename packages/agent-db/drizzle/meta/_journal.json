@@ -57,6 +57,20 @@
       "when": 1784434534000,
       "tag": "0007_run_queued_doorbell",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784539569565,
+      "tag": "0008_careless_proteus",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784539585807,
+      "tag": "0009_backfill_conversation_activity",
+      "breakpoints": true
     }
   ]
 }

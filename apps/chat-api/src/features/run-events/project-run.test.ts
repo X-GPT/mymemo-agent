@@ -7,7 +7,7 @@ import {
 	it,
 } from "bun:test";
 import { InMemoryLiveTextTransport } from "@mymemo/live-text";
-import { runEvents, runs } from "@/db/schema";
+import { conversations, runEvents, runs } from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
 import { type ProjectedFrame, projectRun } from "./project-run";
 import type { RunEventReader, RunEventRow } from "./run-event-reader";
@@ -1482,6 +1482,12 @@ describe("projectRun over the real reader", () => {
 	beforeEach(async () => {
 		const { db } = tdb;
 		await db.delete(runs); // cascades run_events
+		await db.delete(conversations);
+		await db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
 		await db.insert(runs).values({
 			runId: "run-1",
 			userId: "user-1",

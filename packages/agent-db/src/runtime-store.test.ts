@@ -22,7 +22,12 @@ import {
 	recordOrphanSandboxTx,
 	updateRuntimeSandboxTx,
 } from "./runtime-store";
-import { conversationRuntime, orphanSandboxes, runs } from "./schema";
+import {
+	conversationRuntime,
+	conversations,
+	orphanSandboxes,
+	runs,
+} from "./schema";
 import { createTestDatabase, type TestDb } from "./testing";
 
 let tdb: TestDb;
@@ -42,6 +47,12 @@ beforeEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
 	await tdb.db.delete(conversationRuntime);
 	await tdb.db.delete(orphanSandboxes);
+	await tdb.db.delete(conversations);
+	await tdb.db.insert(conversations).values({
+		userId: "user-1",
+		conversationId: "conv-1",
+		scope: "general",
+	});
 });
 
 async function tableExists(name: string): Promise<boolean> {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AppDeps } from "@/deps";
 import type {
+	ConversationCreateInput,
 	ConversationRecord,
 	ConversationStore,
 } from "@/features/conversation-store";
@@ -13,13 +14,27 @@ import {
 
 /** In-memory store capturing every created record. */
 function fakeStore() {
-	const created: ConversationRecord[] = [];
+	const created: ConversationCreateInput[] = [];
 	const store: ConversationStore = {
 		async get() {
 			return null;
 		},
 		async create(record) {
 			created.push(record);
+			const now = new Date();
+			return {
+				...record,
+				title: null,
+				createdAt: now,
+				lastActivityAt: now,
+				archivedAt: null,
+			};
+		},
+		async update() {
+			return { outcome: "not_found" };
+		},
+		async deletePermanently() {
+			return { outcome: "not_found" };
 		},
 	};
 	return { store, created };
@@ -31,6 +46,10 @@ const conversation: ConversationRecord = {
 	scope: "general",
 	collectionId: null,
 	summaryId: null,
+	title: null,
+	createdAt: new Date("2026-01-01T00:00:00.000Z"),
+	lastActivityAt: new Date("2026-01-01T00:00:00.000Z"),
+	archivedAt: null,
 };
 
 describe("createConversation", () => {
@@ -131,6 +150,10 @@ describe("queueConversationTurn", () => {
 			scope: "document",
 			collectionId: null,
 			summaryId: "sum-7",
+			title: null,
+			createdAt: new Date("2026-01-01T00:00:00.000Z"),
+			lastActivityAt: new Date("2026-01-01T00:00:00.000Z"),
+			archivedAt: null,
 		};
 
 		await queueConversationTurn(deps, {

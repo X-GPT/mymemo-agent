@@ -16,6 +16,7 @@ import {
 } from "@mymemo/agent-db/run-store";
 import {
 	conversationRuntime,
+	conversations,
 	orphanSandboxes,
 	runEvents,
 	runs,
@@ -65,6 +66,7 @@ beforeEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
 	await tdb.db.delete(conversationRuntime);
 	await tdb.db.delete(orphanSandboxes);
+	await tdb.db.delete(conversations);
 });
 
 /** Queue a run with its run_started event (as chat-api admission writes it)
@@ -77,6 +79,14 @@ async function createClaimedRun(input: {
 	collectionId?: string | null;
 	summaryId?: string | null;
 }): Promise<RunRecord> {
+	await tdb.db
+		.insert(conversations)
+		.values({
+			userId: USER_ID,
+			conversationId: input.conversationId,
+			scope: "general",
+		})
+		.onConflictDoNothing();
 	await createQueuedRunTx(tdb.db, {
 		runId: input.runId,
 		userId: USER_ID,

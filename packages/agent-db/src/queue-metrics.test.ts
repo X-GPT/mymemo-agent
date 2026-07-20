@@ -9,7 +9,7 @@ import {
 import { eq, sql } from "drizzle-orm";
 import { readRunQueueMetrics } from "./queue-metrics";
 import { claimNextRunTx, createQueuedRunTx } from "./run-store";
-import { runs } from "./schema";
+import { conversations, runs } from "./schema";
 import { createTestDatabase, type TestDb } from "./testing";
 
 let tdb: TestDb;
@@ -24,9 +24,14 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	await tdb.db.delete(runs);
+	await tdb.db.delete(conversations);
 });
 
 async function queueRun(runId: string, conversationId: string) {
+	await tdb.db
+		.insert(conversations)
+		.values({ userId: "user-1", conversationId, scope: "general" })
+		.onConflictDoNothing();
 	return await createQueuedRunTx(tdb.db, {
 		runId,
 		userId: "user-1",
