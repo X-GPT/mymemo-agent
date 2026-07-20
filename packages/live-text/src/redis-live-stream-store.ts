@@ -169,6 +169,10 @@ export interface LiveStreamStore extends ResumableStreamStore {
 	close(): Promise<void>;
 }
 
+/** Consumer-only boundary used by chat-api. Producer ownership and mutation
+ * methods stay unavailable at the HTTP edge. */
+export type LiveStreamReader = Pick<LiveStreamStore, "read" | "status">;
+
 export type LiveStreamStoreErrorCode =
 	| "missing"
 	| "finalized"

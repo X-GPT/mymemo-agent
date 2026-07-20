@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
+import { createRedisLiveStreamStore } from "@mymemo/live-text";
 import { createArtifactPublisher } from "./artifacts/artifact-publication";
 import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
 import type { AdvisoryLockPool } from "./cleanup/advisory-lock";
@@ -39,6 +40,14 @@ const liveTextTransport = createWorkerLiveTextTransport(
 	config.liveTextRedisUrl,
 	liveTextTelemetry,
 );
+const liveStreamStore = config.liveTextRedisUrl
+	? createRedisLiveStreamStore({
+			url: config.liveTextRedisUrl,
+			// Each deployment currently owns its Redis instance. Infrastructure
+			// ticket #341 will supply the explicit deployment prefix.
+			deployment: "current",
+		})
+	: undefined;
 // Verify the native CLI before constructing a run loop: a missing or wrong-libc
 // binary must crash boot before this process can claim work.
 const pathToClaudeCodeExecutable = resolveAndVerifyClaudeCodeExecutable();
@@ -107,6 +116,7 @@ const runLoop = new RunLoop({
 		liveTextPublisher: liveTextTransport,
 		liveTextTelemetry,
 	}),
+	liveStreamStore,
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 	// Admission commits ring this doorbell (the `runs_notify_queued` trigger),
 	// so pickup latency is milliseconds instead of a poll interval; the timer
@@ -148,6 +158,7 @@ async function handleShutdownSignal(signal: NodeJS.Signals): Promise<void> {
 	cleanupLoop.stop();
 	await runLoop.stop();
 	await liveTextTransport?.close().catch(() => {});
+	await liveStreamStore?.close().catch(() => {});
 	liveTextTelemetry.close();
 	server.stop();
 	logger.info({ message: "agent-worker stopped", workerId });

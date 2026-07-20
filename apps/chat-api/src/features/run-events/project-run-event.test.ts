@@ -24,6 +24,15 @@ describe("projectRunEvent", () => {
 		).toEqual([{ type: "text_commit", messageId: "message-1", text: "hi" }]);
 	});
 
+	it("keeps the legacy route usable for canonical Assistant completions", () => {
+		expect(
+			projectRunEvent(RunEventType.AssistantMessageCompleted, {
+				messageId: "message-1",
+				text: "hi",
+			}),
+		).toEqual([{ type: "text_commit", messageId: "message-1", text: "hi" }]);
+	});
+
 	it("maps run_done to done", () => {
 		expect(projectRunEvent(RunEventType.Done, {})).toEqual([{ type: "done" }]);
 	});

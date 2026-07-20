@@ -97,6 +97,12 @@ function buildApp(
 	exposureGate: ExposureGate = recordingGate(true).gate,
 	fakeRuns = fakeRunStore(),
 	liveTextSubscriber: LiveTextSubscriber = disabledLiveTextSubscriber,
+	liveStreamReader: unknown = {
+		async status() {
+			return "missing";
+		},
+		async *read() {},
+	},
 ) {
 	const deps = {
 		config: {},
@@ -106,6 +112,7 @@ function buildApp(
 		runEventReader: fakeRuns.runEventReader,
 		runNotifier: fakeRuns.runNotifier,
 		liveTextSubscriber,
+		liveStreamReader,
 		liveTextTelemetry: silentLiveTextTelemetry,
 	} as unknown as AppDeps;
 	return createApp({ logLevel: "silent" } as unknown as ApiConfig, deps);
@@ -132,6 +139,9 @@ function fakeRunStore() {
 		runId: string;
 	}> = [];
 	const runStore: RunStore = {
+		async admitRun() {
+			throw new Error("AG-UI admission is not used by this test");
+		},
 		async createQueuedRun(input) {
 			const runId = input.runId ?? `run-${queued.length + 1}`;
 			queued.push({
@@ -308,6 +318,61 @@ const identityHeaders = {
 	"x-partner-code": "partner-1",
 };
 
+function agUiRunInput(overrides: Record<string, unknown> = {}) {
+	return {
+		threadId: "conv-1",
+		runId: "client-run-1",
+		state: {},
+		messages: [
+			{ id: "prior-assistant", role: "assistant", content: "prior" },
+			{ id: "user-message-1", role: "user", content: "hello" },
+		],
+		tools: [],
+		context: [],
+		forwardedProps: {},
+		...overrides,
+	};
+}
+
+function retainedAgUiStream(events: unknown[]) {
+	const encoder = new TextEncoder();
+	const entries = events.map((event, index) => ({
+		cursor: `${index + 1}-0`,
+		chunk: encoder.encode(JSON.stringify(event)),
+	}));
+	return {
+		async status() {
+			return "done";
+		},
+		async *read(_runId: string, cursor: string) {
+			const start = cursor
+				? entries.findIndex((entry) => entry.cursor === cursor) + 1
+				: 0;
+			for (const entry of entries.slice(start)) yield entry;
+		},
+	};
+}
+
+function parseAgUiSse(text: string): Array<{ id: string; data: unknown }> {
+	return text
+		.trim()
+		.split("\n\n")
+		.filter((block) => block.includes("data:"))
+		.map((block) => {
+			const lines = block.split("\n");
+			const id = lines
+				.find((line) => line.startsWith("id:"))
+				?.slice(3)
+				.trim();
+			const data = lines
+				.find((line) => line.startsWith("data:"))
+				?.slice(5)
+				.trim();
+			if (!id || !data) throw new Error(`malformed AG-UI SSE block: ${block}`);
+			return { id, data: JSON.parse(data) };
+		});
+}
+
 describe("POST /v1/conversations", () => {
 	it("creates a conversation and returns the id + frozen scope", async () => {
 		const { store, created } = fakeStore();
@@ -351,6 +416,287 @@ describe("POST /v1/conversations", () => {
 			body: JSON.stringify({ memberCode: "smuggled" }),
 		});
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("POST /v1/conversations/:id/runs", () => {
+	const existing: ConversationRecord = {
+		userId: "member-1",
+		conversationId: "conv-1",
+		scope: "general",
+		collectionId: null,
+		summaryId: null,
+		title: null,
+		createdAt: new Date("2026-01-01T00:00:00.000Z"),
+		lastActivityAt: new Date("2026-01-01T00:00:00.000Z"),
+		archivedAt: null,
+	};
+
+	it("admits the final plain-text User message and streams standard AG-UI events", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const admissions: unknown[] = [];
+		fakeRuns.runStore.admitRun = async (input) => {
+			admissions.push(input);
+			fakeRuns.runOwners.set(input.runId, {
+				userId: input.conversation.userId,
+				conversationId: input.conversation.conversationId,
+				status: "done",
+			});
+			return {
+				outcome: "created",
+				run: runRecord({
+					runId: input.runId,
+					userId: input.conversation.userId,
+					conversationId: input.conversation.conversationId,
+					status: "queued",
+				}),
+			};
+		};
+		const events = [
+			{ type: "RUN_STARTED", threadId: "conv-1", runId: "client-run-1" },
+			{
+				type: "TEXT_MESSAGE_START",
+				messageId: "assistant-1",
+				role: "assistant",
+			},
+			{
+				type: "TEXT_MESSAGE_CONTENT",
+				messageId: "assistant-1",
+				delta: "hello",
+			},
+			{ type: "TEXT_MESSAGE_END", messageId: "assistant-1" },
+			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "client-run-1" },
+		];
+
+		const app = buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			retainedAgUiStream(events),
+		);
+		const res = await app.request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toContain("text/event-stream");
+		expect(admissions).toEqual([
+			{
+				conversation: existing,
+				runId: "client-run-1",
+				messageId: "user-message-1",
+				message: "hello",
+			},
+		]);
+		const expectedFrames = events.map((data, index) => ({
+			id: `${index + 1}-0`,
+			data,
+		}));
+		expect(parseAgUiSse(await res.text())).toEqual(expectedFrames);
+
+		const replay = await app.request(
+			"/v1/conversations/conv-1/runs/client-run-1/events",
+			{ headers: identityHeaders },
+		);
+		expect(replay.status).toBe(200);
+		expect(parseAgUiSse(await replay.text())).toEqual(expectedFrames);
+	});
+
+	it("reattaches an exact retry without consulting the new-work exposure gate", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("client-run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "done",
+		});
+		fakeRuns.runStore.admitRun = async (input) => ({
+			outcome: "existing",
+			run: runRecord({
+				runId: input.runId,
+				userId: input.conversation.userId,
+				conversationId: input.conversation.conversationId,
+				status: "done",
+			}),
+		});
+		const events = [
+			{ type: "RUN_STARTED", threadId: "conv-1", runId: "client-run-1" },
+			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "client-run-1" },
+		];
+
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			retainedAgUiStream(events),
+		).request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+
+		expect(res.status).toBe(200);
+		expect(parseAgUiSse(await res.text())).toEqual(
+			events.map((data, index) => ({ id: `${index + 1}-0`, data })),
+		);
+	});
+
+	it.each([
+		["unknown input fields", agUiRunInput({ model: "client-choice" })],
+		["a path/body thread mismatch", agUiRunInput({ threadId: "other" })],
+		["client Tools", agUiRunInput({ tools: [{ name: "unsafe" }] })],
+		["client state", agUiRunInput({ state: { unsafe: true } })],
+		[
+			"extra final-message fields",
+			agUiRunInput({
+				messages: [
+					{ id: "u", role: "user", content: "hello", authority: "client" },
+				],
+			}),
+		],
+		[
+			"a non-User final message",
+			agUiRunInput({
+				messages: [{ id: "a", role: "assistant", content: "no" }],
+			}),
+		],
+		[
+			"multimodal final content",
+			agUiRunInput({
+				messages: [
+					{ id: "u", role: "user", content: [{ type: "text", text: "no" }] },
+				],
+			}),
+		],
+	])("rejects %s before admission", async (_name, body) => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		let admitted = false;
+		fakeRuns.runStore.admitRun = async () => {
+			admitted = true;
+			throw new Error("must not admit");
+		};
+
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+		).request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(body),
+		});
+
+		expect(res.status).toBe(400);
+		expect(admitted).toBe(false);
+	});
+
+	it("returns retryable transport failure without rolling back admission", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		let admitted = false;
+		fakeRuns.runStore.admitRun = async (input) => {
+			admitted = true;
+			return {
+				outcome: "created",
+				run: runRecord({
+					runId: input.runId,
+					userId: input.conversation.userId,
+					conversationId: input.conversation.conversationId,
+					status: "queued",
+				}),
+			};
+		};
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return "streaming" as const;
+				},
+				read() {
+					return {
+						[Symbol.asyncIterator]() {
+							return {
+								async next() {
+									throw new Error("Redis unavailable");
+								},
+							};
+						},
+					};
+				},
+			},
+		).request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+
+		expect(res.status).toBe(503);
+		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
+		expect(admitted).toBe(true);
+	});
+
+	it("closes an incomplete stream without synthesizing an AG-UI error", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runStore.admitRun = async (input) => ({
+			outcome: "created",
+			run: runRecord({
+				runId: input.runId,
+				userId: input.conversation.userId,
+				conversationId: input.conversation.conversationId,
+				status: "queued",
+			}),
+		});
+		const encoder = new TextEncoder();
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return "streaming" as const;
+				},
+				async *read() {
+					yield {
+						cursor: "1-0",
+						chunk: encoder.encode(
+							JSON.stringify({
+								type: "RUN_STARTED",
+								threadId: "conv-1",
+								runId: "client-run-1",
+							}),
+						),
+					};
+					throw new Error("Redis failed after streaming began");
+				},
+			},
+		).request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+
+		expect(res.status).toBe(200);
+		expect(parseAgUiSse(await res.text())).toEqual([
+			{
+				id: "1-0",
+				data: {
+					type: "RUN_STARTED",
+					threadId: "conv-1",
+					runId: "client-run-1",
+				},
+			},
+		]);
 	});
 });
 
@@ -402,6 +748,7 @@ describe("POST /v1/conversations/:id/events", () => {
 		const durableRunStore = new PostgresRunStore(tdb.db);
 		const runStore: RunStore = {
 			...durableRunStore,
+			admitRun: (input) => durableRunStore.admitRun(input),
 			async createQueuedRun(input) {
 				order.push("admit");
 				return durableRunStore.createQueuedRun(input);
@@ -604,6 +951,9 @@ describe("POST /v1/conversations/:id/events", () => {
 			},
 		};
 		const runStore: RunStore = {
+			async admitRun() {
+				throw new Error("AG-UI admission is not used by this test");
+			},
 			async createQueuedRun() {
 				throw new ActiveRunExistsError();
 			},
@@ -633,6 +983,9 @@ describe("POST /v1/conversations/:id/events", () => {
 	it("returns busy backpressure before opening the stream", async () => {
 		const { store } = fakeStore([existing]);
 		const runStore: RunStore = {
+			async admitRun() {
+				throw new Error("AG-UI admission is not used by this test");
+			},
 			async createQueuedRun() {
 				throw new ActiveRunExistsError();
 			},
@@ -659,6 +1012,9 @@ describe("POST /v1/conversations/:id/events", () => {
 	it("returns 409 when the conversation is archived during admission", async () => {
 		const { store } = fakeStore([existing]);
 		const runStore: RunStore = {
+			async admitRun() {
+				throw new Error("AG-UI admission is not used by this test");
+			},
 			async createQueuedRun() {
 				throw new ConversationArchivedError();
 			},
@@ -685,6 +1041,9 @@ describe("POST /v1/conversations/:id/events", () => {
 	it("returns 404 when the conversation is deleted during admission", async () => {
 		const { store } = fakeStore([existing]);
 		const runStore: RunStore = {
+			async admitRun() {
+				throw new Error("AG-UI admission is not used by this test");
+			},
 			async createQueuedRun() {
 				throw new ConversationNotFoundError();
 			},
@@ -987,228 +1346,38 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
 	});
 
-	it("replays an owned run after Last-Event-ID without creating a new run", async () => {
+	it("replays strictly after a retained Live Stream cursor without creating work", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
-		const { queued, eventsByRun, runOwners } = fakeRuns;
+		const { queued, runOwners } = fakeRuns;
 		runOwners.set("run-1", {
 			userId: "member-1",
 			conversationId: "conv-1",
-			status: "queued",
+			status: "done",
 		});
-		eventsByRun.set("run-1", [
-			{
-				seq: 1,
-				type: RunEventType.Started,
-				payload: { conversationId: "conv-1", runId: "run-1" },
-			},
-			{
-				seq: 2,
-				type: RunEventType.AssistantText,
-				payload: { messageId: "message-1", text: "hello" },
-			},
-			{ seq: 3, type: RunEventType.Done, payload: {} },
-		]);
+		const events = [
+			{ type: "RUN_STARTED", threadId: "conv-1", runId: "run-1" },
+			{ type: "TEXT_MESSAGE_CONTENT", messageId: "assistant-1", delta: "hi" },
+			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "run-1" },
+		];
 
 		const res = await buildApp(
 			store,
 			gateThatFailsIfConsulted(),
 			fakeRuns,
+			disabledLiveTextSubscriber,
+			retainedAgUiStream(events),
 		).request("/v1/conversations/conv-1/runs/run-1/events", {
 			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "1" },
+			headers: { ...identityHeaders, "last-event-id": "1-0" },
 		});
 
 		expect(res.status).toBe(200);
-		const text = await readSseUntil(
-			res,
-			(chunk) => chunk.includes("text_commit") && chunk.includes("done"),
-		);
-		expect(text).toContain("event: text_commit");
-		expect(text).toContain("id: 2");
-		expect(text).toContain("message-1");
-		expect(text).toContain("hello");
-		expect(text).not.toContain("text_delta");
-		expect(text).not.toContain("conversation_id");
+		expect(parseAgUiSse(await res.text())).toEqual([
+			{ id: "2-0", data: events[1] },
+			{ id: "3-0", data: events[2] },
+		]);
 		expect(queued).toHaveLength(0);
-	});
-
-	it("suppresses a mid-message reconnect preview but accepts the next complete message", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		const { eventsByRun, runOwners } = fakeRuns;
-		runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "running",
-		});
-		eventsByRun.set("run-1", [
-			{
-				seq: 1,
-				type: RunEventType.Started,
-				payload: { conversationId: "conv-1", runId: "run-1" },
-			},
-			{
-				seq: 2,
-				type: RunEventType.AssistantText,
-				payload: { messageId: "message-1", text: "complete first" },
-			},
-			{
-				seq: 3,
-				type: RunEventType.AssistantText,
-				payload: { messageId: "message-2", text: "complete second" },
-			},
-			{ seq: 4, type: RunEventType.Done, payload: {} },
-		]);
-		let reads = 0;
-		const runEventReader: RunEventReader = {
-			async read(runId, afterSeq, limit) {
-				reads++;
-				if (reads === 1) return [];
-				return (eventsByRun.get(runId) ?? [])
-					.filter((event) => event.seq > afterSeq)
-					.slice(0, limit);
-			},
-		};
-		const liveText = new InMemoryLiveTextTransport();
-		const subscriber: LiveTextSubscriber = {
-			async subscribe(runId) {
-				const subscription = await liveText.subscribe(runId);
-				await liveText.publish({
-					runId,
-					messageId: "message-1",
-					deltaIndex: 5,
-					text: "suffix must be suppressed",
-				});
-				await liveText.publish({
-					runId,
-					messageId: "message-2",
-					deltaIndex: 0,
-					text: "complete second",
-				});
-				return subscription;
-			},
-		};
-
-		const res = await buildApp(
-			store,
-			gateThatFailsIfConsulted(),
-			{ ...fakeRuns, runEventReader },
-			subscriber,
-		).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "1" },
-		});
-
-		expect(res.status).toBe(200);
-		const frames = parseSseFrames(await res.text());
-		expect(frames).toEqual([
-			{
-				event: "text_delta",
-				data: {
-					type: "text_delta",
-					messageId: "message-2",
-					deltaIndex: 0,
-					text: "complete second",
-				},
-			},
-			{
-				id: "2",
-				event: "text_commit",
-				data: {
-					type: "text_commit",
-					messageId: "message-1",
-					text: "complete first",
-				},
-			},
-			{
-				id: "3",
-				event: "text_commit",
-				data: {
-					type: "text_commit",
-					messageId: "message-2",
-					text: "complete second",
-				},
-			},
-			{ id: "4", event: "done", data: { type: "done" } },
-		]);
-		expect(JSON.stringify(frames)).not.toContain("suffix must be suppressed");
-	});
-
-	it("streams a terminal historical run to completion and closes", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		const { eventsByRun, runOwners } = fakeRuns;
-		runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "done",
-		});
-		eventsByRun.set("run-1", [
-			{
-				seq: 1,
-				type: RunEventType.Started,
-				payload: { conversationId: "conv-1", runId: "run-1" },
-			},
-			{
-				seq: 2,
-				type: RunEventType.AssistantText,
-				payload: { messageId: "message-1", text: "finished" },
-			},
-			{ seq: 3, type: RunEventType.Done, payload: {} },
-		]);
-
-		const res = await buildApp(
-			store,
-			gateThatFailsIfConsulted(),
-			fakeRuns,
-		).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "1" },
-		});
-
-		expect(res.status).toBe(200);
-		expect(res.headers.get("content-type")).toContain("text/event-stream");
-		const text = await res.text();
-		expect(text).toContain("event: text_commit");
-		expect(text).toContain("id: 2");
-		expect(text).toContain("message-1");
-		expect(text).toContain("finished");
-		expect(text).toContain("done");
-		expect(text).not.toContain("text_delta");
-	});
-
-	it("returns 204 when reconnecting after a terminal event", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		const { eventsByRun, runOwners } = fakeRuns;
-		runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "done",
-		});
-		eventsByRun.set("run-1", [
-			{
-				seq: 1,
-				type: RunEventType.Started,
-				payload: { conversationId: "conv-1", runId: "run-1" },
-			},
-			{ seq: 2, type: RunEventType.Done, payload: {} },
-		]);
-
-		const res = await buildApp(
-			store,
-			recordingGate(false).gate,
-			fakeRuns,
-		).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "2" },
-		});
-
-		expect(res.status).toBe(204);
-		expect(res.headers.get("content-type") ?? "").not.toContain(
-			"text/event-stream",
-		);
 	});
 
 	it("returns 404 for a foreign run before opening the stream", async () => {

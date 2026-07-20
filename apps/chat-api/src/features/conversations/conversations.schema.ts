@@ -1,3 +1,4 @@
+import { RunAgentInputSchema } from "@ag-ui/core";
 import { z } from "zod";
 
 const MAX_IDENTIFIER_LENGTH = 256;
@@ -17,6 +18,62 @@ export const ConversationIdParam = z
 	.max(MAX_CONVERSATION_ID_LENGTH)
 	.regex(CONVERSATION_ID_PATTERN);
 export const RunIdParam = ConversationIdParam;
+
+const EmptyClientObject = z.object({}).strict();
+const PlainTextUserMessage = z
+	.object({
+		id: z.string().min(1).max(MAX_IDENTIFIER_LENGTH),
+		role: z.literal("user"),
+		content: z.string().min(1).max(MAX_MESSAGE_LENGTH),
+	})
+	.strict();
+
+/** Strict first-slice AG-UI input profile. The upstream schema proves every
+ * message is standard AG-UI; this boundary then rejects all client authority
+ * except the final plain-text User message and its stable id. */
+export const RunAgentInputBody = z
+	.object({
+		threadId: ConversationIdParam,
+		runId: RunIdParam,
+		parentRunId: z.never().optional(),
+		state: z.union([z.null(), EmptyClientObject]).optional(),
+		messages: z.array(z.unknown()).min(1),
+		tools: z.array(z.never()).max(0),
+		context: z.array(z.never()).max(0),
+		forwardedProps: z.union([z.null(), EmptyClientObject]).optional(),
+		resume: z.never().optional(),
+	})
+	.strict()
+	.superRefine((value, context) => {
+		if (!RunAgentInputSchema.safeParse(value).success) {
+			context.addIssue({
+				code: "custom",
+				message: "Input is not a valid RunAgentInput",
+			});
+			return;
+		}
+		const finalMessage = value.messages.at(-1);
+		if (!PlainTextUserMessage.safeParse(finalMessage).success) {
+			context.addIssue({
+				code: "custom",
+				path: ["messages", value.messages.length - 1],
+				message: "Final message must be one plain-text User message",
+			});
+		}
+	});
+export type RunAgentInputBody = z.infer<typeof RunAgentInputBody>;
+
+export function submittedMessageFromRunInput(input: RunAgentInputBody): {
+	messageId: string;
+	message: string;
+} {
+	const finalMessage = input.messages.at(-1) as {
+		id: string;
+		role: "user";
+		content: string;
+	};
+	return { messageId: finalMessage.id, message: finalMessage.content };
+}
 
 // Body of `POST /v1/conversations`. The scope is *resolved* from these ids and
 // frozen onto the conversation; subsequent turns carry no scope. `.strict()`

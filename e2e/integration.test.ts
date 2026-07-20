@@ -1,18 +1,18 @@
 /**
- * Split-runtime projection integration — real Postgres, real processes.
+ * Split-runtime AG-UI integration — real Postgres, Redis, and processes.
  *
- * Runs the actual client path across two real processes talking to a real
- * Postgres: chat-api queues a run, a test-only worker process claims it and
- * appends one complete Assistant message, and chat-api projects the durable
- * events back over SSE. Unlike the PGlite unit tests — which exercise each side in isolation —
- * this crosses the writer→projector seam over one database, so a vocabulary
- * desync fails here instead of reaching a client. The production worker always
- * runs the real SDK; Task 9.7 owns its credentialed end-to-end smoke proof.
+ * Postgres and Redis: chat-api atomically admits a run and its submitted
+ * message, a deterministic worker claims it and appends one complete Assistant
+ * message, and both POST and reconnect consume the same retained Redis Stream.
+ * Unlike the PGlite unit tests — which exercise each side in isolation — this
+ * crosses the writer→stream→client seam over the real coordination services.
+ * The production worker always runs the real SDK; Task 9.7 owns its
+ * credentialed end-to-end smoke proof.
  *
- * It needs no image build: the two apps run as `bun` subprocesses and Postgres
- * is provided externally (a GitHub Actions `services: postgres` container in CI,
- * or a local `postgres` you point `AGENT_DATABASE_URL` at). This is why it can
- * run on every PR where the Docker-compose harness cannot.
+ * It needs no image build: the two apps and a disposable local Redis run as
+ * subprocesses, while Postgres is provided externally (a GitHub Actions
+ * `services: postgres` container in CI, or a local `postgres` you point
+ * `AGENT_DATABASE_URL` at).
  *
  * Gated on `AGENT_DATABASE_URL`: with none set it skips (so it never runs in the
  * PGlite unit suite). CI runs it via the `integration` job in `.github/workflows/
@@ -37,7 +37,9 @@ import {
 	it,
 	setDefaultTimeout,
 } from "bun:test";
+import { createServer } from "node:net";
 import { resolve } from "node:path";
+import { createDatabase } from "../packages/agent-db/src/client";
 
 const DB_URL = process.env.AGENT_DATABASE_URL;
 const RUN = Boolean(DB_URL);
@@ -60,32 +62,59 @@ const PARTNER_CODE = "demo-partner";
 
 interface SSEFrame {
 	id?: string;
-	event: string;
-	data: string;
+	data: Record<string, unknown>;
 }
 
-/** Parse an SSE body into {id, event, data} frames (mirrors chat.route.test.ts). */
+/** Parse standard AG-UI SSE: Redis cursor in `id`, BaseEvent JSON in `data`. */
 function parseSSE(raw: string): SSEFrame[] {
 	const frames: SSEFrame[] = [];
 	for (const block of raw.split("\n\n")) {
 		let id: string | undefined;
-		let event = "";
 		let data = "";
 		for (const line of block.split("\n")) {
 			if (line.startsWith("id:")) id = line.slice("id:".length).trim();
-			else if (line.startsWith("event:"))
-				event = line.slice("event:".length).trim();
 			else if (line.startsWith("data:"))
 				data = line.slice("data:".length).trim();
 		}
-		if (event) frames.push({ id, event, data });
+		if (data) frames.push({ id, data: JSON.parse(data) });
 	}
 	return frames;
 }
 
-function requiredFrame(frames: SSEFrame[], event: string): SSEFrame {
-	const frame = frames.find((candidate) => candidate.event === event);
-	if (!frame) throw new Error(`SSE response omitted ${event}`);
+async function consumeSSE(
+	response: Response,
+	onFrame: (frame: SSEFrame) => Promise<void>,
+): Promise<SSEFrame[]> {
+	if (!response.body) throw new Error("SSE response omitted its body");
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	const frames: SSEFrame[] = [];
+	let buffered = "";
+	for (;;) {
+		const { done, value } = await reader.read();
+		buffered += decoder.decode(value, { stream: !done });
+		let boundary = buffered.indexOf("\n\n");
+		while (boundary >= 0) {
+			const block = buffered.slice(0, boundary + 2);
+			buffered = buffered.slice(boundary + 2);
+			for (const frame of parseSSE(block)) {
+				frames.push(frame);
+				await onFrame(frame);
+			}
+			boundary = buffered.indexOf("\n\n");
+		}
+		if (done) break;
+	}
+	for (const frame of parseSSE(buffered)) {
+		frames.push(frame);
+		await onFrame(frame);
+	}
+	return frames;
+}
+
+function requiredFrame(frames: SSEFrame[], type: string): SSEFrame {
+	const frame = frames.find((candidate) => candidate.data.type === type);
+	if (!frame) throw new Error(`SSE response omitted ${type}`);
 	return frame;
 }
 
@@ -130,156 +159,252 @@ async function waitForHealthy(timeoutMs: number): Promise<boolean> {
 	return false;
 }
 
+async function freePort(): Promise<number> {
+	return new Promise((resolvePort, reject) => {
+		const server = createServer();
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			if (!address || typeof address === "string") {
+				server.close();
+				reject(new Error("failed to allocate Redis test port"));
+				return;
+			}
+			server.close((error) =>
+				error ? reject(error) : resolvePort(address.port),
+			);
+		});
+	});
+}
+
+async function startRedis(port: number): Promise<Bun.Subprocess> {
+	const redis = Bun.spawn(
+		[
+			"redis-server",
+			"--bind",
+			"127.0.0.1",
+			"--port",
+			String(port),
+			"--save",
+			"",
+			"--appendonly",
+			"no",
+		],
+		{ stdout: "inherit", stderr: "inherit" },
+	);
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		const ping = Bun.spawn(
+			["redis-cli", "-h", "127.0.0.1", "-p", String(port), "ping"],
+			{ stdout: "ignore", stderr: "ignore" },
+		);
+		if ((await ping.exited) === 0) return redis;
+		await Bun.sleep(50);
+	}
+	redis.kill();
+	throw new Error("Redis did not become ready");
+}
+
 let chat: Bun.Subprocess | undefined;
 let worker: Bun.Subprocess | undefined;
+let redis: Bun.Subprocess | undefined;
+const acceptanceDb = DB_URL ? createDatabase(DB_URL) : undefined;
 
-describe.skipIf(!RUN)("split-runtime integration (real Postgres)", () => {
-	beforeAll(async () => {
-		const dbUrl = DB_URL as string;
-		worker = spawnEventWriter({
-			AGENT_DATABASE_URL: dbUrl,
-			DB_SSL: "disable",
-			LOG_LEVEL: "warn",
-		});
-		chat = spawnApp("chat-api", {
-			AGENT_DATABASE_URL: dbUrl,
-			ARTIFACT_BUCKET: "mymemo-agent-integration-artifacts",
-			AWS_REGION: "us-west-2",
-			DB_SSL: "disable",
-			AGENT_EXPOSURE_BREAK_GLASS: "true",
-			PORT: String(CHAT_PORT),
-			LOG_LEVEL: "warn",
-		});
-
-		if (!(await waitForHealthy(30_000))) {
-			throw new Error(
-				`chat-api did not become healthy at ${CHAT_URL}. Ensure AGENT_DATABASE_URL ` +
-					`points at a migrated Postgres (see this file's header).`,
-			);
-		}
-	});
-
-	afterAll(() => {
-		chat?.kill();
-		worker?.kill();
-	});
-
-	it(
-		"creates a conversation, queues a run, and projects durable worker events to done",
-		async () => {
-			// Create the conversation (general scope). Proves migrations provisioned
-			// the `conversations` table and chat-api's writable DB is reachable.
-			const createRes = await fetch(`${CHAT_URL}/v1/conversations`, {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					"x-member-code": MEMBER_CODE,
-					"x-partner-code": PARTNER_CODE,
-				},
-				body: JSON.stringify({}),
-				signal: AbortSignal.timeout(15_000),
+describe.skipIf(!RUN)(
+	"split-runtime integration (real Postgres and Redis)",
+	() => {
+		beforeAll(async () => {
+			const dbUrl = DB_URL as string;
+			const redisPort = await freePort();
+			redis = await startRedis(redisPort);
+			const redisUrl = `redis://127.0.0.1:${redisPort}`;
+			worker = spawnEventWriter({
+				AGENT_DATABASE_URL: dbUrl,
+				REDIS_URL: redisUrl,
+				LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
+				DB_SSL: "disable",
+				LOG_LEVEL: "warn",
 			});
-			const createBody = await createRes.text();
-			expect(
-				createRes.status,
-				`create conversation failed; body: ${createBody.slice(0, 500)}`,
-			).toBe(201);
-			const conversationId = JSON.parse(createBody).conversationId as string;
-			expect(conversationId.length).toBeGreaterThan(0);
+			chat = spawnApp("chat-api", {
+				AGENT_DATABASE_URL: dbUrl,
+				ARTIFACT_BUCKET: "mymemo-agent-integration-artifacts",
+				AWS_REGION: "us-west-2",
+				DB_SSL: "disable",
+				AGENT_EXPOSURE_BREAK_GLASS: "true",
+				REDIS_URL: redisUrl,
+				LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
+				PORT: String(CHAT_PORT),
+				LOG_LEVEL: "warn",
+			});
 
-			// Append a user.message and stream the turn. The test worker claims the
-			// queued run, appends assistant text, and terminalizes `done`;
-			// chat-api projects those durable events over SSE.
-			const res = await fetch(
-				`${CHAT_URL}/v1/conversations/${conversationId}/events`,
-				{
+			if (!(await waitForHealthy(30_000))) {
+				throw new Error(
+					`chat-api did not become healthy at ${CHAT_URL}. Ensure AGENT_DATABASE_URL ` +
+						`points at a migrated Postgres (see this file's header).`,
+				);
+			}
+		});
+
+		afterAll(async () => {
+			chat?.kill();
+			worker?.kill();
+			redis?.kill("SIGTERM");
+			if (redis) await redis.exited;
+			await acceptanceDb?.$client.end();
+		});
+
+		it(
+			"admits and idempotently replays a text-only AG-UI Run from real Redis",
+			async () => {
+				// Create the conversation (general scope). Proves migrations provisioned
+				// the `conversations` table and chat-api's writable DB is reachable.
+				const createRes = await fetch(`${CHAT_URL}/v1/conversations`, {
 					method: "POST",
 					headers: {
 						"content-type": "application/json",
 						"x-member-code": MEMBER_CODE,
 						"x-partner-code": PARTNER_CODE,
 					},
-					body: JSON.stringify({
-						type: "user.message",
-						text: "Hello from the split-runtime integration test.",
-					}),
-					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
-				},
-			);
-			const bodyText = await res.text();
-			expect(
-				res.status,
-				`unexpected status; body: ${bodyText.slice(0, 500)}`,
-			).toBe(200);
+					body: JSON.stringify({}),
+					signal: AbortSignal.timeout(15_000),
+				});
+				const createBody = await createRes.text();
+				expect(
+					createRes.status,
+					`create conversation failed; body: ${createBody.slice(0, 500)}`,
+				).toBe(201);
+				const conversationId = JSON.parse(createBody).conversationId as string;
+				expect(conversationId.length).toBeGreaterThan(0);
 
-			const frames = parseSSE(bodyText);
-			const events = frames.map((f) => f.event).filter((e) => e !== "ping");
+				const runId = crypto.randomUUID();
+				const runInput = {
+					threadId: conversationId,
+					runId,
+					state: {},
+					messages: [
+						{
+							id: "integration-user-message",
+							role: "user",
+							content: "Hello from the split-runtime integration test.",
+						},
+					],
+					tools: [],
+					context: [],
+					forwardedProps: {},
+				};
+				const res = await fetch(
+					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
+					{
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							"x-member-code": MEMBER_CODE,
+							"x-partner-code": PARTNER_CODE,
+						},
+						body: JSON.stringify(runInput),
+						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+					},
+				);
+				expect(res.status, "unexpected Run response status").toBe(200);
 
-			// The split-runtime vocabulary streamed, no error; `sandbox_id` is not
-			// part of the contract (a prototype-era internal identifier).
-			expect(events).toContain("conversation_id");
-			expect(events).toContain("run_id");
-			expect(events).toContain("text_commit");
-			expect(events).toContain("done");
-			expect(events).not.toContain("error");
-			expect(events).not.toContain("sandbox_id");
+				const frames = await consumeSSE(res, async (frame) => {
+					if (frame.data.type === "TEXT_MESSAGE_END") {
+						const completed = await acceptanceDb?.query.runEvents.findFirst({
+							columns: { type: true },
+							where: (event, { and, eq }) =>
+								and(
+									eq(event.runId, runId),
+									eq(event.type, "assistant_message_completed"),
+								),
+						});
+						expect(completed?.type).toBe("assistant_message_completed");
+					}
+					if (frame.data.type === "RUN_FINISHED") {
+						const terminal = await acceptanceDb?.query.runs.findFirst({
+							columns: { status: true },
+							where: (run, { eq }) => eq(run.runId, runId),
+						});
+						expect(terminal?.status).toBe("done");
+					}
+				});
+				const eventTypes = frames.map((frame) => frame.data.type);
+				expect(eventTypes).toEqual([
+					"RUN_STARTED",
+					"TEXT_MESSAGE_START",
+					"TEXT_MESSAGE_CONTENT",
+					"TEXT_MESSAGE_END",
+					"RUN_FINISHED",
+				]);
+				expect(requiredFrame(frames, "RUN_STARTED").data).toMatchObject({
+					threadId: conversationId,
+					runId,
+				});
+				const streamedText = frames
+					.filter((frame) => frame.data.type === "TEXT_MESSAGE_CONTENT")
+					.map((frame) => frame.data.delta as string)
+					.join("");
+				expect(streamedText).toContain("Synthetic response");
+				expect(streamedText).toContain(runId);
+				expect(frames.every((frame) => /^\d+-\d+$/.test(frame.id ?? ""))).toBe(
+					true,
+				);
 
-			const echoedConversationId = JSON.parse(
-				requiredFrame(frames, "conversation_id").data,
-			).conversationId as string;
-			expect(echoedConversationId).toBe(conversationId);
-			const runId = JSON.parse(requiredFrame(frames, "run_id").data)
-				.runId as string;
-			expect(runId.length).toBeGreaterThan(0);
+				const durableEvents = await acceptanceDb?.query.runEvents.findMany({
+					columns: { type: true },
+					where: (event, { eq }) => eq(event.runId, runId),
+					orderBy: (event, { asc }) => asc(event.seq),
+				});
+				expect(durableEvents?.map((event) => event.type)).toEqual([
+					"run_started",
+					"assistant_message_completed",
+					"run_done",
+				]);
+				const durableRun = await acceptanceDb?.query.runs.findFirst({
+					columns: { status: true },
+					where: (run, { eq }) => eq(run.runId, runId),
+				});
+				expect(durableRun?.status).toBe("done");
 
-			// The committed text is the test worker's response for this run — proof it
-			// crossed the worker→projector seam, not produced by chat-api.
-			const streamedText = frames
-				.filter((f) => f.event === "text_commit")
-				.map((f) => JSON.parse(f.data).text as string)
-				.join("");
-			expect(streamedText).toContain("Synthetic response");
-			expect(streamedText).toContain(runId);
+				const retry = await fetch(
+					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
+					{
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							"x-member-code": MEMBER_CODE,
+							"x-partner-code": PARTNER_CODE,
+						},
+						body: JSON.stringify(runInput),
+						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+					},
+				);
+				expect(retry.status).toBe(200);
+				expect(parseSSE(await retry.text())).toEqual(frames);
 
-			// The tool events crossed the same seam (ADR-0009): the worker's recorded
-			// payloads arrive as same-named durable frames, in append order, each
-			// carrying its run-event sequence as the SSE id.
-			const nonPing = frames.filter((f) => f.event !== "ping");
-			const toolUseIndex = nonPing.findIndex((f) => f.event === "tool_use");
-			const toolResultIndex = nonPing.findIndex(
-				(f) => f.event === "tool_result",
-			);
-			const commitIndex = nonPing.findIndex((f) => f.event === "text_commit");
-			expect(toolUseIndex).toBeGreaterThan(-1);
-			expect(toolResultIndex).toBe(toolUseIndex + 1);
-			expect(commitIndex).toBe(toolResultIndex + 1);
-
-			const toolUseFrame = requiredFrame(frames, "tool_use");
-			expect(JSON.parse(toolUseFrame.data)).toEqual({
-				type: "tool_use",
-				tool: "Bash",
-				arguments: { command: `echo ${runId}`, timeoutMs: 10_000 },
-				truncated: false,
-			});
-			const toolResultFrame = requiredFrame(frames, "tool_result");
-			expect(JSON.parse(toolResultFrame.data)).toEqual({
-				type: "tool_result",
-				tool: "Bash",
-				result: {
-					exitCode: 0,
-					stdout: `${runId}\n`,
-					stderr: "",
-					stdoutTruncated: false,
-					stderrTruncated: false,
-					outcome: "completed",
-				},
-				isError: false,
-				truncated: false,
-			});
-			// Both frames are durable: consecutive run-event sequences as SSE ids.
-			expect(Number(toolUseFrame.id)).toBeGreaterThan(0);
-			expect(Number(toolResultFrame.id)).toBe(Number(toolUseFrame.id) + 1);
-		},
-		TURN_TIMEOUT_MS + 15_000,
-	);
-});
+				const mismatch = await fetch(
+					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
+					{
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							"x-member-code": MEMBER_CODE,
+							"x-partner-code": PARTNER_CODE,
+						},
+						body: JSON.stringify({
+							...runInput,
+							messages: [
+								{
+									id: "integration-user-message",
+									role: "user",
+									content: "different work",
+								},
+							],
+						}),
+					},
+				);
+				expect(mismatch.status).toBe(409);
+			},
+			TURN_TIMEOUT_MS + 15_000,
+		);
+	},
+);

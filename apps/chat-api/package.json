@@ -9,6 +9,7 @@
 		"db:migrate": "bun run src/db/migrate.ts"
 	},
 	"dependencies": {
+		"@ag-ui/core": "^0.0.57",
 		"@aws-sdk/client-s3": "^3.883.0",
 		"@aws-sdk/s3-request-presigner": "^3.883.0",
 		"@hono/standard-validator": "^0.1.5",

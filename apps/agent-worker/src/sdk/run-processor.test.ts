@@ -269,7 +269,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 		expect((await readRun("run-1"))?.status).toBe("done");
 		const events = await readEvents("run-1");
-		expect(events.map((e) => e.type)).toEqual(["assistant_text", "run_done"]);
+		expect(events.map((e) => e.type)).toEqual([
+			"assistant_message_completed",
+			"run_done",
+		]);
 		expect(events[0]?.payload).toEqual({
 			messageId: expect.stringMatching(
 				/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
@@ -313,8 +316,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect((await readRun("run-1"))?.status).toBe("done");
 		const events = await readEvents("run-1");
 		expect(events.map((event) => event.type)).toEqual([
-			"assistant_text",
-			"assistant_text",
+			"assistant_message_completed",
+			"assistant_message_completed",
 			"run_done",
 		]);
 		const commits = events.slice(0, 2).map((event) => event.payload) as Array<{
@@ -563,7 +566,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 	}
 
-	it("commits completed text on mismatch without forcing pending preview", async () => {
+	it("fails a Run whose streamed text disagrees with provider completion", async () => {
 		const warnings: Record<string, unknown>[] = [];
 		const logger: WorkerLogger = {
 			...silentLogger,
@@ -601,13 +604,9 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		await loop.tick();
 		await worker.drain();
 
-		expect((await readRun("run-1"))?.status).toBe("done");
+		expect((await readRun("run-1"))?.status).toBe("error");
 		const events = await readEvents("run-1");
-		expect(
-			events
-				.filter((event) => event.type === "assistant_text")
-				.map((event) => (event.payload as { text: string }).text),
-		).toEqual(["COMMIT", "NEXT"]);
+		expect(events.map((event) => event.type)).toEqual(["run_error"]);
 		expect(warnings).toEqual([
 			{
 				message: "Live preview signal",
@@ -622,6 +621,13 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				service: "agent-worker",
 				signal: "mismatch",
 				reason: "partial_complete",
+				count: 1,
+			},
+			{
+				message: "Live preview signal",
+				service: "agent-worker",
+				signal: "impossible_ordering",
+				reason: "provider_envelope",
 				count: 1,
 			},
 		]);
@@ -662,7 +668,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect((await readRun("run-1"))?.status).toBe("done");
 		expect(
 			(await readEvents("run-1"))
-				.filter((event) => event.type === "assistant_text")
+				.filter((event) => event.type === "assistant_message_completed")
 				.map((event) => (event.payload as { text: string }).text),
 		).toEqual(["authoritative answer"]);
 		expect(warnings).toEqual([
@@ -875,7 +881,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect((await readRun("run-1"))?.status).toBe("done");
 		expect(runtime?.agentSessionId).toBe("session-valid");
 		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
-			"assistant_text",
+			"assistant_message_completed",
 			"run_done",
 		]);
 	});

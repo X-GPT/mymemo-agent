@@ -131,6 +131,9 @@ export type RunAdmissionResult =
 	| { outcome: "created" | "existing"; run: RunRecord }
 	| { outcome: "not_found" };
 
+/** A Drizzle client scoped to one open transaction. */
+export type DbTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
 /**
  * Atomically admit the canonical client Run id and submitted User message.
  * The insert deliberately uses `ON CONFLICT DO NOTHING` for both possible
@@ -139,6 +142,15 @@ export type RunAdmissionResult =
  */
 export async function admitQueuedRunTx(
 	db: Database,
+	input: AdmitQueuedRunInput,
+): Promise<RunAdmissionResult> {
+	return await db.transaction((tx) => admitQueuedRunInTx(tx, input));
+}
+
+/** Transaction-scoped form used when Conversation lifecycle locking and Run
+ * admission must share one commit boundary. */
+export async function admitQueuedRunInTx(
+	tx: DbTx,
 	input: AdmitQueuedRunInput,
 ): Promise<RunAdmissionResult> {
 	const normalizedInput: NormalizedRunInput = {
@@ -157,53 +169,51 @@ export async function admitQueuedRunTx(
 	};
 	parseDurableRunEvent(RunEventType.Started, startedPayload);
 
-	return await db.transaction(async (tx) => {
-		const [inserted] = await tx
-			.insert(runs)
-			.values({
-				runId: input.runId,
-				userId: input.userId,
-				conversationId: input.conversationId,
-				normalizedInput,
-				status: "queued",
-				nextEventSeq: 2,
-			})
-			.onConflictDoNothing()
-			.returning();
+	const [inserted] = await tx
+		.insert(runs)
+		.values({
+			runId: input.runId,
+			userId: input.userId,
+			conversationId: input.conversationId,
+			normalizedInput,
+			status: "queued",
+			nextEventSeq: 2,
+		})
+		.onConflictDoNothing()
+		.returning();
 
-		if (inserted) {
-			await tx.insert(runEvents).values({
-				runId: input.runId,
-				seq: 1,
-				type: RunEventType.Started,
-				payload: startedPayload,
-			});
-			return { outcome: "created", run: toRunRecord(inserted) };
-		}
+	if (inserted) {
+		await tx.insert(runEvents).values({
+			runId: input.runId,
+			seq: 1,
+			type: RunEventType.Started,
+			payload: startedPayload,
+		});
+		return { outcome: "created", run: toRunRecord(inserted) };
+	}
 
-		const [existing] = await tx
-			.select()
-			.from(runs)
-			.where(eq(runs.runId, input.runId))
-			.limit(1);
-		if (!existing) {
-			throw new ActiveRunConflictError(
-				`conversation ${input.conversationId} already has an active run`,
-			);
-		}
-		if (
-			existing.userId !== input.userId ||
-			existing.conversationId !== input.conversationId
-		) {
-			return { outcome: "not_found" };
-		}
-		if (!normalizedInputsEqual(existing.normalizedInput, normalizedInput)) {
-			throw new RunInputMismatchError(
-				`run ${input.runId} was already admitted with different input`,
-			);
-		}
-		return { outcome: "existing", run: toRunRecord(existing) };
-	});
+	const [existing] = await tx
+		.select()
+		.from(runs)
+		.where(eq(runs.runId, input.runId))
+		.limit(1);
+	if (!existing) {
+		throw new ActiveRunConflictError(
+			`conversation ${input.conversationId} already has an active run`,
+		);
+	}
+	if (
+		existing.userId !== input.userId ||
+		existing.conversationId !== input.conversationId
+	) {
+		return { outcome: "not_found" };
+	}
+	if (!normalizedInputsEqual(existing.normalizedInput, normalizedInput)) {
+		throw new RunInputMismatchError(
+			`run ${input.runId} was already admitted with different input`,
+		);
+	}
+	return { outcome: "existing", run: toRunRecord(existing) };
 }
 
 function normalizedInputsEqual(
@@ -453,9 +463,6 @@ export async function transitionRunTerminalTx(
 ): Promise<RunRecord> {
 	return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
 }
-
-/** A Drizzle client scoped to one open transaction. */
-export type DbTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export interface TerminalTransitionInput {
 	runId: string;

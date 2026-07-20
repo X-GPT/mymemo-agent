@@ -144,6 +144,9 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		artifactRegion,
 		statsigServerSecret: env.STATSIG_SERVER_SECRET,
 		agentExposureBreakGlass,
-		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL),
+		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL, {
+			allowInsecureLoopback:
+				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
+		}),
 	};
 }

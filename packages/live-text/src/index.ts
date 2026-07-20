@@ -18,10 +18,20 @@ const LIVE_TEXT_MAX_ID_LENGTH = 128;
  */
 export function resolveLiveTextRedisUrl(
 	raw: string | undefined,
+	options: { allowInsecureLoopback?: boolean } = {},
 ): string | undefined {
 	if (!raw) return undefined;
 	try {
 		const url = new URL(raw);
+		if (
+			options.allowInsecureLoopback === true &&
+			url.protocol === "redis:" &&
+			(url.hostname === "127.0.0.1" ||
+				url.hostname === "localhost" ||
+				url.hostname === "[::1]")
+		) {
+			return raw;
+		}
 		if (url.protocol !== "rediss:" || !url.hostname || !url.password) {
 			return undefined;
 		}

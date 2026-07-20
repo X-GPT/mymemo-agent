@@ -1,7 +1,9 @@
 import {
 	createLiveTextTelemetry,
+	createRedisLiveStreamStore,
 	createRedisLiveTextTransport,
 	disabledLiveTextSubscriber,
+	type LiveStreamReader,
 	type LiveTextSubscriber,
 	type LiveTextTelemetry,
 	type LiveTextTransport,
@@ -57,6 +59,8 @@ export interface AppDeps {
 	runNotifier: RunNotifier;
 	/** Optional ephemeral Assistant-text preview lane. */
 	liveTextSubscriber: LiveTextSubscriber;
+	/** Retained per-Run AG-UI event source used by initial and reconnect SSE. */
+	liveStreamReader: LiveStreamReader;
 	/** Cardinality-safe, payload-free Live-lane observability. */
 	liveTextTelemetry: LiveTextTelemetry;
 	/** Close optional Live transport resources during service shutdown. */
@@ -98,6 +102,15 @@ export function createDeps(
 					onSignal: emitLiveTextSignal,
 				});
 	if (!liveTextTransport) emitLiveTextSignal("disabled");
+	const liveStreamStore =
+		config.liveTextRedisUrl === undefined
+			? undefined
+			: createRedisLiveStreamStore({
+					url: config.liveTextRedisUrl,
+					// Each deployment currently has its own Redis; infrastructure ticket
+					// #341 will supply the explicit cross-environment prefix.
+					deployment: "current",
+				});
 	return {
 		config,
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
@@ -110,10 +123,34 @@ export function createDeps(
 		runEventReader,
 		runNotifier,
 		liveTextSubscriber: liveTextTransport ?? disabledLiveTextSubscriber,
+		liveStreamReader:
+			liveStreamStore ??
+			({
+				async status() {
+					throw new Error("Live Stream Redis is unavailable");
+				},
+				read() {
+					return {
+						[Symbol.asyncIterator]() {
+							return {
+								async next() {
+									throw new Error("Live Stream Redis is unavailable");
+								},
+							};
+						},
+					};
+				},
+			} satisfies LiveStreamReader),
 		liveTextTelemetry,
-		closeLiveText: liveTextTransport
-			? () => liveTextTransport.close()
-			: undefined,
+		closeLiveText:
+			liveTextTransport || liveStreamStore
+				? async () => {
+						await Promise.all([
+							liveTextTransport?.close(),
+							liveStreamStore?.close(),
+						]);
+					}
+				: undefined,
 		exposureGate: createExposureGate(config),
 	};
 }
