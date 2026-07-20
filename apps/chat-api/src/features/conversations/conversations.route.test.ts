@@ -220,6 +220,7 @@ function runRecord(input: {
 		runId: input.runId,
 		userId: input.userId,
 		conversationId: input.conversationId,
+		normalizedInput: null,
 		status: input.status as RunRecord["status"],
 		createdAt: now,
 		updatedAt: now,
@@ -227,6 +228,7 @@ function runRecord(input: {
 		lockedUntil: null,
 		heartbeatAt: null,
 		cancelRequestedAt: null,
+		liveStreamFailedAt: null,
 		nextEventSeq: input.nextEventSeq ?? 1,
 		terminalAt: null,
 	};

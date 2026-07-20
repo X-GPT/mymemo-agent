@@ -218,11 +218,20 @@ export const runs = pgTable(
 		runId: text("run_id").primaryKey(),
 		userId: text("user_id").notNull(),
 		conversationId: text("conversation_id").notNull(),
+		/**
+		 * Versioned, server-normalized client input used only for admission
+		 * idempotency. NULL identifies Runs written before the AG-UI contract.
+		 */
+		normalizedInput: jsonb("normalized_input"),
 		status: text("status").notNull(),
 		lockedBy: text("locked_by"),
 		lockedUntil: timestamp("locked_until", { withTimezone: true }),
 		heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
 		cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+		/** Monotonic marker that Live delivery is unavailable for this Run. */
+		liveStreamFailedAt: timestamp("live_stream_failed_at", {
+			withTimezone: true,
+		}),
 		nextEventSeq: bigint("next_event_seq", { mode: "number" })
 			.notNull()
 			.default(1),

@@ -7,16 +7,19 @@ import {
 	it,
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
-import { RunEventType } from "./run-events";
+import { InvalidRunEventError, RunEventType } from "./run-events";
 import {
 	ActiveRunConflictError,
+	admitQueuedRunTx,
 	appendRunEventTx,
 	claimNextRunTx,
 	createQueuedRunTx,
 	heartbeatRunTx,
 	loadRunStartedTx,
+	markLiveStreamFailedTx,
 	markStaleRunsTx,
 	RunFenceError,
+	RunInputMismatchError,
 	requestRunCancellationTx,
 	transitionRunTerminalTx,
 } from "./run-store";
@@ -95,6 +98,111 @@ describe("createQueuedRunTx", () => {
 			conversationId: "conv-1",
 		});
 		expect(next.status).toBe("queued");
+	});
+});
+
+describe("admitQueuedRunTx", () => {
+	const admission = {
+		runId: "client-run-1",
+		userId: "user-1",
+		conversationId: "conv-1",
+		messageId: "client-message-1",
+		text: "Summarize my notes",
+		scope: "collection",
+		collectionId: "collection-1",
+		summaryId: null,
+	} as const;
+
+	it("persists the client Run identity and normalized submitted message atomically", async () => {
+		const result = await admitQueuedRunTx(tdb.db, admission);
+
+		expect(result.outcome).toBe("created");
+		if (result.outcome !== "created") throw new Error("unreachable");
+		expect(result.run).toMatchObject({
+			runId: "client-run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+			status: "queued",
+			normalizedInput: {
+				version: 1,
+				messageId: "client-message-1",
+				text: "Summarize my notes",
+			},
+			nextEventSeq: 2,
+		});
+		expect(await readEvents("client-run-1")).toMatchObject([
+			{
+				seq: 1,
+				type: RunEventType.Started,
+				payload: {
+					runId: "client-run-1",
+					conversationId: "conv-1",
+					messageId: "client-message-1",
+					message: "Summarize my notes",
+					scope: "collection",
+					collectionId: "collection-1",
+					summaryId: null,
+				},
+			},
+		]);
+	});
+
+	it("reattaches an exact normalized retry without writing another event", async () => {
+		await admitQueuedRunTx(tdb.db, admission);
+
+		const retry = await admitQueuedRunTx(tdb.db, admission);
+
+		expect(retry).toMatchObject({
+			outcome: "existing",
+			run: { runId: "client-run-1", status: "queued" },
+		});
+		expect(await readEvents("client-run-1")).toHaveLength(1);
+	});
+
+	it("rejects an owned Run id reused with different normalized input", async () => {
+		await admitQueuedRunTx(tdb.db, admission);
+
+		await expect(
+			admitQueuedRunTx(tdb.db, { ...admission, text: "Different work" }),
+		).rejects.toBeInstanceOf(RunInputMismatchError);
+		await expect(
+			admitQueuedRunTx(tdb.db, {
+				...admission,
+				messageId: "different-message-id",
+			}),
+		).rejects.toBeInstanceOf(RunInputMismatchError);
+		expect(await readEvents("client-run-1")).toHaveLength(1);
+	});
+
+	it("makes foreign ownership and Conversation binding indistinguishable from absence", async () => {
+		await admitQueuedRunTx(tdb.db, admission);
+
+		expect(
+			await admitQueuedRunTx(tdb.db, { ...admission, userId: "other-user" }),
+		).toEqual({ outcome: "not_found" });
+		expect(
+			await admitQueuedRunTx(tdb.db, {
+				...admission,
+				conversationId: "other-conversation",
+			}),
+		).toEqual({ outcome: "not_found" });
+	});
+
+	it("preserves active-Run backpressure for a different client Run id", async () => {
+		await admitQueuedRunTx(tdb.db, admission);
+
+		await expect(
+			admitQueuedRunTx(tdb.db, { ...admission, runId: "client-run-2" }),
+		).rejects.toBeInstanceOf(ActiveRunConflictError);
+	});
+
+	it("rejects malformed canonical admission before writing the Run", async () => {
+		await expect(
+			admitQueuedRunTx(tdb.db, { ...admission, scope: "everything" }),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		expect(
+			await tdb.db.select().from(runs).where(eq(runs.runId, "client-run-1")),
+		).toEqual([]);
 	});
 });
 
@@ -216,6 +324,94 @@ describe("appendRunEventTx", () => {
 			messageId: "message-1",
 			text: "hel",
 		});
+	});
+
+	it("rejects malformed known events without consuming a sequence number", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+
+		await expect(
+			appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { text: "missing a stable message id" },
+				appendClass: "model",
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+
+		expect(await readEvents("run-1")).toEqual([]);
+		const [run] = await tdb.db
+			.select()
+			.from(runs)
+			.where(eq(runs.runId, "run-1"));
+		expect(run?.nextEventSeq).toBe(1);
+	});
+
+	it("rejects terminal events outside the terminal status transition", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+
+		await expect(
+			appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				type: RunEventType.Done,
+				payload: { outcome: "done" },
+				appendClass: "model",
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
+	it("persists stable Assistant and correlated Tool identities in order", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		const events = [
+			{
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { messageId: "assistant-1", text: "I will check." },
+			},
+			{
+				type: RunEventType.ToolCallStarted,
+				payload: {
+					toolCallId: "tool-1",
+					toolCallName: "Read",
+					parentMessageId: "assistant-1",
+				},
+			},
+			{
+				type: RunEventType.ToolCallArgs,
+				payload: { toolCallId: "tool-1", delta: '{"path":"notes.md"}' },
+			},
+			{
+				type: RunEventType.ToolCallCompleted,
+				payload: { toolCallId: "tool-1" },
+			},
+			{
+				type: RunEventType.ToolCallResult,
+				payload: {
+					messageId: "tool-message-1",
+					toolCallId: "tool-1",
+					content: "Read completed",
+					isError: false,
+				},
+			},
+		] as const;
+
+		for (const event of events) {
+			await appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				...event,
+				appendClass: "model",
+			});
+		}
+
+		expect(
+			(await readEvents("run-1")).map(({ seq, type, payload }) => ({
+				seq,
+				type,
+				payload,
+			})),
+		).toEqual(events.map((event, index) => ({ seq: index + 1, ...event })));
 	});
 
 	it("rejects a model append on a run that is not running", async () => {
@@ -437,6 +633,7 @@ describe("transitionRunTerminalTx", () => {
 			[1, RunEventType.AssistantText],
 			[2, "run_done"],
 		]);
+		expect(events[1]?.payload).toEqual({ outcome: "done" });
 	});
 
 	it("rejects a second terminal transition for the same run", async () => {
@@ -517,7 +714,7 @@ describe("transitionRunTerminalTx", () => {
 		expect(run.status).toBe("error");
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.type, e.payload])).toEqual([
-			["run_error", { message: "sandbox died" }],
+			["run_error", { message: "sandbox died", outcome: "error" }],
 		]);
 	});
 
@@ -562,6 +759,7 @@ describe("requestRunCancellationTx", () => {
 		expect(result.run.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.seq, e.type])).toEqual([[1, "run_canceled"]]);
+		expect(events[0]?.payload).toEqual({ outcome: "canceled" });
 	});
 
 	it("moves a running run to cancel_requested and leaves ownership intact", async () => {
@@ -708,6 +906,76 @@ describe("heartbeatRunTx", () => {
 	});
 });
 
+describe("markLiveStreamFailedTx", () => {
+	it("marks an active Run only through its live ownership fence", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+
+		expect(
+			await markLiveStreamFailedTx(tdb.db, {
+				runId: "run-1",
+				workerId: "other-worker",
+			}),
+		).toEqual({ outcome: "fence_rejected" });
+
+		const marked = await markLiveStreamFailedTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+		expect(marked.outcome).toBe("marked");
+		if (marked.outcome !== "marked") throw new Error("unreachable");
+		expect(marked.run.status).toBe("running");
+		expect(marked.run.liveStreamFailedAt).toBeInstanceOf(Date);
+	});
+
+	it("is idempotent for the owning worker without moving the timestamp", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		const first = await markLiveStreamFailedTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+		if (first.outcome !== "marked") throw new Error("unreachable");
+
+		const again = await markLiveStreamFailedTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+
+		expect(again.outcome).toBe("already_failed");
+		if (again.outcome !== "already_failed") throw new Error("unreachable");
+		expect(again.run.liveStreamFailedAt).toEqual(first.run.liveStreamFailedAt);
+	});
+
+	it("rejects expired ownership but permits the monotonic null-to-time write after terminalization", async () => {
+		await claimRun("run-expired", "conv-expired", "worker-1");
+		await expireOwnership("run-expired");
+		expect(
+			await markLiveStreamFailedTx(tdb.db, {
+				runId: "run-expired",
+				workerId: "worker-1",
+			}),
+		).toEqual({ outcome: "fence_rejected" });
+
+		await claimRun("run-terminal", "conv-terminal", "worker-1");
+		await transitionRunTerminalTx(tdb.db, {
+			runId: "run-terminal",
+			workerId: "worker-1",
+			status: "done",
+		});
+		const marked = await markLiveStreamFailedTx(tdb.db, {
+			runId: "run-terminal",
+			workerId: "worker-1",
+		});
+
+		expect(marked.outcome).toBe("marked");
+		if (marked.outcome !== "marked") throw new Error("unreachable");
+		expect(marked.run).toMatchObject({ status: "done" });
+		expect(marked.run.liveStreamFailedAt).toBeInstanceOf(Date);
+		expect(
+			(await readEvents("run-terminal")).map(({ payload }) => payload),
+		).toEqual([{ outcome: "done" }]);
+	});
+});
+
 describe("markStaleRunsTx", () => {
 	it("terminalizes a stale running run as error with a run_error event", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
@@ -722,6 +990,7 @@ describe("markStaleRunsTx", () => {
 		expect(recovered[0]?.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
 		expect(events.map((e) => e.type)).toEqual(["run_error"]);
+		expect(recovered[0]?.liveStreamFailedAt).toBeInstanceOf(Date);
 	});
 
 	it("terminalizes a stale cancel_requested run as canceled", async () => {

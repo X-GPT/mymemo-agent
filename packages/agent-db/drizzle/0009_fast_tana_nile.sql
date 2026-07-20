@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "live_stream_failed_at" timestamp with time zone;

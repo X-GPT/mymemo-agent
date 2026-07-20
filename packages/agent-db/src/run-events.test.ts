@@ -1,9 +1,114 @@
 import { describe, expect, it } from "bun:test";
 import {
+	InvalidRunEventError,
 	isAssistantTextPayload,
 	isToolResultPayload,
 	isToolUsePayload,
+	parseDurableRunEvent,
+	RunEventType,
 } from "./run-events";
+
+describe("parseDurableRunEvent", () => {
+	it("parses canonical submitted, Assistant, and Tool identity events", () => {
+		expect(
+			parseDurableRunEvent(RunEventType.Started, {
+				runId: "run-1",
+				conversationId: "conversation-1",
+				messageId: "user-message-1",
+				message: "Summarize my notes",
+				scope: "collection",
+				collectionId: "collection-1",
+				summaryId: null,
+			}),
+		).toMatchObject({
+			type: RunEventType.Started,
+			payload: { messageId: "user-message-1" },
+		});
+		expect(
+			parseDurableRunEvent(RunEventType.AssistantMessageCompleted, {
+				messageId: "assistant-message-1",
+				text: "",
+			}),
+		).toEqual({
+			type: RunEventType.AssistantMessageCompleted,
+			payload: { messageId: "assistant-message-1", text: "" },
+		});
+		expect(
+			parseDurableRunEvent(RunEventType.ToolCallStarted, {
+				toolCallId: "tool-call-1",
+				toolCallName: "Bash",
+				parentMessageId: "assistant-message-1",
+			}),
+		).toMatchObject({ type: RunEventType.ToolCallStarted });
+		expect(
+			parseDurableRunEvent(RunEventType.ToolCallArgs, {
+				toolCallId: "tool-call-1",
+				delta: '{"command":"pwd"}',
+			}),
+		).toMatchObject({ type: RunEventType.ToolCallArgs });
+		expect(
+			parseDurableRunEvent(RunEventType.ToolCallCompleted, {
+				toolCallId: "tool-call-1",
+			}),
+		).toMatchObject({ type: RunEventType.ToolCallCompleted });
+		expect(
+			parseDurableRunEvent(RunEventType.ToolCallResult, {
+				messageId: "tool-message-1",
+				toolCallId: "tool-call-1",
+				content: "Command completed",
+				isError: false,
+			}),
+		).toMatchObject({
+			type: RunEventType.ToolCallResult,
+			payload: { toolCallId: "tool-call-1" },
+		});
+	});
+
+	it("requires terminal payload Outcome to match the durable event type", () => {
+		expect(
+			parseDurableRunEvent(RunEventType.Done, { outcome: "done" }),
+		).toMatchObject({ type: RunEventType.Done });
+		expect(
+			parseDurableRunEvent(RunEventType.Error, {
+				outcome: "error",
+				message: "Run failed",
+			}),
+		).toMatchObject({ type: RunEventType.Error });
+		expect(
+			parseDurableRunEvent(RunEventType.Canceled, {
+				outcome: "canceled",
+			}),
+		).toMatchObject({ type: RunEventType.Canceled });
+
+		expect(() =>
+			parseDurableRunEvent(RunEventType.Done, { outcome: "error" }),
+		).toThrow(InvalidRunEventError);
+		expect(() => parseDurableRunEvent(RunEventType.Error, {})).toThrow(
+			InvalidRunEventError,
+		);
+	});
+
+	it("rejects malformed known identities but skips unknown internal events", () => {
+		expect(() =>
+			parseDurableRunEvent(RunEventType.ToolCallStarted, {
+				toolCallId: "",
+				toolCallName: "mcp__executor__Bash",
+				parentMessageId: "assistant-message-1",
+			}),
+		).toThrow(InvalidRunEventError);
+		expect(() =>
+			parseDurableRunEvent(RunEventType.ToolCallResult, {
+				messageId: "tool-message-1",
+				toolCallId: "tool-call-1",
+				content: { raw: "not AG-UI content" },
+				isError: false,
+			}),
+		).toThrow(InvalidRunEventError);
+		expect(parseDurableRunEvent("worker_internal_note", { any: "shape" })).toBe(
+			null,
+		);
+	});
+});
 
 describe("isAssistantTextPayload", () => {
 	it("accepts only the authoritative complete-message payload", () => {

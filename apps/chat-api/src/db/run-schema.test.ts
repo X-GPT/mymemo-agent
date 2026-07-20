@@ -59,6 +59,8 @@ describe("run queue schema", () => {
 			lockedUntil: null,
 			heartbeatAt: null,
 			cancelRequestedAt: null,
+			normalizedInput: null,
+			liveStreamFailedAt: null,
 			nextEventSeq: 1,
 			terminalAt: null,
 		});

@@ -1,6 +1,10 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import { RunEventType } from "./run-events";
+import {
+	InvalidRunEventError,
+	parseDurableRunEvent,
+	RunEventType,
+} from "./run-events";
 import { runEvents, runs } from "./schema";
 
 /**
@@ -25,9 +29,23 @@ export type RunStatus =
 	| "error"
 	| "canceled";
 
+/** The first admitted AG-UI input profile. Only client-authoritative fields
+ * survive normalization; Scope and execution configuration remain server-owned. */
+export interface NormalizedRunInputV1 {
+	version: 1;
+	messageId: string;
+	text: string;
+}
+
+export type NormalizedRunInput = NormalizedRunInputV1;
+
 /** A persisted run row. `status` is narrowed from text: rows are only ever
  * written through these helpers, which accept the typed union. */
-export type RunRecord = Omit<typeof runs.$inferSelect, "status"> & {
+export type RunRecord = Omit<
+	typeof runs.$inferSelect,
+	"normalizedInput" | "status"
+> & {
+	normalizedInput: NormalizedRunInput | null;
 	status: RunStatus;
 };
 
@@ -48,6 +66,11 @@ export class ActiveRunConflictError extends Error {
  */
 export class RunFenceError extends Error {
 	override name = "RunFenceError" as const;
+}
+
+/** An owned Run id was reused with different normalized admitted input. */
+export class RunInputMismatchError extends Error {
+	override name = "RunInputMismatchError" as const;
 }
 
 /** JSON body persisted with a run event. */
@@ -89,6 +112,113 @@ const TERMINAL_FROM_STATUSES: Record<TerminalRunStatus, RunStatus[]> = {
 	error: ["running"],
 	canceled: ["running", "cancel_requested"],
 };
+
+export interface AdmitQueuedRunInput {
+	runId: string;
+	userId: string;
+	conversationId: string;
+	messageId: string;
+	text: string;
+	scope: string;
+	collectionId: string | null;
+	summaryId: string | null;
+}
+
+export type RunAdmissionResult =
+	| { outcome: "created" | "existing"; run: RunRecord }
+	| { outcome: "not_found" };
+
+/**
+ * Atomically admit the canonical client Run id and submitted User message.
+ * The insert deliberately uses `ON CONFLICT DO NOTHING` for both possible
+ * admission conflicts: a conflicting Run id is classified by an ownership-
+ * scoped read, while a different active Run remains normal backpressure.
+ */
+export async function admitQueuedRunTx(
+	db: Database,
+	input: AdmitQueuedRunInput,
+): Promise<RunAdmissionResult> {
+	const normalizedInput: NormalizedRunInput = {
+		version: 1,
+		messageId: input.messageId,
+		text: input.text,
+	};
+	const startedPayload = {
+		runId: input.runId,
+		conversationId: input.conversationId,
+		messageId: input.messageId,
+		message: input.text,
+		scope: input.scope,
+		collectionId: input.collectionId,
+		summaryId: input.summaryId,
+	};
+	parseDurableRunEvent(RunEventType.Started, startedPayload);
+
+	return await db.transaction(async (tx) => {
+		const [inserted] = await tx
+			.insert(runs)
+			.values({
+				runId: input.runId,
+				userId: input.userId,
+				conversationId: input.conversationId,
+				normalizedInput,
+				status: "queued",
+				nextEventSeq: 2,
+			})
+			.onConflictDoNothing()
+			.returning();
+
+		if (inserted) {
+			await tx.insert(runEvents).values({
+				runId: input.runId,
+				seq: 1,
+				type: RunEventType.Started,
+				payload: startedPayload,
+			});
+			return { outcome: "created", run: toRunRecord(inserted) };
+		}
+
+		const [existing] = await tx
+			.select()
+			.from(runs)
+			.where(eq(runs.runId, input.runId))
+			.limit(1);
+		if (!existing) {
+			throw new ActiveRunConflictError(
+				`conversation ${input.conversationId} already has an active run`,
+			);
+		}
+		if (
+			existing.userId !== input.userId ||
+			existing.conversationId !== input.conversationId
+		) {
+			return { outcome: "not_found" };
+		}
+		if (!normalizedInputsEqual(existing.normalizedInput, normalizedInput)) {
+			throw new RunInputMismatchError(
+				`run ${input.runId} was already admitted with different input`,
+			);
+		}
+		return { outcome: "existing", run: toRunRecord(existing) };
+	});
+}
+
+function normalizedInputsEqual(
+	stored: unknown,
+	expected: NormalizedRunInput,
+): boolean {
+	return (
+		typeof stored === "object" &&
+		stored !== null &&
+		"version" in stored &&
+		stored.version === expected.version &&
+		"messageId" in stored &&
+		stored.messageId === expected.messageId &&
+		"text" in stored &&
+		stored.text === expected.text &&
+		Object.keys(stored).length === 3
+	);
+}
 
 /**
  * Insert one `queued` run. The `runs_one_active_per_conversation` partial
@@ -205,13 +335,16 @@ export async function claimNextRunTx(
 		.where(
 			and(
 				eq(runs.status, "queued"),
-				sql`${runs.runId} in (
-					select run_id from runs
-					where status = 'queued'
-					order by created_at
+				eq(
+					runs.runId,
+					sql`(
+					select candidate.run_id from runs as candidate
+					where candidate.status = 'queued'
+					order by candidate.created_at
 					for update skip locked
 					limit 1
 				)`,
+				),
 			),
 		)
 		.returning();
@@ -257,6 +390,17 @@ export async function appendRunEventTx(
 			throw new RunFenceError(
 				`${input.appendClass} append to run ${input.runId} rejected: ` +
 					`run is not in an appendable status or worker ${input.workerId} no longer owns it`,
+			);
+		}
+		const durableEvent = parseDurableRunEvent(input.type, input.payload);
+		if (
+			durableEvent &&
+			(durableEvent.type === RunEventType.Done ||
+				durableEvent.type === RunEventType.Error ||
+				durableEvent.type === RunEventType.Canceled)
+		) {
+			throw new InvalidRunEventError(
+				`terminal event ${input.type} requires a terminal status transition`,
 			);
 		}
 		const seq = Number(allocated.seq);
@@ -344,11 +488,14 @@ async function insertTerminalEvent(
 	status: TerminalRunStatus,
 	payload: RunEventPayload,
 ): Promise<void> {
+	const type = TERMINAL_EVENT_TYPES[status];
+	const terminalPayload = { ...payload, outcome: status };
+	parseDurableRunEvent(type, terminalPayload);
 	await tx.insert(runEvents).values({
 		runId: row.runId,
 		seq: row.nextEventSeq - 1,
-		type: TERMINAL_EVENT_TYPES[status],
-		payload,
+		type,
+		payload: terminalPayload,
 	});
 }
 
@@ -467,6 +614,61 @@ export async function heartbeatRunTx(
 	return row ? toRunRecord(row) : null;
 }
 
+export type MarkLiveStreamFailedResult =
+	| { outcome: "marked" | "already_failed"; run: RunRecord }
+	| { outcome: "fence_rejected" };
+
+/**
+ * Monotonically record that a Run's Live Stream is unusable without changing
+ * its execution status. Active writes require the same live worker ownership
+ * fence as model appends. Once terminalization has cleared ownership, the
+ * immutable Run permits only the idempotent NULL-to-time marker write; this
+ * lets a terminal Redis publication failure safely race the terminal commit.
+ */
+export async function markLiveStreamFailedTx(
+	db: Database,
+	input: { runId: string; workerId: string },
+): Promise<MarkLiveStreamFailedResult> {
+	return await db.transaction(async (tx) => {
+		const [before] = await tx
+			.select()
+			.from(runs)
+			.where(eq(runs.runId, input.runId))
+			.for("update");
+		if (!before) return { outcome: "fence_rejected" };
+
+		const [row] = await tx
+			.update(runs)
+			.set({
+				liveStreamFailedAt: sql`coalesce(${runs.liveStreamFailedAt}, now())`,
+				updatedAt: sql`now()`,
+			})
+			.where(
+				and(
+					eq(runs.runId, input.runId),
+					or(
+						and(
+							inArray(runs.status, ["running", "cancel_requested"]),
+							eq(runs.lockedBy, input.workerId),
+							sql`${runs.lockedUntil} > now()`,
+						),
+						and(
+							inArray(runs.status, ["done", "error", "canceled"]),
+							isNull(runs.lockedBy),
+							isNull(runs.lockedUntil),
+						),
+					),
+				),
+			)
+			.returning();
+		if (!row) return { outcome: "fence_rejected" };
+		return {
+			outcome: before.liveStreamFailedAt === null ? "marked" : "already_failed",
+			run: toRunRecord(row),
+		};
+	});
+}
+
 /**
  * Stale-run recovery: terminalize every active run that can no longer make
  * progress. Expired `cancel_requested` becomes `canceled`; expired `running`
@@ -504,6 +706,11 @@ export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
 				.set({
 					status,
 					nextEventSeq: sql`${runs.nextEventSeq} + 1`,
+					...(candidate.status === "queued"
+						? {}
+						: {
+								liveStreamFailedAt: sql`coalesce(${runs.liveStreamFailedAt}, now())`,
+							}),
 					lockedBy: null,
 					lockedUntil: null,
 					terminalAt: sql`now()`,
@@ -527,7 +734,11 @@ export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
 /** Narrow a persisted row to a {@link RunRecord}: rows are only ever written
  * through these helpers, so the text `status` is a legal {@link RunStatus}. */
 export function toRunRecord(row: typeof runs.$inferSelect): RunRecord {
-	return { ...row, status: row.status as RunStatus };
+	return {
+		...row,
+		normalizedInput: row.normalizedInput as NormalizedRunInput | null,
+		status: row.status as RunStatus,
+	};
 }
 
 /**
