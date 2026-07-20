@@ -11,6 +11,30 @@ The durable, user-visible container for a chat. Its document scope is frozen
 at creation and never changes for its lifetime.
 _Avoid_: chat, session, thread
 
+**Conversation title**:
+The persisted, user-visible label of a Conversation. It is initialized from
+the first admitted user message when still unset, then changes only through an
+explicit rename.
+_Avoid_: summary, generated response
+
+**Conversation activity**:
+The most recent successfully admitted user message, or Conversation creation
+when no message has been admitted. It determines list recency; rename and
+Archive are not Conversation activity.
+_Avoid_: metadata update, Run completion
+
+**Archive**:
+A reversible lifecycle change that removes a Conversation from the default
+Conversation list and prevents it from receiving new messages, without deleting
+the Conversation or its history.
+_Avoid_: delete, close
+
+**Permanent deletion**:
+The irreversible end of a Conversation that removes it and makes its history
+and Downloadable artifacts inaccessible. A Conversation with an active Run
+cannot be permanently deleted.
+_Avoid_: Archive, soft delete
+
 **Scope**:
 The set of documents a conversation may access — `general`, `collection`, or
 `document`. Resolved once at conversation creation, then only ever re-read.
@@ -28,38 +52,86 @@ most once; a stale run is terminalized, never reclaimed.
 _Avoid_: lease (that word belongs to the decommissioned prototype path)
 
 **Run event**:
-One record in a run's durable, ordered event log — the source of truth for
-what happened during a run and the only source for authoritative, replayable
-client frames. Cursorless Live preview is ephemeral evidence, never a Run
-event, and may be lost without changing the Run outcome or transcript.
+One record in a Run's durable, ordered Postgres event log — the source of truth
+for its completed Assistant messages, Tool activity, Outcome, and permanent
+Conversation history. A Run event may also be published to the Run's Live
+Stream after it commits, but Assistant text deltas are Live Stream entries and
+not Run events.
 
-**Live preview**:
-Provisional assistant text shown while its durable assistant message is still
-being produced. It may be incomplete or missed; it is committed by the durable
-message, or discarded if the run ends before that message completes.
-_Avoid_: transcript, run event, token stream
+**Live Stream**:
+The temporary, ordered Redis Stream that carries every standard AG-UI event for
+one active Run. Its entry ids are transport replay cursors: a transient
+reconnect continues after its last id, while a full refresh reconstructs the
+active Run from the beginning. A healthy Live Stream is kept alive and
+untrimmed while its Run is active and retained for 30 minutes after the
+Outcome; a failed Live Stream is retained for at most 30 minutes after being
+declared unavailable. Permanent Conversation history comes from Run events.
+_Avoid_: Live preview, Pub/Sub channel, Conversation history
+
+**Reconnecting**:
+Resuming consumption of a usable Live Stream after a transient transport
+interruption, continuing after the last observed cursor.
+_Avoid_: Recovering
+
+**Recovering**:
+Waiting for permanent Conversation history after a Live Stream becomes
+unusable, then replacing the Run's provisional client state with that durable
+projection.
+_Avoid_: Reconnecting
+
+**Conversation history**:
+The durable, user-visible record of submitted messages, Assistant messages,
+Tool activity, and Outcomes across a Conversation. It lasts as long as the
+Conversation and excludes Live preview and the internal Agent session. On the
+public agent surface it is represented as AG-UI messages grouped by Run, with
+the Run's AG-UI terminal event kept alongside those messages rather than
+inventing an Outcome message.
+_Avoid_: thread history, Agent session, transcript
+
+**AG-UI agent surface**:
+The interoperable data plane through which a client starts a Run with
+`RunAgentInput` and receives standard AG-UI events. Its `threadId` names a
+MyMemo Conversation, its client-generated `runId` becomes the canonical Run
+identity and idempotency key on admission, and its `messageId` and `toolCallId`
+map to MyMemo-issued stable identities. Conversation listing, lifecycle, Scope,
+authorization, history paging, and artifacts remain MyMemo resource concerns.
+_Avoid_: Conversation API, Assistant Cloud
+
+**Assistant text delta**:
+A bounded, provisional fragment of Assistant text appended to the Run's Live
+Stream before the provider response completes. Its Redis Stream entry id is its
+temporary replay cursor. It is never copied into Postgres as a delta row and
+may disappear after the Live Stream expires.
+_Avoid_: Run event, durable message, token
 
 **Assistant message**:
-One complete model-authored provider response within a run, regardless of how
-many content blocks carry it. Its durable text commits any live preview of that
-response and is the form used for replay.
-_Avoid_: text delta, token stream
+One model-authored provider response within a run, identified by a stable,
+opaque, MyMemo-issued message id regardless of how many content blocks carry
+it. Assistant text remains provisional in the Live Stream until the provider
+response completes; the complete message is then committed to Postgres before
+its completion event is appended to the Live Stream. A textless response
+exposes its identity through its Tool invocations. If its Run is canceled or
+fails before completion, its provisional text does not enter permanent
+Conversation history.
+_Avoid_: token stream
 
 **Tool invocation**:
 One agent request to execute a model-facing tool, recorded as a durable run
-event and identified in the user-visible history by the tool name and a
-bounded, client-safe projection of its arguments. Its result is recorded as a
-separate chronological item rather than updating the invocation.
+event and identified in the user-visible history by a stable, opaque,
+MyMemo-issued Tool invocation id, the tool name, and a bounded, client-safe
+projection of its arguments. It also carries the id of its owning Assistant
+message. Its result is recorded as a separate chronological item rather than
+updating the invocation.
 _Avoid_: tool call
 
 **Tool result**:
 The bounded, client-safe projection of returned content or an error indication
 from a tool invocation, recorded as an append-only durable run event in the
-user-visible history. It carries no client-facing correlation identifier, and
-content is exposed only as a capped, non-authoritative preview, even when a
-short source happens to fit completely. An invocation has no result when the
-run terminates before the tool returns. An error result does not end the run;
-the agent may continue after inspecting it.
+user-visible history and linked to its Tool invocation by the same stable,
+opaque, MyMemo-issued id. Content is exposed only as a capped,
+non-authoritative preview, even when a short source happens to fit completely.
+An invocation has no result when the run terminates before the tool returns. An
+error result does not end the run; the agent may continue after inspecting it.
 _Avoid_: tool response
 
 **Outcome**:
