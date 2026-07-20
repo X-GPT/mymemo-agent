@@ -2,6 +2,7 @@ import { createClient } from "redis";
 import { z } from "zod";
 import type { LiveTextTelemetry } from "./telemetry";
 
+export * from "./redis-live-stream-store";
 export * from "./telemetry";
 
 export const LIVE_TEXT_MAX_CHUNK_LENGTH = 16_384;
