@@ -509,11 +509,20 @@ describe("Downloadable artifact delivery acceptance", () => {
 				.from(runEvents)
 				.orderBy(asc(runEvents.createdAt));
 			expect(publicOutcomes).toEqual([
-				{ type: "run_done", payload: {} },
-				{ type: "run_error", payload: { message: "Run failed" } },
-				{ type: "run_error", payload: { message: "Run failed" } },
-				{ type: "run_error", payload: { message: "Run failed" } },
-				{ type: "run_canceled", payload: {} },
+				{ type: "run_done", payload: { outcome: "done" } },
+				{
+					type: "run_error",
+					payload: { message: "Run failed", outcome: "error" },
+				},
+				{
+					type: "run_error",
+					payload: { message: "Run failed", outcome: "error" },
+				},
+				{
+					type: "run_error",
+					payload: { message: "Run failed", outcome: "error" },
+				},
+				{ type: "run_canceled", payload: { outcome: "canceled" } },
 			]);
 			const serializedPublicState = JSON.stringify({
 				list: priorList,

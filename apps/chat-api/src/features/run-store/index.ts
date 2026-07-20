@@ -1,6 +1,11 @@
 export type {
+	AdmitQueuedRunInput,
 	CreateQueuedRunInput,
 	CreateQueuedRunResult,
+	MarkLiveStreamFailedResult,
+	NormalizedRunInput,
+	NormalizedRunInputV1,
+	RunAdmissionResult,
 	RunCancellationResult,
 	RunEventAppendClass,
 	RunEventPayload,
@@ -13,6 +18,7 @@ export type {
 export {
 	ActiveRunConflictError,
 	ActiveRunExistsError,
+	admitQueuedRunTx,
 	appendRunEventTx,
 	ConversationArchivedError,
 	ConversationNotFoundError,
@@ -20,9 +26,11 @@ export {
 	createQueuedRunStartedTx,
 	createQueuedRunTx,
 	heartbeatRunTx,
+	markLiveStreamFailedTx,
 	markStaleRunsTx,
 	PostgresRunStore,
 	RunFenceError,
+	RunInputMismatchError,
 	requestRunCancellationTx,
 	transitionRunTerminalTx,
 } from "./run-store";

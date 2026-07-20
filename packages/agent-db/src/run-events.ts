@@ -17,11 +17,19 @@ export const RunEventType = {
 	/** One complete Assistant message. Payload `{ messageId, text }`. Projected
 	 * to the durable `text_commit` client frame. */
 	AssistantText: "assistant_text",
+	/** One complete Assistant response for AG-UI history. Empty text is valid
+	 * when the response owns Tool invocations. */
+	AssistantMessageCompleted: "assistant_message_completed",
 	/** One Tool invocation. Payload {@link ToolUsePayload} — already the
 	 * client-safe projection (ADR-0009); the projector forwards, never derives. */
 	ToolUse: "tool_use",
 	/** One Tool result. Payload {@link ToolResultPayload}. */
 	ToolResult: "tool_result",
+	/** Stable, correlated AG-UI Tool lifecycle (ADR-0012). */
+	ToolCallStarted: "tool_call_started",
+	ToolCallArgs: "tool_call_args",
+	ToolCallCompleted: "tool_call_completed",
+	ToolCallResult: "tool_call_result",
 	/** Terminal: the run finished successfully. */
 	Done: "run_done",
 	/** Terminal: the run failed. Payload `{ message }`. */
@@ -31,6 +39,33 @@ export const RunEventType = {
 } as const;
 
 export type RunEventType = (typeof RunEventType)[keyof typeof RunEventType];
+
+export const CANONICAL_MODEL_RUN_EVENT_TYPES = [
+	RunEventType.AssistantMessageCompleted,
+	RunEventType.ToolCallStarted,
+	RunEventType.ToolCallArgs,
+	RunEventType.ToolCallCompleted,
+	RunEventType.ToolCallResult,
+] as const;
+
+export interface RunStartedPayload {
+	[key: string]: unknown;
+	runId: string;
+	conversationId: string;
+	messageId: string;
+	message: string;
+	scope: "general" | "collection" | "document";
+	collectionId: string | null;
+	summaryId: string | null;
+}
+
+export type RunScope = RunStartedPayload["scope"];
+
+export interface AssistantMessageCompletedPayload {
+	[key: string]: unknown;
+	messageId: string;
+	text: string;
+}
 
 /** The durable payload for one complete Assistant message. */
 export interface AssistantTextPayload {
@@ -72,6 +107,40 @@ export const PUBLIC_TOOL_NAMES = [
 ] as const;
 
 export type PublicToolName = (typeof PUBLIC_TOOL_NAMES)[number];
+
+export interface ToolCallStartedPayload {
+	[key: string]: unknown;
+	toolCallId: string;
+	toolCallName: PublicToolName;
+	parentMessageId: string;
+}
+
+export interface ToolCallArgsPayload {
+	[key: string]: unknown;
+	toolCallId: string;
+	delta: string;
+}
+
+export interface ToolCallCompletedPayload {
+	[key: string]: unknown;
+	toolCallId: string;
+}
+
+export interface ToolCallResultPayload {
+	[key: string]: unknown;
+	messageId: string;
+	toolCallId: string;
+	content: string;
+	isError: boolean;
+}
+
+export type RunOutcome = "done" | "error" | "canceled";
+
+export interface RunOutcomePayload {
+	[key: string]: unknown;
+	outcome: RunOutcome;
+	message?: string;
+}
 
 /**
  * The durable payload for one Tool invocation (ADR-0009). `arguments` is the
@@ -129,6 +198,293 @@ export function isToolResultPayload(
 	);
 }
 
+export type DurableRunEvent =
+	| { type: typeof RunEventType.Started; payload: RunStartedPayload }
+	| {
+			type: typeof RunEventType.AssistantMessageCompleted;
+			payload: AssistantMessageCompletedPayload;
+	  }
+	| {
+			type: typeof RunEventType.ToolCallStarted;
+			payload: ToolCallStartedPayload;
+	  }
+	| { type: typeof RunEventType.ToolCallArgs; payload: ToolCallArgsPayload }
+	| {
+			type: typeof RunEventType.ToolCallCompleted;
+			payload: ToolCallCompletedPayload;
+	  }
+	| { type: typeof RunEventType.ToolCallResult; payload: ToolCallResultPayload }
+	| { type: typeof RunEventType.AssistantText; payload: AssistantTextPayload }
+	| { type: typeof RunEventType.ToolUse; payload: ToolUsePayload }
+	| { type: typeof RunEventType.ToolResult; payload: ToolResultPayload }
+	| {
+			type:
+				| typeof RunEventType.Done
+				| typeof RunEventType.Error
+				| typeof RunEventType.Canceled;
+			payload: RunOutcomePayload;
+	  };
+
+/** A known durable event has a corrupt payload/type combination. The error
+ * names only the type so client content never enters logs through its message. */
+export class InvalidRunEventError extends Error {
+	override name = "InvalidRunEventError" as const;
+}
+
+/**
+ * Validate identity and lifecycle relationships across canonical durable
+ * model events. Writers call this while holding the Run row lock, and history
+ * readers can apply the same rules to reject corrupt known sequences.
+ */
+export function validateDurableRunEventSequence(
+	events: readonly { type: string; payload: unknown }[],
+	options: { allowIncomplete?: boolean } = {},
+): void {
+	const assistantMessageIds = new Set<string>();
+	const completedAssistantMessageIds = new Set<string>();
+	const submittedMessageIds = new Set<string>();
+	const toolResultMessageIds = new Set<string>();
+	const toolStates = new Map<
+		string,
+		"started" | "args" | "completed" | "result"
+	>();
+	let terminalSeen = false;
+	let terminalOutcome: RunOutcome | null = null;
+	let staleRecoveryOutcome = false;
+
+	for (const event of events) {
+		const parsed = parseDurableRunEvent(event.type, event.payload);
+		if (!parsed) continue;
+		if (terminalSeen) invalidSequence("public event follows terminal Outcome");
+
+		switch (parsed.type) {
+			case RunEventType.Started:
+				if (
+					submittedMessageIds.size > 0 ||
+					assistantMessageIds.has(parsed.payload.messageId) ||
+					toolResultMessageIds.has(parsed.payload.messageId)
+				) {
+					invalidSequence("duplicate messageId");
+				}
+				submittedMessageIds.add(parsed.payload.messageId);
+				break;
+			case RunEventType.AssistantMessageCompleted:
+				if (
+					completedAssistantMessageIds.has(parsed.payload.messageId) ||
+					submittedMessageIds.has(parsed.payload.messageId) ||
+					toolResultMessageIds.has(parsed.payload.messageId)
+				) {
+					invalidSequence("duplicate messageId");
+				}
+				assistantMessageIds.add(parsed.payload.messageId);
+				completedAssistantMessageIds.add(parsed.payload.messageId);
+				break;
+			case RunEventType.ToolCallStarted:
+				if (toolStates.has(parsed.payload.toolCallId)) {
+					invalidSequence("duplicate toolCallId");
+				}
+				if (
+					submittedMessageIds.has(parsed.payload.parentMessageId) ||
+					toolResultMessageIds.has(parsed.payload.parentMessageId)
+				) {
+					invalidSequence("Tool invocation has an invalid parent message");
+				}
+				assistantMessageIds.add(parsed.payload.parentMessageId);
+				toolStates.set(parsed.payload.toolCallId, "started");
+				break;
+			case RunEventType.ToolCallArgs:
+				if (toolStates.get(parsed.payload.toolCallId) !== "started") {
+					invalidSequence("Tool arguments do not follow Tool start");
+				}
+				toolStates.set(parsed.payload.toolCallId, "args");
+				break;
+			case RunEventType.ToolCallCompleted:
+				if (toolStates.get(parsed.payload.toolCallId) !== "args") {
+					invalidSequence(
+						"Tool completion does not follow one arguments event",
+					);
+				}
+				toolStates.set(parsed.payload.toolCallId, "completed");
+				break;
+			case RunEventType.ToolCallResult:
+				if (toolStates.get(parsed.payload.toolCallId) !== "completed") {
+					invalidSequence("Tool result has no completed invocation");
+				}
+				if (
+					submittedMessageIds.has(parsed.payload.messageId) ||
+					assistantMessageIds.has(parsed.payload.messageId) ||
+					toolResultMessageIds.has(parsed.payload.messageId)
+				) {
+					invalidSequence("duplicate messageId");
+				}
+				toolResultMessageIds.add(parsed.payload.messageId);
+				toolStates.set(parsed.payload.toolCallId, "result");
+				break;
+			case RunEventType.Done:
+			case RunEventType.Error:
+			case RunEventType.Canceled:
+				terminalSeen = true;
+				terminalOutcome = parsed.payload.outcome;
+				staleRecoveryOutcome =
+					parsed.payload.outcome !== "done" &&
+					parsed.payload.reason === "stale_worker";
+				break;
+			default:
+				// Legacy Assistant/Tool events have no stable correlation to validate.
+				break;
+		}
+	}
+
+	if (options.allowIncomplete) return;
+	if (!staleRecoveryOutcome) {
+		for (const state of toolStates.values()) {
+			if (state === "started" || state === "args") {
+				invalidSequence("Tool invocation lifecycle is incomplete");
+			}
+		}
+	}
+	if (terminalOutcome === "done") {
+		for (const messageId of assistantMessageIds) {
+			if (!completedAssistantMessageIds.has(messageId)) {
+				invalidSequence("successful Tool-owning Assistant is incomplete");
+			}
+		}
+	}
+}
+
+function invalidSequence(reason: string): never {
+	throw new InvalidRunEventError(`invalid durable event sequence: ${reason}`);
+}
+
+/**
+ * Parse the public durable vocabulary for permanent-history consumers.
+ * Unknown internal events return `null` and stay fail-closed; a known type with
+ * a malformed payload throws so history cannot silently become incomplete.
+ * Legacy event types remain parseable while their current readers are retired.
+ */
+export function parseDurableRunEvent(
+	type: string,
+	payload: unknown,
+): DurableRunEvent | null {
+	switch (type) {
+		case RunEventType.Started:
+			if (isRunStartedPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.AssistantMessageCompleted:
+			if (isAssistantMessageCompletedPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.ToolCallStarted:
+			if (isToolCallStartedPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.ToolCallArgs:
+			if (isToolCallArgsPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.ToolCallCompleted:
+			if (isToolCallCompletedPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.ToolCallResult:
+			if (isToolCallResultPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.AssistantText:
+			if (isAssistantTextPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.ToolUse:
+			if (isToolUsePayload(payload)) return { type, payload };
+			break;
+		case RunEventType.ToolResult:
+			if (isToolResultPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.Done:
+			if (isRunOutcomePayload(payload, "done")) return { type, payload };
+			break;
+		case RunEventType.Error:
+			if (isRunOutcomePayload(payload, "error")) return { type, payload };
+			break;
+		case RunEventType.Canceled:
+			if (isRunOutcomePayload(payload, "canceled")) return { type, payload };
+			break;
+		default:
+			return null;
+	}
+	throw new InvalidRunEventError(`invalid payload for durable event ${type}`);
+}
+
+export function isRunStartedPayload(
+	value: unknown,
+): value is RunStartedPayload {
+	if (!isPlainRecord(value)) return false;
+	return (
+		isNonEmptyString(value.runId) &&
+		isNonEmptyString(value.conversationId) &&
+		isNonEmptyString(value.messageId) &&
+		isNonEmptyString(value.message) &&
+		(value.scope === "general" ||
+			value.scope === "collection" ||
+			value.scope === "document") &&
+		isNullableString(value.collectionId) &&
+		isNullableString(value.summaryId)
+	);
+}
+
+export function isAssistantMessageCompletedPayload(
+	value: unknown,
+): value is AssistantMessageCompletedPayload {
+	return (
+		isPlainRecord(value) &&
+		isNonEmptyString(value.messageId) &&
+		typeof value.text === "string"
+	);
+}
+
+export function isToolCallStartedPayload(
+	value: unknown,
+): value is ToolCallStartedPayload {
+	return (
+		isPlainRecord(value) &&
+		isNonEmptyString(value.toolCallId) &&
+		isPublicToolName(value.toolCallName) &&
+		isNonEmptyString(value.parentMessageId)
+	);
+}
+
+export function isToolCallArgsPayload(
+	value: unknown,
+): value is ToolCallArgsPayload {
+	return (
+		isPlainRecord(value) &&
+		isNonEmptyString(value.toolCallId) &&
+		typeof value.delta === "string"
+	);
+}
+
+export function isToolCallCompletedPayload(
+	value: unknown,
+): value is ToolCallCompletedPayload {
+	return isPlainRecord(value) && isNonEmptyString(value.toolCallId);
+}
+
+export function isToolCallResultPayload(
+	value: unknown,
+): value is ToolCallResultPayload {
+	return (
+		isPlainRecord(value) &&
+		isNonEmptyString(value.messageId) &&
+		isNonEmptyString(value.toolCallId) &&
+		typeof value.content === "string" &&
+		typeof value.isError === "boolean"
+	);
+}
+
+export function isRunOutcomePayload(
+	value: unknown,
+	expected: RunOutcome,
+): value is RunOutcomePayload {
+	if (!isPlainRecord(value) || value.outcome !== expected) return false;
+	return expected === "error"
+		? isNonEmptyString(value.message)
+		: value.message === undefined;
+}
+
 function isPublicToolName(value: unknown): value is PublicToolName {
 	return (
 		typeof value === "string" &&
@@ -138,4 +494,12 @@ function isPublicToolName(value: unknown): value is PublicToolName {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0;
+}
+
+function isNullableString(value: unknown): value is string | null {
+	return value === null || typeof value === "string";
 }

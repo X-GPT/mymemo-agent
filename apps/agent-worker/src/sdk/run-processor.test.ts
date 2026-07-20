@@ -548,7 +548,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			expect((await readRun("run-1"))?.status).toBe("error");
 			const events = await readEvents("run-1");
 			expect(events.map((event) => event.type)).toEqual(["run_error"]);
-			expect(events[0]?.payload).toEqual({ message: "Run failed" });
+			expect(events[0]?.payload).toEqual({
+				message: "Run failed",
+				outcome: "error",
+			});
 			expect(warnings).toContainEqual({
 				message: "Live preview signal",
 				service: "agent-worker",

@@ -488,6 +488,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("error");
 		expect((await tdb.db.select().from(runEvents))[0]?.payload).toEqual({
 			message: "Run failed",
+			outcome: "error",
 		});
 		expect(
 			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
@@ -520,6 +521,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("error");
 		expect((await tdb.db.select().from(runEvents))[0]?.payload).toEqual({
 			message: "Run failed",
+			outcome: "error",
 		});
 	});
 
@@ -717,6 +719,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("error");
 		expect((await tdb.db.select().from(runEvents))[0]?.payload).toEqual({
 			message: "Run failed",
+			outcome: "error",
 		});
 	});
 
@@ -824,6 +827,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("error");
 		expect((await tdb.db.select().from(runEvents))[0]?.payload).toEqual({
 			message: "Run failed",
+			outcome: "error",
 		});
 	});
 });

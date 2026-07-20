@@ -29,18 +29,26 @@ import { RunEventType } from "@/features/run-events";
 export { ActiveRunConflictError, requestRunCancellationTx };
 export type { RunCancellationResult, RunRecord };
 export type {
+	AdmitQueuedRunInput,
+	MarkLiveStreamFailedResult,
+	NormalizedRunInput,
+	NormalizedRunInputV1,
+	RunAdmissionResult,
 	RunEventAppendClass,
 	RunEventPayload,
 	RunStatus,
 	TerminalRunStatus,
 } from "@mymemo/agent-db/run-store";
 export {
+	admitQueuedRunTx,
 	appendRunEventTx,
 	claimNextRunTx,
 	createQueuedRunTx,
 	heartbeatRunTx,
+	markLiveStreamFailedTx,
 	markStaleRunsTx,
 	RunFenceError,
+	RunInputMismatchError,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 
