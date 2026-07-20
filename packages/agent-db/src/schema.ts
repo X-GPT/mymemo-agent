@@ -110,9 +110,17 @@ export const conversations = pgTable(
 		collectionId: text("collection_id"),
 		/** Non-null only for document scope. */
 		summaryId: text("summary_id"),
+		/** User-visible label, initialized by the first admitted User message. */
+		title: text("title"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
+		/** Creation, or the most recent successfully admitted User message. */
+		lastActivityAt: timestamp("last_activity_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		/** Non-null while the Conversation is archived. */
+		archivedAt: timestamp("archived_at", { withTimezone: true }),
 	},
 	(t) => [
 		primaryKey({ columns: [t.userId, t.conversationId] }),
@@ -239,6 +247,11 @@ export const runs = pgTable(
 			"runs_status_check",
 			sql`${t.status} in ('queued', 'running', 'cancel_requested', 'done', 'error', 'canceled')`,
 		),
+		foreignKey({
+			columns: [t.userId, t.conversationId],
+			foreignColumns: [conversations.userId, conversations.conversationId],
+			name: "runs_conversation_fk",
+		}).onDelete("cascade"),
 		uniqueIndex("runs_one_active_per_conversation")
 			.on(t.userId, t.conversationId)
 			.where(sql`${t.status} in ('queued', 'running', 'cancel_requested')`),

@@ -14,6 +14,8 @@ export {
 	ActiveRunConflictError,
 	ActiveRunExistsError,
 	appendRunEventTx,
+	ConversationArchivedError,
+	ConversationNotFoundError,
 	claimNextRunTx,
 	createQueuedRunStartedTx,
 	createQueuedRunTx,

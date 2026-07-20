@@ -136,6 +136,7 @@ describe("Downloadable artifact object cleanup", () => {
 	});
 
 	it("deletes a pending object owned by a terminal Run", async () => {
+		await insertConversation("user-1", "conv-gone");
 		await tdb.db.insert(runs).values({
 			runId: "run-terminal",
 			userId: "user-1",
@@ -158,6 +159,7 @@ describe("Downloadable artifact object cleanup", () => {
 	});
 
 	it("deletes a pending object after its owning Run becomes stale", async () => {
+		await insertConversation("user-1", "conv-gone");
 		await tdb.db.insert(runs).values({
 			runId: "run-stale",
 			userId: "user-1",

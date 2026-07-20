@@ -10,7 +10,11 @@ import {
 	reportChatLiveTextSetupSignal,
 } from "@/features/run-events/live-text-telemetry";
 import { prepareLiveTextSubscription } from "@/features/run-events/prepare-live-text-subscription";
-import { ActiveRunExistsError } from "@/features/run-store";
+import {
+	ActiveRunExistsError,
+	ConversationArchivedError,
+	ConversationNotFoundError,
+} from "@/features/run-store";
 import { HonoSSESender } from "@/features/streaming/sse-sender";
 import {
 	createConversation,
@@ -182,6 +186,12 @@ app.post(
 					},
 					409,
 				);
+			}
+			if (error instanceof ConversationArchivedError) {
+				return c.json({ error: "Conversation is archived" }, 409);
+			}
+			if (error instanceof ConversationNotFoundError) {
+				return c.json({ error: "Conversation not found" }, 404);
 			}
 			throw error;
 		}

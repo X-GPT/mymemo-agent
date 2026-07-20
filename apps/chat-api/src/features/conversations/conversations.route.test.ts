@@ -10,6 +10,7 @@ import { runEvents, runs } from "@/db/schema";
 import { createTestDatabase } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import type {
+	ConversationCreateInput,
 	ConversationRecord,
 	ConversationStore,
 } from "@/features/conversation-store";
@@ -24,6 +25,8 @@ import type {
 import { DrizzleRunEventReader, RunEventType } from "@/features/run-events";
 import {
 	ActiveRunExistsError,
+	ConversationArchivedError,
+	ConversationNotFoundError,
 	PostgresRunStore,
 	type RunRecord,
 	type RunStore,
@@ -47,8 +50,23 @@ function fakeStore(seed: ConversationRecord[] = []) {
 			return rows.get(`${userId}/${conversationId}`) ?? null;
 		},
 		async create(record) {
-			rows.set(`${record.userId}/${record.conversationId}`, record);
-			created.push(record);
+			const now = new Date();
+			const persisted: ConversationRecord = {
+				...record,
+				title: null,
+				createdAt: now,
+				lastActivityAt: now,
+				archivedAt: null,
+			};
+			rows.set(`${record.userId}/${record.conversationId}`, persisted);
+			created.push(persisted);
+			return persisted;
+		},
+		async update() {
+			return { outcome: "not_found" };
+		},
+		async deletePermanently() {
+			return { outcome: "not_found" };
 		},
 	};
 	return { store, created };
@@ -94,8 +112,10 @@ function buildApp(
 }
 
 function fakeRunStore() {
-	const queued: Array<{ conversation: ConversationRecord; message: string }> =
-		[];
+	const queued: Array<{
+		conversation: ConversationCreateInput;
+		message: string;
+	}> = [];
 	const eventsByRun = new Map<string, RunEventRow[]>();
 	const runOwners = new Map<
 		string,
@@ -339,6 +359,10 @@ describe("POST /v1/conversations/:id/events", () => {
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
+		title: null,
+		createdAt: new Date("2026-01-01T00:00:00.000Z"),
+		lastActivityAt: new Date("2026-01-01T00:00:00.000Z"),
+		archivedAt: null,
 	};
 	const userMessage = JSON.stringify({ type: "user.message", text: "hi" });
 
@@ -630,6 +654,58 @@ describe("POST /v1/conversations/:id/events", () => {
 		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
 	});
 
+	it("returns 409 when the conversation is archived during admission", async () => {
+		const { store } = fakeStore([existing]);
+		const runStore: RunStore = {
+			async createQueuedRun() {
+				throw new ConversationArchivedError();
+			},
+			async getRun() {
+				return null;
+			},
+			async requestCancellation() {
+				return { outcome: "not_found" };
+			},
+		};
+		const res = await buildApp(store, recordingGate(true).gate, {
+			...fakeRunStore(),
+			runStore,
+		}).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: userMessage,
+		});
+
+		expect(res.status).toBe(409);
+		expect(await res.json()).toEqual({ error: "Conversation is archived" });
+	});
+
+	it("returns 404 when the conversation is deleted during admission", async () => {
+		const { store } = fakeStore([existing]);
+		const runStore: RunStore = {
+			async createQueuedRun() {
+				throw new ConversationNotFoundError();
+			},
+			async getRun() {
+				return null;
+			},
+			async requestCancellation() {
+				return { outcome: "not_found" };
+			},
+		};
+		const res = await buildApp(store, recordingGate(true).gate, {
+			...fakeRunStore(),
+			runStore,
+		}).request("/v1/conversations/conv-1/events", {
+			method: "POST",
+			headers: identityHeaders,
+			body: userMessage,
+		});
+
+		expect(res.status).toBe(404);
+		expect(await res.json()).toEqual({ error: "Conversation not found" });
+	});
+
 	it("returns 404 when the conversation does not exist", async () => {
 		const { store } = fakeStore();
 		const res = await buildApp(store).request(
@@ -682,6 +758,10 @@ describe("POST /v1/conversations/:id/events — user.interrupt", () => {
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
+		title: null,
+		createdAt: new Date("2026-01-01T00:00:00.000Z"),
+		lastActivityAt: new Date("2026-01-01T00:00:00.000Z"),
+		archivedAt: null,
 	};
 
 	function interrupt(runId: string) {
@@ -854,6 +934,10 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
+		title: null,
+		createdAt: new Date("2026-01-01T00:00:00.000Z"),
+		lastActivityAt: new Date("2026-01-01T00:00:00.000Z"),
+		archivedAt: null,
 	};
 
 	it("validates identity headers before reconnecting", async () => {
@@ -1156,6 +1240,10 @@ describe("exposure gate (MYM-46)", () => {
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
+		title: null,
+		createdAt: new Date("2026-01-01T00:00:00.000Z"),
+		lastActivityAt: new Date("2026-01-01T00:00:00.000Z"),
+		archivedAt: null,
 	};
 	const userMessage = JSON.stringify({ type: "user.message", text: "hi" });
 

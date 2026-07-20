@@ -1,10 +1,18 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
 import {
 	isToolResultPayload,
 	isToolUsePayload,
 	type PublicToolName,
 } from "@mymemo/agent-db/run-events";
-import { runs } from "@/db/schema";
+import { conversations, runs } from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
 import { PostgresRunStore } from "@/features/run-store";
 import type { WorkerLogger } from "../../../../agent-worker/src/logger";
@@ -37,8 +45,17 @@ afterAll(async () => {
 	await tdb.close();
 });
 
+beforeEach(async () => {
+	await tdb.db.insert(conversations).values({
+		userId: "user-1",
+		conversationId: "conversation-1",
+		scope: "general",
+	});
+});
+
 afterEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
+	await tdb.db.delete(conversations);
 });
 
 class InstantNotifier implements RunNotifier {

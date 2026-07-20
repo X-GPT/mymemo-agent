@@ -2,7 +2,7 @@ import { expect, it } from "bun:test";
 import { createServer } from "node:net";
 import { createRedisLiveTextTransport } from "@mymemo/live-text";
 import { eq } from "drizzle-orm";
-import { runEvents, runs } from "@/db/schema";
+import { conversations, runEvents, runs } from "@/db/schema";
 import { createTestDatabase } from "@/db/testing";
 import { createQueuedRunStartedTx } from "@/features/run-store";
 import type { WorkerLogger } from "../../../../agent-worker/src/logger";
@@ -182,6 +182,11 @@ async function runWorkerThroughRedis(options: {
 	};
 
 	try {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conversation-1",
+			scope: "general",
+		});
 		await createQueuedRunStartedTx(tdb.db, {
 			runId: "run-1",
 			conversation: {

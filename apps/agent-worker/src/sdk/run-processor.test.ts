@@ -2,7 +2,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
 import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
-import { conversationRuntime, runEvents, runs } from "@mymemo/agent-db/schema";
+import {
+	conversationRuntime,
+	conversations,
+	runEvents,
+	runs,
+} from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import {
 	InMemoryLiveTextTransport,
@@ -28,6 +33,11 @@ let tdb: TestDb;
 // starts from empty tables via delete, keeping isolation without the cost.
 beforeAll(async () => {
 	tdb = await createTestDatabase();
+	await tdb.db.insert(conversations).values({
+		userId: "user-1",
+		conversationId: "conv-1",
+		scope: "general",
+	});
 });
 
 afterAll(async () => {
