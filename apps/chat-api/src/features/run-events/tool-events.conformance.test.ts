@@ -288,9 +288,6 @@ describe("durable tool-event conformance", () => {
 			conversation: {
 				userId: "user-1",
 				conversationId: "conversation-1",
-				scope: "general",
-				collectionId: null,
-				summaryId: null,
 			},
 			message: "Inspect everything",
 		});

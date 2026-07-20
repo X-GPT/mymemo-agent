@@ -9,7 +9,7 @@ import {
 import { and, eq, gt, sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
 import { conversations, runEvents, runs } from "@/db/schema";
-import type { ConversationCreateInput } from "@/features/conversation-store";
+import type { ConversationRef } from "@/features/conversation-store";
 import { RunEventType } from "@/features/run-events";
 
 /**
@@ -68,7 +68,7 @@ export class ConversationNotFoundError extends Error {
 }
 
 export interface CreateQueuedRunInput {
-	conversation: ConversationCreateInput;
+	conversation: ConversationRef;
 	message: string;
 	/** A Live subscription may be prepared for this id before admission. */
 	runId?: string;

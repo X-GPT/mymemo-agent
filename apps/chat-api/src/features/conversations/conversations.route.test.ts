@@ -10,8 +10,8 @@ import { runEvents, runs } from "@/db/schema";
 import { createTestDatabase } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import type {
-	ConversationCreateInput,
 	ConversationRecord,
+	ConversationRef,
 	ConversationStore,
 } from "@/features/conversation-store";
 import { PostgresConversationStore } from "@/features/conversation-store";
@@ -113,7 +113,7 @@ function buildApp(
 
 function fakeRunStore() {
 	const queued: Array<{
-		conversation: ConversationCreateInput;
+		conversation: ConversationRef;
 		message: string;
 	}> = [];
 	const eventsByRun = new Map<string, RunEventRow[]>();
