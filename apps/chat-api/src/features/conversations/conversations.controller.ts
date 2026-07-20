@@ -11,16 +11,39 @@ import {
 	submittedMessageFromRunInput,
 } from "./conversations.schema";
 
+/** Public Conversation metadata shared by creation, list, and lifecycle routes. */
+export interface ConversationSummary {
+	conversationId: string;
+	title: string | null;
+	scope: ConversationScope;
+	createdAt: string;
+	lastActivityAt: string;
+	archivedAt: string | null;
+}
+
+export function toConversationSummary(
+	conversation: ConversationRecord,
+): ConversationSummary {
+	return {
+		conversationId: conversation.conversationId,
+		title: conversation.title,
+		scope: conversation.scope,
+		createdAt: conversation.createdAt.toISOString(),
+		lastActivityAt: conversation.lastActivityAt.toISOString(),
+		archivedAt: conversation.archivedAt?.toISOString() ?? null,
+	};
+}
+
 /**
  * Create a conversation: resolve its document scope from the supplied ids once,
- * freeze it onto a new record, and return the generated id + scope. The scope is
- * never re-derived after this — every turn reads it back from the store.
+ * freeze it onto a new record, and return its public summary. The scope is never
+ * re-derived after this — every turn reads it back from the store.
  */
 export async function createConversation(
 	store: ConversationStore,
 	identity: InternalIdentity,
 	body: { collectionId?: string | null; summaryId?: string | null },
-): Promise<{ conversationId: string; scope: ConversationScope }> {
+): Promise<ConversationSummary> {
 	const conversationId = crypto.randomUUID();
 	const collectionId = body.collectionId?.trim() || null;
 	const summaryId = body.summaryId?.trim() || null;
@@ -32,14 +55,14 @@ export async function createConversation(
 		scope = "collection";
 	}
 
-	await store.create({
+	const conversation = await store.create({
 		userId: identity.memberCode,
 		conversationId,
 		scope,
 		collectionId,
 		summaryId,
 	});
-	return { conversationId, scope };
+	return toConversationSummary(conversation);
 }
 
 /**

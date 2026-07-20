@@ -50,6 +50,26 @@ export interface ConversationUpdate {
 	archived?: boolean;
 }
 
+/** Stable keyset position for Conversation activity ordering. */
+export interface ConversationListPosition {
+	/** Exact Postgres-rendered timestamp, retaining sub-millisecond precision. */
+	lastActivityAt: string;
+	conversationId: string;
+}
+
+export interface ConversationListInput {
+	userId: string;
+	archived: boolean;
+	search?: string;
+	after?: ConversationListPosition;
+	limit: number;
+}
+
+export interface ConversationListPage {
+	conversations: ConversationRecord[];
+	next: ConversationListPosition | null;
+}
+
 export type ConversationUpdateResult =
 	| { outcome: "updated"; conversation: ConversationRecord }
 	| { outcome: "not_found" | "active_run" };
@@ -68,6 +88,7 @@ export type ConversationDeleteResult =
 export interface ConversationStore {
 	get(ref: ConversationRef): Promise<ConversationRecord | null>;
 	create(record: ConversationCreateInput): Promise<ConversationRecord>;
+	list(input: ConversationListInput): Promise<ConversationListPage>;
 	update(
 		ref: ConversationRef,
 		changes: ConversationUpdate,

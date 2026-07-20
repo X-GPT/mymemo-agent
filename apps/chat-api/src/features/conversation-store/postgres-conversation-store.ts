@@ -1,9 +1,22 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import {
+	and,
+	desc,
+	eq,
+	getTableColumns,
+	inArray,
+	isNotNull,
+	isNull,
+	lt,
+	or,
+	sql,
+} from "drizzle-orm";
 import type { Database } from "@/db/client";
 import { conversations, runs } from "@/db/schema";
 import type {
 	ConversationCreateInput,
 	ConversationDeleteResult,
+	ConversationListInput,
+	ConversationListPage,
 	ConversationRecord,
 	ConversationRef,
 	ConversationScope,
@@ -64,6 +77,56 @@ export class PostgresConversationStore implements ConversationStore {
 			);
 		}
 		return toConversationRecord(created);
+	}
+
+	async list(input: ConversationListInput): Promise<ConversationListPage> {
+		const rows = await this.db
+			.select({
+				...getTableColumns(conversations),
+				cursorLastActivityAt:
+					sql<string>`to_char(${conversations.lastActivityAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`.as(
+						"cursor_last_activity_at",
+					),
+			})
+			.from(conversations)
+			.where(
+				and(
+					eq(conversations.userId, input.userId),
+					input.archived
+						? isNotNull(conversations.archivedAt)
+						: isNull(conversations.archivedAt),
+					input.search === undefined
+						? undefined
+						: sql`position(lower(${input.search}) in lower(${conversations.title})) > 0`,
+					input.after === undefined
+						? undefined
+						: or(
+								sql`${conversations.lastActivityAt} < ${input.after.lastActivityAt}::timestamptz`,
+								and(
+									sql`${conversations.lastActivityAt} = ${input.after.lastActivityAt}::timestamptz`,
+									lt(conversations.conversationId, input.after.conversationId),
+								),
+							),
+				),
+			)
+			.orderBy(
+				desc(conversations.lastActivityAt),
+				desc(conversations.conversationId),
+			)
+			.limit(input.limit + 1);
+
+		const pageRows = rows.slice(0, input.limit);
+		const last = pageRows.at(-1);
+		return {
+			conversations: pageRows.map(toConversationRecord),
+			next:
+				rows.length > input.limit && last
+					? {
+							lastActivityAt: last.cursorLastActivityAt,
+							conversationId: last.conversationId,
+						}
+					: null,
+		};
 	}
 
 	async update(

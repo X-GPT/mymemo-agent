@@ -20,6 +20,9 @@ function fakeStore() {
 		async get() {
 			return null;
 		},
+		async list() {
+			return { conversations: [], next: null };
+		},
 		async create(record) {
 			created.push(record);
 			const now = new Date();

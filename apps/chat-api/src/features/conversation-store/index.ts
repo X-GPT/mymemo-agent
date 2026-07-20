@@ -1,6 +1,9 @@
 export type {
 	ConversationCreateInput,
 	ConversationDeleteResult,
+	ConversationListInput,
+	ConversationListPage,
+	ConversationListPosition,
 	ConversationRecord,
 	ConversationRef,
 	ConversationScope,

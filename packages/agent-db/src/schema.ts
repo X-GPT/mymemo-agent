@@ -131,6 +131,12 @@ export const conversations = pgTable(
 			"conversations_scope_check",
 			sql`${t.scope} in ('general', 'collection', 'document')`,
 		),
+		index("conversations_regular_activity_idx")
+			.on(t.userId, t.lastActivityAt, t.conversationId)
+			.where(sql`${t.archivedAt} is null`),
+		index("conversations_archived_activity_idx")
+			.on(t.userId, t.lastActivityAt, t.conversationId)
+			.where(sql`${t.archivedAt} is not null`),
 	],
 );
 

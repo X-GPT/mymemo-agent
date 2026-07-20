@@ -22,14 +22,19 @@ import {
 	createConversation,
 	interruptConversationRun,
 	queueConversationTurn,
+	toConversationSummary,
 } from "./conversations.controller";
 import {
 	ConversationEventBody,
 	ConversationIdParam,
+	ConversationListQuery,
 	CreateConversationBody,
+	decodeConversationListCursor,
+	encodeConversationListCursor,
 	MAX_REQUEST_BODY_BYTES,
 	RunAgentInputBody,
 	RunIdParam,
+	UpdateConversationBody,
 } from "./conversations.schema";
 import { identityFromContext } from "./internal-identity";
 
@@ -109,6 +114,50 @@ async function streamAgUiRun(c: Context<AppEnv>, runId: string, cursor = "") {
 	});
 }
 
+// GET /v1/conversations — list one owned Archive partition using stable
+// activity keyset pagination. Search is evaluated by Postgres before paging.
+app.get(
+	"/",
+	zValidator("query", ConversationListQuery, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid query", issues: result.error }, 400);
+		}
+	}),
+	async (c) => {
+		const identity = identityFromContext(c);
+		if (!identity.success) {
+			return c.json(
+				{ error: "Missing or invalid internal identity headers" },
+				401,
+			);
+		}
+
+		const query = c.req.valid("query");
+		const after =
+			query.cursor === undefined
+				? undefined
+				: decodeConversationListCursor(query.cursor, query);
+		if (query.cursor !== undefined && after === null) {
+			return c.json({ error: "Invalid cursor" }, 400);
+		}
+
+		const page = await c.var.deps.conversationStore.list({
+			userId: identity.data.memberCode,
+			archived: query.archived,
+			search: query.search,
+			after: after ?? undefined,
+			limit: query.limit,
+		});
+		return c.json({
+			conversations: page.conversations.map(toConversationSummary),
+			nextCursor:
+				page.next === null
+					? null
+					: encodeConversationListCursor(query, page.next),
+		});
+	},
+);
+
 // POST /v1/conversations — create a conversation, freezing its document scope.
 app.post(
 	"/",
@@ -142,6 +191,89 @@ app.post(
 			c.req.valid("json"),
 		);
 		return c.json(result, 201);
+	},
+);
+
+// PATCH /v1/conversations/:conversationId — rename and/or change Archive
+// state. Existing-resource control deliberately bypasses the exposure gate.
+app.patch(
+	"/:conversationId",
+	conversationBodyLimit,
+	zValidator(
+		"param",
+		z.object({ conversationId: ConversationIdParam }),
+		(result, c) => {
+			if (!result.success) {
+				return c.json({ error: "Invalid conversation id" }, 400);
+			}
+		},
+	),
+	zValidator("json", UpdateConversationBody, (result, c) => {
+		if (!result.success) {
+			return c.json(
+				{ error: "Invalid request body", issues: result.error },
+				400,
+			);
+		}
+	}),
+	async (c) => {
+		const identity = identityFromContext(c);
+		if (!identity.success) {
+			return c.json(
+				{ error: "Missing or invalid internal identity headers" },
+				401,
+			);
+		}
+
+		const result = await c.var.deps.conversationStore.update(
+			{
+				userId: identity.data.memberCode,
+				conversationId: c.req.valid("param").conversationId,
+			},
+			c.req.valid("json"),
+		);
+		if (result.outcome !== "updated") {
+			return result.outcome === "not_found"
+				? c.json({ error: "Conversation not found" }, 404)
+				: c.json({ error: "Conversation has an active Run" }, 409);
+		}
+		return c.json(toConversationSummary(result.conversation));
+	},
+);
+
+// DELETE /v1/conversations/:conversationId — irreversible user-visible
+// deletion. External workspace/session/object cleanup remains asynchronous.
+app.delete(
+	"/:conversationId",
+	zValidator(
+		"param",
+		z.object({ conversationId: ConversationIdParam }),
+		(result, c) => {
+			if (!result.success) {
+				return c.json({ error: "Invalid conversation id" }, 400);
+			}
+		},
+	),
+	async (c) => {
+		const identity = identityFromContext(c);
+		if (!identity.success) {
+			return c.json(
+				{ error: "Missing or invalid internal identity headers" },
+				401,
+			);
+		}
+
+		const result = await c.var.deps.conversationStore.deletePermanently({
+			userId: identity.data.memberCode,
+			conversationId: c.req.valid("param").conversationId,
+		});
+		if (result.outcome === "not_found") {
+			return c.json({ error: "Conversation not found" }, 404);
+		}
+		if (result.outcome === "active_run") {
+			return c.json({ error: "Conversation has an active Run" }, 409);
+		}
+		return c.body(null, 204);
 	},
 );
 

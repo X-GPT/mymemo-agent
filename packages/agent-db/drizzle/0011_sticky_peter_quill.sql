@@ -1,0 +1,2 @@
+CREATE INDEX "conversations_regular_activity_idx" ON "conversations" USING btree ("user_id","last_activity_at","conversation_id") WHERE "conversations"."archived_at" is null;--> statement-breakpoint
+CREATE INDEX "conversations_archived_activity_idx" ON "conversations" USING btree ("user_id","last_activity_at","conversation_id") WHERE "conversations"."archived_at" is not null;
