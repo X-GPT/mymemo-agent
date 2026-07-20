@@ -21,6 +21,10 @@ import {
 	PostgresArtifactMetadataStore,
 } from "./features/artifacts";
 import {
+	type ConversationHistoryStore,
+	PostgresConversationHistoryStore,
+} from "./features/conversation-history";
+import {
 	type ConversationStore,
 	PostgresConversationStore,
 } from "./features/conversation-store";
@@ -51,6 +55,8 @@ export interface AppDeps {
 	artifactDownloadSigner: ArtifactDownloadSigner;
 	/** Durable conversation registry (source of truth for frozen scope). */
 	conversationStore: ConversationStore;
+	/** Permanent AG-UI Conversation-history projection over Postgres Runs. */
+	conversationHistoryStore: ConversationHistoryStore;
 	/** Durable split-runtime run queue and event log. */
 	runStore: RunStore;
 	/** Durable run-event replay source for SSE projection. */
@@ -88,6 +94,9 @@ export function createDeps(
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
 	const conversationStore = new PostgresConversationStore(database);
+	const conversationHistoryStore = new PostgresConversationHistoryStore(
+		database,
+	);
 	const runStore = new PostgresRunStore(database);
 	const runEventReader = new DrizzleRunEventReader(database);
 	const runNotifier = new PostgresRunNotifier(config.databaseUrl);
@@ -119,6 +128,7 @@ export function createDeps(
 			region: config.artifactRegion,
 		}),
 		conversationStore,
+		conversationHistoryStore,
 		runStore,
 		runEventReader,
 		runNotifier,
