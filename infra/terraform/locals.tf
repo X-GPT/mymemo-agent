@@ -58,7 +58,7 @@ locals {
     }
   ]
 
-  live_redis_url_secret = var.live_preview_enabled ? [
+  live_redis_url_secret = var.live_stream_enabled ? [
     { name = "REDIS_URL", valueFrom = local.live_redis_url_secret_arn }
   ] : []
 

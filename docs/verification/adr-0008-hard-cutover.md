@@ -59,7 +59,7 @@ commit. Record the command output plus healthy chat-api and agent-worker task
 status in the Live-enabled evidence row.
 
 Then use the [Live preview runbook](../runbooks/live-preview.md#disable-the-redis-lane)
-to set `live_preview_enabled=false`, review/apply the plan, and roll both ECS
+to set `live_stream_enabled=false`, review/apply the plan, and roll both ECS
 services. With the lane disabled:
 
 ```bash

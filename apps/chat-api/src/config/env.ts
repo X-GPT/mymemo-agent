@@ -55,7 +55,7 @@ export interface ApiConfig {
 	 * Statsig secret is required. Identity-independent and explicit.
 	 */
 	agentExposureBreakGlass: boolean;
-	/** Optional authenticated TLS Redis secret for best-effort Live preview. */
+	/** Additive authenticated TLS Redis secret for temporary live delivery. */
 	liveTextRedisUrl: string | undefined;
 }
 

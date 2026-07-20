@@ -52,7 +52,7 @@ export interface WorkerConfig {
 		bucket: string;
 		region: string;
 	};
-	/** Optional authenticated TLS Redis secret for best-effort Live preview. */
+	/** Additive authenticated TLS Redis secret for temporary live delivery. */
 	liveTextRedisUrl: string | undefined;
 	/** How long an unrenewed E2B sandbox stays active before idle-pausing. */
 	sandboxIdleMs: number;

@@ -15,9 +15,10 @@ jobs:
           # Pinned for reproducible CI — match the version the lockfile was
           # generated with. Bump deliberately alongside local upgrades.
           bun-version: 1.3.0
-      # Integration tests drive real ripgrep and disposable Redis processes;
-      # the runner image does not ship either executable.
-      - run: sudo apt-get update && sudo apt-get install -y ripgrep redis-server
+      # Integration tests drive real ripgrep plus disposable Redis processes for
+      # Stream and Lua contracts; the runner image does not ship either executable.
+      - name: Install real Redis and ripgrep test dependencies
+        run: sudo apt-get update && sudo apt-get install -y ripgrep redis-server
       - run: bun install --frozen-lockfile
       - run: bun run test
 
