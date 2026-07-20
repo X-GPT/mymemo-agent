@@ -2,6 +2,15 @@
 
 Status: accepted (2026-07-10); implementation in progress
 
+The provider-envelope and complete-Assistant-message commit findings remain in
+force. [ADR-0012](./0012-expose-a-full-ag-ui-agent-surface.md) supersedes
+this ADR's cursorless Pub/Sub transport,
+`text_delta`/`text_commit` client contract, two-source projector, and
+message-reconciliation policy with a per-Run Redis Stream carrying standard
+AG-UI events. It also supersedes Postgres-only in-stream degradation: a Redis
+failure now ends reliable live delivery without changing the Run Outcome, and
+the completed result is recovered through Conversation history.
+
 The durable-message increment, private Redis infrastructure, transport-neutral
 Live preview path, loss-tolerance rules, and production Redis adapters are
 implemented. The worker appends one `assistant_text` event per complete
