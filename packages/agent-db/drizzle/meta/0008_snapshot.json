@@ -1,5 +1,5 @@
 {
-  "id": "71e1dceb-4be7-4989-a8ce-946e736909e6",
+  "id": "cd8208c4-7a76-4aae-8782-a4a40b16fa5b",
   "prevId": "117a0c61-f71d-44b2-8ec2-6e1eb3dfd4aa",
   "version": "7",
   "dialect": "postgresql",
@@ -797,6 +797,12 @@
         },
         "cancel_requested_at": {
           "name": "cancel_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "live_stream_failed_at": {
+          "name": "live_stream_failed_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false

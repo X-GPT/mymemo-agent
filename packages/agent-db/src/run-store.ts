@@ -1,9 +1,12 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "./client";
 import {
+	CANONICAL_MODEL_RUN_EVENT_TYPES,
 	InvalidRunEventError,
 	parseDurableRunEvent,
 	RunEventType,
+	type RunScope,
+	validateDurableRunEventSequence,
 } from "./run-events";
 import { runEvents, runs } from "./schema";
 
@@ -119,7 +122,7 @@ export interface AdmitQueuedRunInput {
 	conversationId: string;
 	messageId: string;
 	text: string;
-	scope: string;
+	scope: RunScope;
 	collectionId: string | null;
 	summaryId: string | null;
 }
@@ -395,12 +398,33 @@ export async function appendRunEventTx(
 		const durableEvent = parseDurableRunEvent(input.type, input.payload);
 		if (
 			durableEvent &&
-			(durableEvent.type === RunEventType.Done ||
+			(durableEvent.type === RunEventType.Started ||
+				durableEvent.type === RunEventType.Done ||
 				durableEvent.type === RunEventType.Error ||
 				durableEvent.type === RunEventType.Canceled)
 		) {
 			throw new InvalidRunEventError(
-				`terminal event ${input.type} requires a terminal status transition`,
+				`${input.type} cannot be written through the model append path`,
+			);
+		}
+		if (
+			(CANONICAL_MODEL_RUN_EVENT_TYPES as readonly string[]).includes(
+				input.type,
+			)
+		) {
+			const priorCanonicalEvents = await tx
+				.select({ type: runEvents.type, payload: runEvents.payload })
+				.from(runEvents)
+				.where(
+					and(
+						eq(runEvents.runId, input.runId),
+						inArray(runEvents.type, [...CANONICAL_MODEL_RUN_EVENT_TYPES]),
+					),
+				)
+				.orderBy(runEvents.seq);
+			validateDurableRunEventSequence(
+				[...priorCanonicalEvents, { type: input.type, payload: input.payload }],
+				{ allowIncomplete: true },
 			);
 		}
 		const seq = Number(allocated.seq);
@@ -448,6 +472,11 @@ export async function transitionRunTerminalInTx(
 	tx: DbTx,
 	input: TerminalTransitionInput,
 ): Promise<RunRecord> {
+	if (input.payload?.reason === "stale_worker") {
+		throw new InvalidRunEventError(
+			"stale_worker is reserved for stale-Run recovery",
+		);
+	}
 	const [row] = await tx
 		.update(runs)
 		.set({
@@ -491,6 +520,24 @@ async function insertTerminalEvent(
 	const type = TERMINAL_EVENT_TYPES[status];
 	const terminalPayload = { ...payload, outcome: status };
 	parseDurableRunEvent(type, terminalPayload);
+	const sequenceTypes = [
+		...(row.normalizedInput === null ? [] : [RunEventType.Started]),
+		...CANONICAL_MODEL_RUN_EVENT_TYPES,
+	];
+	const priorCanonicalEvents = await tx
+		.select({ type: runEvents.type, payload: runEvents.payload })
+		.from(runEvents)
+		.where(
+			and(
+				eq(runEvents.runId, row.runId),
+				inArray(runEvents.type, sequenceTypes),
+			),
+		)
+		.orderBy(runEvents.seq);
+	validateDurableRunEventSequence([
+		...priorCanonicalEvents,
+		{ type, payload: terminalPayload },
+	]);
 	await tx.insert(runEvents).values({
 		runId: row.runId,
 		seq: row.nextEventSeq - 1,
@@ -637,33 +684,46 @@ export async function markLiveStreamFailedTx(
 			.for("update");
 		if (!before) return { outcome: "fence_rejected" };
 
+		const writeAllowed = or(
+			and(
+				inArray(runs.status, ["running", "cancel_requested"]),
+				eq(runs.lockedBy, input.workerId),
+				sql`${runs.lockedUntil} > now()`,
+			),
+			and(
+				inArray(runs.status, ["done", "error", "canceled"]),
+				isNull(runs.lockedBy),
+				isNull(runs.lockedUntil),
+			),
+		);
+		if (before.liveStreamFailedAt !== null) {
+			const [authorized] = await tx
+				.select()
+				.from(runs)
+				.where(and(eq(runs.runId, input.runId), writeAllowed))
+				.limit(1);
+			return authorized
+				? { outcome: "already_failed", run: toRunRecord(authorized) }
+				: { outcome: "fence_rejected" };
+		}
+
 		const [row] = await tx
 			.update(runs)
 			.set({
-				liveStreamFailedAt: sql`coalesce(${runs.liveStreamFailedAt}, now())`,
+				liveStreamFailedAt: sql`now()`,
 				updatedAt: sql`now()`,
 			})
 			.where(
 				and(
 					eq(runs.runId, input.runId),
-					or(
-						and(
-							inArray(runs.status, ["running", "cancel_requested"]),
-							eq(runs.lockedBy, input.workerId),
-							sql`${runs.lockedUntil} > now()`,
-						),
-						and(
-							inArray(runs.status, ["done", "error", "canceled"]),
-							isNull(runs.lockedBy),
-							isNull(runs.lockedUntil),
-						),
-					),
+					isNull(runs.liveStreamFailedAt),
+					writeAllowed,
 				),
 			)
 			.returning();
 		if (!row) return { outcome: "fence_rejected" };
 		return {
-			outcome: before.liveStreamFailedAt === null ? "marked" : "already_failed",
+			outcome: "marked",
 			run: toRunRecord(row),
 		};
 	});
@@ -724,7 +784,12 @@ export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
 				)
 				.returning();
 			if (!row) continue;
-			await insertTerminalEvent(tx, row, status, { reason: "stale_worker" });
+			// The stale_worker Outcome is the durable proof that an incomplete Tool
+			// prefix came from a crashed owner, so both recovery and history accept it.
+			await insertTerminalEvent(tx, row, status, {
+				...(status === "error" ? { message: "Run failed" } : {}),
+				reason: "stale_worker",
+			});
 			recovered.push(toRunRecord(row));
 		}
 		return recovered;

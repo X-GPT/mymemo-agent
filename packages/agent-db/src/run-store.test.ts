@@ -7,9 +7,14 @@ import {
 	it,
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
-import { InvalidRunEventError, RunEventType } from "./run-events";
+import {
+	InvalidRunEventError,
+	RunEventType,
+	validateDurableRunEventSequence,
+} from "./run-events";
 import {
 	ActiveRunConflictError,
+	type AdmitQueuedRunInput,
 	admitQueuedRunTx,
 	appendRunEventTx,
 	claimNextRunTx,
@@ -198,7 +203,10 @@ describe("admitQueuedRunTx", () => {
 
 	it("rejects malformed canonical admission before writing the Run", async () => {
 		await expect(
-			admitQueuedRunTx(tdb.db, { ...admission, scope: "everything" }),
+			admitQueuedRunTx(tdb.db, {
+				...admission,
+				scope: "everything" as AdmitQueuedRunInput["scope"],
+			}),
 		).rejects.toBeInstanceOf(InvalidRunEventError);
 		expect(
 			await tdb.db.select().from(runs).where(eq(runs.runId, "client-run-1")),
@@ -362,13 +370,32 @@ describe("appendRunEventTx", () => {
 		expect(await readEvents("run-1")).toEqual([]);
 	});
 
+	it("reserves run_started for atomic admission", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+
+		await expect(
+			appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				type: RunEventType.Started,
+				payload: {
+					runId: "run-1",
+					conversationId: "conv-1",
+					messageId: "user-message-2",
+					message: "second submission",
+					scope: "general",
+					collectionId: null,
+					summaryId: null,
+				},
+				appendClass: "model",
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
 	it("persists stable Assistant and correlated Tool identities in order", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		const events = [
-			{
-				type: RunEventType.AssistantMessageCompleted,
-				payload: { messageId: "assistant-1", text: "I will check." },
-			},
 			{
 				type: RunEventType.ToolCallStarted,
 				payload: {
@@ -384,6 +411,10 @@ describe("appendRunEventTx", () => {
 			{
 				type: RunEventType.ToolCallCompleted,
 				payload: { toolCallId: "tool-1" },
+			},
+			{
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { messageId: "assistant-1", text: "I will check." },
 			},
 			{
 				type: RunEventType.ToolCallResult,
@@ -412,6 +443,106 @@ describe("appendRunEventTx", () => {
 				payload,
 			})),
 		).toEqual(events.map((event, index) => ({ seq: index + 1, ...event })));
+	});
+
+	it("can add canonical events after a legacy run_started payload", async () => {
+		await queueRun("run-1", "conv-1");
+		await tdb.db
+			.update(runs)
+			.set({ nextEventSeq: 2 })
+			.where(eq(runs.runId, "run-1"));
+		await tdb.db.insert(runEvents).values({
+			runId: "run-1",
+			seq: 1,
+			type: RunEventType.Started,
+			payload: { message: "legacy", scope: "general" },
+		});
+		const claimed = await claimNextRunTx(tdb.db, {
+			workerId: "worker-1",
+		});
+		expect(claimed?.runId).toBe("run-1");
+
+		await appendRunEventTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			type: RunEventType.AssistantMessageCompleted,
+			payload: { messageId: "assistant-1", text: "Complete" },
+			appendClass: "model",
+		});
+
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			RunEventType.Started,
+			RunEventType.AssistantMessageCompleted,
+		]);
+	});
+
+	it("rejects orphaned, duplicate, and out-of-order Tool lifecycle events", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		const append = (type: string, payload: Record<string, unknown>) =>
+			appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				type,
+				payload,
+				appendClass: "model",
+			});
+
+		await expect(
+			append(RunEventType.ToolCallArgs, {
+				toolCallId: "tool-1",
+				delta: "{}",
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		await append(RunEventType.AssistantMessageCompleted, {
+			messageId: "assistant-1",
+			text: "",
+		});
+		await append(RunEventType.ToolCallStarted, {
+			toolCallId: "tool-1",
+			toolCallName: "Read",
+			parentMessageId: "assistant-1",
+		});
+		await expect(
+			append(RunEventType.ToolCallResult, {
+				messageId: "tool-message-1",
+				toolCallId: "tool-1",
+				content: "too early",
+				isError: false,
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		await append(RunEventType.ToolCallArgs, {
+			toolCallId: "tool-1",
+			delta: '{"path":"notes.md"}',
+		});
+		await expect(
+			append(RunEventType.ToolCallArgs, {
+				toolCallId: "tool-1",
+				delta: "{}",
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		await append(RunEventType.ToolCallCompleted, { toolCallId: "tool-1" });
+		await expect(
+			append(RunEventType.ToolCallResult, {
+				messageId: "tool-message-1",
+				toolCallId: "unknown-tool",
+				content: "unknown",
+				isError: false,
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		await append(RunEventType.ToolCallResult, {
+			messageId: "tool-message-1",
+			toolCallId: "tool-1",
+			content: "Read completed",
+			isError: false,
+		});
+		await expect(
+			append(RunEventType.ToolCallResult, {
+				messageId: "tool-message-2",
+				toolCallId: "tool-1",
+				content: "duplicate",
+				isError: false,
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
 	});
 
 	it("rejects a model append on a run that is not running", async () => {
@@ -605,6 +736,76 @@ describe("appendRunEventTx", () => {
 });
 
 describe("transitionRunTerminalTx", () => {
+	it("rejects terminalization with an incomplete Tool lifecycle", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await appendRunEventTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			type: RunEventType.ToolCallStarted,
+			payload: {
+				toolCallId: "tool-1",
+				toolCallName: "Read",
+				parentMessageId: "assistant-1",
+			},
+			appendClass: "model",
+		});
+
+		await expect(
+			transitionRunTerminalTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				status: "error",
+				payload: { message: "Run failed" },
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		const [run] = await tdb.db
+			.select()
+			.from(runs)
+			.where(eq(runs.runId, "run-1"));
+		expect(run?.status).toBe("running");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			RunEventType.ToolCallStarted,
+		]);
+	});
+
+	it("allows an errored Run to retain a completed Tool without a result", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		for (const event of [
+			{
+				type: RunEventType.ToolCallStarted,
+				payload: {
+					toolCallId: "tool-1",
+					toolCallName: "Read",
+					parentMessageId: "assistant-1",
+				},
+			},
+			{
+				type: RunEventType.ToolCallArgs,
+				payload: { toolCallId: "tool-1", delta: "{}" },
+			},
+			{
+				type: RunEventType.ToolCallCompleted,
+				payload: { toolCallId: "tool-1" },
+			},
+		] as const) {
+			await appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				...event,
+				appendClass: "model",
+			});
+		}
+
+		const run = await transitionRunTerminalTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			status: "error",
+			payload: { message: "Run failed" },
+		});
+
+		expect(run.status).toBe("error");
+	});
+
 	it("completes a running run and appends exactly one run_done event", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
@@ -973,10 +1174,49 @@ describe("markLiveStreamFailedTx", () => {
 		expect(
 			(await readEvents("run-terminal")).map(({ payload }) => payload),
 		).toEqual([{ outcome: "done" }]);
+		const again = await markLiveStreamFailedTx(tdb.db, {
+			runId: "run-terminal",
+			workerId: "any-worker-after-terminal",
+		});
+		expect(again.outcome).toBe("already_failed");
+		if (again.outcome !== "already_failed") throw new Error("unreachable");
+		expect(again.run.updatedAt).toEqual(marked.run.updatedAt);
 	});
 });
 
 describe("markStaleRunsTx", () => {
+	it("still closes a stale Run after a crash left an incomplete Tool prefix", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await appendRunEventTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			type: RunEventType.ToolCallStarted,
+			payload: {
+				toolCallId: "tool-1",
+				toolCallName: "Read",
+				parentMessageId: "assistant-1",
+			},
+			appendClass: "model",
+		});
+		await expireOwnership("run-1");
+
+		const recovered = await markStaleRunsTx(tdb.db);
+
+		expect(recovered).toMatchObject([
+			{
+				runId: "run-1",
+				status: "error",
+				liveStreamFailedAt: expect.any(Date),
+			},
+		]);
+		const events = await readEvents("run-1");
+		expect(events.map((event) => event.type)).toEqual([
+			RunEventType.ToolCallStarted,
+			RunEventType.Error,
+		]);
+		expect(() => validateDurableRunEventSequence(events)).not.toThrow();
+	});
+
 	it("terminalizes a stale running run as error with a run_error event", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await expireOwnership("run-1");
@@ -989,7 +1229,16 @@ describe("markStaleRunsTx", () => {
 		expect(recovered[0]?.lockedBy).toBeNull();
 		expect(recovered[0]?.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
-		expect(events.map((e) => e.type)).toEqual(["run_error"]);
+		expect(events.map((e) => [e.type, e.payload])).toEqual([
+			[
+				"run_error",
+				{
+					message: "Run failed",
+					outcome: "error",
+					reason: "stale_worker",
+				},
+			],
+		]);
 		expect(recovered[0]?.liveStreamFailedAt).toBeInstanceOf(Date);
 	});
 

@@ -61,15 +61,8 @@
     {
       "idx": 8,
       "version": "7",
-      "when": 1784539465609,
-      "tag": "0008_cynical_bruce_banner",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1784539924318,
-      "tag": "0009_fast_tana_nile",
+      "when": 1784540702985,
+      "tag": "0008_ordinary_paper_doll",
       "breakpoints": true
     }
   ]

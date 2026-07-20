@@ -40,6 +40,14 @@ export const RunEventType = {
 
 export type RunEventType = (typeof RunEventType)[keyof typeof RunEventType];
 
+export const CANONICAL_MODEL_RUN_EVENT_TYPES = [
+	RunEventType.AssistantMessageCompleted,
+	RunEventType.ToolCallStarted,
+	RunEventType.ToolCallArgs,
+	RunEventType.ToolCallCompleted,
+	RunEventType.ToolCallResult,
+] as const;
+
 export interface RunStartedPayload {
 	[key: string]: unknown;
 	runId: string;
@@ -50,6 +58,8 @@ export interface RunStartedPayload {
 	collectionId: string | null;
 	summaryId: string | null;
 }
+
+export type RunScope = RunStartedPayload["scope"];
 
 export interface AssistantMessageCompletedPayload {
 	[key: string]: unknown;
@@ -222,6 +232,131 @@ export class InvalidRunEventError extends Error {
 }
 
 /**
+ * Validate identity and lifecycle relationships across canonical durable
+ * model events. Writers call this while holding the Run row lock, and history
+ * readers can apply the same rules to reject corrupt known sequences.
+ */
+export function validateDurableRunEventSequence(
+	events: readonly { type: string; payload: unknown }[],
+	options: { allowIncomplete?: boolean } = {},
+): void {
+	const assistantMessageIds = new Set<string>();
+	const completedAssistantMessageIds = new Set<string>();
+	const submittedMessageIds = new Set<string>();
+	const toolResultMessageIds = new Set<string>();
+	const toolStates = new Map<
+		string,
+		"started" | "args" | "completed" | "result"
+	>();
+	let terminalSeen = false;
+	let terminalOutcome: RunOutcome | null = null;
+	let staleRecoveryOutcome = false;
+
+	for (const event of events) {
+		const parsed = parseDurableRunEvent(event.type, event.payload);
+		if (!parsed) continue;
+		if (terminalSeen) invalidSequence("public event follows terminal Outcome");
+
+		switch (parsed.type) {
+			case RunEventType.Started:
+				if (
+					submittedMessageIds.size > 0 ||
+					assistantMessageIds.has(parsed.payload.messageId) ||
+					toolResultMessageIds.has(parsed.payload.messageId)
+				) {
+					invalidSequence("duplicate messageId");
+				}
+				submittedMessageIds.add(parsed.payload.messageId);
+				break;
+			case RunEventType.AssistantMessageCompleted:
+				if (
+					completedAssistantMessageIds.has(parsed.payload.messageId) ||
+					submittedMessageIds.has(parsed.payload.messageId) ||
+					toolResultMessageIds.has(parsed.payload.messageId)
+				) {
+					invalidSequence("duplicate messageId");
+				}
+				assistantMessageIds.add(parsed.payload.messageId);
+				completedAssistantMessageIds.add(parsed.payload.messageId);
+				break;
+			case RunEventType.ToolCallStarted:
+				if (toolStates.has(parsed.payload.toolCallId)) {
+					invalidSequence("duplicate toolCallId");
+				}
+				if (
+					submittedMessageIds.has(parsed.payload.parentMessageId) ||
+					toolResultMessageIds.has(parsed.payload.parentMessageId)
+				) {
+					invalidSequence("Tool invocation has an invalid parent message");
+				}
+				assistantMessageIds.add(parsed.payload.parentMessageId);
+				toolStates.set(parsed.payload.toolCallId, "started");
+				break;
+			case RunEventType.ToolCallArgs:
+				if (toolStates.get(parsed.payload.toolCallId) !== "started") {
+					invalidSequence("Tool arguments do not follow Tool start");
+				}
+				toolStates.set(parsed.payload.toolCallId, "args");
+				break;
+			case RunEventType.ToolCallCompleted:
+				if (toolStates.get(parsed.payload.toolCallId) !== "args") {
+					invalidSequence(
+						"Tool completion does not follow one arguments event",
+					);
+				}
+				toolStates.set(parsed.payload.toolCallId, "completed");
+				break;
+			case RunEventType.ToolCallResult:
+				if (toolStates.get(parsed.payload.toolCallId) !== "completed") {
+					invalidSequence("Tool result has no completed invocation");
+				}
+				if (
+					submittedMessageIds.has(parsed.payload.messageId) ||
+					assistantMessageIds.has(parsed.payload.messageId) ||
+					toolResultMessageIds.has(parsed.payload.messageId)
+				) {
+					invalidSequence("duplicate messageId");
+				}
+				toolResultMessageIds.add(parsed.payload.messageId);
+				toolStates.set(parsed.payload.toolCallId, "result");
+				break;
+			case RunEventType.Done:
+			case RunEventType.Error:
+			case RunEventType.Canceled:
+				terminalSeen = true;
+				terminalOutcome = parsed.payload.outcome;
+				staleRecoveryOutcome =
+					parsed.payload.outcome !== "done" &&
+					parsed.payload.reason === "stale_worker";
+				break;
+			default:
+				// Legacy Assistant/Tool events have no stable correlation to validate.
+				break;
+		}
+	}
+
+	if (options.allowIncomplete) return;
+	if (!staleRecoveryOutcome) {
+		for (const state of toolStates.values()) {
+			if (state === "started" || state === "args") {
+				invalidSequence("Tool invocation lifecycle is incomplete");
+			}
+		}
+	}
+	if (terminalOutcome === "done") {
+		for (const messageId of assistantMessageIds) {
+			if (!completedAssistantMessageIds.has(messageId)) {
+				invalidSequence("successful Tool-owning Assistant is incomplete");
+			}
+		}
+	}
+}
+
+function invalidSequence(reason: string): never {
+	throw new InvalidRunEventError(`invalid durable event sequence: ${reason}`);
+}
+
+/**
  * Parse the public durable vocabulary for permanent-history consumers.
  * Unknown internal events return `null` and stay fail-closed; a known type with
  * a malformed payload throws so history cannot silently become incomplete.
@@ -344,11 +479,10 @@ export function isRunOutcomePayload(
 	value: unknown,
 	expected: RunOutcome,
 ): value is RunOutcomePayload {
-	return (
-		isPlainRecord(value) &&
-		value.outcome === expected &&
-		(value.message === undefined || typeof value.message === "string")
-	);
+	if (!isPlainRecord(value) || value.outcome !== expected) return false;
+	return expected === "error"
+		? isNonEmptyString(value.message)
+		: value.message === undefined;
 }
 
 function isPublicToolName(value: unknown): value is PublicToolName {

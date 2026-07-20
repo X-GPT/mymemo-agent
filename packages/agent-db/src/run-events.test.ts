@@ -6,6 +6,7 @@ import {
 	isToolUsePayload,
 	parseDurableRunEvent,
 	RunEventType,
+	validateDurableRunEventSequence,
 } from "./run-events";
 
 describe("parseDurableRunEvent", () => {
@@ -86,6 +87,15 @@ describe("parseDurableRunEvent", () => {
 		expect(() => parseDurableRunEvent(RunEventType.Error, {})).toThrow(
 			InvalidRunEventError,
 		);
+		expect(() =>
+			parseDurableRunEvent(RunEventType.Error, { outcome: "error" }),
+		).toThrow(InvalidRunEventError);
+		expect(() =>
+			parseDurableRunEvent(RunEventType.Done, {
+				outcome: "done",
+				message: "not a successful Outcome field",
+			}),
+		).toThrow(InvalidRunEventError);
 	});
 
 	it("rejects malformed known identities but skips unknown internal events", () => {
@@ -107,6 +117,178 @@ describe("parseDurableRunEvent", () => {
 		expect(parseDurableRunEvent("worker_internal_note", { any: "shape" })).toBe(
 			null,
 		);
+	});
+});
+
+describe("validateDurableRunEventSequence", () => {
+	const started = {
+		type: RunEventType.Started,
+		payload: {
+			runId: "run-1",
+			conversationId: "conversation-1",
+			messageId: "user-message-1",
+			message: "Read my notes",
+			scope: "general",
+			collectionId: null,
+			summaryId: null,
+		},
+	} as const;
+
+	it("accepts Tool activity emitted before its owning Assistant completes", () => {
+		expect(() =>
+			validateDurableRunEventSequence([
+				started,
+				{
+					type: RunEventType.ToolCallStarted,
+					payload: {
+						toolCallId: "tool-1",
+						toolCallName: "Read",
+						parentMessageId: "assistant-1",
+					},
+				},
+				{
+					type: RunEventType.ToolCallArgs,
+					payload: { toolCallId: "tool-1", delta: '{"path":"notes.md"}' },
+				},
+				{
+					type: RunEventType.ToolCallCompleted,
+					payload: { toolCallId: "tool-1" },
+				},
+				{
+					type: RunEventType.AssistantMessageCompleted,
+					payload: { messageId: "assistant-1", text: "I checked." },
+				},
+				{
+					type: RunEventType.ToolCallResult,
+					payload: {
+						messageId: "tool-message-1",
+						toolCallId: "tool-1",
+						content: "Read completed",
+						isError: false,
+					},
+				},
+				{ type: RunEventType.Done, payload: { outcome: "done" } },
+			]),
+		).not.toThrow();
+	});
+
+	it("rejects a Tool parent that collides with the submitted User message", () => {
+		expect(() =>
+			validateDurableRunEventSequence([
+				started,
+				{
+					type: RunEventType.ToolCallStarted,
+					payload: {
+						toolCallId: "tool-1",
+						toolCallName: "Read",
+						parentMessageId: "user-message-1",
+					},
+				},
+				{
+					type: RunEventType.ToolCallArgs,
+					payload: { toolCallId: "tool-1", delta: "{}" },
+				},
+				{
+					type: RunEventType.ToolCallCompleted,
+					payload: { toolCallId: "tool-1" },
+				},
+			]),
+		).toThrow(InvalidRunEventError);
+	});
+
+	it("rejects more than one submitted User message", () => {
+		expect(() =>
+			validateDurableRunEventSequence([
+				started,
+				{
+					type: RunEventType.Started,
+					payload: {
+						...started.payload,
+						messageId: "user-message-2",
+						message: "Second submission",
+					},
+				},
+			]),
+		).toThrow(InvalidRunEventError);
+	});
+
+	it("rejects an incomplete Tool invocation lifecycle", () => {
+		expect(() =>
+			validateDurableRunEventSequence([
+				{
+					type: RunEventType.AssistantMessageCompleted,
+					payload: { messageId: "assistant-1", text: "" },
+				},
+				{
+					type: RunEventType.ToolCallStarted,
+					payload: {
+						toolCallId: "tool-1",
+						toolCallName: "Read",
+						parentMessageId: "assistant-1",
+					},
+				},
+			]),
+		).toThrow(InvalidRunEventError);
+	});
+
+	it("requires Tool-owning Assistant completion only for a successful Run", () => {
+		const completedTool = [
+			{
+				type: RunEventType.ToolCallStarted,
+				payload: {
+					toolCallId: "tool-1",
+					toolCallName: "Read",
+					parentMessageId: "assistant-1",
+				},
+			},
+			{
+				type: RunEventType.ToolCallArgs,
+				payload: { toolCallId: "tool-1", delta: "{}" },
+			},
+			{
+				type: RunEventType.ToolCallCompleted,
+				payload: { toolCallId: "tool-1" },
+			},
+		] as const;
+
+		expect(() =>
+			validateDurableRunEventSequence([
+				...completedTool,
+				{ type: RunEventType.Done, payload: { outcome: "done" } },
+			]),
+		).toThrow(InvalidRunEventError);
+		expect(() =>
+			validateDurableRunEventSequence([
+				...completedTool,
+				{
+					type: RunEventType.Error,
+					payload: { outcome: "error", message: "Run failed" },
+				},
+			]),
+		).not.toThrow();
+	});
+
+	it("accepts an incomplete Tool prefix closed by stale recovery", () => {
+		expect(() =>
+			validateDurableRunEventSequence([
+				{
+					type: RunEventType.ToolCallStarted,
+					payload: {
+						toolCallId: "tool-1",
+						toolCallName: "Read",
+						parentMessageId: "assistant-1",
+					},
+				},
+				{
+					type: RunEventType.Error,
+					payload: {
+						outcome: "error",
+						message: "Run failed",
+						reason: "stale_worker",
+					},
+				},
+			]),
+		).not.toThrow();
 	});
 });
 
