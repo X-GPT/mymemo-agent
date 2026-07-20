@@ -3,6 +3,7 @@ import {
 	createLiveTextTelemetry,
 	disabledLiveTextSubscriber,
 	InMemoryLiveTextTransport,
+	LiveStreamStoreError,
 	type LiveTextSubscriber,
 } from "@mymemo/live-text";
 import type { ApiConfig } from "@/config/env";
@@ -130,6 +131,7 @@ function fakeRunStore() {
 			userId: string;
 			conversationId: string;
 			status: string;
+			liveStreamFailedAt?: Date | null;
 			nextEventSeq?: number;
 		}
 	>();
@@ -243,6 +245,7 @@ function runRecord(input: {
 	userId: string;
 	conversationId: string;
 	status: string;
+	liveStreamFailedAt?: Date | null;
 	nextEventSeq?: number;
 }): RunRecord {
 	const now = new Date();
@@ -258,7 +261,7 @@ function runRecord(input: {
 		lockedUntil: null,
 		heartbeatAt: null,
 		cancelRequestedAt: null,
-		liveStreamFailedAt: null,
+		liveStreamFailedAt: input.liveStreamFailedAt ?? null,
 		nextEventSeq: input.nextEventSeq ?? 1,
 		terminalAt: null,
 	};
@@ -1345,6 +1348,340 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(res.status).toBe(404);
 		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
 	});
+
+	it("returns 400 for a malformed Last-Event-ID before reading the Live Stream", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+		});
+		let redisRead = false;
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					redisRead = true;
+					return "streaming" as const;
+				},
+				read() {
+					redisRead = true;
+					throw new Error("Live Stream must not be read");
+				},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: { ...identityHeaders, "last-event-id": "not-a-cursor" },
+		});
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: "Invalid Last-Event-ID" });
+		expect(redisRead).toBe(false);
+	});
+
+	it("returns 400 for a Redis-shaped Last-Event-ID the Stream never issued", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "done",
+		});
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return "done" as const;
+				},
+				read() {
+					return {
+						[Symbol.asyncIterator]() {
+							return {
+								async next() {
+									throw new LiveStreamStoreError("invalid_cursor");
+								},
+							};
+						},
+					};
+				},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: { ...identityHeaders, "last-event-id": "9999999999999-0" },
+		});
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: "Invalid Last-Event-ID" });
+	});
+
+	it("returns recovery 410 for a Run whose Live Stream failed without reading Redis", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+			liveStreamFailedAt: new Date("2026-01-01T00:01:00.000Z"),
+		});
+		let redisRead = false;
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					redisRead = true;
+					return "error" as const;
+				},
+				read() {
+					redisRead = true;
+					throw new Error("Live Stream must not be read");
+				},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(res.status).toBe(410);
+		expect(await res.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
+		});
+		expect(redisRead).toBe(false);
+	});
+
+	it("returns recovery 410 when a terminal Run's retained Live Stream is missing", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "done",
+		});
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return "missing" as const;
+				},
+				async *read() {},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(res.status).toBe(410);
+		expect(await res.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
+		});
+	}, 7_000);
+
+	it("returns recovery 410 when a terminal Stream has no terminal event to replay", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "done",
+		});
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return "done" as const;
+				},
+				async *read() {},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(res.status).toBe(410);
+		expect(await res.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
+		});
+	});
+
+	it("returns 400 when an active Run has no Stream that could have issued the cursor", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "queued",
+		});
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return "missing" as const;
+				},
+				async *read() {},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: { ...identityHeaders, "last-event-id": "1-0" },
+		});
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: "Invalid Last-Event-ID" });
+	}, 7_000);
+
+	it("waits past startup delay with cursorless pings, then streams the terminal event", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "queued",
+		});
+		const encoder = new TextEncoder();
+		const readyAt = Date.now() + 5_100;
+		const terminalEvent = {
+			type: "RUN_FINISHED",
+			threadId: "conv-1",
+			runId: "run-1",
+		};
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return Date.now() >= readyAt
+						? ("done" as const)
+						: ("missing" as const);
+				},
+				async *read() {
+					yield {
+						cursor: "1-0",
+						chunk: encoder.encode(JSON.stringify(terminalEvent)),
+					};
+				},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(res.status).toBe(200);
+		const body = await res.text();
+		expect(body).toContain(": ping\n\n");
+		expect(parseAgUiSse(body)).toEqual([{ id: "1-0", data: terminalEvent }]);
+	}, 8_000);
+
+	it("follows a Stream that appears just after Postgres terminalizes the Run", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const owner = {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "queued",
+		};
+		fakeRuns.runOwners.set("run-1", owner);
+		const encoder = new TextEncoder();
+		const terminalEvent = {
+			type: "RUN_FINISHED",
+			threadId: "conv-1",
+			runId: "run-1",
+		};
+		let statusReads = 0;
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					statusReads += 1;
+					if (statusReads === 1) {
+						owner.status = "done";
+						return "missing" as const;
+					}
+					return "streaming" as const;
+				},
+				async *read() {
+					yield {
+						cursor: "1-0",
+						chunk: encoder.encode(JSON.stringify(terminalEvent)),
+					};
+				},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(res.status).toBe(200);
+		expect(parseAgUiSse(await res.text())).toEqual([
+			{ id: "1-0", data: terminalEvent },
+		]);
+	});
+
+	it("sends cursorless pings while following a quiet active Stream", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+		});
+		const encoder = new TextEncoder();
+		const terminalEvent = {
+			type: "RUN_FINISHED",
+			threadId: "conv-1",
+			runId: "run-1",
+		};
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return "streaming" as const;
+				},
+				async *read() {
+					await Bun.sleep(5_100);
+					yield {
+						cursor: "2-0",
+						chunk: encoder.encode(JSON.stringify(terminalEvent)),
+					};
+				},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: { ...identityHeaders, "last-event-id": "1-0" },
+		});
+
+		expect(res.status).toBe(200);
+		const body = await res.text();
+		expect(body).toContain(": ping\n\n");
+		expect(parseAgUiSse(body)).toEqual([{ id: "2-0", data: terminalEvent }]);
+	}, 8_000);
 
 	it("replays strictly after a retained Live Stream cursor without creating work", async () => {
 		const { store } = fakeStore([existing]);

@@ -180,6 +180,94 @@ it("replays complete AG-UI events from zero and strictly after a Redis cursor", 
 	}
 }, 10_000);
 
+it("rejects a Redis-shaped cursor that the retained Stream never issued", async () => {
+	const port = await freePort();
+	const redis = await startRedis(port);
+	const store = createRedisLiveStreamStore({
+		url: `redis://127.0.0.1:${port}`,
+		deployment: "test",
+	});
+	try {
+		await store.acquire("run-1");
+		await store.append(
+			"run-1",
+			encoder.encode(
+				JSON.stringify({
+					type: EventType.RUN_FINISHED,
+					threadId: "conversation-1",
+					runId: "run-1",
+				}),
+			),
+		);
+		await store.finalize("run-1", "done");
+
+		await expect(
+			collect(store, "run-1", "9999999999999-0"),
+		).rejects.toMatchObject({ code: "invalid_cursor" });
+	} finally {
+		await store.close();
+		await stopRedis(redis);
+	}
+}, 10_000);
+
+it("rejects a cursor before an active Stream has issued its first entry", async () => {
+	const port = await freePort();
+	const redis = await startRedis(port);
+	const store = createRedisLiveStreamStore({
+		url: `redis://127.0.0.1:${port}`,
+		deployment: "test",
+	});
+	try {
+		await store.acquire("run-1");
+		await expect(collect(store, "run-1", "1-0")).rejects.toMatchObject({
+			code: "invalid_cursor",
+		});
+	} finally {
+		await store.close();
+		await stopRedis(redis);
+	}
+}, 10_000);
+
+it("reports a missing Stream when its metadata outlives the retained entries", async () => {
+	const port = await freePort();
+	const redis = await startRedis(port);
+	const url = `redis://127.0.0.1:${port}`;
+	const rawRedis = createClient({ url });
+	const store = createRedisLiveStreamStore({
+		url,
+		deployment: "test",
+	});
+	try {
+		await rawRedis.connect();
+		await store.acquire("run-1");
+		await store.append(
+			"run-1",
+			encoder.encode(
+				JSON.stringify({
+					type: EventType.RUN_FINISHED,
+					threadId: "conversation-1",
+					runId: "run-1",
+				}),
+			),
+		);
+		await store.finalize("run-1", "done");
+		const [terminal] = await collect(store, "run-1");
+		if (!terminal) throw new Error("expected a terminal entry");
+
+		await rawRedis.del("test:mymemo:agui:{run-1}:stream");
+		expect(await store.status("run-1")).toBe("done");
+		await expect(
+			collect(store, "run-1", terminal.cursor),
+		).rejects.toMatchObject({
+			code: "missing",
+		});
+	} finally {
+		if (rawRedis.isOpen) rawRedis.destroy();
+		await store.close();
+		await stopRedis(redis);
+	}
+}, 10_000);
+
 it("does not lose the terminal event when append and finalization race a reader", async () => {
 	const port = await freePort();
 	const redis = await startRedis(port);

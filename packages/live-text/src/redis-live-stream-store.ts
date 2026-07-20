@@ -27,7 +27,8 @@ const DEPLOYMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
 const DEFAULT_REDIS_OPERATION_TIMEOUT_MS = 250;
 const DEFAULT_REDIS_POLL_INTERVAL_MS = 100;
 const REDIS_BLOB_STRING = 36;
-const REDIS_STREAM_ID_PATTERN = /^\d+-\d+$/;
+const REDIS_STREAM_ID_PATTERN = /^(0|[1-9]\d*)-(0|[1-9]\d*)$/;
+const REDIS_STREAM_ID_PART_MAX = (1n << 64n) - 1n;
 
 const ACQUIRE_SCRIPT = `
 if redis.call("EXISTS", KEYS[1]) == 1 then
@@ -177,6 +178,7 @@ export type LiveStreamStoreErrorCode =
 	| "missing"
 	| "finalized"
 	| "not_producer"
+	| "invalid_cursor"
 	| "invalid_event"
 	| "append_retry_conflict"
 	| "finalize_conflict"
@@ -406,11 +408,37 @@ class RedisLiveStreamStore implements LiveStreamStore {
 	): AsyncIterable<ResumableStreamEntry> {
 		this.#assertOpen();
 		validateRunId(streamId);
-		validateCursor(cursor);
-		if (!(await this.#readMetadata(streamId))) {
+		const normalizedCursor = parseLiveStreamCursor(cursor);
+		const initialMetadata = await this.#readMetadata(streamId);
+		if (!initialMetadata) {
 			throw new LiveStreamStoreError("missing");
 		}
-		let lastCursor = cursor === "" ? "0-0" : cursor;
+		if (normalizedCursor !== "") {
+			const rawEntries = await this.#command(
+				[
+					"XRANGE",
+					this.#streamKey(streamId),
+					normalizedCursor,
+					normalizedCursor,
+					"COUNT",
+					"1",
+				],
+				true,
+			);
+			const exactEntry = Array.isArray(rawEntries)
+				? parseStreamEntry(rawEntries[0])
+				: undefined;
+			if (exactEntry?.cursor !== normalizedCursor) {
+				const streamExists = replyInteger(
+					await this.#command(["EXISTS", this.#streamKey(streamId)]),
+				);
+				if (streamExists === 0 && initialMetadata.status !== "streaming") {
+					throw new LiveStreamStoreError("missing");
+				}
+				throw new LiveStreamStoreError("invalid_cursor");
+			}
+		}
+		let lastCursor = normalizedCursor === "" ? "0-0" : normalizedCursor;
 		while (!signal.aborted) {
 			const metadata = await this.#readMetadata(streamId);
 			if (!metadata) return;
@@ -641,10 +669,18 @@ interface StreamMetadata {
 	error?: string;
 }
 
-function validateCursor(cursor: string): void {
-	if (cursor !== "" && !REDIS_STREAM_ID_PATTERN.test(cursor)) {
-		throw new Error("cursor must be empty or a Redis Stream ID");
+export function parseLiveStreamCursor(cursor: string | undefined): string {
+	if (cursor === undefined || cursor === "" || cursor === "0") return "";
+	const match = REDIS_STREAM_ID_PATTERN.exec(cursor);
+	if (
+		match?.[1] !== undefined &&
+		match[2] !== undefined &&
+		BigInt(match[1]) <= REDIS_STREAM_ID_PART_MAX &&
+		BigInt(match[2]) <= REDIS_STREAM_ID_PART_MAX
+	) {
+		return cursor;
 	}
+	throw new LiveStreamStoreError("invalid_cursor");
 }
 
 function toBuffer(bytes: Uint8Array): Buffer {
@@ -656,6 +692,18 @@ function replyString(value: unknown): string | undefined {
 	if (typeof value === "string") return value;
 	if (Buffer.isBuffer(value)) return value.toString("utf8");
 	return undefined;
+}
+
+function replyInteger(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+	if (typeof value === "bigint") {
+		const parsed = Number(value);
+		return Number.isSafeInteger(parsed) ? parsed : undefined;
+	}
+	const raw = replyString(value);
+	if (raw === undefined || !/^-?\d+$/.test(raw)) return undefined;
+	const parsed = Number(raw);
+	return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function parseArrayReply(value: unknown): string[] {
@@ -723,6 +771,8 @@ function errorMessage(code: LiveStreamStoreErrorCode): string {
 			return "Live Stream is already finalized";
 		case "not_producer":
 			return "Live Stream producer ownership is required";
+		case "invalid_cursor":
+			return "Live Stream cursor is invalid";
 		case "invalid_event":
 			return "Live Stream entry is not a standard AG-UI event";
 		case "append_retry_conflict":

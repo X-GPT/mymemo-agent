@@ -28,8 +28,10 @@ const liveStreamStore = createRedisLiveStreamStore({
 	url: redisUrl,
 	deployment: "current",
 });
+const resumeDelayMs = Number(process.env.INTEGRATION_RESUME_DELAY_MS ?? 0);
 const processor: RunProcessor = async (ctx) => {
 	const messageId = `message-${ctx.run.runId}`;
+	const toolCallId = `tool-${ctx.run.runId}`;
 	const text = `Synthetic response for run ${ctx.run.runId}`;
 	await ctx.appendLiveEvent({
 		type: "TEXT_MESSAGE_START",
@@ -41,6 +43,7 @@ const processor: RunProcessor = async (ctx) => {
 		messageId,
 		delta: text,
 	});
+	if (resumeDelayMs > 0) await Bun.sleep(resumeDelayMs);
 	await ctx.appendModelContent({
 		kind: "assistant_message",
 		payload: {
@@ -49,6 +52,43 @@ const processor: RunProcessor = async (ctx) => {
 		},
 	});
 	await ctx.appendLiveEvent({ type: "TEXT_MESSAGE_END", messageId });
+	await ctx.appendModelContent({
+		kind: "tool_use",
+		payload: {
+			tool: "Read",
+			arguments: { path: "CONTEXT.md" },
+			truncated: false,
+		},
+	});
+	await ctx.appendLiveEvent({
+		type: "TOOL_CALL_START",
+		toolCallId,
+		toolCallName: "Read",
+		parentMessageId: messageId,
+	});
+	await ctx.appendLiveEvent({
+		type: "TOOL_CALL_ARGS",
+		toolCallId,
+		delta: '{"path":"CONTEXT.md"}',
+	});
+	if (resumeDelayMs > 0) await Bun.sleep(resumeDelayMs);
+	await ctx.appendLiveEvent({ type: "TOOL_CALL_END", toolCallId });
+	await ctx.appendModelContent({
+		kind: "tool_result",
+		payload: {
+			tool: "Read",
+			result: { ok: true },
+			isError: false,
+			truncated: false,
+		},
+	});
+	await ctx.appendLiveEvent({
+		type: "TOOL_CALL_RESULT",
+		messageId: `tool-result-${ctx.run.runId}`,
+		toolCallId,
+		content: '{"ok":true}',
+		role: "tool",
+	});
 };
 const runLoop = new RunLoop({
 	db: createDatabase(agentDatabaseUrl),
