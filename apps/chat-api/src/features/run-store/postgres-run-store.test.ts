@@ -12,6 +12,7 @@ import {
 	ConversationArchivedError,
 	ConversationNotFoundError,
 	PostgresRunStore,
+	RunInputMismatchError,
 } from "./run-store";
 
 const initialActivity = new Date("2026-01-01T00:00:00.000Z");
@@ -107,6 +108,41 @@ describe("PostgresRunStore", () => {
 		await expect(
 			loadRunStartedTx(tdb.db, { runId: "prepared-run-id" }),
 		).resolves.toMatchObject({ message: "hello" });
+	});
+
+	it("idempotently admits one canonical AG-UI Run input", async () => {
+		const input = {
+			conversation,
+			runId: "client-run-1",
+			messageId: "user-message-1",
+			message: "hello from AG-UI",
+		};
+
+		await expect(store.admitRun(input)).resolves.toMatchObject({
+			outcome: "created",
+			run: {
+				runId: "client-run-1",
+				normalizedInput: {
+					version: 1,
+					messageId: "user-message-1",
+					text: "hello from AG-UI",
+				},
+			},
+		});
+		await expect(store.admitRun(input)).resolves.toMatchObject({
+			outcome: "existing",
+			run: { runId: "client-run-1" },
+		});
+
+		expect(
+			await tdb.db
+				.select()
+				.from(runEvents)
+				.where(eq(runEvents.runId, "client-run-1")),
+		).toHaveLength(1);
+		await expect(
+			store.admitRun({ ...input, message: "different work" }),
+		).rejects.toBeInstanceOf(RunInputMismatchError);
 	});
 
 	// Guards the write/read contract across the trust boundary: the worker's

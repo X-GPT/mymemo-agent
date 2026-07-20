@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { validator as zValidator } from "hono-openapi";
@@ -14,9 +14,11 @@ import {
 	ActiveRunExistsError,
 	ConversationArchivedError,
 	ConversationNotFoundError,
+	RunInputMismatchError,
 } from "@/features/run-store";
 import { HonoSSESender } from "@/features/streaming/sse-sender";
 import {
+	admitAgUiRun,
 	createConversation,
 	interruptConversationRun,
 	queueConversationTurn,
@@ -26,6 +28,7 @@ import {
 	ConversationIdParam,
 	CreateConversationBody,
 	MAX_REQUEST_BODY_BYTES,
+	RunAgentInputBody,
 	RunIdParam,
 } from "./conversations.schema";
 import { identityFromContext } from "./internal-identity";
@@ -38,18 +41,72 @@ const conversationBodyLimit = bodyLimit({
 	onError: (c) => c.json({ error: "Request body too large" }, 413),
 });
 
-function lastEventIdFromContext(c: {
-	req: { header: (k: string) => string | undefined };
-}): number {
-	const raw = c.req.header("last-event-id");
-	if (!raw) return 0;
-	if (!/^\d+$/.test(raw)) return 0;
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+const LIVE_STREAM_START_WAIT_MS = 5_000;
+const LIVE_STREAM_START_POLL_MS = 25;
+const liveStreamDecoder = new TextDecoder("utf-8", { fatal: true });
+
+async function waitForLiveStream(
+	c: Context<AppEnv>,
+	runId: string,
+): Promise<boolean> {
+	const deadline = Date.now() + LIVE_STREAM_START_WAIT_MS;
+	try {
+		for (;;) {
+			const status = await c.var.deps.liveStreamReader.status(runId);
+			if (status === "streaming" || status === "done") return true;
+			if (status === "error" || Date.now() >= deadline) return false;
+			await new Promise((resolve) =>
+				setTimeout(resolve, LIVE_STREAM_START_POLL_MS),
+			);
+		}
+	} catch {
+		return false;
+	}
 }
 
-function isTerminalRunStatus(status: string): boolean {
-	return status === "done" || status === "error" || status === "canceled";
+async function streamAgUiRun(c: Context<AppEnv>, runId: string, cursor = "") {
+	const requestSignal = c.req.raw.signal;
+	const iterator = c.var.deps.liveStreamReader
+		.read(runId, cursor, requestSignal)
+		[Symbol.asyncIterator]();
+	let first: Awaited<ReturnType<typeof iterator.next>>;
+	try {
+		first = await iterator.next();
+	} catch (error) {
+		c.var.logger.error({
+			message: "AG-UI Live Stream initial read failed",
+			error,
+			runId,
+		});
+		return c.json({ error: "Live stream temporarily unavailable" }, 503);
+	}
+	if (first.done) return c.body(null, 204);
+
+	return streamSSE(c, async (stream) => {
+		const keepaliveInterval = setInterval(() => {
+			stream.write(": ping\n\n").catch(() => {});
+		}, 5_000);
+		try {
+			let next: Awaited<ReturnType<typeof iterator.next>> = first;
+			while (!next.done) {
+				if (requestSignal.aborted) break;
+				await stream.writeSSE({
+					id: next.value.cursor,
+					data: liveStreamDecoder.decode(next.value.chunk),
+				});
+				next = await iterator.next();
+			}
+		} catch (error) {
+			c.var.logger.error({
+				message: "AG-UI Live Stream read failed",
+				error,
+				runId,
+			});
+		} finally {
+			clearInterval(keepaliveInterval);
+			await iterator.return?.();
+		}
+	});
 }
 
 // POST /v1/conversations — create a conversation, freezing its document scope.
@@ -85,6 +142,92 @@ app.post(
 			c.req.valid("json"),
 		);
 		return c.json(result, 201);
+	},
+);
+
+// POST /v1/conversations/:conversationId/runs — atomically admit one strict
+// standard AG-UI Run and consume its retained per-Run Redis Stream.
+app.post(
+	"/:conversationId/runs",
+	conversationBodyLimit,
+	zValidator(
+		"param",
+		z.object({ conversationId: ConversationIdParam }),
+		(result, c) => {
+			if (!result.success) {
+				return c.json({ error: "Invalid conversation id" }, 400);
+			}
+		},
+	),
+	zValidator("json", RunAgentInputBody, (result, c) => {
+		if (!result.success) {
+			return c.json(
+				{ error: "Invalid RunAgentInput", issues: result.error },
+				400,
+			);
+		}
+	}),
+	async (c) => {
+		const identity = identityFromContext(c);
+		if (!identity.success) {
+			return c.json(
+				{ error: "Missing or invalid internal identity headers" },
+				401,
+			);
+		}
+
+		const { conversationId } = c.req.valid("param");
+		const input = c.req.valid("json");
+		if (input.threadId !== conversationId) {
+			return c.json({ error: "threadId must match the Conversation id" }, 400);
+		}
+		const conversation = await c.var.deps.conversationStore.get({
+			userId: identity.data.memberCode,
+			conversationId,
+		});
+		if (!conversation) {
+			return c.json({ error: "Conversation not found" }, 404);
+		}
+		const existingRun = await c.var.deps.runStore.getRun({
+			userId: identity.data.memberCode,
+			conversationId,
+			runId: input.runId,
+		});
+		if (
+			existingRun === null &&
+			!(await c.var.deps.exposureGate.isAgentEnabled(identity.data))
+		) {
+			return c.json({ error: "Agent is not enabled" }, 403);
+		}
+
+		try {
+			const admission = await admitAgUiRun(c.var.deps, {
+				conversation,
+				input,
+			});
+			if (admission.outcome === "not_found") {
+				return c.json({ error: "Run not found" }, 404);
+			}
+		} catch (error) {
+			if (error instanceof ActiveRunExistsError) {
+				return c.json({ error: "Conversation already has an active Run" }, 409);
+			}
+			if (error instanceof RunInputMismatchError) {
+				return c.json({ error: "Run id was reused with different input" }, 409);
+			}
+			if (error instanceof ConversationArchivedError) {
+				return c.json({ error: "Conversation is archived" }, 409);
+			}
+			if (error instanceof ConversationNotFoundError) {
+				return c.json({ error: "Conversation not found" }, 404);
+			}
+			throw error;
+		}
+
+		if (!(await waitForLiveStream(c, input.runId))) {
+			return c.json({ error: "Live stream temporarily unavailable" }, 503);
+		}
+		return streamAgUiRun(c, input.runId);
 	},
 );
 
@@ -289,71 +432,10 @@ app.get(
 			return c.json({ error: "Run not found" }, 404);
 		}
 
-		const afterSeq = lastEventIdFromContext(c);
-		if (isTerminalRunStatus(run.status) && afterSeq >= run.nextEventSeq - 1) {
-			return new Response(null, { status: 204 });
+		if (!(await waitForLiveStream(c, runId))) {
+			return c.json({ error: "Live stream temporarily unavailable" }, 503);
 		}
-		const liveSubscription = isTerminalRunStatus(run.status)
-			? null
-			: await prepareLiveTextSubscription(
-					c.var.deps.liveTextSubscriber,
-					runId,
-					{
-						onSignal: (signal) =>
-							reportChatLiveTextSetupSignal(
-								c.var.deps.liveTextTelemetry,
-								signal,
-							),
-					},
-				);
-
-		const requestSignal = c.req.raw.signal;
-		return streamSSE(
-			c,
-			async (stream) => {
-				const sender = new HonoSSESender(stream);
-				const keepaliveInterval = setInterval(() => {
-					sender.sendPing().catch((err) => {
-						c.var.logger.error({
-							message: "Failed to send keepalive ping",
-							error: err,
-						});
-					});
-				}, 5000);
-
-				try {
-					for await (const projected of projectRun(runId, afterSeq, {
-						reader: c.var.deps.runEventReader,
-						notifier: c.var.deps.runNotifier,
-						liveSubscription: liveSubscription ?? undefined,
-						signal: requestSignal,
-						onLiveTextSignal: (signal) =>
-							reportChatLiveTextProjectionSignal(
-								c.var.deps.liveTextTelemetry,
-								signal,
-							),
-					})) {
-						if (requestSignal.aborted) break;
-						await sender.send({
-							id: projected.id,
-							message: projected.frame,
-						});
-					}
-				} finally {
-					clearInterval(keepaliveInterval);
-				}
-			},
-			async (error, stream) => {
-				c.var.logger.error({
-					message: "Error in conversation run replay route",
-					error,
-				});
-				const sender = new HonoSSESender(stream);
-				await sender.send({
-					message: { type: "error", message: error.message },
-				});
-			},
-		);
+		return streamAgUiRun(c, runId, c.req.header("last-event-id") ?? "");
 	},
 );
 

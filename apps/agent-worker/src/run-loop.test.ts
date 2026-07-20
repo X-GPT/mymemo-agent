@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { EventType } from "@ag-ui/core";
 import {
 	appendRunEventTx,
 	claimNextRunTx,
@@ -17,6 +18,7 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import type { LiveStreamStore } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
 import { RunLoop, type RunProcessor } from "./run-loop";
@@ -260,6 +262,161 @@ describe("RunLoop — heartbeat", () => {
 });
 
 describe("RunLoop — terminal outcomes", () => {
+	it("commits durable facts before exposing AG-UI completion events", async () => {
+		const observed: unknown[] = [];
+		const decoder = new TextDecoder();
+		const liveStreamStore = {
+			async acquire() {
+				return "producer" as const;
+			},
+			async append(_runId: string, chunk: Uint8Array) {
+				const event = JSON.parse(decoder.decode(chunk)) as { type: string };
+				if (event.type === EventType.TEXT_MESSAGE_END) {
+					expect(await readEventTypes("run-1")).toContain(
+						"assistant_message_completed",
+					);
+				}
+				if (event.type === EventType.RUN_FINISHED) {
+					expect((await readRun("run-1"))?.status).toBe("done");
+				}
+				observed.push(event);
+			},
+			async finalize() {},
+			async refresh() {
+				return true;
+			},
+			async appendWithRetryId() {
+				return { cursor: "1-0", appended: true };
+			},
+			async *read() {},
+			async status() {
+				return "done" as const;
+			},
+			async delete() {},
+			async close() {},
+		} satisfies LiveStreamStore;
+		const worker = buildWorker(1);
+		const loop = new RunLoop({
+			db: tdb.db,
+			worker,
+			liveStreamStore,
+			processor: async (ctx) => {
+				await ctx.appendLiveEvent({
+					type: EventType.TEXT_MESSAGE_START,
+					messageId: "assistant-1",
+					role: "assistant",
+				});
+				await ctx.appendLiveEvent({
+					type: EventType.TEXT_MESSAGE_CONTENT,
+					messageId: "assistant-1",
+					delta: "hello",
+				});
+				await ctx.appendModelContent({
+					kind: "assistant_message",
+					payload: { messageId: "assistant-1", text: "hello" },
+				});
+				await ctx.appendLiveEvent({
+					type: EventType.TEXT_MESSAGE_END,
+					messageId: "assistant-1",
+				});
+			},
+			heartbeatIntervalMs: 15_000,
+			logger: silentLogger,
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect(observed).toEqual([
+			{ type: EventType.RUN_STARTED, threadId: "conv-1", runId: "run-1" },
+			{
+				type: EventType.TEXT_MESSAGE_START,
+				messageId: "assistant-1",
+				role: "assistant",
+			},
+			{
+				type: EventType.TEXT_MESSAGE_CONTENT,
+				messageId: "assistant-1",
+				delta: "hello",
+			},
+			{ type: EventType.TEXT_MESSAGE_END, messageId: "assistant-1" },
+			{ type: EventType.RUN_FINISHED, threadId: "conv-1", runId: "run-1" },
+		]);
+		expect(await readEventTypes("run-1")).toEqual([
+			"assistant_message_completed",
+			"run_done",
+		]);
+	});
+
+	it("continues durable execution after the first Redis write failure", async () => {
+		let appendCalls = 0;
+		const finalizations: string[] = [];
+		const liveStreamStore = {
+			async acquire() {
+				return "producer" as const;
+			},
+			async append() {
+				appendCalls++;
+				if (appendCalls === 2) throw new Error("Redis unavailable");
+			},
+			async finalize(_runId: string, status: "done" | "error") {
+				finalizations.push(status);
+			},
+			async refresh() {
+				return true;
+			},
+			async appendWithRetryId() {
+				return { cursor: "1-0", appended: true };
+			},
+			async *read() {},
+			async status() {
+				return "error" as const;
+			},
+			async delete() {},
+			async close() {},
+		} satisfies LiveStreamStore;
+		const worker = buildWorker(1);
+		const loop = new RunLoop({
+			db: tdb.db,
+			worker,
+			liveStreamStore,
+			processor: async (ctx) => {
+				await ctx.appendLiveEvent({
+					type: EventType.TEXT_MESSAGE_START,
+					messageId: "assistant-1",
+					role: "assistant",
+				});
+				await ctx.appendLiveEvent({
+					type: EventType.TEXT_MESSAGE_CONTENT,
+					messageId: "assistant-1",
+					delta: "still durable",
+				});
+				await ctx.appendModelContent({
+					kind: "assistant_message",
+					payload: {
+						messageId: "assistant-1",
+						text: "still durable",
+					},
+				});
+			},
+			heartbeatIntervalMs: 15_000,
+			logger: silentLogger,
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(await readEventTypes("run-1")).toEqual([
+			"assistant_message_completed",
+			"run_done",
+		]);
+		expect(appendCalls).toBe(2);
+		expect(finalizations).toEqual(["error"]);
+	});
+
 	it("ends a synthetic run as done with one durable Assistant message", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor);
@@ -270,13 +427,13 @@ describe("RunLoop — terminal outcomes", () => {
 
 		expect((await readRun("run-1"))?.status).toBe("done");
 		expect(await readEventTypes("run-1")).toEqual([
-			"assistant_text",
+			"assistant_message_completed",
 			"run_done",
 		]);
 		const [message] = await tdb.db
 			.select()
 			.from(runEvents)
-			.where(eq(runEvents.type, "assistant_text"));
+			.where(eq(runEvents.type, "assistant_message_completed"));
 		expect(message?.payload).toEqual({
 			messageId: "message-run-1",
 			text: "synthetic run-1",
@@ -540,7 +697,7 @@ describe("RunLoop — model-content append", () => {
 		expect(events.map((e) => e.type)).toEqual([
 			"tool_use",
 			"tool_result",
-			"assistant_text",
+			"assistant_message_completed",
 			"run_done",
 		]);
 		expect(events[0]?.payload).toEqual({
@@ -574,7 +731,7 @@ describe("RunLoop — synthetic end-to-end smoke", () => {
 		// The durable event log carries the complete Assistant message ahead of the
 		// terminal frame.
 		expect(await readEventTypes("run-smoke")).toEqual([
-			"assistant_text",
+			"assistant_message_completed",
 			"run_done",
 		]);
 	});

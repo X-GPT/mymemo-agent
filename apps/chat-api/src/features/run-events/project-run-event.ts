@@ -37,6 +37,7 @@ export function projectRunEvent(type: string, payload: unknown): ClientFrame[] {
 			return out;
 		}
 		case RunEventType.AssistantText:
+		case RunEventType.AssistantMessageCompleted:
 			return isAssistantTextPayload(payload)
 				? [
 						{

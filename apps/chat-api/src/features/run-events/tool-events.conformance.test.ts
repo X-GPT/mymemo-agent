@@ -301,7 +301,7 @@ describe("durable tool-event conformance", () => {
 		});
 		expect(rows.map((row) => row.type)).toEqual([
 			RunEventType.Started,
-			RunEventType.AssistantText,
+			RunEventType.AssistantMessageCompleted,
 			...Array<RunEventType>(8).fill(RunEventType.ToolUse),
 			...Array<RunEventType>(8).fill(RunEventType.ToolResult),
 			RunEventType.ToolUse,

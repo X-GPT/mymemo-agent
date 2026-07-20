@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
 	isToolResultPayload,
@@ -70,6 +71,14 @@ function errorResultMessage(subtype: string, text: string): SDKMessage {
 type Step =
 	| { message: SDKMessage; before?: () => void }
 	| { throw: unknown; before?: () => void };
+
+function deferred<T = void>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
 
 function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
 	const query = {
@@ -164,6 +173,114 @@ describe("isMirrorError", () => {
 });
 
 describe("consumeAgentStream", () => {
+	it("emits standard Assistant text events and commits before message end", async () => {
+		const order: string[] = [];
+		await consumeAgentStream({
+			query: fakeQuery(
+				textEnvelope({ completeText: "hello" }).map((message) => ({ message })),
+			),
+			signal: new AbortController().signal,
+			appendLiveEvent: async (event) => {
+				if (event.type === EventType.TEXT_MESSAGE_END) {
+					expect(order).toContain("commit:hello");
+				}
+				order.push(event.type);
+			},
+			appendModelContent: onAssistantCommit((message) =>
+				order.push(`commit:${message.text}`),
+			),
+		});
+
+		expect(order).toEqual([
+			EventType.TEXT_MESSAGE_START,
+			EventType.TEXT_MESSAGE_CONTENT,
+			"commit:hello",
+			EventType.TEXT_MESSAGE_END,
+		]);
+	});
+
+	it("coalesces provider text fragments before retained AG-UI publication", async () => {
+		const messages = textEnvelope({
+			completeText: "hello",
+			partialText: "hel",
+		});
+		messages.splice(
+			3,
+			0,
+			streamEvent({
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "text_delta", text: "lo" },
+			}),
+		);
+		const events: Array<Record<string, unknown>> = [];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendLiveEvent: async (event) => {
+				events.push(event as unknown as Record<string, unknown>);
+			},
+			appendModelContent: async () => {},
+		});
+
+		expect(events).toEqual([
+			{
+				type: EventType.TEXT_MESSAGE_START,
+				messageId: expect.any(String),
+				role: "assistant",
+			},
+			{
+				type: EventType.TEXT_MESSAGE_CONTENT,
+				messageId: expect.any(String),
+				delta: "hello",
+			},
+			{
+				type: EventType.TEXT_MESSAGE_END,
+				messageId: expect.any(String),
+			},
+		]);
+	});
+
+	it("waits for an in-flight retained content append before surfacing failure", async () => {
+		const contentStarted = deferred();
+		const releaseContent = deferred();
+		const messages = textEnvelope({ completeText: "hello" });
+		const query: SupervisedQuery = {
+			async interrupt() {},
+			async *[Symbol.asyncIterator]() {
+				for (const message of messages.slice(0, 3)) yield message;
+				await contentStarted.promise;
+				yield errorResultMessage("error_during_execution", "provider failed");
+			},
+		};
+		let settled = false;
+
+		const result = consumeAgentStream({
+			query,
+			signal: new AbortController().signal,
+			appendLiveEvent: async (event) => {
+				if (event.type !== EventType.TEXT_MESSAGE_CONTENT) return;
+				contentStarted.resolve();
+				await releaseContent.promise;
+			},
+			appendModelContent: async () => {},
+		}).then(
+			() => null,
+			(error: unknown) => error,
+		);
+		void result.then(() => {
+			settled = true;
+		});
+
+		await contentStarted.promise;
+		await Bun.sleep(0);
+		expect(settled).toBe(false);
+
+		releaseContent.resolve();
+		expect(await result).toBeInstanceOf(AgentResultError);
+	});
+
 	it("publishes coalesced indexed preview before each sequential Assistant commit", async () => {
 		const transport = new InMemoryLiveTextTransport();
 		const subscription = await transport.subscribe("run-1");

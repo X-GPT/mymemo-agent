@@ -7,6 +7,7 @@ import type {
 } from "@/features/conversation-store";
 import type { CreateQueuedRunInput, RunStore } from "@/features/run-store";
 import {
+	admitAgUiRun,
 	createConversation,
 	interruptConversationRun,
 	queueConversationTurn,
@@ -107,6 +108,9 @@ describe("queueConversationTurn", () => {
 	it("queues a run with the frozen conversation record and message", async () => {
 		const calls: CreateQueuedRunInput[] = [];
 		const runStore: RunStore = {
+			async admitRun() {
+				throw new Error("AG-UI admission is not used by this test");
+			},
 			async createQueuedRun(input) {
 				calls.push(input);
 				return { runId: "run-1" };
@@ -132,6 +136,9 @@ describe("queueConversationTurn", () => {
 	it("does not accept scope from the turn body", async () => {
 		const calls: CreateQueuedRunInput[] = [];
 		const runStore: RunStore = {
+			async admitRun() {
+				throw new Error("AG-UI admission is not used by this test");
+			},
 			async createQueuedRun(input) {
 				calls.push(input);
 				return { runId: "run-1" };
@@ -165,6 +172,50 @@ describe("queueConversationTurn", () => {
 	});
 });
 
+describe("admitAgUiRun", () => {
+	it("admits only the final submitted User message against frozen conversation data", async () => {
+		const calls: Array<Parameters<RunStore["admitRun"]>[0]> = [];
+		const runStore: RunStore = {
+			async admitRun(input) {
+				calls.push(input);
+				return { outcome: "not_found" };
+			},
+			async createQueuedRun() {
+				throw new Error("legacy admission is not used by this test");
+			},
+			async getRun() {
+				return null;
+			},
+			async requestCancellation() {
+				return { outcome: "not_found" };
+			},
+		};
+
+		await admitAgUiRun({ runStore } as unknown as AppDeps, {
+			conversation,
+			input: {
+				threadId: "conv-1",
+				runId: "run-client-1",
+				messages: [
+					{ id: "prior", role: "assistant", content: "history" },
+					{ id: "submitted-1", role: "user", content: "new work" },
+				],
+				tools: [],
+				context: [],
+			},
+		});
+
+		expect(calls).toEqual([
+			{
+				conversation,
+				runId: "run-client-1",
+				messageId: "submitted-1",
+				message: "new work",
+			},
+		]);
+	});
+});
+
 describe("interruptConversationRun", () => {
 	it("scopes the cancellation to the owned conversation record", async () => {
 		const calls: Array<{
@@ -173,6 +224,9 @@ describe("interruptConversationRun", () => {
 			runId: string;
 		}> = [];
 		const runStore: RunStore = {
+			async admitRun() {
+				throw new Error("AG-UI admission is not used by this test");
+			},
 			async createQueuedRun() {
 				throw new Error("interrupt must not create a run");
 			},

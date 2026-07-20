@@ -1,6 +1,8 @@
 import {
 	ActiveRunConflictError,
+	admitQueuedRunInTx,
 	isActiveRunConflict,
+	type RunAdmissionResult,
 	type RunCancellationResult,
 	type RunRecord,
 	requestRunCancellationTx,
@@ -86,6 +88,13 @@ export interface CreateQueuedRunResult {
 	runId: string;
 }
 
+export interface AdmitRunInput {
+	conversation: ConversationRef;
+	runId: string;
+	messageId: string;
+	message: string;
+}
+
 export interface RunEventRecord {
 	runId: string;
 	seq: number;
@@ -95,6 +104,7 @@ export interface RunEventRecord {
 
 export interface RunStore {
 	createQueuedRun(input: CreateQueuedRunInput): Promise<CreateQueuedRunResult>;
+	admitRun(input: AdmitRunInput): Promise<RunAdmissionResult>;
 	getRun(input: {
 		userId: string;
 		conversationId: string;
@@ -107,6 +117,70 @@ export interface RunStore {
 		conversationId: string;
 		runId: string;
 	}): Promise<RunCancellationResult>;
+}
+
+/** Admit a canonical AG-UI Run while holding the same Conversation row lock as
+ * Archive and Permanent deletion. The frozen Scope and lifecycle metadata are
+ * read and updated inside this transaction, never trusted from the request. */
+export async function admitRunTx(
+	db: Database,
+	input: AdmitRunInput,
+): Promise<RunAdmissionResult> {
+	try {
+		return await db.transaction(async (tx) => {
+			const [conversation] = await tx
+				.select()
+				.from(conversations)
+				.where(
+					and(
+						eq(conversations.userId, input.conversation.userId),
+						eq(conversations.conversationId, input.conversation.conversationId),
+					),
+				)
+				.for("update");
+			if (!conversation) {
+				throw new ConversationNotFoundError(
+					`Conversation ${input.conversation.conversationId} does not exist`,
+				);
+			}
+			if (conversation.archivedAt !== null) {
+				throw new ConversationArchivedError(
+					`Conversation ${input.conversation.conversationId} is archived`,
+				);
+			}
+
+			const admission = await admitQueuedRunInTx(tx, {
+				runId: input.runId,
+				userId: conversation.userId,
+				conversationId: conversation.conversationId,
+				messageId: input.messageId,
+				text: input.message,
+				scope: conversation.scope as "general" | "collection" | "document",
+				collectionId: conversation.collectionId,
+				summaryId: conversation.summaryId,
+			});
+			if (admission.outcome === "created") {
+				await tx
+					.update(conversations)
+					.set({
+						title: sql`coalesce(${conversations.title}, ${input.message})`,
+						lastActivityAt: sql`now()`,
+					})
+					.where(
+						and(
+							eq(conversations.userId, conversation.userId),
+							eq(conversations.conversationId, conversation.conversationId),
+						),
+					);
+			}
+			return admission;
+		});
+	} catch (error) {
+		if (isActiveRunConflict(error)) {
+			throw new ActiveRunExistsError({ cause: error });
+		}
+		throw error;
+	}
 }
 
 /**
@@ -201,6 +275,10 @@ export class PostgresRunStore implements RunStore {
 		const runId = input.runId ?? crypto.randomUUID();
 		await createQueuedRunStartedTx(this.db, { ...input, runId });
 		return { runId };
+	}
+
+	async admitRun(input: AdmitRunInput): Promise<RunAdmissionResult> {
+		return admitRunTx(this.db, input);
 	}
 
 	async getRun(input: {

@@ -27,6 +27,24 @@ describe("resolveLiveTextRedisUrl", () => {
 			expect(resolveLiveTextRedisUrl(invalid)).toBeUndefined();
 		}
 	});
+
+	it("allows only explicit insecure loopback configuration for local tests", () => {
+		for (const redisUrl of [
+			"redis://127.0.0.1:6379",
+			"redis://localhost:6379",
+			"redis://[::1]:6379",
+		]) {
+			expect(
+				resolveLiveTextRedisUrl(redisUrl, { allowInsecureLoopback: true }),
+			).toBe(redisUrl);
+			expect(resolveLiveTextRedisUrl(redisUrl)).toBeUndefined();
+		}
+		expect(
+			resolveLiveTextRedisUrl("redis://redis.internal:6379", {
+				allowInsecureLoopback: true,
+			}),
+		).toBeUndefined();
+	});
 });
 
 describe("LiveTextMessageSchema", () => {

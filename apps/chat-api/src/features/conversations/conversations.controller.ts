@@ -5,7 +5,11 @@ import type {
 	ConversationStore,
 } from "@/features/conversation-store";
 import type { RunCancellationResult } from "@/features/run-store";
-import type { InternalIdentity } from "./conversations.schema";
+import {
+	type InternalIdentity,
+	type RunAgentInputBody,
+	submittedMessageFromRunInput,
+} from "./conversations.schema";
 
 /**
  * Create a conversation: resolve its document scope from the supplied ids once,
@@ -53,6 +57,22 @@ export async function queueConversationTurn(
 		conversation: params.conversation,
 		message: params.message,
 		runId: params.runId,
+	});
+}
+
+/** Atomically admit one strict AG-UI Run using only the final submitted User
+ * message plus the server-owned frozen Conversation data. Client history is
+ * validation input, not new durable history. */
+export async function admitAgUiRun(
+	deps: AppDeps,
+	params: { conversation: ConversationRecord; input: RunAgentInputBody },
+) {
+	const submitted = submittedMessageFromRunInput(params.input);
+	return deps.runStore.admitRun({
+		conversation: params.conversation,
+		runId: params.input.runId,
+		messageId: submitted.messageId,
+		message: submitted.message,
 	});
 }
 

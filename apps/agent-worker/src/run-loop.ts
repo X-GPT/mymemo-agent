@@ -1,3 +1,4 @@
+import type { AGUIEvent } from "@ag-ui/core";
 import {
 	ArtifactQuotaError,
 	type PublishedArtifact,
@@ -24,10 +25,12 @@ import {
 	advanceAgentSessionPointerTx,
 	type RunOwnershipRef,
 } from "@mymemo/agent-db/runtime-store";
+import type { LiveStreamStore } from "@mymemo/live-text";
 import { ArtifactValidationError } from "./artifacts/artifact-manifest";
 import { ArtifactPublicationError } from "./artifacts/artifact-publication";
 import { toMessage, type WorkerLogger } from "./logger";
 import { DoorbellTicker, type RunDoorbell } from "./run-doorbell";
+import { RunLiveStream } from "./run-live-stream";
 import type { Worker } from "./worker";
 
 /**
@@ -68,7 +71,7 @@ export type ModelContent =
 const MODEL_CONTENT_EVENT_TYPES = {
 	// The shared vocabulary type the projector maps to `text_commit` — never
 	// the frame name itself, or the projector drops it.
-	assistant_message: RunEventType.AssistantText,
+	assistant_message: RunEventType.AssistantMessageCompleted,
 	tool_use: RunEventType.ToolUse,
 	tool_result: RunEventType.ToolResult,
 } as const satisfies Record<ModelContent["kind"], RunEventType>;
@@ -84,6 +87,9 @@ export interface RunProcessContext {
 	run: RunRecord;
 	signal: AbortSignal;
 	appendModelContent(content: ModelContent): Promise<void>;
+	/** Append one standard event to this Run's retained Live Stream. Failure is
+	 * absorbed by the producer so it cannot change model execution. */
+	appendLiveEvent(event: AGUIEvent): Promise<void>;
 }
 
 /**
@@ -104,6 +110,8 @@ export interface RunLoopOptions {
 	db: Database;
 	worker: Worker;
 	processor: RunProcessor;
+	/** Shared retained AG-UI store. Undefined keeps durable execution available. */
+	liveStreamStore?: LiveStreamStore;
 	/** How often {@link RunLoop.start}'s timer fires a tick (heartbeat + claim). */
 	heartbeatIntervalMs: number;
 	/** Optional doorbell whose ring triggers an immediate tick. */
@@ -123,6 +131,7 @@ interface RunEndState {
 interface ActiveEntry {
 	controller: AbortController;
 	state: RunEndState;
+	liveStream?: RunLiveStream;
 }
 
 const STALE_RUN_RECOVERY_INTERVAL_MS = 15_000;
@@ -328,6 +337,7 @@ export class RunLoop {
 				entry.state.canceled = true;
 				entry.controller.abort();
 			}
+			await entry.liveStream?.refresh();
 		}
 	}
 
@@ -364,6 +374,13 @@ export class RunLoop {
 	}
 
 	private async runClaimed(run: RunRecord, entry: ActiveEntry): Promise<void> {
+		const liveStream = await RunLiveStream.open({
+			store: this.opts.liveStreamStore,
+			runId: run.runId,
+			conversationId: run.conversationId,
+			logger: this.opts.logger,
+		});
+		entry.liveStream = liveStream;
 		let turnResult: TurnResult = EMPTY_TURN;
 		let failure: { error: unknown } | undefined;
 		try {
@@ -373,6 +390,7 @@ export class RunLoop {
 					signal: entry.controller.signal,
 					appendModelContent: (content) =>
 						this.appendModelContent(run.runId, content),
+					appendLiveEvent: (event) => liveStream.append(event),
 				})) ?? EMPTY_TURN;
 		} catch (error) {
 			failure = { error };
@@ -380,7 +398,13 @@ export class RunLoop {
 		// Stop heartbeating this run before terminalizing: from here the loop owns
 		// the terminal transition and a concurrent heartbeat must not race it.
 		this.activeRuns.delete(run.runId);
-		await this.finish(run, entry.state, turnResult, failure);
+		const terminalStatus = await this.finish(
+			run,
+			entry.state,
+			turnResult,
+			failure,
+		);
+		if (terminalStatus) await liveStream.finish(terminalStatus);
 	}
 
 	private async appendModelContent(
@@ -401,7 +425,7 @@ export class RunLoop {
 		state: RunEndState,
 		turnResult: TurnResult,
 		failure?: { error: unknown },
-	): Promise<void> {
+	): Promise<TerminalRunStatus | null> {
 		const runId = run.runId;
 		if (state.lostOwnership) {
 			this.opts.logger.warn({
@@ -409,13 +433,12 @@ export class RunLoop {
 				workerId: this.workerId,
 				runId,
 			});
-			return;
+			return null;
 		}
 		// Cancellation wins over both success and failure: an SDK error raised
 		// while interrupting still surfaces as `canceled`.
 		if (state.canceled) {
-			await this.terminalize(runId, "canceled");
-			return;
+			return this.terminalize(runId, "canceled");
 		}
 		if (failure) {
 			this.opts.logger.error({
@@ -426,10 +449,9 @@ export class RunLoop {
 				runId,
 				...artifactFailureLogFields(failure.error),
 			});
-			await this.terminalize(runId, "error", {
+			return this.terminalize(runId, "error", {
 				message: GENERIC_RUN_ERROR_MESSAGE,
 			});
-			return;
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
 		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
@@ -445,8 +467,7 @@ export class RunLoop {
 			workerId: this.workerId,
 		};
 		if (turnResult.artifactPublication) {
-			await this.publishArtifactsAndFinish(owner, turnResult);
-			return;
+			return this.publishArtifactsAndFinish(owner, turnResult);
 		}
 		if (turnResult.agentSession) {
 			await this.advanceSessionPointer(
@@ -454,15 +475,15 @@ export class RunLoop {
 				turnResult.agentSession.sessionId,
 			);
 		}
-		await this.terminalize(runId, "done");
+		return this.terminalize(runId, "done");
 	}
 
 	private async publishArtifactsAndFinish(
 		owner: RunOwnershipRef,
 		turnResult: TurnResult,
-	): Promise<void> {
+	): Promise<TerminalRunStatus | null> {
 		const publication = turnResult.artifactPublication;
-		if (!publication) return;
+		if (!publication) return null;
 		try {
 			const result = await publishArtifactsAndTransitionRunDoneTx(
 				this.opts.db,
@@ -482,15 +503,16 @@ export class RunLoop {
 					runId: owner.runId,
 				});
 			}
+			return "done";
 		} catch (error) {
 			if (error instanceof RunFenceError) {
-				if (await this.tryTerminalCanceled(owner.runId)) return;
+				if (await this.tryTerminalCanceled(owner.runId)) return "canceled";
 				this.opts.logger.warn({
 					message: "could not publish artifacts; leaving to stale-run recovery",
 					workerId: this.workerId,
 					runId: owner.runId,
 				});
-				return;
+				return null;
 			}
 			this.opts.logger.error({
 				message: "run failed",
@@ -508,7 +530,7 @@ export class RunLoop {
 							},
 						}),
 			});
-			await this.terminalize(owner.runId, "error", {
+			return this.terminalize(owner.runId, "error", {
 				message: GENERIC_RUN_ERROR_MESSAGE,
 			});
 		}
@@ -551,7 +573,7 @@ export class RunLoop {
 		runId: string,
 		status: TerminalRunStatus,
 		payload?: { message: string },
-	): Promise<void> {
+	): Promise<TerminalRunStatus | null> {
 		try {
 			await transitionRunTerminalTx(this.opts.db, {
 				runId,
@@ -559,10 +581,11 @@ export class RunLoop {
 				status,
 				payload,
 			});
+			return status;
 		} catch (error) {
 			if (error instanceof RunFenceError) {
 				if (status !== "canceled" && (await this.tryTerminalCanceled(runId))) {
-					return;
+					return "canceled";
 				}
 				this.opts.logger.warn({
 					message: "could not terminalize run; leaving to stale-run recovery",
@@ -570,7 +593,7 @@ export class RunLoop {
 					runId,
 					intended: status,
 				});
-				return;
+				return null;
 			}
 			throw error;
 		}

@@ -1,9 +1,12 @@
+import { type AGUIEvent, EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
 import type { LiveTextPublisher } from "@mymemo/live-text";
 import type { WorkerLogger } from "../logger";
 import type { ModelContent } from "../run-loop";
+import { AgUiTextStream } from "./ag-ui-text-stream";
 import {
+	AssistantEnvelopeProtocolError,
 	AssistantMessageAssembler,
 	type EnvelopeCommit,
 } from "./assistant-message-assembler";
@@ -95,6 +98,9 @@ export interface ConsumeAgentStreamParams {
 	/** Persists one piece of model content — an Assistant message, a Tool
 	 * invocation, or a Tool result (fenced to `running` upstream). */
 	appendModelContent: (content: ModelContent) => Promise<void>;
+	/** Sequential retained AG-UI publication. The bound Run producer absorbs
+	 * Redis failures so this callback never changes the model Outcome. */
+	appendLiveEvent?: (event: AGUIEvent) => Promise<void>;
 	/** Receives the omission logs ADR-0009 requires (unknown tool names,
 	 * unmatched result ids, unprojectable payloads). Optional: omissions
 	 * degrade visibility, never correctness. */
@@ -140,8 +146,10 @@ export async function consumeAgentStream(
 		sessionId: null,
 		mirrorErrorObserved: false,
 	};
+	let liveMessageMatchesCompletion = true;
 	const assembler = new AssistantMessageAssembler({
 		onPartialCompleteMismatch: () => {
+			liveMessageMatchesCompletion = false;
 			preview?.disable();
 			try {
 				params.onPartialCompleteMismatch?.();
@@ -159,10 +167,16 @@ export async function consumeAgentStream(
 					onSignal: params.onLiveTextSignal,
 				})
 			: undefined;
-	const abandonOpenMessage = () => {
+	const abandonOpenMessage = async (): Promise<void> => {
 		assembler.abandon();
 		preview?.abandon();
+		await agUiText.abandon();
+		liveMessageMatchesCompletion = true;
 	};
+	const appendLiveEvent = async (event: AGUIEvent): Promise<void> => {
+		await params.appendLiveEvent?.(event);
+	};
+	const agUiText = new AgUiTextStream({ appendEvent: appendLiveEvent });
 
 	// Worker-internal association from SDK tool-use id to public tool name,
 	// established only when the invocation's event is appended — so a result for
@@ -286,16 +300,40 @@ export async function consumeAgentStream(
 			const assembled = assembler.accept(message);
 			if (assembled?.type === "partial_text") {
 				preview?.append(assembled.messageId, assembled.text);
+				await agUiText.append(assembled.messageId, assembled.text);
 			} else if (assembled?.type === "message_stop") {
 				await preview?.flushMessage();
+				if (assembled.commit.text !== null && agUiText.messageId === null) {
+					await agUiText.append(
+						assembled.commit.text.messageId,
+						assembled.commit.text.text,
+					);
+				}
+				if (!liveMessageMatchesCompletion) {
+					throw new AssistantEnvelopeProtocolError(
+						"Assistant partial text did not match its completed response",
+					);
+				}
+				const liveMessageId = await agUiText.flushMessage();
 				await commitEnvelope(assembled.commit);
+				if (
+					assembled.commit.text !== null &&
+					liveMessageId === assembled.commit.text.messageId &&
+					liveMessageMatchesCompletion
+				) {
+					await appendLiveEvent({
+						type: EventType.TEXT_MESSAGE_END,
+						messageId: liveMessageId,
+					});
+				}
+				liveMessageMatchesCompletion = true;
 			}
 		}
 		if (signal.aborted) throw new QueryInterruptedError();
 		assembler.finish();
 		return outcome;
 	} catch (error) {
-		abandonOpenMessage();
+		await abandonOpenMessage();
 		throw error;
 	} finally {
 		signal.removeEventListener("abort", interrupt);

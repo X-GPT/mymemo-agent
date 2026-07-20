@@ -238,6 +238,13 @@ describe("loadWorkerConfigFromEnv — additive Live Redis deployment", () => {
 		expect(loadWorkerConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
 	});
 
+	it("allows insecure loopback Redis only under the integration-test switch", () => {
+		const env = baseEnv();
+		env.REDIS_URL = "redis://127.0.0.1:6379";
+		env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS = "true";
+		expect(loadWorkerConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
+	});
+
 	it("degrades missing, malformed, or insecure Redis configuration", () => {
 		for (const redisUrl of [
 			undefined,

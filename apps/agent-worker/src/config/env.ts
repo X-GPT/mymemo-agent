@@ -193,7 +193,10 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			bucket: env.ARTIFACT_BUCKET,
 			region: env.AWS_REGION,
 		},
-		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL),
+		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL, {
+			allowInsecureLoopback:
+				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
+		}),
 		sandboxIdleMs: positiveIntOr(
 			env.WORKER_SANDBOX_IDLE_MS,
 			DEFAULT_SANDBOX_IDLE_MS,

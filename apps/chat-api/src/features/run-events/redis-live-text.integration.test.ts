@@ -324,7 +324,7 @@ it("runs worker publication through Redis into cursorless preview and an exact d
 	expect(run?.status).toBe("done");
 	expect(events.map((event) => event.type)).toEqual([
 		RunEventType.Started,
-		RunEventType.AssistantText,
+		RunEventType.AssistantMessageCompleted,
 		RunEventType.Done,
 	]);
 }, 20_000);
