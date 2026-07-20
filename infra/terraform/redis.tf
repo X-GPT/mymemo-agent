@@ -1,18 +1,18 @@
 resource "aws_security_group" "live_redis" {
   name        = "${local.common_name}-live-redis"
-  description = "Private Redis live preview lane for trusted agent services"
+  description = "Private Redis Live Stream for trusted agent services"
   vpc_id      = local.shared_vpc_id
 }
 
 resource "aws_security_group" "live_redis_clients" {
   name        = "${local.common_name}-live-redis-clients"
-  description = "chat-api and agent-worker clients of the Redis live preview lane"
+  description = "chat-api and agent-worker clients of the Redis Live Stream"
   vpc_id      = local.shared_vpc_id
 }
 
 resource "aws_security_group_rule" "live_redis_from_services" {
   type                     = "ingress"
-  description              = "Trusted agent services to the Redis live preview lane"
+  description              = "Trusted agent services to the Redis Live Stream"
   security_group_id        = aws_security_group.live_redis.id
   source_security_group_id = aws_security_group.live_redis_clients.id
   from_port                = var.live_redis_port
@@ -32,7 +32,7 @@ resource "random_password" "live_redis" {
 
 resource "aws_elasticache_replication_group" "live" {
   replication_group_id = substr(replace("${local.common_name}-live", "_", "-"), 0, 40)
-  description          = "Disposable Redis Pub/Sub lane for live assistant text previews"
+  description          = "Temporary per-Run Redis Streams for AG-UI live delivery"
 
   engine         = "redis"
   engine_version = var.live_redis_engine_version
@@ -58,7 +58,7 @@ resource "aws_elasticache_replication_group" "live" {
 
 resource "aws_secretsmanager_secret" "live_redis_url" {
   name                    = "${local.common_name}-REDIS_URL"
-  description             = "Authenticated TLS URL for the ephemeral Redis live preview lane"
+  description             = "Authenticated TLS URL for the temporary Redis Live Stream"
   recovery_window_in_days = 7
 }
 

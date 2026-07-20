@@ -148,8 +148,8 @@ describe("loadApiConfigFromEnv — split-runtime core", () => {
 	});
 });
 
-describe("loadApiConfigFromEnv — optional Live Redis lane", () => {
-	it("enables Live preview only for an authenticated TLS URL", () => {
+describe("loadApiConfigFromEnv — additive Live Redis deployment", () => {
+	it("accepts only an authenticated TLS URL", () => {
 		const env = baseEnv();
 		env.REDIS_URL = "rediss://default:secret@redis.internal:6379";
 		expect(loadApiConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);

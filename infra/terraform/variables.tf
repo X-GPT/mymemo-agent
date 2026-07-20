@@ -109,25 +109,25 @@ variable "agent_worker_port" {
 }
 
 variable "live_redis_port" {
-  description = "TLS port for the disposable Redis live preview lane."
+  description = "TLS port for the temporary per-Run Redis Live Stream."
   type        = number
   default     = 6379
 }
 
 variable "live_redis_node_type" {
-  description = "ElastiCache node type for ephemeral Pub/Sub traffic."
+  description = "ElastiCache node type for temporary per-Run Redis Streams."
   type        = string
   default     = "cache.t4g.micro"
 }
 
 variable "live_redis_engine_version" {
-  description = "Redis engine version for the ephemeral live preview lane."
+  description = "Redis engine version for the temporary per-Run Live Stream."
   type        = string
   default     = "7.1"
 }
 
-variable "live_preview_enabled" {
-  description = "Inject REDIS_URL into trusted agent services. Set false to disable only the optional Live preview lane while leaving Redis provisioned."
+variable "live_stream_enabled" {
+  description = "Inject REDIS_URL into trusted agent services. Set false to keep the Live Stream additively disabled while leaving Redis provisioned."
   type        = bool
   default     = true
 }

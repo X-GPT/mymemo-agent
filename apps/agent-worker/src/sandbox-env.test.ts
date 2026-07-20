@@ -30,6 +30,7 @@ describe("buildSandboxEnv — credential boundary", () => {
 			OPENROUTER_BASE_URL: "https://openrouter.ai/api",
 			OPENROUTER_DEFAULT_MODEL: "anthropic/claude",
 			E2B_API_KEY: "e2b-secret",
+			REDIS_URL: "rediss://default:redis-secret@redis.internal:6379",
 			WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 			ARTIFACT_BUCKET: "private-artifacts",
 			AWS_REGION: "us-west-2",
@@ -42,6 +43,7 @@ describe("buildSandboxEnv — credential boundary", () => {
 		expect(serialized).not.toContain(config.openrouter.apiKey);
 		expect(serialized).not.toContain("mymemo_kb");
 		expect(serialized).not.toContain(config.e2bApiKey);
+		expect(serialized).not.toContain("redis-secret");
 		for (const forbidden of [
 			"OPENROUTER_API_KEY",
 			"KB_DATABASE_URL",
@@ -49,6 +51,7 @@ describe("buildSandboxEnv — credential boundary", () => {
 			"ANTHROPIC_API_KEY",
 			"ANTHROPIC_AUTH_TOKEN",
 			"E2B_API_KEY",
+			"REDIS_URL",
 			"ARTIFACT_BUCKET",
 			"AWS_REGION",
 			"AWS_ACCESS_KEY_ID",

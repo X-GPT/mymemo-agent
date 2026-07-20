@@ -27,6 +27,21 @@ const releaseDeployWorkflow = readFileSync(
 	join(root, ".github", "workflows", "release-deploy.yml"),
 	"utf8",
 );
+const ciWorkflow = readFileSync(
+	join(root, ".github", "workflows", "ci.yml"),
+	"utf8",
+);
+const composeConfig = readFileSync(join(root, "compose.yaml"), "utf8");
+const redisContractTest = readFileSync(
+	join(
+		root,
+		"packages",
+		"live-text",
+		"src",
+		"redis-live-stream-store.contract.test.ts",
+	),
+	"utf8",
+);
 const createAgentSecretsScript = readFileSync(
 	join(root, "scripts", "deploy", "create_agent_secrets.sh"),
 	"utf8",
@@ -187,10 +202,11 @@ describe("agent deployment config", () => {
 		expect(migrationConfig).not.toContain("ARTIFACT_BUCKET");
 	});
 
-	it("provisions the disposable Redis live lane inside the trusted service network", () => {
+	it("provisions the authenticated TLS Redis Live Stream inside the trusted service network", () => {
 		const redisConfig = readFileSync(join(terraformDir, "redis.tf"), "utf8");
 		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
 		const ecsConfig = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
+		const outputs = readFileSync(join(terraformDir, "outputs.tf"), "utf8");
 		const migrationStart = ecsConfig.indexOf(
 			'resource "aws_ecs_task_definition" "agent_migration"',
 		);
@@ -200,7 +216,9 @@ describe("agent deployment config", () => {
 		);
 		const migrationConfig = ecsConfig.slice(migrationStart, migrationEnd);
 
-		expect(redisConfig).toContain('resource "aws_elasticache_replication_group" "live"');
+		expect(redisConfig).toContain(
+			'resource "aws_elasticache_replication_group" "live"',
+		);
 		expect(redisConfig).toMatch(/num_cache_clusters\s*=\s*1/);
 		expect(redisConfig).toMatch(/automatic_failover_enabled\s*=\s*false/);
 		expect(redisConfig).toMatch(/multi_az_enabled\s*=\s*false/);
@@ -213,13 +231,16 @@ describe("agent deployment config", () => {
 		expect(redisConfig).toContain(
 			"source_security_group_id = aws_security_group.live_redis_clients.id",
 		);
-		expect(redisConfig).toContain('resource "aws_secretsmanager_secret" "live_redis_url"');
+		expect(redisConfig).not.toMatch(/\b(?:cidr_blocks|ipv6_cidr_blocks)\b/);
+		expect(redisConfig).toContain(
+			'resource "aws_secretsmanager_secret" "live_redis_url"',
+		);
 		expect(redisConfig).toContain(
 			'"rediss://default:${urlencode(random_password.live_redis.result)}@',
 		);
 		expect(locals.match(/name\s*=\s*"REDIS_URL"/g)).toHaveLength(1);
 		expect(locals).toMatch(
-			/live_redis_url_secret\s*=\s*var\.live_preview_enabled\s*\?/,
+			/live_redis_url_secret\s*=\s*var\.live_stream_enabled\s*\?/,
 		);
 		expect(
 			locals.match(
@@ -228,9 +249,11 @@ describe("agent deployment config", () => {
 		).toHaveLength(2);
 		expect(ecsConfig.match(/aws_security_group\.live_redis_clients\.id/g)).toHaveLength(2);
 		expect(migrationConfig).toContain("secrets = local.agent_db_password_secret");
+		expect(migrationConfig).not.toContain("REDIS_URL");
+		expect(outputs).not.toMatch(/live_redis|REDIS_URL|random_password/);
 	});
 
-	it("documents the Redis live lane as optional transport infrastructure", () => {
+	it("keeps the Redis Live Stream additively deployable until the hard cutover", () => {
 		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");
 
 		expect(readme).toContain(
@@ -239,6 +262,19 @@ describe("agent deployment config", () => {
 		expect(readme).toContain(
 			"The durable Postgres path remains sufficient for successful Runs",
 		);
+		expect(readme).toContain("live_stream_enabled=false");
+	});
+
+	it("provides disposable local and CI Redis for real Stream and Lua contract tests", () => {
+		expect(composeConfig).toMatch(/\n {2}redis:\n[\s\S]*?image: redis:7/);
+		expect(composeConfig).toContain('"127.0.0.1:${REDIS_PORT:-6379}:6379"');
+		expect(composeConfig).toContain(
+			'["redis-server", "--save", "", "--appendonly", "no"]',
+		);
+		expect(composeConfig).not.toMatch(/redis-data|redisdata/);
+		expect(ciWorkflow).toContain("redis-server");
+		expect(ciWorkflow).toContain("bun run test");
+		expect(redisContractTest).toContain('"redis-server"');
 	});
 
 	it("documents the Downloadable artifact operator and downstream contracts", () => {

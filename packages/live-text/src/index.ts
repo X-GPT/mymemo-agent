@@ -10,10 +10,11 @@ export const LIVE_TEXT_MAX_WIRE_BYTES = 100_000;
 const LIVE_TEXT_MAX_ID_LENGTH = 128;
 
 /**
- * Resolve the optional production Live-lane secret. Invalid configuration is
- * deliberately indistinguishable from missing configuration to callers: both
- * disable only Live preview and must never fail service boot. The returned URL
- * is authenticated and TLS-only, but remains a secret and must not be logged.
+ * Resolve the additive production Live-transport secret. Invalid configuration
+ * is deliberately indistinguishable from missing configuration to callers: both
+ * disable only live delivery until the hard cutover makes it required. The
+ * returned URL is authenticated and TLS-only, but remains a secret and must not
+ * be logged.
  */
 export function resolveLiveTextRedisUrl(
 	raw: string | undefined,

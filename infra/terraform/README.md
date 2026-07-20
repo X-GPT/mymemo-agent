@@ -29,7 +29,8 @@ the direct remote-state output is absent and the fallback input is present.
 - dedicated RDS Postgres instance for writable agent state
 - EC2 Instance Connect Endpoint and private EC2 bridge for operator access to
   the agent and KB databases
-- single-node ElastiCache Redis replication group for disposable live previews
+- single-node ElastiCache Redis replication group for temporary per-Run Live
+  Streams
 - private S3 bucket for durable Downloadable artifact objects
 - ECS Fargate task definitions and services for chat-api and agent-worker
 - agent DB migration task definition
@@ -55,7 +56,7 @@ RDS-managed secret. This is the writable agent state database for conversations,
 leases, run state, and migrations. It is separate from the read-only KB database
 URL used by `agent-worker`.
 
-Terraform also generates the live preview cache authentication token and stores
+Terraform also generates the Live Stream cache authentication token and stores
 the complete `rediss://` connection URL in the Terraform-managed
 `<name_prefix>-<environment>-REDIS_URL` Secrets Manager secret. ECS injects that
 secret as `REDIS_URL` into `chat-api` and `agent-worker` only. It is not added to
@@ -88,16 +89,16 @@ validates that variable when `SANDBOX_PROVIDER=e2b`. The final split-runtime
 boundary should remove that from chat-api once sandbox creation moves fully to
 `agent-worker`.
 
-## Redis Live Preview Lane
+## Redis Live Stream Infrastructure
 
-The Redis cache is transport infrastructure for provisional Assistant text,
-not a source of truth. It is a single small node with no replicas, Multi-AZ
-failover, automatic snapshots, final snapshot, or backup retention. The cache
-is reachable on its TLS port only from a dedicated client security group
-attached to the trusted `chat-api` and `agent-worker` services; the migration
-task does not receive that group. ElastiCache does not receive a public address
-or a public ingress rule. Authentication and in-transit encryption are
-mandatory.
+The Redis cache is temporary transport infrastructure for one retained AG-UI
+Live Stream per Run, not a permanent history authority. It is a single small
+node with no replicas, Multi-AZ failover, automatic snapshots, final snapshot,
+or backup retention. The cache is reachable on its TLS port only from a
+dedicated client security group attached to the trusted `chat-api` and
+`agent-worker` services; the migration task does not receive that group.
+ElastiCache does not receive a public address or a CIDR-based ingress rule.
+Authentication and in-transit encryption are mandatory.
 
 Before the first cache plan in an existing environment, reapply
 `infra/bootstrap-iam` with the admin profile as shown below. That updates the
@@ -105,16 +106,19 @@ GitHub Actions deploy role with the ElastiCache permissions used by this root.
 
 Redis availability must not participate in chat-api or agent-worker readiness.
 Missing, invalid, or unreachable Redis configuration must degrade only live
-previews and must not prevent either service from booting or staying healthy.
+delivery and must not prevent either service from booting or staying healthy
+until the hard-cutover contract makes missing or insecure configuration a boot
+failure. Runtime Redis availability remains outside readiness in either phase.
 The durable Postgres path remains sufficient for successful Runs, durable
 Assistant messages, terminal Outcomes, and replay.
 
-Set `live_preview_enabled=false` to omit `REDIS_URL` from both trusted service
-task definitions without deleting the cache. Live telemetry is converted into
-CloudWatch metrics with bounded service/signal/outcome dimensions; the alarms
-detect both repeated per-service breaches and multiple services degrading in
-the same five-minute period, and never feed service health. Production must set
-`alarm_action_arns` to an SNS topic with a confirmed incident subscription. See
+Set `live_stream_enabled=false` to omit `REDIS_URL` from both trusted service
+task definitions without deleting the cache during the additive rollout. Live
+telemetry is converted into CloudWatch metrics with bounded
+service/signal/outcome dimensions; the alarms detect both repeated per-service
+breaches and multiple services degrading in the same five-minute period, and
+never feed service health. Production must set `alarm_action_arns` to an SNS
+topic with a confirmed incident subscription. See
 [`docs/runbooks/live-preview.md`](../../docs/runbooks/live-preview.md) for
 diagnosis, disable, and restore procedures.
 

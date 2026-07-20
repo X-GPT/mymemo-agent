@@ -12,6 +12,7 @@
 #   migrate       — one-shot: applies the @mymemo/agent-db migrations, then exits
 #   chat-api      — creates conversations, queues runs, projects run events as SSE
 #   agent-worker  — claims queued runs and serves real SDK turns through E2B
+#   redis         — disposable Redis 7 for real Stream and Lua contract testing
 #
 # The prototype gateway/sandbox services were removed once the split runtime
 # replaced them end to end (ADR-0002). Bring the demo up with:
@@ -108,6 +109,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+    networks:
+      - mymemo-network
+
+  # Disposable development Redis. It binds only to host loopback, keeps no
+  # volume or persistence, and supports the same Stream and Lua commands used by
+  # the production adapter. Start it alone with `docker compose up redis`.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
     restart: "no"
     networks:
       - mymemo-network

@@ -84,7 +84,7 @@ deployed image URIs as described in the Terraform README. Then save and apply
 the reviewed plan:
 
 ```bash
-terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars -var="live_preview_enabled=false" -out=/tmp/live-preview-disable.tfplan
+terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars -var="live_stream_enabled=false" -out=/tmp/live-preview-disable.tfplan
 terraform -chdir=infra/terraform apply /tmp/live-preview-disable.tfplan
 AWS_PROFILE=mymemo scripts/deploy/roll_ecs_services.sh
 ```
@@ -103,7 +103,7 @@ Set the same variable back to `true`, review the plan, apply, and wait for both
 services to roll:
 
 ```bash
-terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars -var="live_preview_enabled=true" -out=/tmp/live-preview-restore.tfplan
+terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars -var="live_stream_enabled=true" -out=/tmp/live-preview-restore.tfplan
 terraform -chdir=infra/terraform apply /tmp/live-preview-restore.tfplan
 AWS_PROFILE=mymemo scripts/deploy/roll_ecs_services.sh
 ```

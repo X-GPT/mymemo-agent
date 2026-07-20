@@ -231,8 +231,8 @@ describe("loadWorkerConfigFromEnv — ListDocuments cap", () => {
 	});
 });
 
-describe("loadWorkerConfigFromEnv — optional Live Redis lane", () => {
-	it("enables Live preview only for an authenticated TLS URL", () => {
+describe("loadWorkerConfigFromEnv — additive Live Redis deployment", () => {
+	it("accepts only an authenticated TLS URL", () => {
 		const env = baseEnv();
 		env.REDIS_URL = "rediss://default:secret@redis.internal:6379";
 		expect(loadWorkerConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
