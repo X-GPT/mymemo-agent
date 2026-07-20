@@ -8,7 +8,7 @@ import {
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { createTestDatabase, type TestDb } from "@/db/testing";
-import { documentAccessEvents, runEvents, runs } from "./schema";
+import { conversations, documentAccessEvents, runEvents, runs } from "./schema";
 
 let tdb: TestDb;
 
@@ -25,6 +25,11 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
+	await tdb.db.delete(conversations);
+	await tdb.db.insert(conversations).values([
+		{ userId: "user-1", conversationId: "conv-1", scope: "general" },
+		{ userId: "user-1", conversationId: "conv-2", scope: "general" },
+	]);
 	await tdb.db.delete(documentAccessEvents);
 });
 

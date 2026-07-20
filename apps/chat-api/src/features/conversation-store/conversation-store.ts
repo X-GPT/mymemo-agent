@@ -24,9 +24,10 @@ export interface ConversationRef {
 	conversationId: string;
 }
 
-/** A persisted conversation. `collectionId`/`summaryId` are non-null only for
- * the matching scope. */
-export interface ConversationRecord {
+/** Input used to create a Conversation before database-owned lifecycle metadata
+ * has been established. `collectionId`/`summaryId` are non-null only for the
+ * matching frozen Scope. */
+export interface ConversationCreateInput {
 	userId: string;
 	conversationId: string;
 	scope: ConversationScope;
@@ -34,13 +35,42 @@ export interface ConversationRecord {
 	summaryId: string | null;
 }
 
+/** A persisted Conversation with its full lifecycle metadata. */
+export interface ConversationRecord extends ConversationCreateInput {
+	title: string | null;
+	createdAt: Date;
+	lastActivityAt: Date;
+	archivedAt: Date | null;
+}
+
+/** Mutable Conversation fields. Rename does not count as Conversation
+ * activity; Archive is represented by a server-owned timestamp. */
+export interface ConversationUpdate {
+	title?: string;
+	archived?: boolean;
+}
+
+export type ConversationUpdateResult =
+	| { outcome: "updated"; conversation: ConversationRecord }
+	| { outcome: "not_found" | "active_run" };
+
+export type ConversationDeleteResult =
+	| { outcome: "deleted" }
+	| { outcome: "not_found" | "active_run" };
+
 /**
  * Persistence seam for the conversation registry, keyed by `{userId,
- * conversationId}`. Small on purpose: a conversation is created once and read
- * each turn. `create` is a plain insert — a second create for the same key fails
- * loudly rather than silently re-scoping an existing conversation.
+ * conversationId}`. Scope is immutable after creation; lifecycle metadata is
+ * changed only through the guarded update and admission paths. `create` is a
+ * plain insert — a second create for the same key fails loudly rather than
+ * silently re-scoping an existing conversation.
  */
 export interface ConversationStore {
 	get(ref: ConversationRef): Promise<ConversationRecord | null>;
-	create(record: ConversationRecord): Promise<void>;
+	create(record: ConversationCreateInput): Promise<ConversationRecord>;
+	update(
+		ref: ConversationRef,
+		changes: ConversationUpdate,
+	): Promise<ConversationUpdateResult>;
+	deletePermanently(ref: ConversationRef): Promise<ConversationDeleteResult>;
 }

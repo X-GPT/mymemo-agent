@@ -20,6 +20,8 @@ export {
 	ActiveRunExistsError,
 	admitQueuedRunTx,
 	appendRunEventTx,
+	ConversationArchivedError,
+	ConversationNotFoundError,
 	claimNextRunTx,
 	createQueuedRunStartedTx,
 	createQueuedRunTx,

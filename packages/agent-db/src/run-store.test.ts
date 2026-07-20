@@ -28,7 +28,7 @@ import {
 	requestRunCancellationTx,
 	transitionRunTerminalTx,
 } from "./run-store";
-import { runEvents, runs } from "./schema";
+import { conversations, runEvents, runs } from "./schema";
 import { createTestDatabase, type TestDb } from "./testing";
 
 let tdb: TestDb;
@@ -46,6 +46,19 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
+	await tdb.db.delete(conversations);
+	await tdb.db.insert(conversations).values([
+		{
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		},
+		{
+			userId: "user-1",
+			conversationId: "conv-2",
+			scope: "general",
+		},
+	]);
 });
 
 describe("createQueuedRunTx", () => {
@@ -215,6 +228,10 @@ describe("admitQueuedRunTx", () => {
 });
 
 async function queueRun(runId: string, conversationId: string) {
+	await tdb.db
+		.insert(conversations)
+		.values({ userId: "user-1", conversationId, scope: "general" })
+		.onConflictDoNothing();
 	return await createQueuedRunTx(tdb.db, {
 		runId,
 		userId: "user-1",

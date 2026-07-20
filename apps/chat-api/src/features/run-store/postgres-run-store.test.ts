@@ -3,20 +3,34 @@ import { loadRunStartedTx } from "@mymemo/agent-db/run-store";
 import { eq } from "drizzle-orm";
 import { conversations, runEvents, runs } from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
-import type { ConversationRecord } from "@/features/conversation-store";
-import { ActiveRunExistsError, PostgresRunStore } from "./run-store";
+import {
+	type ConversationRecord,
+	PostgresConversationStore,
+} from "@/features/conversation-store";
+import {
+	ActiveRunExistsError,
+	ConversationArchivedError,
+	ConversationNotFoundError,
+	PostgresRunStore,
+} from "./run-store";
 
+const initialActivity = new Date("2026-01-01T00:00:00.000Z");
 const conversation: ConversationRecord = {
 	userId: "user-1",
 	conversationId: "conv-1",
 	scope: "collection",
 	collectionId: "col-1",
 	summaryId: null,
+	title: null,
+	createdAt: initialActivity,
+	lastActivityAt: initialActivity,
+	archivedAt: null,
 };
 
 describe("PostgresRunStore", () => {
 	let tdb: TestDb;
 	let store: PostgresRunStore;
+	let conversationStore: PostgresConversationStore;
 
 	// One PGlite instance for the whole file (spin-up is the slow part); each
 	// test starts from an empty runs table via delete, keeping isolation without
@@ -24,13 +38,25 @@ describe("PostgresRunStore", () => {
 	beforeAll(async () => {
 		tdb = await createTestDatabase();
 		store = new PostgresRunStore(tdb.db);
+		conversationStore = new PostgresConversationStore(tdb.db);
 		await tdb.db.insert(conversations).values(conversation);
 	});
 
 	afterAll(() => tdb.close());
 
 	afterEach(async () => {
-		await tdb.db.delete(runs); // cascades run_events; keeps the conversation seed
+		await tdb.db.delete(runs); // cascades run_events
+		await tdb.db
+			.insert(conversations)
+			.values(conversation)
+			.onConflictDoUpdate({
+				target: [conversations.userId, conversations.conversationId],
+				set: {
+					title: null,
+					lastActivityAt: initialActivity,
+					archivedAt: null,
+				},
+			});
 	});
 
 	it("creates one queued run and records run_started transactionally", async () => {
@@ -108,6 +134,134 @@ describe("PostgresRunStore", () => {
 		await expect(
 			store.createQueuedRun({ conversation, message: "second" }),
 		).rejects.toThrow(ActiveRunExistsError);
+	});
+
+	it("first admitted User message initializes title and advances activity atomically", async () => {
+		await store.createQueuedRun({
+			conversation,
+			message: "Summarize the quarterly plan",
+		});
+
+		await expect(
+			conversationStore.get({
+				userId: "user-1",
+				conversationId: "conv-1",
+			}),
+		).resolves.toMatchObject({
+			title: "Summarize the quarterly plan",
+		});
+		const persisted = await conversationStore.get({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		expect(persisted?.lastActivityAt.getTime()).toBeGreaterThan(
+			initialActivity.getTime(),
+		);
+	});
+
+	it("later admission advances activity without replacing an explicit title", async () => {
+		await conversationStore.update(
+			{ userId: "user-1", conversationId: "conv-1" },
+			{ title: "Quarterly planning" },
+		);
+
+		await store.createQueuedRun({
+			conversation,
+			message: "What changed this week?",
+		});
+
+		await expect(
+			conversationStore.get({
+				userId: "user-1",
+				conversationId: "conv-1",
+			}),
+		).resolves.toMatchObject({
+			title: "Quarterly planning",
+		});
+		const persisted = await conversationStore.get({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		expect(persisted?.lastActivityAt.getTime()).toBeGreaterThan(
+			initialActivity.getTime(),
+		);
+	});
+
+	it("failed admission leaves title and activity unchanged", async () => {
+		await store.createQueuedRun({ conversation, message: "first" });
+		const before = await conversationStore.get({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await expect(
+			store.createQueuedRun({ conversation, message: "must not commit" }),
+		).rejects.toBeInstanceOf(ActiveRunExistsError);
+
+		const after = await conversationStore.get({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		expect(after?.title).toBe(before?.title);
+		expect(after?.lastActivityAt).toEqual(before?.lastActivityAt);
+	});
+
+	it("serializes Archive before admission and rejects the new Run", async () => {
+		await expect(
+			conversationStore.update(
+				{ userId: "user-1", conversationId: "conv-1" },
+				{ archived: true },
+			),
+		).resolves.toMatchObject({ outcome: "updated" });
+
+		await expect(
+			store.createQueuedRun({ conversation, message: "too late" }),
+		).rejects.toBeInstanceOf(ConversationArchivedError);
+		expect(await tdb.db.select().from(runs)).toHaveLength(0);
+	});
+
+	it("serializes admission before Archive and rejects the lifecycle change", async () => {
+		await store.createQueuedRun({ conversation, message: "admitted first" });
+
+		await expect(
+			conversationStore.update(
+				{ userId: "user-1", conversationId: "conv-1" },
+				{ archived: true },
+			),
+		).resolves.toEqual({ outcome: "active_run" });
+	});
+
+	it("serializes permanent deletion racing admission", async () => {
+		const deletion = conversationStore.deletePermanently({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		const admission = store.createQueuedRun({
+			conversation,
+			message: "racing deletion",
+		});
+
+		const [deletionResult, admissionResult] = await Promise.allSettled([
+			deletion,
+			admission,
+		]);
+		expect(deletionResult.status).toBe("fulfilled");
+		if (deletionResult.status !== "fulfilled") return;
+
+		if (deletionResult.value.outcome === "deleted") {
+			expect(admissionResult.status).toBe("rejected");
+			if (admissionResult.status === "rejected") {
+				expect(admissionResult.reason).toBeInstanceOf(
+					ConversationNotFoundError,
+				);
+			}
+			expect(await tdb.db.select().from(runs)).toHaveLength(0);
+			return;
+		}
+
+		expect(deletionResult.value).toEqual({ outcome: "active_run" });
+		expect(admissionResult.status).toBe("fulfilled");
+		expect(await tdb.db.select().from(runs)).toHaveLength(1);
 	});
 
 	it("lists replay events after a sequence number", async () => {

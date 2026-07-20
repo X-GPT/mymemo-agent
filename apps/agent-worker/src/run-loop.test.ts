@@ -10,7 +10,12 @@ import {
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
 } from "@mymemo/agent-db/runtime-store";
-import { conversationRuntime, runEvents, runs } from "@mymemo/agent-db/schema";
+import {
+	conversationRuntime,
+	conversations,
+	runEvents,
+	runs,
+} from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
@@ -34,6 +39,7 @@ afterAll(async () => {
 afterEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
 	await tdb.db.delete(conversationRuntime);
+	await tdb.db.delete(conversations);
 });
 
 /** A promise whose resolution the test controls, to gate a processor. */
@@ -65,6 +71,10 @@ function buildLoop(worker: Worker, processor: RunProcessor) {
 }
 
 async function queueRun(runId: string, conversationId: string) {
+	await tdb.db
+		.insert(conversations)
+		.values({ userId: "user-1", conversationId, scope: "general" })
+		.onConflictDoNothing();
 	await createQueuedRunTx(tdb.db, { runId, userId: "user-1", conversationId });
 }
 

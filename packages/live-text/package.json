@@ -10,6 +10,8 @@
 		"check": "biome check --write"
 	},
 	"dependencies": {
+		"@ag-ui/core": "^0.0.57",
+		"assistant-stream": "^0.3.26",
 		"redis": "^5.12.1",
 		"zod": "^4.1.12"
 	},

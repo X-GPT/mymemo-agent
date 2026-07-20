@@ -1,6 +1,6 @@
 {
-  "id": "59964bce-0417-4356-9858-ba504637447c",
-  "prevId": "117a0c61-f71d-44b2-8ec2-6e1eb3dfd4aa",
+  "id": "54d397ed-d0fb-4ef2-bb1c-933ef127475f",
+  "prevId": "60ba86e6-7a9e-43d5-a245-52562419509c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -784,6 +784,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "normalized_input": {
+          "name": "normalized_input",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -810,6 +816,12 @@
         },
         "cancel_requested_at": {
           "name": "cancel_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "live_stream_failed_at": {
+          "name": "live_stream_failed_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false

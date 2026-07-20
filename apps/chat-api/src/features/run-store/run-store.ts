@@ -6,10 +6,10 @@ import {
 	requestRunCancellationTx,
 	toRunRecord,
 } from "@mymemo/agent-db/run-store";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
-import { runEvents, runs } from "@/db/schema";
-import type { ConversationRecord } from "@/features/conversation-store";
+import { conversations, runEvents, runs } from "@/db/schema";
+import type { ConversationRef } from "@/features/conversation-store";
 import { RunEventType } from "@/features/run-events";
 
 /**
@@ -65,8 +65,18 @@ export class ActiveRunExistsError extends ActiveRunConflictError {
 	}
 }
 
+/** Admission lost a lifecycle race with Archive. */
+export class ConversationArchivedError extends Error {
+	override name = "ConversationArchivedError" as const;
+}
+
+/** Admission lost a lifecycle race with Permanent deletion. */
+export class ConversationNotFoundError extends Error {
+	override name = "ConversationNotFoundError" as const;
+}
+
 export interface CreateQueuedRunInput {
-	conversation: ConversationRecord;
+	conversation: ConversationRef;
 	message: string;
 	/** A Live subscription may be prepared for this id before admission. */
 	runId?: string;
@@ -114,6 +124,27 @@ export async function createQueuedRunStartedTx(
 	const { conversation, message, runId } = input;
 	try {
 		return await db.transaction(async (tx) => {
+			const [lockedConversation] = await tx
+				.select()
+				.from(conversations)
+				.where(
+					and(
+						eq(conversations.userId, conversation.userId),
+						eq(conversations.conversationId, conversation.conversationId),
+					),
+				)
+				.for("update");
+			if (!lockedConversation) {
+				throw new ConversationNotFoundError(
+					`Conversation ${conversation.conversationId} does not exist`,
+				);
+			}
+			if (lockedConversation.archivedAt !== null) {
+				throw new ConversationArchivedError(
+					`Conversation ${conversation.conversationId} is archived`,
+				);
+			}
+
 			const [row] = await tx
 				.insert(runs)
 				.values({
@@ -130,15 +161,27 @@ export async function createQueuedRunStartedTx(
 				seq: 1,
 				type: RunEventType.Started,
 				payload: {
-					userId: conversation.userId,
-					conversationId: conversation.conversationId,
+					userId: lockedConversation.userId,
+					conversationId: lockedConversation.conversationId,
 					runId,
 					message,
-					scope: conversation.scope,
-					collectionId: conversation.collectionId,
-					summaryId: conversation.summaryId,
+					scope: lockedConversation.scope,
+					collectionId: lockedConversation.collectionId,
+					summaryId: lockedConversation.summaryId,
 				},
 			});
+			await tx
+				.update(conversations)
+				.set({
+					title: sql`coalesce(${conversations.title}, ${message})`,
+					lastActivityAt: sql`now()`,
+				})
+				.where(
+					and(
+						eq(conversations.userId, lockedConversation.userId),
+						eq(conversations.conversationId, lockedConversation.conversationId),
+					),
+				);
 			return toRunRecord(row);
 		});
 	} catch (error) {

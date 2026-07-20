@@ -1,6 +1,6 @@
 {
-  "id": "59964bce-0417-4356-9858-ba504637447c",
-  "prevId": "117a0c61-f71d-44b2-8ec2-6e1eb3dfd4aa",
+  "id": "60ba86e6-7a9e-43d5-a245-52562419509c",
+  "prevId": "59964bce-0417-4356-9858-ba504637447c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -89,9 +89,9 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "agent_sessions_transcript_idx": {
           "name": "agent_sessions_transcript_idx",
@@ -122,9 +122,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "agent_sessions_conversation_idx": {
           "name": "agent_sessions_conversation_idx",
@@ -137,9 +137,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -222,9 +222,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "artifact_objects_status_idx": {
           "name": "artifact_objects_status_idx",
@@ -237,9 +237,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -339,26 +339,26 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "conversation_artifacts_conversation_fk": {
           "name": "conversation_artifacts_conversation_fk",
           "tableFrom": "conversation_artifacts",
-          "tableTo": "conversations",
           "columnsFrom": [
             "user_id",
             "conversation_id"
           ],
+          "tableTo": "conversations",
           "columnsTo": [
             "user_id",
             "conversation_id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -604,9 +604,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "document_access_events_created_at_idx": {
           "name": "document_access_events_created_at_idx",
@@ -619,9 +619,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -737,15 +737,15 @@
         "run_events_run_id_runs_run_id_fk": {
           "name": "run_events_run_id_runs_run_id_fk",
           "tableFrom": "run_events",
-          "tableTo": "runs",
           "columnsFrom": [
             "run_id"
           ],
+          "tableTo": "runs",
           "columnsTo": [
             "run_id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {
@@ -860,10 +860,10 @@
             }
           ],
           "isUnique": true,
-          "where": "\"runs\".\"status\" in ('queued', 'running', 'cancel_requested')",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"runs\".\"status\" in ('queued', 'running', 'cancel_requested')",
+          "concurrently": false
         },
         "runs_queue_claim_idx": {
           "name": "runs_queue_claim_idx",
@@ -876,10 +876,10 @@
             }
           ],
           "isUnique": false,
-          "where": "\"runs\".\"status\" = 'queued'",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"runs\".\"status\" = 'queued'",
+          "concurrently": false
         },
         "runs_stale_recovery_idx": {
           "name": "runs_stale_recovery_idx",
@@ -892,10 +892,10 @@
             }
           ],
           "isUnique": false,
-          "where": "\"runs\".\"status\" in ('running', 'cancel_requested')",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"runs\".\"status\" in ('running', 'cancel_requested')",
+          "concurrently": false
         },
         "runs_cleanup_idx": {
           "name": "runs_cleanup_idx",
@@ -908,27 +908,27 @@
             }
           ],
           "isUnique": false,
-          "where": "\"runs\".\"status\" in ('done', 'error', 'canceled')",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"runs\".\"status\" in ('done', 'error', 'canceled')",
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "runs_conversation_fk": {
           "name": "runs_conversation_fk",
           "tableFrom": "runs",
-          "tableTo": "conversations",
           "columnsFrom": [
             "user_id",
             "conversation_id"
           ],
+          "tableTo": "conversations",
           "columnsTo": [
             "user_id",
             "conversation_id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -945,10 +945,10 @@
   },
   "enums": {},
   "schemas": {},
+  "views": {},
   "sequences": {},
   "roles": {},
   "policies": {},
-  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},
