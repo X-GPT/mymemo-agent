@@ -1,12 +1,14 @@
+# Security group descriptions are replacement-only in AWS. These fixed-name
+# groups cannot be replaced while ECS and ElastiCache network interfaces use them.
 resource "aws_security_group" "live_redis" {
   name        = "${local.common_name}-live-redis"
-  description = "Private Redis Live Stream for trusted agent services"
+  description = "Private Redis live preview lane for trusted agent services"
   vpc_id      = local.shared_vpc_id
 }
 
 resource "aws_security_group" "live_redis_clients" {
   name        = "${local.common_name}-live-redis-clients"
-  description = "chat-api and agent-worker clients of the Redis Live Stream"
+  description = "chat-api and agent-worker clients of the Redis live preview lane"
   vpc_id      = local.shared_vpc_id
 }
 
