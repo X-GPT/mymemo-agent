@@ -145,6 +145,25 @@ describe("PostgresRunStore", () => {
 		).rejects.toBeInstanceOf(RunInputMismatchError);
 	});
 
+	it("surfaces a different active AG-UI Run id as route backpressure", async () => {
+		const input = {
+			conversation,
+			runId: "client-run-1",
+			messageId: "user-message-1",
+			message: "first work",
+		};
+		await store.admitRun(input);
+
+		await expect(
+			store.admitRun({
+				...input,
+				runId: "client-run-2",
+				messageId: "user-message-2",
+				message: "competing work",
+			}),
+		).rejects.toBeInstanceOf(ActiveRunExistsError);
+	});
+
 	// Guards the write/read contract across the trust boundary: the worker's
 	// orchestration loads the turn through the shared helper, so what admission
 	// writes must be exactly what it reads back.

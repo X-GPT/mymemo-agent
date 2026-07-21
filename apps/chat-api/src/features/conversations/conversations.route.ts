@@ -688,6 +688,45 @@ app.post(
 	},
 );
 
+// POST /v1/conversations/:conversationId/runs/:runId/cancel — durably cancel
+// an owned Run without admitting new work or opening an SSE response.
+app.post(
+	"/:conversationId/runs/:runId/cancel",
+	zValidator(
+		"param",
+		z.object({
+			conversationId: ConversationIdParam,
+			runId: RunIdParam,
+		}),
+		(result, c) => {
+			if (!result.success) {
+				return c.json({ error: "Invalid conversation or Run id" }, 400);
+			}
+		},
+	),
+	async (c) => {
+		const identity = identityFromContext(c);
+		if (!identity.success) {
+			return c.json(
+				{ error: "Missing or invalid internal identity headers" },
+				401,
+			);
+		}
+
+		const { conversationId, runId } = c.req.valid("param");
+		const result = await c.var.deps.runStore.requestCancellation({
+			userId: identity.data.memberCode,
+			conversationId,
+			runId,
+		});
+		if (result.outcome === "not_found") {
+			return c.json({ error: "Run not found" }, 404);
+		}
+		const body = { runId: result.run.runId, status: result.run.status };
+		return c.json(body, result.outcome === "already_terminal" ? 409 : 202);
+	},
+);
+
 // POST /v1/conversations/:conversationId/events — send an event.
 // `user.message` queues a turn and streams its events back as SSE;
 // `user.interrupt` cancels an existing owned run and returns JSON.

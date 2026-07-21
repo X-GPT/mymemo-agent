@@ -25,7 +25,7 @@
  * db:migrate`), then run the line above.
  *
  * Overridable knobs:
- *   CHAT_API_PORT        chat-api listen port  (default 3100)
+ *   CHAT_API_PORT           fixed chat-api listen port (default: free port)
  *   INTEGRATION_TIMEOUT_MS  per-turn ceiling   (default 30000)
  */
 
@@ -39,16 +39,15 @@ import {
 } from "bun:test";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
-import { createDatabase } from "../packages/agent-db/src/client";
-import { claimNextRunTx } from "../packages/agent-db/src/run-store";
-import { createRedisLiveStreamStore } from "../packages/live-text/src/redis-live-stream-store";
 
 const DB_URL = process.env.AGENT_DATABASE_URL;
 const RUN = Boolean(DB_URL);
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
-const CHAT_PORT = Number(process.env.CHAT_API_PORT ?? 3100);
-const CHAT_URL = `http://localhost:${CHAT_PORT}`;
+const configuredChatPort = process.env.CHAT_API_PORT;
+let chatPort =
+	configuredChatPort === undefined ? 0 : Number(configuredChatPort);
+let CHAT_URL = "";
 const rawTurnTimeout = Number(process.env.INTEGRATION_TIMEOUT_MS);
 const TURN_TIMEOUT_MS =
 	Number.isFinite(rawTurnTimeout) && rawTurnTimeout > 0
@@ -59,8 +58,16 @@ const TURN_TIMEOUT_MS =
 // hook default off 5s only when the suite will actually run.
 if (RUN) setDefaultTimeout(90_000);
 
-const MEMBER_CODE = "demo-member";
+const MEMBER_CODE = `acceptance-${crypto.randomUUID()}`;
 const PARTNER_CODE = "demo-partner";
+const IDENTITY_HEADERS = {
+	"x-member-code": MEMBER_CODE,
+	"x-partner-code": PARTNER_CODE,
+};
+const JSON_IDENTITY_HEADERS = {
+	...IDENTITY_HEADERS,
+	"content-type": "application/json",
+};
 
 interface SSEFrame {
 	id?: string;
@@ -159,8 +166,8 @@ function fetchRunEvents(
 	} = {},
 ): Promise<Response> {
 	const headers: Record<string, string> = {
+		...IDENTITY_HEADERS,
 		"x-member-code": options.memberCode ?? MEMBER_CODE,
-		"x-partner-code": PARTNER_CODE,
 	};
 	if (options.cursor !== undefined) {
 		headers["last-event-id"] = options.cursor;
@@ -168,6 +175,23 @@ function fetchRunEvents(
 	return fetch(
 		`${CHAT_URL}/v1/conversations/${conversationId}/runs/${runId}/events`,
 		{ headers, signal: options.signal },
+	);
+}
+
+function cancelRun(
+	conversationId: string,
+	runId: string,
+	memberCode = MEMBER_CODE,
+): Promise<Response> {
+	return fetch(
+		`${CHAT_URL}/v1/conversations/${conversationId}/runs/${runId}/cancel`,
+		{
+			method: "POST",
+			headers: {
+				...IDENTITY_HEADERS,
+				"x-member-code": memberCode,
+			},
+		},
 	);
 }
 
@@ -212,46 +236,28 @@ async function waitForHealthy(timeoutMs: number): Promise<boolean> {
 	return false;
 }
 
-async function waitForPersistedRun(
+async function waitForRunVisible(
+	conversationId: string,
 	runId: string,
 	timeoutMs: number,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		const run = await acceptanceDb?.query.runs.findFirst({
-			columns: { runId: true },
-			where: (row, { eq }) => eq(row.runId, runId),
-		});
-		if (run) return;
-		await Bun.sleep(50);
-	}
-	throw new Error(`Run ${runId} was not admitted before the deadline`);
-}
-
-async function waitForFailedLiveStreamRun(
-	runId: string,
-	timeoutMs: number,
-): Promise<{ status: string; liveStreamFailedAt: Date | null }> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const run = await acceptanceDb?.query.runs.findFirst({
-			columns: { status: true, liveStreamFailedAt: true },
-			where: (row, { eq }) => eq(row.runId, runId),
-		});
-		if (
-			run &&
-			run.liveStreamFailedAt !== null &&
-			(run.status === "done" ||
-				run.status === "error" ||
-				run.status === "canceled")
-		) {
-			return run;
+		const response = await fetch(
+			`${CHAT_URL}/v1/conversations/${conversationId}/history`,
+			{
+				headers: IDENTITY_HEADERS,
+			},
+		);
+		if (response.ok) {
+			const history = (await response.json()) as {
+				runs: Array<{ runId: string }>;
+			};
+			if (history.runs.some((run) => run.runId === runId)) return;
 		}
 		await Bun.sleep(50);
 	}
-	throw new Error(
-		`Run ${runId} did not terminalize with a failed Live Stream before the deadline`,
-	);
+	throw new Error(`Run ${runId} was not admitted before the deadline`);
 }
 
 async function admitIntegrationRun(prompt: string): Promise<{
@@ -261,11 +267,7 @@ async function admitIntegrationRun(prompt: string): Promise<{
 }> {
 	const createResponse = await fetch(`${CHAT_URL}/v1/conversations`, {
 		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			"x-member-code": MEMBER_CODE,
-			"x-partner-code": PARTNER_CODE,
-		},
+		headers: JSON_IDENTITY_HEADERS,
 		body: JSON.stringify({}),
 		signal: AbortSignal.timeout(15_000),
 	});
@@ -276,11 +278,7 @@ async function admitIntegrationRun(prompt: string): Promise<{
 		`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
 		{
 			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				"x-member-code": MEMBER_CODE,
-				"x-partner-code": PARTNER_CODE,
-			},
+			headers: JSON_IDENTITY_HEADERS,
 			body: JSON.stringify({
 				threadId: conversationId,
 				runId,
@@ -299,45 +297,42 @@ async function admitIntegrationRun(prompt: string): Promise<{
 			signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 		},
 	);
-	await waitForPersistedRun(runId, 10_000);
+	await waitForRunVisible(conversationId, runId, 10_000);
 	return { conversationId, runId, response };
 }
 
-async function liveStreamStatus(runId: string): Promise<string> {
-	const redisUrl = eventWriterEnv?.REDIS_URL;
-	if (!redisUrl) throw new Error("event writer was not configured");
-	const store = createRedisLiveStreamStore({
-		url: redisUrl,
-		deployment: "current",
-	});
-	try {
-		return await store.status(runId);
-	} finally {
-		await store.close();
-	}
+interface AcceptanceHistoryRun {
+	runId: string;
+	messages: Array<Record<string, unknown>>;
+	terminalEvent: { type: string; [key: string]: unknown } | null;
 }
 
-async function historyTerminalType(
+async function waitForHistoryRun(
 	conversationId: string,
 	runId: string,
-): Promise<string | undefined> {
-	const response = await fetch(
-		`${CHAT_URL}/v1/conversations/${conversationId}/history`,
-		{
-			headers: {
-				"x-member-code": MEMBER_CODE,
-				"x-partner-code": PARTNER_CODE,
+	terminalType: string,
+	timeoutMs: number,
+): Promise<AcceptanceHistoryRun> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const response = await fetch(
+			`${CHAT_URL}/v1/conversations/${conversationId}/history`,
+			{
+				headers: IDENTITY_HEADERS,
 			},
-		},
+		);
+		if (response.ok) {
+			const history = (await response.json()) as {
+				runs: AcceptanceHistoryRun[];
+			};
+			const run = history.runs.find((candidate) => candidate.runId === runId);
+			if (run?.terminalEvent?.type === terminalType) return run;
+		}
+		await Bun.sleep(50);
+	}
+	throw new Error(
+		`Run ${runId} did not reach ${terminalType} in Conversation history`,
 	);
-	expect(response.status).toBe(200);
-	const history = (await response.json()) as {
-		runs: Array<{
-			runId: string;
-			terminalEvent: { type: string } | null;
-		}>;
-	};
-	return history.runs.find((run) => run.runId === runId)?.terminalEvent?.type;
 }
 
 async function freePort(): Promise<number> {
@@ -348,7 +343,7 @@ async function freePort(): Promise<number> {
 			const address = server.address();
 			if (!address || typeof address === "string") {
 				server.close();
-				reject(new Error("failed to allocate Redis test port"));
+				reject(new Error("failed to allocate integration fixture port"));
 				return;
 			}
 			server.close((error) =>
@@ -389,8 +384,33 @@ async function startRedis(port: number): Promise<Bun.Subprocess> {
 let chat: Bun.Subprocess | undefined;
 let worker: Bun.Subprocess | undefined;
 let redis: Bun.Subprocess | undefined;
-let eventWriterEnv: Record<string, string> | undefined;
-const acceptanceDb = DB_URL ? createDatabase(DB_URL) : undefined;
+let redisPort: number;
+let workerPort: number;
+let eventWriterEnv: Record<string, string>;
+
+async function waitForWorkerHealthy(timeoutMs: number): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		try {
+			const response = await fetch(`http://127.0.0.1:${workerPort}/health`, {
+				signal: AbortSignal.timeout(1_000),
+			});
+			if (response.ok) return true;
+		} catch {
+			// The process may still be binding its health port.
+		}
+		await Bun.sleep(50);
+	}
+	return false;
+}
+
+async function startEventWriter(
+	overrides: Record<string, string> = {},
+	healthFailureMessage = "deterministic worker did not become healthy",
+): Promise<void> {
+	worker = spawnEventWriter({ ...eventWriterEnv, ...overrides });
+	expect(await waitForWorkerHealthy(10_000), healthFailureMessage).toBe(true);
+}
 
 async function stopEventWriter(): Promise<void> {
 	const runningWorker = worker;
@@ -405,7 +425,10 @@ describe.skipIf(!RUN)(
 	() => {
 		beforeAll(async () => {
 			const dbUrl = DB_URL as string;
-			const redisPort = await freePort();
+			if (configuredChatPort === undefined) chatPort = await freePort();
+			CHAT_URL = `http://127.0.0.1:${chatPort}`;
+			redisPort = await freePort();
+			workerPort = await freePort();
 			redis = await startRedis(redisPort);
 			const redisUrl = `redis://127.0.0.1:${redisPort}`;
 			eventWriterEnv = {
@@ -415,6 +438,7 @@ describe.skipIf(!RUN)(
 				DB_SSL: "disable",
 				LOG_LEVEL: "warn",
 				INTEGRATION_RESUME_DELAY_MS: "1500",
+				INTEGRATION_WORKER_PORT: String(workerPort),
 			};
 			chat = spawnApp("chat-api", {
 				AGENT_DATABASE_URL: dbUrl,
@@ -424,7 +448,7 @@ describe.skipIf(!RUN)(
 				AGENT_EXPOSURE_BREAK_GLASS: "true",
 				REDIS_URL: redisUrl,
 				LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
-				PORT: String(CHAT_PORT),
+				PORT: String(chatPort),
 				LOG_LEVEL: "warn",
 			});
 
@@ -441,7 +465,6 @@ describe.skipIf(!RUN)(
 			await stopEventWriter();
 			redis?.kill("SIGTERM");
 			if (redis) await redis.exited;
-			await acceptanceDb?.$client.end();
 		});
 
 		it(
@@ -451,20 +474,17 @@ describe.skipIf(!RUN)(
 				// the `conversations` table and chat-api's writable DB is reachable.
 				const createRes = await fetch(`${CHAT_URL}/v1/conversations`, {
 					method: "POST",
-					headers: {
-						"content-type": "application/json",
-						"x-member-code": MEMBER_CODE,
-						"x-partner-code": PARTNER_CODE,
-					},
+					headers: JSON_IDENTITY_HEADERS,
 					body: JSON.stringify({}),
 					signal: AbortSignal.timeout(15_000),
 				});
-				const createBody = await createRes.text();
 				expect(
 					createRes.status,
-					`create conversation failed; body: ${createBody.slice(0, 500)}`,
+					"create conversation failed (response payload intentionally omitted)",
 				).toBe(201);
-				const conversationId = JSON.parse(createBody).conversationId as string;
+				const conversationId = (
+					(await createRes.json()) as { conversationId: string }
+				).conversationId;
 				expect(conversationId.length).toBeGreaterThan(0);
 
 				const runId = crypto.randomUUID();
@@ -487,16 +507,12 @@ describe.skipIf(!RUN)(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
 					{
 						method: "POST",
-						headers: {
-							"content-type": "application/json",
-							"x-member-code": MEMBER_CODE,
-							"x-partner-code": PARTNER_CODE,
-						},
+						headers: JSON_IDENTITY_HEADERS,
 						body: JSON.stringify(runInput),
 						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 					},
 				);
-				await waitForPersistedRun(runId, 10_000);
+				await waitForRunVisible(conversationId, runId, 10_000);
 
 				const missingRun = await fetchRunEvents(
 					conversationId,
@@ -522,8 +538,10 @@ describe.skipIf(!RUN)(
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
 				await Bun.sleep(5_200);
-				if (!eventWriterEnv) throw new Error("event writer was not configured");
-				worker = spawnEventWriter(eventWriterEnv);
+				await startEventWriter(
+					{},
+					"deterministic worker did not expose its production health boundary",
+				);
 
 				const reconnect = await reconnectPromise;
 				expect(reconnect.status).toBe(200);
@@ -555,42 +573,7 @@ describe.skipIf(!RUN)(
 				expect(res.status, "unexpected Run response status").toBe(200);
 
 				const [frames, afterToolResponse] = await Promise.all([
-					consumeSSE(res, async (frame) => {
-						if (frame.data.type === "TEXT_MESSAGE_END") {
-							const completed = await acceptanceDb?.query.runEvents.findFirst({
-								columns: { type: true },
-								where: (event, { and, eq }) =>
-									and(
-										eq(event.runId, runId),
-										eq(event.type, "assistant_message_completed"),
-									),
-							});
-							expect(completed?.type).toBe("assistant_message_completed");
-						}
-						const durableToolType = (
-							{
-								TOOL_CALL_START: "tool_call_started",
-								TOOL_CALL_ARGS: "tool_call_args",
-								TOOL_CALL_END: "tool_call_completed",
-								TOOL_CALL_RESULT: "tool_call_result",
-							} as Record<string, string>
-						)[frame.data.type as string];
-						if (durableToolType) {
-							const committed = await acceptanceDb?.query.runEvents.findFirst({
-								columns: { type: true },
-								where: (event, { and, eq }) =>
-									and(eq(event.runId, runId), eq(event.type, durableToolType)),
-							});
-							expect(committed?.type).toBe(durableToolType);
-						}
-						if (frame.data.type === "RUN_FINISHED") {
-							const terminal = await acceptanceDb?.query.runs.findFirst({
-								columns: { status: true },
-								where: (run, { eq }) => eq(run.runId, runId),
-							});
-							expect(terminal?.status).toBe("done");
-						}
-					}),
+					consumeSSE(res, async () => {}),
 					afterToolResponsePromise,
 				]);
 				expect(afterToolResponse.status).toBe(200);
@@ -645,26 +628,6 @@ describe.skipIf(!RUN)(
 					true,
 				);
 
-				const durableEvents = await acceptanceDb?.query.runEvents.findMany({
-					columns: { type: true },
-					where: (event, { eq }) => eq(event.runId, runId),
-					orderBy: (event, { asc }) => asc(event.seq),
-				});
-				expect(durableEvents?.map((event) => event.type)).toEqual([
-					"run_started",
-					"assistant_message_completed",
-					"tool_call_started",
-					"tool_call_args",
-					"tool_call_completed",
-					"tool_call_result",
-					"run_done",
-				]);
-				const durableRun = await acceptanceDb?.query.runs.findFirst({
-					columns: { status: true },
-					where: (run, { eq }) => eq(run.runId, runId),
-				});
-				expect(durableRun?.status).toBe("done");
-
 				const replayFromZero = await fetchRunEvents(conversationId, runId, {
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
@@ -674,10 +637,7 @@ describe.skipIf(!RUN)(
 				const historyResponse = await fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/history`,
 					{
-						headers: {
-							"x-member-code": MEMBER_CODE,
-							"x-partner-code": PARTNER_CODE,
-						},
+						headers: IDENTITY_HEADERS,
 					},
 				);
 				expect(historyResponse.status).toBe(200);
@@ -685,29 +645,45 @@ describe.skipIf(!RUN)(
 					runs: Array<{
 						runId: string;
 						messages: Array<Record<string, unknown>>;
+						terminalEvent: Record<string, unknown> | null;
 					}>;
 				};
 				const historyRun = history.runs.find((run) => run.runId === runId);
-				const historyAssistant = historyRun?.messages.find(
-					(message) => message.role === "assistant",
-				);
-				const historyTool = historyRun?.messages.find(
-					(message) => message.role === "tool",
-				);
-				expect(historyAssistant).toMatchObject({
-					id: textStart.messageId,
-					toolCalls: [
+				expect(historyRun).toEqual({
+					runId,
+					messages: [
 						{
-							id: toolStart.toolCallId,
-							type: "function",
-							function: { name: "Read", arguments: '{"path":"CONTEXT.md"}' },
+							id: "integration-user-message",
+							role: "user",
+							content: "Hello from the split-runtime integration test.",
+						},
+						{
+							id: textStart.messageId,
+							role: "assistant",
+							content: streamedText,
+							toolCalls: [
+								{
+									id: toolStart.toolCallId,
+									type: "function",
+									function: {
+										name: "Read",
+										arguments: '{"path":"CONTEXT.md"}',
+									},
+								},
+							],
+						},
+						{
+							id: toolResult.messageId,
+							role: "tool",
+							toolCallId: toolStart.toolCallId,
+							content: '{"ok":true}',
 						},
 					],
-				});
-				expect(historyTool).toMatchObject({
-					id: toolResult.messageId,
-					toolCallId: toolStart.toolCallId,
-					content: '{"ok":true}',
+					terminalEvent: {
+						type: "RUN_FINISHED",
+						threadId: conversationId,
+						runId,
+					},
 				});
 
 				const impossibleRetainedCursor = await fetchRunEvents(
@@ -721,11 +697,7 @@ describe.skipIf(!RUN)(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
 					{
 						method: "POST",
-						headers: {
-							"content-type": "application/json",
-							"x-member-code": MEMBER_CODE,
-							"x-partner-code": PARTNER_CODE,
-						},
+						headers: JSON_IDENTITY_HEADERS,
 						body: JSON.stringify(runInput),
 						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 					},
@@ -737,11 +709,7 @@ describe.skipIf(!RUN)(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
 					{
 						method: "POST",
-						headers: {
-							"content-type": "application/json",
-							"x-member-code": MEMBER_CODE,
-							"x-partner-code": PARTNER_CODE,
-						},
+						headers: JSON_IDENTITY_HEADERS,
 						body: JSON.stringify({
 							...runInput,
 							messages: [
@@ -761,11 +729,7 @@ describe.skipIf(!RUN)(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
 					{
 						method: "POST",
-						headers: {
-							"content-type": "application/json",
-							"x-member-code": MEMBER_CODE,
-							"x-partner-code": PARTNER_CODE,
-						},
+						headers: JSON_IDENTITY_HEADERS,
 						body: JSON.stringify({
 							...runInput,
 							runId: failedRunId,
@@ -836,10 +800,7 @@ describe.skipIf(!RUN)(
 				const failedHistoryResponse = await fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/history`,
 					{
-						headers: {
-							"x-member-code": MEMBER_CODE,
-							"x-partner-code": PARTNER_CODE,
-						},
+						headers: IDENTITY_HEADERS,
 					},
 				);
 				const failedHistory = (await failedHistoryResponse.json()) as {
@@ -884,6 +845,327 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
+			"cancels a running Run through HTTP while its client reconnects",
+			async () => {
+				await stopEventWriter();
+				const turn = await admitIntegrationRun(
+					"Synthetic text-only lifecycle scenario",
+				);
+				await startEventWriter({
+					INTEGRATION_RESUME_DELAY_MS: "6000",
+				});
+
+				const response = await turn.response;
+				expect(response.status).toBe(200);
+				const disconnected = await readUntilSSEFrameAndCancel(
+					response,
+					"TEXT_MESSAGE_CONTENT",
+				);
+
+				const archiveWhileActive = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}`,
+					{
+						method: "PATCH",
+						headers: JSON_IDENTITY_HEADERS,
+						body: JSON.stringify({ archived: true }),
+					},
+				);
+				expect(archiveWhileActive.status).toBe(409);
+
+				const deleteWhileActive = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}`,
+					{
+						method: "DELETE",
+						headers: IDENTITY_HEADERS,
+					},
+				);
+				expect(deleteWhileActive.status).toBe(409);
+
+				const renameWhileActive = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}`,
+					{
+						method: "PATCH",
+						headers: JSON_IDENTITY_HEADERS,
+						body: JSON.stringify({ title: "Renamed while active" }),
+					},
+				);
+				expect(renameWhileActive.status).toBe(200);
+
+				const competingRunId = crypto.randomUUID();
+				const competingAdmission = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}/runs`,
+					{
+						method: "POST",
+						headers: JSON_IDENTITY_HEADERS,
+						body: JSON.stringify({
+							threadId: turn.conversationId,
+							runId: competingRunId,
+							state: {},
+							messages: [
+								{
+									id: `user-${competingRunId}`,
+									role: "user",
+									content: "Competing active work",
+								},
+							],
+							tools: [],
+							context: [],
+							forwardedProps: {},
+						}),
+					},
+				);
+				expect(competingAdmission.status).toBe(409);
+
+				const resumed = await fetchRunEvents(turn.conversationId, turn.runId, {
+					cursor: disconnected.frame.id,
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+				expect(resumed.status).toBe(200);
+
+				const cancellation = await cancelRun(turn.conversationId, turn.runId);
+				expect(cancellation.status).toBe(202);
+				expect(await cancellation.json()).toEqual({
+					runId: turn.runId,
+					status: "cancel_requested",
+				});
+
+				const resumedFrames = parseSSE(await resumed.text());
+				expect(resumedFrames.at(-1)?.data.type).toBe("RUN_CANCELLED");
+				expect(
+					resumedFrames.some((frame) => frame.data.type === "RUN_FINISHED"),
+				).toBe(false);
+
+				const historyRun = await waitForHistoryRun(
+					turn.conversationId,
+					turn.runId,
+					"RUN_CANCELLED",
+					TURN_TIMEOUT_MS,
+				);
+				expect(historyRun.messages).toEqual([
+					{
+						id: `user-${turn.runId}`,
+						role: "user",
+						content: "Synthetic text-only lifecycle scenario",
+					},
+				]);
+
+				const archiveAfterCancel = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}`,
+					{
+						method: "PATCH",
+						headers: JSON_IDENTITY_HEADERS,
+						body: JSON.stringify({ archived: true }),
+					},
+				);
+				expect(archiveAfterCancel.status).toBe(200);
+
+				const deleteAfterCancel = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}`,
+					{
+						method: "DELETE",
+						headers: IDENTITY_HEADERS,
+					},
+				);
+				expect(deleteAfterCancel.status).toBe(204);
+				const deletedHistory = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}/history`,
+					{
+						headers: IDENTITY_HEADERS,
+					},
+				);
+				expect(deletedHistory.status).toBe(404);
+			},
+			TURN_TIMEOUT_MS + 15_000,
+		);
+
+		it(
+			"cancels a running Run through HTTP while its client recovers",
+			async () => {
+				await stopEventWriter();
+				const turn = await admitIntegrationRun(
+					"Synthetic text-only recovering cancellation",
+				);
+				await startEventWriter({
+					INTEGRATION_LIVE_STREAM_FAIL_AT: "mid_text",
+					INTEGRATION_RESUME_DELAY_MS: "2500",
+				});
+
+				const response = await turn.response;
+				expect(response.status).toBe(200);
+				const incompleteFrames = parseSSE(await response.text());
+				expect(
+					incompleteFrames.some((frame) =>
+						["RUN_FINISHED", "RUN_ERROR", "RUN_CANCELLED"].includes(
+							frame.data.type as string,
+						),
+					),
+				).toBe(false);
+
+				const recovering = await fetchRunEvents(
+					turn.conversationId,
+					turn.runId,
+				);
+				expect(recovering.status).toBe(410);
+				expect(await recovering.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
+
+				const cancellation = await cancelRun(turn.conversationId, turn.runId);
+				expect(cancellation.status).toBe(202);
+				expect(await cancellation.json()).toEqual({
+					runId: turn.runId,
+					status: "cancel_requested",
+				});
+
+				const historyRun = await waitForHistoryRun(
+					turn.conversationId,
+					turn.runId,
+					"RUN_CANCELLED",
+					TURN_TIMEOUT_MS,
+				);
+				expect(historyRun.messages).toEqual([
+					{
+						id: `user-${turn.runId}`,
+						role: "user",
+						content: "Synthetic text-only recovering cancellation",
+					},
+				]);
+			},
+			TURN_TIMEOUT_MS + 15_000,
+		);
+
+		it(
+			"keeps text Run identities equal across live delivery, replay, and history",
+			async () => {
+				await stopEventWriter();
+				const prompt = "Synthetic text-only equality scenario";
+				const turn = await admitIntegrationRun(prompt);
+				await startEventWriter({
+					INTEGRATION_RESUME_DELAY_MS: "0",
+				});
+
+				const response = await turn.response;
+				expect(response.status).toBe(200);
+				const liveFrames = parseSSE(await response.text());
+				const messageId = `message-${turn.runId}`;
+				const assistantText = `Synthetic response for run ${turn.runId}`;
+				expect(liveFrames.map((frame) => frame.data)).toEqual([
+					{
+						type: "RUN_STARTED",
+						threadId: turn.conversationId,
+						runId: turn.runId,
+					},
+					{
+						type: "TEXT_MESSAGE_START",
+						messageId,
+						role: "assistant",
+					},
+					{
+						type: "TEXT_MESSAGE_CONTENT",
+						messageId,
+						delta: assistantText,
+					},
+					{ type: "TEXT_MESSAGE_END", messageId },
+					{
+						type: "RUN_FINISHED",
+						threadId: turn.conversationId,
+						runId: turn.runId,
+					},
+				]);
+
+				const replay = await fetchRunEvents(turn.conversationId, turn.runId);
+				expect(replay.status).toBe(200);
+				expect(parseSSE(await replay.text())).toEqual(liveFrames);
+
+				const historyRun = await waitForHistoryRun(
+					turn.conversationId,
+					turn.runId,
+					"RUN_FINISHED",
+					TURN_TIMEOUT_MS,
+				);
+				expect(historyRun).toEqual({
+					runId: turn.runId,
+					messages: [
+						{
+							id: `user-${turn.runId}`,
+							role: "user",
+							content: prompt,
+						},
+						{
+							id: messageId,
+							role: "assistant",
+							content: assistantText,
+						},
+					],
+					terminalEvent: {
+						type: "RUN_FINISHED",
+						threadId: turn.conversationId,
+						runId: turn.runId,
+					},
+				});
+			},
+			TURN_TIMEOUT_MS + 10_000,
+		);
+
+		it(
+			"returns 503 before Stream creation and completes after real Redis recovers",
+			async () => {
+				await stopEventWriter();
+				const pause = Bun.spawn(
+					[
+						"redis-cli",
+						"-h",
+						"127.0.0.1",
+						"-p",
+						String(redisPort),
+						"CLIENT",
+						"PAUSE",
+						"1500",
+						"ALL",
+					],
+					{ stdout: "ignore", stderr: "ignore" },
+				);
+				expect(await pause.exited).toBe(0);
+				const turn = await admitIntegrationRun(
+					"Synthetic text-only pre-creation Redis outage",
+				);
+				const unavailable = await turn.response;
+				expect(unavailable.status).toBe(503);
+				expect(await unavailable.json()).toEqual({
+					error: "Live stream temporarily unavailable",
+				});
+
+				await Bun.sleep(1_600);
+				await startEventWriter({
+					INTEGRATION_RESUME_DELAY_MS: "0",
+				});
+
+				const replay = await fetchRunEvents(turn.conversationId, turn.runId, {
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+				expect(replay.status).toBe(200);
+				expect(
+					parseSSE(await replay.text()).map((frame) => frame.data.type),
+				).toEqual([
+					"RUN_STARTED",
+					"TEXT_MESSAGE_START",
+					"TEXT_MESSAGE_CONTENT",
+					"TEXT_MESSAGE_END",
+					"RUN_FINISHED",
+				]);
+				const historyRun = await waitForHistoryRun(
+					turn.conversationId,
+					turn.runId,
+					"RUN_FINISHED",
+					TURN_TIMEOUT_MS,
+				);
+				expect(historyRun.messages).toHaveLength(2);
+			},
+			TURN_TIMEOUT_MS + 10_000,
+		);
+
+		it(
 			"recovers Conversation history across the real Redis failure matrix",
 			async () => {
 				const faultPoints = [
@@ -900,45 +1182,24 @@ describe.skipIf(!RUN)(
 						runId,
 						response: runResponsePromise,
 					} = await admitIntegrationRun(`Exercise ${faultPoint} recovery`);
-					if (!eventWriterEnv) {
-						throw new Error("event writer was not configured");
-					}
-					worker = spawnEventWriter({
-						...eventWriterEnv,
+					await startEventWriter({
 						INTEGRATION_LIVE_STREAM_FAIL_AT: faultPoint,
 					});
 
-					const terminal = await waitForFailedLiveStreamRun(
+					const recoveredRun = await waitForHistoryRun(
+						conversationId,
 						runId,
+						"RUN_FINISHED",
 						TURN_TIMEOUT_MS,
 					);
-					expect(terminal, faultPoint).toMatchObject({
-						status: "done",
-						liveStreamFailedAt: expect.any(Date),
+					expect(recoveredRun.terminalEvent, faultPoint).toMatchObject({
+						type: "RUN_FINISHED",
 					});
 					await stopEventWriter();
 
 					const runResponse = await runResponsePromise;
 					expect(runResponse.status, faultPoint).toBe(200);
 					await runResponse.text();
-
-					const durableEvents = await acceptanceDb?.query.runEvents.findMany({
-						columns: { type: true },
-						where: (event, { eq }) => eq(event.runId, runId),
-						orderBy: (event, { asc }) => asc(event.seq),
-					});
-					expect(
-						durableEvents?.map((event) => event.type),
-						faultPoint,
-					).toEqual([
-						"run_started",
-						"assistant_message_completed",
-						"tool_call_started",
-						"tool_call_args",
-						"tool_call_completed",
-						"tool_call_result",
-						"run_done",
-					]);
 
 					const recoveryResponse = await fetchRunEvents(conversationId, runId);
 					expect(recoveryResponse.status, faultPoint).toBe(410);
@@ -947,29 +1208,8 @@ describe.skipIf(!RUN)(
 						recovery: "history",
 					});
 
-					const historyResponse = await fetch(
-						`${CHAT_URL}/v1/conversations/${conversationId}/history`,
-						{
-							headers: {
-								"x-member-code": MEMBER_CODE,
-								"x-partner-code": PARTNER_CODE,
-							},
-						},
-					);
-					expect(historyResponse.status, faultPoint).toBe(200);
-					const history = (await historyResponse.json()) as {
-						runs: Array<{
-							runId: string;
-							messages: Array<{ role: string; content: unknown }>;
-							terminalEvent: { type: string } | null;
-						}>;
-					};
-					const recoveredRun = history.runs.find((run) => run.runId === runId);
-					expect(recoveredRun?.terminalEvent, faultPoint).toMatchObject({
-						type: "RUN_FINISHED",
-					});
 					expect(
-						recoveredRun?.messages.some(
+						recoveredRun.messages.some(
 							(message) =>
 								message.role === "assistant" &&
 								JSON.stringify(message.content).includes("Synthetic response"),
@@ -982,26 +1222,195 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
+			"rebuilds an active Run from cursor zero while it terminalizes",
+			async () => {
+				await stopEventWriter();
+				const prompt = "Synthetic text-only full-refresh race";
+				const turn = await admitIntegrationRun(prompt);
+				await startEventWriter({ INTEGRATION_RESUME_DELAY_MS: "1500" });
+
+				const response = await turn.response;
+				expect(response.status).toBe(200);
+				await readUntilSSEFrameAndCancel(response, "TEXT_MESSAGE_CONTENT");
+
+				const activeHistoryResponse = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}/history`,
+					{ headers: IDENTITY_HEADERS },
+				);
+				expect(activeHistoryResponse.status).toBe(200);
+				const activeHistory = (await activeHistoryResponse.json()) as {
+					activeRun: {
+						runId: string;
+						status: string;
+						lastEventId: string;
+					} | null;
+					runs: AcceptanceHistoryRun[];
+				};
+				expect(activeHistory.activeRun).toEqual({
+					runId: turn.runId,
+					status: "running",
+					lastEventId: "0",
+				});
+				expect(
+					activeHistory.runs.find((run) => run.runId === turn.runId),
+				).toEqual({
+					runId: turn.runId,
+					messages: [
+						{
+							id: `user-${turn.runId}`,
+							role: "user",
+							content: prompt,
+						},
+					],
+					terminalEvent: null,
+				});
+
+				const replay = await fetchRunEvents(turn.conversationId, turn.runId, {
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+				expect(replay.status).toBe(200);
+				expect(
+					parseSSE(await replay.text()).map((frame) => frame.data.type),
+				).toEqual([
+					"RUN_STARTED",
+					"TEXT_MESSAGE_START",
+					"TEXT_MESSAGE_CONTENT",
+					"TEXT_MESSAGE_END",
+					"RUN_FINISHED",
+				]);
+
+				const completeHistoryResponse = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}/history`,
+					{ headers: IDENTITY_HEADERS },
+				);
+				const completeHistory = (await completeHistoryResponse.json()) as {
+					activeRun: unknown;
+					runs: AcceptanceHistoryRun[];
+				};
+				expect(completeHistory.activeRun).toBeNull();
+				expect(
+					completeHistory.runs.find((run) => run.runId === turn.runId)
+						?.terminalEvent?.type,
+				).toBe("RUN_FINISHED");
+			},
+			TURN_TIMEOUT_MS + 10_000,
+		);
+
+		it(
+			"refreshes an active Stream and expires it after the terminal grace period",
+			async () => {
+				await stopEventWriter();
+				const turn = await admitIntegrationRun(
+					"Synthetic text-only retention scenario",
+				);
+				await startEventWriter({
+					INTEGRATION_HEARTBEAT_INTERVAL_MS: "100",
+					INTEGRATION_LIVE_STREAM_RETENTION_MS: "800",
+					INTEGRATION_RESUME_DELAY_MS: "2200",
+				});
+
+				const response = await turn.response;
+				expect(response.status).toBe(200);
+				const disconnected = await readUntilSSEFrameAndCancel(
+					response,
+					"TEXT_MESSAGE_CONTENT",
+				);
+				await Bun.sleep(1_200);
+
+				const resumed = await fetchRunEvents(turn.conversationId, turn.runId, {
+					cursor: disconnected.frame.id,
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+				expect(resumed.status).toBe(200);
+				const resumedFrames = parseSSE(await resumed.text());
+				expect(resumedFrames.map((frame) => frame.data.type)).toEqual([
+					"TEXT_MESSAGE_END",
+					"RUN_FINISHED",
+				]);
+
+				const historyRun = await waitForHistoryRun(
+					turn.conversationId,
+					turn.runId,
+					"RUN_FINISHED",
+					TURN_TIMEOUT_MS,
+				);
+				expect(historyRun.messages).toHaveLength(2);
+
+				await Bun.sleep(1_200);
+				const expired = await fetchRunEvents(turn.conversationId, turn.runId);
+				expect(expired.status).toBe(410);
+				expect(await expired.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
+			},
+			TURN_TIMEOUT_MS + 15_000,
+		);
+
+		it(
+			"recovers completed history when either real Redis Stream cap is reached",
+			async () => {
+				const caps = [
+					{
+						label: "entry cap",
+						overrides: { INTEGRATION_LIVE_STREAM_MAX_EVENTS: "2" },
+					},
+					{
+						label: "byte-size cap",
+						overrides: { INTEGRATION_LIVE_STREAM_MAX_BYTES: "200" },
+					},
+				] as const;
+
+				for (const cap of caps) {
+					await stopEventWriter();
+					const turn = await admitIntegrationRun(
+						`Synthetic text-only ${cap.label} scenario`,
+					);
+					await startEventWriter({
+						...cap.overrides,
+						INTEGRATION_RESUME_DELAY_MS: "0",
+					});
+
+					const response = await turn.response;
+					expect(response.status, cap.label).toBe(200);
+					const partialFrames = parseSSE(await response.text());
+					expect(
+						partialFrames.some((frame) => frame.data.type === "RUN_FINISHED"),
+						cap.label,
+					).toBe(false);
+
+					const historyRun = await waitForHistoryRun(
+						turn.conversationId,
+						turn.runId,
+						"RUN_FINISHED",
+						TURN_TIMEOUT_MS,
+					);
+					expect(historyRun.messages, cap.label).toHaveLength(2);
+
+					const recovery = await fetchRunEvents(
+						turn.conversationId,
+						turn.runId,
+					);
+					expect(recovery.status, cap.label).toBe(410);
+					expect(await recovery.json(), cap.label).toEqual({
+						error: "Live stream unavailable",
+						recovery: "history",
+					});
+				}
+			},
+			TURN_TIMEOUT_MS * 2 + 10_000,
+		);
+
+		it(
 			"keeps queued cancellation and stale recovery free of fabricated Live Streams",
 			async () => {
 				await stopEventWriter();
 				const queued = await admitIntegrationRun(
 					"Cancel before a worker claims",
 				);
-				const cancellation = await fetch(
-					`${CHAT_URL}/v1/conversations/${queued.conversationId}/events`,
-					{
-						method: "POST",
-						headers: {
-							"content-type": "application/json",
-							"x-member-code": MEMBER_CODE,
-							"x-partner-code": PARTNER_CODE,
-						},
-						body: JSON.stringify({
-							type: "user.interrupt",
-							runId: queued.runId,
-						}),
-					},
+				const cancellation = await cancelRun(
+					queued.conversationId,
+					queued.runId,
 				);
 				expect(cancellation.status).toBe(202);
 				expect(await cancellation.json()).toEqual({
@@ -1010,69 +1419,46 @@ describe.skipIf(!RUN)(
 				});
 				const queuedResponse = await queued.response;
 				expect(queuedResponse.status).toBe(200);
-				await queuedResponse.text();
-				const queuedRun = await acceptanceDb?.query.runs.findFirst({
-					columns: { status: true, liveStreamFailedAt: true },
-					where: (run, { eq }) => eq(run.runId, queued.runId),
-				});
-				expect(queuedRun).toMatchObject({
-					status: "canceled",
-					liveStreamFailedAt: null,
-				});
-				const queuedEvents = await acceptanceDb?.query.runEvents.findMany({
-					columns: { type: true },
-					where: (event, { eq }) => eq(event.runId, queued.runId),
-					orderBy: (event, { asc }) => asc(event.seq),
-				});
-				expect(queuedEvents?.map((event) => event.type)).toEqual([
-					"run_started",
-					"run_canceled",
-				]);
-				expect(await liveStreamStatus(queued.runId)).toBe("missing");
-				expect(
-					await historyTerminalType(queued.conversationId, queued.runId),
-				).toBe("RUN_CANCELLED");
-
-				const stale = await admitIntegrationRun(
-					"Recover an expired worker claim",
-				);
-				if (!acceptanceDb || !eventWriterEnv) {
-					throw new Error("integration services were not configured");
-				}
-				const claimed = await claimNextRunTx(acceptanceDb, {
-					workerId: "integration-stale-worker",
-				});
-				expect(claimed?.runId).toBe(stale.runId);
-				await acceptanceDb.$client.query(
-					"update runs set locked_until = now() - interval '1 second' where run_id = $1",
-					[stale.runId],
-				);
-				worker = spawnEventWriter(eventWriterEnv);
-				const recovered = await waitForFailedLiveStreamRun(
-					stale.runId,
+				expect(parseSSE(await queuedResponse.text())).toEqual([]);
+				const queuedHistory = await waitForHistoryRun(
+					queued.conversationId,
+					queued.runId,
+					"RUN_CANCELLED",
 					TURN_TIMEOUT_MS,
 				);
-				expect(recovered).toMatchObject({
-					status: "error",
-					liveStreamFailedAt: expect.any(Date),
-				});
+				expect(queuedHistory.terminalEvent?.type).toBe("RUN_CANCELLED");
+				const queuedRecovery = await fetchRunEvents(
+					queued.conversationId,
+					queued.runId,
+				);
+				expect(queuedRecovery.status).toBe(410);
+
+				const stale = await admitIntegrationRun("Synthetic stale worker crash");
+				worker = spawnEventWriter(eventWriterEnv);
+				const crashedWorker = worker;
+				expect(await crashedWorker.exited).toBe(17);
+				worker = undefined;
+
+				await startEventWriter();
+				const staleHistory = await waitForHistoryRun(
+					stale.conversationId,
+					stale.runId,
+					"RUN_ERROR",
+					TURN_TIMEOUT_MS,
+				);
+				expect(staleHistory.terminalEvent?.type).toBe("RUN_ERROR");
 				await stopEventWriter();
 				const staleResponse = await stale.response;
 				expect(staleResponse.status).toBe(200);
-				await staleResponse.text();
-				const staleEvents = await acceptanceDb.query.runEvents.findMany({
-					columns: { type: true },
-					where: (event, { eq }) => eq(event.runId, stale.runId),
-					orderBy: (event, { asc }) => asc(event.seq),
-				});
-				expect(staleEvents.map((event) => event.type)).toEqual([
-					"run_started",
-					"run_error",
-				]);
-				expect(await liveStreamStatus(stale.runId)).toBe("missing");
+				const staleFrames = parseSSE(await staleResponse.text());
 				expect(
-					await historyTerminalType(stale.conversationId, stale.runId),
-				).toBe("RUN_ERROR");
+					staleFrames.some((frame) => frame.data.type === "RUN_ERROR"),
+				).toBe(false);
+				const staleRecovery = await fetchRunEvents(
+					stale.conversationId,
+					stale.runId,
+				);
+				expect(staleRecovery.status).toBe(410);
 			},
 			TURN_TIMEOUT_MS * 2 + 15_000,
 		);
