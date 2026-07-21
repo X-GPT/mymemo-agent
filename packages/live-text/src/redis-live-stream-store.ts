@@ -13,6 +13,7 @@ import type {
 	ResumableStreamStore,
 } from "assistant-stream/resumable";
 import { createClient } from "redis";
+import { z } from "zod";
 
 export const LIVE_STREAM_RETENTION_MS = 30 * 60 * 1_000;
 export const LIVE_STREAM_MAX_EVENT_BYTES = 32 * 1_024;
@@ -29,6 +30,20 @@ const DEFAULT_REDIS_POLL_INTERVAL_MS = 100;
 const REDIS_BLOB_STRING = 36;
 const REDIS_STREAM_ID_PATTERN = /^(0|[1-9]\d*)-(0|[1-9]\d*)$/;
 const REDIS_STREAM_ID_PART_MAX = (1n << 64n) - 1n;
+
+/** AG-UI's cancellation terminal is not present in the currently pinned core
+ * package, so keep its standard wire shape at the Live Stream boundary. */
+export const RUN_CANCELLED_EVENT_TYPE = "RUN_CANCELLED" as const;
+const RunCancelledEventSchema = z
+	.object({
+		type: z.literal(RUN_CANCELLED_EVENT_TYPE),
+		threadId: z.string().min(1).max(MAX_RUN_ID_LENGTH),
+		runId: z.string().min(1).max(MAX_RUN_ID_LENGTH),
+	})
+	.strict();
+
+export type RunCancelledEvent = z.infer<typeof RunCancelledEventSchema>;
+export type LiveStreamEvent = AGUIEvent | RunCancelledEvent;
 
 const ACQUIRE_SCRIPT = `
 if redis.call("EXISTS", KEYS[1]) == 1 then
@@ -198,8 +213,10 @@ export class LiveStreamStoreError extends Error {
  * Validate and serialize one standard AG-UI event. Large text-content deltas
  * become several complete events; no other event is split or truncated.
  */
-export function encodeAgUiLiveStreamEvent(event: AGUIEvent): Uint8Array[] {
-	const parsed = EventSchemas.parse(event);
+export function encodeAgUiLiveStreamEvent(
+	event: LiveStreamEvent,
+): Uint8Array[] {
+	const parsed = parseLiveStreamEvent(event);
 	const encoded = encodeEvent(parsed);
 	if (parsed.type !== EventType.TEXT_MESSAGE_CONTENT) {
 		if (encoded.byteLength > LIVE_STREAM_MAX_EVENT_BYTES) {
@@ -611,16 +628,28 @@ function positiveInteger(value: number, name: string): number {
 	return value;
 }
 
-function encodeEvent(event: AGUIEvent): Uint8Array {
+function encodeEvent(event: LiveStreamEvent): Uint8Array {
 	return EVENT_ENCODER.encode(JSON.stringify(event));
 }
 
 function validateEncodedAgUiEvent(chunk: Uint8Array): void {
 	try {
-		EventSchemas.parse(JSON.parse(EVENT_DECODER.decode(chunk)));
+		parseLiveStreamEvent(JSON.parse(EVENT_DECODER.decode(chunk)));
 	} catch {
 		throw new LiveStreamStoreError("invalid_event");
 	}
+}
+
+function parseLiveStreamEvent(event: unknown): LiveStreamEvent {
+	if (
+		typeof event === "object" &&
+		event !== null &&
+		"type" in event &&
+		event.type === RUN_CANCELLED_EVENT_TYPE
+	) {
+		return RunCancelledEventSchema.parse(event);
+	}
+	return EventSchemas.parse(event);
 }
 
 function splitTextContentEvent(event: TextMessageContentEvent): Uint8Array[] {

@@ -9,7 +9,10 @@ import { createLogger } from "../apps/agent-worker/src/logger";
 import { RunLoop, type RunProcessor } from "../apps/agent-worker/src/run-loop";
 import { Worker } from "../apps/agent-worker/src/worker";
 import { createDatabase } from "../packages/agent-db/src/client";
-import { createRedisLiveStreamStore } from "../packages/live-text/src/redis-live-stream-store";
+import {
+	createRedisLiveStreamStore,
+	type LiveStreamStore,
+} from "../packages/live-text/src/redis-live-stream-store";
 
 const agentDatabaseUrl = process.env.AGENT_DATABASE_URL;
 if (!agentDatabaseUrl) throw new Error("AGENT_DATABASE_URL is required");
@@ -24,10 +27,14 @@ const worker = new Worker({
 	shutdownTimeoutMs: 1_000,
 	logger,
 });
-const liveStreamStore = createRedisLiveStreamStore({
+const redisLiveStreamStore = createRedisLiveStreamStore({
 	url: redisUrl,
 	deployment: "current",
 });
+const liveStreamStore = withInjectedRedisFault(
+	redisLiveStreamStore,
+	process.env.INTEGRATION_LIVE_STREAM_FAIL_AT,
+);
 const resumeDelayMs = Number(process.env.INTEGRATION_RESUME_DELAY_MS ?? 0);
 const processor: RunProcessor = async (ctx) => {
 	const messageId = `message-${ctx.run.runId}`;
@@ -112,3 +119,77 @@ async function shutdown(): Promise<void> {
 
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
+
+type LiveStreamFault = "before_creation" | "mid_text" | "tool" | "terminal";
+
+/** Deterministically faults one operation while retaining a real Redis-backed
+ * store for every operation on either side of the failure. Integration tests
+ * use this to cover process-boundary recovery without timing Redis shutdowns. */
+function withInjectedRedisFault(
+	store: LiveStreamStore,
+	rawFault: string | undefined,
+): LiveStreamStore {
+	const fault = isLiveStreamFault(rawFault) ? rawFault : undefined;
+	let injected = false;
+	const inject = (candidate: LiveStreamFault) => {
+		if (fault !== candidate || injected) return;
+		injected = true;
+		throw new Error(`injected Redis failure at ${candidate}`);
+	};
+	return {
+		async acquire(streamId, options) {
+			inject("before_creation");
+			return store.acquire(streamId, options);
+		},
+		async append(streamId, chunk) {
+			const type = liveEventType(chunk);
+			if (type === "TEXT_MESSAGE_CONTENT") inject("mid_text");
+			if (type === "TOOL_CALL_START") inject("tool");
+			if (type === "RUN_FINISHED") inject("terminal");
+			return store.append(streamId, chunk);
+		},
+		appendWithRetryId(streamId, retryId, chunk) {
+			return store.appendWithRetryId(streamId, retryId, chunk);
+		},
+		finalize(streamId, status, error) {
+			return store.finalize(streamId, status, error);
+		},
+		refresh(streamId) {
+			return store.refresh(streamId);
+		},
+		read(streamId, cursor, signal) {
+			return store.read(streamId, cursor, signal);
+		},
+		status(streamId) {
+			return store.status(streamId);
+		},
+		delete(streamId) {
+			return store.delete(streamId);
+		},
+		close() {
+			return store.close();
+		},
+	};
+}
+
+function isLiveStreamFault(
+	value: string | undefined,
+): value is LiveStreamFault {
+	return (
+		value === "before_creation" ||
+		value === "mid_text" ||
+		value === "tool" ||
+		value === "terminal"
+	);
+}
+
+function liveEventType(chunk: Uint8Array): string | undefined {
+	try {
+		const event = JSON.parse(new TextDecoder().decode(chunk)) as {
+			type?: unknown;
+		};
+		return typeof event.type === "string" ? event.type : undefined;
+	} catch {
+		return undefined;
+	}
+}

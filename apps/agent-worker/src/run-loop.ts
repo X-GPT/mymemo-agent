@@ -1,4 +1,3 @@
-import type { AGUIEvent } from "@ag-ui/core";
 import {
 	ArtifactQuotaError,
 	type PublishedArtifact,
@@ -15,6 +14,7 @@ import {
 	appendRunEventTx,
 	claimNextRunTx,
 	heartbeatRunTx,
+	markLiveStreamFailedTx,
 	markStaleRunsTx,
 	RunFenceError,
 	type RunRecord,
@@ -25,7 +25,7 @@ import {
 	advanceAgentSessionPointerTx,
 	type RunOwnershipRef,
 } from "@mymemo/agent-db/runtime-store";
-import type { LiveStreamStore } from "@mymemo/live-text";
+import type { LiveStreamEvent, LiveStreamStore } from "@mymemo/live-text";
 import { ArtifactValidationError } from "./artifacts/artifact-manifest";
 import { ArtifactPublicationError } from "./artifacts/artifact-publication";
 import { toMessage, type WorkerLogger } from "./logger";
@@ -89,7 +89,7 @@ export interface RunProcessContext {
 	appendModelContent(content: ModelContent): Promise<void>;
 	/** Append one standard event to this Run's retained Live Stream. Failure is
 	 * absorbed by the producer so it cannot change model execution. */
-	appendLiveEvent(event: AGUIEvent): Promise<void>;
+	appendLiveEvent(event: LiveStreamEvent): Promise<void>;
 }
 
 /**
@@ -299,6 +299,20 @@ export class RunLoop {
 				status: run.status,
 			})),
 		});
+		if (!this.opts.liveStreamStore) return;
+		for (const run of recovered) {
+			if (run.liveStreamFailedAt === null) continue;
+			try {
+				await this.opts.liveStreamStore.delete(run.runId);
+			} catch (error) {
+				this.opts.logger.warn({
+					message: "could not delete stale Run Live Stream",
+					workerId: this.workerId,
+					runId: run.runId,
+					error: toMessage(error),
+				});
+			}
+		}
 	}
 
 	private async heartbeatActive(): Promise<void> {
@@ -378,6 +392,22 @@ export class RunLoop {
 			store: this.opts.liveStreamStore,
 			runId: run.runId,
 			conversationId: run.conversationId,
+			markLiveStreamFailed: async () => {
+				const result = await markLiveStreamFailedTx(this.opts.db, {
+					runId: run.runId,
+					workerId: this.workerId,
+				});
+				if (result.outcome === "fence_rejected") {
+					this.opts.logger.warn({
+						message: "could not mark Live Stream failed through Run fence",
+						workerId: this.workerId,
+						runId: run.runId,
+					});
+					throw new RunFenceError(
+						"Run fence rejected the Live Stream failure marker",
+					);
+				}
+			},
 			logger: this.opts.logger,
 		});
 		entry.liveStream = liveStream;

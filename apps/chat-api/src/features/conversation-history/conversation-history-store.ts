@@ -1,4 +1,5 @@
 import type { Message, RunErrorEvent, RunFinishedEvent } from "@ag-ui/core";
+import type { RunCancelledEvent } from "@mymemo/live-text";
 import type { ConversationScope } from "@/features/conversation-store";
 
 export interface ConversationSummary {
@@ -12,14 +13,7 @@ export interface ConversationSummary {
 	archivedAt: Date | null;
 }
 
-/** ADR-0012 names cancellation as its own standard terminal event. The pinned
- * AG-UI package does not expose that type yet, so keep this narrow bridge local
- * to the history contract until the package adds it. */
-export interface RunCancelledEvent {
-	type: "RUN_CANCELLED";
-	threadId: string;
-	runId: string;
-}
+export type { RunCancelledEvent } from "@mymemo/live-text";
 
 export type RunTerminalEvent =
 	| RunFinishedEvent
