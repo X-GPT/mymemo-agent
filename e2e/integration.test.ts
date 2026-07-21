@@ -112,10 +112,61 @@ async function consumeSSE(
 	return frames;
 }
 
+async function readUntilSSEFrameAndCancel(
+	response: Response,
+	eventType: string,
+): Promise<{ frame: SSEFrame; raw: string }> {
+	if (!response.body) throw new Error("SSE response omitted its body");
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffered = "";
+	let raw = "";
+	for (;;) {
+		const { done, value } = await reader.read();
+		const decoded = decoder.decode(value, { stream: !done });
+		buffered += decoded;
+		raw += decoded;
+		let boundary = buffered.indexOf("\n\n");
+		while (boundary >= 0) {
+			const block = buffered.slice(0, boundary + 2);
+			buffered = buffered.slice(boundary + 2);
+			const [frame] = parseSSE(block);
+			if (frame?.data.type === eventType) {
+				await reader.cancel();
+				return { frame, raw };
+			}
+			boundary = buffered.indexOf("\n\n");
+		}
+		if (done) throw new Error(`SSE response ended before ${eventType}`);
+	}
+}
+
 function requiredFrame(frames: SSEFrame[], type: string): SSEFrame {
 	const frame = frames.find((candidate) => candidate.data.type === type);
 	if (!frame) throw new Error(`SSE response omitted ${type}`);
 	return frame;
+}
+
+function fetchRunEvents(
+	conversationId: string,
+	runId: string,
+	options: {
+		memberCode?: string;
+		cursor?: string;
+		signal?: AbortSignal;
+	} = {},
+): Promise<Response> {
+	const headers: Record<string, string> = {
+		"x-member-code": options.memberCode ?? MEMBER_CODE,
+		"x-partner-code": PARTNER_CODE,
+	};
+	if (options.cursor !== undefined) {
+		headers["last-event-id"] = options.cursor;
+	}
+	return fetch(
+		`${CHAT_URL}/v1/conversations/${conversationId}/runs/${runId}/events`,
+		{ headers, signal: options.signal },
+	);
 }
 
 /** Spawn `bun run src/index.ts` for an app under apps/<name>. Output is inherited
@@ -157,6 +208,22 @@ async function waitForHealthy(timeoutMs: number): Promise<boolean> {
 		await Bun.sleep(500);
 	}
 	return false;
+}
+
+async function waitForPersistedRun(
+	runId: string,
+	timeoutMs: number,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const run = await acceptanceDb?.query.runs.findFirst({
+			columns: { runId: true },
+			where: (row, { eq }) => eq(row.runId, runId),
+		});
+		if (run) return;
+		await Bun.sleep(50);
+	}
+	throw new Error(`Run ${runId} was not admitted before the deadline`);
 }
 
 async function freePort(): Promise<number> {
@@ -208,6 +275,7 @@ async function startRedis(port: number): Promise<Bun.Subprocess> {
 let chat: Bun.Subprocess | undefined;
 let worker: Bun.Subprocess | undefined;
 let redis: Bun.Subprocess | undefined;
+let eventWriterEnv: Record<string, string> | undefined;
 const acceptanceDb = DB_URL ? createDatabase(DB_URL) : undefined;
 
 describe.skipIf(!RUN)(
@@ -218,13 +286,14 @@ describe.skipIf(!RUN)(
 			const redisPort = await freePort();
 			redis = await startRedis(redisPort);
 			const redisUrl = `redis://127.0.0.1:${redisPort}`;
-			worker = spawnEventWriter({
+			eventWriterEnv = {
 				AGENT_DATABASE_URL: dbUrl,
 				REDIS_URL: redisUrl,
 				LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
 				DB_SSL: "disable",
 				LOG_LEVEL: "warn",
-			});
+				INTEGRATION_RESUME_DELAY_MS: "1500",
+			};
 			chat = spawnApp("chat-api", {
 				AGENT_DATABASE_URL: dbUrl,
 				ARTIFACT_BUCKET: "mymemo-agent-integration-artifacts",
@@ -254,7 +323,7 @@ describe.skipIf(!RUN)(
 		});
 
 		it(
-			"admits and idempotently replays a text-only AG-UI Run from real Redis",
+			"waits, disconnects, and replays an authorized AG-UI Run from real Redis",
 			async () => {
 				// Create the conversation (general scope). Proves migrations provisioned
 				// the `conversations` table and chat-api's writable DB is reachable.
@@ -292,7 +361,7 @@ describe.skipIf(!RUN)(
 					context: [],
 					forwardedProps: {},
 				};
-				const res = await fetch(
+				const runResponsePromise = fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
 					{
 						method: "POST",
@@ -305,34 +374,111 @@ describe.skipIf(!RUN)(
 						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 					},
 				);
+				await waitForPersistedRun(runId, 10_000);
+
+				const missingRun = await fetchRunEvents(
+					conversationId,
+					crypto.randomUUID(),
+				);
+				expect(missingRun.status).toBe(404);
+				const foreignRun = await fetchRunEvents(conversationId, runId, {
+					memberCode: "foreign-member",
+				});
+				expect(foreignRun.status).toBe(404);
+				const malformedCursor = await fetchRunEvents(conversationId, runId, {
+					cursor: "not-a-cursor",
+				});
+				expect(malformedCursor.status).toBe(400);
+				const impossibleBeforeCreation = await fetchRunEvents(
+					conversationId,
+					runId,
+					{ cursor: "1-0" },
+				);
+				expect(impossibleBeforeCreation.status).toBe(400);
+
+				const reconnectPromise = fetchRunEvents(conversationId, runId, {
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+				await Bun.sleep(5_200);
+				if (!eventWriterEnv) throw new Error("event writer was not configured");
+				worker = spawnEventWriter(eventWriterEnv);
+
+				const reconnect = await reconnectPromise;
+				expect(reconnect.status).toBe(200);
+				const textDisconnect = await readUntilSSEFrameAndCancel(
+					reconnect,
+					"TEXT_MESSAGE_CONTENT",
+				);
+				expect(textDisconnect.raw).toContain(": ping\n\n");
+				expect(textDisconnect.frame.data.type).toBe("TEXT_MESSAGE_CONTENT");
+				expect(textDisconnect.frame.id).toMatch(/^\d+-\d+$/);
+
+				const afterTextResponse = await fetchRunEvents(conversationId, runId, {
+					cursor: textDisconnect.frame.id as string,
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+				expect(afterTextResponse.status).toBe(200);
+				const toolDisconnect = await readUntilSSEFrameAndCancel(
+					afterTextResponse,
+					"TOOL_CALL_ARGS",
+				);
+				expect(toolDisconnect.frame.id).toMatch(/^\d+-\d+$/);
+
+				const afterToolResponsePromise = fetchRunEvents(conversationId, runId, {
+					cursor: toolDisconnect.frame.id as string,
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+
+				const res = await runResponsePromise;
 				expect(res.status, "unexpected Run response status").toBe(200);
 
-				const frames = await consumeSSE(res, async (frame) => {
-					if (frame.data.type === "TEXT_MESSAGE_END") {
-						const completed = await acceptanceDb?.query.runEvents.findFirst({
-							columns: { type: true },
-							where: (event, { and, eq }) =>
-								and(
-									eq(event.runId, runId),
-									eq(event.type, "assistant_message_completed"),
-								),
-						});
-						expect(completed?.type).toBe("assistant_message_completed");
-					}
-					if (frame.data.type === "RUN_FINISHED") {
-						const terminal = await acceptanceDb?.query.runs.findFirst({
-							columns: { status: true },
-							where: (run, { eq }) => eq(run.runId, runId),
-						});
-						expect(terminal?.status).toBe("done");
-					}
-				});
+				const [frames, afterToolResponse] = await Promise.all([
+					consumeSSE(res, async (frame) => {
+						if (frame.data.type === "TEXT_MESSAGE_END") {
+							const completed = await acceptanceDb?.query.runEvents.findFirst({
+								columns: { type: true },
+								where: (event, { and, eq }) =>
+									and(
+										eq(event.runId, runId),
+										eq(event.type, "assistant_message_completed"),
+									),
+							});
+							expect(completed?.type).toBe("assistant_message_completed");
+						}
+						if (frame.data.type === "RUN_FINISHED") {
+							const terminal = await acceptanceDb?.query.runs.findFirst({
+								columns: { status: true },
+								where: (run, { eq }) => eq(run.runId, runId),
+							});
+							expect(terminal?.status).toBe("done");
+						}
+					}),
+					afterToolResponsePromise,
+				]);
+				expect(afterToolResponse.status).toBe(200);
+				const afterToolFrames = parseSSE(await afterToolResponse.text());
+				const textDisconnectIndex = frames.findIndex(
+					(frame) => frame.id === textDisconnect.frame.id,
+				);
+				const toolDisconnectIndex = frames.findIndex(
+					(frame) => frame.id === toolDisconnect.frame.id,
+				);
+				expect(textDisconnectIndex).toBe(2);
+				expect(toolDisconnectIndex).toBe(5);
+				expect(parseSSE(toolDisconnect.raw)).toEqual(
+					frames.slice(textDisconnectIndex + 1, toolDisconnectIndex + 1),
+				);
+				expect(afterToolFrames).toEqual(frames.slice(toolDisconnectIndex + 1));
 				const eventTypes = frames.map((frame) => frame.data.type);
 				expect(eventTypes).toEqual([
 					"RUN_STARTED",
 					"TEXT_MESSAGE_START",
 					"TEXT_MESSAGE_CONTENT",
 					"TEXT_MESSAGE_END",
+					"TOOL_CALL_START",
+					"TOOL_CALL_ARGS",
+					"TOOL_CALL_END",
+					"TOOL_CALL_RESULT",
 					"RUN_FINISHED",
 				]);
 				expect(requiredFrame(frames, "RUN_STARTED").data).toMatchObject({
@@ -357,6 +503,8 @@ describe.skipIf(!RUN)(
 				expect(durableEvents?.map((event) => event.type)).toEqual([
 					"run_started",
 					"assistant_message_completed",
+					"tool_use",
+					"tool_result",
 					"run_done",
 				]);
 				const durableRun = await acceptanceDb?.query.runs.findFirst({
@@ -364,6 +512,19 @@ describe.skipIf(!RUN)(
 					where: (run, { eq }) => eq(run.runId, runId),
 				});
 				expect(durableRun?.status).toBe("done");
+
+				const replayFromZero = await fetchRunEvents(conversationId, runId, {
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+				expect(replayFromZero.status).toBe(200);
+				expect(parseSSE(await replayFromZero.text())).toEqual(frames);
+
+				const impossibleRetainedCursor = await fetchRunEvents(
+					conversationId,
+					runId,
+					{ cursor: "9999999999999-0" },
+				);
+				expect(impossibleRetainedCursor.status).toBe(400);
 
 				const retry = await fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
