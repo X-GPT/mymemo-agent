@@ -6,8 +6,9 @@ import {
 	LiveStreamStoreError,
 	type LiveTextSubscriber,
 } from "@mymemo/live-text";
+import { eq, sql } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
-import { runEvents, runs } from "@/db/schema";
+import { conversations, runEvents, runs } from "@/db/schema";
 import { createTestDatabase } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import type {
@@ -49,6 +50,9 @@ function fakeStore(seed: ConversationRecord[] = []) {
 	const store: ConversationStore = {
 		async get({ userId, conversationId }) {
 			return rows.get(`${userId}/${conversationId}`) ?? null;
+		},
+		async list() {
+			return { conversations: [], next: null };
 		},
 		async create(record) {
 			const now = new Date();
@@ -117,6 +121,24 @@ function buildApp(
 		liveTextTelemetry: silentLiveTextTelemetry,
 	} as unknown as AppDeps;
 	return createApp({ logLevel: "silent" } as unknown as ApiConfig, deps);
+}
+
+function buildAppWithDurableRunStore(
+	conversationStore: ConversationStore,
+	runStore: RunStore,
+) {
+	return buildApp(
+		conversationStore,
+		recordingGate(true).gate,
+		{ ...fakeRunStore(), runStore },
+		disabledLiveTextSubscriber,
+		{
+			async status() {
+				return "done";
+			},
+			async *read() {},
+		},
+	);
 }
 
 function fakeRunStore() {
@@ -377,28 +399,45 @@ function parseAgUiSse(text: string): Array<{ id: string; data: unknown }> {
 }
 
 describe("POST /v1/conversations", () => {
-	it("creates a conversation and returns the id + frozen scope", async () => {
-		const { store, created } = fakeStore();
-		const app = buildApp(store);
+	it("creates an empty draft and returns its standard Conversation summary", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			const store = new PostgresConversationStore(tdb.db);
+			const app = buildApp(store);
 
-		const res = await app.request("/v1/conversations", {
-			method: "POST",
-			headers: identityHeaders,
-			body: JSON.stringify({ collectionId: "col-1" }),
-		});
+			const res = await app.request("/v1/conversations", {
+				method: "POST",
+				headers: identityHeaders,
+				body: JSON.stringify({ collectionId: "col-1" }),
+			});
 
-		expect(res.status).toBe(201);
-		const body = (await res.json()) as {
-			conversationId: string;
-			scope: string;
-		};
-		expect(body.scope).toBe("collection");
-		expect(created[0]).toMatchObject({
-			userId: "member-1",
-			conversationId: body.conversationId,
-			scope: "collection",
-			collectionId: "col-1",
-		});
+			expect(res.status).toBe(201);
+			const body = (await res.json()) as {
+				conversationId: string;
+				title: string | null;
+				scope: string;
+				createdAt: string;
+				lastActivityAt: string;
+				archivedAt: string | null;
+			};
+			expect(body).toEqual({
+				conversationId: body.conversationId,
+				title: null,
+				scope: "collection",
+				createdAt: body.createdAt,
+				lastActivityAt: body.createdAt,
+				archivedAt: null,
+			});
+			expect(new Date(body.createdAt).toISOString()).toBe(body.createdAt);
+			expect(
+				await store.get({
+					userId: "member-1",
+					conversationId: body.conversationId,
+				}),
+			).toMatchObject({ scope: "collection", collectionId: "col-1" });
+		} finally {
+			await tdb.close();
+		}
 	});
 
 	it("rejects missing identity headers with 401", async () => {
@@ -419,6 +458,588 @@ describe("POST /v1/conversations", () => {
 			body: JSON.stringify({ memberCode: "smuggled" }),
 		});
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("GET /v1/conversations", () => {
+	it("pages regular Conversations by activity with a deterministic opaque cursor", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			await tdb.db.insert(conversations).values([
+				{
+					userId: "member-1",
+					conversationId: "conv-a",
+					scope: "general",
+					title: "Old regular",
+					createdAt: new Date("2026-01-01T00:00:00.000Z"),
+					lastActivityAt: new Date("2026-01-02T00:00:00.000Z"),
+				},
+				{
+					userId: "member-1",
+					conversationId: "conv-b",
+					scope: "general",
+					title: "Recent regular B",
+					createdAt: new Date("2026-01-02T00:00:00.000Z"),
+					lastActivityAt: new Date("2026-01-03T00:00:00.000Z"),
+				},
+				{
+					userId: "member-1",
+					conversationId: "conv-c",
+					scope: "collection",
+					collectionId: "collection-1",
+					title: "Recent regular C",
+					createdAt: new Date("2026-01-03T00:00:00.000Z"),
+					lastActivityAt: new Date("2026-01-03T00:00:00.000Z"),
+				},
+				{
+					userId: "member-1",
+					conversationId: "conv-archived",
+					scope: "general",
+					title: "Archived",
+					createdAt: new Date("2026-01-04T00:00:00.000Z"),
+					lastActivityAt: new Date("2026-01-04T00:00:00.000Z"),
+					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
+				},
+			]);
+			const app = buildApp(
+				new PostgresConversationStore(tdb.db),
+				gateThatFailsIfConsulted(),
+			);
+
+			const first = await app.request("/v1/conversations?limit=2", {
+				headers: identityHeaders,
+			});
+			expect(first.status).toBe(200);
+			const firstBody = (await first.json()) as {
+				conversations: Array<{
+					conversationId: string;
+					title: string | null;
+					scope: string;
+					createdAt: string;
+					lastActivityAt: string;
+					archivedAt: string | null;
+				}>;
+				nextCursor: string | null;
+			};
+			expect(
+				firstBody.conversations.map((item) => item.conversationId),
+			).toEqual(["conv-c", "conv-b"]);
+			expect(typeof firstBody.nextCursor).toBe("string");
+			expect(firstBody.nextCursor).not.toContain("conv-b");
+			expect(firstBody.conversations[0]).toEqual({
+				conversationId: "conv-c",
+				title: "Recent regular C",
+				scope: "collection",
+				createdAt: "2026-01-03T00:00:00.000Z",
+				lastActivityAt: "2026-01-03T00:00:00.000Z",
+				archivedAt: null,
+			});
+			await tdb.db.insert(conversations).values({
+				userId: "member-1",
+				conversationId: "conv-newer-after-page-one",
+				scope: "general",
+				title: "Newly active",
+				lastActivityAt: new Date("2026-01-06T00:00:00.000Z"),
+			});
+
+			const second = await app.request(
+				`/v1/conversations?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+				{ headers: identityHeaders },
+			);
+			expect(second.status).toBe(200);
+			expect(await second.json()).toMatchObject({
+				conversations: [{ conversationId: "conv-a" }],
+				nextCursor: null,
+			});
+			const wrongPartition = await app.request(
+				`/v1/conversations?archived=true&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+				{ headers: identityHeaders },
+			);
+			expect(wrongPartition.status).toBe(400);
+		} finally {
+			await tdb.close();
+		}
+	});
+
+	it("searches titles inside the owned Archive partition on the server", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			await tdb.db.insert(conversations).values([
+				{
+					userId: "member-1",
+					conversationId: "owned-archived-match",
+					scope: "general",
+					title: "Quarterly Planning",
+					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
+				},
+				{
+					userId: "member-1",
+					conversationId: "owned-regular-match",
+					scope: "general",
+					title: "Quarterly planning notes",
+				},
+				{
+					userId: "member-1",
+					conversationId: "owned-archived-miss",
+					scope: "general",
+					title: "Travel ideas",
+					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
+				},
+				{
+					userId: "other-member",
+					conversationId: "foreign-archived-match",
+					scope: "general",
+					title: "Secret planning",
+					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
+				},
+			]);
+			const app = buildApp(
+				new PostgresConversationStore(tdb.db),
+				gateThatFailsIfConsulted(),
+			);
+
+			const res = await app.request(
+				"/v1/conversations?archived=true&search=PLANNING",
+				{ headers: identityHeaders },
+			);
+
+			expect(res.status).toBe(200);
+			expect(await res.json()).toMatchObject({
+				conversations: [{ conversationId: "owned-archived-match" }],
+				nextCursor: null,
+			});
+		} finally {
+			await tdb.close();
+		}
+	});
+
+	it("preserves Postgres microseconds across activity cursors", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			await tdb.db.execute(sql`
+				insert into conversations
+					(user_id, conversation_id, scope, title, last_activity_at)
+				values
+					('member-1', 'micro-newest', 'general', 'Newest', '2026-01-03T00:00:00.000900Z'),
+					('member-1', 'micro-next', 'general', 'Next', '2026-01-03T00:00:00.000800Z')
+			`);
+			const app = buildApp(new PostgresConversationStore(tdb.db));
+
+			const first = await app.request("/v1/conversations?limit=1", {
+				headers: identityHeaders,
+			});
+			const firstBody = (await first.json()) as {
+				conversations: Array<{ conversationId: string }>;
+				nextCursor: string;
+			};
+			expect(firstBody.conversations[0]?.conversationId).toBe("micro-newest");
+
+			const second = await app.request(
+				`/v1/conversations?limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`,
+				{ headers: identityHeaders },
+			);
+			expect(second.status).toBe(200);
+			expect(await second.json()).toMatchObject({
+				conversations: [{ conversationId: "micro-next" }],
+			});
+		} finally {
+			await tdb.close();
+		}
+	});
+
+	it("rejects invalid list parameters and cursors", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			const app = buildApp(new PostgresConversationStore(tdb.db));
+			for (const query of [
+				"archived=yes",
+				"limit=0",
+				"limit=101",
+				"search=%20%20",
+				"cursor=not-a-cursor",
+				"unknown=value",
+			]) {
+				const res = await app.request(`/v1/conversations?${query}`, {
+					headers: identityHeaders,
+				});
+				expect(res.status, query).toBe(400);
+			}
+		} finally {
+			await tdb.close();
+		}
+	});
+});
+
+describe("PATCH /v1/conversations/:id", () => {
+	it("renames during an active Run and guards Archive transitions atomically", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			const store = new PostgresConversationStore(tdb.db);
+			await store.create({
+				userId: "member-1",
+				conversationId: "conv-lifecycle",
+				scope: "general",
+				collectionId: null,
+				summaryId: null,
+			});
+			await tdb.db.insert(runs).values({
+				runId: "active-run",
+				userId: "member-1",
+				conversationId: "conv-lifecycle",
+				status: "queued",
+			});
+			const app = buildApp(store, gateThatFailsIfConsulted());
+			const activityBeforeRename = (
+				await store.get({
+					userId: "member-1",
+					conversationId: "conv-lifecycle",
+				})
+			)?.lastActivityAt.toISOString();
+
+			const renamed = await app.request("/v1/conversations/conv-lifecycle", {
+				method: "PATCH",
+				headers: identityHeaders,
+				body: JSON.stringify({ title: "Quarterly plan" }),
+			});
+			expect(renamed.status).toBe(200);
+			expect(await renamed.json()).toMatchObject({
+				conversationId: "conv-lifecycle",
+				title: "Quarterly plan",
+				lastActivityAt: activityBeforeRename,
+				archivedAt: null,
+			});
+
+			const blocked = await app.request("/v1/conversations/conv-lifecycle", {
+				method: "PATCH",
+				headers: identityHeaders,
+				body: JSON.stringify({ title: "Must not apply", archived: true }),
+			});
+			expect(blocked.status).toBe(409);
+			expect(
+				(
+					await store.get({
+						userId: "member-1",
+						conversationId: "conv-lifecycle",
+					})
+				)?.title,
+			).toBe("Quarterly plan");
+
+			await tdb.db
+				.update(runs)
+				.set({ status: "done", terminalAt: new Date() })
+				.where(eq(runs.runId, "active-run"));
+			const archived = await app.request("/v1/conversations/conv-lifecycle", {
+				method: "PATCH",
+				headers: identityHeaders,
+				body: JSON.stringify({ title: "Archived plan", archived: true }),
+			});
+			expect(archived.status).toBe(200);
+			const archivedBody = (await archived.json()) as {
+				title: string;
+				archivedAt: string | null;
+			};
+			expect(archivedBody.title).toBe("Archived plan");
+			expect(archivedBody.archivedAt).not.toBeNull();
+
+			const unarchived = await app.request("/v1/conversations/conv-lifecycle", {
+				method: "PATCH",
+				headers: identityHeaders,
+				body: JSON.stringify({ archived: false }),
+			});
+			expect(unarchived.status).toBe(200);
+			expect(await unarchived.json()).toMatchObject({ archivedAt: null });
+		} finally {
+			await tdb.close();
+		}
+	});
+
+	it("serializes Archive and unarchive racing Run admission", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			const store = new PostgresConversationStore(tdb.db);
+			await store.create({
+				userId: "member-1",
+				conversationId: "conv-archive-race",
+				scope: "general",
+				collectionId: null,
+				summaryId: null,
+			});
+			await store.create({
+				userId: "member-1",
+				conversationId: "conv-unarchive-race",
+				scope: "general",
+				collectionId: null,
+				summaryId: null,
+			});
+			await store.update(
+				{ userId: "member-1", conversationId: "conv-unarchive-race" },
+				{ archived: true },
+			);
+			const durableRuns = new PostgresRunStore(tdb.db);
+			const app = buildAppWithDurableRunStore(store, durableRuns);
+			const admit = (conversationId: string, runId: string) =>
+				app.request(`/v1/conversations/${conversationId}/runs`, {
+					method: "POST",
+					headers: identityHeaders,
+					body: JSON.stringify({
+						...agUiRunInput(),
+						threadId: conversationId,
+						runId,
+					}),
+				});
+
+			const [archive, archiveAdmission] = await Promise.all([
+				app.request("/v1/conversations/conv-archive-race", {
+					method: "PATCH",
+					headers: identityHeaders,
+					body: JSON.stringify({ archived: true }),
+				}),
+				admit("conv-archive-race", "archive-racing-run"),
+			]);
+			// The stubbed retained Stream is empty, so a committed admission returns
+			// the route's retryable transport response after winning the DB race.
+			expect(
+				(archive.status === 200 && archiveAdmission.status === 409) ||
+					(archive.status === 409 && archiveAdmission.status === 503),
+			).toBe(true);
+			const archived = await store.get({
+				userId: "member-1",
+				conversationId: "conv-archive-race",
+			});
+			const archiveRun = await durableRuns.getRun({
+				userId: "member-1",
+				conversationId: "conv-archive-race",
+				runId: "archive-racing-run",
+			});
+			if (archive.status === 200) {
+				expect(archived?.archivedAt).not.toBeNull();
+				expect(archiveRun).toBeNull();
+			} else {
+				expect(archived?.archivedAt).toBeNull();
+				expect(archiveRun).not.toBeNull();
+			}
+
+			const [unarchive, unarchiveAdmission] = await Promise.all([
+				app.request("/v1/conversations/conv-unarchive-race", {
+					method: "PATCH",
+					headers: identityHeaders,
+					body: JSON.stringify({ archived: false }),
+				}),
+				admit("conv-unarchive-race", "unarchive-racing-run"),
+			]);
+			expect(unarchive.status).toBe(200);
+			expect([409, 503]).toContain(unarchiveAdmission.status);
+			expect(
+				(
+					await store.get({
+						userId: "member-1",
+						conversationId: "conv-unarchive-race",
+					})
+				)?.archivedAt,
+			).toBeNull();
+			const unarchiveRun = await durableRuns.getRun({
+				userId: "member-1",
+				conversationId: "conv-unarchive-race",
+				runId: "unarchive-racing-run",
+			});
+			if (unarchiveAdmission.status === 503) {
+				expect(unarchiveRun).not.toBeNull();
+			} else {
+				expect(unarchiveRun).toBeNull();
+			}
+		} finally {
+			await tdb.close();
+		}
+	});
+
+	it("validates mutations and keeps missing and foreign Conversations private", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			const store = new PostgresConversationStore(tdb.db);
+			await store.create({
+				userId: "other-member",
+				conversationId: "foreign-conversation",
+				scope: "general",
+				collectionId: null,
+				summaryId: null,
+			});
+			const app = buildApp(store, gateThatFailsIfConsulted());
+
+			for (const body of [
+				{},
+				{ title: "   " },
+				{ archived: "true" },
+				{ title: "Valid", extra: true },
+			]) {
+				const invalid = await app.request(
+					"/v1/conversations/foreign-conversation",
+					{
+						method: "PATCH",
+						headers: identityHeaders,
+						body: JSON.stringify(body),
+					},
+				);
+				expect(invalid.status).toBe(400);
+			}
+
+			const foreign = await app.request(
+				"/v1/conversations/foreign-conversation",
+				{
+					method: "PATCH",
+					headers: identityHeaders,
+					body: JSON.stringify({ title: "Probe" }),
+				},
+			);
+			const missing = await app.request("/v1/conversations/missing", {
+				method: "PATCH",
+				headers: identityHeaders,
+				body: JSON.stringify({ title: "Probe" }),
+			});
+			expect(foreign.status).toBe(404);
+			expect(missing.status).toBe(404);
+			const foreignDelete = await app.request(
+				"/v1/conversations/foreign-conversation",
+				{ method: "DELETE", headers: identityHeaders },
+			);
+			const missingDelete = await app.request("/v1/conversations/missing", {
+				method: "DELETE",
+				headers: identityHeaders,
+			});
+			expect(foreignDelete.status).toBe(404);
+			expect(missingDelete.status).toBe(404);
+			expect(
+				(
+					await store.get({
+						userId: "other-member",
+						conversationId: "foreign-conversation",
+					})
+				)?.title,
+			).toBeNull();
+		} finally {
+			await tdb.close();
+		}
+	});
+});
+
+describe("DELETE /v1/conversations/:id", () => {
+	it("rejects an active Run, then permanently removes every user-visible resource", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			const store = new PostgresConversationStore(tdb.db);
+			await store.create({
+				userId: "member-1",
+				conversationId: "conv-delete",
+				scope: "general",
+				collectionId: null,
+				summaryId: null,
+			});
+			await tdb.db.insert(runs).values({
+				runId: "delete-run",
+				userId: "member-1",
+				conversationId: "conv-delete",
+				status: "queued",
+			});
+			const app = buildApp(store, gateThatFailsIfConsulted());
+
+			const blocked = await app.request("/v1/conversations/conv-delete", {
+				method: "DELETE",
+				headers: identityHeaders,
+			});
+			expect(blocked.status).toBe(409);
+
+			await tdb.db
+				.update(runs)
+				.set({ status: "done", terminalAt: new Date() })
+				.where(eq(runs.runId, "delete-run"));
+			const deleted = await app.request("/v1/conversations/conv-delete", {
+				method: "DELETE",
+				headers: identityHeaders,
+			});
+			expect(deleted.status).toBe(204);
+			expect(await deleted.text()).toBe("");
+			expect(await tdb.db.select().from(runs)).toHaveLength(0);
+
+			const list = await app.request("/v1/conversations", {
+				headers: identityHeaders,
+			});
+			expect(await list.json()).toMatchObject({ conversations: [] });
+
+			const missingRun = await app.request(
+				"/v1/conversations/conv-delete/runs",
+				{
+					method: "POST",
+					headers: identityHeaders,
+					body: JSON.stringify({
+						...agUiRunInput(),
+						threadId: "conv-delete",
+					}),
+				},
+			);
+			expect(missingRun.status).toBe(404);
+			const missingReconnect = await app.request(
+				"/v1/conversations/conv-delete/runs/delete-run/events",
+				{ headers: identityHeaders },
+			);
+			expect(missingReconnect.status).toBe(404);
+			const missingArtifacts = await app.request(
+				"/v1/conversations/conv-delete/artifacts",
+				{ headers: identityHeaders },
+			);
+			expect(missingArtifacts.status).toBe(404);
+		} finally {
+			await tdb.close();
+		}
+	});
+
+	it("serializes Permanent deletion racing Run admission", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			const store = new PostgresConversationStore(tdb.db);
+			await store.create({
+				userId: "member-1",
+				conversationId: "conv-delete-race",
+				scope: "general",
+				collectionId: null,
+				summaryId: null,
+			});
+			const durableRuns = new PostgresRunStore(tdb.db);
+			const app = buildAppWithDurableRunStore(store, durableRuns);
+
+			const [deletion, admission] = await Promise.all([
+				app.request("/v1/conversations/conv-delete-race", {
+					method: "DELETE",
+					headers: identityHeaders,
+				}),
+				app.request("/v1/conversations/conv-delete-race/runs", {
+					method: "POST",
+					headers: identityHeaders,
+					body: JSON.stringify({
+						...agUiRunInput(),
+						threadId: "conv-delete-race",
+						runId: "racing-run",
+					}),
+				}),
+			]);
+
+			expect(
+				(deletion.status === 204 && admission.status === 404) ||
+					(deletion.status === 409 && admission.status === 204),
+			).toBe(true);
+			const persisted = await store.get({
+				userId: "member-1",
+				conversationId: "conv-delete-race",
+			});
+			const persistedRuns = await tdb.db.select().from(runs);
+			if (deletion.status === 204) {
+				expect(persisted).toBeNull();
+				expect(persistedRuns).toHaveLength(0);
+			} else {
+				expect(persisted).not.toBeNull();
+				expect(persistedRuns).toHaveLength(1);
+			}
+		} finally {
+			await tdb.close();
+		}
 	});
 });
 

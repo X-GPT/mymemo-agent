@@ -1,8 +1,10 @@
 import { RunAgentInputSchema } from "@ag-ui/core";
 import { z } from "zod";
+import type { ConversationListPosition } from "@/features/conversation-store";
 
 const MAX_IDENTIFIER_LENGTH = 256;
 const MAX_MESSAGE_LENGTH = 50_000;
+const MAX_LIST_CURSOR_LENGTH = 2_048;
 
 export const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -85,6 +87,90 @@ export const CreateConversationBody = z
 	})
 	.strict();
 export type CreateConversationBody = z.infer<typeof CreateConversationBody>;
+
+export const UpdateConversationBody = z
+	.object({
+		title: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH).optional(),
+		archived: z.boolean().optional(),
+	})
+	.strict()
+	.refine(
+		(value) => value.title !== undefined || value.archived !== undefined,
+		{
+			message: "At least one Conversation field is required",
+		},
+	);
+export type UpdateConversationBody = z.infer<typeof UpdateConversationBody>;
+
+const ConversationListLimit = z
+	.string()
+	.regex(/^\d+$/)
+	.transform(Number)
+	.pipe(z.number().int().min(1).max(100));
+
+export const ConversationListQuery = z
+	.object({
+		archived: z
+			.enum(["true", "false"])
+			.default("false")
+			.transform((value) => value === "true"),
+		search: z.string().trim().min(1).max(MAX_IDENTIFIER_LENGTH).optional(),
+		limit: ConversationListLimit.default(20),
+		cursor: z.string().min(1).max(MAX_LIST_CURSOR_LENGTH).optional(),
+	})
+	.strict();
+export type ConversationListQuery = z.infer<typeof ConversationListQuery>;
+
+const ConversationListCursorPayload = z
+	.object({
+		version: z.literal(1),
+		archived: z.boolean(),
+		search: z.string().nullable(),
+		lastActivityAt: z.iso.datetime({ offset: true }),
+		conversationId: ConversationIdParam,
+	})
+	.strict();
+
+export function encodeConversationListCursor(
+	query: Pick<ConversationListQuery, "archived" | "search">,
+	position: ConversationListPosition,
+): string {
+	return Buffer.from(
+		JSON.stringify({
+			version: 1,
+			archived: query.archived,
+			search: query.search ?? null,
+			lastActivityAt: position.lastActivityAt,
+			conversationId: position.conversationId,
+		}),
+	).toString("base64url");
+}
+
+export function decodeConversationListCursor(
+	cursor: string,
+	query: Pick<ConversationListQuery, "archived" | "search">,
+): ConversationListPosition | null {
+	try {
+		const decoded = Buffer.from(cursor, "base64url");
+		if (decoded.toString("base64url") !== cursor) return null;
+		const parsed = ConversationListCursorPayload.safeParse(
+			JSON.parse(decoded.toString("utf8")),
+		);
+		if (!parsed.success) return null;
+		if (
+			parsed.data.archived !== query.archived ||
+			parsed.data.search !== (query.search ?? null)
+		) {
+			return null;
+		}
+		return {
+			lastActivityAt: parsed.data.lastActivityAt,
+			conversationId: parsed.data.conversationId,
+		};
+	} catch {
+		return null;
+	}
+}
 
 // Body of `POST /v1/conversations/:id/events`. A discriminated union over
 // `type`, mirroring the Managed Agents event model: `user.message` queues a new
