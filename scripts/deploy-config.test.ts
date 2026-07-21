@@ -320,7 +320,7 @@ describe("agent deployment config", () => {
 				`resource "aws_cloudwatch_metric_alarm" "${resource}"`,
 			);
 		}
-		expect(cloudwatch.match(/datapoints_to_alarm\s*=\s*2/g)).toHaveLength(4);
+		expect(cloudwatch.match(/datapoints_to_alarm\s*=\s*2/g)).toHaveLength(7);
 		expect(cloudwatch).toMatch(
 			/resource "aws_cloudwatch_metric_alarm" "live_preview_widespread_degraded"[\s\S]*?evaluation_periods\s*=\s*3[\s\S]*?datapoints_to_alarm\s*=\s*2[\s\S]*?threshold\s*=\s*2/,
 		);
@@ -340,6 +340,43 @@ describe("agent deployment config", () => {
 		expect(ecs).not.toMatch(
 			/live_preview_(degraded|drops|overflow)|LivePreview/,
 		);
+	});
+
+	it("alarms on retained Live Stream unavailability, recovery, and capacity exhaustion", () => {
+		const cloudwatch = readFileSync(join(terraformDir, "cloudwatch.tf"), "utf8");
+		const ecs = readFileSync(join(terraformDir, "ecs.tf"), "utf8");
+
+		for (const filter of [
+			"live_stream_operations",
+			"live_stream_latency",
+			"live_stream_redis_unavailable",
+			"live_stream_recovery",
+			"live_stream_capacity",
+			"live_stream_degraded_duration",
+		]) {
+			expect(cloudwatch).toContain(
+				`resource "aws_cloudwatch_log_metric_filter" "${filter}"`,
+			);
+		}
+		for (const alarm of [
+			"live_stream_redis_unavailable",
+			"live_stream_recovery_rate",
+			"live_stream_capacity_bound",
+		]) {
+			expect(cloudwatch).toContain(
+				`resource "aws_cloudwatch_metric_alarm" "${alarm}"`,
+			);
+		}
+		expect(cloudwatch).toContain("Live Stream metric");
+		expect(cloudwatch).toContain("agent-worker owns Live Stream production");
+		expect(cloudwatch).toContain("chat-api owns reconnect and recovery responses");
+		expect(cloudwatch).toContain('namespace = "${local.common_name}/LiveStream"');
+		expect(cloudwatch).toContain('treat_missing_data  = "notBreaching"');
+		expect(cloudwatch).toContain('Result    = "$.result"');
+		expect(cloudwatch).not.toMatch(
+			/LiveStream[\s\S]*?(ConversationId|RunId|MessageId|RedisKey|Payload)/,
+		);
+		expect(ecs).not.toContain("LiveStream");
 	});
 
 	it("example tfvars include required deploy inputs and optional secret-name overrides", () => {

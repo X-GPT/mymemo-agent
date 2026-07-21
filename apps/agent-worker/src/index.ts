@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
-import { createRedisLiveStreamStore } from "@mymemo/live-text";
+import {
+	createLiveStreamTelemetry,
+	createRedisLiveStreamStore,
+} from "@mymemo/live-text";
 import { createArtifactPublisher } from "./artifacts/artifact-publication";
 import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
 import type { AdvisoryLockPool } from "./cleanup/advisory-lock";
@@ -36,6 +39,7 @@ const config = loadWorkerConfigFromEnv(Bun.env);
 const logger = createLogger(config.logLevel);
 const workerId = generateWorkerId();
 const liveTextTelemetry = createWorkerLiveTextTelemetry(logger);
+const liveStreamTelemetry = createLiveStreamTelemetry("agent-worker", logger);
 const liveTextTransport = createWorkerLiveTextTransport(
 	config.liveTextRedisUrl,
 	liveTextTelemetry,
@@ -117,6 +121,7 @@ const runLoop = new RunLoop({
 		liveTextTelemetry,
 	}),
 	liveStreamStore,
+	liveStreamTelemetry,
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 	// Admission commits ring this doorbell (the `runs_notify_queued` trigger),
 	// so pickup latency is milliseconds instead of a poll interval; the timer

@@ -18,7 +18,7 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
-import type { LiveStreamStore } from "@mymemo/live-text";
+import type { LiveStreamStore, LiveStreamTelemetry } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
 import { RunLoop, type RunProcessor } from "./run-loop";
@@ -67,12 +67,14 @@ function buildLoop(
 	worker: Worker,
 	processor: RunProcessor,
 	liveStreamStore?: LiveStreamStore,
+	liveStreamTelemetry?: LiveStreamTelemetry,
 ) {
 	return new RunLoop({
 		db: tdb.db,
 		worker,
 		processor,
 		liveStreamStore,
+		liveStreamTelemetry,
 		heartbeatIntervalMs: 15_000,
 		logger: silentLogger,
 	});
@@ -461,11 +463,11 @@ describe("RunLoop — terminal outcomes", () => {
 		const loop = buildLoop(
 			worker,
 			async (ctx) => {
+				await ctx.appendModelContent({
+					kind: "assistant_message",
+					payload: { messageId: "assistant-1", text: "" },
+				});
 				await ctx.appendModelContents([
-					{
-						kind: "assistant_message",
-						payload: { messageId: "assistant-1", text: "" },
-					},
 					{
 						kind: "tool_call_started",
 						payload: {
@@ -488,6 +490,15 @@ describe("RunLoop — terminal outcomes", () => {
 					toolCallId: "tool-1",
 					toolCallName: "Bash",
 					parentMessageId: "assistant-1",
+				});
+				await ctx.appendLiveEvent({
+					type: EventType.TOOL_CALL_ARGS,
+					toolCallId: "tool-1",
+					delta: '{"command":"pwd"}',
+				});
+				await ctx.appendLiveEvent({
+					type: EventType.TOOL_CALL_END,
+					toolCallId: "tool-1",
 				});
 				await ctx.appendModelContent({
 					kind: "tool_call_result",
@@ -797,6 +808,73 @@ describe("RunLoop — shutdown", () => {
 });
 
 describe("RunLoop — stale-run recovery", () => {
+	it("observes the degradation marker and duration created by stale recovery", async () => {
+		await claimRun("run-stale", "conv-1", "stale-worker");
+		await expireOwnership("run-stale");
+		const metrics: Record<string, unknown>[] = [];
+		const telemetry: LiveStreamTelemetry = {
+			record(operation, result, options) {
+				metrics.push({ operation, result, ...options });
+			},
+		};
+		const worker = buildWorker(1);
+		const loop = buildLoop(
+			worker,
+			appendMessageProcessor,
+			undefined,
+			telemetry,
+		);
+
+		await loop.tick();
+
+		expect(metrics).toEqual([
+			{
+				operation: "degradation",
+				result: "started",
+				reason: "stale_worker",
+			},
+			{
+				operation: "degradation",
+				result: "ended",
+				reason: "stale_worker",
+				durationMs: expect.any(Number),
+			},
+		]);
+	});
+
+	it("ends an existing degradation during stale recovery without duplicating its start", async () => {
+		await claimRun("run-stale", "conv-1", "stale-worker");
+		await tdb.db
+			.update(runs)
+			.set({ liveStreamFailedAt: new Date(Date.now() - 1_000) })
+			.where(eq(runs.runId, "run-stale"));
+		await expireOwnership("run-stale");
+		const metrics: Record<string, unknown>[] = [];
+		const telemetry: LiveStreamTelemetry = {
+			record(operation, result, options) {
+				metrics.push({ operation, result, ...options });
+			},
+		};
+		const worker = buildWorker(1);
+		const loop = buildLoop(
+			worker,
+			appendMessageProcessor,
+			undefined,
+			telemetry,
+		);
+
+		await loop.tick();
+
+		expect(metrics).toEqual([
+			{
+				operation: "degradation",
+				result: "ended",
+				reason: "stale_worker",
+				durationMs: expect.any(Number),
+			},
+		]);
+	});
+
 	it("deletes an orphan Live Stream only after stale recovery terminalizes its Run", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await expireOwnership("run-stale");
@@ -833,6 +911,51 @@ describe("RunLoop — stale-run recovery", () => {
 		});
 		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
 		expect(deleted).toEqual(["run-stale"]);
+	});
+
+	it("logs stale Live Stream cleanup failures without Redis secrets or keys", async () => {
+		await claimRun("run-stale", "conv-1", "stale-worker");
+		await expireOwnership("run-stale");
+		const logs: Record<string, unknown>[] = [];
+		const logger: WorkerLogger = {
+			info: (event) => logs.push(event),
+			warn: (event) => logs.push(event),
+			error: (event) => logs.push(event),
+		};
+		const worker = buildWorker(1);
+		const loop = new RunLoop({
+			db: tdb.db,
+			worker,
+			processor: appendMessageProcessor,
+			liveStreamStore: fakeLiveStreamStore({
+				async delete() {
+					throw new Error(
+						"redis://:secret@redis.internal current:mymemo:agui:{run-stale}:stream assistant text tool arguments",
+					);
+				},
+			}),
+			heartbeatIntervalMs: 15_000,
+			logger,
+		});
+
+		await loop.tick();
+
+		expect(logs).toContainEqual({
+			message: "could not delete stale Run Live Stream",
+			workerId: "worker-1",
+			runId: "run-stale",
+			reason: "redis_unavailable",
+		});
+		const serialized = JSON.stringify(logs);
+		for (const forbidden of [
+			"redis://",
+			"secret",
+			"mymemo:agui",
+			"assistant text",
+			"tool arguments",
+		]) {
+			expect(serialized).not.toContain(forbidden);
+		}
 	});
 
 	it("terminalizes stale running runs as error during a tick", async () => {

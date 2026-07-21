@@ -26,7 +26,7 @@ it("keeps the chat-api Live lane disabled without valid Redis configuration", ()
 	});
 	const deps = createDeps(config(undefined), telemetry);
 	expect(deps.liveTextSubscriber).toBe(disabledLiveTextSubscriber);
-	expect(deps.closeLiveText).toBeUndefined();
+	expect(deps.closeLiveResources).toBeUndefined();
 	expect(signals).toEqual([
 		{
 			message: "Live preview signal",
@@ -43,6 +43,6 @@ it("constructs the lazy production subscriber when Redis is configured", async (
 		config("rediss://default:secret@redis.internal:6379"),
 	);
 	expect(deps.liveTextSubscriber).not.toBe(disabledLiveTextSubscriber);
-	expect(deps.closeLiveText).toBeFunction();
-	await deps.closeLiveText?.();
+	expect(deps.closeLiveResources).toBeFunction();
+	await deps.closeLiveResources?.();
 });
