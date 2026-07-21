@@ -1,4 +1,9 @@
-import { LiveStreamStoreError, parseLiveStreamCursor } from "@mymemo/live-text";
+import {
+	classifyLiveStreamFailure,
+	type LiveStreamReason,
+	LiveStreamStoreError,
+	parseLiveStreamCursor,
+} from "@mymemo/live-text";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
@@ -57,12 +62,14 @@ function isTerminalRunStatus(status: RunRecord["status"]): boolean {
 }
 
 function liveStreamRecoveryResponse(c: Context<AppEnv>) {
+	c.var.deps.liveStreamTelemetry.record("recovery_response", "history_410");
 	return c.json({ error: "Live stream unavailable", recovery: "history" }, 410);
 }
 
 async function liveStreamReadFailureResponse(
 	c: Context<AppEnv>,
 	run: RunRecord,
+	reason: LiveStreamReason,
 ) {
 	const currentRun = await c.var.deps.runStore.getRun({
 		userId: run.userId,
@@ -70,10 +77,16 @@ async function liveStreamReadFailureResponse(
 		runId: run.runId,
 	});
 	if (currentRun === null) return c.json({ error: "Run not found" }, 404);
-	return currentRun.liveStreamFailedAt !== null ||
+	if (
+		currentRun.liveStreamFailedAt !== null ||
 		isTerminalRunStatus(currentRun.status)
-		? liveStreamRecoveryResponse(c)
-		: c.json({ error: "Live stream temporarily unavailable" }, 503);
+	) {
+		return liveStreamRecoveryResponse(c);
+	}
+	c.var.deps.liveStreamTelemetry.record("reconnect_response", "retryable_503", {
+		reason,
+	});
+	return c.json({ error: "Live stream temporarily unavailable" }, 503);
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
@@ -114,8 +127,8 @@ function endAgUiStreamOnKeepaliveFailure(
 ): void {
 	c.var.logger.error({
 		message: "AG-UI keepalive write failed",
-		error,
 		runId,
+		reason: "sse_write_failed",
 	});
 	readController.abort(error);
 	stream.abort();
@@ -159,8 +172,8 @@ async function writeAgUiEntries(
 	} catch (error) {
 		c.var.logger.error({
 			message: "AG-UI Live Stream read failed",
-			error,
 			runId,
+			reason: classifyLiveStreamFailure(error),
 		});
 	} finally {
 		await iterator.return?.();
@@ -204,10 +217,14 @@ async function streamAgUiRun(
 		}
 		c.var.logger.error({
 			message: "AG-UI Live Stream initial read failed",
-			error,
 			runId: run.runId,
+			reason: classifyLiveStreamFailure(error),
 		});
-		return liveStreamReadFailureResponse(c, run);
+		return liveStreamReadFailureResponse(
+			c,
+			run,
+			classifyLiveStreamFailure(error),
+		);
 	}
 	if (initial.outcome === "ping") {
 		if (requestSignal.aborted) {
@@ -236,8 +253,8 @@ async function streamAgUiRun(
 				if (delayed.outcome === "error") {
 					c.var.logger.error({
 						message: "AG-UI Live Stream read failed",
-						error: delayed.error,
 						runId: run.runId,
+						reason: classifyLiveStreamFailure(delayed.error),
 					});
 					await iterator.return?.();
 					return;
@@ -266,7 +283,7 @@ async function streamAgUiRun(
 		readAbort.dispose();
 		await iterator.return?.();
 		if (status === "done" && cursor !== "") return c.body(null, 204);
-		return liveStreamReadFailureResponse(c, run);
+		return liveStreamReadFailureResponse(c, run, "missing");
 	}
 
 	return streamSSE(c, async (stream) => {
@@ -296,6 +313,19 @@ async function streamAgUiRun(
 
 function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 	const requestSignal = c.req.raw.signal;
+	const waitStartedAt = Date.now();
+	let waitRecorded = false;
+	const recordWait = (
+		result: "aborted" | "failure" | "success",
+		reason?: LiveStreamReason,
+	) => {
+		if (waitRecorded) return;
+		waitRecorded = true;
+		c.var.deps.liveStreamTelemetry.record("read_wait", result, {
+			...(reason ? { reason } : {}),
+			durationMs: Date.now() - waitStartedAt,
+		});
+	};
 	return streamSSE(c, async (stream) => {
 		const readAbort = linkedAbortController(requestSignal);
 		const readSignal = readAbort.controller.signal;
@@ -313,13 +343,17 @@ function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 		);
 		try {
 			for (;;) {
-				if (readSignal.aborted) return;
+				if (readSignal.aborted) {
+					recordWait("aborted");
+					return;
+				}
 				const currentRun = await c.var.deps.runStore.getRun({
 					userId: run.userId,
 					conversationId: run.conversationId,
 					runId: run.runId,
 				});
 				if (currentRun === null || currentRun.liveStreamFailedAt !== null) {
+					recordWait("failure", "missing");
 					return;
 				}
 
@@ -328,12 +362,22 @@ function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 				>;
 				try {
 					status = await c.var.deps.liveStreamReader.status(run.runId);
-				} catch {
+				} catch (error) {
+					recordWait("failure", classifyLiveStreamFailure(error));
 					return;
 				}
-				if (status === "error") return;
-				if (status === "streaming" || status === "done") break;
-				if (isTerminalRunStatus(currentRun.status)) return;
+				if (status === "error") {
+					recordWait("failure", "missing");
+					return;
+				}
+				if (status === "streaming" || status === "done") {
+					recordWait("success");
+					break;
+				}
+				if (isTerminalRunStatus(currentRun.status)) {
+					recordWait("failure", "missing");
+					return;
+				}
 				await abortableDelay(LIVE_STREAM_START_POLL_MS, readSignal);
 			}
 
@@ -346,8 +390,8 @@ function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 			} catch (error) {
 				c.var.logger.error({
 					message: "AG-UI Live Stream read failed after waiting for creation",
-					error,
 					runId: run.runId,
+					reason: classifyLiveStreamFailure(error),
 				});
 				await iterator.return?.();
 				return;
@@ -360,6 +404,7 @@ function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 				stream.writeSSE(event),
 			);
 		} finally {
+			if (!waitRecorded) recordWait("aborted");
 			stopKeepalive();
 			readAbort.controller.abort();
 			readAbort.dispose();
@@ -377,8 +422,12 @@ async function respondWithAgUiRun(
 	let status: Awaited<ReturnType<typeof c.var.deps.liveStreamReader.status>>;
 	try {
 		status = await c.var.deps.liveStreamReader.status(run.runId);
-	} catch {
-		return liveStreamReadFailureResponse(c, run);
+	} catch (error) {
+		return liveStreamReadFailureResponse(
+			c,
+			run,
+			classifyLiveStreamFailure(error),
+		);
 	}
 	if (status === "error") return liveStreamRecoveryResponse(c);
 	if (status === "missing") {

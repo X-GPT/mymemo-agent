@@ -1,9 +1,11 @@
 import {
+	createLiveStreamTelemetry,
 	createLiveTextTelemetry,
 	createRedisLiveStreamStore,
 	createRedisLiveTextTransport,
 	disabledLiveTextSubscriber,
 	type LiveStreamReader,
+	type LiveStreamTelemetry,
 	type LiveTextSubscriber,
 	type LiveTextTelemetry,
 	type LiveTextTransport,
@@ -69,8 +71,10 @@ export interface AppDeps {
 	liveStreamReader: LiveStreamReader;
 	/** Cardinality-safe, payload-free Live-lane observability. */
 	liveTextTelemetry: LiveTextTelemetry;
+	/** Cardinality-safe, payload-free retained Live Stream observability. */
+	liveStreamTelemetry: LiveStreamTelemetry;
 	/** Close optional Live transport resources during service shutdown. */
-	closeLiveText?: () => Promise<void>;
+	closeLiveResources?: () => Promise<void>;
 	/**
 	 * Server-side gate controlling who may create new agent work. Consulted on
 	 * the new-work paths (conversation create, `user.message`) after identity is
@@ -90,6 +94,13 @@ export function createDeps(
 		info() {},
 		warn() {},
 	}),
+	liveStreamTelemetry: LiveStreamTelemetry = createLiveStreamTelemetry(
+		"chat-api",
+		{
+			info() {},
+			warn() {},
+		},
+	),
 ): AppDeps {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
@@ -152,7 +163,8 @@ export function createDeps(
 				},
 			} satisfies LiveStreamReader),
 		liveTextTelemetry,
-		closeLiveText:
+		liveStreamTelemetry,
+		closeLiveResources:
 			liveTextTransport || liveStreamStore
 				? async () => {
 						await Promise.all([

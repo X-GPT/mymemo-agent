@@ -52,6 +52,12 @@ export type RunRecord = Omit<
 	status: RunStatus;
 };
 
+/** A stale Run after terminal recovery, plus whether that transaction created
+ * its null-to-time Live Stream failure marker. */
+export type RecoveredRunRecord = RunRecord & {
+	liveStreamFailureMarkedByRecovery: boolean;
+};
+
 /**
  * Queue admission failed: the conversation already has an active
  * (queued/running/cancel_requested) run. Surfaced as busy/backpressure by the
@@ -776,10 +782,16 @@ export async function markLiveStreamFailedTx(
  * double-terminalized. Returns the runs it recovered so the caller can clean up
  * their sandbox side effects.
  */
-export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
+export async function markStaleRunsTx(
+	db: Database,
+): Promise<RecoveredRunRecord[]> {
 	return await db.transaction(async (tx) => {
 		const stale = await tx
-			.select({ runId: runs.runId, status: runs.status })
+			.select({
+				runId: runs.runId,
+				status: runs.status,
+				liveStreamFailedAt: runs.liveStreamFailedAt,
+			})
 			.from(runs)
 			.where(
 				sql`(
@@ -794,7 +806,7 @@ export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
 			)
 			.for("update", { skipLocked: true });
 
-		const recovered: RunRecord[] = [];
+		const recovered: RecoveredRunRecord[] = [];
 		for (const candidate of stale) {
 			const status: TerminalRunStatus =
 				candidate.status === "cancel_requested" ? "canceled" : "error";
@@ -827,7 +839,12 @@ export async function markStaleRunsTx(db: Database): Promise<RunRecord[]> {
 				...(status === "error" ? { message: "Run failed" } : {}),
 				reason: "stale_worker",
 			});
-			recovered.push(toRunRecord(row));
+			recovered.push({
+				...toRunRecord(row),
+				liveStreamFailureMarkedByRecovery:
+					candidate.status !== "queued" &&
+					candidate.liveStreamFailedAt === null,
+			});
 		}
 		return recovered;
 	});

@@ -2,6 +2,7 @@ import { createClient } from "redis";
 import { z } from "zod";
 import type { LiveTextTelemetry } from "./telemetry";
 
+export * from "./live-stream-telemetry";
 export * from "./redis-live-stream-store";
 export * from "./telemetry";
 

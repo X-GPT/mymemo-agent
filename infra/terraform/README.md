@@ -114,13 +114,16 @@ Assistant messages, terminal Outcomes, and replay.
 
 Set `live_stream_enabled=false` to omit `REDIS_URL` from both trusted service
 task definitions without deleting the cache during the additive rollout. Live
-telemetry is converted into CloudWatch metrics with bounded
-service/signal/outcome dimensions; the alarms detect both repeated per-service
-breaches and multiple services degrading in the same five-minute period, and
-never feed service health. Production must set `alarm_action_arns` to an SNS
-topic with a confirmed incident subscription. See
-[`docs/runbooks/live-preview.md`](../../docs/runbooks/live-preview.md) for
-diagnosis, disable, and restore procedures.
+telemetry is converted into separate CloudWatch namespaces for the legacy
+preview lane and retained Live Stream, using bounded signal/outcome dimensions
+for preview, operation/result dimensions for retained delivery, and bounded
+reason classifications. The retained Stream alarms identify
+agent-worker production failures, chat-api recovery responses, and capacity
+exhaustion without feeding service health. Production must set
+`alarm_action_arns` to an SNS topic with a confirmed incident subscription. See
+[`docs/runbooks/live-stream.md`](../../docs/runbooks/live-stream.md) for retained
+Stream diagnosis and [`docs/runbooks/live-preview.md`](../../docs/runbooks/live-preview.md)
+for the staged legacy lane.
 
 ## Release Deploy Config
 

@@ -133,7 +133,7 @@ variable "live_stream_enabled" {
 }
 
 variable "alarm_action_arns" {
-  description = "Optional SNS topic ARNs notified by Live preview CloudWatch alarms."
+  description = "Optional SNS topic ARNs notified by Live preview and retained Live Stream CloudWatch alarms."
   type        = list(string)
   default     = []
 }
