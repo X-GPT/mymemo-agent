@@ -461,32 +461,49 @@ describe("RunLoop — terminal outcomes", () => {
 		const loop = buildLoop(
 			worker,
 			async (ctx) => {
-				await ctx.appendModelContent({
-					kind: "tool_use",
-					payload: {
-						tool: "Bash",
-						arguments: { command: "pwd" },
-						truncated: false,
+				await ctx.appendModelContents([
+					{
+						kind: "assistant_message",
+						payload: { messageId: "assistant-1", text: "" },
 					},
-				});
+					{
+						kind: "tool_call_started",
+						payload: {
+							toolCallId: "tool-1",
+							toolCallName: "Bash",
+							parentMessageId: "assistant-1",
+						},
+					},
+					{
+						kind: "tool_call_args",
+						payload: { toolCallId: "tool-1", delta: '{"command":"pwd"}' },
+					},
+					{
+						kind: "tool_call_completed",
+						payload: { toolCallId: "tool-1" },
+					},
+				]);
 				await ctx.appendLiveEvent({
-					type: EventType.CUSTOM,
-					name: "mymemo.tool_use",
-					value: { tool: "Bash" },
+					type: EventType.TOOL_CALL_START,
+					toolCallId: "tool-1",
+					toolCallName: "Bash",
+					parentMessageId: "assistant-1",
 				});
 				await ctx.appendModelContent({
-					kind: "tool_result",
+					kind: "tool_call_result",
 					payload: {
-						tool: "Bash",
-						result: { exitCode: 0 },
+						messageId: "tool-result-1",
+						toolCallId: "tool-1",
+						content: '{"exitCode":0}',
 						isError: false,
-						truncated: false,
 					},
 				});
 				await ctx.appendLiveEvent({
-					type: EventType.CUSTOM,
-					name: "mymemo.tool_result",
-					value: { tool: "Bash" },
+					type: EventType.TOOL_CALL_RESULT,
+					messageId: "tool-result-1",
+					toolCallId: "tool-1",
+					content: '{"exitCode":0}',
+					role: "tool",
 				});
 			},
 			liveStreamStore,
@@ -501,8 +518,11 @@ describe("RunLoop — terminal outcomes", () => {
 			liveStreamFailedAt: expect.any(Date),
 		});
 		expect(await readEventTypes("run-1")).toEqual([
-			"tool_use",
-			"tool_result",
+			"assistant_message_completed",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_result",
 			"run_done",
 		]);
 		expect(appendCalls).toBe(2);

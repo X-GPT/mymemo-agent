@@ -844,10 +844,11 @@ export function toRunRecord(row: typeof runs.$inferSelect): RunRecord {
 }
 
 /**
- * True when the error chain is a unique violation of the
- * `runs_one_active_per_conversation` partial index. Matched by constraint
- * name (node-postgres exposes `constraint`) with a message fallback (pglite
- * in tests), so a duplicate-`runId` primary-key violation stays distinct.
+ * True when the error chain already represents active-Run backpressure or is a
+ * unique violation of the `runs_one_active_per_conversation` partial index.
+ * Database errors are matched by constraint name (node-postgres exposes
+ * `constraint`) with a message fallback (pglite in tests), so a duplicate
+ * `runId` primary-key violation stays distinct.
  * Exported so both run-creation paths (this module's `createQueuedRunTx` and
  * chat-api's `createQueuedRunStartedTx`) classify admission conflicts identically.
  */
@@ -857,6 +858,7 @@ export function isActiveRunConflict(error: unknown): boolean {
 		e instanceof Error;
 		e = (e as { cause?: unknown }).cause
 	) {
+		if (e instanceof ActiveRunConflictError) return true;
 		const constraint = (e as { constraint?: unknown }).constraint;
 		if (constraint === "runs_one_active_per_conversation") return true;
 		if (e.message.includes("runs_one_active_per_conversation")) return true;

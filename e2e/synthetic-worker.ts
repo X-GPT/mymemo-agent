@@ -5,6 +5,8 @@
  * retained AG-UI Stream seam deterministic; Task 9.7 owns the credentialed
  * live smoke for the production worker.
  */
+
+import { startHealthServer } from "../apps/agent-worker/src/health";
 import { createLogger } from "../apps/agent-worker/src/logger";
 import { RunLoop, type RunProcessor } from "../apps/agent-worker/src/run-loop";
 import { Worker } from "../apps/agent-worker/src/worker";
@@ -18,6 +20,21 @@ const agentDatabaseUrl = process.env.AGENT_DATABASE_URL;
 if (!agentDatabaseUrl) throw new Error("AGENT_DATABASE_URL is required");
 const redisUrl = process.env.REDIS_URL;
 if (!redisUrl) throw new Error("REDIS_URL is required");
+const healthPort = Number(process.env.INTEGRATION_WORKER_PORT);
+if (!Number.isInteger(healthPort) || healthPort < 1) {
+	throw new Error("INTEGRATION_WORKER_PORT is required");
+}
+const retentionMs = optionalPositiveInteger(
+	process.env.INTEGRATION_LIVE_STREAM_RETENTION_MS,
+);
+const maxEvents = optionalPositiveInteger(
+	process.env.INTEGRATION_LIVE_STREAM_MAX_EVENTS,
+);
+const maxStreamBytes = optionalPositiveInteger(
+	process.env.INTEGRATION_LIVE_STREAM_MAX_BYTES,
+);
+const heartbeatIntervalMs =
+	optionalPositiveInteger(process.env.INTEGRATION_HEARTBEAT_INTERVAL_MS) ?? 500;
 
 const logger = createLogger(process.env.LOG_LEVEL ?? "warn");
 const workerId = "integration-event-writer";
@@ -27,21 +44,56 @@ const worker = new Worker({
 	shutdownTimeoutMs: 1_000,
 	logger,
 });
+const healthServer = startHealthServer(worker, healthPort, logger);
+const database = createDatabase(agentDatabaseUrl);
 const redisLiveStreamStore = createRedisLiveStreamStore({
 	url: redisUrl,
 	deployment: "current",
+	...(retentionMs !== undefined ||
+	maxEvents !== undefined ||
+	maxStreamBytes !== undefined
+		? {
+				testLimits: {
+					...(retentionMs === undefined ? {} : { retentionMs }),
+					...(maxEvents === undefined ? {} : { maxEvents }),
+					...(maxStreamBytes === undefined ? {} : { maxStreamBytes }),
+				},
+			}
+		: {}),
 });
 const liveStreamStore = withInjectedRedisFault(
 	redisLiveStreamStore,
 	process.env.INTEGRATION_LIVE_STREAM_FAIL_AT,
 );
 const resumeDelayMs = Number(process.env.INTEGRATION_RESUME_DELAY_MS ?? 0);
+
+type SyntheticScenario =
+	| "text_and_tool"
+	| "text_only"
+	| "tool_failure"
+	| "stale_crash";
+
+function resolveSyntheticScenario(text: string | undefined): SyntheticScenario {
+	if (text === "Synthetic stale worker crash") return "stale_crash";
+	if (text === "Synthetic tool-only failure") return "tool_failure";
+	if (text?.startsWith("Synthetic text-only")) return "text_only";
+	return "text_and_tool";
+}
+
 const processor: RunProcessor = async (ctx) => {
+	const scenario = resolveSyntheticScenario(ctx.run.normalizedInput?.text);
+	if (scenario === "stale_crash") {
+		await database.$client.query(
+			"update runs set locked_until = now() - interval '1 second' where run_id = $1 and locked_by = $2",
+			[ctx.run.runId, workerId],
+		);
+		process.exit(17);
+	}
 	const messageId = `message-${ctx.run.runId}`;
 	const toolCallId = `tool-${ctx.run.runId}`;
 	const toolResultMessageId = `tool-result-${ctx.run.runId}`;
-	const toolOnlyFailure =
-		ctx.run.normalizedInput?.text === "Synthetic tool-only failure";
+	const toolOnlyFailure = scenario === "tool_failure";
+	const textOnly = scenario === "text_only";
 	const text = `Synthetic response for run ${ctx.run.runId}`;
 	if (!toolOnlyFailure) {
 		await ctx.appendLiveEvent({
@@ -66,6 +118,7 @@ const processor: RunProcessor = async (ctx) => {
 	if (!toolOnlyFailure) {
 		await ctx.appendLiveEvent({ type: "TEXT_MESSAGE_END", messageId });
 	}
+	if (textOnly) return;
 	await ctx.appendModelContents([
 		{
 			kind: "tool_call_started",
@@ -122,11 +175,11 @@ const processor: RunProcessor = async (ctx) => {
 	}
 };
 const runLoop = new RunLoop({
-	db: createDatabase(agentDatabaseUrl),
+	db: database,
 	worker,
 	processor,
 	liveStreamStore,
-	heartbeatIntervalMs: 500,
+	heartbeatIntervalMs,
 	logger,
 });
 
@@ -138,6 +191,8 @@ async function shutdown(): Promise<void> {
 	shuttingDown = true;
 	await runLoop.stop();
 	await liveStreamStore.close();
+	await database.$client.end();
+	healthServer.stop();
 	process.exit(0);
 }
 
@@ -216,4 +271,13 @@ function liveEventType(chunk: Uint8Array): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function optionalPositiveInteger(raw: string | undefined): number | undefined {
+	if (raw === undefined) return undefined;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < 1) {
+		throw new Error("integration limits must be positive integers");
+	}
+	return value;
 }
