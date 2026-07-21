@@ -1,4 +1,4 @@
-import { resolveLiveTextRedisUrl } from "@mymemo/live-text";
+import { resolveLiveStreamRedisUrl } from "@mymemo/live-text";
 
 export type ChatMessagesScope = "general" | "collection" | "document";
 
@@ -55,8 +55,8 @@ export interface ApiConfig {
 	 * Statsig secret is required. Identity-independent and explicit.
 	 */
 	agentExposureBreakGlass: boolean;
-	/** Additive authenticated TLS Redis secret for temporary live delivery. */
-	liveTextRedisUrl: string | undefined;
+	/** Required authenticated TLS Redis secret for the retained Live Stream. */
+	redisUrl: string;
 }
 
 /**
@@ -144,7 +144,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		artifactRegion,
 		statsigServerSecret: env.STATSIG_SERVER_SECRET,
 		agentExposureBreakGlass,
-		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL, {
+		redisUrl: resolveLiveStreamRedisUrl(env.REDIS_URL, {
 			allowInsecureLoopback:
 				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
 		}),

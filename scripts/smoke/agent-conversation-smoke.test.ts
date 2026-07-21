@@ -1,920 +1,88 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { createServer } from "node:net";
 import { resolve } from "node:path";
-import type { PublicToolName } from "../../packages/agent-db/src/run-events";
 
 const root = resolve(import.meta.dir, "../..");
+const script = resolve(import.meta.dir, "agent-conversation-smoke.ts");
 const servers: Bun.Server<unknown>[] = [];
 
 afterEach(() => {
 	for (const server of servers.splice(0)) server.stop(true);
 });
 
-interface UserMessage {
-	type: "user.message";
-	text: string;
-}
-
-interface UserInterrupt {
-	type: "user.interrupt";
+interface RunInput {
+	threadId: string;
 	runId: string;
+	messages: Array<{ id: string; role: string; content: string }>;
+	tools: unknown[];
+	context: unknown[];
 }
 
-interface StubRequest {
-	pathname: string;
-	memberCode: string | null;
-	partnerCode: string | null;
-}
-
-interface SmokeStubOptions {
-	conversationId: string;
-	interruptConversationId?: string;
-	searchableDocumentConversationId?: string;
-	workspaceMarker: string;
-	runIdPrefix: string;
-	includePreview?: boolean;
-	interruptIncludePreview?: boolean;
-	replayInterruptToolCommand?: string;
-	artifactContent?: (requestedContent: string) => string;
-	failSearchableDocumentRead?: boolean;
-}
-
-interface SmokeStub {
-	baseUrl: string;
-	messages: UserMessage[];
-	interrupts: Array<UserInterrupt & { afterToolUse: boolean }>;
-	reconnectCursors: string[];
-	requests: StubRequest[];
-}
-
-interface StubSSEFrame {
-	id?: string;
-	event: string;
+interface Frame {
+	id: string;
 	data: Record<string, unknown>;
 }
 
-function serializeSSEFrame(frame: StubSSEFrame): string {
-	return `${frame.id === undefined ? "" : `id: ${frame.id}\n`}event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`;
-}
-
-function sseResponse(frames: StubSSEFrame[]): Response {
-	return new Response(frames.map(serializeSSEFrame).join(""), {
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
-function toolInvocationFrames(
-	firstSeq: number,
-	parentMessageId: string,
-	tool: PublicToolName,
-	argumentsValue: Record<string, unknown>,
-): StubSSEFrame[] {
-	const toolCallId = `tool-call-${firstSeq}`;
-	return [
-		{
-			id: String(firstSeq),
-			event: "TOOL_CALL_START",
-			data: {
-				type: "TOOL_CALL_START",
-				toolCallId,
-				toolCallName: tool,
-				parentMessageId,
-			},
-		},
-		{
-			id: String(firstSeq + 1),
-			event: "TOOL_CALL_ARGS",
-			data: {
-				type: "TOOL_CALL_ARGS",
-				toolCallId,
-				delta: JSON.stringify(argumentsValue),
-			},
-		},
-		{
-			id: String(firstSeq + 2),
-			event: "TOOL_CALL_END",
-			data: { type: "TOOL_CALL_END", toolCallId },
-		},
-	];
-}
-
-function toolResultFrames(
-	seq: number,
-	toolCallId: string,
-	result: Record<string, unknown>,
-	isError = false,
-): StubSSEFrame[] {
-	const messageId = `tool-message-${seq}`;
-	const frames: StubSSEFrame[] = [
-		{
-			id: String(seq),
-			event: "TOOL_CALL_RESULT",
-			data: {
-				type: "TOOL_CALL_RESULT",
-				messageId,
-				toolCallId,
-				content: isError ? "Tool failed" : JSON.stringify(result),
-				role: "tool",
-			},
-		},
-	];
-	if (isError) {
-		frames.push({
-			id: String(seq),
-			event: "CUSTOM",
-			data: {
-				type: "CUSTOM",
-				name: "mymemo.tool_result_error",
-				value: { messageId, toolCallId },
-			},
-		});
-	}
-	return frames;
-}
-
-function toolExchangeFrames(
-	firstSeq: number,
-	parentMessageId: string,
-	tool: PublicToolName,
-	argumentsValue: Record<string, unknown>,
-	result: Record<string, unknown>,
-	isError = false,
-): StubSSEFrame[] {
-	const invocation = toolInvocationFrames(
-		firstSeq,
-		parentMessageId,
-		tool,
-		argumentsValue,
+function sse(frames: Frame[]): Response {
+	return new Response(
+		frames
+			.map(
+				(frame) => `id: ${frame.id}\ndata: ${JSON.stringify(frame.data)}\n\n`,
+			)
+			.join(""),
+		{ headers: { "content-type": "text/event-stream" } },
 	);
-	const toolCallId = invocation[0]?.data.toolCallId;
-	if (typeof toolCallId !== "string")
-		throw new Error("missing fixture Tool id");
+}
+
+function successfulRun(
+	conversationId: string,
+	runId: string,
+	text: string,
+): Frame[] {
+	const messageId = `assistant-${runId}`;
 	return [
-		...invocation,
-		...toolResultFrames(firstSeq + 3, toolCallId, result, isError),
-	];
-}
-
-function sseTurn(input: {
-	conversationId: string;
-	runId: string;
-	text: string;
-	includeDone?: boolean;
-	includePreview?: boolean;
-	includeLifecycle?: boolean;
-	commitTexts?: string[];
-	toolFrames?: StubSSEFrame[];
-}): Response {
-	const frames: StubSSEFrame[] = [];
-	if (input.includeLifecycle !== false) {
-		frames.push({
+		{
 			id: "1",
-			event: "conversation_id",
-			data: { type: "conversation_id", conversationId: input.conversationId },
-		});
-		frames.push({
-			id: "1",
-			event: "run_id",
-			data: { type: "run_id", runId: input.runId },
-		});
-	}
-	const toolFrames = input.toolFrames ?? [];
-	if (input.includePreview) {
-		frames.push({
-			event: "text_delta",
-			data: {
-				type: "text_delta",
-				messageId: `message-${input.runId}`,
-				deltaIndex: 0,
-				text: input.text.slice(0, Math.ceil(input.text.length / 2)),
-			},
-		});
-	}
-	const commitTexts = input.commitTexts ?? [input.text];
-	for (const [index, text] of commitTexts.entries()) {
-		frames.push({
-			id: String(index + 2 + toolFrames.length),
-			event: "text_commit",
-			data: {
-				type: "text_commit",
-				messageId:
-					commitTexts.length === 1
-						? `message-${input.runId}`
-						: `message-${input.runId}-${index}`,
-				text,
-			},
-		});
-	}
-	frames.push(...toolFrames);
-	if (input.includeDone !== false) {
-		const lastToolCursor = Math.max(
-			0,
-			...toolFrames.map((frame) => Number(frame.id) || 0),
-		);
-		frames.push({
-			id: String(Math.max(commitTexts.length + 1, lastToolCursor) + 1),
-			event: "done",
-			data: { type: "done" },
-		});
-	}
-	return sseResponse(frames);
-}
-
-describe("agent conversation live smoke", () => {
-	it("runs the core continuity and artifact checks with Live preview", async () => {
-		const conversationId = "00000000-0000-4000-8000-000000000233";
-		const workspaceMarker = "workspace-0123456789abcdef0123456789abcdef";
-		const stub = await startSmokeStub({
-			conversationId,
-			workspaceMarker,
-			runIdPrefix: "run",
-			includePreview: true,
-		});
-
-		const { exitCode, stdout, stderr } = await runSmoke(stub.baseUrl, {
-			AGENT_SMOKE_PREVIEW_MODE: "required",
-		});
-
-		expect(stderr).toBe("");
-		expect(exitCode).toBe(0);
-		expect(stdout).toContain("agent live smoke passed");
-		expect(stdout).toContain("suite=core");
-		expect(stdout).toContain(conversationId);
-		expect(stdout).toContain("run-1");
-		expect(stdout).toContain("run-2");
-		expect(stdout).toContain("run-3");
-		expect(stub.messages).toHaveLength(3);
-		expect(stub.messages[0]?.type).toBe("user.message");
-		expect(stub.messages[0]?.text).toContain("Bash");
-		expect(stub.messages[0]?.text).toContain("/home/user/.mymemo-live-smoke");
-		expect(stub.messages[0]?.text).toContain("sha256");
-		expect(stub.messages[1]?.type).toBe("user.message");
-		expect(stub.messages[1]?.text).toContain("previous turn");
-		expect(stub.messages[1]?.text).toContain("Read");
-		expect(stub.messages[1]?.text).not.toContain(
-			extractSessionMarker(stub.messages[0]?.text),
-		);
-		const artifact = extractArtifactRequest(stub.messages[2]?.text);
-		expect(artifact.relativePath).toBe("smoke/core-check.txt");
-		expect(artifact.content).toMatch(/^mymemo-core-artifact-[0-9a-f-]{36}$/);
-		expect(stub.requests.slice(0, -1).map(identityFromRequest)).toEqual(
-			Array.from({ length: 9 }, () => [
-				"live-smoke-member",
-				"live-smoke-partner",
-			]),
-		);
-		expect(identityFromRequest(stub.requests.at(-1))).toEqual([null, null]);
-		expect(stub.reconnectCursors).toEqual(["1", "1", "1"]);
-	});
-
-	it("rejects a non-positive turn timeout before making a request", async () => {
-		const { exitCode, stderr } = await runSmoke("http://127.0.0.1:1", {
-			AGENT_SMOKE_TURN_TIMEOUT_MS: "0",
-		});
-
-		expect(exitCode).not.toBe(0);
-		expect(stderr).toContain(
-			"AGENT_SMOKE_TURN_TIMEOUT_MS must be a positive integer",
-		);
-	});
-
-	it("rejects an unknown suite before making a request", async () => {
-		const { exitCode, stderr } = await runSmoke("http://127.0.0.1:1", {
-			AGENT_SMOKE_SUITE: "extended",
-		});
-
-		expect(exitCode).not.toBe(0);
-		expect(stderr).toContain("AGENT_SMOKE_SUITE must be core or full");
-		expect(stderr).not.toContain("Unable to connect");
-	});
-
-	it("rejects a non-fixture member before starting the full suite", async () => {
-		const { exitCode, stderr } = await runSmoke("http://127.0.0.1:1", {
-			AGENT_SMOKE_SUITE: "full",
-		});
-
-		expect(exitCode).not.toBe(0);
-		expect(stderr).toContain(
-			"AGENT_SMOKE_SUITE=full requires AGENT_SMOKE_MEMBER_CODE=demo-member",
-		);
-		expect(stderr).not.toContain("Unable to connect");
-	});
-
-	it("interrupts a held-open full-suite Run after its first Tool invocation and replays canceled history", async () => {
-		const conversationId = "00000000-0000-4000-8000-000000000235";
-		const interruptConversationId = "00000000-0000-4000-8000-000000000236";
-		const searchableDocumentConversationId =
-			"00000000-0000-4000-8000-000000000237";
-		const workspaceMarker = "workspace-fedcba9876543210fedcba9876543210";
-		const stub = await startSmokeStub({
-			conversationId,
-			interruptConversationId,
-			searchableDocumentConversationId,
-			workspaceMarker,
-			runIdPrefix: "disabled-run",
-			artifactContent: (content) => `${content}\n`,
-		});
-
-		const { exitCode, stdout, stderr } = await runSmoke(stub.baseUrl, {
-			AGENT_SMOKE_MEMBER_CODE: "demo-member",
-			AGENT_SMOKE_PREVIEW_MODE: "forbidden",
-			AGENT_SMOKE_SUITE: "full",
-		});
-
-		expect(stderr).toBe("");
-		expect(exitCode).toBe(0);
-		expect(stdout).toContain("suite=full");
-		expect(stdout).toContain("preview=forbidden");
-		expect(stdout).toContain(interruptConversationId);
-		expect(stdout).toContain("disabled-run-interrupt");
-		expect(stdout).toContain(searchableDocumentConversationId);
-		expect(stdout).toContain("disabled-run-searchable-document-inventory");
-		expect(stdout).toContain("disabled-run-searchable-document-content");
-		expect(extractArtifactRequest(stub.messages[2]?.text).relativePath).toBe(
-			"smoke/core-check.txt",
-		);
-		expect(stub.messages[3]?.text).toContain("Bash");
-		expect(stub.messages[3]?.text).toContain("sleep 120");
-		expect(stub.messages[4]?.text).toContain("ListDocuments");
-		expect(stub.messages[5]?.text).toContain("SearchDocuments");
-		expect(stub.messages[5]?.text).toContain("LoadDocuments");
-		expect(stub.messages[5]?.text).toContain("Read");
-		expect(stub.interrupts).toEqual([
-			{
-				type: "user.interrupt",
-				runId: "disabled-run-interrupt",
-				afterToolUse: true,
-			},
-		]);
-		expect(stub.reconnectCursors).toEqual(["1", "1", "1", "1", "1", "1"]);
-	});
-
-	it("discards provisional Assistant text when the interrupted Run is canceled", async () => {
-		const stub = await startSmokeStub({
-			conversationId: "00000000-0000-4000-8000-000000000238",
-			interruptConversationId: "00000000-0000-4000-8000-000000000239",
-			searchableDocumentConversationId: "00000000-0000-4000-8000-000000000242",
-			workspaceMarker: "workspace-22222222222222222222222222222222",
-			runIdPrefix: "preview-run",
-			includePreview: true,
-			interruptIncludePreview: true,
-		});
-
-		const { exitCode, stderr } = await runSmoke(stub.baseUrl, {
-			AGENT_SMOKE_MEMBER_CODE: "demo-member",
-			AGENT_SMOKE_PREVIEW_MODE: "required",
-			AGENT_SMOKE_SUITE: "full",
-		});
-
-		expect(stderr).toBe("");
-		expect(exitCode).toBe(0);
-		expect(stub.interrupts).toEqual([
-			{
-				type: "user.interrupt",
-				runId: "preview-run-interrupt",
-				afterToolUse: true,
-			},
-		]);
-	});
-
-	it("rejects searchable-document content when Read returns an error", async () => {
-		const stub = await startSmokeStub({
-			conversationId: "00000000-0000-4000-8000-000000000243",
-			interruptConversationId: "00000000-0000-4000-8000-000000000244",
-			searchableDocumentConversationId: "00000000-0000-4000-8000-000000000245",
-			workspaceMarker: "workspace-44444444444444444444444444444444",
-			runIdPrefix: "missing-read-run",
-			failSearchableDocumentRead: true,
-		});
-
-		const { exitCode, stderr } = await runSmoke(stub.baseUrl, {
-			AGENT_SMOKE_MEMBER_CODE: "demo-member",
-			AGENT_SMOKE_SUITE: "full",
-		});
-
-		expect(exitCode).not.toBe(0);
-		expect(stderr).toContain(
-			"searchable-document content Run did not record the required Tool invocations and successful results",
-		);
-	});
-
-	it("rejects canceled replay whose Tool payload differs from the live stream", async () => {
-		const stub = await startSmokeStub({
-			conversationId: "00000000-0000-4000-8000-000000000240",
-			interruptConversationId: "00000000-0000-4000-8000-000000000241",
-			workspaceMarker: "workspace-33333333333333333333333333333333",
-			runIdPrefix: "tampered-tool-run",
-			replayInterruptToolCommand: "sleep 1",
-		});
-
-		const { exitCode, stderr } = await runSmoke(stub.baseUrl, {
-			AGENT_SMOKE_MEMBER_CODE: "demo-member",
-			AGENT_SMOKE_SUITE: "full",
-		});
-
-		expect(exitCode).not.toBe(0);
-		expect(stderr).toContain(
-			"durable reconnect did not replay the exact Tool events",
-		);
-	});
-
-	it("rejects a signed artifact whose bytes do not match the request", async () => {
-		const conversationId = "00000000-0000-4000-8000-000000000237";
-		const workspaceMarker = "workspace-11111111111111111111111111111111";
-		const stub = await startSmokeStub({
-			conversationId,
-			workspaceMarker,
-			runIdPrefix: "tampered-run",
-			artifactContent: (content) => "x".repeat(content.length),
-		});
-
-		const { exitCode, stderr } = await runSmoke(stub.baseUrl);
-
-		expect(exitCode).not.toBe(0);
-		expect(stderr).toContain(
-			"downloaded artifact bytes did not match requested content",
-		);
-	});
-
-	it("rejects an assistant stream that never records the done outcome", async () => {
-		const conversationId = "00000000-0000-4000-8000-000000000234";
-		const server = Bun.serve({
-			port: await availablePort(),
-			fetch(request) {
-				const url = new URL(request.url);
-				if (url.pathname === "/v1/conversations") {
-					return Response.json(
-						{ conversationId, scope: "general" },
-						{ status: 201 },
-					);
-				}
-				return sseTurn({
-					conversationId,
-					runId: "run-without-done",
-					text: "TURN1_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-					includeDone: false,
-				});
-			},
-		});
-		servers.push(server);
-
-		const { exitCode, stderr } = await runSmoke(
-			`http://127.0.0.1:${server.port}`,
-		);
-
-		expect(exitCode).not.toBe(0);
-		expect(stderr).toContain("event stream did not end in done");
-	});
-
-	it("rejects a provider-complete response split across multiple commits", async () => {
-		const conversationId = "00000000-0000-4000-8000-000000000236";
-		const exact =
-			"TURN1_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-		const server = Bun.serve({
-			port: await availablePort(),
-			fetch(request) {
-				const url = new URL(request.url);
-				if (url.pathname === "/v1/conversations") {
-					return Response.json(
-						{ conversationId, scope: "general" },
-						{ status: 201 },
-					);
-				}
-				return sseTurn({
-					conversationId,
-					runId: "split-run",
-					text: exact,
-					commitTexts: [exact.slice(0, 20), exact.slice(20)],
-				});
-			},
-		});
-		servers.push(server);
-
-		const { exitCode, stderr } = await runSmoke(
-			`http://127.0.0.1:${server.port}`,
-		);
-
-		expect(exitCode).not.toBe(0);
-		expect(stderr).toContain(
-			"expected exactly one provider-complete Assistant message",
-		);
-	});
-});
-
-async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
-	const messages: UserMessage[] = [];
-	const interrupts: Array<UserInterrupt & { afterToolUse: boolean }> = [];
-	const reconnectCursors: string[] = [];
-	const requests: StubRequest[] = [];
-	const responsesByRun = new Map<string, string>();
-	const searchableDocumentResponsesByRun = new Map<
-		string,
-		{ text: string; toolFrames: StubSSEFrame[] }
-	>();
-	const workspaceHash = createHash("sha256")
-		.update(input.workspaceMarker)
-		.digest("hex");
-	const artifactId = `${input.runIdPrefix}-artifact`;
-	const signedPath = `/signed/${artifactId}`;
-	let downloadedContent = "";
-	let conversationCreates = 0;
-	let searchableDocumentTurns = 0;
-	let interruptToolUseSent = false;
-	let interruptController:
-		| ReadableStreamDefaultController<Uint8Array>
-		| undefined;
-	const port = await availablePort();
-
-	const server = Bun.serve({
-		port,
-		async fetch(request) {
-			const url = new URL(request.url);
-			requests.push({
-				pathname: url.pathname,
-				memberCode: request.headers.get("x-member-code"),
-				partnerCode: request.headers.get("x-partner-code"),
-			});
-			if (url.pathname === "/v1/conversations") {
-				const conversationId = [
-					input.conversationId,
-					input.interruptConversationId,
-					input.searchableDocumentConversationId,
-				][conversationCreates++];
-				if (!conversationId) {
-					return new Response("unexpected Conversation create", {
-						status: 500,
-					});
-				}
-				return Response.json(
-					{ conversationId, scope: "general" },
-					{ status: 201 },
-				);
-			}
-			if (
-				request.method === "POST" &&
-				url.pathname === `/v1/conversations/${input.conversationId}/events`
-			) {
-				messages.push((await request.json()) as UserMessage);
-				const turn = messages.length;
-				const runId = `${input.runIdPrefix}-${turn}`;
-				const text =
-					turn === 1
-						? `TURN1_SHA256=${workspaceHash}`
-						: turn === 2
-							? `SESSION_MARKER=${extractSessionMarker(messages[0]?.text)}\nWORKSPACE_MARKER=${input.workspaceMarker}`
-							: "ARTIFACT_WRITTEN";
-				responsesByRun.set(runId, text);
-				return sseTurn({
-					conversationId: input.conversationId,
-					runId,
-					includePreview: input.includePreview,
-					text,
-				});
-			}
-
-			if (
-				input.searchableDocumentConversationId &&
-				request.method === "POST" &&
-				url.pathname ===
-					`/v1/conversations/${input.searchableDocumentConversationId}/events`
-			) {
-				messages.push((await request.json()) as UserMessage);
-				searchableDocumentTurns += 1;
-				const isInventory = searchableDocumentTurns === 1;
-				const runId = `${input.runIdPrefix}-searchable-document-${isInventory ? "inventory" : "content"}`;
-				const text = isInventory
-					? "DOCUMENT_COUNT=2"
-					: "DOCUMENT_TITLE=MyMemo Overview\nFIRST_HEADING=# MyMemo Overview";
-				const parentMessageId = `message-${runId}`;
-				const toolFrames = isInventory
-					? [
-							...toolExchangeFrames(
-								3,
-								parentMessageId,
-								"ListDocuments",
-								{ limit: 20, cursorProvided: false },
-								{
-									total: 2,
-									returnedCount: 2,
-									hasMore: false,
-									documents: [
-										{ title: "Intro to Machine Learning" },
-										{ title: "MyMemo Overview" },
-									],
-								},
-							),
-						]
-					: [
-							...toolExchangeFrames(
-								3,
-								parentMessageId,
-								"SearchDocuments",
-								{ query: "personal knowledge base" },
-								{
-									passages: [
-										{
-											title: "MyMemo Overview",
-											snippet:
-												"MyMemo is a personal knowledge base that answers questions by searching your documents.",
-										},
-									],
-								},
-							),
-							...toolExchangeFrames(
-								7,
-								parentMessageId,
-								"LoadDocuments",
-								{ requestedCount: 1 },
-								{
-									loadedCount: 1,
-									loaded: [{ title: "MyMemo Overview" }],
-									failedCount: 0,
-								},
-							),
-							...toolExchangeFrames(
-								11,
-								parentMessageId,
-								"Read",
-								{
-									path: ".mymemo/docs/doc-mymemo-overview.md",
-									offset: 1,
-									limit: 1,
-								},
-								input.failSearchableDocumentRead
-									? { message: "Tool failed" }
-									: {
-											path: ".mymemo/docs/doc-mymemo-overview.md",
-											content: "# MyMemo Overview",
-											startLine: 1,
-											linesRead: 1,
-											truncated: true,
-										},
-								input.failSearchableDocumentRead,
-							),
-						];
-				searchableDocumentResponsesByRun.set(runId, { text, toolFrames });
-				return sseTurn({
-					conversationId: input.searchableDocumentConversationId,
-					runId,
-					includePreview: input.includePreview,
-					text,
-					toolFrames,
-				});
-			}
-
-			if (
-				input.interruptConversationId &&
-				request.method === "POST" &&
-				url.pathname ===
-					`/v1/conversations/${input.interruptConversationId}/events`
-			) {
-				const event = (await request.json()) as UserMessage | UserInterrupt;
-				const runId = `${input.runIdPrefix}-interrupt`;
-				if (event.type === "user.interrupt") {
-					interrupts.push({ ...event, afterToolUse: interruptToolUseSent });
-					if (event.runId !== runId || !interruptController) {
-						return new Response("Run not found", { status: 404 });
-					}
-					interruptController.enqueue(
-						new TextEncoder().encode(
-							serializeSSEFrame({
-								id: "6",
-								event: "canceled",
-								data: { type: "canceled" },
-							}),
-						),
-					);
-					interruptController.close();
-					interruptController = undefined;
-					return Response.json(
-						{ runId, status: "cancel_requested" },
-						{ status: 202 },
-					);
-				}
-
-				messages.push(event);
-				const frames: StubSSEFrame[] = [
-					{
-						id: "1",
-						event: "conversation_id",
-						data: {
-							type: "conversation_id",
-							conversationId: input.interruptConversationId,
-						},
-					},
-					{
-						id: "1",
-						event: "run_id",
-						data: { type: "run_id", runId },
-					},
-				];
-				if (input.interruptIncludePreview) {
-					frames.push({
-						event: "text_delta",
-						data: {
-							type: "text_delta",
-							messageId: `message-${runId}`,
-							deltaIndex: 0,
-							text: "discard this provisional text",
-						},
-					});
-				}
-				const parentMessageId = `tool-parent-${runId}`;
-				const toolUseFrames = toolInvocationFrames(3, parentMessageId, "Bash", {
-					command: "sleep 120",
-				});
-				const encoder = new TextEncoder();
-				const stream = new ReadableStream<Uint8Array>({
-					start(controller) {
-						interruptController = controller;
-						for (const frame of frames) {
-							controller.enqueue(encoder.encode(serializeSSEFrame(frame)));
-						}
-						controller.enqueue(
-							encoder.encode(
-								serializeSSEFrame({
-									id: "2",
-									event: "text_commit",
-									data: {
-										type: "text_commit",
-										messageId: parentMessageId,
-										text: "",
-									},
-								}),
-							),
-						);
-						setTimeout(() => {
-							if (interruptController !== controller) return;
-							for (const frame of toolUseFrames) {
-								controller.enqueue(encoder.encode(serializeSSEFrame(frame)));
-							}
-							interruptToolUseSent = true;
-						}, 10);
-					},
-				});
-				return new Response(stream, {
-					headers: { "content-type": "text/event-stream" },
-				});
-			}
-
-			if (
-				input.interruptConversationId &&
-				request.method === "GET" &&
-				url.pathname ===
-					`/v1/conversations/${input.interruptConversationId}/runs/${input.runIdPrefix}-interrupt/events`
-			) {
-				reconnectCursors.push(request.headers.get("last-event-id") ?? "");
-				const runId = `${input.runIdPrefix}-interrupt`;
-				const parentMessageId = `tool-parent-${runId}`;
-				return sseResponse([
-					{
-						id: "2",
-						event: "text_commit",
-						data: {
-							type: "text_commit",
-							messageId: parentMessageId,
-							text: "",
-						},
-					},
-					...toolInvocationFrames(3, parentMessageId, "Bash", {
-						command: input.replayInterruptToolCommand ?? "sleep 120",
-					}),
-					{
-						id: "6",
-						event: "canceled",
-						data: { type: "canceled" },
-					},
-				]);
-			}
-
-			const searchableDocumentReconnectPrefix =
-				input.searchableDocumentConversationId
-					? `/v1/conversations/${input.searchableDocumentConversationId}/runs/`
-					: undefined;
-			if (
-				searchableDocumentReconnectPrefix &&
-				request.method === "GET" &&
-				url.pathname.startsWith(searchableDocumentReconnectPrefix) &&
-				url.pathname.endsWith("/events")
-			) {
-				reconnectCursors.push(request.headers.get("last-event-id") ?? "");
-				const runId = url.pathname.slice(
-					searchableDocumentReconnectPrefix.length,
-					-"/events".length,
-				);
-				const response = searchableDocumentResponsesByRun.get(runId);
-				if (!response) return new Response("not found", { status: 404 });
-				return sseTurn({
-					conversationId: input.searchableDocumentConversationId,
-					runId,
-					text: response.text,
-					toolFrames: response.toolFrames,
-					includeLifecycle: false,
-				});
-			}
-
-			const reconnectPrefix = `/v1/conversations/${input.conversationId}/runs/`;
-			const reconnectSuffix = "/events";
-			if (
-				request.method === "GET" &&
-				url.pathname.startsWith(reconnectPrefix) &&
-				url.pathname.endsWith(reconnectSuffix)
-			) {
-				reconnectCursors.push(request.headers.get("last-event-id") ?? "");
-				const runId = url.pathname.slice(
-					reconnectPrefix.length,
-					-reconnectSuffix.length,
-				);
-				const text = responsesByRun.get(runId);
-				if (!text) return new Response("not found", { status: 404 });
-				return sseTurn({
-					conversationId: input.conversationId,
-					runId,
-					text,
-					includeLifecycle: false,
-				});
-			}
-
-			if (
-				request.method === "GET" &&
-				url.pathname === `/v1/conversations/${input.conversationId}/artifacts`
-			) {
-				const artifact = extractArtifactRequest(messages[2]?.text);
-				downloadedContent = input.artifactContent
-					? input.artifactContent(artifact.content)
-					: artifact.content;
-				return Response.json({
-					artifacts: [
-						{
-							artifactId,
-							path: artifact.relativePath,
-							sizeBytes: new TextEncoder().encode(downloadedContent).byteLength,
-							contentType: "text/plain",
-							createdAt: "2026-07-17T00:00:00.000Z",
-							updatedAt: "2026-07-17T00:00:00.000Z",
-						},
-					],
-				});
-			}
-			if (
-				request.method === "GET" &&
-				url.pathname ===
-					`/v1/conversations/${input.conversationId}/artifacts/${artifactId}/download-url`
-			) {
-				return Response.json({
-					downloadUrl: `http://127.0.0.1:${port}${signedPath}`,
-				});
-			}
-			if (request.method === "GET" && url.pathname === signedPath) {
-				return new Response(downloadedContent, {
-					headers: {
-						"content-disposition": 'attachment; filename="core-check.txt"',
-						"content-type": "text/plain",
-					},
-				});
-			}
-			return new Response("not found", { status: 404 });
+			data: { type: "RUN_STARTED", threadId: conversationId, runId },
 		},
-	});
-	servers.push(server);
-	return {
-		baseUrl: `http://127.0.0.1:${port}`,
-		messages,
-		interrupts,
-		reconnectCursors,
-		requests,
-	};
-}
-
-function identityFromRequest(
-	request: StubRequest | undefined,
-): [string | null, string | null] {
-	if (!request) throw new Error("expected stub request");
-	return [request.memberCode, request.partnerCode];
+		{
+			id: "2",
+			data: {
+				type: "TEXT_MESSAGE_START",
+				messageId,
+				role: "assistant",
+			},
+		},
+		{
+			id: "3",
+			data: { type: "TEXT_MESSAGE_CONTENT", messageId, delta: text },
+		},
+		{
+			id: "4",
+			data: { type: "TEXT_MESSAGE_END", messageId },
+		},
+		{
+			id: "5",
+			data: { type: "RUN_FINISHED", threadId: conversationId, runId },
+		},
+	];
 }
 
 async function runSmoke(
 	baseUrl: string,
-	env: Record<string, string> = {},
+	extraEnv: Record<string, string> = {},
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-	const child = Bun.spawn(
-		["bun", "run", "scripts/smoke/agent-conversation-smoke.ts"],
-		{
-			cwd: root,
-			env: {
-				...process.env,
-				AGENT_SMOKE_BASE_URL: baseUrl,
-				AGENT_SMOKE_EXPECT_GATE_CLOSED: "false",
-				AGENT_SMOKE_MEMBER_CODE: "live-smoke-member",
-				AGENT_SMOKE_PARTNER_CODE: "live-smoke-partner",
-				AGENT_SMOKE_TURN_TIMEOUT_MS: "5000",
-				...env,
-			},
-			stdout: "pipe",
-			stderr: "pipe",
+	const child = Bun.spawn([process.execPath, "run", script], {
+		cwd: root,
+		env: {
+			...Bun.env,
+			AGENT_SMOKE_BASE_URL: baseUrl,
+			AGENT_SMOKE_TURN_TIMEOUT_MS: "5000",
+			...extraEnv,
 		},
-	);
+		stdout: "pipe",
+		stderr: "pipe",
+	});
 	const [exitCode, stdout, stderr] = await Promise.all([
 		child.exited,
 		new Response(child.stdout).text(),
@@ -923,45 +91,121 @@ async function runSmoke(
 	return { exitCode, stdout, stderr };
 }
 
-function extractSessionMarker(prompt: string | undefined): string {
-	const marker = prompt?.match(/agent-session-[0-9a-f-]{36}/)?.[0];
-	if (!marker)
-		throw new Error("first-turn prompt did not contain a session marker");
-	return marker;
-}
-
-function extractArtifactRequest(prompt: string | undefined): {
-	relativePath: string;
-	content: string;
-} {
-	const absolutePath = prompt?.match(
-		/^ARTIFACT_PATH=(\/home\/user\/artifacts\/.+)$/m,
-	)?.[1];
-	const content = prompt?.match(/^ARTIFACT_CONTENT=(.+)$/m)?.[1];
-	if (!absolutePath || !content) {
-		throw new Error("artifact-turn prompt did not contain path and content");
-	}
-	return {
-		relativePath: absolutePath.slice("/home/user/artifacts/".length),
-		content,
-	};
-}
-
-async function availablePort(): Promise<number> {
-	return await new Promise((resolvePort, reject) => {
-		const server = createServer();
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const address = server.address();
-			if (typeof address !== "object" || address === null) {
-				server.close();
-				reject(new Error("could not reserve a smoke-test port"));
-				return;
-			}
-			server.close((error) => {
-				if (error) reject(error);
-				else resolvePort(address.port);
-			});
+describe("agent conversation smoke", () => {
+	it("passes when the exposure gate is closed", async () => {
+		const server = Bun.serve({
+			port: 0,
+			fetch: () =>
+				new Response('{"error":"Agent is not enabled"}', { status: 403 }),
 		});
+		servers.push(server);
+
+		const result = await runSmoke(`http://127.0.0.1:${server.port}`);
+
+		expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(result.stdout).toContain("Statsig gate is closed by default");
 	});
-}
+
+	it("uses only strict Run admission and retained AG-UI reconnect", async () => {
+		const conversationId = "conversation-1";
+		const workspaceMarker = "workspace-0123456789abcdef0123456789abcdef";
+		const workspaceHash = createHash("sha256")
+			.update(workspaceMarker)
+			.digest("hex");
+		const runInputs: RunInput[] = [];
+		const runFrames = new Map<string, Frame[]>();
+		const paths: string[] = [];
+		let sessionMarker = "";
+		let artifactContent = "";
+
+		const server = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				const url = new URL(request.url);
+				paths.push(`${request.method} ${url.pathname}`);
+				if (request.method === "POST" && url.pathname === "/v1/conversations") {
+					return Response.json({ conversationId }, { status: 201 });
+				}
+				if (
+					request.method === "POST" &&
+					url.pathname === `/v1/conversations/${conversationId}/runs`
+				) {
+					const input = (await request.json()) as RunInput;
+					runInputs.push(input);
+					const prompt = input.messages[0]?.content ?? "";
+					let reply: string;
+					if (prompt.includes("TURN1_SHA256")) {
+						sessionMarker = prompt.match(/agent-session-[0-9a-f-]+/)?.[0] ?? "";
+						reply = `TURN1_SHA256=${workspaceHash}`;
+					} else if (prompt.includes("SESSION_MARKER=")) {
+						reply = `SESSION_MARKER=${sessionMarker}\nWORKSPACE_MARKER=${workspaceMarker}`;
+					} else {
+						artifactContent = prompt.match(/ARTIFACT_CONTENT=(.+)/)?.[1] ?? "";
+						reply = "ARTIFACT_WRITTEN";
+					}
+					const frames = successfulRun(conversationId, input.runId, reply);
+					runFrames.set(input.runId, frames);
+					return sse(frames);
+				}
+				const replayMatch = url.pathname.match(
+					/^\/v1\/conversations\/conversation-1\/runs\/([^/]+)\/events$/,
+				);
+				if (request.method === "GET" && replayMatch) {
+					const frames = runFrames.get(replayMatch[1] ?? "") ?? [];
+					const cursor = Number(request.headers.get("Last-Event-ID"));
+					return sse(frames.filter((frame) => Number(frame.id) > cursor));
+				}
+				if (
+					request.method === "GET" &&
+					url.pathname === `/v1/conversations/${conversationId}/artifacts`
+				) {
+					return Response.json({
+						artifacts: [
+							{
+								artifactId: "artifact-1",
+								path: "smoke/core-check.txt",
+								sizeBytes: new TextEncoder().encode(artifactContent).byteLength,
+							},
+						],
+					});
+				}
+				if (url.pathname.endsWith("/artifacts/artifact-1/download-url")) {
+					return Response.json({
+						downloadUrl: `http://127.0.0.1:${server.port}/download`,
+					});
+				}
+				if (url.pathname === "/download") {
+					return new Response(artifactContent, {
+						headers: {
+							"content-disposition": 'attachment; filename="core-check.txt"',
+						},
+					});
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+
+		const result = await runSmoke(`http://127.0.0.1:${server.port}`, {
+			AGENT_SMOKE_EXPECT_GATE_CLOSED: "false",
+		});
+
+		expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(result.stdout).toContain("agent live smoke passed: suite=core");
+		expect(runInputs).toHaveLength(3);
+		for (const input of runInputs) {
+			expect(input).toMatchObject({
+				threadId: conversationId,
+				tools: [],
+				context: [],
+			});
+			expect(input.runId).toBeTruthy();
+			expect(input.messages).toHaveLength(1);
+			expect(input.messages[0]).toMatchObject({ role: "user" });
+		}
+		expect(paths).not.toContain(
+			`POST /v1/conversations/${conversationId}/events`,
+		);
+		expect(paths.filter((path) => path.endsWith("/events"))).toHaveLength(3);
+	});
+});

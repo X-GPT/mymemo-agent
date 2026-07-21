@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AssistantTextPayload } from "@mymemo/agent-db/run-events";
+import type { AssistantMessageCompletedPayload } from "@mymemo/agent-db/run-events";
 
 type ContentBlockDelta = Extract<
 	Extract<SDKMessage, { type: "stream_event" }>["event"],
@@ -54,7 +54,7 @@ export interface CompletedToolUse {
  */
 export interface EnvelopeCommit {
 	messageId: string;
-	text: AssistantTextPayload | null;
+	text: AssistantMessageCompletedPayload | null;
 	toolUses: CompletedToolUse[];
 }
 

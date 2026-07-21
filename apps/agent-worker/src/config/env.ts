@@ -1,4 +1,4 @@
-import { resolveLiveTextRedisUrl } from "@mymemo/live-text";
+import { resolveLiveStreamRedisUrl } from "@mymemo/live-text";
 import {
 	type BashToolLimits,
 	DEFAULT_BASH_TOOL_LIMITS,
@@ -52,8 +52,8 @@ export interface WorkerConfig {
 		bucket: string;
 		region: string;
 	};
-	/** Additive authenticated TLS Redis secret for temporary live delivery. */
-	liveTextRedisUrl: string | undefined;
+	/** Required authenticated TLS Redis secret for the retained Live Stream. */
+	redisUrl: string;
 	/** How long an unrenewed E2B sandbox stays active before idle-pausing. */
 	sandboxIdleMs: number;
 	/** Bounds for the model-facing workspace file tools. */
@@ -165,6 +165,10 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 	assert(env.WORKER_E2B_TEMPLATE, "WORKER_E2B_TEMPLATE is required");
 	assert(env.ARTIFACT_BUCKET, "ARTIFACT_BUCKET is required");
 	assert(env.AWS_REGION, "AWS_REGION is required");
+	const redisUrl = resolveLiveStreamRedisUrl(env.REDIS_URL, {
+		allowInsecureLoopback:
+			env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
+	});
 
 	const sslEnabled = env.DB_SSL !== "disable";
 	const bashMaxOutputBytes = positiveIntOr(
@@ -193,10 +197,7 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			bucket: env.ARTIFACT_BUCKET,
 			region: env.AWS_REGION,
 		},
-		liveTextRedisUrl: resolveLiveTextRedisUrl(env.REDIS_URL, {
-			allowInsecureLoopback:
-				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
-		}),
+		redisUrl,
 		sandboxIdleMs: positiveIntOr(
 			env.WORKER_SANDBOX_IDLE_MS,
 			DEFAULT_SANDBOX_IDLE_MS,

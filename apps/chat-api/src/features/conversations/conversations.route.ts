@@ -10,12 +10,6 @@ import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 import { validator as zValidator } from "hono-openapi";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
-import { projectRun } from "@/features/run-events";
-import {
-	reportChatLiveTextProjectionSignal,
-	reportChatLiveTextSetupSignal,
-} from "@/features/run-events/live-text-telemetry";
-import { prepareLiveTextSubscription } from "@/features/run-events/prepare-live-text-subscription";
 import {
 	ActiveRunExistsError,
 	ConversationArchivedError,
@@ -23,16 +17,12 @@ import {
 	RunInputMismatchError,
 	type RunRecord,
 } from "@/features/run-store";
-import { HonoSSESender } from "@/features/streaming/sse-sender";
 import {
 	admitAgUiRun,
 	createConversation,
-	interruptConversationRun,
-	queueConversationTurn,
 	toConversationSummary,
 } from "./conversations.controller";
 import {
-	ConversationEventBody,
 	ConversationIdParam,
 	ConversationListQuery,
 	CreateConversationBody,
@@ -724,164 +714,6 @@ app.post(
 		}
 		const body = { runId: result.run.runId, status: result.run.status };
 		return c.json(body, result.outcome === "already_terminal" ? 409 : 202);
-	},
-);
-
-// POST /v1/conversations/:conversationId/events — send an event.
-// `user.message` queues a turn and streams its events back as SSE;
-// `user.interrupt` cancels an existing owned run and returns JSON.
-app.post(
-	"/:conversationId/events",
-	conversationBodyLimit,
-	zValidator(
-		"param",
-		z.object({ conversationId: ConversationIdParam }),
-		(result, c) => {
-			if (!result.success) {
-				return c.json({ error: "Invalid conversation id" }, 400);
-			}
-		},
-	),
-	zValidator("json", ConversationEventBody, (result, c) => {
-		if (!result.success) {
-			return c.json({ error: "Invalid event body", issues: result.error }, 400);
-		}
-	}),
-	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
-		}
-		const store = c.var.deps.conversationStore;
-
-		const { conversationId } = c.req.valid("param");
-		const event = c.req.valid("json");
-
-		// Existence + ownership gate before opening the stream: a missing or
-		// foreign conversation is a clean 404, not an SSE error frame. This runs
-		// before the exposure gate so the 404 ownership contract is preserved — a
-		// gated user probing a conversation they don't own still gets 404, not a
-		// 403 that would leak the existence of the gate over ownership.
-		const conversation = await store.get({
-			userId: identity.data.memberCode,
-			conversationId,
-		});
-		if (!conversation) {
-			return c.json({ error: "Conversation not found" }, 404);
-		}
-
-		// `user.interrupt` is a control event for an existing owned run: it must
-		// not depend on the new-work exposure gate, never creates a run, and
-		// returns JSON without opening SSE. The terminal `canceled` frame is
-		// delivered through the original run's stream or the reconnect endpoint.
-		// The design doc's pg_notify(runId) worker wake-up for the running case
-		// is deferred to the worker milestone — until then the worker observes
-		// `cancel_requested` through its heartbeat.
-		if (event.type === "user.interrupt") {
-			const result = await interruptConversationRun(c.var.deps, {
-				conversation,
-				runId: event.runId,
-			});
-			if (result.outcome === "not_found") {
-				return c.json({ error: "Run not found" }, 404);
-			}
-			const body = { runId: result.run.runId, status: result.run.status };
-			return c.json(body, result.outcome === "already_terminal" ? 409 : 202);
-		}
-
-		// `user.message` is new work and is gated. Evaluated on the trusted
-		// identity, after the ownership check but before any run write; fails
-		// closed.
-		if (!(await c.var.deps.exposureGate.isAgentEnabled(identity.data))) {
-			return c.json({ error: "Agent is not enabled" }, 403);
-		}
-
-		const runId = crypto.randomUUID();
-		const liveSubscription = await prepareLiveTextSubscription(
-			c.var.deps.liveTextSubscriber,
-			runId,
-			{
-				onSignal: (signal) =>
-					reportChatLiveTextSetupSignal(c.var.deps.liveTextTelemetry, signal),
-			},
-		);
-		let queuedRun: { runId: string };
-		try {
-			queuedRun = await queueConversationTurn(c.var.deps, {
-				conversation,
-				message: event.text,
-				runId,
-			});
-		} catch (error) {
-			await liveSubscription?.close().catch(() => {});
-			if (error instanceof ActiveRunExistsError) {
-				return c.json(
-					{
-						error:
-							"Conversation is busy processing another request. Please try again shortly.",
-					},
-					409,
-				);
-			}
-			if (error instanceof ConversationArchivedError) {
-				return c.json({ error: "Conversation is archived" }, 409);
-			}
-			if (error instanceof ConversationNotFoundError) {
-				return c.json({ error: "Conversation not found" }, 404);
-			}
-			throw error;
-		}
-
-		const requestSignal = c.req.raw.signal;
-		return streamSSE(
-			c,
-			async (stream) => {
-				const sender = new HonoSSESender(stream);
-				const keepaliveInterval = setInterval(() => {
-					sender.sendPing().catch((err) => {
-						c.var.logger.error({
-							message: "Failed to send keepalive ping",
-							error: err,
-						});
-					});
-				}, 5000);
-
-				try {
-					for await (const projected of projectRun(queuedRun.runId, 0, {
-						reader: c.var.deps.runEventReader,
-						notifier: c.var.deps.runNotifier,
-						liveSubscription: liveSubscription ?? undefined,
-						signal: requestSignal,
-						onLiveTextSignal: (signal) =>
-							reportChatLiveTextProjectionSignal(
-								c.var.deps.liveTextTelemetry,
-								signal,
-							),
-					})) {
-						if (requestSignal.aborted) break;
-						await sender.send({
-							id: projected.id,
-							message: projected.frame,
-						});
-					}
-				} finally {
-					clearInterval(keepaliveInterval);
-				}
-			},
-			async (error, stream) => {
-				c.var.logger.error({
-					message: "Error in conversation event route",
-					error,
-				});
-				const sender = new HonoSSESender(stream);
-				await sender.send({
-					message: { type: "error", message: error.message },
-				});
-			},
-		);
 	},
 );
 

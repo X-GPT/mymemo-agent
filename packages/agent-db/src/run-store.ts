@@ -463,7 +463,10 @@ export async function appendRunEventsTx(
 				.where(
 					and(
 						eq(runEvents.runId, input.runId),
-						inArray(runEvents.type, [...CANONICAL_MODEL_RUN_EVENT_TYPES]),
+						inArray(runEvents.type, [
+							RunEventType.Started,
+							...CANONICAL_MODEL_RUN_EVENT_TYPES,
+						]),
 					),
 				)
 				.orderBy(runEvents.seq);
@@ -564,7 +567,7 @@ async function insertTerminalEvent(
 	const terminalPayload = { ...payload, outcome: status };
 	parseDurableRunEvent(type, terminalPayload);
 	const sequenceTypes = [
-		...(row.normalizedInput === null ? [] : [RunEventType.Started]),
+		RunEventType.Started,
 		...CANONICAL_MODEL_RUN_EVENT_TYPES,
 	];
 	const priorCanonicalEvents = await tx
@@ -866,8 +869,8 @@ export function toRunRecord(row: typeof runs.$inferSelect): RunRecord {
  * Database errors are matched by constraint name (node-postgres exposes
  * `constraint`) with a message fallback (pglite in tests), so a duplicate
  * `runId` primary-key violation stays distinct.
- * Exported so both run-creation paths (this module's `createQueuedRunTx` and
- * chat-api's `createQueuedRunStartedTx`) classify admission conflicts identically.
+ * Exported so strict admission and lower-level queue tests classify the same
+ * database invariant identically.
  */
 export function isActiveRunConflict(error: unknown): boolean {
 	for (

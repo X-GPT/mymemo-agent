@@ -14,7 +14,6 @@ const memberCode = Bun.env.AGENT_SMOKE_MEMBER_CODE || "agent-smoke-member";
 const partnerCode = Bun.env.AGENT_SMOKE_PARTNER_CODE || "agent-smoke-partner";
 const expectGateClosed = Bun.env.AGENT_SMOKE_EXPECT_GATE_CLOSED !== "false";
 const suite = parseSuite(Bun.env.AGENT_SMOKE_SUITE);
-const previewMode = parsePreviewMode(Bun.env.AGENT_SMOKE_PREVIEW_MODE);
 const FIXTURE_MEMBER_CODE = "demo-member";
 if (suite === "full" && memberCode !== FIXTURE_MEMBER_CODE) {
 	throw new Error(
@@ -29,10 +28,10 @@ if (!Number.isInteger(turnTimeoutMs) || turnTimeoutMs <= 0) {
 }
 
 const TURN_HISTORY_EVENT_TYPES = [
-	"conversation_id",
-	"run_id",
-	"text_delta",
-	"text_commit",
+	"RUN_STARTED",
+	"TEXT_MESSAGE_START",
+	"TEXT_MESSAGE_CONTENT",
+	"TEXT_MESSAGE_END",
 	"TOOL_CALL_START",
 	"TOOL_CALL_ARGS",
 	"TOOL_CALL_END",
@@ -42,11 +41,11 @@ const TURN_HISTORY_EVENT_TYPES = [
 
 const TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 	...TURN_HISTORY_EVENT_TYPES,
-	"done",
+	"RUN_FINISHED",
 ]);
 const INTERRUPTED_TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 	...TURN_HISTORY_EVENT_TYPES,
-	"canceled",
+	"RUN_CANCELLED",
 ]);
 
 interface SSEFrame {
@@ -223,7 +222,7 @@ if (suite === "full") {
 }
 
 console.log(
-	`agent live smoke passed: suite=${suite}; preview=${previewMode}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}, ${artifactTurn.runId}${fullSuiteEvidence}`,
+	`agent live smoke passed: suite=${suite}; conversation ${conversationId}; runs ${firstTurn.runId}, ${secondTurn.runId}, ${artifactTurn.runId}${fullSuiteEvidence}`,
 );
 
 function requestConversationCreate(): Promise<Response> {
@@ -516,19 +515,29 @@ function matchesRequestedContent(
 async function verifyRunningRunCancellation(
 	conversationId: string,
 ): Promise<{ runId: string }> {
+	const runId = randomUUID();
 	const response = await fetch(
-		`${baseUrl}/v1/conversations/${conversationId}/events`,
+		`${baseUrl}/v1/conversations/${conversationId}/runs`,
 		{
 			method: "POST",
 			headers: headers(),
 			body: JSON.stringify({
-				type: "user.message",
-				text: [
-					"Run the local full-suite cancellation check.",
-					"Immediately use the Bash tool to run exactly this command: sleep 120",
-					"Do not use any other tool.",
-					"Do not reply until the command finishes.",
-				].join("\n"),
+				threadId: conversationId,
+				runId,
+				messages: [
+					{
+						id: randomUUID(),
+						role: "user",
+						content: [
+							"Run the local full-suite cancellation check.",
+							"Immediately use the Bash tool to run exactly this command: sleep 120",
+							"Do not use any other tool.",
+							"Do not reply until the command finishes.",
+						].join("\n"),
+					},
+				],
+				tools: [],
+				context: [],
 			}),
 			signal: AbortSignal.timeout(turnTimeoutMs),
 		},
@@ -544,7 +553,6 @@ async function verifyRunningRunCancellation(
 
 	const frames: SSEFrame[] = [];
 	const client = createClientContractFixture();
-	let runId: string | undefined;
 	let runCursor: string | undefined;
 	let interruptSent = false;
 
@@ -558,18 +566,23 @@ async function verifyRunningRunCancellation(
 		frames.push(frame);
 		client.receive({ ...frame, data: parseFrameData(frame) });
 
-		if (frame.event === "run_id") {
-			runId = stringField(frame, "runId");
+		if (frame.event === "RUN_STARTED") {
+			if (stringField(frame, "runId") !== runId) {
+				throw new Error("interrupt-check stream echoed the wrong Run id");
+			}
+			if (stringField(frame, "threadId") !== conversationId) {
+				throw new Error(
+					"interrupt-check stream echoed the wrong Conversation id",
+				);
+			}
 			runCursor = frame.id;
 			if (!runCursor) {
-				throw new Error("interrupt-check run_id frame had no durable cursor");
+				throw new Error("interrupt-check RUN_STARTED frame had no cursor");
 			}
 		}
 		if (frame.event === "TOOL_CALL_START" && !interruptSent) {
-			if (!runId) {
-				throw new Error(
-					"Tool invocation arrived before the interrupt-check run id",
-				);
+			if (!runCursor) {
+				throw new Error("Tool invocation arrived before RUN_STARTED");
 			}
 			const tool = stringField(frame, "toolCallName");
 			if (tool !== "Bash") {
@@ -582,38 +595,22 @@ async function verifyRunningRunCancellation(
 		}
 	});
 
-	if (!interruptSent || !runId || !runCursor) {
+	if (!interruptSent || !runCursor) {
 		throw new Error(
 			"interrupted event stream ended before the first Tool invocation",
 		);
 	}
 	const events = frames.map((frame) => frame.event);
-	const conversationIndex = events.indexOf("conversation_id");
-	const runIndex = events.indexOf("run_id");
+	const runIndex = events.indexOf("RUN_STARTED");
 	const toolUseIndex = events.indexOf("TOOL_CALL_START");
-	if (
-		conversationIndex < 0 ||
-		runIndex < 0 ||
-		toolUseIndex < 0 ||
-		conversationIndex >= runIndex ||
-		runIndex >= toolUseIndex
-	) {
+	if (runIndex < 0 || toolUseIndex < 0 || runIndex >= toolUseIndex) {
 		throw new Error(
-			`interrupted event stream did not identify the Conversation and Run before the Tool invocation: ${events.join(", ")}`,
-		);
-	}
-	const echoedConversationId = stringField(
-		frames.find((frame) => frame.event === "conversation_id"),
-		"conversationId",
-	);
-	if (echoedConversationId !== conversationId) {
-		throw new Error(
-			`interrupted event stream echoed conversation ${echoedConversationId}, expected ${conversationId}`,
+			`interrupted event stream did not identify the Run before the Tool invocation: ${events.join(", ")}`,
 		);
 	}
 	if (
-		events.at(-1) !== "canceled" ||
-		events.filter((event) => event === "canceled").length !== 1
+		events.at(-1) !== "RUN_CANCELLED" ||
+		events.filter((event) => event === "RUN_CANCELLED").length !== 1
 	) {
 		throw new Error(
 			`interrupted event stream did not end in one canceled outcome: ${events.join(", ")}`,
@@ -653,18 +650,17 @@ async function requestRunningRunCancellation(
 	runId: string,
 ): Promise<void> {
 	const response = await fetch(
-		`${baseUrl}/v1/conversations/${conversationId}/events`,
+		`${baseUrl}/v1/conversations/${conversationId}/runs/${runId}/cancel`,
 		{
 			method: "POST",
 			headers: headers(),
-			body: JSON.stringify({ type: "user.interrupt", runId }),
 			signal: AbortSignal.timeout(turnTimeoutMs),
 		},
 	);
 	const rawBody = await response.text();
 	if (response.status !== 202) {
 		throw new Error(
-			`expected running Run interrupt 202, got ${response.status}: ${rawBody}`,
+			`expected running Run cancellation 202, got ${response.status}: ${rawBody}`,
 		);
 	}
 
@@ -672,7 +668,7 @@ async function requestRunningRunCancellation(
 	try {
 		body = JSON.parse(rawBody);
 	} catch {
-		throw new Error("running Run interrupt response was not JSON");
+		throw new Error("running Run cancellation response was not JSON");
 	}
 	if (
 		typeof body !== "object" ||
@@ -683,7 +679,7 @@ async function requestRunningRunCancellation(
 		(body as Record<string, unknown>).status !== "cancel_requested"
 	) {
 		throw new Error(
-			"running Run interrupt response was not the accepted cancel_requested shape",
+			"running Run cancellation response was not the accepted cancel_requested shape",
 		);
 	}
 }
@@ -692,12 +688,19 @@ async function sendTurn(
 	conversationId: string,
 	message: string,
 ): Promise<TurnResult> {
+	const runId = randomUUID();
 	const response = await fetch(
-		`${baseUrl}/v1/conversations/${conversationId}/events`,
+		`${baseUrl}/v1/conversations/${conversationId}/runs`,
 		{
 			method: "POST",
 			headers: headers(),
-			body: JSON.stringify({ type: "user.message", text: message }),
+			body: JSON.stringify({
+				threadId: conversationId,
+				runId,
+				messages: [{ id: randomUUID(), role: "user", content: message }],
+				tools: [],
+				context: [],
+			}),
 			signal: AbortSignal.timeout(turnTimeoutMs),
 		},
 	);
@@ -716,58 +719,34 @@ async function sendTurn(
 	const unexpected = events.find((event) => !TURN_EVENT_TYPES.has(event));
 	if (unexpected)
 		throw new Error(`event stream included unexpected ${unexpected}`);
-	if (events.at(-1) !== "done") {
-		throw new Error(`event stream did not end in done: ${events.join(", ")}`);
+	if (events.at(-1) !== "RUN_FINISHED") {
+		throw new Error(
+			`event stream did not end in RUN_FINISHED: ${events.join(", ")}`,
+		);
 	}
-	const conversationIndex = events.indexOf("conversation_id");
-	const runIndex = events.indexOf("run_id");
-	const firstTextIndex = events.findIndex(
-		(event) => event === "text_delta" || event === "text_commit",
+	const runIndex = events.indexOf("RUN_STARTED");
+	const firstTextIndex = events.indexOf("TEXT_MESSAGE_START");
+	if (runIndex < 0 || firstTextIndex < 0 || runIndex >= firstTextIndex) {
+		throw new Error(
+			`event stream did not identify the Run before text: ${events.join(", ")}`,
+		);
+	}
+	const startFrames = frames.filter(
+		(frame) => frame.event === "TEXT_MESSAGE_START",
 	);
+	const endFrames = frames.filter(
+		(frame) => frame.event === "TEXT_MESSAGE_END",
+	);
+	if (startFrames.length !== 1 || endFrames.length !== 1) {
+		throw new Error(
+			"event stream did not contain exactly one complete Assistant message",
+		);
+	}
 	if (
-		conversationIndex < 0 ||
-		runIndex < 0 ||
-		firstTextIndex < 0 ||
-		conversationIndex >= runIndex ||
-		runIndex >= firstTextIndex
+		stringField(startFrames[0], "messageId") !==
+		stringField(endFrames[0], "messageId")
 	) {
-		throw new Error(
-			`event stream did not identify the Conversation and Run before text: ${events.join(", ")}`,
-		);
-	}
-	const previewFrames = frames.filter((frame) => frame.event === "text_delta");
-	const commitFrames = frames.filter((frame) => frame.event === "text_commit");
-	if (commitFrames.length !== 1) {
-		throw new Error(
-			`event stream contained ${commitFrames.length} commits; expected exactly one provider-complete Assistant message`,
-		);
-	}
-	if (previewMode === "required" && previewFrames.length === 0) {
-		throw new Error("event stream contained no required Live preview");
-	}
-	if (previewMode === "forbidden" && previewFrames.length > 0) {
-		throw new Error(
-			"Redis-disabled stream unexpectedly contained Live preview",
-		);
-	}
-	if (previewMode === "required") {
-		const firstPreviewIndex = frames.findIndex(
-			(frame) => frame.event === "text_delta",
-		);
-		const firstCommitIndex = frames.findIndex(
-			(frame) => frame.event === "text_commit",
-		);
-		if (firstPreviewIndex < 0 || firstPreviewIndex >= firstCommitIndex) {
-			throw new Error("Live preview did not arrive before its durable commit");
-		}
-		const commitMessageId = stringField(commitFrames[0], "messageId");
-		if (
-			previewFrames.some(
-				(frame) => stringField(frame, "messageId") !== commitMessageId,
-			)
-		) {
-			throw new Error("Live preview did not belong to the committed message");
-		}
+		throw new Error("Assistant message identity changed before completion");
 	}
 
 	const client = createClientContractFixture();
@@ -787,22 +766,19 @@ async function sendTurn(
 		);
 	}
 
-	const echoedConversationId = stringField(
-		frames.find((frame) => frame.event === "conversation_id"),
-		"conversationId",
-	);
+	const startedFrame = frames.find((frame) => frame.event === "RUN_STARTED");
+	const echoedConversationId = stringField(startedFrame, "threadId");
 	if (echoedConversationId !== conversationId) {
 		throw new Error(
 			`event stream echoed conversation ${echoedConversationId}, expected ${conversationId}`,
 		);
 	}
-	const runId = stringField(
-		frames.find((frame) => frame.event === "run_id"),
-		"runId",
-	);
-	const runCursor = frames.find((frame) => frame.event === "run_id")?.id;
+	if (stringField(startedFrame, "runId") !== runId) {
+		throw new Error("event stream echoed the wrong Run id");
+	}
+	const runCursor = startedFrame?.id;
 	if (!runCursor)
-		throw new Error("run_id frame did not carry a durable cursor");
+		throw new Error("RUN_STARTED frame did not carry a replay cursor");
 	const text = snapshot.messages.map((message) => message.text).join("");
 	if (!text.trim()) throw new Error("event stream contained no assistant text");
 	await replayTurn({
@@ -817,6 +793,11 @@ async function sendTurn(
 
 async function replayTurn(expectation: ReplayExpectation): Promise<void> {
 	const expectedTerminal = expectation.terminal ?? "done";
+	const expectedTerminalEvent = {
+		done: "RUN_FINISHED",
+		canceled: "RUN_CANCELLED",
+		error: "RUN_ERROR",
+	}[expectedTerminal];
 	const response = await fetch(
 		`${baseUrl}/v1/conversations/${expectation.conversationId}/runs/${expectation.runId}/events`,
 		{
@@ -839,26 +820,20 @@ async function replayTurn(expectation: ReplayExpectation): Promise<void> {
 
 	const frames = parseSSE(body).filter((frame) => frame.event !== "ping");
 	const replayedEvents = frames.map((frame) => frame.event);
-	if (
-		replayedEvents.some((event) =>
-			["conversation_id", "run_id", "text_delta"].includes(event),
-		)
-	) {
-		throw new Error(
-			`durable reconnect attempted to replay non-durable frames: ${replayedEvents.join(", ")}`,
-		);
+	if (replayedEvents.includes("RUN_STARTED")) {
+		throw new Error("reconnect replayed the acknowledged RUN_STARTED event");
 	}
-	if (replayedEvents.at(-1) !== expectedTerminal) {
+	if (replayedEvents.at(-1) !== expectedTerminalEvent) {
 		throw new Error(
-			`durable reconnect did not end in ${expectedTerminal}: ${replayedEvents.join(", ")}`,
+			`durable reconnect did not end in ${expectedTerminalEvent}: ${replayedEvents.join(", ")}`,
 		);
 	}
 	const replayedTerminals = replayedEvents.filter((event) =>
-		["done", "canceled", "error"].includes(event),
+		["RUN_FINISHED", "RUN_CANCELLED", "RUN_ERROR"].includes(event),
 	);
 	if (
 		replayedTerminals.length !== 1 ||
-		replayedTerminals[0] !== expectedTerminal
+		replayedTerminals[0] !== expectedTerminalEvent
 	) {
 		throw new Error(
 			`durable reconnect did not contain exactly one ${expectedTerminal} outcome: ${replayedEvents.join(", ")}`,
@@ -960,7 +935,16 @@ function parseSSE(raw: string): SSEFrame[] {
 				data.push(line.slice("data:".length).trimStart());
 			}
 		}
-		if (event) frames.push({ id, event, data: data.join("\n") });
+		const frameData = data.join("\n");
+		if (!event && frameData) {
+			try {
+				const parsed = JSON.parse(frameData) as { type?: unknown };
+				if (typeof parsed.type === "string") event = parsed.type;
+			} catch {
+				// parseFrameData reports malformed JSON with event context.
+			}
+		}
+		if (event) frames.push({ id, event, data: frameData });
 	}
 	return frames;
 }
@@ -987,20 +971,10 @@ function parseFrameData(frame: SSEFrame): unknown {
 	}
 }
 
-type PreviewMode = "optional" | "required" | "forbidden";
-
 type SmokeSuite = "core" | "full";
 
 function parseSuite(value: string | undefined): SmokeSuite {
 	if (value === undefined || value === "core") return "core";
 	if (value === "full") return "full";
 	throw new Error("AGENT_SMOKE_SUITE must be core or full");
-}
-
-function parsePreviewMode(value: string | undefined): PreviewMode {
-	if (value === undefined || value === "optional") return "optional";
-	if (value === "required" || value === "forbidden") return value;
-	throw new Error(
-		"AGENT_SMOKE_PREVIEW_MODE must be optional, required, or forbidden",
-	);
 }

@@ -12,7 +12,6 @@ import {
 import { createTestDatabase, type TestDb } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store";
-import { projectRunEvent } from "@/features/run-events/project-run-event";
 import type { ArtifactManifestEntry } from "../../../../agent-worker/src/artifacts/artifact-manifest";
 import {
 	type ArtifactObjectStore,
@@ -25,6 +24,7 @@ import type { WorkerLogger } from "../../../../agent-worker/src/logger";
 import { RunLoop } from "../../../../agent-worker/src/run-loop";
 import type { SupervisedQuery } from "../../../../agent-worker/src/sdk/agent-stream";
 import { createSdkRunProcessor } from "../../../../agent-worker/src/sdk/run-processor";
+import { fakeLiveStreamStore } from "../../../../agent-worker/src/testing/live-stream-store";
 import { Worker } from "../../../../agent-worker/src/worker";
 import type {
 	ArtifactDownloadSigner,
@@ -132,6 +132,7 @@ function createDeliveryHarness(
 	const loop = new RunLoop({
 		db: tdb.db,
 		worker,
+		liveStreamStore: fakeLiveStreamStore(),
 		processor: createSdkRunProcessor({
 			logger,
 			startRunQuery: async (run, signal) => {
@@ -261,11 +262,6 @@ describe("Downloadable artifact delivery acceptance", () => {
 				.where(eq(runEvents.runId, "run-1"))
 				.orderBy(asc(runEvents.seq));
 			expect(firstEvents.map(({ type }) => type)).toEqual(["run_done"]);
-			expect(
-				firstEvents.flatMap(({ type, payload }) =>
-					projectRunEvent(type, payload),
-				),
-			).toEqual([{ type: "done" }]);
 
 			const firstCurrent = await currentArtifacts(tdb);
 			const firstList = await artifactList(http.app);

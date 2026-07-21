@@ -198,8 +198,8 @@ describe("PostgresConversationStore", () => {
 		});
 		await tdb.db.insert(runEvents).values([
 			{ runId: "run-terminal", seq: 1, type: "run_started", payload: {} },
-			{ runId: "run-terminal", seq: 2, type: "tool_use", payload: {} },
-			{ runId: "run-terminal", seq: 3, type: "tool_result", payload: {} },
+			{ runId: "run-terminal", seq: 2, type: "tool_call_started", payload: {} },
+			{ runId: "run-terminal", seq: 3, type: "tool_call_result", payload: {} },
 			{ runId: "run-terminal", seq: 4, type: "run_done", payload: {} },
 		]);
 		await tdb.db.insert(conversationArtifacts).values({

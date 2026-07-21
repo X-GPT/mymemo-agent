@@ -58,9 +58,9 @@ locals {
     }
   ]
 
-  live_redis_url_secret = var.live_stream_enabled ? [
+  live_redis_url_secret = [
     { name = "REDIS_URL", valueFrom = local.live_redis_url_secret_arn }
-  ] : []
+  ]
 
   chat_api_environment = concat([
     { name = "PORT", value = tostring(var.chat_api_port) },

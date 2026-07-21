@@ -7,11 +7,11 @@ import {
 	it,
 } from "bun:test";
 import { EventType } from "@ag-ui/core";
+import { RunEventType } from "@mymemo/agent-db/run-events";
 import { and, eq, sql } from "drizzle-orm";
 import { conversations, runEvents, runs } from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
 import { PostgresConversationStore } from "@/features/conversation-store";
-import { RunEventType } from "@/features/run-events";
 import { PostgresConversationHistoryStore } from "./postgres-conversation-history-store";
 
 let tdb: TestDb;
@@ -121,66 +121,6 @@ describe("PostgresConversationHistoryStore", () => {
 			nextCursor: null,
 			activeRun: null,
 		});
-	});
-
-	it("retains complete legacy Assistant text when it has a stable message id", async () => {
-		await tdb.db.insert(conversations).values({
-			userId: "member-1",
-			conversationId: "conversation-1",
-			scope: "general",
-		});
-		await tdb.db.insert(runs).values({
-			runId: "run-legacy-text",
-			userId: "member-1",
-			conversationId: "conversation-1",
-			status: "done",
-			terminalAt: new Date("2026-07-20T01:00:05.000Z"),
-			nextEventSeq: 4,
-		});
-		await tdb.db.insert(runEvents).values([
-			{
-				runId: "run-legacy-text",
-				seq: 1,
-				type: RunEventType.Started,
-				payload: {
-					runId: "run-legacy-text",
-					conversationId: "conversation-1",
-					messageId: "user-legacy",
-					message: "Legacy question",
-					scope: "general",
-					collectionId: null,
-					summaryId: null,
-				},
-			},
-			{
-				runId: "run-legacy-text",
-				seq: 2,
-				type: RunEventType.AssistantText,
-				payload: { messageId: "assistant-legacy", text: "Legacy answer" },
-			},
-			{
-				runId: "run-legacy-text",
-				seq: 3,
-				type: RunEventType.Done,
-				payload: { outcome: "done" },
-			},
-		]);
-
-		const page = await new PostgresConversationHistoryStore(tdb.db).getPage({
-			userId: "member-1",
-			conversationId: "conversation-1",
-			limit: 20,
-			cursor: null,
-		});
-
-		expect(page?.runs[0]?.messages).toEqual([
-			{ id: "user-legacy", role: "user", content: "Legacy question" },
-			{
-				id: "assistant-legacy",
-				role: "assistant",
-				content: "Legacy answer",
-			},
-		]);
 	});
 
 	it("pages whole terminal Runs newest-first and presents each page chronologically", async () => {

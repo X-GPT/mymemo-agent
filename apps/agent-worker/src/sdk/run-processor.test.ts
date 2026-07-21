@@ -9,13 +9,10 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
-import {
-	InMemoryLiveTextTransport,
-	type LiveTextPublisher,
-} from "@mymemo/live-text";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
+import { fakeLiveStreamStore } from "../testing/live-stream-store";
 import { Worker } from "../worker";
 import type { SupervisedQuery } from "./agent-stream";
 import { createSdkRunProcessor, type StartRunQuery } from "./run-processor";
@@ -159,46 +156,18 @@ function stepQuery(
 	};
 }
 
-/**
- * A query that yields one message then blocks until the run is aborted, then
- * emits one more (ignored) message and ends — as a real interrupt would. Records
- * interrupt calls so the test can assert the supervisor interrupted the query.
- */
-function cancelableQuery(
-	signal: AbortSignal,
-	firstText: string,
-): SupervisedQuery & { interrupts: number } {
-	const q = {
-		interrupts: 0,
-		async interrupt() {
-			q.interrupts++;
-		},
-		async *[Symbol.asyncIterator]() {
-			const envelope = textEnvelope({ completeText: firstText });
-			for (const message of envelope.slice(0, 4)) yield message;
-			await new Promise<void>((resolve) => {
-				if (signal.aborted) return resolve();
-				signal.addEventListener("abort", () => resolve(), { once: true });
-			});
-			for (const message of envelope.slice(4)) yield message;
-		},
-	};
-	return q;
-}
-
 function buildLoop(
 	worker: Worker,
 	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
-	liveTextPublisher?: LiveTextPublisher,
 ) {
 	return new RunLoop({
 		db: tdb.db,
 		worker,
+		liveStreamStore: fakeLiveStreamStore(),
 		processor: createSdkRunProcessor({
 			startRunQuery,
 			logger,
-			liveTextPublisher,
 		}),
 		heartbeatIntervalMs: 15_000,
 		logger,
@@ -212,30 +181,6 @@ function buildWorker() {
 		shutdownTimeoutMs: 1_000,
 		logger: silentLogger,
 	});
-}
-
-function stalledPublisher() {
-	let resolveStarted: () => void = () => {};
-	const started = new Promise<void>((resolve) => {
-		resolveStarted = resolve;
-	});
-	let aborted = false;
-	const publisher: LiveTextPublisher = {
-		async publish(_message, options) {
-			resolveStarted();
-			await new Promise<void>((resolve) => {
-				options?.signal?.addEventListener(
-					"abort",
-					() => {
-						aborted = true;
-						resolve();
-					},
-					{ once: true },
-				);
-			});
-		},
-	};
-	return { publisher, started, wasAborted: () => aborted };
 }
 
 async function readRun(runId: string) {
@@ -283,8 +228,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	it("keeps sequential envelopes separate, ignores non-text blocks, and skips empty messages", async () => {
 		const worker = buildWorker();
-		const transport = new InMemoryLiveTextTransport();
-		const subscription = await transport.subscribe("run-1");
 		const messages = [
 			...providerEnvelope("provider-1", [
 				{ type: "text", completeText: "ALPHA|" },
@@ -298,12 +241,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			]),
 			resultMessage(),
 		];
-		const loop = buildLoop(
-			worker,
-			async () => messageQuery(messages),
-			silentLogger,
-			transport,
-		);
+		const loop = buildLoop(worker, async () => messageQuery(messages));
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
@@ -326,14 +264,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		}>;
 		expect(commits.map(({ text }) => text)).toEqual(["ALPHA|BETA", "GAMMA"]);
 		expect(new Set(commits.map(({ messageId }) => messageId)).size).toBe(2);
-		expect(subscription.readAvailable()).toEqual(
-			commits.map(({ messageId, text }) => ({
-				runId: "run-1",
-				messageId,
-				deltaIndex: 0,
-				text,
-			})),
-		);
 	});
 
 	for (const fixture of [
@@ -528,16 +458,9 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		},
 	]) {
 		it(`fails the Run closed for ${fixture.name}`, async () => {
-			const warnings: Record<string, unknown>[] = [];
-			const logger: WorkerLogger = {
-				...silentLogger,
-				warn: (event) => warnings.push(event),
-			};
 			const worker = buildWorker();
-			const loop = buildLoop(
-				worker,
-				async () => messageQuery(fixture.messages),
-				logger,
+			const loop = buildLoop(worker, async () =>
+				messageQuery(fixture.messages),
 			);
 			await createQueuedRunTx(tdb.db, {
 				runId: "run-1",
@@ -555,45 +478,23 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				message: "Run failed",
 				outcome: "error",
 			});
-			expect(warnings).toContainEqual({
-				message: "Live preview signal",
-				service: "agent-worker",
-				signal: "impossible_ordering",
-				reason: "provider_envelope",
-				count: 1,
-			});
-			expect(JSON.stringify(warnings)).not.toContain("complete");
 		});
 	}
 
 	it("fails a Run whose streamed text disagrees with provider completion", async () => {
-		const warnings: Record<string, unknown>[] = [];
-		const logger: WorkerLogger = {
-			...silentLogger,
-			warn(event) {
-				warnings.push(event);
-				throw new Error("telemetry unavailable");
-			},
-		};
 		const worker = buildWorker();
-		const transport = new InMemoryLiveTextTransport();
-		const subscription = await transport.subscribe("run-1");
-		const loop = buildLoop(
-			worker,
-			async () =>
-				messageQuery([
-					...textEnvelope({
-						completeText: "COMMIT",
-						providerMessageId: "provider-1",
-						partialText: "PREVIEW",
-					}),
-					...textEnvelope({
-						completeText: "NEXT",
-						providerMessageId: "provider-2",
-					}),
-				]),
-			logger,
-			transport,
+		const loop = buildLoop(worker, async () =>
+			messageQuery([
+				...textEnvelope({
+					completeText: "COMMIT",
+					providerMessageId: "provider-1",
+					partialText: "PREVIEW",
+				}),
+				...textEnvelope({
+					completeText: "NEXT",
+					providerMessageId: "provider-2",
+				}),
+			]),
 		);
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -607,81 +508,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect((await readRun("run-1"))?.status).toBe("error");
 		const events = await readEvents("run-1");
 		expect(events.map((event) => event.type)).toEqual(["run_error"]);
-		expect(warnings).toEqual([
-			{
-				message: "Live preview signal",
-				service: "agent-worker",
-				signal: "dropped",
-				reason: "partial_complete",
-				outcome: "dropped",
-				count: 1,
-			},
-			{
-				message: "Live preview signal",
-				service: "agent-worker",
-				signal: "mismatch",
-				reason: "partial_complete",
-				count: 1,
-			},
-			{
-				message: "Live preview signal",
-				service: "agent-worker",
-				signal: "impossible_ordering",
-				reason: "provider_envelope",
-				count: 1,
-			},
-		]);
-		expect(JSON.stringify(warnings)).not.toContain("PREVIEW");
-		expect(JSON.stringify(warnings)).not.toContain("COMMIT");
-		expect(subscription.readAvailable()).toEqual([]);
-	});
-
-	it("keeps the Run done and emits a payload-free signal when publication fails", async () => {
-		const warnings: Record<string, unknown>[] = [];
-		const logger: WorkerLogger = {
-			...silentLogger,
-			warn(event) {
-				warnings.push(event);
-			},
-		};
-		const worker = buildWorker();
-		const loop = buildLoop(
-			worker,
-			async () =>
-				messageQuery(textEnvelope({ completeText: "authoritative answer" })),
-			logger,
-			{
-				async publish() {
-					throw new Error("transport unavailable");
-				},
-			},
-		);
-		await createQueuedRunTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		await loop.tick();
-		await worker.drain();
-
-		expect((await readRun("run-1"))?.status).toBe("done");
-		expect(
-			(await readEvents("run-1"))
-				.filter((event) => event.type === "assistant_message_completed")
-				.map((event) => (event.payload as { text: string }).text),
-		).toEqual(["authoritative answer"]);
-		expect(warnings).toEqual([
-			{
-				message: "Live preview signal",
-				service: "agent-worker",
-				signal: "dropped",
-				reason: "publisher",
-				outcome: "dropped",
-				count: 1,
-			},
-		]);
-		expect(JSON.stringify(warnings)).not.toContain("authoritative answer");
 	});
 
 	it("passes the claimed run and abort signal to startRunQuery", async () => {
@@ -756,102 +582,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const events = await readEvents("run-1");
 		expect(events.map((event) => event.type)).toEqual(["run_error"]);
 		expect(JSON.stringify(events[0]?.payload)).not.toContain("provider");
-	});
-
-	it("abandons an open message after cancel_requested and terminalizes as canceled", async () => {
-		const worker = buildWorker();
-		let query: (SupervisedQuery & { interrupts: number }) | undefined;
-		const live = stalledPublisher();
-		const loop = buildLoop(
-			worker,
-			async (_run, signal) => {
-				query = cancelableQuery(signal, "x".repeat(16_384));
-				return query;
-			},
-			silentLogger,
-			live.publisher,
-		);
-		await createQueuedRunTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		await loop.tick(); // claim + dispatch; processor streams "before cancel"
-		await live.started;
-
-		// User cancels the running run.
-		await tdb.db
-			.update(runs)
-			.set({ status: "cancel_requested", cancelRequestedAt: sql`now()` })
-			.where(eq(runs.runId, "run-1"));
-
-		await loop.tick(); // heartbeat observes cancel → aborts the run's signal
-		await worker.drain();
-
-		expect((await readRun("run-1"))?.status).toBe("canceled");
-		const types = (await readEvents("run-1")).map((e) => e.type);
-		expect(types).toEqual(["run_canceled"]);
-		expect(query?.interrupts).toBeGreaterThanOrEqual(1);
-		expect(live.wasAborted()).toBe(true);
-	});
-
-	it("discards pending preview after ownership loss without terminalizing", async () => {
-		const worker = buildWorker();
-		const live = stalledPublisher();
-		const loop = buildLoop(
-			worker,
-			async (_run, signal) => cancelableQuery(signal, "x".repeat(16_384)),
-			silentLogger,
-			live.publisher,
-		);
-		await createQueuedRunTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		await loop.tick();
-		await live.started;
-		await tdb.db
-			.update(runs)
-			.set({
-				lockedBy: "worker-2",
-				lockedUntil: sql`now() + interval '60 seconds'`,
-			})
-			.where(eq(runs.runId, "run-1"));
-		await loop.tick();
-		await worker.drain();
-
-		expect(live.wasAborted()).toBe(true);
-		expect((await readRun("run-1"))?.lockedBy).toBe("worker-2");
-		expect(await readEvents("run-1")).toEqual([]);
-	});
-
-	it("discards pending preview when shutdown aborts the active Run", async () => {
-		const worker = buildWorker();
-		const live = stalledPublisher();
-		const loop = buildLoop(
-			worker,
-			async (_run, signal) => cancelableQuery(signal, "x".repeat(16_384)),
-			silentLogger,
-			live.publisher,
-		);
-		await createQueuedRunTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		await loop.tick();
-		await live.started;
-		await loop.stop();
-
-		expect(live.wasAborted()).toBe(true);
-		expect((await readRun("run-1"))?.status).toBe("error");
-		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
-			"run_error",
-		]);
 	});
 
 	it("advances the agent-session pointer only after a valid successful stream", async () => {

@@ -279,7 +279,6 @@ function projectCompleteRun(
 	for (const event of parsed.slice(1)) {
 		switch (event.type) {
 			case RunEventType.AssistantMessageCompleted:
-			case RunEventType.AssistantText:
 				if (event.payload.text) {
 					ensureAssistantMessage(event.payload.messageId).content =
 						event.payload.text;

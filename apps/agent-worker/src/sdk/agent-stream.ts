@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { type AGUIEvent, EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
-import type { LiveTextPublisher } from "@mymemo/live-text";
 import type { WorkerLogger } from "../logger";
 import type { ModelContent } from "../run-loop";
 import { AgUiTextStream } from "./ag-ui-text-stream";
@@ -11,10 +10,6 @@ import {
 	AssistantMessageAssembler,
 	type EnvelopeCommit,
 } from "./assistant-message-assembler";
-import {
-	LiveTextPreview,
-	type LiveTextPreviewSignal,
-} from "./live-text-preview";
 import {
 	projectToolResult,
 	projectToolUse,
@@ -106,12 +101,6 @@ export interface ConsumeAgentStreamParams {
 	 * unmatched result ids, unprojectable payloads). Optional: omissions
 	 * degrade visibility, never correctness. */
 	logger?: WorkerLogger;
-	liveTextPublisher?: LiveTextPublisher;
-	liveTextCoalesceWindowMs?: number;
-	/** Payload-free, fixed-vocabulary Live preview transport signal. */
-	onLiveTextSignal?: (signal: LiveTextPreviewSignal) => void;
-	/** Payload-free signal that disables Live preview for the rest of the Run. */
-	onPartialCompleteMismatch?: () => void;
 }
 
 /**
@@ -153,26 +142,10 @@ export async function consumeAgentStream(
 	const assembler = new AssistantMessageAssembler({
 		onPartialCompleteMismatch: () => {
 			liveMessageMatchesCompletion = false;
-			preview?.disable();
-			try {
-				params.onPartialCompleteMismatch?.();
-			} catch {
-				// Telemetry is optional and cannot change the Run outcome.
-			}
 		},
 	});
-	const preview =
-		params.liveTextPublisher && params.runId
-			? new LiveTextPreview({
-					runId: params.runId,
-					publisher: params.liveTextPublisher,
-					coalesceWindowMs: params.liveTextCoalesceWindowMs,
-					onSignal: params.onLiveTextSignal,
-				})
-			: undefined;
 	const abandonOpenMessage = async (): Promise<void> => {
 		assembler.abandon();
-		preview?.abandon();
 		await agUiText.abandon();
 		liveMessageMatchesCompletion = true;
 	};
@@ -386,10 +359,8 @@ export async function consumeAgentStream(
 			}
 			const assembled = assembler.accept(message);
 			if (assembled?.type === "partial_text") {
-				preview?.append(assembled.messageId, assembled.text);
 				await agUiText.append(assembled.messageId, assembled.text);
 			} else if (assembled?.type === "message_stop") {
-				await preview?.flushMessage();
 				if (assembled.commit.text !== null && agUiText.messageId === null) {
 					await agUiText.append(
 						assembled.commit.text.messageId,
@@ -424,7 +395,6 @@ export async function consumeAgentStream(
 		throw error;
 	} finally {
 		signal.removeEventListener("abort", interrupt);
-		preview?.close();
 	}
 }
 

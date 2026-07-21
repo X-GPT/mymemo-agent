@@ -178,7 +178,7 @@ describe("run queue schema", () => {
 			{
 				runId: "run-1",
 				seq: 2,
-				type: "assistant_text",
+				type: "assistant_message_completed",
 				payload: { messageId: "message-1", text: "hello" },
 			},
 		]);
@@ -192,7 +192,7 @@ describe("run queue schema", () => {
 		expect(events.map((event) => event.seq)).toEqual([1, 2]);
 		expect(events.map((event) => event.type)).toEqual([
 			"run_started",
-			"assistant_text",
+			"assistant_message_completed",
 		]);
 	});
 

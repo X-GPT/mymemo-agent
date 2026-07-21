@@ -126,14 +126,8 @@ variable "live_redis_engine_version" {
   default     = "7.1"
 }
 
-variable "live_stream_enabled" {
-  description = "Inject REDIS_URL into trusted agent services. Set false to keep the Live Stream additively disabled while leaving Redis provisioned."
-  type        = bool
-  default     = true
-}
-
 variable "alarm_action_arns" {
-  description = "Optional SNS topic ARNs notified by Live preview and retained Live Stream CloudWatch alarms."
+  description = "Optional SNS topic ARNs notified by retained Live Stream CloudWatch alarms."
   type        = list(string)
   default     = []
 }

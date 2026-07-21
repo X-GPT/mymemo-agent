@@ -78,8 +78,6 @@ export type ModelContent =
 /** The loop owns the kind→event-type mapping in exactly one place, so a
  * processor can never write a payload under a mismatched vocabulary type. */
 const MODEL_CONTENT_EVENT_TYPES = {
-	// The shared vocabulary type the projector maps to `text_commit` — never
-	// the frame name itself, or the projector drops it.
 	assistant_message: RunEventType.AssistantMessageCompleted,
 	tool_call_started: RunEventType.ToolCallStarted,
 	tool_call_args: RunEventType.ToolCallArgs,
@@ -123,8 +121,8 @@ export interface RunLoopOptions {
 	db: Database;
 	worker: Worker;
 	processor: RunProcessor;
-	/** Shared retained AG-UI store. Undefined keeps durable execution available. */
-	liveStreamStore?: LiveStreamStore;
+	/** Required retained AG-UI store. Runtime failures keep durable execution available. */
+	liveStreamStore: LiveStreamStore;
 	/** Payload-free retained Live Stream operation metrics. */
 	liveStreamTelemetry?: LiveStreamTelemetry;
 	/** How often {@link RunLoop.start}'s timer fires a tick (heartbeat + claim). */
@@ -326,7 +324,6 @@ export class RunLoop {
 				durationMs: Math.max(0, Date.now() - run.liveStreamFailedAt.getTime()),
 			});
 		}
-		if (!this.opts.liveStreamStore) return;
 		for (const run of recovered) {
 			if (run.liveStreamFailedAt === null) continue;
 			try {

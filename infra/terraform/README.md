@@ -104,26 +104,18 @@ Before the first cache plan in an existing environment, reapply
 `infra/bootstrap-iam` with the admin profile as shown below. That updates the
 GitHub Actions deploy role with the ElastiCache permissions used by this root.
 
-Redis availability must not participate in chat-api or agent-worker readiness.
-Missing, invalid, or unreachable Redis configuration must degrade only live
-delivery and must not prevent either service from booting or staying healthy
-until the hard-cutover contract makes missing or insecure configuration a boot
-failure. Runtime Redis availability remains outside readiness in either phase.
-The durable Postgres path remains sufficient for successful Runs, durable
-Assistant messages, terminal Outcomes, and replay.
+`REDIS_URL` is required at chat-api and agent-worker startup and must be an
+authenticated `rediss://` URL. Runtime Redis availability remains outside
+readiness: an outage degrades live delivery but does not make either service
+unhealthy, and permanent Conversation history and Outcomes remain in Postgres.
 
-Set `live_stream_enabled=false` to omit `REDIS_URL` from both trusted service
-task definitions without deleting the cache during the additive rollout. Live
-telemetry is converted into separate CloudWatch namespaces for the legacy
-preview lane and retained Live Stream, using bounded signal/outcome dimensions
-for preview, operation/result dimensions for retained delivery, and bounded
-reason classifications. The retained Stream alarms identify
+Live Stream telemetry is converted into a CloudWatch namespace using bounded
+operation/result dimensions and reason classifications. The alarms identify
 agent-worker production failures, chat-api recovery responses, and capacity
 exhaustion without feeding service health. Production must set
 `alarm_action_arns` to an SNS topic with a confirmed incident subscription. See
 [`docs/runbooks/live-stream.md`](../../docs/runbooks/live-stream.md) for retained
-Stream diagnosis and [`docs/runbooks/live-preview.md`](../../docs/runbooks/live-preview.md)
-for the staged legacy lane.
+Stream diagnosis.
 
 ## Release Deploy Config
 
@@ -185,11 +177,9 @@ different settings:
   for running `scripts/deploy/prod_smoke.sh` from inside the VPC. The
   GitHub-hosted release workflow does not call this internal URL. The checked-in
   smoke identity must be allowlisted in Statsig: the default `core` suite drives
-  three real Runs, verifies Agent-session resume and Workspace persistence,
-  reconnects each Run from its durable cursor, and checks Downloadable-artifact
-  listing plus signed attachment delivery. `AGENT_SMOKE_PREVIEW_MODE=required` proves
-  the Live-enabled contract; after disabling the lane, override it with
-  `AGENT_SMOKE_PREVIEW_MODE=forbidden` to prove exact Postgres-only delivery. Set
+    three real Runs, verifies Agent-session resume and Workspace persistence,
+    reconnects each Run from its retained Redis cursor, and checks Downloadable-artifact
+    listing plus signed attachment delivery. Set
   `AGENT_SMOKE_EXPECT_GATE_CLOSED=true` only when checking the default-deny path
   instead.
 
