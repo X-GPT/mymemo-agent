@@ -16,6 +16,7 @@ import {
 	ActiveRunConflictError,
 	type AdmitQueuedRunInput,
 	admitQueuedRunTx,
+	appendRunEventsTx,
 	appendRunEventTx,
 	claimNextRunTx,
 	createQueuedRunTx,
@@ -453,6 +454,44 @@ describe("appendRunEventTx", () => {
 			});
 		}
 
+		expect(
+			(await readEvents("run-1")).map(({ seq, type, payload }) => ({
+				seq,
+				type,
+				payload,
+			})),
+		).toEqual(events.map((event, index) => ({ seq: index + 1, ...event })));
+	});
+
+	it("atomically appends one complete Tool invocation lifecycle", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		const events = [
+			{
+				type: RunEventType.ToolCallStarted,
+				payload: {
+					toolCallId: "tool-1",
+					toolCallName: "Read",
+					parentMessageId: "assistant-1",
+				},
+			},
+			{
+				type: RunEventType.ToolCallArgs,
+				payload: { toolCallId: "tool-1", delta: '{"path":"notes.md"}' },
+			},
+			{
+				type: RunEventType.ToolCallCompleted,
+				payload: { toolCallId: "tool-1" },
+			},
+		] as const;
+
+		expect(
+			await appendRunEventsTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				events,
+				appendClass: "model",
+			}),
+		).toEqual([{ seq: 1 }, { seq: 2 }, { seq: 3 }]);
 		expect(
 			(await readEvents("run-1")).map(({ seq, type, payload }) => ({
 				seq,

@@ -157,85 +157,120 @@ describe("hard-cutover client contract", () => {
 		});
 	}
 
-	it("records tool events as chronological items in arrival order", () => {
+	it("records correlated tool lifecycle events in arrival order", () => {
 		const client = createClientContractFixture();
 
 		client.receive({
 			id: "2",
-			event: "tool_use",
+			event: "TOOL_CALL_START",
 			data: {
-				type: "tool_use",
-				tool: "Bash",
-				arguments: { command: "ls -la", cwd: "src", timeoutMs: 30_000 },
-				truncated: false,
+				type: "TOOL_CALL_START",
+				toolCallId: "tool-1",
+				toolCallName: "Bash",
+				parentMessageId: "assistant-1",
 			},
 		});
 		client.receive({
 			id: "3",
-			event: "tool_result",
+			event: "TOOL_CALL_ARGS",
 			data: {
-				type: "tool_result",
-				tool: "Bash",
-				result: { exitCode: 0, stdout: "a.ts\n" },
-				isError: false,
-				truncated: false,
+				type: "TOOL_CALL_ARGS",
+				toolCallId: "tool-1",
+				delta: '{"command":"ls -la"}',
 			},
 		});
 		client.receive({
 			id: "4",
-			event: "tool_result",
+			event: "TOOL_CALL_END",
 			data: {
-				type: "tool_result",
-				tool: "Bash",
-				result: { message: "Tool failed" },
-				isError: true,
-				truncated: false,
+				type: "TOOL_CALL_END",
+				toolCallId: "tool-1",
+			},
+		});
+		client.receive({
+			id: "5",
+			event: "TOOL_CALL_RESULT",
+			data: {
+				type: "TOOL_CALL_RESULT",
+				messageId: "tool-message-1",
+				toolCallId: "tool-1",
+				content: '{"exitCode":0,"stdout":"a.ts\\n"}',
+				role: "tool",
+			},
+		});
+		client.receive({
+			id: "5",
+			event: "CUSTOM",
+			data: {
+				type: "CUSTOM",
+				name: "mymemo.tool_result_error",
+				value: { messageId: "tool-message-1", toolCallId: "tool-1" },
 			},
 		});
 
 		expect(client.snapshot().toolEvents).toEqual([
-			{ kind: "tool_use", tool: "Bash" },
-			{ kind: "tool_result", tool: "Bash", isError: false },
-			{ kind: "tool_result", tool: "Bash", isError: true },
+			{
+				kind: "tool_call_start",
+				toolCallId: "tool-1",
+				tool: "Bash",
+				parentMessageId: "assistant-1",
+			},
+			{
+				kind: "tool_call_args",
+				toolCallId: "tool-1",
+				delta: '{"command":"ls -la"}',
+			},
+			{ kind: "tool_call_end", toolCallId: "tool-1" },
+			{
+				kind: "tool_call_result",
+				messageId: "tool-message-1",
+				toolCallId: "tool-1",
+				content: '{"exitCode":0,"stdout":"a.ts\\n"}',
+			},
+			{
+				kind: "custom",
+				name: "mymemo.tool_result_error",
+				value: { messageId: "tool-message-1", toolCallId: "tool-1" },
+			},
 		]);
 	});
 
 	it("rejects cursorless or malformed tool frames", () => {
 		const client = createClientContractFixture();
 
-		// Tool events are durable-only: no live lane, so every frame must carry
-		// its run-event cursor.
+		// The legacy route projects canonical Tool events from durable rows, so
+		// every frame carries its Run-event cursor.
 		expect(() =>
 			client.receive({
-				event: "tool_use",
+				event: "TOOL_CALL_START",
 				data: {
-					type: "tool_use",
-					tool: "Bash",
-					arguments: {},
-					truncated: false,
+					type: "TOOL_CALL_START",
+					toolCallId: "tool-1",
+					toolCallName: "Bash",
+					parentMessageId: "assistant-1",
 				},
 			}),
-		).toThrow("tool_use must carry a durable cursor");
+		).toThrow("TOOL_CALL_START must carry a durable cursor");
 		expect(() =>
 			client.receive({
 				id: "2",
-				event: "tool_use",
-				data: { type: "tool_use", arguments: {}, truncated: false },
+				event: "TOOL_CALL_START",
+				data: { type: "TOOL_CALL_START", toolCallId: "tool-1" },
 			}),
-		).toThrow("invalid tool_use frame");
+		).toThrow("invalid TOOL_CALL_START frame");
 		expect(() =>
 			client.receive({
 				id: "2",
-				event: "tool_result",
+				event: "TOOL_CALL_RESULT",
 				data: {
-					type: "tool_result",
-					tool: "Bash",
-					result: "raw text",
-					isError: false,
-					truncated: false,
+					type: "TOOL_CALL_RESULT",
+					messageId: "tool-message-1",
+					toolCallId: "tool-1",
+					content: "raw text",
+					role: "assistant",
 				},
 			}),
-		).toThrow("invalid tool_result frame");
+		).toThrow("invalid TOOL_CALL_RESULT frame");
 	});
 
 	it("ignores tool frames after the terminal outcome", () => {
@@ -243,12 +278,12 @@ describe("hard-cutover client contract", () => {
 		client.receive({ id: "9", event: "done", data: { type: "done" } });
 		client.receive({
 			id: "10",
-			event: "tool_use",
+			event: "TOOL_CALL_START",
 			data: {
-				type: "tool_use",
-				tool: "Bash",
-				arguments: {},
-				truncated: false,
+				type: "TOOL_CALL_START",
+				toolCallId: "tool-1",
+				toolCallName: "Bash",
+				parentMessageId: "assistant-1",
 			},
 		});
 
@@ -283,5 +318,12 @@ describe("hard-cutover client contract", () => {
 				data: { type: "assistant_text", text: "legacy alias" },
 			}),
 		).toThrow("unsupported client event assistant_text");
+		expect(() =>
+			client.receive({
+				id: "3",
+				event: "tool_use",
+				data: { type: "tool_use", tool: "Bash" },
+			}),
+		).toThrow("unsupported client event tool_use");
 	});
 });

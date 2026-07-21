@@ -55,7 +55,7 @@ describe("projectRunEvent", () => {
 		]);
 	});
 
-	it("maps a guard-valid tool_use payload to a tool_use frame", () => {
+	it("maps a legacy Tool invocation to a namespaced CUSTOM event", () => {
 		expect(
 			projectRunEvent(RunEventType.ToolUse, {
 				tool: "Bash",
@@ -64,15 +64,18 @@ describe("projectRunEvent", () => {
 			}),
 		).toEqual([
 			{
-				type: "tool_use",
-				tool: "Bash",
-				arguments: { command: "ls -la", cwd: "src", timeoutMs: 30_000 },
-				truncated: false,
+				type: "CUSTOM",
+				name: "mymemo.legacy_tool_invocation",
+				value: {
+					tool: "Bash",
+					arguments: { command: "ls -la", cwd: "src", timeoutMs: 30_000 },
+					truncated: false,
+				},
 			},
 		]);
 	});
 
-	it("maps a guard-valid tool_result payload to a tool_result frame", () => {
+	it("maps a legacy Tool result to a namespaced CUSTOM event", () => {
 		expect(
 			projectRunEvent(RunEventType.ToolResult, {
 				tool: "Bash",
@@ -82,11 +85,14 @@ describe("projectRunEvent", () => {
 			}),
 		).toEqual([
 			{
-				type: "tool_result",
-				tool: "Bash",
-				result: { exitCode: 2, stdout: "", stderr: "no such file" },
-				isError: false,
-				truncated: true,
+				type: "CUSTOM",
+				name: "mymemo.legacy_tool_result",
+				value: {
+					tool: "Bash",
+					result: { exitCode: 2, stdout: "", stderr: "no such file" },
+					isError: false,
+					truncated: true,
+				},
 			},
 		]);
 	});
@@ -101,11 +107,14 @@ describe("projectRunEvent", () => {
 			}),
 		).toEqual([
 			{
-				type: "tool_result",
-				tool: "Bash",
-				result: { message: "Tool failed" },
-				isError: true,
-				truncated: false,
+				type: "CUSTOM",
+				name: "mymemo.legacy_tool_result",
+				value: {
+					tool: "Bash",
+					result: { message: "Tool failed" },
+					isError: true,
+					truncated: false,
+				},
 			},
 		]);
 	});

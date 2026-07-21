@@ -39,34 +39,51 @@ const resumeDelayMs = Number(process.env.INTEGRATION_RESUME_DELAY_MS ?? 0);
 const processor: RunProcessor = async (ctx) => {
 	const messageId = `message-${ctx.run.runId}`;
 	const toolCallId = `tool-${ctx.run.runId}`;
+	const toolResultMessageId = `tool-result-${ctx.run.runId}`;
+	const toolOnlyFailure =
+		ctx.run.normalizedInput?.text === "Synthetic tool-only failure";
 	const text = `Synthetic response for run ${ctx.run.runId}`;
-	await ctx.appendLiveEvent({
-		type: "TEXT_MESSAGE_START",
-		messageId,
-		role: "assistant",
-	});
-	await ctx.appendLiveEvent({
-		type: "TEXT_MESSAGE_CONTENT",
-		messageId,
-		delta: text,
-	});
-	if (resumeDelayMs > 0) await Bun.sleep(resumeDelayMs);
+	if (!toolOnlyFailure) {
+		await ctx.appendLiveEvent({
+			type: "TEXT_MESSAGE_START",
+			messageId,
+			role: "assistant",
+		});
+		await ctx.appendLiveEvent({
+			type: "TEXT_MESSAGE_CONTENT",
+			messageId,
+			delta: text,
+		});
+		if (resumeDelayMs > 0) await Bun.sleep(resumeDelayMs);
+	}
 	await ctx.appendModelContent({
 		kind: "assistant_message",
 		payload: {
 			messageId,
-			text,
+			text: toolOnlyFailure ? "" : text,
 		},
 	});
-	await ctx.appendLiveEvent({ type: "TEXT_MESSAGE_END", messageId });
-	await ctx.appendModelContent({
-		kind: "tool_use",
-		payload: {
-			tool: "Read",
-			arguments: { path: "CONTEXT.md" },
-			truncated: false,
+	if (!toolOnlyFailure) {
+		await ctx.appendLiveEvent({ type: "TEXT_MESSAGE_END", messageId });
+	}
+	await ctx.appendModelContents([
+		{
+			kind: "tool_call_started",
+			payload: {
+				toolCallId,
+				toolCallName: "Read",
+				parentMessageId: messageId,
+			},
 		},
-	});
+		{
+			kind: "tool_call_args",
+			payload: { toolCallId, delta: '{"path":"CONTEXT.md"}' },
+		},
+		{
+			kind: "tool_call_completed",
+			payload: { toolCallId },
+		},
+	]);
 	await ctx.appendLiveEvent({
 		type: "TOOL_CALL_START",
 		toolCallId,
@@ -81,21 +98,28 @@ const processor: RunProcessor = async (ctx) => {
 	if (resumeDelayMs > 0) await Bun.sleep(resumeDelayMs);
 	await ctx.appendLiveEvent({ type: "TOOL_CALL_END", toolCallId });
 	await ctx.appendModelContent({
-		kind: "tool_result",
+		kind: "tool_call_result",
 		payload: {
-			tool: "Read",
-			result: { ok: true },
-			isError: false,
-			truncated: false,
+			messageId: toolResultMessageId,
+			toolCallId,
+			content: toolOnlyFailure ? "Tool failed" : '{"ok":true}',
+			isError: toolOnlyFailure,
 		},
 	});
 	await ctx.appendLiveEvent({
 		type: "TOOL_CALL_RESULT",
-		messageId: `tool-result-${ctx.run.runId}`,
+		messageId: toolResultMessageId,
 		toolCallId,
-		content: '{"ok":true}',
+		content: toolOnlyFailure ? "Tool failed" : '{"ok":true}',
 		role: "tool",
 	});
+	if (toolOnlyFailure) {
+		await ctx.appendLiveEvent({
+			type: "CUSTOM",
+			name: "mymemo.tool_result_error",
+			value: { messageId: toolResultMessageId, toolCallId },
+		});
+	}
 };
 const runLoop = new RunLoop({
 	db: createDatabase(agentDatabaseUrl),

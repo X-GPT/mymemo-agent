@@ -1,5 +1,9 @@
 import {
 	isAssistantTextPayload,
+	isToolCallArgsPayload,
+	isToolCallCompletedPayload,
+	isToolCallResultPayload,
+	isToolCallStartedPayload,
 	isToolResultPayload,
 	isToolUsePayload,
 } from "@mymemo/agent-db/run-events";
@@ -47,17 +51,70 @@ export function projectRunEvent(type: string, payload: unknown): ClientFrame[] {
 						},
 					]
 				: [];
-		// The recorded tool payloads ARE the client-safe projection (ADR-0009 —
-		// projected once, worker-side, before append); after the shared guard
-		// validates the shape, the frame forwards the payload fields verbatim.
+		case RunEventType.ToolCallStarted:
+			return isToolCallStartedPayload(payload)
+				? [
+						{
+							type: "TOOL_CALL_START",
+							toolCallId: payload.toolCallId,
+							toolCallName: payload.toolCallName,
+							parentMessageId: payload.parentMessageId,
+						},
+					]
+				: [];
+		case RunEventType.ToolCallArgs:
+			return isToolCallArgsPayload(payload)
+				? [
+						{
+							type: "TOOL_CALL_ARGS",
+							toolCallId: payload.toolCallId,
+							delta: payload.delta,
+						},
+					]
+				: [];
+		case RunEventType.ToolCallCompleted:
+			return isToolCallCompletedPayload(payload)
+				? [
+						{
+							type: "TOOL_CALL_END",
+							toolCallId: payload.toolCallId,
+						},
+					]
+				: [];
+		case RunEventType.ToolCallResult:
+			return isToolCallResultPayload(payload)
+				? [
+						{
+							type: "TOOL_CALL_RESULT",
+							messageId: payload.messageId,
+							toolCallId: payload.toolCallId,
+							content: payload.content,
+							role: "tool",
+						},
+						...(payload.isError
+							? [
+									{
+										type: "CUSTOM" as const,
+										name: "mymemo.tool_result_error",
+										value: {
+											messageId: payload.messageId,
+											toolCallId: payload.toolCallId,
+										},
+									},
+								]
+							: []),
+					]
+				: [];
+		// Legacy Tool rows predate stable public identities. Preserve only their
+		// bounded client-safe projection as namespaced CUSTOM data; never invent
+		// message or Tool-call correlation for them (ADR-0012).
 		case RunEventType.ToolUse:
 			return isToolUsePayload(payload)
 				? [
 						{
-							type: "tool_use",
-							tool: payload.tool,
-							arguments: payload.arguments,
-							truncated: payload.truncated,
+							type: "CUSTOM",
+							name: "mymemo.legacy_tool_invocation",
+							value: payload,
 						},
 					]
 				: [];
@@ -65,11 +122,9 @@ export function projectRunEvent(type: string, payload: unknown): ClientFrame[] {
 			return isToolResultPayload(payload)
 				? [
 						{
-							type: "tool_result",
-							tool: payload.tool,
-							result: payload.result,
-							isError: payload.isError,
-							truncated: payload.truncated,
+							type: "CUSTOM",
+							name: "mymemo.legacy_tool_result",
+							value: payload,
 						},
 					]
 				: [];

@@ -10,11 +10,24 @@ export interface ClientContractMessage {
 	provisional: boolean;
 }
 
-/** One rendered Tool item (ADR-0009): append-only and self-describing — a
- * result is a separate chronological item, never an update to its invocation. */
+/** One rendered canonical Tool lifecycle item (ADR-0012). Stable public ids
+ * correlate the invocation, result, and owning Assistant message. */
 export type ClientContractToolEvent =
-	| { kind: "tool_use"; tool: string }
-	| { kind: "tool_result"; tool: string; isError: boolean };
+	| {
+			kind: "tool_call_start";
+			toolCallId: string;
+			tool: string;
+			parentMessageId: string;
+	  }
+	| { kind: "tool_call_args"; toolCallId: string; delta: string }
+	| { kind: "tool_call_end"; toolCallId: string }
+	| {
+			kind: "tool_call_result";
+			messageId: string;
+			toolCallId: string;
+			content: string;
+	  }
+	| { kind: "custom"; name: string; value: unknown };
 
 export type ClientContractTerminal = "done" | "canceled" | "error";
 
@@ -49,8 +62,8 @@ export function createClientContractFixture(): ClientContractFixture {
 				terminal !== undefined &&
 				(frame.event === "text_delta" ||
 					frame.event === "text_commit" ||
-					frame.event === "tool_use" ||
-					frame.event === "tool_result")
+					frame.event.startsWith("TOOL_CALL_") ||
+					frame.event === "CUSTOM")
 			) {
 				return;
 			}
@@ -102,29 +115,60 @@ export function createClientContractFixture(): ClientContractFixture {
 					committedMessageIds.add(messageId);
 					return;
 				}
-				case "tool_use": {
+				case "TOOL_CALL_START": {
 					requireCursor(frame);
-					const tool = requireString(data, "tool", frame.event);
-					if (
-						!isPlainRecord(data.arguments) ||
-						typeof data.truncated !== "boolean"
-					) {
-						throw new Error(`invalid ${frame.event} frame`);
-					}
-					toolEvents.push({ kind: "tool_use", tool });
+					const toolCallId = requireString(data, "toolCallId", frame.event);
+					const tool = requireString(data, "toolCallName", frame.event);
+					const parentMessageId = requireString(
+						data,
+						"parentMessageId",
+						frame.event,
+					);
+					toolEvents.push({
+						kind: "tool_call_start",
+						toolCallId,
+						tool,
+						parentMessageId,
+					});
 					return;
 				}
-				case "tool_result": {
+				case "TOOL_CALL_ARGS": {
 					requireCursor(frame);
-					const tool = requireString(data, "tool", frame.event);
-					if (
-						!isPlainRecord(data.result) ||
-						typeof data.isError !== "boolean" ||
-						typeof data.truncated !== "boolean"
-					) {
+					toolEvents.push({
+						kind: "tool_call_args",
+						toolCallId: requireString(data, "toolCallId", frame.event),
+						delta: requireString(data, "delta", frame.event),
+					});
+					return;
+				}
+				case "TOOL_CALL_END": {
+					requireCursor(frame);
+					toolEvents.push({
+						kind: "tool_call_end",
+						toolCallId: requireString(data, "toolCallId", frame.event),
+					});
+					return;
+				}
+				case "TOOL_CALL_RESULT": {
+					requireCursor(frame);
+					if (data.role !== "tool") {
 						throw new Error(`invalid ${frame.event} frame`);
 					}
-					toolEvents.push({ kind: "tool_result", tool, isError: data.isError });
+					toolEvents.push({
+						kind: "tool_call_result",
+						messageId: requireString(data, "messageId", frame.event),
+						toolCallId: requireString(data, "toolCallId", frame.event),
+						content: requireString(data, "content", frame.event),
+					});
+					return;
+				}
+				case "CUSTOM": {
+					requireCursor(frame);
+					toolEvents.push({
+						kind: "custom",
+						name: requireString(data, "name", frame.event),
+						value: data.value,
+					});
 					return;
 				}
 				case "done":

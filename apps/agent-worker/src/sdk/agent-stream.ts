@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type AGUIEvent, EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
@@ -95,13 +96,13 @@ export interface ConsumeAgentStreamParams {
 	query: SupervisedQuery;
 	/** Fires on cancel, ownership loss, or shutdown; interrupts the query. */
 	signal: AbortSignal;
-	/** Persists one piece of model content — an Assistant message, a Tool
-	 * invocation, or a Tool result (fenced to `running` upstream). */
-	appendModelContent: (content: ModelContent) => Promise<void>;
+	/** Atomically persists canonical model-content events, fenced to `running`
+	 * upstream. Single events use a one-item batch. */
+	appendModelContents: (contents: readonly ModelContent[]) => Promise<void>;
 	/** Sequential retained AG-UI publication. The bound Run producer absorbs
 	 * Redis failures so this callback never changes the model Outcome. */
 	appendLiveEvent?: (event: AGUIEvent) => Promise<void>;
-	/** Receives the omission logs ADR-0009 requires (unknown tool names,
+	/** Receives the omission logs ADR-0012 requires (unknown tool names,
 	 * unmatched result ids, unprojectable payloads). Optional: omissions
 	 * degrade visibility, never correctness. */
 	logger?: WorkerLogger;
@@ -115,17 +116,19 @@ export interface ConsumeAgentStreamParams {
 
 /**
  * Consume a supervised SDK query, persisting assistant text and client-safe
- * tool events as run content events, under the run's abort signal (plan Task
- * 7.2, ADR-0009).
+ * Tool lifecycle events as run content events, under the run's abort signal
+ * (plan Task 7.2, ADR-0012).
  *
- * At one envelope's `message_stop`, its single Assistant message (when it has
- * visible text) is appended first, then its `tool_use` events in content-block
- * order. A `tool_result` derives only from a complete, non-replay SDK user
- * message, associated to its invocation through a per-run in-memory id map —
- * results for ids with no appended invocation are logged and omitted, and a
- * result is never fabricated. Omissions (non-allowlisted tools, unprojectable
- * payloads) degrade visibility only; a failed append of a valid tool event
- * fails the run exactly like assistant text.
+ * At one envelope's `message_stop`, its Assistant message is appended first;
+ * Tool-only envelopes persist that message with empty text. Each projected
+ * `tool_use` then commits its start/arguments/end batch before those standard
+ * AG-UI events are published. A `tool_result` derives only from a complete,
+ * non-replay SDK user message and matches the invocation through a provider-id
+ * map that never leaves the worker. Results without a committed invocation are
+ * logged and omitted; correlation is never fabricated. Omissions
+ * (non-allowlisted tools, unprojectable payloads) degrade visibility only; a
+ * failed append of valid Tool content fails the run exactly like Assistant
+ * content.
  *
  * The moment the run is aborted it is no longer `running`, so:
  *  - the query is interrupted (once), and
@@ -141,7 +144,7 @@ export interface ConsumeAgentStreamParams {
 export async function consumeAgentStream(
 	params: ConsumeAgentStreamParams,
 ): Promise<AgentStreamOutcome> {
-	const { query, signal, appendModelContent } = params;
+	const { query, signal, appendModelContents } = params;
 	const outcome: AgentStreamOutcome = {
 		sessionId: null,
 		mirrorErrorObserved: false,
@@ -178,13 +181,17 @@ export async function consumeAgentStream(
 	};
 	const agUiText = new AgUiTextStream({ appendEvent: appendLiveEvent });
 
-	// Worker-internal association from SDK tool-use id to public tool name,
-	// established only when the invocation's event is appended — so a result for
-	// an omitted or unknown invocation is itself omitted (ADR-0009).
-	const toolNamesByUseId = new Map<string, PublicToolName>();
-	const appendWhileRunning = async (content: ModelContent): Promise<void> => {
+	// Provider Tool-use ids stay worker-internal. They only index the public,
+	// MyMemo-generated identity needed to correlate a later Tool result.
+	const toolInvocationsByUseId = new Map<
+		string,
+		{ tool: PublicToolName; toolCallId: string }
+	>();
+	const appendWhileRunning = async (
+		contents: readonly ModelContent[],
+	): Promise<void> => {
 		if (signal.aborted) throw new QueryInterruptedError();
-		await appendModelContent(content);
+		await appendModelContents(contents);
 		// The append itself is not abortable. Recheck after it settles so shutdown
 		// cannot let the rest of the envelope append while the DB Run is still
 		// fenced as running.
@@ -192,12 +199,11 @@ export async function consumeAgentStream(
 	};
 
 	const commitEnvelope = async (commit: EnvelopeCommit): Promise<void> => {
-		if (commit.text !== null) {
-			await appendWhileRunning({
-				kind: "assistant_message",
-				payload: commit.text,
-			});
-		}
+		const projectedToolUses: Array<{
+			providerToolUseId: string;
+			tool: PublicToolName;
+			argumentsJson: string;
+		}> = [];
 		for (const toolUse of commit.toolUses) {
 			const tool = publicToolName(toolUse.name);
 			if (tool === null) {
@@ -218,11 +224,63 @@ export async function consumeAgentStream(
 				});
 				continue;
 			}
-			await appendWhileRunning({
-				kind: "tool_use",
-				payload: projected.payload,
+			projectedToolUses.push({
+				providerToolUseId: toolUse.id,
+				tool,
+				argumentsJson: JSON.stringify(projected.payload.arguments),
 			});
-			toolNamesByUseId.set(toolUse.id, tool);
+		}
+
+		if (commit.text !== null || projectedToolUses.length > 0) {
+			await appendWhileRunning([
+				{
+					kind: "assistant_message",
+					payload: {
+						messageId: commit.messageId,
+						text: commit.text?.text ?? "",
+					},
+				},
+			]);
+		}
+		for (const projected of projectedToolUses) {
+			const toolCallId = randomUUID();
+			await appendWhileRunning([
+				{
+					kind: "tool_call_started",
+					payload: {
+						toolCallId,
+						toolCallName: projected.tool,
+						parentMessageId: commit.messageId,
+					},
+				},
+				{
+					kind: "tool_call_args",
+					payload: { toolCallId, delta: projected.argumentsJson },
+				},
+				{
+					kind: "tool_call_completed",
+					payload: { toolCallId },
+				},
+			]);
+			await appendLiveEvent({
+				type: EventType.TOOL_CALL_START,
+				toolCallId,
+				toolCallName: projected.tool,
+				parentMessageId: commit.messageId,
+			});
+			await appendLiveEvent({
+				type: EventType.TOOL_CALL_ARGS,
+				toolCallId,
+				delta: projected.argumentsJson,
+			});
+			await appendLiveEvent({
+				type: EventType.TOOL_CALL_END,
+				toolCallId,
+			});
+			toolInvocationsByUseId.set(projected.providerToolUseId, {
+				tool: projected.tool,
+				toolCallId,
+			});
 		}
 	};
 
@@ -230,11 +288,11 @@ export async function consumeAgentStream(
 		userMessage: Extract<SDKMessage, { type: "user" }>,
 	): Promise<void> => {
 		for (const block of toolResultBlocks(userMessage)) {
-			const tool =
+			const invocation =
 				block.toolUseId !== null
-					? toolNamesByUseId.get(block.toolUseId)
+					? toolInvocationsByUseId.get(block.toolUseId)
 					: undefined;
-			if (block.toolUseId === null || tool === undefined) {
+			if (block.toolUseId === null || invocation === undefined) {
 				params.logger?.warn({
 					message: "tool result omitted: no appended invocation matches its id",
 					runId: params.runId,
@@ -244,21 +302,50 @@ export async function consumeAgentStream(
 			}
 			// One result per invocation: a second result for the same id is
 			// unmatched, logged, and omitted.
-			toolNamesByUseId.delete(block.toolUseId);
-			const projected = projectToolResult(tool, block.content, block.isError);
+			toolInvocationsByUseId.delete(block.toolUseId);
+			const projected = projectToolResult(
+				invocation.tool,
+				block.content,
+				block.isError,
+			);
 			if (!projected.ok) {
 				params.logger?.warn({
 					message: "tool result omitted",
 					runId: params.runId,
-					tool,
+					tool: invocation.tool,
 					reason: projected.reason,
 				});
 				continue;
 			}
-			await appendWhileRunning({
-				kind: "tool_result",
-				payload: projected.payload,
+			const messageId = randomUUID();
+			const content = projected.payload.isError
+				? "Tool failed"
+				: JSON.stringify(projected.payload.result);
+			await appendWhileRunning([
+				{
+					kind: "tool_call_result",
+					payload: {
+						messageId,
+						toolCallId: invocation.toolCallId,
+						content,
+						isError: projected.payload.isError,
+					},
+				},
+			]);
+			await appendLiveEvent({
+				type: EventType.TOOL_CALL_RESULT,
+				messageId,
+				toolCallId: invocation.toolCallId,
+				content,
+				role: "tool",
 			});
+			if (projected.payload.isError) {
+				await appendLiveEvent({
+					type: EventType.CUSTOM,
+					name: "mymemo.tool_result_error",
+					value: { messageId, toolCallId: invocation.toolCallId },
+				});
+			}
 		}
 	};
 

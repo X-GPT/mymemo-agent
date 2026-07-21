@@ -64,44 +64,96 @@ function sseResponse(frames: StubSSEFrame[]): Response {
 	});
 }
 
-function bashToolUseFrame(command: string): StubSSEFrame {
-	return toolUseFrame("2", "Bash", { command });
-}
-
-function toolUseFrame(
-	id: string,
+function toolInvocationFrames(
+	firstSeq: number,
+	parentMessageId: string,
 	tool: PublicToolName,
 	argumentsValue: Record<string, unknown>,
-): StubSSEFrame {
-	return {
-		id,
-		event: "tool_use",
-		data: {
-			type: "tool_use",
-			tool,
-			arguments: argumentsValue,
-			truncated: false,
+): StubSSEFrame[] {
+	const toolCallId = `tool-call-${firstSeq}`;
+	return [
+		{
+			id: String(firstSeq),
+			event: "TOOL_CALL_START",
+			data: {
+				type: "TOOL_CALL_START",
+				toolCallId,
+				toolCallName: tool,
+				parentMessageId,
+			},
 		},
-	};
+		{
+			id: String(firstSeq + 1),
+			event: "TOOL_CALL_ARGS",
+			data: {
+				type: "TOOL_CALL_ARGS",
+				toolCallId,
+				delta: JSON.stringify(argumentsValue),
+			},
+		},
+		{
+			id: String(firstSeq + 2),
+			event: "TOOL_CALL_END",
+			data: { type: "TOOL_CALL_END", toolCallId },
+		},
+	];
 }
 
-function toolResultFrame(
-	id: string,
-	tool: PublicToolName,
+function toolResultFrames(
+	seq: number,
+	toolCallId: string,
 	result: Record<string, unknown>,
 	isError = false,
-): StubSSEFrame {
-	return {
-		id,
-		event: "tool_result",
-		data: {
-			type: "tool_result",
-			tool,
-			result,
-			isError,
-			truncated: false,
+): StubSSEFrame[] {
+	const messageId = `tool-message-${seq}`;
+	const frames: StubSSEFrame[] = [
+		{
+			id: String(seq),
+			event: "TOOL_CALL_RESULT",
+			data: {
+				type: "TOOL_CALL_RESULT",
+				messageId,
+				toolCallId,
+				content: isError ? "Tool failed" : JSON.stringify(result),
+				role: "tool",
+			},
 		},
-	};
+	];
+	if (isError) {
+		frames.push({
+			id: String(seq),
+			event: "CUSTOM",
+			data: {
+				type: "CUSTOM",
+				name: "mymemo.tool_result_error",
+				value: { messageId, toolCallId },
+			},
+		});
+	}
+	return frames;
+}
+
+function toolExchangeFrames(
+	firstSeq: number,
+	parentMessageId: string,
+	tool: PublicToolName,
+	argumentsValue: Record<string, unknown>,
+	result: Record<string, unknown>,
+	isError = false,
+): StubSSEFrame[] {
+	const invocation = toolInvocationFrames(
+		firstSeq,
+		parentMessageId,
+		tool,
+		argumentsValue,
+	);
+	const toolCallId = invocation[0]?.data.toolCallId;
+	if (typeof toolCallId !== "string")
+		throw new Error("missing fixture Tool id");
+	return [
+		...invocation,
+		...toolResultFrames(firstSeq + 3, toolCallId, result, isError),
+	];
 }
 
 function sseTurn(input: {
@@ -128,7 +180,6 @@ function sseTurn(input: {
 		});
 	}
 	const toolFrames = input.toolFrames ?? [];
-	frames.push(...toolFrames);
 	if (input.includePreview) {
 		frames.push({
 			event: "text_delta",
@@ -155,9 +206,14 @@ function sseTurn(input: {
 			},
 		});
 	}
+	frames.push(...toolFrames);
 	if (input.includeDone !== false) {
+		const lastToolCursor = Math.max(
+			0,
+			...toolFrames.map((frame) => Number(frame.id) || 0),
+		);
 		frames.push({
-			id: String(commitTexts.length + 2 + toolFrames.length),
+			id: String(Math.max(commitTexts.length + 1, lastToolCursor) + 1),
 			event: "done",
 			data: { type: "done" },
 		});
@@ -530,49 +586,61 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 				const text = isInventory
 					? "DOCUMENT_COUNT=2"
 					: "DOCUMENT_TITLE=MyMemo Overview\nFIRST_HEADING=# MyMemo Overview";
+				const parentMessageId = `message-${runId}`;
 				const toolFrames = isInventory
 					? [
-							toolUseFrame("2", "ListDocuments", {
-								limit: 20,
-								cursorProvided: false,
-							}),
-							toolResultFrame("3", "ListDocuments", {
-								total: 2,
-								returnedCount: 2,
-								hasMore: false,
-								documents: [
-									{ title: "Intro to Machine Learning" },
-									{ title: "MyMemo Overview" },
-								],
-							}),
+							...toolExchangeFrames(
+								3,
+								parentMessageId,
+								"ListDocuments",
+								{ limit: 20, cursorProvided: false },
+								{
+									total: 2,
+									returnedCount: 2,
+									hasMore: false,
+									documents: [
+										{ title: "Intro to Machine Learning" },
+										{ title: "MyMemo Overview" },
+									],
+								},
+							),
 						]
 					: [
-							toolUseFrame("2", "SearchDocuments", {
-								query: "personal knowledge base",
-							}),
-							toolResultFrame("3", "SearchDocuments", {
-								passages: [
-									{
-										title: "MyMemo Overview",
-										snippet:
-											"MyMemo is a personal knowledge base that answers questions by searching your documents.",
-									},
-								],
-							}),
-							toolUseFrame("4", "LoadDocuments", { requestedCount: 1 }),
-							toolResultFrame("5", "LoadDocuments", {
-								loadedCount: 1,
-								loaded: [{ title: "MyMemo Overview" }],
-								failedCount: 0,
-							}),
-							toolUseFrame("6", "Read", {
-								path: ".mymemo/docs/doc-mymemo-overview.md",
-								offset: 1,
-								limit: 1,
-							}),
-							toolResultFrame(
-								"7",
+							...toolExchangeFrames(
+								3,
+								parentMessageId,
+								"SearchDocuments",
+								{ query: "personal knowledge base" },
+								{
+									passages: [
+										{
+											title: "MyMemo Overview",
+											snippet:
+												"MyMemo is a personal knowledge base that answers questions by searching your documents.",
+										},
+									],
+								},
+							),
+							...toolExchangeFrames(
+								7,
+								parentMessageId,
+								"LoadDocuments",
+								{ requestedCount: 1 },
+								{
+									loadedCount: 1,
+									loaded: [{ title: "MyMemo Overview" }],
+									failedCount: 0,
+								},
+							),
+							...toolExchangeFrames(
+								11,
+								parentMessageId,
 								"Read",
+								{
+									path: ".mymemo/docs/doc-mymemo-overview.md",
+									offset: 1,
+									limit: 1,
+								},
 								input.failSearchableDocumentRead
 									? { message: "Tool failed" }
 									: {
@@ -611,7 +679,7 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 					interruptController.enqueue(
 						new TextEncoder().encode(
 							serializeSSEFrame({
-								id: "3",
+								id: "6",
 								event: "canceled",
 								data: { type: "canceled" },
 							}),
@@ -652,7 +720,10 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 						},
 					});
 				}
-				const toolUseFrame = bashToolUseFrame("sleep 120");
+				const parentMessageId = `tool-parent-${runId}`;
+				const toolUseFrames = toolInvocationFrames(3, parentMessageId, "Bash", {
+					command: "sleep 120",
+				});
 				const encoder = new TextEncoder();
 				const stream = new ReadableStream<Uint8Array>({
 					start(controller) {
@@ -660,11 +731,24 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 						for (const frame of frames) {
 							controller.enqueue(encoder.encode(serializeSSEFrame(frame)));
 						}
+						controller.enqueue(
+							encoder.encode(
+								serializeSSEFrame({
+									id: "2",
+									event: "text_commit",
+									data: {
+										type: "text_commit",
+										messageId: parentMessageId,
+										text: "",
+									},
+								}),
+							),
+						);
 						setTimeout(() => {
 							if (interruptController !== controller) return;
-							controller.enqueue(
-								encoder.encode(serializeSSEFrame(toolUseFrame)),
-							);
+							for (const frame of toolUseFrames) {
+								controller.enqueue(encoder.encode(serializeSSEFrame(frame)));
+							}
 							interruptToolUseSent = true;
 						}, 10);
 					},
@@ -681,10 +765,23 @@ async function startSmokeStub(input: SmokeStubOptions): Promise<SmokeStub> {
 					`/v1/conversations/${input.interruptConversationId}/runs/${input.runIdPrefix}-interrupt/events`
 			) {
 				reconnectCursors.push(request.headers.get("last-event-id") ?? "");
+				const runId = `${input.runIdPrefix}-interrupt`;
+				const parentMessageId = `tool-parent-${runId}`;
 				return sseResponse([
-					bashToolUseFrame(input.replayInterruptToolCommand ?? "sleep 120"),
 					{
-						id: "3",
+						id: "2",
+						event: "text_commit",
+						data: {
+							type: "text_commit",
+							messageId: parentMessageId,
+							text: "",
+						},
+					},
+					...toolInvocationFrames(3, parentMessageId, "Bash", {
+						command: input.replayInterruptToolCommand ?? "sleep 120",
+					}),
+					{
+						id: "6",
 						event: "canceled",
 						data: { type: "canceled" },
 					},

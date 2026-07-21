@@ -1,5 +1,3 @@
-import type { PublicToolName } from "@mymemo/agent-db/run-events";
-
 export interface MymemoEvent {
 	id?: string;
 	message: EventMessage;
@@ -9,8 +7,11 @@ export type EventMessage =
 	| ErrorEvent
 	| TextDeltaEvent
 	| TextCommitEvent
-	| ToolUseEvent
-	| ToolResultEvent
+	| ToolCallStartEvent
+	| ToolCallArgsEvent
+	| ToolCallEndEvent
+	| ToolCallResultEvent
+	| CustomEvent
 	| DoneEvent
 	| CanceledEvent
 	| ConversationIdEvent
@@ -44,24 +45,36 @@ export interface TextDeltaEvent {
 	text: string;
 }
 
-/** One Tool invocation (ADR-0009): the short public tool name and the bounded,
- * client-safe projection of its arguments. Append-only and self-describing —
- * no correlation id; the matching result is a separate chronological item. */
-export interface ToolUseEvent {
-	type: "tool_use";
-	tool: PublicToolName;
-	arguments: Record<string, unknown>;
-	truncated: boolean;
+export interface CustomEvent {
+	type: "CUSTOM";
+	name: string;
+	value: unknown;
 }
 
-/** One Tool result (ADR-0009). An `isError` result carries the fixed safe
- * message; a run may terminate after an invocation with no result. */
-export interface ToolResultEvent {
-	type: "tool_result";
-	tool: PublicToolName;
-	result: Record<string, unknown>;
-	isError: boolean;
-	truncated: boolean;
+export interface ToolCallStartEvent {
+	type: "TOOL_CALL_START";
+	toolCallId: string;
+	toolCallName: string;
+	parentMessageId: string;
+}
+
+export interface ToolCallArgsEvent {
+	type: "TOOL_CALL_ARGS";
+	toolCallId: string;
+	delta: string;
+}
+
+export interface ToolCallEndEvent {
+	type: "TOOL_CALL_END";
+	toolCallId: string;
+}
+
+export interface ToolCallResultEvent {
+	type: "TOOL_CALL_RESULT";
+	messageId: string;
+	toolCallId: string;
+	content: string;
+	role: "tool";
 }
 
 export interface DoneEvent {

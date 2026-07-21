@@ -1192,8 +1192,16 @@ describe("projectRun", () => {
 			{ type: "conversation_id", conversationId: "conv-1" },
 			{ type: "run_id", runId: "run-1" },
 			{ type: "text_commit", messageId: "message-1", text: "Let me check." },
-			{ type: "tool_use", ...toolUse },
-			{ type: "tool_result", ...toolResult },
+			{
+				type: "CUSTOM",
+				name: "mymemo.legacy_tool_invocation",
+				value: toolUse,
+			},
+			{
+				type: "CUSTOM",
+				name: "mymemo.legacy_tool_result",
+				value: toolResult,
+			},
 			{ type: "text_commit", messageId: "message-2", text: "One file." },
 			{ type: "done" },
 		]);
@@ -1234,14 +1242,17 @@ describe("projectRun", () => {
 			projectRun("run-1", 0, { reader, notifier: new InstantNotifier() }),
 		);
 
-		// The invocation stays resultless — no fabricated tool_result — and the
+		// The invocation stays resultless — no fabricated correlation — and the
 		// run's terminal frame ends the stream.
 		expect(frames(projected)).toEqual([
 			{
-				type: "tool_use",
-				tool: "Bash",
-				arguments: { command: "sleep 600" },
-				truncated: false,
+				type: "CUSTOM",
+				name: "mymemo.legacy_tool_invocation",
+				value: {
+					tool: "Bash",
+					arguments: { command: "sleep 600" },
+					truncated: false,
+				},
 			},
 			{ type: "error", message: "Run failed" },
 		]);

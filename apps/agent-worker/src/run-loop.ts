@@ -5,13 +5,15 @@ import {
 } from "@mymemo/agent-db/artifact-store";
 import type { Database } from "@mymemo/agent-db/client";
 import {
-	type AssistantTextPayload,
+	type AssistantMessageCompletedPayload,
 	RunEventType,
-	type ToolResultPayload,
-	type ToolUsePayload,
+	type ToolCallArgsPayload,
+	type ToolCallCompletedPayload,
+	type ToolCallResultPayload,
+	type ToolCallStartedPayload,
 } from "@mymemo/agent-db/run-events";
 import {
-	appendRunEventTx,
+	appendRunEventsTx,
 	claimNextRunTx,
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
@@ -56,15 +58,17 @@ export interface TurnResult {
 const EMPTY_TURN: TurnResult = {};
 
 /**
- * One piece of durable model content a processor can record while its run is
- * `running`: a complete Assistant message, a Tool invocation, or a Tool result
- * (ADR-0009). The payload is already the client-safe shape — the loop persists
- * it verbatim under the event type its kind maps to.
+ * One piece of canonical durable model content a processor can record while
+ * its run is `running`: a complete Assistant message or one Tool lifecycle
+ * event (ADR-0012). The payload is already the client-safe shape — the loop
+ * persists it verbatim under the event type its kind maps to.
  */
 export type ModelContent =
-	| { kind: "assistant_message"; payload: AssistantTextPayload }
-	| { kind: "tool_use"; payload: ToolUsePayload }
-	| { kind: "tool_result"; payload: ToolResultPayload };
+	| { kind: "assistant_message"; payload: AssistantMessageCompletedPayload }
+	| { kind: "tool_call_started"; payload: ToolCallStartedPayload }
+	| { kind: "tool_call_args"; payload: ToolCallArgsPayload }
+	| { kind: "tool_call_completed"; payload: ToolCallCompletedPayload }
+	| { kind: "tool_call_result"; payload: ToolCallResultPayload };
 
 /** The loop owns the kind→event-type mapping in exactly one place, so a
  * processor can never write a payload under a mismatched vocabulary type. */
@@ -72,8 +76,10 @@ const MODEL_CONTENT_EVENT_TYPES = {
 	// The shared vocabulary type the projector maps to `text_commit` — never
 	// the frame name itself, or the projector drops it.
 	assistant_message: RunEventType.AssistantMessageCompleted,
-	tool_use: RunEventType.ToolUse,
-	tool_result: RunEventType.ToolResult,
+	tool_call_started: RunEventType.ToolCallStarted,
+	tool_call_args: RunEventType.ToolCallArgs,
+	tool_call_completed: RunEventType.ToolCallCompleted,
+	tool_call_result: RunEventType.ToolCallResult,
 } as const satisfies Record<ModelContent["kind"], RunEventType>;
 
 /**
@@ -87,6 +93,8 @@ export interface RunProcessContext {
 	run: RunRecord;
 	signal: AbortSignal;
 	appendModelContent(content: ModelContent): Promise<void>;
+	/** Atomically append an ordered group of model events under one Run fence. */
+	appendModelContents(contents: readonly ModelContent[]): Promise<void>;
 	/** Append one standard event to this Run's retained Live Stream. Failure is
 	 * absorbed by the producer so it cannot change model execution. */
 	appendLiveEvent(event: LiveStreamEvent): Promise<void>;
@@ -420,6 +428,8 @@ export class RunLoop {
 					signal: entry.controller.signal,
 					appendModelContent: (content) =>
 						this.appendModelContent(run.runId, content),
+					appendModelContents: (contents) =>
+						this.appendModelContents(run.runId, contents),
 					appendLiveEvent: (event) => liveStream.append(event),
 				})) ?? EMPTY_TURN;
 		} catch (error) {
@@ -441,11 +451,20 @@ export class RunLoop {
 		runId: string,
 		content: ModelContent,
 	): Promise<void> {
-		await appendRunEventTx(this.opts.db, {
+		await this.appendModelContents(runId, [content]);
+	}
+
+	private async appendModelContents(
+		runId: string,
+		contents: readonly ModelContent[],
+	): Promise<void> {
+		await appendRunEventsTx(this.opts.db, {
 			runId,
 			workerId: this.workerId,
-			type: MODEL_CONTENT_EVENT_TYPES[content.kind],
-			payload: content.payload,
+			events: contents.map((content) => ({
+				type: MODEL_CONTENT_EVENT_TYPES[content.kind],
+				payload: content.payload,
+			})),
 			appendClass: "model",
 		});
 	}
