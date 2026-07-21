@@ -16,6 +16,7 @@ import {
 	LIVE_STREAM_RETENTION_MS,
 	LIVE_STREAM_TEXT_EVENT_TARGET_BYTES,
 	type LiveStreamStore,
+	RUN_CANCELLED_EVENT_TYPE,
 } from "./index";
 
 const encoder = new TextEncoder();
@@ -481,7 +482,38 @@ it("splits large Unicode text deltas into complete standard AG-UI events", () =>
 	expect(textEvents.map((event) => event.delta).join("")).toBe(delta);
 });
 
-it("rejects bytes that are not exactly one standard AG-UI event", async () => {
+it("retains the standard cancellation terminal while the pinned core lacks it", async () => {
+	const port = await freePort();
+	const redis = await startRedis(port);
+	const store = createRedisLiveStreamStore({
+		url: `redis://127.0.0.1:${port}`,
+		deployment: "test",
+	});
+	const [encoded] = encodeAgUiLiveStreamEvent({
+		type: RUN_CANCELLED_EVENT_TYPE,
+		threadId: "conv-1",
+		runId: "run-1",
+	});
+
+	try {
+		if (!encoded) throw new Error("cancellation terminal was not encoded");
+		await store.acquire("run-1");
+		await store.append("run-1", encoded);
+		await store.finalize("run-1", "done");
+		const retained = await collect(store, "run-1");
+		expect(retained).toHaveLength(1);
+		expect(JSON.parse(decoder.decode(retained[0]?.chunk))).toEqual({
+			type: "RUN_CANCELLED",
+			threadId: "conv-1",
+			runId: "run-1",
+		});
+	} finally {
+		await store.close();
+		await stopRedis(redis);
+	}
+}, 10_000);
+
+it("rejects bytes that are not exactly one supported Live Stream event", async () => {
 	const port = await freePort();
 	const redis = await startRedis(port);
 	const store = createRedisLiveStreamStore({

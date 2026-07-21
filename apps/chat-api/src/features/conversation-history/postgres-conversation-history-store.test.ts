@@ -684,7 +684,7 @@ describe("PostgresConversationHistoryStore", () => {
 			status: "done",
 			liveStreamFailedAt: new Date("2026-07-20T01:00:01.000Z"),
 			terminalAt: new Date("2026-07-20T01:00:05.000Z"),
-			nextEventSeq: 3,
+			nextEventSeq: 4,
 		});
 		await tdb.db.insert(runEvents).values([
 			{
@@ -704,6 +704,12 @@ describe("PostgresConversationHistoryStore", () => {
 			{
 				runId: "run-1",
 				seq: 2,
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { messageId: "assistant-1", text: "Durable answer" },
+			},
+			{
+				runId: "run-1",
+				seq: 3,
 				type: RunEventType.Done,
 				payload: { outcome: "done" },
 			},
@@ -716,7 +722,24 @@ describe("PostgresConversationHistoryStore", () => {
 			cursor: null,
 		};
 
-		expect((await historyStore.getPage(input))?.runs).toHaveLength(1);
+		expect((await historyStore.getPage(input))?.runs).toEqual([
+			{
+				runId: "run-1",
+				messages: [
+					{ id: "user-1", role: "user", content: "Question" },
+					{
+						id: "assistant-1",
+						role: "assistant",
+						content: "Durable answer",
+					},
+				],
+				terminalEvent: {
+					type: EventType.RUN_FINISHED,
+					threadId: "conversation-1",
+					runId: "run-1",
+				},
+			},
+		]);
 		await expect(
 			conversationStore.deletePermanently({
 				userId: "member-1",

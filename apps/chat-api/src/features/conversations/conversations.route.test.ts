@@ -1226,6 +1226,11 @@ describe("POST /v1/conversations/:id/runs", () => {
 		let admitted = false;
 		fakeRuns.runStore.admitRun = async (input) => {
 			admitted = true;
+			fakeRuns.runOwners.set(input.runId, {
+				userId: input.conversation.userId,
+				conversationId: input.conversation.conversationId,
+				status: "queued",
+			});
 			return {
 				outcome: "created",
 				run: runRecord({
@@ -2080,6 +2085,150 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(redisRead).toBe(false);
 	});
 
+	it("returns retryable 503 for a temporary read failure while the Run is active", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+		});
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					throw new Error("temporary Redis failure");
+				},
+				async *read() {},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({
+			error: "Live stream temporarily unavailable",
+		});
+	});
+
+	it("returns recovery 410 when the failure marker races the first Live Stream read", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const owner = {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+			liveStreamFailedAt: null as Date | null,
+		};
+		fakeRuns.runOwners.set("run-1", owner);
+		const res = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					return "streaming" as const;
+				},
+				read() {
+					return {
+						[Symbol.asyncIterator]() {
+							return {
+								async next() {
+									owner.liveStreamFailedAt = new Date();
+									throw new Error("Redis failed permanently");
+								},
+							};
+						},
+					};
+				},
+			},
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(res.status).toBe(410);
+		expect(await res.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
+		});
+	});
+
+	it("closes a failed open Live Stream, then returns the Recovering signal", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		const owner = {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+			liveStreamFailedAt: null as Date | null,
+		};
+		fakeRuns.runOwners.set("run-1", owner);
+		const encoder = new TextEncoder();
+		let statusReads = 0;
+		const app = buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					statusReads++;
+					return "streaming" as const;
+				},
+				async *read() {
+					yield {
+						cursor: "1-0",
+						chunk: encoder.encode(
+							JSON.stringify({
+								type: "RUN_STARTED",
+								threadId: "conv-1",
+								runId: "run-1",
+							}),
+						),
+					};
+					owner.liveStreamFailedAt = new Date();
+					throw new Error("Redis failed mid-stream");
+				},
+			},
+		);
+
+		const first = await app.request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{ method: "GET", headers: identityHeaders },
+		);
+		expect(first.status).toBe(200);
+		expect(parseAgUiSse(await first.text())).toEqual([
+			{
+				id: "1-0",
+				data: {
+					type: "RUN_STARTED",
+					threadId: "conv-1",
+					runId: "run-1",
+				},
+			},
+		]);
+
+		const recoveryResponse = await app.request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{
+				method: "GET",
+				headers: { ...identityHeaders, "last-event-id": "1-0" },
+			},
+		);
+		expect(recoveryResponse.status).toBe(410);
+		expect(await recoveryResponse.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
+		});
+		expect(statusReads).toBe(1);
+	});
+
 	it("returns recovery 410 when a terminal Run's retained Live Stream is missing", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
@@ -2111,7 +2260,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		});
 	}, 7_000);
 
-	it("returns recovery 410 when a terminal Stream has no terminal event to replay", async () => {
+	it("returns recovery 410 when a terminal Live Stream has no terminal event to replay", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
 		fakeRuns.runOwners.set("run-1", {
@@ -2142,7 +2291,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		});
 	});
 
-	it("returns 400 when an active Run has no Stream that could have issued the cursor", async () => {
+	it("returns 400 when an active Run has no Live Stream that could have issued the cursor", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
 		fakeRuns.runOwners.set("run-1", {
@@ -2214,7 +2363,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(parseAgUiSse(body)).toEqual([{ id: "1-0", data: terminalEvent }]);
 	}, 8_000);
 
-	it("follows a Stream that appears just after Postgres terminalizes the Run", async () => {
+	it("follows a Live Stream that appears just after Postgres terminalizes the Run", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
 		const owner = {

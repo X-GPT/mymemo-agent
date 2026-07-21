@@ -40,6 +40,8 @@ import {
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { createDatabase } from "../packages/agent-db/src/client";
+import { claimNextRunTx } from "../packages/agent-db/src/run-store";
+import { createRedisLiveStreamStore } from "../packages/live-text/src/redis-live-stream-store";
 
 const DB_URL = process.env.AGENT_DATABASE_URL;
 const RUN = Boolean(DB_URL);
@@ -226,6 +228,118 @@ async function waitForPersistedRun(
 	throw new Error(`Run ${runId} was not admitted before the deadline`);
 }
 
+async function waitForFailedLiveStreamRun(
+	runId: string,
+	timeoutMs: number,
+): Promise<{ status: string; liveStreamFailedAt: Date | null }> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const run = await acceptanceDb?.query.runs.findFirst({
+			columns: { status: true, liveStreamFailedAt: true },
+			where: (row, { eq }) => eq(row.runId, runId),
+		});
+		if (
+			run &&
+			run.liveStreamFailedAt !== null &&
+			(run.status === "done" ||
+				run.status === "error" ||
+				run.status === "canceled")
+		) {
+			return run;
+		}
+		await Bun.sleep(50);
+	}
+	throw new Error(
+		`Run ${runId} did not terminalize with a failed Live Stream before the deadline`,
+	);
+}
+
+async function admitIntegrationRun(prompt: string): Promise<{
+	conversationId: string;
+	runId: string;
+	response: Promise<Response>;
+}> {
+	const createResponse = await fetch(`${CHAT_URL}/v1/conversations`, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"x-member-code": MEMBER_CODE,
+			"x-partner-code": PARTNER_CODE,
+		},
+		body: JSON.stringify({}),
+		signal: AbortSignal.timeout(15_000),
+	});
+	expect(createResponse.status).toBe(201);
+	const conversationId = (await createResponse.json()).conversationId as string;
+	const runId = crypto.randomUUID();
+	const response = fetch(
+		`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
+		{
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-member-code": MEMBER_CODE,
+				"x-partner-code": PARTNER_CODE,
+			},
+			body: JSON.stringify({
+				threadId: conversationId,
+				runId,
+				state: {},
+				messages: [
+					{
+						id: `user-${runId}`,
+						role: "user",
+						content: prompt,
+					},
+				],
+				tools: [],
+				context: [],
+				forwardedProps: {},
+			}),
+			signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+		},
+	);
+	await waitForPersistedRun(runId, 10_000);
+	return { conversationId, runId, response };
+}
+
+async function liveStreamStatus(runId: string): Promise<string> {
+	const redisUrl = eventWriterEnv?.REDIS_URL;
+	if (!redisUrl) throw new Error("event writer was not configured");
+	const store = createRedisLiveStreamStore({
+		url: redisUrl,
+		deployment: "current",
+	});
+	try {
+		return await store.status(runId);
+	} finally {
+		await store.close();
+	}
+}
+
+async function historyTerminalType(
+	conversationId: string,
+	runId: string,
+): Promise<string | undefined> {
+	const response = await fetch(
+		`${CHAT_URL}/v1/conversations/${conversationId}/history`,
+		{
+			headers: {
+				"x-member-code": MEMBER_CODE,
+				"x-partner-code": PARTNER_CODE,
+			},
+		},
+	);
+	expect(response.status).toBe(200);
+	const history = (await response.json()) as {
+		runs: Array<{
+			runId: string;
+			terminalEvent: { type: string } | null;
+		}>;
+	};
+	return history.runs.find((run) => run.runId === runId)?.terminalEvent?.type;
+}
+
 async function freePort(): Promise<number> {
 	return new Promise((resolvePort, reject) => {
 		const server = createServer();
@@ -278,6 +392,14 @@ let redis: Bun.Subprocess | undefined;
 let eventWriterEnv: Record<string, string> | undefined;
 const acceptanceDb = DB_URL ? createDatabase(DB_URL) : undefined;
 
+async function stopEventWriter(): Promise<void> {
+	const runningWorker = worker;
+	worker = undefined;
+	if (!runningWorker) return;
+	runningWorker.kill("SIGTERM");
+	await runningWorker.exited;
+}
+
 describe.skipIf(!RUN)(
 	"split-runtime integration (real Postgres and Redis)",
 	() => {
@@ -316,7 +438,7 @@ describe.skipIf(!RUN)(
 
 		afterAll(async () => {
 			chat?.kill();
-			worker?.kill();
+			await stopEventWriter();
 			redis?.kill("SIGTERM");
 			if (redis) await redis.exited;
 			await acceptanceDb?.$client.end();
@@ -566,6 +688,198 @@ describe.skipIf(!RUN)(
 				expect(mismatch.status).toBe(409);
 			},
 			TURN_TIMEOUT_MS + 15_000,
+		);
+
+		it(
+			"recovers Conversation history across the real Redis failure matrix",
+			async () => {
+				const faultPoints = [
+					"before_creation",
+					"mid_text",
+					"tool",
+					"terminal",
+				] as const;
+
+				for (const faultPoint of faultPoints) {
+					await stopEventWriter();
+					const {
+						conversationId,
+						runId,
+						response: runResponsePromise,
+					} = await admitIntegrationRun(`Exercise ${faultPoint} recovery`);
+					if (!eventWriterEnv) {
+						throw new Error("event writer was not configured");
+					}
+					worker = spawnEventWriter({
+						...eventWriterEnv,
+						INTEGRATION_LIVE_STREAM_FAIL_AT: faultPoint,
+					});
+
+					const terminal = await waitForFailedLiveStreamRun(
+						runId,
+						TURN_TIMEOUT_MS,
+					);
+					expect(terminal, faultPoint).toMatchObject({
+						status: "done",
+						liveStreamFailedAt: expect.any(Date),
+					});
+					await stopEventWriter();
+
+					const runResponse = await runResponsePromise;
+					expect(runResponse.status, faultPoint).toBe(200);
+					await runResponse.text();
+
+					const durableEvents = await acceptanceDb?.query.runEvents.findMany({
+						columns: { type: true },
+						where: (event, { eq }) => eq(event.runId, runId),
+						orderBy: (event, { asc }) => asc(event.seq),
+					});
+					expect(
+						durableEvents?.map((event) => event.type),
+						faultPoint,
+					).toEqual([
+						"run_started",
+						"assistant_message_completed",
+						"tool_use",
+						"tool_result",
+						"run_done",
+					]);
+
+					const recoveryResponse = await fetchRunEvents(conversationId, runId);
+					expect(recoveryResponse.status, faultPoint).toBe(410);
+					expect(await recoveryResponse.json(), faultPoint).toEqual({
+						error: "Live stream unavailable",
+						recovery: "history",
+					});
+
+					const historyResponse = await fetch(
+						`${CHAT_URL}/v1/conversations/${conversationId}/history`,
+						{
+							headers: {
+								"x-member-code": MEMBER_CODE,
+								"x-partner-code": PARTNER_CODE,
+							},
+						},
+					);
+					expect(historyResponse.status, faultPoint).toBe(200);
+					const history = (await historyResponse.json()) as {
+						runs: Array<{
+							runId: string;
+							messages: Array<{ role: string; content: unknown }>;
+							terminalEvent: { type: string } | null;
+						}>;
+					};
+					const recoveredRun = history.runs.find((run) => run.runId === runId);
+					expect(recoveredRun?.terminalEvent, faultPoint).toMatchObject({
+						type: "RUN_FINISHED",
+					});
+					expect(
+						recoveredRun?.messages.some(
+							(message) =>
+								message.role === "assistant" &&
+								JSON.stringify(message.content).includes("Synthetic response"),
+						),
+						faultPoint,
+					).toBe(true);
+				}
+			},
+			TURN_TIMEOUT_MS * 4 + 30_000,
+		);
+
+		it(
+			"keeps queued cancellation and stale recovery free of fabricated Live Streams",
+			async () => {
+				await stopEventWriter();
+				const queued = await admitIntegrationRun(
+					"Cancel before a worker claims",
+				);
+				const cancellation = await fetch(
+					`${CHAT_URL}/v1/conversations/${queued.conversationId}/events`,
+					{
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							"x-member-code": MEMBER_CODE,
+							"x-partner-code": PARTNER_CODE,
+						},
+						body: JSON.stringify({
+							type: "user.interrupt",
+							runId: queued.runId,
+						}),
+					},
+				);
+				expect(cancellation.status).toBe(202);
+				expect(await cancellation.json()).toEqual({
+					runId: queued.runId,
+					status: "canceled",
+				});
+				const queuedResponse = await queued.response;
+				expect(queuedResponse.status).toBe(200);
+				await queuedResponse.text();
+				const queuedRun = await acceptanceDb?.query.runs.findFirst({
+					columns: { status: true, liveStreamFailedAt: true },
+					where: (run, { eq }) => eq(run.runId, queued.runId),
+				});
+				expect(queuedRun).toMatchObject({
+					status: "canceled",
+					liveStreamFailedAt: null,
+				});
+				const queuedEvents = await acceptanceDb?.query.runEvents.findMany({
+					columns: { type: true },
+					where: (event, { eq }) => eq(event.runId, queued.runId),
+					orderBy: (event, { asc }) => asc(event.seq),
+				});
+				expect(queuedEvents?.map((event) => event.type)).toEqual([
+					"run_started",
+					"run_canceled",
+				]);
+				expect(await liveStreamStatus(queued.runId)).toBe("missing");
+				expect(
+					await historyTerminalType(queued.conversationId, queued.runId),
+				).toBe("RUN_CANCELLED");
+
+				const stale = await admitIntegrationRun(
+					"Recover an expired worker claim",
+				);
+				if (!acceptanceDb || !eventWriterEnv) {
+					throw new Error("integration services were not configured");
+				}
+				const claimed = await claimNextRunTx(acceptanceDb, {
+					workerId: "integration-stale-worker",
+				});
+				expect(claimed?.runId).toBe(stale.runId);
+				await acceptanceDb.$client.query(
+					"update runs set locked_until = now() - interval '1 second' where run_id = $1",
+					[stale.runId],
+				);
+				worker = spawnEventWriter(eventWriterEnv);
+				const recovered = await waitForFailedLiveStreamRun(
+					stale.runId,
+					TURN_TIMEOUT_MS,
+				);
+				expect(recovered).toMatchObject({
+					status: "error",
+					liveStreamFailedAt: expect.any(Date),
+				});
+				await stopEventWriter();
+				const staleResponse = await stale.response;
+				expect(staleResponse.status).toBe(200);
+				await staleResponse.text();
+				const staleEvents = await acceptanceDb.query.runEvents.findMany({
+					columns: { type: true },
+					where: (event, { eq }) => eq(event.runId, stale.runId),
+					orderBy: (event, { asc }) => asc(event.seq),
+				});
+				expect(staleEvents.map((event) => event.type)).toEqual([
+					"run_started",
+					"run_error",
+				]);
+				expect(await liveStreamStatus(stale.runId)).toBe("missing");
+				expect(
+					await historyTerminalType(stale.conversationId, stale.runId),
+				).toBe("RUN_ERROR");
+			},
+			TURN_TIMEOUT_MS * 2 + 15_000,
 		);
 	},
 );

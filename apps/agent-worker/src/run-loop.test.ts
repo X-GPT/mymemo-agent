@@ -22,6 +22,7 @@ import type { LiveStreamStore } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
 import { RunLoop, type RunProcessor } from "./run-loop";
+import { fakeLiveStreamStore } from "./testing/live-stream-store";
 import { Worker } from "./worker";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
@@ -62,11 +63,16 @@ function buildWorker(maxConcurrentRuns: number, workerId = "worker-1") {
 	});
 }
 
-function buildLoop(worker: Worker, processor: RunProcessor) {
+function buildLoop(
+	worker: Worker,
+	processor: RunProcessor,
+	liveStreamStore?: LiveStreamStore,
+) {
 	return new RunLoop({
 		db: tdb.db,
 		worker,
 		processor,
+		liveStreamStore,
 		heartbeatIntervalMs: 15_000,
 		logger: silentLogger,
 	});
@@ -262,13 +268,66 @@ describe("RunLoop — heartbeat", () => {
 });
 
 describe("RunLoop — terminal outcomes", () => {
+	it.each([
+		[
+			"Redis fails before Live Stream creation",
+			async (): Promise<never> => {
+				throw new Error("Redis unavailable");
+			},
+		],
+		[
+			"an existing Live Stream rejects producer acquisition",
+			async (): Promise<"consumer"> => "consumer",
+		],
+	] as const)("marks the Live Stream failed and continues when %s", async (_, acquire) => {
+		let appendCalls = 0;
+		let finalizeCalls = 0;
+		const liveStreamStore = fakeLiveStreamStore({
+			acquire,
+			async append() {
+				appendCalls++;
+			},
+			async finalize() {
+				finalizeCalls++;
+			},
+		});
+		const worker = buildWorker(1);
+		const loop = buildLoop(
+			worker,
+			async (ctx) => {
+				await ctx.appendLiveEvent({
+					type: EventType.TEXT_MESSAGE_CONTENT,
+					messageId: "assistant-1",
+					delta: "not published",
+				});
+				await ctx.appendModelContent({
+					kind: "assistant_message",
+					payload: { messageId: "assistant-1", text: "still durable" },
+				});
+			},
+			liveStreamStore,
+		);
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect(await readRun("run-1")).toMatchObject({
+			status: "done",
+			liveStreamFailedAt: expect.any(Date),
+		});
+		expect(await readEventTypes("run-1")).toEqual([
+			"assistant_message_completed",
+			"run_done",
+		]);
+		expect(appendCalls).toBe(0);
+		expect(finalizeCalls).toBe(0);
+	});
+
 	it("commits durable facts before exposing AG-UI completion events", async () => {
 		const observed: unknown[] = [];
 		const decoder = new TextDecoder();
-		const liveStreamStore = {
-			async acquire() {
-				return "producer" as const;
-			},
+		const liveStreamStore = fakeLiveStreamStore({
 			async append(_runId: string, chunk: Uint8Array) {
 				const event = JSON.parse(decoder.decode(chunk)) as { type: string };
 				if (event.type === EventType.TEXT_MESSAGE_END) {
@@ -281,26 +340,11 @@ describe("RunLoop — terminal outcomes", () => {
 				}
 				observed.push(event);
 			},
-			async finalize() {},
-			async refresh() {
-				return true;
-			},
-			async appendWithRetryId() {
-				return { cursor: "1-0", appended: true };
-			},
-			async *read() {},
-			async status() {
-				return "done" as const;
-			},
-			async delete() {},
-			async close() {},
-		} satisfies LiveStreamStore;
+		});
 		const worker = buildWorker(1);
-		const loop = new RunLoop({
-			db: tdb.db,
+		const loop = buildLoop(
 			worker,
-			liveStreamStore,
-			processor: async (ctx) => {
+			async (ctx) => {
 				await ctx.appendLiveEvent({
 					type: EventType.TEXT_MESSAGE_START,
 					messageId: "assistant-1",
@@ -320,9 +364,8 @@ describe("RunLoop — terminal outcomes", () => {
 					messageId: "assistant-1",
 				});
 			},
-			heartbeatIntervalMs: 15_000,
-			logger: silentLogger,
-		});
+			liveStreamStore,
+		);
 		await queueRun("run-1", "conv-1");
 
 		await loop.tick();
@@ -349,39 +392,22 @@ describe("RunLoop — terminal outcomes", () => {
 		]);
 	});
 
-	it("continues durable execution after the first Redis write failure", async () => {
+	it("continues durable execution after a mid-text Live Stream write fails", async () => {
 		let appendCalls = 0;
 		const finalizations: string[] = [];
-		const liveStreamStore = {
-			async acquire() {
-				return "producer" as const;
-			},
+		const liveStreamStore = fakeLiveStreamStore({
 			async append() {
 				appendCalls++;
-				if (appendCalls === 2) throw new Error("Redis unavailable");
+				if (appendCalls === 3) throw new Error("Redis unavailable");
 			},
 			async finalize(_runId: string, status: "done" | "error") {
 				finalizations.push(status);
 			},
-			async refresh() {
-				return true;
-			},
-			async appendWithRetryId() {
-				return { cursor: "1-0", appended: true };
-			},
-			async *read() {},
-			async status() {
-				return "error" as const;
-			},
-			async delete() {},
-			async close() {},
-		} satisfies LiveStreamStore;
+		});
 		const worker = buildWorker(1);
-		const loop = new RunLoop({
-			db: tdb.db,
+		const loop = buildLoop(
 			worker,
-			liveStreamStore,
-			processor: async (ctx) => {
+			async (ctx) => {
 				await ctx.appendLiveEvent({
 					type: EventType.TEXT_MESSAGE_START,
 					messageId: "assistant-1",
@@ -400,21 +426,165 @@ describe("RunLoop — terminal outcomes", () => {
 					},
 				});
 			},
-			heartbeatIntervalMs: 15_000,
-			logger: silentLogger,
-		});
+			liveStreamStore,
+		);
 		await queueRun("run-1", "conv-1");
 
 		await loop.tick();
 		await worker.drain();
 
-		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(await readRun("run-1")).toMatchObject({
+			status: "done",
+			liveStreamFailedAt: expect.any(Date),
+		});
 		expect(await readEventTypes("run-1")).toEqual([
 			"assistant_message_completed",
 			"run_done",
 		]);
+		expect(appendCalls).toBe(3);
+		expect(finalizations).toEqual(["error"]);
+	});
+
+	it("keeps committing Tool events after Live Stream publication fails", async () => {
+		let appendCalls = 0;
+		const finalizations: string[] = [];
+		const liveStreamStore = fakeLiveStreamStore({
+			async append() {
+				appendCalls++;
+				if (appendCalls === 2) throw new Error("Redis unavailable");
+			},
+			async finalize(_runId: string, status: "done" | "error") {
+				finalizations.push(status);
+			},
+		});
+		const worker = buildWorker(1);
+		const loop = buildLoop(
+			worker,
+			async (ctx) => {
+				await ctx.appendModelContent({
+					kind: "tool_use",
+					payload: {
+						tool: "Bash",
+						arguments: { command: "pwd" },
+						truncated: false,
+					},
+				});
+				await ctx.appendLiveEvent({
+					type: EventType.CUSTOM,
+					name: "mymemo.tool_use",
+					value: { tool: "Bash" },
+				});
+				await ctx.appendModelContent({
+					kind: "tool_result",
+					payload: {
+						tool: "Bash",
+						result: { exitCode: 0 },
+						isError: false,
+						truncated: false,
+					},
+				});
+				await ctx.appendLiveEvent({
+					type: EventType.CUSTOM,
+					name: "mymemo.tool_result",
+					value: { tool: "Bash" },
+				});
+			},
+			liveStreamStore,
+		);
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect(await readRun("run-1")).toMatchObject({
+			status: "done",
+			liveStreamFailedAt: expect.any(Date),
+		});
+		expect(await readEventTypes("run-1")).toEqual([
+			"tool_use",
+			"tool_result",
+			"run_done",
+		]);
 		expect(appendCalls).toBe(2);
 		expect(finalizations).toEqual(["error"]);
+	});
+
+	it("marks the Live Stream failed after durable terminalization without changing the Outcome", async () => {
+		const decoder = new TextDecoder();
+		const finalizations: string[] = [];
+		const liveStreamStore = fakeLiveStreamStore({
+			async append(_runId: string, chunk: Uint8Array) {
+				const event = JSON.parse(decoder.decode(chunk)) as { type: string };
+				if (event.type === EventType.RUN_FINISHED) {
+					expect((await readRun("run-1"))?.status).toBe("done");
+					throw new Error("Redis unavailable after terminal commit");
+				}
+			},
+			async finalize(_runId: string, status: "done" | "error") {
+				finalizations.push(status);
+			},
+		});
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendMessageProcessor, liveStreamStore);
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect(await readRun("run-1")).toMatchObject({
+			status: "done",
+			liveStreamFailedAt: expect.any(Date),
+		});
+		expect(await readEventTypes("run-1")).toEqual([
+			"assistant_message_completed",
+			"run_done",
+		]);
+		expect(finalizations).toEqual(["error"]);
+	});
+
+	it("marks the Live Stream failed when heartbeat refresh loses it", async () => {
+		let appendCalls = 0;
+		const processorStarted = deferred();
+		const finishTurn = deferred();
+		const liveStreamStore = fakeLiveStreamStore({
+			async append() {
+				appendCalls++;
+			},
+			async finalize() {},
+			async refresh() {
+				return false;
+			},
+		});
+		const worker = buildWorker(1);
+		const loop = buildLoop(
+			worker,
+			async (ctx) => {
+				processorStarted.resolve();
+				await finishTurn.promise;
+				await ctx.appendModelContent({
+					kind: "assistant_message",
+					payload: { messageId: "assistant-1", text: "still durable" },
+				});
+			},
+			liveStreamStore,
+		);
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await processorStarted.promise;
+		await loop.tick();
+		finishTurn.resolve();
+		await worker.drain();
+
+		expect(await readRun("run-1")).toMatchObject({
+			status: "done",
+			liveStreamFailedAt: expect.any(Date),
+		});
+		expect(await readEventTypes("run-1")).toEqual([
+			"assistant_message_completed",
+			"run_done",
+		]);
+		expect(appendCalls).toBe(1);
 	});
 
 	it("ends a synthetic run as done with one durable Assistant message", async () => {
@@ -486,13 +656,28 @@ describe("RunLoop — terminal outcomes", () => {
 
 	it("terminalizes as canceled when cancellation is observed mid-processing", async () => {
 		const worker = buildWorker(1);
-		// A processor that runs until the run is aborted, without appending.
-		const loop = buildLoop(worker, async (ctx) => {
-			await new Promise<void>((resolve) => {
-				if (ctx.signal.aborted) return resolve();
-				ctx.signal.addEventListener("abort", () => resolve(), { once: true });
-			});
+		const decoder = new TextDecoder();
+		const published: unknown[] = [];
+		const finalizations: string[] = [];
+		const liveStreamStore = fakeLiveStreamStore({
+			async append(_runId: string, chunk: Uint8Array) {
+				published.push(JSON.parse(decoder.decode(chunk)) as { type: string });
+			},
+			async finalize(_runId: string, status: "done" | "error") {
+				finalizations.push(status);
+			},
 		});
+		// A processor that runs until the run is aborted, without appending.
+		const loop = buildLoop(
+			worker,
+			async (ctx) => {
+				await new Promise<void>((resolve) => {
+					if (ctx.signal.aborted) return resolve();
+					ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+				});
+			},
+			liveStreamStore,
+		);
 		await queueRun("run-1", "conv-1");
 		await loop.tick(); // claim + dispatch (processor now blocking on abort)
 
@@ -505,8 +690,16 @@ describe("RunLoop — terminal outcomes", () => {
 		await loop.tick(); // heartbeat observes cancel_requested → aborts the run
 		await worker.drain();
 
-		expect((await readRun("run-1"))?.status).toBe("canceled");
+		expect(await readRun("run-1")).toMatchObject({
+			status: "canceled",
+			liveStreamFailedAt: null,
+		});
 		expect(await readEventTypes("run-1")).toEqual(["run_canceled"]);
+		expect(published).toEqual([
+			{ type: EventType.RUN_STARTED, threadId: "conv-1", runId: "run-1" },
+			{ type: "RUN_CANCELLED", threadId: "conv-1", runId: "run-1" },
+		]);
+		expect(finalizations).toEqual(["done"]);
 	});
 });
 
@@ -584,6 +777,44 @@ describe("RunLoop — shutdown", () => {
 });
 
 describe("RunLoop — stale-run recovery", () => {
+	it("deletes an orphan Live Stream only after stale recovery terminalizes its Run", async () => {
+		await claimRun("run-stale", "conv-1", "stale-worker");
+		await expireOwnership("run-stale");
+		const deleted: string[] = [];
+		const liveStreamStore = fakeLiveStreamStore({
+			async acquire() {
+				throw new Error("must not acquire");
+			},
+			async append() {
+				throw new Error("must not append");
+			},
+			async finalize() {
+				throw new Error("must not fabricate a terminal Live Stream event");
+			},
+			async refresh() {
+				throw new Error("must not refresh");
+			},
+			async appendWithRetryId() {
+				throw new Error("must not append");
+			},
+			async delete(runId: string) {
+				deleted.push(runId);
+			},
+		});
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendMessageProcessor, liveStreamStore);
+
+		await loop.tick();
+		await worker.drain();
+
+		expect(await readRun("run-stale")).toMatchObject({
+			status: "error",
+			liveStreamFailedAt: expect.any(Date),
+		});
+		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
+		expect(deleted).toEqual(["run-stale"]);
+	});
+
 	it("terminalizes stale running runs as error during a tick", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await expireOwnership("run-stale");

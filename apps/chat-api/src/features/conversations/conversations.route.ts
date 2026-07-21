@@ -60,6 +60,22 @@ function liveStreamRecoveryResponse(c: Context<AppEnv>) {
 	return c.json({ error: "Live stream unavailable", recovery: "history" }, 410);
 }
 
+async function liveStreamReadFailureResponse(
+	c: Context<AppEnv>,
+	run: RunRecord,
+) {
+	const currentRun = await c.var.deps.runStore.getRun({
+		userId: run.userId,
+		conversationId: run.conversationId,
+		runId: run.runId,
+	});
+	if (currentRun === null) return c.json({ error: "Run not found" }, 404);
+	return currentRun.liveStreamFailedAt !== null ||
+		isTerminalRunStatus(currentRun.status)
+		? liveStreamRecoveryResponse(c)
+		: c.json({ error: "Live stream temporarily unavailable" }, 503);
+}
+
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 	return new Promise((resolve) => {
 		if (signal.aborted) return resolve();
@@ -191,9 +207,7 @@ async function streamAgUiRun(
 			error,
 			runId: run.runId,
 		});
-		return isTerminalRunStatus(run.status)
-			? liveStreamRecoveryResponse(c)
-			: c.json({ error: "Live stream temporarily unavailable" }, 503);
+		return liveStreamReadFailureResponse(c, run);
 	}
 	if (initial.outcome === "ping") {
 		if (requestSignal.aborted) {
@@ -252,9 +266,7 @@ async function streamAgUiRun(
 		readAbort.dispose();
 		await iterator.return?.();
 		if (status === "done" && cursor !== "") return c.body(null, 204);
-		return isTerminalRunStatus(run.status)
-			? liveStreamRecoveryResponse(c)
-			: c.json({ error: "Live stream temporarily unavailable" }, 503);
+		return liveStreamReadFailureResponse(c, run);
 	}
 
 	return streamSSE(c, async (stream) => {
@@ -366,9 +378,7 @@ async function respondWithAgUiRun(
 	try {
 		status = await c.var.deps.liveStreamReader.status(run.runId);
 	} catch {
-		return isTerminalRunStatus(run.status)
-			? liveStreamRecoveryResponse(c)
-			: c.json({ error: "Live stream temporarily unavailable" }, 503);
+		return liveStreamReadFailureResponse(c, run);
 	}
 	if (status === "error") return liveStreamRecoveryResponse(c);
 	if (status === "missing") {
