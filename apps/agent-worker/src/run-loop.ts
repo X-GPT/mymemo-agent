@@ -27,7 +27,12 @@ import {
 	advanceAgentSessionPointerTx,
 	type RunOwnershipRef,
 } from "@mymemo/agent-db/runtime-store";
-import type { LiveStreamEvent, LiveStreamStore } from "@mymemo/live-text";
+import {
+	classifyLiveStreamFailure,
+	type LiveStreamEvent,
+	type LiveStreamStore,
+	type LiveStreamTelemetry,
+} from "@mymemo/live-text";
 import { ArtifactValidationError } from "./artifacts/artifact-manifest";
 import { ArtifactPublicationError } from "./artifacts/artifact-publication";
 import { toMessage, type WorkerLogger } from "./logger";
@@ -120,6 +125,8 @@ export interface RunLoopOptions {
 	processor: RunProcessor;
 	/** Shared retained AG-UI store. Undefined keeps durable execution available. */
 	liveStreamStore?: LiveStreamStore;
+	/** Payload-free retained Live Stream operation metrics. */
+	liveStreamTelemetry?: LiveStreamTelemetry;
 	/** How often {@link RunLoop.start}'s timer fires a tick (heartbeat + claim). */
 	heartbeatIntervalMs: number;
 	/** Optional doorbell whose ring triggers an immediate tick. */
@@ -307,6 +314,18 @@ export class RunLoop {
 				status: run.status,
 			})),
 		});
+		for (const run of recovered) {
+			if (run.liveStreamFailedAt === null) continue;
+			if (run.liveStreamFailureMarkedByRecovery) {
+				this.opts.liveStreamTelemetry?.record("degradation", "started", {
+					reason: "stale_worker",
+				});
+			}
+			this.opts.liveStreamTelemetry?.record("degradation", "ended", {
+				reason: "stale_worker",
+				durationMs: Math.max(0, Date.now() - run.liveStreamFailedAt.getTime()),
+			});
+		}
 		if (!this.opts.liveStreamStore) return;
 		for (const run of recovered) {
 			if (run.liveStreamFailedAt === null) continue;
@@ -317,7 +336,7 @@ export class RunLoop {
 					message: "could not delete stale Run Live Stream",
 					workerId: this.workerId,
 					runId: run.runId,
-					error: toMessage(error),
+					reason: classifyLiveStreamFailure(error),
 				});
 			}
 		}
@@ -415,8 +434,16 @@ export class RunLoop {
 						"Run fence rejected the Live Stream failure marker",
 					);
 				}
+				if (result.run.liveStreamFailedAt === null) {
+					throw new Error("Live Stream failure marker timestamp is missing");
+				}
+				return {
+					outcome: result.outcome,
+					failedAt: result.run.liveStreamFailedAt,
+				};
 			},
 			logger: this.opts.logger,
+			telemetry: this.opts.liveStreamTelemetry,
 		});
 		entry.liveStream = liveStream;
 		let turnResult: TurnResult = EMPTY_TURN;

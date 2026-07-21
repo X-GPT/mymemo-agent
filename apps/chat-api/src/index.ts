@@ -1,4 +1,7 @@
-import { createLiveTextTelemetry } from "@mymemo/live-text";
+import {
+	createLiveStreamTelemetry,
+	createLiveTextTelemetry,
+} from "@mymemo/live-text";
 import pino from "pino";
 import { createApp } from "./app";
 import { loadApiConfigFromEnv } from "./config/env";
@@ -15,17 +18,18 @@ const productionLogger = pino({ level: productionConfig.logLevel });
 const productionDeps = createDeps(
 	productionConfig,
 	createLiveTextTelemetry("chat-api", productionLogger),
+	createLiveStreamTelemetry("chat-api", productionLogger),
 );
 const productionApp = createApp(productionConfig, productionDeps);
 let shuttingDown = false;
-async function closeProductionLiveText(): Promise<void> {
+async function closeProductionLiveResources(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
-	await productionDeps.closeLiveText?.().catch(() => {});
+	await productionDeps.closeLiveResources?.().catch(() => {});
 	productionDeps.liveTextTelemetry.close();
 	process.exit(0);
 }
-process.once("SIGINT", () => void closeProductionLiveText());
-process.once("SIGTERM", () => void closeProductionLiveText());
+process.once("SIGINT", () => void closeProductionLiveResources());
+process.once("SIGTERM", () => void closeProductionLiveResources());
 
 export default productionApp;

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import {
+	createLiveStreamTelemetry,
 	createLiveTextTelemetry,
 	disabledLiveTextSubscriber,
 	InMemoryLiveTextTransport,
 	LiveStreamStoreError,
+	type LiveStreamTelemetry,
 	type LiveTextSubscriber,
 } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
@@ -37,6 +39,10 @@ import type { InternalIdentity } from "./conversations.schema";
 
 const { createApp } = await import("@/app");
 const silentLiveTextTelemetry = createLiveTextTelemetry("chat-api", {
+	info() {},
+	warn() {},
+});
+const silentLiveStreamTelemetry = createLiveStreamTelemetry("chat-api", {
 	info() {},
 	warn() {},
 });
@@ -108,6 +114,7 @@ function buildApp(
 		},
 		async *read() {},
 	},
+	liveStreamTelemetry: LiveStreamTelemetry = silentLiveStreamTelemetry,
 ) {
 	const deps = {
 		config: {},
@@ -119,6 +126,7 @@ function buildApp(
 		liveTextSubscriber,
 		liveStreamReader,
 		liveTextTelemetry: silentLiveTextTelemetry,
+		liveStreamTelemetry,
 	} as unknown as AppDeps;
 	return createApp({ logLevel: "silent" } as unknown as ApiConfig, deps);
 }
@@ -2085,6 +2093,129 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(redisRead).toBe(false);
 	});
 
+	it("classifies retryable reconnect and permanent-history recovery responses", async () => {
+		const { store } = fakeStore([existing]);
+		const metrics: Record<string, unknown>[] = [];
+		const telemetry = createLiveStreamTelemetry("chat-api", {
+			info: (event) => metrics.push(event),
+			warn: (event) => metrics.push(event),
+		});
+		const temporarilyUnavailableRuns = fakeRunStore();
+		temporarilyUnavailableRuns.runOwners.set("run-reconnect", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+			liveStreamFailedAt: null,
+		});
+		const reconnect = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			temporarilyUnavailableRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					throw new Error(
+						"redis://:secret@redis.internal current:mymemo:agui:{run-reconnect}:stream",
+					);
+				},
+				async *read() {},
+			},
+			telemetry,
+		).request("/v1/conversations/conv-1/runs/run-reconnect/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		const failedRuns = fakeRunStore();
+		failedRuns.runOwners.set("run-recovery", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+			liveStreamFailedAt: new Date(),
+		});
+		const recovery = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			failedRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					throw new Error("must not read Redis");
+				},
+				async *read() {},
+			},
+			telemetry,
+		).request("/v1/conversations/conv-1/runs/run-recovery/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect([reconnect.status, recovery.status]).toEqual([503, 410]);
+		expect(metrics).toEqual([
+			expect.objectContaining({
+				operation: "reconnect_response",
+				result: "retryable_503",
+				reason: "redis_unavailable",
+			}),
+			expect.objectContaining({
+				operation: "recovery_response",
+				result: "history_410",
+			}),
+		]);
+		const serialized = JSON.stringify(metrics);
+		for (const forbidden of [
+			"redis://",
+			"secret",
+			"mymemo:agui",
+			"run-reconnect",
+			"run-recovery",
+		]) {
+			expect(serialized).not.toContain(forbidden);
+		}
+	});
+
+	it("does not classify a bounded missing-Stream reconnect as Redis unavailable", async () => {
+		const { store } = fakeStore([existing]);
+		const metrics: Record<string, unknown>[] = [];
+		const telemetry = createLiveStreamTelemetry("chat-api", {
+			info: (event) => metrics.push(event),
+			warn: (event) => metrics.push(event),
+		});
+		const activeRuns = fakeRunStore();
+		activeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+			liveStreamFailedAt: null,
+		});
+
+		const response = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			activeRuns,
+			disabledLiveTextSubscriber,
+			{
+				async status() {
+					throw new LiveStreamStoreError("missing");
+				},
+				async *read() {},
+			},
+			telemetry,
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			method: "GET",
+			headers: identityHeaders,
+		});
+
+		expect(response.status).toBe(503);
+		expect(metrics).toContainEqual(
+			expect.objectContaining({
+				operation: "reconnect_response",
+				result: "retryable_503",
+				reason: "missing",
+			}),
+		);
+	});
+
 	it("returns retryable 503 for a temporary read failure while the Run is active", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
@@ -2365,6 +2496,11 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 
 	it("follows a Live Stream that appears just after Postgres terminalizes the Run", async () => {
 		const { store } = fakeStore([existing]);
+		const metrics: Record<string, unknown>[] = [];
+		const telemetry = createLiveStreamTelemetry("chat-api", {
+			info: (event) => metrics.push(event),
+			warn: (event) => metrics.push(event),
+		});
 		const fakeRuns = fakeRunStore();
 		const owner = {
 			userId: "member-1",
@@ -2400,6 +2536,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 					};
 				},
 			},
+			telemetry,
 		).request("/v1/conversations/conv-1/runs/run-1/events", {
 			method: "GET",
 			headers: identityHeaders,
@@ -2409,6 +2546,13 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(parseAgUiSse(await res.text())).toEqual([
 			{ id: "1-0", data: terminalEvent },
 		]);
+		expect(metrics).toContainEqual(
+			expect.objectContaining({
+				operation: "read_wait",
+				result: "success",
+				durationMs: expect.any(Number),
+			}),
+		);
 	});
 
 	it("sends cursorless pings while following a quiet active Stream", async () => {

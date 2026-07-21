@@ -14,6 +14,7 @@ import type {
 } from "assistant-stream/resumable";
 import { createClient } from "redis";
 import { z } from "zod";
+import type { LiveStreamReason } from "./live-stream-telemetry";
 
 export const LIVE_STREAM_RETENTION_MS = 30 * 60 * 1_000;
 export const LIVE_STREAM_MAX_EVENT_BYTES = 32 * 1_024;
@@ -207,6 +208,14 @@ export class LiveStreamStoreError extends Error {
 	constructor(readonly code: LiveStreamStoreErrorCode) {
 		super(errorMessage(code));
 	}
+}
+
+/** Collapse adapter and infrastructure failures to the bounded reason
+ * vocabulary shared by producer and reconnect telemetry. */
+export function classifyLiveStreamFailure(error: unknown): LiveStreamReason {
+	return error instanceof LiveStreamStoreError
+		? error.code
+		: "redis_unavailable";
 }
 
 /**
