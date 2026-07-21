@@ -38,7 +38,7 @@ export interface AssistantMessageAssemblerOptions {
  * SDK id (worker-internal, for associating the later result), the tool name as
  * the SDK reports it, and the raw model-authored input. Nothing here is
  * client-safe yet — allowlisting and projection happen at commit, before any
- * append (ADR-0009).
+ * append (ADR-0012).
  */
 export interface CompletedToolUse {
 	id: string;
@@ -47,11 +47,13 @@ export interface CompletedToolUse {
 }
 
 /**
- * What one provider envelope commits at its `message_stop`: the single complete
- * Assistant message (or `null` for a textless envelope) and the envelope's
- * completed tool_use blocks in content-block order.
+ * What one provider envelope commits at its `message_stop`: the MyMemo message
+ * id, optional visible text, and completed tool_use blocks in content-block
+ * order. A textless Tool-only envelope still uses the message id as each Tool
+ * call's parent identity.
  */
 export interface EnvelopeCommit {
+	messageId: string;
 	text: AssistantTextPayload | null;
 	toolUses: CompletedToolUse[];
 }
@@ -307,6 +309,7 @@ export class AssistantMessageAssembler {
 		}
 		this.#active = null;
 		return {
+			messageId: active.messageId,
 			text:
 				active.completedText.length > 0
 					? { messageId: active.messageId, text: active.completedText }

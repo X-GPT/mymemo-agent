@@ -381,11 +381,39 @@ export async function appendRunEventTx(
 		appendClass: RunEventAppendClass;
 	},
 ): Promise<{ seq: number }> {
+	const [appended] = await appendRunEventsTx(db, {
+		runId: input.runId,
+		workerId: input.workerId,
+		appendClass: input.appendClass,
+		events: [{ type: input.type, payload: input.payload }],
+	});
+	if (!appended)
+		throw new Error("single Run-event append returned no sequence");
+	return appended;
+}
+
+/**
+ * Append a non-empty ordered batch under one Run-row fence and transaction.
+ * A complete Tool invocation uses this so start/arguments/completion can never
+ * be split by cancellation, ownership loss, or a database failure.
+ */
+export async function appendRunEventsTx(
+	db: Database,
+	input: {
+		runId: string;
+		workerId: string;
+		events: readonly { type: string; payload: RunEventPayload }[];
+		appendClass: RunEventAppendClass;
+	},
+): Promise<Array<{ seq: number }>> {
+	if (input.events.length === 0) {
+		throw new Error("Run-event append batch must not be empty");
+	}
 	return await db.transaction(async (tx) => {
 		const [allocated] = await tx
 			.update(runs)
 			.set({
-				nextEventSeq: sql`${runs.nextEventSeq} + 1`,
+				nextEventSeq: sql`${runs.nextEventSeq} + ${input.events.length}`,
 				updatedAt: sql`now()`,
 			})
 			.where(
@@ -396,32 +424,33 @@ export async function appendRunEventTx(
 					sql`${runs.lockedUntil} > now()`,
 				),
 			)
-			// In UPDATE ... RETURNING the column holds its new value, so the
-			// pre-increment counter — this append's seq — is `next_event_seq - 1`.
-			.returning({ seq: sql`${runs.nextEventSeq} - 1` });
+			.returning({ nextEventSeq: runs.nextEventSeq });
 		if (!allocated) {
 			throw new RunFenceError(
 				`${input.appendClass} append to run ${input.runId} rejected: ` +
 					`run is not in an appendable status or worker ${input.workerId} no longer owns it`,
 			);
 		}
-		const durableEvent = parseDurableRunEvent(input.type, input.payload);
-		if (
-			durableEvent &&
-			(durableEvent.type === RunEventType.Started ||
-				durableEvent.type === RunEventType.Done ||
-				durableEvent.type === RunEventType.Error ||
-				durableEvent.type === RunEventType.Canceled)
-		) {
-			throw new InvalidRunEventError(
-				`${input.type} cannot be written through the model append path`,
-			);
+		for (const event of input.events) {
+			const durableEvent = parseDurableRunEvent(event.type, event.payload);
+			if (
+				durableEvent &&
+				(durableEvent.type === RunEventType.Started ||
+					durableEvent.type === RunEventType.Done ||
+					durableEvent.type === RunEventType.Error ||
+					durableEvent.type === RunEventType.Canceled)
+			) {
+				throw new InvalidRunEventError(
+					`${event.type} cannot be written through the model append path`,
+				);
+			}
 		}
-		if (
+		const canonicalEvents = input.events.filter((event) =>
 			(CANONICAL_MODEL_RUN_EVENT_TYPES as readonly string[]).includes(
-				input.type,
-			)
-		) {
+				event.type,
+			),
+		);
+		if (canonicalEvents.length > 0) {
 			const priorCanonicalEvents = await tx
 				.select({ type: runEvents.type, payload: runEvents.payload })
 				.from(runEvents)
@@ -433,18 +462,19 @@ export async function appendRunEventTx(
 				)
 				.orderBy(runEvents.seq);
 			validateDurableRunEventSequence(
-				[...priorCanonicalEvents, { type: input.type, payload: input.payload }],
+				[...priorCanonicalEvents, ...canonicalEvents],
 				{ allowIncomplete: true },
 			);
 		}
-		const seq = Number(allocated.seq);
-		await tx.insert(runEvents).values({
+		const firstSeq = allocated.nextEventSeq - input.events.length;
+		const appended = input.events.map((event, index) => ({
 			runId: input.runId,
-			seq,
-			type: input.type,
-			payload: input.payload,
-		});
-		return { seq };
+			seq: firstSeq + index,
+			type: event.type,
+			payload: event.payload,
+		}));
+		await tx.insert(runEvents).values(appended);
+		return appended.map(({ seq }) => ({ seq }));
 	});
 }
 

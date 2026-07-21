@@ -445,6 +445,22 @@ describe.skipIf(!RUN)(
 							});
 							expect(completed?.type).toBe("assistant_message_completed");
 						}
+						const durableToolType = (
+							{
+								TOOL_CALL_START: "tool_call_started",
+								TOOL_CALL_ARGS: "tool_call_args",
+								TOOL_CALL_END: "tool_call_completed",
+								TOOL_CALL_RESULT: "tool_call_result",
+							} as Record<string, string>
+						)[frame.data.type as string];
+						if (durableToolType) {
+							const committed = await acceptanceDb?.query.runEvents.findFirst({
+								columns: { type: true },
+								where: (event, { and, eq }) =>
+									and(eq(event.runId, runId), eq(event.type, durableToolType)),
+							});
+							expect(committed?.type).toBe(durableToolType);
+						}
 						if (frame.data.type === "RUN_FINISHED") {
 							const terminal = await acceptanceDb?.query.runs.findFirst({
 								columns: { status: true },
@@ -485,6 +501,18 @@ describe.skipIf(!RUN)(
 					threadId: conversationId,
 					runId,
 				});
+				const textStart = requiredFrame(frames, "TEXT_MESSAGE_START").data;
+				const toolStart = requiredFrame(frames, "TOOL_CALL_START").data;
+				const toolArgs = requiredFrame(frames, "TOOL_CALL_ARGS").data;
+				const toolEnd = requiredFrame(frames, "TOOL_CALL_END").data;
+				const toolResult = requiredFrame(frames, "TOOL_CALL_RESULT").data;
+				expect(toolStart).toMatchObject({
+					parentMessageId: textStart.messageId,
+					toolCallName: "Read",
+				});
+				expect(toolArgs.toolCallId).toBe(toolStart.toolCallId);
+				expect(toolEnd.toolCallId).toBe(toolStart.toolCallId);
+				expect(toolResult.toolCallId).toBe(toolStart.toolCallId);
 				const streamedText = frames
 					.filter((frame) => frame.data.type === "TEXT_MESSAGE_CONTENT")
 					.map((frame) => frame.data.delta as string)
@@ -503,8 +531,10 @@ describe.skipIf(!RUN)(
 				expect(durableEvents?.map((event) => event.type)).toEqual([
 					"run_started",
 					"assistant_message_completed",
-					"tool_use",
-					"tool_result",
+					"tool_call_started",
+					"tool_call_args",
+					"tool_call_completed",
+					"tool_call_result",
 					"run_done",
 				]);
 				const durableRun = await acceptanceDb?.query.runs.findFirst({
@@ -518,6 +548,45 @@ describe.skipIf(!RUN)(
 				});
 				expect(replayFromZero.status).toBe(200);
 				expect(parseSSE(await replayFromZero.text())).toEqual(frames);
+
+				const historyResponse = await fetch(
+					`${CHAT_URL}/v1/conversations/${conversationId}/history`,
+					{
+						headers: {
+							"x-member-code": MEMBER_CODE,
+							"x-partner-code": PARTNER_CODE,
+						},
+					},
+				);
+				expect(historyResponse.status).toBe(200);
+				const history = (await historyResponse.json()) as {
+					runs: Array<{
+						runId: string;
+						messages: Array<Record<string, unknown>>;
+					}>;
+				};
+				const historyRun = history.runs.find((run) => run.runId === runId);
+				const historyAssistant = historyRun?.messages.find(
+					(message) => message.role === "assistant",
+				);
+				const historyTool = historyRun?.messages.find(
+					(message) => message.role === "tool",
+				);
+				expect(historyAssistant).toMatchObject({
+					id: textStart.messageId,
+					toolCalls: [
+						{
+							id: toolStart.toolCallId,
+							type: "function",
+							function: { name: "Read", arguments: '{"path":"CONTEXT.md"}' },
+						},
+					],
+				});
+				expect(historyTool).toMatchObject({
+					id: toolResult.messageId,
+					toolCallId: toolStart.toolCallId,
+					content: '{"ok":true}',
+				});
 
 				const impossibleRetainedCursor = await fetchRunEvents(
 					conversationId,
@@ -564,6 +633,130 @@ describe.skipIf(!RUN)(
 					},
 				);
 				expect(mismatch.status).toBe(409);
+
+				const failedRunId = crypto.randomUUID();
+				const failedRun = await fetch(
+					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
+					{
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							"x-member-code": MEMBER_CODE,
+							"x-partner-code": PARTNER_CODE,
+						},
+						body: JSON.stringify({
+							...runInput,
+							runId: failedRunId,
+							messages: [
+								{
+									id: "integration-tool-error-message",
+									role: "user",
+									content: "Synthetic tool-only failure",
+								},
+							],
+						}),
+						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+					},
+				);
+				expect(failedRun.status).toBe(200);
+				const failedFrames = parseSSE(await failedRun.text());
+				expect(failedFrames.map((frame) => frame.data.type)).toEqual([
+					"RUN_STARTED",
+					"TOOL_CALL_START",
+					"TOOL_CALL_ARGS",
+					"TOOL_CALL_END",
+					"TOOL_CALL_RESULT",
+					"CUSTOM",
+					"RUN_FINISHED",
+				]);
+				const failedStart = requiredFrame(failedFrames, "TOOL_CALL_START").data;
+				const failedResult = requiredFrame(
+					failedFrames,
+					"TOOL_CALL_RESULT",
+				).data;
+				expect(failedResult).toMatchObject({
+					toolCallId: failedStart.toolCallId,
+					content: "Tool failed",
+				});
+				expect(requiredFrame(failedFrames, "CUSTOM").data).toEqual({
+					type: "CUSTOM",
+					name: "mymemo.tool_result_error",
+					value: {
+						messageId: failedResult.messageId,
+						toolCallId: failedStart.toolCallId,
+					},
+				});
+				const failedReplay = await fetchRunEvents(conversationId, failedRunId, {
+					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+				});
+				expect(failedReplay.status).toBe(200);
+				expect(parseSSE(await failedReplay.text())).toEqual(failedFrames);
+				const failedArgsIndex = failedFrames.findIndex(
+					(frame) => frame.data.type === "TOOL_CALL_ARGS",
+				);
+				const failedArgsCursor = failedFrames[failedArgsIndex]?.id;
+				if (!failedArgsCursor)
+					throw new Error("failed Tool args had no cursor");
+				expect(failedArgsCursor).toMatch(/^\d+-\d+$/);
+				const failedCursorReplay = await fetchRunEvents(
+					conversationId,
+					failedRunId,
+					{
+						cursor: failedArgsCursor,
+						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
+					},
+				);
+				expect(failedCursorReplay.status).toBe(200);
+				expect(parseSSE(await failedCursorReplay.text())).toEqual(
+					failedFrames.slice(failedArgsIndex + 1),
+				);
+
+				const failedHistoryResponse = await fetch(
+					`${CHAT_URL}/v1/conversations/${conversationId}/history`,
+					{
+						headers: {
+							"x-member-code": MEMBER_CODE,
+							"x-partner-code": PARTNER_CODE,
+						},
+					},
+				);
+				const failedHistory = (await failedHistoryResponse.json()) as {
+					runs: Array<{
+						runId: string;
+						messages: Array<Record<string, unknown>>;
+					}>;
+				};
+				const failedHistoryRun = failedHistory.runs.find(
+					(run) => run.runId === failedRunId,
+				);
+				expect(failedHistoryRun?.messages).toEqual([
+					{
+						id: "integration-tool-error-message",
+						role: "user",
+						content: "Synthetic tool-only failure",
+					},
+					{
+						id: failedStart.parentMessageId,
+						role: "assistant",
+						toolCalls: [
+							{
+								id: failedStart.toolCallId,
+								type: "function",
+								function: {
+									name: "Read",
+									arguments: '{"path":"CONTEXT.md"}',
+								},
+							},
+						],
+					},
+					{
+						id: failedResult.messageId,
+						role: "tool",
+						toolCallId: failedStart.toolCallId,
+						content: "Tool failed",
+						error: "Tool failed",
+					},
+				]);
 			},
 			TURN_TIMEOUT_MS + 15_000,
 		);

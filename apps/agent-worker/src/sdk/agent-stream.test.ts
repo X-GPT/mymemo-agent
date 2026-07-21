@@ -1,10 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import {
-	isToolResultPayload,
-	isToolUsePayload,
-} from "@mymemo/agent-db/run-events";
 import { InMemoryLiveTextTransport } from "@mymemo/live-text";
 import type { ModelContent } from "../run-loop";
 import {
@@ -102,13 +98,33 @@ type AssistantCommit = Extract<
 	{ kind: "assistant_message" }
 >["payload"];
 
-/** Record every model-content append, whatever its kind, in stream order. */
-function captureModelContent(
+/** Record every atomic model-content batch, preserving event order. */
+function captureModelContents(
 	appended: ModelContent[],
-): (content: ModelContent) => Promise<void> {
-	return async (content) => {
-		appended.push(content);
+): (contents: readonly ModelContent[]) => Promise<void> {
+	return async (contents) => {
+		appended.push(...contents);
 	};
+}
+
+type ModelContentPayloadByKind = {
+	[Kind in ModelContent["kind"]]: Extract<
+		ModelContent,
+		{ kind: Kind }
+	>["payload"];
+};
+
+function payloadsOfKind<Kind extends ModelContent["kind"]>(
+	contents: ModelContent[],
+	kind: Kind,
+): ModelContentPayloadByKind[Kind][] {
+	const payloads: ModelContentPayloadByKind[Kind][] = [];
+	for (const content of contents) {
+		if (content.kind === kind) {
+			payloads.push(content.payload as ModelContentPayloadByKind[Kind]);
+		}
+	}
+	return payloads;
 }
 
 function spyLogger() {
@@ -143,12 +159,14 @@ function bashResultText(overrides: Record<string, unknown>): string {
  * rather than silently dropping it. */
 function onAssistantCommit(
 	handle: (payload: AssistantCommit) => void,
-): (content: ModelContent) => Promise<void> {
-	return async (content) => {
-		if (content.kind !== "assistant_message") {
-			throw new Error(`unexpected model content kind: ${content.kind}`);
+): (contents: readonly ModelContent[]) => Promise<void> {
+	return async (contents) => {
+		for (const content of contents) {
+			if (content.kind !== "assistant_message") {
+				throw new Error(`unexpected model content kind: ${content.kind}`);
+			}
+			handle(content.payload);
 		}
-		handle(content.payload);
 	};
 }
 
@@ -186,7 +204,7 @@ describe("consumeAgentStream", () => {
 				}
 				order.push(event.type);
 			},
-			appendModelContent: onAssistantCommit((message) =>
+			appendModelContents: onAssistantCommit((message) =>
 				order.push(`commit:${message.text}`),
 			),
 		});
@@ -221,7 +239,7 @@ describe("consumeAgentStream", () => {
 			appendLiveEvent: async (event) => {
 				events.push(event as unknown as Record<string, unknown>);
 			},
-			appendModelContent: async () => {},
+			appendModelContents: async () => {},
 		});
 
 		expect(events).toEqual([
@@ -264,7 +282,7 @@ describe("consumeAgentStream", () => {
 				contentStarted.resolve();
 				await releaseContent.promise;
 			},
-			appendModelContent: async () => {},
+			appendModelContents: async () => {},
 		}).then(
 			() => null,
 			(error: unknown) => error,
@@ -324,7 +342,7 @@ describe("consumeAgentStream", () => {
 					await transport.publish(message);
 				},
 			},
-			appendModelContent: onAssistantCommit((message) =>
+			appendModelContents: onAssistantCommit((message) =>
 				order.push(`commit:${message.text}`),
 			),
 		});
@@ -370,7 +388,7 @@ describe("consumeAgentStream", () => {
 					});
 				},
 			},
-			appendModelContent: onAssistantCommit((message) =>
+			appendModelContents: onAssistantCommit((message) =>
 				appended.push(message),
 			),
 		});
@@ -397,7 +415,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: onAssistantCommit((message) =>
+				appendModelContents: onAssistantCommit((message) =>
 					appended.push(message),
 				),
 			}),
@@ -424,7 +442,7 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query,
 			signal: new AbortController().signal,
-			appendModelContent: onAssistantCommit((message) =>
+			appendModelContents: onAssistantCommit((message) =>
 				appended.push(message),
 			),
 		});
@@ -450,7 +468,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: onAssistantCommit((message) =>
+				appendModelContents: onAssistantCommit((message) =>
 					appended.push(message),
 				),
 			}),
@@ -472,7 +490,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: onAssistantCommit((message) =>
+				appendModelContents: onAssistantCommit((message) =>
 					appended.push(message),
 				),
 			}),
@@ -496,7 +514,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: onAssistantCommit((message) =>
+				appendModelContents: onAssistantCommit((message) =>
 					appended.push(message),
 				),
 			}),
@@ -520,7 +538,7 @@ describe("consumeAgentStream", () => {
 				query,
 				signal: controller.signal,
 				liveTextPublisher: liveText,
-				appendModelContent: async () => {},
+				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
 		await Bun.sleep(60);
@@ -545,7 +563,7 @@ describe("consumeAgentStream", () => {
 				query,
 				signal: new AbortController().signal,
 				liveTextPublisher: liveText,
-				appendModelContent: async () => {},
+				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
 		expect(subscription.readAvailable()).toEqual([]);
@@ -620,7 +638,7 @@ describe("consumeAgentStream", () => {
 				consumeAgentStream({
 					query,
 					signal: new AbortController().signal,
-					appendModelContent: captureModelContent(appended),
+					appendModelContents: captureModelContents(appended),
 				}),
 			).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
 			expect(appended).toEqual([]);
@@ -675,7 +693,7 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query,
 			signal: new AbortController().signal,
-			appendModelContent: onAssistantCommit((message) =>
+			appendModelContents: onAssistantCommit((message) =>
 				appended.push(message),
 			),
 		});
@@ -722,7 +740,7 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query,
 			signal: new AbortController().signal,
-			appendModelContent: onAssistantCommit((message) =>
+			appendModelContents: onAssistantCommit((message) =>
 				appended.push(message),
 			),
 		});
@@ -747,7 +765,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: async () => {},
+				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AgentResultError);
 	});
@@ -766,7 +784,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: async () => {},
+				appendModelContents: async () => {},
 			}),
 		).resolves.toEqual({
 			sessionId: "session-7",
@@ -806,52 +824,169 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 			logger,
 		});
 
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_result",
+			"tool_call_result",
+		]);
 		expect(
-			appended.map((content) =>
-				content.kind === "assistant_message"
-					? content.kind
-					: `${content.kind}:${JSON.stringify(
-							content.kind === "tool_use"
-								? content.payload.arguments.command
-								: content.payload.result.stdout,
-						)}`,
+			payloadsOfKind(appended, "tool_call_args").map(({ delta }) =>
+				JSON.parse(delta),
 			),
 		).toEqual([
-			"assistant_message",
-			'tool_use:"ls"',
-			'tool_use:"pwd"',
-			'tool_result:"a.ts\\n"',
-			'tool_result:"/workspace\\n"',
+			{ command: "ls", cwd: "src", timeoutMs: 10_000 },
+			{ command: "pwd" },
 		]);
-		expect(appended[1]).toEqual({
-			kind: "tool_use",
-			payload: {
-				tool: "Bash",
-				arguments: { command: "ls", cwd: "src", timeoutMs: 10_000 },
-				truncated: false,
+		expect(
+			payloadsOfKind(appended, "tool_call_result").map(({ content }) =>
+				JSON.parse(content),
+			),
+		).toEqual([
+			{
+				exitCode: 0,
+				stdout: "a.ts\n",
+				stderr: "",
+				stdoutTruncated: false,
+				stderrTruncated: false,
+				outcome: "completed",
 			},
-		});
-		expect(appended[3]).toEqual({
-			kind: "tool_result",
-			payload: {
-				tool: "Bash",
-				result: {
-					exitCode: 0,
-					stdout: "a.ts\n",
-					stderr: "",
-					stdoutTruncated: false,
-					stderrTruncated: false,
-					outcome: "completed",
-				},
-				isError: false,
-				truncated: false,
+			{
+				exitCode: 0,
+				stdout: "/workspace\n",
+				stderr: "",
+				stdoutTruncated: false,
+				stderrTruncated: false,
+				outcome: "completed",
 			},
-		});
+		]);
 		expect(warnings).toEqual([]);
+	});
+
+	it("commits canonical Tool identities before publishing their live events", async () => {
+		const appended: ModelContent[] = [];
+		const liveEvents: Array<Record<string, unknown>> = [];
+		const operations: string[] = [];
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "provider-tool-1",
+						name: "mcp__mymemo-executor__Read",
+						input: { path: "notes.md" },
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{
+					toolUseId: "provider-tool-1",
+					text: JSON.stringify({
+						path: "notes.md",
+						content: "hello",
+						startLine: 1,
+						linesRead: 1,
+						truncated: false,
+					}),
+				},
+			]),
+		];
+
+		await consumeAgentStream({
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			signal: new AbortController().signal,
+			appendModelContents: async (contents) => {
+				appended.push(...contents);
+				for (const content of contents) {
+					operations.push(`durable:${content.kind}`);
+				}
+			},
+			appendLiveEvent: async (event) => {
+				liveEvents.push(event as unknown as Record<string, unknown>);
+				operations.push(`live:${event.type}`);
+			},
+		});
+
+		const durable = appended as unknown as Array<{
+			kind: string;
+			payload: Record<string, unknown>;
+		}>;
+		expect(durable.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_result",
+		]);
+		const assistant = durable[0]?.payload;
+		const started = durable[1]?.payload;
+		const args = durable[2]?.payload;
+		const completed = durable[3]?.payload;
+		const result = durable[4]?.payload;
+		expect(assistant).toMatchObject({ text: "" });
+		expect(started).toMatchObject({
+			toolCallName: "Read",
+			parentMessageId: assistant?.messageId,
+		});
+		expect(started?.toolCallId).not.toBe("provider-tool-1");
+		expect(assistant?.messageId).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+		);
+		expect(started?.toolCallId).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+		);
+		expect(args).toEqual({
+			toolCallId: started?.toolCallId,
+			delta: '{"path":"notes.md"}',
+		});
+		expect(completed).toEqual({ toolCallId: started?.toolCallId });
+		expect(result).toMatchObject({
+			toolCallId: started?.toolCallId,
+			isError: false,
+		});
+		expect(liveEvents).toEqual([
+			{
+				type: EventType.TOOL_CALL_START,
+				toolCallId: started?.toolCallId,
+				toolCallName: "Read",
+				parentMessageId: assistant?.messageId,
+			},
+			{
+				type: EventType.TOOL_CALL_ARGS,
+				toolCallId: started?.toolCallId,
+				delta: '{"path":"notes.md"}',
+			},
+			{
+				type: EventType.TOOL_CALL_END,
+				toolCallId: started?.toolCallId,
+			},
+			{
+				type: EventType.TOOL_CALL_RESULT,
+				messageId: result?.messageId,
+				toolCallId: started?.toolCallId,
+				content: result?.content,
+				role: "tool",
+			},
+		]);
+		expect(operations).toEqual([
+			"durable:assistant_message",
+			"durable:tool_call_started",
+			"durable:tool_call_args",
+			"durable:tool_call_completed",
+			`live:${EventType.TOOL_CALL_START}`,
+			`live:${EventType.TOOL_CALL_ARGS}`,
+			`live:${EventType.TOOL_CALL_END}`,
+			"durable:tool_call_result",
+			`live:${EventType.TOOL_CALL_RESULT}`,
+		]);
 	});
 
 	it("streams a file-tool invocation and result end to end as guard-valid payloads", async () => {
@@ -882,42 +1017,30 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 		});
 
-		expect(appended).toEqual([
-			{
-				kind: "tool_use",
-				payload: {
-					tool: "Edit",
-					arguments: {
-						path: "src/app.ts",
-						oldText: "const a",
-						oldTextBytes: 7,
-						newText: "const alpha",
-						newTextBytes: 11,
-					},
-					truncated: false,
-				},
-			},
-			{
-				kind: "tool_result",
-				payload: {
-					tool: "Edit",
-					result: { path: "src/app.ts", replacements: 2 },
-					isError: false,
-					truncated: false,
-				},
-			},
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_result",
 		]);
-		// Guard-valid means chat-api's projector will map these durable payloads
-		// to the tool_use/tool_result client frames (the tracer's projector cases).
-		const [use, result] = appended;
-		if (use?.kind !== "tool_use" || result?.kind !== "tool_result") {
-			throw new Error("expected a tool_use then a tool_result");
-		}
-		expect(isToolUsePayload(use.payload)).toBe(true);
-		expect(isToolResultPayload(result.payload)).toBe(true);
+		expect(
+			JSON.parse(payloadsOfKind(appended, "tool_call_args")[0]?.delta ?? ""),
+		).toEqual({
+			path: "src/app.ts",
+			oldText: "const a",
+			oldTextBytes: 7,
+			newText: "const alpha",
+			newTextBytes: 11,
+		});
+		expect(
+			JSON.parse(
+				payloadsOfKind(appended, "tool_call_result")[0]?.content ?? "",
+			),
+		).toEqual({ path: "src/app.ts", replacements: 2 });
 	});
 
 	it("streams document-tool invocations and results as safe guard-valid payloads", async () => {
@@ -983,59 +1106,38 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 		});
 
-		expect(appended).toEqual([
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_result",
+			"tool_call_result",
+		]);
+		expect(
+			payloadsOfKind(appended, "tool_call_args").map(({ delta }) =>
+				JSON.parse(delta),
+			),
+		).toEqual([{ query: "quarterly roadmap" }, { requestedCount: 2 }]);
+		expect(
+			payloadsOfKind(appended, "tool_call_result").map(({ content }) =>
+				JSON.parse(content),
+			),
+		).toEqual([
+			{ passages: [{ title: "Q3 Roadmap", snippet: "Launch milestones" }] },
 			{
-				kind: "tool_use",
-				payload: {
-					tool: "SearchDocuments",
-					arguments: { query: "quarterly roadmap" },
-					truncated: false,
-				},
-			},
-			{
-				kind: "tool_use",
-				payload: {
-					tool: "LoadDocuments",
-					arguments: { requestedCount: 2 },
-					truncated: false,
-				},
-			},
-			{
-				kind: "tool_result",
-				payload: {
-					tool: "SearchDocuments",
-					result: {
-						passages: [{ title: "Q3 Roadmap", snippet: "Launch milestones" }],
-					},
-					isError: false,
-					truncated: false,
-				},
-			},
-			{
-				kind: "tool_result",
-				payload: {
-					tool: "LoadDocuments",
-					result: {
-						loadedCount: 1,
-						loaded: [{ title: "Q3 Roadmap" }],
-						failedCount: 1,
-						failureSummary: "Some documents could not be loaded",
-					},
-					isError: false,
-					truncated: false,
-				},
+				loadedCount: 1,
+				loaded: [{ title: "Q3 Roadmap" }],
+				failedCount: 1,
+				failureSummary: "Some documents could not be loaded",
 			},
 		]);
-		for (const content of appended) {
-			if (content.kind === "tool_use") {
-				expect(isToolUsePayload(content.payload)).toBe(true);
-			} else if (content.kind === "tool_result") {
-				expect(isToolResultPayload(content.payload)).toBe(true);
-			}
-		}
 	});
 
 	it("appends only ordered tool uses for a textless envelope", async () => {
@@ -1055,10 +1157,15 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 		});
 
-		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+		]);
 	});
 
 	it("appends no tool event before message_stop commits the envelope", async () => {
@@ -1083,10 +1190,15 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query,
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 		});
 
-		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+		]);
 	});
 
 	it("ignores replay-flagged user messages entirely", async () => {
@@ -1111,11 +1223,16 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 			logger,
 		});
 
-		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+		]);
 		expect(warnings).toEqual([]);
 	});
 
@@ -1141,11 +1258,16 @@ describe("consumeAgentStream", () => {
 			runId: "run-1",
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 			logger,
 		});
 
-		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+		]);
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toMatchObject({ toolUseId: "toolu-unseen" });
 	});
@@ -1174,13 +1296,16 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 			logger,
 		});
 
 		expect(appended.map((content) => content.kind)).toEqual([
-			"tool_use",
-			"tool_result",
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_result",
 		]);
 		expect(warnings).toHaveLength(1);
 	});
@@ -1207,7 +1332,7 @@ describe("consumeAgentStream", () => {
 		const outcome = await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 			logger,
 		});
 
@@ -1221,6 +1346,7 @@ describe("consumeAgentStream", () => {
 
 	it("projects an error-flagged result as the fixed safe message", async () => {
 		const appended: ModelContent[] = [];
+		const liveEvents: Array<Record<string, unknown>> = [];
 		const messages = [
 			...toolEnvelope({
 				toolUses: [
@@ -1243,18 +1369,36 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
-		});
-
-		expect(appended[1]).toEqual({
-			kind: "tool_result",
-			payload: {
-				tool: "Bash",
-				result: { message: "Tool failed" },
-				isError: true,
-				truncated: false,
+			appendModelContents: captureModelContents(appended),
+			appendLiveEvent: async (event) => {
+				liveEvents.push(event as unknown as Record<string, unknown>);
 			},
 		});
+
+		const [result] = payloadsOfKind(appended, "tool_call_result");
+		expect(result).toEqual(
+			expect.objectContaining({
+				content: "Tool failed",
+				isError: true,
+			}),
+		);
+		expect(liveEvents.slice(-2)).toEqual([
+			{
+				type: EventType.TOOL_CALL_RESULT,
+				messageId: result?.messageId,
+				toolCallId: result?.toolCallId,
+				content: "Tool failed",
+				role: "tool",
+			},
+			{
+				type: EventType.CUSTOM,
+				name: "mymemo.tool_result_error",
+				value: {
+					messageId: result?.messageId,
+					toolCallId: result?.toolCallId,
+				},
+			},
+		]);
 	});
 
 	it("discards buffered tool blocks when the envelope is abandoned by abort", async () => {
@@ -1282,7 +1426,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: captureModelContent(appended),
+				appendModelContents: captureModelContents(appended),
 			}),
 		).rejects.toBeInstanceOf(QueryInterruptedError);
 
@@ -1315,11 +1459,16 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: captureModelContent(appended),
+				appendModelContents: captureModelContents(appended),
 			}),
 		).rejects.toBeInstanceOf(QueryInterruptedError);
 
-		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+		]);
 	});
 
 	it("stops appending tool events when shutdown aborts a stalled append", async () => {
@@ -1352,8 +1501,8 @@ describe("consumeAgentStream", () => {
 		const consuming = consumeAgentStream({
 			query,
 			signal: controller.signal,
-			appendModelContent: async (content) => {
-				appended.push(content);
+			appendModelContents: async (contents) => {
+				appended.push(...contents);
 				if (appended.length === 1) {
 					markAppendStarted();
 					await appendGate;
@@ -1367,7 +1516,9 @@ describe("consumeAgentStream", () => {
 
 		await expect(consuming).rejects.toBeInstanceOf(QueryInterruptedError);
 		expect(query.interrupts).toBe(1);
-		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+		]);
 	});
 
 	it("logs and omits a tool invocation with malformed required arguments", async () => {
@@ -1387,7 +1538,7 @@ describe("consumeAgentStream", () => {
 			runId: "run-1",
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 			logger,
 		});
 
@@ -1419,12 +1570,17 @@ describe("consumeAgentStream", () => {
 		const outcome = await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			signal: new AbortController().signal,
-			appendModelContent: captureModelContent(appended),
+			appendModelContents: captureModelContents(appended),
 		});
 
 		// No result is ever fabricated; the supervisor's terminal frame closes the
 		// stream after the resultless invocation.
-		expect(appended.map((content) => content.kind)).toEqual(["tool_use"]);
+		expect(appended.map((content) => content.kind)).toEqual([
+			"assistant_message",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+		]);
 		expect(outcome.sessionId).toBe("session-1");
 	});
 
@@ -1444,8 +1600,10 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query: fakeQuery(messages.map((message) => ({ message }))),
 				signal: new AbortController().signal,
-				appendModelContent: async (content) => {
-					if (content.kind === "tool_use") throw boom;
+				appendModelContents: async (contents) => {
+					if (contents.some(({ kind }) => kind === "tool_call_started")) {
+						throw boom;
+					}
 				},
 			}),
 		).rejects.toBe(boom);
@@ -1472,8 +1630,10 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query: fakeQuery(messages.map((message) => ({ message }))),
 				signal: new AbortController().signal,
-				appendModelContent: async (content) => {
-					if (content.kind === "tool_result") throw boom;
+				appendModelContents: async (contents) => {
+					if (contents.some(({ kind }) => kind === "tool_call_result")) {
+						throw boom;
+					}
 				},
 			}),
 		).rejects.toBe(boom);
@@ -1505,7 +1665,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query: fakeQuery(messages.map((message) => ({ message }))),
 				signal: new AbortController().signal,
-				appendModelContent: async () => {},
+				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
 	});
@@ -1524,7 +1684,7 @@ describe("consumeAgentStream", () => {
 			consumeAgentStream({
 				query,
 				signal: controller.signal,
-				appendModelContent: onAssistantCommit((message) =>
+				appendModelContents: onAssistantCommit((message) =>
 					appended.push(message),
 				),
 			}),

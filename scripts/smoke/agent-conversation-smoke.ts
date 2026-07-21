@@ -33,8 +33,11 @@ const TURN_HISTORY_EVENT_TYPES = [
 	"run_id",
 	"text_delta",
 	"text_commit",
-	"tool_use",
-	"tool_result",
+	"TOOL_CALL_START",
+	"TOOL_CALL_ARGS",
+	"TOOL_CALL_END",
+	"TOOL_CALL_RESULT",
+	"CUSTOM",
 ] as const;
 
 const TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -60,7 +63,12 @@ interface TurnResult {
 
 interface DurableToolFrame {
 	id?: string;
-	event: "tool_use" | "tool_result";
+	event:
+		| "TOOL_CALL_START"
+		| "TOOL_CALL_ARGS"
+		| "TOOL_CALL_END"
+		| "TOOL_CALL_RESULT"
+		| "CUSTOM";
 	data: unknown;
 }
 
@@ -437,44 +445,55 @@ function requireToolHistory(
 	label: string,
 	expected: ExpectedToolExchange[],
 ): void {
-	const expectedFrames = expected.flatMap(
-		({ tool, arguments: expectedArguments, result }) =>
-			[
-				{
-					event: "tool_use",
-					data: {
-						type: "tool_use",
-						tool,
-						arguments: expectedArguments,
-						truncated: false,
-					},
-				},
-				{
-					event: "tool_result",
-					data: {
-						type: "tool_result",
-						tool,
-						result,
-						isError: false,
-						truncated: false,
-					},
-				},
-			] satisfies Array<{ event: DurableToolFrame["event"]; data: unknown }>,
-	);
-	const actualFrames = turn.toolFrames.map(({ event, data }) => ({
-		event,
-		data,
-	}));
-	if (!isDeepStrictEqual(actualFrames, expectedFrames)) {
-		const actualTools = turn.toolFrames.flatMap((frame) =>
-			frame.event === "tool_use" &&
-			typeof frame.data === "object" &&
-			frame.data !== null &&
-			"tool" in frame.data &&
-			typeof frame.data.tool === "string"
-				? [frame.data.tool]
-				: [],
+	const actualTools: string[] = [];
+	let valid = turn.toolFrames.length === expected.length * 4;
+	for (const [index, exchange] of expected.entries()) {
+		const [start, args, end, result] = turn.toolFrames.slice(
+			index * 4,
+			index * 4 + 4,
 		);
+		if (
+			!start ||
+			!args ||
+			!end ||
+			!result ||
+			start.event !== "TOOL_CALL_START" ||
+			args.event !== "TOOL_CALL_ARGS" ||
+			end.event !== "TOOL_CALL_END" ||
+			result.event !== "TOOL_CALL_RESULT"
+		) {
+			valid = false;
+			continue;
+		}
+		const startData = recordData(start.data);
+		const argsData = recordData(args.data);
+		const endData = recordData(end.data);
+		const resultData = recordData(result.data);
+		const toolCallId = startData.toolCallId;
+		if (typeof startData.toolCallName === "string") {
+			actualTools.push(startData.toolCallName);
+		}
+		let projectedArguments: unknown;
+		let projectedResult: unknown;
+		try {
+			projectedArguments = JSON.parse(String(argsData.delta));
+			projectedResult = JSON.parse(String(resultData.content));
+		} catch {
+			valid = false;
+		}
+		valid &&=
+			typeof toolCallId === "string" &&
+			startData.toolCallName === exchange.tool &&
+			typeof startData.parentMessageId === "string" &&
+			argsData.toolCallId === toolCallId &&
+			endData.toolCallId === toolCallId &&
+			resultData.toolCallId === toolCallId &&
+			typeof resultData.messageId === "string" &&
+			resultData.role === "tool" &&
+			isDeepStrictEqual(projectedArguments, exchange.arguments) &&
+			isDeepStrictEqual(projectedResult, exchange.result);
+	}
+	if (!valid) {
 		throw new Error(
 			`${label} Run did not record the required Tool invocations and successful results: expected ${expected.map(({ tool }) => tool).join(", ")}; got ${actualTools.join(", ") || "none"}`,
 		);
@@ -546,13 +565,13 @@ async function verifyRunningRunCancellation(
 				throw new Error("interrupt-check run_id frame had no durable cursor");
 			}
 		}
-		if (frame.event === "tool_use" && !interruptSent) {
+		if (frame.event === "TOOL_CALL_START" && !interruptSent) {
 			if (!runId) {
 				throw new Error(
 					"Tool invocation arrived before the interrupt-check run id",
 				);
 			}
-			const tool = stringField(frame, "tool");
+			const tool = stringField(frame, "toolCallName");
 			if (tool !== "Bash") {
 				throw new Error(
 					`interrupt-check first Tool invocation was ${tool}, expected Bash`,
@@ -571,7 +590,7 @@ async function verifyRunningRunCancellation(
 	const events = frames.map((frame) => frame.event);
 	const conversationIndex = events.indexOf("conversation_id");
 	const runIndex = events.indexOf("run_id");
-	const toolUseIndex = events.indexOf("tool_use");
+	const toolUseIndex = events.indexOf("TOOL_CALL_START");
 	if (
 		conversationIndex < 0 ||
 		runIndex < 0 ||
@@ -612,7 +631,7 @@ async function verifyRunningRunCancellation(
 	}
 	if (
 		!snapshot.toolEvents.some(
-			(event) => event.kind === "tool_use" && event.tool === "Bash",
+			(event) => event.kind === "tool_call_start" && event.tool === "Bash",
 		)
 	) {
 		throw new Error("client fixture did not retain the Bash Tool invocation");
@@ -861,8 +880,8 @@ async function replayTurn(expectation: ReplayExpectation): Promise<void> {
 			"durable reconnect did not replay the exact committed messages",
 		);
 	}
-	// Tool events are durable run events too: a reconnect replays exactly the
-	// invocations and results the live stream showed, in order (ADR-0009).
+	// Tool lifecycle events are durable run events too: reconnect replays the
+	// exact correlated frames the original stream showed, in order (ADR-0012).
 	if (!isDeepStrictEqual(durableToolFrames(frames), expectation.toolFrames)) {
 		throw new Error("durable reconnect did not replay the exact Tool events");
 	}
@@ -870,7 +889,15 @@ async function replayTurn(expectation: ReplayExpectation): Promise<void> {
 
 function durableToolFrames(frames: SSEFrame[]): DurableToolFrame[] {
 	return frames.flatMap((frame) => {
-		if (frame.event !== "tool_use" && frame.event !== "tool_result") return [];
+		if (
+			frame.event !== "TOOL_CALL_START" &&
+			frame.event !== "TOOL_CALL_ARGS" &&
+			frame.event !== "TOOL_CALL_END" &&
+			frame.event !== "TOOL_CALL_RESULT" &&
+			frame.event !== "CUSTOM"
+		) {
+			return [];
+		}
 		return [
 			{
 				id: frame.id,
@@ -879,6 +906,12 @@ function durableToolFrames(frames: SSEFrame[]): DurableToolFrame[] {
 			},
 		];
 	});
+}
+
+function recordData(value: unknown): Record<string, unknown> {
+	return typeof value === "object" && value !== null
+		? (value as Record<string, unknown>)
+		: {};
 }
 
 async function readSSEIncrementally(

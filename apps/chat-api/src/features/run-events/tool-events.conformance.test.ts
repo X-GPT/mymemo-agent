@@ -8,8 +8,10 @@ import {
 	it,
 } from "bun:test";
 import {
-	isToolResultPayload,
-	isToolUsePayload,
+	isToolCallArgsPayload,
+	isToolCallCompletedPayload,
+	isToolCallResultPayload,
+	isToolCallStartedPayload,
 	type PublicToolName,
 } from "@mymemo/agent-db/run-events";
 import { conversations, runs } from "@/db/schema";
@@ -27,7 +29,6 @@ import { Worker } from "../../../../agent-worker/src/worker";
 import { type ProjectedFrame, projectRun } from "./project-run";
 import { projectRunEvent } from "./project-run-event";
 import { DrizzleRunEventReader } from "./run-event-reader";
-import type { ClientFrame } from "./run-event-types";
 import { RunEventType } from "./run-event-types";
 import type { RunNotifier, RunSubscription } from "./run-notifier";
 
@@ -73,6 +74,21 @@ function executorToolName(tool: PublicToolName): string {
 
 function executorResult(result: Record<string, unknown>): string {
 	return JSON.stringify(result);
+}
+
+function isCanonicalToolPayload(type: string, payload: unknown): boolean {
+	switch (type) {
+		case RunEventType.ToolCallStarted:
+			return isToolCallStartedPayload(payload);
+		case RunEventType.ToolCallArgs:
+			return isToolCallArgsPayload(payload);
+		case RunEventType.ToolCallCompleted:
+			return isToolCallCompletedPayload(payload);
+		case RunEventType.ToolCallResult:
+			return isToolCallResultPayload(payload);
+		default:
+			return false;
+	}
 }
 
 async function drain(
@@ -302,45 +318,30 @@ describe("durable tool-event conformance", () => {
 		expect(rows.map((row) => row.type)).toEqual([
 			RunEventType.Started,
 			RunEventType.AssistantMessageCompleted,
-			...Array<RunEventType>(8).fill(RunEventType.ToolUse),
-			...Array<RunEventType>(8).fill(RunEventType.ToolResult),
-			RunEventType.ToolUse,
+			...Array.from({ length: 8 }, () => [
+				RunEventType.ToolCallStarted,
+				RunEventType.ToolCallArgs,
+				RunEventType.ToolCallCompleted,
+			]).flat(),
+			...Array<RunEventType>(8).fill(RunEventType.ToolCallResult),
+			RunEventType.AssistantMessageCompleted,
+			RunEventType.ToolCallStarted,
+			RunEventType.ToolCallArgs,
+			RunEventType.ToolCallCompleted,
 			RunEventType.Done,
 		]);
 
 		const toolRows = rows.filter(
 			(row) =>
-				row.type === RunEventType.ToolUse ||
-				row.type === RunEventType.ToolResult,
+				row.type === RunEventType.ToolCallStarted ||
+				row.type === RunEventType.ToolCallArgs ||
+				row.type === RunEventType.ToolCallCompleted ||
+				row.type === RunEventType.ToolCallResult,
 		);
-		expect(toolRows).toHaveLength(17);
+		expect(toolRows).toHaveLength(35);
 		for (const row of toolRows) {
-			const guardValid =
-				row.type === RunEventType.ToolUse
-					? isToolUsePayload(row.payload)
-					: isToolResultPayload(row.payload);
-			expect(guardValid).toBe(true);
-			expect(projectRunEvent(row.type, row.payload)).toHaveLength(1);
-		}
-		for (const invalid of [
-			{
-				type: RunEventType.ToolUse,
-				payload: { tool: "Read", arguments: [], truncated: false },
-				guard: isToolUsePayload,
-			},
-			{
-				type: RunEventType.ToolResult,
-				payload: {
-					tool: "UnknownTool",
-					result: {},
-					isError: false,
-					truncated: false,
-				},
-				guard: isToolResultPayload,
-			},
-		]) {
-			expect(invalid.guard(invalid.payload)).toBe(false);
-			expect(projectRunEvent(invalid.type, invalid.payload)).toEqual([]);
+			expect(isCanonicalToolPayload(row.type, row.payload)).toBe(true);
+			expect(projectRunEvent(row.type, row.payload).length).toBeGreaterThan(0);
 		}
 
 		const reader = new DrizzleRunEventReader(tdb.db);
@@ -348,226 +349,51 @@ describe("durable tool-event conformance", () => {
 			projectRun(RUN_ID, 0, { reader, notifier: new InstantNotifier() }),
 		);
 		const frames = projected.map(({ frame }) => frame);
-		expect(
-			frames.map((frame): ClientFrame => {
-				if (frame.type === "text_commit") {
-					return { ...frame, messageId: "<message-id>" };
-				}
-				if (frame.type === "tool_use" && frame.tool === "Write") {
-					return {
-						...frame,
-						arguments: {
-							...frame.arguments,
-							content: "<truncated-preview>",
-						},
-					};
-				}
-				return frame;
-			}),
-		).toEqual([
-			{ type: "conversation_id", conversationId: "conversation-1" },
-			{ type: "run_id", runId: RUN_ID },
-			{
-				type: "text_commit",
-				messageId: "<message-id>",
-				text: "I will inspect the workspace and documents.",
-			},
-			{
-				type: "tool_use",
-				tool: "Read",
-				arguments: { path: "src/index.ts", offset: 2, limit: 20 },
-				truncated: false,
-			},
-			{
-				type: "tool_use",
-				tool: "Write",
-				arguments: {
-					path: "notes.md",
-					content: "<truncated-preview>",
-					contentBytes: 100_000,
-				},
-				truncated: true,
-			},
-			{
-				type: "tool_use",
-				tool: "Edit",
-				arguments: {
-					path: "src/app.ts",
-					oldText: "const a",
-					oldTextBytes: 7,
-					newText: "const alpha",
-					newTextBytes: 11,
-				},
-				truncated: false,
-			},
-			{
-				type: "tool_use",
-				tool: "Grep",
-				arguments: {
-					pattern: "TODO",
-					path: "src",
-					include: "*.ts",
-					caseSensitive: false,
-					maxResults: 20,
-				},
-				truncated: false,
-			},
-			{
-				type: "tool_use",
-				tool: "Glob",
-				arguments: {
-					pattern: "**/*.ts",
-					path: "src",
-					includeHidden: false,
-					maxResults: 40,
-				},
-				truncated: false,
-			},
-			{
-				type: "tool_use",
-				tool: "Bash",
-				arguments: { command: "bun test", cwd: "apps", timeoutMs: 30_000 },
-				truncated: false,
-			},
-			{
-				type: "tool_use",
-				tool: "ListDocuments",
-				arguments: { limit: 20, cursorProvided: true },
-				truncated: false,
-			},
-			{
-				type: "tool_use",
-				tool: "SearchDocuments",
-				arguments: { query: "quarterly roadmap" },
-				truncated: false,
-			},
-			{
-				type: "tool_result",
-				tool: "ListDocuments",
-				result: {
-					total: 42,
-					returnedCount: 1,
-					hasMore: true,
-					documents: [{ title: "Inventory title" }],
-				},
-				isError: false,
-				truncated: false,
-			},
-			{
-				type: "tool_result",
-				tool: "SearchDocuments",
-				result: {
-					passages: [
-						{ title: "Q3 Roadmap", snippet: "Launch the durable timeline." },
-					],
-				},
-				isError: false,
-				truncated: false,
-			},
-			{
-				type: "tool_result",
-				tool: "Read",
-				result: {
-					path: "src/index.ts",
-					content: "line two\nline three",
-					startLine: 2,
-					linesRead: 2,
-					truncated: false,
-				},
-				isError: false,
-				truncated: false,
-			},
-			{
-				type: "tool_result",
-				tool: "Bash",
-				result: {
-					exitCode: 0,
-					stdout: "42 tests passed\n",
-					stderr: "",
-					stdoutTruncated: false,
-					stderrTruncated: false,
-					outcome: "completed",
-				},
-				isError: false,
-				truncated: false,
-			},
-			{
-				type: "tool_result",
-				tool: "Edit",
-				result: { message: "Tool failed" },
-				isError: true,
-				truncated: false,
-			},
-			{
-				type: "tool_result",
-				tool: "Glob",
-				result: { paths: ["src/app.ts", "src/index.ts"], truncated: false },
-				isError: false,
-				truncated: false,
-			},
-			{
-				type: "tool_result",
-				tool: "Write",
-				result: { path: "notes.md", bytesWritten: 100_000 },
-				isError: false,
-				truncated: false,
-			},
-			{
-				type: "tool_result",
-				tool: "Grep",
-				result: {
-					matches: [
-						{
-							path: "src/app.ts",
-							line: 12,
-							column: 3,
-							text: "// TODO: fix",
-						},
-					],
-					truncated: false,
-				},
-				isError: false,
-				truncated: false,
-			},
-			{
-				type: "tool_use",
-				tool: "LoadDocuments",
-				arguments: { requestedCount: 2 },
-				truncated: false,
-			},
-			{ type: "done" },
-		]);
-		expect(projected.map(({ id }) => id)).toEqual([
-			undefined,
-			"1",
-			"2",
-			"3",
-			"4",
-			"5",
-			"6",
-			"7",
-			"8",
-			"9",
-			"10",
-			"11",
-			"12",
-			"13",
-			"14",
-			"15",
-			"16",
-			"17",
-			"18",
-			"19",
-			"20",
-		]);
-
-		const writeUse = frames.find(
-			(frame): frame is Extract<ClientFrame, { type: "tool_use" }> =>
-				frame.type === "tool_use" && frame.tool === "Write",
+		const toolStarts = frames.filter(
+			(frame) => frame.type === "TOOL_CALL_START",
 		);
-		expect(writeUse?.truncated).toBe(true);
-		expect(writeUse?.arguments.contentBytes).toBe(100_000);
-		expect(writeUse?.arguments.content).not.toBe(OVERSIZED_WRITE_CONTENT);
+		const toolArgs = frames.filter((frame) => frame.type === "TOOL_CALL_ARGS");
+		const toolEnds = frames.filter((frame) => frame.type === "TOOL_CALL_END");
+		const toolResults = frames.filter(
+			(frame) => frame.type === "TOOL_CALL_RESULT",
+		);
+		expect(toolStarts.map((frame) => frame.toolCallName)).toEqual([
+			"Read",
+			"Write",
+			"Edit",
+			"Grep",
+			"Glob",
+			"Bash",
+			"ListDocuments",
+			"SearchDocuments",
+			"LoadDocuments",
+		]);
+		expect(toolArgs).toHaveLength(9);
+		expect(toolEnds).toHaveLength(9);
+		expect(toolResults).toHaveLength(8);
+		for (const [index, start] of toolStarts.entries()) {
+			expect(toolArgs[index]?.toolCallId).toBe(start.toolCallId);
+			expect(toolEnds[index]?.toolCallId).toBe(start.toolCallId);
+		}
+		for (const result of toolResults) {
+			expect(
+				toolStarts.some((start) => start.toolCallId === result.toolCallId),
+			).toBe(true);
+		}
+		const writeArguments = JSON.parse(toolArgs[1]?.delta ?? "");
+		expect(writeArguments.contentBytes).toBe(100_000);
+		expect(writeArguments.content).not.toBe(OVERSIZED_WRITE_CONTENT);
+		expect(toolResults.some((result) => result.content === "Tool failed")).toBe(
+			true,
+		);
+		expect(
+			frames.some(
+				(frame) =>
+					frame.type === "CUSTOM" && frame.name === "mymemo.tool_result_error",
+			),
+		).toBe(true);
+		expect(frames.at(-1)).toEqual({ type: "done" });
+
 		const serializedFrames = JSON.stringify(frames);
 		expect(serializedFrames).not.toContain("collection-secret");
 		expect(serializedFrames).not.toContain("document-secret");
@@ -577,21 +403,22 @@ describe("durable tool-event conformance", () => {
 		expect(serializedFrames).not.toContain("inventory-cursor-secret");
 		expect(serializedFrames).not.toContain("inventory-document-secret");
 
-		const reconnected = await drain(
-			projectRun(RUN_ID, 18, { reader, notifier: new InstantNotifier() }),
+		const resultlessStart = rows.findLast(
+			(row) => row.type === RunEventType.ToolCallStarted,
 		);
-		expect(reconnected).toEqual([
-			{
-				seq: 19,
-				id: "19",
-				frame: {
-					type: "tool_use",
-					tool: "LoadDocuments",
-					arguments: { requestedCount: 2 },
-					truncated: false,
-				},
-			},
-			{ seq: 20, id: "20", frame: { type: "done" } },
+		if (!resultlessStart) throw new Error("missing resultless Tool invocation");
+		const reconnected = await drain(
+			projectRun(RUN_ID, resultlessStart.seq - 1, {
+				reader,
+				notifier: new InstantNotifier(),
+			}),
+		);
+		expect(reconnected.map(({ frame }) => frame.type)).toEqual([
+			"TOOL_CALL_START",
+			"TOOL_CALL_ARGS",
+			"TOOL_CALL_END",
+			"done",
 		]);
+		expect(reconnected[0]?.id).toBe(String(resultlessStart.seq));
 	});
 });

@@ -17,11 +17,9 @@
  * the client stream (see the design doc's client contract).
  */
 
-import type { PublicToolName } from "@mymemo/agent-db/run-events";
 import { RunEventType } from "@mymemo/agent-db/run-events";
 
 export { RunEventType };
-export type { PublicToolName };
 
 /**
  * The terminal event types. When the projector reads one of these it emits the
@@ -37,9 +35,10 @@ export const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
 
 /**
  * The client-visible SSE frames. `type` is also the SSE `event:` name. This is
- * the Postgres-only client vocabulary — `conversation_id`, `run_id`, the
- * authoritative `text_commit`, the append-only `tool_use`/`tool_result`
- * items (ADR-0009), and one terminal frame per outcome.
+ * the Postgres projection vocabulary — `conversation_id`, `run_id`, the
+ * authoritative `text_commit`, standard correlated AG-UI Tool lifecycle
+ * events, namespaced compatibility `CUSTOM` events, and one terminal frame per
+ * outcome (ADR-0012).
  */
 export type ClientFrame =
 	| { type: "conversation_id"; conversationId: string }
@@ -52,18 +51,21 @@ export type ClientFrame =
 	  }
 	| { type: "text_commit"; messageId: string; text: string }
 	| {
-			type: "tool_use";
-			tool: PublicToolName;
-			arguments: Record<string, unknown>;
-			truncated: boolean;
+			type: "TOOL_CALL_START";
+			toolCallId: string;
+			toolCallName: string;
+			parentMessageId: string;
 	  }
+	| { type: "TOOL_CALL_ARGS"; toolCallId: string; delta: string }
+	| { type: "TOOL_CALL_END"; toolCallId: string }
 	| {
-			type: "tool_result";
-			tool: PublicToolName;
-			result: Record<string, unknown>;
-			isError: boolean;
-			truncated: boolean;
+			type: "TOOL_CALL_RESULT";
+			messageId: string;
+			toolCallId: string;
+			content: string;
+			role: "tool";
 	  }
+	| { type: "CUSTOM"; name: string; value: unknown }
 	| { type: "done" }
 	| { type: "canceled" }
 	| { type: "error"; message: string };

@@ -658,29 +658,37 @@ describe("RunLoop — stale-run recovery", () => {
 describe("RunLoop — model-content append", () => {
 	it("maps each model-content kind to its durable event type", async () => {
 		const worker = buildWorker(1);
-		// One turn recording a Tool invocation, its result, then the Assistant
-		// message — the loop, not the processor, owns the kind→type mapping.
+		// One turn recording an Assistant message, a Tool invocation, and its result;
+		// the loop, not the processor, owns the kind→type mapping.
 		const loop = buildLoop(worker, async (ctx) => {
-			await ctx.appendModelContent({
-				kind: "tool_use",
-				payload: {
-					tool: "Bash",
-					arguments: { command: "ls" },
-					truncated: false,
-				},
-			});
-			await ctx.appendModelContent({
-				kind: "tool_result",
-				payload: {
-					tool: "Bash",
-					result: { exitCode: 0 },
-					isError: false,
-					truncated: false,
-				},
-			});
 			await ctx.appendModelContent({
 				kind: "assistant_message",
 				payload: { messageId: "message-1", text: "listed" },
+			});
+			await ctx.appendModelContent({
+				kind: "tool_call_started",
+				payload: {
+					toolCallId: "tool-1",
+					toolCallName: "Bash",
+					parentMessageId: "message-1",
+				},
+			});
+			await ctx.appendModelContent({
+				kind: "tool_call_args",
+				payload: { toolCallId: "tool-1", delta: '{"command":"ls"}' },
+			});
+			await ctx.appendModelContent({
+				kind: "tool_call_completed",
+				payload: { toolCallId: "tool-1" },
+			});
+			await ctx.appendModelContent({
+				kind: "tool_call_result",
+				payload: {
+					messageId: "tool-result-1",
+					toolCallId: "tool-1",
+					content: '{"exitCode":0}',
+					isError: false,
+				},
 			});
 		});
 		await queueRun("run-1", "conv-1");
@@ -695,21 +703,21 @@ describe("RunLoop — model-content append", () => {
 			.where(eq(runEvents.runId, "run-1"))
 			.orderBy(runEvents.seq);
 		expect(events.map((e) => e.type)).toEqual([
-			"tool_use",
-			"tool_result",
 			"assistant_message_completed",
+			"tool_call_started",
+			"tool_call_args",
+			"tool_call_completed",
+			"tool_call_result",
 			"run_done",
 		]);
 		expect(events[0]?.payload).toEqual({
-			tool: "Bash",
-			arguments: { command: "ls" },
-			truncated: false,
+			messageId: "message-1",
+			text: "listed",
 		});
 		expect(events[1]?.payload).toEqual({
-			tool: "Bash",
-			result: { exitCode: 0 },
-			isError: false,
-			truncated: false,
+			toolCallId: "tool-1",
+			toolCallName: "Bash",
+			parentMessageId: "message-1",
 		});
 	});
 });
