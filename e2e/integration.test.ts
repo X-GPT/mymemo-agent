@@ -933,8 +933,10 @@ describe.skipIf(!RUN)(
 					).toEqual([
 						"run_started",
 						"assistant_message_completed",
-						"tool_use",
-						"tool_result",
+						"tool_call_started",
+						"tool_call_args",
+						"tool_call_completed",
+						"tool_call_result",
 						"run_done",
 					]);
 
