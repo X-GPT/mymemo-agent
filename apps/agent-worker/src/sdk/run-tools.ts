@@ -262,5 +262,8 @@ export function createRunMcpServer(
 	return createSdkMcpServer({
 		name: EXECUTOR_SERVER_NAME,
 		tools: buildRunTools(deps),
+		// The SDK can defer MCP connections. Every executor tool must be
+		// available to the model on its first turn.
+		alwaysLoad: true,
 	});
 }

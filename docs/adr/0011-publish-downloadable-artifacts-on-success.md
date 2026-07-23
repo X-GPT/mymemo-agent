@@ -8,7 +8,7 @@ text file tools or Bash. Only files deliberately placed in a reserved
 `artifacts/` subtree are downloadable artifacts. After agent execution
 completes successfully, the worker publishes the subtree's files created or
 changed by that run to durable object storage and persists their metadata before
-terminalizing the run as `done`; running, errored, and canceled runs publish
+terminalizing the run as `done`; running, errored, and interrupted runs publish
 nothing. This trades away recovery of incomplete outputs so clients never list
 partial files and a `done` outcome means every artifact change detected for that
 run is durable and downloadable.
@@ -21,10 +21,10 @@ successful-run boundary over the reserved tree, not an extra tool call the
 model can forget.
 
 Artifact manifesting and upload remain inside the supervised run lifecycle,
-while sandbox renewal and ownership heartbeats are active. Cancellation keeps
-its existing priority until the terminal-success transaction commits: it aborts
+while sandbox renewal and ownership heartbeats are active. Run interruption
+keeps its existing priority until the terminal-success transaction commits: it aborts
 in-progress uploads, leaves current artifact metadata unchanged, terminalizes
-the run as `canceled`, and leaves any uploaded object keys for ledger-driven
+the run as `interrupted`, and leaves any uploaded object keys for ledger-driven
 cleanup.
 
 An artifact is the conversation's current file at one normalized relative path,
@@ -126,7 +126,7 @@ and presigned URLs are not list metadata.
 No artifact-specific SSE frame is added. Artifact metadata changes and
 `run_done` are committed in the same Postgres transaction, so after
 `mymemo-web` receives `done` it refreshes the list endpoint and observes the
-authoritative current set. An errored or canceled run emits no refresh promise.
+authoritative current set. An errored or interrupted run emits no refresh promise.
 
 List and download requests parse the trusted identity headers and authorize the
 conversation owner before looking up artifacts. A missing or foreign

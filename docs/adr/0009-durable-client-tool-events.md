@@ -17,7 +17,7 @@ by ADR-0008.
 The two frames are append-only and self-describing rather than updates to a
 shared client object. They expose the short public tool name but no tool-call
 correlation id; the worker may use the SDK id internally to associate a result
-with its tool. A run may terminate with `canceled` or `error` after `tool_use`
+with its tool. A run may terminate with `interrupted` or `error` after `tool_use`
 without a matching `tool_result` rather than fabricating a result.
 
 ```ts
