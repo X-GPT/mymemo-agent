@@ -54,7 +54,7 @@ provisional Live preview from authoritative Assistant-message storage.
   run: the completed-block aggregate still commits and replaces the inaccurate
   preview, the worker records a payload-free mismatch metric, and live preview
   stays disabled for the rest of that run.
-- `message_stop` is the only event that may commit an envelope. Cancel,
+- `message_stop` is the only event that may commit an envelope. Run interruption,
   ownership loss, shutdown, an SDK error result, or iterator rejection abandons
   the open assembler and ignores its late events; no accumulated partial or
   completed-block prefix is persisted. A clean iterator end with an open
@@ -100,7 +100,7 @@ provisional Live preview from authoritative Assistant-message storage.
   that message, even if cross-transport reordering delivers one. Clients may
   enforce the same rule defensively, but correctness does not depend on them.
 - Every terminal frame discards any uncommitted preview. For `error` and
-  `canceled`, this is the normal fate of an interrupted assistant message. A
+  `interrupted`, this is the normal fate of an interrupted assistant message. A
   `done` with an uncommitted preview is an invariant violation that chat-api
   records before discarding it. Partial text is never retained in the
   user-visible history when no corresponding durable Run event exists;
@@ -192,7 +192,7 @@ provider-envelope model above. A deterministic envelope-assembler prototype
 then passed the replacement gate across five captured SDK shapes and seven
 synthetic valid or malformed fixtures. It verified that the design can:
 
-- replay the captured normal, tool, text-empty, cancellation, and SDK-error
+- replay the captured normal, tool, text-empty, interruption, and SDK-error
   sequences from the live spike;
 - process a synthetic valid envelope with multiple text blocks interleaved with
   a tool block;
