@@ -29,7 +29,9 @@ import {
  * Task 7.2: "use a fake SDK stream for deterministic unit tests").
  */
 export type SupervisedQuery = AsyncIterable<SDKMessage> & {
-	interrupt(): Promise<void>;
+	// The SDK returns a control receipt from `interrupt()`; supervision only
+	// needs to await completion, not inspect that receipt.
+	interrupt(): Promise<unknown>;
 };
 
 /**
