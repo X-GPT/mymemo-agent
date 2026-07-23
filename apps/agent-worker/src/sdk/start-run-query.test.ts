@@ -104,6 +104,7 @@ async function createClaimedRun(input: {
 			userId: USER_ID,
 			conversationId: input.conversationId,
 			runId: input.runId,
+			messageId: `${input.runId}-message`,
 			message: input.message ?? "hello agent",
 			scope: input.scope ?? "general",
 			collectionId: input.collectionId ?? null,
