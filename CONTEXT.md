@@ -72,19 +72,19 @@ Stream after it commits, but Assistant text deltas are Live Stream entries and
 not Run events.
 
 **Live Stream**:
-The temporary, ordered Redis Stream that carries every standard AG-UI event for
-one active Run. Its entry ids are transport replay cursors: a transient
-reconnect continues after its last id, while a full refresh reconstructs the
-active Run from the beginning. A healthy Live Stream is kept alive and
-untrimmed while its Run is active and retained for 30 minutes after the
-Outcome; a failed Live Stream is retained for at most 30 minutes after being
-declared unavailable. Permanent Conversation history comes from Run events.
-_Avoid_: Live preview, Pub/Sub channel, Conversation history
+The temporary, ordered sequence of standard AG-UI events for one active Run,
+buffered in the producing worker's memory and relayed event-by-event over Redis
+pub/sub. No stream content is stored in Redis: a reader attaches by requesting
+the full backlog from the living producer, and every reconnect rebuilds the
+active Run from that backlog. The Live Stream ends with the Run's Outcome and
+dies with its producer; after either, permanent Conversation history is the
+only source.
+_Avoid_: Live preview, retained stream, replay cursor, Conversation history
 
 **Reconnecting**:
-Resuming consumption of a usable Live Stream after a transient transport
-interruption, continuing after the last observed cursor.
-_Avoid_: Recovering
+Re-attaching to a usable Live Stream after a transient transport interruption,
+rebuilding the active Run from its full backlog.
+_Avoid_: Recovering, resuming after a cursor
 
 **Recovering**:
 Waiting for permanent Conversation history after a Live Stream becomes
@@ -115,9 +115,8 @@ _Avoid_: Conversation API, Assistant Cloud
 
 **Assistant text delta**:
 A bounded, provisional fragment of Assistant text appended to the Run's Live
-Stream before the provider response completes. Its Redis Stream entry id is its
-temporary replay cursor. It is never copied into Postgres as a delta row and
-may disappear after the Live Stream expires.
+Stream before the provider response completes. It is never copied into Postgres
+as a delta row and may disappear when the Live Stream ends.
 _Avoid_: Run event, durable message, token
 
 **Assistant message**:
