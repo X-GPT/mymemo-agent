@@ -2,6 +2,9 @@
 
 Status: accepted
 
+Amended by
+[ADR-0013](./0013-interrupt-runs-without-ending-conversation-continuity.md).
+
 In the split runtime the Claude Agent SDK runs in Fargate workers, its
 session transcripts are worker-local disk files, and a conversation is not
 pinned to a worker — so the prototype's implicit continuity story (SDK
@@ -24,25 +27,28 @@ per-conversation resume pointer stored in `conversation_runtime`.
   and breaks scale-in and crash recovery.
 - **Reconstruct history from `run_events` each turn** — rejected: lossy
   (drops tool-call context), re-implements what the SDK's documented
-  `SessionStore` interface (with a Postgres reference adapter and
-  conformance suite) already provides.
+  `SessionStore` interface already provides.
 - **SDK `SessionStore` on Postgres** (chosen).
 
 ## Consequences
 
-- `conversation_runtime` regains `agent_session_id` as the resume pointer.
-  It advances only in the run's terminal-success transition, under the same
-  ownership fence as other runtime metadata — a stale worker cannot move it.
-  Stale-worker transcript appends land under that worker's own session key
-  and are harmless orphans.
-- Mirror writes are best-effort: if any `mirror_error` occurred during a
-  run, the pointer does not advance. The run still succeeds for the user;
-  the next turn resumes from the previous session and loses only that
-  turn's model-side memory (the user-visible history in `run_events` is
-  unaffected).
-- Retention is ours: conversation deletion must delete the conversation's
-  transcripts from the session store; superseded session transcripts are
-  cleaned up by the same periodic cleanup that owns snapshots.
+- `conversation_runtime.agent_session_id` is the resume pointer. Once
+  established, later Runs directly continue under that same session id. A first
+  pointer is written only inside an ownership-fenced `done` or `interrupted`
+  terminal transaction, after at least one main-session entry was mirrored
+  successfully. Recovery never establishes or changes it.
+- Every SDK transcript append or delete is atomically fenced by the active Run's
+  status, `locked_by`, and unexpired `locked_until`. A stale worker cannot mutate
+  the shared session after losing its ownership lease.
+- A `mirror_error` is fatal rather than best-effort: it stops model and Tool
+  execution and makes a still-running Run end as `error`. A user interruption
+  already committed in Postgres still wins and ends as `interrupted`. A mirror
+  error cannot establish a first pointer; an existing pointer and any accepted
+  transcript tail remain for Claude Code to handle on resume.
+- Transcript writes continue directly without staging, per-Run forks, or
+  rollback. Rows written before any first pointer is established are inert and
+  remain until Conversation deletion, which deletes all of the Conversation's
+  session transcripts.
 - The worker must run each query with a deterministic, conversation-stable
   working directory so the store's `projectKey` is identical across workers
   and turns.

@@ -67,7 +67,8 @@ all real. Three findings amend the wiring and are binding on it:
   never held open.** `interrupt()` halts a string-prompt turn and the stream
   self-terminates in ~3 s, ending with an `is_error` result whose text is
   internal diagnostics and a thrown stream error — which `RunLoop.finish`
-  already remaps to `canceled` (cancellation wins over failure). With a
+  remaps to `interrupted` after a durable user request (interruption wins over
+  failure). With a
   held-open streaming input, generation halts but the stream **never ends**
   and the consuming worker would hang until stale-run recovery.
 

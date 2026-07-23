@@ -46,10 +46,23 @@ conversation is active at a time, and in v1 a run executes at most once —
 never requeued or automatically retried.
 _Avoid_: job, task, attempt
 
+**Run interruption**:
+A user-requested end to one queued or running Run that leaves its Conversation,
+Agent session, and Workspace available for later Runs. Once accepted before
+another Outcome, interruption wins the Run's Outcome and prevents Downloadable
+artifact publication.
+_Avoid_: cancellation, Conversation termination, HITL interrupt
+
 **Claim**:
 Taking exclusive execution ownership of a queued run. A v1 run is claimed at
 most once; a stale run is terminalized, never reclaimed.
-_Avoid_: lease (that word belongs to the decommissioned prototype path)
+_Avoid_: job reservation
+
+**Ownership lease**:
+The time-bounded write authority a worker receives by claiming a Run, represented
+by `locked_by` and `locked_until` and renewed by heartbeat. After expiry, that
+worker's fenced writes are rejected and recovery may terminalize the stale Run.
+_Avoid_: sandbox lease (the decommissioned prototype concept)
 
 **Run event**:
 One record in a Run's durable, ordered Postgres event log — the source of truth
@@ -85,7 +98,10 @@ Tool activity, and Outcomes across a Conversation. It lasts as long as the
 Conversation and excludes Live preview and the internal Agent session. On the
 public agent surface it is represented as AG-UI messages grouped by Run, with
 the Run's AG-UI terminal event kept alongside those messages rather than
-inventing an Outcome message.
+inventing an Outcome message. An interrupted Run retains every Run event
+committed before interruption; its provisional open response is excluded. A
+queued interruption retains the submitted User message even when no worker
+delivered it to Claude.
 _Avoid_: thread history, Agent session, transcript
 
 **AG-UI agent surface**:
@@ -110,7 +126,7 @@ opaque, MyMemo-issued message id regardless of how many content blocks carry
 it. Assistant text remains provisional in the Live Stream until the provider
 response completes; the complete message is then committed to Postgres before
 its completion event is appended to the Live Stream. A textless response
-exposes its identity through its Tool invocations. If its Run is canceled or
+exposes its identity through its Tool invocations. If its Run is interrupted or
 fails before completion, its provisional text does not enter permanent
 Conversation history.
 _Avoid_: token stream
@@ -131,13 +147,15 @@ user-visible history and linked to its Tool invocation by the same stable,
 opaque, MyMemo-issued id. Content is exposed only as a capped,
 non-authoritative preview, even when a short source happens to fit completely.
 An invocation has no result when the run terminates before the tool returns. An
+interruption does not fabricate a failure result for such an invocation. An
 error result does not end the run; the agent may continue after inspecting it.
 _Avoid_: tool response
 
 **Outcome**:
-The single way a run ends: `done`, `error`, or `canceled`. One word per
+The single way a Run ends: `done`, `error`, or `interrupted`. One word per
 outcome at every layer — status `done`, run event `run_done`, client frame
-`done`; likewise `error`/`run_error` and `canceled`/`run_canceled`.
+`done`; likewise `error`/`run_error` and
+`interrupted`/`run_interrupted`/`RUN_INTERRUPTED`.
 _Avoid_: completed, failed, finished, succeeded
 
 **Searchable document**:
@@ -171,8 +189,10 @@ _Avoid_: chunk, excerpt
 The conversation's sandbox filesystem (E2B `/home/user`) where the model's
 file and shell tools act. It *is* the paused E2B sandbox between turns —
 persistence is best-effort: reconnect restores it, but a lost sandbox starts
-the next turn empty. Not the Fargate query cwd (that is only a stable
-projectKey anchor), and not durable like the agent session.
+the next turn empty. Run interruption preserves its current contents rather
+than rolling them back, so stopping a command may leave partial edits for a
+later Run to inspect or repair. Not the Fargate query cwd (that is only a stable
+projectKey anchor), and not durable like the Agent session.
 _Avoid_: sandbox (that is the runtime; the workspace is its filesystem)
 
 **Downloadable artifact**:
@@ -196,9 +216,10 @@ refreshes its cached copy.
 _Avoid_: fetch (the prototype path's word for content-into-context)
 
 **Agent session**:
-The Claude SDK transcript that carries a conversation's model-side memory
-across turns. Internal and worker-owned — never client-facing, never in the
-sandbox.
+The internal, worker-owned Claude SDK transcript that carries a Conversation's
+model-side memory across Runs, including a successfully preserved interrupted
+Run even when its provisional response is absent from Conversation history. It
+is never client-facing or stored in the Workspace.
 _Avoid_: chat history (that is the user-visible record in run events)
 
 **Split runtime**:
