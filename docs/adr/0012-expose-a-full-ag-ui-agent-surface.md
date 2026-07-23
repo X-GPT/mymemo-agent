@@ -2,6 +2,12 @@
 
 Run-control vocabulary and terminal behavior are amended by
 [ADR-0013](./0013-interrupt-runs-without-ending-conversation-continuity.md).
+The retained per-Run Redis Stream transport — entry-id cursors,
+`Last-Event-ID` resumption, `activeRun.lastEventId`, the 30-minute
+post-terminal retention, the `ResumableStreamStore` adapter, and its Lua/cap/
+TTL machinery — is superseded by
+[ADR-0014](./0014-producer-buffered-live-stream-over-pubsub.md); every
+non-transport decision here remains in force.
 
 MyMemo exposes a plug-compatible AG-UI data plane rather than only borrowing AG-UI-shaped event names. A Run endpoint accepts the standard `RunAgentInput` body and returns a standard AG-UI `BaseEvent` stream; active-Run reconnect emits the same event vocabulary from a per-Run Redis Stream. MyMemo also supplies the persistence, replay, interruption, and history endpoints that AG-UI leaves to the server implementation. The surface advertises resumability only after its sequence and replay contract is implemented and verified.
 
