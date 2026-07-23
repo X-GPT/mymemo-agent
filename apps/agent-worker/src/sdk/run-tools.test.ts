@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { Client } from "@modelcontextprotocol/sdk/client";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type {
 	CommandAuditEvent,
 	RawCommandOutcome,
@@ -355,5 +357,25 @@ describe("createRunMcpServer", () => {
 	it("wraps the bound tools in an in-process SDK MCP server", () => {
 		const server = createRunMcpServer(buildDeps().deps);
 		expect(server.type).toBe("sdk");
+	});
+
+	it("makes every executor tool available on the first model turn", async () => {
+		const server = createRunMcpServer(buildDeps().deps);
+		const [clientTransport, serverTransport] =
+			InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "test-client", version: "1.0.0" });
+		await server.instance.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		try {
+			const { tools } = await client.listTools();
+			expect(tools).toHaveLength(EXECUTOR_ALLOWED_TOOLS.length);
+			for (const tool of tools) {
+				expect(tool._meta?.["anthropic/alwaysLoad"]).toBe(true);
+			}
+		} finally {
+			await client.close();
+			await server.instance.close();
+		}
 	});
 });
