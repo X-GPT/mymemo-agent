@@ -70,22 +70,21 @@ const JSON_IDENTITY_HEADERS = {
 };
 
 interface SSEFrame {
-	id?: string;
 	data: Record<string, unknown>;
 }
 
-/** Parse standard AG-UI SSE: Redis cursor in `id`, BaseEvent JSON in `data`. */
+/** Parse cursor-free standard AG-UI SSE with one BaseEvent JSON object per frame. */
 function parseSSE(raw: string): SSEFrame[] {
 	const frames: SSEFrame[] = [];
 	for (const block of raw.split("\n\n")) {
-		let id: string | undefined;
 		let data = "";
 		for (const line of block.split("\n")) {
-			if (line.startsWith("id:")) id = line.slice("id:".length).trim();
-			else if (line.startsWith("data:"))
-				data = line.slice("data:".length).trim();
+			if (line.startsWith("id:")) {
+				throw new Error("AG-UI SSE frame carried an unexpected id");
+			}
+			if (line.startsWith("data:")) data = line.slice("data:".length).trim();
 		}
-		if (data) frames.push({ id, data: JSON.parse(data) });
+		if (data) frames.push({ data: JSON.parse(data) });
 	}
 	return frames;
 }
@@ -161,7 +160,7 @@ function fetchRunEvents(
 	runId: string,
 	options: {
 		memberCode?: string;
-		cursor?: string;
+		lastEventId?: string;
 		signal?: AbortSignal;
 	} = {},
 ): Promise<Response> {
@@ -169,8 +168,8 @@ function fetchRunEvents(
 		...IDENTITY_HEADERS,
 		"x-member-code": options.memberCode ?? MEMBER_CODE,
 	};
-	if (options.cursor !== undefined) {
-		headers["last-event-id"] = options.cursor;
+	if (options.lastEventId !== undefined) {
+		headers["last-event-id"] = options.lastEventId;
 	}
 	return fetch(
 		`${CHAT_URL}/v1/conversations/${conversationId}/runs/${runId}/events`,
@@ -523,17 +522,6 @@ describe.skipIf(!RUN)(
 					memberCode: "foreign-member",
 				});
 				expect(foreignRun.status).toBe(404);
-				const malformedCursor = await fetchRunEvents(conversationId, runId, {
-					cursor: "not-a-cursor",
-				});
-				expect(malformedCursor.status).toBe(400);
-				const impossibleBeforeCreation = await fetchRunEvents(
-					conversationId,
-					runId,
-					{ cursor: "1-0" },
-				);
-				expect(impossibleBeforeCreation.status).toBe(400);
-
 				const reconnectPromise = fetchRunEvents(conversationId, runId, {
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
@@ -551,10 +539,9 @@ describe.skipIf(!RUN)(
 				);
 				expect(textDisconnect.raw).toContain(": ping\n\n");
 				expect(textDisconnect.frame.data.type).toBe("TEXT_MESSAGE_CONTENT");
-				expect(textDisconnect.frame.id).toMatch(/^\d+-\d+$/);
 
 				const afterTextResponse = await fetchRunEvents(conversationId, runId, {
-					cursor: textDisconnect.frame.id as string,
+					lastEventId: "not-a-cursor",
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
 				expect(afterTextResponse.status).toBe(200);
@@ -562,10 +549,9 @@ describe.skipIf(!RUN)(
 					afterTextResponse,
 					"TOOL_CALL_ARGS",
 				);
-				expect(toolDisconnect.frame.id).toMatch(/^\d+-\d+$/);
 
 				const afterToolResponsePromise = fetchRunEvents(conversationId, runId, {
-					cursor: toolDisconnect.frame.id as string,
+					lastEventId: "1-0",
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
 
@@ -579,17 +565,17 @@ describe.skipIf(!RUN)(
 				expect(afterToolResponse.status).toBe(200);
 				const afterToolFrames = parseSSE(await afterToolResponse.text());
 				const textDisconnectIndex = frames.findIndex(
-					(frame) => frame.id === textDisconnect.frame.id,
+					(frame) => frame.data.type === "TEXT_MESSAGE_CONTENT",
 				);
 				const toolDisconnectIndex = frames.findIndex(
-					(frame) => frame.id === toolDisconnect.frame.id,
+					(frame) => frame.data.type === "TOOL_CALL_ARGS",
 				);
 				expect(textDisconnectIndex).toBe(2);
 				expect(toolDisconnectIndex).toBe(5);
 				expect(parseSSE(toolDisconnect.raw)).toEqual(
-					frames.slice(textDisconnectIndex + 1, toolDisconnectIndex + 1),
+					frames.slice(0, toolDisconnectIndex + 1),
 				);
-				expect(afterToolFrames).toEqual(frames.slice(toolDisconnectIndex + 1));
+				expect(afterToolFrames).toEqual(frames);
 				const eventTypes = frames.map((frame) => frame.data.type);
 				expect(eventTypes).toEqual([
 					"RUN_STARTED",
@@ -624,8 +610,8 @@ describe.skipIf(!RUN)(
 					.join("");
 				expect(streamedText).toContain("Synthetic response");
 				expect(streamedText).toContain(runId);
-				expect(frames.every((frame) => /^\d+-\d+$/.test(frame.id ?? ""))).toBe(
-					true,
+				expect(parseSSE(textDisconnect.raw)).toEqual(
+					frames.slice(0, textDisconnectIndex + 1),
 				);
 
 				const replayFromZero = await fetchRunEvents(conversationId, runId, {
@@ -686,12 +672,11 @@ describe.skipIf(!RUN)(
 					},
 				});
 
-				const impossibleRetainedCursor = await fetchRunEvents(
-					conversationId,
-					runId,
-					{ cursor: "9999999999999-0" },
-				);
-				expect(impossibleRetainedCursor.status).toBe(400);
+				const legacyHeaderReplay = await fetchRunEvents(conversationId, runId, {
+					lastEventId: "9999999999999-0",
+				});
+				expect(legacyHeaderReplay.status).toBe(200);
+				expect(parseSSE(await legacyHeaderReplay.text())).toEqual(frames);
 
 				const retry = await fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
@@ -777,24 +762,17 @@ describe.skipIf(!RUN)(
 				});
 				expect(failedReplay.status).toBe(200);
 				expect(parseSSE(await failedReplay.text())).toEqual(failedFrames);
-				const failedArgsIndex = failedFrames.findIndex(
-					(frame) => frame.data.type === "TOOL_CALL_ARGS",
-				);
-				const failedArgsCursor = failedFrames[failedArgsIndex]?.id;
-				if (!failedArgsCursor)
-					throw new Error("failed Tool args had no cursor");
-				expect(failedArgsCursor).toMatch(/^\d+-\d+$/);
-				const failedCursorReplay = await fetchRunEvents(
+				const failedLegacyHeaderReplay = await fetchRunEvents(
 					conversationId,
 					failedRunId,
 					{
-						cursor: failedArgsCursor,
+						lastEventId: "3-0",
 						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 					},
 				);
-				expect(failedCursorReplay.status).toBe(200);
-				expect(parseSSE(await failedCursorReplay.text())).toEqual(
-					failedFrames.slice(failedArgsIndex + 1),
+				expect(failedLegacyHeaderReplay.status).toBe(200);
+				expect(parseSSE(await failedLegacyHeaderReplay.text())).toEqual(
+					failedFrames,
 				);
 
 				const failedHistoryResponse = await fetch(
@@ -857,10 +835,7 @@ describe.skipIf(!RUN)(
 
 				const response = await turn.response;
 				expect(response.status).toBe(200);
-				const disconnected = await readUntilSSEFrameAndCancel(
-					response,
-					"TEXT_MESSAGE_CONTENT",
-				);
+				await readUntilSSEFrameAndCancel(response, "TEXT_MESSAGE_CONTENT");
 
 				const archiveWhileActive = await fetch(
 					`${CHAT_URL}/v1/conversations/${turn.conversationId}`,
@@ -917,7 +892,7 @@ describe.skipIf(!RUN)(
 				expect(competingAdmission.status).toBe(409);
 
 				const resumed = await fetchRunEvents(turn.conversationId, turn.runId, {
-					cursor: disconnected.frame.id,
+					lastEventId: "legacy-cursor",
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
 				expect(resumed.status).toBe(200);
@@ -1222,7 +1197,7 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
-			"rebuilds an active Run from cursor zero while it terminalizes",
+			"rebuilds an active Run from the beginning while it terminalizes",
 			async () => {
 				await stopEventWriter();
 				const prompt = "Synthetic text-only full-refresh race";
@@ -1242,14 +1217,12 @@ describe.skipIf(!RUN)(
 					activeRun: {
 						runId: string;
 						status: string;
-						lastEventId: string;
 					} | null;
 					runs: AcceptanceHistoryRun[];
 				};
 				expect(activeHistory.activeRun).toEqual({
 					runId: turn.runId,
 					status: "running",
-					lastEventId: "0",
 				});
 				expect(
 					activeHistory.runs.find((run) => run.runId === turn.runId),
@@ -1311,19 +1284,19 @@ describe.skipIf(!RUN)(
 
 				const response = await turn.response;
 				expect(response.status).toBe(200);
-				const disconnected = await readUntilSSEFrameAndCancel(
-					response,
-					"TEXT_MESSAGE_CONTENT",
-				);
+				await readUntilSSEFrameAndCancel(response, "TEXT_MESSAGE_CONTENT");
 				await Bun.sleep(1_200);
 
 				const resumed = await fetchRunEvents(turn.conversationId, turn.runId, {
-					cursor: disconnected.frame.id,
+					lastEventId: "legacy-cursor",
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
 				expect(resumed.status).toBe(200);
 				const resumedFrames = parseSSE(await resumed.text());
 				expect(resumedFrames.map((frame) => frame.data.type)).toEqual([
+					"RUN_STARTED",
+					"TEXT_MESSAGE_START",
+					"TEXT_MESSAGE_CONTENT",
 					"TEXT_MESSAGE_END",
 					"RUN_FINISHED",
 				]);

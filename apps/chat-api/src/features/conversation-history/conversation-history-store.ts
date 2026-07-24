@@ -29,7 +29,6 @@ export interface ConversationHistoryRun {
 export interface ActiveRunSummary {
 	runId: string;
 	status: "queued" | "running" | "cancel_requested";
-	lastEventId: "0";
 }
 
 export interface ConversationHistoryPage {

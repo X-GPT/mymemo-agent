@@ -49,7 +49,6 @@ const INTERRUPTED_TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 interface SSEFrame {
-	id?: string;
 	event: string;
 	data: string;
 }
@@ -61,7 +60,6 @@ interface TurnResult {
 }
 
 interface DurableToolFrame {
-	id?: string;
 	event:
 		| "TOOL_CALL_START"
 		| "TOOL_CALL_ARGS"
@@ -74,7 +72,6 @@ interface DurableToolFrame {
 interface ReplayExpectation {
 	conversationId: string;
 	runId: string;
-	afterCursor: string;
 	messages: ClientContractMessage[];
 	toolFrames: DurableToolFrame[];
 	terminal?: ClientContractTerminal;
@@ -553,7 +550,6 @@ async function verifyRunningRunCancellation(
 
 	const frames: SSEFrame[] = [];
 	const client = createClientContractFixture();
-	let runCursor: string | undefined;
 	let interruptSent = false;
 
 	await readSSEIncrementally(response, async (frame) => {
@@ -575,13 +571,9 @@ async function verifyRunningRunCancellation(
 					"interrupt-check stream echoed the wrong Conversation id",
 				);
 			}
-			runCursor = frame.id;
-			if (!runCursor) {
-				throw new Error("interrupt-check RUN_STARTED frame had no cursor");
-			}
 		}
 		if (frame.event === "TOOL_CALL_START" && !interruptSent) {
-			if (!runCursor) {
+			if (!frames.some((candidate) => candidate.event === "RUN_STARTED")) {
 				throw new Error("Tool invocation arrived before RUN_STARTED");
 			}
 			const tool = stringField(frame, "toolCallName");
@@ -595,7 +587,7 @@ async function verifyRunningRunCancellation(
 		}
 	});
 
-	if (!interruptSent || !runCursor) {
+	if (!interruptSent) {
 		throw new Error(
 			"interrupted event stream ended before the first Tool invocation",
 		);
@@ -637,7 +629,6 @@ async function verifyRunningRunCancellation(
 	await replayTurn({
 		conversationId,
 		runId,
-		afterCursor: runCursor,
 		messages: snapshot.messages,
 		toolFrames: durableToolFrames(frames),
 		terminal: "canceled",
@@ -776,15 +767,11 @@ async function sendTurn(
 	if (stringField(startedFrame, "runId") !== runId) {
 		throw new Error("event stream echoed the wrong Run id");
 	}
-	const runCursor = startedFrame?.id;
-	if (!runCursor)
-		throw new Error("RUN_STARTED frame did not carry a replay cursor");
 	const text = snapshot.messages.map((message) => message.text).join("");
 	if (!text.trim()) throw new Error("event stream contained no assistant text");
 	await replayTurn({
 		conversationId,
 		runId,
-		afterCursor: runCursor,
 		messages: snapshot.messages,
 		toolFrames: durableToolFrames(frames),
 	});
@@ -801,10 +788,7 @@ async function replayTurn(expectation: ReplayExpectation): Promise<void> {
 	const response = await fetch(
 		`${baseUrl}/v1/conversations/${expectation.conversationId}/runs/${expectation.runId}/events`,
 		{
-			headers: {
-				...headers(),
-				"Last-Event-ID": expectation.afterCursor,
-			},
+			headers: headers(),
 			signal: AbortSignal.timeout(turnTimeoutMs),
 		},
 	);
@@ -820,8 +804,8 @@ async function replayTurn(expectation: ReplayExpectation): Promise<void> {
 
 	const frames = parseSSE(body).filter((frame) => frame.event !== "ping");
 	const replayedEvents = frames.map((frame) => frame.event);
-	if (replayedEvents.includes("RUN_STARTED")) {
-		throw new Error("reconnect replayed the acknowledged RUN_STARTED event");
+	if (replayedEvents[0] !== "RUN_STARTED") {
+		throw new Error("reconnect did not rebuild the Run from RUN_STARTED");
 	}
 	if (replayedEvents.at(-1) !== expectedTerminalEvent) {
 		throw new Error(
@@ -875,7 +859,6 @@ function durableToolFrames(frames: SSEFrame[]): DurableToolFrame[] {
 		}
 		return [
 			{
-				id: frame.id,
 				event: frame.event,
 				data: parseFrameData(frame),
 			},
@@ -923,13 +906,13 @@ async function readSSEIncrementally(
 function parseSSE(raw: string): SSEFrame[] {
 	const frames: SSEFrame[] = [];
 	for (const block of raw.replaceAll("\r\n", "\n").split("\n\n")) {
-		let id: string | undefined;
 		let event = "";
 		const data: string[] = [];
 		for (const line of block.split("\n")) {
 			if (line.startsWith("id:")) {
-				id = line.slice("id:".length).trim();
-			} else if (line.startsWith("event:")) {
+				throw new Error("event stream carried an unexpected SSE id");
+			}
+			if (line.startsWith("event:")) {
 				event = line.slice("event:".length).trim();
 			} else if (line.startsWith("data:")) {
 				data.push(line.slice("data:".length).trimStart());
@@ -944,7 +927,7 @@ function parseSSE(raw: string): SSEFrame[] {
 				// parseFrameData reports malformed JSON with event context.
 			}
 		}
-		if (event) frames.push({ id, event, data: frameData });
+		if (event) frames.push({ event, data: frameData });
 	}
 	return frames;
 }

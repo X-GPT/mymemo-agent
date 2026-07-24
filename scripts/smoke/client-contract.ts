@@ -1,5 +1,4 @@
 export interface ClientContractFrame {
-	id?: string;
 	event: string;
 	data: unknown;
 }
@@ -51,7 +50,6 @@ export function createClientContractFixture(): ClientContractFixture {
 			if (data.type !== frame.event) {
 				throw new Error(`invalid ${frame.event} frame`);
 			}
-			requireCursor(frame);
 			if (terminal !== undefined) return;
 
 			switch (frame.event) {
@@ -171,8 +169,4 @@ function requireString(
 	const value = data[field];
 	if (typeof value !== "string") throw new Error(`invalid ${event} frame`);
 	return value;
-}
-
-function requireCursor(frame: ClientContractFrame): void {
-	if (!frame.id) throw new Error(`${frame.event} must carry a replay cursor`);
 }

@@ -116,10 +116,10 @@ curl -N http://localhost:3000/v1/conversations/<conversationId>/runs \
 ```
 
 The stream emits standard AG-UI `RUN_STARTED`, Assistant text lifecycle and
-Tool events, then one terminal event. Every event carries its Redis replay
-cursor in the SSE `id`; reconnect with `Last-Event-ID` at
-`GET /v1/conversations/<conversationId>/runs/<runId>/events`. POST another
-client-owned Run id to the same Conversation for the next turn.
+Tool events, then one terminal event. SSE frames carry data only. Reconnect at
+`GET /v1/conversations/<conversationId>/runs/<runId>/events`; every attach
+rebuilds the active Run from the beginning. POST another client-owned Run id to
+the same Conversation for the next turn.
 
 This `compose.yaml` is a **manual** local stack for poking the running services
 by hand; it is not what gates correctness. That is `e2e/integration.test.ts`,

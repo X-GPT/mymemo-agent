@@ -166,7 +166,7 @@ function toActiveRunSummary(run: RunRow): ActiveRunSummary {
 	if (!isActiveStatus(run.status)) {
 		throw new InvalidRunEventError("captured active Run has terminal status");
 	}
-	return { runId: run.runId, status: run.status, lastEventId: "0" };
+	return { runId: run.runId, status: run.status };
 }
 
 function projectActiveRun(
