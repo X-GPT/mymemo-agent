@@ -1,6 +1,6 @@
 # Local end-to-end harness — real split runtime. The client contract is
 # chat-api's /v1 conversation API: create a Conversation, admit a strict AG-UI
-# Run, and consume its retained Redis Stream over SSE. A queued Run is claimed
+# Run, and attach to its producer-buffered Live Stream over SSE. A queued Run is claimed
 # and processed by the agent-worker. The worker runs the real Claude Agent SDK
 # processor, so export
 # OPENROUTER_API_KEY and E2B_API_KEY before starting the stack and build the
@@ -10,9 +10,9 @@
 #   postgres      — the writable mymemo_agent DB (conversations/runs/run_events)
 #                   AND the read-only mymemo_kb (seeded for the retained doc path)
 #   migrate       — one-shot: applies the @mymemo/agent-db migrations, then exits
-#   chat-api      — creates Conversations, admits Runs, and relays retained SSE
+#   chat-api      — creates Conversations, admits Runs, and attaches SSE
 #   agent-worker  — claims Runs and publishes standard AG-UI events through E2B
-#   redis         — disposable Redis 7 for real Stream and Lua contract testing
+#   redis         — disposable Redis 7 for real relay contract testing
 #
 # The prototype gateway/sandbox services were removed once the split runtime
 # replaced them end to end (ADR-0002). Bring the demo up with:
@@ -120,8 +120,8 @@ services:
       - mymemo-network
 
   # Disposable development Redis. It binds only to host loopback, keeps no
-  # volume or persistence, and supports the same Stream and Lua commands used by
-  # the production adapter. Start it alone with `docker compose up redis`.
+  # volume or persistence, and exercises the same pub/sub relay used in
+  # production. Start it alone with `docker compose up redis`.
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]

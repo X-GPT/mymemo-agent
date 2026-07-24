@@ -1,5 +1,5 @@
 import { createClient } from "redis";
-import { LiveStreamStoreError } from "./live-stream-events";
+import { LiveStreamRelayError } from "./live-stream-events";
 import {
 	type LiveStreamRelay,
 	type LiveStreamRelayOptions,
@@ -89,7 +89,7 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 		const timedOut = new Promise<never>((_, reject) => {
 			timeout = setTimeout(() => {
 				if (publisher.isOpen) publisher.destroy();
-				reject(new LiveStreamStoreError("relay_failed"));
+				reject(new LiveStreamRelayError("relay_failed"));
 			}, FAILURE_PUBLISH_TIMEOUT_MS);
 		});
 		const publishing = Promise.race([operation, timedOut]).finally(() => {
@@ -174,7 +174,7 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 	}
 
 	#assertOpen(): void {
-		if (this.#closed) throw new LiveStreamStoreError("relay_closed");
+		if (this.#closed) throw new LiveStreamRelayError("relay_closed");
 	}
 }
 
@@ -206,7 +206,7 @@ async function withTimeout<T>(
 	const timedOut = new Promise<never>((_, reject) => {
 		timeout = setTimeout(() => {
 			onTimeout();
-			reject(new LiveStreamStoreError("relay_failed"));
+			reject(new LiveStreamRelayError("relay_failed"));
 		}, timeoutMs);
 	});
 	try {

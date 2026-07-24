@@ -1,42 +1,28 @@
 export type LiveStreamService = "agent-worker" | "chat-api";
 
 export type LiveStreamOperation =
-	| "acquire"
-	| "append"
 	| "attach_attempt"
 	| "backlog_request"
 	| "degradation"
-	| "finalize"
 	| "publish"
-	| "read_wait"
 	| "reconnect_response"
-	| "recovery_response"
-	| "refresh";
+	| "recovery_response";
 
 export type LiveStreamResult =
 	| "aborted"
-	| "consumer"
 	| "ended"
 	| "failure"
-	| "finalized"
 	| "history_410"
 	| "no_producer"
-	| "producer"
 	| "retry"
 	| "retryable_503"
 	| "started"
 	| "success";
 
 export type LiveStreamReason =
-	| "append_retry_conflict"
 	| "event_too_large"
-	| "finalize_conflict"
-	| "finalized"
-	| "invalid_cursor"
 	| "invalid_event"
 	| "marker_write_failed"
-	| "missing"
-	| "not_producer"
 	| "operation_failed"
 	| "producer_closed"
 	| "producer_failed"

@@ -35,13 +35,13 @@ const ciWorkflow = readFileSync(
 	"utf8",
 );
 const composeConfig = readFileSync(join(root, "compose.yaml"), "utf8");
-const redisContractTest = readFileSync(
+const redisRelayContractTest = readFileSync(
 	join(
 		root,
 		"packages",
 		"live-text",
 		"src",
-		"redis-live-stream-store.contract.test.ts",
+		"live-stream-relay.contract.test.ts",
 	),
 	"utf8",
 );
@@ -284,7 +284,7 @@ describe("agent deployment config", () => {
 		expect(readme).not.toContain("live_stream_enabled");
 	});
 
-	it("provides disposable local and CI Redis for real Stream and Lua contract tests", () => {
+	it("provides disposable local and CI Redis for real relay contract tests", () => {
 		expect(composeConfig).toMatch(/\n {2}redis:\n[\s\S]*?image: redis:7/);
 		expect(composeConfig).toContain('"127.0.0.1:${REDIS_PORT:-6379}:6379"');
 		expect(composeConfig).toContain(
@@ -293,7 +293,7 @@ describe("agent deployment config", () => {
 		expect(composeConfig).not.toMatch(/redis-data|redisdata/);
 		expect(ciWorkflow).toContain("redis-server");
 		expect(ciWorkflow).toContain("bun run test");
-		expect(redisContractTest).toContain(
+		expect(redisRelayContractTest).toContain(
 			'from "../../../test-support/redis-test-server"',
 		);
 		expect(redisTestServer).toContain('"redis-server"');

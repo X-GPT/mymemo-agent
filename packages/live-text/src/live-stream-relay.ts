@@ -7,7 +7,7 @@ import {
 	LIVE_STREAM_MAX_EVENT_BYTES,
 	LIVE_STREAM_MAX_EVENTS,
 	type LiveStreamEvent,
-	LiveStreamStoreError,
+	LiveStreamRelayError,
 	RUN_CANCELLED_EVENT_TYPE,
 } from "./live-stream-events";
 import {
@@ -149,7 +149,7 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 
 	async openProducer(runId: string): Promise<LiveStreamProducer> {
 		this.#assertOpen();
-		validateLiveStreamRunId(runId, "runId");
+		validateLiveStreamRunId(runId);
 		const producer = new BufferedLiveStreamProducer(
 			this.#transport,
 			this.#requestChannel(runId),
@@ -170,7 +170,7 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 		signal: AbortSignal,
 	): Promise<LiveStreamAttachResult> {
 		this.#assertOpen();
-		validateLiveStreamRunId(runId, "runId");
+		validateLiveStreamRunId(runId);
 		const startedAt = performance.now();
 		recordTelemetry(this.#telemetry, "attach_attempt", "started");
 		if (signal.aborted) {
@@ -257,7 +257,7 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 				settled = true;
 				if (timeout !== undefined) clearTimeout(timeout);
 				signal.removeEventListener("abort", abort);
-				queue.fail(new LiveStreamStoreError("relay_failed"));
+				queue.fail(new LiveStreamRelayError("relay_failed"));
 				void closeSubscriptions();
 				recordTelemetry(this.#telemetry, "attach_attempt", "failure", {
 					reason: "relay_failed",
@@ -277,7 +277,7 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 								settleRelayFailed();
 								return;
 							}
-							queue.fail(new LiveStreamStoreError("relay_failed"));
+							queue.fail(new LiveStreamRelayError("relay_failed"));
 							return;
 						}
 						if (nextOrdinal !== undefined && envelope.ordinal < nextOrdinal) {
@@ -289,7 +289,7 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 					},
 					() => {
 						if (settled) {
-							queue.fail(new LiveStreamStoreError("relay_failed"));
+							queue.fail(new LiveStreamRelayError("relay_failed"));
 							return;
 						}
 						settleRelayFailed();
@@ -354,7 +354,7 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 	}
 
 	#assertOpen(): void {
-		if (this.#closed) throw new LiveStreamStoreError("relay_closed");
+		if (this.#closed) throw new LiveStreamRelayError("relay_closed");
 	}
 
 	#liveChannel(runId: string): string {
@@ -454,29 +454,29 @@ class BufferedLiveStreamProducer implements LiveStreamProducer {
 
 	#publish(event: Uint8Array, terminal: boolean): Promise<void> {
 		const append = this.#appendTail.then(async () => {
-			if (this.#closed) throw new LiveStreamStoreError("producer_closed");
+			if (this.#closed) throw new LiveStreamRelayError("producer_closed");
 			if (this.#failed) {
-				throw new LiveStreamStoreError("producer_failed");
+				throw new LiveStreamRelayError("producer_failed");
 			}
 			if (this.#terminalPublished) {
-				throw new LiveStreamStoreError("terminal_already_published");
+				throw new LiveStreamRelayError("terminal_already_published");
 			}
 			const parsed = decodeAgUiLiveStreamEvent(event);
 			if (isTerminalType(parsed.type) !== terminal) {
-				throw new LiveStreamStoreError(
+				throw new LiveStreamRelayError(
 					terminal ? "terminal_required" : "terminal_not_allowed",
 				);
 			}
 			if (event.byteLength > LIVE_STREAM_MAX_EVENT_BYTES) {
-				throw new LiveStreamStoreError("event_too_large");
+				throw new LiveStreamRelayError("event_too_large");
 			}
 			if (this.#bufferBytes + event.byteLength > this.#maxBufferBytes) {
-				const error = new LiveStreamStoreError("stream_bytes_exceeded");
+				const error = new LiveStreamRelayError("stream_bytes_exceeded");
 				this.#fail();
 				throw error;
 			}
 			if (this.#events.length + 1 > this.#maxEvents) {
-				const error = new LiveStreamStoreError("stream_events_exceeded");
+				const error = new LiveStreamRelayError("stream_events_exceeded");
 				this.#fail();
 				throw error;
 			}
@@ -512,7 +512,7 @@ class BufferedLiveStreamProducer implements LiveStreamProducer {
 					reason: classifyLiveStreamFailure(error),
 				});
 				this.#fail();
-				throw new LiveStreamStoreError("relay_failed");
+				throw new LiveStreamRelayError("relay_failed");
 			}
 		});
 		this.#appendTail = append.catch(() => {});

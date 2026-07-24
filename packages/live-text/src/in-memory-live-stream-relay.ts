@@ -1,4 +1,4 @@
-import { LiveStreamStoreError } from "./live-stream-events";
+import { LiveStreamRelayError } from "./live-stream-events";
 import {
 	type LiveStreamRelay,
 	type LiveStreamRelayOptions,
@@ -12,7 +12,7 @@ class InMemoryRelayTransport implements LiveStreamRelayTransport {
 	#closed = false;
 
 	async publish(channel: string, message: string): Promise<void> {
-		if (this.#closed) throw new LiveStreamStoreError("relay_closed");
+		if (this.#closed) throw new LiveStreamRelayError("relay_closed");
 		for (const subscriber of this.#subscribers.get(channel) ?? []) {
 			subscriber(message);
 		}
@@ -26,7 +26,7 @@ class InMemoryRelayTransport implements LiveStreamRelayTransport {
 		channel: string,
 		onMessage: (message: string) => void,
 	): Promise<LiveStreamSubscription> {
-		if (this.#closed) throw new LiveStreamStoreError("relay_closed");
+		if (this.#closed) throw new LiveStreamRelayError("relay_closed");
 		const subscribers = this.#subscribers.get(channel) ?? new Set();
 		subscribers.add(onMessage);
 		this.#subscribers.set(channel, subscribers);

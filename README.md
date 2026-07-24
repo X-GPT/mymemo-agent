@@ -9,7 +9,7 @@ architecture and trust boundaries.
 
 | App | Location | Role |
 |-----|----------|------|
-| **chat-api** | `apps/chat-api/` | AI chat service; owns Conversation resources, strict Run admission, retained Redis Stream consumption, history, and artifact delivery |
+| **chat-api** | `apps/chat-api/` | AI chat service; owns Conversation resources, strict Run admission, producer-buffered Live Stream attachment, history, and artifact delivery |
 | **agent-worker** | `apps/agent-worker/` | Split-runtime Fargate worker; claims Runs, holds worker-only credentials, executes Claude Agent SDK turns, and publishes standard AG-UI events |
 
 Shared libraries live under `packages/` (e.g. `@mymemo/agent-db`).
@@ -28,7 +28,7 @@ See [apps/chat-api/README.md](./apps/chat-api/README.md) for chat-api documentat
 ```
 .
 ├── apps/                   # Deployable applications
-│   ├── chat-api/           # AI chat service (admits Runs, relays retained SSE)
+│   ├── chat-api/           # AI chat service (admits Runs, attaches SSE)
 │   └── agent-worker/       # Split-runtime worker (claims + runs turns)
 ├── packages/               # Shared libraries (e.g. @mymemo/agent-db)
 ├── AGENTS.md               # Architecture & agent guidance
@@ -43,10 +43,11 @@ Each project can be developed independently. Navigate to the respective project 
 ## Local end-to-end harness
 
 `compose.yaml` runs the split-runtime path locally: **chat-api admits a Run →
-agent-worker claims and processes it → chat-api relays the retained standard
-AG-UI Stream as SSE**. The worker runs a real Claude Agent SDK turn through
-OpenRouter and an E2B workspace. Postgres backs permanent Conversation history;
-Redis provides the temporary per-Run delivery and reconnect lane.
+agent-worker claims and processes it → chat-api attaches to the worker's
+producer-buffered standard AG-UI Live Stream as SSE**. The worker runs a real
+Claude Agent SDK turn through OpenRouter and an E2B workspace. Postgres backs
+permanent Conversation history; Redis pub/sub relays the temporary per-Run
+delivery and reconnect lane without storing stream content.
 
 ### Run it
 
