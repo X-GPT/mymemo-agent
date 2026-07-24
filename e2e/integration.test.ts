@@ -37,8 +37,13 @@ import {
 	it,
 	setDefaultTimeout,
 } from "bun:test";
-import { createServer } from "node:net";
 import { resolve } from "node:path";
+import {
+	findFreePort,
+	type RedisTestServer,
+	startRedisTestServer,
+} from "../test-support/redis-test-server";
+import { type AgUiSseFrame, parseAgUiSse } from "./ag-ui-sse";
 
 const DB_URL = process.env.AGENT_DATABASE_URL;
 const RUN = Boolean(DB_URL);
@@ -69,34 +74,14 @@ const JSON_IDENTITY_HEADERS = {
 	"content-type": "application/json",
 };
 
-interface SSEFrame {
-	data: Record<string, unknown>;
-}
-
-/** Parse cursor-free standard AG-UI SSE with one BaseEvent JSON object per frame. */
-function parseSSE(raw: string): SSEFrame[] {
-	const frames: SSEFrame[] = [];
-	for (const block of raw.split("\n\n")) {
-		let data = "";
-		for (const line of block.split("\n")) {
-			if (line.startsWith("id:")) {
-				throw new Error("AG-UI SSE frame carried an unexpected id");
-			}
-			if (line.startsWith("data:")) data = line.slice("data:".length).trim();
-		}
-		if (data) frames.push({ data: JSON.parse(data) });
-	}
-	return frames;
-}
-
 async function consumeSSE(
 	response: Response,
-	onFrame: (frame: SSEFrame) => Promise<void>,
-): Promise<SSEFrame[]> {
+	onFrame: (frame: AgUiSseFrame) => Promise<void>,
+): Promise<AgUiSseFrame[]> {
 	if (!response.body) throw new Error("SSE response omitted its body");
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
-	const frames: SSEFrame[] = [];
+	const frames: AgUiSseFrame[] = [];
 	let buffered = "";
 	for (;;) {
 		const { done, value } = await reader.read();
@@ -105,7 +90,7 @@ async function consumeSSE(
 		while (boundary >= 0) {
 			const block = buffered.slice(0, boundary + 2);
 			buffered = buffered.slice(boundary + 2);
-			for (const frame of parseSSE(block)) {
+			for (const frame of parseAgUiSse(block)) {
 				frames.push(frame);
 				await onFrame(frame);
 			}
@@ -113,7 +98,7 @@ async function consumeSSE(
 		}
 		if (done) break;
 	}
-	for (const frame of parseSSE(buffered)) {
+	for (const frame of parseAgUiSse(buffered)) {
 		frames.push(frame);
 		await onFrame(frame);
 	}
@@ -123,7 +108,7 @@ async function consumeSSE(
 async function readUntilSSEFrameAndCancel(
 	response: Response,
 	eventType: string,
-): Promise<{ frame: SSEFrame; raw: string }> {
+): Promise<{ frame: AgUiSseFrame; raw: string }> {
 	if (!response.body) throw new Error("SSE response omitted its body");
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
@@ -138,7 +123,7 @@ async function readUntilSSEFrameAndCancel(
 		while (boundary >= 0) {
 			const block = buffered.slice(0, boundary + 2);
 			buffered = buffered.slice(boundary + 2);
-			const [frame] = parseSSE(block);
+			const [frame] = parseAgUiSse(block);
 			if (frame?.data.type === eventType) {
 				await reader.cancel();
 				return { frame, raw };
@@ -149,7 +134,7 @@ async function readUntilSSEFrameAndCancel(
 	}
 }
 
-function requiredFrame(frames: SSEFrame[], type: string): SSEFrame {
+function requiredFrame(frames: AgUiSseFrame[], type: string): AgUiSseFrame {
 	const frame = frames.find((candidate) => candidate.data.type === type);
 	if (!frame) throw new Error(`SSE response omitted ${type}`);
 	return frame;
@@ -334,56 +319,9 @@ async function waitForHistoryRun(
 	);
 }
 
-async function freePort(): Promise<number> {
-	return new Promise((resolvePort, reject) => {
-		const server = createServer();
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const address = server.address();
-			if (!address || typeof address === "string") {
-				server.close();
-				reject(new Error("failed to allocate integration fixture port"));
-				return;
-			}
-			server.close((error) =>
-				error ? reject(error) : resolvePort(address.port),
-			);
-		});
-	});
-}
-
-async function startRedis(port: number): Promise<Bun.Subprocess> {
-	const redis = Bun.spawn(
-		[
-			"redis-server",
-			"--bind",
-			"127.0.0.1",
-			"--port",
-			String(port),
-			"--save",
-			"",
-			"--appendonly",
-			"no",
-		],
-		{ stdout: "inherit", stderr: "inherit" },
-	);
-	const deadline = Date.now() + 10_000;
-	while (Date.now() < deadline) {
-		const ping = Bun.spawn(
-			["redis-cli", "-h", "127.0.0.1", "-p", String(port), "ping"],
-			{ stdout: "ignore", stderr: "ignore" },
-		);
-		if ((await ping.exited) === 0) return redis;
-		await Bun.sleep(50);
-	}
-	redis.kill();
-	throw new Error("Redis did not become ready");
-}
-
 let chat: Bun.Subprocess | undefined;
 let worker: Bun.Subprocess | undefined;
-let redis: Bun.Subprocess | undefined;
-let redisPort: number;
+let redis: RedisTestServer | undefined;
 let workerPort: number;
 let eventWriterEnv: Record<string, string>;
 
@@ -424,12 +362,11 @@ describe.skipIf(!RUN)(
 	() => {
 		beforeAll(async () => {
 			const dbUrl = DB_URL as string;
-			if (configuredChatPort === undefined) chatPort = await freePort();
+			if (configuredChatPort === undefined) chatPort = await findFreePort();
 			CHAT_URL = `http://127.0.0.1:${chatPort}`;
-			redisPort = await freePort();
-			workerPort = await freePort();
-			redis = await startRedis(redisPort);
-			const redisUrl = `redis://127.0.0.1:${redisPort}`;
+			workerPort = await findFreePort();
+			redis = await startRedisTestServer({ stdio: "inherit" });
+			const redisUrl = redis.url;
 			eventWriterEnv = {
 				AGENT_DATABASE_URL: dbUrl,
 				REDIS_URL: redisUrl,
@@ -462,8 +399,7 @@ describe.skipIf(!RUN)(
 		afterAll(async () => {
 			chat?.kill();
 			await stopEventWriter();
-			redis?.kill("SIGTERM");
-			if (redis) await redis.exited;
+			await redis?.stop();
 		});
 
 		it(
@@ -563,7 +499,7 @@ describe.skipIf(!RUN)(
 					afterToolResponsePromise,
 				]);
 				expect(afterToolResponse.status).toBe(200);
-				const afterToolFrames = parseSSE(await afterToolResponse.text());
+				const afterToolFrames = parseAgUiSse(await afterToolResponse.text());
 				const textDisconnectIndex = frames.findIndex(
 					(frame) => frame.data.type === "TEXT_MESSAGE_CONTENT",
 				);
@@ -572,7 +508,7 @@ describe.skipIf(!RUN)(
 				);
 				expect(textDisconnectIndex).toBe(2);
 				expect(toolDisconnectIndex).toBe(5);
-				expect(parseSSE(toolDisconnect.raw)).toEqual(
+				expect(parseAgUiSse(toolDisconnect.raw)).toEqual(
 					frames.slice(0, toolDisconnectIndex + 1),
 				);
 				expect(afterToolFrames).toEqual(frames);
@@ -610,7 +546,7 @@ describe.skipIf(!RUN)(
 					.join("");
 				expect(streamedText).toContain("Synthetic response");
 				expect(streamedText).toContain(runId);
-				expect(parseSSE(textDisconnect.raw)).toEqual(
+				expect(parseAgUiSse(textDisconnect.raw)).toEqual(
 					frames.slice(0, textDisconnectIndex + 1),
 				);
 
@@ -739,7 +675,7 @@ describe.skipIf(!RUN)(
 					},
 				);
 				expect(failedRun.status).toBe(200);
-				const failedFrames = parseSSE(await failedRun.text());
+				const failedFrames = parseAgUiSse(await failedRun.text());
 				expect(failedFrames.map((frame) => frame.data.type)).toEqual([
 					"RUN_STARTED",
 					"TOOL_CALL_START",
@@ -917,7 +853,7 @@ describe.skipIf(!RUN)(
 					status: "cancel_requested",
 				});
 
-				const resumedFrames = parseSSE(await resumed.text());
+				const resumedFrames = parseAgUiSse(await resumed.text());
 				expect(resumedFrames.at(-1)?.data.type).toBe("RUN_CANCELLED");
 				expect(
 					resumedFrames.some((frame) => frame.data.type === "RUN_FINISHED"),
@@ -980,7 +916,7 @@ describe.skipIf(!RUN)(
 
 				const response = await turn.response;
 				expect(response.status).toBe(200);
-				const incompleteFrames = parseSSE(await response.text());
+				const incompleteFrames = parseAgUiSse(await response.text());
 				expect(
 					incompleteFrames.some((frame) =>
 						["RUN_FINISHED", "RUN_ERROR", "RUN_CANCELLED"].includes(
@@ -1035,7 +971,7 @@ describe.skipIf(!RUN)(
 
 				const response = await turn.response;
 				expect(response.status).toBe(200);
-				const liveFrames = parseSSE(await response.text());
+				const liveFrames = parseAgUiSse(await response.text());
 				const messageId = `message-${turn.runId}`;
 				const assistantText = `Synthetic response for run ${turn.runId}`;
 				expect(liveFrames.map((frame) => frame.data)).toEqual([
@@ -1103,13 +1039,14 @@ describe.skipIf(!RUN)(
 			"returns 503 before Stream creation and completes after real Redis recovers",
 			async () => {
 				await stopEventWriter();
+				if (!redis) throw new Error("Redis test server is not running");
 				const pause = Bun.spawn(
 					[
 						"redis-cli",
 						"-h",
 						"127.0.0.1",
 						"-p",
-						String(redisPort),
+						String(redis.port),
 						"CLIENT",
 						"PAUSE",
 						"1500",
@@ -1137,7 +1074,7 @@ describe.skipIf(!RUN)(
 				});
 				expect(replay.status).toBe(200);
 				expect(
-					parseSSE(await replay.text()).map((frame) => frame.data.type),
+					parseAgUiSse(await replay.text()).map((frame) => frame.data.type),
 				).toEqual([
 					"RUN_STARTED",
 					"TEXT_MESSAGE_START",
@@ -1259,7 +1196,7 @@ describe.skipIf(!RUN)(
 				});
 				expect(replay.status).toBe(200);
 				expect(
-					parseSSE(await replay.text()).map((frame) => frame.data.type),
+					parseAgUiSse(await replay.text()).map((frame) => frame.data.type),
 				).toEqual([
 					"RUN_STARTED",
 					"TEXT_MESSAGE_START",
@@ -1307,7 +1244,7 @@ describe.skipIf(!RUN)(
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
 				expect(resumed.status).toBe(200);
-				const resumedFrames = parseSSE(await resumed.text());
+				const resumedFrames = parseAgUiSse(await resumed.text());
 				expect(resumedFrames.map((frame) => frame.data.type)).toEqual([
 					"RUN_STARTED",
 					"TEXT_MESSAGE_START",
@@ -1364,7 +1301,7 @@ describe.skipIf(!RUN)(
 
 					const response = await turn.response;
 					expect(response.status, cap.label).toBe(200);
-					const partialFrames = parseSSE(await response.text());
+					const partialFrames = parseAgUiSse(await response.text());
 					expect(
 						partialFrames.some((frame) => frame.data.type === "RUN_FINISHED"),
 						cap.label,
@@ -1444,7 +1381,7 @@ describe.skipIf(!RUN)(
 				await stopEventWriter();
 				const staleResponse = await stale.response;
 				expect(staleResponse.status).toBe(200);
-				const staleFrames = parseSSE(await staleResponse.text());
+				const staleFrames = parseAgUiSse(await staleResponse.text());
 				expect(
 					staleFrames.some((frame) => frame.data.type === "RUN_ERROR"),
 				).toBe(false);

@@ -45,6 +45,10 @@ const redisContractTest = readFileSync(
 	),
 	"utf8",
 );
+const redisTestServer = readFileSync(
+	join(root, "test-support", "redis-test-server.ts"),
+	"utf8",
+);
 const createAgentSecretsScript = readFileSync(
 	join(root, "scripts", "deploy", "create_agent_secrets.sh"),
 	"utf8",
@@ -289,7 +293,10 @@ describe("agent deployment config", () => {
 		expect(composeConfig).not.toMatch(/redis-data|redisdata/);
 		expect(ciWorkflow).toContain("redis-server");
 		expect(ciWorkflow).toContain("bun run test");
-		expect(redisContractTest).toContain('"redis-server"');
+		expect(redisContractTest).toContain(
+			'from "../../../test-support/redis-test-server"',
+		);
+		expect(redisTestServer).toContain('"redis-server"');
 	});
 
 	it("documents the Downloadable artifact operator and downstream contracts", () => {

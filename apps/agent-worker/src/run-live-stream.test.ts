@@ -4,6 +4,7 @@ import {
 	createInMemoryLiveStreamRelay,
 	decodeAgUiLiveStreamEvent,
 	type LiveStreamMetricEvent,
+	type LiveStreamRelayOptions,
 	type LiveStreamTelemetry,
 } from "@mymemo/live-text";
 import type { WorkerLogger } from "./logger";
@@ -63,7 +64,10 @@ it("observes a payload-safe degradation transition separately from Run outcome",
 	};
 	const relay = createInMemoryLiveStreamRelay({
 		telemetry,
-		testHooks: { failEventPublishAtOrdinal: 0 },
+		testHooks: {
+			failEventPublishWhen: ({ eventType }) =>
+				eventType === EventType.RUN_STARTED,
+		},
 	});
 	const stream = await RunLiveStream.open({
 		relay,
@@ -127,7 +131,10 @@ it("observes a payload-safe degradation transition separately from Run outcome",
 it("retries a transient Live Stream failure-marker write after the Run terminalizes", async () => {
 	let markerAttempts = 0;
 	const relay = createInMemoryLiveStreamRelay({
-		testHooks: { failEventPublishAtOrdinal: 0 },
+		testHooks: {
+			failEventPublishWhen: ({ eventType }) =>
+				eventType === EventType.RUN_STARTED,
+		},
 	});
 	const stream = await RunLiveStream.open({
 		relay,
@@ -148,7 +155,13 @@ it("retries a transient Live Stream failure-marker write after the Run terminali
 });
 
 it.each([
-	["terminal publish", { failEventPublishAtOrdinal: 1 }, undefined],
+	[
+		"terminal publish",
+		{
+			failEventPublishWhen: ({ terminal }) => terminal,
+		} satisfies NonNullable<LiveStreamRelayOptions["testHooks"]>,
+		undefined,
+	],
 	["buffer overflow", undefined, { maxEvents: 1 }],
 ] as const)("latches %s failure while the Run still reaches its durable outcome", async (_name, testHooks, testLimits) => {
 	let markerAttempts = 0;

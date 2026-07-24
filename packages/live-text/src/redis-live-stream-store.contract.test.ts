@@ -1,5 +1,4 @@
 import { expect, it } from "bun:test";
-import { createServer } from "node:net";
 import {
 	EventSchemas,
 	EventType,
@@ -7,6 +6,11 @@ import {
 } from "@ag-ui/core";
 import type { ResumableStreamEntry } from "assistant-stream/resumable";
 import { createClient } from "redis";
+import {
+	findFreePort as freePort,
+	type RedisTestServer,
+	startRedisTestServer,
+} from "../../../test-support/redis-test-server";
 import {
 	createRedisLiveStreamStore,
 	encodeAgUiLiveStreamEvent,
@@ -22,68 +26,15 @@ import {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-async function waitUntil(
-	condition: () => boolean | Promise<boolean>,
-	timeoutMs = 3_000,
-): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (!(await condition())) {
-		if (Date.now() >= deadline) throw new Error("condition timed out");
-		await Bun.sleep(20);
-	}
-}
-
-async function freePort(): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const server = createServer();
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const address = server.address();
-			if (!address || typeof address === "string") {
-				server.close();
-				reject(new Error("failed to allocate Redis test port"));
-				return;
-			}
-			server.close((error) => (error ? reject(error) : resolve(address.port)));
-		});
-	});
-}
-
-type RedisProcess = ReturnType<typeof Bun.spawn>;
-
 async function startRedis(
 	port: number,
 	password?: string,
-): Promise<RedisProcess> {
-	const serverArguments = [
-		"redis-server",
-		"--bind",
-		"127.0.0.1",
-		"--port",
-		String(port),
-		"--save",
-		"",
-		"--appendonly",
-		"no",
-	];
-	if (password) serverArguments.push("--requirepass", password);
-	const process = Bun.spawn(serverArguments, {
-		stdout: "ignore",
-		stderr: "ignore",
-	});
-	await waitUntil(async () => {
-		const pingArguments = ["redis-cli", "-h", "127.0.0.1", "-p", String(port)];
-		if (password) pingArguments.push("-a", password);
-		pingArguments.push("ping");
-		const ping = Bun.spawn(pingArguments, { stdout: "pipe", stderr: "ignore" });
-		return (await ping.exited) === 0;
-	});
-	return process;
+): Promise<RedisTestServer> {
+	return startRedisTestServer({ port, password });
 }
 
-async function stopRedis(process: RedisProcess): Promise<void> {
-	process.kill("SIGTERM");
-	await process.exited;
+async function stopRedis(server: RedisTestServer): Promise<void> {
+	await server.stop();
 }
 
 async function collect(
