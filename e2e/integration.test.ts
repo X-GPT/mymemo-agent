@@ -1030,7 +1030,7 @@ describe.skipIf(!RUN)(
 				const prompt = "Synthetic text-only equality scenario";
 				const turn = await admitIntegrationRun(prompt);
 				await startEventWriter({
-					INTEGRATION_RESUME_DELAY_MS: "0",
+					INTEGRATION_RESUME_DELAY_MS: "1500",
 				});
 
 				const response = await turn.response;
@@ -1409,8 +1409,11 @@ describe.skipIf(!RUN)(
 					status: "canceled",
 				});
 				const queuedResponse = await queued.response;
-				expect(queuedResponse.status).toBe(200);
-				expect(parseSSE(await queuedResponse.text())).toEqual([]);
+				expect(queuedResponse.status).toBe(410);
+				expect(await queuedResponse.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
 				const queuedHistory = await waitForHistoryRun(
 					queued.conversationId,
 					queued.runId,
