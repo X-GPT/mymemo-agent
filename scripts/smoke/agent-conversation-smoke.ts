@@ -2,6 +2,10 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import {
+	parseRawAgUiSse as parseSSE,
+	type RawAgUiSseFrame,
+} from "@mymemo/test-support/ag-ui-sse";
 import type { PublicToolName } from "../../packages/agent-db/src/run-events";
 import {
 	type ClientContractMessage,
@@ -47,11 +51,6 @@ const INTERRUPTED_TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 	...TURN_HISTORY_EVENT_TYPES,
 	"RUN_CANCELLED",
 ]);
-
-interface SSEFrame {
-	event: string;
-	data: string;
-}
 
 interface TurnResult {
 	runId: string;
@@ -548,7 +547,7 @@ async function verifyRunningRunCancellation(
 		throw new Error("interrupt-check event response was not an SSE stream");
 	}
 
-	const frames: SSEFrame[] = [];
+	const frames: RawAgUiSseFrame[] = [];
 	const client = createClientContractFixture();
 	let interruptSent = false;
 
@@ -900,7 +899,7 @@ async function verifyHistoryRecovery(
 	}
 }
 
-function durableToolFrames(frames: SSEFrame[]): DurableToolFrame[] {
+function durableToolFrames(frames: RawAgUiSseFrame[]): DurableToolFrame[] {
 	return frames.flatMap((frame) => {
 		if (
 			frame.event !== "TOOL_CALL_START" &&
@@ -928,7 +927,7 @@ function recordData(value: unknown): Record<string, unknown> {
 
 async function readSSEIncrementally(
 	response: Response,
-	onFrame: (frame: SSEFrame) => Promise<void>,
+	onFrame: (frame: RawAgUiSseFrame) => Promise<void>,
 ): Promise<void> {
 	if (!response.body) throw new Error("event response had no body");
 	const reader = response.body.getReader();
@@ -957,36 +956,10 @@ async function readSSEIncrementally(
 	if (buffer.trim()) await dispatch(buffer);
 }
 
-function parseSSE(raw: string): SSEFrame[] {
-	const frames: SSEFrame[] = [];
-	for (const block of raw.replaceAll("\r\n", "\n").split("\n\n")) {
-		let event = "";
-		const data: string[] = [];
-		for (const line of block.split("\n")) {
-			if (line.startsWith("id:")) {
-				throw new Error("event stream carried an unexpected SSE id");
-			}
-			if (line.startsWith("event:")) {
-				event = line.slice("event:".length).trim();
-			} else if (line.startsWith("data:")) {
-				data.push(line.slice("data:".length).trimStart());
-			}
-		}
-		const frameData = data.join("\n");
-		if (!event && frameData) {
-			try {
-				const parsed = JSON.parse(frameData) as { type?: unknown };
-				if (typeof parsed.type === "string") event = parsed.type;
-			} catch {
-				// parseFrameData reports malformed JSON with event context.
-			}
-		}
-		if (event) frames.push({ event, data: frameData });
-	}
-	return frames;
-}
-
-function stringField(frame: SSEFrame | undefined, field: string): string {
+function stringField(
+	frame: RawAgUiSseFrame | undefined,
+	field: string,
+): string {
 	if (!frame)
 		throw new Error(`event stream did not include the ${field} frame`);
 	const value = parseFrameData(frame);
@@ -1000,7 +973,7 @@ function stringField(frame: SSEFrame | undefined, field: string): string {
 	return (value as Record<string, string>)[field] as string;
 }
 
-function parseFrameData(frame: SSEFrame): unknown {
+function parseFrameData(frame: RawAgUiSseFrame): unknown {
 	try {
 		return JSON.parse(frame.data);
 	} catch {

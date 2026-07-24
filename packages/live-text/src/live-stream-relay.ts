@@ -22,6 +22,8 @@ import {
 } from "./live-stream-validation";
 
 const DEFAULT_BACKLOG_WAIT_MS = 250;
+const EVENT_ENCODER = new TextEncoder();
+const EVENT_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 export interface LiveStreamRelayOptions {
 	backlogWaitMs?: number;
@@ -187,7 +189,6 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 		let timeout: ReturnType<typeof setTimeout> | undefined;
 		let liveSubscription: LiveStreamSubscription | undefined;
 		let replySubscription: LiveStreamSubscription | undefined;
-		let settleAborted: (() => void) | undefined;
 
 		const closeSubscriptions = async () => {
 			await Promise.allSettled([
@@ -195,14 +196,20 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 				replySubscription?.close(),
 			]);
 		};
+		type AttachSettlement =
+			| { outcome: "aborted" }
+			| { outcome: "attached"; reply: BacklogEventsReply }
+			| { outcome: "relay_failed" }
+			| { outcome: "no_producer" }
+			| { outcome: "error"; error: unknown };
+		let settle!: (result: AttachSettlement) => void;
 		const abort = () => {
 			if (settled) {
 				queue.end();
 				return;
 			}
-			settleAborted?.();
+			settle({ outcome: "aborted" });
 		};
-		signal.addEventListener("abort", abort, { once: true });
 
 		const drainLive = () => {
 			while (nextOrdinal !== undefined) {
@@ -216,54 +223,62 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 		};
 
 		const attached = new Promise<LiveStreamAttachResult>((resolve, reject) => {
-			settleAborted = () => {
+			settle = (result: AttachSettlement): void => {
 				if (settled) return;
 				settled = true;
 				if (timeout !== undefined) clearTimeout(timeout);
-				signal.removeEventListener("abort", abort);
-				void closeSubscriptions();
-				recordTelemetry(this.#telemetry, "attach_attempt", "aborted", {
-					durationMs: performance.now() - startedAt,
-				});
-				resolve({ outcome: "aborted" });
-			};
-			const settleAttached = (reply: BacklogEventsReply) => {
-				if (settled) return;
-				settled = true;
-				if (timeout !== undefined) clearTimeout(timeout);
-				nextOrdinal = reply.count;
-				for (const ordinal of pendingLive.keys()) {
-					if (ordinal < reply.count) pendingLive.delete(ordinal);
+
+				if (result.outcome === "attached") {
+					nextOrdinal = result.reply.count;
+					for (const ordinal of pendingLive.keys()) {
+						if (ordinal < result.reply.count) pendingLive.delete(ordinal);
+					}
+					for (const event of result.reply.events) {
+						queue.push(encodeEvent(event));
+						if (isTerminalEvent(event)) queue.end();
+					}
+					drainLive();
+					void replySubscription?.close();
+					recordTelemetry(this.#telemetry, "attach_attempt", "success", {
+						durationMs: performance.now() - startedAt,
+					});
+					resolve({
+						outcome: "attached",
+						events: queue.iterate(async () => {
+							signal.removeEventListener("abort", abort);
+							await closeSubscriptions();
+						}),
+					});
+					return;
 				}
-				for (const event of reply.events) {
-					queue.push(encodeEvent(event));
-					if (isTerminalEvent(event)) queue.end();
-				}
-				drainLive();
-				void replySubscription?.close();
-				recordTelemetry(this.#telemetry, "attach_attempt", "success", {
-					durationMs: performance.now() - startedAt,
-				});
-				resolve({
-					outcome: "attached",
-					events: queue.iterate(async () => {
-						signal.removeEventListener("abort", abort);
-						await closeSubscriptions();
-					}),
-				});
-			};
-			const settleRelayFailed = () => {
-				if (settled) return;
-				settled = true;
-				if (timeout !== undefined) clearTimeout(timeout);
+
 				signal.removeEventListener("abort", abort);
-				queue.fail(new LiveStreamRelayError("relay_failed"));
+				if (result.outcome === "relay_failed") {
+					queue.fail(new LiveStreamRelayError("relay_failed"));
+					void closeSubscriptions();
+					recordTelemetry(this.#telemetry, "attach_attempt", "failure", {
+						reason: "relay_failed",
+						durationMs: performance.now() - startedAt,
+					});
+					resolve({ outcome: "relay_failed" });
+					return;
+				}
+
+				if (result.outcome === "error") {
+					queue.fail(result.error);
+					recordTelemetry(this.#telemetry, "attach_attempt", "failure", {
+						reason: classifyLiveStreamFailure(result.error),
+						durationMs: performance.now() - startedAt,
+					});
+					void closeSubscriptions().then(() => reject(result.error));
+					return;
+				}
+
 				void closeSubscriptions();
-				recordTelemetry(this.#telemetry, "attach_attempt", "failure", {
-					reason: "relay_failed",
+				recordTelemetry(this.#telemetry, "attach_attempt", result.outcome, {
 					durationMs: performance.now() - startedAt,
 				});
-				resolve({ outcome: "relay_failed" });
+				resolve(result);
 			};
 
 			void (async () => {
@@ -274,7 +289,7 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 						if (!envelope) return;
 						if (envelope.type === "relay_failed") {
 							if (!settled) {
-								settleRelayFailed();
+								settle({ outcome: "relay_failed" });
 								return;
 							}
 							queue.fail(new LiveStreamRelayError("relay_failed"));
@@ -292,7 +307,7 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 							queue.fail(new LiveStreamRelayError("relay_failed"));
 							return;
 						}
-						settleRelayFailed();
+						settle({ outcome: "relay_failed" });
 					},
 				);
 				await this.#testHooks?.afterLiveSubscribed?.();
@@ -305,43 +320,30 @@ export class ProducerBufferedLiveStreamRelay implements LiveStreamRelay {
 					replyChannel,
 					(message) => {
 						const reply = parseBacklogReply(message);
-						if (reply?.outcome === "backlog") settleAttached(reply);
-						if (reply?.outcome === "relay_failed") settleRelayFailed();
+						if (reply?.outcome === "backlog") {
+							settle({ outcome: "attached", reply });
+						}
+						if (reply?.outcome === "relay_failed") {
+							settle({ outcome: "relay_failed" });
+						}
 					},
-					() => settleRelayFailed(),
+					() => settle({ outcome: "relay_failed" }),
 				);
 				if (settled) {
 					await replySubscription.close();
 					return;
 				}
-				timeout = setTimeout(() => {
-					if (settled) return;
-					settled = true;
-					signal.removeEventListener("abort", abort);
-					void closeSubscriptions();
-					recordTelemetry(this.#telemetry, "attach_attempt", "no_producer", {
-						durationMs: performance.now() - startedAt,
-					});
-					resolve({ outcome: "no_producer" });
-				}, this.#backlogWaitMs);
+				timeout = setTimeout(
+					() => settle({ outcome: "no_producer" }),
+					this.#backlogWaitMs,
+				);
 				await this.#transport.publish(
 					this.#requestChannel(runId),
 					JSON.stringify({ replyChannel } satisfies BacklogRequest),
 				);
-			})().catch(async (error) => {
-				if (settled) return;
-				settled = true;
-				if (timeout !== undefined) clearTimeout(timeout);
-				signal.removeEventListener("abort", abort);
-				await closeSubscriptions();
-				queue.fail(error);
-				recordTelemetry(this.#telemetry, "attach_attempt", "failure", {
-					reason: classifyLiveStreamFailure(error),
-					durationMs: performance.now() - startedAt,
-				});
-				reject(error);
-			});
+			})().catch((error) => settle({ outcome: "error", error }));
 		});
+		signal.addEventListener("abort", abort, { once: true });
 
 		return attached;
 	}
@@ -603,8 +605,7 @@ function parseLiveEnvelope(message: string): LiveEnvelope | undefined {
 		if (parsed.type === "relay_failed") return { type: "relay_failed" };
 		if (
 			parsed.type !== "event" ||
-			!Number.isSafeInteger(parsed.ordinal) ||
-			(typeof parsed.ordinal === "number" ? parsed.ordinal : -1) < 0 ||
+			!isNonNegativeSafeInteger(parsed.ordinal) ||
 			typeof parsed.event !== "string"
 		) {
 			return undefined;
@@ -639,8 +640,7 @@ function parseBacklogReply(message: string): BacklogReply | undefined {
 		}
 		if (
 			parsed.outcome !== "backlog" ||
-			!Number.isSafeInteger(parsed.count) ||
-			(typeof parsed.count === "number" ? parsed.count : -1) < 0 ||
+			!isNonNegativeSafeInteger(parsed.count) ||
 			!Array.isArray(parsed.events) ||
 			parsed.events.some((event) => typeof event !== "string") ||
 			parsed.events.length !== parsed.count
@@ -657,12 +657,16 @@ function parseBacklogReply(message: string): BacklogReply | undefined {
 	}
 }
 
+function isNonNegativeSafeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function decodeEvent(event: Uint8Array): string {
-	return new TextDecoder("utf-8", { fatal: true }).decode(event);
+	return EVENT_DECODER.decode(event);
 }
 
 function encodeEvent(event: string): Uint8Array {
-	return new TextEncoder().encode(event);
+	return EVENT_ENCODER.encode(event);
 }
 
 function isTerminalEvent(event: string): boolean {

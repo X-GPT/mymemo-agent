@@ -39,11 +39,14 @@ import {
 } from "bun:test";
 import { resolve } from "node:path";
 import {
+	type AgUiSseFrame,
+	parseAgUiSse,
+} from "@mymemo/test-support/ag-ui-sse";
+import {
 	findFreePort,
 	type RedisTestServer,
 	startRedisTestServer,
-} from "../test-support/redis-test-server";
-import { type AgUiSseFrame, parseAgUiSse } from "./ag-ui-sse";
+} from "@mymemo/test-support/redis-test-server";
 
 const DB_URL = process.env.AGENT_DATABASE_URL;
 const RUN = Boolean(DB_URL);

@@ -46,7 +46,7 @@ const redisRelayContractTest = readFileSync(
 	"utf8",
 );
 const redisTestServer = readFileSync(
-	join(root, "test-support", "redis-test-server.ts"),
+	join(root, "packages", "test-support", "redis-test-server.ts"),
 	"utf8",
 );
 const createAgentSecretsScript = readFileSync(
@@ -294,7 +294,7 @@ describe("agent deployment config", () => {
 		expect(ciWorkflow).toContain("redis-server");
 		expect(ciWorkflow).toContain("bun run test");
 		expect(redisRelayContractTest).toContain(
-			'from "../../../test-support/redis-test-server"',
+			'from "@mymemo/test-support/redis-test-server"',
 		);
 		expect(redisTestServer).toContain('"redis-server"');
 	});
