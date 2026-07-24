@@ -8,8 +8,8 @@
 		"terraform:validate": "terraform -chdir=infra/bootstrap-iam validate && terraform -chdir=infra/terraform validate && terraform -chdir=infra/ecr validate && terraform -chdir=infra/dev validate"
 	},
 	"devDependencies": {
-		"@mymemo/test-support": "workspace:*",
 		"@biomejs/biome": "^2.3.11",
+		"@mymemo/test-support": "workspace:*",
 		"@types/bun": "latest"
 	},
 	"peerDependencies": {

@@ -222,7 +222,7 @@ interface AttachedAgUiReader {
 		writeSSE: (event: { data: string }) => Promise<unknown>,
 		readFailureMessage: string,
 		firstRead?: AttachedFirstRead,
-	): Promise<AttachedFirstRead | { outcome: "streamed" }>;
+	): Promise<void>;
 	close(): Promise<void>;
 }
 
@@ -255,11 +255,10 @@ function openAttachedAgUiReader(
 					runId: run.runId,
 					reason: classifyLiveStreamFailure(first.error),
 				});
-				return first;
+				return;
 			}
-			if (first.outcome === "ended") return first;
+			if (first.outcome === "ended") return;
 			await writeAgUiEvents(c, run.runId, iterator, first.first, writeSSE);
-			return { outcome: "streamed" };
 		},
 		async close() {
 			if (closed) return;
