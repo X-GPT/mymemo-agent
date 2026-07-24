@@ -259,7 +259,7 @@ describe("consumeAgentStream", () => {
 		]);
 	});
 
-	it("waits for an in-flight retained content append before surfacing failure", async () => {
+	it("waits for an in-flight content append before surfacing failure", async () => {
 		const contentStarted = deferred();
 		const releaseContent = deferred();
 		const messages = textEnvelope({ completeText: "hello" });

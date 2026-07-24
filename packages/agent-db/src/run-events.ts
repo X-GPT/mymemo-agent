@@ -4,7 +4,7 @@
  * exactly one place: chat-api's run queue writes `run_started`; the agent-worker
  * writes assistant text and tool events and, through the run-store terminal
  * helpers, the terminal events. Permanent-history readers consume this same
- * vocabulary; retained AG-UI delivery is written directly to Redis.
+ * vocabulary; live AG-UI delivery uses the separate producer-buffered relay.
  *
  * Appenders MUST use these constants, never the raw strings, so a rename cannot
  * silently desync a writer from the projector (a text event written under the
