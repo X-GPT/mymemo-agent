@@ -1,10 +1,4 @@
 import { randomUUID } from "node:crypto";
-import {
-	type AGUIEvent,
-	EventSchemas,
-	EventType,
-	type TextMessageContentEvent,
-} from "@ag-ui/core";
 import type {
 	ResumableStreamAcquireOptions,
 	ResumableStreamEntry,
@@ -13,38 +7,26 @@ import type {
 	ResumableStreamStore,
 } from "assistant-stream/resumable";
 import { createClient } from "redis";
-import { z } from "zod";
-import type { LiveStreamReason } from "./live-stream-telemetry";
+import {
+	decodeAgUiLiveStreamEvent,
+	LIVE_STREAM_MAX_BYTES,
+	LIVE_STREAM_MAX_EVENT_BYTES,
+	LIVE_STREAM_MAX_EVENTS,
+	LiveStreamStoreError,
+} from "./live-stream-events";
+import {
+	requirePositiveInteger,
+	validateLiveStreamDeployment,
+	validateLiveStreamRunId,
+} from "./live-stream-validation";
 
 export const LIVE_STREAM_RETENTION_MS = 30 * 60 * 1_000;
-export const LIVE_STREAM_MAX_EVENT_BYTES = 32 * 1_024;
-export const LIVE_STREAM_MAX_BYTES = 8 * 1_024 * 1_024;
-export const LIVE_STREAM_MAX_EVENTS = 10_000;
-export const LIVE_STREAM_TEXT_EVENT_TARGET_BYTES = 16 * 1_024;
 
-const MAX_RUN_ID_LENGTH = 128;
-const RUN_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
-const MAX_DEPLOYMENT_LENGTH = 64;
-const DEPLOYMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
 const DEFAULT_REDIS_OPERATION_TIMEOUT_MS = 250;
 const DEFAULT_REDIS_POLL_INTERVAL_MS = 100;
 const REDIS_BLOB_STRING = 36;
 const REDIS_STREAM_ID_PATTERN = /^(0|[1-9]\d*)-(0|[1-9]\d*)$/;
 const REDIS_STREAM_ID_PART_MAX = (1n << 64n) - 1n;
-
-/** AG-UI's cancellation terminal is not present in the currently pinned core
- * package, so keep its standard wire shape at the Live Stream boundary. */
-export const RUN_CANCELLED_EVENT_TYPE = "RUN_CANCELLED" as const;
-const RunCancelledEventSchema = z
-	.object({
-		type: z.literal(RUN_CANCELLED_EVENT_TYPE),
-		threadId: z.string().min(1).max(MAX_RUN_ID_LENGTH),
-		runId: z.string().min(1).max(MAX_RUN_ID_LENGTH),
-	})
-	.strict();
-
-export type RunCancelledEvent = z.infer<typeof RunCancelledEventSchema>;
-export type LiveStreamEvent = AGUIEvent | RunCancelledEvent;
 
 const ACQUIRE_SCRIPT = `
 if redis.call("EXISTS", KEYS[1]) == 1 then
@@ -160,7 +142,6 @@ return "refreshed"
 
 type RedisClient = ReturnType<typeof createClient>;
 const EVENT_ENCODER = new TextEncoder();
-const EVENT_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 export interface RedisLiveStreamStoreOptions {
 	/** Authenticated rediss:// in production; loopback redis:// is test-only. */
@@ -190,55 +171,6 @@ export interface LiveStreamStore extends ResumableStreamStore {
  * methods stay unavailable at the HTTP edge. */
 export type LiveStreamReader = Pick<LiveStreamStore, "read" | "status">;
 
-export type LiveStreamStoreErrorCode =
-	| "missing"
-	| "finalized"
-	| "not_producer"
-	| "invalid_cursor"
-	| "invalid_event"
-	| "append_retry_conflict"
-	| "finalize_conflict"
-	| "event_too_large"
-	| "stream_bytes_exceeded"
-	| "stream_events_exceeded";
-
-export class LiveStreamStoreError extends Error {
-	override readonly name = "LiveStreamStoreError";
-
-	constructor(readonly code: LiveStreamStoreErrorCode) {
-		super(errorMessage(code));
-	}
-}
-
-/** Collapse adapter and infrastructure failures to the bounded reason
- * vocabulary shared by producer and reconnect telemetry. */
-export function classifyLiveStreamFailure(error: unknown): LiveStreamReason {
-	return error instanceof LiveStreamStoreError
-		? error.code
-		: "redis_unavailable";
-}
-
-/**
- * Validate and serialize one standard AG-UI event. Large text-content deltas
- * become several complete events; no other event is split or truncated.
- */
-export function encodeAgUiLiveStreamEvent(
-	event: LiveStreamEvent,
-): Uint8Array[] {
-	const parsed = parseLiveStreamEvent(event);
-	const encoded = encodeEvent(parsed);
-	if (parsed.type !== EventType.TEXT_MESSAGE_CONTENT) {
-		if (encoded.byteLength > LIVE_STREAM_MAX_EVENT_BYTES) {
-			throw new LiveStreamStoreError("event_too_large");
-		}
-		return [encoded];
-	}
-	if (encoded.byteLength <= LIVE_STREAM_TEXT_EVENT_TARGET_BYTES) {
-		return [encoded];
-	}
-	return splitTextContentEvent(parsed);
-}
-
 class RedisLiveStreamStore implements LiveStreamStore {
 	readonly #client: RedisClient;
 	readonly #keyPrefix: string;
@@ -251,36 +183,30 @@ class RedisLiveStreamStore implements LiveStreamStore {
 	#closed = false;
 
 	constructor(options: RedisLiveStreamStoreOptions) {
-		if (
-			options.deployment.length < 1 ||
-			options.deployment.length > MAX_DEPLOYMENT_LENGTH ||
-			!DEPLOYMENT_PATTERN.test(options.deployment)
-		) {
-			throw new Error("deployment must be a path-safe identifier");
-		}
+		validateLiveStreamDeployment(options.deployment);
 		this.#retentionMs = Math.min(
-			positiveInteger(
+			requirePositiveInteger(
 				options.testLimits?.retentionMs ?? LIVE_STREAM_RETENTION_MS,
 				"retentionMs",
 			),
 			LIVE_STREAM_RETENTION_MS,
 		);
 		this.#maxEventBytes = Math.min(
-			positiveInteger(
+			requirePositiveInteger(
 				options.testLimits?.maxEventBytes ?? LIVE_STREAM_MAX_EVENT_BYTES,
 				"maxEventBytes",
 			),
 			LIVE_STREAM_MAX_EVENT_BYTES,
 		);
 		this.#maxStreamBytes = Math.min(
-			positiveInteger(
+			requirePositiveInteger(
 				options.testLimits?.maxStreamBytes ?? LIVE_STREAM_MAX_BYTES,
 				"maxStreamBytes",
 			),
 			LIVE_STREAM_MAX_BYTES,
 		);
 		this.#maxEvents = Math.min(
-			positiveInteger(
+			requirePositiveInteger(
 				options.testLimits?.maxEvents ?? LIVE_STREAM_MAX_EVENTS,
 				"maxEvents",
 			),
@@ -302,10 +228,10 @@ class RedisLiveStreamStore implements LiveStreamStore {
 		options: ResumableStreamAcquireOptions = {},
 	): Promise<ResumableStreamRole> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		if (
 			options.ttlMs !== undefined &&
-			positiveInteger(options.ttlMs, "ttlMs") !== this.#retentionMs
+			requirePositiveInteger(options.ttlMs, "ttlMs") !== this.#retentionMs
 		) {
 			throw new Error("ttlMs is fixed by the Live Stream retention policy");
 		}
@@ -351,7 +277,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 		chunk: Uint8Array,
 	): Promise<{ cursor: string; appended: boolean }> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		validateEncodedAgUiEvent(chunk);
 		const producerToken = this.#producerToken(streamId);
 		const result = parseArrayReply(
@@ -381,7 +307,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 		error?: string,
 	): Promise<void> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		const producerToken = this.#producerToken(streamId);
 		const result = replyString(
 			await this.#command([
@@ -407,7 +333,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 
 	async refresh(streamId: string): Promise<boolean> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		const producerToken = this.#producerToken(streamId);
 		const result = replyString(
 			await this.#command([
@@ -433,7 +359,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 		signal: AbortSignal,
 	): AsyncIterable<ResumableStreamEntry> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		const normalizedCursor = parseLiveStreamCursor(cursor);
 		const initialMetadata = await this.#readMetadata(streamId);
 		if (!initialMetadata) {
@@ -498,7 +424,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 
 	async status(streamId: string): Promise<ResumableStreamStatus> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		const metadata = await this.#readMetadata(streamId);
 		if (!metadata) return "missing";
 		if (
@@ -513,7 +439,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 
 	async delete(streamId: string): Promise<void> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		await this.#command([
 			"DEL",
 			this.#metaKey(streamId),
@@ -610,96 +536,12 @@ export function createRedisLiveStreamStore(
 	return new RedisLiveStreamStore(options);
 }
 
-function validateRunId(streamId: string): void {
-	if (
-		streamId.length < 1 ||
-		streamId.length > MAX_RUN_ID_LENGTH ||
-		!RUN_ID_PATTERN.test(streamId)
-	) {
-		throw new Error("streamId must be a path-safe Run identifier");
-	}
-}
-
 function validateRetryId(retryId: string): void {
-	if (
-		retryId.length < 1 ||
-		retryId.length > MAX_RUN_ID_LENGTH ||
-		!RUN_ID_PATTERN.test(retryId)
-	) {
-		throw new Error("retryId must be a path-safe identifier");
-	}
-}
-
-function positiveInteger(value: number, name: string): number {
-	if (!Number.isSafeInteger(value) || value < 1) {
-		throw new Error(`${name} must be a positive integer`);
-	}
-	return value;
-}
-
-function encodeEvent(event: LiveStreamEvent): Uint8Array {
-	return EVENT_ENCODER.encode(JSON.stringify(event));
+	validateLiveStreamRunId(retryId, "retryId");
 }
 
 function validateEncodedAgUiEvent(chunk: Uint8Array): void {
-	try {
-		parseLiveStreamEvent(JSON.parse(EVENT_DECODER.decode(chunk)));
-	} catch {
-		throw new LiveStreamStoreError("invalid_event");
-	}
-}
-
-function parseLiveStreamEvent(event: unknown): LiveStreamEvent {
-	if (
-		typeof event === "object" &&
-		event !== null &&
-		"type" in event &&
-		event.type === RUN_CANCELLED_EVENT_TYPE
-	) {
-		return RunCancelledEventSchema.parse(event);
-	}
-	return EventSchemas.parse(event);
-}
-
-function splitTextContentEvent(event: TextMessageContentEvent): Uint8Array[] {
-	const emptyEventBytes = encodeEvent({ ...event, delta: "" }).byteLength;
-	const deltaBudget = LIVE_STREAM_TEXT_EVENT_TARGET_BYTES - emptyEventBytes;
-	if (deltaBudget < 1) {
-		throw new LiveStreamStoreError("event_too_large");
-	}
-
-	const deltas: string[] = [];
-	let current = "";
-	let currentBytes = 0;
-	for (const codePoint of event.delta) {
-		const codePointBytes = jsonStringContentBytes(codePoint);
-		if (codePointBytes > deltaBudget) {
-			throw new LiveStreamStoreError("event_too_large");
-		}
-		if (current && currentBytes + codePointBytes > deltaBudget) {
-			deltas.push(current);
-			current = "";
-			currentBytes = 0;
-		}
-		current += codePoint;
-		currentBytes += codePointBytes;
-	}
-	if (current) deltas.push(current);
-	if (deltas.length === 0) {
-		throw new LiveStreamStoreError("event_too_large");
-	}
-
-	return deltas.map((delta) => {
-		const chunk = encodeEvent({ ...event, delta });
-		if (chunk.byteLength > LIVE_STREAM_TEXT_EVENT_TARGET_BYTES) {
-			throw new LiveStreamStoreError("event_too_large");
-		}
-		return chunk;
-	});
-}
-
-function jsonStringContentBytes(value: string): number {
-	return EVENT_ENCODER.encode(JSON.stringify(value)).byteLength - 2;
+	decodeAgUiLiveStreamEvent(chunk);
 }
 
 interface StreamMetadata {
@@ -799,31 +641,6 @@ function storeError(code: string | undefined): LiveStreamStoreError {
 		return new LiveStreamStoreError(code);
 	}
 	return new LiveStreamStoreError("missing");
-}
-
-function errorMessage(code: LiveStreamStoreErrorCode): string {
-	switch (code) {
-		case "missing":
-			return "Live Stream is unavailable";
-		case "finalized":
-			return "Live Stream is already finalized";
-		case "not_producer":
-			return "Live Stream producer ownership is required";
-		case "invalid_cursor":
-			return "Live Stream cursor is invalid";
-		case "invalid_event":
-			return "Live Stream entry is not a standard AG-UI event";
-		case "append_retry_conflict":
-			return "Live Stream append retry conflicts with its prior event";
-		case "finalize_conflict":
-			return "Live Stream finalization conflicts with its terminal state";
-		case "event_too_large":
-			return "Live Stream event exceeds the size limit";
-		case "stream_bytes_exceeded":
-			return "Live Stream byte limit exceeded";
-		case "stream_events_exceeded":
-			return "Live Stream event limit exceeded";
-	}
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {

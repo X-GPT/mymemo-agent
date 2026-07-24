@@ -1,4 +1,15 @@
+export * from "./in-memory-live-stream-relay";
+export * from "./live-stream-events";
+export type {
+	LiveStreamAttachResult,
+	LiveStreamProducer,
+	LiveStreamRelay,
+	LiveStreamRelayOptions,
+	LiveStreamSubscription,
+} from "./live-stream-relay";
 export * from "./live-stream-telemetry";
+export * from "./live-stream-validation";
+export * from "./redis-live-stream-relay";
 export * from "./redis-live-stream-store";
 
 /** Validate the required Redis Live Stream secret without connecting at boot. */

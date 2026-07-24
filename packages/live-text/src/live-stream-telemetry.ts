@@ -3,8 +3,11 @@ export type LiveStreamService = "agent-worker" | "chat-api";
 export type LiveStreamOperation =
 	| "acquire"
 	| "append"
+	| "attach_attempt"
+	| "backlog_request"
 	| "degradation"
 	| "finalize"
+	| "publish"
 	| "read_wait"
 	| "reconnect_response"
 	| "recovery_response"
@@ -17,6 +20,7 @@ export type LiveStreamResult =
 	| "failure"
 	| "finalized"
 	| "history_410"
+	| "no_producer"
 	| "producer"
 	| "retry"
 	| "retryable_503"
@@ -34,10 +38,17 @@ export type LiveStreamReason =
 	| "missing"
 	| "not_producer"
 	| "operation_failed"
+	| "producer_closed"
+	| "producer_failed"
+	| "relay_closed"
+	| "relay_failed"
 	| "redis_unavailable"
 	| "stale_worker"
 	| "stream_bytes_exceeded"
-	| "stream_events_exceeded";
+	| "stream_events_exceeded"
+	| "terminal_already_published"
+	| "terminal_not_allowed"
+	| "terminal_required";
 
 export interface LiveStreamMetricEvent extends Record<string, unknown> {
 	message: "Live Stream metric";
