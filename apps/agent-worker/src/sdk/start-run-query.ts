@@ -398,7 +398,7 @@ function buildQueryOptions(
 
 	return {
 		// Provider envelope boundaries are the durable Assistant-message contract,
-		// so partial SDK stream events are required even when Live preview is off.
+		// so partial SDK stream events are required for retained AG-UI text delivery.
 		includePartialMessages: true,
 		// Two independent guards (ADR-0006): every built-in tool is disabled, and
 		// even a tool that reappeared is denied — never prompted, never executed

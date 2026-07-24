@@ -13,6 +13,7 @@ function baseEnv(): Record<string, string | undefined> {
 		AGENT_DATABASE_URL: "postgresql://u:p@localhost:5432/mymemo_agent",
 		ARTIFACT_BUCKET: "mymemo-agent-test-artifacts",
 		AWS_REGION: "us-west-2",
+		REDIS_URL: "rediss://default:secret@redis.internal:6379",
 		STATSIG_SERVER_SECRET: "secret-statsig",
 		DB_SSL: "disable",
 	};
@@ -148,21 +149,22 @@ describe("loadApiConfigFromEnv — split-runtime core", () => {
 	});
 });
 
-describe("loadApiConfigFromEnv — additive Live Redis deployment", () => {
+describe("loadApiConfigFromEnv — required Live Stream Redis", () => {
 	it("accepts only an authenticated TLS URL", () => {
 		const env = baseEnv();
-		env.REDIS_URL = "rediss://default:secret@redis.internal:6379";
-		expect(loadApiConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
+		expect(loadApiConfigFromEnv(env).redisUrl).toBe(
+			"rediss://default:secret@redis.internal:6379",
+		);
 	});
 
 	it("allows insecure loopback Redis only under the integration-test switch", () => {
 		const env = baseEnv();
 		env.REDIS_URL = "redis://127.0.0.1:6379";
 		env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS = "true";
-		expect(loadApiConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
+		expect(loadApiConfigFromEnv(env).redisUrl).toBe(env.REDIS_URL);
 	});
 
-	it("degrades missing, malformed, or insecure Redis configuration", () => {
+	it("refuses to boot with missing, malformed, or insecure Redis configuration", () => {
 		for (const redisUrl of [
 			undefined,
 			"not a URL",
@@ -171,8 +173,7 @@ describe("loadApiConfigFromEnv — additive Live Redis deployment", () => {
 		]) {
 			const env = baseEnv();
 			env.REDIS_URL = redisUrl;
-			expect(() => loadApiConfigFromEnv(env)).not.toThrow();
-			expect(loadApiConfigFromEnv(env).liveTextRedisUrl).toBeUndefined();
+			expect(() => loadApiConfigFromEnv(env)).toThrow(/REDIS_URL/);
 		}
 	});
 });

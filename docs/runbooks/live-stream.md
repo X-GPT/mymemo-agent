@@ -5,6 +5,13 @@ authoritative for Run execution, complete messages, Tool activity, and terminal
 Outcomes. A Live Stream alarm is a delivery incident: it must not fail service
 health, restart a Run, or be counted as a model or Run failure.
 
+Both trusted services require `REDIS_URL` at startup. It must be an
+authenticated `rediss://` URL; missing, malformed, unauthenticated, or
+plaintext production configuration is a deployment failure. The only exception
+is the explicit local-test flag for a literal loopback `redis://` host. Startup
+validates the secret's shape without connecting, so runtime Redis availability
+remains outside readiness and health.
+
 ## Ownership and signals
 
 The CloudWatch namespace `<name-prefix>-<environment>/LiveStream` contains:

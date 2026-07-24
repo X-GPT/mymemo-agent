@@ -1,7 +1,7 @@
 # SPIKE: E2B semantics gate (Task 4.1) — THROWAWAY CODE
 
 **Question:** does the pinned E2B SDK (`e2b ^2.14.0`, resolved 2.19.0) actually
-provide the seven behaviors `docs/split-runtime-fargate-e2b-design.md` depends
+provide the seven behaviors the split-runtime implementation depends
 on for user-work durability, or does the design need the sandbox-side command
 wrapper / a separate durable workspace store?
 
@@ -40,5 +40,5 @@ only proves object distinctness; pricing goes in NOTES.md.
 ## When done
 
 Findings land in `NOTES.md` here and back in
-`docs/split-runtime-fargate-e2b-design.md` (as Task 4.1 instructs). Then this
+the relevant ADR and implementation notes. Then this
 directory gets deleted — do not import anything from it.

@@ -31,7 +31,7 @@ export class RunLiveStream {
 	#degradationEnded = false;
 
 	private constructor(
-		private readonly store: LiveStreamStore | undefined,
+		private readonly store: LiveStreamStore,
 		private readonly runId: string,
 		private readonly conversationId: string,
 		private readonly markLiveStreamFailed: () => Promise<LiveStreamFailureMarker>,
@@ -40,33 +40,26 @@ export class RunLiveStream {
 	) {}
 
 	static async open(options: {
-		store: LiveStreamStore | undefined;
+		store: LiveStreamStore;
 		runId: string;
 		conversationId: string;
 		markLiveStreamFailed: () => Promise<LiveStreamFailureMarker>;
 		logger: WorkerLogger;
 		telemetry?: LiveStreamTelemetry;
 	}): Promise<RunLiveStream> {
-		const store = options.store;
 		const stream = new RunLiveStream(
-			store,
+			options.store,
 			options.runId,
 			options.conversationId,
 			options.markLiveStreamFailed,
 			options.logger,
 			options.telemetry ?? disabledLiveStreamTelemetry,
 		);
-		if (!store) {
-			stream.telemetry.record("acquire", "failure", {
-				reason: "not_configured",
-			});
-			return stream;
-		}
 		try {
 			const role = await stream.#observe(
 				"acquire",
 				(value) => (value === "producer" ? "producer" : "consumer"),
-				() => store.acquire(options.runId),
+				() => options.store.acquire(options.runId),
 			);
 			if (role !== "producer") {
 				await stream.#disable(new LiveStreamStoreError("not_producer"));
@@ -85,15 +78,14 @@ export class RunLiveStream {
 	}
 
 	async append(event: LiveStreamEvent): Promise<void> {
-		const store = this.store;
-		if (!this.#enabled || !store) return;
+		if (!this.#enabled) return;
 		try {
 			await this.#observe(
 				"append",
 				() => "success",
 				async () => {
 					for (const chunk of encodeAgUiLiveStreamEvent(event)) {
-						await store.append(this.runId, chunk);
+						await this.store.append(this.runId, chunk);
 					}
 				},
 			);
@@ -103,13 +95,12 @@ export class RunLiveStream {
 	}
 
 	async refresh(): Promise<void> {
-		const store = this.store;
-		if (!this.#enabled || !store) return;
+		if (!this.#enabled) return;
 		try {
 			const refreshed = await this.#observe(
 				"refresh",
 				(value) => (value ? "success" : "finalized"),
-				() => store.refresh(this.runId),
+				() => this.store.refresh(this.runId),
 			);
 			if (!refreshed) {
 				await this.#disable(new LiveStreamStoreError("finalized"));
@@ -121,8 +112,7 @@ export class RunLiveStream {
 
 	/** Publish only after the matching Postgres terminal transaction commits. */
 	async finish(status: TerminalRunStatus): Promise<void> {
-		const store = this.store;
-		if (!this.#enabled || !store) {
+		if (!this.#enabled) {
 			await this.#retryFailureMarker();
 			this.#recordDegradationEnded();
 			return;
@@ -153,7 +143,7 @@ export class RunLiveStream {
 			await this.#observe(
 				"finalize",
 				() => "success",
-				() => store.finalize(this.runId, "done"),
+				() => this.store.finalize(this.runId, "done"),
 			);
 			this.#enabled = false;
 		} catch (error) {
@@ -174,12 +164,11 @@ export class RunLiveStream {
 			reason: this.#failureReason,
 		});
 		await this.#persistFailureMarker();
-		if (!wasEnabled || !this.store) return;
-		const store = this.store;
+		if (!wasEnabled) return;
 		await this.#observe(
 			"finalize",
 			() => "success",
-			() => store.finalize(this.runId, "error", "Live stream unavailable"),
+			() => this.store.finalize(this.runId, "error", "Live stream unavailable"),
 		).catch(() => {});
 	}
 

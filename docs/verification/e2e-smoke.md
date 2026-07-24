@@ -18,18 +18,18 @@ value fails before the first HTTP request.
   contract, exactly one committed Assistant message per Run, Agent-session
   resume, Workspace persistence, and byte-exact durable reconnect replay. The
   third asks the agent to write unique exact content under
-  `/home/user/artifacts/`; after `done`, the smoke requires exactly that
+  `/home/user/artifacts/`; after `RUN_FINISHED`, the smoke requires exactly that
   conversation-relative artifact path, checks its listed size against the
   downloaded object, obtains `{ downloadUrl }`, and fetches the URL without
   identity headers. The response must be an attachment whose bytes match the
   request, with exactly one trailing newline tolerated.
 - `full` is the local pre-merge superset. After the `core` checks it creates a
   second Conversation, asks its Run to start an immediate long-running Bash
-  command, reads the live SSE incrementally, and sends `user.interrupt` only
-  after the first Tool invocation arrives. It requires the running-Run
-  `cancel_requested` response, a `canceled` live outcome with no surviving
+  command, reads the live SSE incrementally, and calls the Run cancellation
+  resource only after the first Tool invocation arrives. It requires the
+  running-Run `cancel_requested` response, a `RUN_CANCELLED` live outcome with no surviving
   provisional Assistant text, and a reconnect that exactly replays the live
-  committed messages and Tool events before ending `canceled`. A third
+  committed messages and Tool events before ending `RUN_CANCELLED`. A third
   Conversation performs two searchable-document Runs against the local KB seed: the first
   reports the exact inventory count through `ListDocuments`; the second uses
   `SearchDocuments`, `LoadDocuments`, and `Read` to report the seeded title and
@@ -37,10 +37,6 @@ value fails before the first HTTP request.
   history and proves their exact replay. Because these assertions are coupled
   to the local fixture, `full` refuses to start unless
   `AGENT_SMOKE_MEMBER_CODE=demo-member`.
-
-`AGENT_SMOKE_PREVIEW_MODE` is independent of the suite. Use `required` to prove
-the Redis Live-preview lane, `forbidden` to prove Postgres-only delivery, or the
-default `optional` when preview transport is not the subject of the run.
 
 ## Target strategy
 
@@ -74,17 +70,13 @@ the assertion that failed.
 ## Deterministic verification of the verifier
 
 The suite logic is tested through its CLI against loopback stub Conversation
-servers. The tests cover both required-preview and forbidden-preview artifact
-happy paths, a held-open stream canceled only after its Tool invocation,
-canceled durable replay, provisional-text discard, and rejection of a changed
-replayed Tool payload, the allowed single trailing newline, identity-free
-signed-object fetching, tampered object bytes, both seeded searchable-document
-Runs, rejection of a failed `Read` Tool result, and
-fixture-member/environment validation:
+servers. The tests cover the gate-closed path and a complete core Run flow
+through strict admission, cursor-bearing standard AG-UI events, retained
+reconnect, and identity-free signed-object fetching:
 
 ```sh
 bun test scripts/smoke/agent-conversation-smoke.test.ts
 ```
 
-The broader client-contract evidence and release record remain in
-[ADR-0008 hard-cutover verification](./adr-0008-hard-cutover.md).
+The broader client-contract decision and release contract are recorded in
+[ADR-0012](../adr/0012-expose-a-full-ag-ui-agent-surface.md).

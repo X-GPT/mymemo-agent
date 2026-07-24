@@ -135,11 +135,9 @@ E2B work is actually killed.
 
 The canonical control surface is
 `POST /v1/conversations/:conversationId/runs/:runId/interrupt`; the former
-`/cancel` endpoint is removed. Until the legacy Conversation-event surface is
-removed under issue #344, `{ type: "user.interrupt", runId }` remains a second
-transport entry point. Both routes call the same ownership-scoped interruption
-operation and therefore share validation, idempotency, race, and response
-semantics; the legacy route does not implement a second state machine.
+`/cancel` endpoint is removed. Issue #344 removes the legacy Conversation-event
+surface and its `{ type: "user.interrupt", runId }` entry point, leaving only
+the ownership-scoped canonical interruption operation.
 
 Interruption is retry-safe across its terminal transition. A queued Run returns
 `202 { status: "interrupted" }`; a running Run returns
@@ -191,10 +189,10 @@ Stream receives the same `410 { recovery: "history" }` response regardless of
 whether the Stream never existed, failed, or expired. This covers an observer in
 another tab or device that did not receive the initiating interruption response.
 
-Until issue #344 removes the legacy Postgres-to-SSE projector, its exact terminal
-frame is `{ type: "interrupted" }`. It maps `run_interrupted` to that frame and
-then closes, replacing the old `{ type: "canceled" }` wire vocabulary; it does
-not expose the internal `interrupt_requested` transition as an SSE event.
+Issue #344 removes the legacy Postgres-to-SSE projector and its custom
+`{ type: "interrupted" }` terminal frame. The durable `run_interrupted` event
+remains available through Conversation history and the worker-owned standard
+Live Stream projection described above.
 
 Under the claim-once protocol a queued Run has no Stream because Stream creation
 happens only after claim. A future requeue design may expose a stale prior-attempt

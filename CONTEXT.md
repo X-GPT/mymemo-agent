@@ -95,7 +95,7 @@ _Avoid_: Reconnecting
 **Conversation history**:
 The durable, user-visible record of submitted messages, Assistant messages,
 Tool activity, and Outcomes across a Conversation. It lasts as long as the
-Conversation and excludes Live preview and the internal Agent session. On the
+Conversation and excludes provisional Live Stream text and the internal Agent session. On the
 public agent surface it is represented as AG-UI messages grouped by Run, with
 the Run's AG-UI terminal event kept alongside those messages rather than
 inventing an Outcome message. An interrupted Run retains every Run event

@@ -3,9 +3,8 @@
  * run-event log, shared by every appender so the type strings are defined in
  * exactly one place: chat-api's run queue writes `run_started`; the agent-worker
  * writes assistant text and tool events and, through the run-store terminal
- * helpers, the terminal events. chat-api's projector is the READ side — it maps
- * these types to client SSE frames, and an unmapped type produces no frame
- * (fail-closed).
+ * helpers, the terminal events. Permanent-history readers consume this same
+ * vocabulary; retained AG-UI delivery is written directly to Redis.
  *
  * Appenders MUST use these constants, never the raw strings, so a rename cannot
  * silently desync a writer from the projector (a text event written under the
@@ -14,17 +13,9 @@
 export const RunEventType = {
 	/** First event of a run. Payload `{ conversationId, runId, ... }`. */
 	Started: "run_started",
-	/** One complete Assistant message. Payload `{ messageId, text }`. Projected
-	 * to the durable `text_commit` client frame. */
-	AssistantText: "assistant_text",
 	/** One complete Assistant response for AG-UI history. Empty text is valid
 	 * when the response owns Tool invocations. */
 	AssistantMessageCompleted: "assistant_message_completed",
-	/** One Tool invocation. Payload {@link ToolUsePayload} — already the
-	 * client-safe projection (ADR-0009); the projector forwards, never derives. */
-	ToolUse: "tool_use",
-	/** One Tool result. Payload {@link ToolResultPayload}. */
-	ToolResult: "tool_result",
 	/** Stable, correlated AG-UI Tool lifecycle (ADR-0012). */
 	ToolCallStarted: "tool_call_started",
 	ToolCallArgs: "tool_call_args",
@@ -65,28 +56,6 @@ export interface AssistantMessageCompletedPayload {
 	[key: string]: unknown;
 	messageId: string;
 	text: string;
-}
-
-/** The durable payload for one complete Assistant message. */
-export interface AssistantTextPayload {
-	[key: string]: unknown;
-	messageId: string;
-	text: string;
-}
-
-export function isAssistantTextPayload(
-	value: unknown,
-): value is AssistantTextPayload {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"messageId" in value &&
-		typeof value.messageId === "string" &&
-		value.messageId.length > 0 &&
-		"text" in value &&
-		typeof value.text === "string" &&
-		value.text.length > 0
-	);
 }
 
 /**
@@ -214,9 +183,6 @@ export type DurableRunEvent =
 			payload: ToolCallCompletedPayload;
 	  }
 	| { type: typeof RunEventType.ToolCallResult; payload: ToolCallResultPayload }
-	| { type: typeof RunEventType.AssistantText; payload: AssistantTextPayload }
-	| { type: typeof RunEventType.ToolUse; payload: ToolUsePayload }
-	| { type: typeof RunEventType.ToolResult; payload: ToolResultPayload }
 	| {
 			type:
 				| typeof RunEventType.Done
@@ -329,9 +295,6 @@ export function validateDurableRunEventSequence(
 					parsed.payload.outcome !== "done" &&
 					parsed.payload.reason === "stale_worker";
 				break;
-			default:
-				// Legacy Assistant/Tool events have no stable correlation to validate.
-				break;
 		}
 	}
 
@@ -360,7 +323,6 @@ function invalidSequence(reason: string): never {
  * Parse the public durable vocabulary for permanent-history consumers.
  * Unknown internal events return `null` and stay fail-closed; a known type with
  * a malformed payload throws so history cannot silently become incomplete.
- * Legacy event types remain parseable while their current readers are retired.
  */
 export function parseDurableRunEvent(
 	type: string,
@@ -384,15 +346,6 @@ export function parseDurableRunEvent(
 			break;
 		case RunEventType.ToolCallResult:
 			if (isToolCallResultPayload(payload)) return { type, payload };
-			break;
-		case RunEventType.AssistantText:
-			if (isAssistantTextPayload(payload)) return { type, payload };
-			break;
-		case RunEventType.ToolUse:
-			if (isToolUsePayload(payload)) return { type, payload };
-			break;
-		case RunEventType.ToolResult:
-			if (isToolResultPayload(payload)) return { type, payload };
 			break;
 		case RunEventType.Done:
 			if (isRunOutcomePayload(payload, "done")) return { type, payload };

@@ -9,32 +9,6 @@ import { fakeLiveStreamStore } from "./testing/live-stream-store";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
-it("classifies producer acquisition when the retained store is not configured", async () => {
-	const metrics: Array<Record<string, unknown>> = [];
-	await RunLiveStream.open({
-		store: undefined,
-		runId: "run-1",
-		conversationId: "conv-1",
-		async markLiveStreamFailed() {
-			throw new Error("must not mark an intentionally disabled Stream");
-		},
-		logger: silentLogger,
-		telemetry: {
-			record(operation, result, options) {
-				metrics.push({ operation, result, ...options });
-			},
-		},
-	});
-
-	expect(metrics).toEqual([
-		{
-			operation: "acquire",
-			result: "failure",
-			reason: "not_configured",
-		},
-	]);
-});
-
 it("measures healthy producer acquisition, publication, refresh, and finalization", async () => {
 	const metrics: Array<Record<string, unknown>> = [];
 	const stream = await RunLiveStream.open({

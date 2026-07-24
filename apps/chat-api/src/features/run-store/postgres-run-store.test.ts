@@ -28,6 +28,15 @@ const conversation: ConversationRecord = {
 	archivedAt: null,
 };
 
+function runInput(runId: string, message: string) {
+	return {
+		conversation,
+		runId,
+		messageId: `message-${runId}`,
+		message,
+	};
+}
+
 describe("PostgresRunStore", () => {
 	let tdb: TestDb;
 	let store: PostgresRunStore;
@@ -60,18 +69,19 @@ describe("PostgresRunStore", () => {
 			});
 	});
 
-	it("creates one queued run and records run_started transactionally", async () => {
-		const result = await store.createQueuedRun({
-			conversation,
-			message: "hello",
+	it("creates one queued AG-UI Run and records run_started transactionally", async () => {
+		await expect(
+			store.admitRun(runInput("run-1", "hello")),
+		).resolves.toMatchObject({
+			outcome: "created",
 		});
 
 		const [run] = await tdb.db
 			.select()
 			.from(runs)
-			.where(eq(runs.runId, result.runId));
+			.where(eq(runs.runId, "run-1"));
 		expect(run).toMatchObject({
-			runId: result.runId,
+			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 			status: "queued",
@@ -81,33 +91,21 @@ describe("PostgresRunStore", () => {
 		const events = await tdb.db
 			.select()
 			.from(runEvents)
-			.where(eq(runEvents.runId, result.runId));
+			.where(eq(runEvents.runId, "run-1"));
 		expect(events).toHaveLength(1);
 		expect(events[0]).toMatchObject({
 			seq: 1,
 			type: "run_started",
 		});
 		expect(events[0]?.payload).toMatchObject({
-			runId: result.runId,
+			runId: "run-1",
 			conversationId: "conv-1",
+			messageId: "message-run-1",
 			message: "hello",
 			scope: "collection",
 			collectionId: "col-1",
 			summaryId: null,
 		});
-	});
-
-	it("admits a caller-prepared Run id transactionally", async () => {
-		const result = await store.createQueuedRun({
-			conversation,
-			message: "hello",
-			runId: "prepared-run-id",
-		});
-
-		expect(result).toEqual({ runId: "prepared-run-id" });
-		await expect(
-			loadRunStartedTx(tdb.db, { runId: "prepared-run-id" }),
-		).resolves.toMatchObject({ message: "hello" });
 	});
 
 	it("idempotently admits one canonical AG-UI Run input", async () => {
@@ -168,10 +166,8 @@ describe("PostgresRunStore", () => {
 	// orchestration loads the turn through the shared helper, so what admission
 	// writes must be exactly what it reads back.
 	it("round-trips the run_started payload through loadRunStartedTx", async () => {
-		const { runId } = await store.createQueuedRun({
-			conversation,
-			message: "summarize my notes",
-		});
+		const runId = "run-round-trip";
+		await store.admitRun(runInput(runId, "summarize my notes"));
 
 		const started = await loadRunStartedTx(tdb.db, { runId });
 
@@ -183,19 +179,8 @@ describe("PostgresRunStore", () => {
 		});
 	});
 
-	it("surfaces the active-run unique index as backpressure", async () => {
-		await store.createQueuedRun({ conversation, message: "first" });
-
-		await expect(
-			store.createQueuedRun({ conversation, message: "second" }),
-		).rejects.toThrow(ActiveRunExistsError);
-	});
-
 	it("first admitted User message initializes title and advances activity atomically", async () => {
-		await store.createQueuedRun({
-			conversation,
-			message: "Summarize the quarterly plan",
-		});
+		await store.admitRun(runInput("run-title", "Summarize the quarterly plan"));
 
 		await expect(
 			conversationStore.get({
@@ -220,10 +205,7 @@ describe("PostgresRunStore", () => {
 			{ title: "Quarterly planning" },
 		);
 
-		await store.createQueuedRun({
-			conversation,
-			message: "What changed this week?",
-		});
+		await store.admitRun(runInput("run-later", "What changed this week?"));
 
 		await expect(
 			conversationStore.get({
@@ -243,14 +225,14 @@ describe("PostgresRunStore", () => {
 	});
 
 	it("failed admission leaves title and activity unchanged", async () => {
-		await store.createQueuedRun({ conversation, message: "first" });
+		await store.admitRun(runInput("run-first", "first"));
 		const before = await conversationStore.get({
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
 
 		await expect(
-			store.createQueuedRun({ conversation, message: "must not commit" }),
+			store.admitRun(runInput("run-conflict", "must not commit")),
 		).rejects.toBeInstanceOf(ActiveRunExistsError);
 
 		const after = await conversationStore.get({
@@ -270,13 +252,13 @@ describe("PostgresRunStore", () => {
 		).resolves.toMatchObject({ outcome: "updated" });
 
 		await expect(
-			store.createQueuedRun({ conversation, message: "too late" }),
+			store.admitRun(runInput("run-too-late", "too late")),
 		).rejects.toBeInstanceOf(ConversationArchivedError);
 		expect(await tdb.db.select().from(runs)).toHaveLength(0);
 	});
 
 	it("serializes admission before Archive and rejects the lifecycle change", async () => {
-		await store.createQueuedRun({ conversation, message: "admitted first" });
+		await store.admitRun(runInput("run-admitted", "admitted first"));
 
 		await expect(
 			conversationStore.update(
@@ -291,10 +273,7 @@ describe("PostgresRunStore", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		const admission = store.createQueuedRun({
-			conversation,
-			message: "racing deletion",
-		});
+		const admission = store.admitRun(runInput("run-racing", "racing deletion"));
 
 		const [deletionResult, admissionResult] = await Promise.allSettled([
 			deletion,
@@ -319,34 +298,9 @@ describe("PostgresRunStore", () => {
 		expect(await tdb.db.select().from(runs)).toHaveLength(1);
 	});
 
-	it("lists replay events after a sequence number", async () => {
-		const { runId } = await store.createQueuedRun({
-			conversation,
-			message: "hello",
-		});
-		await tdb.db.insert(runEvents).values({
-			runId,
-			seq: 2,
-			type: "assistant_text",
-			payload: { messageId: "message-1", text: "hi" },
-		});
-
-		const replay = await store.listRunEventsAfter({ runId, afterSeq: 1 });
-		expect(replay).toEqual([
-			{
-				runId,
-				seq: 2,
-				type: "assistant_text",
-				payload: { messageId: "message-1", text: "hi" },
-			},
-		]);
-	});
-
 	it("requests cancellation scoped to the owning user and conversation", async () => {
-		const { runId } = await store.createQueuedRun({
-			conversation,
-			message: "hello",
-		});
+		const runId = "run-cancel";
+		await store.admitRun(runInput(runId, "hello"));
 
 		await expect(
 			store.requestCancellation({
@@ -367,10 +321,8 @@ describe("PostgresRunStore", () => {
 	});
 
 	it("gets a run only for its owning user and conversation", async () => {
-		const { runId } = await store.createQueuedRun({
-			conversation,
-			message: "hello",
-		});
+		const runId = "run-get";
+		await store.admitRun(runInput(runId, "hello"));
 
 		await expect(
 			store.getRun({

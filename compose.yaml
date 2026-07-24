@@ -1,8 +1,8 @@
 # Local end-to-end harness — real split runtime. The client contract is
-# chat-api's /v1 conversation API: create a conversation, POST a user.message,
-# and read the turn back as SSE. A queued turn is claimed and processed by the
-# agent-worker; chat-api projects the run's durable events (run_events) back to
-# the client. The worker runs the real Claude Agent SDK processor, so export
+# chat-api's /v1 conversation API: create a Conversation, admit a strict AG-UI
+# Run, and consume its retained Redis Stream over SSE. A queued Run is claimed
+# and processed by the agent-worker. The worker runs the real Claude Agent SDK
+# processor, so export
 # OPENROUTER_API_KEY and E2B_API_KEY before starting the stack and build the
 # WORKER_E2B_TEMPLATE described in apps/agent-worker/e2b-template/.
 #
@@ -10,8 +10,8 @@
 #   postgres      — the writable mymemo_agent DB (conversations/runs/run_events)
 #                   AND the read-only mymemo_kb (seeded for the retained doc path)
 #   migrate       — one-shot: applies the @mymemo/agent-db migrations, then exits
-#   chat-api      — creates conversations, queues runs, projects run events as SSE
-#   agent-worker  — claims queued runs and serves real SDK turns through E2B
+#   chat-api      — creates Conversations, admits Runs, and relays retained SSE
+#   agent-worker  — claims Runs and publishes standard AG-UI events through E2B
 #   redis         — disposable Redis 7 for real Stream and Lua contract testing
 #
 # The prototype gateway/sandbox services were removed once the split runtime
@@ -31,8 +31,9 @@ services:
     build:
       context: .
       dockerfile: apps/chat-api/Dockerfile
-    ports:
-      - "3000:3000"
+    # Share the local Redis network namespace so the deliberately narrow plaintext
+    # development escape hatch can use the literal loopback host.
+    network_mode: "service:redis"
     environment:
       <<: *artifact-aws-environment
       # chat-api's writable database (mymemo_agent): conversations, runs,
@@ -43,6 +44,8 @@ services:
       LOG_LEVEL: info
       # Open the agent exposure gate locally without wiring Statsig (break-glass).
       AGENT_EXPOSURE_BREAK_GLASS: "true"
+      REDIS_URL: redis://127.0.0.1:6379
+      LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true"
     # The mounted developer AWS profile is trusted-runtime-only and signs
     # artifact downloads. Chat-api still receives no provider/KB/E2B secrets.
     volumes:
@@ -52,9 +55,9 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     restart: unless-stopped
-    networks:
-      - mymemo-network
 
   # Claims queued runs from the shared mymemo_agent DB, heartbeats ownership,
   # and serves each with the real Claude Agent SDK over OpenRouter + E2B.
@@ -62,6 +65,7 @@ services:
     build:
       context: .
       dockerfile: apps/agent-worker/Dockerfile
+    network_mode: "service:redis"
     environment:
       <<: *artifact-aws-environment
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
@@ -76,6 +80,8 @@ services:
       OPENROUTER_DEFAULT_MODEL: ${OPENROUTER_DEFAULT_MODEL:-anthropic/claude-sonnet-4}
       E2B_API_KEY: ${E2B_API_KEY:?Set E2B_API_KEY}
       WORKER_E2B_TEMPLATE: ${WORKER_E2B_TEMPLATE:-mymemo-agent-sandbox}
+      REDIS_URL: redis://127.0.0.1:6379
+      LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true"
     # AWS credentials remain in this trusted worker. buildSandboxEnv accepts
     # only the Run binding, so none of them are copied into the E2B sandbox.
     volumes:
@@ -85,9 +91,9 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     restart: unless-stopped
-    networks:
-      - mymemo-network
 
   # One-shot: apply the writable DB (mymemo_agent) schema from Drizzle migrations,
   # then exit. The postgres init only creates the database; the tables are owned
@@ -121,6 +127,7 @@ services:
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+      - "3000:3000"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s

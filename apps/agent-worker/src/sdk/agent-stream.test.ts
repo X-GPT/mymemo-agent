@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { InMemoryLiveTextTransport } from "@mymemo/live-text";
 import type { ModelContent } from "../run-loop";
 import {
 	AgentResultError,
@@ -299,108 +298,6 @@ describe("consumeAgentStream", () => {
 		expect(await result).toBeInstanceOf(AgentResultError);
 	});
 
-	it("publishes coalesced indexed preview before each sequential Assistant commit", async () => {
-		const transport = new InMemoryLiveTextTransport();
-		const subscription = await transport.subscribe("run-1");
-		const order: string[] = [];
-		const messages = [
-			streamEvent({
-				type: "message_start",
-				message: { id: "provider-1", content: [] },
-			}),
-			streamEvent({
-				type: "content_block_start",
-				index: 0,
-				content_block: { type: "text", text: "" },
-			}),
-			streamEvent({
-				type: "content_block_delta",
-				index: 0,
-				delta: { type: "text_delta", text: "hel" },
-			}),
-			streamEvent({
-				type: "content_block_delta",
-				index: 0,
-				delta: { type: "text_delta", text: "lo" },
-			}),
-			assistantBlock("provider-1", { type: "text", text: "hello" }),
-			streamEvent({ type: "content_block_stop", index: 0 }),
-			streamEvent({ type: "message_stop" }),
-			...textEnvelope({
-				providerMessageId: "provider-2",
-				completeText: "again",
-			}),
-		];
-
-		await consumeAgentStream({
-			runId: "run-1",
-			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
-			liveTextPublisher: {
-				async publish(message) {
-					order.push(`preview:${message.text}`);
-					await transport.publish(message);
-				},
-			},
-			appendModelContents: onAssistantCommit((message) =>
-				order.push(`commit:${message.text}`),
-			),
-		});
-
-		const preview = subscription.readAvailable();
-		expect(
-			preview.map(({ deltaIndex, text }) => ({ deltaIndex, text })),
-		).toEqual([
-			{ deltaIndex: 0, text: "hello" },
-			{ deltaIndex: 0, text: "again" },
-		]);
-		expect(preview[0]?.messageId).not.toBe(preview[1]?.messageId);
-		expect(order).toEqual([
-			"preview:hello",
-			"commit:hello",
-			"preview:again",
-			"commit:again",
-		]);
-	});
-
-	it("commits exact durable text and releases a stalled publisher without blocking the SDK stream", async () => {
-		const appended: Array<{ messageId: string; text: string }> = [];
-		let publicationAborted = false;
-		const outcome = await consumeAgentStream({
-			runId: "run-1",
-			query: fakeQuery(
-				textEnvelope({ completeText: "authoritative" }).map((message) => ({
-					message,
-				})),
-			),
-			signal: new AbortController().signal,
-			liveTextPublisher: {
-				async publish(_message, options) {
-					await new Promise<void>((resolve) => {
-						options?.signal?.addEventListener(
-							"abort",
-							() => {
-								publicationAborted = true;
-								resolve();
-							},
-							{ once: true },
-						);
-					});
-				},
-			},
-			appendModelContents: onAssistantCommit((message) =>
-				appended.push(message),
-			),
-		});
-
-		expect(outcome).toEqual({
-			sessionId: null,
-			mirrorErrorObserved: false,
-		});
-		expect(appended.map(({ text }) => text)).toEqual(["authoritative"]);
-		expect(publicationAborted).toBe(true);
-	});
-
 	it("commits only the complete provider envelope and ignores the result echo", async () => {
 		const appended: Array<{ messageId: string; text: string }> = [];
 		const controller = new AbortController();
@@ -525,8 +422,6 @@ describe("consumeAgentStream", () => {
 
 	it("fails closed when a nominally successful stream ends before message_stop", async () => {
 		const controller = new AbortController();
-		const liveText = new InMemoryLiveTextTransport();
-		const subscription = await liveText.subscribe("run-1");
 		const envelope = textEnvelope({ completeText: "uncommitted" });
 		const query = fakeQuery(
 			envelope.slice(0, 5).map((message) => ({ message })),
@@ -534,20 +429,14 @@ describe("consumeAgentStream", () => {
 
 		await expect(
 			consumeAgentStream({
-				runId: "run-1",
 				query,
 				signal: controller.signal,
-				liveTextPublisher: liveText,
 				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
-		await Bun.sleep(60);
-		expect(subscription.readAvailable()).toEqual([]);
 	});
 
-	it("does not publish pending preview when message_stop fails envelope validation", async () => {
-		const liveText = new InMemoryLiveTextTransport();
-		const subscription = await liveText.subscribe("run-1");
+	it("fails closed when message_stop arrives before the envelope is complete", async () => {
 		const envelope = textEnvelope({
 			completeText: "uncommitted",
 			partialText: "preview",
@@ -559,14 +448,11 @@ describe("consumeAgentStream", () => {
 
 		await expect(
 			consumeAgentStream({
-				runId: "run-1",
 				query,
 				signal: new AbortController().signal,
-				liveTextPublisher: liveText,
 				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
-		expect(subscription.readAvailable()).toEqual([]);
 	});
 
 	// Issue #244: a nominally successful stream with invalid envelope structure

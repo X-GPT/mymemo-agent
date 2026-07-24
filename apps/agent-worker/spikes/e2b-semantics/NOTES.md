@@ -82,5 +82,5 @@ e2b.dev/pricing.
 
 ## Status
 
-Findings folded into `docs/split-runtime-fargate-e2b-design.md`. This spike
+Findings were folded into the worker implementation and ADRs. This spike
 directory can be deleted once Task 4.2+ consume the findings.

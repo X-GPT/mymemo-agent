@@ -32,7 +32,6 @@ export type LiveStreamReason =
 	| "invalid_event"
 	| "marker_write_failed"
 	| "missing"
-	| "not_configured"
 	| "not_producer"
 	| "operation_failed"
 	| "redis_unavailable"

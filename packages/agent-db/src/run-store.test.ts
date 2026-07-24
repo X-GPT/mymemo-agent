@@ -327,14 +327,14 @@ describe("appendRunEventTx", () => {
 		const first = await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: RunEventType.AssistantText,
+			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "hel" },
 			appendClass: "model",
 		});
 		const second = await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: RunEventType.AssistantText,
+			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-2", text: "lo" },
 			appendClass: "model",
 		});
@@ -343,8 +343,8 @@ describe("appendRunEventTx", () => {
 		expect(second.seq).toBe(2);
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.seq, e.type])).toEqual([
-			[1, RunEventType.AssistantText],
-			[2, RunEventType.AssistantText],
+			[1, RunEventType.AssistantMessageCompleted],
+			[2, RunEventType.AssistantMessageCompleted],
 		]);
 		expect(events[0]?.payload).toEqual({
 			messageId: "message-1",
@@ -501,37 +501,6 @@ describe("appendRunEventTx", () => {
 		).toEqual(events.map((event, index) => ({ seq: index + 1, ...event })));
 	});
 
-	it("can add canonical events after a legacy run_started payload", async () => {
-		await queueRun("run-1", "conv-1");
-		await tdb.db
-			.update(runs)
-			.set({ nextEventSeq: 2 })
-			.where(eq(runs.runId, "run-1"));
-		await tdb.db.insert(runEvents).values({
-			runId: "run-1",
-			seq: 1,
-			type: RunEventType.Started,
-			payload: { message: "legacy", scope: "general" },
-		});
-		const claimed = await claimNextRunTx(tdb.db, {
-			workerId: "worker-1",
-		});
-		expect(claimed?.runId).toBe("run-1");
-
-		await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
-			type: RunEventType.AssistantMessageCompleted,
-			payload: { messageId: "assistant-1", text: "Complete" },
-			appendClass: "model",
-		});
-
-		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
-			RunEventType.Started,
-			RunEventType.AssistantMessageCompleted,
-		]);
-	});
-
 	it("rejects orphaned, duplicate, and out-of-order Tool lifecycle events", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		const append = (type: string, payload: Record<string, unknown>) =>
@@ -608,7 +577,7 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: RunEventType.AssistantText,
+				type: RunEventType.AssistantMessageCompleted,
 				payload: {},
 				appendClass: "model",
 			}),
@@ -622,7 +591,7 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-2",
-				type: RunEventType.AssistantText,
+				type: RunEventType.AssistantMessageCompleted,
 				payload: {},
 				appendClass: "model",
 			}),
@@ -637,7 +606,7 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: RunEventType.AssistantText,
+				type: RunEventType.AssistantMessageCompleted,
 				payload: {},
 				appendClass: "model",
 			}),
@@ -655,48 +624,74 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: RunEventType.AssistantText,
+				type: RunEventType.AssistantMessageCompleted,
 				payload: {},
 				appendClass: "model",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
 	});
 
-	it("sequences tool events with assistant text under the model class", async () => {
+	it("sequences canonical Tool lifecycle events with Assistant text", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
-		const toolUse = await appendRunEventTx(tdb.db, {
+		const toolStart = await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: RunEventType.ToolUse,
-			payload: { tool: "Bash", arguments: { command: "ls" }, truncated: false },
+			type: RunEventType.ToolCallStarted,
+			payload: {
+				toolCallId: "tool-1",
+				toolCallName: "Bash",
+				parentMessageId: "message-1",
+			},
+			appendClass: "model",
+		});
+		const toolArgs = await appendRunEventTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			type: RunEventType.ToolCallArgs,
+			payload: { toolCallId: "tool-1", delta: '{"command":"ls"}' },
+			appendClass: "model",
+		});
+		const toolEnd = await appendRunEventTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			type: RunEventType.ToolCallCompleted,
+			payload: { toolCallId: "tool-1" },
 			appendClass: "model",
 		});
 		const toolResult = await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: RunEventType.ToolResult,
+			type: RunEventType.ToolCallResult,
 			payload: {
-				tool: "Bash",
-				result: { exitCode: 0 },
+				messageId: "tool-message-1",
+				toolCallId: "tool-1",
+				content: '{"exitCode":0}',
 				isError: false,
-				truncated: false,
 			},
 			appendClass: "model",
 		});
 		const text = await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: RunEventType.AssistantText,
+			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "done" },
 			appendClass: "model",
 		});
 
-		expect([toolUse.seq, toolResult.seq, text.seq]).toEqual([1, 2, 3]);
+		expect([
+			toolStart.seq,
+			toolArgs.seq,
+			toolEnd.seq,
+			toolResult.seq,
+			text.seq,
+		]).toEqual([1, 2, 3, 4, 5]);
 		expect((await readEvents("run-1")).map((e) => [e.seq, e.type])).toEqual([
-			[1, RunEventType.ToolUse],
-			[2, RunEventType.ToolResult],
-			[3, RunEventType.AssistantText],
+			[1, RunEventType.ToolCallStarted],
+			[2, RunEventType.ToolCallArgs],
+			[3, RunEventType.ToolCallCompleted],
+			[4, RunEventType.ToolCallResult],
+			[5, RunEventType.AssistantMessageCompleted],
 		]);
 	});
 
@@ -713,11 +708,11 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: RunEventType.ToolUse,
+				type: RunEventType.ToolCallStarted,
 				payload: {
-					tool: "Read",
-					arguments: { path: "notes.md" },
-					truncated: false,
+					toolCallId: "tool-1",
+					toolCallName: "Read",
+					parentMessageId: "message-1",
 				},
 				appendClass: "model",
 			}),
@@ -733,12 +728,12 @@ describe("appendRunEventTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: RunEventType.ToolResult,
+				type: RunEventType.ToolCallResult,
 				payload: {
-					tool: "Read",
-					result: { preview: "…" },
+					messageId: "tool-message-1",
+					toolCallId: "tool-1",
+					content: "preview",
 					isError: false,
-					truncated: true,
 				},
 				appendClass: "model",
 			}),
@@ -867,7 +862,7 @@ describe("transitionRunTerminalTx", () => {
 		await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			type: RunEventType.AssistantText,
+			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "hi" },
 			appendClass: "model",
 		});
@@ -887,7 +882,7 @@ describe("transitionRunTerminalTx", () => {
 		expect(run.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.seq, e.type])).toEqual([
-			[1, RunEventType.AssistantText],
+			[1, RunEventType.AssistantMessageCompleted],
 			[2, "run_done"],
 		]);
 		expect(events[1]?.payload).toEqual({ outcome: "done" });
@@ -1372,7 +1367,7 @@ describe("markStaleRunsTx", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-1",
 				workerId: "worker-1",
-				type: RunEventType.AssistantText,
+				type: RunEventType.AssistantMessageCompleted,
 				payload: {},
 				appendClass: "model",
 			}),

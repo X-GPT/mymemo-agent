@@ -13,6 +13,7 @@ function baseEnv(): Record<string, string | undefined> {
 		OPENROUTER_API_KEY: "sk-or-test",
 		OPENROUTER_BASE_URL: "https://openrouter.ai/api",
 		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
+		REDIS_URL: "rediss://default:secret@redis.internal:6379",
 		E2B_API_KEY: "e2b-test",
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 		ARTIFACT_BUCKET: "private-artifacts",
@@ -32,6 +33,7 @@ describe("loadWorkerConfigFromEnv — required settings", () => {
 		"WORKER_E2B_TEMPLATE",
 		"ARTIFACT_BUCKET",
 		"AWS_REGION",
+		"REDIS_URL",
 	];
 
 	it("loads cleanly with all required settings present", () => {
@@ -231,21 +233,22 @@ describe("loadWorkerConfigFromEnv — ListDocuments cap", () => {
 	});
 });
 
-describe("loadWorkerConfigFromEnv — additive Live Redis deployment", () => {
+describe("loadWorkerConfigFromEnv — required Live Stream Redis", () => {
 	it("accepts only an authenticated TLS URL", () => {
 		const env = baseEnv();
-		env.REDIS_URL = "rediss://default:secret@redis.internal:6379";
-		expect(loadWorkerConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
+		expect(loadWorkerConfigFromEnv(env).redisUrl).toBe(
+			"rediss://default:secret@redis.internal:6379",
+		);
 	});
 
 	it("allows insecure loopback Redis only under the integration-test switch", () => {
 		const env = baseEnv();
 		env.REDIS_URL = "redis://127.0.0.1:6379";
 		env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS = "true";
-		expect(loadWorkerConfigFromEnv(env).liveTextRedisUrl).toBe(env.REDIS_URL);
+		expect(loadWorkerConfigFromEnv(env).redisUrl).toBe(env.REDIS_URL);
 	});
 
-	it("degrades missing, malformed, or insecure Redis configuration", () => {
+	it("refuses to boot with missing, malformed, or insecure Redis configuration", () => {
 		for (const redisUrl of [
 			undefined,
 			"not a URL",
@@ -254,8 +257,7 @@ describe("loadWorkerConfigFromEnv — additive Live Redis deployment", () => {
 		]) {
 			const env = baseEnv();
 			env.REDIS_URL = redisUrl;
-			expect(() => loadWorkerConfigFromEnv(env)).not.toThrow();
-			expect(loadWorkerConfigFromEnv(env).liveTextRedisUrl).toBeUndefined();
+			expect(() => loadWorkerConfigFromEnv(env)).toThrow(/REDIS_URL/);
 		}
 	});
 });

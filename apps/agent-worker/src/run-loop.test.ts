@@ -66,7 +66,7 @@ function buildWorker(maxConcurrentRuns: number, workerId = "worker-1") {
 function buildLoop(
 	worker: Worker,
 	processor: RunProcessor,
-	liveStreamStore?: LiveStreamStore,
+	liveStreamStore: LiveStreamStore = fakeLiveStreamStore(),
 	liveStreamTelemetry?: LiveStreamTelemetry,
 ) {
 	return new RunLoop({
@@ -190,6 +190,7 @@ describe("RunLoop — claim isolation", () => {
 		const loopB = new RunLoop({
 			db: tdb.db,
 			worker: workerB,
+			liveStreamStore: fakeLiveStreamStore(),
 			processor: block,
 			heartbeatIntervalMs: 15_000,
 			logger: silentLogger,
@@ -653,6 +654,7 @@ describe("RunLoop — terminal outcomes", () => {
 		const loop = new RunLoop({
 			db: tdb.db,
 			worker,
+			liveStreamStore: fakeLiveStreamStore(),
 			processor: async () => {
 				throw new Error("provider leaked a secret detail");
 			},
@@ -1002,7 +1004,7 @@ describe("RunLoop — stale-run recovery", () => {
 			appendRunEventTx(tdb.db, {
 				runId: "run-stale",
 				workerId: "stale-worker",
-				type: "assistant_text",
+				type: "assistant_message_completed",
 				payload: { messageId: "message-too-late", text: "too late" },
 				appendClass: "model",
 			}),
@@ -1162,6 +1164,7 @@ describe("RunLoop — doorbell", () => {
 		const loop = new RunLoop({
 			db: tdb.db,
 			worker,
+			liveStreamStore: fakeLiveStreamStore(),
 			processor: appendMessageProcessor,
 			// The timer cannot fire within the test window: only start()'s
 			// immediate tick and the doorbell can claim.
@@ -1195,6 +1198,7 @@ describe("RunLoop — doorbell", () => {
 		const loop = new RunLoop({
 			db: tdb.db,
 			worker,
+			liveStreamStore: fakeLiveStreamStore(),
 			processor: appendMessageProcessor,
 			heartbeatIntervalMs: 3_600_000,
 			logger: silentLogger,
