@@ -109,25 +109,25 @@ variable "agent_worker_port" {
 }
 
 variable "live_redis_port" {
-  description = "TLS port for the temporary per-Run Redis Live Stream."
+  description = "TLS port for the per-Run Redis Live Stream relay."
   type        = number
   default     = 6379
 }
 
 variable "live_redis_node_type" {
-  description = "ElastiCache node type for temporary per-Run Redis Streams."
+  description = "ElastiCache node type for the ephemeral AG-UI pub/sub relay."
   type        = string
   default     = "cache.t4g.micro"
 }
 
 variable "live_redis_engine_version" {
-  description = "Redis engine version for the temporary per-Run Live Stream."
+  description = "Redis engine version for the per-Run Live Stream relay."
   type        = string
   default     = "7.1"
 }
 
 variable "alarm_action_arns" {
-  description = "Optional SNS topic ARNs notified by retained Live Stream CloudWatch alarms."
+  description = "Optional SNS topic ARNs notified by Live Stream relay CloudWatch alarms."
   type        = list(string)
   default     = []
 }

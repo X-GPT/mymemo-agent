@@ -518,6 +518,7 @@ class BufferedLiveStreamProducer implements LiveStreamProducer {
 
 	async close(): Promise<void> {
 		if (this.#closed) return;
+		if (!this.#terminalPublished && !this.#failed) this.#fail();
 		this.#closed = true;
 		await this.#appendTail;
 		try {

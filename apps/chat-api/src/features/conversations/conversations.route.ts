@@ -1,5 +1,6 @@
 import {
 	classifyLiveStreamFailure,
+	type LiveStreamAttachResult,
 	type LiveStreamReason,
 } from "@mymemo/live-text";
 import { type Context, Hono } from "hono";
@@ -42,6 +43,7 @@ const conversationBodyLimit = bodyLimit({
 });
 
 const LIVE_STREAM_START_POLL_MS = 100;
+const LIVE_STREAM_MAX_RETRY_MS = 1_000;
 const LIVE_STREAM_KEEPALIVE_MS = 5_000;
 const liveStreamDecoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -89,8 +91,6 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 		signal.addEventListener("abort", done, { once: true });
 	});
 }
-
-type LiveStreamEntry = { cursor: string; chunk: Uint8Array };
 
 function linkedAbortController(parent: AbortSignal): {
 	controller: AbortController;
@@ -140,11 +140,11 @@ function startAgUiKeepalive(
 	return stop;
 }
 
-async function writeAgUiEntries(
+async function writeAgUiEvents(
 	c: Context<AppEnv>,
 	runId: string,
-	iterator: AsyncIterator<LiveStreamEntry>,
-	first: IteratorResult<LiveStreamEntry>,
+	iterator: AsyncIterator<Uint8Array>,
+	first: IteratorResult<Uint8Array>,
 	writeSSE: (event: { data: string }) => Promise<unknown>,
 ): Promise<void> {
 	let next = first;
@@ -152,7 +152,7 @@ async function writeAgUiEntries(
 		while (!next.done) {
 			if (c.req.raw.signal.aborted) break;
 			await writeSSE({
-				data: liveStreamDecoder.decode(next.value.chunk),
+				data: liveStreamDecoder.decode(next.value),
 			});
 			next = await iterator.next();
 		}
@@ -170,27 +170,22 @@ async function writeAgUiEntries(
 async function streamAgUiRun(
 	c: Context<AppEnv>,
 	run: RunRecord,
-	status: "streaming" | "done",
+	events: AsyncIterable<Uint8Array>,
+	readAbort: ReturnType<typeof linkedAbortController>,
 ) {
 	const requestSignal = c.req.raw.signal;
-	const readAbort = linkedAbortController(requestSignal);
-	const iterator = c.var.deps.liveStreamReader
-		.read(run.runId, "", readAbort.controller.signal)
-		[Symbol.asyncIterator]();
+	const iterator = events[Symbol.asyncIterator]();
 	const firstRead = iterator.next().then(
 		(result) => ({ outcome: "read" as const, result }),
 		(error: unknown) => ({ outcome: "error" as const, error }),
 	);
 	let first: Awaited<ReturnType<typeof iterator.next>>;
-	const initial =
-		status === "streaming"
-			? await Promise.race([
-					firstRead,
-					abortableDelay(LIVE_STREAM_KEEPALIVE_MS, requestSignal).then(() => ({
-						outcome: "ping" as const,
-					})),
-				])
-			: await firstRead;
+	const initial = await Promise.race([
+		firstRead,
+		abortableDelay(LIVE_STREAM_KEEPALIVE_MS, requestSignal).then(() => ({
+			outcome: "ping" as const,
+		})),
+	]);
 	if (initial.outcome === "error") {
 		const { error } = initial;
 		readAbort.dispose();
@@ -243,12 +238,8 @@ async function streamAgUiRun(
 					await iterator.return?.();
 					return;
 				}
-				await writeAgUiEntries(
-					c,
-					run.runId,
-					iterator,
-					delayed.result,
-					(event) => stream.writeSSE(event),
+				await writeAgUiEvents(c, run.runId, iterator, delayed.result, (event) =>
+					stream.writeSSE(event),
 				);
 			} finally {
 				stopKeepalive();
@@ -262,7 +253,8 @@ async function streamAgUiRun(
 	if (first.done) {
 		readAbort.dispose();
 		await iterator.return?.();
-		return liveStreamReadFailureResponse(c, run, "missing");
+		if (requestSignal.aborted) return c.body(null, 204);
+		return liveStreamReadFailureResponse(c, run, "relay_failed");
 	}
 
 	return streamSSE(c, async (stream) => {
@@ -279,7 +271,7 @@ async function streamAgUiRun(
 				),
 		);
 		try {
-			await writeAgUiEntries(c, run.runId, iterator, first, (event) =>
+			await writeAgUiEvents(c, run.runId, iterator, first, (event) =>
 				stream.writeSSE(event),
 			);
 		} finally {
@@ -290,24 +282,24 @@ async function streamAgUiRun(
 	});
 }
 
-function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
+async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 	const requestSignal = c.req.raw.signal;
-	const waitStartedAt = Date.now();
-	let waitRecorded = false;
-	const recordWait = (
-		result: "aborted" | "failure" | "success",
-		reason?: LiveStreamReason,
-	) => {
-		if (waitRecorded) return;
-		waitRecorded = true;
-		c.var.deps.liveStreamTelemetry.record("read_wait", result, {
-			...(reason ? { reason } : {}),
-			durationMs: Date.now() - waitStartedAt,
-		});
-	};
+	const currentRun = await c.var.deps.runStore.getRun({
+		userId: run.userId,
+		conversationId: run.conversationId,
+		runId: run.runId,
+	});
+	if (currentRun === null) return c.json({ error: "Run not found" }, 404);
+	if (
+		currentRun.liveStreamFailedAt !== null ||
+		isTerminalRunStatus(currentRun.status)
+	) {
+		return liveStreamRecoveryResponse(c);
+	}
 	return streamSSE(c, async (stream) => {
 		const readAbort = linkedAbortController(requestSignal);
 		const readSignal = readAbort.controller.signal;
+		let retryDelayMs = LIVE_STREAM_START_POLL_MS;
 		stream.onAbort(() => readAbort.controller.abort());
 		const stopKeepalive = startAgUiKeepalive(
 			() => stream.write(": ping\n\n"),
@@ -322,68 +314,66 @@ function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 		);
 		try {
 			for (;;) {
-				if (readSignal.aborted) {
-					recordWait("aborted");
-					return;
-				}
+				if (readSignal.aborted) return;
 				const currentRun = await c.var.deps.runStore.getRun({
 					userId: run.userId,
 					conversationId: run.conversationId,
 					runId: run.runId,
 				});
-				if (currentRun === null || currentRun.liveStreamFailedAt !== null) {
-					recordWait("failure", "missing");
+				if (
+					currentRun === null ||
+					currentRun.liveStreamFailedAt !== null ||
+					isTerminalRunStatus(currentRun.status)
+				) {
 					return;
 				}
 
-				let status: Awaited<
-					ReturnType<typeof c.var.deps.liveStreamReader.status>
-				>;
+				c.var.deps.liveStreamTelemetry.record("attach_attempt", "retry");
+				await abortableDelay(retryDelayMs, readSignal);
+				if (readSignal.aborted) return;
+				let attached: LiveStreamAttachResult;
 				try {
-					status = await c.var.deps.liveStreamReader.status(run.runId);
+					attached = await c.var.deps.liveStreamRelay.attach(
+						run.runId,
+						readSignal,
+					);
 				} catch (error) {
-					recordWait("failure", classifyLiveStreamFailure(error));
+					c.var.logger.error({
+						message: "AG-UI Live Stream attach failed while retrying",
+						runId: run.runId,
+						reason: classifyLiveStreamFailure(error),
+					});
 					return;
 				}
-				if (status === "error") {
-					recordWait("failure", "missing");
+				if (attached.outcome === "aborted") return;
+				if (attached.outcome === "relay_failed") return;
+				if (attached.outcome === "no_producer") {
+					retryDelayMs = Math.min(retryDelayMs * 2, LIVE_STREAM_MAX_RETRY_MS);
+					continue;
+				}
+				const iterator = attached.events[Symbol.asyncIterator]();
+				let first: Awaited<ReturnType<typeof iterator.next>>;
+				try {
+					first = await iterator.next();
+				} catch (error) {
+					c.var.logger.error({
+						message: "AG-UI Live Stream read failed after attaching",
+						runId: run.runId,
+						reason: classifyLiveStreamFailure(error),
+					});
+					await iterator.return?.();
 					return;
 				}
-				if (status === "streaming" || status === "done") {
-					recordWait("success");
-					break;
-				}
-				if (isTerminalRunStatus(currentRun.status)) {
-					recordWait("failure", "missing");
+				if (first.done) {
+					await iterator.return?.();
 					return;
 				}
-				await abortableDelay(LIVE_STREAM_START_POLL_MS, readSignal);
-			}
-
-			const iterator = c.var.deps.liveStreamReader
-				.read(run.runId, "", readSignal)
-				[Symbol.asyncIterator]();
-			let first: Awaited<ReturnType<typeof iterator.next>>;
-			try {
-				first = await iterator.next();
-			} catch (error) {
-				c.var.logger.error({
-					message: "AG-UI Live Stream read failed after waiting for creation",
-					runId: run.runId,
-					reason: classifyLiveStreamFailure(error),
-				});
-				await iterator.return?.();
+				await writeAgUiEvents(c, run.runId, iterator, first, (event) =>
+					stream.writeSSE(event),
+				);
 				return;
 			}
-			if (first.done) {
-				await iterator.return?.();
-				return;
-			}
-			await writeAgUiEntries(c, run.runId, iterator, first, (event) =>
-				stream.writeSSE(event),
-			);
 		} finally {
-			if (!waitRecorded) recordWait("aborted");
 			stopKeepalive();
 			readAbort.controller.abort();
 			readAbort.dispose();
@@ -393,23 +383,33 @@ function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 
 async function respondWithAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 	if (run.liveStreamFailedAt !== null) return liveStreamRecoveryResponse(c);
+	if (isTerminalRunStatus(run.status)) return liveStreamRecoveryResponse(c);
 
-	let status: Awaited<ReturnType<typeof c.var.deps.liveStreamReader.status>>;
+	const readAbort = linkedAbortController(c.req.raw.signal);
+	let attached: LiveStreamAttachResult;
 	try {
-		status = await c.var.deps.liveStreamReader.status(run.runId);
+		attached = await c.var.deps.liveStreamRelay.attach(
+			run.runId,
+			readAbort.controller.signal,
+		);
 	} catch (error) {
+		readAbort.controller.abort();
+		readAbort.dispose();
 		return liveStreamReadFailureResponse(
 			c,
 			run,
 			classifyLiveStreamFailure(error),
 		);
 	}
-	if (status === "error") return liveStreamRecoveryResponse(c);
-	if (status === "missing") {
-		if (isTerminalRunStatus(run.status)) return liveStreamRecoveryResponse(c);
-		return waitForAndStreamAgUiRun(c, run);
+	if (attached.outcome === "attached") {
+		return streamAgUiRun(c, run, attached.events, readAbort);
 	}
-	return streamAgUiRun(c, run, status);
+	readAbort.controller.abort();
+	readAbort.dispose();
+	if (attached.outcome === "no_producer")
+		return waitForAndStreamAgUiRun(c, run);
+	if (attached.outcome === "aborted") return c.body(null, 204);
+	return liveStreamReadFailureResponse(c, run, "relay_failed");
 }
 
 // GET /v1/conversations — list one owned Archive partition using stable
@@ -576,7 +576,7 @@ app.delete(
 );
 
 // POST /v1/conversations/:conversationId/runs — atomically admit one strict
-// standard AG-UI Run and consume its retained per-Run Redis Stream.
+// standard AG-UI Run and attach to its producer-buffered Live Stream relay.
 app.post(
 	"/:conversationId/runs",
 	conversationBodyLimit,

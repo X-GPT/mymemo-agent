@@ -96,7 +96,7 @@ export interface ConsumeAgentStreamParams {
 	/** Atomically persists canonical model-content events, fenced to `running`
 	 * upstream. Single events use a one-item batch. */
 	appendModelContents: (contents: readonly ModelContent[]) => Promise<void>;
-	/** Sequential retained AG-UI publication. The bound Run producer absorbs
+	/** Sequential relay-backed AG-UI publication. The bound Run producer absorbs
 	 * Redis failures so this callback never changes the model Outcome. */
 	appendLiveEvent?: (event: AGUIEvent) => Promise<void>;
 	/** Receives the omission logs ADR-0012 requires (unknown tool names,

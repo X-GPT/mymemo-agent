@@ -16,7 +16,7 @@ value fails before the first HTTP request.
 
 - `core` performs three real Runs in one Conversation. Two Runs prove the SSE
   contract, exactly one committed Assistant message per Run, Agent-session
-  resume, Workspace persistence, and byte-exact durable reconnect replay. The
+  resume, Workspace persistence, and gapless active-Run backlog rebuild. The
   third asks the agent to write unique exact content under
   `/home/user/artifacts/`; after `RUN_FINISHED`, the smoke requires exactly that
   conversation-relative artifact path, checks its listed size against the
@@ -28,13 +28,13 @@ value fails before the first HTTP request.
   command, reads the live SSE incrementally, and calls the Run cancellation
   resource only after the first Tool invocation arrives. It requires the
   running-Run `cancel_requested` response, a `RUN_CANCELLED` live outcome with no surviving
-  provisional Assistant text, and a reconnect that exactly replays the live
-  committed messages and Tool events before ending `RUN_CANCELLED`. A third
+  provisional Assistant text, and terminal recovery through Conversation
+  history with the committed messages and Tool events ending `RUN_CANCELLED`. A third
   Conversation performs two searchable-document Runs against the local KB seed: the first
   reports the exact inventory count through `ListDocuments`; the second uses
   `SearchDocuments`, `LoadDocuments`, and `Read` to report the seeded title and
   first markdown heading. The smoke requires those Tool invocations in durable
-  history and proves their exact replay. Because these assertions are coupled
+  history and proves their exact projection. Because these assertions are coupled
   to the local fixture, `full` refuses to start unless
   `AGENT_SMOKE_MEMBER_CODE=demo-member`.
 
@@ -71,8 +71,8 @@ the assertion that failed.
 
 The suite logic is tested through its CLI against loopback stub Conversation
 servers. The tests cover the gate-closed path and a complete core Run flow
-through strict admission, cursor-bearing standard AG-UI events, retained
-reconnect, and identity-free signed-object fetching:
+through strict admission, cursor-free standard AG-UI events, terminal history
+recovery, and identity-free signed-object fetching:
 
 ```sh
 bun test scripts/smoke/agent-conversation-smoke.test.ts

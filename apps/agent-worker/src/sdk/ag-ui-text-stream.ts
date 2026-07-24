@@ -5,8 +5,8 @@ const DEFAULT_COALESCE_WINDOW_MS = 50;
 const MAX_PENDING_TEXT_LENGTH = 16_384;
 
 /**
- * Coalesces provider text fragments into sequential retained AG-UI appends.
- * At most one Redis append is in flight; backpressure is applied once the
+ * Coalesces provider text fragments into sequential Live Stream appends.
+ * At most one producer-buffer append is in flight; backpressure applies once the
  * bounded pending buffer fills, and `flushMessage` drains all text before the
  * caller commits the Assistant message and publishes TEXT_MESSAGE_END.
  */

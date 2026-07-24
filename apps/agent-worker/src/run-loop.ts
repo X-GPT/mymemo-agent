@@ -27,11 +27,10 @@ import {
 	advanceAgentSessionPointerTx,
 	type RunOwnershipRef,
 } from "@mymemo/agent-db/runtime-store";
-import {
-	classifyLiveStreamFailure,
-	type LiveStreamEvent,
-	type LiveStreamStore,
-	type LiveStreamTelemetry,
+import type {
+	LiveStreamEvent,
+	LiveStreamRelay,
+	LiveStreamTelemetry,
 } from "@mymemo/live-text";
 import { ArtifactValidationError } from "./artifacts/artifact-manifest";
 import { ArtifactPublicationError } from "./artifacts/artifact-publication";
@@ -98,7 +97,7 @@ export interface RunProcessContext {
 	appendModelContent(content: ModelContent): Promise<void>;
 	/** Atomically append an ordered group of model events under one Run fence. */
 	appendModelContents(contents: readonly ModelContent[]): Promise<void>;
-	/** Append one standard event to this Run's retained Live Stream. Failure is
+	/** Append one standard event to this Run's Live Stream. Failure is
 	 * absorbed by the producer so it cannot change model execution. */
 	appendLiveEvent(event: LiveStreamEvent): Promise<void>;
 }
@@ -121,9 +120,9 @@ export interface RunLoopOptions {
 	db: Database;
 	worker: Worker;
 	processor: RunProcessor;
-	/** Required retained AG-UI store. Runtime failures keep durable execution available. */
-	liveStreamStore: LiveStreamStore;
-	/** Payload-free retained Live Stream operation metrics. */
+	/** Required AG-UI relay. Runtime failures keep durable execution available. */
+	liveStreamRelay: LiveStreamRelay;
+	/** Payload-free Live Stream relay operation metrics. */
 	liveStreamTelemetry?: LiveStreamTelemetry;
 	/** How often {@link RunLoop.start}'s timer fires a tick (heartbeat + claim). */
 	heartbeatIntervalMs: number;
@@ -324,19 +323,6 @@ export class RunLoop {
 				durationMs: Math.max(0, Date.now() - run.liveStreamFailedAt.getTime()),
 			});
 		}
-		for (const run of recovered) {
-			if (run.liveStreamFailedAt === null) continue;
-			try {
-				await this.opts.liveStreamStore.delete(run.runId);
-			} catch (error) {
-				this.opts.logger.warn({
-					message: "could not delete stale Run Live Stream",
-					workerId: this.workerId,
-					runId: run.runId,
-					reason: classifyLiveStreamFailure(error),
-				});
-			}
-		}
 	}
 
 	private async heartbeatActive(): Promise<void> {
@@ -375,7 +361,6 @@ export class RunLoop {
 				entry.state.canceled = true;
 				entry.controller.abort();
 			}
-			await entry.liveStream?.refresh();
 		}
 	}
 
@@ -413,7 +398,7 @@ export class RunLoop {
 
 	private async runClaimed(run: RunRecord, entry: ActiveEntry): Promise<void> {
 		const liveStream = await RunLiveStream.open({
-			store: this.opts.liveStreamStore,
+			relay: this.opts.liveStreamRelay,
 			runId: run.runId,
 			conversationId: run.conversationId,
 			markLiveStreamFailed: async () => {
@@ -462,13 +447,17 @@ export class RunLoop {
 		// Stop heartbeating this run before terminalizing: from here the loop owns
 		// the terminal transition and a concurrent heartbeat must not race it.
 		this.activeRuns.delete(run.runId);
-		const terminalStatus = await this.finish(
-			run,
-			entry.state,
-			turnResult,
-			failure,
-		);
-		if (terminalStatus) await liveStream.finish(terminalStatus);
+		try {
+			const terminalStatus = await this.finish(
+				run,
+				entry.state,
+				turnResult,
+				failure,
+			);
+			if (terminalStatus) await liveStream.finish(terminalStatus);
+		} finally {
+			await liveStream.close();
+		}
 	}
 
 	private async appendModelContent(

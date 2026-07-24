@@ -69,7 +69,7 @@ interface DurableToolFrame {
 	data: unknown;
 }
 
-interface ReplayExpectation {
+interface RecoveryExpectation {
 	conversationId: string;
 	runId: string;
 	messages: ClientContractMessage[];
@@ -626,7 +626,7 @@ async function verifyRunningRunCancellation(
 		throw new Error("client fixture did not retain the Bash Tool invocation");
 	}
 
-	await replayTurn({
+	await verifyHistoryRecovery({
 		conversationId,
 		runId,
 		messages: snapshot.messages,
@@ -769,7 +769,7 @@ async function sendTurn(
 	}
 	const text = snapshot.messages.map((message) => message.text).join("");
 	if (!text.trim()) throw new Error("event stream contained no assistant text");
-	await replayTurn({
+	await verifyHistoryRecovery({
 		conversationId,
 		runId,
 		messages: snapshot.messages,
@@ -778,7 +778,9 @@ async function sendTurn(
 	return { runId, text, toolFrames: durableToolFrames(frames) };
 }
 
-async function replayTurn(expectation: ReplayExpectation): Promise<void> {
+async function verifyHistoryRecovery(
+	expectation: RecoveryExpectation,
+): Promise<void> {
 	const expectedTerminal = expectation.terminal ?? "done";
 	const expectedTerminalEvent = {
 		done: "RUN_FINISHED",
@@ -793,56 +795,108 @@ async function replayTurn(expectation: ReplayExpectation): Promise<void> {
 		},
 	);
 	const body = await response.text();
-	if (!response.ok) {
+	if (response.status !== 410) {
 		throw new Error(
-			`expected reconnect stream 2xx, got ${response.status}: ${body}`,
+			`expected terminal Live Stream recovery 410, got ${response.status}: ${body}`,
 		);
 	}
-	if (!response.headers.get("content-type")?.includes("text/event-stream")) {
-		throw new Error("reconnect response was not an SSE stream");
-	}
-
-	const frames = parseSSE(body).filter((frame) => frame.event !== "ping");
-	const replayedEvents = frames.map((frame) => frame.event);
-	if (replayedEvents[0] !== "RUN_STARTED") {
-		throw new Error("reconnect did not rebuild the Run from RUN_STARTED");
-	}
-	if (replayedEvents.at(-1) !== expectedTerminalEvent) {
-		throw new Error(
-			`durable reconnect did not end in ${expectedTerminalEvent}: ${replayedEvents.join(", ")}`,
-		);
-	}
-	const replayedTerminals = replayedEvents.filter((event) =>
-		["RUN_FINISHED", "RUN_CANCELLED", "RUN_ERROR"].includes(event),
-	);
 	if (
-		replayedTerminals.length !== 1 ||
-		replayedTerminals[0] !== expectedTerminalEvent
+		!isDeepStrictEqual(JSON.parse(body), {
+			error: "Live stream unavailable",
+			recovery: "history",
+		})
 	) {
 		throw new Error(
-			`durable reconnect did not contain exactly one ${expectedTerminal} outcome: ${replayedEvents.join(", ")}`,
+			"terminal Live Stream response did not direct history recovery",
 		);
 	}
 
-	const client = createClientContractFixture();
-	for (const frame of frames) {
-		client.receive({ ...frame, data: parseFrameData(frame) });
-	}
-	const snapshot = client.snapshot();
-	if (snapshot.terminal !== expectedTerminal) {
+	const historyResponse = await fetch(
+		`${baseUrl}/v1/conversations/${expectation.conversationId}/history`,
+		{
+			headers: headers(),
+			signal: AbortSignal.timeout(turnTimeoutMs),
+		},
+	);
+	const historyBody = await historyResponse.text();
+	if (!historyResponse.ok) {
 		throw new Error(
-			`reconnected client fixture did not observe ${expectedTerminal}`,
+			`expected Conversation history 2xx, got ${historyResponse.status}: ${historyBody}`,
 		);
 	}
-	if (!isDeepStrictEqual(snapshot.messages, expectation.messages)) {
+	const history = recordData(JSON.parse(historyBody));
+	const runs = Array.isArray(history.runs) ? history.runs : [];
+	const run = runs
+		.map(recordData)
+		.find((candidate) => candidate.runId === expectation.runId);
+	if (!run) throw new Error("Conversation history omitted the completed Run");
+	const terminalEvent = recordData(run.terminalEvent);
+	if (terminalEvent.type !== expectedTerminalEvent) {
 		throw new Error(
-			"durable reconnect did not replay the exact committed messages",
+			`Conversation history did not end in ${expectedTerminalEvent}`,
 		);
 	}
-	// Tool lifecycle events are durable run events too: reconnect replays the
-	// exact correlated frames the original stream showed, in order (ADR-0012).
-	if (!isDeepStrictEqual(durableToolFrames(frames), expectation.toolFrames)) {
-		throw new Error("durable reconnect did not replay the exact Tool events");
+
+	const messages = Array.isArray(run.messages)
+		? run.messages.map(recordData)
+		: [];
+	for (const expected of expectation.messages) {
+		const committed = messages.find(
+			(message) =>
+				message.role === "assistant" && message.id === expected.messageId,
+		);
+		if (!committed || committed.content !== expected.text) {
+			throw new Error(
+				"Conversation history omitted a committed Assistant message",
+			);
+		}
+	}
+
+	const expectedArgs = new Map<string, string>();
+	for (const frame of expectation.toolFrames) {
+		if (frame.event !== "TOOL_CALL_ARGS") continue;
+		const data = recordData(frame.data);
+		const toolCallId = String(data.toolCallId);
+		expectedArgs.set(
+			toolCallId,
+			(expectedArgs.get(toolCallId) ?? "") + String(data.delta),
+		);
+	}
+	for (const frame of expectation.toolFrames) {
+		const data = recordData(frame.data);
+		if (frame.event === "TOOL_CALL_START") {
+			const assistant = messages.find((message) => {
+				if (message.id !== data.parentMessageId) return false;
+				const toolCalls = Array.isArray(message.toolCalls)
+					? message.toolCalls.map(recordData)
+					: [];
+				return toolCalls.some((toolCall) => toolCall.id === data.toolCallId);
+			});
+			const toolCall = (
+				Array.isArray(assistant?.toolCalls)
+					? assistant.toolCalls.map(recordData)
+					: []
+			).find((candidate) => candidate.id === data.toolCallId);
+			const fn = recordData(toolCall?.function);
+			if (
+				!toolCall ||
+				fn.name !== data.toolCallName ||
+				fn.arguments !== (expectedArgs.get(String(data.toolCallId)) ?? "")
+			) {
+				throw new Error("Conversation history omitted a Tool invocation");
+			}
+		}
+		if (frame.event === "TOOL_CALL_RESULT") {
+			const result = messages.find(
+				(message) =>
+					message.role === "tool" &&
+					message.id === data.messageId &&
+					message.toolCallId === data.toolCallId,
+			);
+			if (!result || result.content !== data.content) {
+				throw new Error("Conversation history omitted a Tool result");
+			}
+		}
 	}
 }
 

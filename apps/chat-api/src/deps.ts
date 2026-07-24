@@ -1,7 +1,7 @@
 import {
 	createLiveStreamTelemetry,
-	createRedisLiveStreamStore,
-	type LiveStreamReader,
+	createRedisLiveStreamRelay,
+	type LiveStreamRelay,
 	type LiveStreamTelemetry,
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
@@ -47,11 +47,11 @@ export interface AppDeps {
 	conversationHistoryStore: ConversationHistoryStore;
 	/** Durable split-runtime run queue and event log. */
 	runStore: RunStore;
-	/** Retained per-Run AG-UI event source used by initial and reconnect SSE. */
-	liveStreamReader: LiveStreamReader;
-	/** Cardinality-safe, payload-free retained Live Stream observability. */
+	/** Producer-buffered per-Run relay used by initial and reconnect SSE. */
+	liveStreamRelay: LiveStreamRelay;
+	/** Cardinality-safe, payload-free Live Stream relay observability. */
 	liveStreamTelemetry: LiveStreamTelemetry;
-	/** Close the lazy Redis Stream client during service shutdown. */
+	/** Close the lazy Redis relay clients during service shutdown. */
 	closeLiveResources: () => Promise<void>;
 	/**
 	 * Server-side gate controlling who may create new agent work. Consulted on
@@ -81,9 +81,10 @@ export function createDeps(
 		database,
 	);
 	const runStore = new PostgresRunStore(database);
-	const liveStreamStore = createRedisLiveStreamStore({
+	const liveStreamRelay = createRedisLiveStreamRelay({
 		url: config.redisUrl,
 		deployment: "current",
+		telemetry: liveStreamTelemetry,
 	});
 	return {
 		config,
@@ -95,9 +96,9 @@ export function createDeps(
 		conversationStore,
 		conversationHistoryStore,
 		runStore,
-		liveStreamReader: liveStreamStore satisfies LiveStreamReader,
+		liveStreamRelay,
 		liveStreamTelemetry,
-		closeLiveResources: () => liveStreamStore.close(),
+		closeLiveResources: () => liveStreamRelay.close(),
 		exposureGate: createExposureGate(config),
 	};
 }

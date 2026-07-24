@@ -9,10 +9,10 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
-import { fakeLiveStreamStore } from "../testing/live-stream-store";
 import { Worker } from "../worker";
 import type { SupervisedQuery } from "./agent-stream";
 import { createSdkRunProcessor, type StartRunQuery } from "./run-processor";
@@ -164,7 +164,7 @@ function buildLoop(
 	return new RunLoop({
 		db: tdb.db,
 		worker,
-		liveStreamStore: fakeLiveStreamStore(),
+		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
 			startRunQuery,
 			logger,

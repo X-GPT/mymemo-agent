@@ -34,7 +34,7 @@ resource "random_password" "live_redis" {
 
 resource "aws_elasticache_replication_group" "live" {
   replication_group_id = substr(replace("${local.common_name}-live", "_", "-"), 0, 40)
-  description          = "Temporary per-Run Redis Streams for AG-UI live delivery"
+  description          = "Ephemeral Redis pub/sub relay for AG-UI Live Stream delivery"
 
   engine         = "redis"
   engine_version = var.live_redis_engine_version
@@ -60,7 +60,7 @@ resource "aws_elasticache_replication_group" "live" {
 
 resource "aws_secretsmanager_secret" "live_redis_url" {
   name                    = "${local.common_name}-REDIS_URL"
-  description             = "Authenticated TLS URL for the temporary Redis Live Stream"
+  description             = "Authenticated TLS URL for the Redis Live Stream relay"
   recovery_window_in_days = 7
 }
 

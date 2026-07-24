@@ -2,7 +2,7 @@
  * Test-only Run processor for the credential-free Postgres/Redis integration.
  * Production never imports this file: the real agent-worker entrypoint always
  * runs the Claude Agent SDK. This fixture keeps the queue → durable history →
- * retained AG-UI Stream seam deterministic; Task 9.7 owns the credentialed
+ * relay-backed AG-UI Stream seam deterministic; Task 9.7 owns the credentialed
  * live smoke for the production worker.
  */
 
@@ -12,9 +12,9 @@ import { RunLoop, type RunProcessor } from "../apps/agent-worker/src/run-loop";
 import { Worker } from "../apps/agent-worker/src/worker";
 import { createDatabase } from "../packages/agent-db/src/client";
 import {
-	createRedisLiveStreamStore,
-	type LiveStreamStore,
-} from "../packages/live-text/src/redis-live-stream-store";
+	createRedisLiveStreamRelay,
+	type LiveStreamRelay,
+} from "../packages/live-text/src";
 
 const agentDatabaseUrl = process.env.AGENT_DATABASE_URL;
 if (!agentDatabaseUrl) throw new Error("AGENT_DATABASE_URL is required");
@@ -24,14 +24,14 @@ const healthPort = Number(process.env.INTEGRATION_WORKER_PORT);
 if (!Number.isInteger(healthPort) || healthPort < 1) {
 	throw new Error("INTEGRATION_WORKER_PORT is required");
 }
-const retentionMs = optionalPositiveInteger(
-	process.env.INTEGRATION_LIVE_STREAM_RETENTION_MS,
-);
 const maxEvents = optionalPositiveInteger(
 	process.env.INTEGRATION_LIVE_STREAM_MAX_EVENTS,
 );
 const maxStreamBytes = optionalPositiveInteger(
 	process.env.INTEGRATION_LIVE_STREAM_MAX_BYTES,
+);
+const liveStreamFault = parseLiveStreamFault(
+	process.env.INTEGRATION_LIVE_STREAM_FAIL_AT,
 );
 const heartbeatIntervalMs =
 	optionalPositiveInteger(process.env.INTEGRATION_HEARTBEAT_INTERVAL_MS) ?? 500;
@@ -46,25 +46,31 @@ const worker = new Worker({
 });
 const healthServer = startHealthServer(worker, healthPort, logger);
 const database = createDatabase(agentDatabaseUrl);
-const redisLiveStreamStore = createRedisLiveStreamStore({
+const redisLiveStreamRelay = createRedisLiveStreamRelay({
 	url: redisUrl,
 	deployment: "current",
-	...(retentionMs !== undefined ||
-	maxEvents !== undefined ||
-	maxStreamBytes !== undefined
+	...(maxEvents !== undefined || maxStreamBytes !== undefined
 		? {
 				testLimits: {
-					...(retentionMs === undefined ? {} : { retentionMs }),
 					...(maxEvents === undefined ? {} : { maxEvents }),
-					...(maxStreamBytes === undefined ? {} : { maxStreamBytes }),
+					...(maxStreamBytes === undefined
+						? {}
+						: { maxBufferBytes: maxStreamBytes }),
+				},
+			}
+		: {}),
+	...(liveStreamFault && liveStreamFault !== "before_creation"
+		? {
+				testHooks: {
+					failEventPublishAtOrdinal: faultOrdinal(liveStreamFault),
 				},
 			}
 		: {}),
 });
-const liveStreamStore = withInjectedRedisFault(
-	redisLiveStreamStore,
-	process.env.INTEGRATION_LIVE_STREAM_FAIL_AT,
-);
+const liveStreamRelay =
+	liveStreamFault === "before_creation"
+		? withInjectedProducerCreationFault(redisLiveStreamRelay)
+		: redisLiveStreamRelay;
 const resumeDelayMs = Number(process.env.INTEGRATION_RESUME_DELAY_MS ?? 0);
 
 type SyntheticScenario =
@@ -178,7 +184,7 @@ const runLoop = new RunLoop({
 	db: database,
 	worker,
 	processor,
-	liveStreamStore,
+	liveStreamRelay,
 	heartbeatIntervalMs,
 	logger,
 });
@@ -190,7 +196,7 @@ async function shutdown(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	await runLoop.stop();
-	await liveStreamStore.close();
+	await liveStreamRelay.close();
 	await database.$client.end();
 	healthServer.stop();
 	process.exit(0);
@@ -201,54 +207,46 @@ process.on("SIGTERM", () => void shutdown());
 
 type LiveStreamFault = "before_creation" | "mid_text" | "tool" | "terminal";
 
-/** Deterministically faults one operation while retaining a real Redis-backed
- * store for every operation on either side of the failure. Integration tests
- * use this to cover process-boundary recovery without timing Redis shutdowns. */
-function withInjectedRedisFault(
-	store: LiveStreamStore,
-	rawFault: string | undefined,
-): LiveStreamStore {
-	const fault = isLiveStreamFault(rawFault) ? rawFault : undefined;
+/** The creation fault is outside a producer; later fault points use the relay's
+ * publish hook so its real failure signal reaches attached readers. */
+function withInjectedProducerCreationFault(
+	relay: LiveStreamRelay,
+): LiveStreamRelay {
 	let injected = false;
-	const inject = (candidate: LiveStreamFault) => {
-		if (fault !== candidate || injected) return;
-		injected = true;
-		throw new Error(`injected Redis failure at ${candidate}`);
-	};
 	return {
-		async acquire(streamId, options) {
-			inject("before_creation");
-			return store.acquire(streamId, options);
+		async openProducer(runId) {
+			if (!injected) {
+				injected = true;
+				throw new Error("injected Redis failure before producer creation");
+			}
+			return relay.openProducer(runId);
 		},
-		async append(streamId, chunk) {
-			const type = liveEventType(chunk);
-			if (type === "TEXT_MESSAGE_CONTENT") inject("mid_text");
-			if (type === "TOOL_CALL_START") inject("tool");
-			if (type === "RUN_FINISHED") inject("terminal");
-			return store.append(streamId, chunk);
-		},
-		appendWithRetryId(streamId, retryId, chunk) {
-			return store.appendWithRetryId(streamId, retryId, chunk);
-		},
-		finalize(streamId, status, error) {
-			return store.finalize(streamId, status, error);
-		},
-		refresh(streamId) {
-			return store.refresh(streamId);
-		},
-		read(streamId, cursor, signal) {
-			return store.read(streamId, cursor, signal);
-		},
-		status(streamId) {
-			return store.status(streamId);
-		},
-		delete(streamId) {
-			return store.delete(streamId);
+		attach(runId, signal) {
+			return relay.attach(runId, signal);
 		},
 		close() {
-			return store.close();
+			return relay.close();
 		},
 	};
+}
+
+function parseLiveStreamFault(
+	value: string | undefined,
+): LiveStreamFault | undefined {
+	return isLiveStreamFault(value) ? value : undefined;
+}
+
+function faultOrdinal(
+	fault: Exclude<LiveStreamFault, "before_creation">,
+): number {
+	switch (fault) {
+		case "mid_text":
+			return 2;
+		case "tool":
+			return 4;
+		case "terminal":
+			return 8;
+	}
 }
 
 function isLiveStreamFault(
@@ -260,17 +258,6 @@ function isLiveStreamFault(
 		value === "tool" ||
 		value === "terminal"
 	);
-}
-
-function liveEventType(chunk: Uint8Array): string | undefined {
-	try {
-		const event = JSON.parse(new TextDecoder().decode(chunk)) as {
-			type?: unknown;
-		};
-		return typeof event.type === "string" ? event.type : undefined;
-	} catch {
-		return undefined;
-	}
 }
 
 function optionalPositiveInteger(raw: string | undefined): number | undefined {

@@ -1,9 +1,10 @@
 # Live Stream operations
 
-The retained Live Stream is a temporary per-Run Redis Stream. Postgres remains
-authoritative for Run execution, complete messages, Tool activity, and terminal
-Outcomes. A Live Stream alarm is a delivery incident: it must not fail service
-health, restart a Run, or be counted as a model or Run failure.
+The Live Stream is buffered in the producing worker's memory and relayed over
+Redis pub/sub. Redis stores no stream content. Postgres remains authoritative
+for Run execution, complete messages, Tool activity, and terminal Outcomes. A
+Live Stream alarm is a delivery incident: it must not fail service health,
+restart a Run, or be counted as a model or Run failure.
 
 Both trusted services require `REDIS_URL` at startup. It must be an
 authenticated `rediss://` URL; missing, malformed, unauthenticated, or
@@ -23,9 +24,9 @@ The CloudWatch namespace `<name-prefix>-<environment>/LiveStream` contains:
 - `CapacityFailures`, dimensioned only by `Service`; and
 - `DegradedDurationMs`, dimensioned only by `Service`.
 
-`agent-worker` owns producer acquisition, append, finalization, TTL refresh,
-capacity enforcement, and persistence of `live_stream_failed_at`. `chat-api`
-owns Live Stream reads, reconnect waits, retryable `503` responses, and
+`agent-worker` owns producer creation, event publication, backlog replies,
+buffer-cap enforcement, and persistence of `live_stream_failed_at`. `chat-api`
+owns attach attempts, Postgres-governed retries, retryable `503` responses, and
 permanent-history recovery `410` responses.
 
 Metric events contain only enumerated classifications, integer duration/count,
@@ -57,10 +58,10 @@ duration pair when it creates the marker after an owner disappears.
 
 The per-service alarm identifies the owner:
 
-1. For `agent-worker`, inspect `acquire`, `append`, `finalize`, and `refresh`
+1. For `agent-worker`, inspect `publish`, `backlog_request`, and `degradation`
    failures and latency. Confirm Runs still terminalize and permanent history
    remains available.
-2. For `chat-api`, inspect `read_wait`, `reconnect_response`, and
+2. For `chat-api`, inspect `attach_attempt`, `reconnect_response`, and
    `recovery_response`.
    Confirm ownership checks still precede Redis reads and clients receive `503`
    while retry is valid or `410` when history recovery is required.
@@ -87,5 +88,5 @@ unexpectedly large.
 
 All alarms notify `alarm_action_arns`; production must point it at a confirmed
 incident subscription. After restoration, run a new Conversation turn and
-confirm producer acquisition, successful append/finalize, a terminal AG-UI
-event, and permanent history agree.
+confirm successful publish/backlog/attach operations, a terminal AG-UI event,
+and permanent history agree.

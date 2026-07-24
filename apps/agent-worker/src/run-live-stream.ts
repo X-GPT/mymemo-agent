@@ -5,11 +5,9 @@ import {
 	disabledLiveStreamTelemetry,
 	encodeAgUiLiveStreamEvent,
 	type LiveStreamEvent,
-	type LiveStreamOperation,
+	type LiveStreamProducer,
 	type LiveStreamReason,
-	type LiveStreamResult,
-	type LiveStreamStore,
-	LiveStreamStoreError,
+	type LiveStreamRelay,
 	type LiveStreamTelemetry,
 	RUN_CANCELLED_EVENT_TYPE,
 } from "@mymemo/live-text";
@@ -20,7 +18,7 @@ export interface LiveStreamFailureMarker {
 	failedAt: Date;
 }
 
-/** One claimed Run's best-effort AG-UI producer. Redis failure disables every
+/** One claimed Run's best-effort AG-UI producer. Relay failure disables every
  * later write but never escapes into model execution or the Postgres Outcome. */
 export class RunLiveStream {
 	#enabled = false;
@@ -29,9 +27,9 @@ export class RunLiveStream {
 	#failureReason: LiveStreamReason = "redis_unavailable";
 	#failedAt: Date | undefined;
 	#degradationEnded = false;
+	#producer: LiveStreamProducer | undefined;
 
 	private constructor(
-		private readonly store: LiveStreamStore,
 		private readonly runId: string,
 		private readonly conversationId: string,
 		private readonly markLiveStreamFailed: () => Promise<LiveStreamFailureMarker>,
@@ -40,7 +38,7 @@ export class RunLiveStream {
 	) {}
 
 	static async open(options: {
-		store: LiveStreamStore;
+		relay: LiveStreamRelay;
 		runId: string;
 		conversationId: string;
 		markLiveStreamFailed: () => Promise<LiveStreamFailureMarker>;
@@ -48,7 +46,6 @@ export class RunLiveStream {
 		telemetry?: LiveStreamTelemetry;
 	}): Promise<RunLiveStream> {
 		const stream = new RunLiveStream(
-			options.store,
 			options.runId,
 			options.conversationId,
 			options.markLiveStreamFailed,
@@ -56,15 +53,7 @@ export class RunLiveStream {
 			options.telemetry ?? disabledLiveStreamTelemetry,
 		);
 		try {
-			const role = await stream.#observe(
-				"acquire",
-				(value) => (value === "producer" ? "producer" : "consumer"),
-				() => options.store.acquire(options.runId),
-			);
-			if (role !== "producer") {
-				await stream.#disable(new LiveStreamStoreError("not_producer"));
-				return stream;
-			}
+			stream.#producer = await options.relay.openProducer(options.runId);
 			stream.#enabled = true;
 			await stream.append({
 				type: EventType.RUN_STARTED,
@@ -80,30 +69,8 @@ export class RunLiveStream {
 	async append(event: LiveStreamEvent): Promise<void> {
 		if (!this.#enabled) return;
 		try {
-			await this.#observe(
-				"append",
-				() => "success",
-				async () => {
-					for (const chunk of encodeAgUiLiveStreamEvent(event)) {
-						await this.store.append(this.runId, chunk);
-					}
-				},
-			);
-		} catch (error) {
-			await this.#disable(error);
-		}
-	}
-
-	async refresh(): Promise<void> {
-		if (!this.#enabled) return;
-		try {
-			const refreshed = await this.#observe(
-				"refresh",
-				(value) => (value ? "success" : "finalized"),
-				() => this.store.refresh(this.runId),
-			);
-			if (!refreshed) {
-				await this.#disable(new LiveStreamStoreError("finalized"));
+			for (const chunk of encodeAgUiLiveStreamEvent(event)) {
+				await this.#producer?.append(chunk);
 			}
 		} catch (error) {
 			await this.#disable(error);
@@ -114,47 +81,46 @@ export class RunLiveStream {
 	async finish(status: TerminalRunStatus): Promise<void> {
 		if (!this.#enabled) {
 			await this.#retryFailureMarker();
-			this.#recordDegradationEnded();
-			return;
-		}
-		if (status === "canceled") {
-			await this.append({
-				type: RUN_CANCELLED_EVENT_TYPE,
-				threadId: this.conversationId,
-				runId: this.runId,
-			});
-		} else {
-			await this.append(
-				status === "done"
-					? {
-							type: EventType.RUN_FINISHED,
-							threadId: this.conversationId,
-							runId: this.runId,
-						}
-					: { type: EventType.RUN_ERROR, message: "Run failed" },
-			);
-		}
-		if (!this.#enabled) {
-			await this.#retryFailureMarker();
+			await this.#closeProducer();
 			this.#recordDegradationEnded();
 			return;
 		}
 		try {
-			await this.#observe(
-				"finalize",
-				() => "success",
-				() => this.store.finalize(this.runId, "done"),
-			);
+			const event: LiveStreamEvent =
+				status === "canceled"
+					? {
+							type: RUN_CANCELLED_EVENT_TYPE,
+							threadId: this.conversationId,
+							runId: this.runId,
+						}
+					: status === "done"
+						? {
+								type: EventType.RUN_FINISHED,
+								threadId: this.conversationId,
+								runId: this.runId,
+							}
+						: { type: EventType.RUN_ERROR, message: "Run failed" };
+			const [chunk] = encodeAgUiLiveStreamEvent(event);
+			if (!chunk) throw new Error("Terminal Live Stream event encoded empty");
+			await this.#producer?.publishTerminal(chunk);
 			this.#enabled = false;
 		} catch (error) {
 			await this.#disable(error);
 			await this.#retryFailureMarker();
+		} finally {
+			await this.#closeProducer();
 		}
 		this.#recordDegradationEnded();
 	}
 
+	/** Release a producer when this worker can no longer terminalize the Run. */
+	async close(): Promise<void> {
+		this.#enabled = false;
+		await this.#closeProducer();
+		this.#recordDegradationEnded();
+	}
+
 	async #disable(error: unknown): Promise<void> {
-		const wasEnabled = this.#enabled;
 		this.#enabled = false;
 		this.#failed = true;
 		this.#failureReason = classifyLiveStreamFailure(error);
@@ -164,12 +130,6 @@ export class RunLiveStream {
 			reason: this.#failureReason,
 		});
 		await this.#persistFailureMarker();
-		if (!wasEnabled) return;
-		await this.#observe(
-			"finalize",
-			() => "success",
-			() => this.store.finalize(this.runId, "error", "Live stream unavailable"),
-		).catch(() => {});
 	}
 
 	async #persistFailureMarker(): Promise<void> {
@@ -209,24 +169,9 @@ export class RunLiveStream {
 		});
 	}
 
-	async #observe<T>(
-		operation: LiveStreamOperation,
-		result: (value: T) => LiveStreamResult,
-		execute: () => Promise<T>,
-	): Promise<T> {
-		const startedAt = Date.now();
-		try {
-			const value = await execute();
-			this.telemetry.record(operation, result(value), {
-				durationMs: Date.now() - startedAt,
-			});
-			return value;
-		} catch (error) {
-			this.telemetry.record(operation, "failure", {
-				reason: classifyLiveStreamFailure(error),
-				durationMs: Date.now() - startedAt,
-			});
-			throw error;
-		}
+	async #closeProducer(): Promise<void> {
+		const producer = this.#producer;
+		this.#producer = undefined;
+		await producer?.close().catch(() => {});
 	}
 }

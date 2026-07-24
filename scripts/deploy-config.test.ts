@@ -330,7 +330,7 @@ describe("agent deployment config", () => {
 		expect(cloudwatch).not.toMatch(/live_preview|Live preview|LivePreview/);
 	});
 
-	it("alarms on retained Live Stream unavailability, recovery, and capacity exhaustion", () => {
+	it("alarms on Live Stream relay unavailability, recovery, and capacity exhaustion", () => {
 		const cloudwatch = readFileSync(
 			join(terraformDir, "cloudwatch.tf"),
 			"utf8",

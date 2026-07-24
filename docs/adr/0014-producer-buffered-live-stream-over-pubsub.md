@@ -4,7 +4,7 @@ status: accepted
 
 # Producer-buffered Live Stream over pub/sub
 
-Status: accepted (2026-07-23); implementation not started. Supersedes the
+Status: accepted (2026-07-23); implemented by #369. Supersedes the
 retained per-Run Redis Stream transport of
 [ADR-0012](./0012-expose-a-full-ag-ui-agent-surface.md); every non-transport
 decision there (admission, authorization, event vocabulary, Postgres-first

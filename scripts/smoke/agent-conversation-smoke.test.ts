@@ -96,14 +96,14 @@ describe("agent conversation smoke", () => {
 		expect(result.stdout).toContain("Statsig gate is closed by default");
 	});
 
-	it("uses strict Run admission and cursor-free full AG-UI replay", async () => {
+	it("uses strict Run admission and terminal history recovery", async () => {
 		const conversationId = "conversation-1";
 		const workspaceMarker = "workspace-0123456789abcdef0123456789abcdef";
 		const workspaceHash = createHash("sha256")
 			.update(workspaceMarker)
 			.digest("hex");
 		const runInputs: RunInput[] = [];
-		const runFrames = new Map<string, Frame[]>();
+		const historyRuns: Array<Record<string, unknown>> = [];
 		const paths: string[] = [];
 		const reconnectEventIds: Array<string | null> = [];
 		let sessionMarker = "";
@@ -135,16 +135,47 @@ describe("agent conversation smoke", () => {
 						reply = "ARTIFACT_WRITTEN";
 					}
 					const frames = successfulRun(conversationId, input.runId, reply);
-					runFrames.set(input.runId, frames);
+					historyRuns.push({
+						runId: input.runId,
+						messages: [
+							input.messages[0],
+							{
+								id: `assistant-${input.runId}`,
+								role: "assistant",
+								content: reply,
+							},
+						],
+						terminalEvent: {
+							type: "RUN_FINISHED",
+							threadId: conversationId,
+							runId: input.runId,
+						},
+					});
 					return sse(frames);
 				}
 				const replayMatch = url.pathname.match(
 					/^\/v1\/conversations\/conversation-1\/runs\/([^/]+)\/events$/,
 				);
 				if (request.method === "GET" && replayMatch) {
-					const frames = runFrames.get(replayMatch[1] ?? "") ?? [];
 					reconnectEventIds.push(request.headers.get("Last-Event-ID"));
-					return sse(frames);
+					return Response.json(
+						{
+							error: "Live stream unavailable",
+							recovery: "history",
+						},
+						{ status: 410 },
+					);
+				}
+				if (
+					request.method === "GET" &&
+					url.pathname === `/v1/conversations/${conversationId}/history`
+				) {
+					return Response.json({
+						conversation: { conversationId },
+						runs: historyRuns,
+						nextCursor: null,
+						activeRun: null,
+					});
 				}
 				if (
 					request.method === "GET" &&
