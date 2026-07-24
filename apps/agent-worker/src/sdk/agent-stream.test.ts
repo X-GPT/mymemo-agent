@@ -216,7 +216,7 @@ describe("consumeAgentStream", () => {
 		]);
 	});
 
-	it("coalesces provider text fragments before retained AG-UI publication", async () => {
+	it("coalesces provider text fragments before Live Stream publication", async () => {
 		const messages = textEnvelope({
 			completeText: "hello",
 			partialText: "hel",

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import { EventType } from "@ag-ui/core";
 import {
+	createInMemoryLiveStreamRelay,
 	createLiveStreamTelemetry,
-	LiveStreamStoreError,
+	encodeAgUiLiveStreamEvent,
+	type LiveStreamEvent,
+	type LiveStreamProducer,
+	type LiveStreamRelay,
 	type LiveStreamTelemetry,
 } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
@@ -88,12 +93,7 @@ function buildApp(
 	conversationStore: ConversationStore,
 	exposureGate: ExposureGate = recordingGate(true).gate,
 	fakeRuns = fakeRunStore(),
-	liveStreamReader: unknown = {
-		async status() {
-			return "missing";
-		},
-		async *read() {},
-	},
+	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 	liveStreamTelemetry: LiveStreamTelemetry = silentLiveStreamTelemetry,
 ) {
 	const deps = {
@@ -101,7 +101,7 @@ function buildApp(
 		conversationStore,
 		exposureGate,
 		runStore: fakeRuns.runStore,
-		liveStreamReader,
+		liveStreamRelay,
 		liveStreamTelemetry,
 	} as unknown as AppDeps;
 	return createApp({ logLevel: "silent" } as unknown as ApiConfig, deps);
@@ -111,16 +111,13 @@ function buildAppWithDurableRunStore(
 	conversationStore: ConversationStore,
 	runStore: RunStore,
 ) {
+	const relay = createInMemoryLiveStreamRelay();
+	void relay.close();
 	return buildApp(
 		conversationStore,
 		recordingGate(true).gate,
 		{ ...fakeRunStore(), runStore },
-		{
-			async status() {
-				return "done";
-			},
-			async *read() {},
-		},
+		relay,
 	);
 }
 
@@ -241,23 +238,19 @@ function agUiRunInput(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-function retainedAgUiStream(events: unknown[]) {
-	const encoder = new TextEncoder();
-	const entries = events.map((event, index) => ({
-		cursor: `${index + 1}-0`,
-		chunk: encoder.encode(JSON.stringify(event)),
-	}));
-	return {
-		async status() {
-			return "done";
-		},
-		async *read(_runId: string, cursor: string) {
-			const start = cursor
-				? entries.findIndex((entry) => entry.cursor === cursor) + 1
-				: 0;
-			for (const entry of entries.slice(start)) yield entry;
-		},
-	};
+async function relayWithEvents(
+	runId: string,
+	events: unknown[],
+): Promise<{ relay: LiveStreamRelay; producer: LiveStreamProducer }> {
+	const relay = createInMemoryLiveStreamRelay();
+	const producer = await relay.openProducer(runId);
+	for (const [index, event] of events.entries()) {
+		const [chunk] = encodeAgUiLiveStreamEvent(event as never);
+		if (!chunk) throw new Error("test event encoded empty");
+		if (index === events.length - 1) await producer.publishTerminal(chunk);
+		else await producer.append(chunk);
+	}
+	return { relay, producer };
 }
 
 function parseAgUiSse(text: string): unknown[] {
@@ -677,8 +670,8 @@ describe("PATCH /v1/conversations/:id", () => {
 				}),
 				admit("conv-archive-race", "archive-racing-run"),
 			]);
-			// The stubbed retained Stream is empty, so a committed admission returns
-			// the route's retryable transport response after winning the DB race.
+			// The closed relay returns a retryable transport response after the
+			// committed admission wins the DB race.
 			expect(
 				(archive.status === 200 && archiveAdmission.status === 409) ||
 					(archive.status === 409 && archiveAdmission.status === 503),
@@ -937,6 +930,61 @@ describe("POST /v1/conversations/:id/runs", () => {
 		archivedAt: null,
 	};
 
+	it("streams the relay backlog through the terminal event", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runStore.admitRun = async (input) => {
+			fakeRuns.runOwners.set(input.runId, {
+				userId: input.conversation.userId,
+				conversationId: input.conversation.conversationId,
+				status: "running",
+			});
+			return {
+				outcome: "created",
+				run: runRecord({
+					runId: input.runId,
+					userId: input.conversation.userId,
+					conversationId: input.conversation.conversationId,
+					status: "queued",
+				}),
+			};
+		};
+		const relay = createInMemoryLiveStreamRelay();
+		const producer = await relay.openProducer("client-run-1");
+		const [started] = encodeAgUiLiveStreamEvent({
+			type: EventType.RUN_STARTED,
+			threadId: "conv-1",
+			runId: "client-run-1",
+		});
+		const [terminal] = encodeAgUiLiveStreamEvent({
+			type: EventType.RUN_FINISHED,
+			threadId: "conv-1",
+			runId: "client-run-1",
+		});
+		if (!started || !terminal) throw new Error("test event encoded empty");
+		await producer.append(started);
+		await producer.publishTerminal(terminal);
+
+		const response = await buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+			relay,
+		).request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+
+		expect(response.status).toBe(200);
+		expect(parseAgUiSse(await response.text())).toEqual([
+			{ type: "RUN_STARTED", threadId: "conv-1", runId: "client-run-1" },
+			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "client-run-1" },
+		]);
+		await producer.close();
+		await relay.close();
+	});
+
 	it("admits the final plain-text User message and streams standard AG-UI events", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
@@ -974,12 +1022,8 @@ describe("POST /v1/conversations/:id/runs", () => {
 			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "client-run-1" },
 		];
 
-		const app = buildApp(
-			store,
-			recordingGate(true).gate,
-			fakeRuns,
-			retainedAgUiStream(events),
-		);
+		const live = await relayWithEvents("client-run-1", events);
+		const app = buildApp(store, recordingGate(true).gate, fakeRuns, live.relay);
 		const res = await app.request("/v1/conversations/conv-1/runs", {
 			method: "POST",
 			headers: identityHeaders,
@@ -1002,8 +1046,13 @@ describe("POST /v1/conversations/:id/runs", () => {
 			"/v1/conversations/conv-1/runs/client-run-1/events",
 			{ headers: identityHeaders },
 		);
-		expect(replay.status).toBe(200);
-		expect(parseAgUiSse(await replay.text())).toEqual(events);
+		expect(replay.status).toBe(410);
+		expect(await replay.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
+		});
+		await live.producer.close();
+		await live.relay.close();
 	});
 
 	it("reattaches an exact retry without consulting the new-work exposure gate", async () => {
@@ -1028,19 +1077,25 @@ describe("POST /v1/conversations/:id/runs", () => {
 			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "client-run-1" },
 		];
 
+		const live = await relayWithEvents("client-run-1", events);
 		const res = await buildApp(
 			store,
 			gateThatFailsIfConsulted(),
 			fakeRuns,
-			retainedAgUiStream(events),
+			live.relay,
 		).request("/v1/conversations/conv-1/runs", {
 			method: "POST",
 			headers: identityHeaders,
 			body: JSON.stringify(agUiRunInput()),
 		});
 
-		expect(res.status).toBe(200);
-		expect(parseAgUiSse(await res.text())).toEqual(events);
+		expect(res.status).toBe(410);
+		expect(await res.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
+		});
+		await live.producer.close();
+		await live.relay.close();
 	});
 
 	it.each([
@@ -1114,22 +1169,14 @@ describe("POST /v1/conversations/:id/runs", () => {
 				}),
 			};
 		};
-		const res = await buildApp(store, recordingGate(true).gate, fakeRuns, {
-			async status() {
-				return "streaming" as const;
-			},
-			read() {
-				return {
-					[Symbol.asyncIterator]() {
-						return {
-							async next() {
-								throw new Error("Redis unavailable");
-							},
-						};
-					},
-				};
-			},
-		}).request("/v1/conversations/conv-1/runs", {
+		const relay = createInMemoryLiveStreamRelay();
+		await relay.close();
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+			relay,
+		).request("/v1/conversations/conv-1/runs", {
 			method: "POST",
 			headers: identityHeaders,
 			body: JSON.stringify(agUiRunInput()),
@@ -1152,29 +1199,36 @@ describe("POST /v1/conversations/:id/runs", () => {
 				status: "queued",
 			}),
 		});
-		const encoder = new TextEncoder();
-		const res = await buildApp(store, recordingGate(true).gate, fakeRuns, {
-			async status() {
-				return "streaming" as const;
-			},
-			async *read() {
-				yield {
-					cursor: "1-0",
-					chunk: encoder.encode(
-						JSON.stringify({
-							type: "RUN_STARTED",
-							threadId: "conv-1",
-							runId: "client-run-1",
-						}),
-					),
-				};
-				throw new Error("Redis failed after streaming began");
-			},
-		}).request("/v1/conversations/conv-1/runs", {
+		const relay = createInMemoryLiveStreamRelay({
+			testHooks: { failEventPublishAtOrdinal: 1 },
+		});
+		const producer = await relay.openProducer("client-run-1");
+		const [started] = encodeAgUiLiveStreamEvent({
+			type: EventType.RUN_STARTED,
+			threadId: "conv-1",
+			runId: "client-run-1",
+		});
+		if (!started) throw new Error("test event encoded empty");
+		await producer.append(started);
+		const responsePromise = buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+			relay,
+		).request("/v1/conversations/conv-1/runs", {
 			method: "POST",
 			headers: identityHeaders,
 			body: JSON.stringify(agUiRunInput()),
 		});
+		await Bun.sleep(10);
+		const [content] = encodeAgUiLiveStreamEvent({
+			type: EventType.TEXT_MESSAGE_CONTENT,
+			messageId: "assistant-1",
+			delta: "not delivered",
+		});
+		if (!content) throw new Error("test event encoded empty");
+		await expect(producer.append(content)).rejects.toThrow();
+		const res = await responsePromise;
 
 		expect(res.status).toBe(200);
 		expect(parseAgUiSse(await res.text())).toEqual([
@@ -1184,6 +1238,8 @@ describe("POST /v1/conversations/:id/runs", () => {
 				runId: "client-run-1",
 			},
 		]);
+		await producer.close();
+		await relay.close();
 	});
 });
 
@@ -1330,92 +1386,81 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		archivedAt: null,
 	};
 
-	it("validates identity headers before reconnecting", async () => {
-		const { store } = fakeStore([existing]);
-		const res = await buildApp(store).request(
+	it("validates ownership before attaching to the relay", async () => {
+		const unauthorized = await buildApp(fakeStore([existing]).store).request(
 			"/v1/conversations/conv-1/runs/run-1/events",
 			{ method: "GET" },
 		);
+		expect(unauthorized.status).toBe(401);
 
-		expect(res.status).toBe(401);
-	});
-
-	it("returns 404 for a missing or foreign conversation before opening the stream", async () => {
-		const missing = await buildApp(fakeStore().store).request(
+		const missingConversation = await buildApp(fakeStore().store).request(
 			"/v1/conversations/conv-1/runs/run-1/events",
 			{ method: "GET", headers: identityHeaders },
 		);
-		expect(missing.status).toBe(404);
-		expect(missing.headers.get("content-type")).not.toContain(
-			"text/event-stream",
-		);
+		expect(missingConversation.status).toBe(404);
 
 		const { store } = fakeStore([existing]);
-		const foreign = await buildApp(store).request(
-			"/v1/conversations/conv-1/runs/run-1/events",
-			{
-				method: "GET",
-				headers: { ...identityHeaders, "x-member-code": "intruder" },
-			},
-		);
-		expect(foreign.status).toBe(404);
-		expect(foreign.headers.get("content-type")).not.toContain(
-			"text/event-stream",
-		);
-	});
-
-	it("returns 404 for a missing run before opening the stream", async () => {
-		const { store } = fakeStore([existing]);
-		const res = await buildApp(store).request(
+		const missingRun = await buildApp(store).request(
 			"/v1/conversations/conv-1/runs/run-1/events",
 			{ method: "GET", headers: identityHeaders },
 		);
-
-		expect(res.status).toBe(404);
-		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
+		expect(missingRun.status).toBe(404);
 	});
 
-	it("returns recovery 410 for a Run whose Live Stream failed without reading Redis", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "running",
-			liveStreamFailedAt: new Date("2026-01-01T00:01:00.000Z"),
-		});
-		let redisRead = false;
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				redisRead = true;
-				return "error" as const;
-			},
-			read() {
-				redisRead = true;
-				throw new Error("Live Stream must not be read");
-			},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: identityHeaders,
-		});
-
-		expect(res.status).toBe(410);
-		expect(await res.json()).toEqual({
-			error: "Live stream unavailable",
-			recovery: "history",
-		});
-		expect(redisRead).toBe(false);
-	});
-
-	it("classifies retryable reconnect and permanent-history recovery responses", async () => {
+	it("returns recovery 410 for failed and terminal Runs without attaching", async () => {
 		const { store } = fakeStore([existing]);
 		const metrics: Record<string, unknown>[] = [];
 		const telemetry = createLiveStreamTelemetry("chat-api", {
 			info: (event) => metrics.push(event),
 			warn: (event) => metrics.push(event),
 		});
-		const temporarilyUnavailableRuns = fakeRunStore();
-		temporarilyUnavailableRuns.runOwners.set("run-reconnect", {
+		const relay = createInMemoryLiveStreamRelay({ telemetry });
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("failed-run", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+			liveStreamFailedAt: new Date(),
+		});
+		fakeRuns.runOwners.set("done-run", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "done",
+		});
+
+		for (const runId of ["failed-run", "done-run"]) {
+			const response = await buildApp(
+				store,
+				gateThatFailsIfConsulted(),
+				fakeRuns,
+				relay,
+				telemetry,
+			).request(`/v1/conversations/conv-1/runs/${runId}/events`, {
+				headers: identityHeaders,
+			});
+			expect(response.status).toBe(410);
+			expect(await response.json()).toEqual({
+				error: "Live stream unavailable",
+				recovery: "history",
+			});
+		}
+		expect(
+			metrics.some((metric) => metric.operation === "attach_attempt"),
+		).toBe(false);
+		await relay.close();
+	});
+
+	it("preserves retryable 503 versus history 410 discrimination", async () => {
+		const { store } = fakeStore([existing]);
+		const metrics: Record<string, unknown>[] = [];
+		const telemetry = createLiveStreamTelemetry("chat-api", {
+			info: (event) => metrics.push(event),
+			warn: (event) => metrics.push(event),
+		});
+		const unavailableRelay = createInMemoryLiveStreamRelay({ telemetry });
+		await unavailableRelay.close();
+		const activeRuns = fakeRunStore();
+		activeRuns.runOwners.set("active-run", {
 			userId: "member-1",
 			conversationId: "conv-1",
 			status: "running",
@@ -1424,319 +1469,157 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		const reconnect = await buildApp(
 			store,
 			gateThatFailsIfConsulted(),
-			temporarilyUnavailableRuns,
-			{
-				async status() {
-					throw new Error(
-						"redis://:secret@redis.internal current:mymemo:agui:{run-reconnect}:stream",
-					);
-				},
-				async *read() {},
-			},
+			activeRuns,
+			unavailableRelay,
 			telemetry,
-		).request("/v1/conversations/conv-1/runs/run-reconnect/events", {
-			method: "GET",
+		).request("/v1/conversations/conv-1/runs/active-run/events", {
 			headers: identityHeaders,
 		});
-
-		const failedRuns = fakeRunStore();
-		failedRuns.runOwners.set("run-recovery", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "running",
-			liveStreamFailedAt: new Date(),
+		expect(reconnect.status).toBe(503);
+		expect(await reconnect.json()).toEqual({
+			error: "Live stream temporarily unavailable",
 		});
+
+		const activeOwner = activeRuns.runOwners.get("active-run");
+		if (!activeOwner) throw new Error("active Run fixture missing");
+		activeOwner.liveStreamFailedAt = new Date();
 		const recovery = await buildApp(
 			store,
 			gateThatFailsIfConsulted(),
-			failedRuns,
-			{
-				async status() {
-					throw new Error("must not read Redis");
-				},
-				async *read() {},
-			},
+			activeRuns,
+			unavailableRelay,
 			telemetry,
-		).request("/v1/conversations/conv-1/runs/run-recovery/events", {
-			method: "GET",
+		).request("/v1/conversations/conv-1/runs/active-run/events", {
 			headers: identityHeaders,
 		});
-
-		expect([reconnect.status, recovery.status]).toEqual([503, 410]);
-		expect(metrics).toEqual([
+		expect(recovery.status).toBe(410);
+		expect(metrics).toContainEqual(
 			expect.objectContaining({
 				operation: "reconnect_response",
 				result: "retryable_503",
-				reason: "redis_unavailable",
+				reason: "relay_closed",
 			}),
+		);
+		expect(metrics).toContainEqual(
 			expect.objectContaining({
 				operation: "recovery_response",
 				result: "history_410",
 			}),
-		]);
-		const serialized = JSON.stringify(metrics);
-		for (const forbidden of [
-			"redis://",
-			"secret",
-			"mymemo:agui",
-			"run-reconnect",
-			"run-recovery",
-		]) {
-			expect(serialized).not.toContain(forbidden);
-		}
+		);
 	});
 
-	it("does not classify a bounded missing-Stream reconnect as Redis unavailable", async () => {
+	it("serves history when the Run terminalizes during the backlog wait", async () => {
 		const { store } = fakeStore([existing]);
-		const metrics: Record<string, unknown>[] = [];
-		const telemetry = createLiveStreamTelemetry("chat-api", {
-			info: (event) => metrics.push(event),
-			warn: (event) => metrics.push(event),
-		});
-		const activeRuns = fakeRunStore();
-		activeRuns.runOwners.set("run-1", {
+		const fakeRuns = fakeRunStore();
+		const owner = {
 			userId: "member-1",
 			conversationId: "conv-1",
 			status: "running",
-			liveStreamFailedAt: null,
-		});
+		};
+		fakeRuns.runOwners.set("run-1", owner);
+		const relay = createInMemoryLiveStreamRelay({ backlogWaitMs: 20 });
+		setTimeout(() => {
+			owner.status = "done";
+		}, 5);
 
 		const response = await buildApp(
 			store,
 			gateThatFailsIfConsulted(),
-			activeRuns,
-			{
-				async status() {
-					throw new LiveStreamStoreError("missing");
-				},
-				async *read() {},
-			},
-			telemetry,
+			fakeRuns,
+			relay,
 		).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
 			headers: identityHeaders,
 		});
 
-		expect(response.status).toBe(503);
-		expect(metrics).toContainEqual(
-			expect.objectContaining({
-				operation: "reconnect_response",
-				result: "retryable_503",
-				reason: "missing",
-			}),
-		);
+		expect(response.status).toBe(410);
+		expect(await response.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
+		});
+		await relay.close();
 	});
 
-	it("returns retryable 503 for a temporary read failure while the Run is active", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "running",
-		});
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				throw new Error("temporary Redis failure");
-			},
-			async *read() {},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: identityHeaders,
-		});
-
-		expect(res.status).toBe(503);
-		expect(await res.json()).toEqual({
-			error: "Live stream temporarily unavailable",
-		});
-	});
-
-	it("returns recovery 410 when the failure marker races the first Live Stream read", async () => {
+	it("gives concurrent reconnects the full backlog plus live tail without duplicates", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
 		const owner = {
 			userId: "member-1",
 			conversationId: "conv-1",
 			status: "running",
-			liveStreamFailedAt: null as Date | null,
 		};
 		fakeRuns.runOwners.set("run-1", owner);
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				return "streaming" as const;
-			},
-			read() {
-				return {
-					[Symbol.asyncIterator]() {
-						return {
-							async next() {
-								owner.liveStreamFailedAt = new Date();
-								throw new Error("Redis failed permanently");
-							},
-						};
-					},
-				};
-			},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: identityHeaders,
-		});
-
-		expect(res.status).toBe(410);
-		expect(await res.json()).toEqual({
-			error: "Live stream unavailable",
-			recovery: "history",
-		});
-	});
-
-	it("closes a failed open Live Stream, then returns the Recovering signal", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		const owner = {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "running",
-			liveStreamFailedAt: null as Date | null,
-		};
-		fakeRuns.runOwners.set("run-1", owner);
-		const encoder = new TextEncoder();
-		let statusReads = 0;
-		const app = buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				statusReads++;
-				return "streaming" as const;
-			},
-			async *read() {
-				yield {
-					cursor: "1-0",
-					chunk: encoder.encode(
-						JSON.stringify({
-							type: "RUN_STARTED",
-							threadId: "conv-1",
-							runId: "run-1",
-						}),
-					),
-				};
-				owner.liveStreamFailedAt = new Date();
-				throw new Error("Redis failed mid-stream");
-			},
-		});
-
-		const first = await app.request(
-			"/v1/conversations/conv-1/runs/run-1/events",
-			{ method: "GET", headers: identityHeaders },
-		);
-		expect(first.status).toBe(200);
-		expect(parseAgUiSse(await first.text())).toEqual([
+		const relay = createInMemoryLiveStreamRelay();
+		const producer = await relay.openProducer("run-1");
+		const backlogEvents: LiveStreamEvent[] = [
+			{ type: EventType.RUN_STARTED, threadId: "conv-1", runId: "run-1" },
 			{
-				type: "RUN_STARTED",
-				threadId: "conv-1",
-				runId: "run-1",
+				type: EventType.TEXT_MESSAGE_START,
+				messageId: "assistant-1",
+				role: "assistant" as const,
 			},
-		]);
-
-		const recoveryResponse = await app.request(
+		];
+		for (const event of backlogEvents) {
+			const [chunk] = encodeAgUiLiveStreamEvent(event);
+			if (!chunk) throw new Error("test event encoded empty");
+			await producer.append(chunk);
+		}
+		const app = buildApp(store, gateThatFailsIfConsulted(), fakeRuns, relay);
+		const firstResponse = app.request(
 			"/v1/conversations/conv-1/runs/run-1/events",
-			{
-				method: "GET",
-				headers: { ...identityHeaders, "last-event-id": "1-0" },
-			},
+			{ headers: identityHeaders },
 		);
-		expect(recoveryResponse.status).toBe(410);
-		expect(await recoveryResponse.json()).toEqual({
-			error: "Live stream unavailable",
-			recovery: "history",
-		});
-		expect(statusReads).toBe(1);
-	});
-
-	it("returns recovery 410 when a terminal Run's retained Live Stream is missing", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "done",
-		});
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				return "missing" as const;
+		const reconnectResponse = app.request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{ headers: { ...identityHeaders, "last-event-id": "ignored" } },
+		);
+		await Bun.sleep(20);
+		const tailEvents: LiveStreamEvent[] = [
+			{
+				type: EventType.TEXT_MESSAGE_CONTENT,
+				messageId: "assistant-1",
+				delta: "hello",
 			},
-			async *read() {},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: identityHeaders,
-		});
-
-		expect(res.status).toBe(410);
-		expect(await res.json()).toEqual({
-			error: "Live stream unavailable",
-			recovery: "history",
-		});
-	}, 7_000);
-
-	it("returns recovery 410 when a terminal Live Stream has no terminal event to replay", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "done",
-		});
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				return "done" as const;
-			},
-			async *read() {},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: identityHeaders,
-		});
-
-		expect(res.status).toBe(410);
-		expect(await res.json()).toEqual({
-			error: "Live stream unavailable",
-			recovery: "history",
-		});
-	});
-
-	it("waits past startup delay with cursorless pings, then streams the terminal event", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-		const encoder = new TextEncoder();
-		const readyAt = Date.now() + 5_100;
-		const terminalEvent = {
-			type: "RUN_FINISHED",
+			{ type: EventType.TEXT_MESSAGE_END, messageId: "assistant-1" },
+		];
+		for (const event of tailEvents) {
+			const [chunk] = encodeAgUiLiveStreamEvent(event);
+			if (!chunk) throw new Error("test event encoded empty");
+			await producer.append(chunk);
+		}
+		owner.status = "done";
+		const [terminal] = encodeAgUiLiveStreamEvent({
+			type: EventType.RUN_FINISHED,
 			threadId: "conv-1",
 			runId: "run-1",
-		};
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				return Date.now() >= readyAt ? ("done" as const) : ("missing" as const);
-			},
-			async *read() {
-				yield {
-					cursor: "1-0",
-					chunk: encoder.encode(JSON.stringify(terminalEvent)),
-				};
-			},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: identityHeaders,
 		});
+		if (!terminal) throw new Error("test event encoded empty");
+		await producer.publishTerminal(terminal);
 
-		expect(res.status).toBe(200);
-		const body = await res.text();
-		expect(body).toContain(": ping\n\n");
-		expect(parseAgUiSse(body)).toEqual([terminalEvent]);
-	}, 8_000);
+		const bodies = await Promise.all([
+			Promise.resolve(firstResponse).then((response) => response.text()),
+			Promise.resolve(reconnectResponse).then((response) => response.text()),
+		]);
+		const expected = [
+			{ type: "RUN_STARTED", threadId: "conv-1", runId: "run-1" },
+			{
+				type: "TEXT_MESSAGE_START",
+				messageId: "assistant-1",
+				role: "assistant",
+			},
+			{
+				type: "TEXT_MESSAGE_CONTENT",
+				messageId: "assistant-1",
+				delta: "hello",
+			},
+			{ type: "TEXT_MESSAGE_END", messageId: "assistant-1" },
+			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "run-1" },
+		];
+		expect(bodies.map(parseAgUiSse)).toEqual([expected, expected]);
+		await producer.close();
+		await relay.close();
+	});
 
-	it("follows a Live Stream that appears just after Postgres terminalizes the Run", async () => {
+	it("keeps a queued Run open with pings while retrying until its producer answers", async () => {
 		const { store } = fakeStore([existing]);
 		const metrics: Record<string, unknown>[] = [];
 		const telemetry = createLiveStreamTelemetry("chat-api", {
@@ -1750,139 +1633,111 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 			status: "queued",
 		};
 		fakeRuns.runOwners.set("run-1", owner);
-		const encoder = new TextEncoder();
-		const terminalEvent = {
-			type: "RUN_FINISHED",
-			threadId: "conv-1",
-			runId: "run-1",
-		};
-		let statusReads = 0;
-		const res = await buildApp(
+		const relay = createInMemoryLiveStreamRelay({
+			backlogWaitMs: 20,
+			telemetry,
+		});
+		const responsePromise = buildApp(
 			store,
 			gateThatFailsIfConsulted(),
 			fakeRuns,
-			{
-				async status() {
-					statusReads += 1;
-					if (statusReads === 1) {
-						owner.status = "done";
-						return "missing" as const;
-					}
-					return "streaming" as const;
-				},
-				async *read() {
-					yield {
-						cursor: "1-0",
-						chunk: encoder.encode(JSON.stringify(terminalEvent)),
-					};
-				},
-			},
+			relay,
 			telemetry,
 		).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
 			headers: identityHeaders,
 		});
 
-		expect(res.status).toBe(200);
-		expect(parseAgUiSse(await res.text())).toEqual([terminalEvent]);
+		await Bun.sleep(5_100);
+		owner.status = "running";
+		const producer = await relay.openProducer("run-1");
+		const [started] = encodeAgUiLiveStreamEvent({
+			type: EventType.RUN_STARTED,
+			threadId: "conv-1",
+			runId: "run-1",
+		});
+		if (!started) throw new Error("test event encoded empty");
+		await producer.append(started);
+		owner.status = "done";
+		const [terminal] = encodeAgUiLiveStreamEvent({
+			type: EventType.RUN_FINISHED,
+			threadId: "conv-1",
+			runId: "run-1",
+		});
+		if (!terminal) throw new Error("test event encoded empty");
+		await producer.publishTerminal(terminal);
+
+		const response = await responsePromise;
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain(": ping\n\n");
+		expect(parseAgUiSse(body)).toEqual([
+			{ type: "RUN_STARTED", threadId: "conv-1", runId: "run-1" },
+			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "run-1" },
+		]);
 		expect(metrics).toContainEqual(
 			expect.objectContaining({
-				operation: "read_wait",
-				result: "success",
-				durationMs: expect.any(Number),
+				operation: "attach_attempt",
+				result: "retry",
 			}),
 		);
-	});
+		await producer.close();
+		await relay.close();
+	}, 8_000);
 
-	it("sends cursorless pings while following a quiet active Stream", async () => {
+	it("closes an incomplete relay stream and recovers from history on the next attach", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
+		const owner = {
 			userId: "member-1",
 			conversationId: "conv-1",
 			status: "running",
+			liveStreamFailedAt: null as Date | null,
+		};
+		fakeRuns.runOwners.set("run-1", owner);
+		const relay = createInMemoryLiveStreamRelay({
+			testHooks: { failEventPublishAtOrdinal: 1 },
 		});
-		const encoder = new TextEncoder();
-		const terminalEvent = {
-			type: "RUN_FINISHED",
+		const producer = await relay.openProducer("run-1");
+		const [started] = encodeAgUiLiveStreamEvent({
+			type: EventType.RUN_STARTED,
 			threadId: "conv-1",
 			runId: "run-1",
-		};
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				return "streaming" as const;
-			},
-			async *read() {
-				await Bun.sleep(5_100);
-				yield {
-					cursor: "2-0",
-					chunk: encoder.encode(JSON.stringify(terminalEvent)),
-				};
-			},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "1-0" },
 		});
-
-		expect(res.status).toBe(200);
-		const body = await res.text();
-		expect(body).toContain(": ping\n\n");
-		expect(parseAgUiSse(body)).toEqual([terminalEvent]);
-	}, 8_000);
-
-	it("ignores Last-Event-ID and replays the active Run from the beginning", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		const { runOwners } = fakeRuns;
-		runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "done",
+		if (!started) throw new Error("test event encoded empty");
+		await producer.append(started);
+		const app = buildApp(store, gateThatFailsIfConsulted(), fakeRuns, relay);
+		const firstResponse = app.request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{ headers: identityHeaders },
+		);
+		await Bun.sleep(20);
+		owner.liveStreamFailedAt = new Date();
+		const [content] = encodeAgUiLiveStreamEvent({
+			type: EventType.TEXT_MESSAGE_CONTENT,
+			messageId: "assistant-1",
+			delta: "not delivered",
 		});
-		const events = [
+		if (!content) throw new Error("test event encoded empty");
+		await expect(producer.append(content)).rejects.toThrow();
+
+		const first = await firstResponse;
+		expect(first.status).toBe(200);
+		expect(parseAgUiSse(await first.text())).toEqual([
 			{ type: "RUN_STARTED", threadId: "conv-1", runId: "run-1" },
-			{ type: "TEXT_MESSAGE_CONTENT", messageId: "assistant-1", delta: "hi" },
-			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "run-1" },
-		];
-
-		const res = await buildApp(
-			store,
-			gateThatFailsIfConsulted(),
-			fakeRuns,
-			retainedAgUiStream(events),
-		).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "not-a-cursor" },
+		]);
+		const recovery = await app.request(
+			"/v1/conversations/conv-1/runs/run-1/events",
+			{ headers: identityHeaders },
+		);
+		expect(recovery.status).toBe(410);
+		expect(await recovery.json()).toEqual({
+			error: "Live stream unavailable",
+			recovery: "history",
 		});
-
-		expect(res.status).toBe(200);
-		expect(parseAgUiSse(await res.text())).toEqual(events);
-	});
-
-	it("returns 404 for a foreign run before opening the stream", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		const { runOwners } = fakeRuns;
-		runOwners.set("run-1", {
-			userId: "other-member",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-
-		const res = await buildApp(
-			store,
-			recordingGate(false).gate,
-			fakeRuns,
-		).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: identityHeaders,
-		});
-
-		expect(res.status).toBe(404);
-		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
+		await producer.close();
+		await relay.close();
 	});
 });
-
 describe("exposure gate (MYM-46)", () => {
 	it("allows conversation creation for an enabled identity", async () => {
 		const { store } = fakeStore();

@@ -3,7 +3,7 @@
  *
  * Postgres and Redis: chat-api atomically admits a run and its submitted
  * message, a deterministic worker claims it and appends one complete Assistant
- * message, and both POST and reconnect consume the same retained Redis Stream.
+ * message, and both POST and reconnect attach to the same Redis Live Stream relay.
  * Unlike the PGlite unit tests — which exercise each side in isolation — this
  * crosses the writer→stream→client seam over the real coordination services.
  * The production worker always runs the real SDK; Task 9.7 owns its
@@ -467,7 +467,7 @@ describe.skipIf(!RUN)(
 		});
 
 		it(
-			"waits, disconnects, and replays an authorized AG-UI Run from real Redis",
+			"waits, disconnects, and reconnects an authorized AG-UI Run over real Redis",
 			async () => {
 				// Create the conversation (general scope). Proves migrations provisioned
 				// the `conversations` table and chat-api's writable DB is reachable.
@@ -617,8 +617,11 @@ describe.skipIf(!RUN)(
 				const replayFromZero = await fetchRunEvents(conversationId, runId, {
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
-				expect(replayFromZero.status).toBe(200);
-				expect(parseSSE(await replayFromZero.text())).toEqual(frames);
+				expect(replayFromZero.status).toBe(410);
+				expect(await replayFromZero.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
 
 				const historyResponse = await fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/history`,
@@ -675,8 +678,11 @@ describe.skipIf(!RUN)(
 				const legacyHeaderReplay = await fetchRunEvents(conversationId, runId, {
 					lastEventId: "9999999999999-0",
 				});
-				expect(legacyHeaderReplay.status).toBe(200);
-				expect(parseSSE(await legacyHeaderReplay.text())).toEqual(frames);
+				expect(legacyHeaderReplay.status).toBe(410);
+				expect(await legacyHeaderReplay.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
 
 				const retry = await fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
@@ -687,8 +693,11 @@ describe.skipIf(!RUN)(
 						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 					},
 				);
-				expect(retry.status).toBe(200);
-				expect(parseSSE(await retry.text())).toEqual(frames);
+				expect(retry.status).toBe(410);
+				expect(await retry.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
 
 				const mismatch = await fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/runs`,
@@ -760,8 +769,11 @@ describe.skipIf(!RUN)(
 				const failedReplay = await fetchRunEvents(conversationId, failedRunId, {
 					signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 				});
-				expect(failedReplay.status).toBe(200);
-				expect(parseSSE(await failedReplay.text())).toEqual(failedFrames);
+				expect(failedReplay.status).toBe(410);
+				expect(await failedReplay.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
 				const failedLegacyHeaderReplay = await fetchRunEvents(
 					conversationId,
 					failedRunId,
@@ -770,10 +782,11 @@ describe.skipIf(!RUN)(
 						signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
 					},
 				);
-				expect(failedLegacyHeaderReplay.status).toBe(200);
-				expect(parseSSE(await failedLegacyHeaderReplay.text())).toEqual(
-					failedFrames,
-				);
+				expect(failedLegacyHeaderReplay.status).toBe(410);
+				expect(await failedLegacyHeaderReplay.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
 
 				const failedHistoryResponse = await fetch(
 					`${CHAT_URL}/v1/conversations/${conversationId}/history`,
@@ -1011,7 +1024,7 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
-			"keeps text Run identities equal across live delivery, replay, and history",
+			"keeps text Run identities equal across live delivery and history",
 			async () => {
 				await stopEventWriter();
 				const prompt = "Synthetic text-only equality scenario";
@@ -1050,8 +1063,11 @@ describe.skipIf(!RUN)(
 				]);
 
 				const replay = await fetchRunEvents(turn.conversationId, turn.runId);
-				expect(replay.status).toBe(200);
-				expect(parseSSE(await replay.text())).toEqual(liveFrames);
+				expect(replay.status).toBe(410);
+				expect(await replay.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
 
 				const historyRun = await waitForHistoryRun(
 					turn.conversationId,
@@ -1113,7 +1129,7 @@ describe.skipIf(!RUN)(
 
 				await Bun.sleep(1_600);
 				await startEventWriter({
-					INTEGRATION_RESUME_DELAY_MS: "0",
+					INTEGRATION_RESUME_DELAY_MS: "1500",
 				});
 
 				const replay = await fetchRunEvents(turn.conversationId, turn.runId, {
@@ -1270,15 +1286,14 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
-			"refreshes an active Stream and expires it after the terminal grace period",
+			"serves the producer backlog while active and history after the terminal",
 			async () => {
 				await stopEventWriter();
 				const turn = await admitIntegrationRun(
-					"Synthetic text-only retention scenario",
+					"Synthetic text-only producer backlog scenario",
 				);
 				await startEventWriter({
 					INTEGRATION_HEARTBEAT_INTERVAL_MS: "100",
-					INTEGRATION_LIVE_STREAM_RETENTION_MS: "800",
 					INTEGRATION_RESUME_DELAY_MS: "2200",
 				});
 
@@ -1310,9 +1325,12 @@ describe.skipIf(!RUN)(
 				expect(historyRun.messages).toHaveLength(2);
 
 				await Bun.sleep(1_200);
-				const expired = await fetchRunEvents(turn.conversationId, turn.runId);
-				expect(expired.status).toBe(410);
-				expect(await expired.json()).toEqual({
+				const afterTerminal = await fetchRunEvents(
+					turn.conversationId,
+					turn.runId,
+				);
+				expect(afterTerminal.status).toBe(410);
+				expect(await afterTerminal.json()).toEqual({
 					error: "Live stream unavailable",
 					recovery: "history",
 				});
@@ -1321,7 +1339,7 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
-			"recovers completed history when either real Redis Stream cap is reached",
+			"recovers completed history when either real relay buffer cap is reached",
 			async () => {
 				const caps = [
 					{

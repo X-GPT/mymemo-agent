@@ -14,9 +14,9 @@ function config(): ApiConfig {
 	};
 }
 
-it("constructs the lazy retained Live Stream reader from required Redis config", async () => {
+it("constructs the lazy Live Stream relay from required Redis config", async () => {
 	const deps = createDeps(config());
-	expect(deps.liveStreamReader).toBeDefined();
+	expect(deps.liveStreamRelay).toBeDefined();
 	expect(deps.closeLiveResources).toBeFunction();
 	await deps.closeLiveResources();
 });

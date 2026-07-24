@@ -10,12 +10,12 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import type { SupervisedQuery } from "../sdk/agent-stream";
 import { createSdkRunProcessor } from "../sdk/run-processor";
-import { fakeLiveStreamStore } from "../testing/live-stream-store";
 import { Worker } from "../worker";
 import type { ArtifactManifestEntry } from "./artifact-manifest";
 import {
@@ -162,7 +162,7 @@ function buildArtifactHarness(
 	const loop = new RunLoop({
 		db: tdb.db,
 		worker,
-		liveStreamStore: fakeLiveStreamStore(),
+		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
 			logger,
 			startRunQuery: async (run, signal) => {
@@ -273,7 +273,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		const loop = new RunLoop({
 			db: tdb.db,
 			worker,
-			liveStreamStore: fakeLiveStreamStore(),
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			processor: createSdkRunProcessor({
 				logger: silentLogger,
 				startRunQuery: async (run, signal) => {

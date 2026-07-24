@@ -18,11 +18,15 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
-import type { LiveStreamStore, LiveStreamTelemetry } from "@mymemo/live-text";
+import {
+	createInMemoryLiveStreamRelay,
+	decodeAgUiLiveStreamEvent,
+	type LiveStreamRelay,
+	type LiveStreamTelemetry,
+} from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
 import { RunLoop, type RunProcessor } from "./run-loop";
-import { fakeLiveStreamStore } from "./testing/live-stream-store";
 import { Worker } from "./worker";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
@@ -66,14 +70,14 @@ function buildWorker(maxConcurrentRuns: number, workerId = "worker-1") {
 function buildLoop(
 	worker: Worker,
 	processor: RunProcessor,
-	liveStreamStore: LiveStreamStore = fakeLiveStreamStore(),
+	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 	liveStreamTelemetry?: LiveStreamTelemetry,
 ) {
 	return new RunLoop({
 		db: tdb.db,
 		worker,
 		processor,
-		liveStreamStore,
+		liveStreamRelay,
 		liveStreamTelemetry,
 		heartbeatIntervalMs: 15_000,
 		logger: silentLogger,
@@ -190,7 +194,7 @@ describe("RunLoop — claim isolation", () => {
 		const loopB = new RunLoop({
 			db: tdb.db,
 			worker: workerB,
-			liveStreamStore: fakeLiveStreamStore(),
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			processor: block,
 			heartbeatIntervalMs: 15_000,
 			logger: silentLogger,
@@ -271,29 +275,9 @@ describe("RunLoop — heartbeat", () => {
 });
 
 describe("RunLoop — terminal outcomes", () => {
-	it.each([
-		[
-			"Redis fails before Live Stream creation",
-			async (): Promise<never> => {
-				throw new Error("Redis unavailable");
-			},
-		],
-		[
-			"an existing Live Stream rejects producer acquisition",
-			async (): Promise<"consumer"> => "consumer",
-		],
-	] as const)("marks the Live Stream failed and continues when %s", async (_, acquire) => {
-		let appendCalls = 0;
-		let finalizeCalls = 0;
-		const liveStreamStore = fakeLiveStreamStore({
-			acquire,
-			async append() {
-				appendCalls++;
-			},
-			async finalize() {
-				finalizeCalls++;
-			},
-		});
+	it("marks the Live Stream failed and continues when the relay cannot open a producer", async () => {
+		const liveStreamRelay = createInMemoryLiveStreamRelay();
+		await liveStreamRelay.close();
 		const worker = buildWorker(1);
 		const loop = buildLoop(
 			worker,
@@ -308,7 +292,7 @@ describe("RunLoop — terminal outcomes", () => {
 					payload: { messageId: "assistant-1", text: "still durable" },
 				});
 			},
-			liveStreamStore,
+			liveStreamRelay,
 		);
 		await queueRun("run-1", "conv-1");
 
@@ -323,31 +307,19 @@ describe("RunLoop — terminal outcomes", () => {
 			"assistant_message_completed",
 			"run_done",
 		]);
-		expect(appendCalls).toBe(0);
-		expect(finalizeCalls).toBe(0);
 	});
 
 	it("commits durable facts before exposing AG-UI completion events", async () => {
 		const observed: unknown[] = [];
-		const decoder = new TextDecoder();
-		const liveStreamStore = fakeLiveStreamStore({
-			async append(_runId: string, chunk: Uint8Array) {
-				const event = JSON.parse(decoder.decode(chunk)) as { type: string };
-				if (event.type === EventType.TEXT_MESSAGE_END) {
-					expect(await readEventTypes("run-1")).toContain(
-						"assistant_message_completed",
-					);
-				}
-				if (event.type === EventType.RUN_FINISHED) {
-					expect((await readRun("run-1"))?.status).toBe("done");
-				}
-				observed.push(event);
-			},
-		});
+		const processorStarted = deferred();
+		const continueProcessor = deferred();
+		const liveStreamRelay = createInMemoryLiveStreamRelay();
 		const worker = buildWorker(1);
 		const loop = buildLoop(
 			worker,
 			async (ctx) => {
+				processorStarted.resolve();
+				await continueProcessor.promise;
 				await ctx.appendLiveEvent({
 					type: EventType.TEXT_MESSAGE_START,
 					messageId: "assistant-1",
@@ -367,12 +339,35 @@ describe("RunLoop — terminal outcomes", () => {
 					messageId: "assistant-1",
 				});
 			},
-			liveStreamStore,
+			liveStreamRelay,
 		);
 		await queueRun("run-1", "conv-1");
 
 		await loop.tick();
+		await processorStarted.promise;
+		const attached = await liveStreamRelay.attach(
+			"run-1",
+			new AbortController().signal,
+		);
+		if (attached.outcome !== "attached") throw new Error("expected attachment");
+		const consume = (async () => {
+			for await (const chunk of attached.events) {
+				const event = decodeAgUiLiveStreamEvent(chunk);
+				if (event.type === EventType.TEXT_MESSAGE_END) {
+					expect(await readEventTypes("run-1")).toContain(
+						"assistant_message_completed",
+					);
+				}
+				if (event.type === EventType.RUN_FINISHED) {
+					expect((await readRun("run-1"))?.status).toBe("done");
+				}
+				observed.push(event);
+			}
+		})();
+
+		continueProcessor.resolve();
 		await worker.drain();
+		await consume;
 
 		expect(observed).toEqual([
 			{ type: EventType.RUN_STARTED, threadId: "conv-1", runId: "run-1" },
@@ -396,16 +391,8 @@ describe("RunLoop — terminal outcomes", () => {
 	});
 
 	it("continues durable execution after a mid-text Live Stream write fails", async () => {
-		let appendCalls = 0;
-		const finalizations: string[] = [];
-		const liveStreamStore = fakeLiveStreamStore({
-			async append() {
-				appendCalls++;
-				if (appendCalls === 3) throw new Error("Redis unavailable");
-			},
-			async finalize(_runId: string, status: "done" | "error") {
-				finalizations.push(status);
-			},
+		const liveStreamRelay = createInMemoryLiveStreamRelay({
+			testHooks: { failEventPublishAtOrdinal: 2 },
 		});
 		const worker = buildWorker(1);
 		const loop = buildLoop(
@@ -429,7 +416,7 @@ describe("RunLoop — terminal outcomes", () => {
 					},
 				});
 			},
-			liveStreamStore,
+			liveStreamRelay,
 		);
 		await queueRun("run-1", "conv-1");
 
@@ -444,21 +431,11 @@ describe("RunLoop — terminal outcomes", () => {
 			"assistant_message_completed",
 			"run_done",
 		]);
-		expect(appendCalls).toBe(3);
-		expect(finalizations).toEqual(["error"]);
 	});
 
 	it("keeps committing Tool events after Live Stream publication fails", async () => {
-		let appendCalls = 0;
-		const finalizations: string[] = [];
-		const liveStreamStore = fakeLiveStreamStore({
-			async append() {
-				appendCalls++;
-				if (appendCalls === 2) throw new Error("Redis unavailable");
-			},
-			async finalize(_runId: string, status: "done" | "error") {
-				finalizations.push(status);
-			},
+		const liveStreamRelay = createInMemoryLiveStreamRelay({
+			testHooks: { failEventPublishAtOrdinal: 1 },
 		});
 		const worker = buildWorker(1);
 		const loop = buildLoop(
@@ -518,7 +495,7 @@ describe("RunLoop — terminal outcomes", () => {
 					role: "tool",
 				});
 			},
-			liveStreamStore,
+			liveStreamRelay,
 		);
 		await queueRun("run-1", "conv-1");
 
@@ -537,27 +514,14 @@ describe("RunLoop — terminal outcomes", () => {
 			"tool_call_result",
 			"run_done",
 		]);
-		expect(appendCalls).toBe(2);
-		expect(finalizations).toEqual(["error"]);
 	});
 
 	it("marks the Live Stream failed after durable terminalization without changing the Outcome", async () => {
-		const decoder = new TextDecoder();
-		const finalizations: string[] = [];
-		const liveStreamStore = fakeLiveStreamStore({
-			async append(_runId: string, chunk: Uint8Array) {
-				const event = JSON.parse(decoder.decode(chunk)) as { type: string };
-				if (event.type === EventType.RUN_FINISHED) {
-					expect((await readRun("run-1"))?.status).toBe("done");
-					throw new Error("Redis unavailable after terminal commit");
-				}
-			},
-			async finalize(_runId: string, status: "done" | "error") {
-				finalizations.push(status);
-			},
+		const liveStreamRelay = createInMemoryLiveStreamRelay({
+			testHooks: { failEventPublishAtOrdinal: 1 },
 		});
 		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendMessageProcessor, liveStreamStore);
+		const loop = buildLoop(worker, appendMessageProcessor, liveStreamRelay);
 		await queueRun("run-1", "conv-1");
 
 		await loop.tick();
@@ -571,52 +535,6 @@ describe("RunLoop — terminal outcomes", () => {
 			"assistant_message_completed",
 			"run_done",
 		]);
-		expect(finalizations).toEqual(["error"]);
-	});
-
-	it("marks the Live Stream failed when heartbeat refresh loses it", async () => {
-		let appendCalls = 0;
-		const processorStarted = deferred();
-		const finishTurn = deferred();
-		const liveStreamStore = fakeLiveStreamStore({
-			async append() {
-				appendCalls++;
-			},
-			async finalize() {},
-			async refresh() {
-				return false;
-			},
-		});
-		const worker = buildWorker(1);
-		const loop = buildLoop(
-			worker,
-			async (ctx) => {
-				processorStarted.resolve();
-				await finishTurn.promise;
-				await ctx.appendModelContent({
-					kind: "assistant_message",
-					payload: { messageId: "assistant-1", text: "still durable" },
-				});
-			},
-			liveStreamStore,
-		);
-		await queueRun("run-1", "conv-1");
-
-		await loop.tick();
-		await processorStarted.promise;
-		await loop.tick();
-		finishTurn.resolve();
-		await worker.drain();
-
-		expect(await readRun("run-1")).toMatchObject({
-			status: "done",
-			liveStreamFailedAt: expect.any(Date),
-		});
-		expect(await readEventTypes("run-1")).toEqual([
-			"assistant_message_completed",
-			"run_done",
-		]);
-		expect(appendCalls).toBe(1);
 	});
 
 	it("ends a synthetic run as done with one durable Assistant message", async () => {
@@ -654,7 +572,7 @@ describe("RunLoop — terminal outcomes", () => {
 		const loop = new RunLoop({
 			db: tdb.db,
 			worker,
-			liveStreamStore: fakeLiveStreamStore(),
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			processor: async () => {
 				throw new Error("provider leaked a secret detail");
 			},
@@ -689,30 +607,34 @@ describe("RunLoop — terminal outcomes", () => {
 
 	it("terminalizes as canceled when cancellation is observed mid-processing", async () => {
 		const worker = buildWorker(1);
-		const decoder = new TextDecoder();
 		const published: unknown[] = [];
-		const finalizations: string[] = [];
-		const liveStreamStore = fakeLiveStreamStore({
-			async append(_runId: string, chunk: Uint8Array) {
-				published.push(JSON.parse(decoder.decode(chunk)) as { type: string });
-			},
-			async finalize(_runId: string, status: "done" | "error") {
-				finalizations.push(status);
-			},
-		});
+		const liveStreamRelay = createInMemoryLiveStreamRelay();
+		const processorStarted = deferred();
 		// A processor that runs until the run is aborted, without appending.
 		const loop = buildLoop(
 			worker,
 			async (ctx) => {
+				processorStarted.resolve();
 				await new Promise<void>((resolve) => {
 					if (ctx.signal.aborted) return resolve();
 					ctx.signal.addEventListener("abort", () => resolve(), { once: true });
 				});
 			},
-			liveStreamStore,
+			liveStreamRelay,
 		);
 		await queueRun("run-1", "conv-1");
 		await loop.tick(); // claim + dispatch (processor now blocking on abort)
+		await processorStarted.promise;
+		const attached = await liveStreamRelay.attach(
+			"run-1",
+			new AbortController().signal,
+		);
+		if (attached.outcome !== "attached") throw new Error("expected attachment");
+		const consume = (async () => {
+			for await (const chunk of attached.events) {
+				published.push(decodeAgUiLiveStreamEvent(chunk));
+			}
+		})();
 
 		// User requests cancellation while the run is executing.
 		await tdb.db
@@ -722,6 +644,7 @@ describe("RunLoop — terminal outcomes", () => {
 
 		await loop.tick(); // heartbeat observes cancel_requested → aborts the run
 		await worker.drain();
+		await consume;
 
 		expect(await readRun("run-1")).toMatchObject({
 			status: "canceled",
@@ -732,7 +655,6 @@ describe("RunLoop — terminal outcomes", () => {
 			{ type: EventType.RUN_STARTED, threadId: "conv-1", runId: "run-1" },
 			{ type: "RUN_CANCELLED", threadId: "conv-1", runId: "run-1" },
 		]);
-		expect(finalizations).toEqual(["done"]);
 	});
 });
 
@@ -877,89 +799,6 @@ describe("RunLoop — stale-run recovery", () => {
 		]);
 	});
 
-	it("deletes an orphan Live Stream only after stale recovery terminalizes its Run", async () => {
-		await claimRun("run-stale", "conv-1", "stale-worker");
-		await expireOwnership("run-stale");
-		const deleted: string[] = [];
-		const liveStreamStore = fakeLiveStreamStore({
-			async acquire() {
-				throw new Error("must not acquire");
-			},
-			async append() {
-				throw new Error("must not append");
-			},
-			async finalize() {
-				throw new Error("must not fabricate a terminal Live Stream event");
-			},
-			async refresh() {
-				throw new Error("must not refresh");
-			},
-			async appendWithRetryId() {
-				throw new Error("must not append");
-			},
-			async delete(runId: string) {
-				deleted.push(runId);
-			},
-		});
-		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendMessageProcessor, liveStreamStore);
-
-		await loop.tick();
-		await worker.drain();
-
-		expect(await readRun("run-stale")).toMatchObject({
-			status: "error",
-			liveStreamFailedAt: expect.any(Date),
-		});
-		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
-		expect(deleted).toEqual(["run-stale"]);
-	});
-
-	it("logs stale Live Stream cleanup failures without Redis secrets or keys", async () => {
-		await claimRun("run-stale", "conv-1", "stale-worker");
-		await expireOwnership("run-stale");
-		const logs: Record<string, unknown>[] = [];
-		const logger: WorkerLogger = {
-			info: (event) => logs.push(event),
-			warn: (event) => logs.push(event),
-			error: (event) => logs.push(event),
-		};
-		const worker = buildWorker(1);
-		const loop = new RunLoop({
-			db: tdb.db,
-			worker,
-			processor: appendMessageProcessor,
-			liveStreamStore: fakeLiveStreamStore({
-				async delete() {
-					throw new Error(
-						"redis://:secret@redis.internal current:mymemo:agui:{run-stale}:stream assistant text tool arguments",
-					);
-				},
-			}),
-			heartbeatIntervalMs: 15_000,
-			logger,
-		});
-
-		await loop.tick();
-
-		expect(logs).toContainEqual({
-			message: "could not delete stale Run Live Stream",
-			workerId: "worker-1",
-			runId: "run-stale",
-			reason: "redis_unavailable",
-		});
-		const serialized = JSON.stringify(logs);
-		for (const forbidden of [
-			"redis://",
-			"secret",
-			"mymemo:agui",
-			"assistant text",
-			"tool arguments",
-		]) {
-			expect(serialized).not.toContain(forbidden);
-		}
-	});
-
 	it("terminalizes stale running runs as error during a tick", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await expireOwnership("run-stale");
@@ -1015,9 +854,14 @@ describe("RunLoop — stale-run recovery", () => {
 	it("does not double-terminalize when recovery beats an active processor", async () => {
 		const worker = buildWorker(1);
 		const gate = deferred();
-		const loop = buildLoop(worker, async () => {
-			await gate.promise;
-		});
+		const liveStreamRelay = createInMemoryLiveStreamRelay();
+		const loop = buildLoop(
+			worker,
+			async () => {
+				await gate.promise;
+			},
+			liveStreamRelay,
+		);
 		await queueRun("run-1", "conv-1");
 		await loop.tick(); // claim + dispatch (processor blocks)
 		await expireOwnership("run-1");
@@ -1028,6 +872,11 @@ describe("RunLoop — stale-run recovery", () => {
 
 		expect((await readRun("run-1"))?.status).toBe("error");
 		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
+		expect(
+			(await liveStreamRelay.attach("run-1", new AbortController().signal))
+				.outcome,
+		).toBe("no_producer");
+		await liveStreamRelay.close();
 	});
 });
 
@@ -1164,7 +1013,7 @@ describe("RunLoop — doorbell", () => {
 		const loop = new RunLoop({
 			db: tdb.db,
 			worker,
-			liveStreamStore: fakeLiveStreamStore(),
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			processor: appendMessageProcessor,
 			// The timer cannot fire within the test window: only start()'s
 			// immediate tick and the doorbell can claim.
@@ -1198,7 +1047,7 @@ describe("RunLoop — doorbell", () => {
 		const loop = new RunLoop({
 			db: tdb.db,
 			worker,
-			liveStreamStore: fakeLiveStreamStore(),
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			processor: appendMessageProcessor,
 			heartbeatIntervalMs: 3_600_000,
 			logger: silentLogger,

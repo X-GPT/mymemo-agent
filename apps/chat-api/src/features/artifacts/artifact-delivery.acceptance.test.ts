@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
+import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { asc, eq } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
 import {
@@ -24,7 +25,6 @@ import type { WorkerLogger } from "../../../../agent-worker/src/logger";
 import { RunLoop } from "../../../../agent-worker/src/run-loop";
 import type { SupervisedQuery } from "../../../../agent-worker/src/sdk/agent-stream";
 import { createSdkRunProcessor } from "../../../../agent-worker/src/sdk/run-processor";
-import { fakeLiveStreamStore } from "../../../../agent-worker/src/testing/live-stream-store";
 import { Worker } from "../../../../agent-worker/src/worker";
 import type {
 	ArtifactDownloadSigner,
@@ -132,7 +132,7 @@ function createDeliveryHarness(
 	const loop = new RunLoop({
 		db: tdb.db,
 		worker,
-		liveStreamStore: fakeLiveStreamStore(),
+		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
 			logger,
 			startRunQuery: async (run, signal) => {

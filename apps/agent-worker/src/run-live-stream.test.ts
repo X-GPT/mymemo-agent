@@ -1,61 +1,44 @@
 import { expect, it } from "bun:test";
-import type {
-	LiveStreamMetricEvent,
-	LiveStreamTelemetry,
+import { EventType } from "@ag-ui/core";
+import {
+	createInMemoryLiveStreamRelay,
+	decodeAgUiLiveStreamEvent,
+	type LiveStreamMetricEvent,
+	type LiveStreamTelemetry,
 } from "@mymemo/live-text";
 import type { WorkerLogger } from "./logger";
 import { RunLiveStream } from "./run-live-stream";
-import { fakeLiveStreamStore } from "./testing/live-stream-store";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
-it("measures healthy producer acquisition, publication, refresh, and finalization", async () => {
-	const metrics: Array<Record<string, unknown>> = [];
+it("publishes RUN_STARTED through the terminal event over one relay producer", async () => {
+	const relay = createInMemoryLiveStreamRelay();
 	const stream = await RunLiveStream.open({
-		store: fakeLiveStreamStore(),
+		relay,
 		runId: "run-1",
 		conversationId: "conv-1",
 		async markLiveStreamFailed() {
 			throw new Error("must not mark a healthy Stream");
 		},
 		logger: silentLogger,
-		telemetry: {
-			record(operation, result, options) {
-				metrics.push({ operation, result, ...options });
-			},
-		},
 	});
+	const attached = await relay.attach("run-1", new AbortController().signal);
+	expect(attached.outcome).toBe("attached");
+	if (attached.outcome !== "attached") throw new Error("expected attachment");
 
-	await stream.refresh();
 	await stream.finish("done");
+	const events = [];
+	for await (const event of attached.events) {
+		events.push(decodeAgUiLiveStreamEvent(event));
+	}
 
-	expect(metrics).toEqual([
-		expect.objectContaining({
-			operation: "acquire",
-			result: "producer",
-			durationMs: expect.any(Number),
-		}),
-		expect.objectContaining({
-			operation: "append",
-			result: "success",
-			durationMs: expect.any(Number),
-		}),
-		expect.objectContaining({
-			operation: "refresh",
-			result: "success",
-			durationMs: expect.any(Number),
-		}),
-		expect.objectContaining({
-			operation: "append",
-			result: "success",
-			durationMs: expect.any(Number),
-		}),
-		expect.objectContaining({
-			operation: "finalize",
-			result: "success",
-			durationMs: expect.any(Number),
-		}),
+	expect(events).toEqual([
+		{ type: EventType.RUN_STARTED, threadId: "conv-1", runId: "run-1" },
+		{ type: EventType.RUN_FINISHED, threadId: "conv-1", runId: "run-1" },
 	]);
+	const afterClose = await relay.attach("run-1", new AbortController().signal);
+	expect(afterClose.outcome).toBe("no_producer");
+	await relay.close();
 });
 
 it("observes a payload-safe degradation transition separately from Run outcome", async () => {
@@ -78,14 +61,12 @@ it("observes a payload-safe degradation transition separately from Run outcome",
 			});
 		},
 	};
+	const relay = createInMemoryLiveStreamRelay({
+		telemetry,
+		testHooks: { failEventPublishAtOrdinal: 0 },
+	});
 	const stream = await RunLiveStream.open({
-		store: fakeLiveStreamStore({
-			async append() {
-				throw new Error(
-					"redis://:secret@redis.internal current:mymemo:agui:{run-1}:stream assistant text tool arguments",
-				);
-			},
-		}),
+		relay,
 		runId: "run-1",
 		conversationId: "conv-1",
 		async markLiveStreamFailed() {
@@ -100,40 +81,33 @@ it("observes a payload-safe degradation transition separately from Run outcome",
 
 	await stream.finish("done");
 
-	expect(metrics).toEqual([
+	expect(metrics).toContainEqual(
 		expect.objectContaining({
-			operation: "acquire",
-			result: "producer",
-			durationMs: expect.any(Number),
-		}),
-		expect.objectContaining({
-			operation: "append",
+			operation: "publish",
 			result: "failure",
 			reason: "redis_unavailable",
-			durationMs: expect.any(Number),
 		}),
+	);
+	expect(metrics).toContainEqual(
 		expect.objectContaining({
 			operation: "degradation",
 			result: "started",
-			reason: "redis_unavailable",
+			reason: "relay_failed",
 		}),
-		expect.objectContaining({
-			operation: "finalize",
-			result: "success",
-			durationMs: expect.any(Number),
-		}),
+	);
+	expect(metrics).toContainEqual(
 		expect.objectContaining({
 			operation: "degradation",
 			result: "ended",
-			reason: "redis_unavailable",
+			reason: "relay_failed",
 			durationMs: expect.any(Number),
 		}),
-	]);
+	);
 	expect(logs).toEqual([
 		{
 			message: "Live Stream publication disabled",
 			runId: "run-1",
-			reason: "redis_unavailable",
+			reason: "relay_failed",
 		},
 	]);
 	const serialized = JSON.stringify({ logs, metrics });
@@ -147,16 +121,16 @@ it("observes a payload-safe degradation transition separately from Run outcome",
 	]) {
 		expect(serialized).not.toContain(forbidden);
 	}
+	await relay.close();
 });
 
 it("retries a transient Live Stream failure-marker write after the Run terminalizes", async () => {
 	let markerAttempts = 0;
+	const relay = createInMemoryLiveStreamRelay({
+		testHooks: { failEventPublishAtOrdinal: 0 },
+	});
 	const stream = await RunLiveStream.open({
-		store: fakeLiveStreamStore({
-			async append() {
-				throw new Error("Redis unavailable");
-			},
-		}),
+		relay,
 		runId: "run-1",
 		conversationId: "conv-1",
 		async markLiveStreamFailed() {
@@ -170,40 +144,38 @@ it("retries a transient Live Stream failure-marker write after the Run terminali
 	expect(markerAttempts).toBe(1);
 	await stream.finish("done");
 	expect(markerAttempts).toBe(2);
+	await relay.close();
 });
 
 it.each([
-	"append",
-	"finalization",
-] as const)("retries a transient failure-marker write after terminal %s fails", async (fault) => {
-	let appendAttempts = 0;
-	let finalizeAttempts = 0;
+	["terminal publish", { failEventPublishAtOrdinal: 1 }, undefined],
+	["buffer overflow", undefined, { maxEvents: 1 }],
+] as const)("latches %s failure while the Run still reaches its durable outcome", async (_name, testHooks, testLimits) => {
 	let markerAttempts = 0;
+	const relay = createInMemoryLiveStreamRelay({
+		...(testHooks ? { testHooks } : {}),
+		...(testLimits ? { testLimits } : {}),
+	});
 	const stream = await RunLiveStream.open({
-		store: fakeLiveStreamStore({
-			async append() {
-				appendAttempts += 1;
-				if (fault === "append" && appendAttempts === 2) {
-					throw new Error("Redis unavailable");
-				}
-			},
-			async finalize() {
-				finalizeAttempts += 1;
-				if (fault === "finalization" && finalizeAttempts === 1) {
-					throw new Error("Redis unavailable");
-				}
-			},
-		}),
+		relay,
 		runId: "run-1",
 		conversationId: "conv-1",
 		async markLiveStreamFailed() {
 			markerAttempts += 1;
-			if (markerAttempts === 1) throw new Error("database unavailable");
 			return { outcome: "marked", failedAt: new Date() };
 		},
 		logger: silentLogger,
 	});
 
+	if (testLimits) {
+		await stream.append({
+			type: EventType.TEXT_MESSAGE_START,
+			messageId: "assistant-1",
+			role: "assistant",
+		});
+	}
 	await stream.finish("done");
-	expect(markerAttempts).toBe(2);
+
+	expect(markerAttempts).toBe(1);
+	await relay.close();
 });

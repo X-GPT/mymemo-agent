@@ -91,12 +91,13 @@ boundary should remove that from chat-api once sandbox creation moves fully to
 
 ## Redis Live Stream Infrastructure
 
-The Redis cache is temporary transport infrastructure for one retained AG-UI
-Live Stream per Run, not a permanent history authority. It is a single small
-node with no replicas, Multi-AZ failover, automatic snapshots, final snapshot,
-or backup retention. The cache is reachable on its TLS port only from a
-dedicated client security group attached to the trusted `chat-api` and
-`agent-worker` services; the migration task does not receive that group.
+The Redis cache is an ephemeral pub/sub relay for AG-UI Live Streams, not a
+storage or permanent-history authority. Producers keep active-Run backlogs in
+worker memory; Redis holds no per-Run keys. It is a single small node with no
+replicas, Multi-AZ failover, automatic snapshots, final snapshot, or backup
+retention. The cache is reachable on its TLS port only from a dedicated client
+security group attached to the trusted `chat-api` and `agent-worker` services;
+the migration task does not receive that group.
 ElastiCache does not receive a public address or a CIDR-based ingress rule.
 Authentication and in-transit encryption are mandatory.
 
@@ -114,8 +115,8 @@ operation/result dimensions and reason classifications. The alarms identify
 agent-worker production failures, chat-api recovery responses, and capacity
 exhaustion without feeding service health. Production must set
 `alarm_action_arns` to an SNS topic with a confirmed incident subscription. See
-[`docs/runbooks/live-stream.md`](../../docs/runbooks/live-stream.md) for retained
-Stream diagnosis.
+[`docs/runbooks/live-stream.md`](../../docs/runbooks/live-stream.md) for Live
+Stream relay diagnosis.
 
 ## Release Deploy Config
 
@@ -177,9 +178,9 @@ different settings:
   for running `scripts/deploy/prod_smoke.sh` from inside the VPC. The
   GitHub-hosted release workflow does not call this internal URL. The checked-in
   smoke identity must be allowlisted in Statsig: the default `core` suite drives
-    three real Runs, verifies Agent-session resume and Workspace persistence,
-    reconnects each Run from its retained Redis cursor, and checks Downloadable-artifact
-    listing plus signed attachment delivery. Set
+  three real Runs, verifies Agent-session resume and Workspace persistence,
+  recovers each terminal Run through Conversation history, and checks
+  Downloadable-artifact listing plus signed attachment delivery. Set
   `AGENT_SMOKE_EXPECT_GATE_CLOSED=true` only when checking the default-deny path
   instead.
 

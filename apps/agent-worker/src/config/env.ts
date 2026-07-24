@@ -52,7 +52,7 @@ export interface WorkerConfig {
 		bucket: string;
 		region: string;
 	};
-	/** Required authenticated TLS Redis secret for the retained Live Stream. */
+	/** Required authenticated TLS Redis secret for the Live Stream relay. */
 	redisUrl: string;
 	/** How long an unrenewed E2B sandbox stays active before idle-pausing. */
 	sandboxIdleMs: number;

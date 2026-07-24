@@ -5,7 +5,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
 import {
 	createLiveStreamTelemetry,
-	createRedisLiveStreamStore,
+	createRedisLiveStreamRelay,
 } from "@mymemo/live-text";
 import { createArtifactPublisher } from "./artifacts/artifact-publication";
 import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
@@ -35,9 +35,10 @@ const config = loadWorkerConfigFromEnv(Bun.env);
 const logger = createLogger(config.logLevel);
 const workerId = generateWorkerId();
 const liveStreamTelemetry = createLiveStreamTelemetry("agent-worker", logger);
-const liveStreamStore = createRedisLiveStreamStore({
+const liveStreamRelay = createRedisLiveStreamRelay({
 	url: config.redisUrl,
 	deployment: "current",
+	telemetry: liveStreamTelemetry,
 });
 // Verify the native CLI before constructing a run loop: a missing or wrong-libc
 // binary must crash boot before this process can claim work.
@@ -105,7 +106,7 @@ const runLoop = new RunLoop({
 		startRunQuery,
 		logger,
 	}),
-	liveStreamStore,
+	liveStreamRelay,
 	liveStreamTelemetry,
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 	// Admission commits ring this doorbell (the `runs_notify_queued` trigger),
@@ -147,7 +148,7 @@ async function handleShutdownSignal(signal: NodeJS.Signals): Promise<void> {
 	logger.info({ message: "Received shutdown signal", signal, workerId });
 	cleanupLoop.stop();
 	await runLoop.stop();
-	await liveStreamStore.close().catch(() => {});
+	await liveStreamRelay.close().catch(() => {});
 	server.stop();
 	logger.info({ message: "agent-worker stopped", workerId });
 	process.exit(0);

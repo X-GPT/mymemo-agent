@@ -15,9 +15,9 @@ describe("agent-worker production composition", () => {
 		expect(source).toContain("createS3ArtifactObjectStore(config.artifact)");
 		expect(source).toContain("artifactPublisher,");
 		expect(source).toContain("processor: createSdkRunProcessor({");
-		expect(source).toContain("createRedisLiveStreamStore({");
+		expect(source).toContain("createRedisLiveStreamRelay({");
 		expect(source).toContain("url: config.redisUrl");
-		expect(source).toContain("await liveStreamStore.close()");
+		expect(source).toContain("await liveStreamRelay.close()");
 		expect(source).not.toContain("liveTextTransport");
 		expect(source).not.toContain("syntheticProcessor");
 	});
