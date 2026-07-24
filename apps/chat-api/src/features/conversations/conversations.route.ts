@@ -56,6 +56,10 @@ function needsLiveStreamRecovery(run: RunRecord): boolean {
 	return run.liveStreamFailedAt !== null || isTerminalRunStatus(run.status);
 }
 
+function cannotUseLiveStream(run: RunRecord | null): boolean {
+	return run === null || needsLiveStreamRecovery(run);
+}
+
 function liveStreamRecoveryResponse(c: Context<AppEnv>) {
 	c.var.deps.liveStreamTelemetry.record("recovery_response", "history_410");
 	return c.json({ error: "Live stream unavailable", recovery: "history" }, 410);
@@ -161,7 +165,7 @@ function watchRunForLiveStreamRecovery(
 			.then((currentRun) => {
 				// Terminal state may commit just before its live terminal publish. If
 				// this poll wins that race, the incomplete close recovers via history.
-				if (currentRun === null || needsLiveStreamRecovery(currentRun)) {
+				if (cannotUseLiveStream(currentRun)) {
 					readController.abort();
 				}
 			})
@@ -204,9 +208,106 @@ async function writeAgUiEvents(
 			runId,
 			reason: classifyLiveStreamFailure(error),
 		});
-	} finally {
-		await iterator.return?.();
 	}
+}
+
+type AttachedFirstRead =
+	| { outcome: "event"; first: IteratorYieldResult<Uint8Array> }
+	| { outcome: "ended" }
+	| { outcome: "error"; error: unknown };
+
+interface AttachedAgUiReader {
+	firstRead: Promise<AttachedFirstRead>;
+	streamEventsTo(
+		writeSSE: (event: { data: string }) => Promise<unknown>,
+		readFailureMessage: string,
+		firstRead?: AttachedFirstRead,
+	): Promise<AttachedFirstRead | { outcome: "streamed" }>;
+	close(): Promise<void>;
+}
+
+function openAttachedAgUiReader(
+	c: Context<AppEnv>,
+	run: RunRecord,
+	events: AsyncIterable<Uint8Array>,
+	readController: AbortController,
+): AttachedAgUiReader {
+	const iterator = events[Symbol.asyncIterator]();
+	const stopRecoveryWatch = watchRunForLiveStreamRecovery(
+		c,
+		run,
+		readController,
+	);
+	const firstRead = iterator.next().then(
+		(result): AttachedFirstRead =>
+			result.done ? { outcome: "ended" } : { outcome: "event", first: result },
+		(error: unknown): AttachedFirstRead => ({ outcome: "error", error }),
+	);
+	let closed = false;
+
+	return {
+		firstRead,
+		async streamEventsTo(writeSSE, readFailureMessage, initial) {
+			const first = initial ?? (await firstRead);
+			if (first.outcome === "error") {
+				c.var.logger.error({
+					message: readFailureMessage,
+					runId: run.runId,
+					reason: classifyLiveStreamFailure(first.error),
+				});
+				return first;
+			}
+			if (first.outcome === "ended") return first;
+			await writeAgUiEvents(c, run.runId, iterator, first.first, writeSSE);
+			return { outcome: "streamed" };
+		},
+		async close() {
+			if (closed) return;
+			closed = true;
+			stopRecoveryWatch();
+			await iterator.return?.();
+		},
+	};
+}
+
+function streamAttachedAgUiReader(
+	c: Context<AppEnv>,
+	run: RunRecord,
+	readAbort: ReturnType<typeof linkedAbortController>,
+	reader: AttachedAgUiReader,
+	options: {
+		firstRead?: AttachedFirstRead;
+		writeInitialPing?: boolean;
+	} = {},
+) {
+	return streamSSE(c, async (stream) => {
+		stream.onAbort(() => readAbort.controller.abort());
+		let stopKeepalive = () => {};
+		try {
+			if (options.writeInitialPing) await stream.write(": ping\n\n");
+			stopKeepalive = startAgUiKeepalive(
+				() => stream.write(": ping\n\n"),
+				(error) =>
+					endAgUiStreamOnKeepaliveFailure(
+						c,
+						run.runId,
+						stream,
+						readAbort.controller,
+						error,
+					),
+			);
+			await reader.streamEventsTo(
+				(event) => stream.writeSSE(event),
+				"AG-UI Live Stream read failed",
+				options.firstRead,
+			);
+		} finally {
+			stopKeepalive();
+			await reader.close();
+			readAbort.controller.abort();
+			readAbort.dispose();
+		}
+	});
 }
 
 async function streamAgUiRun(
@@ -216,28 +317,17 @@ async function streamAgUiRun(
 	readAbort: ReturnType<typeof linkedAbortController>,
 ) {
 	const requestSignal = c.req.raw.signal;
-	const iterator = events[Symbol.asyncIterator]();
-	const stopRecoveryWatch = watchRunForLiveStreamRecovery(
-		c,
-		run,
-		readAbort.controller,
-	);
-	const firstRead = iterator.next().then(
-		(result) => ({ outcome: "read" as const, result }),
-		(error: unknown) => ({ outcome: "error" as const, error }),
-	);
-	let first: Awaited<ReturnType<typeof iterator.next>>;
+	const reader = openAttachedAgUiReader(c, run, events, readAbort.controller);
 	const initial = await Promise.race([
-		firstRead,
+		reader.firstRead,
 		abortableDelay(LIVE_STREAM_KEEPALIVE_MS, requestSignal).then(() => ({
 			outcome: "ping" as const,
 		})),
 	]);
 	if (initial.outcome === "error") {
 		const { error } = initial;
-		stopRecoveryWatch();
+		await reader.close();
 		readAbort.dispose();
-		await iterator.return?.();
 		c.var.logger.error({
 			message: "AG-UI Live Stream initial read failed",
 			runId: run.runId,
@@ -251,86 +341,24 @@ async function streamAgUiRun(
 	}
 	if (initial.outcome === "ping") {
 		if (requestSignal.aborted) {
-			stopRecoveryWatch();
 			readAbort.controller.abort(requestSignal.reason);
+			await reader.close();
 			readAbort.dispose();
-			await iterator.return?.();
 			return c.body(null, 204);
 		}
-		return streamSSE(c, async (stream) => {
-			stream.onAbort(() => readAbort.controller.abort());
-			let stopKeepalive = () => {};
-			try {
-				await stream.write(": ping\n\n");
-				stopKeepalive = startAgUiKeepalive(
-					() => stream.write(": ping\n\n"),
-					(error) =>
-						endAgUiStreamOnKeepaliveFailure(
-							c,
-							run.runId,
-							stream,
-							readAbort.controller,
-							error,
-						),
-				);
-				const delayed = await firstRead;
-				if (delayed.outcome === "error") {
-					c.var.logger.error({
-						message: "AG-UI Live Stream read failed",
-						runId: run.runId,
-						reason: classifyLiveStreamFailure(delayed.error),
-					});
-					await iterator.return?.();
-					return;
-				}
-				if (delayed.result.done) {
-					await iterator.return?.();
-					return;
-				}
-				await writeAgUiEvents(c, run.runId, iterator, delayed.result, (event) =>
-					stream.writeSSE(event),
-				);
-			} finally {
-				stopKeepalive();
-				stopRecoveryWatch();
-				readAbort.controller.abort();
-				readAbort.dispose();
-				await iterator.return?.();
-			}
+		return streamAttachedAgUiReader(c, run, readAbort, reader, {
+			writeInitialPing: true,
 		});
 	}
-	first = initial.result;
-	if (first.done) {
-		stopRecoveryWatch();
+	if (initial.outcome === "ended") {
+		await reader.close();
 		readAbort.dispose();
-		await iterator.return?.();
 		if (requestSignal.aborted) return c.body(null, 204);
 		return liveStreamReadFailureResponse(c, run, "relay_failed");
 	}
 
-	return streamSSE(c, async (stream) => {
-		stream.onAbort(() => readAbort.controller.abort());
-		const stopKeepalive = startAgUiKeepalive(
-			() => stream.write(": ping\n\n"),
-			(error) =>
-				endAgUiStreamOnKeepaliveFailure(
-					c,
-					run.runId,
-					stream,
-					readAbort.controller,
-					error,
-				),
-		);
-		try {
-			await writeAgUiEvents(c, run.runId, iterator, first, (event) =>
-				stream.writeSSE(event),
-			);
-		} finally {
-			stopKeepalive();
-			stopRecoveryWatch();
-			readAbort.controller.abort();
-			readAbort.dispose();
-		}
+	return streamAttachedAgUiReader(c, run, readAbort, reader, {
+		firstRead: initial,
 	});
 }
 
@@ -369,9 +397,7 @@ async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 					conversationId: run.conversationId,
 					runId: run.runId,
 				});
-				if (currentRun === null || needsLiveStreamRecovery(currentRun)) {
-					return;
-				}
+				if (cannotUseLiveStream(currentRun)) return;
 
 				c.var.deps.liveStreamTelemetry.record("attach_attempt", "retry");
 				await abortableDelay(retryDelayMs, readSignal);
@@ -396,35 +422,20 @@ async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 					retryDelayMs = Math.min(retryDelayMs * 2, LIVE_STREAM_MAX_RETRY_MS);
 					continue;
 				}
-				const iterator = attached.events[Symbol.asyncIterator]();
-				const stopRecoveryWatch = watchRunForLiveStreamRecovery(
+				const reader = openAttachedAgUiReader(
 					c,
 					run,
+					attached.events,
 					readAbort.controller,
 				);
-				let first: Awaited<ReturnType<typeof iterator.next>>;
 				try {
-					try {
-						first = await iterator.next();
-					} catch (error) {
-						c.var.logger.error({
-							message: "AG-UI Live Stream read failed after attaching",
-							runId: run.runId,
-							reason: classifyLiveStreamFailure(error),
-						});
-						await iterator.return?.();
-						return;
-					}
-					if (first.done) {
-						await iterator.return?.();
-						return;
-					}
-					await writeAgUiEvents(c, run.runId, iterator, first, (event) =>
-						stream.writeSSE(event),
+					await reader.streamEventsTo(
+						(event) => stream.writeSSE(event),
+						"AG-UI Live Stream read failed after attaching",
 					);
 					return;
 				} finally {
-					stopRecoveryWatch();
+					await reader.close();
 				}
 			}
 		} finally {

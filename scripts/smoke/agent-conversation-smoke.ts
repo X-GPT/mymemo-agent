@@ -2,6 +2,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { parseRawAgUiSse as parseSSE } from "@mymemo/test-support/ag-ui-sse";
 import type { PublicToolName } from "../../packages/agent-db/src/run-events";
 import {
 	type ClientContractMessage,
@@ -955,35 +956,6 @@ async function readSSEIncrementally(
 
 	buffer += decoder.decode();
 	if (buffer.trim()) await dispatch(buffer);
-}
-
-function parseSSE(raw: string): SSEFrame[] {
-	const frames: SSEFrame[] = [];
-	for (const block of raw.replaceAll("\r\n", "\n").split("\n\n")) {
-		let event = "";
-		const data: string[] = [];
-		for (const line of block.split("\n")) {
-			if (line.startsWith("id:")) {
-				throw new Error("event stream carried an unexpected SSE id");
-			}
-			if (line.startsWith("event:")) {
-				event = line.slice("event:".length).trim();
-			} else if (line.startsWith("data:")) {
-				data.push(line.slice("data:".length).trimStart());
-			}
-		}
-		const frameData = data.join("\n");
-		if (!event && frameData) {
-			try {
-				const parsed = JSON.parse(frameData) as { type?: unknown };
-				if (typeof parsed.type === "string") event = parsed.type;
-			} catch {
-				// parseFrameData reports malformed JSON with event context.
-			}
-		}
-		if (event) frames.push({ event, data: frameData });
-	}
-	return frames;
 }
 
 function stringField(frame: SSEFrame | undefined, field: string): string {

@@ -17,6 +17,12 @@ const FAILURE_PUBLISH_TIMEOUT_MS = 250;
 const DEFAULT_OPERATION_TIMEOUT_MS = 1_000;
 
 export interface RedisLiveStreamRelayOptions extends LiveStreamRelayOptions {
+	/**
+	 * The transport factory intentionally accepts both `rediss://` production
+	 * URLs and plaintext loopback URLs used by real-Redis contract tests.
+	 * Production entrypoints must pass the output of
+	 * `resolveLiveStreamRedisUrl`, which requires authenticated TLS.
+	 */
 	url: string;
 	deployment: string;
 	/** Bounds each Redis connect/command so Live Stream failure cannot stall a Run. */

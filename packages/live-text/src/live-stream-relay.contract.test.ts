@@ -3,7 +3,7 @@ import { createServer, type Socket } from "node:net";
 import {
 	type RedisTestServer,
 	startRedisTestServer,
-} from "../../../test-support/redis-test-server";
+} from "@mymemo/test-support/redis-test-server";
 import {
 	createInMemoryLiveStreamRelay,
 	createRedisLiveStreamRelay,

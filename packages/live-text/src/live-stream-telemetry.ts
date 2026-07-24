@@ -23,7 +23,6 @@ export type LiveStreamReason =
 	| "event_too_large"
 	| "invalid_event"
 	| "marker_write_failed"
-	| "operation_failed"
 	| "producer_closed"
 	| "producer_failed"
 	| "relay_closed"
