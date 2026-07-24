@@ -1,12 +1,16 @@
 import { createClient } from "redis";
+import { LiveStreamStoreError } from "./live-stream-events";
 import {
 	type LiveStreamRelay,
 	type LiveStreamRelayOptions,
 	type LiveStreamRelayTransport,
+	type LiveStreamSubscription,
 	ProducerBufferedLiveStreamRelay,
 } from "./live-stream-relay";
+import { validateLiveStreamDeployment } from "./live-stream-validation";
 
 type RedisClient = ReturnType<typeof createClient>;
+const FAILURE_PUBLISH_TIMEOUT_MS = 250;
 
 export interface RedisLiveStreamRelayOptions extends LiveStreamRelayOptions {
 	url: string;
@@ -16,6 +20,8 @@ export interface RedisLiveStreamRelayOptions extends LiveStreamRelayOptions {
 class RedisRelayTransport implements LiveStreamRelayTransport {
 	readonly #url: string;
 	readonly #publisher: RedisClient;
+	readonly #failurePublishers = new Set<RedisClient>();
+	readonly #failurePublishes = new Set<Promise<void>>();
 	readonly #subscribers = new Set<RedisClient>();
 	#connecting: Promise<void> | undefined;
 	#closed = false;
@@ -32,13 +38,52 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 		await this.#publisher.publish(channel, message);
 	}
 
+	publishFailure(channel: string, message: string): Promise<void> {
+		this.#assertOpen();
+		const publisher = createClient({
+			url: this.#url,
+			socket: {
+				connectTimeout: FAILURE_PUBLISH_TIMEOUT_MS,
+				reconnectStrategy: false,
+			},
+		});
+		publisher.on("error", () => {});
+		this.#failurePublishers.add(publisher);
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		const operation = (async () => {
+			await publisher.connect();
+			await publisher.publish(channel, message);
+		})();
+		const timedOut = new Promise<never>((_, reject) => {
+			timeout = setTimeout(() => {
+				if (publisher.isOpen) publisher.destroy();
+				reject(new LiveStreamStoreError("relay_failed"));
+			}, FAILURE_PUBLISH_TIMEOUT_MS);
+		});
+		const publishing = Promise.race([operation, timedOut]).finally(() => {
+			if (timeout !== undefined) clearTimeout(timeout);
+			this.#failurePublishers.delete(publisher);
+			if (publisher.isOpen) publisher.destroy();
+		});
+		this.#failurePublishes.add(publishing);
+		void publishing.then(
+			() => this.#failurePublishes.delete(publishing),
+			() => this.#failurePublishes.delete(publishing),
+		);
+		return publishing;
+	}
+
 	async subscribe(
 		channel: string,
 		onMessage: (message: string) => void,
-	): Promise<{ close(): Promise<void> }> {
+		onFailure?: (error: unknown) => void,
+	): Promise<LiveStreamSubscription> {
 		this.#assertOpen();
 		const subscriber = createClient({ url: this.#url });
-		subscriber.on("error", () => {});
+		let closed = false;
+		subscriber.on("error", (error) => {
+			if (!closed) onFailure?.(error);
+		});
 		this.#subscribers.add(subscriber);
 		try {
 			await subscriber.connect();
@@ -48,7 +93,6 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 			if (subscriber.isOpen) subscriber.destroy();
 			throw error;
 		}
-		let closed = false;
 		return {
 			close: async () => {
 				if (closed) return;
@@ -67,9 +111,13 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 	async close(): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;
+		for (const publisher of this.#failurePublishers) {
+			if (publisher.isOpen) publisher.destroy();
+		}
 		for (const subscriber of this.#subscribers) subscriber.destroy();
 		this.#subscribers.clear();
 		if (this.#publisher.isOpen) this.#publisher.destroy();
+		await Promise.allSettled(this.#failurePublishes);
 	}
 
 	async #connectPublisher(): Promise<void> {
@@ -86,16 +134,14 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 	}
 
 	#assertOpen(): void {
-		if (this.#closed) throw new Error("Live Stream relay is closed");
+		if (this.#closed) throw new LiveStreamStoreError("relay_closed");
 	}
 }
 
 export function createRedisLiveStreamRelay(
 	options: RedisLiveStreamRelayOptions,
 ): LiveStreamRelay {
-	if (!/^[A-Za-z0-9_-]{1,64}$/.test(options.deployment)) {
-		throw new Error("deployment must be a path-safe identifier");
-	}
+	validateLiveStreamDeployment(options.deployment);
 	return new ProducerBufferedLiveStreamRelay(
 		new RedisRelayTransport(options.url),
 		`${options.deployment}:mymemo:agui`,

@@ -5,8 +5,10 @@ export type {
 	LiveStreamProducer,
 	LiveStreamRelay,
 	LiveStreamRelayOptions,
+	LiveStreamSubscription,
 } from "./live-stream-relay";
 export * from "./live-stream-telemetry";
+export * from "./live-stream-validation";
 export * from "./redis-live-stream-relay";
 export * from "./redis-live-stream-store";
 

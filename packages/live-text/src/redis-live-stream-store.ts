@@ -14,13 +14,14 @@ import {
 	LIVE_STREAM_MAX_EVENTS,
 	LiveStreamStoreError,
 } from "./live-stream-events";
+import {
+	requirePositiveInteger,
+	validateLiveStreamDeployment,
+	validateLiveStreamRunId,
+} from "./live-stream-validation";
 
 export const LIVE_STREAM_RETENTION_MS = 30 * 60 * 1_000;
 
-const MAX_RUN_ID_LENGTH = 128;
-const RUN_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
-const MAX_DEPLOYMENT_LENGTH = 64;
-const DEPLOYMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
 const DEFAULT_REDIS_OPERATION_TIMEOUT_MS = 250;
 const DEFAULT_REDIS_POLL_INTERVAL_MS = 100;
 const REDIS_BLOB_STRING = 36;
@@ -182,36 +183,30 @@ class RedisLiveStreamStore implements LiveStreamStore {
 	#closed = false;
 
 	constructor(options: RedisLiveStreamStoreOptions) {
-		if (
-			options.deployment.length < 1 ||
-			options.deployment.length > MAX_DEPLOYMENT_LENGTH ||
-			!DEPLOYMENT_PATTERN.test(options.deployment)
-		) {
-			throw new Error("deployment must be a path-safe identifier");
-		}
+		validateLiveStreamDeployment(options.deployment);
 		this.#retentionMs = Math.min(
-			positiveInteger(
+			requirePositiveInteger(
 				options.testLimits?.retentionMs ?? LIVE_STREAM_RETENTION_MS,
 				"retentionMs",
 			),
 			LIVE_STREAM_RETENTION_MS,
 		);
 		this.#maxEventBytes = Math.min(
-			positiveInteger(
+			requirePositiveInteger(
 				options.testLimits?.maxEventBytes ?? LIVE_STREAM_MAX_EVENT_BYTES,
 				"maxEventBytes",
 			),
 			LIVE_STREAM_MAX_EVENT_BYTES,
 		);
 		this.#maxStreamBytes = Math.min(
-			positiveInteger(
+			requirePositiveInteger(
 				options.testLimits?.maxStreamBytes ?? LIVE_STREAM_MAX_BYTES,
 				"maxStreamBytes",
 			),
 			LIVE_STREAM_MAX_BYTES,
 		);
 		this.#maxEvents = Math.min(
-			positiveInteger(
+			requirePositiveInteger(
 				options.testLimits?.maxEvents ?? LIVE_STREAM_MAX_EVENTS,
 				"maxEvents",
 			),
@@ -233,10 +228,10 @@ class RedisLiveStreamStore implements LiveStreamStore {
 		options: ResumableStreamAcquireOptions = {},
 	): Promise<ResumableStreamRole> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		if (
 			options.ttlMs !== undefined &&
-			positiveInteger(options.ttlMs, "ttlMs") !== this.#retentionMs
+			requirePositiveInteger(options.ttlMs, "ttlMs") !== this.#retentionMs
 		) {
 			throw new Error("ttlMs is fixed by the Live Stream retention policy");
 		}
@@ -282,7 +277,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 		chunk: Uint8Array,
 	): Promise<{ cursor: string; appended: boolean }> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		validateEncodedAgUiEvent(chunk);
 		const producerToken = this.#producerToken(streamId);
 		const result = parseArrayReply(
@@ -312,7 +307,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 		error?: string,
 	): Promise<void> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		const producerToken = this.#producerToken(streamId);
 		const result = replyString(
 			await this.#command([
@@ -338,7 +333,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 
 	async refresh(streamId: string): Promise<boolean> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		const producerToken = this.#producerToken(streamId);
 		const result = replyString(
 			await this.#command([
@@ -364,7 +359,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 		signal: AbortSignal,
 	): AsyncIterable<ResumableStreamEntry> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		const normalizedCursor = parseLiveStreamCursor(cursor);
 		const initialMetadata = await this.#readMetadata(streamId);
 		if (!initialMetadata) {
@@ -429,7 +424,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 
 	async status(streamId: string): Promise<ResumableStreamStatus> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		const metadata = await this.#readMetadata(streamId);
 		if (!metadata) return "missing";
 		if (
@@ -444,7 +439,7 @@ class RedisLiveStreamStore implements LiveStreamStore {
 
 	async delete(streamId: string): Promise<void> {
 		this.#assertOpen();
-		validateRunId(streamId);
+		validateLiveStreamRunId(streamId, "streamId");
 		await this.#command([
 			"DEL",
 			this.#metaKey(streamId),
@@ -541,31 +536,8 @@ export function createRedisLiveStreamStore(
 	return new RedisLiveStreamStore(options);
 }
 
-function validateRunId(streamId: string): void {
-	if (
-		streamId.length < 1 ||
-		streamId.length > MAX_RUN_ID_LENGTH ||
-		!RUN_ID_PATTERN.test(streamId)
-	) {
-		throw new Error("streamId must be a path-safe Run identifier");
-	}
-}
-
 function validateRetryId(retryId: string): void {
-	if (
-		retryId.length < 1 ||
-		retryId.length > MAX_RUN_ID_LENGTH ||
-		!RUN_ID_PATTERN.test(retryId)
-	) {
-		throw new Error("retryId must be a path-safe identifier");
-	}
-}
-
-function positiveInteger(value: number, name: string): number {
-	if (!Number.isSafeInteger(value) || value < 1) {
-		throw new Error(`${name} must be a positive integer`);
-	}
-	return value;
+	validateLiveStreamRunId(retryId, "retryId");
 }
 
 function validateEncodedAgUiEvent(chunk: Uint8Array): void {

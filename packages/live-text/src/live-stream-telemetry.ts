@@ -38,10 +38,17 @@ export type LiveStreamReason =
 	| "missing"
 	| "not_producer"
 	| "operation_failed"
+	| "producer_closed"
+	| "producer_failed"
+	| "relay_closed"
+	| "relay_failed"
 	| "redis_unavailable"
 	| "stale_worker"
 	| "stream_bytes_exceeded"
-	| "stream_events_exceeded";
+	| "stream_events_exceeded"
+	| "terminal_already_published"
+	| "terminal_not_allowed"
+	| "terminal_required";
 
 export interface LiveStreamMetricEvent extends Record<string, unknown> {
 	message: "Live Stream metric";

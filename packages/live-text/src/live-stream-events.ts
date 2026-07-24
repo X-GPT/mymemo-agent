@@ -6,13 +6,13 @@ import {
 } from "@ag-ui/core";
 import { z } from "zod";
 import type { LiveStreamReason } from "./live-stream-telemetry";
+import { LIVE_STREAM_RUN_ID_MAX_LENGTH } from "./live-stream-validation";
 
 export const LIVE_STREAM_MAX_EVENT_BYTES = 32 * 1_024;
 export const LIVE_STREAM_MAX_BYTES = 8 * 1_024 * 1_024;
 export const LIVE_STREAM_MAX_EVENTS = 10_000;
 export const LIVE_STREAM_TEXT_EVENT_TARGET_BYTES = 16 * 1_024;
 
-const MAX_RUN_ID_LENGTH = 128;
 const EVENT_ENCODER = new TextEncoder();
 const EVENT_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -22,8 +22,8 @@ export const RUN_CANCELLED_EVENT_TYPE = "RUN_CANCELLED" as const;
 const RunCancelledEventSchema = z
 	.object({
 		type: z.literal(RUN_CANCELLED_EVENT_TYPE),
-		threadId: z.string().min(1).max(MAX_RUN_ID_LENGTH),
-		runId: z.string().min(1).max(MAX_RUN_ID_LENGTH),
+		threadId: z.string().min(1).max(LIVE_STREAM_RUN_ID_MAX_LENGTH),
+		runId: z.string().min(1).max(LIVE_STREAM_RUN_ID_MAX_LENGTH),
 	})
 	.strict();
 
@@ -39,8 +39,15 @@ export type LiveStreamStoreErrorCode =
 	| "append_retry_conflict"
 	| "finalize_conflict"
 	| "event_too_large"
+	| "producer_closed"
+	| "producer_failed"
+	| "relay_closed"
+	| "relay_failed"
 	| "stream_bytes_exceeded"
-	| "stream_events_exceeded";
+	| "stream_events_exceeded"
+	| "terminal_already_published"
+	| "terminal_not_allowed"
+	| "terminal_required";
 
 export class LiveStreamStoreError extends Error {
 	override readonly name = "LiveStreamStoreError";
@@ -162,9 +169,23 @@ function errorMessage(code: LiveStreamStoreErrorCode): string {
 			return "Live Stream finalization conflicts with its terminal state";
 		case "event_too_large":
 			return "Live Stream event exceeds the size limit";
+		case "producer_closed":
+			return "Live Stream producer is closed";
+		case "producer_failed":
+			return "Live Stream producer has failed";
+		case "relay_closed":
+			return "Live Stream relay is closed";
+		case "relay_failed":
+			return "Live Stream relay failed";
 		case "stream_bytes_exceeded":
 			return "Live Stream byte limit exceeded";
 		case "stream_events_exceeded":
 			return "Live Stream event limit exceeded";
+		case "terminal_already_published":
+			return "Live Stream terminal event was already published";
+		case "terminal_not_allowed":
+			return "append does not accept terminal AG-UI events";
+		case "terminal_required":
+			return "publishTerminal requires a terminal AG-UI event";
 	}
 }
