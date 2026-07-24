@@ -171,9 +171,9 @@ async function streamAgUiRun(
 	c: Context<AppEnv>,
 	run: RunRecord,
 	events: AsyncIterable<Uint8Array>,
+	readAbort: ReturnType<typeof linkedAbortController>,
 ) {
 	const requestSignal = c.req.raw.signal;
-	const readAbort = linkedAbortController(requestSignal);
 	const iterator = events[Symbol.asyncIterator]();
 	const firstRead = iterator.next().then(
 		(result) => ({ outcome: "read" as const, result }),
@@ -385,13 +385,16 @@ async function respondWithAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 	if (run.liveStreamFailedAt !== null) return liveStreamRecoveryResponse(c);
 	if (isTerminalRunStatus(run.status)) return liveStreamRecoveryResponse(c);
 
+	const readAbort = linkedAbortController(c.req.raw.signal);
 	let attached: LiveStreamAttachResult;
 	try {
 		attached = await c.var.deps.liveStreamRelay.attach(
 			run.runId,
-			c.req.raw.signal,
+			readAbort.controller.signal,
 		);
 	} catch (error) {
+		readAbort.controller.abort();
+		readAbort.dispose();
 		return liveStreamReadFailureResponse(
 			c,
 			run,
@@ -399,8 +402,10 @@ async function respondWithAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 		);
 	}
 	if (attached.outcome === "attached") {
-		return streamAgUiRun(c, run, attached.events);
+		return streamAgUiRun(c, run, attached.events, readAbort);
 	}
+	readAbort.controller.abort();
+	readAbort.dispose();
 	if (attached.outcome === "no_producer")
 		return waitForAndStreamAgUiRun(c, run);
 	if (attached.outcome === "aborted") return c.body(null, 204);

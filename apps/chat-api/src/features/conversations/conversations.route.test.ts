@@ -1619,6 +1619,65 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		await relay.close();
 	});
 
+	it("aborts the attached relay reader when the SSE client disconnects", async () => {
+		const { store } = fakeStore([existing]);
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runOwners.set("run-1", {
+			userId: "member-1",
+			conversationId: "conv-1",
+			status: "running",
+		});
+		const [started] = encodeAgUiLiveStreamEvent({
+			type: EventType.RUN_STARTED,
+			threadId: "conv-1",
+			runId: "run-1",
+		});
+		if (!started) throw new Error("test event encoded empty");
+		let attachedSignal: AbortSignal | undefined;
+		const relay: LiveStreamRelay = {
+			async openProducer() {
+				throw new Error("producer is not used by this route test");
+			},
+			async attach(_runId, signal) {
+				attachedSignal = signal;
+				return {
+					outcome: "attached" as const,
+					events: {
+						async *[Symbol.asyncIterator]() {
+							yield started;
+							await new Promise<void>((resolve) => {
+								if (signal.aborted) resolve();
+								else
+									signal.addEventListener("abort", () => resolve(), {
+										once: true,
+									});
+							});
+						},
+					},
+				};
+			},
+			async close() {},
+		};
+		const requestAbort = new AbortController();
+		const response = await buildApp(
+			store,
+			gateThatFailsIfConsulted(),
+			fakeRuns,
+			relay,
+		).request("/v1/conversations/conv-1/runs/run-1/events", {
+			headers: identityHeaders,
+			signal: requestAbort.signal,
+		});
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("expected streaming response body");
+
+		expect((await reader.read()).done).toBe(false);
+		await reader.cancel();
+		await Bun.sleep(0);
+		expect(attachedSignal?.aborted).toBe(true);
+		requestAbort.abort();
+	});
+
 	it("keeps a queued Run open with pings while retrying until its producer answers", async () => {
 		const { store } = fakeStore([existing]);
 		const metrics: Record<string, unknown>[] = [];
