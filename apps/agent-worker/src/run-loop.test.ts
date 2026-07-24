@@ -392,7 +392,10 @@ describe("RunLoop — terminal outcomes", () => {
 
 	it("continues durable execution after a mid-text Live Stream write fails", async () => {
 		const liveStreamRelay = createInMemoryLiveStreamRelay({
-			testHooks: { failEventPublishAtOrdinal: 2 },
+			testHooks: {
+				failEventPublishWhen: ({ eventType }) =>
+					eventType === EventType.TEXT_MESSAGE_CONTENT,
+			},
 		});
 		const worker = buildWorker(1);
 		const loop = buildLoop(
@@ -435,7 +438,10 @@ describe("RunLoop — terminal outcomes", () => {
 
 	it("keeps committing Tool events after Live Stream publication fails", async () => {
 		const liveStreamRelay = createInMemoryLiveStreamRelay({
-			testHooks: { failEventPublishAtOrdinal: 1 },
+			testHooks: {
+				failEventPublishWhen: ({ eventType }) =>
+					eventType === EventType.TOOL_CALL_START,
+			},
 		});
 		const worker = buildWorker(1);
 		const loop = buildLoop(
@@ -518,7 +524,9 @@ describe("RunLoop — terminal outcomes", () => {
 
 	it("marks the Live Stream failed after durable terminalization without changing the Outcome", async () => {
 		const liveStreamRelay = createInMemoryLiveStreamRelay({
-			testHooks: { failEventPublishAtOrdinal: 1 },
+			testHooks: {
+				failEventPublishWhen: ({ terminal }) => terminal,
+			},
 		});
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor, liveStreamRelay);

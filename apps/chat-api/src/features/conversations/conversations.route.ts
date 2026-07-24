@@ -45,10 +45,15 @@ const conversationBodyLimit = bodyLimit({
 const LIVE_STREAM_START_POLL_MS = 100;
 const LIVE_STREAM_MAX_RETRY_MS = 1_000;
 const LIVE_STREAM_KEEPALIVE_MS = 5_000;
+const LIVE_STREAM_RECOVERY_POLL_MS = LIVE_STREAM_KEEPALIVE_MS;
 const liveStreamDecoder = new TextDecoder("utf-8", { fatal: true });
 
 function isTerminalRunStatus(status: RunRecord["status"]): boolean {
 	return status === "done" || status === "error" || status === "canceled";
+}
+
+function needsLiveStreamRecovery(run: RunRecord): boolean {
+	return run.liveStreamFailedAt !== null || isTerminalRunStatus(run.status);
 }
 
 function liveStreamRecoveryResponse(c: Context<AppEnv>) {
@@ -67,10 +72,7 @@ async function liveStreamReadFailureResponse(
 		runId: run.runId,
 	});
 	if (currentRun === null) return c.json({ error: "Run not found" }, 404);
-	if (
-		currentRun.liveStreamFailedAt !== null ||
-		isTerminalRunStatus(currentRun.status)
-	) {
+	if (needsLiveStreamRecovery(currentRun)) {
 		return liveStreamRecoveryResponse(c);
 	}
 	c.var.deps.liveStreamTelemetry.record("reconnect_response", "retryable_503", {
@@ -140,6 +142,46 @@ function startAgUiKeepalive(
 	return stop;
 }
 
+function watchRunForLiveStreamRecovery(
+	c: Context<AppEnv>,
+	run: RunRecord,
+	readController: AbortController,
+): () => void {
+	let checking = false;
+	let stopped = false;
+	const interval = setInterval(() => {
+		if (checking || stopped || readController.signal.aborted) return;
+		checking = true;
+		void c.var.deps.runStore
+			.getRun({
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId: run.runId,
+			})
+			.then((currentRun) => {
+				// Terminal state may commit just before its live terminal publish. If
+				// this poll wins that race, the incomplete close recovers via history.
+				if (currentRun === null || needsLiveStreamRecovery(currentRun)) {
+					readController.abort();
+				}
+			})
+			.catch(() => {
+				c.var.logger.error({
+					message: "AG-UI Live Stream recovery watch failed",
+					runId: run.runId,
+					reason: "run_state_read_failed",
+				});
+			})
+			.finally(() => {
+				checking = false;
+			});
+	}, LIVE_STREAM_RECOVERY_POLL_MS);
+	return () => {
+		stopped = true;
+		clearInterval(interval);
+	};
+}
+
 async function writeAgUiEvents(
 	c: Context<AppEnv>,
 	runId: string,
@@ -175,6 +217,11 @@ async function streamAgUiRun(
 ) {
 	const requestSignal = c.req.raw.signal;
 	const iterator = events[Symbol.asyncIterator]();
+	const stopRecoveryWatch = watchRunForLiveStreamRecovery(
+		c,
+		run,
+		readAbort.controller,
+	);
 	const firstRead = iterator.next().then(
 		(result) => ({ outcome: "read" as const, result }),
 		(error: unknown) => ({ outcome: "error" as const, error }),
@@ -188,6 +235,7 @@ async function streamAgUiRun(
 	]);
 	if (initial.outcome === "error") {
 		const { error } = initial;
+		stopRecoveryWatch();
 		readAbort.dispose();
 		await iterator.return?.();
 		c.var.logger.error({
@@ -203,6 +251,7 @@ async function streamAgUiRun(
 	}
 	if (initial.outcome === "ping") {
 		if (requestSignal.aborted) {
+			stopRecoveryWatch();
 			readAbort.controller.abort(requestSignal.reason);
 			readAbort.dispose();
 			await iterator.return?.();
@@ -243,6 +292,7 @@ async function streamAgUiRun(
 				);
 			} finally {
 				stopKeepalive();
+				stopRecoveryWatch();
 				readAbort.controller.abort();
 				readAbort.dispose();
 				await iterator.return?.();
@@ -251,6 +301,7 @@ async function streamAgUiRun(
 	}
 	first = initial.result;
 	if (first.done) {
+		stopRecoveryWatch();
 		readAbort.dispose();
 		await iterator.return?.();
 		if (requestSignal.aborted) return c.body(null, 204);
@@ -276,6 +327,7 @@ async function streamAgUiRun(
 			);
 		} finally {
 			stopKeepalive();
+			stopRecoveryWatch();
 			readAbort.controller.abort();
 			readAbort.dispose();
 		}
@@ -290,10 +342,7 @@ async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 		runId: run.runId,
 	});
 	if (currentRun === null) return c.json({ error: "Run not found" }, 404);
-	if (
-		currentRun.liveStreamFailedAt !== null ||
-		isTerminalRunStatus(currentRun.status)
-	) {
+	if (needsLiveStreamRecovery(currentRun)) {
 		return liveStreamRecoveryResponse(c);
 	}
 	return streamSSE(c, async (stream) => {
@@ -320,11 +369,7 @@ async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 					conversationId: run.conversationId,
 					runId: run.runId,
 				});
-				if (
-					currentRun === null ||
-					currentRun.liveStreamFailedAt !== null ||
-					isTerminalRunStatus(currentRun.status)
-				) {
+				if (currentRun === null || needsLiveStreamRecovery(currentRun)) {
 					return;
 				}
 
@@ -352,26 +397,35 @@ async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 					continue;
 				}
 				const iterator = attached.events[Symbol.asyncIterator]();
+				const stopRecoveryWatch = watchRunForLiveStreamRecovery(
+					c,
+					run,
+					readAbort.controller,
+				);
 				let first: Awaited<ReturnType<typeof iterator.next>>;
 				try {
-					first = await iterator.next();
-				} catch (error) {
-					c.var.logger.error({
-						message: "AG-UI Live Stream read failed after attaching",
-						runId: run.runId,
-						reason: classifyLiveStreamFailure(error),
-					});
-					await iterator.return?.();
+					try {
+						first = await iterator.next();
+					} catch (error) {
+						c.var.logger.error({
+							message: "AG-UI Live Stream read failed after attaching",
+							runId: run.runId,
+							reason: classifyLiveStreamFailure(error),
+						});
+						await iterator.return?.();
+						return;
+					}
+					if (first.done) {
+						await iterator.return?.();
+						return;
+					}
+					await writeAgUiEvents(c, run.runId, iterator, first, (event) =>
+						stream.writeSSE(event),
+					);
 					return;
+				} finally {
+					stopRecoveryWatch();
 				}
-				if (first.done) {
-					await iterator.return?.();
-					return;
-				}
-				await writeAgUiEvents(c, run.runId, iterator, first, (event) =>
-					stream.writeSSE(event),
-				);
-				return;
 			}
 		} finally {
 			stopKeepalive();
@@ -382,8 +436,7 @@ async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 }
 
 async function respondWithAgUiRun(c: Context<AppEnv>, run: RunRecord) {
-	if (run.liveStreamFailedAt !== null) return liveStreamRecoveryResponse(c);
-	if (isTerminalRunStatus(run.status)) return liveStreamRecoveryResponse(c);
+	if (needsLiveStreamRecovery(run)) return liveStreamRecoveryResponse(c);
 
 	const readAbort = linkedAbortController(c.req.raw.signal);
 	let attached: LiveStreamAttachResult;

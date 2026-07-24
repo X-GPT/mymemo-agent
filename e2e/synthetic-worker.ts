@@ -62,7 +62,8 @@ const redisLiveStreamRelay = createRedisLiveStreamRelay({
 	...(liveStreamFault && liveStreamFault !== "before_creation"
 		? {
 				testHooks: {
-					failEventPublishAtOrdinal: faultOrdinal(liveStreamFault),
+					failEventPublishWhen: ({ eventType, terminal }) =>
+						matchesLiveStreamFault(liveStreamFault, eventType, terminal),
 				},
 			}
 		: {}),
@@ -236,16 +237,18 @@ function parseLiveStreamFault(
 	return isLiveStreamFault(value) ? value : undefined;
 }
 
-function faultOrdinal(
+function matchesLiveStreamFault(
 	fault: Exclude<LiveStreamFault, "before_creation">,
-): number {
+	eventType: string,
+	terminal: boolean,
+): boolean {
 	switch (fault) {
 		case "mid_text":
-			return 2;
+			return eventType === "TEXT_MESSAGE_CONTENT";
 		case "tool":
-			return 4;
+			return eventType === "TOOL_CALL_START";
 		case "terminal":
-			return 8;
+			return terminal;
 	}
 }
 

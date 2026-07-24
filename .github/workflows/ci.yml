@@ -21,6 +21,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ripgrep redis-server
       - run: bun install --frozen-lockfile
       - run: bun run test
+      - run: bun test e2e/relay-failure-matrix.integration.test.ts
 
   # Build the final production-pruned image and exercise the SDK's native CLI
   # inside it. This needs no runtime credentials and catches both optional-dep
@@ -39,9 +40,9 @@ jobs:
 
   # Split-runtime AG-UI integration: runs chat-api plus a deterministic
   # test-only worker against real Postgres and Redis, so atomic admission,
-  # durable completion, and the retained per-Run stream are exercised on every
-  # PR without live provider credentials. Task 9.7 owns the production SDK
-  # path's credentialed smoke.
+  # durable completion, and relay-backed streaming are exercised on every PR
+  # without live provider credentials. Task 9.7 owns the production SDK path's
+  # credentialed smoke.
   # `e2e/integration.test.ts` is gated on AGENT_DATABASE_URL.
   integration:
     runs-on: ubuntu-latest

@@ -157,7 +157,10 @@ export function liveStreamRelayContract(
 
 		it("latches a failed publish and ends readers with relay failure", async () => {
 			const relay = await factory.create({
-				testHooks: { failEventPublishAtOrdinal: 1 },
+				testHooks: {
+					failEventPublishWhen: ({ eventType }) =>
+						eventType === EventType.TEXT_MESSAGE_CONTENT,
+				},
 			});
 			const reader = new AbortController();
 			try {
@@ -170,22 +173,33 @@ export function liveStreamRelayContract(
 					() => undefined,
 					(error: unknown) => error,
 				);
-				const textEvent = (delta: string) =>
+				await producer.append(
 					event({
-						type: EventType.TEXT_MESSAGE_CONTENT,
+						type: EventType.TEXT_MESSAGE_START,
 						messageId: "message-1",
-						delta,
-					});
-
-				await producer.append(textEvent("first"));
-				await expect(
-					producer.append(textEvent("failed")),
-				).rejects.toMatchObject({ code: "relay_failed" });
-				await expect(producer.append(textEvent("later"))).rejects.toMatchObject(
-					{
-						code: "producer_failed",
-					},
+						role: "assistant",
+					}),
 				);
+				await expect(
+					producer.append(
+						event({
+							type: EventType.TEXT_MESSAGE_CONTENT,
+							messageId: "message-1",
+							delta: "failed",
+						}),
+					),
+				).rejects.toMatchObject({ code: "relay_failed" });
+				await expect(
+					producer.append(
+						event({
+							type: EventType.TEXT_MESSAGE_CONTENT,
+							messageId: "message-1",
+							delta: "later",
+						}),
+					),
+				).rejects.toMatchObject({
+					code: "producer_failed",
+				});
 				expect(await readerFailure).toMatchObject({
 					code: "relay_failed",
 				});

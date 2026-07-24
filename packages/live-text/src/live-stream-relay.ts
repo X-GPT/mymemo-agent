@@ -6,6 +6,7 @@ import {
 	LIVE_STREAM_MAX_BYTES,
 	LIVE_STREAM_MAX_EVENT_BYTES,
 	LIVE_STREAM_MAX_EVENTS,
+	type LiveStreamEvent,
 	LiveStreamStoreError,
 	RUN_CANCELLED_EVENT_TYPE,
 } from "./live-stream-events";
@@ -31,10 +32,17 @@ export interface LiveStreamRelayOptions {
 		maxEvents?: number;
 	};
 	testHooks?: {
+		afterEventPublished?: (context: {
+			eventType: LiveStreamEvent["type"];
+			terminal: boolean;
+		}) => void;
 		afterLiveEventBuffered?: (ordinal: number) => void;
 		afterLiveSubscribed?: () => Promise<void>;
 		beforeBacklogReply?: () => Promise<void>;
-		failEventPublishAtOrdinal?: number;
+		failEventPublishWhen?: (context: {
+			eventType: LiveStreamEvent["type"];
+			terminal: boolean;
+		}) => boolean;
 	};
 }
 
@@ -481,7 +489,12 @@ class BufferedLiveStreamProducer implements LiveStreamProducer {
 			this.#events.push(serialized);
 			this.#bufferBytes += event.byteLength;
 			try {
-				if (this.#testHooks?.failEventPublishAtOrdinal === envelope.ordinal) {
+				if (
+					this.#testHooks?.failEventPublishWhen?.({
+						eventType: parsed.type,
+						terminal,
+					})
+				) {
 					throw new Error("injected Live Stream publish failure");
 				}
 				await this.#transport.publish(
@@ -490,6 +503,10 @@ class BufferedLiveStreamProducer implements LiveStreamProducer {
 				);
 				recordTelemetry(this.#telemetry, "publish", "success");
 				if (terminal) this.#terminalPublished = true;
+				this.#testHooks?.afterEventPublished?.({
+					eventType: parsed.type,
+					terminal,
+				});
 			} catch (error) {
 				recordTelemetry(this.#telemetry, "publish", "failure", {
 					reason: classifyLiveStreamFailure(error),

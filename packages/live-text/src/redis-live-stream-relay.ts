@@ -21,10 +21,13 @@ export interface RedisLiveStreamRelayOptions extends LiveStreamRelayOptions {
 	deployment: string;
 	/** Bounds each Redis connect/command so Live Stream failure cannot stall a Run. */
 	operationTimeoutMs?: number;
+	/** Names this relay's Redis connections for process-death integration tests. */
+	testClientName?: string;
 }
 
 class RedisRelayTransport implements LiveStreamRelayTransport {
 	readonly #url: string;
+	readonly #clientName: string | undefined;
 	readonly #publisher: RedisClient;
 	readonly #failurePublishers = new Set<RedisClient>();
 	readonly #failurePublishes = new Set<Promise<void>>();
@@ -33,11 +36,17 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 	#connecting: Promise<void> | undefined;
 	#closed = false;
 
-	constructor(url: string, operationTimeoutMs: number) {
+	constructor(
+		url: string,
+		operationTimeoutMs: number,
+		clientName: string | undefined,
+	) {
 		this.#url = url;
+		this.#clientName = clientName;
 		this.#operationTimeoutMs = operationTimeoutMs;
 		this.#publisher = createClient({
 			url,
+			...(clientName ? { name: `${clientName}:publisher` } : {}),
 			socket: {
 				connectTimeout: operationTimeoutMs,
 				reconnectStrategy: false,
@@ -62,6 +71,9 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 		this.#assertOpen();
 		const publisher = createClient({
 			url: this.#url,
+			...(this.#clientName
+				? { name: `${this.#clientName}:failure-publisher` }
+				: {}),
 			socket: {
 				connectTimeout: FAILURE_PUBLISH_TIMEOUT_MS,
 				reconnectStrategy: false,
@@ -101,6 +113,7 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 		this.#assertOpen();
 		const subscriber = createClient({
 			url: this.#url,
+			...(this.#clientName ? { name: `${this.#clientName}:subscriber` } : {}),
 			socket: {
 				connectTimeout: this.#operationTimeoutMs,
 				reconnectStrategy: false,
@@ -174,7 +187,11 @@ export function createRedisLiveStreamRelay(
 		"operationTimeoutMs",
 	);
 	return new ProducerBufferedLiveStreamRelay(
-		new RedisRelayTransport(options.url, operationTimeoutMs),
+		new RedisRelayTransport(
+			options.url,
+			operationTimeoutMs,
+			options.testClientName,
+		),
 		`${options.deployment}:mymemo:agui`,
 		options,
 	);

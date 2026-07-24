@@ -1200,7 +1200,10 @@ describe("POST /v1/conversations/:id/runs", () => {
 			}),
 		});
 		const relay = createInMemoryLiveStreamRelay({
-			testHooks: { failEventPublishAtOrdinal: 1 },
+			testHooks: {
+				failEventPublishWhen: ({ eventType }) =>
+					eventType === EventType.TEXT_MESSAGE_CONTENT,
+			},
 		});
 		const producer = await relay.openProducer("client-run-1");
 		const [started] = encodeAgUiLiveStreamEvent({
@@ -1754,7 +1757,10 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		};
 		fakeRuns.runOwners.set("run-1", owner);
 		const relay = createInMemoryLiveStreamRelay({
-			testHooks: { failEventPublishAtOrdinal: 1 },
+			testHooks: {
+				failEventPublishWhen: ({ eventType }) =>
+					eventType === EventType.TEXT_MESSAGE_CONTENT,
+			},
 		});
 		const producer = await relay.openProducer("run-1");
 		const [started] = encodeAgUiLiveStreamEvent({
