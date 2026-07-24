@@ -7,6 +7,7 @@ import {
 import {
 	createInMemoryLiveStreamRelay,
 	createRedisLiveStreamRelay,
+	LiveStreamRelayError,
 } from "./index";
 import { liveStreamRelayContract } from "./live-stream-relay.contract";
 
@@ -61,7 +62,9 @@ it("bounds Redis operations when a peer accepts TCP but never answers", async ()
 	});
 
 	const startedAt = performance.now();
-	await expect(relay.openProducer("run-timeout")).rejects.toThrow();
+	await expect(relay.openProducer("run-timeout")).rejects.toBeInstanceOf(
+		LiveStreamRelayError,
+	);
 	expect(performance.now() - startedAt).toBeLessThan(1_000);
 
 	await relay.close();

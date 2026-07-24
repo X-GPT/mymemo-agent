@@ -8,8 +8,8 @@ it("emits bounded payload-safe Live Stream operation metrics", () => {
 		warn: (event) => events.push(event),
 	});
 
-	telemetry.record("acquire", "producer", { durationMs: 7 });
-	telemetry.record("append", "failure", {
+	telemetry.record("publish", "success", { durationMs: 7 });
+	telemetry.record("publish", "failure", {
 		reason: "stream_bytes_exceeded",
 		durationMs: 11,
 	});
@@ -19,15 +19,15 @@ it("emits bounded payload-safe Live Stream operation metrics", () => {
 		{
 			message: "Live Stream metric",
 			service: "agent-worker",
-			operation: "acquire",
-			result: "producer",
+			operation: "publish",
+			result: "success",
 			durationMs: 7,
 			count: 1,
 		},
 		{
 			message: "Live Stream metric",
 			service: "agent-worker",
-			operation: "append",
+			operation: "publish",
 			result: "failure",
 			reason: "stream_bytes_exceeded",
 			durationMs: 11,

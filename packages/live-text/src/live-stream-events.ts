@@ -30,14 +30,8 @@ const RunCancelledEventSchema = z
 export type RunCancelledEvent = z.infer<typeof RunCancelledEventSchema>;
 export type LiveStreamEvent = AGUIEvent | RunCancelledEvent;
 
-export type LiveStreamStoreErrorCode =
-	| "missing"
-	| "finalized"
-	| "not_producer"
-	| "invalid_cursor"
+export type LiveStreamRelayErrorCode =
 	| "invalid_event"
-	| "append_retry_conflict"
-	| "finalize_conflict"
 	| "event_too_large"
 	| "producer_closed"
 	| "producer_failed"
@@ -49,10 +43,10 @@ export type LiveStreamStoreErrorCode =
 	| "terminal_not_allowed"
 	| "terminal_required";
 
-export class LiveStreamStoreError extends Error {
-	override readonly name = "LiveStreamStoreError";
+export class LiveStreamRelayError extends Error {
+	override readonly name = "LiveStreamRelayError";
 
-	constructor(readonly code: LiveStreamStoreErrorCode) {
+	constructor(readonly code: LiveStreamRelayErrorCode) {
 		super(errorMessage(code));
 	}
 }
@@ -60,7 +54,7 @@ export class LiveStreamStoreError extends Error {
 /** Collapse adapter and infrastructure failures to the bounded reason
  * vocabulary shared by producer and reconnect telemetry. */
 export function classifyLiveStreamFailure(error: unknown): LiveStreamReason {
-	return error instanceof LiveStreamStoreError
+	return error instanceof LiveStreamRelayError
 		? error.code
 		: "redis_unavailable";
 }
@@ -76,7 +70,7 @@ export function encodeAgUiLiveStreamEvent(
 	const encoded = encodeEvent(parsed);
 	if (parsed.type !== EventType.TEXT_MESSAGE_CONTENT) {
 		if (encoded.byteLength > LIVE_STREAM_MAX_EVENT_BYTES) {
-			throw new LiveStreamStoreError("event_too_large");
+			throw new LiveStreamRelayError("event_too_large");
 		}
 		return [encoded];
 	}
@@ -90,7 +84,7 @@ export function decodeAgUiLiveStreamEvent(chunk: Uint8Array): LiveStreamEvent {
 	try {
 		return parseLiveStreamEvent(JSON.parse(EVENT_DECODER.decode(chunk)));
 	} catch {
-		throw new LiveStreamStoreError("invalid_event");
+		throw new LiveStreamRelayError("invalid_event");
 	}
 }
 
@@ -114,7 +108,7 @@ function splitTextContentEvent(event: TextMessageContentEvent): Uint8Array[] {
 	const emptyEventBytes = encodeEvent({ ...event, delta: "" }).byteLength;
 	const deltaBudget = LIVE_STREAM_TEXT_EVENT_TARGET_BYTES - emptyEventBytes;
 	if (deltaBudget < 1) {
-		throw new LiveStreamStoreError("event_too_large");
+		throw new LiveStreamRelayError("event_too_large");
 	}
 
 	const deltas: string[] = [];
@@ -123,7 +117,7 @@ function splitTextContentEvent(event: TextMessageContentEvent): Uint8Array[] {
 	for (const codePoint of event.delta) {
 		const codePointBytes = jsonStringContentBytes(codePoint);
 		if (codePointBytes > deltaBudget) {
-			throw new LiveStreamStoreError("event_too_large");
+			throw new LiveStreamRelayError("event_too_large");
 		}
 		if (current && currentBytes + codePointBytes > deltaBudget) {
 			deltas.push(current);
@@ -135,13 +129,13 @@ function splitTextContentEvent(event: TextMessageContentEvent): Uint8Array[] {
 	}
 	if (current) deltas.push(current);
 	if (deltas.length === 0) {
-		throw new LiveStreamStoreError("event_too_large");
+		throw new LiveStreamRelayError("event_too_large");
 	}
 
 	return deltas.map((delta) => {
 		const chunk = encodeEvent({ ...event, delta });
 		if (chunk.byteLength > LIVE_STREAM_TEXT_EVENT_TARGET_BYTES) {
-			throw new LiveStreamStoreError("event_too_large");
+			throw new LiveStreamRelayError("event_too_large");
 		}
 		return chunk;
 	});
@@ -151,22 +145,10 @@ function jsonStringContentBytes(value: string): number {
 	return EVENT_ENCODER.encode(JSON.stringify(value)).byteLength - 2;
 }
 
-function errorMessage(code: LiveStreamStoreErrorCode): string {
+function errorMessage(code: LiveStreamRelayErrorCode): string {
 	switch (code) {
-		case "missing":
-			return "Live Stream is unavailable";
-		case "finalized":
-			return "Live Stream is already finalized";
-		case "not_producer":
-			return "Live Stream producer ownership is required";
-		case "invalid_cursor":
-			return "Live Stream cursor is invalid";
 		case "invalid_event":
-			return "Live Stream entry is not a standard AG-UI event";
-		case "append_retry_conflict":
-			return "Live Stream append retry conflicts with its prior event";
-		case "finalize_conflict":
-			return "Live Stream finalization conflicts with its terminal state";
+			return "Live Stream payload is not a standard AG-UI event";
 		case "event_too_large":
 			return "Live Stream event exceeds the size limit";
 		case "producer_closed":

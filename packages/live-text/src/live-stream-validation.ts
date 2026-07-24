@@ -2,17 +2,13 @@ export const LIVE_STREAM_RUN_ID_MAX_LENGTH = 128;
 export const LIVE_STREAM_DEPLOYMENT_MAX_LENGTH = 64;
 export const LIVE_STREAM_PATH_SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-export function validateLiveStreamRunId(
-	value: string,
-	name: "runId" | "streamId" | "retryId",
-): void {
+export function validateLiveStreamRunId(value: string): void {
 	if (
 		value.length < 1 ||
 		value.length > LIVE_STREAM_RUN_ID_MAX_LENGTH ||
 		!LIVE_STREAM_PATH_SAFE_IDENTIFIER_PATTERN.test(value)
 	) {
-		const qualifier = name === "retryId" ? "" : " Run";
-		throw new Error(`${name} must be a path-safe${qualifier} identifier`);
+		throw new Error("runId must be a path-safe Run identifier");
 	}
 }
 
