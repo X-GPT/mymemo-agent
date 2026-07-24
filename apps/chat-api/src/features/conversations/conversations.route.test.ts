@@ -260,23 +260,22 @@ function retainedAgUiStream(events: unknown[]) {
 	};
 }
 
-function parseAgUiSse(text: string): Array<{ id: string; data: unknown }> {
+function parseAgUiSse(text: string): unknown[] {
 	return text
 		.trim()
 		.split("\n\n")
 		.filter((block) => block.includes("data:"))
 		.map((block) => {
 			const lines = block.split("\n");
-			const id = lines
-				.find((line) => line.startsWith("id:"))
-				?.slice(3)
-				.trim();
+			if (lines.some((line) => line.startsWith("id:"))) {
+				throw new Error(`AG-UI SSE block must not carry an id: ${block}`);
+			}
 			const data = lines
 				.find((line) => line.startsWith("data:"))
 				?.slice(5)
 				.trim();
-			if (!id || !data) throw new Error(`malformed AG-UI SSE block: ${block}`);
-			return { id, data: JSON.parse(data) };
+			if (!data) throw new Error(`malformed AG-UI SSE block: ${block}`);
+			return JSON.parse(data);
 		});
 }
 
@@ -997,18 +996,14 @@ describe("POST /v1/conversations/:id/runs", () => {
 				message: "hello",
 			},
 		]);
-		const expectedFrames = events.map((data, index) => ({
-			id: `${index + 1}-0`,
-			data,
-		}));
-		expect(parseAgUiSse(await res.text())).toEqual(expectedFrames);
+		expect(parseAgUiSse(await res.text())).toEqual(events);
 
 		const replay = await app.request(
 			"/v1/conversations/conv-1/runs/client-run-1/events",
 			{ headers: identityHeaders },
 		);
 		expect(replay.status).toBe(200);
-		expect(parseAgUiSse(await replay.text())).toEqual(expectedFrames);
+		expect(parseAgUiSse(await replay.text())).toEqual(events);
 	});
 
 	it("reattaches an exact retry without consulting the new-work exposure gate", async () => {
@@ -1045,9 +1040,7 @@ describe("POST /v1/conversations/:id/runs", () => {
 		});
 
 		expect(res.status).toBe(200);
-		expect(parseAgUiSse(await res.text())).toEqual(
-			events.map((data, index) => ({ id: `${index + 1}-0`, data })),
-		);
+		expect(parseAgUiSse(await res.text())).toEqual(events);
 	});
 
 	it.each([
@@ -1186,12 +1179,9 @@ describe("POST /v1/conversations/:id/runs", () => {
 		expect(res.status).toBe(200);
 		expect(parseAgUiSse(await res.text())).toEqual([
 			{
-				id: "1-0",
-				data: {
-					type: "RUN_STARTED",
-					threadId: "conv-1",
-					runId: "client-run-1",
-				},
+				type: "RUN_STARTED",
+				threadId: "conv-1",
+				runId: "client-run-1",
 			},
 		]);
 	});
@@ -1383,66 +1373,6 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 
 		expect(res.status).toBe(404);
 		expect(res.headers.get("content-type")).not.toContain("text/event-stream");
-	});
-
-	it("returns 400 for a malformed Last-Event-ID before reading the Live Stream", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "running",
-		});
-		let redisRead = false;
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				redisRead = true;
-				return "streaming" as const;
-			},
-			read() {
-				redisRead = true;
-				throw new Error("Live Stream must not be read");
-			},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "not-a-cursor" },
-		});
-
-		expect(res.status).toBe(400);
-		expect(await res.json()).toEqual({ error: "Invalid Last-Event-ID" });
-		expect(redisRead).toBe(false);
-	});
-
-	it("returns 400 for a Redis-shaped Last-Event-ID the Stream never issued", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "done",
-		});
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				return "done" as const;
-			},
-			read() {
-				return {
-					[Symbol.asyncIterator]() {
-						return {
-							async next() {
-								throw new LiveStreamStoreError("invalid_cursor");
-							},
-						};
-					},
-				};
-			},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "9999999999999-0" },
-		});
-
-		expect(res.status).toBe(400);
-		expect(await res.json()).toEqual({ error: "Invalid Last-Event-ID" });
 	});
 
 	it("returns recovery 410 for a Run whose Live Stream failed without reading Redis", async () => {
@@ -1699,12 +1629,9 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(first.status).toBe(200);
 		expect(parseAgUiSse(await first.text())).toEqual([
 			{
-				id: "1-0",
-				data: {
-					type: "RUN_STARTED",
-					threadId: "conv-1",
-					runId: "run-1",
-				},
+				type: "RUN_STARTED",
+				threadId: "conv-1",
+				runId: "run-1",
 			},
 		]);
 
@@ -1773,28 +1700,6 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		});
 	});
 
-	it("returns 400 when an active Run has no Live Stream that could have issued the cursor", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-		const res = await buildApp(store, gateThatFailsIfConsulted(), fakeRuns, {
-			async status() {
-				return "missing" as const;
-			},
-			async *read() {},
-		}).request("/v1/conversations/conv-1/runs/run-1/events", {
-			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "1-0" },
-		});
-
-		expect(res.status).toBe(400);
-		expect(await res.json()).toEqual({ error: "Invalid Last-Event-ID" });
-	}, 7_000);
-
 	it("waits past startup delay with cursorless pings, then streams the terminal event", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
@@ -1828,7 +1733,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(res.status).toBe(200);
 		const body = await res.text();
 		expect(body).toContain(": ping\n\n");
-		expect(parseAgUiSse(body)).toEqual([{ id: "1-0", data: terminalEvent }]);
+		expect(parseAgUiSse(body)).toEqual([terminalEvent]);
 	}, 8_000);
 
 	it("follows a Live Stream that appears just after Postgres terminalizes the Run", async () => {
@@ -1879,9 +1784,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		});
 
 		expect(res.status).toBe(200);
-		expect(parseAgUiSse(await res.text())).toEqual([
-			{ id: "1-0", data: terminalEvent },
-		]);
+		expect(parseAgUiSse(await res.text())).toEqual([terminalEvent]);
 		expect(metrics).toContainEqual(
 			expect.objectContaining({
 				operation: "read_wait",
@@ -1924,10 +1827,10 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 		expect(res.status).toBe(200);
 		const body = await res.text();
 		expect(body).toContain(": ping\n\n");
-		expect(parseAgUiSse(body)).toEqual([{ id: "2-0", data: terminalEvent }]);
+		expect(parseAgUiSse(body)).toEqual([terminalEvent]);
 	}, 8_000);
 
-	it("replays strictly after a retained Live Stream cursor without creating work", async () => {
+	it("ignores Last-Event-ID and replays the active Run from the beginning", async () => {
 		const { store } = fakeStore([existing]);
 		const fakeRuns = fakeRunStore();
 		const { runOwners } = fakeRuns;
@@ -1949,14 +1852,11 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 			retainedAgUiStream(events),
 		).request("/v1/conversations/conv-1/runs/run-1/events", {
 			method: "GET",
-			headers: { ...identityHeaders, "last-event-id": "1-0" },
+			headers: { ...identityHeaders, "last-event-id": "not-a-cursor" },
 		});
 
 		expect(res.status).toBe(200);
-		expect(parseAgUiSse(await res.text())).toEqual([
-			{ id: "2-0", data: events[1] },
-			{ id: "3-0", data: events[2] },
-		]);
+		expect(parseAgUiSse(await res.text())).toEqual(events);
 	});
 
 	it("returns 404 for a foreign run before opening the stream", async () => {

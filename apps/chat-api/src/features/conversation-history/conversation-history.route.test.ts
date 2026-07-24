@@ -15,7 +15,7 @@ const identityHeaders = {
 };
 
 describe("GET /v1/conversations/:conversationId/history", () => {
-	it("returns the owned permanent history envelope without consulting exposure", async () => {
+	it("returns cursor-free active Run metadata without consulting exposure", async () => {
 		const calls: unknown[] = [];
 		const historyStore: ConversationHistoryStore = {
 			async getPage(input) {
@@ -33,7 +33,7 @@ describe("GET /v1/conversations/:conversationId/history", () => {
 					},
 					runs: [],
 					nextCursor: null,
-					activeRun: null,
+					activeRun: { runId: "run-active", status: "running" },
 				};
 			},
 		};
@@ -66,7 +66,7 @@ describe("GET /v1/conversations/:conversationId/history", () => {
 			},
 			runs: [],
 			nextCursor: null,
-			activeRun: null,
+			activeRun: { runId: "run-active", status: "running" },
 		});
 		expect(calls).toEqual([
 			{

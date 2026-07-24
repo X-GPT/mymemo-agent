@@ -19,17 +19,12 @@ interface RunInput {
 }
 
 interface Frame {
-	id: string;
 	data: Record<string, unknown>;
 }
 
 function sse(frames: Frame[]): Response {
 	return new Response(
-		frames
-			.map(
-				(frame) => `id: ${frame.id}\ndata: ${JSON.stringify(frame.data)}\n\n`,
-			)
-			.join(""),
+		frames.map((frame) => `data: ${JSON.stringify(frame.data)}\n\n`).join(""),
 		{ headers: { "content-type": "text/event-stream" } },
 	);
 }
@@ -42,11 +37,9 @@ function successfulRun(
 	const messageId = `assistant-${runId}`;
 	return [
 		{
-			id: "1",
 			data: { type: "RUN_STARTED", threadId: conversationId, runId },
 		},
 		{
-			id: "2",
 			data: {
 				type: "TEXT_MESSAGE_START",
 				messageId,
@@ -54,15 +47,12 @@ function successfulRun(
 			},
 		},
 		{
-			id: "3",
 			data: { type: "TEXT_MESSAGE_CONTENT", messageId, delta: text },
 		},
 		{
-			id: "4",
 			data: { type: "TEXT_MESSAGE_END", messageId },
 		},
 		{
-			id: "5",
 			data: { type: "RUN_FINISHED", threadId: conversationId, runId },
 		},
 	];
@@ -106,7 +96,7 @@ describe("agent conversation smoke", () => {
 		expect(result.stdout).toContain("Statsig gate is closed by default");
 	});
 
-	it("uses only strict Run admission and retained AG-UI reconnect", async () => {
+	it("uses strict Run admission and cursor-free full AG-UI replay", async () => {
 		const conversationId = "conversation-1";
 		const workspaceMarker = "workspace-0123456789abcdef0123456789abcdef";
 		const workspaceHash = createHash("sha256")
@@ -115,6 +105,7 @@ describe("agent conversation smoke", () => {
 		const runInputs: RunInput[] = [];
 		const runFrames = new Map<string, Frame[]>();
 		const paths: string[] = [];
+		const reconnectEventIds: Array<string | null> = [];
 		let sessionMarker = "";
 		let artifactContent = "";
 
@@ -152,8 +143,8 @@ describe("agent conversation smoke", () => {
 				);
 				if (request.method === "GET" && replayMatch) {
 					const frames = runFrames.get(replayMatch[1] ?? "") ?? [];
-					const cursor = Number(request.headers.get("Last-Event-ID"));
-					return sse(frames.filter((frame) => Number(frame.id) > cursor));
+					reconnectEventIds.push(request.headers.get("Last-Event-ID"));
+					return sse(frames);
 				}
 				if (
 					request.method === "GET" &&
@@ -207,5 +198,6 @@ describe("agent conversation smoke", () => {
 			`POST /v1/conversations/${conversationId}/events`,
 		);
 		expect(paths.filter((path) => path.endsWith("/events"))).toHaveLength(3);
+		expect(reconnectEventIds).toEqual([null, null, null]);
 	});
 });

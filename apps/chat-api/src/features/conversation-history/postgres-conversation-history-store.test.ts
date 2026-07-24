@@ -253,7 +253,7 @@ describe("PostgresConversationHistoryStore", () => {
 		expect(second?.runs.map((run) => run.runId)).toEqual(["run-a"]);
 	});
 
-	it("returns the active Run outside the completed-Run limit with replay metadata", async () => {
+	it("returns the active Run outside the terminal-Run limit without cursor metadata", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "member-1",
 			conversationId: "conversation-1",
@@ -345,7 +345,6 @@ describe("PostgresConversationHistoryStore", () => {
 		expect(page?.activeRun).toEqual({
 			runId: "run-active",
 			status: "running",
-			lastEventId: "0",
 		});
 	});
 

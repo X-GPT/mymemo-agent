@@ -1,8 +1,6 @@
 import {
 	classifyLiveStreamFailure,
 	type LiveStreamReason,
-	LiveStreamStoreError,
-	parseLiveStreamCursor,
 } from "@mymemo/live-text";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -147,14 +145,13 @@ async function writeAgUiEntries(
 	runId: string,
 	iterator: AsyncIterator<LiveStreamEntry>,
 	first: IteratorResult<LiveStreamEntry>,
-	writeSSE: (event: { id: string; data: string }) => Promise<unknown>,
+	writeSSE: (event: { data: string }) => Promise<unknown>,
 ): Promise<void> {
 	let next = first;
 	try {
 		while (!next.done) {
 			if (c.req.raw.signal.aborted) break;
 			await writeSSE({
-				id: next.value.cursor,
 				data: liveStreamDecoder.decode(next.value.chunk),
 			});
 			next = await iterator.next();
@@ -173,13 +170,12 @@ async function writeAgUiEntries(
 async function streamAgUiRun(
 	c: Context<AppEnv>,
 	run: RunRecord,
-	cursor: string,
 	status: "streaming" | "done",
 ) {
 	const requestSignal = c.req.raw.signal;
 	const readAbort = linkedAbortController(requestSignal);
 	const iterator = c.var.deps.liveStreamReader
-		.read(run.runId, cursor, readAbort.controller.signal)
+		.read(run.runId, "", readAbort.controller.signal)
 		[Symbol.asyncIterator]();
 	const firstRead = iterator.next().then(
 		(result) => ({ outcome: "read" as const, result }),
@@ -199,12 +195,6 @@ async function streamAgUiRun(
 		const { error } = initial;
 		readAbort.dispose();
 		await iterator.return?.();
-		if (
-			error instanceof LiveStreamStoreError &&
-			error.code === "invalid_cursor"
-		) {
-			return c.json({ error: "Invalid Last-Event-ID" }, 400);
-		}
 		c.var.logger.error({
 			message: "AG-UI Live Stream initial read failed",
 			runId: run.runId,
@@ -272,7 +262,6 @@ async function streamAgUiRun(
 	if (first.done) {
 		readAbort.dispose();
 		await iterator.return?.();
-		if (status === "done" && cursor !== "") return c.body(null, 204);
 		return liveStreamReadFailureResponse(c, run, "missing");
 	}
 
@@ -402,11 +391,7 @@ function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 	});
 }
 
-async function respondWithAgUiRun(
-	c: Context<AppEnv>,
-	run: RunRecord,
-	cursor: string,
-) {
+async function respondWithAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 	if (run.liveStreamFailedAt !== null) return liveStreamRecoveryResponse(c);
 
 	let status: Awaited<ReturnType<typeof c.var.deps.liveStreamReader.status>>;
@@ -422,12 +407,9 @@ async function respondWithAgUiRun(
 	if (status === "error") return liveStreamRecoveryResponse(c);
 	if (status === "missing") {
 		if (isTerminalRunStatus(run.status)) return liveStreamRecoveryResponse(c);
-		if (cursor !== "") {
-			return c.json({ error: "Invalid Last-Event-ID" }, 400);
-		}
 		return waitForAndStreamAgUiRun(c, run);
 	}
-	return streamAgUiRun(c, run, cursor, status);
+	return streamAgUiRun(c, run, status);
 }
 
 // GET /v1/conversations — list one owned Archive partition using stable
@@ -674,7 +656,7 @@ app.post(
 			throw error;
 		}
 
-		return respondWithAgUiRun(c, admittedRun, "");
+		return respondWithAgUiRun(c, admittedRun);
 	},
 );
 
@@ -759,13 +741,7 @@ app.get(
 		if (!run) {
 			return c.json({ error: "Run not found" }, 404);
 		}
-		let cursor: string;
-		try {
-			cursor = parseLiveStreamCursor(c.req.header("last-event-id"));
-		} catch {
-			return c.json({ error: "Invalid Last-Event-ID" }, 400);
-		}
-		return respondWithAgUiRun(c, run, cursor);
+		return respondWithAgUiRun(c, run);
 	},
 );
 
