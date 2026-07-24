@@ -7,23 +7,54 @@ export interface RawAgUiSseFrame {
 	data: string;
 }
 
+interface AgUiSseField {
+	name: "event" | "data";
+	value: string;
+}
+
+function scanAgUiSse(
+	raw: string,
+	options: { normalizeLineEndings: boolean },
+): AgUiSseField[][] {
+	const input = options.normalizeLineEndings
+		? raw.replaceAll("\r\n", "\n")
+		: raw;
+	return input.split("\n\n").map((block) => {
+		const fields: AgUiSseField[] = [];
+		for (const line of block.split("\n")) {
+			if (line.startsWith("id:")) {
+				throw new Error("AG-UI SSE frame carried an unexpected id");
+			}
+			if (line.startsWith("event:")) {
+				fields.push({
+					name: "event",
+					value: line.slice("event:".length),
+				});
+			} else if (line.startsWith("data:")) {
+				fields.push({
+					name: "data",
+					value: line.slice("data:".length),
+				});
+			}
+		}
+		return fields;
+	});
+}
+
 /**
  * Parse cursor-free standard AG-UI SSE while retaining its optional event name.
  * Event names omitted by data-only streams are recovered from the AG-UI type.
  */
 export function parseRawAgUiSse(raw: string): RawAgUiSseFrame[] {
 	const frames: RawAgUiSseFrame[] = [];
-	for (const block of raw.replaceAll("\r\n", "\n").split("\n\n")) {
+	for (const fields of scanAgUiSse(raw, { normalizeLineEndings: true })) {
 		let event = "";
 		const data: string[] = [];
-		for (const line of block.split("\n")) {
-			if (line.startsWith("id:")) {
-				throw new Error("AG-UI SSE frame carried an unexpected id");
-			}
-			if (line.startsWith("event:")) {
-				event = line.slice("event:".length).trim();
-			} else if (line.startsWith("data:")) {
-				data.push(line.slice("data:".length).trimStart());
+		for (const field of fields) {
+			if (field.name === "event") {
+				event = field.value.trim();
+			} else {
+				data.push(field.value.trimStart());
 			}
 		}
 		const frameData = data.join("\n");
@@ -43,13 +74,10 @@ export function parseRawAgUiSse(raw: string): RawAgUiSseFrame[] {
 /** Parse cursor-free standard AG-UI SSE with one BaseEvent JSON object per frame. */
 export function parseAgUiSse(raw: string): AgUiSseFrame[] {
 	const frames: AgUiSseFrame[] = [];
-	for (const block of raw.split("\n\n")) {
+	for (const fields of scanAgUiSse(raw, { normalizeLineEndings: false })) {
 		let data = "";
-		for (const line of block.split("\n")) {
-			if (line.startsWith("id:")) {
-				throw new Error("AG-UI SSE frame carried an unexpected id");
-			}
-			if (line.startsWith("data:")) data = line.slice("data:".length).trim();
+		for (const field of fields) {
+			if (field.name === "data") data = field.value.trim();
 		}
 		if (data) frames.push({ data: JSON.parse(data) });
 	}
