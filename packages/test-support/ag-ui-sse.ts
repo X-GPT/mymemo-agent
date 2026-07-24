@@ -12,14 +12,10 @@ interface AgUiSseField {
 	value: string;
 }
 
-function scanAgUiSse(
-	raw: string,
-	options: { normalizeLineEndings: boolean },
-): AgUiSseField[][] {
-	const input = options.normalizeLineEndings
-		? raw.replaceAll("\r\n", "\n")
-		: raw;
-	return input.split("\n\n").map((block) => {
+type AgUiSseBlock = AgUiSseField[];
+
+function scanAgUiSse(raw: string): AgUiSseBlock[] {
+	return raw.split("\n\n").map((block) => {
 		const fields: AgUiSseField[] = [];
 		for (const line of block.split("\n")) {
 			if (line.startsWith("id:")) {
@@ -47,7 +43,7 @@ function scanAgUiSse(
  */
 export function parseRawAgUiSse(raw: string): RawAgUiSseFrame[] {
 	const frames: RawAgUiSseFrame[] = [];
-	for (const fields of scanAgUiSse(raw, { normalizeLineEndings: true })) {
+	for (const fields of scanAgUiSse(raw.replaceAll("\r\n", "\n"))) {
 		let event = "";
 		const data: string[] = [];
 		for (const field of fields) {
@@ -74,7 +70,7 @@ export function parseRawAgUiSse(raw: string): RawAgUiSseFrame[] {
 /** Parse cursor-free standard AG-UI SSE with one BaseEvent JSON object per frame. */
 export function parseAgUiSse(raw: string): AgUiSseFrame[] {
 	const frames: AgUiSseFrame[] = [];
-	for (const fields of scanAgUiSse(raw, { normalizeLineEndings: false })) {
+	for (const fields of scanAgUiSse(raw)) {
 		let data = "";
 		for (const field of fields) {
 			if (field.name === "data") data = field.value.trim();
