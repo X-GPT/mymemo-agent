@@ -1440,7 +1440,7 @@ describe("consumeAgentStream", () => {
 		]);
 	});
 
-	it("stops appending tool events when shutdown aborts a stalled append", async () => {
+	it("stops appending tool events when supervised stop aborts a stalled append", async () => {
 		const appended: ModelContent[] = [];
 		const controller = new AbortController();
 		let markAppendStarted!: () => void;

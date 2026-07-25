@@ -17,12 +17,8 @@ import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import { Worker } from "../worker";
-import type { SupervisedQuery } from "./agent-stream";
-import {
-	createSdkRunProcessor,
-	type StartRunQuery,
-	type SupervisedQueryOptions,
-} from "./run-processor";
+import type { StartStopDeadline, SupervisedQuery } from "./agent-stream";
+import { createSdkRunProcessor, type StartRunQuery } from "./run-processor";
 import {
 	assistantBlock,
 	streamEvent,
@@ -169,7 +165,7 @@ function buildLoop(
 	worker: Worker,
 	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
-	supervisedQueryOptions?: SupervisedQueryOptions,
+	startStopDeadline?: StartStopDeadline,
 ) {
 	return new RunLoop({
 		db: tdb.db,
@@ -178,7 +174,7 @@ function buildLoop(
 		processor: createSdkRunProcessor({
 			startRunQuery,
 			logger,
-			supervisedQueryOptions,
+			startStopDeadline,
 		}),
 		heartbeatIntervalMs: 15_000,
 		logger,
@@ -195,21 +191,19 @@ function buildWorker() {
 }
 
 function virtualStopDeadline(): {
-	options: SupervisedQueryOptions;
+	startStopDeadline: StartStopDeadline;
 	elapse(): void;
 	started: Promise<number>;
 } {
 	const elapsed = Promise.withResolvers<void>();
 	const started = Promise.withResolvers<number>();
 	return {
-		options: {
-			startStopDeadline(timeoutMs) {
-				started.resolve(timeoutMs);
-				return {
-					elapsed: elapsed.promise,
-					cancel() {},
-				};
-			},
+		startStopDeadline(timeoutMs) {
+			started.resolve(timeoutMs);
+			return {
+				elapsed: elapsed.promise,
+				cancel() {},
+			};
 		},
 		elapse: () => elapsed.resolve(),
 		started: started.promise,
@@ -595,16 +589,14 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				};
 			},
 			silentLogger,
-			{
-				startStopDeadline(timeoutMs) {
-					deadlineMs = timeoutMs;
-					return {
-						elapsed: new Promise<void>(() => {}),
-						cancel() {
-							deadlineCancelled = true;
-						},
-					};
-				},
+			(timeoutMs) => {
+				deadlineMs = timeoutMs;
+				return {
+					elapsed: new Promise<void>(() => {}),
+					cancel() {
+						deadlineCancelled = true;
+					},
+				};
 			},
 		);
 		await createQueuedRunTx(tdb.db, {
@@ -670,7 +662,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				};
 			},
 			logger,
-			deadline.options,
+			deadline.startStopDeadline,
 		);
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -737,7 +729,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				};
 			},
 			silentLogger,
-			deadline.options,
+			deadline.startStopDeadline,
 		);
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -767,30 +759,90 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect(await readEvents("run-1")).toEqual([]);
 	});
 
-	it("maps a query-local stopped disposition to error", async () => {
+	it("writes no terminal Outcome when the fence is lost after forced close", async () => {
 		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
-		const settled = Promise.withResolvers<void>();
-		const stopController = new AbortController();
+		const closeCalled = Promise.withResolvers<void>();
+		const releaseStream = Promise.withResolvers<void>();
 		const deadline = virtualStopDeadline();
 		const loop = buildLoop(
 			worker,
 			async () => ({
-				stopSignal: stopController.signal,
-				async interrupt() {
-					settled.resolve();
-				},
+				async interrupt() {},
 				close() {
-					settled.resolve();
+					closeCalled.resolve();
 				},
-				// biome-ignore lint/correctness/useYield: models an infrastructure-stopped SDK query.
+				// biome-ignore lint/correctness/useYield: stream settlement is held past forced close to revoke the fence.
 				async *[Symbol.asyncIterator]() {
 					started.resolve();
-					await settled.promise;
+					await releaseStream.promise;
 				},
 			}),
 			silentLogger,
-			deadline.options,
+			deadline.startStopDeadline,
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await loop.tick();
+		await started.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await loop.tick();
+		deadline.elapse();
+		await closeCalled.promise;
+
+		await tdb.db
+			.update(runs)
+			.set({
+				lockedBy: "worker-2",
+				lockedUntil: new Date(Date.now() + 60_000),
+			})
+			.where(eq(runs.runId, "run-1"));
+		releaseStream.resolve();
+		await worker.drain();
+
+		expect(await readRun("run-1")).toMatchObject({
+			status: "interrupt_requested",
+			lockedBy: "worker-2",
+		});
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
+	it("force-closes a query-local infrastructure stop and maps it to error", async () => {
+		const worker = buildWorker();
+		const started = Promise.withResolvers<void>();
+		const forceCloseController = new AbortController();
+		const calls: string[] = [];
+		const loop = buildLoop(
+			worker,
+			async () => ({
+				forceCloseSignal: forceCloseController.signal,
+				async interrupt() {
+					calls.push("interrupt");
+				},
+				close() {
+					calls.push("close");
+				},
+				async *[Symbol.asyncIterator]() {
+					started.resolve();
+					if (!forceCloseController.signal.aborted) {
+						await new Promise<void>((resolve) =>
+							forceCloseController.signal.addEventListener(
+								"abort",
+								() => resolve(),
+								{ once: true },
+							),
+						);
+					}
+				},
+			}),
+			silentLogger,
 		);
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -800,9 +852,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 		await loop.tick();
 		await started.promise;
-		stopController.abort();
+		forceCloseController.abort();
 		await worker.drain();
 
+		expect(calls).toEqual(["close"]);
 		expect((await readRun("run-1"))?.status).toBe("error");
 		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
 			"run_error",
@@ -813,14 +866,17 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const settled = Promise.withResolvers<void>();
-		const deadline = virtualStopDeadline();
+		const calls: string[] = [];
+		let deadlines = 0;
 		const loop = buildLoop(
 			worker,
-			async () => ({
+			async (_run, _signal) => ({
 				async interrupt() {
+					calls.push("interrupt");
 					settled.resolve();
 				},
 				close() {
+					calls.push("close");
 					settled.resolve();
 				},
 				// biome-ignore lint/correctness/useYield: models a query stopped by worker shutdown.
@@ -830,7 +886,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				},
 			}),
 			silentLogger,
-			deadline.options,
+			() => {
+				deadlines++;
+				return { elapsed: new Promise(() => {}), cancel() {} };
+			},
 		);
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -842,6 +901,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 		await loop.stop();
 
+		expect(calls).toEqual(["close"]);
+		expect(deadlines).toBe(0);
 		expect((await readRun("run-1"))?.status).toBe("error");
 		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
 			"run_error",
@@ -871,7 +932,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					},
 				}),
 				silentLogger,
-				deadline.options,
+				deadline.startStopDeadline,
 			);
 			await createQueuedRunTx(tdb.db, {
 				runId: "run-1",

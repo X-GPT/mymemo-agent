@@ -17,9 +17,9 @@ import {
  * run supervision (plan Task 7.2, this module) and everything a query needs that
  * later milestones own: the provisioned E2B sandbox and its clients, the bound
  * executor tools ({@link buildRunTools}), the OpenRouter model client, the docs
- * scope, and the resumed session. The returned handle is consumed under `signal`
- * — which the supervisor aborts on interruption, ownership loss, or shutdown, so the
- * query can be interrupted.
+ * scope, and the resumed session. `signal` cancels Tool/E2B work for any
+ * supervisor stop; the returned query's interrupt/close controls remain under
+ * stream supervision.
  */
 export type StartRunQuery = (
 	run: RunRecord,
@@ -29,10 +29,6 @@ export type StartRunQuery = (
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
 	logger: WorkerLogger;
-	supervisedQueryOptions?: SupervisedQueryOptions;
-}
-
-export interface SupervisedQueryOptions {
 	startStopDeadline?: StartStopDeadline;
 }
 
@@ -54,12 +50,16 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 		const outcome: AgentStreamOutcome = await consumeAgentStream({
 			runId: ctx.run.runId,
 			query,
-			signal: ctx.signal,
+			signal: ctx.interruptionSignal,
+			forceCloseSignals: [
+				ctx.shutdownSignal,
+				...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
+			],
 			ownershipLostSignal: ctx.ownershipLostSignal,
 			appendModelContents: ctx.appendModelContents,
 			appendLiveEvent: ctx.appendLiveEvent,
 			logger: deps.logger,
-			startStopDeadline: deps.supervisedQueryOptions?.startStopDeadline,
+			startStopDeadline: deps.startStopDeadline,
 		});
 		const { disposition, ...streamMetadata } = outcome;
 		return {

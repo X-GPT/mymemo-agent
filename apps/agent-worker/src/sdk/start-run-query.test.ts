@@ -393,7 +393,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		expect(typeof options?.systemPrompt).toBe("string");
 		expect(options?.model).toBe("anthropic/claude-test");
 		expect(options?.pathToClaudeCodeExecutable).toBe("/opt/sdk/cli/claude");
-		expect(options?.abortController).toBeInstanceOf(AbortController);
+		expect(options?.abortController).toBeUndefined();
 	});
 
 	it("teaches the model to use inventory separately from passage search and loading", () => {
@@ -848,7 +848,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		expect(h.handle.renews).toBe(renewsAtEnd);
 	});
 
-	it("renewal failure requests bounded query stop and still ends in error", async () => {
+	it("renewal failure requests immediate query close and still ends in error", async () => {
 		const h = buildHarness({
 			provision: {
 				sandboxId: "sb-1",
@@ -866,15 +866,14 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 
 		const query = await h.startRunQuery(run, freshSignal());
 		const consumed = consume(query);
-		await until(() => query.stopSignal?.aborted === true);
+		await until(() => query.forceCloseSignal?.aborted === true);
 
-		expect(h.captured.options?.abortController?.signal.aborted).toBe(false);
 		query.close();
 		await expect(consumed).rejects.toThrow(/renewal/);
 		expect(h.handle.disposed).toBe(true);
 	});
 
-	it("aborts Tool work without hard-aborting the SDK and passes both stop controls through", async () => {
+	it("aborts Tool work and passes the query stop controls through", async () => {
 		let toolSignal: AbortSignal | undefined;
 		const h = buildHarness({
 			provision: { sandboxId: "sb-1", isNew: true },
@@ -902,7 +901,6 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 
 		controller.abort();
 		expect(toolSignal?.aborted).toBe(true);
-		expect(h.captured.options?.abortController?.signal.aborted).toBe(false);
 
 		await query.interrupt();
 		expect(gated.interrupts).toBe(1);

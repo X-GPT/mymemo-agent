@@ -33,8 +33,8 @@ export type SupervisedQuery = AsyncIterable<SDKMessage> & {
 	interrupt(): Promise<unknown>;
 	/** Forcefully terminates the underlying CLI process and resources. */
 	close(): void;
-	/** Optional query-local stop (for example, sandbox-renewal failure). */
-	stopSignal?: AbortSignal;
+	/** Optional query-local immediate close (for example, renewal failure). */
+	forceCloseSignal?: AbortSignal;
 };
 
 /**
@@ -104,8 +104,10 @@ export interface AgentStreamOutcome extends TurnStreamMetadata {
 export interface ConsumeAgentStreamParams {
 	runId?: string;
 	query: SupervisedQuery;
-	/** Fires on interruption, ownership loss, or shutdown; interrupts the query. */
+	/** Fires only for durable interruption; grants the bounded stop window. */
 	signal: AbortSignal;
+	/** Operational stops that must close immediately without a grace deadline. */
+	forceCloseSignals?: readonly AbortSignal[];
 	/** Fires only after the ownership fence is gone; close immediately because
 	 * no private transcript drain is permitted beyond the lease. */
 	ownershipLostSignal?: AbortSignal;
@@ -371,21 +373,22 @@ export async function consumeAgentStream(
 		forceClosed = true;
 		query.close();
 	};
-	const stopSignals = [
-		signal,
-		...(query.stopSignal && query.stopSignal !== signal
-			? [query.stopSignal]
-			: []),
-	];
+	const settleStream = (): void => {
+		streamSettled = true;
+		stopDeadline?.cancel();
+	};
+	const forceCloseSignals = params.forceCloseSignals ?? [];
 	if (params.ownershipLostSignal?.aborted) forceClose();
 	else
 		params.ownershipLostSignal?.addEventListener("abort", forceClose, {
 			once: true,
 		});
-	for (const stopSignal of stopSignals) {
-		if (stopSignal.aborted) stop();
-		else stopSignal.addEventListener("abort", stop, { once: true });
+	for (const forceCloseSignal of forceCloseSignals) {
+		if (forceCloseSignal.aborted) forceClose();
+		else forceCloseSignal.addEventListener("abort", forceClose, { once: true });
 	}
+	if (signal.aborted) stop();
+	else signal.addEventListener("abort", stop, { once: true });
 
 	try {
 		for await (const message of query) {
@@ -443,8 +446,7 @@ export async function consumeAgentStream(
 				liveMessageMatchesCompletion = true;
 			}
 		}
-		streamSettled = true;
-		stopDeadline?.cancel();
+		settleStream();
 		if (stopRequested) {
 			await abandonOpenMessage();
 			return { ...outcome, disposition: "stopped" };
@@ -452,18 +454,17 @@ export async function consumeAgentStream(
 		assembler.finish();
 		return outcome;
 	} catch (error) {
-		streamSettled = true;
-		stopDeadline?.cancel();
+		settleStream();
 		await abandonOpenMessage();
 		if (stopRequested || error instanceof QueryStoppedError) {
 			return { ...outcome, disposition: "stopped" };
 		}
 		throw error;
 	} finally {
-		streamSettled = true;
-		stopDeadline?.cancel();
-		for (const stopSignal of stopSignals) {
-			stopSignal.removeEventListener("abort", stop);
+		settleStream();
+		signal.removeEventListener("abort", stop);
+		for (const forceCloseSignal of forceCloseSignals) {
+			forceCloseSignal.removeEventListener("abort", forceClose);
 		}
 		params.ownershipLostSignal?.removeEventListener("abort", forceClose);
 	}

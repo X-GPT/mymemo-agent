@@ -157,18 +157,14 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			throw error;
 		}
 
-		// Tool/E2B work stops immediately. The SDK process has a separate hard-abort
-		// controller so Run control can first use interrupt() and the bounded clean
-		// stop window before close() forcefully tears the process down.
+		// Every supervisor stop cancels Tool/E2B work immediately. SDK teardown is
+		// owned by stream supervision: durable interruption gets its bounded clean
+		// window, while operational failures and shutdown close immediately.
 		const toolController = new AbortController();
-		const sdkController = new AbortController();
-		const queryStopController = new AbortController();
-		const stopRun = (): void => {
-			toolController.abort();
-			queryStopController.abort();
-		};
-		if (signal.aborted) stopRun();
-		else signal.addEventListener("abort", stopRun, { once: true });
+		const forceCloseController = new AbortController();
+		const stopToolWork = (): void => toolController.abort();
+		if (signal.aborted) stopToolWork();
+		else signal.addEventListener("abort", stopToolWork, { once: true });
 
 		let renewalFailure: { error: unknown } | null = null;
 		const renewal = startSandboxRenewal({
@@ -182,7 +178,8 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 					sandboxId: provisioned.sandboxId,
 					error: toMessage(error),
 				});
-				stopRun();
+				toolController.abort();
+				forceCloseController.abort();
 			},
 		});
 		let settled = false;
@@ -193,7 +190,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			// The paused sandbox IS the persisted workspace (ADR-0007): dispose
 			// only stops keeping it awake.
 			provisioned.dispose();
-			signal.removeEventListener("abort", stopRun);
+			signal.removeEventListener("abort", stopToolWork);
 			await claudeConfigDir.dispose();
 		};
 
@@ -213,7 +210,6 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				provisioned,
 				documentScope,
 				toolController,
-				sdkController,
 				claudeConfigDir: claudeConfigDir.path,
 			});
 			const underlying = deps.query({ prompt: started.message, options });
@@ -221,7 +217,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				withArtifactPublication(underlying, artifactPublication),
 				settle,
 				() => renewalFailure,
-				queryStopController.signal,
+				forceCloseController.signal,
 			);
 		} catch (error) {
 			await settle();
@@ -350,7 +346,6 @@ function buildQueryOptions(
 		provisioned: ProvisionedSandbox;
 		documentScope: RunToolDeps["documentScope"];
 		toolController: AbortController;
-		sdkController: AbortController;
 		claudeConfigDir: string;
 	},
 ): Options {
@@ -361,7 +356,6 @@ function buildQueryOptions(
 		provisioned,
 		documentScope,
 		toolController,
-		sdkController,
 		claudeConfigDir,
 	} = input;
 	const binding: RunBinding = {
@@ -428,7 +422,6 @@ function buildQueryOptions(
 		},
 		pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable,
 		mcpServers: { [EXECUTOR_SERVER_NAME]: createRunMcpServer(toolDeps) },
-		abortController: sdkController,
 		sessionStore: sessionConfig.sessionStore,
 		cwd: sessionConfig.cwd,
 		...(sessionConfig.resume !== undefined
@@ -440,21 +433,21 @@ function buildQueryOptions(
 /**
  * Wrap the SDK query so the turn's per-run resources settle exactly when its
  * stream does (renewal stops, the sandbox is left to idle-pause), and a
- * renewal failure can never end the turn cleanly: even when the aborted SDK
- * stream ends without raising, the wrapper throws {@link SandboxRenewalError}
- * so the run terminalizes `error`, never `done`.
+ * renewal failure can never end the turn cleanly: even when the force-closed
+ * SDK stream ends without raising, the wrapper throws
+ * {@link SandboxRenewalError} so the run terminalizes `error`, never `done`.
  */
 function superviseTurn(
 	underlying: SupervisedQuery,
 	settle: () => Promise<void>,
 	renewalFailure: () => { error: unknown } | null,
-	stopSignal: AbortSignal,
+	forceCloseSignal: AbortSignal,
 ): SupervisedQuery & Partial<ArtifactAwareQuery> {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
 		close: () => underlying.close(),
-		stopSignal,
+		forceCloseSignal,
 		...(artifactQuery.getArtifactPublication
 			? {
 					getArtifactPublication: () =>
