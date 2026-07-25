@@ -89,7 +89,7 @@ export interface BashToolContext {
 	workspaceRoot: string;
 	binding: RunBinding;
 	limits: BashToolLimits;
-	/** Fires when the run is canceled or ownership is lost; kills the command. */
+	/** Fires when the run is interrupted or ownership is lost; kills the command. */
 	signal: AbortSignal;
 	/**
 	 * Records that this sandbox failed command-tree cleanup. The seam is wired to

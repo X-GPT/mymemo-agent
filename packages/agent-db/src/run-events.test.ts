@@ -75,10 +75,10 @@ describe("parseDurableRunEvent", () => {
 			}),
 		).toMatchObject({ type: RunEventType.Error });
 		expect(
-			parseDurableRunEvent(RunEventType.Canceled, {
-				outcome: "canceled",
+			parseDurableRunEvent(RunEventType.Interrupted, {
+				outcome: "interrupted",
 			}),
-		).toMatchObject({ type: RunEventType.Canceled });
+		).toMatchObject({ type: RunEventType.Interrupted });
 
 		expect(() =>
 			parseDurableRunEvent(RunEventType.Done, { outcome: "error" }),

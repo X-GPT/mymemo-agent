@@ -4,9 +4,9 @@ export type {
 	NormalizedRunInput,
 	NormalizedRunInputV1,
 	RunAdmissionResult,
-	RunCancellationResult,
 	RunEventAppendClass,
 	RunEventPayload,
+	RunInterruptionResult,
 	RunRecord,
 	RunStatus,
 	RunStore,
@@ -26,6 +26,6 @@ export {
 	PostgresRunStore,
 	RunFenceError,
 	RunInputMismatchError,
-	requestRunCancellationTx,
+	requestRunInterruptionTx,
 	transitionRunTerminalTx,
 } from "./run-store";

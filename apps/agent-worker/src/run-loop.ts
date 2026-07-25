@@ -88,7 +88,7 @@ const MODEL_CONTENT_EVENT_TYPES = {
  * What a claimed run's processing is handed. `appendModelContent` is the bound
  * durable model-content append for this owned run (fenced by the run store to
  * `running`, all kinds alike); `signal` fires when the loop observes
- * cancellation or loses ownership, so long-running processing can stop
+ * interruption or loses ownership, so long-running processing can stop
  * promptly.
  */
 export interface RunProcessContext {
@@ -133,8 +133,8 @@ export interface RunLoopOptions {
 
 /** Per-run loop-local state, resolved once processing ends into a terminal. */
 interface RunEndState {
-	/** A heartbeat observed `cancel_requested`; the terminal must be `canceled`. */
-	canceled: boolean;
+	/** A heartbeat observed `interrupt_requested`; the terminal must be `interrupted`. */
+	interrupted: boolean;
 	/** A heartbeat lost the ownership fence; recovery owns the run — do not
 	 * terminalize it. */
 	lostOwnership: boolean;
@@ -153,7 +153,7 @@ const GENERIC_RUN_ERROR_MESSAGE = "Run failed";
  * The agent-worker control loop over the shared run-store helpers. One `tick`:
  *  1. terminalizes stale runs through the shared recovery helper;
  *  2. heartbeats every run this worker is executing — renewing `locked_until`
- *     and, in the same call, observing a `cancel_requested` or a lost ownership
+ *     and, in the same call, observing an `interrupt_requested` or a lost ownership
  *     fence; and
  *  3. claims queued runs up to the supervisor's remaining capacity and
  *     dispatches each onto it.
@@ -265,9 +265,9 @@ export class RunLoop {
 		}
 		// Interrupt every in-flight run before draining: aborting the run's
 		// controller is what makes its processor interrupt the live SDK query and
-		// cancel any active E2B command (plan Task 7.2). This is not a user cancel,
-		// so `state.canceled` stays false — an interrupted turn drains to `error`,
-		// never a false `done`. Snapshot the map: a finishing run deletes itself.
+		// cancel any active E2B command (plan Task 7.2). This is not a user interruption,
+		// so `state.interrupted` stays false — a turn stopped by shutdown drains to
+		// `error`, never a false `done`. Snapshot the map: a finishing run deletes itself.
 		for (const entry of [...this.activeRuns.values()]) {
 			entry.controller.abort();
 		}
@@ -357,8 +357,8 @@ export class RunLoop {
 				entry.controller.abort();
 				continue;
 			}
-			if (renewed.status === "cancel_requested") {
-				entry.state.canceled = true;
+			if (renewed.status === "interrupt_requested") {
+				entry.state.interrupted = true;
 				entry.controller.abort();
 			}
 		}
@@ -373,7 +373,7 @@ export class RunLoop {
 			if (!run) break;
 			const entry: ActiveEntry = {
 				controller: new AbortController(),
-				state: { canceled: false, lostOwnership: false },
+				state: { interrupted: false, lostOwnership: false },
 			};
 			this.activeRuns.set(run.runId, entry);
 			const dispatched = this.opts.worker.tryStart(() =>
@@ -497,10 +497,10 @@ export class RunLoop {
 			});
 			return null;
 		}
-		// Cancellation wins over both success and failure: an SDK error raised
-		// while interrupting still surfaces as `canceled`.
-		if (state.canceled) {
-			return this.terminalize(runId, "canceled");
+		// Interruption wins over both success and failure: an SDK error raised
+		// while interrupting still surfaces as `interrupted`.
+		if (state.interrupted) {
+			return this.terminalize(runId, "interrupted");
 		}
 		if (failure) {
 			this.opts.logger.error({
@@ -568,7 +568,8 @@ export class RunLoop {
 			return "done";
 		} catch (error) {
 			if (error instanceof RunFenceError) {
-				if (await this.tryTerminalCanceled(owner.runId)) return "canceled";
+				if (await this.tryTerminalInterrupted(owner.runId))
+					return "interrupted";
 				this.opts.logger.warn({
 					message: "could not publish artifacts; leaving to stale-run recovery",
 					workerId: this.workerId,
@@ -626,9 +627,9 @@ export class RunLoop {
 
 	/**
 	 * Append the run's terminal event through the fenced run-store helper, with
-	 * the late-cancellation fallback the loop relies on: `done`/`error` lose to a
-	 * cancellation the terminal CAS observes (the run is already
-	 * `cancel_requested`), so on a fence rejection try `canceled` once; if even
+	 * the late-interruption fallback the loop relies on: `done`/`error` lose to an
+	 * interruption the terminal CAS observes (the run is already
+	 * `interrupt_requested`), so on a fence rejection try `interrupted` once; if even
 	 * that is fenced, stale-run recovery finishes the run.
 	 */
 	private async terminalize(
@@ -646,8 +647,11 @@ export class RunLoop {
 			return status;
 		} catch (error) {
 			if (error instanceof RunFenceError) {
-				if (status !== "canceled" && (await this.tryTerminalCanceled(runId))) {
-					return "canceled";
+				if (
+					status !== "interrupted" &&
+					(await this.tryTerminalInterrupted(runId))
+				) {
+					return "interrupted";
 				}
 				this.opts.logger.warn({
 					message: "could not terminalize run; leaving to stale-run recovery",
@@ -661,12 +665,12 @@ export class RunLoop {
 		}
 	}
 
-	private async tryTerminalCanceled(runId: string): Promise<boolean> {
+	private async tryTerminalInterrupted(runId: string): Promise<boolean> {
 		try {
 			await transitionRunTerminalTx(this.opts.db, {
 				runId,
 				workerId: this.workerId,
-				status: "canceled",
+				status: "interrupted",
 			});
 			return true;
 		} catch {

@@ -30,10 +30,11 @@ export type SupervisedQuery = AsyncIterable<SDKMessage> & {
 };
 
 /**
- * The run was interrupted (user cancel, ownership loss, or worker shutdown) and
- * the SDK stream ended without raising. Thrown so the supervisor never records a
- * clean `done` for work that did not complete on its own; the terminal
- * transition remaps a user cancel to `canceled` and leaves the rest as `error`.
+ * The run was stopped (user interruption, ownership loss, or worker shutdown)
+ * and the SDK stream ended without raising. Thrown so the supervisor never
+ * records a clean `done` for work that did not complete on its own; the
+ * terminal transition remaps a user interruption to `interrupted` and leaves
+ * the rest as `error`.
  */
 export class QueryInterruptedError extends Error {
 	override name = "QueryInterruptedError" as const;
@@ -91,7 +92,7 @@ export interface AgentStreamOutcome {
 export interface ConsumeAgentStreamParams {
 	runId?: string;
 	query: SupervisedQuery;
-	/** Fires on cancel, ownership loss, or shutdown; interrupts the query. */
+	/** Fires on interruption, ownership loss, or shutdown; interrupts the query. */
 	signal: AbortSignal;
 	/** Atomically persists canonical model-content events, fenced to `running`
 	 * upstream. Single events use a one-item batch. */
@@ -129,8 +130,8 @@ export interface ConsumeAgentStreamParams {
  * stream completes on its own; it throws on an SDK error (so the supervisor
  * terminalizes `error`) and on an interrupted-then-quietly-ended stream
  * ({@link QueryInterruptedError}) so an interrupted turn is never mistaken for a
- * clean success. Deciding the terminal status — `canceled` vs `error` — belongs
- * to the supervisor, which knows whether the abort was a user cancel.
+ * clean success. Deciding the terminal status — `interrupted` vs `error` — belongs
+ * to the supervisor, which knows whether the abort was a user interruption.
  */
 export async function consumeAgentStream(
 	params: ConsumeAgentStreamParams,
@@ -336,7 +337,7 @@ export async function consumeAgentStream(
 	try {
 		for await (const message of query) {
 			// Track continuity signals before the abort skip: the pointer decision
-			// reflects the whole stream, not just its pre-cancel prefix.
+			// reflects the whole stream, not just its pre-interrupt prefix.
 			if (isMirrorError(message)) outcome.mirrorErrorObserved = true;
 			const sessionId = sessionIdFromResult(message);
 			if (sessionId !== null) outcome.sessionId = sessionId;

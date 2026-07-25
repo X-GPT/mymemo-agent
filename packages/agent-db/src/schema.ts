@@ -241,7 +241,9 @@ export const runs = pgTable(
 		lockedBy: text("locked_by"),
 		lockedUntil: timestamp("locked_until", { withTimezone: true }),
 		heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
-		cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+		interruptRequestedAt: timestamp("interrupt_requested_at", {
+			withTimezone: true,
+		}),
 		/** Monotonic marker that Live delivery is unavailable for this Run. */
 		liveStreamFailedAt: timestamp("live_stream_failed_at", {
 			withTimezone: true,
@@ -260,7 +262,7 @@ export const runs = pgTable(
 	(t) => [
 		check(
 			"runs_status_check",
-			sql`${t.status} in ('queued', 'running', 'cancel_requested', 'done', 'error', 'canceled')`,
+			sql`${t.status} in ('queued', 'running', 'interrupt_requested', 'done', 'error', 'interrupted')`,
 		),
 		foreignKey({
 			columns: [t.userId, t.conversationId],
@@ -269,7 +271,7 @@ export const runs = pgTable(
 		}).onDelete("cascade"),
 		uniqueIndex("runs_one_active_per_conversation")
 			.on(t.userId, t.conversationId)
-			.where(sql`${t.status} in ('queued', 'running', 'cancel_requested')`),
+			.where(sql`${t.status} in ('queued', 'running', 'interrupt_requested')`),
 		// Queue claim: oldest queued run first (`FOR UPDATE SKIP LOCKED` scan).
 		index("runs_queue_claim_idx")
 			.on(t.createdAt)
@@ -277,11 +279,11 @@ export const runs = pgTable(
 		// Stale-run recovery: active runs whose lock deadline has passed.
 		index("runs_stale_recovery_idx")
 			.on(t.lockedUntil)
-			.where(sql`${t.status} in ('running', 'cancel_requested')`),
+			.where(sql`${t.status} in ('running', 'interrupt_requested')`),
 		// Cleanup/retention: terminal runs by when they finished.
 		index("runs_cleanup_idx")
 			.on(t.terminalAt)
-			.where(sql`${t.status} in ('done', 'error', 'canceled')`),
+			.where(sql`${t.status} in ('done', 'error', 'interrupted')`),
 	],
 );
 

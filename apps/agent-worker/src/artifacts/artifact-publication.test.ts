@@ -726,13 +726,13 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		});
 	});
 
-	it("lets late cancellation beat the atomic success commit", async () => {
+	it("lets late interruption beat the atomic success commit", async () => {
 		await insertConversation();
 		const workspace = new FakeWorkspace();
 		const h = buildArtifactHarness(workspace, async () => {
 			await tdb.db
 				.update(runs)
-				.set({ status: "cancel_requested" })
+				.set({ status: "interrupt_requested" })
 				.where(eq(runs.runId, "run-1"));
 		});
 
@@ -744,13 +744,13 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		);
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
-		expect((await tdb.db.select().from(runs))[0]?.status).toBe("canceled");
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("interrupted");
 		expect(
 			(await tdb.db.select().from(runEvents)).map((event) => event.type),
-		).toEqual(["run_canceled"]);
+		).toEqual(["run_interrupted"]);
 	});
 
-	it("aborts an in-progress upload when cancellation is observed", async () => {
+	it("aborts an in-progress upload when interruption is observed", async () => {
 		await insertConversation();
 		const workspace = new FakeWorkspace();
 		const blocked = blockingUpload();
@@ -766,13 +766,13 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		await blocked.started;
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested" })
+			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 		await h.loop.tick();
 		await h.worker.drain();
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
-		expect((await tdb.db.select().from(runs))[0]?.status).toBe("canceled");
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("interrupted");
 		expect((await tdb.db.select().from(artifactObjects))[0]?.status).toBe(
 			"pending",
 		);

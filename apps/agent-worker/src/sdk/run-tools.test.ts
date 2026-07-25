@@ -349,6 +349,8 @@ describe("buildRunTools — the run signal cancels active commands", () => {
 		const payload = JSON.parse(
 			(result?.content?.[0] as { text: string }).text,
 		) as { outcome: string };
+		// Carve-out (ADR-0013): the Bash executor's process-kill outcome keeps
+		// its internal cancellation vocabulary.
 		expect(payload.outcome).toBe("canceled");
 	});
 });

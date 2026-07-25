@@ -25,8 +25,8 @@ import type {
 } from "./conversation-history-store";
 import { InvalidConversationHistoryCursorError } from "./conversation-history-store";
 
-const TERMINAL_STATUSES = ["done", "error", "canceled"] as const;
-const ACTIVE_STATUSES = ["queued", "running", "cancel_requested"] as const;
+const TERMINAL_STATUSES = ["done", "error", "interrupted"] as const;
+const ACTIVE_STATUSES = ["queued", "running", "interrupt_requested"] as const;
 // node-postgres exposes timestamps as millisecond Date values while Postgres
 // stores microseconds. Use that same precision for ordering and comparison so
 // Run-id tie-breaking cannot be skipped when a cursor round-trips through JSON.
@@ -275,7 +275,7 @@ function projectCompleteRun(
 		return message;
 	};
 	let terminalEvent: RunTerminalEvent | null = null;
-	let terminalStatus: "done" | "error" | "canceled" | null = null;
+	let terminalStatus: "done" | "error" | "interrupted" | null = null;
 	for (const event of parsed.slice(1)) {
 		switch (event.type) {
 			case RunEventType.AssistantMessageCompleted:
@@ -329,10 +329,10 @@ function projectCompleteRun(
 					message: event.payload.message ?? "Run failed",
 				};
 				break;
-			case RunEventType.Canceled:
-				terminalStatus = "canceled";
+			case RunEventType.Interrupted:
+				terminalStatus = "interrupted";
 				terminalEvent = {
-					type: "RUN_CANCELLED",
+					type: "RUN_INTERRUPTED",
 					threadId: run.conversationId,
 					runId: run.runId,
 				};

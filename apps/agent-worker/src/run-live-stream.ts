@@ -9,7 +9,7 @@ import {
 	type LiveStreamReason,
 	type LiveStreamRelay,
 	type LiveStreamTelemetry,
-	RUN_CANCELLED_EVENT_TYPE,
+	RUN_INTERRUPTED_EVENT_TYPE,
 } from "@mymemo/live-text";
 import type { WorkerLogger } from "./logger";
 
@@ -87,9 +87,9 @@ export class RunLiveStream {
 		}
 		try {
 			const event: LiveStreamEvent =
-				status === "canceled"
+				status === "interrupted"
 					? {
-							type: RUN_CANCELLED_EVENT_TYPE,
+							type: RUN_INTERRUPTED_EVENT_TYPE,
 							threadId: this.conversationId,
 							runId: this.runId,
 						}

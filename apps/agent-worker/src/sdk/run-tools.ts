@@ -89,7 +89,7 @@ export interface RunToolDeps {
 	binding: RunBinding;
 	/** Absolute sandbox workspace root; all file/shell paths resolve under it. */
 	workspaceRoot: string;
-	/** Fires on cancel/ownership-loss/shutdown; a running Bash command is killed. */
+	/** Fires on interruption/ownership-loss/shutdown; a running Bash command is killed. */
 	signal: AbortSignal;
 	fileClient: SandboxFileClient;
 	commandClient: SandboxCommandClient;

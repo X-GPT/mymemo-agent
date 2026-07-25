@@ -26,7 +26,7 @@ import {
 	markStaleRunsTx,
 	RunFenceError,
 	RunInputMismatchError,
-	requestRunCancellationTx,
+	requestRunInterruptionTx,
 	transitionRunTerminalTx,
 } from "./run-store";
 import { conversations, runEvents, runs } from "./schema";
@@ -78,7 +78,7 @@ describe("createQueuedRunTx", () => {
 			lockedBy: null,
 			lockedUntil: null,
 			heartbeatAt: null,
-			cancelRequestedAt: null,
+			interruptRequestedAt: null,
 			nextEventSeq: 1,
 			terminalAt: null,
 		});
@@ -613,11 +613,11 @@ describe("appendRunEventTx", () => {
 		).rejects.toBeInstanceOf(RunFenceError);
 	});
 
-	it("rejects model appends after cancellation is requested", async () => {
+	it("rejects model appends after interruption is requested", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested" })
+			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
 		await expect(
@@ -697,11 +697,11 @@ describe("appendRunEventTx", () => {
 
 	// Tool events ride the same `model` append class as assistant text, so the
 	// same fence rejects them once the run leaves `running`…
-	it("rejects a tool-event model append after cancellation is requested", async () => {
+	it("rejects a tool-event model append after interruption is requested", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested" })
+			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
 		await expect(
@@ -740,7 +740,7 @@ describe("appendRunEventTx", () => {
 		).rejects.toBeInstanceOf(RunFenceError);
 	});
 
-	it("allows cancellation audit appends while running or cancel_requested", async () => {
+	it("allows cancellation audit appends while running or interrupt_requested", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
 		const whileRunning = await appendRunEventTx(tdb.db, {
@@ -752,9 +752,9 @@ describe("appendRunEventTx", () => {
 		});
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested" })
+			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
-		const whileCancelRequested = await appendRunEventTx(tdb.db, {
+		const whileInterruptRequested = await appendRunEventTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
 			type: "command_canceled",
@@ -763,14 +763,14 @@ describe("appendRunEventTx", () => {
 		});
 
 		expect(whileRunning.seq).toBe(1);
-		expect(whileCancelRequested.seq).toBe(2);
+		expect(whileInterruptRequested.seq).toBe(2);
 	});
 
 	it("still fences cancellation audit appends by lock deadline", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested" })
+			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 		await expireOwnership("run-1");
 
@@ -908,11 +908,11 @@ describe("transitionRunTerminalTx", () => {
 		expect(events.map((e) => e.type)).toEqual(["run_done"]);
 	});
 
-	it("refuses done once cancellation was requested; canceled wins", async () => {
+	it("refuses done once interruption was requested; interrupted wins", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested" })
+			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
 		await expect(
@@ -926,21 +926,21 @@ describe("transitionRunTerminalTx", () => {
 		const run = await transitionRunTerminalTx(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
-			status: "canceled",
+			status: "interrupted",
 		});
-		expect(run.status).toBe("canceled");
+		expect(run.status).toBe("interrupted");
 		const events = await readEvents("run-1");
-		expect(events.map((e) => e.type)).toEqual(["run_canceled"]);
+		expect(events.map((e) => e.type)).toEqual(["run_interrupted"]);
 	});
 
-	it("refuses error once cancellation was requested", async () => {
-		// "Do not overload `error` for user-initiated cancellation": after
-		// cancel_requested the only legal terminal is canceled, even when the
+	it("refuses error once interruption was requested", async () => {
+		// "Do not overload `error` for user-directed interruption": after
+		// interrupt_requested the only legal terminal is interrupted, even when the
 		// SDK errors during the interrupt.
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested" })
+			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
 		await expect(
@@ -992,51 +992,88 @@ describe("transitionRunTerminalTx", () => {
 	});
 });
 
-describe("requestRunCancellationTx", () => {
+describe("requestRunInterruptionTx", () => {
 	const ref = { runId: "run-1", userId: "user-1", conversationId: "conv-1" };
 
-	it("cancels a queued run immediately and appends run_canceled", async () => {
+	it("interrupts a queued run immediately and appends run_interrupted", async () => {
 		await queueRun("run-1", "conv-1");
 
-		const result = await requestRunCancellationTx(tdb.db, ref);
+		const result = await requestRunInterruptionTx(tdb.db, ref);
 
-		expect(result.outcome).toBe("canceled");
-		if (result.outcome !== "canceled") throw new Error("unreachable");
+		expect(result.outcome).toBe("interrupted");
+		if (result.outcome !== "interrupted") throw new Error("unreachable");
 		expect(result.run).toMatchObject({
 			runId: "run-1",
-			status: "canceled",
+			status: "interrupted",
 			lockedBy: null,
 			lockedUntil: null,
 		});
 		expect(result.run.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
-		expect(events.map((e) => [e.seq, e.type])).toEqual([[1, "run_canceled"]]);
-		expect(events[0]?.payload).toEqual({ outcome: "canceled" });
+		expect(events.map((e) => [e.seq, e.type])).toEqual([
+			[1, "run_interrupted"],
+		]);
+		expect(events[0]?.payload).toEqual({ outcome: "interrupted" });
 	});
 
-	it("moves a running run to cancel_requested and leaves ownership intact", async () => {
+	it("moves a running run to interrupt_requested and leaves ownership intact", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
-		const result = await requestRunCancellationTx(tdb.db, ref);
+		const result = await requestRunInterruptionTx(tdb.db, ref);
 
-		expect(result.outcome).toBe("cancel_requested");
-		if (result.outcome !== "cancel_requested") throw new Error("unreachable");
-		expect(result.run.status).toBe("cancel_requested");
+		expect(result.outcome).toBe("interrupt_requested");
+		if (result.outcome !== "interrupt_requested")
+			throw new Error("unreachable");
+		expect(result.run.status).toBe("interrupt_requested");
 		expect(result.run.lockedBy).toBe("worker-1");
-		expect(result.run.cancelRequestedAt).toBeInstanceOf(Date);
-		// No terminal event yet: the owning worker appends run_canceled when it
+		expect(result.run.interruptRequestedAt).toBeInstanceOf(Date);
+		// No terminal event yet: the owning worker appends run_interrupted when it
 		// actually terminalizes.
 		expect(await readEvents("run-1")).toEqual([]);
 	});
 
-	it("is idempotent while cancellation is already requested", async () => {
+	it("is idempotent while interruption is already requested", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
-		await requestRunCancellationTx(tdb.db, ref);
+		await requestRunInterruptionTx(tdb.db, ref);
 
-		const again = await requestRunCancellationTx(tdb.db, ref);
+		const again = await requestRunInterruptionTx(tdb.db, ref);
 
-		expect(again.outcome).toBe("cancel_requested");
+		expect(again.outcome).toBe("interrupt_requested");
 		expect(await readEvents("run-1")).toEqual([]);
+	});
+
+	it("stays a success when retried after the interruption already won", async () => {
+		await queueRun("run-1", "conv-1");
+		await requestRunInterruptionTx(tdb.db, ref);
+
+		const retry = await requestRunInterruptionTx(tdb.db, ref);
+
+		// ADR-0013 retry contract: an interruption that already won reports
+		// `interrupted`, distinct from the `done`/`error` conflict — and stays
+		// idempotent (no second terminal event).
+		expect(retry.outcome).toBe("interrupted");
+		if (retry.outcome !== "interrupted") throw new Error("unreachable");
+		expect(retry.run.status).toBe("interrupted");
+		const events = await readEvents("run-1");
+		expect(events.map((e) => e.type)).toEqual(["run_interrupted"]);
+	});
+
+	it("stays a success when retried after the owner terminalized interrupted", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await requestRunInterruptionTx(tdb.db, ref);
+		await transitionRunTerminalTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			status: "interrupted",
+		});
+
+		const retry = await requestRunInterruptionTx(tdb.db, ref);
+
+		expect(retry.outcome).toBe("interrupted");
+		if (retry.outcome !== "interrupted") throw new Error("unreachable");
+		expect(retry.run.status).toBe("interrupted");
+		const events = await readEvents("run-1");
+		expect(events.map((e) => e.type)).toEqual(["run_interrupted"]);
 	});
 
 	it("reports an already-terminal run without touching it", async () => {
@@ -1047,7 +1084,7 @@ describe("requestRunCancellationTx", () => {
 			status: "done",
 		});
 
-		const result = await requestRunCancellationTx(tdb.db, ref);
+		const result = await requestRunInterruptionTx(tdb.db, ref);
 
 		expect(result.outcome).toBe("already_terminal");
 		if (result.outcome !== "already_terminal") throw new Error("unreachable");
@@ -1060,19 +1097,19 @@ describe("requestRunCancellationTx", () => {
 		await queueRun("run-1", "conv-1");
 
 		expect(
-			await requestRunCancellationTx(tdb.db, {
+			await requestRunInterruptionTx(tdb.db, {
 				...ref,
 				runId: "run-ghost",
 			}),
 		).toEqual({ outcome: "not_found" });
 		expect(
-			await requestRunCancellationTx(tdb.db, {
+			await requestRunInterruptionTx(tdb.db, {
 				...ref,
 				userId: "user-2",
 			}),
 		).toEqual({ outcome: "not_found" });
 		expect(
-			await requestRunCancellationTx(tdb.db, {
+			await requestRunInterruptionTx(tdb.db, {
 				...ref,
 				conversationId: "conv-2",
 			}),
@@ -1101,9 +1138,9 @@ describe("heartbeatRunTx", () => {
 		expect(renewed?.heartbeatAt).toBeInstanceOf(Date);
 	});
 
-	it("lets the control loop observe a pending cancellation request", async () => {
+	it("lets the control loop observe a pending interruption request", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
-		await requestRunCancellationTx(tdb.db, {
+		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1114,8 +1151,8 @@ describe("heartbeatRunTx", () => {
 			workerId: "worker-1",
 		});
 
-		expect(renewed?.status).toBe("cancel_requested");
-		expect(renewed?.cancelRequestedAt).toBeInstanceOf(Date);
+		expect(renewed?.status).toBe("interrupt_requested");
+		expect(renewed?.interruptRequestedAt).toBeInstanceOf(Date);
 	});
 
 	it("does not renew for a worker that does not own the run", async () => {
@@ -1293,9 +1330,9 @@ describe("markStaleRunsTx", () => {
 		expect(recovered[0]?.liveStreamFailedAt).toBeInstanceOf(Date);
 	});
 
-	it("terminalizes a stale cancel_requested run as canceled", async () => {
+	it("terminalizes a stale interrupt_requested run as interrupted", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
-		await requestRunCancellationTx(tdb.db, {
+		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1305,10 +1342,10 @@ describe("markStaleRunsTx", () => {
 		const recovered = await markStaleRunsTx(tdb.db);
 
 		expect(recovered.map((r) => [r.runId, r.status])).toEqual([
-			["run-1", "canceled"],
+			["run-1", "interrupted"],
 		]);
 		const events = await readEvents("run-1");
-		expect(events.map((e) => e.type)).toEqual(["run_canceled"]);
+		expect(events.map((e) => e.type)).toEqual(["run_interrupted"]);
 	});
 
 	it("leaves queued runs and live claims alone", async () => {

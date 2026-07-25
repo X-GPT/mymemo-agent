@@ -8,7 +8,7 @@ import {
 	LIVE_STREAM_MAX_EVENTS,
 	type LiveStreamEvent,
 	LiveStreamRelayError,
-	RUN_CANCELLED_EVENT_TYPE,
+	RUN_INTERRUPTED_EVENT_TYPE,
 } from "./live-stream-events";
 import {
 	disabledLiveStreamTelemetry,
@@ -682,7 +682,7 @@ function isTerminalType(type: unknown): boolean {
 	return (
 		type === EventType.RUN_FINISHED ||
 		type === EventType.RUN_ERROR ||
-		type === RUN_CANCELLED_EVENT_TYPE
+		type === RUN_INTERRUPTED_EVENT_TYPE
 	);
 }
 

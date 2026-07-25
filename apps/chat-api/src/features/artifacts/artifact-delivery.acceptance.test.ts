@@ -380,7 +380,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 		}
 	});
 
-	it("keeps the prior current Downloadable artifact set intact across validation, quota, upload, cancellation, and cleanup failures", async () => {
+	it("keeps the prior current Downloadable artifact set intact across validation, quota, upload, interruption, and cleanup failures", async () => {
 		const tdb = await createTestDatabase();
 		try {
 			const logEvents: Record<string, unknown>[] = [];
@@ -463,21 +463,21 @@ describe("Downloadable artifact delivery acceptance", () => {
 				});
 			});
 			await delivery.queue(
-				"run-cancel",
+				"run-interrupt",
 				successfulQuery(() => {
-					workspace.write("cancel.txt", encoder.encode("partial"), "5");
+					workspace.write("interrupt.txt", encoder.encode("partial"), "5");
 				}),
 			);
 			await delivery.loop.tick();
 			await started;
 			await tdb.db
 				.update(runs)
-				.set({ status: "cancel_requested" })
-				.where(eq(runs.runId, "run-cancel"));
+				.set({ status: "interrupt_requested" })
+				.where(eq(runs.runId, "run-interrupt"));
 			await delivery.loop.tick();
 			await delivery.worker.drain();
 			delivery.setUploadOverride();
-			workspace.delete("cancel.txt");
+			workspace.delete("interrupt.txt");
 
 			delivery.setDeleteOverride(async () => {
 				throw new Error("delete temporarily unavailable");
@@ -498,7 +498,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 				{ runId: "run-validation", status: "error" },
 				{ runId: "run-quota", status: "error" },
 				{ runId: "run-upload", status: "error" },
-				{ runId: "run-cancel", status: "canceled" },
+				{ runId: "run-interrupt", status: "interrupted" },
 			]);
 			const publicOutcomes = await tdb.db
 				.select({ type: runEvents.type, payload: runEvents.payload })
@@ -518,7 +518,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 					type: "run_error",
 					payload: { message: "Run failed", outcome: "error" },
 				},
-				{ type: "run_canceled", payload: { outcome: "canceled" } },
+				{ type: "run_interrupted", payload: { outcome: "interrupted" } },
 			]);
 			const serializedPublicState = JSON.stringify({
 				list: priorList,

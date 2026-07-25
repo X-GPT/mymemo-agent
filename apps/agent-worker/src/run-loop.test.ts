@@ -5,7 +5,7 @@ import {
 	claimNextRunTx,
 	createQueuedRunTx,
 	RunFenceError,
-	requestRunCancellationTx,
+	requestRunInterruptionTx,
 } from "@mymemo/agent-db/run-store";
 import {
 	createConversationRuntimeTx,
@@ -613,7 +613,7 @@ describe("RunLoop — terminal outcomes", () => {
 		});
 	});
 
-	it("terminalizes as canceled when cancellation is observed mid-processing", async () => {
+	it("terminalizes as interrupted when interruption is observed mid-processing", async () => {
 		const worker = buildWorker(1);
 		const published: unknown[] = [];
 		const liveStreamRelay = createInMemoryLiveStreamRelay();
@@ -644,24 +644,24 @@ describe("RunLoop — terminal outcomes", () => {
 			}
 		})();
 
-		// User requests cancellation while the run is executing.
+		// User requests interruption while the run is executing.
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested", cancelRequestedAt: sql`now()` })
+			.set({ status: "interrupt_requested", interruptRequestedAt: sql`now()` })
 			.where(eq(runs.runId, "run-1"));
 
-		await loop.tick(); // heartbeat observes cancel_requested → aborts the run
+		await loop.tick(); // heartbeat observes interrupt_requested → aborts the run
 		await worker.drain();
 		await consume;
 
 		expect(await readRun("run-1")).toMatchObject({
-			status: "canceled",
+			status: "interrupted",
 			liveStreamFailedAt: null,
 		});
-		expect(await readEventTypes("run-1")).toEqual(["run_canceled"]);
+		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
 		expect(published).toEqual([
 			{ type: EventType.RUN_STARTED, threadId: "conv-1", runId: "run-1" },
-			{ type: "RUN_CANCELLED", threadId: "conv-1", runId: "run-1" },
+			{ type: "RUN_INTERRUPTED", threadId: "conv-1", runId: "run-1" },
 		]);
 	});
 });
@@ -821,9 +821,9 @@ describe("RunLoop — stale-run recovery", () => {
 		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
 	});
 
-	it("terminalizes stale cancel-requested runs as canceled during a tick", async () => {
+	it("terminalizes stale interrupt-requested runs as interrupted during a tick", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
-		await requestRunCancellationTx(tdb.db, {
+		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-stale",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -835,8 +835,8 @@ describe("RunLoop — stale-run recovery", () => {
 		await loop.tick();
 		await worker.drain();
 
-		expect((await readRun("run-stale"))?.status).toBe("canceled");
-		expect(await readEventTypes("run-stale")).toEqual(["run_canceled"]);
+		expect((await readRun("run-stale"))?.status).toBe("interrupted");
+		expect(await readEventTypes("run-stale")).toEqual(["run_interrupted"]);
 	});
 
 	it("rejects stale worker appends after loop recovery terminalizes the run", async () => {

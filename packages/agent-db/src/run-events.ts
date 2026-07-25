@@ -25,8 +25,8 @@ export const RunEventType = {
 	Done: "run_done",
 	/** Terminal: the run failed. Payload `{ message }`. */
 	Error: "run_error",
-	/** Terminal: the run was canceled by the user. */
-	Canceled: "run_canceled",
+	/** Terminal: the run was interrupted by the user. */
+	Interrupted: "run_interrupted",
 } as const;
 
 export type RunEventType = (typeof RunEventType)[keyof typeof RunEventType];
@@ -103,7 +103,7 @@ export interface ToolCallResultPayload {
 	isError: boolean;
 }
 
-export type RunOutcome = "done" | "error" | "canceled";
+export type RunOutcome = "done" | "error" | "interrupted";
 
 export interface RunOutcomePayload {
 	[key: string]: unknown;
@@ -187,7 +187,7 @@ export type DurableRunEvent =
 			type:
 				| typeof RunEventType.Done
 				| typeof RunEventType.Error
-				| typeof RunEventType.Canceled;
+				| typeof RunEventType.Interrupted;
 			payload: RunOutcomePayload;
 	  };
 
@@ -288,7 +288,7 @@ export function validateDurableRunEventSequence(
 				break;
 			case RunEventType.Done:
 			case RunEventType.Error:
-			case RunEventType.Canceled:
+			case RunEventType.Interrupted:
 				terminalSeen = true;
 				terminalOutcome = parsed.payload.outcome;
 				staleRecoveryOutcome =
@@ -353,8 +353,8 @@ export function parseDurableRunEvent(
 		case RunEventType.Error:
 			if (isRunOutcomePayload(payload, "error")) return { type, payload };
 			break;
-		case RunEventType.Canceled:
-			if (isRunOutcomePayload(payload, "canceled")) return { type, payload };
+		case RunEventType.Interrupted:
+			if (isRunOutcomePayload(payload, "interrupted")) return { type, payload };
 			break;
 		default:
 			return null;

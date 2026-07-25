@@ -63,7 +63,7 @@ describe("run queue schema", () => {
 			lockedBy: null,
 			lockedUntil: null,
 			heartbeatAt: null,
-			cancelRequestedAt: null,
+			interruptRequestedAt: null,
 			normalizedInput: null,
 			liveStreamFailedAt: null,
 			nextEventSeq: 1,
@@ -94,6 +94,46 @@ describe("run queue schema", () => {
 		);
 	});
 
+	it("rejects the pre-cutover cancellation status vocabulary", async () => {
+		for (const status of ["canceled", "cancel_requested"]) {
+			await expectDbWriteToFail(() =>
+				tdb.db.insert(runs).values({
+					runId: `run-old-${status}`,
+					userId: "user-1",
+					conversationId: "conv-1",
+					status,
+				}),
+			);
+		}
+	});
+
+	it("accepts the interruption status vocabulary", async () => {
+		await tdb.db.insert(runs).values([
+			{
+				runId: "run-interrupt-requested",
+				userId: "user-1",
+				conversationId: "conv-1",
+				status: "interrupt_requested",
+			},
+			{
+				runId: "run-interrupted",
+				userId: "user-1",
+				conversationId: "conv-2",
+				status: "interrupted",
+			},
+		]);
+	});
+
+	it("renamed cancel_requested_at to interrupt_requested_at", async () => {
+		const { rows } = await tdb.db.execute(sql`
+			select column_name
+			from information_schema.columns
+			where table_name = 'runs'
+				and column_name in ('cancel_requested_at', 'interrupt_requested_at')
+		`);
+		expect(rows).toEqual([{ column_name: "interrupt_requested_at" }]);
+	});
+
 	it("enforces one active run per conversation", async () => {
 		await tdb.db.insert(runs).values({
 			runId: "run-active-1",
@@ -108,6 +148,24 @@ describe("run queue schema", () => {
 				userId: "user-1",
 				conversationId: "conv-1",
 				status: "running",
+			}),
+		);
+	});
+
+	it("keeps interrupt_requested inside the one-active-run backpressure", async () => {
+		await tdb.db.insert(runs).values({
+			runId: "run-stopping",
+			userId: "user-1",
+			conversationId: "conv-1",
+			status: "interrupt_requested",
+		});
+
+		await expectDbWriteToFail(() =>
+			tdb.db.insert(runs).values({
+				runId: "run-next",
+				userId: "user-1",
+				conversationId: "conv-1",
+				status: "queued",
 			}),
 		);
 	});
@@ -194,6 +252,37 @@ describe("run queue schema", () => {
 			"run_started",
 			"assistant_message_completed",
 		]);
+	});
+
+	it("rings the run_doorbell function from queued inserts and interruption transitions only", async () => {
+		const { rows: triggers } = await tdb.db.execute(sql`
+			select tgname, pg_get_triggerdef(oid) as def
+			from pg_trigger
+			where tgrelid = 'runs'::regclass and not tgisinternal
+			order by tgname
+		`);
+		expect(triggers.map((row) => row.tgname)).toEqual([
+			"runs_notify_interrupt_requested",
+			"runs_notify_queued",
+		]);
+		// The WHEN clauses are the silence guarantees: heartbeat `locked_until`
+		// renewals never ring (the UPDATE trigger requires the committed
+		// `running` → `interrupt_requested` status transition), and a queued
+		// interruption (queued → `interrupted` directly) rings nothing.
+		const definitions = triggers.map((row) => String(row.def));
+		expect(definitions[0]).toContain("AFTER UPDATE OF status ON public.runs");
+		expect(definitions[0]).toContain(
+			"WHEN (((old.status = 'running'::text) AND (new.status = 'interrupt_requested'::text)))",
+		);
+		expect(definitions[0]).toContain("EXECUTE FUNCTION notify_run_doorbell()");
+		expect(definitions[1]).toContain("AFTER INSERT ON public.runs");
+		expect(definitions[1]).toContain("WHEN ((new.status = 'queued'::text))");
+		expect(definitions[1]).toContain("EXECUTE FUNCTION notify_run_doorbell()");
+		const { rows: functions } = await tdb.db.execute(sql`
+			select proname from pg_proc
+			where proname in ('notify_run_doorbell', 'notify_run_queued')
+		`);
+		expect(functions).toEqual([{ proname: "notify_run_doorbell" }]);
 	});
 
 	it("installs a trigger that notifies listeners when run events are inserted", async () => {

@@ -17,7 +17,7 @@ import {
  * later milestones own: the provisioned E2B sandbox and its clients, the bound
  * executor tools ({@link buildRunTools}), the OpenRouter model client, the docs
  * scope, and the resumed session. The returned handle is consumed under `signal`
- * — which the supervisor aborts on cancel, ownership loss, or shutdown, so the
+ * — which the supervisor aborts on interruption, ownership loss, or shutdown, so the
  * query can be interrupted.
  */
 export type StartRunQuery = (
@@ -36,7 +36,7 @@ export interface SdkRunProcessorDeps {
  * events (plan Task 7.2). It slots into the same {@link RunProcessor} seam the
  * synthetic processor used, so the control loop's claim/heartbeat/terminalize
  * behavior — including mapping this processor's throw to `error` and a
- * supervisor-observed cancel to `canceled` — is unchanged.
+ * supervisor-observed interruption to `interrupted` — is unchanged.
  *
  * Message appends, terminal transitions, and the ownership fence all belong to
  * the loop and run store; this processor only assembles SDK provider envelopes,
