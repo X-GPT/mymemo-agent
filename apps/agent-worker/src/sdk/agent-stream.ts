@@ -30,10 +30,11 @@ export type SupervisedQuery = AsyncIterable<SDKMessage> & {
 };
 
 /**
- * The run was interrupted (user interruption, ownership loss, or worker shutdown) and
- * the SDK stream ended without raising. Thrown so the supervisor never records a
- * clean `done` for work that did not complete on its own; the terminal
- * transition remaps a user interruption to `interrupted` and leaves the rest as `error`.
+ * The run was stopped (user interruption, ownership loss, or worker shutdown)
+ * and the SDK stream ended without raising. Thrown so the supervisor never
+ * records a clean `done` for work that did not complete on its own; the
+ * terminal transition remaps a user interruption to `interrupted` and leaves
+ * the rest as `error`.
  */
 export class QueryInterruptedError extends Error {
 	override name = "QueryInterruptedError" as const;

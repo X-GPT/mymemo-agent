@@ -256,7 +256,7 @@ describe("run queue schema", () => {
 
 	it("rings the run_doorbell function from queued inserts and interruption transitions only", async () => {
 		const { rows: triggers } = await tdb.db.execute(sql`
-			select tgname
+			select tgname, pg_get_triggerdef(oid) as def
 			from pg_trigger
 			where tgrelid = 'runs'::regclass and not tgisinternal
 			order by tgname
@@ -265,6 +265,19 @@ describe("run queue schema", () => {
 			"runs_notify_interrupt_requested",
 			"runs_notify_queued",
 		]);
+		// The WHEN clauses are the silence guarantees: heartbeat `locked_until`
+		// renewals never ring (the UPDATE trigger requires the committed
+		// `running` → `interrupt_requested` status transition), and a queued
+		// interruption (queued → `interrupted` directly) rings nothing.
+		const definitions = triggers.map((row) => String(row.def));
+		expect(definitions[0]).toContain("AFTER UPDATE OF status ON public.runs");
+		expect(definitions[0]).toContain(
+			"WHEN (((old.status = 'running'::text) AND (new.status = 'interrupt_requested'::text)))",
+		);
+		expect(definitions[0]).toContain("EXECUTE FUNCTION notify_run_doorbell()");
+		expect(definitions[1]).toContain("AFTER INSERT ON public.runs");
+		expect(definitions[1]).toContain("WHEN ((new.status = 'queued'::text))");
+		expect(definitions[1]).toContain("EXECUTE FUNCTION notify_run_doorbell()");
 		const { rows: functions } = await tdb.db.execute(sql`
 			select proname from pg_proc
 			where proname in ('notify_run_doorbell', 'notify_run_queued')

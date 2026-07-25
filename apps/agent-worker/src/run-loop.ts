@@ -153,7 +153,7 @@ const GENERIC_RUN_ERROR_MESSAGE = "Run failed";
  * The agent-worker control loop over the shared run-store helpers. One `tick`:
  *  1. terminalizes stale runs through the shared recovery helper;
  *  2. heartbeats every run this worker is executing — renewing `locked_until`
- *     and, in the same call, observing a `interrupt_requested` or a lost ownership
+ *     and, in the same call, observing an `interrupt_requested` or a lost ownership
  *     fence; and
  *  3. claims queued runs up to the supervisor's remaining capacity and
  *     dispatches each onto it.
@@ -266,8 +266,8 @@ export class RunLoop {
 		// Interrupt every in-flight run before draining: aborting the run's
 		// controller is what makes its processor interrupt the live SDK query and
 		// cancel any active E2B command (plan Task 7.2). This is not a user interruption,
-		// so `state.interrupted` stays false — an interrupted turn drains to `error`,
-		// never a false `done`. Snapshot the map: a finishing run deletes itself.
+		// so `state.interrupted` stays false — a turn stopped by shutdown drains to
+		// `error`, never a false `done`. Snapshot the map: a finishing run deletes itself.
 		for (const entry of [...this.activeRuns.values()]) {
 			entry.controller.abort();
 		}
