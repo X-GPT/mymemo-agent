@@ -50,7 +50,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 		const outcome: AgentStreamOutcome = await consumeAgentStream({
 			runId: ctx.run.runId,
 			query,
-			signal: ctx.interruptionSignal,
+			interruptionSignal: ctx.interruptionSignal,
 			forceCloseSignals: [
 				ctx.shutdownSignal,
 				...(query.forceCloseSignal ? [query.forceCloseSignal] : []),

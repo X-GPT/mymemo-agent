@@ -679,6 +679,7 @@ describe("RunLoop — agent session pointer", () => {
 				workerId: "worker-1",
 			});
 			return {
+				disposition: "completed",
 				streamMetadata: {
 					sessionId: "session-abc",
 					mirrorErrorObserved: false,
@@ -706,6 +707,7 @@ describe("RunLoop — agent session pointer", () => {
 				workerId: "worker-1",
 			});
 			return {
+				disposition: "completed",
 				streamMetadata: {
 					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,

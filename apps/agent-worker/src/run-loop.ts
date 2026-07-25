@@ -53,7 +53,7 @@ export interface TurnStreamMetadata {
 
 export interface TurnResult {
 	/** Cause-blind processor disposition; the supervisor chooses the Outcome. */
-	disposition?: TurnDisposition;
+	disposition: TurnDisposition;
 	/**
 	 * Cause-blind continuity observations from the SDK stream. The supervisor
 	 * alone decides whether the Outcome permits advancing the resume pointer.

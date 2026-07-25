@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { type AGUIEvent, EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
-import type { WorkerLogger } from "../logger";
+import { toMessage, type WorkerLogger } from "../logger";
 import type {
 	ModelContent,
 	TurnDisposition,
@@ -105,7 +105,7 @@ export interface ConsumeAgentStreamParams {
 	runId?: string;
 	query: SupervisedQuery;
 	/** Fires only for durable interruption; grants the bounded stop window. */
-	signal: AbortSignal;
+	interruptionSignal: AbortSignal;
 	/** Operational stops that must close immediately without a grace deadline. */
 	forceCloseSignals?: readonly AbortSignal[];
 	/** Fires only after the ownership fence is gone; close immediately because
@@ -152,7 +152,7 @@ export interface ConsumeAgentStreamParams {
 export async function consumeAgentStream(
 	params: ConsumeAgentStreamParams,
 ): Promise<AgentStreamOutcome> {
-	const { query, signal, appendModelContents } = params;
+	const { query, interruptionSignal, appendModelContents } = params;
 	const outcome: AgentStreamOutcome = {
 		disposition: "completed",
 		sessionId: null,
@@ -348,6 +348,18 @@ export async function consumeAgentStream(
 	let streamSettled = false;
 	let forceClosed = false;
 	let stopDeadline: StopDeadline | undefined;
+	let resolveForceClosed!: () => void;
+	const forceClosedSignal = new Promise<void>((resolve) => {
+		resolveForceClosed = resolve;
+	});
+	const reportStoppedStreamFailure = (error: unknown): void => {
+		if (error instanceof QueryStoppedError) return;
+		params.logger?.error({
+			message: "agent query failed while stopping",
+			runId: params.runId,
+			error: toMessage(error),
+		});
+	};
 	const stop = (): void => {
 		if (stopRequested) return;
 		stopRequested = true;
@@ -357,13 +369,12 @@ export async function consumeAgentStream(
 		stopDeadline = startStopDeadline(QUERY_STOP_TIMEOUT_MS);
 		void stopDeadline.elapsed.then(() => {
 			if (streamSettled || forceClosed) return;
-			forceClosed = true;
 			params.logger?.warn({
 				message: "agent query exceeded stop deadline; forcing close",
 				runId: params.runId,
 				stopDeadlineMs: QUERY_STOP_TIMEOUT_MS,
 			});
-			query.close();
+			forceClose();
 		});
 	};
 	const forceClose = (): void => {
@@ -371,27 +382,50 @@ export async function consumeAgentStream(
 		stopRequested = true;
 		stopDeadline?.cancel();
 		forceClosed = true;
-		query.close();
+		try {
+			query.close();
+		} catch (error) {
+			params.logger?.error({
+				message: "agent query force-close failed",
+				runId: params.runId,
+				error: toMessage(error),
+			});
+		} finally {
+			resolveForceClosed();
+		}
 	};
 	const settleStream = (): void => {
 		streamSettled = true;
 		stopDeadline?.cancel();
 	};
 	const forceCloseSignals = params.forceCloseSignals ?? [];
-	if (params.ownershipLostSignal?.aborted) forceClose();
-	else
-		params.ownershipLostSignal?.addEventListener("abort", forceClose, {
-			once: true,
-		});
-	for (const forceCloseSignal of forceCloseSignals) {
-		if (forceCloseSignal.aborted) forceClose();
-		else forceCloseSignal.addEventListener("abort", forceClose, { once: true });
-	}
-	if (signal.aborted) stop();
-	else signal.addEventListener("abort", stop, { once: true });
+	const removeAbortListeners = [
+		onAbort(params.ownershipLostSignal, forceClose),
+		...forceCloseSignals.map((forceCloseSignal) =>
+			onAbort(forceCloseSignal, forceClose),
+		),
+		onAbort(interruptionSignal, stop),
+	];
 
 	try {
-		for await (const message of query) {
+		const iterator = query[Symbol.asyncIterator]();
+		while (true) {
+			const nextMessage = Promise.resolve(iterator.next());
+			const next = await Promise.race([
+				nextMessage.then((result) => ({ type: "message" as const, result })),
+				forceClosedSignal.then(() => ({ type: "force_closed" as const })),
+			]);
+			if (next.type === "force_closed") {
+				// `Query.close()` is the terminal SDK cleanup boundary. Do not wait
+				// indefinitely for a misbehaving iterator to acknowledge it; late
+				// rejection is still retained in worker-only diagnostics.
+				void nextMessage.catch(reportStoppedStreamFailure);
+				settleStream();
+				await abandonOpenMessage();
+				return { ...outcome, disposition: "stopped" };
+			}
+			if (next.result.done) break;
+			const message = next.result.value;
 			// Track continuity signals before the abort skip: the pointer decision
 			// reflects the whole stream, not just its pre-interrupt prefix.
 			if (isMirrorError(message)) outcome.mirrorErrorObserved = true;
@@ -457,17 +491,26 @@ export async function consumeAgentStream(
 		settleStream();
 		await abandonOpenMessage();
 		if (stopRequested || error instanceof QueryStoppedError) {
+			reportStoppedStreamFailure(error);
 			return { ...outcome, disposition: "stopped" };
 		}
 		throw error;
 	} finally {
 		settleStream();
-		signal.removeEventListener("abort", stop);
-		for (const forceCloseSignal of forceCloseSignals) {
-			forceCloseSignal.removeEventListener("abort", forceClose);
+		for (const removeAbortListener of removeAbortListeners) {
+			removeAbortListener();
 		}
-		params.ownershipLostSignal?.removeEventListener("abort", forceClose);
 	}
+}
+
+function onAbort(
+	signal: AbortSignal | undefined,
+	listener: () => void,
+): () => void {
+	if (!signal) return () => {};
+	if (signal.aborted) listener();
+	else signal.addEventListener("abort", listener, { once: true });
+	return () => signal.removeEventListener("abort", listener);
 }
 
 function createWallClockStopDeadline(timeoutMs: number): StopDeadline {
