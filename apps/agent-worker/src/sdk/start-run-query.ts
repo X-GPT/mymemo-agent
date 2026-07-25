@@ -182,16 +182,17 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				forceCloseController.abort();
 			},
 		});
-		let settled = false;
+		let settlePromise: Promise<void> | undefined;
 		const settle = async (): Promise<void> => {
-			if (settled) return;
-			settled = true;
-			renewal.stop();
-			// The paused sandbox IS the persisted workspace (ADR-0007): dispose
-			// only stops keeping it awake.
-			provisioned.dispose();
-			signal.removeEventListener("abort", stopToolWork);
-			await claudeConfigDir.dispose();
+			settlePromise ??= (async () => {
+				renewal.stop();
+				// The paused sandbox IS the persisted workspace (ADR-0007): dispose
+				// only stops keeping it awake.
+				provisioned.dispose();
+				signal.removeEventListener("abort", stopToolWork);
+				await claudeConfigDir.dispose();
+			})();
+			return settlePromise;
 		};
 
 		try {
@@ -218,6 +219,13 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				settle,
 				() => renewalFailure,
 				forceCloseController.signal,
+				(error) => {
+					deps.logger.error({
+						message: "run resource cleanup failed after query close",
+						runId: run.runId,
+						error: toMessage(error),
+					});
+				},
 			);
 		} catch (error) {
 			await settle();
@@ -431,10 +439,10 @@ function buildQueryOptions(
 }
 
 /**
- * Wrap the SDK query so the turn's per-run resources settle exactly when its
- * stream does (renewal stops, the sandbox is left to idle-pause), and a
- * renewal failure can never end the turn cleanly: even when the force-closed
- * SDK stream ends without raising, the wrapper throws
+ * Wrap the SDK query so the turn's per-run resources settle when its stream
+ * ends or the query is force-closed (renewal stops, the sandbox is left to
+ * idle-pause), and a renewal failure can never end the turn cleanly: even when
+ * the force-closed SDK stream ends without raising, the wrapper throws
  * {@link SandboxRenewalError} so the run terminalizes `error`, never `done`.
  */
 function superviseTurn(
@@ -442,11 +450,21 @@ function superviseTurn(
 	settle: () => Promise<void>,
 	renewalFailure: () => { error: unknown } | null,
 	forceCloseSignal: AbortSignal,
+	onDetachedSettleError: (error: unknown) => void,
 ): SupervisedQuery & Partial<ArtifactAwareQuery> {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
-		close: () => underlying.close(),
+		close: () => {
+			try {
+				underlying.close();
+			} finally {
+				// `close()` is synchronous in the vendor SDK. Start wrapper cleanup
+				// here as well as in the iterator's `finally`: a truly hung iterator
+				// may never process `return()`, but must not keep renewal/config alive.
+				void settle().catch(onDetachedSettleError);
+			}
+		},
 		forceCloseSignal,
 		...(artifactQuery.getArtifactPublication
 			? {

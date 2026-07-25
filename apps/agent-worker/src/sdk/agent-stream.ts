@@ -349,11 +349,14 @@ export async function consumeAgentStream(
 	let forceClosed = false;
 	let stopDeadline: StopDeadline | undefined;
 	let resolveForceClosed!: () => void;
-	const forceClosedSignal = new Promise<void>((resolve) => {
+	const forceClosedPromise = new Promise<void>((resolve) => {
 		resolveForceClosed = resolve;
 	});
-	const reportStoppedStreamFailure = (error: unknown): void => {
-		if (error instanceof QueryStoppedError) return;
+	const forceClosedResult = forceClosedPromise.then(
+		() => ({ type: "force_closed" }) as const,
+	);
+	const reportUnexpectedStoppedStreamFailure = (error: unknown): void => {
+		if (isExpectedStopError(error)) return;
 		params.logger?.error({
 			message: "agent query failed while stopping",
 			runId: params.runId,
@@ -398,6 +401,11 @@ export async function consumeAgentStream(
 		streamSettled = true;
 		stopDeadline?.cancel();
 	};
+	const settleStopped = async (): Promise<AgentStreamOutcome> => {
+		settleStream();
+		await abandonOpenMessage();
+		return { ...outcome, disposition: "stopped" };
+	};
 	const forceCloseSignals = params.forceCloseSignals ?? [];
 	const removeAbortListeners = [
 		onAbort(params.ownershipLostSignal, forceClose),
@@ -413,16 +421,24 @@ export async function consumeAgentStream(
 			const nextMessage = Promise.resolve(iterator.next());
 			const next = await Promise.race([
 				nextMessage.then((result) => ({ type: "message" as const, result })),
-				forceClosedSignal.then(() => ({ type: "force_closed" as const })),
+				forceClosedResult,
 			]);
 			if (next.type === "force_closed") {
 				// `Query.close()` is the terminal SDK cleanup boundary. Do not wait
 				// indefinitely for a misbehaving iterator to acknowledge it; late
 				// rejection is still retained in worker-only diagnostics.
-				void nextMessage.catch(reportStoppedStreamFailure);
-				settleStream();
-				await abandonOpenMessage();
-				return { ...outcome, disposition: "stopped" };
+				void nextMessage.catch(reportUnexpectedStoppedStreamFailure);
+				try {
+					const returned = iterator.return?.();
+					if (returned) {
+						void Promise.resolve(returned).catch(
+							reportUnexpectedStoppedStreamFailure,
+						);
+					}
+				} catch (error) {
+					reportUnexpectedStoppedStreamFailure(error);
+				}
+				return settleStopped();
 			}
 			if (next.result.done) break;
 			const message = next.result.value;
@@ -480,23 +496,19 @@ export async function consumeAgentStream(
 				liveMessageMatchesCompletion = true;
 			}
 		}
+		if (stopRequested) return settleStopped();
 		settleStream();
-		if (stopRequested) {
-			await abandonOpenMessage();
-			return { ...outcome, disposition: "stopped" };
-		}
 		assembler.finish();
 		return outcome;
 	} catch (error) {
+		if (stopRequested || error instanceof QueryStoppedError) {
+			reportUnexpectedStoppedStreamFailure(error);
+			return settleStopped();
+		}
 		settleStream();
 		await abandonOpenMessage();
-		if (stopRequested || error instanceof QueryStoppedError) {
-			reportStoppedStreamFailure(error);
-			return { ...outcome, disposition: "stopped" };
-		}
 		throw error;
 	} finally {
-		settleStream();
 		for (const removeAbortListener of removeAbortListeners) {
 			removeAbortListener();
 		}
@@ -511,6 +523,13 @@ function onAbort(
 	if (signal.aborted) listener();
 	else signal.addEventListener("abort", listener, { once: true });
 	return () => signal.removeEventListener("abort", listener);
+}
+
+function isExpectedStopError(error: unknown): boolean {
+	return (
+		error instanceof QueryStoppedError ||
+		(error instanceof Error && error.name === "AbortError")
+	);
 }
 
 function createWallClockStopDeadline(timeoutMs: number): StopDeadline {

@@ -848,6 +848,39 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		expect(h.handle.renews).toBe(renewsAtEnd);
 	});
 
+	it("settles run resources on close even when the SDK iterator stays hung", async () => {
+		const streamStarted = Promise.withResolvers<void>();
+		const h = buildHarness({
+			provision: { sandboxId: "sb-1", isNew: true },
+			sandboxIdleMs: 20,
+		});
+		h.setQuery({
+			async interrupt() {},
+			close() {},
+			async *[Symbol.asyncIterator]() {
+				streamStarted.resolve();
+				await new Promise<void>(() => {});
+			},
+		});
+		const run = await createClaimedRun({
+			runId: "run-1",
+			conversationId: "conv-1",
+		});
+		const query = await h.startRunQuery(run, freshSignal());
+		const iterator = query[Symbol.asyncIterator]();
+		void iterator.next();
+		await streamStarted.promise;
+		await until(() => h.handle.renews >= 1);
+
+		query.close();
+		await until(() => h.handle.disposed);
+
+		const renewsAtClose = h.handle.renews;
+		await Bun.sleep(30);
+		expect(h.handle.renews).toBe(renewsAtClose);
+		expect(h.disposedClaudeConfigDirs).toEqual(h.createdClaudeConfigDirs);
+	});
+
 	it("renewal failure requests immediate query close and still ends in error", async () => {
 		const h = buildHarness({
 			provision: {

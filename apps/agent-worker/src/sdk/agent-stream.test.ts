@@ -447,14 +447,23 @@ describe("consumeAgentStream", () => {
 		const streamStarted = deferred();
 		const deadlineElapsed = deferred();
 		let closes = 0;
+		let returns = 0;
 		const query: SupervisedQuery = {
 			async interrupt() {},
 			close() {
 				closes++;
 			},
-			async *[Symbol.asyncIterator]() {
-				streamStarted.resolve();
-				await new Promise<void>(() => {});
+			[Symbol.asyncIterator]() {
+				return {
+					next() {
+						streamStarted.resolve();
+						return new Promise<IteratorResult<SDKMessage>>(() => {});
+					},
+					async return() {
+						returns++;
+						return { done: true, value: undefined };
+					},
+				};
 			},
 		};
 		const consuming = consumeAgentStream({
@@ -473,6 +482,7 @@ describe("consumeAgentStream", () => {
 
 		expect(await consuming).toMatchObject({ disposition: "stopped" });
 		expect(closes).toBe(1);
+		expect(returns).toBe(1);
 	});
 
 	it("logs a late SDK rejection after an operational force-close", async () => {
@@ -517,6 +527,40 @@ describe("consumeAgentStream", () => {
 			runId: undefined,
 			error: "late close failure",
 		});
+	});
+
+	it("does not log an expected AbortError from a clean interruption", async () => {
+		const stopController = new AbortController();
+		const nextMessage = Promise.withResolvers<IteratorResult<SDKMessage>>();
+		const errors: Record<string, unknown>[] = [];
+		const query: SupervisedQuery = {
+			async interrupt() {
+				nextMessage.reject(
+					new DOMException("This operation was aborted", "AbortError"),
+				);
+			},
+			close() {},
+			[Symbol.asyncIterator]() {
+				return { next: () => nextMessage.promise };
+			},
+		};
+		const consuming = consumeAgentStream({
+			query,
+			interruptionSignal: stopController.signal,
+			appendModelContents: async () => {},
+			logger: {
+				info() {},
+				warn() {},
+				error(fields) {
+					errors.push(fields);
+				},
+			},
+		});
+
+		stopController.abort();
+
+		expect(await consuming).toMatchObject({ disposition: "stopped" });
+		expect(errors).toEqual([]);
 	});
 
 	it("prioritizes pre-observed ownership loss over regular stop", async () => {
