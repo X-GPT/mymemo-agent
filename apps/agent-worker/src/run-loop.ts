@@ -536,14 +536,18 @@ export class RunLoop {
 			);
 		}
 		if (turnResult.disposition === "stopped") {
-			return this.failRun(run, "run stopped before completion");
+			return this.failRun(
+				run,
+				turnResult.streamMetadata?.mirrorErrorObserved
+					? "agent session mirror failed"
+					: "run stopped before completion",
+			);
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
 		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
 		// itself the persisted workspace. The terminal-success transition also
 		// advances the conversation's resume pointer, under the ownership fence
-		// (ADR-0005). Only a reported session with a reliable mirror advances it;
-		// a `mirror_error` keeps the observation but holds the pointer.
+		// (ADR-0005). Only a reported session with a reliable mirror advances it.
 		const owner: RunOwnershipRef = {
 			userId: run.userId,
 			conversationId: run.conversationId,

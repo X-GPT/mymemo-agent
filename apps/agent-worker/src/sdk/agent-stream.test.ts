@@ -861,27 +861,51 @@ describe("consumeAgentStream", () => {
 		).rejects.toBeInstanceOf(AgentResultError);
 	});
 
-	it("reports a mirror error without losing a clean session outcome", async () => {
-		const controller = new AbortController();
-		const query = fakeQuery([
-			...textEnvelope({ completeText: "answer" }).map((message) => ({
-				message,
-			})),
-			{ message: mirrorErrorMessage() },
-			{ message: resultMessage("session-7") },
-		]);
+	it("stops immediately on mirror error through the bounded stop path", async () => {
+		const settled = deferred();
+		const calls: string[] = [];
+		let deadlineMs: number | undefined;
+		let deadlineCancelled = false;
+		const query: SupervisedQuery = {
+			async interrupt() {
+				calls.push("interrupt");
+				settled.resolve();
+			},
+			close() {
+				calls.push("close");
+				settled.resolve();
+			},
+			async *[Symbol.asyncIterator]() {
+				yield resultMessage("session-7");
+				yield mirrorErrorMessage();
+				await settled.promise;
+			},
+		};
 
-		await expect(
-			consumeAgentStream({
-				query,
-				interruptionSignal: controller.signal,
-				appendModelContents: async () => {},
-			}),
-		).resolves.toEqual({
-			disposition: "completed",
+		const outcome = await consumeAgentStream({
+			query,
+			interruptionSignal: new AbortController().signal,
+			abortRunScopedWork: () => calls.push("tool-abort"),
+			appendModelContents: async () => {},
+			startStopDeadline: (timeoutMs) => {
+				deadlineMs = timeoutMs;
+				return {
+					elapsed: new Promise(() => {}),
+					cancel() {
+						deadlineCancelled = true;
+					},
+				};
+			},
+		});
+
+		expect(outcome).toEqual({
+			disposition: "stopped",
 			sessionId: "session-7",
 			mirrorErrorObserved: true,
 		});
+		expect(calls).toEqual(["tool-abort", "interrupt"]);
+		expect(deadlineMs).toBe(30_000);
+		expect(deadlineCancelled).toBe(true);
 	});
 
 	it("appends text first, tool uses in block order, then results in block order", async () => {

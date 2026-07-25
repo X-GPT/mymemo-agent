@@ -46,30 +46,46 @@ export interface SdkRunProcessorDeps {
  */
 export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 	return async (ctx) => {
-		const query = await deps.startRunQuery(ctx.run, ctx.signal);
-		const outcome: AgentStreamOutcome = await consumeAgentStream({
-			runId: ctx.run.runId,
-			query,
-			interruptionSignal: ctx.interruptionSignal,
-			forceCloseSignals: [
-				ctx.shutdownSignal,
-				...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
-			],
-			ownershipLostSignal: ctx.ownershipLostSignal,
-			appendModelContents: ctx.appendModelContents,
-			appendLiveEvent: ctx.appendLiveEvent,
-			logger: deps.logger,
-			startStopDeadline: deps.startStopDeadline,
-		});
-		const { disposition, ...streamMetadata } = outcome;
-		return {
-			disposition,
-			streamMetadata,
-			artifactPublication:
-				disposition === "completed"
-					? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??
-						null)
-					: null,
-		};
+		const runScopedController = new AbortController();
+		const forwardSupervisorStop = () =>
+			runScopedController.abort(ctx.signal.reason);
+		if (ctx.signal.aborted) forwardSupervisorStop();
+		else
+			ctx.signal.addEventListener("abort", forwardSupervisorStop, {
+				once: true,
+			});
+		try {
+			const query = await deps.startRunQuery(
+				ctx.run,
+				runScopedController.signal,
+			);
+			const outcome: AgentStreamOutcome = await consumeAgentStream({
+				runId: ctx.run.runId,
+				query,
+				interruptionSignal: ctx.interruptionSignal,
+				forceCloseSignals: [
+					ctx.shutdownSignal,
+					...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
+				],
+				ownershipLostSignal: ctx.ownershipLostSignal,
+				abortRunScopedWork: () => runScopedController.abort(),
+				appendModelContents: ctx.appendModelContents,
+				appendLiveEvent: ctx.appendLiveEvent,
+				logger: deps.logger,
+				startStopDeadline: deps.startStopDeadline,
+			});
+			const { disposition, ...streamMetadata } = outcome;
+			return {
+				disposition,
+				streamMetadata,
+				artifactPublication:
+					disposition === "completed"
+						? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??
+							null)
+						: null,
+			};
+		} finally {
+			ctx.signal.removeEventListener("abort", forwardSupervisorStop);
+		}
 	};
 }

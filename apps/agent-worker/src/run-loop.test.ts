@@ -697,7 +697,7 @@ describe("RunLoop — agent session pointer", () => {
 		});
 	});
 
-	it("terminalizes done without advancing the pointer when the turn reported a mirror error", async () => {
+	it("terminalizes error without establishing a pointer after a mirror error stop", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
 			await createConversationRuntimeTx(tdb.db, {
@@ -707,7 +707,7 @@ describe("RunLoop — agent session pointer", () => {
 				workerId: "worker-1",
 			});
 			return {
-				disposition: "completed",
+				disposition: "stopped",
 				streamMetadata: {
 					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
@@ -719,7 +719,7 @@ describe("RunLoop — agent session pointer", () => {
 		await loop.tick();
 		await worker.drain();
 
-		expect((await readRun("run-1"))?.status).toBe("done");
+		expect((await readRun("run-1"))?.status).toBe("error");
 		expect(await readRuntime("conv-1")).toMatchObject({ agentSessionId: null });
 	});
 });
