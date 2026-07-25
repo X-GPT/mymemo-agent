@@ -359,13 +359,19 @@ export async function consumeAgentStream(
 	const forceClosedResult = forceClosedPromise.then(
 		() => ({ type: "force_closed" }) as const,
 	);
+	const stoppedQueryFailureFields = (
+		message: string,
+		error: unknown,
+	): Record<string, unknown> => ({
+		message,
+		runId: params.runId,
+		...(outcome.mirrorErrorObserved ? {} : { error: toMessage(error) }),
+	});
 	const reportUnexpectedStoppedStreamFailure = (error: unknown): void => {
 		if (isExpectedStopError(error)) return;
-		params.logger?.error({
-			message: "agent query failed while stopping",
-			runId: params.runId,
-			error: toMessage(error),
-		});
+		params.logger?.error(
+			stoppedQueryFailureFields("agent query failed while stopping", error),
+		);
 	};
 	const stop = (): void => {
 		if (stopRequested) return;
@@ -392,11 +398,9 @@ export async function consumeAgentStream(
 		try {
 			query.close();
 		} catch (error) {
-			params.logger?.error({
-				message: "agent query force-close failed",
-				runId: params.runId,
-				error: toMessage(error),
-			});
+			params.logger?.error(
+				stoppedQueryFailureFields("agent query force-close failed", error),
+			);
 		} finally {
 			resolveForceClosed();
 		}

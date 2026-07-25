@@ -908,6 +908,75 @@ describe("consumeAgentStream", () => {
 		expect(deadlineCancelled).toBe(true);
 	});
 
+	it("redacts late SDK and force-close errors after mirror_error", async () => {
+		const deadlineElapsed = deferred();
+		const nextRequested = deferred();
+		const lateNext = Promise.withResolvers<IteratorResult<SDKMessage>>();
+		const errors: Record<string, unknown>[] = [];
+		let nextCalls = 0;
+		const query: SupervisedQuery = {
+			async interrupt() {},
+			close() {
+				throw new Error("provider close detail");
+			},
+			[Symbol.asyncIterator]() {
+				return {
+					next() {
+						nextCalls++;
+						if (nextCalls === 1) {
+							return Promise.resolve({
+								done: false,
+								value: mirrorErrorMessage(),
+							});
+						}
+						nextRequested.resolve();
+						return lateNext.promise;
+					},
+				};
+			},
+		};
+		const consuming = consumeAgentStream({
+			runId: "run-1",
+			query,
+			interruptionSignal: new AbortController().signal,
+			abortRunScopedWork: () => {},
+			appendModelContents: async () => {},
+			startStopDeadline: () => ({
+				elapsed: deadlineElapsed.promise,
+				cancel() {},
+			}),
+			logger: {
+				info() {},
+				warn() {},
+				error(fields) {
+					errors.push(fields);
+				},
+			},
+		});
+		await nextRequested.promise;
+
+		deadlineElapsed.resolve();
+		expect(await consuming).toMatchObject({
+			disposition: "stopped",
+			mirrorErrorObserved: true,
+		});
+		lateNext.reject(new Error("transcript drain detail"));
+		await Promise.resolve();
+
+		expect(errors).toEqual([
+			{
+				message: "agent query force-close failed",
+				runId: "run-1",
+			},
+			{
+				message: "agent query failed while stopping",
+				runId: "run-1",
+			},
+		]);
+		expect(JSON.stringify(errors)).not.toContain("provider close detail");
+		expect(JSON.stringify(errors)).not.toContain("transcript drain detail");
+	});
+
 	it("appends text first, tool uses in block order, then results in block order", async () => {
 		const appended: ModelContent[] = [];
 		const { logger, warnings } = spyLogger();
