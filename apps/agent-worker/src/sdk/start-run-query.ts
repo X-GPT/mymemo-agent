@@ -157,13 +157,14 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			throw error;
 		}
 
-		// One controller links every way this turn can be told to stop: the
-		// supervisor's signal (interruption, ownership loss, shutdown) and a renewal
-		// failure. It aborts the SDK query and kills any running Bash command.
-		const controller = new AbortController();
-		const abortQuery = (): void => controller.abort();
-		if (signal.aborted) abortQuery();
-		else signal.addEventListener("abort", abortQuery, { once: true });
+		// Every supervisor stop cancels Tool/E2B work immediately. SDK teardown is
+		// owned by stream supervision: durable interruption gets its bounded clean
+		// window, while operational failures and shutdown close immediately.
+		const toolController = new AbortController();
+		const forceCloseController = new AbortController();
+		const stopToolWork = (): void => toolController.abort();
+		if (signal.aborted) stopToolWork();
+		else signal.addEventListener("abort", stopToolWork, { once: true });
 
 		let renewalFailure: { error: unknown } | null = null;
 		const renewal = startSandboxRenewal({
@@ -177,19 +178,21 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 					sandboxId: provisioned.sandboxId,
 					error: toMessage(error),
 				});
-				controller.abort();
+				toolController.abort();
+				forceCloseController.abort();
 			},
 		});
-		let settled = false;
+		let settlePromise: Promise<void> | undefined;
 		const settle = async (): Promise<void> => {
-			if (settled) return;
-			settled = true;
-			renewal.stop();
-			// The paused sandbox IS the persisted workspace (ADR-0007): dispose
-			// only stops keeping it awake.
-			provisioned.dispose();
-			signal.removeEventListener("abort", abortQuery);
-			await claudeConfigDir.dispose();
+			settlePromise ??= (async () => {
+				renewal.stop();
+				// The paused sandbox IS the persisted workspace (ADR-0007): dispose
+				// only stops keeping it awake.
+				provisioned.dispose();
+				signal.removeEventListener("abort", stopToolWork);
+				await claudeConfigDir.dispose();
+			})();
+			return settlePromise;
 		};
 
 		try {
@@ -199,7 +202,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			const artifactPublication = await deps.artifactPublisher.begin({
 				run,
 				workspace: provisioned.artifactWorkspace,
-				signal: controller.signal,
+				signal: toolController.signal,
 			});
 			const options = buildQueryOptions(deps, {
 				run,
@@ -207,7 +210,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				runtime,
 				provisioned,
 				documentScope,
-				controller,
+				toolController,
 				claudeConfigDir: claudeConfigDir.path,
 			});
 			const underlying = deps.query({ prompt: started.message, options });
@@ -215,6 +218,14 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				withArtifactPublication(underlying, artifactPublication),
 				settle,
 				() => renewalFailure,
+				forceCloseController.signal,
+				(error) => {
+					deps.logger.error({
+						message: "run resource cleanup failed after query close",
+						runId: run.runId,
+						error: toMessage(error),
+					});
+				},
 			);
 		} catch (error) {
 			await settle();
@@ -342,7 +353,7 @@ function buildQueryOptions(
 		runtime: ConversationRuntimeRecord;
 		provisioned: ProvisionedSandbox;
 		documentScope: RunToolDeps["documentScope"];
-		controller: AbortController;
+		toolController: AbortController;
 		claudeConfigDir: string;
 	},
 ): Options {
@@ -352,7 +363,7 @@ function buildQueryOptions(
 		runtime,
 		provisioned,
 		documentScope,
-		controller,
+		toolController,
 		claudeConfigDir,
 	} = input;
 	const binding: RunBinding = {
@@ -364,7 +375,7 @@ function buildQueryOptions(
 	const toolDeps: RunToolDeps = {
 		binding,
 		workspaceRoot: provisioned.workspaceRoot,
-		signal: controller.signal,
+		signal: toolController.signal,
 		fileClient: provisioned.fileClient,
 		commandClient: provisioned.commandClient,
 		documentClient: deps.documentClient,
@@ -419,7 +430,6 @@ function buildQueryOptions(
 		},
 		pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable,
 		mcpServers: { [EXECUTOR_SERVER_NAME]: createRunMcpServer(toolDeps) },
-		abortController: controller,
 		sessionStore: sessionConfig.sessionStore,
 		cwd: sessionConfig.cwd,
 		...(sessionConfig.resume !== undefined
@@ -429,20 +439,33 @@ function buildQueryOptions(
 }
 
 /**
- * Wrap the SDK query so the turn's per-run resources settle exactly when its
- * stream does (renewal stops, the sandbox is left to idle-pause), and a
- * renewal failure can never end the turn cleanly: even when the aborted SDK
- * stream ends without raising, the wrapper throws {@link SandboxRenewalError}
- * so the run terminalizes `error`, never `done`.
+ * Wrap the SDK query so the turn's per-run resources settle when its stream
+ * ends or the query is force-closed (renewal stops, the sandbox is left to
+ * idle-pause), and a renewal failure can never end the turn cleanly: even when
+ * the force-closed SDK stream ends without raising, the wrapper throws
+ * {@link SandboxRenewalError} so the run terminalizes `error`, never `done`.
  */
 function superviseTurn(
 	underlying: SupervisedQuery,
 	settle: () => Promise<void>,
 	renewalFailure: () => { error: unknown } | null,
+	forceCloseSignal: AbortSignal,
+	onDetachedSettleError: (error: unknown) => void,
 ): SupervisedQuery & Partial<ArtifactAwareQuery> {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
+		close: () => {
+			try {
+				underlying.close();
+			} finally {
+				// `close()` is synchronous in the vendor SDK. Start wrapper cleanup
+				// here as well as in the iterator's `finally`: a truly hung iterator
+				// may never process `return()`, but must not keep renewal/config alive.
+				void settle().catch(onDetachedSettleError);
+			}
+		},
+		forceCloseSignal,
 		...(artifactQuery.getArtifactPublication
 			? {
 					getArtifactPublication: () =>

@@ -678,7 +678,13 @@ describe("RunLoop — agent session pointer", () => {
 				runId: ctx.run.runId,
 				workerId: "worker-1",
 			});
-			return { agentSession: { sessionId: "session-abc" } };
+			return {
+				disposition: "completed",
+				streamMetadata: {
+					sessionId: "session-abc",
+					mirrorErrorObserved: false,
+				},
+			};
 		});
 		await queueRun("run-1", "conv-1");
 
@@ -700,8 +706,13 @@ describe("RunLoop — agent session pointer", () => {
 				runId: ctx.run.runId,
 				workerId: "worker-1",
 			});
-			// A mirror_error turn drops the session id → agentSession is null.
-			return { agentSession: null };
+			return {
+				disposition: "completed",
+				streamMetadata: {
+					sessionId: "session-unreliable",
+					mirrorErrorObserved: true,
+				},
+			};
 		});
 		await queueRun("run-1", "conv-1");
 

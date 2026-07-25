@@ -8,6 +8,7 @@ import type { RunProcessor } from "../run-loop";
 import {
 	type AgentStreamOutcome,
 	consumeAgentStream,
+	type StartStopDeadline,
 	type SupervisedQuery,
 } from "./agent-stream";
 
@@ -16,9 +17,9 @@ import {
  * run supervision (plan Task 7.2, this module) and everything a query needs that
  * later milestones own: the provisioned E2B sandbox and its clients, the bound
  * executor tools ({@link buildRunTools}), the OpenRouter model client, the docs
- * scope, and the resumed session. The returned handle is consumed under `signal`
- * — which the supervisor aborts on interruption, ownership loss, or shutdown, so the
- * query can be interrupted.
+ * scope, and the resumed session. `signal` cancels Tool/E2B work for any
+ * supervisor stop; the returned query's interrupt/close controls remain under
+ * stream supervision.
  */
 export type StartRunQuery = (
 	run: RunRecord,
@@ -28,6 +29,7 @@ export type StartRunQuery = (
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
 	logger: WorkerLogger;
+	startStopDeadline?: StartStopDeadline;
 }
 
 /**
@@ -48,22 +50,26 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 		const outcome: AgentStreamOutcome = await consumeAgentStream({
 			runId: ctx.run.runId,
 			query,
-			signal: ctx.signal,
+			interruptionSignal: ctx.interruptionSignal,
+			forceCloseSignals: [
+				ctx.shutdownSignal,
+				...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
+			],
+			ownershipLostSignal: ctx.ownershipLostSignal,
 			appendModelContents: ctx.appendModelContents,
 			appendLiveEvent: ctx.appendLiveEvent,
 			logger: deps.logger,
+			startStopDeadline: deps.startStopDeadline,
 		});
+		const { disposition, ...streamMetadata } = outcome;
 		return {
-			// Advance the conversation's resume pointer only when the SDK produced a
-			// session id and no `mirror_error` left the stored transcript unreliable
-			// (ADR-0005); otherwise the run still succeeds but the pointer holds.
-			agentSession:
-				outcome.sessionId !== null && !outcome.mirrorErrorObserved
-					? { sessionId: outcome.sessionId }
-					: null,
+			disposition,
+			streamMetadata,
 			artifactPublication:
-				(query.getArtifactPublication?.() as ArtifactPublication | null) ??
-				null,
+				disposition === "completed"
+					? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??
+						null)
+					: null,
 		};
 	};
 }

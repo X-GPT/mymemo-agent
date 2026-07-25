@@ -202,6 +202,10 @@ export function withArtifactPublication(
 	let publication: ArtifactPublication | null = null;
 	return {
 		interrupt: () => query.interrupt(),
+		close: () => query.close(),
+		...(query.forceCloseSignal
+			? { forceCloseSignal: query.forceCloseSignal }
+			: {}),
 		getArtifactPublication: () => publication,
 		async *[Symbol.asyncIterator]() {
 			for await (const message of query) yield message;

@@ -44,22 +44,28 @@ import type { Worker } from "./worker";
  * need no end-of-turn handling (ADR-0007): the sandbox idle-pauses once the
  * turn stops renewing it, and the paused sandbox *is* the persisted workspace.
  */
+export type TurnDisposition = "completed" | "stopped";
+
+export interface TurnStreamMetadata {
+	sessionId: string | null;
+	mirrorErrorObserved: boolean;
+}
+
 export interface TurnResult {
+	/** Cause-blind processor disposition; the supervisor chooses the Outcome. */
+	disposition: TurnDisposition;
 	/**
-	 * The agent session to record as the conversation's resume pointer once the
-	 * turn terminalizes `done` (ADR-0005). Present only when the SDK produced a
-	 * session id AND no `mirror_error` made the mirrored transcript unreliable —
-	 * a dropped-mirror turn omits it, so the pointer does not advance yet the run
-	 * still succeeds. Absent for synthetic turns that ran no query.
+	 * Cause-blind continuity observations from the SDK stream. The supervisor
+	 * alone decides whether the Outcome permits advancing the resume pointer.
 	 */
-	agentSession?: { sessionId: string } | null;
+	streamMetadata?: TurnStreamMetadata;
 	/** Changed files already ledgered and uploaded under fresh private keys. */
 	artifactPublication?: { artifacts: PublishedArtifact[] } | null;
 }
 
 /** A processor that reports nothing is normalized to a turn with no session
  * pointer to advance (the Milestone 3 synthetic turn). */
-const EMPTY_TURN: TurnResult = {};
+const EMPTY_TURN: TurnResult = { disposition: "completed" };
 
 /**
  * One piece of canonical durable model content a processor can record while
@@ -93,7 +99,16 @@ const MODEL_CONTENT_EVENT_TYPES = {
  */
 export interface RunProcessContext {
 	run: RunRecord;
+	/** Cancels active Tool/E2B work for every supervisor stop cause. */
 	signal: AbortSignal;
+	/** Fires only after durable interruption is observed; grants the bounded
+	 * private SDK stop window while the ownership lease remains live. */
+	interruptionSignal: AbortSignal;
+	/** Fires on worker shutdown; private SDK resources must close immediately. */
+	shutdownSignal: AbortSignal;
+	/** Fires only when the ownership fence is lost. Unlike a normal stop, this
+	 * permits no post-fence drain and must close private SDK resources now. */
+	ownershipLostSignal: AbortSignal;
 	appendModelContent(content: ModelContent): Promise<void>;
 	/** Atomically append an ordered group of model events under one Run fence. */
 	appendModelContents(contents: readonly ModelContent[]): Promise<void>;
@@ -142,6 +157,9 @@ interface RunEndState {
 
 interface ActiveEntry {
 	controller: AbortController;
+	interruptionController: AbortController;
+	shutdownController: AbortController;
+	ownershipLostController: AbortController;
 	state: RunEndState;
 	liveStream?: RunLiveStream;
 }
@@ -263,13 +281,13 @@ export class RunLoop {
 			clearTimeout(this.recoveryTimer);
 			this.recoveryTimer = undefined;
 		}
-		// Interrupt every in-flight run before draining: aborting the run's
-		// controller is what makes its processor interrupt the live SDK query and
-		// cancel any active E2B command (plan Task 7.2). This is not a user interruption,
-		// so `state.interrupted` stays false — a turn stopped by shutdown drains to
+		// Stop every in-flight run before draining: cancel Tool/E2B work, then
+		// force-close private SDK resources without granting the user-interruption
+		// grace window. `state.interrupted` stays false, so shutdown drains to
 		// `error`, never a false `done`. Snapshot the map: a finishing run deletes itself.
 		for (const entry of [...this.activeRuns.values()]) {
 			entry.controller.abort();
+			entry.shutdownController.abort();
 		}
 		await this.opts.worker.shutdown();
 	}
@@ -355,11 +373,13 @@ export class RunLoop {
 				this.activeRuns.delete(runId);
 				entry.state.lostOwnership = true;
 				entry.controller.abort();
+				entry.ownershipLostController.abort();
 				continue;
 			}
 			if (renewed.status === "interrupt_requested") {
 				entry.state.interrupted = true;
 				entry.controller.abort();
+				entry.interruptionController.abort();
 			}
 		}
 	}
@@ -373,6 +393,9 @@ export class RunLoop {
 			if (!run) break;
 			const entry: ActiveEntry = {
 				controller: new AbortController(),
+				interruptionController: new AbortController(),
+				shutdownController: new AbortController(),
+				ownershipLostController: new AbortController(),
 				state: { interrupted: false, lostOwnership: false },
 			};
 			this.activeRuns.set(run.runId, entry);
@@ -435,6 +458,9 @@ export class RunLoop {
 				(await this.opts.processor({
 					run,
 					signal: entry.controller.signal,
+					interruptionSignal: entry.interruptionController.signal,
+					shutdownSignal: entry.shutdownController.signal,
+					ownershipLostSignal: entry.ownershipLostController.signal,
 					appendModelContent: (content) =>
 						this.appendModelContent(run.runId, content),
 					appendModelContents: (contents) =>
@@ -503,25 +529,21 @@ export class RunLoop {
 			return this.terminalize(runId, "interrupted");
 		}
 		if (failure) {
-			this.opts.logger.error({
-				message: "run failed",
-				workerId: this.workerId,
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId,
-				...artifactFailureLogFields(failure.error),
-			});
-			return this.terminalize(runId, "error", {
-				message: GENERIC_RUN_ERROR_MESSAGE,
-			});
+			return this.failRun(
+				run,
+				"run failed",
+				artifactFailureLogFields(failure.error),
+			);
+		}
+		if (turnResult.disposition === "stopped") {
+			return this.failRun(run, "run stopped before completion");
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
 		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
 		// itself the persisted workspace. The terminal-success transition also
 		// advances the conversation's resume pointer, under the ownership fence
-		// (ADR-0005). Only when the turn reported a session to resume from — a
-		// `mirror_error` turn carries none, so the pointer holds and the run still
-		// terminalizes `done`.
+		// (ADR-0005). Only a reported session with a reliable mirror advances it;
+		// a `mirror_error` keeps the observation but holds the pointer.
 		const owner: RunOwnershipRef = {
 			userId: run.userId,
 			conversationId: run.conversationId,
@@ -531,13 +553,29 @@ export class RunLoop {
 		if (turnResult.artifactPublication) {
 			return this.publishArtifactsAndFinish(owner, turnResult);
 		}
-		if (turnResult.agentSession) {
-			await this.advanceSessionPointer(
-				owner,
-				turnResult.agentSession.sessionId,
-			);
+		const agentSessionId = resumableAgentSessionId(turnResult);
+		if (agentSessionId) {
+			await this.advanceSessionPointer(owner, agentSessionId);
 		}
 		return this.terminalize(runId, "done");
+	}
+
+	private failRun(
+		run: RunRecord,
+		message: string,
+		fields: Record<string, unknown> = {},
+	): Promise<TerminalRunStatus | null> {
+		this.opts.logger.error({
+			message,
+			workerId: this.workerId,
+			userId: run.userId,
+			conversationId: run.conversationId,
+			runId: run.runId,
+			...fields,
+		});
+		return this.terminalize(run.runId, "error", {
+			message: GENERIC_RUN_ERROR_MESSAGE,
+		});
 	}
 
 	private async publishArtifactsAndFinish(
@@ -547,18 +585,16 @@ export class RunLoop {
 		const publication = turnResult.artifactPublication;
 		if (!publication) return null;
 		try {
+			const agentSessionId = resumableAgentSessionId(turnResult);
 			const result = await publishArtifactsAndTransitionRunDoneTx(
 				this.opts.db,
 				{
 					owner,
 					artifacts: publication.artifacts,
-					agentSessionId: turnResult.agentSession?.sessionId,
+					agentSessionId,
 				},
 			);
-			if (
-				turnResult.agentSession &&
-				result.agentSessionPointerAdvanced === false
-			) {
+			if (agentSessionId && result.agentSessionPointerAdvanced === false) {
 				this.opts.logger.warn({
 					message: "could not advance agent session pointer",
 					workerId: this.workerId,
@@ -710,4 +746,16 @@ function artifactFailureLogFields(error: unknown): Record<string, unknown> {
 		};
 	}
 	return { error: toMessage(error) };
+}
+
+function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
+	const metadata = turnResult.streamMetadata;
+	if (
+		!metadata ||
+		metadata.sessionId === null ||
+		metadata.mirrorErrorObserved
+	) {
+		return undefined;
+	}
+	return metadata.sessionId;
 }

@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import { type AGUIEvent, EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
-import type { WorkerLogger } from "../logger";
-import type { ModelContent } from "../run-loop";
+import { toMessage, type WorkerLogger } from "../logger";
+import type {
+	ModelContent,
+	TurnDisposition,
+	TurnStreamMetadata,
+} from "../run-loop";
 import { AgUiTextStream } from "./ag-ui-text-stream";
 import {
 	AssistantEnvelopeProtocolError,
@@ -18,7 +22,7 @@ import {
 
 /**
  * The subset of the Claude Agent SDK's `Query` handle the run supervisor
- * consumes: an async stream of SDK messages plus `interrupt()`. The real
+ * consumes: an async stream of SDK messages plus its stop controls. The real
  * `query()` result satisfies this structurally, and tests substitute a fake
  * stream — so the supervision logic is verified without a live model (plan
  * Task 7.2: "use a fake SDK stream for deterministic unit tests").
@@ -27,21 +31,32 @@ export type SupervisedQuery = AsyncIterable<SDKMessage> & {
 	// The SDK returns a control receipt from `interrupt()`; supervision only
 	// needs to await completion, not inspect that receipt.
 	interrupt(): Promise<unknown>;
+	/** Forcefully terminates the underlying CLI process and resources. */
+	close(): void;
+	/** Optional query-local immediate close (for example, renewal failure). */
+	forceCloseSignal?: AbortSignal;
 };
 
 /**
- * The run was stopped (user interruption, ownership loss, or worker shutdown)
- * and the SDK stream ended without raising. Thrown so the supervisor never
- * records a clean `done` for work that did not complete on its own; the
- * terminal transition remaps a user interruption to `interrupted` and leaves
- * the rest as `error`.
+ * Internal control flow raised when an in-flight durable append observes that
+ * its query has stopped. The stream consumer converts it to the same neutral
+ * `stopped` disposition as a quietly settled SDK stream.
  */
-export class QueryInterruptedError extends Error {
-	override name = "QueryInterruptedError" as const;
+export class QueryStoppedError extends Error {
+	override name = "QueryStoppedError" as const;
 	constructor() {
-		super("agent query interrupted");
+		super("agent query stopped");
 	}
 }
+
+export interface StopDeadline {
+	elapsed: Promise<void>;
+	cancel(): void;
+}
+
+export type StartStopDeadline = (timeoutMs: number) => StopDeadline;
+
+const QUERY_STOP_TIMEOUT_MS = 30_000;
 
 /** The SDK reports a run failure either by throwing or — on a clean process
  * exit — by emitting a terminal `result` message with `is_error: true`. This
@@ -77,23 +92,25 @@ export function isMirrorError(message: SDKMessage): boolean {
 }
 
 /**
- * What a completed stream reports back for conversation continuity (ADR-0005):
- * the session id to store as the resume pointer, and whether a `mirror_error`
- * made the mirrored transcript unreliable. Only meaningful on the clean-completion
- * path — an interrupted or errored run never advances the pointer.
+ * What a settled stream reports back for supervisor reconciliation and
+ * Conversation continuity (ADR-0005): its neutral disposition, observed
+ * session id, and whether a `mirror_error` made the transcript unreliable.
  */
-export interface AgentStreamOutcome {
-	/** The id from the terminal result message, or `null` if none was seen. */
-	sessionId: string | null;
-	/** A transcript-mirror batch was dropped; do not advance the pointer. */
-	mirrorErrorObserved: boolean;
+export interface AgentStreamOutcome extends TurnStreamMetadata {
+	/** Whether the query completed itself or settled after a stop request. */
+	disposition: TurnDisposition;
 }
 
 export interface ConsumeAgentStreamParams {
 	runId?: string;
 	query: SupervisedQuery;
-	/** Fires on interruption, ownership loss, or shutdown; interrupts the query. */
-	signal: AbortSignal;
+	/** Fires only for durable interruption; grants the bounded stop window. */
+	interruptionSignal: AbortSignal;
+	/** Operational stops that must close immediately without a grace deadline. */
+	forceCloseSignals?: readonly AbortSignal[];
+	/** Fires only after the ownership fence is gone; close immediately because
+	 * no private transcript drain is permitted beyond the lease. */
+	ownershipLostSignal?: AbortSignal;
 	/** Atomically persists canonical model-content events, fenced to `running`
 	 * upstream. Single events use a one-item batch. */
 	appendModelContents: (contents: readonly ModelContent[]) => Promise<void>;
@@ -104,6 +121,8 @@ export interface ConsumeAgentStreamParams {
 	 * unmatched result ids, unprojectable payloads). Optional: omissions
 	 * degrade visibility, never correctness. */
 	logger?: WorkerLogger;
+	/** Injectable only for deterministic supervision tests. */
+	startStopDeadline?: StartStopDeadline;
 }
 
 /**
@@ -126,18 +145,16 @@ export interface ConsumeAgentStreamParams {
  *  - the query is interrupted (once), and
  *  - any further content is ignored — never appended.
  *
- * The function resolves with the run's {@link AgentStreamOutcome} only when the
- * stream completes on its own; it throws on an SDK error (so the supervisor
- * terminalizes `error`) and on an interrupted-then-quietly-ended stream
- * ({@link QueryInterruptedError}) so an interrupted turn is never mistaken for a
- * clean success. Deciding the terminal status — `interrupted` vs `error` — belongs
- * to the supervisor, which knows whether the abort was a user interruption.
+ * The function resolves with a neutral `completed`/`stopped` disposition and
+ * throws only for an unstopped SDK failure. Deciding the terminal status —
+ * `interrupted`, `error`, or no write — belongs to the Run supervisor.
  */
 export async function consumeAgentStream(
 	params: ConsumeAgentStreamParams,
 ): Promise<AgentStreamOutcome> {
-	const { query, signal, appendModelContents } = params;
+	const { query, interruptionSignal, appendModelContents } = params;
 	const outcome: AgentStreamOutcome = {
+		disposition: "completed",
 		sessionId: null,
 		mirrorErrorObserved: false,
 	};
@@ -166,12 +183,12 @@ export async function consumeAgentStream(
 	const appendWhileRunning = async (
 		contents: readonly ModelContent[],
 	): Promise<void> => {
-		if (signal.aborted) throw new QueryInterruptedError();
+		if (stopRequested) throw new QueryStoppedError();
 		await appendModelContents(contents);
 		// The append itself is not abortable. Recheck after it settles so shutdown
 		// cannot let the rest of the envelope append while the DB Run is still
 		// fenced as running.
-		if (signal.aborted) throw new QueryInterruptedError();
+		if (stopRequested) throw new QueryStoppedError();
 	};
 
 	const commitEnvelope = async (commit: EnvelopeCommit): Promise<void> => {
@@ -325,24 +342,113 @@ export async function consumeAgentStream(
 		}
 	};
 
-	// Best-effort: interrupt only needs to reach the SDK. Swallow its rejection so
-	// a failed interrupt cannot become an unhandled rejection — the loop stops
-	// appending on the same signal regardless.
-	const interrupt = (): void => {
-		void query.interrupt().catch(() => {});
+	const startStopDeadline =
+		params.startStopDeadline ?? createWallClockStopDeadline;
+	let stopRequested = false;
+	let streamSettled = false;
+	let forceClosed = false;
+	let stopDeadline: StopDeadline | undefined;
+	let resolveForceClosed!: () => void;
+	const forceClosedPromise = new Promise<void>((resolve) => {
+		resolveForceClosed = resolve;
+	});
+	const forceClosedResult = forceClosedPromise.then(
+		() => ({ type: "force_closed" }) as const,
+	);
+	const reportUnexpectedStoppedStreamFailure = (error: unknown): void => {
+		if (isExpectedStopError(error)) return;
+		params.logger?.error({
+			message: "agent query failed while stopping",
+			runId: params.runId,
+			error: toMessage(error),
+		});
 	};
-	if (signal.aborted) interrupt();
-	else signal.addEventListener("abort", interrupt, { once: true });
+	const stop = (): void => {
+		if (stopRequested) return;
+		stopRequested = true;
+		// The Run signal has already fired, cancelling active Tool work. Invoke the
+		// cause-blind SDK control next, then bound how long its stream may drain.
+		void query.interrupt().catch(() => {});
+		stopDeadline = startStopDeadline(QUERY_STOP_TIMEOUT_MS);
+		void stopDeadline.elapsed.then(() => {
+			if (streamSettled || forceClosed) return;
+			params.logger?.warn({
+				message: "agent query exceeded stop deadline; forcing close",
+				runId: params.runId,
+				stopDeadlineMs: QUERY_STOP_TIMEOUT_MS,
+			});
+			forceClose();
+		});
+	};
+	const forceClose = (): void => {
+		if (streamSettled || forceClosed) return;
+		stopRequested = true;
+		stopDeadline?.cancel();
+		forceClosed = true;
+		try {
+			query.close();
+		} catch (error) {
+			params.logger?.error({
+				message: "agent query force-close failed",
+				runId: params.runId,
+				error: toMessage(error),
+			});
+		} finally {
+			resolveForceClosed();
+		}
+	};
+	const settleStream = (): void => {
+		streamSettled = true;
+		stopDeadline?.cancel();
+	};
+	const settleStopped = async (): Promise<AgentStreamOutcome> => {
+		settleStream();
+		await abandonOpenMessage();
+		return { ...outcome, disposition: "stopped" };
+	};
+	const forceCloseSignals = params.forceCloseSignals ?? [];
+	const removeAbortListeners = [
+		onAbort(params.ownershipLostSignal, forceClose),
+		...forceCloseSignals.map((forceCloseSignal) =>
+			onAbort(forceCloseSignal, forceClose),
+		),
+		onAbort(interruptionSignal, stop),
+	];
 
 	try {
-		for await (const message of query) {
+		const iterator = query[Symbol.asyncIterator]();
+		while (true) {
+			const nextMessage = Promise.resolve(iterator.next());
+			const next = await Promise.race([
+				nextMessage.then((result) => ({ type: "message" as const, result })),
+				forceClosedResult,
+			]);
+			if (next.type === "force_closed") {
+				// `Query.close()` is the terminal SDK cleanup boundary. Do not wait
+				// indefinitely for a misbehaving iterator to acknowledge it; late
+				// rejection is still retained in worker-only diagnostics.
+				void nextMessage.catch(reportUnexpectedStoppedStreamFailure);
+				try {
+					const returned = iterator.return?.();
+					if (returned) {
+						void Promise.resolve(returned).catch(
+							reportUnexpectedStoppedStreamFailure,
+						);
+					}
+				} catch (error) {
+					reportUnexpectedStoppedStreamFailure(error);
+				}
+				return settleStopped();
+			}
+			if (next.result.done) break;
+			const message = next.result.value;
 			// Track continuity signals before the abort skip: the pointer decision
 			// reflects the whole stream, not just its pre-interrupt prefix.
 			if (isMirrorError(message)) outcome.mirrorErrorObserved = true;
 			const sessionId = sessionIdFromResult(message);
 			if (sessionId !== null) outcome.sessionId = sessionId;
 
-			if (signal.aborted) continue;
+			if (stopRequested) continue;
 			const errorText = resultErrorText(message);
 			if (errorText !== null) {
 				throw new AgentResultError(errorText);
@@ -390,15 +496,53 @@ export async function consumeAgentStream(
 				liveMessageMatchesCompletion = true;
 			}
 		}
-		if (signal.aborted) throw new QueryInterruptedError();
+		if (stopRequested) return settleStopped();
+		settleStream();
 		assembler.finish();
 		return outcome;
 	} catch (error) {
+		if (stopRequested || error instanceof QueryStoppedError) {
+			reportUnexpectedStoppedStreamFailure(error);
+			return settleStopped();
+		}
+		settleStream();
 		await abandonOpenMessage();
 		throw error;
 	} finally {
-		signal.removeEventListener("abort", interrupt);
+		for (const removeAbortListener of removeAbortListeners) {
+			removeAbortListener();
+		}
 	}
+}
+
+function onAbort(
+	signal: AbortSignal | undefined,
+	listener: () => void,
+): () => void {
+	if (!signal) return () => {};
+	if (signal.aborted) listener();
+	else signal.addEventListener("abort", listener, { once: true });
+	return () => signal.removeEventListener("abort", listener);
+}
+
+function isExpectedStopError(error: unknown): boolean {
+	return (
+		error instanceof QueryStoppedError ||
+		(error instanceof Error && error.name === "AbortError")
+	);
+}
+
+function createWallClockStopDeadline(timeoutMs: number): StopDeadline {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return {
+		elapsed: new Promise<void>((resolve) => {
+			timer = setTimeout(resolve, timeoutMs);
+		}),
+		cancel() {
+			if (timer) clearTimeout(timer);
+			timer = undefined;
+		},
+	};
 }
 
 /** The SDK marks user messages replayed from a resumed session transcript with

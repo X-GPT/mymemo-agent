@@ -107,6 +107,7 @@ async function readStream(
 
 function successfulQuery(onStart: () => void): SupervisedQuery {
 	return {
+		close() {},
 		async interrupt() {},
 		async *[Symbol.asyncIterator]() {
 			onStart();
@@ -123,6 +124,7 @@ function successfulQuery(onStart: () => void): SupervisedQuery {
 
 function failedQuery(onStart: () => void, error: Error): SupervisedQuery {
 	return {
+		close() {},
 		async interrupt() {},
 		// biome-ignore lint/correctness/useYield: the fixture fails before producing an SDK message.
 		async *[Symbol.asyncIterator]() {

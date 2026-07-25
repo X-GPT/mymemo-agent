@@ -6,7 +6,6 @@ import {
 	AgentResultError,
 	consumeAgentStream,
 	isMirrorError,
-	QueryInterruptedError,
 	type SupervisedQuery,
 	sessionIdFromResult,
 } from "./agent-stream";
@@ -78,6 +77,7 @@ function deferred<T = void>() {
 function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
 	const query = {
 		interrupts: 0,
+		close() {},
 		async interrupt() {
 			query.interrupts++;
 		},
@@ -196,7 +196,7 @@ describe("consumeAgentStream", () => {
 			query: fakeQuery(
 				textEnvelope({ completeText: "hello" }).map((message) => ({ message })),
 			),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendLiveEvent: async (event) => {
 				if (event.type === EventType.TEXT_MESSAGE_END) {
 					expect(order).toContain("commit:hello");
@@ -234,7 +234,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendLiveEvent: async (event) => {
 				events.push(event as unknown as Record<string, unknown>);
 			},
@@ -264,6 +264,7 @@ describe("consumeAgentStream", () => {
 		const releaseContent = deferred();
 		const messages = textEnvelope({ completeText: "hello" });
 		const query: SupervisedQuery = {
+			close() {},
 			async interrupt() {},
 			async *[Symbol.asyncIterator]() {
 				for (const message of messages.slice(0, 3)) yield message;
@@ -275,7 +276,7 @@ describe("consumeAgentStream", () => {
 
 		const result = consumeAgentStream({
 			query,
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendLiveEvent: async (event) => {
 				if (event.type !== EventType.TEXT_MESSAGE_CONTENT) return;
 				contentStarted.resolve();
@@ -311,12 +312,13 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query,
-				signal: controller.signal,
+				interruptionSignal: controller.signal,
 				appendModelContents: onAssistantCommit((message) =>
 					appended.push(message),
 				),
 			}),
 		).resolves.toEqual({
+			disposition: "completed",
 			sessionId: "session-42",
 			mirrorErrorObserved: false,
 		});
@@ -338,7 +340,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query,
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: onAssistantCommit((message) =>
 				appended.push(message),
 			),
@@ -361,16 +363,15 @@ describe("consumeAgentStream", () => {
 			{ message: messageAt(envelope, 5) },
 		]);
 
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendModelContents: onAssistantCommit((message) =>
-					appended.push(message),
-				),
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
+		const outcome = await consumeAgentStream({
+			query,
+			interruptionSignal: controller.signal,
+			appendModelContents: onAssistantCommit((message) =>
+				appended.push(message),
+			),
+		});
 
+		expect(outcome.disposition).toBe("stopped");
 		expect(appended).toEqual([]);
 		expect(query.interrupts).toBe(1);
 	});
@@ -383,18 +384,222 @@ describe("consumeAgentStream", () => {
 			textEnvelope({ completeText: "never" }).map((message) => ({ message })),
 		);
 
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendModelContents: onAssistantCommit((message) =>
-					appended.push(message),
-				),
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
+		const outcome = await consumeAgentStream({
+			query,
+			interruptionSignal: controller.signal,
+			appendModelContents: onAssistantCommit((message) =>
+				appended.push(message),
+			),
+		});
 
+		expect(outcome.disposition).toBe("stopped");
 		expect(appended).toEqual([]);
 		expect(query.interrupts).toBe(1);
+	});
+
+	it("does not double-close when ownership is lost during the stop grace", async () => {
+		const stopController = new AbortController();
+		const ownershipController = new AbortController();
+		const releaseStream = deferred();
+		const deadlineElapsed = deferred();
+		let interrupts = 0;
+		let closes = 0;
+		const query: SupervisedQuery = {
+			async interrupt() {
+				interrupts++;
+			},
+			close() {
+				closes++;
+			},
+			// biome-ignore lint/correctness/useYield: the held-open stream exercises stop races.
+			async *[Symbol.asyncIterator]() {
+				await releaseStream.promise;
+			},
+		};
+		const consuming = consumeAgentStream({
+			query,
+			interruptionSignal: stopController.signal,
+			ownershipLostSignal: ownershipController.signal,
+			appendModelContents: async () => {},
+			startStopDeadline: () => ({
+				elapsed: deadlineElapsed.promise,
+				cancel() {},
+			}),
+		});
+
+		stopController.abort();
+		await Promise.resolve();
+		expect(interrupts).toBe(1);
+		expect(closes).toBe(0);
+
+		ownershipController.abort();
+		expect(closes).toBe(1);
+		deadlineElapsed.resolve();
+		await Promise.resolve();
+		expect(closes).toBe(1);
+
+		releaseStream.resolve();
+		expect((await consuming).disposition).toBe("stopped");
+	});
+
+	it("settles after forced close even when the SDK iterator stays hung", async () => {
+		const stopController = new AbortController();
+		const streamStarted = deferred();
+		const deadlineElapsed = deferred();
+		let closes = 0;
+		let returns = 0;
+		const query: SupervisedQuery = {
+			async interrupt() {},
+			close() {
+				closes++;
+			},
+			[Symbol.asyncIterator]() {
+				return {
+					next() {
+						streamStarted.resolve();
+						return new Promise<IteratorResult<SDKMessage>>(() => {});
+					},
+					async return() {
+						returns++;
+						return { done: true, value: undefined };
+					},
+				};
+			},
+		};
+		const consuming = consumeAgentStream({
+			query,
+			interruptionSignal: stopController.signal,
+			appendModelContents: async () => {},
+			startStopDeadline: () => ({
+				elapsed: deadlineElapsed.promise,
+				cancel() {},
+			}),
+		});
+		await streamStarted.promise;
+
+		stopController.abort();
+		deadlineElapsed.resolve();
+
+		expect(await consuming).toMatchObject({ disposition: "stopped" });
+		expect(closes).toBe(1);
+		expect(returns).toBe(1);
+	});
+
+	it("logs a late SDK rejection after an operational force-close", async () => {
+		const forceCloseController = new AbortController();
+		const streamStarted = deferred();
+		const nextMessage = Promise.withResolvers<IteratorResult<SDKMessage>>();
+		const errors: Record<string, unknown>[] = [];
+		const query: SupervisedQuery = {
+			async interrupt() {},
+			close() {},
+			[Symbol.asyncIterator]() {
+				return {
+					next() {
+						streamStarted.resolve();
+						return nextMessage.promise;
+					},
+				};
+			},
+		};
+		const consuming = consumeAgentStream({
+			query,
+			interruptionSignal: new AbortController().signal,
+			forceCloseSignals: [forceCloseController.signal],
+			appendModelContents: async () => {},
+			logger: {
+				info() {},
+				warn() {},
+				error(fields) {
+					errors.push(fields);
+				},
+			},
+		});
+		await streamStarted.promise;
+
+		forceCloseController.abort();
+		expect(await consuming).toMatchObject({ disposition: "stopped" });
+		nextMessage.reject(new Error("late close failure"));
+		await Promise.resolve();
+
+		expect(errors).toContainEqual({
+			message: "agent query failed while stopping",
+			runId: undefined,
+			error: "late close failure",
+		});
+	});
+
+	it("does not log an expected AbortError from a clean interruption", async () => {
+		const stopController = new AbortController();
+		const nextMessage = Promise.withResolvers<IteratorResult<SDKMessage>>();
+		const errors: Record<string, unknown>[] = [];
+		const query: SupervisedQuery = {
+			async interrupt() {
+				nextMessage.reject(
+					new DOMException("This operation was aborted", "AbortError"),
+				);
+			},
+			close() {},
+			[Symbol.asyncIterator]() {
+				return { next: () => nextMessage.promise };
+			},
+		};
+		const consuming = consumeAgentStream({
+			query,
+			interruptionSignal: stopController.signal,
+			appendModelContents: async () => {},
+			logger: {
+				info() {},
+				warn() {},
+				error(fields) {
+					errors.push(fields);
+				},
+			},
+		});
+
+		stopController.abort();
+
+		expect(await consuming).toMatchObject({ disposition: "stopped" });
+		expect(errors).toEqual([]);
+	});
+
+	it("prioritizes pre-observed ownership loss over regular stop", async () => {
+		const stopController = new AbortController();
+		const ownershipController = new AbortController();
+		stopController.abort();
+		ownershipController.abort();
+		let interrupts = 0;
+		let closes = 0;
+		let deadlines = 0;
+		const query: SupervisedQuery = {
+			async interrupt() {
+				interrupts++;
+			},
+			close() {
+				closes++;
+			},
+			async *[Symbol.asyncIterator]() {
+				yield resultMessage();
+			},
+		};
+
+		const outcome = await consumeAgentStream({
+			query,
+			interruptionSignal: stopController.signal,
+			ownershipLostSignal: ownershipController.signal,
+			appendModelContents: async () => {},
+			startStopDeadline: () => {
+				deadlines++;
+				return { elapsed: new Promise(() => {}), cancel() {} };
+			},
+		});
+
+		expect(outcome.disposition).toBe("stopped");
+		expect({ interrupts, closes, deadlines }).toEqual({
+			interrupts: 0,
+			closes: 1,
+			deadlines: 0,
+		});
 	});
 
 	it("abandons an open envelope on an SDK error result", async () => {
@@ -410,7 +615,7 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query,
-				signal: controller.signal,
+				interruptionSignal: controller.signal,
 				appendModelContents: onAssistantCommit((message) =>
 					appended.push(message),
 				),
@@ -430,7 +635,7 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query,
-				signal: controller.signal,
+				interruptionSignal: controller.signal,
 				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
@@ -449,7 +654,7 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query,
-				signal: new AbortController().signal,
+				interruptionSignal: new AbortController().signal,
 				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
@@ -523,7 +728,7 @@ describe("consumeAgentStream", () => {
 			await expect(
 				consumeAgentStream({
 					query,
-					signal: new AbortController().signal,
+					interruptionSignal: new AbortController().signal,
 					appendModelContents: captureModelContents(appended),
 				}),
 			).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
@@ -578,7 +783,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query,
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: onAssistantCommit((message) =>
 				appended.push(message),
 			),
@@ -625,7 +830,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query,
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: onAssistantCommit((message) =>
 				appended.push(message),
 			),
@@ -650,7 +855,7 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query,
-				signal: controller.signal,
+				interruptionSignal: controller.signal,
 				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AgentResultError);
@@ -669,10 +874,11 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query,
-				signal: controller.signal,
+				interruptionSignal: controller.signal,
 				appendModelContents: async () => {},
 			}),
 		).resolves.toEqual({
+			disposition: "completed",
 			sessionId: "session-7",
 			mirrorErrorObserved: true,
 		});
@@ -709,7 +915,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 			logger,
 		});
@@ -788,7 +994,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: async (contents) => {
 				appended.push(...contents);
 				for (const content of contents) {
@@ -902,7 +1108,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 		});
 
@@ -991,7 +1197,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 		});
 
@@ -1042,7 +1248,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 		});
 
@@ -1075,7 +1281,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query,
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 		});
 
@@ -1108,7 +1314,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 			logger,
 		});
@@ -1143,7 +1349,7 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			runId: "run-1",
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 			logger,
 		});
@@ -1181,7 +1387,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 			logger,
 		});
@@ -1217,7 +1423,7 @@ describe("consumeAgentStream", () => {
 
 		const outcome = await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 			logger,
 		});
@@ -1254,7 +1460,7 @@ describe("consumeAgentStream", () => {
 
 		await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 			appendLiveEvent: async (event) => {
 				liveEvents.push(event as unknown as Record<string, unknown>);
@@ -1308,14 +1514,13 @@ describe("consumeAgentStream", () => {
 			},
 		]);
 
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendModelContents: captureModelContents(appended),
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
+		const outcome = await consumeAgentStream({
+			query,
+			interruptionSignal: controller.signal,
+			appendModelContents: captureModelContents(appended),
+		});
 
+		expect(outcome.disposition).toBe("stopped");
 		expect(appended).toEqual([]);
 	});
 
@@ -1341,14 +1546,13 @@ describe("consumeAgentStream", () => {
 			},
 		]);
 
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendModelContents: captureModelContents(appended),
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
+		const outcome = await consumeAgentStream({
+			query,
+			interruptionSignal: controller.signal,
+			appendModelContents: captureModelContents(appended),
+		});
 
+		expect(outcome.disposition).toBe("stopped");
 		expect(appended.map((content) => content.kind)).toEqual([
 			"assistant_message",
 			"tool_call_started",
@@ -1357,7 +1561,7 @@ describe("consumeAgentStream", () => {
 		]);
 	});
 
-	it("stops appending tool events when shutdown aborts a stalled append", async () => {
+	it("stops appending tool events when supervised stop aborts a stalled append", async () => {
 		const appended: ModelContent[] = [];
 		const controller = new AbortController();
 		let markAppendStarted!: () => void;
@@ -1386,7 +1590,7 @@ describe("consumeAgentStream", () => {
 
 		const consuming = consumeAgentStream({
 			query,
-			signal: controller.signal,
+			interruptionSignal: controller.signal,
 			appendModelContents: async (contents) => {
 				appended.push(...contents);
 				if (appended.length === 1) {
@@ -1400,7 +1604,7 @@ describe("consumeAgentStream", () => {
 		controller.abort();
 		releaseAppend();
 
-		await expect(consuming).rejects.toBeInstanceOf(QueryInterruptedError);
+		expect((await consuming).disposition).toBe("stopped");
 		expect(query.interrupts).toBe(1);
 		expect(appended.map((content) => content.kind)).toEqual([
 			"assistant_message",
@@ -1423,7 +1627,7 @@ describe("consumeAgentStream", () => {
 		await consumeAgentStream({
 			runId: "run-1",
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 			logger,
 		});
@@ -1455,7 +1659,7 @@ describe("consumeAgentStream", () => {
 
 		const outcome = await consumeAgentStream({
 			query: fakeQuery(messages.map((message) => ({ message }))),
-			signal: new AbortController().signal,
+			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
 		});
 
@@ -1485,7 +1689,7 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query: fakeQuery(messages.map((message) => ({ message }))),
-				signal: new AbortController().signal,
+				interruptionSignal: new AbortController().signal,
 				appendModelContents: async (contents) => {
 					if (contents.some(({ kind }) => kind === "tool_call_started")) {
 						throw boom;
@@ -1515,7 +1719,7 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query: fakeQuery(messages.map((message) => ({ message }))),
-				signal: new AbortController().signal,
+				interruptionSignal: new AbortController().signal,
 				appendModelContents: async (contents) => {
 					if (contents.some(({ kind }) => kind === "tool_call_result")) {
 						throw boom;
@@ -1550,7 +1754,7 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query: fakeQuery(messages.map((message) => ({ message }))),
-				signal: new AbortController().signal,
+				interruptionSignal: new AbortController().signal,
 				appendModelContents: async () => {},
 			}),
 		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
@@ -1569,7 +1773,7 @@ describe("consumeAgentStream", () => {
 		await expect(
 			consumeAgentStream({
 				query,
-				signal: controller.signal,
+				interruptionSignal: controller.signal,
 				appendModelContents: onAssistantCommit((message) =>
 					appended.push(message),
 				),
