@@ -157,13 +157,18 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			throw error;
 		}
 
-		// One controller links every way this turn can be told to stop: the
-		// supervisor's signal (interruption, ownership loss, shutdown) and a renewal
-		// failure. It aborts the SDK query and kills any running Bash command.
-		const controller = new AbortController();
-		const abortQuery = (): void => controller.abort();
-		if (signal.aborted) abortQuery();
-		else signal.addEventListener("abort", abortQuery, { once: true });
+		// Tool/E2B work stops immediately. The SDK process has a separate hard-abort
+		// controller so Run control can first use interrupt() and the bounded clean
+		// stop window before close() forcefully tears the process down.
+		const toolController = new AbortController();
+		const sdkController = new AbortController();
+		const queryStopController = new AbortController();
+		const stopRun = (): void => {
+			toolController.abort();
+			queryStopController.abort();
+		};
+		if (signal.aborted) stopRun();
+		else signal.addEventListener("abort", stopRun, { once: true });
 
 		let renewalFailure: { error: unknown } | null = null;
 		const renewal = startSandboxRenewal({
@@ -177,7 +182,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 					sandboxId: provisioned.sandboxId,
 					error: toMessage(error),
 				});
-				controller.abort();
+				stopRun();
 			},
 		});
 		let settled = false;
@@ -188,7 +193,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			// The paused sandbox IS the persisted workspace (ADR-0007): dispose
 			// only stops keeping it awake.
 			provisioned.dispose();
-			signal.removeEventListener("abort", abortQuery);
+			signal.removeEventListener("abort", stopRun);
 			await claudeConfigDir.dispose();
 		};
 
@@ -199,7 +204,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			const artifactPublication = await deps.artifactPublisher.begin({
 				run,
 				workspace: provisioned.artifactWorkspace,
-				signal: controller.signal,
+				signal: toolController.signal,
 			});
 			const options = buildQueryOptions(deps, {
 				run,
@@ -207,7 +212,8 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				runtime,
 				provisioned,
 				documentScope,
-				controller,
+				toolController,
+				sdkController,
 				claudeConfigDir: claudeConfigDir.path,
 			});
 			const underlying = deps.query({ prompt: started.message, options });
@@ -215,6 +221,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				withArtifactPublication(underlying, artifactPublication),
 				settle,
 				() => renewalFailure,
+				queryStopController.signal,
 			);
 		} catch (error) {
 			await settle();
@@ -342,7 +349,8 @@ function buildQueryOptions(
 		runtime: ConversationRuntimeRecord;
 		provisioned: ProvisionedSandbox;
 		documentScope: RunToolDeps["documentScope"];
-		controller: AbortController;
+		toolController: AbortController;
+		sdkController: AbortController;
 		claudeConfigDir: string;
 	},
 ): Options {
@@ -352,7 +360,8 @@ function buildQueryOptions(
 		runtime,
 		provisioned,
 		documentScope,
-		controller,
+		toolController,
+		sdkController,
 		claudeConfigDir,
 	} = input;
 	const binding: RunBinding = {
@@ -364,7 +373,7 @@ function buildQueryOptions(
 	const toolDeps: RunToolDeps = {
 		binding,
 		workspaceRoot: provisioned.workspaceRoot,
-		signal: controller.signal,
+		signal: toolController.signal,
 		fileClient: provisioned.fileClient,
 		commandClient: provisioned.commandClient,
 		documentClient: deps.documentClient,
@@ -419,7 +428,7 @@ function buildQueryOptions(
 		},
 		pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable,
 		mcpServers: { [EXECUTOR_SERVER_NAME]: createRunMcpServer(toolDeps) },
-		abortController: controller,
+		abortController: sdkController,
 		sessionStore: sessionConfig.sessionStore,
 		cwd: sessionConfig.cwd,
 		...(sessionConfig.resume !== undefined
@@ -439,10 +448,13 @@ function superviseTurn(
 	underlying: SupervisedQuery,
 	settle: () => Promise<void>,
 	renewalFailure: () => { error: unknown } | null,
+	stopSignal: AbortSignal,
 ): SupervisedQuery & Partial<ArtifactAwareQuery> {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
+		close: () => underlying.close(),
+		stopSignal,
 		...(artifactQuery.getArtifactPublication
 			? {
 					getArtifactPublication: () =>

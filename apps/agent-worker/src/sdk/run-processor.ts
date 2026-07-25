@@ -8,6 +8,7 @@ import type { RunProcessor } from "../run-loop";
 import {
 	type AgentStreamOutcome,
 	consumeAgentStream,
+	type StartStopDeadline,
 	type SupervisedQuery,
 } from "./agent-stream";
 
@@ -28,6 +29,11 @@ export type StartRunQuery = (
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
 	logger: WorkerLogger;
+	supervisedQueryOptions?: SupervisedQueryOptions;
+}
+
+export interface SupervisedQueryOptions {
+	startStopDeadline?: StartStopDeadline;
 }
 
 /**
@@ -49,21 +55,21 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 			runId: ctx.run.runId,
 			query,
 			signal: ctx.signal,
+			ownershipLostSignal: ctx.ownershipLostSignal,
 			appendModelContents: ctx.appendModelContents,
 			appendLiveEvent: ctx.appendLiveEvent,
 			logger: deps.logger,
+			startStopDeadline: deps.supervisedQueryOptions?.startStopDeadline,
 		});
+		const { disposition, ...streamMetadata } = outcome;
 		return {
-			// Advance the conversation's resume pointer only when the SDK produced a
-			// session id and no `mirror_error` left the stored transcript unreliable
-			// (ADR-0005); otherwise the run still succeeds but the pointer holds.
-			agentSession:
-				outcome.sessionId !== null && !outcome.mirrorErrorObserved
-					? { sessionId: outcome.sessionId }
-					: null,
+			disposition,
+			streamMetadata,
 			artifactPublication:
-				(query.getArtifactPublication?.() as ArtifactPublication | null) ??
-				null,
+				disposition === "completed"
+					? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??
+						null)
+					: null,
 		};
 	};
 }

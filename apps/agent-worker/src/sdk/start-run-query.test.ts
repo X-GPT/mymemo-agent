@@ -169,6 +169,7 @@ async function consume(query: SupervisedQuery): Promise<void> {
 function immediateQuery() {
 	const q = {
 		interrupts: 0,
+		close() {},
 		async interrupt() {
 			q.interrupts++;
 		},
@@ -185,9 +186,14 @@ function gatedQuery() {
 	});
 	const q = {
 		interrupts: 0,
+		closes: 0,
 		release: () => release(),
 		async interrupt() {
 			q.interrupts++;
+		},
+		close() {
+			q.closes++;
+			release();
 		},
 		// biome-ignore lint/correctness/useYield: the fixture models a silent, still-running SDK stream.
 		async *[Symbol.asyncIterator]() {
@@ -195,22 +201,6 @@ function gatedQuery() {
 		},
 	};
 	return q;
-}
-
-/** A query that ends CLEANLY once the built options' abort controller fires —
- * the worst-case SDK stream that swallows the abort instead of throwing. */
-function abortEndingQuery(getSignal: () => AbortSignal | undefined) {
-	return {
-		async interrupt() {},
-		async *[Symbol.asyncIterator]() {
-			const signal = getSignal();
-			if (!signal) throw new Error("options were never captured");
-			if (signal.aborted) return;
-			await new Promise<void>((resolve) => {
-				signal.addEventListener("abort", () => resolve(), { once: true });
-			});
-		},
-	};
 }
 
 interface FakeProvisionConfig {
@@ -858,7 +848,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		expect(h.handle.renews).toBe(renewsAtEnd);
 	});
 
-	it("renewal failure aborts the linked controller and the turn ends in error, never done", async () => {
+	it("renewal failure requests bounded query stop and still ends in error", async () => {
 		const h = buildHarness({
 			provision: {
 				sandboxId: "sb-1",
@@ -867,24 +857,38 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 			},
 			sandboxIdleMs: 10,
 		});
-		// Worst case: the aborted SDK stream ends cleanly instead of throwing.
-		h.setQuery(
-			abortEndingQuery(() => h.captured.options?.abortController?.signal),
-		);
+		const gated = gatedQuery();
+		h.setQuery(gated);
 		const run = await createClaimedRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
 
 		const query = await h.startRunQuery(run, freshSignal());
+		const consumed = consume(query);
+		await until(() => query.stopSignal?.aborted === true);
 
-		await expect(consume(query)).rejects.toThrow(/renewal/);
-		expect(h.captured.options?.abortController?.signal.aborted).toBe(true);
+		expect(h.captured.options?.abortController?.signal.aborted).toBe(false);
+		query.close();
+		await expect(consumed).rejects.toThrow(/renewal/);
 		expect(h.handle.disposed).toBe(true);
 	});
 
-	it("links the run signal to the SDK abort controller and passes interrupt through", async () => {
-		const h = buildHarness({ provision: { sandboxId: "sb-1", isNew: true } });
+	it("aborts Tool work without hard-aborting the SDK and passes both stop controls through", async () => {
+		let toolSignal: AbortSignal | undefined;
+		const h = buildHarness({
+			provision: { sandboxId: "sb-1", isNew: true },
+			artifactPublisher: {
+				async begin({ signal }) {
+					toolSignal = signal;
+					return {
+						async publish() {
+							return null;
+						},
+					};
+				},
+			},
+		});
 		const gated = gatedQuery();
 		h.setQuery(gated);
 		const controller = new AbortController();
@@ -897,12 +901,14 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		const consumed = consume(query);
 
 		controller.abort();
-		expect(h.captured.options?.abortController?.signal.aborted).toBe(true);
+		expect(toolSignal?.aborted).toBe(true);
+		expect(h.captured.options?.abortController?.signal.aborted).toBe(false);
 
 		await query.interrupt();
 		expect(gated.interrupts).toBe(1);
 
-		gated.release();
+		query.close();
+		expect(gated.closes).toBe(1);
 		await consumed;
 		expect(h.handle.disposed).toBe(true);
 	});

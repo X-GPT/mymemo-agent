@@ -6,7 +6,6 @@ import {
 	AgentResultError,
 	consumeAgentStream,
 	isMirrorError,
-	QueryInterruptedError,
 	type SupervisedQuery,
 	sessionIdFromResult,
 } from "./agent-stream";
@@ -78,6 +77,7 @@ function deferred<T = void>() {
 function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
 	const query = {
 		interrupts: 0,
+		close() {},
 		async interrupt() {
 			query.interrupts++;
 		},
@@ -264,6 +264,7 @@ describe("consumeAgentStream", () => {
 		const releaseContent = deferred();
 		const messages = textEnvelope({ completeText: "hello" });
 		const query: SupervisedQuery = {
+			close() {},
 			async interrupt() {},
 			async *[Symbol.asyncIterator]() {
 				for (const message of messages.slice(0, 3)) yield message;
@@ -317,6 +318,7 @@ describe("consumeAgentStream", () => {
 				),
 			}),
 		).resolves.toEqual({
+			disposition: "completed",
 			sessionId: "session-42",
 			mirrorErrorObserved: false,
 		});
@@ -361,16 +363,15 @@ describe("consumeAgentStream", () => {
 			{ message: messageAt(envelope, 5) },
 		]);
 
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendModelContents: onAssistantCommit((message) =>
-					appended.push(message),
-				),
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
+		const outcome = await consumeAgentStream({
+			query,
+			signal: controller.signal,
+			appendModelContents: onAssistantCommit((message) =>
+				appended.push(message),
+			),
+		});
 
+		expect(outcome.disposition).toBe("stopped");
 		expect(appended).toEqual([]);
 		expect(query.interrupts).toBe(1);
 	});
@@ -383,18 +384,101 @@ describe("consumeAgentStream", () => {
 			textEnvelope({ completeText: "never" }).map((message) => ({ message })),
 		);
 
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendModelContents: onAssistantCommit((message) =>
-					appended.push(message),
-				),
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
+		const outcome = await consumeAgentStream({
+			query,
+			signal: controller.signal,
+			appendModelContents: onAssistantCommit((message) =>
+				appended.push(message),
+			),
+		});
 
+		expect(outcome.disposition).toBe("stopped");
 		expect(appended).toEqual([]);
 		expect(query.interrupts).toBe(1);
+	});
+
+	it("does not double-close when ownership is lost during the stop grace", async () => {
+		const stopController = new AbortController();
+		const ownershipController = new AbortController();
+		const releaseStream = deferred();
+		const deadlineElapsed = deferred();
+		let interrupts = 0;
+		let closes = 0;
+		const query: SupervisedQuery = {
+			async interrupt() {
+				interrupts++;
+			},
+			close() {
+				closes++;
+			},
+			// biome-ignore lint/correctness/useYield: the held-open stream exercises stop races.
+			async *[Symbol.asyncIterator]() {
+				await releaseStream.promise;
+			},
+		};
+		const consuming = consumeAgentStream({
+			query,
+			signal: stopController.signal,
+			ownershipLostSignal: ownershipController.signal,
+			appendModelContents: async () => {},
+			startStopDeadline: () => ({
+				elapsed: deadlineElapsed.promise,
+				cancel() {},
+			}),
+		});
+
+		stopController.abort();
+		await Promise.resolve();
+		expect(interrupts).toBe(1);
+		expect(closes).toBe(0);
+
+		ownershipController.abort();
+		expect(closes).toBe(1);
+		deadlineElapsed.resolve();
+		await Promise.resolve();
+		expect(closes).toBe(1);
+
+		releaseStream.resolve();
+		expect((await consuming).disposition).toBe("stopped");
+	});
+
+	it("prioritizes pre-observed ownership loss over regular stop", async () => {
+		const stopController = new AbortController();
+		const ownershipController = new AbortController();
+		stopController.abort();
+		ownershipController.abort();
+		let interrupts = 0;
+		let closes = 0;
+		let deadlines = 0;
+		const query: SupervisedQuery = {
+			async interrupt() {
+				interrupts++;
+			},
+			close() {
+				closes++;
+			},
+			async *[Symbol.asyncIterator]() {
+				yield resultMessage();
+			},
+		};
+
+		const outcome = await consumeAgentStream({
+			query,
+			signal: stopController.signal,
+			ownershipLostSignal: ownershipController.signal,
+			appendModelContents: async () => {},
+			startStopDeadline: () => {
+				deadlines++;
+				return { elapsed: new Promise(() => {}), cancel() {} };
+			},
+		});
+
+		expect(outcome.disposition).toBe("stopped");
+		expect({ interrupts, closes, deadlines }).toEqual({
+			interrupts: 0,
+			closes: 1,
+			deadlines: 0,
+		});
 	});
 
 	it("abandons an open envelope on an SDK error result", async () => {
@@ -673,6 +757,7 @@ describe("consumeAgentStream", () => {
 				appendModelContents: async () => {},
 			}),
 		).resolves.toEqual({
+			disposition: "completed",
 			sessionId: "session-7",
 			mirrorErrorObserved: true,
 		});
@@ -1308,14 +1393,13 @@ describe("consumeAgentStream", () => {
 			},
 		]);
 
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendModelContents: captureModelContents(appended),
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
+		const outcome = await consumeAgentStream({
+			query,
+			signal: controller.signal,
+			appendModelContents: captureModelContents(appended),
+		});
 
+		expect(outcome.disposition).toBe("stopped");
 		expect(appended).toEqual([]);
 	});
 
@@ -1341,14 +1425,13 @@ describe("consumeAgentStream", () => {
 			},
 		]);
 
-		await expect(
-			consumeAgentStream({
-				query,
-				signal: controller.signal,
-				appendModelContents: captureModelContents(appended),
-			}),
-		).rejects.toBeInstanceOf(QueryInterruptedError);
+		const outcome = await consumeAgentStream({
+			query,
+			signal: controller.signal,
+			appendModelContents: captureModelContents(appended),
+		});
 
+		expect(outcome.disposition).toBe("stopped");
 		expect(appended.map((content) => content.kind)).toEqual([
 			"assistant_message",
 			"tool_call_started",
@@ -1400,7 +1483,7 @@ describe("consumeAgentStream", () => {
 		controller.abort();
 		releaseAppend();
 
-		await expect(consuming).rejects.toBeInstanceOf(QueryInterruptedError);
+		expect((await consuming).disposition).toBe("stopped");
 		expect(query.interrupts).toBe(1);
 		expect(appended.map((content) => content.kind)).toEqual([
 			"assistant_message",

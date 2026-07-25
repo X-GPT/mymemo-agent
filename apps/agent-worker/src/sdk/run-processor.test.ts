@@ -1,6 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
+import {
+	createQueuedRunTx,
+	requestRunInterruptionTx,
+} from "@mymemo/agent-db/run-store";
 import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
 import {
 	conversationRuntime,
@@ -15,7 +18,11 @@ import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import { Worker } from "../worker";
 import type { SupervisedQuery } from "./agent-stream";
-import { createSdkRunProcessor, type StartRunQuery } from "./run-processor";
+import {
+	createSdkRunProcessor,
+	type StartRunQuery,
+	type SupervisedQueryOptions,
+} from "./run-processor";
 import {
 	assistantBlock,
 	streamEvent,
@@ -135,6 +142,7 @@ function errorResultMessage(text: string): SDKMessage {
 
 function messageQuery(messages: SDKMessage[]): SupervisedQuery {
 	return {
+		close() {},
 		async interrupt() {},
 		async *[Symbol.asyncIterator]() {
 			for (const message of messages) yield message;
@@ -146,6 +154,7 @@ function stepQuery(
 	steps: Array<SDKMessage | { throw: unknown }>,
 ): SupervisedQuery {
 	return {
+		close() {},
 		async interrupt() {},
 		async *[Symbol.asyncIterator]() {
 			for (const step of steps) {
@@ -160,6 +169,7 @@ function buildLoop(
 	worker: Worker,
 	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
+	supervisedQueryOptions?: SupervisedQueryOptions,
 ) {
 	return new RunLoop({
 		db: tdb.db,
@@ -168,6 +178,7 @@ function buildLoop(
 		processor: createSdkRunProcessor({
 			startRunQuery,
 			logger,
+			supervisedQueryOptions,
 		}),
 		heartbeatIntervalMs: 15_000,
 		logger,
@@ -181,6 +192,28 @@ function buildWorker() {
 		shutdownTimeoutMs: 1_000,
 		logger: silentLogger,
 	});
+}
+
+function virtualStopDeadline(): {
+	options: SupervisedQueryOptions;
+	elapse(): void;
+	started: Promise<number>;
+} {
+	const elapsed = Promise.withResolvers<void>();
+	const started = Promise.withResolvers<number>();
+	return {
+		options: {
+			startStopDeadline(timeoutMs) {
+				started.resolve(timeoutMs);
+				return {
+					elapsed: elapsed.promise,
+					cancel() {},
+				};
+			},
+		},
+		elapse: () => elapsed.resolve(),
+		started: started.promise,
+	};
 }
 
 async function readRun(runId: string) {
@@ -531,6 +564,337 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect(seenRunId).toBe("run-1");
 		expect(sawSignal).toBe(true);
 	});
+
+	it("stops an interrupted Run cleanly inside the 30-second deadline", async () => {
+		const worker = buildWorker();
+		const started = Promise.withResolvers<void>();
+		const settled = Promise.withResolvers<void>();
+		const calls: string[] = [];
+		let deadlineMs: number | undefined;
+		let deadlineCancelled = false;
+		const loop = buildLoop(
+			worker,
+			async (_run, signal) => {
+				signal.addEventListener("abort", () => calls.push("tool-abort"), {
+					once: true,
+				});
+				started.resolve();
+				return {
+					async interrupt() {
+						calls.push("interrupt");
+						settled.resolve();
+					},
+					close() {
+						calls.push("close");
+						settled.resolve();
+					},
+					// biome-ignore lint/correctness/useYield: models a silent SDK query that settles after interrupt.
+					async *[Symbol.asyncIterator]() {
+						await settled.promise;
+					},
+				};
+			},
+			silentLogger,
+			{
+				startStopDeadline(timeoutMs) {
+					deadlineMs = timeoutMs;
+					return {
+						elapsed: new Promise<void>(() => {}),
+						cancel() {
+							deadlineCancelled = true;
+						},
+					};
+				},
+			},
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await started.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await loop.tick();
+		await worker.drain();
+
+		expect(calls).toEqual(["tool-abort", "interrupt"]);
+		expect(deadlineMs).toBe(30_000);
+		expect(deadlineCancelled).toBe(true);
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_interrupted",
+		]);
+	});
+
+	it("keeps heartbeating a hung interrupted Run and force-closes it after the deadline", async () => {
+		const worker = buildWorker();
+		const started = Promise.withResolvers<void>();
+		const interrupted = Promise.withResolvers<void>();
+		const closed = Promise.withResolvers<void>();
+		const calls: string[] = [];
+		const warnings: Record<string, unknown>[] = [];
+		const logger: WorkerLogger = {
+			info() {},
+			error() {},
+			warn(fields) {
+				warnings.push(fields);
+			},
+		};
+		const deadline = virtualStopDeadline();
+		const loop = buildLoop(
+			worker,
+			async (_run, signal) => {
+				signal.addEventListener("abort", () => calls.push("tool-abort"), {
+					once: true,
+				});
+				started.resolve();
+				return {
+					async interrupt() {
+						calls.push("interrupt");
+						interrupted.resolve();
+					},
+					close() {
+						calls.push("close");
+						closed.resolve();
+					},
+					// biome-ignore lint/correctness/useYield: models a hung SDK query released only by close.
+					async *[Symbol.asyncIterator]() {
+						await closed.promise;
+					},
+				};
+			},
+			logger,
+			deadline.options,
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await started.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await loop.tick();
+		await interrupted.promise;
+		expect(await deadline.started).toBe(30_000);
+		expect(calls).toEqual(["tool-abort", "interrupt"]);
+		expect((await readRun("run-1"))?.status).toBe("interrupt_requested");
+
+		await tdb.db
+			.update(runs)
+			.set({ lockedUntil: new Date(Date.now() + 1_000) })
+			.where(eq(runs.runId, "run-1"));
+		await loop.tick();
+		expect((await readRun("run-1"))?.lockedUntil?.getTime()).toBeGreaterThan(
+			Date.now() + 30_000,
+		);
+		expect(calls).toEqual(["tool-abort", "interrupt"]);
+
+		deadline.elapse();
+		await worker.drain();
+
+		expect(calls).toEqual(["tool-abort", "interrupt", "close"]);
+		expect(warnings).toContainEqual({
+			message: "agent query exceeded stop deadline; forcing close",
+			runId: "run-1",
+			stopDeadlineMs: 30_000,
+		});
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+	});
+
+	it("force-closes immediately and writes no terminal Outcome after ownership loss", async () => {
+		const worker = buildWorker();
+		const started = Promise.withResolvers<void>();
+		const releaseStream = Promise.withResolvers<void>();
+		const deadline = virtualStopDeadline();
+		const calls: string[] = [];
+		const loop = buildLoop(
+			worker,
+			async () => {
+				started.resolve();
+				return {
+					async interrupt() {
+						calls.push("interrupt");
+					},
+					close() {
+						calls.push("close");
+					},
+					// biome-ignore lint/correctness/useYield: close is intentionally controllable in this fence race.
+					async *[Symbol.asyncIterator]() {
+						await releaseStream.promise;
+					},
+				};
+			},
+			silentLogger,
+			deadline.options,
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await loop.tick();
+		await started.promise;
+		await tdb.db
+			.update(runs)
+			.set({
+				lockedBy: "worker-2",
+				lockedUntil: new Date(Date.now() + 60_000),
+			})
+			.where(eq(runs.runId, "run-1"));
+		await loop.tick();
+		await Promise.resolve();
+
+		expect(calls).toEqual(["close"]);
+		releaseStream.resolve();
+		await worker.drain();
+
+		expect(await readRun("run-1")).toMatchObject({
+			status: "running",
+			lockedBy: "worker-2",
+		});
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
+	it("maps a query-local stopped disposition to error", async () => {
+		const worker = buildWorker();
+		const started = Promise.withResolvers<void>();
+		const settled = Promise.withResolvers<void>();
+		const stopController = new AbortController();
+		const deadline = virtualStopDeadline();
+		const loop = buildLoop(
+			worker,
+			async () => ({
+				stopSignal: stopController.signal,
+				async interrupt() {
+					settled.resolve();
+				},
+				close() {
+					settled.resolve();
+				},
+				// biome-ignore lint/correctness/useYield: models an infrastructure-stopped SDK query.
+				async *[Symbol.asyncIterator]() {
+					started.resolve();
+					await settled.promise;
+				},
+			}),
+			silentLogger,
+			deadline.options,
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await started.promise;
+		stopController.abort();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("error");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_error",
+		]);
+	});
+
+	it("maps worker shutdown of a supervised query to error", async () => {
+		const worker = buildWorker();
+		const started = Promise.withResolvers<void>();
+		const settled = Promise.withResolvers<void>();
+		const deadline = virtualStopDeadline();
+		const loop = buildLoop(
+			worker,
+			async () => ({
+				async interrupt() {
+					settled.resolve();
+				},
+				close() {
+					settled.resolve();
+				},
+				// biome-ignore lint/correctness/useYield: models a query stopped by worker shutdown.
+				async *[Symbol.asyncIterator]() {
+					started.resolve();
+					await settled.promise;
+				},
+			}),
+			silentLogger,
+			deadline.options,
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await loop.tick();
+		await started.promise;
+
+		await loop.stop();
+
+		expect((await readRun("run-1"))?.status).toBe("error");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_error",
+		]);
+	});
+
+	for (const lateResult of ["success", "error"] as const) {
+		it(`lets durable interruption beat a late SDK ${lateResult}`, async () => {
+			const worker = buildWorker();
+			const started = Promise.withResolvers<void>();
+			const stopped = Promise.withResolvers<void>();
+			const deadline = virtualStopDeadline();
+			const loop = buildLoop(
+				worker,
+				async () => ({
+					async interrupt() {
+						stopped.resolve();
+					},
+					close() {
+						stopped.resolve();
+					},
+					async *[Symbol.asyncIterator]() {
+						started.resolve();
+						await stopped.promise;
+						if (lateResult === "error") throw new Error("late SDK error");
+						yield resultMessage("late-session");
+					},
+				}),
+				silentLogger,
+				deadline.options,
+			);
+			await createQueuedRunTx(tdb.db, {
+				runId: "run-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+			});
+			await loop.tick();
+			await started.promise;
+			await requestRunInterruptionTx(tdb.db, {
+				runId: "run-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+			});
+
+			await loop.tick();
+			await worker.drain();
+
+			expect((await readRun("run-1"))?.status).toBe("interrupted");
+			expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+				"run_interrupted",
+			]);
+		});
+	}
 
 	it("terminalizes an SDK failure with the generic client message", async () => {
 		const worker = buildWorker();
