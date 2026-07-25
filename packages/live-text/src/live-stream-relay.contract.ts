@@ -4,7 +4,7 @@ import {
 	LIVE_STREAM_MAX_BYTES,
 	LIVE_STREAM_MAX_EVENT_BYTES,
 	LIVE_STREAM_MAX_EVENTS,
-	RUN_CANCELLED_EVENT_TYPE,
+	RUN_INTERRUPTED_EVENT_TYPE,
 } from "./live-stream-events";
 import type {
 	LiveStreamRelay,
@@ -325,7 +325,7 @@ export function liveStreamRelayContract(
 				}
 				const collecting = collect(attached.events);
 				const terminal = {
-					type: RUN_CANCELLED_EVENT_TYPE,
+					type: RUN_INTERRUPTED_EVENT_TYPE,
 					threadId: "conversation-1",
 					runId: "run-1",
 				};

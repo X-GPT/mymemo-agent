@@ -158,7 +158,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 		}
 
 		// One controller links every way this turn can be told to stop: the
-		// supervisor's signal (cancel, ownership loss, shutdown) and a renewal
+		// supervisor's signal (interruption, ownership loss, shutdown) and a renewal
 		// failure. It aborts the SDK query and kills any running Bash command.
 		const controller = new AbortController();
 		const abortQuery = (): void => controller.abort();

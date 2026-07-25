@@ -26,7 +26,7 @@ export type ClientContractToolEvent =
 	  }
 	| { kind: "custom"; name: string; value: unknown };
 
-export type ClientContractTerminal = "done" | "canceled" | "error";
+export type ClientContractTerminal = "done" | "interrupted" | "error";
 
 export interface ClientContractSnapshot {
 	messages: ClientContractMessage[];
@@ -127,11 +127,11 @@ export function createClientContractFixture(): ClientContractFixture {
 				case "RUN_FINISHED":
 					terminal = "done";
 					return;
-				case "RUN_CANCELLED":
+				case "RUN_INTERRUPTED":
 					for (const [id, message] of messages) {
 						if (message.provisional) messages.delete(id);
 					}
-					terminal = "canceled";
+					terminal = "interrupted";
 					return;
 				case "RUN_ERROR":
 					requireString(data, "message", frame.event);

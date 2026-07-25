@@ -457,13 +457,13 @@ describe("PostgresConversationHistoryStore", () => {
 		]);
 	});
 
-	it("keeps error and cancellation Outcomes only in terminal events", async () => {
+	it("keeps error and interruption Outcomes only in terminal events", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
 		});
-		for (const [index, outcome] of ["error", "canceled"].entries()) {
+		for (const [index, outcome] of ["error", "interrupted"].entries()) {
 			const runId = `run-${outcome}`;
 			const createdAt = new Date(`2026-07-20T0${index + 1}:00:00.000Z`);
 			await tdb.db.insert(runs).values({
@@ -494,11 +494,11 @@ describe("PostgresConversationHistoryStore", () => {
 					runId,
 					seq: 2,
 					type:
-						outcome === "error" ? RunEventType.Error : RunEventType.Canceled,
+						outcome === "error" ? RunEventType.Error : RunEventType.Interrupted,
 					payload:
 						outcome === "error"
 							? { outcome: "error", message: "Run failed" }
-							: { outcome: "canceled" },
+							: { outcome: "interrupted" },
 				},
 			]);
 		}
@@ -519,18 +519,18 @@ describe("PostgresConversationHistoryStore", () => {
 				terminalEvent: { type: EventType.RUN_ERROR, message: "Run failed" },
 			},
 			{
-				runId: "run-canceled",
+				runId: "run-interrupted",
 				messages: [
 					{
-						id: "user-canceled",
+						id: "user-interrupted",
 						role: "user",
-						content: "canceled question",
+						content: "interrupted question",
 					},
 				],
 				terminalEvent: {
-					type: "RUN_CANCELLED",
+					type: "RUN_INTERRUPTED",
 					threadId: "conversation-1",
-					runId: "run-canceled",
+					runId: "run-interrupted",
 				},
 			},
 		]);

@@ -109,9 +109,10 @@ const runLoop = new RunLoop({
 	liveStreamRelay,
 	liveStreamTelemetry,
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
-	// Admission commits ring this doorbell (the `runs_notify_queued` trigger),
-	// so pickup latency is milliseconds instead of a poll interval; the timer
-	// tick above remains the source of truth if the LISTEN connection drops.
+	// Admission commits and `running` → `interrupt_requested` transitions ring
+	// this doorbell (the migration-0012 `run_doorbell` triggers), so pickup and
+	// stop latency are milliseconds instead of a poll interval; the timer tick
+	// above remains the source of truth if the LISTEN connection drops.
 	doorbell: new PostgresRunDoorbell(config.agentDatabaseUrl, logger),
 	logger,
 });

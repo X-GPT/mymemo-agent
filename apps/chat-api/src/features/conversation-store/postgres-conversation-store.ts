@@ -25,7 +25,11 @@ import type {
 	ConversationUpdateResult,
 } from "./conversation-store";
 
-const ACTIVE_RUN_STATUSES = ["queued", "running", "cancel_requested"] as const;
+const ACTIVE_RUN_STATUSES = [
+	"queued",
+	"running",
+	"interrupt_requested",
+] as const;
 
 type ConversationRow = typeof conversations.$inferSelect;
 type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];

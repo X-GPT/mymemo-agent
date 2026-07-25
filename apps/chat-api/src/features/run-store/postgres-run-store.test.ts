@@ -298,26 +298,26 @@ describe("PostgresRunStore", () => {
 		expect(await tdb.db.select().from(runs)).toHaveLength(1);
 	});
 
-	it("requests cancellation scoped to the owning user and conversation", async () => {
-		const runId = "run-cancel";
+	it("requests interruption scoped to the owning user and conversation", async () => {
+		const runId = "run-interrupt";
 		await store.admitRun(runInput(runId, "hello"));
 
 		await expect(
-			store.requestCancellation({
+			store.requestInterruption({
 				userId: "other",
 				conversationId: "conv-1",
 				runId,
 			}),
 		).resolves.toEqual({ outcome: "not_found" });
 
-		const result = await store.requestCancellation({
+		const result = await store.requestInterruption({
 			userId: "user-1",
 			conversationId: "conv-1",
 			runId,
 		});
-		expect(result.outcome).toBe("canceled");
-		if (result.outcome !== "canceled") throw new Error("unreachable");
-		expect(result.run.status).toBe("canceled");
+		expect(result.outcome).toBe("interrupted");
+		if (result.outcome !== "interrupted") throw new Error("unreachable");
+		expect(result.run.status).toBe("interrupted");
 	});
 
 	it("gets a run only for its owning user and conversation", async () => {

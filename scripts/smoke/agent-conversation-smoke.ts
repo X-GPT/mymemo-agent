@@ -49,7 +49,7 @@ const TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 const INTERRUPTED_TURN_EVENT_TYPES: ReadonlySet<string> = new Set([
 	...TURN_HISTORY_EVENT_TYPES,
-	"RUN_CANCELLED",
+	"RUN_INTERRUPTED",
 ]);
 
 interface TurnResult {
@@ -203,7 +203,7 @@ if (suite === "full") {
 	const interruptConversationId = await requireCreatedConversation(
 		await requestConversationCreate(),
 	);
-	const interruptedTurn = await verifyRunningRunCancellation(
+	const interruptedTurn = await verifyRunningRunInterruption(
 		interruptConversationId,
 	);
 	fullSuiteEvidence = `; interrupt conversation ${interruptConversationId}; run ${interruptedTurn.runId}`;
@@ -508,7 +508,7 @@ function matchesRequestedContent(
 	return expected.every((byte, index) => actual[index] === byte);
 }
 
-async function verifyRunningRunCancellation(
+async function verifyRunningRunInterruption(
 	conversationId: string,
 ): Promise<{ runId: string }> {
 	const runId = randomUUID();
@@ -525,7 +525,7 @@ async function verifyRunningRunCancellation(
 						id: randomUUID(),
 						role: "user",
 						content: [
-							"Run the local full-suite cancellation check.",
+							"Run the local full-suite interruption check.",
 							"Immediately use the Bash tool to run exactly this command: sleep 120",
 							"Do not use any other tool.",
 							"Do not reply until the command finishes.",
@@ -582,7 +582,7 @@ async function verifyRunningRunCancellation(
 				);
 			}
 			interruptSent = true;
-			await requestRunningRunCancellation(conversationId, runId);
+			await requestRunningRunInterruption(conversationId, runId);
 		}
 	});
 
@@ -600,21 +600,21 @@ async function verifyRunningRunCancellation(
 		);
 	}
 	if (
-		events.at(-1) !== "RUN_CANCELLED" ||
-		events.filter((event) => event === "RUN_CANCELLED").length !== 1
+		events.at(-1) !== "RUN_INTERRUPTED" ||
+		events.filter((event) => event === "RUN_INTERRUPTED").length !== 1
 	) {
 		throw new Error(
-			`interrupted event stream did not end in one canceled outcome: ${events.join(", ")}`,
+			`interrupted event stream did not end in one interrupted outcome: ${events.join(", ")}`,
 		);
 	}
 
 	const snapshot = client.snapshot();
-	if (snapshot.terminal !== "canceled") {
-		throw new Error("client fixture did not observe the canceled outcome");
+	if (snapshot.terminal !== "interrupted") {
+		throw new Error("client fixture did not observe the interrupted outcome");
 	}
 	if (snapshot.messages.some((message) => message.provisional)) {
 		throw new Error(
-			"client fixture retained provisional Assistant text after cancellation",
+			"client fixture retained provisional Assistant text after interruption",
 		);
 	}
 	if (
@@ -630,17 +630,17 @@ async function verifyRunningRunCancellation(
 		runId,
 		messages: snapshot.messages,
 		toolFrames: durableToolFrames(frames),
-		terminal: "canceled",
+		terminal: "interrupted",
 	});
 	return { runId };
 }
 
-async function requestRunningRunCancellation(
+async function requestRunningRunInterruption(
 	conversationId: string,
 	runId: string,
 ): Promise<void> {
 	const response = await fetch(
-		`${baseUrl}/v1/conversations/${conversationId}/runs/${runId}/cancel`,
+		`${baseUrl}/v1/conversations/${conversationId}/runs/${runId}/interrupt`,
 		{
 			method: "POST",
 			headers: headers(),
@@ -650,7 +650,7 @@ async function requestRunningRunCancellation(
 	const rawBody = await response.text();
 	if (response.status !== 202) {
 		throw new Error(
-			`expected running Run cancellation 202, got ${response.status}: ${rawBody}`,
+			`expected running Run interruption 202, got ${response.status}: ${rawBody}`,
 		);
 	}
 
@@ -658,7 +658,7 @@ async function requestRunningRunCancellation(
 	try {
 		body = JSON.parse(rawBody);
 	} catch {
-		throw new Error("running Run cancellation response was not JSON");
+		throw new Error("running Run interruption response was not JSON");
 	}
 	if (
 		typeof body !== "object" ||
@@ -666,10 +666,10 @@ async function requestRunningRunCancellation(
 		Array.isArray(body) ||
 		Object.keys(body).sort().join(",") !== "runId,status" ||
 		(body as Record<string, unknown>).runId !== runId ||
-		(body as Record<string, unknown>).status !== "cancel_requested"
+		(body as Record<string, unknown>).status !== "interrupt_requested"
 	) {
 		throw new Error(
-			"running Run cancellation response was not the accepted cancel_requested shape",
+			"running Run interruption response was not the accepted interrupt_requested shape",
 		);
 	}
 }
@@ -783,7 +783,7 @@ async function verifyHistoryRecovery(
 	const expectedTerminal = expectation.terminal ?? "done";
 	const expectedTerminalEvent = {
 		done: "RUN_FINISHED",
-		canceled: "RUN_CANCELLED",
+		interrupted: "RUN_INTERRUPTED",
 		error: "RUN_ERROR",
 	}[expectedTerminal];
 	const response = await fetch(

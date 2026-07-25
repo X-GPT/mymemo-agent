@@ -6,7 +6,7 @@ export type {
 	ConversationHistoryRun,
 	ConversationHistoryStore,
 	ConversationSummary,
-	RunCancelledEvent,
+	RunInterruptedEvent,
 	RunTerminalEvent,
 } from "./conversation-history-store";
 export { InvalidConversationHistoryCursorError } from "./conversation-history-store";

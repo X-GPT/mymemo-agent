@@ -113,7 +113,7 @@ describe("admitAgUiRun", () => {
 			async getRun() {
 				return null;
 			},
-			async requestCancellation() {
+			async requestInterruption() {
 				return { outcome: "not_found" };
 			},
 		};

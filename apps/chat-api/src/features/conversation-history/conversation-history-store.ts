@@ -1,5 +1,5 @@
 import type { Message, RunErrorEvent, RunFinishedEvent } from "@ag-ui/core";
-import type { RunCancelledEvent } from "@mymemo/live-text";
+import type { RunInterruptedEvent } from "@mymemo/live-text";
 import type { ConversationScope } from "@/features/conversation-store";
 
 export interface ConversationSummary {
@@ -13,12 +13,12 @@ export interface ConversationSummary {
 	archivedAt: Date | null;
 }
 
-export type { RunCancelledEvent } from "@mymemo/live-text";
+export type { RunInterruptedEvent } from "@mymemo/live-text";
 
 export type RunTerminalEvent =
 	| RunFinishedEvent
 	| RunErrorEvent
-	| RunCancelledEvent;
+	| RunInterruptedEvent;
 
 export interface ConversationHistoryRun {
 	runId: string;
@@ -28,7 +28,7 @@ export interface ConversationHistoryRun {
 
 export interface ActiveRunSummary {
 	runId: string;
-	status: "queued" | "running" | "cancel_requested";
+	status: "queued" | "running" | "interrupt_requested";
 }
 
 export interface ConversationHistoryPage {

@@ -62,11 +62,11 @@ describe("readRunQueueMetrics", () => {
 
 	it("counts recent queued runs and live claimed runs", async () => {
 		await claimRun("run-running-live", "conv-running-live", "worker-1");
-		await claimRun("run-cancel-live", "conv-cancel-live", "worker-2");
+		await claimRun("run-interrupt-live", "conv-interrupt-live", "worker-2");
 		await tdb.db
 			.update(runs)
-			.set({ status: "cancel_requested" })
-			.where(eq(runs.runId, "run-cancel-live"));
+			.set({ status: "interrupt_requested" })
+			.where(eq(runs.runId, "run-interrupt-live"));
 
 		await claimRun("run-running-expired", "conv-running-expired", "worker-3");
 		await tdb.db

@@ -165,13 +165,13 @@ function fetchRunEvents(
 	);
 }
 
-function cancelRun(
+function interruptRun(
 	conversationId: string,
 	runId: string,
 	memberCode = MEMBER_CODE,
 ): Promise<Response> {
 	return fetch(
-		`${CHAT_URL}/v1/conversations/${conversationId}/runs/${runId}/cancel`,
+		`${CHAT_URL}/v1/conversations/${conversationId}/runs/${runId}/interrupt`,
 		{
 			method: "POST",
 			headers: {
@@ -775,7 +775,7 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
-			"cancels a running Run through HTTP while its client reconnects",
+			"interrupts a running Run through HTTP while its client reconnects",
 			async () => {
 				await stopEventWriter();
 				const turn = await admitIntegrationRun(
@@ -849,15 +849,18 @@ describe.skipIf(!RUN)(
 				});
 				expect(resumed.status).toBe(200);
 
-				const cancellation = await cancelRun(turn.conversationId, turn.runId);
-				expect(cancellation.status).toBe(202);
-				expect(await cancellation.json()).toEqual({
+				const interruption = await interruptRun(
+					turn.conversationId,
+					turn.runId,
+				);
+				expect(interruption.status).toBe(202);
+				expect(await interruption.json()).toEqual({
 					runId: turn.runId,
-					status: "cancel_requested",
+					status: "interrupt_requested",
 				});
 
 				const resumedFrames = parseAgUiSse(await resumed.text());
-				expect(resumedFrames.at(-1)?.data.type).toBe("RUN_CANCELLED");
+				expect(resumedFrames.at(-1)?.data.type).toBe("RUN_INTERRUPTED");
 				expect(
 					resumedFrames.some((frame) => frame.data.type === "RUN_FINISHED"),
 				).toBe(false);
@@ -865,7 +868,7 @@ describe.skipIf(!RUN)(
 				const historyRun = await waitForHistoryRun(
 					turn.conversationId,
 					turn.runId,
-					"RUN_CANCELLED",
+					"RUN_INTERRUPTED",
 					TURN_TIMEOUT_MS,
 				);
 				expect(historyRun.messages).toEqual([
@@ -876,7 +879,7 @@ describe.skipIf(!RUN)(
 					},
 				]);
 
-				const archiveAfterCancel = await fetch(
+				const archiveAfterInterrupt = await fetch(
 					`${CHAT_URL}/v1/conversations/${turn.conversationId}`,
 					{
 						method: "PATCH",
@@ -884,16 +887,16 @@ describe.skipIf(!RUN)(
 						body: JSON.stringify({ archived: true }),
 					},
 				);
-				expect(archiveAfterCancel.status).toBe(200);
+				expect(archiveAfterInterrupt.status).toBe(200);
 
-				const deleteAfterCancel = await fetch(
+				const deleteAfterInterrupt = await fetch(
 					`${CHAT_URL}/v1/conversations/${turn.conversationId}`,
 					{
 						method: "DELETE",
 						headers: IDENTITY_HEADERS,
 					},
 				);
-				expect(deleteAfterCancel.status).toBe(204);
+				expect(deleteAfterInterrupt.status).toBe(204);
 				const deletedHistory = await fetch(
 					`${CHAT_URL}/v1/conversations/${turn.conversationId}/history`,
 					{
@@ -906,11 +909,11 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
-			"cancels a running Run through HTTP while its client recovers",
+			"interrupts a running Run through HTTP while its client recovers",
 			async () => {
 				await stopEventWriter();
 				const turn = await admitIntegrationRun(
-					"Synthetic text-only recovering cancellation",
+					"Synthetic text-only recovering interruption",
 				);
 				await startEventWriter({
 					INTEGRATION_LIVE_STREAM_FAIL_AT: "mid_text",
@@ -922,7 +925,7 @@ describe.skipIf(!RUN)(
 				const incompleteFrames = parseAgUiSse(await response.text());
 				expect(
 					incompleteFrames.some((frame) =>
-						["RUN_FINISHED", "RUN_ERROR", "RUN_CANCELLED"].includes(
+						["RUN_FINISHED", "RUN_ERROR", "RUN_INTERRUPTED"].includes(
 							frame.data.type as string,
 						),
 					),
@@ -938,28 +941,138 @@ describe.skipIf(!RUN)(
 					recovery: "history",
 				});
 
-				const cancellation = await cancelRun(turn.conversationId, turn.runId);
-				expect(cancellation.status).toBe(202);
-				expect(await cancellation.json()).toEqual({
+				const interruption = await interruptRun(
+					turn.conversationId,
+					turn.runId,
+				);
+				expect(interruption.status).toBe(202);
+				expect(await interruption.json()).toEqual({
 					runId: turn.runId,
-					status: "cancel_requested",
+					status: "interrupt_requested",
 				});
 
 				const historyRun = await waitForHistoryRun(
 					turn.conversationId,
 					turn.runId,
-					"RUN_CANCELLED",
+					"RUN_INTERRUPTED",
 					TURN_TIMEOUT_MS,
 				);
 				expect(historyRun.messages).toEqual([
 					{
 						id: `user-${turn.runId}`,
 						role: "user",
-						content: "Synthetic text-only recovering cancellation",
+						content: "Synthetic text-only recovering interruption",
 					},
 				]);
 			},
 			TURN_TIMEOUT_MS + 15_000,
+		);
+
+		it(
+			"wakes the owning worker through the run doorbell, not heartbeat polling",
+			async () => {
+				await stopEventWriter();
+				// A deliberately long heartbeat interval: after the boot tick, timer
+				// polling cannot claim the run or observe the interruption inside this
+				// test's deadlines. Claim latency proves the queued-insert ring; stop
+				// latency proves the `running` → `interrupt_requested` ring — the
+				// synthetic `await_interrupt` scenario holds its turn open for 45s
+				// unless the supervisor observes the interruption and aborts the run
+				// signal.
+				await startEventWriter({
+					INTEGRATION_HEARTBEAT_INTERVAL_MS: "60000",
+				});
+				const turn = await admitIntegrationRun("Synthetic doorbell wake");
+
+				// Claimed and producing well before any 60s timer tick.
+				const response = await turn.response;
+				expect(response.status).toBe(200);
+				const framesPromise = readUntilSSEFrameAndCancel(
+					response,
+					"TEXT_MESSAGE_CONTENT",
+				);
+				await framesPromise;
+
+				const interruption = await interruptRun(
+					turn.conversationId,
+					turn.runId,
+				);
+				expect(interruption.status).toBe(202);
+				expect(await interruption.json()).toEqual({
+					runId: turn.runId,
+					status: "interrupt_requested",
+				});
+
+				// A repeated request while stopping stays the same 202 (ADR-0013).
+				const repeated = await interruptRun(turn.conversationId, turn.runId);
+				expect(repeated.status).toBe(202);
+				expect(await repeated.json()).toEqual({
+					runId: turn.runId,
+					status: "interrupt_requested",
+				});
+
+				// The doorbell-triggered tick observes the interruption and the Run
+				// terminalizes far inside the 45s scenario ceiling and 60s heartbeat.
+				const historyRun = await waitForHistoryRun(
+					turn.conversationId,
+					turn.runId,
+					"RUN_INTERRUPTED",
+					20_000,
+				);
+				expect(historyRun.terminalEvent).toEqual({
+					type: "RUN_INTERRUPTED",
+					threadId: turn.conversationId,
+					runId: turn.runId,
+				});
+				// The provisional open Assistant text stays out of permanent history.
+				expect(historyRun.messages).toEqual([
+					{
+						id: `user-${turn.runId}`,
+						role: "user",
+						content: "Synthetic doorbell wake",
+					},
+				]);
+
+				// A retry after the interruption won reports the terminal success.
+				const retryAfterWon = await interruptRun(
+					turn.conversationId,
+					turn.runId,
+				);
+				expect(retryAfterWon.status).toBe(202);
+				expect(await retryAfterWon.json()).toEqual({
+					runId: turn.runId,
+					status: "interrupted",
+				});
+
+				// Interruption released the one-active-Run backpressure: the next
+				// message admits immediately.
+				const nextRunId = crypto.randomUUID();
+				const nextAdmission = await fetch(
+					`${CHAT_URL}/v1/conversations/${turn.conversationId}/runs`,
+					{
+						method: "POST",
+						headers: JSON_IDENTITY_HEADERS,
+						body: JSON.stringify({
+							threadId: turn.conversationId,
+							runId: nextRunId,
+							state: {},
+							messages: [
+								{
+									id: `user-${nextRunId}`,
+									role: "user",
+									content: "Synthetic text-only after interruption",
+								},
+							],
+							tools: [],
+							context: [],
+							forwardedProps: {},
+						}),
+					},
+				);
+				expect(nextAdmission.status).toBe(200);
+				await readUntilSSEFrameAndCancel(nextAdmission, "RUN_FINISHED");
+			},
+			TURN_TIMEOUT_MS + 30_000,
 		);
 
 		it(
@@ -1333,20 +1446,31 @@ describe.skipIf(!RUN)(
 		);
 
 		it(
-			"keeps queued cancellation and stale recovery free of fabricated Live Streams",
+			"keeps queued interruption and stale recovery free of fabricated Live Streams",
 			async () => {
 				await stopEventWriter();
 				const queued = await admitIntegrationRun(
-					"Cancel before a worker claims",
+					"Interrupt before a worker claims",
 				);
-				const cancellation = await cancelRun(
+				const interruption = await interruptRun(
 					queued.conversationId,
 					queued.runId,
 				);
-				expect(cancellation.status).toBe(202);
-				expect(await cancellation.json()).toEqual({
+				expect(interruption.status).toBe(202);
+				expect(await interruption.json()).toEqual({
 					runId: queued.runId,
-					status: "canceled",
+					status: "interrupted",
+				});
+				// Retry-safe across the terminal transition (ADR-0013): the queued
+				// interruption already won, so a lost-response retry stays a success.
+				const retriedInterruption = await interruptRun(
+					queued.conversationId,
+					queued.runId,
+				);
+				expect(retriedInterruption.status).toBe(202);
+				expect(await retriedInterruption.json()).toEqual({
+					runId: queued.runId,
+					status: "interrupted",
 				});
 				const queuedResponse = await queued.response;
 				expect(queuedResponse.status).toBe(410);
@@ -1357,10 +1481,10 @@ describe.skipIf(!RUN)(
 				const queuedHistory = await waitForHistoryRun(
 					queued.conversationId,
 					queued.runId,
-					"RUN_CANCELLED",
+					"RUN_INTERRUPTED",
 					TURN_TIMEOUT_MS,
 				);
-				expect(queuedHistory.terminalEvent?.type).toBe("RUN_CANCELLED");
+				expect(queuedHistory.terminalEvent?.type).toBe("RUN_INTERRUPTED");
 				const queuedRecovery = await fetchRunEvents(
 					queued.conversationId,
 					queued.runId,

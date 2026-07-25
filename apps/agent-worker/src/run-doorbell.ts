@@ -62,17 +62,18 @@ export class DoorbellTicker {
 	}
 }
 
-/** The channel the `runs_notify_queued` trigger (agent-db migration 0007)
- * notifies on for every queued-run insert; the payload carries the run id for
- * debugging only — any notification is just a ring. */
-export const RUN_QUEUED_CHANNEL = "run_queued";
+/** The channel the `runs_notify_queued` and `runs_notify_interrupt_requested`
+ * triggers (agent-db migration 0012) notify on: every queued-run insert and
+ * every committed `running` → `interrupt_requested` transition. The payload
+ * carries the run id for debugging only — any notification is just a ring. */
+export const RUN_DOORBELL_CHANNEL = "run_doorbell";
 
 const RECONNECT_DELAY_MS = 5_000;
 
 /**
  * Postgres `LISTEN/NOTIFY` doorbell. Owns one dedicated `pg` connection (never
  * a pooled/PgBouncer-multiplexed one — a listener must stay pinned to its
- * backend) that `LISTEN`s on {@link RUN_QUEUED_CHANNEL} and rings the
+ * backend) that `LISTEN`s on {@link RUN_DOORBELL_CHANNEL} and rings the
  * subscriber on every notification. Unlike chat-api's per-request notifier,
  * the worker subscribes once at boot, so a dropped connection reconnects on a
  * timer instead of lazily; while disconnected the run loop's timer tick keeps
@@ -111,7 +112,7 @@ export class PostgresRunDoorbell implements RunDoorbell {
 		client.on("notification", () => onRing());
 		client.on("error", (error) => {
 			this.logger.warn({
-				message: "run-queued doorbell connection lost; will reconnect",
+				message: "run doorbell connection lost; will reconnect",
 				error: toMessage(error),
 			});
 			if (this.client === client) this.client = null;
@@ -120,7 +121,7 @@ export class PostgresRunDoorbell implements RunDoorbell {
 		});
 		try {
 			await client.connect();
-			await client.query(`LISTEN ${RUN_QUEUED_CHANNEL}`);
+			await client.query(`LISTEN ${RUN_DOORBELL_CHANNEL}`);
 			if (this.closed) {
 				void client.end().catch(() => {});
 				return;
@@ -128,7 +129,7 @@ export class PostgresRunDoorbell implements RunDoorbell {
 			this.client = client;
 		} catch (error) {
 			this.logger.warn({
-				message: "run-queued doorbell connect failed; will retry",
+				message: "run doorbell connect failed; will retry",
 				error: toMessage(error),
 			});
 			void client.end().catch(() => {});

@@ -62,7 +62,7 @@ describe("AG-UI smoke client contract", () => {
 		});
 	});
 
-	it("drops incomplete Assistant text when the Run is canceled", () => {
+	it("drops incomplete Assistant text when the Run is interrupted", () => {
 		const client = createClientContractFixture();
 		for (const data of [
 			{ type: "RUN_STARTED", threadId: "conv-1", runId: "run-1" },
@@ -72,7 +72,7 @@ describe("AG-UI smoke client contract", () => {
 				messageId: "assistant-1",
 				delta: "temporary",
 			},
-			{ type: "RUN_CANCELLED", threadId: "conv-1", runId: "run-1" },
+			{ type: "RUN_INTERRUPTED", threadId: "conv-1", runId: "run-1" },
 		] as const) {
 			client.receive({ event: data.type, data });
 		}
@@ -80,7 +80,7 @@ describe("AG-UI smoke client contract", () => {
 		expect(client.snapshot()).toEqual({
 			messages: [],
 			toolEvents: [],
-			terminal: "canceled",
+			terminal: "interrupted",
 		});
 	});
 

@@ -8,6 +8,7 @@
 
 import { startHealthServer } from "../apps/agent-worker/src/health";
 import { createLogger } from "../apps/agent-worker/src/logger";
+import { PostgresRunDoorbell } from "../apps/agent-worker/src/run-doorbell";
 import { RunLoop, type RunProcessor } from "../apps/agent-worker/src/run-loop";
 import { Worker } from "../apps/agent-worker/src/worker";
 import { createDatabase } from "../packages/agent-db/src/client";
@@ -78,13 +79,34 @@ type SyntheticScenario =
 	| "text_and_tool"
 	| "text_only"
 	| "tool_failure"
-	| "stale_crash";
+	| "stale_crash"
+	| "await_interrupt";
 
 function resolveSyntheticScenario(text: string | undefined): SyntheticScenario {
 	if (text === "Synthetic stale worker crash") return "stale_crash";
 	if (text === "Synthetic tool-only failure") return "tool_failure";
+	if (text === "Synthetic doorbell wake") return "await_interrupt";
 	if (text?.startsWith("Synthetic text-only")) return "text_only";
 	return "text_and_tool";
+}
+
+/** How long the `await_interrupt` scenario holds its turn open when the run
+ * signal never aborts. Far above the doorbell-wake test's latency assertion,
+ * far below its deliberately long heartbeat interval — so a worker that only
+ * learns of `interrupt_requested` by heartbeat polling fails that test. */
+const AWAIT_INTERRUPT_CEILING_MS = 45_000;
+
+function abortedOrDelay(signal: AbortSignal, ms: number): Promise<void> {
+	if (signal.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		const finish = (): void => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, ms);
+		signal.addEventListener("abort", finish, { once: true });
+	});
 }
 
 const processor: RunProcessor = async (ctx) => {
@@ -97,6 +119,23 @@ const processor: RunProcessor = async (ctx) => {
 		process.exit(17);
 	}
 	const messageId = `message-${ctx.run.runId}`;
+	if (scenario === "await_interrupt") {
+		await ctx.appendLiveEvent({
+			type: "TEXT_MESSAGE_START",
+			messageId,
+			role: "assistant",
+		});
+		await ctx.appendLiveEvent({
+			type: "TEXT_MESSAGE_CONTENT",
+			messageId,
+			delta: "waiting for interruption",
+		});
+		// Hold the turn open until the supervisor observes the interruption and
+		// aborts the run signal. No durable Assistant message: the provisional
+		// text must stay out of permanent history for an interrupted Run.
+		await abortedOrDelay(ctx.signal, AWAIT_INTERRUPT_CEILING_MS);
+		return;
+	}
 	const toolCallId = `tool-${ctx.run.runId}`;
 	const toolResultMessageId = `tool-result-${ctx.run.runId}`;
 	const toolOnlyFailure = scenario === "tool_failure";
@@ -187,6 +226,11 @@ const runLoop = new RunLoop({
 	processor,
 	liveStreamRelay,
 	heartbeatIntervalMs,
+	// The production Postgres doorbell (issue #364 harness decision): queued
+	// inserts and `running` → `interrupt_requested` transitions ring it, so the
+	// doorbell-wake integration case can prove prompt pickup under a
+	// deliberately long heartbeat interval.
+	doorbell: new PostgresRunDoorbell(agentDatabaseUrl, logger),
 	logger,
 });
 

@@ -3,9 +3,9 @@ import {
 	admitQueuedRunInTx,
 	isActiveRunConflict,
 	type RunAdmissionResult,
-	type RunCancellationResult,
+	type RunInterruptionResult,
 	type RunRecord,
-	requestRunCancellationTx,
+	requestRunInterruptionTx,
 	toRunRecord,
 } from "@mymemo/agent-db/run-store";
 import { and, eq, sql } from "drizzle-orm";
@@ -15,7 +15,7 @@ import type { ConversationRef } from "@/features/conversation-store";
 
 /**
  * chat-api's run-store surface. The concurrency-critical transaction helpers
- * (claim, append, terminal, heartbeat, cancel, stale recovery) and their types
+ * (claim, append, terminal, heartbeat, interrupt, stale recovery) and their types
  * live in the shared `@mymemo/agent-db` package, so chat-api and agent-worker
  * run one implementation of the queue protocol over the same `runs`/`run_events`
  * tables. They are re-exported here so the feature barrel and existing
@@ -27,8 +27,8 @@ import type { ConversationRef } from "@/features/conversation-store";
 
 // Locally-bound helpers/types (used by this module's admission code) are
 // re-exported through their import binding; the rest are pure pass-throughs.
-export { ActiveRunConflictError, requestRunCancellationTx };
-export type { RunCancellationResult, RunRecord };
+export { ActiveRunConflictError, requestRunInterruptionTx };
+export type { RunInterruptionResult, RunRecord };
 export type {
 	AdmitQueuedRunInput,
 	MarkLiveStreamFailedResult,
@@ -54,7 +54,7 @@ export {
 
 /**
  * Queue admission failed: the conversation already has an active
- * (queued/running/cancel_requested) run. A specialization of the shared
+ * (queued/running/interrupt_requested) run. A specialization of the shared
  * {@link ActiveRunConflictError} so the route can surface busy/backpressure with
  * a stable message; the partial unique index is the authority.
  */
@@ -89,13 +89,13 @@ export interface RunStore {
 		conversationId: string;
 		runId: string;
 	}): Promise<RunRecord | null>;
-	/** Record a user cancellation request for an owned run
-	 * (see {@link requestRunCancellationTx}). */
-	requestCancellation(input: {
+	/** Record a user interruption request for an owned run
+	 * (see {@link requestRunInterruptionTx}). */
+	requestInterruption(input: {
 		userId: string;
 		conversationId: string;
 		runId: string;
-	}): Promise<RunCancellationResult>;
+	}): Promise<RunInterruptionResult>;
 }
 
 /** Admit a canonical AG-UI Run while holding the same Conversation row lock as
@@ -188,11 +188,11 @@ export class PostgresRunStore implements RunStore {
 		return rows[0] ? toRunRecord(rows[0]) : null;
 	}
 
-	async requestCancellation(input: {
+	async requestInterruption(input: {
 		userId: string;
 		conversationId: string;
 		runId: string;
-	}): Promise<RunCancellationResult> {
-		return requestRunCancellationTx(this.db, input);
+	}): Promise<RunInterruptionResult> {
+		return requestRunInterruptionTx(this.db, input);
 	}
 }

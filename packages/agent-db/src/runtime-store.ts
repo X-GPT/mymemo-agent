@@ -20,13 +20,14 @@ import { conversationRuntime, orphanSandboxes, runs } from "./schema";
  * a recovered conversation now relies on. The one deliberate exception is
  * orphan recording, which exists precisely for the ownership-already-lost path.
  *
- * `cancel_requested` is inside the fence (mirroring the run-store
- * "cancellation" append class): command cleanup during cancellation is where
- * sandbox taint decisions happen, and those must stay durable.
+ * `interrupt_requested` is inside the fence (mirroring the run-store
+ * "cancellation" append class): command cleanup while an interruption stops
+ * the run is where sandbox taint decisions happen, and those must stay
+ * durable.
  */
 
 /** Run statuses under which the owning worker may mutate runtime metadata. */
-const OWNED_ACTIVE_STATUSES = ["running", "cancel_requested"] as const;
+const OWNED_ACTIVE_STATUSES = ["running", "interrupt_requested"] as const;
 
 /** A persisted runtime row. */
 export type ConversationRuntimeRecord = typeof conversationRuntime.$inferSelect;

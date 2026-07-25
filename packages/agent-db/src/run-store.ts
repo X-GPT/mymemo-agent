@@ -13,7 +13,7 @@ import { runEvents, runs } from "./schema";
 /**
  * Narrow transaction helpers over `runs`/`run_events` — the only write path for
  * run state (design doc "State Ownership"), shared by chat-api (run creation,
- * cancellation requests) and agent-worker (claim/heartbeat/terminalize). Each
+ * interruption requests) and agent-worker (claim/heartbeat/terminalize). Each
  * helper owns one transaction: sequence allocation is database-owned
  * (`runs.next_event_seq`, never app-side `max(seq) + 1`), and every status
  * change or append is fenced inside the same statement that performs it, so
@@ -27,10 +27,10 @@ import { runEvents, runs } from "./schema";
 export type RunStatus =
 	| "queued"
 	| "running"
-	| "cancel_requested"
+	| "interrupt_requested"
 	| "done"
 	| "error"
-	| "canceled";
+	| "interrupted";
 
 /** The first admitted AG-UI input profile. Only client-authoritative fields
  * survive normalization; Scope and execution configuration remain server-owned. */
@@ -60,8 +60,8 @@ export type RecoveredRunRecord = RunRecord & {
 
 /**
  * Queue admission failed: the conversation already has an active
- * (queued/running/cancel_requested) run. Surfaced as busy/backpressure by the
- * caller; the partial unique index is the authority.
+ * (queued/running/interrupt_requested) run. Surfaced as busy/backpressure by
+ * the caller; the partial unique index is the authority.
  */
 export class ActiveRunConflictError extends Error {
 	override name = "ActiveRunConflictError";
@@ -88,20 +88,22 @@ export type RunEventPayload = Record<string, unknown>;
 /**
  * The two owned append classes (design doc "State Ownership"): `model` is
  * normal SDK content — assistant text, tool results — and is only legal while
- * the run is `running`; `cancellation` is the bounded cleanup/audit trail the
- * owning worker may still write after `cancel_requested`. Terminal events are
- * deliberately not an append class here — they only exist through the
- * terminal transition helpers.
+ * the run is `running`; `cancellation` is the bounded command/process-kill
+ * cleanup and audit trail the owning worker may still write after
+ * `interrupt_requested` (the class keeps its internal process-cancellation
+ * name per ADR-0013 — user-facing Run control is "interruption"). Terminal
+ * events are deliberately not an append class here — they only exist through
+ * the terminal transition helpers.
  */
 export type RunEventAppendClass = "model" | "cancellation";
 
 const APPEND_CLASS_STATUSES: Record<RunEventAppendClass, RunStatus[]> = {
 	model: ["running"],
-	cancellation: ["running", "cancel_requested"],
+	cancellation: ["running", "interrupt_requested"],
 };
 
 /** The three terminal statuses a worker can transition an owned run into. */
-export type TerminalRunStatus = "done" | "error" | "canceled";
+export type TerminalRunStatus = "done" | "error" | "interrupted";
 
 /** The helper owns the status→event-type mapping so a terminal run can never
  * carry a mismatched terminal event. Types come from the shared vocabulary so
@@ -109,17 +111,17 @@ export type TerminalRunStatus = "done" | "error" | "canceled";
 const TERMINAL_EVENT_TYPES: Record<TerminalRunStatus, string> = {
 	done: RunEventType.Done,
 	error: RunEventType.Error,
-	canceled: RunEventType.Canceled,
+	interrupted: RunEventType.Interrupted,
 };
 
-/** `done` must lose to a recorded cancellation request, and `error` must not
- * overload user-initiated cancellation (an SDK failure after the interrupt
- * still surfaces as `canceled`), so both are only legal from `running`; only
- * `canceled` also closes a `cancel_requested` run. */
+/** `done` must lose to a recorded interruption request, and `error` must not
+ * overload user-directed interruption (an SDK failure after the interrupt
+ * still surfaces as `interrupted`), so both are only legal from `running`;
+ * only `interrupted` also closes an `interrupt_requested` run. */
 const TERMINAL_FROM_STATUSES: Record<TerminalRunStatus, RunStatus[]> = {
 	done: ["running"],
 	error: ["running"],
-	canceled: ["running", "cancel_requested"],
+	interrupted: ["running", "interrupt_requested"],
 };
 
 export interface AdmitQueuedRunInput {
@@ -401,7 +403,7 @@ export async function appendRunEventTx(
 /**
  * Append a non-empty ordered batch under one Run-row fence and transaction.
  * A complete Tool invocation uses this so start/arguments/completion can never
- * be split by cancellation, ownership loss, or a database failure.
+ * be split by interruption, ownership loss, or a database failure.
  */
 export async function appendRunEventsTx(
 	db: Database,
@@ -444,7 +446,7 @@ export async function appendRunEventsTx(
 				(durableEvent.type === RunEventType.Started ||
 					durableEvent.type === RunEventType.Done ||
 					durableEvent.type === RunEventType.Error ||
-					durableEvent.type === RunEventType.Canceled)
+					durableEvent.type === RunEventType.Interrupted)
 			) {
 				throw new InvalidRunEventError(
 					`${event.type} cannot be written through the model append path`,
@@ -593,30 +595,34 @@ async function insertTerminalEvent(
 }
 
 /**
- * How a cancellation request landed. `canceled`: the run was still queued and
- * is now terminal with its `run_canceled` event. `cancel_requested`: the run
- * is executing; the owning worker keeps ownership and terminalizes after
- * interrupting (repeat requests are idempotent no-ops). `already_terminal`:
- * nothing to cancel — `run` carries the status the caller should report.
+ * How an interruption request landed. `interrupted`: the run is terminal with
+ * its `run_interrupted` event — either this request terminalized a still-
+ * queued run directly, or the interruption already won and this is a safe
+ * retry (ADR-0013 keeps both at `202 { status: "interrupted" }`, distinct
+ * from a `done`/`error` terminal). `interrupt_requested`: the run is
+ * executing; the owning worker keeps ownership and terminalizes after
+ * stopping (repeat requests are idempotent no-ops). `already_terminal`: the
+ * run already committed `done` or `error`, so interruption conflicts — `run`
+ * carries the status the caller should report.
  */
-export type RunCancellationResult =
+export type RunInterruptionResult =
 	| {
-			outcome: "canceled" | "cancel_requested" | "already_terminal";
+			outcome: "interrupted" | "interrupt_requested" | "already_terminal";
 			run: RunRecord;
 	  }
 	| { outcome: "not_found" };
 
 /**
- * Record a user cancellation request for an owned run. The row is locked
+ * Record a user interruption request for an owned run. The row is locked
  * (`FOR UPDATE`) for the whole decision, so the status branch cannot race a
  * concurrent claim, append, or terminal transition. `userId`/`conversationId`
  * scope the lookup to the owner — a foreign run is `not_found`, never a state
  * change.
  */
-export async function requestRunCancellationTx(
+export async function requestRunInterruptionTx(
 	db: Database,
 	input: { runId: string; userId: string; conversationId: string },
-): Promise<RunCancellationResult> {
+): Promise<RunInterruptionResult> {
 	return await db.transaction(async (tx) => {
 		const [run] = await tx
 			.select()
@@ -632,15 +638,15 @@ export async function requestRunCancellationTx(
 		if (!run) return { outcome: "not_found" };
 
 		if (run.status === "queued") {
-			// Never claimed, so there is no owner to hand the cancellation to:
+			// Never claimed, so there is no owner to hand the interruption to:
 			// terminalize directly, with the same counter-allocated terminal event
 			// a worker transition would produce.
 			const [row] = await tx
 				.update(runs)
 				.set({
-					status: "canceled",
+					status: "interrupted",
 					nextEventSeq: sql`${runs.nextEventSeq} + 1`,
-					cancelRequestedAt: sql`now()`,
+					interruptRequestedAt: sql`now()`,
 					lockedBy: null,
 					lockedUntil: null,
 					terminalAt: sql`now()`,
@@ -649,26 +655,32 @@ export async function requestRunCancellationTx(
 				.where(and(eq(runs.runId, input.runId), eq(runs.status, "queued")))
 				.returning();
 			if (!row) throw new Error(`queued run ${input.runId} vanished mid-lock`);
-			await insertTerminalEvent(tx, row, "canceled", {});
-			return { outcome: "canceled", run: toRunRecord(row) };
+			await insertTerminalEvent(tx, row, "interrupted", {});
+			return { outcome: "interrupted", run: toRunRecord(row) };
 		}
 
 		if (run.status === "running") {
 			const [row] = await tx
 				.update(runs)
 				.set({
-					status: "cancel_requested",
-					cancelRequestedAt: sql`now()`,
+					status: "interrupt_requested",
+					interruptRequestedAt: sql`now()`,
 					updatedAt: sql`now()`,
 				})
 				.where(and(eq(runs.runId, input.runId), eq(runs.status, "running")))
 				.returning();
 			if (!row) throw new Error(`running run ${input.runId} vanished mid-lock`);
-			return { outcome: "cancel_requested", run: toRunRecord(row) };
+			return { outcome: "interrupt_requested", run: toRunRecord(row) };
 		}
 
-		if (run.status === "cancel_requested") {
-			return { outcome: "cancel_requested", run: toRunRecord(run) };
+		if (run.status === "interrupt_requested") {
+			return { outcome: "interrupt_requested", run: toRunRecord(run) };
+		}
+
+		if (run.status === "interrupted") {
+			// The interruption already won; a retried request stays a success
+			// (ADR-0013), never the `done`/`error` conflict.
+			return { outcome: "interrupted", run: toRunRecord(run) };
 		}
 
 		return { outcome: "already_terminal", run: toRunRecord(run) };
@@ -678,7 +690,7 @@ export async function requestRunCancellationTx(
 /**
  * Renew the caller's ownership of an active run — push `locked_until` ahead —
  * and return the fresh row, so the worker's control loop both keeps the run
- * alive and observes `cancel_requested` through this one call. Fenced like an
+ * alive and observes `interrupt_requested` through this one call. Fenced like an
  * append: active status, matching `locked_by`, and an unexpired
  * `locked_until`. Returns `null` when the fence rejects — expired ownership
  * is never revived (the run belongs to stale-run recovery now), and the
@@ -698,7 +710,7 @@ export async function heartbeatRunTx(
 		.where(
 			and(
 				eq(runs.runId, input.runId),
-				inArray(runs.status, ["running", "cancel_requested"]),
+				inArray(runs.status, ["running", "interrupt_requested"]),
 				eq(runs.lockedBy, input.workerId),
 				sql`${runs.lockedUntil} > now()`,
 			),
@@ -732,12 +744,12 @@ export async function markLiveStreamFailedTx(
 
 		const writeAllowed = or(
 			and(
-				inArray(runs.status, ["running", "cancel_requested"]),
+				inArray(runs.status, ["running", "interrupt_requested"]),
 				eq(runs.lockedBy, input.workerId),
 				sql`${runs.lockedUntil} > now()`,
 			),
 			and(
-				inArray(runs.status, ["done", "error", "canceled"]),
+				inArray(runs.status, ["done", "error", "interrupted"]),
 				isNull(runs.lockedBy),
 				isNull(runs.lockedUntil),
 			),
@@ -777,7 +789,8 @@ export async function markLiveStreamFailedTx(
 
 /**
  * Stale-run recovery: terminalize every active run that can no longer make
- * progress. Expired `cancel_requested` becomes `canceled`; expired `running`
+ * progress. Expired `interrupt_requested` becomes `interrupted` — the user's
+ * accepted control, never reclassified as an error; expired `running`
  * and old unclaimed `queued` runs become `error` (a v1 run is never reclaimed).
  * Each run's status CAS and terminal event share the transaction, and candidates
  * are taken `FOR UPDATE SKIP LOCKED`, so concurrent recovery loops across the
@@ -798,7 +811,7 @@ export async function markStaleRunsTx(
 			.from(runs)
 			.where(
 				sql`(
-					${runs.status} in ('running', 'cancel_requested')
+					${runs.status} in ('running', 'interrupt_requested')
 					and ${runs.lockedUntil} <= now()
 				) or (
 					${runs.status} = 'queued'
@@ -812,7 +825,7 @@ export async function markStaleRunsTx(
 		const recovered: RecoveredRunRecord[] = [];
 		for (const candidate of stale) {
 			const status: TerminalRunStatus =
-				candidate.status === "cancel_requested" ? "canceled" : "error";
+				candidate.status === "interrupt_requested" ? "interrupted" : "error";
 			const [row] = await tx
 				.update(runs)
 				.set({
@@ -831,7 +844,7 @@ export async function markStaleRunsTx(
 				.where(
 					and(
 						eq(runs.runId, candidate.runId),
-						inArray(runs.status, ["queued", "running", "cancel_requested"]),
+						inArray(runs.status, ["queued", "running", "interrupt_requested"]),
 					),
 				)
 				.returning();

@@ -49,7 +49,7 @@ const LIVE_STREAM_RECOVERY_POLL_MS = LIVE_STREAM_KEEPALIVE_MS;
 const liveStreamDecoder = new TextDecoder("utf-8", { fatal: true });
 
 function isTerminalRunStatus(status: RunRecord["status"]): boolean {
-	return status === "done" || status === "error" || status === "canceled";
+	return status === "done" || status === "error" || status === "interrupted";
 }
 
 function needsLiveStreamRecovery(run: RunRecord): boolean {
@@ -723,10 +723,13 @@ app.post(
 	},
 );
 
-// POST /v1/conversations/:conversationId/runs/:runId/cancel — durably cancel
-// an owned Run without admitting new work or opening an SSE response.
+// POST /v1/conversations/:conversationId/runs/:runId/interrupt — durably
+// interrupt an owned Run without admitting new work or opening an SSE
+// response. Canonical Run control (ADR-0013): a queued Run terminalizes
+// `interrupted` directly; a running Run becomes `interrupt_requested`; both
+// answers stay retry-safe across the terminal transition.
 app.post(
-	"/:conversationId/runs/:runId/cancel",
+	"/:conversationId/runs/:runId/interrupt",
 	zValidator(
 		"param",
 		z.object({
@@ -749,7 +752,7 @@ app.post(
 		}
 
 		const { conversationId, runId } = c.req.valid("param");
-		const result = await c.var.deps.runStore.requestCancellation({
+		const result = await c.var.deps.runStore.requestInterruption({
 			userId: identity.data.memberCode,
 			conversationId,
 			runId,

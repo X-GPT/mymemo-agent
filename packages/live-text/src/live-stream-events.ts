@@ -16,19 +16,21 @@ export const LIVE_STREAM_TEXT_EVENT_TARGET_BYTES = 16 * 1_024;
 const EVENT_ENCODER = new TextEncoder();
 const EVENT_DECODER = new TextDecoder("utf-8", { fatal: true });
 
-/** AG-UI's cancellation terminal is not present in the currently pinned core
- * package, so keep its standard wire shape at the Live Stream boundary. */
-export const RUN_CANCELLED_EVENT_TYPE = "RUN_CANCELLED" as const;
-const RunCancelledEventSchema = z
+/** The custom interruption terminal (ADR-0013): AG-UI's core package carries
+ * no user-interruption terminal (its `RUN_FINISHED` interrupt outcome means a
+ * pending HITL interrupt), so define the strict wire shape at the Live Stream
+ * boundary. Never carries an Agent-session id. */
+export const RUN_INTERRUPTED_EVENT_TYPE = "RUN_INTERRUPTED" as const;
+const RunInterruptedEventSchema = z
 	.object({
-		type: z.literal(RUN_CANCELLED_EVENT_TYPE),
+		type: z.literal(RUN_INTERRUPTED_EVENT_TYPE),
 		threadId: z.string().min(1).max(LIVE_STREAM_RUN_ID_MAX_LENGTH),
 		runId: z.string().min(1).max(LIVE_STREAM_RUN_ID_MAX_LENGTH),
 	})
 	.strict();
 
-export type RunCancelledEvent = z.infer<typeof RunCancelledEventSchema>;
-export type LiveStreamEvent = AGUIEvent | RunCancelledEvent;
+export type RunInterruptedEvent = z.infer<typeof RunInterruptedEventSchema>;
+export type LiveStreamEvent = AGUIEvent | RunInterruptedEvent;
 
 export type LiveStreamRelayErrorCode =
 	| "invalid_event"
@@ -93,9 +95,9 @@ function parseLiveStreamEvent(event: unknown): LiveStreamEvent {
 		typeof event === "object" &&
 		event !== null &&
 		"type" in event &&
-		event.type === RUN_CANCELLED_EVENT_TYPE
+		event.type === RUN_INTERRUPTED_EVENT_TYPE
 	) {
-		return RunCancelledEventSchema.parse(event);
+		return RunInterruptedEventSchema.parse(event);
 	}
 	return EventSchemas.parse(event);
 }
