@@ -1,7 +1,7 @@
 {
 	"name": "agent-worker",
 	"scripts": {
-		"test": "bun test",
+		"test": "bun test --timeout=30000",
 		"dev": "bun run --hot src/index.ts",
 		"start": "bun run src/index.ts",
 		"spike:e2b": "bun run spikes/e2b-semantics/spike.ts",

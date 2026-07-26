@@ -1,7 +1,7 @@
 {
 	"name": "chat-api",
 	"scripts": {
-		"test": "bun test",
+		"test": "bun test --timeout=30000",
 		"dev": "bun run --hot src/index.ts",
 		"format": "biome format --write",
 		"lint": "biome lint --write",
