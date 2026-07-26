@@ -1,6 +1,7 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import { agentSessions } from "./schema";
+import { type DbTx, RunFenceError } from "./run-store";
+import { agentSessions, runs } from "./schema";
 
 /**
  * Table-level helpers over `agent_sessions` — the raw read/write path the
@@ -39,9 +40,18 @@ export interface AgentSessionRef {
 	subpath?: string;
 }
 
+/** The active Run ownership that authorizes one SDK-requested transcript
+ * mutation. Conversation-deletion cleanup deliberately does not use this. */
+export interface AgentSessionMutationOwner {
+	conversationId: string;
+	runId: string;
+	workerId: string;
+}
+
 /** The main transcript's stored subpath — the empty string, since the SDK's
  * "omit the field" convention is not representable in a NOT NULL column. */
 const MAIN_SUBPATH = "";
+const OWNED_ACTIVE_STATUSES = ["running", "interrupt_requested"] as const;
 
 function normalizeSubpath(subpath: string | undefined): string {
 	return subpath ?? MAIN_SUBPATH;
@@ -58,22 +68,31 @@ export async function appendAgentSessionEntriesTx(
 	db: Database,
 	ref: AgentSessionRef,
 	entries: AgentSessionEntry[],
+	owner: AgentSessionMutationOwner,
 ): Promise<void> {
-	if (entries.length === 0) return;
 	const subpath = normalizeSubpath(ref.subpath);
-	await db
-		.insert(agentSessions)
-		.values(
-			entries.map((entry) => ({
-				conversationId: ref.conversationId,
-				projectKey: ref.projectKey,
-				sessionId: ref.sessionId,
-				subpath,
-				uuid: typeof entry.uuid === "string" ? entry.uuid : null,
-				entry,
-			})),
-		)
-		.onConflictDoNothing();
+	await withOwnedSessionMutation(
+		db,
+		ref.conversationId,
+		owner,
+		"session append",
+		async (tx) => {
+			if (entries.length === 0) return;
+			await tx
+				.insert(agentSessions)
+				.values(
+					entries.map((entry) => ({
+						conversationId: ref.conversationId,
+						projectKey: ref.projectKey,
+						sessionId: ref.sessionId,
+						subpath,
+						uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+						entry,
+					})),
+				)
+				.onConflictDoNothing();
+		},
+	);
 }
 
 /**
@@ -158,12 +177,21 @@ export async function listAgentSessionSubkeysTx(
 export async function deleteAgentSessionTx(
 	db: Database,
 	input: { conversationId: string; sessionId: string; subpath?: string },
+	owner: AgentSessionMutationOwner,
 ): Promise<void> {
-	await db
-		.delete(agentSessions)
-		.where(
-			transcriptWhere(input.conversationId, input.sessionId, input.subpath),
-		);
+	await withOwnedSessionMutation(
+		db,
+		input.conversationId,
+		owner,
+		"session delete",
+		async (tx) => {
+			await tx
+				.delete(agentSessions)
+				.where(
+					transcriptWhere(input.conversationId, input.sessionId, input.subpath),
+				);
+		},
+	);
 }
 
 /**
@@ -179,6 +207,38 @@ export async function deleteConversationAgentSessionsTx(
 	await db
 		.delete(agentSessions)
 		.where(eq(agentSessions.conversationId, input.conversationId));
+}
+
+async function withOwnedSessionMutation(
+	db: Database,
+	conversationId: string,
+	owner: AgentSessionMutationOwner,
+	operation: string,
+	mutate: (tx: DbTx) => Promise<void>,
+): Promise<void> {
+	await db.transaction(async (tx) => {
+		const [owned] = await tx
+			.select({ runId: runs.runId })
+			.from(runs)
+			.where(
+				and(
+					eq(runs.runId, owner.runId),
+					eq(runs.conversationId, conversationId),
+					eq(runs.conversationId, owner.conversationId),
+					inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
+					eq(runs.lockedBy, owner.workerId),
+					sql`${runs.lockedUntil} > now()`,
+				),
+			)
+			.for("share");
+		if (!owned) {
+			throw new RunFenceError(
+				`${operation} for conversation ${conversationId} rejected: ` +
+					`worker ${owner.workerId} no longer owns run ${owner.runId}`,
+			);
+		}
+		await mutate(tx);
+	});
 }
 
 /**

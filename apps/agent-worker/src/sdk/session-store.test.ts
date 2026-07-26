@@ -1,10 +1,18 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
 import type {
 	SessionKey,
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
-import { agentSessions } from "@mymemo/agent-db/schema";
+import { agentSessions, conversations, runs } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { WorkerLogger } from "../logger";
 import {
@@ -17,7 +25,12 @@ let tdb: TestDb;
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
 function storeBinding(conversationId: string) {
-	return { conversationId, runId: "run-1", logger: silentLogger };
+	return {
+		conversationId,
+		runId: `run-${conversationId}`,
+		workerId: "worker-1",
+		logger: silentLogger,
+	};
 }
 
 // One PGlite instance for the whole file (spin-up is the slow part); each test
@@ -27,12 +40,39 @@ beforeAll(async () => {
 	tdb = await createTestDatabase();
 });
 
+beforeEach(async () => {
+	await tdb.db.insert(conversations).values([
+		{ userId: "user-1", conversationId: "conv-1", scope: "general" },
+		{ userId: "user-2", conversationId: "conv-2", scope: "general" },
+	]);
+	await tdb.db.insert(runs).values([
+		{
+			runId: "run-conv-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+			status: "running",
+			lockedBy: "worker-1",
+			lockedUntil: new Date(Date.now() + 60_000),
+		},
+		{
+			runId: "run-conv-2",
+			userId: "user-2",
+			conversationId: "conv-2",
+			status: "running",
+			lockedBy: "worker-1",
+			lockedUntil: new Date(Date.now() + 60_000),
+		},
+	]);
+});
+
 afterAll(async () => {
 	await tdb.close();
 });
 
 afterEach(async () => {
 	await tdb.db.delete(agentSessions);
+	await tdb.db.delete(runs);
+	await tdb.db.delete(conversations);
 });
 
 /** A main-transcript key for `conv-1`. projectKey is deliberately arbitrary —
@@ -71,7 +111,8 @@ describe("createConversationSessionStore", () => {
 		const errors: Record<string, unknown>[] = [];
 		const store = createConversationSessionStore(tdb.db, {
 			conversationId: "conv-1",
-			runId: "run-1",
+			runId: "run-conv-1",
+			workerId: "worker-1",
 			logger: {
 				info() {},
 				warn() {},
@@ -96,7 +137,7 @@ describe("createConversationSessionStore", () => {
 		expect(errors).toEqual([
 			{
 				message: "agent session mirror append failed",
-				runId: "run-1",
+				runId: "run-conv-1",
 				conversationId: "conv-1",
 				errorType:
 					databaseError instanceof Error
@@ -155,13 +196,41 @@ describe("createConversationSessionStore", () => {
 
 		expect(await store.load(mainKey())).toBeNull();
 	});
+
+	it("rejects mutations when the bound worker does not own the Run", async () => {
+		const store = createConversationSessionStore(tdb.db, {
+			...storeBinding("conv-1"),
+			workerId: "worker-stale",
+		});
+
+		await expect(store.append(mainKey(), [entry("rejected")])).rejects.toThrow(
+			/session append.*rejected/i,
+		);
+		expect(await store.load(mainKey())).toBeNull();
+	});
+
+	it("records evidence only after a successful append to that main session", async () => {
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
+
+		expect(store.hasMirroredMainSession("sess-1")).toBe(false);
+		await store.append(mainKey("sess-1", "subagents/agent-1"), [entry("sub")]);
+		expect(store.hasMirroredMainSession("sess-1")).toBe(false);
+		await store.append(mainKey("sess-other"), [entry("other-main")]);
+		expect(store.hasMirroredMainSession("sess-1")).toBe(false);
+		await store.append(mainKey("sess-1"), [entry("main")]);
+		expect(store.hasMirroredMainSession("sess-1")).toBe(true);
+	});
 });
 
 describe("buildAgentSessionQueryConfig", () => {
 	const base = {
 		db: undefined as never,
 		conversationId: "conv-1",
-		runId: "run-1",
+		runId: "run-conv-1",
+		workerId: "worker-1",
 		logger: silentLogger,
 	};
 

@@ -23,10 +23,7 @@ import {
 	type TerminalRunStatus,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
-import {
-	advanceAgentSessionPointerTx,
-	type RunOwnershipRef,
-} from "@mymemo/agent-db/runtime-store";
+import type { RunOwnershipRef } from "@mymemo/agent-db/runtime-store";
 import type {
 	LiveStreamEvent,
 	LiveStreamRelay,
@@ -49,6 +46,9 @@ export type TurnDisposition = "completed" | "stopped";
 export interface TurnStreamMetadata {
 	sessionId: string | null;
 	mirrorErrorObserved: boolean;
+	/** The bound SessionStore accepted a non-empty append for this exact main
+	 * session during the Run. Initialization and subagent mirrors do not count. */
+	mainSessionMirrored: boolean;
 }
 
 export interface TurnResult {
@@ -526,7 +526,12 @@ export class RunLoop {
 		// Interruption wins over both success and failure: an SDK error raised
 		// while interrupting still surfaces as `interrupted`.
 		if (state.interrupted) {
-			return this.terminalize(runId, "interrupted");
+			return this.terminalize(
+				runId,
+				"interrupted",
+				undefined,
+				resumableAgentSessionId(turnResult),
+			);
 		}
 		if (failure) {
 			return this.failRun(
@@ -546,8 +551,8 @@ export class RunLoop {
 		// Success: terminalize `done` directly — there is no end-of-turn
 		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
 		// itself the persisted workspace. The terminal-success transition also
-		// advances the conversation's resume pointer, under the ownership fence
-		// (ADR-0005). Only a reported session with a reliable mirror advances it.
+		// publishes the conversation's first usable resume pointer in that same
+		// ownership-fenced transaction (ADR-0005).
 		const owner: RunOwnershipRef = {
 			userId: run.userId,
 			conversationId: run.conversationId,
@@ -558,10 +563,7 @@ export class RunLoop {
 			return this.publishArtifactsAndFinish(owner, turnResult);
 		}
 		const agentSessionId = resumableAgentSessionId(turnResult);
-		if (agentSessionId) {
-			await this.advanceSessionPointer(owner, agentSessionId);
-		}
-		return this.terminalize(runId, "done");
+		return this.terminalize(runId, "done", undefined, agentSessionId);
 	}
 
 	private failRun(
@@ -588,28 +590,19 @@ export class RunLoop {
 	): Promise<TerminalRunStatus | null> {
 		const publication = turnResult.artifactPublication;
 		if (!publication) return null;
+		const agentSessionId = resumableAgentSessionId(turnResult);
 		try {
-			const agentSessionId = resumableAgentSessionId(turnResult);
-			const result = await publishArtifactsAndTransitionRunDoneTx(
-				this.opts.db,
-				{
-					owner,
-					artifacts: publication.artifacts,
-					agentSessionId,
-				},
-			);
-			if (agentSessionId && result.agentSessionPointerAdvanced === false) {
-				this.opts.logger.warn({
-					message: "could not advance agent session pointer",
-					workerId: this.workerId,
-					runId: owner.runId,
-				});
-			}
+			await publishArtifactsAndTransitionRunDoneTx(this.opts.db, {
+				owner,
+				artifacts: publication.artifacts,
+				agentSessionId,
+			});
 			return "done";
 		} catch (error) {
 			if (error instanceof RunFenceError) {
-				if (await this.tryTerminalInterrupted(owner.runId))
+				if (await this.tryTerminalInterrupted(owner.runId, agentSessionId)) {
 					return "interrupted";
+				}
 				this.opts.logger.warn({
 					message: "could not publish artifacts; leaving to stale-run recovery",
 					workerId: this.workerId,
@@ -640,56 +633,53 @@ export class RunLoop {
 	}
 
 	/**
-	 * Advance the conversation's Claude Agent SDK resume pointer through the fenced
-	 * runtime helper. Best-effort (ADR-0005): a failure — the fence lost to
-	 * recovery, or a transient DB error — only leaves the next turn resuming from
-	 * the previous session, losing this turn's model-side memory; the user-visible
-	 * run still succeeds, so the terminal `done` must not be blocked by it.
-	 */
-	private async advanceSessionPointer(
-		owner: RunOwnershipRef,
-		agentSessionId: string,
-	): Promise<void> {
-		try {
-			await advanceAgentSessionPointerTx(this.opts.db, {
-				...owner,
-				agentSessionId,
-			});
-		} catch (error) {
-			this.opts.logger.warn({
-				message: "could not advance agent session pointer",
-				workerId: this.workerId,
-				runId: owner.runId,
-				error: toMessage(error),
-			});
-		}
-	}
-
-	/**
 	 * Append the run's terminal event through the fenced run-store helper, with
 	 * the late-interruption fallback the loop relies on: `done`/`error` lose to an
 	 * interruption the terminal CAS observes (the run is already
 	 * `interrupt_requested`), so on a fence rejection try `interrupted` once; if even
 	 * that is fenced, stale-run recovery finishes the run.
 	 */
+	private terminalize(
+		runId: string,
+		status: "error",
+		payload?: { message: string },
+	): Promise<TerminalRunStatus | null>;
+	private terminalize(
+		runId: string,
+		status: "done" | "interrupted",
+		payload?: { message: string },
+		agentSessionId?: string,
+	): Promise<TerminalRunStatus | null>;
 	private async terminalize(
 		runId: string,
 		status: TerminalRunStatus,
 		payload?: { message: string },
+		agentSessionId?: string,
 	): Promise<TerminalRunStatus | null> {
 		try {
-			await transitionRunTerminalTx(this.opts.db, {
-				runId,
-				workerId: this.workerId,
-				status,
-				payload,
-			});
+			await transitionRunTerminalTx(
+				this.opts.db,
+				status === "error"
+					? {
+							runId,
+							workerId: this.workerId,
+							status,
+							payload,
+						}
+					: {
+							runId,
+							workerId: this.workerId,
+							status,
+							payload,
+							agentSessionId,
+						},
+			);
 			return status;
 		} catch (error) {
 			if (error instanceof RunFenceError) {
 				if (
 					status !== "interrupted" &&
-					(await this.tryTerminalInterrupted(runId))
+					(await this.tryTerminalInterrupted(runId, agentSessionId))
 				) {
 					return "interrupted";
 				}
@@ -705,12 +695,16 @@ export class RunLoop {
 		}
 	}
 
-	private async tryTerminalInterrupted(runId: string): Promise<boolean> {
+	private async tryTerminalInterrupted(
+		runId: string,
+		agentSessionId?: string,
+	): Promise<boolean> {
 		try {
 			await transitionRunTerminalTx(this.opts.db, {
 				runId,
 				workerId: this.workerId,
 				status: "interrupted",
+				agentSessionId,
 			});
 			return true;
 		} catch {
@@ -759,7 +753,8 @@ function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	if (
 		!metadata ||
 		metadata.sessionId === null ||
-		metadata.mirrorErrorObserved
+		metadata.mirrorErrorObserved ||
+		!metadata.mainSessionMirrored
 	) {
 		return undefined;
 	}

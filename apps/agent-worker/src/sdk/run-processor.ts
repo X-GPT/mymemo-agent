@@ -12,6 +12,7 @@ import {
 	type StartStopDeadline,
 	type SupervisedQuery,
 } from "./agent-stream";
+import type { SessionMirrorEvidence } from "./session-store";
 
 /**
  * Start a Claude Agent SDK query for one claimed run. This is the seam between
@@ -25,7 +26,9 @@ import {
 export type StartRunQuery = (
 	run: RunRecord,
 	signal: AbortSignal,
-) => Promise<SupervisedQuery & Partial<ArtifactAwareQuery>>;
+) => Promise<
+	SupervisedQuery & Partial<ArtifactAwareQuery & SessionMirrorEvidence>
+>;
 
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
@@ -76,9 +79,12 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				startStopDeadline: deps.startStopDeadline,
 			});
 			const { disposition, ...streamMetadata } = outcome;
+			const mainSessionMirrored =
+				streamMetadata.sessionId !== null &&
+				query.hasMirroredMainSession?.(streamMetadata.sessionId) === true;
 			return {
 				disposition,
-				streamMetadata,
+				streamMetadata: { ...streamMetadata, mainSessionMirrored },
 				artifactPublication:
 					disposition === "completed"
 						? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??

@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Database } from "./client";
-import { type DbTx, RunFenceError } from "./run-store";
+import { RunFenceError } from "./run-store";
 import { conversationRuntime, orphanSandboxes, runs } from "./schema";
 
 /**
@@ -191,38 +191,6 @@ export async function markRuntimeSandboxTaintedTx(
 ): Promise<ConversationRuntimeRecord> {
 	return await fencedRuntimeUpdate(db, owner, "sandbox taint mark", {
 		sandboxTainted: true,
-	});
-}
-
-/**
- * Advance the conversation's Claude Agent SDK resume pointer to `agentSessionId`
- * (ADR-0005, Task 7.3). Fenced like every other runtime mutation, so this is
- * exactly what makes "the pointer advances only in the terminal-success
- * transition, and a stale worker cannot move it" true: a worker that lost the
- * run gets a {@link RunFenceError} and the pointer stays where the owner left
- * it. The caller advances it only after a turn terminalizes `done` with a clean
- * mirror; a `mirror_error` turn simply never calls this.
- */
-export async function advanceAgentSessionPointerTx(
-	db: Database,
-	input: RunOwnershipRef & { agentSessionId: string },
-): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, input, "agent session pointer advance", {
-		agentSessionId: input.agentSessionId,
-	});
-}
-
-/**
- * Transaction-scoped form of {@link advanceAgentSessionPointerTx}. Artifact
- * publication uses it so the canonical runtime fence and `run_done` share the
- * caller's transaction.
- */
-export async function advanceAgentSessionPointerInTx(
-	tx: DbTx,
-	input: RunOwnershipRef & { agentSessionId: string },
-): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(tx, input, "agent session pointer advance", {
-		agentSessionId: input.agentSessionId,
 	});
 }
 

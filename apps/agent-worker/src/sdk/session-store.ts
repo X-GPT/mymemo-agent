@@ -15,6 +15,7 @@ import type {
 import type { Database } from "@mymemo/agent-db/client";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import {
+	type AgentSessionMutationOwner,
 	appendAgentSessionEntriesTx,
 	deleteAgentSessionTx,
 	listAgentSessionSubkeysTx,
@@ -22,6 +23,17 @@ import {
 	loadAgentSessionEntriesTx,
 } from "@mymemo/agent-db/session-store";
 import type { WorkerLogger } from "../logger";
+
+export interface ConversationSessionStore extends SessionStore {
+	/** True only when this adapter successfully mirrored at least one non-empty
+	 * batch for the named main transcript during the current Run. */
+	hasMirroredMainSession(sessionId: string): boolean;
+}
+
+/** Query-level projection of the bound adapter's per-Run mirror evidence. */
+export interface SessionMirrorEvidence {
+	hasMirroredMainSession(sessionId: string): boolean;
+}
 
 /**
  * The deterministic, conversation-stable working directory the worker runs every
@@ -47,10 +59,17 @@ export function createConversationSessionStore(
 	binding: {
 		conversationId: string;
 		runId: string;
+		workerId: string;
 		logger: WorkerLogger;
 	},
-): SessionStore {
-	const { conversationId, runId, logger } = binding;
+): ConversationSessionStore {
+	const { conversationId, runId, workerId, logger } = binding;
+	const owner: AgentSessionMutationOwner = {
+		conversationId,
+		runId,
+		workerId,
+	};
+	const mirroredMainSessionIds = new Set<string>();
 	const ref = (key: SessionKey) => ({
 		conversationId,
 		projectKey: key.projectKey,
@@ -60,7 +79,13 @@ export function createConversationSessionStore(
 	return {
 		async append(key, entries) {
 			try {
-				await appendAgentSessionEntriesTx(db, ref(key), entries);
+				await appendAgentSessionEntriesTx(db, ref(key), entries, owner);
+				if (
+					entries.length > 0 &&
+					(key.subpath === undefined || key.subpath === "")
+				) {
+					mirroredMainSessionIds.add(key.sessionId);
+				}
 			} catch (error) {
 				logger.error({
 					message: "agent session mirror append failed",
@@ -94,11 +119,18 @@ export function createConversationSessionStore(
 			});
 		},
 		async delete(key) {
-			await deleteAgentSessionTx(db, {
-				conversationId,
-				sessionId: key.sessionId,
-				subpath: key.subpath,
-			});
+			await deleteAgentSessionTx(
+				db,
+				{
+					conversationId,
+					sessionId: key.sessionId,
+					subpath: key.subpath,
+				},
+				owner,
+			);
+		},
+		hasMirroredMainSession(sessionId) {
+			return mirroredMainSessionIds.has(sessionId);
 		},
 	};
 }
@@ -110,7 +142,7 @@ export function createConversationSessionStore(
  * so a first turn starts fresh and a later turn resumes the prior transcript.
  */
 export interface AgentSessionQueryConfig {
-	sessionStore: SessionStore;
+	sessionStore: ConversationSessionStore;
 	cwd: string;
 	resume?: string;
 }
@@ -126,13 +158,15 @@ export function buildAgentSessionQueryConfig(input: {
 	conversationId: string;
 	runtime: ConversationRuntimeRecord | null;
 	runId: string;
+	workerId: string;
 	logger: WorkerLogger;
 }): AgentSessionQueryConfig {
-	const { db, conversationId, runtime, runId, logger } = input;
+	const { db, conversationId, runtime, runId, workerId, logger } = input;
 	const config: AgentSessionQueryConfig = {
 		sessionStore: createConversationSessionStore(db, {
 			conversationId,
 			runId,
+			workerId,
 			logger,
 		}),
 		cwd: conversationWorkingDirectory(conversationId),

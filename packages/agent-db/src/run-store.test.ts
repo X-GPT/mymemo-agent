@@ -29,7 +29,7 @@ import {
 	requestRunInterruptionTx,
 	transitionRunTerminalTx,
 } from "./run-store";
-import { conversations, runEvents, runs } from "./schema";
+import { conversationRuntime, conversations, runEvents, runs } from "./schema";
 import { createTestDatabase, type TestDb } from "./testing";
 
 let tdb: TestDb;
@@ -47,6 +47,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
+	await tdb.db.delete(conversationRuntime);
 	await tdb.db.delete(conversations);
 	await tdb.db.insert(conversations).values([
 		{
@@ -787,6 +788,77 @@ describe("appendRunEventTx", () => {
 });
 
 describe("transitionRunTerminalTx", () => {
+	it.each([
+		"done",
+		"interrupted",
+	] as const)("publishes the first Agent-session pointer atomically with %s", async (status) => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		if (status === "interrupted") {
+			await tdb.db
+				.update(runs)
+				.set({ status: "interrupt_requested" })
+				.where(eq(runs.runId, "run-1"));
+		}
+
+		await transitionRunTerminalTx(tdb.db, {
+			runId: "run-1",
+			workerId: "worker-1",
+			status,
+			agentSessionId: "session-first",
+		});
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		const [run] = await tdb.db.select().from(runs);
+		expect(runtime?.agentSessionId).toBe("session-first");
+		expect(run?.status).toBe(status);
+	});
+
+	it("rolls back the terminal Outcome when its Agent-session pointer cannot publish", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+
+		await expect(
+			transitionRunTerminalTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				status: "done",
+				agentSessionId: "session-without-runtime",
+			}),
+		).rejects.toThrow(/session pointer/i);
+
+		const [run] = await tdb.db.select().from(runs);
+		expect(run?.status).toBe("running");
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
+	it("rejects Agent-session pointer publication on an error Outcome", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await expect(
+			// @ts-expect-error Error Outcomes cannot publish resume pointers.
+			transitionRunTerminalTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				status: "error",
+				payload: { message: "Run failed" },
+				agentSessionId: "session-error",
+			}),
+		).rejects.toThrow(/pointer publication.*done or interrupted/i);
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		const [run] = await tdb.db.select().from(runs);
+		expect(runtime?.agentSessionId).toBeNull();
+		expect(run?.status).toBe("running");
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
 	it("rejects terminalization with an incomplete Tool lifecycle", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {

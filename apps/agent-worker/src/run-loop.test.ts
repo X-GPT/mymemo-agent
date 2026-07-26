@@ -667,7 +667,36 @@ describe("RunLoop — terminal outcomes", () => {
 });
 
 describe("RunLoop — agent session pointer", () => {
-	it("advances the resume pointer on a successful turn that reports a session", async () => {
+	it("does not establish the first pointer without main-session evidence", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			return {
+				disposition: "completed",
+				streamMetadata: {
+					sessionId: "session-unproven",
+					mirrorErrorObserved: false,
+					mainSessionMirrored: false,
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(await readRuntime("conv-1")).toMatchObject({
+			agentSessionId: null,
+		});
+	});
+
+	it("establishes the first pointer after a successful main-session append", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
 			// The runtime row is created while the run is owned (as E2B provisioning
@@ -683,6 +712,7 @@ describe("RunLoop — agent session pointer", () => {
 				streamMetadata: {
 					sessionId: "session-abc",
 					mirrorErrorObserved: false,
+					mainSessionMirrored: true,
 				},
 			};
 		});
@@ -695,6 +725,52 @@ describe("RunLoop — agent session pointer", () => {
 		expect(await readRuntime("conv-1")).toMatchObject({
 			agentSessionId: "session-abc",
 		});
+	});
+
+	it.each([
+		["without main-session evidence", false, null],
+		["with main-session evidence", true, "session-interrupted"],
+	] as const)("terminalizes an interrupted first Run %s", async (_name, mainSessionMirrored, expectedPointer) => {
+		const worker = buildWorker(1);
+		const processorStarted = deferred();
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			processorStarted.resolve();
+			await new Promise<void>((resolve) => {
+				if (ctx.signal.aborted) return resolve();
+				ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			return {
+				disposition: "stopped",
+				streamMetadata: {
+					sessionId: "session-interrupted",
+					mirrorErrorObserved: false,
+					mainSessionMirrored,
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick();
+		await processorStarted.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(await readRuntime("conv-1")).toMatchObject({
+			agentSessionId: expectedPointer,
+		});
+		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
 	});
 
 	it("terminalizes error without establishing a pointer after a mirror error stop", async () => {
@@ -711,6 +787,7 @@ describe("RunLoop — agent session pointer", () => {
 				streamMetadata: {
 					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
+					mainSessionMirrored: true,
 				},
 			};
 		});
@@ -737,6 +814,7 @@ describe("RunLoop — agent session pointer", () => {
 				streamMetadata: {
 					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
+					mainSessionMirrored: true,
 				},
 			};
 		});

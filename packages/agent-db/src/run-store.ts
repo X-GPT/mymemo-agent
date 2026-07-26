@@ -8,7 +8,7 @@ import {
 	type RunScope,
 	validateDurableRunEventSequence,
 } from "./run-events";
-import { runEvents, runs } from "./schema";
+import { conversationRuntime, runEvents, runs } from "./schema";
 
 /**
  * Narrow transaction helpers over `runs`/`run_events` — the only write path for
@@ -505,12 +505,23 @@ export async function transitionRunTerminalTx(
 	return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
 }
 
-export interface TerminalTransitionInput {
+interface TerminalTransitionBase {
 	runId: string;
 	workerId: string;
-	status: TerminalRunStatus;
 	payload?: RunEventPayload;
 }
+
+export type TerminalTransitionInput =
+	| (TerminalTransitionBase & {
+			status: "done" | "interrupted";
+			/** A session proven usable by a successful main-transcript mirror. When
+			 * present, pointer publication and the terminal Outcome are all-or-nothing. */
+			agentSessionId?: string;
+	  })
+	| (TerminalTransitionBase & {
+			status: "error";
+			agentSessionId?: never;
+	  });
 
 /**
  * Transaction-scoped form of {@link transitionRunTerminalTx}. Artifact
@@ -520,6 +531,11 @@ export async function transitionRunTerminalInTx(
 	tx: DbTx,
 	input: TerminalTransitionInput,
 ): Promise<RunRecord> {
+	if (input.status === "error" && input.agentSessionId !== undefined) {
+		throw new InvalidRunEventError(
+			"agent session pointer publication requires a done or interrupted Outcome",
+		);
+	}
 	if (input.payload?.reason === "stale_worker") {
 		throw new InvalidRunEventError(
 			"stale_worker is reserved for stale-Run recovery",
@@ -549,6 +565,26 @@ export async function transitionRunTerminalInTx(
 			`terminal transition of run ${input.runId} to ${input.status} rejected: ` +
 				`run is already terminal, not transitionable to ${input.status}, or worker ${input.workerId} no longer owns it`,
 		);
+	}
+	if (input.agentSessionId !== undefined) {
+		const [runtime] = await tx
+			.update(conversationRuntime)
+			.set({
+				agentSessionId: input.agentSessionId,
+				updatedAt: sql`now()`,
+			})
+			.where(
+				and(
+					eq(conversationRuntime.userId, row.userId),
+					eq(conversationRuntime.conversationId, row.conversationId),
+				),
+			)
+			.returning({ conversationId: conversationRuntime.conversationId });
+		if (!runtime) {
+			throw new Error(
+				`agent session pointer publication for conversation ${row.conversationId} failed: runtime row is missing`,
+			);
+		}
 	}
 	await insertTerminalEvent(tx, row, input.status, input.payload ?? {});
 	return toRunRecord(row);

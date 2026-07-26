@@ -236,6 +236,36 @@ async function readEvents(runId: string) {
 }
 
 describe("createSdkRunProcessor — through the run loop", () => {
+	it("publishes the first pointer only when the bound store mirrored that main session", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId: run.runId,
+				workerId: "worker-1",
+			});
+			return {
+				...messageQuery([resultMessage("session-proven")]),
+				hasMirroredMainSession(sessionId: string) {
+					return sessionId === "session-proven";
+				},
+			};
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(runtime?.agentSessionId).toBe("session-proven");
+	});
+
 	it("commits one durable Assistant message for a complete provider envelope", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async () =>
@@ -1206,10 +1236,15 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				runId: run.runId,
 				workerId: "worker-1",
 			});
-			return messageQuery([
-				...textEnvelope({ completeText: "answer" }),
-				resultMessage("session-valid"),
-			]);
+			return {
+				...messageQuery([
+					...textEnvelope({ completeText: "answer" }),
+					resultMessage("session-valid"),
+				]),
+				hasMirroredMainSession(sessionId: string) {
+					return sessionId === "session-valid";
+				},
+			};
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",

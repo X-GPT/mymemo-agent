@@ -39,7 +39,9 @@ import {
 import { startSandboxRenewal } from "./sandbox-renewal";
 import {
 	buildAgentSessionQueryConfig,
+	type ConversationSessionStore,
 	conversationWorkingDirectory,
+	type SessionMirrorEvidence,
 } from "./session-store";
 
 /**
@@ -216,6 +218,8 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			const underlying = deps.query({ prompt: started.message, options });
 			return superviseTurn({
 				underlying: withArtifactPublication(underlying, artifactPublication),
+				hasMirroredMainSession: (sessionId) =>
+					options.sessionStore.hasMirroredMainSession(sessionId),
 				settle,
 				renewalFailure: () => renewalFailure,
 				forceCloseSignal: forceCloseController.signal,
@@ -356,7 +360,7 @@ function buildQueryOptions(
 		toolController: AbortController;
 		claudeConfigDir: string;
 	},
-): Options {
+): Options & { sessionStore: ConversationSessionStore } {
 	const {
 		run,
 		owner,
@@ -406,6 +410,7 @@ function buildQueryOptions(
 		conversationId: run.conversationId,
 		runtime,
 		runId: run.runId,
+		workerId: owner.workerId,
 		logger: deps.logger,
 	});
 
@@ -449,13 +454,15 @@ function buildQueryOptions(
  */
 function superviseTurn(input: {
 	underlying: SupervisedQuery;
+	hasMirroredMainSession: (sessionId: string) => boolean;
 	settle: () => Promise<void>;
 	renewalFailure: () => { error: unknown } | null;
 	forceCloseSignal: AbortSignal;
 	onDetachedSettleError: (error: unknown) => void;
-}): SupervisedQuery & Partial<ArtifactAwareQuery> {
+}): SupervisedQuery & Partial<ArtifactAwareQuery> & SessionMirrorEvidence {
 	const {
 		underlying,
+		hasMirroredMainSession,
 		settle,
 		renewalFailure,
 		forceCloseSignal,
@@ -464,6 +471,7 @@ function superviseTurn(input: {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
+		hasMirroredMainSession,
 		close: () => {
 			try {
 				underlying.close();

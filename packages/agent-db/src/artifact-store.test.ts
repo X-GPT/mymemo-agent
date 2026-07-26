@@ -205,4 +205,57 @@ describe("Downloadable artifact publication", () => {
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("running");
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 	});
+
+	it("rolls back artifacts and Outcome when the Agent-session pointer cannot publish", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		await recordArtifactObjectsTx(tdb.db, {
+			objects: [
+				{
+					objectKey: "objects/opaque-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+					runId: "run-1",
+					path: "report.txt",
+				},
+			],
+		});
+
+		await expect(
+			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+				owner: {
+					runId: "run-1",
+					workerId: "worker-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+				},
+				agentSessionId: "session-without-runtime",
+				artifacts: [
+					{
+						artifactId: "artifact-1",
+						path: "report.txt",
+						objectKey: "objects/opaque-1",
+						sizeBytes: 12,
+						contentType: "application/octet-stream",
+					},
+				],
+			}),
+		).rejects.toThrow(/session pointer/i);
+
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("running");
+		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
+		expect(await tdb.db.select().from(runEvents)).toEqual([]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([
+			expect.objectContaining({ status: "pending" }),
+		]);
+	});
 });

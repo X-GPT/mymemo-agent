@@ -96,7 +96,8 @@ export function isMirrorError(message: SDKMessage): boolean {
  * Conversation continuity (ADR-0005): its neutral disposition, observed
  * session id, and whether a `mirror_error` made the transcript unreliable.
  */
-export interface AgentStreamOutcome extends TurnStreamMetadata {
+export interface AgentStreamOutcome
+	extends Omit<TurnStreamMetadata, "mainSessionMirrored"> {
 	/** Whether the query completed itself or settled after a stop request. */
 	disposition: TurnDisposition;
 }

@@ -1,10 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
 import { type RunRecord, transitionRunTerminalInTx } from "./run-store";
-import {
-	advanceAgentSessionPointerInTx,
-	type RunOwnershipRef,
-} from "./runtime-store";
+import type { RunOwnershipRef } from "./runtime-store";
 import { artifactObjects, conversationArtifacts } from "./schema";
 
 export const MAX_CURRENT_ARTIFACT_PATHS = 100;
@@ -68,7 +65,6 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 	},
 ): Promise<{
 	run: RunRecord;
-	agentSessionPointerAdvanced: boolean | null;
 }> {
 	if (input.artifacts.length === 0) {
 		throw new Error("artifact publication requires at least one staged object");
@@ -91,21 +87,6 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 			.for("update");
 		validatePostUpsertQuota(currentArtifacts, input.artifacts);
 
-		let agentSessionPointerAdvanced: boolean | null = null;
-		const agentSessionId = input.agentSessionId;
-		if (agentSessionId !== undefined) {
-			try {
-				await tx.transaction(async (savepoint) => {
-					await advanceAgentSessionPointerInTx(savepoint, {
-						...input.owner,
-						agentSessionId,
-					});
-				});
-				agentSessionPointerAdvanced = true;
-			} catch {
-				agentSessionPointerAdvanced = false;
-			}
-		}
 		const paths = input.artifacts.map((artifact) => artifact.path);
 		const changedPaths = new Set(paths);
 		const existing = currentArtifacts.filter((artifact) =>
@@ -169,8 +150,9 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 			runId: input.owner.runId,
 			workerId: input.owner.workerId,
 			status: "done",
+			agentSessionId: input.agentSessionId,
 		});
-		return { run, agentSessionPointerAdvanced };
+		return { run };
 	});
 }
 
