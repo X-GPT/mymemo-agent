@@ -5,10 +5,11 @@
 // terminal transaction through the same shared fence.
 // chat-api keeps this `@/features/conversation-runtime-store` surface as a thin
 // re-export so its imports stay stable.
+
+export type { RunOwnershipRef } from "@mymemo/agent-db/run-ownership";
 export type {
 	ConversationRuntimeRecord,
 	OrphanSandboxRecord,
-	RunOwnershipRef,
 } from "@mymemo/agent-db/runtime-store";
 export {
 	createConversationRuntimeTx,

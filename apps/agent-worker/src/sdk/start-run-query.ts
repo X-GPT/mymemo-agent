@@ -1,11 +1,11 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Database } from "@mymemo/agent-db/client";
+import type { RunOwnershipRef } from "@mymemo/agent-db/run-ownership";
 import { loadRunStartedTx, type RunRecord } from "@mymemo/agent-db/run-store";
 import {
 	type ConversationRuntimeRecord,
 	createConversationRuntimeTx,
 	markRuntimeSandboxTaintedTx,
-	type RunOwnershipRef,
 	recordOrphanSandboxTx,
 	updateRuntimeSandboxTx,
 } from "@mymemo/agent-db/runtime-store";
@@ -471,8 +471,7 @@ function superviseTurn(input: {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
-		hasMirroredMainSession: (sessionId) =>
-			sessionEvidence.hasMirroredMainSession(sessionId),
+		hasMirroredMainSession: sessionEvidence.hasMirroredMainSession,
 		close: () => {
 			try {
 				underlying.close();

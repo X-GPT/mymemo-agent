@@ -208,7 +208,7 @@ describe("Downloadable artifact publication", () => {
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 	});
 
-	it("rolls back artifacts and Outcome when the Agent-session pointer cannot publish", async () => {
+	it("publishes artifacts and Outcome without a pointer when the runtime row is absent", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -232,32 +232,33 @@ describe("Downloadable artifact publication", () => {
 			],
 		});
 
-		await expect(
-			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-				owner: {
-					runId: "run-1",
-					workerId: "worker-1",
-					userId: "user-1",
-					conversationId: "conv-1",
+		const run = await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+			owner: {
+				runId: "run-1",
+				workerId: "worker-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+			},
+			agentSessionId: "session-without-runtime",
+			artifacts: [
+				{
+					artifactId: "artifact-1",
+					path: "report.txt",
+					objectKey: "objects/opaque-1",
+					sizeBytes: 12,
+					contentType: "application/octet-stream",
 				},
-				agentSessionId: "session-without-runtime",
-				artifacts: [
-					{
-						artifactId: "artifact-1",
-						path: "report.txt",
-						objectKey: "objects/opaque-1",
-						sizeBytes: 12,
-						contentType: "application/octet-stream",
-					},
-				],
-			}),
-		).rejects.toThrow(/session pointer/i);
+			],
+		});
 
-		expect((await tdb.db.select().from(runs))[0]?.status).toBe("running");
-		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
-		expect(await tdb.db.select().from(runEvents)).toEqual([]);
+		expect(run.status).toBe("done");
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("done");
+		expect(await tdb.db.select().from(conversationArtifacts)).toHaveLength(1);
+		expect(
+			(await tdb.db.select().from(runEvents)).map((event) => event.type),
+		).toEqual(["run_done"]);
 		expect(await tdb.db.select().from(artifactObjects)).toEqual([
-			expect.objectContaining({ status: "pending" }),
+			expect.objectContaining({ status: "current" }),
 		]);
 	});
 

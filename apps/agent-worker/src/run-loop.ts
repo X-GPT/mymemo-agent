@@ -12,6 +12,7 @@ import {
 	type ToolCallResultPayload,
 	type ToolCallStartedPayload,
 } from "@mymemo/agent-db/run-events";
+import type { RunOwnershipRef } from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventsTx,
 	claimNextRunTx,
@@ -24,7 +25,6 @@ import {
 	type TerminalRunStatus,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
-import type { RunOwnershipRef } from "@mymemo/agent-db/runtime-store";
 import type {
 	LiveStreamEvent,
 	LiveStreamRelay,
@@ -44,6 +44,8 @@ import type { Worker } from "./worker";
  */
 export type TurnDisposition = "completed" | "stopped";
 
+/** SDK stream facts observed before the SessionStore evidence check determines
+ * whether the result session is safe to resume. */
 export interface AgentStreamMetadata {
 	sessionId: string | null;
 	mirrorErrorObserved: boolean;
@@ -534,7 +536,8 @@ export class RunLoop {
 		}
 		const agentSessionId = resumableAgentSessionId(turnResult);
 		// Interruption wins over both success and failure: an SDK error raised
-		// while interrupting still surfaces as `interrupted`.
+		// while interrupting still surfaces as `interrupted`. A mirrored main
+		// session publishes its first or later resume pointer with this Outcome.
 		if (state.interrupted) {
 			return this.terminalize(owner, {
 				status: "interrupted",
@@ -559,8 +562,8 @@ export class RunLoop {
 		// Success: terminalize `done` directly — there is no end-of-turn
 		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
 		// itself the persisted workspace. The terminal-success transition also
-		// publishes the conversation's first usable resume pointer in that same
-		// ownership-fenced transaction (ADR-0005).
+		// publishes the conversation's first or later usable resume pointer in
+		// that same ownership-fenced transaction (ADR-0005).
 		if (turnResult.artifactPublication) {
 			return this.publishArtifactsAndFinish(owner, turnResult, agentSessionId);
 		}

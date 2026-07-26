@@ -1,5 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+	SDKMessage,
+	SessionStoreEntry,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
 	createQueuedRunTx,
 	requestRunInterruptionTx,
@@ -14,13 +17,15 @@ import {
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq } from "drizzle-orm";
-import type { ArtifactAwareQuery } from "../artifacts/artifact-publication";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import { Worker } from "../worker";
 import type { StartStopDeadline, SupervisedQuery } from "./agent-stream";
 import { createSdkRunProcessor, type StartRunQuery } from "./run-processor";
-import type { SessionMirrorEvidence } from "./session-store";
+import {
+	createConversationSessionStore,
+	type SessionMirrorEvidence,
+} from "./session-store";
 import {
 	assistantBlock,
 	streamEvent,
@@ -148,6 +153,17 @@ function initMessage(sessionId: string): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
+const noMainSessionMirrored: SessionMirrorEvidence["hasMirroredMainSession"] =
+	() => false;
+
+function withoutMainSessionEvidence<Query extends SupervisedQuery>(
+	query: Query,
+): Query & SessionMirrorEvidence {
+	return Object.assign(query, {
+		hasMirroredMainSession: noMainSessionMirrored,
+	});
+}
+
 function errorResultMessage(text: string): SDKMessage {
 	return {
 		type: "result",
@@ -159,13 +175,12 @@ function errorResultMessage(text: string): SDKMessage {
 
 function messageQuery(
 	messages: SDKMessage[],
+	hasMirroredMainSession: SessionMirrorEvidence["hasMirroredMainSession"] = noMainSessionMirrored,
 ): SupervisedQuery & SessionMirrorEvidence {
 	return {
 		close() {},
 		async interrupt() {},
-		hasMirroredMainSession() {
-			return false;
-		},
+		hasMirroredMainSession,
 		async *[Symbol.asyncIterator]() {
 			for (const message of messages) yield message;
 		},
@@ -178,9 +193,7 @@ function stepQuery(
 	return {
 		close() {},
 		async interrupt() {},
-		hasMirroredMainSession() {
-			return false;
-		},
+		hasMirroredMainSession: noMainSessionMirrored,
 		async *[Symbol.asyncIterator]() {
 			for (const step of steps) {
 				if ("throw" in step) throw step.throw;
@@ -192,9 +205,7 @@ function stepQuery(
 
 type TestStartRunQuery = (
 	...args: Parameters<StartRunQuery>
-) => Promise<
-	SupervisedQuery & Partial<ArtifactAwareQuery> & Partial<SessionMirrorEvidence>
->;
+) => ReturnType<StartRunQuery>;
 
 function buildLoop(
 	worker: Worker,
@@ -207,12 +218,7 @@ function buildLoop(
 		worker,
 		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
-			startRunQuery: async (...args) => {
-				const query = await startRunQuery(...args);
-				return Object.assign(query, {
-					hasMirroredMainSession: query.hasMirroredMainSession ?? (() => false),
-				});
-			},
+			startRunQuery,
 			logger,
 			startStopDeadline,
 		}),
@@ -274,10 +280,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				runId: run.runId,
 				workerId: "worker-1",
 			});
-			return messageQuery([
-				initMessage("session-initialized"),
-				resultMessage("session-initialized"),
-			]);
+			return messageQuery(
+				[initMessage("session-initialized")],
+				(sessionId) => sessionId === "session-initialized",
+			);
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -305,12 +311,20 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				runId: run.runId,
 				workerId: "worker-1",
 			});
-			return {
-				...messageQuery([resultMessage("session-proven")]),
-				hasMirroredMainSession(sessionId: string) {
-					return sessionId === "session-proven";
-				},
-			};
+			const store = createConversationSessionStore(tdb.db, {
+				conversationId: run.conversationId,
+				runId: run.runId,
+				workerId: "worker-1",
+				logger: silentLogger,
+			});
+			await store.append(
+				{ projectKey: "project-1", sessionId: "session-proven" },
+				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
+			);
+			return messageQuery(
+				[resultMessage("session-proven")],
+				store.hasMirroredMainSession,
+			);
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -324,6 +338,48 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
 		expect(runtime?.agentSessionId).toBe("session-proven");
+	});
+
+	it("does not publish a pointer from subagent-only mirroring", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId: run.runId,
+				workerId: "worker-1",
+			});
+			const store = createConversationSessionStore(tdb.db, {
+				conversationId: run.conversationId,
+				runId: run.runId,
+				workerId: "worker-1",
+				logger: silentLogger,
+			});
+			await store.append(
+				{
+					projectKey: "project-1",
+					sessionId: "session-subagent-only",
+					subpath: "subagents/agent-1",
+				},
+				[{ type: "user", uuid: "subagent-entry" } as SessionStoreEntry],
+			);
+			return messageQuery(
+				[resultMessage("session-subagent-only")],
+				store.hasMirroredMainSession,
+			);
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(runtime?.agentSessionId).toBeNull();
 	});
 
 	it("commits one durable Assistant message for a complete provider envelope", async () => {
@@ -693,7 +749,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					},
 					{ once: true },
 				);
-				return {
+				return withoutMainSessionEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -711,7 +767,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 						artifactPublicationReads++;
 						return { artifacts: [] };
 					},
-				};
+				});
 			},
 			logger,
 			(timeoutMs) => {
@@ -768,7 +824,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			signal.addEventListener("abort", () => calls.push("tool-abort"), {
 				once: true,
 			});
-			return {
+			return withoutMainSessionEvidence({
 				async interrupt() {
 					calls.push("interrupt");
 				},
@@ -780,7 +836,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					await releaseMirrorError.promise;
 					yield mirrorErrorMessage();
 				},
-			};
+			});
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -851,7 +907,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					once: true,
 				});
 				started.resolve();
-				return {
+				return withoutMainSessionEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -864,7 +920,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					async *[Symbol.asyncIterator]() {
 						await settled.promise;
 					},
-				};
+				});
 			},
 			silentLogger,
 			(timeoutMs) => {
@@ -924,7 +980,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					once: true,
 				});
 				started.resolve();
-				return {
+				return withoutMainSessionEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 						interrupted.resolve();
@@ -937,7 +993,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					async *[Symbol.asyncIterator]() {
 						await closed.promise;
 					},
-				};
+				});
 			},
 			logger,
 			deadline.startStopDeadline,
@@ -993,7 +1049,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			worker,
 			async () => {
 				started.resolve();
-				return {
+				return withoutMainSessionEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 					},
@@ -1004,7 +1060,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					async *[Symbol.asyncIterator]() {
 						await releaseStream.promise;
 					},
-				};
+				});
 			},
 			silentLogger,
 			deadline.startStopDeadline,
@@ -1045,17 +1101,18 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const deadline = virtualStopDeadline();
 		const loop = buildLoop(
 			worker,
-			async () => ({
-				async interrupt() {},
-				close() {
-					closeCalled.resolve();
-				},
-				// biome-ignore lint/correctness/useYield: stream settlement is held past forced close to revoke the fence.
-				async *[Symbol.asyncIterator]() {
-					started.resolve();
-					await releaseStream.promise;
-				},
-			}),
+			async () =>
+				withoutMainSessionEvidence({
+					async interrupt() {},
+					close() {
+						closeCalled.resolve();
+					},
+					// biome-ignore lint/correctness/useYield: stream settlement is held past forced close to revoke the fence.
+					async *[Symbol.asyncIterator]() {
+						started.resolve();
+						await releaseStream.promise;
+					},
+				}),
 			silentLogger,
 			deadline.startStopDeadline,
 		);
@@ -1099,27 +1156,28 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const calls: string[] = [];
 		const loop = buildLoop(
 			worker,
-			async () => ({
-				forceCloseSignal: forceCloseController.signal,
-				async interrupt() {
-					calls.push("interrupt");
-				},
-				close() {
-					calls.push("close");
-				},
-				async *[Symbol.asyncIterator]() {
-					started.resolve();
-					if (!forceCloseController.signal.aborted) {
-						await new Promise<void>((resolve) =>
-							forceCloseController.signal.addEventListener(
-								"abort",
-								() => resolve(),
-								{ once: true },
-							),
-						);
-					}
-				},
-			}),
+			async () =>
+				withoutMainSessionEvidence({
+					forceCloseSignal: forceCloseController.signal,
+					async interrupt() {
+						calls.push("interrupt");
+					},
+					close() {
+						calls.push("close");
+					},
+					async *[Symbol.asyncIterator]() {
+						started.resolve();
+						if (!forceCloseController.signal.aborted) {
+							await new Promise<void>((resolve) =>
+								forceCloseController.signal.addEventListener(
+									"abort",
+									() => resolve(),
+									{ once: true },
+								),
+							);
+						}
+					},
+				}),
 			silentLogger,
 		);
 		await createQueuedRunTx(tdb.db, {
@@ -1148,21 +1206,22 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		let deadlines = 0;
 		const loop = buildLoop(
 			worker,
-			async (_run, _signal) => ({
-				async interrupt() {
-					calls.push("interrupt");
-					settled.resolve();
-				},
-				close() {
-					calls.push("close");
-					settled.resolve();
-				},
-				// biome-ignore lint/correctness/useYield: models a query stopped by worker shutdown.
-				async *[Symbol.asyncIterator]() {
-					started.resolve();
-					await settled.promise;
-				},
-			}),
+			async (_run, _signal) =>
+				withoutMainSessionEvidence({
+					async interrupt() {
+						calls.push("interrupt");
+						settled.resolve();
+					},
+					close() {
+						calls.push("close");
+						settled.resolve();
+					},
+					// biome-ignore lint/correctness/useYield: models a query stopped by worker shutdown.
+					async *[Symbol.asyncIterator]() {
+						started.resolve();
+						await settled.promise;
+					},
+				}),
 			silentLogger,
 			() => {
 				deadlines++;
@@ -1195,20 +1254,21 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			const deadline = virtualStopDeadline();
 			const loop = buildLoop(
 				worker,
-				async () => ({
-					async interrupt() {
-						stopped.resolve();
-					},
-					close() {
-						stopped.resolve();
-					},
-					async *[Symbol.asyncIterator]() {
-						started.resolve();
-						await stopped.promise;
-						if (lateResult === "error") throw new Error("late SDK error");
-						yield resultMessage("late-session");
-					},
-				}),
+				async () =>
+					withoutMainSessionEvidence({
+						async interrupt() {
+							stopped.resolve();
+						},
+						close() {
+							stopped.resolve();
+						},
+						async *[Symbol.asyncIterator]() {
+							started.resolve();
+							await stopped.promise;
+							if (lateResult === "error") throw new Error("late SDK error");
+							yield resultMessage("late-session");
+						},
+					}),
 				silentLogger,
 				deadline.startStopDeadline,
 			);

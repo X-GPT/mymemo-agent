@@ -9,11 +9,11 @@ import {
 	validateDurableRunEventSequence,
 } from "./run-events";
 import {
-	ownedRunConditions,
+	ownedRunByUserConditions,
 	RunFenceError,
 	type RunOwnershipRef,
 } from "./run-ownership";
-import { fencedRuntimeUpdateTx } from "./runtime-store";
+import { publishAgentSessionPointerInTx } from "./runtime-store";
 import { runEvents, runs } from "./schema";
 
 export { RunFenceError } from "./run-ownership";
@@ -543,12 +543,7 @@ export async function transitionRunTerminalInTx(
 		);
 	}
 	if (input.agentSessionId !== undefined) {
-		await fencedRuntimeUpdateTx(
-			tx,
-			input.owner,
-			"agent session pointer publication",
-			{ agentSessionId: input.agentSessionId },
-		);
+		await publishAgentSessionPointerInTx(tx, input.owner, input.agentSessionId);
 	}
 	const [row] = await tx
 		.update(runs)
@@ -562,7 +557,7 @@ export async function transitionRunTerminalInTx(
 		})
 		.where(
 			and(
-				ownedRunConditions(input.owner),
+				ownedRunByUserConditions(input.owner),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
 			),
 		)

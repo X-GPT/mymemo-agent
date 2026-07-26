@@ -2,22 +2,22 @@ import { and, eq, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Database } from "./client";
 import {
-	ownedRunConditions,
+	ownedRunByUserConditions,
 	ownedRunExists,
 	type RunOwnershipRef,
 	rejectRunFence,
 } from "./run-ownership";
+import type { DbTx } from "./run-store";
 import { conversationRuntime, orphanSandboxes, runs } from "./schema";
-
-export type { RunOwnershipRef } from "./run-ownership";
 
 /**
  * Narrow transaction helpers over `conversation_runtime` and
- * `orphan_sandboxes`, plus the fenced runtime-update primitive used by terminal
- * Run transactions (design doc "State Ownership", Task 4.2). Shared by chat-api
- * and agent-worker so the runtime write protocol lives in one place over one
- * `pg` driver. Sandbox/taint helpers live here; Agent-session pointer publication
- * is composed by run-store with the terminal Outcome.
+ * `orphan_sandboxes`, plus the named in-transaction Agent-session pointer
+ * operation used by terminal Run transactions (design doc "State Ownership",
+ * Task 4.2). Shared by chat-api and agent-worker so the runtime write protocol
+ * lives in one place over one `pg` driver. Sandbox/taint helpers live here;
+ * Agent-session pointer publication is composed by run-store with the terminal
+ * Outcome.
  * The table grants no execution ownership of its own: every mutation is fenced
  * on the claiming run's ownership in `runs` (`status` active,
  * `locked_by = workerId`, `locked_until > now()`): every update carries the
@@ -71,7 +71,7 @@ export async function createConversationRuntimeTx(
 		const owned = await tx
 			.select({ runId: runs.runId })
 			.from(runs)
-			.where(ownedRunConditions(owner))
+			.where(ownedRunByUserConditions(owner))
 			.for("share");
 		if (!owned[0]) rejectRunFence(owner, "runtime row creation");
 
@@ -110,24 +110,52 @@ export async function updateRuntimeSandboxTx(
 	db: Database,
 	input: RunOwnershipRef & { sandboxId: string | null },
 ): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdateTx(db, input, "sandbox pointer update", {
+	return await fencedRuntimeUpdate(db, input, "sandbox pointer update", {
 		sandboxId: input.sandboxId,
 		sandboxTainted: false,
 	});
 }
 
 /**
- * One fenced runtime UPDATE: the ownership predicate rides inside the same
- * statement as the write. Zero rows means the fence rejected (or the row was
- * never created — equally a caller that must stop treating the run as its
- * own), surfaced as the canonical Run fence error.
+ * Publish a proven Agent-session pointer inside its caller's terminal
+ * transaction. The update carries the ownership fence in-statement. A missing
+ * optional runtime row skips pointer publication only after the same
+ * transaction confirms ownership `FOR SHARE`; a stale owner still fails.
  */
-export async function fencedRuntimeUpdateTx(
+export async function publishAgentSessionPointerInTx(
+	tx: DbTx,
+	owner: RunOwnershipRef,
+	agentSessionId: string,
+): Promise<ConversationRuntimeRecord | null> {
+	const row = await updateRuntimeWithFence(tx, owner, { agentSessionId });
+	if (row) return row;
+
+	const [owned] = await tx
+		.select({ runId: runs.runId })
+		.from(runs)
+		.where(ownedRunByUserConditions(owner))
+		.for("share");
+	if (!owned) rejectRunFence(owner, "agent session pointer publication");
+	return null;
+}
+
+/** One fenced runtime update for helpers that require an existing row. */
+async function fencedRuntimeUpdate(
 	db: Pick<Database, "update">,
 	owner: RunOwnershipRef,
 	operation: string,
 	set: PgUpdateSetSource<typeof conversationRuntime>,
 ): Promise<ConversationRuntimeRecord> {
+	const row = await updateRuntimeWithFence(db, owner, set);
+	if (!row) rejectRunFence(owner, operation);
+	return row;
+}
+
+async function updateRuntimeWithFence(
+	db: Pick<Database, "update">,
+	owner: RunOwnershipRef,
+	set: PgUpdateSetSource<typeof conversationRuntime>,
+): Promise<ConversationRuntimeRecord | null> {
 	const [row] = await db
 		.update(conversationRuntime)
 		.set({ ...set, updatedAt: sql`now()` })
@@ -139,8 +167,7 @@ export async function fencedRuntimeUpdateTx(
 			),
 		)
 		.returning();
-	if (!row) rejectRunFence(owner, operation);
-	return row;
+	return row ?? null;
 }
 
 /**
@@ -152,7 +179,7 @@ export async function markRuntimeSandboxTaintedTx(
 	db: Database,
 	owner: RunOwnershipRef,
 ): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdateTx(db, owner, "sandbox taint mark", {
+	return await fencedRuntimeUpdate(db, owner, "sandbox taint mark", {
 		sandboxTainted: true,
 	});
 }

@@ -24,25 +24,25 @@ export class RunFenceError extends Error {
 /** Run statuses under which the owning worker may mutate private Run state. */
 const OWNED_ACTIVE_STATUSES = ["running", "interrupt_requested"] as const;
 
-/**
- * The single ownership predicate shared by runtime pointers and SDK transcript
- * mutations. A full owner additionally binds the Run to its user.
- */
-export function ownedRunConditions(owner: RunMutationOwner | RunOwnershipRef) {
-	const conditions = [
+/** The ownership predicate for Run-scoped mutations. */
+export function ownedRunConditions(owner: RunMutationOwner) {
+	return and(
 		eq(runs.runId, owner.runId),
 		eq(runs.conversationId, owner.conversationId),
 		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
 		eq(runs.lockedBy, owner.workerId),
 		sql`${runs.lockedUntil} > now()`,
-	];
-	if ("userId" in owner) conditions.push(eq(runs.userId, owner.userId));
-	return and(...conditions);
+	);
 }
 
-/** {@link ownedRunConditions} as an in-statement `EXISTS` predicate. */
-export function ownedRunExists(owner: RunMutationOwner | RunOwnershipRef) {
-	return sql`exists (select 1 from ${runs} where ${ownedRunConditions(owner)})`;
+/** The stronger ownership predicate for user-owned Conversation state. */
+export function ownedRunByUserConditions(owner: RunOwnershipRef) {
+	return and(ownedRunConditions(owner), eq(runs.userId, owner.userId));
+}
+
+/** {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate. */
+export function ownedRunExists(owner: RunOwnershipRef) {
+	return sql`exists (select 1 from ${runs} where ${ownedRunByUserConditions(owner)})`;
 }
 
 /** Raise the canonical bounded rejection for an owned worker mutation. */

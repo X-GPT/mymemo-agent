@@ -45,10 +45,6 @@ export interface AgentSessionRef {
 	subpath?: string;
 }
 
-/** The active Run ownership that authorizes one SDK-requested transcript
- * mutation. Conversation-deletion cleanup deliberately does not use this. */
-export interface AgentSessionMutationOwner extends RunMutationOwner {}
-
 /** The main transcript's stored subpath — the empty string, since the SDK's
  * "omit the field" convention is not representable in a NOT NULL column. */
 const MAIN_SUBPATH = "";
@@ -57,23 +53,28 @@ function normalizeSubpath(subpath: string | undefined): string {
 	return subpath ?? MAIN_SUBPATH;
 }
 
+/** Whether an SDK key names the main transcript rather than a subagent. */
+export function isMainAgentSessionRef(
+	ref: Pick<AgentSessionRef, "subpath">,
+): boolean {
+	return normalizeSubpath(ref.subpath) === MAIN_SUBPATH;
+}
+
 /**
  * Mirror a batch of transcript entries, insertion-ordered by the `bigserial`
  * id. Deduplicates by `entry.uuid`: `ON CONFLICT DO NOTHING` against the unique
  * `(conversation, session, subpath, uuid)` index drops a re-delivered uuid,
  * while uuid-less entries (NULL, distinct in the index) always insert. Empty
- * batches no-op.
+ * batches still validate Run ownership, then perform no insert.
  */
 export async function appendAgentSessionEntriesTx(
 	db: Database,
 	ref: AgentSessionRef,
 	entries: AgentSessionEntry[],
-	owner: AgentSessionMutationOwner,
+	owner: RunMutationOwner,
 ): Promise<void> {
 	const subpath = normalizeSubpath(ref.subpath);
-	if (ref.conversationId !== owner.conversationId) {
-		rejectRunFence(owner, "session append");
-	}
+	assertOwnedConversation(ref.conversationId, owner, "session append");
 	await withOwnedSessionMutation(db, owner, "session append", async (tx) => {
 		if (entries.length === 0) return;
 		await tx
@@ -174,11 +175,9 @@ export async function listAgentSessionSubkeysTx(
 export async function deleteAgentSessionTx(
 	db: Database,
 	input: { conversationId: string; sessionId: string; subpath?: string },
-	owner: AgentSessionMutationOwner,
+	owner: RunMutationOwner,
 ): Promise<void> {
-	if (input.conversationId !== owner.conversationId) {
-		rejectRunFence(owner, "session delete");
-	}
+	assertOwnedConversation(input.conversationId, owner, "session delete");
 	await withOwnedSessionMutation(db, owner, "session delete", async (tx) => {
 		await tx
 			.delete(agentSessions)
@@ -205,7 +204,7 @@ export async function deleteConversationAgentSessionsTx(
 
 async function withOwnedSessionMutation(
 	db: Database,
-	owner: AgentSessionMutationOwner,
+	owner: RunMutationOwner,
 	operation: string,
 	mutate: (tx: DbTx) => Promise<void>,
 ): Promise<void> {
@@ -220,6 +219,16 @@ async function withOwnedSessionMutation(
 		}
 		await mutate(tx);
 	});
+}
+
+function assertOwnedConversation(
+	conversationId: string,
+	owner: RunMutationOwner,
+	operation: string,
+): void {
+	if (conversationId !== owner.conversationId) {
+		rejectRunFence(owner, operation);
+	}
 }
 
 /**

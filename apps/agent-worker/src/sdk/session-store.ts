@@ -13,11 +13,12 @@ import type {
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Database } from "@mymemo/agent-db/client";
+import type { RunMutationOwner } from "@mymemo/agent-db/run-ownership";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import {
-	type AgentSessionMutationOwner,
 	appendAgentSessionEntriesTx,
 	deleteAgentSessionTx,
+	isMainAgentSessionRef,
 	listAgentSessionSubkeysTx,
 	listAgentSessionsTx,
 	loadAgentSessionEntriesTx,
@@ -64,7 +65,7 @@ export function createConversationSessionStore(
 	},
 ): ConversationSessionStore {
 	const { conversationId, runId, workerId, logger } = binding;
-	const owner: AgentSessionMutationOwner = {
+	const owner: RunMutationOwner = {
 		conversationId,
 		runId,
 		workerId,
@@ -80,10 +81,7 @@ export function createConversationSessionStore(
 		async append(key, entries) {
 			try {
 				await appendAgentSessionEntriesTx(db, ref(key), entries, owner);
-				if (
-					entries.length > 0 &&
-					(key.subpath === undefined || key.subpath === "")
-				) {
+				if (entries.length > 0 && isMainAgentSessionRef(key)) {
 					mirroredMainSessionIds.add(key.sessionId);
 				}
 			} catch (error) {
@@ -128,7 +126,7 @@ export function createConversationSessionStore(
 				},
 				owner,
 			);
-			if (key.subpath === undefined || key.subpath === "") {
+			if (isMainAgentSessionRef(key)) {
 				mirroredMainSessionIds.delete(key.sessionId);
 			}
 		},

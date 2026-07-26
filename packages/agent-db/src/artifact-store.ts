@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
+import type { RunOwnershipRef } from "./run-ownership";
 import { type RunRecord, transitionRunTerminalInTx } from "./run-store";
-import type { RunOwnershipRef } from "./runtime-store";
 import { artifactObjects, conversationArtifacts } from "./schema";
 
 export const MAX_CURRENT_ARTIFACT_PATHS = 100;

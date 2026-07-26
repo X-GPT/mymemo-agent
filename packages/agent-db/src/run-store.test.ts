@@ -824,20 +824,22 @@ describe("transitionRunTerminalTx", () => {
 		expect(run?.status).toBe(status);
 	});
 
-	it("rolls back the terminal Outcome when its Agent-session pointer cannot publish", async () => {
+	it("terminalizes without a pointer when the optional runtime row is absent", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
-		await expect(
-			transitionRunTerminalTx(tdb.db, {
-				owner: owner(),
-				status: "done",
-				agentSessionId: "session-without-runtime",
-			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		const terminal = await transitionRunTerminalTx(tdb.db, {
+			owner: owner(),
+			status: "done",
+			agentSessionId: "session-without-runtime",
+		});
 
 		const [run] = await tdb.db.select().from(runs);
-		expect(run?.status).toBe("running");
-		expect(await readEvents("run-1")).toEqual([]);
+		expect(terminal.status).toBe("done");
+		expect(run?.status).toBe("done");
+		expect(await tdb.db.select().from(conversationRuntime)).toEqual([]);
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_done",
+		]);
 	});
 
 	it("rejects Agent-session pointer publication on an error Outcome", async () => {

@@ -8,6 +8,7 @@
 		"./artifact-store": "./src/artifact-store.ts",
 		"./client": "./src/client.ts",
 		"./run-store": "./src/run-store.ts",
+		"./run-ownership": "./src/run-ownership.ts",
 		"./run-events": "./src/run-events.ts",
 		"./queue-metrics": "./src/queue-metrics.ts",
 		"./runtime-store": "./src/runtime-store.ts",
