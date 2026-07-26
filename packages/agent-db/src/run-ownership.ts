@@ -25,7 +25,7 @@ export class RunFenceError extends Error {
 const OWNED_ACTIVE_STATUSES = ["running", "interrupt_requested"] as const;
 
 /** Run identity and live lease, without imposing a status class. */
-export function runLeaseConditions(owner: RunMutationOwner) {
+function runLeaseConditions(owner: RunMutationOwner) {
 	return and(
 		eq(runs.runId, owner.runId),
 		eq(runs.conversationId, owner.conversationId),

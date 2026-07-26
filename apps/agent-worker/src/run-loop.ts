@@ -79,7 +79,7 @@ type TerminalizationIntent =
 	| (Extract<TerminalOutcome, { status: "error" }> & {
 			/** Proven continuity carried only if the error CAS must reconcile to
 			 * an interrupted Outcome. It is never sent with `run_error`. */
-			interruptionFallback?: { agentSessionId: string };
+			interruptionFallback?: string;
 	  });
 
 /**
@@ -137,9 +137,10 @@ export interface RunProcessContext {
  * claim/heartbeat/terminalize behavior is tested independently of what a turn
  * does.
  *
- * A processor may return a {@link TurnResult} naming the agent session to
- * resume from next turn; returning nothing is treated as a turn with no
- * session to record, so the Milestone 3 synthetic processor needs no change.
+ * A processor may return a {@link TurnResult} with mirror reliability and
+ * SessionStore evidence; the supervisor alone decides whether that evidence
+ * may advance continuity. Returning nothing is treated as a turn with no
+ * continuity evidence, so the Milestone 3 synthetic processor needs no change.
  */
 // biome-ignore lint/suspicious/noConfusingVoidType: `void` keeps a nothing-returning processor valid — `undefined` is not assignable from a void-returning async fn.
 type RunTurnResult = void | TurnResult;
@@ -557,7 +558,7 @@ export class RunLoop {
 			return this.failRun(owner, {
 				message: "run failed",
 				fields: artifactFailureLogFields(failure.error),
-				interruptionFallback: interruptionFallback(agentSessionId),
+				interruptionFallback: agentSessionId,
 			});
 		}
 		if (turnResult.streamMetadata?.mirrorErrorObserved) {
@@ -569,7 +570,7 @@ export class RunLoop {
 		if (turnResult.disposition === "stopped") {
 			return this.failRun(owner, {
 				message: "run stopped before completion",
-				interruptionFallback: interruptionFallback(agentSessionId),
+				interruptionFallback: agentSessionId,
 			});
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
@@ -592,7 +593,7 @@ export class RunLoop {
 		input: {
 			message: string;
 			fields?: Record<string, unknown>;
-			interruptionFallback?: { agentSessionId: string };
+			interruptionFallback?: string;
 		},
 	): Promise<TerminalRunStatus | null> {
 		this.opts.logger.error({
@@ -606,9 +607,7 @@ export class RunLoop {
 		return this.terminalize(owner, {
 			status: "error",
 			payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-			...(input.interruptionFallback
-				? { interruptionFallback: input.interruptionFallback }
-				: {}),
+			interruptionFallback: input.interruptionFallback,
 		});
 	}
 
@@ -652,11 +651,10 @@ export class RunLoop {
 							},
 						}),
 			});
-			const fallback = interruptionFallback(agentSessionId);
 			return this.terminalize(owner, {
 				status: "error",
 				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-				...(fallback ? { interruptionFallback: fallback } : {}),
+				interruptionFallback: agentSessionId,
 			});
 		}
 	}
@@ -693,7 +691,7 @@ export class RunLoop {
 					(await this.tryTerminalInterrupted(
 						owner,
 						intent.status === "error"
-							? intent.interruptionFallback?.agentSessionId
+							? intent.interruptionFallback
 							: intent.agentSessionId,
 					))
 				) {
@@ -774,10 +772,4 @@ function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 		return undefined;
 	}
 	return metadata.mirroredMainSessionId;
-}
-
-function interruptionFallback(
-	agentSessionId: string | undefined,
-): { agentSessionId: string } | undefined {
-	return agentSessionId === undefined ? undefined : { agentSessionId };
 }

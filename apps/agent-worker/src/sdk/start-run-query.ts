@@ -448,7 +448,8 @@ function buildQueryOptions(
  * settling per-run resources when its stream ends or is force-closed (renewal
  * stops, the sandbox is left to idle-pause). A renewal failure can never end
  * the turn cleanly: even when the force-closed SDK stream ends without raising,
- * the wrapper throws {@link SandboxRenewalError} so the run terminalizes
+ * the linked abort prevents the nested artifact publication from succeeding,
+ * and this wrapper throws {@link SandboxRenewalError} so the run terminalizes
  * `error`, never `done`.
  */
 function superviseTurn(input: {

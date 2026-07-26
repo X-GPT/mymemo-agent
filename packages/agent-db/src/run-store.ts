@@ -535,6 +535,11 @@ export async function transitionRunTerminalInTx(
 			"stale_worker is reserved for stale-Run recovery",
 		);
 	}
+	if (input.status === "error" && input.agentSessionId !== undefined) {
+		throw new InvalidRunEventError(
+			"agent session pointer publication requires a done or interrupted Outcome",
+		);
+	}
 	if (input.agentSessionId !== undefined) {
 		await publishAgentSessionPointerInTx(tx, input.owner, input.agentSessionId);
 	}

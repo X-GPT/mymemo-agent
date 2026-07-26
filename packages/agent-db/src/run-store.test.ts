@@ -828,6 +828,29 @@ describe("transitionRunTerminalTx", () => {
 		expect(run?.status).toBe(status);
 	});
 
+	it("rejects runtime-erased pointer evidence on an error Outcome", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		const invalidInput = {
+			owner: owner(),
+			status: "error",
+			agentSessionId: "session-invalid",
+		} as unknown as Parameters<typeof transitionRunTerminalTx>[1];
+
+		await expect(
+			transitionRunTerminalTx(tdb.db, invalidInput),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		const [run] = await tdb.db.select().from(runs);
+		expect(runtime?.agentSessionId).toBeNull();
+		expect(run?.status).toBe("running");
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
 	it("rolls back a written pointer when the terminal Outcome loses a status race", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({

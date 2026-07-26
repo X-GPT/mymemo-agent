@@ -1,8 +1,5 @@
 import type { RunRecord } from "@mymemo/agent-db/run-store";
-import type {
-	ArtifactAwareQuery,
-	ArtifactPublication,
-} from "../artifacts/artifact-publication";
+import type { ArtifactAwareQuery } from "../artifacts/artifact-publication";
 import type { WorkerLogger } from "../logger";
 import type { RunProcessor } from "../run-loop";
 import {
@@ -88,10 +85,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				disposition,
 				streamMetadata: { ...streamMetadata, mirroredMainSessionId },
 				artifactPublication:
-					disposition === "completed"
-						? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??
-							null)
-						: null,
+					disposition === "completed" ? query.getArtifactPublication() : null,
 			};
 		} finally {
 			removeSupervisorStopListener();
