@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { type AGUIEvent, EventType } from "@ag-ui/core";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+	SDKMessage,
+	SDKMirrorErrorMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
 import { toMessage, type WorkerLogger } from "../logger";
 import type {
@@ -14,6 +17,7 @@ import {
 	AssistantMessageAssembler,
 	type EnvelopeCommit,
 } from "./assistant-message-assembler";
+import { sessionMirrorFailureCategory } from "./session-store";
 import {
 	projectToolResult,
 	projectToolUse,
@@ -87,14 +91,17 @@ export function sessionIdFromResult(message: SDKMessage): string | null {
 /** A `mirror_error` means the SDK dropped a transcript-mirror batch (at-most-once
  * delivery). It is a fail-fast stop signal, and the stored transcript is not
  * eligible to establish or advance the resume pointer. */
-export function isMirrorError(message: SDKMessage): boolean {
+export function isMirrorError(
+	message: SDKMessage,
+): message is SDKMirrorErrorMessage {
 	return message.type === "system" && message.subtype === "mirror_error";
 }
 
 /**
  * What a settled stream reports back for supervisor reconciliation and
  * Conversation continuity (ADR-0005): its neutral disposition, observed
- * session id, and whether a `mirror_error` made the transcript unreliable.
+ * session id, and whether a `mirror_error` made the transcript unreliable,
+ * including only a redaction-safe failure category.
  */
 export interface AgentStreamOutcome extends TurnStreamMetadata {
 	/** Whether the query completed itself or settled after a stop request. */
@@ -161,6 +168,7 @@ export async function consumeAgentStream(
 		disposition: "completed",
 		sessionId: null,
 		mirrorErrorObserved: false,
+		mirrorErrorCategory: null,
 	};
 	let liveMessageMatchesCompletion = true;
 	const assembler = new AssistantMessageAssembler({
@@ -359,31 +367,21 @@ export async function consumeAgentStream(
 	const forceClosedResult = forceClosedPromise.then(
 		() => ({ type: "force_closed" }) as const,
 	);
-	type StopFailureDetailPolicy = "include" | "redact";
-	let stopFailureDetailPolicy: StopFailureDetailPolicy = "include";
-	const queryStopFailureFields = (
-		message: string,
-		error: unknown,
-		detailPolicy: StopFailureDetailPolicy,
-	): Record<string, unknown> => ({
-		message,
-		runId: params.runId,
-		...(detailPolicy === "redact" ? {} : { error: toMessage(error) }),
-	});
 	const reportUnexpectedStoppedStreamFailure = (error: unknown): void => {
 		if (isExpectedStopError(error)) return;
-		params.logger?.error(
-			queryStopFailureFields(
-				"agent query failed while stopping",
-				error,
-				stopFailureDetailPolicy,
-			),
-		);
+		params.logger?.error({
+			message: "agent query failed while stopping",
+			runId: params.runId,
+			// A late drain failure after mirror_error may repeat the SDK's raw
+			// provider/transcript detail. The observed mirror flag is monotonic,
+			// so neither a prior interruption nor a later operational close can
+			// re-enable that detail.
+			...(outcome.mirrorErrorObserved ? {} : { error: toMessage(error) }),
+		});
 	};
-	const stop = (detailPolicy: StopFailureDetailPolicy = "include"): void => {
+	const stop = (): void => {
 		if (stopRequested) return;
 		stopRequested = true;
-		stopFailureDetailPolicy = detailPolicy;
 		// The Run signal has already fired, cancelling active Tool work. Invoke the
 		// cause-blind SDK control next, then bound how long its stream may drain.
 		void query.interrupt().catch(() => {});
@@ -395,29 +393,24 @@ export async function consumeAgentStream(
 				runId: params.runId,
 				stopDeadlineMs: QUERY_STOP_TIMEOUT_MS,
 			});
-			forceClose(stopFailureDetailPolicy);
+			forceClose();
 		});
 	};
-	const forceClose = (
-		detailPolicy: StopFailureDetailPolicy = "include",
-	): void => {
+	const forceClose = (): void => {
 		if (streamSettled || forceClosed) return;
 		stopRequested = true;
-		// An operational close can supersede a mirror-error drain. Its diagnostics
-		// are unrelated to the mirror and retain their ordinary error detail.
-		stopFailureDetailPolicy = detailPolicy;
 		stopDeadline?.cancel();
 		forceClosed = true;
 		try {
 			query.close();
 		} catch (error) {
-			params.logger?.error(
-				queryStopFailureFields(
-					"agent query force-close failed",
-					error,
-					detailPolicy,
-				),
-			);
+			// `close()` is an operational cleanup boundary, not the mirror
+			// stream payload. Keep its worker-only diagnostic on every stop path.
+			params.logger?.error({
+				message: "agent query force-close failed",
+				runId: params.runId,
+				error: toMessage(error),
+			});
 		} finally {
 			resolveForceClosed();
 		}
@@ -470,15 +463,18 @@ export async function consumeAgentStream(
 			// Track continuity signals before the stop skip: the supervisor still
 			// needs the observed metadata for its pointer and Outcome decisions.
 			const mirrorError = isMirrorError(message);
-			if (mirrorError) outcome.mirrorErrorObserved = true;
+			if (mirrorError) {
+				outcome.mirrorErrorObserved = true;
+				outcome.mirrorErrorCategory = sessionMirrorFailureCategory(
+					message.error,
+				);
+			}
 			const sessionId = sessionIdFromResult(message);
 			if (sessionId !== null) outcome.sessionId = sessionId;
 
 			if (mirrorError) {
 				params.abortRunScopedWork(new Error("agent session mirror failed"));
-				// SDK errors observed while draining this failure may echo provider
-				// or transcript details, so keep only their structured category.
-				stop("redact");
+				stop();
 				continue;
 			}
 			if (stopRequested) continue;

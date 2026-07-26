@@ -19,8 +19,8 @@ import {
  * later milestones own: the provisioned E2B sandbox and its clients, the bound
  * executor tools ({@link buildRunTools}), the OpenRouter model client, the docs
  * scope, and the resumed session. `signal` cancels Tool/E2B work for any
- * supervisor stop; the returned query's interrupt/close controls remain under
- * stream supervision.
+ * supervisor stop or fatal mirror failure; the returned query's interrupt/close
+ * controls remain under stream supervision.
  */
 export type StartRunQuery = (
 	run: RunRecord,
@@ -42,8 +42,9 @@ export interface SdkRunProcessorDeps {
  * supervisor-observed interruption to `interrupted` — is unchanged.
  *
  * Message appends, terminal transitions, and the ownership fence all belong to
- * the loop and run store; this processor only assembles SDK provider envelopes,
- * reports the session to resume from next turn, and lets errors propagate.
+ * the loop and run store. This processor owns the Run-scoped Tool/E2B signal,
+ * mediates supervisor and mirror-failure cancellation, assembles SDK provider
+ * envelopes, reports continuity metadata, and lets unstopped errors propagate.
  */
 export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 	return async (ctx) => {

@@ -157,9 +157,10 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			throw error;
 		}
 
-		// Every supervisor stop cancels Tool/E2B work immediately. SDK teardown is
-		// owned by stream supervision: durable interruption gets its bounded clean
-		// window, while operational failures and shutdown close immediately.
+		// Every Run-scoped stop, including a fatal transcript mirror failure,
+		// cancels Tool/E2B work immediately. SDK teardown is owned by stream
+		// supervision: durable interruption and mirror failure get the bounded
+		// clean window, while operational failures and shutdown close immediately.
 		const toolController = new AbortController();
 		const forceCloseController = new AbortController();
 		const stopToolWork = (): void => toolController.abort();

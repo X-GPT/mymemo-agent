@@ -37,6 +37,7 @@ import { ArtifactPublicationError } from "./artifacts/artifact-publication";
 import { toMessage, type WorkerLogger } from "./logger";
 import { DoorbellTicker, type RunDoorbell } from "./run-doorbell";
 import { RunLiveStream } from "./run-live-stream";
+import type { SessionMirrorFailureCategory } from "./sdk/session-store";
 import type { Worker } from "./worker";
 
 /**
@@ -49,14 +50,16 @@ export type TurnDisposition = "completed" | "stopped";
 export interface TurnStreamMetadata {
 	sessionId: string | null;
 	mirrorErrorObserved: boolean;
+	mirrorErrorCategory: SessionMirrorFailureCategory | null;
 }
 
 export interface TurnResult {
 	/** Cause-blind processor disposition; the supervisor chooses the Outcome. */
 	disposition: TurnDisposition;
 	/**
-	 * Cause-blind continuity observations from the SDK stream. The supervisor
-	 * alone decides whether the Outcome permits advancing the resume pointer.
+	 * Continuity observations and the redaction-safe mirror failure category
+	 * from the SDK stream. The supervisor alone decides the Outcome and whether
+	 * the resume pointer may advance.
 	 */
 	streamMetadata?: TurnStreamMetadata;
 	/** Changed files already ledgered and uploaded under fresh private keys. */
@@ -535,12 +538,13 @@ export class RunLoop {
 				artifactFailureLogFields(failure.error),
 			);
 		}
+		if (turnResult.streamMetadata?.mirrorErrorObserved) {
+			return this.failRun(run, "agent session mirror failed", {
+				reason: "mirror_error",
+				category: turnResult.streamMetadata.mirrorErrorCategory ?? "unknown",
+			});
+		}
 		if (turnResult.disposition === "stopped") {
-			if (turnResult.streamMetadata?.mirrorErrorObserved) {
-				return this.failRun(run, "agent session mirror failed", {
-					reason: "mirror_error",
-				});
-			}
 			return this.failRun(run, "run stopped before completion");
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
@@ -754,11 +758,7 @@ function artifactFailureLogFields(error: unknown): Record<string, unknown> {
 
 function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	const metadata = turnResult.streamMetadata;
-	if (
-		!metadata ||
-		metadata.sessionId === null ||
-		metadata.mirrorErrorObserved
-	) {
+	if (!metadata || metadata.sessionId === null) {
 		return undefined;
 	}
 	return metadata.sessionId;

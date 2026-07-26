@@ -3,6 +3,7 @@ import type {
 	SessionKey,
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { Database } from "@mymemo/agent-db/client";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import { agentSessions } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
@@ -10,6 +11,8 @@ import {
 	buildAgentSessionQueryConfig,
 	conversationWorkingDirectory,
 	createConversationSessionStore,
+	sessionMirrorAppendFailure,
+	sessionMirrorFailureCategory,
 } from "./session-store";
 
 let tdb: TestDb;
@@ -60,6 +63,34 @@ describe("createConversationSessionStore", () => {
 		expect(await store.load(mainKey())).toEqual([entry("a"), entry("b")]);
 	});
 
+	it("rethrows append failures with only a redaction-safe category", async () => {
+		const databaseError = Object.assign(
+			new Error("postgres connection detail"),
+			{ code: "ECONNRESET" },
+		);
+		const failingDb = {
+			insert() {
+				return {
+					values() {
+						return {
+							async onConflictDoNothing() {
+								throw databaseError;
+							},
+						};
+					},
+				};
+			},
+		} as unknown as Database;
+		const store = createConversationSessionStore(failingDb, {
+			conversationId: "conv-1",
+		});
+
+		await expect(store.append(mainKey(), [entry("a")])).rejects.toMatchObject({
+			message: "mymemo_session_mirror_append:database",
+			cause: databaseError,
+		});
+	});
+
 	it("returns null for a session that was never written", async () => {
 		const store = createConversationSessionStore(tdb.db, {
 			conversationId: "conv-1",
@@ -102,6 +133,32 @@ describe("createConversationSessionStore", () => {
 		await store.delete?.(mainKey());
 
 		expect(await store.load(mainKey())).toBeNull();
+	});
+});
+
+describe("session mirror failure categories", () => {
+	it("distinguishes SDK timeouts, database failures, serialization failures, and unknown errors", () => {
+		expect(
+			sessionMirrorFailureCategory(
+				"SessionStore.append() timed out after 60000ms for /private/path",
+			),
+		).toBe("append_timeout");
+		expect(
+			sessionMirrorFailureCategory(
+				sessionMirrorAppendFailure(
+					Object.assign(new Error("database detail"), { code: "57P01" }),
+				).message,
+			),
+		).toBe("database");
+		expect(
+			sessionMirrorFailureCategory(
+				sessionMirrorAppendFailure(new TypeError("serialization detail"))
+					.message,
+			),
+		).toBe("serialization");
+		expect(sessionMirrorFailureCategory("unclassified provider detail")).toBe(
+			"unknown",
+		);
 	});
 });
 

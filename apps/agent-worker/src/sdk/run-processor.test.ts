@@ -131,7 +131,7 @@ function mirrorErrorMessage(): SDKMessage {
 	return {
 		type: "system",
 		subtype: "mirror_error",
-		error: "provider transcript detail",
+		error: "mymemo_session_mirror_append:database",
 		key: { projectKey: "p", sessionId: "s" },
 		uuid: "u",
 		session_id: "s",
@@ -663,8 +663,11 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 			runId: "run-1",
 			reason: "mirror_error",
+			category: "database",
 		});
-		expect(JSON.stringify(errors)).not.toContain("provider transcript detail");
+		expect(JSON.stringify(errors)).not.toContain(
+			"mymemo_session_mirror_append",
+		);
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect(runtime?.agentSessionId).toBeNull();
 	});

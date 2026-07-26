@@ -36,11 +36,13 @@ function resultMessage(sessionId?: string): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
-function mirrorErrorMessage(): SDKMessage {
+function mirrorErrorMessage(
+	error = "SessionStore.append() timed out after 60000ms for /private/path",
+): SDKMessage {
 	return {
 		type: "system",
 		subtype: "mirror_error",
-		error: "append timed out",
+		error,
 		key: { projectKey: "p", sessionId: "s" },
 		uuid: "u",
 		session_id: "s",
@@ -333,6 +335,7 @@ describe("consumeAgentStream", () => {
 			disposition: "completed",
 			sessionId: "session-42",
 			mirrorErrorObserved: false,
+			mirrorErrorCategory: null,
 		});
 		expect(appended).toHaveLength(1);
 		expect(appended[0]).toMatchObject({ text: "complete text" });
@@ -914,13 +917,14 @@ describe("consumeAgentStream", () => {
 			disposition: "stopped",
 			sessionId: "session-7",
 			mirrorErrorObserved: true,
+			mirrorErrorCategory: "append_timeout",
 		});
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 		expect(deadlineMs).toBe(30_000);
 		expect(deadlineCancelled).toBe(true);
 	});
 
-	it("redacts late SDK and force-close errors after mirror_error", async () => {
+	it("retains deadline close detail but redacts the late mirror drain", async () => {
 		const deadlineElapsed = deferred();
 		const nextRequested = deferred();
 		const lateNext = Promise.withResolvers<IteratorResult<SDKMessage>>();
@@ -971,6 +975,7 @@ describe("consumeAgentStream", () => {
 		expect(await consuming).toMatchObject({
 			disposition: "stopped",
 			mirrorErrorObserved: true,
+			mirrorErrorCategory: "append_timeout",
 		});
 		lateNext.reject(new Error("transcript drain detail"));
 		await Promise.resolve();
@@ -979,17 +984,17 @@ describe("consumeAgentStream", () => {
 			{
 				message: "agent query force-close failed",
 				runId: "run-1",
+				error: "provider close detail",
 			},
 			{
 				message: "agent query failed while stopping",
 				runId: "run-1",
 			},
 		]);
-		expect(JSON.stringify(errors)).not.toContain("provider close detail");
 		expect(JSON.stringify(errors)).not.toContain("transcript drain detail");
 	});
 
-	it("retains failure details when an operational close supersedes a mirror stop", async () => {
+	it("retains operational close detail without exposing its inherited mirror drain", async () => {
 		const forceCloseController = new AbortController();
 		const nextRequested = deferred();
 		const lateNext = Promise.withResolvers<IteratorResult<SDKMessage>>();
@@ -1041,6 +1046,7 @@ describe("consumeAgentStream", () => {
 		expect(await consuming).toMatchObject({
 			disposition: "stopped",
 			mirrorErrorObserved: true,
+			mirrorErrorCategory: "append_timeout",
 		});
 		lateNext.reject(new Error("operational iterator detail"));
 		await Promise.resolve();
@@ -1054,9 +1060,51 @@ describe("consumeAgentStream", () => {
 			{
 				message: "agent query failed while stopping",
 				runId: "run-1",
-				error: "operational iterator detail",
 			},
 		]);
+		expect(JSON.stringify(errors)).not.toContain("operational iterator detail");
+	});
+
+	it("redacts a mirror drain that began as an interruption", async () => {
+		const interruptionController = new AbortController();
+		interruptionController.abort();
+		const errors: Record<string, unknown>[] = [];
+		const outcome = await consumeAgentStream({
+			runId: "run-1",
+			query: fakeQuery([
+				{ message: mirrorErrorMessage() },
+				{ throw: new Error("interruption-first transcript detail") },
+			]),
+			interruptionSignal: interruptionController.signal,
+			abortRunScopedWork: () => {},
+			appendModelContents: async () => {},
+			startStopDeadline: () => ({
+				elapsed: new Promise(() => {}),
+				cancel() {},
+			}),
+			logger: {
+				info() {},
+				warn() {},
+				error(fields) {
+					errors.push(fields);
+				},
+			},
+		});
+
+		expect(outcome).toMatchObject({
+			disposition: "stopped",
+			mirrorErrorObserved: true,
+			mirrorErrorCategory: "append_timeout",
+		});
+		expect(errors).toEqual([
+			{
+				message: "agent query failed while stopping",
+				runId: "run-1",
+			},
+		]);
+		expect(JSON.stringify(errors)).not.toContain(
+			"interruption-first transcript detail",
+		);
 	});
 
 	it("appends text first, tool uses in block order, then results in block order", async () => {

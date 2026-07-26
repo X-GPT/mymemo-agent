@@ -13,6 +13,70 @@ import {
 	loadAgentSessionEntriesTx,
 } from "@mymemo/agent-db/session-store";
 
+export type SessionMirrorFailureCategory =
+	| "append_timeout"
+	| "database"
+	| "serialization"
+	| "unknown";
+
+const SESSION_MIRROR_APPEND_FAILURE_PREFIX =
+	"mymemo_session_mirror_append:" as const;
+const SESSION_STORE_APPEND_TIMEOUT_PREFIX =
+	"SessionStore.append() timed out after ";
+
+/**
+ * Convert an adapter failure into a category-only error before the SDK retries
+ * and eventually surfaces it as `mirror_error`. The original error remains
+ * available as `cause` inside the worker but cannot be copied into stream
+ * diagnostics.
+ */
+export function sessionMirrorAppendFailure(error: unknown): Error {
+	return new Error(
+		`${SESSION_MIRROR_APPEND_FAILURE_PREFIX}${appendFailureCategory(error)}`,
+		{ cause: error },
+	);
+}
+
+/** Derive the fixed, redaction-safe operator category from an SDK mirror error. */
+export function sessionMirrorFailureCategory(
+	error: string,
+): SessionMirrorFailureCategory {
+	if (error.startsWith(SESSION_STORE_APPEND_TIMEOUT_PREFIX)) {
+		return "append_timeout";
+	}
+	if (error.startsWith(SESSION_MIRROR_APPEND_FAILURE_PREFIX)) {
+		const category = error.slice(SESSION_MIRROR_APPEND_FAILURE_PREFIX.length);
+		if (
+			category === "database" ||
+			category === "serialization" ||
+			category === "unknown"
+		) {
+			return category;
+		}
+	}
+	return "unknown";
+}
+
+function appendFailureCategory(
+	error: unknown,
+): Exclude<SessionMirrorFailureCategory, "append_timeout"> {
+	if (error instanceof TypeError || error instanceof SyntaxError) {
+		return "serialization";
+	}
+	if (error && typeof error === "object") {
+		const code = "code" in error ? error.code : undefined;
+		const name = "name" in error ? error.name : undefined;
+		if (
+			typeof code === "string" ||
+			name === "DatabaseError" ||
+			name === "PostgresError"
+		) {
+			return "database";
+		}
+	}
+	return "unknown";
+}
+
 /**
  * Conversation continuity for the split runtime (ADR-0005, Task 7.3): the Claude
  * Agent SDK runs in stateless Fargate workers, so its worker-local transcript
@@ -54,7 +118,11 @@ export function createConversationSessionStore(
 	});
 	return {
 		async append(key, entries) {
-			await appendAgentSessionEntriesTx(db, ref(key), entries);
+			try {
+				await appendAgentSessionEntriesTx(db, ref(key), entries);
+			} catch (error) {
+				throw sessionMirrorAppendFailure(error);
+			}
 		},
 		async load(key) {
 			// The store round-trips exactly the SessionStoreEntry blobs the SDK
