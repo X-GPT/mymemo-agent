@@ -20,6 +20,7 @@ import {
 	markStaleRunsTx,
 	RunFenceError,
 	type RunRecord,
+	type TerminalOutcome,
 	type TerminalRunStatus,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
@@ -43,9 +44,12 @@ import type { Worker } from "./worker";
  */
 export type TurnDisposition = "completed" | "stopped";
 
-export interface TurnStreamMetadata {
+export interface AgentStreamMetadata {
 	sessionId: string | null;
 	mirrorErrorObserved: boolean;
+}
+
+export interface TurnStreamMetadata extends AgentStreamMetadata {
 	/** The bound SessionStore accepted a non-empty append for this exact main
 	 * session during the Run. Initialization and subagent mirrors do not count. */
 	mainSessionMirrored: boolean;
@@ -514,83 +518,81 @@ export class RunLoop {
 		turnResult: TurnResult,
 		failure?: { error: unknown },
 	): Promise<TerminalRunStatus | null> {
-		const runId = run.runId;
-		if (state.lostOwnership) {
-			this.opts.logger.warn({
-				message: "abandoning run after ownership loss",
-				workerId: this.workerId,
-				runId,
-			});
-			return null;
-		}
-		// Interruption wins over both success and failure: an SDK error raised
-		// while interrupting still surfaces as `interrupted`.
-		if (state.interrupted) {
-			return this.terminalize(
-				runId,
-				"interrupted",
-				undefined,
-				resumableAgentSessionId(turnResult),
-			);
-		}
-		if (failure) {
-			return this.failRun(
-				run,
-				"run failed",
-				artifactFailureLogFields(failure.error),
-			);
-		}
-		if (turnResult.streamMetadata?.mirrorErrorObserved) {
-			return this.failRun(run, "agent session mirror failed", {
-				reason: "mirror_error",
-			});
-		}
-		if (turnResult.disposition === "stopped") {
-			return this.failRun(run, "run stopped before completion");
-		}
-		// Success: terminalize `done` directly — there is no end-of-turn
-		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
-		// itself the persisted workspace. The terminal-success transition also
-		// publishes the conversation's first usable resume pointer in that same
-		// ownership-fenced transaction (ADR-0005).
 		const owner: RunOwnershipRef = {
 			userId: run.userId,
 			conversationId: run.conversationId,
 			runId: run.runId,
 			workerId: this.workerId,
 		};
-		if (turnResult.artifactPublication) {
-			return this.publishArtifactsAndFinish(owner, turnResult);
+		if (state.lostOwnership) {
+			this.opts.logger.warn({
+				message: "abandoning run after ownership loss",
+				workerId: this.workerId,
+				runId: owner.runId,
+			});
+			return null;
 		}
 		const agentSessionId = resumableAgentSessionId(turnResult);
-		return this.terminalize(runId, "done", undefined, agentSessionId);
+		// Interruption wins over both success and failure: an SDK error raised
+		// while interrupting still surfaces as `interrupted`.
+		if (state.interrupted) {
+			return this.terminalize(owner, {
+				status: "interrupted",
+				agentSessionId,
+			});
+		}
+		if (failure) {
+			return this.failRun(
+				owner,
+				"run failed",
+				artifactFailureLogFields(failure.error),
+			);
+		}
+		if (turnResult.streamMetadata?.mirrorErrorObserved) {
+			return this.failRun(owner, "agent session mirror failed", {
+				reason: "mirror_error",
+			});
+		}
+		if (turnResult.disposition === "stopped") {
+			return this.failRun(owner, "run stopped before completion");
+		}
+		// Success: terminalize `done` directly — there is no end-of-turn
+		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
+		// itself the persisted workspace. The terminal-success transition also
+		// publishes the conversation's first usable resume pointer in that same
+		// ownership-fenced transaction (ADR-0005).
+		if (turnResult.artifactPublication) {
+			return this.publishArtifactsAndFinish(owner, turnResult, agentSessionId);
+		}
+		return this.terminalize(owner, { status: "done", agentSessionId });
 	}
 
 	private failRun(
-		run: RunRecord,
+		owner: RunOwnershipRef,
 		message: string,
 		fields: Record<string, unknown> = {},
 	): Promise<TerminalRunStatus | null> {
 		this.opts.logger.error({
 			message,
 			workerId: this.workerId,
-			userId: run.userId,
-			conversationId: run.conversationId,
-			runId: run.runId,
+			userId: owner.userId,
+			conversationId: owner.conversationId,
+			runId: owner.runId,
 			...fields,
 		});
-		return this.terminalize(run.runId, "error", {
-			message: GENERIC_RUN_ERROR_MESSAGE,
+		return this.terminalize(owner, {
+			status: "error",
+			payload: { message: GENERIC_RUN_ERROR_MESSAGE },
 		});
 	}
 
 	private async publishArtifactsAndFinish(
 		owner: RunOwnershipRef,
 		turnResult: TurnResult,
+		agentSessionId: string | undefined,
 	): Promise<TerminalRunStatus | null> {
 		const publication = turnResult.artifactPublication;
 		if (!publication) return null;
-		const agentSessionId = resumableAgentSessionId(turnResult);
 		try {
 			await publishArtifactsAndTransitionRunDoneTx(this.opts.db, {
 				owner,
@@ -600,7 +602,7 @@ export class RunLoop {
 			return "done";
 		} catch (error) {
 			if (error instanceof RunFenceError) {
-				if (await this.tryTerminalInterrupted(owner.runId, agentSessionId)) {
+				if (await this.tryTerminalInterrupted(owner, agentSessionId)) {
 					return "interrupted";
 				}
 				this.opts.logger.warn({
@@ -626,8 +628,9 @@ export class RunLoop {
 							},
 						}),
 			});
-			return this.terminalize(owner.runId, "error", {
-				message: GENERIC_RUN_ERROR_MESSAGE,
+			return this.terminalize(owner, {
+				status: "error",
+				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
 			});
 		}
 	}
@@ -639,55 +642,26 @@ export class RunLoop {
 	 * `interrupt_requested`), so on a fence rejection try `interrupted` once; if even
 	 * that is fenced, stale-run recovery finishes the run.
 	 */
-	private terminalize(
-		runId: string,
-		status: "error",
-		payload?: { message: string },
-	): Promise<TerminalRunStatus | null>;
-	private terminalize(
-		runId: string,
-		status: "done" | "interrupted",
-		payload?: { message: string },
-		agentSessionId?: string,
-	): Promise<TerminalRunStatus | null>;
 	private async terminalize(
-		runId: string,
-		status: TerminalRunStatus,
-		payload?: { message: string },
-		agentSessionId?: string,
+		owner: RunOwnershipRef,
+		outcome: TerminalOutcome,
 	): Promise<TerminalRunStatus | null> {
 		try {
-			await transitionRunTerminalTx(
-				this.opts.db,
-				status === "error"
-					? {
-							runId,
-							workerId: this.workerId,
-							status,
-							payload,
-						}
-					: {
-							runId,
-							workerId: this.workerId,
-							status,
-							payload,
-							agentSessionId,
-						},
-			);
-			return status;
+			await transitionRunTerminalTx(this.opts.db, { owner, ...outcome });
+			return outcome.status;
 		} catch (error) {
 			if (error instanceof RunFenceError) {
 				if (
-					status !== "interrupted" &&
-					(await this.tryTerminalInterrupted(runId, agentSessionId))
+					outcome.status !== "interrupted" &&
+					(await this.tryTerminalInterrupted(owner, outcome.agentSessionId))
 				) {
 					return "interrupted";
 				}
 				this.opts.logger.warn({
 					message: "could not terminalize run; leaving to stale-run recovery",
 					workerId: this.workerId,
-					runId,
-					intended: status,
+					runId: owner.runId,
+					intended: outcome.status,
 				});
 				return null;
 			}
@@ -696,13 +670,12 @@ export class RunLoop {
 	}
 
 	private async tryTerminalInterrupted(
-		runId: string,
+		owner: RunOwnershipRef,
 		agentSessionId?: string,
 	): Promise<boolean> {
 		try {
 			await transitionRunTerminalTx(this.opts.db, {
-				runId,
-				workerId: this.workerId,
+				owner,
 				status: "interrupted",
 				agentSessionId,
 			});

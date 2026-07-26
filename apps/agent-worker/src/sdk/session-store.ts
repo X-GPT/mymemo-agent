@@ -24,16 +24,16 @@ import {
 } from "@mymemo/agent-db/session-store";
 import type { WorkerLogger } from "../logger";
 
-export interface ConversationSessionStore extends SessionStore {
-	/** True only when this adapter successfully mirrored at least one non-empty
-	 * batch for the named main transcript during the current Run. */
+/** Query-level projection of the bound adapter's per-Run mirror evidence. */
+export interface SessionMirrorEvidence {
+	/** True only while the named main transcript still exists after a successful
+	 * non-empty mirror during the current Run. */
 	hasMirroredMainSession(sessionId: string): boolean;
 }
 
-/** Query-level projection of the bound adapter's per-Run mirror evidence. */
-export interface SessionMirrorEvidence {
-	hasMirroredMainSession(sessionId: string): boolean;
-}
+export interface ConversationSessionStore
+	extends SessionStore,
+		SessionMirrorEvidence {}
 
 /**
  * The deterministic, conversation-stable working directory the worker runs every
@@ -128,6 +128,9 @@ export function createConversationSessionStore(
 				},
 				owner,
 			);
+			if (key.subpath === undefined || key.subpath === "") {
+				mirroredMainSessionIds.delete(key.sessionId);
+			}
 		},
 		hasMirroredMainSession(sessionId) {
 			return mirroredMainSessionIds.has(sessionId);

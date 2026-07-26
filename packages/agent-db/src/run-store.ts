@@ -8,13 +8,22 @@ import {
 	type RunScope,
 	validateDurableRunEventSequence,
 } from "./run-events";
-import { conversationRuntime, runEvents, runs } from "./schema";
+import {
+	ownedRunConditions,
+	RunFenceError,
+	type RunOwnershipRef,
+} from "./run-ownership";
+import { fencedRuntimeUpdateTx } from "./runtime-store";
+import { runEvents, runs } from "./schema";
+
+export { RunFenceError } from "./run-ownership";
 
 /**
- * Narrow transaction helpers over `runs`/`run_events` — the only write path for
- * run state (design doc "State Ownership"), shared by chat-api (run creation,
- * interruption requests) and agent-worker (claim/heartbeat/terminalize). Each
- * helper owns one transaction: sequence allocation is database-owned
+ * Transaction helpers over `runs`/`run_events`, plus Agent-session pointer
+ * publication composed into terminal Run transactions (design doc "State
+ * Ownership"). Shared by chat-api (run creation, interruption requests) and
+ * agent-worker (claim/heartbeat/terminalize). Each helper owns one transaction:
+ * sequence allocation is database-owned
  * (`runs.next_event_seq`, never app-side `max(seq) + 1`), and every status
  * change or append is fenced inside the same statement that performs it, so
  * app-side select/update races cannot happen through this module. The ownership
@@ -65,16 +74,6 @@ export type RecoveredRunRecord = RunRecord & {
  */
 export class ActiveRunConflictError extends Error {
 	override name = "ActiveRunConflictError";
-}
-
-/**
- * An ownership/status fence rejected the write: the run is not in a status
- * the append class allows, is owned by another worker, or the caller's
- * `locked_until` deadline has passed. The caller must stop treating the run
- * as its own; recovery (or the actual owner) is in charge now.
- */
-export class RunFenceError extends Error {
-	override name = "RunFenceError" as const;
 }
 
 /** An owned Run id was reused with different normalized admitted input. */
@@ -505,23 +504,25 @@ export async function transitionRunTerminalTx(
 	return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
 }
 
-interface TerminalTransitionBase {
-	runId: string;
-	workerId: string;
+interface TerminalOutcomeBase {
 	payload?: RunEventPayload;
 }
 
-export type TerminalTransitionInput =
-	| (TerminalTransitionBase & {
+export type TerminalOutcome =
+	| (TerminalOutcomeBase & {
 			status: "done" | "interrupted";
 			/** A session proven usable by a successful main-transcript mirror. When
 			 * present, pointer publication and the terminal Outcome are all-or-nothing. */
 			agentSessionId?: string;
 	  })
-	| (TerminalTransitionBase & {
+	| (TerminalOutcomeBase & {
 			status: "error";
 			agentSessionId?: never;
 	  });
+
+export type TerminalTransitionInput = TerminalOutcome & {
+	owner: RunOwnershipRef;
+};
 
 /**
  * Transaction-scoped form of {@link transitionRunTerminalTx}. Artifact
@@ -541,6 +542,14 @@ export async function transitionRunTerminalInTx(
 			"stale_worker is reserved for stale-Run recovery",
 		);
 	}
+	if (input.agentSessionId !== undefined) {
+		await fencedRuntimeUpdateTx(
+			tx,
+			input.owner,
+			"agent session pointer publication",
+			{ agentSessionId: input.agentSessionId },
+		);
+	}
 	const [row] = await tx
 		.update(runs)
 		.set({
@@ -553,38 +562,16 @@ export async function transitionRunTerminalInTx(
 		})
 		.where(
 			and(
-				eq(runs.runId, input.runId),
+				ownedRunConditions(input.owner),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
-				eq(runs.lockedBy, input.workerId),
-				sql`${runs.lockedUntil} > now()`,
 			),
 		)
 		.returning();
 	if (!row) {
 		throw new RunFenceError(
-			`terminal transition of run ${input.runId} to ${input.status} rejected: ` +
-				`run is already terminal, not transitionable to ${input.status}, or worker ${input.workerId} no longer owns it`,
+			`terminal transition of run ${input.owner.runId} to ${input.status} rejected: ` +
+				`run is already terminal, not transitionable to ${input.status}, or worker ${input.owner.workerId} no longer owns it`,
 		);
-	}
-	if (input.agentSessionId !== undefined) {
-		const [runtime] = await tx
-			.update(conversationRuntime)
-			.set({
-				agentSessionId: input.agentSessionId,
-				updatedAt: sql`now()`,
-			})
-			.where(
-				and(
-					eq(conversationRuntime.userId, row.userId),
-					eq(conversationRuntime.conversationId, row.conversationId),
-				),
-			)
-			.returning({ conversationId: conversationRuntime.conversationId });
-		if (!runtime) {
-			throw new Error(
-				`agent session pointer publication for conversation ${row.conversationId} failed: runtime row is missing`,
-			);
-		}
 	}
 	await insertTerminalEvent(tx, row, input.status, input.payload ?? {});
 	return toRunRecord(row);

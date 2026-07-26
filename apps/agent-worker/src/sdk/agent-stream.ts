@@ -4,9 +4,9 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
 import { toMessage, type WorkerLogger } from "../logger";
 import type {
+	AgentStreamMetadata,
 	ModelContent,
 	TurnDisposition,
-	TurnStreamMetadata,
 } from "../run-loop";
 import { AgUiTextStream } from "./ag-ui-text-stream";
 import {
@@ -96,8 +96,7 @@ export function isMirrorError(message: SDKMessage): boolean {
  * Conversation continuity (ADR-0005): its neutral disposition, observed
  * session id, and whether a `mirror_error` made the transcript unreliable.
  */
-export interface AgentStreamOutcome
-	extends Omit<TurnStreamMetadata, "mainSessionMirrored"> {
+export interface AgentStreamOutcome extends AgentStreamMetadata {
 	/** Whether the query completed itself or settled after a stop request. */
 	disposition: TurnDisposition;
 }

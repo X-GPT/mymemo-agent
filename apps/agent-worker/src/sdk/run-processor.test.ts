@@ -14,11 +14,13 @@ import {
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq } from "drizzle-orm";
+import type { ArtifactAwareQuery } from "../artifacts/artifact-publication";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import { Worker } from "../worker";
 import type { StartStopDeadline, SupervisedQuery } from "./agent-stream";
 import { createSdkRunProcessor, type StartRunQuery } from "./run-processor";
+import type { SessionMirrorEvidence } from "./session-store";
 import {
 	assistantBlock,
 	streamEvent,
@@ -138,6 +140,14 @@ function mirrorErrorMessage(): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
+function initMessage(sessionId: string): SDKMessage {
+	return {
+		type: "system",
+		subtype: "init",
+		session_id: sessionId,
+	} as unknown as SDKMessage;
+}
+
 function errorResultMessage(text: string): SDKMessage {
 	return {
 		type: "result",
@@ -147,10 +157,15 @@ function errorResultMessage(text: string): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
-function messageQuery(messages: SDKMessage[]): SupervisedQuery {
+function messageQuery(
+	messages: SDKMessage[],
+): SupervisedQuery & SessionMirrorEvidence {
 	return {
 		close() {},
 		async interrupt() {},
+		hasMirroredMainSession() {
+			return false;
+		},
 		async *[Symbol.asyncIterator]() {
 			for (const message of messages) yield message;
 		},
@@ -159,10 +174,13 @@ function messageQuery(messages: SDKMessage[]): SupervisedQuery {
 
 function stepQuery(
 	steps: Array<SDKMessage | { throw: unknown }>,
-): SupervisedQuery {
+): SupervisedQuery & SessionMirrorEvidence {
 	return {
 		close() {},
 		async interrupt() {},
+		hasMirroredMainSession() {
+			return false;
+		},
 		async *[Symbol.asyncIterator]() {
 			for (const step of steps) {
 				if ("throw" in step) throw step.throw;
@@ -172,9 +190,15 @@ function stepQuery(
 	};
 }
 
+type TestStartRunQuery = (
+	...args: Parameters<StartRunQuery>
+) => Promise<
+	SupervisedQuery & Partial<ArtifactAwareQuery> & Partial<SessionMirrorEvidence>
+>;
+
 function buildLoop(
 	worker: Worker,
-	startRunQuery: StartRunQuery,
+	startRunQuery: TestStartRunQuery,
 	logger: WorkerLogger = silentLogger,
 	startStopDeadline?: StartStopDeadline,
 ) {
@@ -183,7 +207,12 @@ function buildLoop(
 		worker,
 		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
-			startRunQuery,
+			startRunQuery: async (...args) => {
+				const query = await startRunQuery(...args);
+				return Object.assign(query, {
+					hasMirroredMainSession: query.hasMirroredMainSession ?? (() => false),
+				});
+			},
 			logger,
 			startStopDeadline,
 		}),
@@ -236,6 +265,37 @@ async function readEvents(runId: string) {
 }
 
 describe("createSdkRunProcessor — through the run loop", () => {
+	it("does not publish a pointer from an SDK initialization id alone", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId: run.runId,
+				workerId: "worker-1",
+			});
+			return messageQuery([
+				initMessage("session-initialized"),
+				resultMessage("session-initialized"),
+			]);
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(runtime?.agentSessionId).toBeNull();
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_done",
+		]);
+	});
+
 	it("publishes the first pointer only when the bound store mirrored that main session", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {

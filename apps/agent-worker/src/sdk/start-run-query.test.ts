@@ -615,8 +615,12 @@ describe("createStartRunQuery — fenced provisioning", () => {
 		});
 		await first.startRunQuery(run1, freshSignal());
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: WORKER_ID,
+			owner: {
+				runId: "run-1",
+				workerId: WORKER_ID,
+				userId: "user-1",
+				conversationId: "conv-1",
+			},
 			status: "done",
 		});
 

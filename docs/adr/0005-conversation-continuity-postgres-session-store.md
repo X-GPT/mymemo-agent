@@ -36,7 +36,8 @@ per-conversation resume pointer stored in `conversation_runtime`.
   established, later Runs directly continue under that same session id. A first
   pointer is written only inside an ownership-fenced `done` or `interrupted`
   terminal transaction, after at least one main-session entry was mirrored
-  successfully. Recovery never establishes or changes it.
+  successfully and remains present. An SDK delete of that main session
+  withdraws the Run's evidence. Recovery never establishes or changes it.
 - Every SDK transcript append or delete is atomically fenced by the active Run's
   status, `locked_by`, and unexpired `locked_until`. A stale worker cannot mutate
   the shared session after losing its ownership lease.

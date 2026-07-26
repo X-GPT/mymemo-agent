@@ -38,8 +38,8 @@ import {
 } from "./run-tools";
 import { startSandboxRenewal } from "./sandbox-renewal";
 import {
+	type AgentSessionQueryConfig,
 	buildAgentSessionQueryConfig,
-	type ConversationSessionStore,
 	conversationWorkingDirectory,
 	type SessionMirrorEvidence,
 } from "./session-store";
@@ -206,20 +206,30 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				workspace: provisioned.artifactWorkspace,
 				signal: toolController.signal,
 			});
-			const options = buildQueryOptions(deps, {
-				run,
-				owner,
+			const sessionConfig = buildAgentSessionQueryConfig({
+				db: deps.db,
+				conversationId: run.conversationId,
 				runtime,
-				provisioned,
-				documentScope,
-				toolController,
-				claudeConfigDir: claudeConfigDir.path,
+				runId: run.runId,
+				workerId: owner.workerId,
+				logger: deps.logger,
 			});
+			const options = buildQueryOptions(
+				deps,
+				{
+					run,
+					owner,
+					provisioned,
+					documentScope,
+					toolController,
+					claudeConfigDir: claudeConfigDir.path,
+				},
+				sessionConfig,
+			);
 			const underlying = deps.query({ prompt: started.message, options });
 			return superviseTurn({
 				underlying: withArtifactPublication(underlying, artifactPublication),
-				hasMirroredMainSession: (sessionId) =>
-					options.sessionStore.hasMirroredMainSession(sessionId),
+				sessionEvidence: sessionConfig.sessionStore,
 				settle,
 				renewalFailure: () => renewalFailure,
 				forceCloseSignal: forceCloseController.signal,
@@ -354,17 +364,16 @@ function buildQueryOptions(
 	input: {
 		run: RunRecord;
 		owner: RunOwnershipRef;
-		runtime: ConversationRuntimeRecord;
 		provisioned: ProvisionedSandbox;
 		documentScope: RunToolDeps["documentScope"];
 		toolController: AbortController;
 		claudeConfigDir: string;
 	},
-): Options & { sessionStore: ConversationSessionStore } {
+	sessionConfig: AgentSessionQueryConfig,
+): Options {
 	const {
 		run,
 		owner,
-		runtime,
 		provisioned,
 		documentScope,
 		toolController,
@@ -405,15 +414,6 @@ function buildQueryOptions(
 			});
 		},
 	};
-	const sessionConfig = buildAgentSessionQueryConfig({
-		db: deps.db,
-		conversationId: run.conversationId,
-		runtime,
-		runId: run.runId,
-		workerId: owner.workerId,
-		logger: deps.logger,
-	});
-
 	return {
 		// Provider envelope boundaries are the durable Assistant-message contract,
 		// so partial SDK stream events are required for live AG-UI text delivery.
@@ -454,7 +454,7 @@ function buildQueryOptions(
  */
 function superviseTurn(input: {
 	underlying: SupervisedQuery;
-	hasMirroredMainSession: (sessionId: string) => boolean;
+	sessionEvidence: SessionMirrorEvidence;
 	settle: () => Promise<void>;
 	renewalFailure: () => { error: unknown } | null;
 	forceCloseSignal: AbortSignal;
@@ -462,7 +462,7 @@ function superviseTurn(input: {
 }): SupervisedQuery & Partial<ArtifactAwareQuery> & SessionMirrorEvidence {
 	const {
 		underlying,
-		hasMirroredMainSession,
+		sessionEvidence,
 		settle,
 		renewalFailure,
 		forceCloseSignal,
@@ -471,7 +471,8 @@ function superviseTurn(input: {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
-		hasMirroredMainSession,
+		hasMirroredMainSession: (sessionId) =>
+			sessionEvidence.hasMirroredMainSession(sessionId),
 		close: () => {
 			try {
 				underlying.close();

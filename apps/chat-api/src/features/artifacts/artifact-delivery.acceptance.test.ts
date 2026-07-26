@@ -84,6 +84,7 @@ class AcceptanceWorkspace implements ArtifactWorkspace {
 
 function successfulQuery(onStart: () => void): SupervisedQuery {
 	return {
+		close() {},
 		async interrupt() {},
 		async *[Symbol.asyncIterator]() {
 			onStart();
@@ -139,7 +140,9 @@ function createDeliveryHarness(
 				const query = queries.get(run.runId);
 				if (!query) throw new Error(`missing query for ${run.runId}`);
 				const publication = await publisher.begin({ run, workspace, signal });
-				return withArtifactPublication(query, publication);
+				return Object.assign(withArtifactPublication(query, publication), {
+					hasMirroredMainSession: () => false,
+				});
 			},
 		}),
 		heartbeatIntervalMs: 15_000,

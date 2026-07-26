@@ -223,6 +223,20 @@ describe("createConversationSessionStore", () => {
 		await store.append(mainKey("sess-1"), [entry("main")]);
 		expect(store.hasMirroredMainSession("sess-1")).toBe(true);
 	});
+
+	it("withdraws main-session evidence when the SDK deletes that session", async () => {
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
+		await store.append(mainKey("sess-1"), [entry("main")]);
+		expect(store.hasMirroredMainSession("sess-1")).toBe(true);
+
+		await store.delete?.(mainKey("sess-1"));
+
+		expect(store.hasMirroredMainSession("sess-1")).toBe(false);
+		expect(await store.load(mainKey("sess-1"))).toBeNull();
+	});
 });
 
 describe("buildAgentSessionQueryConfig", () => {

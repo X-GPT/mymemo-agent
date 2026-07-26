@@ -175,7 +175,9 @@ function buildArtifactHarness(
 					workspace,
 					signal,
 				});
-				return withArtifactPublication(query, publication);
+				return Object.assign(withArtifactPublication(query, publication), {
+					hasMirroredMainSession: () => false,
+				});
 			},
 		}),
 		heartbeatIntervalMs: 15_000,
@@ -284,16 +286,19 @@ describe("Downloadable artifact publication through the Run loop", () => {
 						workspace,
 						signal,
 					});
-					return withArtifactPublication(
-						successfulQuery(() => {
-							workspace.write("report.txt", encoder.encode("hello"), "2");
-							workspace.write(
-								"chart.bin",
-								new Uint8Array([0, 255, 1, 254]),
-								"2",
-							);
-						}),
-						publication,
+					return Object.assign(
+						withArtifactPublication(
+							successfulQuery(() => {
+								workspace.write("report.txt", encoder.encode("hello"), "2");
+								workspace.write(
+									"chart.bin",
+									new Uint8Array([0, 255, 1, 254]),
+									"2",
+								);
+							}),
+							publication,
+						),
+						{ hasMirroredMainSession: () => false },
 					);
 				},
 			}),

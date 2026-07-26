@@ -27,7 +27,7 @@ export type StartRunQuery = (
 	run: RunRecord,
 	signal: AbortSignal,
 ) => Promise<
-	SupervisedQuery & Partial<ArtifactAwareQuery & SessionMirrorEvidence>
+	SupervisedQuery & Partial<ArtifactAwareQuery> & SessionMirrorEvidence
 >;
 
 export interface SdkRunProcessorDeps {
@@ -81,7 +81,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 			const { disposition, ...streamMetadata } = outcome;
 			const mainSessionMirrored =
 				streamMetadata.sessionId !== null &&
-				query.hasMirroredMainSession?.(streamMetadata.sessionId) === true;
+				query.hasMirroredMainSession(streamMetadata.sessionId);
 			return {
 				disposition,
 				streamMetadata: { ...streamMetadata, mainSessionMirrored },

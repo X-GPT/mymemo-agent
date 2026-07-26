@@ -1,16 +1,23 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Database } from "./client";
-import { RunFenceError } from "./run-store";
+import {
+	ownedRunConditions,
+	ownedRunExists,
+	type RunOwnershipRef,
+	rejectRunFence,
+} from "./run-ownership";
 import { conversationRuntime, orphanSandboxes, runs } from "./schema";
+
+export type { RunOwnershipRef } from "./run-ownership";
 
 /**
  * Narrow transaction helpers over `conversation_runtime` and
- * `orphan_sandboxes` — the only write path for persistent E2B workspace
- * metadata (design doc "State Ownership", Task 4.2). Shared by chat-api (which
- * owns run admission and conversation records) and agent-worker (which mutates
- * the sandbox and session pointers through these helpers), so the fenced write
- * protocol lives in exactly one place over one `pg` driver.
+ * `orphan_sandboxes`, plus the fenced runtime-update primitive used by terminal
+ * Run transactions (design doc "State Ownership", Task 4.2). Shared by chat-api
+ * and agent-worker so the runtime write protocol lives in one place over one
+ * `pg` driver. Sandbox/taint helpers live here; Agent-session pointer publication
+ * is composed by run-store with the terminal Outcome.
  * The table grants no execution ownership of its own: every mutation is fenced
  * on the claiming run's ownership in `runs` (`status` active,
  * `locked_by = workerId`, `locked_until > now()`): every update carries the
@@ -26,52 +33,8 @@ import { conversationRuntime, orphanSandboxes, runs } from "./schema";
  * durable.
  */
 
-/** Run statuses under which the owning worker may mutate runtime metadata. */
-const OWNED_ACTIVE_STATUSES = ["running", "interrupt_requested"] as const;
-
 /** A persisted runtime row. */
 export type ConversationRuntimeRecord = typeof conversationRuntime.$inferSelect;
-
-/**
- * The identity a fenced mutation acts under: the conversation's runtime row
- * being mutated plus the run/worker whose live ownership authorizes it.
- */
-export interface RunOwnershipRef {
-	userId: string;
-	conversationId: string;
-	runId: string;
-	workerId: string;
-}
-
-/**
- * The ownership fence as conditions on `runs`: satisfiable only while
- * `workerId` holds the named run for this exact conversation with an
- * unexpired lock. The single source of the fence — both the `EXISTS` form
- * and the create-path `FOR SHARE` check are built from it.
- */
-function ownedRunConditions(owner: RunOwnershipRef) {
-	return and(
-		eq(runs.runId, owner.runId),
-		eq(runs.userId, owner.userId),
-		eq(runs.conversationId, owner.conversationId),
-		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
-		eq(runs.lockedBy, owner.workerId),
-		sql`${runs.lockedUntil} > now()`,
-	);
-}
-
-/** {@link ownedRunConditions} as a predicate a mutating statement carries
- * inside itself, never as a separate app-side check. */
-function ownedRunExists(owner: RunOwnershipRef) {
-	return sql`exists (select 1 from ${runs} where ${ownedRunConditions(owner)})`;
-}
-
-function fenceRejected(owner: RunOwnershipRef, operation: string): never {
-	throw new RunFenceError(
-		`${operation} for conversation ${owner.conversationId} rejected: ` +
-			`worker ${owner.workerId} no longer owns run ${owner.runId}`,
-	);
-}
 
 /** Load the runtime row, or `null` when the conversation has none yet.
  * Reads are not fenced — only mutations need ownership. */
@@ -110,7 +73,7 @@ export async function createConversationRuntimeTx(
 			.from(runs)
 			.where(ownedRunConditions(owner))
 			.for("share");
-		if (!owned[0]) fenceRejected(owner, "runtime row creation");
+		if (!owned[0]) rejectRunFence(owner, "runtime row creation");
 
 		const [inserted] = await tx
 			.insert(conversationRuntime)
@@ -147,7 +110,7 @@ export async function updateRuntimeSandboxTx(
 	db: Database,
 	input: RunOwnershipRef & { sandboxId: string | null },
 ): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, input, "sandbox pointer update", {
+	return await fencedRuntimeUpdateTx(db, input, "sandbox pointer update", {
 		sandboxId: input.sandboxId,
 		sandboxTainted: false,
 	});
@@ -157,9 +120,9 @@ export async function updateRuntimeSandboxTx(
  * One fenced runtime UPDATE: the ownership predicate rides inside the same
  * statement as the write. Zero rows means the fence rejected (or the row was
  * never created — equally a caller that must stop treating the run as its
- * own), surfaced as {@link RunFenceError}.
+ * own), surfaced as the canonical Run fence error.
  */
-async function fencedRuntimeUpdate(
+export async function fencedRuntimeUpdateTx(
 	db: Pick<Database, "update">,
 	owner: RunOwnershipRef,
 	operation: string,
@@ -176,7 +139,7 @@ async function fencedRuntimeUpdate(
 			),
 		)
 		.returning();
-	if (!row) fenceRejected(owner, operation);
+	if (!row) rejectRunFence(owner, operation);
 	return row;
 }
 
@@ -189,7 +152,7 @@ export async function markRuntimeSandboxTaintedTx(
 	db: Database,
 	owner: RunOwnershipRef,
 ): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, owner, "sandbox taint mark", {
+	return await fencedRuntimeUpdateTx(db, owner, "sandbox taint mark", {
 		sandboxTainted: true,
 	});
 }

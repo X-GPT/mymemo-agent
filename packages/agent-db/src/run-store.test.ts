@@ -305,6 +305,14 @@ async function claimRun(
 	return claimed;
 }
 
+function owner(
+	runId = "run-1",
+	conversationId = "conv-1",
+	workerId = "worker-1",
+) {
+	return { runId, conversationId, workerId, userId: "user-1" };
+}
+
 /** Force a claimed run's locked_until past, as if the worker stalled. */
 async function expireOwnership(runId: string) {
 	await tdb.db
@@ -805,8 +813,7 @@ describe("transitionRunTerminalTx", () => {
 		}
 
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status,
 			agentSessionId: "session-first",
 		});
@@ -822,12 +829,11 @@ describe("transitionRunTerminalTx", () => {
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "done",
 				agentSessionId: "session-without-runtime",
 			}),
-		).rejects.toThrow(/session pointer/i);
+		).rejects.toBeInstanceOf(RunFenceError);
 
 		const [run] = await tdb.db.select().from(runs);
 		expect(run?.status).toBe("running");
@@ -844,8 +850,7 @@ describe("transitionRunTerminalTx", () => {
 		await expect(
 			// @ts-expect-error Error Outcomes cannot publish resume pointers.
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "error",
 				payload: { message: "Run failed" },
 				agentSessionId: "session-error",
@@ -875,8 +880,7 @@ describe("transitionRunTerminalTx", () => {
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "error",
 				payload: { message: "Run failed" },
 			}),
@@ -920,8 +924,7 @@ describe("transitionRunTerminalTx", () => {
 		}
 
 		const run = await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "error",
 			payload: { message: "Run failed" },
 		});
@@ -940,8 +943,7 @@ describe("transitionRunTerminalTx", () => {
 		});
 
 		const run = await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "done",
 		});
 
@@ -963,15 +965,13 @@ describe("transitionRunTerminalTx", () => {
 	it("rejects a second terminal transition for the same run", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "done",
 		});
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "error",
 				payload: { message: "boom" },
 			}),
@@ -989,15 +989,13 @@ describe("transitionRunTerminalTx", () => {
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "done",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
 
 		const run = await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "interrupted",
 		});
 		expect(run.status).toBe("interrupted");
@@ -1017,8 +1015,7 @@ describe("transitionRunTerminalTx", () => {
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "error",
 				payload: { message: "sdk exploded mid-interrupt" },
 			}),
@@ -1029,8 +1026,7 @@ describe("transitionRunTerminalTx", () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
 		const run = await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "error",
 			payload: { message: "sandbox died" },
 		});
@@ -1044,23 +1040,34 @@ describe("transitionRunTerminalTx", () => {
 
 	it("rejects a terminal transition from a non-owner or expired ownership", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			agentSessionId: "session-old",
+		});
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-2",
+				owner: owner("run-1", "conv-1", "worker-2"),
 				status: "done",
+				agentSessionId: "session-new",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("session-old");
 
 		await expireOwnership("run-1");
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "done",
+				agentSessionId: "session-new",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("session-old");
 	});
 });
 
@@ -1134,8 +1141,7 @@ describe("requestRunInterruptionTx", () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await requestRunInterruptionTx(tdb.db, ref);
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "interrupted",
 		});
 
@@ -1151,8 +1157,7 @@ describe("requestRunInterruptionTx", () => {
 	it("reports an already-terminal run without touching it", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "done",
 		});
 
@@ -1253,8 +1258,7 @@ describe("heartbeatRunTx", () => {
 	it("does not renew a terminal run", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "done",
 		});
 
@@ -1318,8 +1322,7 @@ describe("markLiveStreamFailedTx", () => {
 
 		await claimRun("run-terminal", "conv-terminal", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-terminal",
-			workerId: "worker-1",
+			owner: owner("run-terminal", "conv-terminal"),
 			status: "done",
 		});
 		const marked = await markLiveStreamFailedTx(tdb.db, {

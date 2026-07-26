@@ -63,9 +63,7 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 		artifacts: PublishedArtifact[];
 		agentSessionId?: string;
 	},
-): Promise<{
-	run: RunRecord;
-}> {
+): Promise<RunRecord> {
 	if (input.artifacts.length === 0) {
 		throw new Error("artifact publication requires at least one staged object");
 	}
@@ -146,13 +144,11 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 				.where(inArray(artifactObjects.objectKey, supersededKeys));
 		}
 
-		const run = await transitionRunTerminalInTx(tx, {
-			runId: input.owner.runId,
-			workerId: input.owner.workerId,
+		return await transitionRunTerminalInTx(tx, {
+			owner: input.owner,
 			status: "done",
 			agentSessionId: input.agentSessionId,
 		});
-		return { run };
 	});
 }
 

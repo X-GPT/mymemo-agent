@@ -1,6 +1,11 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import { type DbTx, RunFenceError } from "./run-store";
+import {
+	ownedRunConditions,
+	type RunMutationOwner,
+	rejectRunFence,
+} from "./run-ownership";
+import type { DbTx } from "./run-store";
 import { agentSessions, runs } from "./schema";
 
 /**
@@ -42,16 +47,11 @@ export interface AgentSessionRef {
 
 /** The active Run ownership that authorizes one SDK-requested transcript
  * mutation. Conversation-deletion cleanup deliberately does not use this. */
-export interface AgentSessionMutationOwner {
-	conversationId: string;
-	runId: string;
-	workerId: string;
-}
+export interface AgentSessionMutationOwner extends RunMutationOwner {}
 
 /** The main transcript's stored subpath — the empty string, since the SDK's
  * "omit the field" convention is not representable in a NOT NULL column. */
 const MAIN_SUBPATH = "";
-const OWNED_ACTIVE_STATUSES = ["running", "interrupt_requested"] as const;
 
 function normalizeSubpath(subpath: string | undefined): string {
 	return subpath ?? MAIN_SUBPATH;
@@ -71,28 +71,25 @@ export async function appendAgentSessionEntriesTx(
 	owner: AgentSessionMutationOwner,
 ): Promise<void> {
 	const subpath = normalizeSubpath(ref.subpath);
-	await withOwnedSessionMutation(
-		db,
-		ref.conversationId,
-		owner,
-		"session append",
-		async (tx) => {
-			if (entries.length === 0) return;
-			await tx
-				.insert(agentSessions)
-				.values(
-					entries.map((entry) => ({
-						conversationId: ref.conversationId,
-						projectKey: ref.projectKey,
-						sessionId: ref.sessionId,
-						subpath,
-						uuid: typeof entry.uuid === "string" ? entry.uuid : null,
-						entry,
-					})),
-				)
-				.onConflictDoNothing();
-		},
-	);
+	if (ref.conversationId !== owner.conversationId) {
+		rejectRunFence(owner, "session append");
+	}
+	await withOwnedSessionMutation(db, owner, "session append", async (tx) => {
+		if (entries.length === 0) return;
+		await tx
+			.insert(agentSessions)
+			.values(
+				entries.map((entry) => ({
+					conversationId: ref.conversationId,
+					projectKey: ref.projectKey,
+					sessionId: ref.sessionId,
+					subpath,
+					uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+					entry,
+				})),
+			)
+			.onConflictDoNothing();
+	});
 }
 
 /**
@@ -179,19 +176,16 @@ export async function deleteAgentSessionTx(
 	input: { conversationId: string; sessionId: string; subpath?: string },
 	owner: AgentSessionMutationOwner,
 ): Promise<void> {
-	await withOwnedSessionMutation(
-		db,
-		input.conversationId,
-		owner,
-		"session delete",
-		async (tx) => {
-			await tx
-				.delete(agentSessions)
-				.where(
-					transcriptWhere(input.conversationId, input.sessionId, input.subpath),
-				);
-		},
-	);
+	if (input.conversationId !== owner.conversationId) {
+		rejectRunFence(owner, "session delete");
+	}
+	await withOwnedSessionMutation(db, owner, "session delete", async (tx) => {
+		await tx
+			.delete(agentSessions)
+			.where(
+				transcriptWhere(input.conversationId, input.sessionId, input.subpath),
+			);
+	});
 }
 
 /**
@@ -211,7 +205,6 @@ export async function deleteConversationAgentSessionsTx(
 
 async function withOwnedSessionMutation(
 	db: Database,
-	conversationId: string,
 	owner: AgentSessionMutationOwner,
 	operation: string,
 	mutate: (tx: DbTx) => Promise<void>,
@@ -220,22 +213,10 @@ async function withOwnedSessionMutation(
 		const [owned] = await tx
 			.select({ runId: runs.runId })
 			.from(runs)
-			.where(
-				and(
-					eq(runs.runId, owner.runId),
-					eq(runs.conversationId, conversationId),
-					eq(runs.conversationId, owner.conversationId),
-					inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
-					eq(runs.lockedBy, owner.workerId),
-					sql`${runs.lockedUntil} > now()`,
-				),
-			)
+			.where(ownedRunConditions(owner))
 			.for("share");
 		if (!owned) {
-			throw new RunFenceError(
-				`${operation} for conversation ${conversationId} rejected: ` +
-					`worker ${owner.workerId} no longer owns run ${owner.runId}`,
-			);
+			rejectRunFence(owner, operation);
 		}
 		await mutate(tx);
 	});

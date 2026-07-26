@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import {
+	ArtifactQuotaError,
+	MAX_ARTIFACT_SIZE_BYTES,
 	publishArtifactsAndTransitionRunDoneTx,
 	recordArtifactObjectsTx,
 } from "./artifact-store";
@@ -257,5 +259,50 @@ describe("Downloadable artifact publication", () => {
 		expect(await tdb.db.select().from(artifactObjects)).toEqual([
 			expect.objectContaining({ status: "pending" }),
 		]);
+	});
+
+	it("leaves the first session pointer empty when artifact validation rejects publication", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+
+		await expect(
+			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+				owner: {
+					runId: "run-1",
+					workerId: "worker-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+				},
+				agentSessionId: "session-new",
+				artifacts: [
+					{
+						artifactId: "artifact-1",
+						path: "oversized.bin",
+						objectKey: "objects/oversized",
+						sizeBytes: MAX_ARTIFACT_SIZE_BYTES + 1,
+						contentType: "application/octet-stream",
+					},
+				],
+			}),
+		).rejects.toBeInstanceOf(ArtifactQuotaError);
+
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBeNull();
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("running");
+		expect(await tdb.db.select().from(runEvents)).toEqual([]);
 	});
 });
