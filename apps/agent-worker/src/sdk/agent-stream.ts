@@ -113,7 +113,7 @@ export interface ConsumeAgentStreamParams {
 	ownershipLostSignal?: AbortSignal;
 	/** Stops the Run-scoped Tool/E2B work before the cause-blind SDK interrupt
 	 * when the stream reports a fatal transcript mirror failure. */
-	abortRunScopedWork?: () => void;
+	abortRunScopedWork: (reason: unknown) => void;
 	/** Atomically persists canonical model-content events, fenced to `running`
 	 * upstream. Single events use a one-item batch. */
 	appendModelContents: (contents: readonly ModelContent[]) => Promise<void>;
@@ -359,23 +359,31 @@ export async function consumeAgentStream(
 	const forceClosedResult = forceClosedPromise.then(
 		() => ({ type: "force_closed" }) as const,
 	);
-	const stoppedQueryFailureFields = (
+	type StopFailureDetailPolicy = "include" | "redact";
+	let stopFailureDetailPolicy: StopFailureDetailPolicy = "include";
+	const queryStopFailureFields = (
 		message: string,
 		error: unknown,
+		detailPolicy: StopFailureDetailPolicy,
 	): Record<string, unknown> => ({
 		message,
 		runId: params.runId,
-		...(outcome.mirrorErrorObserved ? {} : { error: toMessage(error) }),
+		...(detailPolicy === "redact" ? {} : { error: toMessage(error) }),
 	});
 	const reportUnexpectedStoppedStreamFailure = (error: unknown): void => {
 		if (isExpectedStopError(error)) return;
 		params.logger?.error(
-			stoppedQueryFailureFields("agent query failed while stopping", error),
+			queryStopFailureFields(
+				"agent query failed while stopping",
+				error,
+				stopFailureDetailPolicy,
+			),
 		);
 	};
-	const stop = (): void => {
+	const stop = (detailPolicy: StopFailureDetailPolicy = "include"): void => {
 		if (stopRequested) return;
 		stopRequested = true;
+		stopFailureDetailPolicy = detailPolicy;
 		// The Run signal has already fired, cancelling active Tool work. Invoke the
 		// cause-blind SDK control next, then bound how long its stream may drain.
 		void query.interrupt().catch(() => {});
@@ -387,19 +395,28 @@ export async function consumeAgentStream(
 				runId: params.runId,
 				stopDeadlineMs: QUERY_STOP_TIMEOUT_MS,
 			});
-			forceClose();
+			forceClose(stopFailureDetailPolicy);
 		});
 	};
-	const forceClose = (): void => {
+	const forceClose = (
+		detailPolicy: StopFailureDetailPolicy = "include",
+	): void => {
 		if (streamSettled || forceClosed) return;
 		stopRequested = true;
+		// An operational close can supersede a mirror-error drain. Its diagnostics
+		// are unrelated to the mirror and retain their ordinary error detail.
+		stopFailureDetailPolicy = detailPolicy;
 		stopDeadline?.cancel();
 		forceClosed = true;
 		try {
 			query.close();
 		} catch (error) {
 			params.logger?.error(
-				stoppedQueryFailureFields("agent query force-close failed", error),
+				queryStopFailureFields(
+					"agent query force-close failed",
+					error,
+					detailPolicy,
+				),
 			);
 		} finally {
 			resolveForceClosed();
@@ -458,8 +475,10 @@ export async function consumeAgentStream(
 			if (sessionId !== null) outcome.sessionId = sessionId;
 
 			if (mirrorError) {
-				params.abortRunScopedWork?.();
-				stop();
+				params.abortRunScopedWork(new Error("agent session mirror failed"));
+				// SDK errors observed while draining this failure may echo provider
+				// or transcript details, so keep only their structured category.
+				stop("redact");
 				continue;
 			}
 			if (stopRequested) continue;
@@ -529,7 +548,7 @@ export async function consumeAgentStream(
 	}
 }
 
-function onAbort(
+export function onAbort(
 	signal: AbortSignal | undefined,
 	listener: () => void,
 ): () => void {

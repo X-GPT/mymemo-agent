@@ -536,12 +536,12 @@ export class RunLoop {
 			);
 		}
 		if (turnResult.disposition === "stopped") {
-			return this.failRun(
-				run,
-				turnResult.streamMetadata?.mirrorErrorObserved
-					? "agent session mirror failed"
-					: "run stopped before completion",
-			);
+			if (turnResult.streamMetadata?.mirrorErrorObserved) {
+				return this.failRun(run, "agent session mirror failed", {
+					reason: "mirror_error",
+				});
+			}
+			return this.failRun(run, "run stopped before completion");
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
 		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is

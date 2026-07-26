@@ -4,7 +4,8 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelContent } from "../run-loop";
 import {
 	AgentResultError,
-	consumeAgentStream,
+	type ConsumeAgentStreamParams,
+	consumeAgentStream as consumeAgentStreamWithRunScope,
 	isMirrorError,
 	type SupervisedQuery,
 	sessionIdFromResult,
@@ -90,6 +91,17 @@ function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
 		},
 	};
 	return query;
+}
+
+function consumeAgentStream(
+	params: Omit<ConsumeAgentStreamParams, "abortRunScopedWork"> & {
+		abortRunScopedWork?: ConsumeAgentStreamParams["abortRunScopedWork"];
+	},
+) {
+	return consumeAgentStreamWithRunScope({
+		abortRunScopedWork: () => {},
+		...params,
+	});
 }
 
 type AssistantCommit = Extract<
@@ -975,6 +987,76 @@ describe("consumeAgentStream", () => {
 		]);
 		expect(JSON.stringify(errors)).not.toContain("provider close detail");
 		expect(JSON.stringify(errors)).not.toContain("transcript drain detail");
+	});
+
+	it("retains failure details when an operational close supersedes a mirror stop", async () => {
+		const forceCloseController = new AbortController();
+		const nextRequested = deferred();
+		const lateNext = Promise.withResolvers<IteratorResult<SDKMessage>>();
+		const errors: Record<string, unknown>[] = [];
+		let nextCalls = 0;
+		const query: SupervisedQuery = {
+			async interrupt() {},
+			close() {
+				throw new Error("operational close detail");
+			},
+			[Symbol.asyncIterator]() {
+				return {
+					next() {
+						nextCalls++;
+						if (nextCalls === 1) {
+							return Promise.resolve({
+								done: false,
+								value: mirrorErrorMessage(),
+							});
+						}
+						nextRequested.resolve();
+						return lateNext.promise;
+					},
+				};
+			},
+		};
+		const consuming = consumeAgentStream({
+			runId: "run-1",
+			query,
+			interruptionSignal: new AbortController().signal,
+			forceCloseSignals: [forceCloseController.signal],
+			abortRunScopedWork: () => {},
+			appendModelContents: async () => {},
+			startStopDeadline: () => ({
+				elapsed: new Promise(() => {}),
+				cancel() {},
+			}),
+			logger: {
+				info() {},
+				warn() {},
+				error(fields) {
+					errors.push(fields);
+				},
+			},
+		});
+		await nextRequested.promise;
+
+		forceCloseController.abort();
+		expect(await consuming).toMatchObject({
+			disposition: "stopped",
+			mirrorErrorObserved: true,
+		});
+		lateNext.reject(new Error("operational iterator detail"));
+		await Promise.resolve();
+
+		expect(errors).toEqual([
+			{
+				message: "agent query force-close failed",
+				runId: "run-1",
+				error: "operational close detail",
+			},
+			{
+				message: "agent query failed while stopping",
+				runId: "run-1",
+				error: "operational iterator detail",
+			},
+		]);
 	});
 
 	it("appends text first, tool uses in block order, then results in block order", async () => {

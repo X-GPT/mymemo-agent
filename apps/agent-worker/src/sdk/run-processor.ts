@@ -8,6 +8,7 @@ import type { RunProcessor } from "../run-loop";
 import {
 	type AgentStreamOutcome,
 	consumeAgentStream,
+	onAbort,
 	type StartStopDeadline,
 	type SupervisedQuery,
 } from "./agent-stream";
@@ -49,11 +50,10 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 		const runScopedController = new AbortController();
 		const forwardSupervisorStop = () =>
 			runScopedController.abort(ctx.signal.reason);
-		if (ctx.signal.aborted) forwardSupervisorStop();
-		else
-			ctx.signal.addEventListener("abort", forwardSupervisorStop, {
-				once: true,
-			});
+		const removeSupervisorStopListener = onAbort(
+			ctx.signal,
+			forwardSupervisorStop,
+		);
 		try {
 			const query = await deps.startRunQuery(
 				ctx.run,
@@ -68,7 +68,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 					...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
 				],
 				ownershipLostSignal: ctx.ownershipLostSignal,
-				abortRunScopedWork: () => runScopedController.abort(),
+				abortRunScopedWork: (reason) => runScopedController.abort(reason),
 				appendModelContents: ctx.appendModelContents,
 				appendLiveEvent: ctx.appendLiveEvent,
 				logger: deps.logger,
@@ -85,7 +85,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 						: null,
 			};
 		} finally {
-			ctx.signal.removeEventListener("abort", forwardSupervisorStop);
+			removeSupervisorStopListener();
 		}
 	};
 }

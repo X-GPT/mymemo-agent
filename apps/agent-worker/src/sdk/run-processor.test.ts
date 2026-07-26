@@ -575,6 +575,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const settled = Promise.withResolvers<void>();
 		const calls: string[] = [];
 		const errors: Record<string, unknown>[] = [];
+		let toolAbortReason: unknown;
+		let artifactPublicationReads = 0;
 		let deadlineMs: number | undefined;
 		let deadlineCancelled = false;
 		const logger: WorkerLogger = {
@@ -593,9 +595,14 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					runId: run.runId,
 					workerId: "worker-1",
 				});
-				signal.addEventListener("abort", () => calls.push("tool-abort"), {
-					once: true,
-				});
+				signal.addEventListener(
+					"abort",
+					() => {
+						calls.push("tool-abort");
+						toolAbortReason = signal.reason;
+					},
+					{ once: true },
+				);
 				return {
 					async interrupt() {
 						calls.push("interrupt");
@@ -609,6 +616,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 						yield resultMessage("session-unreliable");
 						yield mirrorErrorMessage();
 						await settled.promise;
+					},
+					getArtifactPublication() {
+						artifactPublicationReads++;
+						return { artifacts: [] };
 					},
 				};
 			},
@@ -633,6 +644,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		await worker.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
+		expect(toolAbortReason).toEqual(new Error("agent session mirror failed"));
+		expect(artifactPublicationReads).toBe(0);
 		expect(deadlineMs).toBe(30_000);
 		expect(deadlineCancelled).toBe(true);
 		expect((await readRun("run-1"))?.status).toBe("error");
@@ -649,6 +662,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			runId: "run-1",
+			reason: "mirror_error",
 		});
 		expect(JSON.stringify(errors)).not.toContain("provider transcript detail");
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
