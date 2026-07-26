@@ -1,3 +1,12 @@
+/**
+ * Conversation continuity for the split runtime (ADR-0005, Task 7.3): the Claude
+ * Agent SDK runs in stateless Fargate workers, so its worker-local transcript
+ * files cannot carry a conversation's model-side memory across turns. This
+ * module restores continuity by mirroring transcripts to the writable agent
+ * Postgres through the SDK's `SessionStore` seam, and pointing each turn's query
+ * at the previous turn's session.
+ */
+
 import type {
 	SessionKey,
 	SessionStore,
@@ -12,79 +21,7 @@ import {
 	listAgentSessionsTx,
 	loadAgentSessionEntriesTx,
 } from "@mymemo/agent-db/session-store";
-
-export type SessionMirrorFailureCategory =
-	| "append_timeout"
-	| "database"
-	| "serialization"
-	| "unknown";
-
-const SESSION_MIRROR_APPEND_FAILURE_PREFIX =
-	"mymemo_session_mirror_append:" as const;
-const SESSION_STORE_APPEND_TIMEOUT_PREFIX =
-	"SessionStore.append() timed out after ";
-
-/**
- * Convert an adapter failure into a category-only error before the SDK retries
- * and eventually surfaces it as `mirror_error`. The original error remains
- * available as `cause` inside the worker but cannot be copied into stream
- * diagnostics.
- */
-export function sessionMirrorAppendFailure(error: unknown): Error {
-	return new Error(
-		`${SESSION_MIRROR_APPEND_FAILURE_PREFIX}${appendFailureCategory(error)}`,
-		{ cause: error },
-	);
-}
-
-/** Derive the fixed, redaction-safe operator category from an SDK mirror error. */
-export function sessionMirrorFailureCategory(
-	error: string,
-): SessionMirrorFailureCategory {
-	if (error.startsWith(SESSION_STORE_APPEND_TIMEOUT_PREFIX)) {
-		return "append_timeout";
-	}
-	if (error.startsWith(SESSION_MIRROR_APPEND_FAILURE_PREFIX)) {
-		const category = error.slice(SESSION_MIRROR_APPEND_FAILURE_PREFIX.length);
-		if (
-			category === "database" ||
-			category === "serialization" ||
-			category === "unknown"
-		) {
-			return category;
-		}
-	}
-	return "unknown";
-}
-
-function appendFailureCategory(
-	error: unknown,
-): Exclude<SessionMirrorFailureCategory, "append_timeout"> {
-	if (error instanceof TypeError || error instanceof SyntaxError) {
-		return "serialization";
-	}
-	if (error && typeof error === "object") {
-		const code = "code" in error ? error.code : undefined;
-		const name = "name" in error ? error.name : undefined;
-		if (
-			typeof code === "string" ||
-			name === "DatabaseError" ||
-			name === "PostgresError"
-		) {
-			return "database";
-		}
-	}
-	return "unknown";
-}
-
-/**
- * Conversation continuity for the split runtime (ADR-0005, Task 7.3): the Claude
- * Agent SDK runs in stateless Fargate workers, so its worker-local transcript
- * files cannot carry a conversation's model-side memory across turns. This
- * module restores continuity by mirroring transcripts to the writable agent
- * Postgres through the SDK's `SessionStore` seam, and pointing each turn's query
- * at the previous turn's session.
- */
+import type { MirrorFailureCategory } from "../run-loop";
 
 /**
  * The deterministic, conversation-stable working directory the worker runs every
@@ -107,9 +44,12 @@ export function conversationWorkingDirectory(conversationId: string): string {
  */
 export function createConversationSessionStore(
 	db: Database,
-	binding: { conversationId: string },
+	binding: {
+		conversationId: string;
+		onAppendFailure?: (category: MirrorFailureCategory) => void;
+	},
 ): SessionStore {
-	const { conversationId } = binding;
+	const { conversationId, onAppendFailure } = binding;
 	const ref = (key: SessionKey) => ({
 		conversationId,
 		projectKey: key.projectKey,
@@ -121,7 +61,8 @@ export function createConversationSessionStore(
 			try {
 				await appendAgentSessionEntriesTx(db, ref(key), entries);
 			} catch (error) {
-				throw sessionMirrorAppendFailure(error);
+				onAppendFailure?.("database");
+				throw error;
 			}
 		},
 		async load(key) {
@@ -176,10 +117,14 @@ export function buildAgentSessionQueryConfig(input: {
 	db: Database;
 	conversationId: string;
 	runtime: ConversationRuntimeRecord | null;
+	onAppendFailure?: (category: MirrorFailureCategory) => void;
 }): AgentSessionQueryConfig {
-	const { db, conversationId, runtime } = input;
+	const { db, conversationId, runtime, onAppendFailure } = input;
 	const config: AgentSessionQueryConfig = {
-		sessionStore: createConversationSessionStore(db, { conversationId }),
+		sessionStore: createConversationSessionStore(db, {
+			conversationId,
+			onAppendFailure,
+		}),
 		cwd: conversationWorkingDirectory(conversationId),
 	};
 	const resume = runtime?.agentSessionId ?? undefined;

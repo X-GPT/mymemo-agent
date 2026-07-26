@@ -17,7 +17,6 @@ import {
 	AssistantMessageAssembler,
 	type EnvelopeCommit,
 } from "./assistant-message-assembler";
-import { sessionMirrorFailureCategory } from "./session-store";
 import {
 	projectToolResult,
 	projectToolUse,
@@ -39,6 +38,8 @@ export type SupervisedQuery = AsyncIterable<SDKMessage> & {
 	close(): void;
 	/** Optional query-local immediate close (for example, renewal failure). */
 	forceCloseSignal?: AbortSignal;
+	/** Bounded adapter diagnosis captured before the SDK emits mirror_error. */
+	getMirrorFailureCategory?(): TurnStreamMetadata["mirrorFailure"];
 };
 
 /**
@@ -100,8 +101,8 @@ export function isMirrorError(
 /**
  * What a settled stream reports back for supervisor reconciliation and
  * Conversation continuity (ADR-0005): its neutral disposition, observed
- * session id, and whether a `mirror_error` made the transcript unreliable,
- * including only a redaction-safe failure category.
+ * session id, and the bounded failure category when a `mirror_error` made the
+ * transcript unreliable.
  */
 export interface AgentStreamOutcome extends TurnStreamMetadata {
 	/** Whether the query completed itself or settled after a stop request. */
@@ -167,8 +168,7 @@ export async function consumeAgentStream(
 	const outcome: AgentStreamOutcome = {
 		disposition: "completed",
 		sessionId: null,
-		mirrorErrorObserved: false,
-		mirrorErrorCategory: null,
+		mirrorFailure: null,
 	};
 	let liveMessageMatchesCompletion = true;
 	const assembler = new AssistantMessageAssembler({
@@ -373,10 +373,10 @@ export async function consumeAgentStream(
 			message: "agent query failed while stopping",
 			runId: params.runId,
 			// A late drain failure after mirror_error may repeat the SDK's raw
-			// provider/transcript detail. The observed mirror flag is monotonic,
-			// so neither a prior interruption nor a later operational close can
+			// provider/transcript detail. The observed failure is monotonic, so
+			// neither a prior interruption nor a later operational close can
 			// re-enable that detail.
-			...(outcome.mirrorErrorObserved ? {} : { error: toMessage(error) }),
+			...(outcome.mirrorFailure !== null ? {} : { error: toMessage(error) }),
 		});
 	};
 	const stop = (): void => {
@@ -464,10 +464,7 @@ export async function consumeAgentStream(
 			// needs the observed metadata for its pointer and Outcome decisions.
 			const mirrorError = isMirrorError(message);
 			if (mirrorError) {
-				outcome.mirrorErrorObserved = true;
-				outcome.mirrorErrorCategory = sessionMirrorFailureCategory(
-					message.error,
-				);
+				outcome.mirrorFailure = query.getMirrorFailureCategory?.() ?? "unknown";
 			}
 			const sessionId = sessionIdFromResult(message);
 			if (sessionId !== null) outcome.sessionId = sessionId;

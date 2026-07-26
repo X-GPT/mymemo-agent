@@ -27,8 +27,9 @@ import {
 import type { FileToolLimits } from "../file-tools/file-tools";
 import type { WorkerLogger } from "../logger";
 import type { ModelClientConfig } from "../model-client";
+import type { MirrorFailureCategory } from "../run-loop";
 import type { RunBinding } from "../sandbox-env";
-import type { SupervisedQuery } from "./agent-stream";
+import { onAbort, type SupervisedQuery } from "./agent-stream";
 import type { StartRunQuery } from "./run-processor";
 import {
 	createRunMcpServer,
@@ -164,8 +165,8 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 		const toolController = new AbortController();
 		const forceCloseController = new AbortController();
 		const stopToolWork = (): void => toolController.abort();
-		if (signal.aborted) stopToolWork();
-		else signal.addEventListener("abort", stopToolWork, { once: true });
+		const removeToolStopListener = onAbort(signal, stopToolWork);
+		let mirrorFailure: MirrorFailureCategory | null = null;
 
 		let renewalFailure: { error: unknown } | null = null;
 		const renewal = startSandboxRenewal({
@@ -190,7 +191,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				// The paused sandbox IS the persisted workspace (ADR-0007): dispose
 				// only stops keeping it awake.
 				provisioned.dispose();
-				signal.removeEventListener("abort", stopToolWork);
+				removeToolStopListener();
 				await claudeConfigDir.dispose();
 			})();
 			return settlePromise;
@@ -213,12 +214,16 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				documentScope,
 				toolController,
 				claudeConfigDir: claudeConfigDir.path,
+				onSessionMirrorFailure: (category) => {
+					mirrorFailure ??= category;
+				},
 			});
 			const underlying = deps.query({ prompt: started.message, options });
 			return superviseTurn(
 				withArtifactPublication(underlying, artifactPublication),
 				settle,
 				() => renewalFailure,
+				() => mirrorFailure,
 				forceCloseController.signal,
 				(error) => {
 					deps.logger.error({
@@ -356,6 +361,7 @@ function buildQueryOptions(
 		documentScope: RunToolDeps["documentScope"];
 		toolController: AbortController;
 		claudeConfigDir: string;
+		onSessionMirrorFailure: (category: MirrorFailureCategory) => void;
 	},
 ): Options {
 	const {
@@ -366,6 +372,7 @@ function buildQueryOptions(
 		documentScope,
 		toolController,
 		claudeConfigDir,
+		onSessionMirrorFailure,
 	} = input;
 	const binding: RunBinding = {
 		userId: run.userId,
@@ -406,6 +413,7 @@ function buildQueryOptions(
 		db: deps.db,
 		conversationId: run.conversationId,
 		runtime,
+		onAppendFailure: onSessionMirrorFailure,
 	});
 
 	return {
@@ -450,6 +458,7 @@ function superviseTurn(
 	underlying: SupervisedQuery,
 	settle: () => Promise<void>,
 	renewalFailure: () => { error: unknown } | null,
+	mirrorFailure: () => MirrorFailureCategory | null,
 	forceCloseSignal: AbortSignal,
 	onDetachedSettleError: (error: unknown) => void,
 ): SupervisedQuery & Partial<ArtifactAwareQuery> {
@@ -467,6 +476,7 @@ function superviseTurn(
 			}
 		},
 		forceCloseSignal,
+		getMirrorFailureCategory: mirrorFailure,
 		...(artifactQuery.getArtifactPublication
 			? {
 					getArtifactPublication: () =>

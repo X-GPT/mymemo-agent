@@ -5,7 +5,7 @@ import type { ModelContent } from "../run-loop";
 import {
 	AgentResultError,
 	type ConsumeAgentStreamParams,
-	consumeAgentStream as consumeAgentStreamWithRunScope,
+	consumeAgentStream,
 	isMirrorError,
 	type SupervisedQuery,
 	sessionIdFromResult,
@@ -36,9 +36,7 @@ function resultMessage(sessionId?: string): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
-function mirrorErrorMessage(
-	error = "SessionStore.append() timed out after 60000ms for /private/path",
-): SDKMessage {
+function mirrorErrorMessage(error = "provider transcript detail"): SDKMessage {
 	return {
 		type: "system",
 		subtype: "mirror_error",
@@ -95,12 +93,10 @@ function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
 	return query;
 }
 
-function consumeAgentStream(
-	params: Omit<ConsumeAgentStreamParams, "abortRunScopedWork"> & {
-		abortRunScopedWork?: ConsumeAgentStreamParams["abortRunScopedWork"];
-	},
+function consumeAgentStreamWithNoopRunScope(
+	params: Omit<ConsumeAgentStreamParams, "abortRunScopedWork">,
 ) {
-	return consumeAgentStreamWithRunScope({
+	return consumeAgentStream({
 		abortRunScopedWork: () => {},
 		...params,
 	});
@@ -206,7 +202,7 @@ describe("isMirrorError", () => {
 describe("consumeAgentStream", () => {
 	it("emits standard Assistant text events and commits before message end", async () => {
 		const order: string[] = [];
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(
 				textEnvelope({ completeText: "hello" }).map((message) => ({ message })),
 			),
@@ -246,7 +242,7 @@ describe("consumeAgentStream", () => {
 		);
 		const events: Array<Record<string, unknown>> = [];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendLiveEvent: async (event) => {
@@ -288,7 +284,7 @@ describe("consumeAgentStream", () => {
 		};
 		let settled = false;
 
-		const result = consumeAgentStream({
+		const result = consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: new AbortController().signal,
 			appendLiveEvent: async (event) => {
@@ -324,7 +320,7 @@ describe("consumeAgentStream", () => {
 		]);
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query,
 				interruptionSignal: controller.signal,
 				appendModelContents: onAssistantCommit((message) =>
@@ -334,8 +330,7 @@ describe("consumeAgentStream", () => {
 		).resolves.toEqual({
 			disposition: "completed",
 			sessionId: "session-42",
-			mirrorErrorObserved: false,
-			mirrorErrorCategory: null,
+			mirrorFailure: null,
 		});
 		expect(appended).toHaveLength(1);
 		expect(appended[0]).toMatchObject({ text: "complete text" });
@@ -353,7 +348,7 @@ describe("consumeAgentStream", () => {
 			},
 		]);
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: onAssistantCommit((message) =>
@@ -378,7 +373,7 @@ describe("consumeAgentStream", () => {
 			{ message: messageAt(envelope, 5) },
 		]);
 
-		const outcome = await consumeAgentStream({
+		const outcome = await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: controller.signal,
 			appendModelContents: onAssistantCommit((message) =>
@@ -399,7 +394,7 @@ describe("consumeAgentStream", () => {
 			textEnvelope({ completeText: "never" }).map((message) => ({ message })),
 		);
 
-		const outcome = await consumeAgentStream({
+		const outcome = await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: controller.signal,
 			appendModelContents: onAssistantCommit((message) =>
@@ -431,7 +426,7 @@ describe("consumeAgentStream", () => {
 				await releaseStream.promise;
 			},
 		};
-		const consuming = consumeAgentStream({
+		const consuming = consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: stopController.signal,
 			ownershipLostSignal: ownershipController.signal,
@@ -481,7 +476,7 @@ describe("consumeAgentStream", () => {
 				};
 			},
 		};
-		const consuming = consumeAgentStream({
+		const consuming = consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: stopController.signal,
 			appendModelContents: async () => {},
@@ -517,7 +512,7 @@ describe("consumeAgentStream", () => {
 				};
 			},
 		};
-		const consuming = consumeAgentStream({
+		const consuming = consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: new AbortController().signal,
 			forceCloseSignals: [forceCloseController.signal],
@@ -559,7 +554,7 @@ describe("consumeAgentStream", () => {
 				return { next: () => nextMessage.promise };
 			},
 		};
-		const consuming = consumeAgentStream({
+		const consuming = consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: stopController.signal,
 			appendModelContents: async () => {},
@@ -598,7 +593,7 @@ describe("consumeAgentStream", () => {
 			},
 		};
 
-		const outcome = await consumeAgentStream({
+		const outcome = await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: stopController.signal,
 			ownershipLostSignal: ownershipController.signal,
@@ -628,7 +623,7 @@ describe("consumeAgentStream", () => {
 		]);
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query,
 				interruptionSignal: controller.signal,
 				appendModelContents: onAssistantCommit((message) =>
@@ -648,7 +643,7 @@ describe("consumeAgentStream", () => {
 		);
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query,
 				interruptionSignal: controller.signal,
 				appendModelContents: async () => {},
@@ -667,7 +662,7 @@ describe("consumeAgentStream", () => {
 		]);
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query,
 				interruptionSignal: new AbortController().signal,
 				appendModelContents: async () => {},
@@ -741,7 +736,7 @@ describe("consumeAgentStream", () => {
 			);
 
 			await expect(
-				consumeAgentStream({
+				consumeAgentStreamWithNoopRunScope({
 					query,
 					interruptionSignal: new AbortController().signal,
 					appendModelContents: captureModelContents(appended),
@@ -796,7 +791,7 @@ describe("consumeAgentStream", () => {
 			].map((message) => ({ message })),
 		);
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: onAssistantCommit((message) =>
@@ -843,7 +838,7 @@ describe("consumeAgentStream", () => {
 			].map((message) => ({ message })),
 		);
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: onAssistantCommit((message) =>
@@ -868,7 +863,7 @@ describe("consumeAgentStream", () => {
 		]);
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query,
 				interruptionSignal: controller.signal,
 				appendModelContents: async () => {},
@@ -882,6 +877,9 @@ describe("consumeAgentStream", () => {
 		let deadlineMs: number | undefined;
 		let deadlineCancelled = false;
 		const query: SupervisedQuery = {
+			getMirrorFailureCategory() {
+				return "database";
+			},
 			async interrupt() {
 				calls.push("interrupt");
 				settled.resolve();
@@ -916,8 +914,7 @@ describe("consumeAgentStream", () => {
 		expect(outcome).toEqual({
 			disposition: "stopped",
 			sessionId: "session-7",
-			mirrorErrorObserved: true,
-			mirrorErrorCategory: "append_timeout",
+			mirrorFailure: "database",
 		});
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 		expect(deadlineMs).toBe(30_000);
@@ -933,7 +930,7 @@ describe("consumeAgentStream", () => {
 		const query: SupervisedQuery = {
 			async interrupt() {},
 			close() {
-				throw new Error("provider close detail");
+				throw new Error("operational close detail");
 			},
 			[Symbol.asyncIterator]() {
 				return {
@@ -974,8 +971,7 @@ describe("consumeAgentStream", () => {
 		deadlineElapsed.resolve();
 		expect(await consuming).toMatchObject({
 			disposition: "stopped",
-			mirrorErrorObserved: true,
-			mirrorErrorCategory: "append_timeout",
+			mirrorFailure: "unknown",
 		});
 		lateNext.reject(new Error("transcript drain detail"));
 		await Promise.resolve();
@@ -984,7 +980,7 @@ describe("consumeAgentStream", () => {
 			{
 				message: "agent query force-close failed",
 				runId: "run-1",
-				error: "provider close detail",
+				error: "operational close detail",
 			},
 			{
 				message: "agent query failed while stopping",
@@ -1045,8 +1041,7 @@ describe("consumeAgentStream", () => {
 		forceCloseController.abort();
 		expect(await consuming).toMatchObject({
 			disposition: "stopped",
-			mirrorErrorObserved: true,
-			mirrorErrorCategory: "append_timeout",
+			mirrorFailure: "unknown",
 		});
 		lateNext.reject(new Error("operational iterator detail"));
 		await Promise.resolve();
@@ -1093,8 +1088,7 @@ describe("consumeAgentStream", () => {
 
 		expect(outcome).toMatchObject({
 			disposition: "stopped",
-			mirrorErrorObserved: true,
-			mirrorErrorCategory: "append_timeout",
+			mirrorFailure: "unknown",
 		});
 		expect(errors).toEqual([
 			{
@@ -1136,7 +1130,7 @@ describe("consumeAgentStream", () => {
 			resultMessage("session-1"),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1215,7 +1209,7 @@ describe("consumeAgentStream", () => {
 			]),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: async (contents) => {
@@ -1329,7 +1323,7 @@ describe("consumeAgentStream", () => {
 			resultMessage("session-file-1"),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1418,7 +1412,7 @@ describe("consumeAgentStream", () => {
 			resultMessage("session-documents-1"),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1469,7 +1463,7 @@ describe("consumeAgentStream", () => {
 			}),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1502,7 +1496,7 @@ describe("consumeAgentStream", () => {
 			},
 		]);
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1535,7 +1529,7 @@ describe("consumeAgentStream", () => {
 			),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1569,7 +1563,7 @@ describe("consumeAgentStream", () => {
 			]),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			runId: "run-1",
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
@@ -1608,7 +1602,7 @@ describe("consumeAgentStream", () => {
 			]),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1644,7 +1638,7 @@ describe("consumeAgentStream", () => {
 			resultMessage(),
 		];
 
-		const outcome = await consumeAgentStream({
+		const outcome = await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1652,7 +1646,7 @@ describe("consumeAgentStream", () => {
 		});
 
 		// The run continues and completes; visibility degrades, correctness does not.
-		expect(outcome.mirrorErrorObserved).toBe(false);
+		expect(outcome.mirrorFailure).toBeNull();
 		expect(appended).toEqual([]);
 		expect(warnings).toHaveLength(2);
 		expect(warnings[0]).toMatchObject({ toolName: "mcp__other-server__Bash" });
@@ -1681,7 +1675,7 @@ describe("consumeAgentStream", () => {
 			]),
 		];
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1737,7 +1731,7 @@ describe("consumeAgentStream", () => {
 			},
 		]);
 
-		const outcome = await consumeAgentStream({
+		const outcome = await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: controller.signal,
 			appendModelContents: captureModelContents(appended),
@@ -1769,7 +1763,7 @@ describe("consumeAgentStream", () => {
 			},
 		]);
 
-		const outcome = await consumeAgentStream({
+		const outcome = await consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: controller.signal,
 			appendModelContents: captureModelContents(appended),
@@ -1811,7 +1805,7 @@ describe("consumeAgentStream", () => {
 		});
 		const query = fakeQuery(messages.map((message) => ({ message })));
 
-		const consuming = consumeAgentStream({
+		const consuming = consumeAgentStreamWithNoopRunScope({
 			query,
 			interruptionSignal: controller.signal,
 			appendModelContents: async (contents) => {
@@ -1847,7 +1841,7 @@ describe("consumeAgentStream", () => {
 			],
 		});
 
-		await consumeAgentStream({
+		await consumeAgentStreamWithNoopRunScope({
 			runId: "run-1",
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
@@ -1880,7 +1874,7 @@ describe("consumeAgentStream", () => {
 			resultMessage("session-1"),
 		];
 
-		const outcome = await consumeAgentStream({
+		const outcome = await consumeAgentStreamWithNoopRunScope({
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: captureModelContents(appended),
@@ -1910,7 +1904,7 @@ describe("consumeAgentStream", () => {
 		});
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query: fakeQuery(messages.map((message) => ({ message }))),
 				interruptionSignal: new AbortController().signal,
 				appendModelContents: async (contents) => {
@@ -1940,7 +1934,7 @@ describe("consumeAgentStream", () => {
 		];
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query: fakeQuery(messages.map((message) => ({ message }))),
 				interruptionSignal: new AbortController().signal,
 				appendModelContents: async (contents) => {
@@ -1975,7 +1969,7 @@ describe("consumeAgentStream", () => {
 		];
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query: fakeQuery(messages.map((message) => ({ message }))),
 				interruptionSignal: new AbortController().signal,
 				appendModelContents: async () => {},
@@ -1994,7 +1988,7 @@ describe("consumeAgentStream", () => {
 		]);
 
 		await expect(
-			consumeAgentStream({
+			consumeAgentStreamWithNoopRunScope({
 				query,
 				interruptionSignal: controller.signal,
 				appendModelContents: onAssistantCommit((message) =>

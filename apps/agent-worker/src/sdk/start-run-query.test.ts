@@ -474,13 +474,14 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 			conversationId: "conv-1",
 		});
 
-		await h.startRunQuery(run, freshSignal());
+		const query = await h.startRunQuery(run, freshSignal());
 
 		expect(h.captured.options?.sessionStore).toBeDefined();
 		expect(h.captured.options?.cwd).toBe(
 			conversationWorkingDirectory("conv-1"),
 		);
 		expect(h.captured.options?.resume).toBeUndefined();
+		expect(query.getMirrorFailureCategory?.()).toBeNull();
 	});
 
 	it("creates the conversation working directory before starting the query", async () => {

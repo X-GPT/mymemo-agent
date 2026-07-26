@@ -682,8 +682,7 @@ describe("RunLoop — agent session pointer", () => {
 				disposition: "completed",
 				streamMetadata: {
 					sessionId: "session-abc",
-					mirrorErrorObserved: false,
-					mirrorErrorCategory: null,
+					mirrorFailure: null,
 				},
 			};
 		});
@@ -711,8 +710,7 @@ describe("RunLoop — agent session pointer", () => {
 				disposition: "stopped",
 				streamMetadata: {
 					sessionId: "session-unreliable",
-					mirrorErrorObserved: true,
-					mirrorErrorCategory: "database",
+					mirrorFailure: "database",
 				},
 			};
 		});
@@ -738,8 +736,7 @@ describe("RunLoop — agent session pointer", () => {
 				disposition: "completed",
 				streamMetadata: {
 					sessionId: "session-unreliable",
-					mirrorErrorObserved: true,
-					mirrorErrorCategory: "serialization",
+					mirrorFailure: "unknown",
 				},
 			};
 		});

@@ -37,7 +37,6 @@ import { ArtifactPublicationError } from "./artifacts/artifact-publication";
 import { toMessage, type WorkerLogger } from "./logger";
 import { DoorbellTicker, type RunDoorbell } from "./run-doorbell";
 import { RunLiveStream } from "./run-live-stream";
-import type { SessionMirrorFailureCategory } from "./sdk/session-store";
 import type { Worker } from "./worker";
 
 /**
@@ -47,10 +46,11 @@ import type { Worker } from "./worker";
  */
 export type TurnDisposition = "completed" | "stopped";
 
+export type MirrorFailureCategory = "database" | "unknown";
+
 export interface TurnStreamMetadata {
 	sessionId: string | null;
-	mirrorErrorObserved: boolean;
-	mirrorErrorCategory: SessionMirrorFailureCategory | null;
+	mirrorFailure: MirrorFailureCategory | null;
 }
 
 export interface TurnResult {
@@ -538,10 +538,11 @@ export class RunLoop {
 				artifactFailureLogFields(failure.error),
 			);
 		}
-		if (turnResult.streamMetadata?.mirrorErrorObserved) {
+		const mirrorFailure = turnResult.streamMetadata?.mirrorFailure;
+		if (mirrorFailure) {
 			return this.failRun(run, "agent session mirror failed", {
 				reason: "mirror_error",
-				category: turnResult.streamMetadata.mirrorErrorCategory ?? "unknown",
+				category: mirrorFailure,
 			});
 		}
 		if (turnResult.disposition === "stopped") {
@@ -758,7 +759,11 @@ function artifactFailureLogFields(error: unknown): Record<string, unknown> {
 
 function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	const metadata = turnResult.streamMetadata;
-	if (!metadata || metadata.sessionId === null) {
+	if (
+		!metadata ||
+		metadata.sessionId === null ||
+		metadata.mirrorFailure !== null
+	) {
 		return undefined;
 	}
 	return metadata.sessionId;
