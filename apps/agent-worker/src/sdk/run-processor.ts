@@ -8,6 +8,7 @@ import type { RunProcessor } from "../run-loop";
 import {
 	type AgentStreamOutcome,
 	consumeAgentStream,
+	onAbort,
 	type StartStopDeadline,
 	type SupervisedQuery,
 } from "./agent-stream";
@@ -18,8 +19,8 @@ import {
  * later milestones own: the provisioned E2B sandbox and its clients, the bound
  * executor tools ({@link buildRunTools}), the OpenRouter model client, the docs
  * scope, and the resumed session. `signal` cancels Tool/E2B work for any
- * supervisor stop; the returned query's interrupt/close controls remain under
- * stream supervision.
+ * supervisor stop or fatal mirror failure; the returned query's interrupt/close
+ * controls remain under stream supervision.
  */
 export type StartRunQuery = (
 	run: RunRecord,
@@ -41,35 +42,51 @@ export interface SdkRunProcessorDeps {
  * supervisor-observed interruption to `interrupted` — is unchanged.
  *
  * Message appends, terminal transitions, and the ownership fence all belong to
- * the loop and run store; this processor only assembles SDK provider envelopes,
- * reports the session to resume from next turn, and lets errors propagate.
+ * the loop and run store. This processor owns the Run-scoped Tool/E2B signal,
+ * mediates supervisor and mirror-failure cancellation, assembles SDK provider
+ * envelopes, reports continuity metadata, and lets unstopped errors propagate.
  */
 export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 	return async (ctx) => {
-		const query = await deps.startRunQuery(ctx.run, ctx.signal);
-		const outcome: AgentStreamOutcome = await consumeAgentStream({
-			runId: ctx.run.runId,
-			query,
-			interruptionSignal: ctx.interruptionSignal,
-			forceCloseSignals: [
-				ctx.shutdownSignal,
-				...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
-			],
-			ownershipLostSignal: ctx.ownershipLostSignal,
-			appendModelContents: ctx.appendModelContents,
-			appendLiveEvent: ctx.appendLiveEvent,
-			logger: deps.logger,
-			startStopDeadline: deps.startStopDeadline,
-		});
-		const { disposition, ...streamMetadata } = outcome;
-		return {
-			disposition,
-			streamMetadata,
-			artifactPublication:
-				disposition === "completed"
-					? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??
-						null)
-					: null,
-		};
+		const runScopedController = new AbortController();
+		const forwardSupervisorStop = () =>
+			runScopedController.abort(ctx.signal.reason);
+		const removeSupervisorStopListener = onAbort(
+			ctx.signal,
+			forwardSupervisorStop,
+		);
+		try {
+			const query = await deps.startRunQuery(
+				ctx.run,
+				runScopedController.signal,
+			);
+			const outcome: AgentStreamOutcome = await consumeAgentStream({
+				runId: ctx.run.runId,
+				query,
+				interruptionSignal: ctx.interruptionSignal,
+				forceCloseSignals: [
+					ctx.shutdownSignal,
+					...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
+				],
+				ownershipLostSignal: ctx.ownershipLostSignal,
+				abortRunScopedWork: (reason) => runScopedController.abort(reason),
+				appendModelContents: ctx.appendModelContents,
+				appendLiveEvent: ctx.appendLiveEvent,
+				logger: deps.logger,
+				startStopDeadline: deps.startStopDeadline,
+			});
+			const { disposition, ...streamMetadata } = outcome;
+			return {
+				disposition,
+				streamMetadata,
+				artifactPublication:
+					disposition === "completed"
+						? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??
+							null)
+						: null,
+			};
+		} finally {
+			removeSupervisorStopListener();
+		}
 	};
 }

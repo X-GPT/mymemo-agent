@@ -127,6 +127,17 @@ function resultMessage(sessionId = "session-1"): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
+function mirrorErrorMessage(): SDKMessage {
+	return {
+		type: "system",
+		subtype: "mirror_error",
+		error: "provider transcript detail",
+		key: { projectKey: "p", sessionId: "s" },
+		uuid: "u",
+		session_id: "s",
+	} as unknown as SDKMessage;
+}
+
 function errorResultMessage(text: string): SDKMessage {
 	return {
 		type: "result",
@@ -557,6 +568,183 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 		expect(seenRunId).toBe("run-1");
 		expect(sawSignal).toBe(true);
+	});
+
+	it("fails fast on mirror_error without establishing a first session pointer", async () => {
+		const worker = buildWorker();
+		const settled = Promise.withResolvers<void>();
+		const calls: string[] = [];
+		const errors: Record<string, unknown>[] = [];
+		let toolAbortReason: unknown;
+		let artifactPublicationReads = 0;
+		let deadlineMs: number | undefined;
+		let deadlineCancelled = false;
+		const logger: WorkerLogger = {
+			info() {},
+			warn() {},
+			error(fields) {
+				errors.push(fields);
+			},
+		};
+		const loop = buildLoop(
+			worker,
+			async (run, signal) => {
+				await createConversationRuntimeTx(tdb.db, {
+					userId: run.userId,
+					conversationId: run.conversationId,
+					runId: run.runId,
+					workerId: "worker-1",
+				});
+				signal.addEventListener(
+					"abort",
+					() => {
+						calls.push("tool-abort");
+						toolAbortReason = signal.reason;
+					},
+					{ once: true },
+				);
+				return {
+					async interrupt() {
+						calls.push("interrupt");
+						settled.resolve();
+					},
+					close() {
+						calls.push("close");
+						settled.resolve();
+					},
+					async *[Symbol.asyncIterator]() {
+						yield resultMessage("session-unreliable");
+						yield mirrorErrorMessage();
+						await settled.promise;
+					},
+					getArtifactPublication() {
+						artifactPublicationReads++;
+						return { artifacts: [] };
+					},
+				};
+			},
+			logger,
+			(timeoutMs) => {
+				deadlineMs = timeoutMs;
+				return {
+					elapsed: new Promise(() => {}),
+					cancel() {
+						deadlineCancelled = true;
+					},
+				};
+			},
+		);
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		expect(calls).toEqual(["tool-abort", "interrupt"]);
+		expect(toolAbortReason).toEqual(new Error("agent session mirror failed"));
+		expect(artifactPublicationReads).toBe(0);
+		expect(deadlineMs).toBe(30_000);
+		expect(deadlineCancelled).toBe(true);
+		expect((await readRun("run-1"))?.status).toBe("error");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_error",
+		]);
+		expect((await readEvents("run-1"))[0]?.payload).toEqual({
+			message: "Run failed",
+			outcome: "error",
+		});
+		expect(errors).toContainEqual({
+			message: "agent session mirror failed",
+			workerId: "worker-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+			runId: "run-1",
+			reason: "mirror_error",
+		});
+		expect(JSON.stringify(errors)).not.toContain("provider transcript detail");
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect(runtime?.agentSessionId).toBeNull();
+	});
+
+	it("lets an already-committed interruption win over mirror_error", async () => {
+		const worker = buildWorker();
+		const started = Promise.withResolvers<void>();
+		const releaseMirrorError = Promise.withResolvers<void>();
+		const calls: string[] = [];
+		const loop = buildLoop(worker, async (_run, signal) => {
+			signal.addEventListener("abort", () => calls.push("tool-abort"), {
+				once: true,
+			});
+			return {
+				async interrupt() {
+					calls.push("interrupt");
+				},
+				close() {
+					calls.push("close");
+				},
+				async *[Symbol.asyncIterator]() {
+					started.resolve();
+					await releaseMirrorError.promise;
+					yield mirrorErrorMessage();
+				},
+			};
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await loop.tick();
+		await started.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		releaseMirrorError.resolve();
+		await worker.drain();
+
+		expect(calls).toEqual(["tool-abort", "interrupt"]);
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_interrupted",
+		]);
+	});
+
+	it("retains an existing session pointer after mirror_error", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: run.userId,
+				conversationId: run.conversationId,
+				runId: run.runId,
+				workerId: "worker-1",
+			});
+			await tdb.db
+				.update(conversationRuntime)
+				.set({ agentSessionId: "session-existing" })
+				.where(eq(conversationRuntime.conversationId, run.conversationId));
+			return messageQuery([
+				resultMessage("session-unreliable"),
+				mirrorErrorMessage(),
+			]);
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("error");
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect(runtime?.agentSessionId).toBe("session-existing");
 	});
 
 	it("stops an interrupted Run cleanly inside the 30-second deadline", async () => {

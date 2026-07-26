@@ -932,8 +932,10 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		const query = await h.startRunQuery(run, controller.signal);
 		const consumed = consume(query);
 
-		controller.abort();
+		const stopReason = new Error("mirror stop");
+		controller.abort(stopReason);
 		expect(toolSignal?.aborted).toBe(true);
+		expect(toolSignal?.reason).toBe(stopReason);
 
 		await query.interrupt();
 		expect(gated.interrupts).toBe(1);

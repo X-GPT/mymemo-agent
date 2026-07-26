@@ -28,7 +28,7 @@ import type { FileToolLimits } from "../file-tools/file-tools";
 import type { WorkerLogger } from "../logger";
 import type { ModelClientConfig } from "../model-client";
 import type { RunBinding } from "../sandbox-env";
-import type { SupervisedQuery } from "./agent-stream";
+import { onAbort, type SupervisedQuery } from "./agent-stream";
 import type { StartRunQuery } from "./run-processor";
 import {
 	createRunMcpServer,
@@ -157,14 +157,14 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			throw error;
 		}
 
-		// Every supervisor stop cancels Tool/E2B work immediately. SDK teardown is
-		// owned by stream supervision: durable interruption gets its bounded clean
-		// window, while operational failures and shutdown close immediately.
+		// Every Run-scoped stop, including a fatal transcript mirror failure,
+		// cancels Tool/E2B work immediately. SDK teardown is owned by stream
+		// supervision: durable interruption and mirror failure get the bounded
+		// clean window, while operational failures and shutdown close immediately.
 		const toolController = new AbortController();
 		const forceCloseController = new AbortController();
-		const stopToolWork = (): void => toolController.abort();
-		if (signal.aborted) stopToolWork();
-		else signal.addEventListener("abort", stopToolWork, { once: true });
+		const stopToolWork = (): void => toolController.abort(signal.reason);
+		const removeToolStopListener = onAbort(signal, stopToolWork);
 
 		let renewalFailure: { error: unknown } | null = null;
 		const renewal = startSandboxRenewal({
@@ -189,7 +189,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				// The paused sandbox IS the persisted workspace (ADR-0007): dispose
 				// only stops keeping it awake.
 				provisioned.dispose();
-				signal.removeEventListener("abort", stopToolWork);
+				removeToolStopListener();
 				await claudeConfigDir.dispose();
 			})();
 			return settlePromise;
@@ -214,19 +214,19 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				claudeConfigDir: claudeConfigDir.path,
 			});
 			const underlying = deps.query({ prompt: started.message, options });
-			return superviseTurn(
-				withArtifactPublication(underlying, artifactPublication),
+			return superviseTurn({
+				underlying: withArtifactPublication(underlying, artifactPublication),
 				settle,
-				() => renewalFailure,
-				forceCloseController.signal,
-				(error) => {
+				renewalFailure: () => renewalFailure,
+				forceCloseSignal: forceCloseController.signal,
+				onDetachedSettleError: (error) => {
 					deps.logger.error({
 						message: "run resource cleanup failed after query close",
 						runId: run.runId,
 						error: toMessage(error),
 					});
 				},
-			);
+			});
 		} catch (error) {
 			await settle();
 			throw error;
@@ -405,6 +405,8 @@ function buildQueryOptions(
 		db: deps.db,
 		conversationId: run.conversationId,
 		runtime,
+		runId: run.runId,
+		logger: deps.logger,
 	});
 
 	return {
@@ -445,13 +447,20 @@ function buildQueryOptions(
  * the force-closed SDK stream ends without raising, the wrapper throws
  * {@link SandboxRenewalError} so the run terminalizes `error`, never `done`.
  */
-function superviseTurn(
-	underlying: SupervisedQuery,
-	settle: () => Promise<void>,
-	renewalFailure: () => { error: unknown } | null,
-	forceCloseSignal: AbortSignal,
-	onDetachedSettleError: (error: unknown) => void,
-): SupervisedQuery & Partial<ArtifactAwareQuery> {
+function superviseTurn(input: {
+	underlying: SupervisedQuery;
+	settle: () => Promise<void>;
+	renewalFailure: () => { error: unknown } | null;
+	forceCloseSignal: AbortSignal;
+	onDetachedSettleError: (error: unknown) => void;
+}): SupervisedQuery & Partial<ArtifactAwareQuery> {
+	const {
+		underlying,
+		settle,
+		renewalFailure,
+		forceCloseSignal,
+		onDetachedSettleError,
+	} = input;
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),

@@ -55,8 +55,8 @@ export interface TurnResult {
 	/** Cause-blind processor disposition; the supervisor chooses the Outcome. */
 	disposition: TurnDisposition;
 	/**
-	 * Cause-blind continuity observations from the SDK stream. The supervisor
-	 * alone decides whether the Outcome permits advancing the resume pointer.
+	 * Continuity observations from the SDK stream. The supervisor alone decides
+	 * the Outcome and whether the resume pointer may advance.
 	 */
 	streamMetadata?: TurnStreamMetadata;
 	/** Changed files already ledgered and uploaded under fresh private keys. */
@@ -535,6 +535,11 @@ export class RunLoop {
 				artifactFailureLogFields(failure.error),
 			);
 		}
+		if (turnResult.streamMetadata?.mirrorErrorObserved) {
+			return this.failRun(run, "agent session mirror failed", {
+				reason: "mirror_error",
+			});
+		}
 		if (turnResult.disposition === "stopped") {
 			return this.failRun(run, "run stopped before completion");
 		}
@@ -542,8 +547,7 @@ export class RunLoop {
 		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
 		// itself the persisted workspace. The terminal-success transition also
 		// advances the conversation's resume pointer, under the ownership fence
-		// (ADR-0005). Only a reported session with a reliable mirror advances it;
-		// a `mirror_error` keeps the observation but holds the pointer.
+		// (ADR-0005). Only a reported session with a reliable mirror advances it.
 		const owner: RunOwnershipRef = {
 			userId: run.userId,
 			conversationId: run.conversationId,
@@ -750,6 +754,8 @@ function artifactFailureLogFields(error: unknown): Record<string, unknown> {
 
 function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	const metadata = turnResult.streamMetadata;
+	// Keep pointer safety local to this injected RunProcessor seam even though
+	// finish() currently rejects mirror failures before reaching either caller.
 	if (
 		!metadata ||
 		metadata.sessionId === null ||

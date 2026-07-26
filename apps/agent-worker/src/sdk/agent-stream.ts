@@ -85,8 +85,8 @@ export function sessionIdFromResult(message: SDKMessage): string | null {
 }
 
 /** A `mirror_error` means the SDK dropped a transcript-mirror batch (at-most-once
- * delivery). If one occurred anywhere in the run, the resume pointer must not
- * advance — the stored transcript is missing entries. */
+ * delivery). It is a fail-fast stop signal, and the stored transcript is not
+ * eligible to establish or advance the resume pointer. */
 export function isMirrorError(message: SDKMessage): boolean {
 	return message.type === "system" && message.subtype === "mirror_error";
 }
@@ -111,6 +111,9 @@ export interface ConsumeAgentStreamParams {
 	/** Fires only after the ownership fence is gone; close immediately because
 	 * no private transcript drain is permitted beyond the lease. */
 	ownershipLostSignal?: AbortSignal;
+	/** Stops the Run-scoped Tool/E2B work before the cause-blind SDK interrupt
+	 * when the stream reports a fatal transcript mirror failure. */
+	abortRunScopedWork: (reason: unknown) => void;
 	/** Atomically persists canonical model-content events, fenced to `running`
 	 * upstream. Single events use a one-item batch. */
 	appendModelContents: (contents: readonly ModelContent[]) => Promise<void>;
@@ -141,7 +144,8 @@ export interface ConsumeAgentStreamParams {
  * failed append of valid Tool content fails the run exactly like Assistant
  * content.
  *
- * The moment the run is aborted it is no longer `running`, so:
+ * The moment the run is aborted or reports `mirror_error` it is no longer
+ * eligible to continue, so:
  *  - the query is interrupted (once), and
  *  - any further content is ignored — never appended.
  *
@@ -355,12 +359,19 @@ export async function consumeAgentStream(
 	const forceClosedResult = forceClosedPromise.then(
 		() => ({ type: "force_closed" }) as const,
 	);
+	// These catch boundaries intentionally differ: iterator failures originate
+	// in the provider stream and may repeat mirror payload detail, while
+	// query.close() below is a worker-side cleanup operation.
 	const reportUnexpectedStoppedStreamFailure = (error: unknown): void => {
 		if (isExpectedStopError(error)) return;
 		params.logger?.error({
 			message: "agent query failed while stopping",
 			runId: params.runId,
-			error: toMessage(error),
+			// A late drain failure after mirror_error may repeat the SDK's raw
+			// provider/transcript detail. The observed failure is monotonic, so
+			// neither a prior interruption nor a later operational close can
+			// re-enable that detail.
+			...(outcome.mirrorErrorObserved ? {} : { error: toMessage(error) }),
 		});
 	};
 	const stop = (): void => {
@@ -388,6 +399,8 @@ export async function consumeAgentStream(
 		try {
 			query.close();
 		} catch (error) {
+			// `close()` is an operational cleanup boundary, not the mirror
+			// stream payload. Keep its worker-only diagnostic on every stop path.
 			params.logger?.error({
 				message: "agent query force-close failed",
 				runId: params.runId,
@@ -442,9 +455,14 @@ export async function consumeAgentStream(
 			}
 			if (next.result.done) break;
 			const message = next.result.value;
-			// Track continuity signals before the abort skip: the pointer decision
-			// reflects the whole stream, not just its pre-interrupt prefix.
-			if (isMirrorError(message)) outcome.mirrorErrorObserved = true;
+			// Track continuity signals before the stop skip: the supervisor still
+			// needs the observed metadata for its pointer and Outcome decisions.
+			if (isMirrorError(message)) {
+				outcome.mirrorErrorObserved = true;
+				params.abortRunScopedWork(new Error("agent session mirror failed"));
+				stop();
+				continue;
+			}
 			const sessionId = sessionIdFromResult(message);
 			if (sessionId !== null) outcome.sessionId = sessionId;
 
@@ -515,7 +533,7 @@ export async function consumeAgentStream(
 	}
 }
 
-function onAbort(
+export function onAbort(
 	signal: AbortSignal | undefined,
 	listener: () => void,
 ): () => void {

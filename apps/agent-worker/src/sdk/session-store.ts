@@ -1,3 +1,12 @@
+/**
+ * Conversation continuity for the split runtime (ADR-0005, Task 7.3): the Claude
+ * Agent SDK runs in stateless Fargate workers, so its worker-local transcript
+ * files cannot carry a conversation's model-side memory across turns. This
+ * module restores continuity by mirroring transcripts to the writable agent
+ * Postgres through the SDK's `SessionStore` seam, and pointing each turn's query
+ * at the previous turn's session.
+ */
+
 import type {
 	SessionKey,
 	SessionStore,
@@ -12,15 +21,7 @@ import {
 	listAgentSessionsTx,
 	loadAgentSessionEntriesTx,
 } from "@mymemo/agent-db/session-store";
-
-/**
- * Conversation continuity for the split runtime (ADR-0005, Task 7.3): the Claude
- * Agent SDK runs in stateless Fargate workers, so its worker-local transcript
- * files cannot carry a conversation's model-side memory across turns. This
- * module restores continuity by mirroring transcripts to the writable agent
- * Postgres through the SDK's `SessionStore` seam, and pointing each turn's query
- * at the previous turn's session.
- */
+import type { WorkerLogger } from "../logger";
 
 /**
  * The deterministic, conversation-stable working directory the worker runs every
@@ -43,9 +44,13 @@ export function conversationWorkingDirectory(conversationId: string): string {
  */
 export function createConversationSessionStore(
 	db: Database,
-	binding: { conversationId: string },
+	binding: {
+		conversationId: string;
+		runId: string;
+		logger: WorkerLogger;
+	},
 ): SessionStore {
-	const { conversationId } = binding;
+	const { conversationId, runId, logger } = binding;
 	const ref = (key: SessionKey) => ({
 		conversationId,
 		projectKey: key.projectKey,
@@ -54,7 +59,19 @@ export function createConversationSessionStore(
 	});
 	return {
 		async append(key, entries) {
-			await appendAgentSessionEntriesTx(db, ref(key), entries);
+			try {
+				await appendAgentSessionEntriesTx(db, ref(key), entries);
+			} catch (error) {
+				logger.error({
+					message: "agent session mirror append failed",
+					runId,
+					conversationId,
+					// Error identity is useful to operators without exposing the
+					// transcript-bearing database error message.
+					errorType: error instanceof Error ? error.name : typeof error,
+				});
+				throw error;
+			}
 		},
 		async load(key) {
 			// The store round-trips exactly the SessionStoreEntry blobs the SDK
@@ -108,10 +125,16 @@ export function buildAgentSessionQueryConfig(input: {
 	db: Database;
 	conversationId: string;
 	runtime: ConversationRuntimeRecord | null;
+	runId: string;
+	logger: WorkerLogger;
 }): AgentSessionQueryConfig {
-	const { db, conversationId, runtime } = input;
+	const { db, conversationId, runtime, runId, logger } = input;
 	const config: AgentSessionQueryConfig = {
-		sessionStore: createConversationSessionStore(db, { conversationId }),
+		sessionStore: createConversationSessionStore(db, {
+			conversationId,
+			runId,
+			logger,
+		}),
 		cwd: conversationWorkingDirectory(conversationId),
 	};
 	const resume = runtime?.agentSessionId ?? undefined;
