@@ -457,18 +457,15 @@ export async function consumeAgentStream(
 			const message = next.result.value;
 			// Track continuity signals before the stop skip: the supervisor still
 			// needs the observed metadata for its pointer and Outcome decisions.
-			const mirrorError = isMirrorError(message);
-			if (mirrorError) {
+			if (isMirrorError(message)) {
 				outcome.mirrorErrorObserved = true;
-			}
-			const sessionId = sessionIdFromResult(message);
-			if (sessionId !== null) outcome.sessionId = sessionId;
-
-			if (mirrorError) {
 				params.abortRunScopedWork(new Error("agent session mirror failed"));
 				stop();
 				continue;
 			}
+			const sessionId = sessionIdFromResult(message);
+			if (sessionId !== null) outcome.sessionId = sessionId;
+
 			if (stopRequested) continue;
 			const errorText = resultErrorText(message);
 			if (errorText !== null) {
