@@ -27,7 +27,6 @@ import {
 import type { FileToolLimits } from "../file-tools/file-tools";
 import type { WorkerLogger } from "../logger";
 import type { ModelClientConfig } from "../model-client";
-import type { MirrorFailureCategory } from "../run-loop";
 import type { RunBinding } from "../sandbox-env";
 import { onAbort, type SupervisedQuery } from "./agent-stream";
 import type { StartRunQuery } from "./run-processor";
@@ -164,9 +163,8 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 		// clean window, while operational failures and shutdown close immediately.
 		const toolController = new AbortController();
 		const forceCloseController = new AbortController();
-		const stopToolWork = (): void => toolController.abort();
+		const stopToolWork = (): void => toolController.abort(signal.reason);
 		const removeToolStopListener = onAbort(signal, stopToolWork);
-		let mirrorFailure: MirrorFailureCategory | null = null;
 
 		let renewalFailure: { error: unknown } | null = null;
 		const renewal = startSandboxRenewal({
@@ -214,25 +212,21 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				documentScope,
 				toolController,
 				claudeConfigDir: claudeConfigDir.path,
-				onSessionMirrorFailure: (category) => {
-					mirrorFailure ??= category;
-				},
 			});
 			const underlying = deps.query({ prompt: started.message, options });
-			return superviseTurn(
-				withArtifactPublication(underlying, artifactPublication),
+			return superviseTurn({
+				underlying: withArtifactPublication(underlying, artifactPublication),
 				settle,
-				() => renewalFailure,
-				() => mirrorFailure,
-				forceCloseController.signal,
-				(error) => {
+				renewalFailure: () => renewalFailure,
+				forceCloseSignal: forceCloseController.signal,
+				onDetachedSettleError: (error) => {
 					deps.logger.error({
 						message: "run resource cleanup failed after query close",
 						runId: run.runId,
 						error: toMessage(error),
 					});
 				},
-			);
+			});
 		} catch (error) {
 			await settle();
 			throw error;
@@ -361,7 +355,6 @@ function buildQueryOptions(
 		documentScope: RunToolDeps["documentScope"];
 		toolController: AbortController;
 		claudeConfigDir: string;
-		onSessionMirrorFailure: (category: MirrorFailureCategory) => void;
 	},
 ): Options {
 	const {
@@ -372,7 +365,6 @@ function buildQueryOptions(
 		documentScope,
 		toolController,
 		claudeConfigDir,
-		onSessionMirrorFailure,
 	} = input;
 	const binding: RunBinding = {
 		userId: run.userId,
@@ -413,7 +405,8 @@ function buildQueryOptions(
 		db: deps.db,
 		conversationId: run.conversationId,
 		runtime,
-		onAppendFailure: onSessionMirrorFailure,
+		runId: run.runId,
+		logger: deps.logger,
 	});
 
 	return {
@@ -454,14 +447,20 @@ function buildQueryOptions(
  * the force-closed SDK stream ends without raising, the wrapper throws
  * {@link SandboxRenewalError} so the run terminalizes `error`, never `done`.
  */
-function superviseTurn(
-	underlying: SupervisedQuery,
-	settle: () => Promise<void>,
-	renewalFailure: () => { error: unknown } | null,
-	mirrorFailure: () => MirrorFailureCategory | null,
-	forceCloseSignal: AbortSignal,
-	onDetachedSettleError: (error: unknown) => void,
-): SupervisedQuery & Partial<ArtifactAwareQuery> {
+function superviseTurn(input: {
+	underlying: SupervisedQuery;
+	settle: () => Promise<void>;
+	renewalFailure: () => { error: unknown } | null;
+	forceCloseSignal: AbortSignal;
+	onDetachedSettleError: (error: unknown) => void;
+}): SupervisedQuery & Partial<ArtifactAwareQuery> {
+	const {
+		underlying,
+		settle,
+		renewalFailure,
+		forceCloseSignal,
+		onDetachedSettleError,
+	} = input;
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
@@ -476,7 +475,6 @@ function superviseTurn(
 			}
 		},
 		forceCloseSignal,
-		getMirrorFailureCategory: mirrorFailure,
 		...(artifactQuery.getArtifactPublication
 			? {
 					getArtifactPublication: () =>

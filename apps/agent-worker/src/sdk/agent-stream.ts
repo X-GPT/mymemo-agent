@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type AGUIEvent, EventType } from "@ag-ui/core";
-import type {
-	SDKMessage,
-	SDKMirrorErrorMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
 import { toMessage, type WorkerLogger } from "../logger";
 import type {
@@ -38,8 +35,6 @@ export type SupervisedQuery = AsyncIterable<SDKMessage> & {
 	close(): void;
 	/** Optional query-local immediate close (for example, renewal failure). */
 	forceCloseSignal?: AbortSignal;
-	/** Bounded adapter diagnosis captured before the SDK emits mirror_error. */
-	getMirrorFailureCategory?(): TurnStreamMetadata["mirrorFailure"];
 };
 
 /**
@@ -92,17 +87,14 @@ export function sessionIdFromResult(message: SDKMessage): string | null {
 /** A `mirror_error` means the SDK dropped a transcript-mirror batch (at-most-once
  * delivery). It is a fail-fast stop signal, and the stored transcript is not
  * eligible to establish or advance the resume pointer. */
-export function isMirrorError(
-	message: SDKMessage,
-): message is SDKMirrorErrorMessage {
+export function isMirrorError(message: SDKMessage): boolean {
 	return message.type === "system" && message.subtype === "mirror_error";
 }
 
 /**
  * What a settled stream reports back for supervisor reconciliation and
  * Conversation continuity (ADR-0005): its neutral disposition, observed
- * session id, and the bounded failure category when a `mirror_error` made the
- * transcript unreliable.
+ * session id, and whether a `mirror_error` made the transcript unreliable.
  */
 export interface AgentStreamOutcome extends TurnStreamMetadata {
 	/** Whether the query completed itself or settled after a stop request. */
@@ -168,7 +160,7 @@ export async function consumeAgentStream(
 	const outcome: AgentStreamOutcome = {
 		disposition: "completed",
 		sessionId: null,
-		mirrorFailure: null,
+		mirrorErrorObserved: false,
 	};
 	let liveMessageMatchesCompletion = true;
 	const assembler = new AssistantMessageAssembler({
@@ -376,7 +368,7 @@ export async function consumeAgentStream(
 			// provider/transcript detail. The observed failure is monotonic, so
 			// neither a prior interruption nor a later operational close can
 			// re-enable that detail.
-			...(outcome.mirrorFailure !== null ? {} : { error: toMessage(error) }),
+			...(outcome.mirrorErrorObserved ? {} : { error: toMessage(error) }),
 		});
 	};
 	const stop = (): void => {
@@ -464,7 +456,7 @@ export async function consumeAgentStream(
 			// needs the observed metadata for its pointer and Outcome decisions.
 			const mirrorError = isMirrorError(message);
 			if (mirrorError) {
-				outcome.mirrorFailure = query.getMirrorFailureCategory?.() ?? "unknown";
+				outcome.mirrorErrorObserved = true;
 			}
 			const sessionId = sessionIdFromResult(message);
 			if (sessionId !== null) outcome.sessionId = sessionId;

@@ -474,14 +474,13 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 			conversationId: "conv-1",
 		});
 
-		const query = await h.startRunQuery(run, freshSignal());
+		await h.startRunQuery(run, freshSignal());
 
 		expect(h.captured.options?.sessionStore).toBeDefined();
 		expect(h.captured.options?.cwd).toBe(
 			conversationWorkingDirectory("conv-1"),
 		);
 		expect(h.captured.options?.resume).toBeUndefined();
-		expect(query.getMirrorFailureCategory?.()).toBeNull();
 	});
 
 	it("creates the conversation working directory before starting the query", async () => {
@@ -933,8 +932,10 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		const query = await h.startRunQuery(run, controller.signal);
 		const consumed = consume(query);
 
-		controller.abort();
+		const stopReason = new Error("mirror stop");
+		controller.abort(stopReason);
 		expect(toolSignal?.aborted).toBe(true);
+		expect(toolSignal?.reason).toBe(stopReason);
 
 		await query.interrupt();
 		expect(gated.interrupts).toBe(1);

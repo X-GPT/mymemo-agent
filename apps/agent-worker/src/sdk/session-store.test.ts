@@ -61,12 +61,12 @@ describe("createConversationSessionStore", () => {
 		expect(await store.load(mainKey())).toEqual([entry("a"), entry("b")]);
 	});
 
-	it("reports a bounded category while preserving the append failure", async () => {
+	it("logs a bounded error identity while preserving the append failure", async () => {
 		const databaseError = Object.assign(
 			new Error("postgres connection detail"),
-			{ code: "ECONNRESET" },
+			{ name: "PostgresError", code: "ECONNRESET" },
 		);
-		const failures: string[] = [];
+		const errors: Record<string, unknown>[] = [];
 		const failingDb = {
 			insert() {
 				return {
@@ -82,13 +82,28 @@ describe("createConversationSessionStore", () => {
 		} as unknown as Database;
 		const store = createConversationSessionStore(failingDb, {
 			conversationId: "conv-1",
-			onAppendFailure: (category) => failures.push(category),
+			runId: "run-1",
+			logger: {
+				info() {},
+				warn() {},
+				error(fields) {
+					errors.push(fields);
+				},
+			},
 		});
 
 		await expect(store.append(mainKey(), [entry("a")])).rejects.toBe(
 			databaseError,
 		);
-		expect(failures).toEqual(["database"]);
+		expect(errors).toEqual([
+			{
+				message: "agent session mirror append failed",
+				runId: "run-1",
+				conversationId: "conv-1",
+				errorType: "PostgresError",
+			},
+		]);
+		expect(JSON.stringify(errors)).not.toContain("postgres connection detail");
 	});
 
 	it("returns null for a session that was never written", async () => {

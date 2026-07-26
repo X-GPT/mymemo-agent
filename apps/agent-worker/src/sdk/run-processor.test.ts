@@ -604,9 +604,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					{ once: true },
 				);
 				return {
-					getMirrorFailureCategory() {
-						return "database";
-					},
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -666,7 +663,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 			runId: "run-1",
 			reason: "mirror_error",
-			category: "database",
 		});
 		expect(JSON.stringify(errors)).not.toContain("provider transcript detail");
 		const [runtime] = await tdb.db.select().from(conversationRuntime);

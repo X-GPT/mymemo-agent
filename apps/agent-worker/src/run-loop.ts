@@ -46,20 +46,17 @@ import type { Worker } from "./worker";
  */
 export type TurnDisposition = "completed" | "stopped";
 
-export type MirrorFailureCategory = "database" | "unknown";
-
 export interface TurnStreamMetadata {
 	sessionId: string | null;
-	mirrorFailure: MirrorFailureCategory | null;
+	mirrorErrorObserved: boolean;
 }
 
 export interface TurnResult {
 	/** Cause-blind processor disposition; the supervisor chooses the Outcome. */
 	disposition: TurnDisposition;
 	/**
-	 * Continuity observations and the redaction-safe mirror failure category
-	 * from the SDK stream. The supervisor alone decides the Outcome and whether
-	 * the resume pointer may advance.
+	 * Continuity observations from the SDK stream. The supervisor alone decides
+	 * the Outcome and whether the resume pointer may advance.
 	 */
 	streamMetadata?: TurnStreamMetadata;
 	/** Changed files already ledgered and uploaded under fresh private keys. */
@@ -538,11 +535,9 @@ export class RunLoop {
 				artifactFailureLogFields(failure.error),
 			);
 		}
-		const mirrorFailure = turnResult.streamMetadata?.mirrorFailure;
-		if (mirrorFailure) {
+		if (turnResult.streamMetadata?.mirrorErrorObserved) {
 			return this.failRun(run, "agent session mirror failed", {
 				reason: "mirror_error",
-				category: mirrorFailure,
 			});
 		}
 		if (turnResult.disposition === "stopped") {
@@ -762,7 +757,7 @@ function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	if (
 		!metadata ||
 		metadata.sessionId === null ||
-		metadata.mirrorFailure !== null
+		metadata.mirrorErrorObserved
 	) {
 		return undefined;
 	}

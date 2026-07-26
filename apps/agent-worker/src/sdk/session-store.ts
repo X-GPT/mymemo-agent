@@ -21,7 +21,7 @@ import {
 	listAgentSessionsTx,
 	loadAgentSessionEntriesTx,
 } from "@mymemo/agent-db/session-store";
-import type { MirrorFailureCategory } from "../run-loop";
+import type { WorkerLogger } from "../logger";
 
 /**
  * The deterministic, conversation-stable working directory the worker runs every
@@ -46,10 +46,11 @@ export function createConversationSessionStore(
 	db: Database,
 	binding: {
 		conversationId: string;
-		onAppendFailure?: (category: MirrorFailureCategory) => void;
+		runId?: string;
+		logger?: WorkerLogger;
 	},
 ): SessionStore {
-	const { conversationId, onAppendFailure } = binding;
+	const { conversationId, runId, logger } = binding;
 	const ref = (key: SessionKey) => ({
 		conversationId,
 		projectKey: key.projectKey,
@@ -61,7 +62,14 @@ export function createConversationSessionStore(
 			try {
 				await appendAgentSessionEntriesTx(db, ref(key), entries);
 			} catch (error) {
-				onAppendFailure?.("database");
+				logger?.error({
+					message: "agent session mirror append failed",
+					runId,
+					conversationId,
+					// Error identity is useful to operators without exposing the
+					// transcript-bearing database error message.
+					errorType: error instanceof Error ? error.name : typeof error,
+				});
 				throw error;
 			}
 		},
@@ -117,13 +125,15 @@ export function buildAgentSessionQueryConfig(input: {
 	db: Database;
 	conversationId: string;
 	runtime: ConversationRuntimeRecord | null;
-	onAppendFailure?: (category: MirrorFailureCategory) => void;
+	runId?: string;
+	logger?: WorkerLogger;
 }): AgentSessionQueryConfig {
-	const { db, conversationId, runtime, onAppendFailure } = input;
+	const { db, conversationId, runtime, runId, logger } = input;
 	const config: AgentSessionQueryConfig = {
 		sessionStore: createConversationSessionStore(db, {
 			conversationId,
-			onAppendFailure,
+			runId,
+			logger,
 		}),
 		cwd: conversationWorkingDirectory(conversationId),
 	};
