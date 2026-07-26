@@ -16,7 +16,7 @@
 		"./migrations": "./src/migrations.ts"
 	},
 	"scripts": {
-		"test": "bun test",
+		"test": "bun test --timeout=30000",
 		"db:generate": "drizzle-kit generate",
 		"format": "biome format --write",
 		"lint": "biome lint --write",

@@ -34,9 +34,11 @@ export interface TestDb {
 // been seen during instance creation — never after `waitReady` resolves. So
 // creation retries on exactly that trap, on a fresh instance each time;
 // deterministic failures (migration SQL errors, missing files) rethrow on the
-// first attempt. Capped at one retry: bun:test enforces its 5s default
-// timeout on `beforeAll` hooks, and two boots (~2.5s on CI runners) leave
-// comfortable headroom where a third would ride that limit.
+// first attempt. Capped at one retry so a persistent trap surfaces as a failure
+// instead of a long retry loop; the workspace `test` scripts raise bun's
+// per-test timeout (which also governs hooks) to 30s, since the first pglite
+// boot in a `bun test` process pays the one-time postgres.wasm compile and has
+// measured up to ~6.7s on CI runners — past bun's 5s default.
 const BOOT_ATTEMPTS = 2;
 
 function isWasmBootTrap(err: unknown): boolean {
