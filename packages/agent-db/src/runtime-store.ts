@@ -1,13 +1,12 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
-import type { Database } from "./client";
+import type { Database, DbTx } from "./client";
 import {
 	ownedRunByUserConditions,
 	ownedRunExists,
 	type RunOwnershipRef,
 	rejectRunFence,
 } from "./run-ownership";
-import type { DbTx } from "./run-store";
 import { conversationRuntime, orphanSandboxes, runs } from "./schema";
 
 /**
@@ -110,24 +109,27 @@ export async function updateRuntimeSandboxTx(
 	db: Database,
 	input: RunOwnershipRef & { sandboxId: string | null },
 ): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, input, "sandbox pointer update", {
+	const row = await tryUpdateRuntimeRow(db, input, {
 		sandboxId: input.sandboxId,
 		sandboxTainted: false,
 	});
+	if (!row) rejectRunFence(input, "sandbox pointer update");
+	return row;
 }
 
 /**
  * Publish a proven Agent-session pointer inside its caller's terminal
  * transaction. The update carries the ownership fence in-statement. A missing
  * optional runtime row skips pointer publication only after the same
- * transaction confirms ownership `FOR SHARE`; a stale owner still fails.
+ * transaction classifies that zero-row result under an ownership lock; this
+ * post-update check never authorizes the pointer mutation. A stale owner fails.
  */
 export async function publishAgentSessionPointerInTx(
 	tx: DbTx,
 	owner: RunOwnershipRef,
 	agentSessionId: string,
 ): Promise<ConversationRuntimeRecord | null> {
-	const row = await updateRuntimeWithFence(tx, owner, { agentSessionId });
+	const row = await tryUpdateRuntimeRow(tx, owner, { agentSessionId });
 	if (row) return row;
 
 	const [owned] = await tx
@@ -139,19 +141,7 @@ export async function publishAgentSessionPointerInTx(
 	return null;
 }
 
-/** One fenced runtime update for helpers that require an existing row. */
-async function fencedRuntimeUpdate(
-	db: Pick<Database, "update">,
-	owner: RunOwnershipRef,
-	operation: string,
-	set: PgUpdateSetSource<typeof conversationRuntime>,
-): Promise<ConversationRuntimeRecord> {
-	const row = await updateRuntimeWithFence(db, owner, set);
-	if (!row) rejectRunFence(owner, operation);
-	return row;
-}
-
-async function updateRuntimeWithFence(
+async function tryUpdateRuntimeRow(
 	db: Pick<Database, "update">,
 	owner: RunOwnershipRef,
 	set: PgUpdateSetSource<typeof conversationRuntime>,
@@ -179,9 +169,11 @@ export async function markRuntimeSandboxTaintedTx(
 	db: Database,
 	owner: RunOwnershipRef,
 ): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, owner, "sandbox taint mark", {
+	const row = await tryUpdateRuntimeRow(db, owner, {
 		sandboxTainted: true,
 	});
+	if (!row) rejectRunFence(owner, "sandbox taint mark");
+	return row;
 }
 
 /** A persisted orphan-ledger row. */

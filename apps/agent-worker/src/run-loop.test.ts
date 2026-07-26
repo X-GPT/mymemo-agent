@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
+import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventTx,
 	claimNextRunTx,
 	createQueuedRunTx,
-	RunFenceError,
 	requestRunInterruptionTx,
 } from "@mymemo/agent-db/run-store";
 import {
@@ -681,7 +681,7 @@ describe("RunLoop — agent session pointer", () => {
 				streamMetadata: {
 					sessionId: "session-unproven",
 					mirrorErrorObserved: false,
-					mainSessionMirrored: false,
+					mirroredMainSessionId: null,
 				},
 			};
 		});
@@ -712,7 +712,7 @@ describe("RunLoop — agent session pointer", () => {
 				streamMetadata: {
 					sessionId: "session-abc",
 					mirrorErrorObserved: false,
-					mainSessionMirrored: true,
+					mirroredMainSessionId: "session-abc",
 				},
 			};
 		});
@@ -728,9 +728,13 @@ describe("RunLoop — agent session pointer", () => {
 	});
 
 	it.each([
-		["without main-session evidence", false, null],
-		["with main-session evidence", true, "session-interrupted"],
-	] as const)("terminalizes an interrupted first Run %s", async (_name, mainSessionMirrored, expectedPointer) => {
+		["without main-session evidence", null, null],
+		[
+			"with main-session evidence",
+			"session-interrupted",
+			"session-interrupted",
+		],
+	] as const)("terminalizes an interrupted first Run %s", async (_name, mirroredMainSessionId, expectedPointer) => {
 		const worker = buildWorker(1);
 		const processorStarted = deferred();
 		const loop = buildLoop(worker, async (ctx) => {
@@ -750,7 +754,7 @@ describe("RunLoop — agent session pointer", () => {
 				streamMetadata: {
 					sessionId: "session-interrupted",
 					mirrorErrorObserved: false,
-					mainSessionMirrored,
+					mirroredMainSessionId,
 				},
 			};
 		});
@@ -787,7 +791,7 @@ describe("RunLoop — agent session pointer", () => {
 				streamMetadata: {
 					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
-					mainSessionMirrored: true,
+					mirroredMainSessionId: "session-first",
 				},
 			};
 		});
@@ -814,7 +818,7 @@ describe("RunLoop — agent session pointer", () => {
 				streamMetadata: {
 					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
-					mainSessionMirrored: true,
+					mirroredMainSessionId: "session-first",
 				},
 			};
 		});

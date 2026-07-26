@@ -27,9 +27,9 @@ import type { WorkerLogger } from "../logger";
 
 /** Query-level projection of the bound adapter's per-Run mirror evidence. */
 export interface SessionMirrorEvidence {
-	/** True only while the named main transcript still exists after a successful
-	 * non-empty mirror during the current Run. */
-	hasMirroredMainSession(sessionId: string): boolean;
+	/** The latest main transcript that still exists after a successful non-empty
+	 * mirror during the current Run, or `null` when none qualifies. */
+	mirroredMainSessionId(): string | null;
 }
 
 export interface ConversationSessionStore
@@ -130,8 +130,10 @@ export function createConversationSessionStore(
 				mirroredMainSessionIds.delete(key.sessionId);
 			}
 		},
-		hasMirroredMainSession(sessionId) {
-			return mirroredMainSessionIds.has(sessionId);
+		mirroredMainSessionId() {
+			let latest: string | null = null;
+			for (const sessionId of mirroredMainSessionIds) latest = sessionId;
+			return latest;
 		},
 	};
 }

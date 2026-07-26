@@ -31,6 +31,10 @@ import {
 	streamEvent,
 	textEnvelope,
 } from "./testing/sdk-message-fixtures";
+import {
+	noSessionMirrorEvidence,
+	withNoSessionMirrorEvidence,
+} from "./testing/session-mirror-fixtures";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
@@ -153,17 +157,6 @@ function initMessage(sessionId: string): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
-const noMainSessionMirrored: SessionMirrorEvidence["hasMirroredMainSession"] =
-	() => false;
-
-function withoutMainSessionEvidence<Query extends SupervisedQuery>(
-	query: Query,
-): Query & SessionMirrorEvidence {
-	return Object.assign(query, {
-		hasMirroredMainSession: noMainSessionMirrored,
-	});
-}
-
 function errorResultMessage(text: string): SDKMessage {
 	return {
 		type: "result",
@@ -175,12 +168,12 @@ function errorResultMessage(text: string): SDKMessage {
 
 function messageQuery(
 	messages: SDKMessage[],
-	hasMirroredMainSession: SessionMirrorEvidence["hasMirroredMainSession"] = noMainSessionMirrored,
-): SupervisedQuery & SessionMirrorEvidence {
+	sessionEvidence: SessionMirrorEvidence = noSessionMirrorEvidence,
+): SupervisedQuery & { sessionEvidence: SessionMirrorEvidence } {
 	return {
 		close() {},
 		async interrupt() {},
-		hasMirroredMainSession,
+		sessionEvidence,
 		async *[Symbol.asyncIterator]() {
 			for (const message of messages) yield message;
 		},
@@ -189,11 +182,11 @@ function messageQuery(
 
 function stepQuery(
 	steps: Array<SDKMessage | { throw: unknown }>,
-): SupervisedQuery & SessionMirrorEvidence {
+): SupervisedQuery & { sessionEvidence: SessionMirrorEvidence } {
 	return {
 		close() {},
 		async interrupt() {},
-		hasMirroredMainSession: noMainSessionMirrored,
+		sessionEvidence: noSessionMirrorEvidence,
 		async *[Symbol.asyncIterator]() {
 			for (const step of steps) {
 				if ("throw" in step) throw step.throw;
@@ -203,13 +196,9 @@ function stepQuery(
 	};
 }
 
-type TestStartRunQuery = (
-	...args: Parameters<StartRunQuery>
-) => ReturnType<StartRunQuery>;
-
 function buildLoop(
 	worker: Worker,
-	startRunQuery: TestStartRunQuery,
+	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
 	startStopDeadline?: StartStopDeadline,
 ) {
@@ -280,10 +269,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				runId: run.runId,
 				workerId: "worker-1",
 			});
-			return messageQuery(
-				[initMessage("session-initialized")],
-				(sessionId) => sessionId === "session-initialized",
-			);
+			return messageQuery([initMessage("session-initialized")]);
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -321,10 +307,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				{ projectKey: "project-1", sessionId: "session-proven" },
 				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
 			);
-			return messageQuery(
-				[resultMessage("session-proven")],
-				store.hasMirroredMainSession,
-			);
+			return messageQuery([resultMessage("session-proven")], store);
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -363,10 +346,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				},
 				[{ type: "user", uuid: "subagent-entry" } as SessionStoreEntry],
 			);
-			return messageQuery(
-				[resultMessage("session-subagent-only")],
-				store.hasMirroredMainSession,
-			);
+			return messageQuery([resultMessage("session-subagent-only")], store);
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -749,7 +729,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					},
 					{ once: true },
 				);
-				return withoutMainSessionEvidence({
+				return withNoSessionMirrorEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -824,7 +804,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			signal.addEventListener("abort", () => calls.push("tool-abort"), {
 				once: true,
 			});
-			return withoutMainSessionEvidence({
+			return withNoSessionMirrorEvidence({
 				async interrupt() {
 					calls.push("interrupt");
 				},
@@ -907,7 +887,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					once: true,
 				});
 				started.resolve();
-				return withoutMainSessionEvidence({
+				return withNoSessionMirrorEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -975,25 +955,44 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const deadline = virtualStopDeadline();
 		const loop = buildLoop(
 			worker,
-			async (_run, signal) => {
+			async (run, signal) => {
+				await createConversationRuntimeTx(tdb.db, {
+					userId: run.userId,
+					conversationId: run.conversationId,
+					runId: run.runId,
+					workerId: "worker-1",
+				});
+				const store = createConversationSessionStore(tdb.db, {
+					conversationId: run.conversationId,
+					runId: run.runId,
+					workerId: "worker-1",
+					logger: silentLogger,
+				});
+				await store.append(
+					{ projectKey: "project-1", sessionId: "session-interrupted" },
+					[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
+				);
 				signal.addEventListener("abort", () => calls.push("tool-abort"), {
 					once: true,
 				});
 				started.resolve();
-				return withoutMainSessionEvidence({
-					async interrupt() {
-						calls.push("interrupt");
-						interrupted.resolve();
+				return Object.assign(
+					{
+						async interrupt() {
+							calls.push("interrupt");
+							interrupted.resolve();
+						},
+						close() {
+							calls.push("close");
+							closed.resolve();
+						},
+						// biome-ignore lint/correctness/useYield: models a hung SDK query released only by close.
+						async *[Symbol.asyncIterator]() {
+							await closed.promise;
+						},
 					},
-					close() {
-						calls.push("close");
-						closed.resolve();
-					},
-					// biome-ignore lint/correctness/useYield: models a hung SDK query released only by close.
-					async *[Symbol.asyncIterator]() {
-						await closed.promise;
-					},
-				});
+					{ sessionEvidence: store },
+				);
 			},
 			logger,
 			deadline.startStopDeadline,
@@ -1037,6 +1036,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			stopDeadlineMs: 30_000,
 		});
 		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect(runtime?.agentSessionId).toBe("session-interrupted");
 	});
 
 	it("force-closes immediately and writes no terminal Outcome after ownership loss", async () => {
@@ -1049,7 +1050,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			worker,
 			async () => {
 				started.resolve();
-				return withoutMainSessionEvidence({
+				return withNoSessionMirrorEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 					},
@@ -1102,7 +1103,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const loop = buildLoop(
 			worker,
 			async () =>
-				withoutMainSessionEvidence({
+				withNoSessionMirrorEvidence({
 					async interrupt() {},
 					close() {
 						closeCalled.resolve();
@@ -1157,7 +1158,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const loop = buildLoop(
 			worker,
 			async () =>
-				withoutMainSessionEvidence({
+				withNoSessionMirrorEvidence({
 					forceCloseSignal: forceCloseController.signal,
 					async interrupt() {
 						calls.push("interrupt");
@@ -1207,7 +1208,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const loop = buildLoop(
 			worker,
 			async (_run, _signal) =>
-				withoutMainSessionEvidence({
+				withNoSessionMirrorEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -1255,7 +1256,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			const loop = buildLoop(
 				worker,
 				async () =>
-					withoutMainSessionEvidence({
+					withNoSessionMirrorEvidence({
 						async interrupt() {
 							stopped.resolve();
 						},
@@ -1356,15 +1357,17 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				runId: run.runId,
 				workerId: "worker-1",
 			});
-			return {
-				...messageQuery([
+			return messageQuery(
+				[
 					...textEnvelope({ completeText: "answer" }),
 					resultMessage("session-valid"),
-				]),
-				hasMirroredMainSession(sessionId: string) {
-					return sessionId === "session-valid";
+				],
+				{
+					mirroredMainSessionId() {
+						return "session-valid";
+					},
 				},
-			};
+			);
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",

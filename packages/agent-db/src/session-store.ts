@@ -1,19 +1,20 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import type { Database } from "./client";
+import type { Database, DbTx } from "./client";
 import {
 	ownedRunConditions,
 	type RunMutationOwner,
 	rejectRunFence,
 } from "./run-ownership";
-import type { DbTx } from "./run-store";
 import { agentSessions, runs } from "./schema";
 
 /**
- * Table-level helpers over `agent_sessions` — the raw read/write path the
- * worker's Claude Agent SDK `SessionStore` adapter is built on (ADR-0005, Task
- * 7.3). They live here, SDK-free, so the schema and its SQL stay in the shared
- * package over one drizzle instance; the adapter that `implements SessionStore`
- * (and imports the SDK types) lives in agent-worker and delegates to these.
+ * SDK-free persistence helpers over `agent_sessions`, used by the worker's
+ * Claude Agent SDK `SessionStore` adapter (ADR-0005, Task 7.3). Append and
+ * SDK-requested delete operations share a transaction with a `FOR SHARE`
+ * ownership check against the active Run; reads and administrative
+ * Conversation deletion are deliberately unfenced. The helpers live here so
+ * the schema, fence, and SQL use the shared package's one Drizzle instance;
+ * the adapter that imports SDK types lives in agent-worker and delegates here.
  *
  * Every helper is keyed by `conversationId` — the stable identity the adapter
  * binds each call to — plus the SDK's `(sessionId, subpath)`. `projectKey` is

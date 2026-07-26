@@ -7,11 +7,11 @@ import {
 	it,
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
+import { RunFenceError } from "./run-ownership";
 import {
 	claimNextRunTx,
 	createQueuedRunTx,
 	markStaleRunsTx,
-	RunFenceError,
 } from "./run-store";
 import {
 	createConversationRuntimeTx,

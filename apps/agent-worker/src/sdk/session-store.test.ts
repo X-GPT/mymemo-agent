@@ -215,13 +215,13 @@ describe("createConversationSessionStore", () => {
 			storeBinding("conv-1"),
 		);
 
-		expect(store.hasMirroredMainSession("sess-1")).toBe(false);
+		expect(store.mirroredMainSessionId()).toBeNull();
 		await store.append(mainKey("sess-1", "subagents/agent-1"), [entry("sub")]);
-		expect(store.hasMirroredMainSession("sess-1")).toBe(false);
+		expect(store.mirroredMainSessionId()).toBeNull();
 		await store.append(mainKey("sess-other"), [entry("other-main")]);
-		expect(store.hasMirroredMainSession("sess-1")).toBe(false);
+		expect(store.mirroredMainSessionId()).toBe("sess-other");
 		await store.append(mainKey("sess-1"), [entry("main")]);
-		expect(store.hasMirroredMainSession("sess-1")).toBe(true);
+		expect(store.mirroredMainSessionId()).toBe("sess-1");
 	});
 
 	it("withdraws main-session evidence when the SDK deletes that session", async () => {
@@ -230,11 +230,11 @@ describe("createConversationSessionStore", () => {
 			storeBinding("conv-1"),
 		);
 		await store.append(mainKey("sess-1"), [entry("main")]);
-		expect(store.hasMirroredMainSession("sess-1")).toBe(true);
+		expect(store.mirroredMainSessionId()).toBe("sess-1");
 
 		await store.delete?.(mainKey("sess-1"));
 
-		expect(store.hasMirroredMainSession("sess-1")).toBe(false);
+		expect(store.mirroredMainSessionId()).toBeNull();
 		expect(await store.load(mainKey("sess-1"))).toBeNull();
 	});
 });

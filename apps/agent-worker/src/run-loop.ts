@@ -12,14 +12,16 @@ import {
 	type ToolCallResultPayload,
 	type ToolCallStartedPayload,
 } from "@mymemo/agent-db/run-events";
-import type { RunOwnershipRef } from "@mymemo/agent-db/run-ownership";
+import {
+	RunFenceError,
+	type RunOwnershipRef,
+} from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventsTx,
 	claimNextRunTx,
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
 	markStaleRunsTx,
-	RunFenceError,
 	type RunRecord,
 	type TerminalOutcome,
 	type TerminalRunStatus,
@@ -52,9 +54,9 @@ export interface AgentStreamMetadata {
 }
 
 export interface TurnStreamMetadata extends AgentStreamMetadata {
-	/** The bound SessionStore accepted a non-empty append for this exact main
-	 * session during the Run. Initialization and subagent mirrors do not count. */
-	mainSessionMirrored: boolean;
+	/** The main session proven resumable by the bound SessionStore during this
+	 * Run. Initialization and subagent mirrors do not count. */
+	mirroredMainSessionId: string | null;
 }
 
 export interface TurnResult {
@@ -728,11 +730,10 @@ function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	// finish() currently rejects mirror failures before reaching either caller.
 	if (
 		!metadata ||
-		metadata.sessionId === null ||
 		metadata.mirrorErrorObserved ||
-		!metadata.mainSessionMirrored
+		metadata.mirroredMainSessionId === null
 	) {
 		return undefined;
 	}
-	return metadata.sessionId;
+	return metadata.mirroredMainSessionId;
 }

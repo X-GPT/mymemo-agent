@@ -40,7 +40,11 @@ export function ownedRunByUserConditions(owner: RunOwnershipRef) {
 	return and(ownedRunConditions(owner), eq(runs.userId, owner.userId));
 }
 
-/** {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate. */
+/**
+ * {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate.
+ * Mutating statements carry this predicate themselves; an app-side check never
+ * authorizes a later mutation.
+ */
 export function ownedRunExists(owner: RunOwnershipRef) {
 	return sql`exists (select 1 from ${runs} where ${ownedRunByUserConditions(owner)})`;
 }

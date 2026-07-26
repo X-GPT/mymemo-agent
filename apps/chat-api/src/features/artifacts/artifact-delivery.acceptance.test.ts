@@ -25,7 +25,7 @@ import type { WorkerLogger } from "../../../../agent-worker/src/logger";
 import { RunLoop } from "../../../../agent-worker/src/run-loop";
 import type { SupervisedQuery } from "../../../../agent-worker/src/sdk/agent-stream";
 import { createSdkRunProcessor } from "../../../../agent-worker/src/sdk/run-processor";
-import type { SessionMirrorEvidence } from "../../../../agent-worker/src/sdk/session-store";
+import { withNoSessionMirrorEvidence } from "../../../../agent-worker/src/sdk/testing/session-mirror-fixtures";
 import { Worker } from "../../../../agent-worker/src/worker";
 import type {
 	ArtifactDownloadSigner,
@@ -40,9 +40,6 @@ const identityHeaders = {
 	"x-partner-code": "partner-1",
 };
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
-const noSessionEvidence: SessionMirrorEvidence = {
-	hasMirroredMainSession: () => false,
-};
 const encoder = new TextEncoder();
 
 class AcceptanceWorkspace implements ArtifactWorkspace {
@@ -144,9 +141,8 @@ function createDeliveryHarness(
 				const query = queries.get(run.runId);
 				if (!query) throw new Error(`missing query for ${run.runId}`);
 				const publication = await publisher.begin({ run, workspace, signal });
-				return Object.assign(
+				return withNoSessionMirrorEvidence(
 					withArtifactPublication(query, publication),
-					noSessionEvidence,
 				);
 			},
 		}),

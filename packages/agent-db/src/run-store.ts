@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import type { Database } from "./client";
+import type { Database, DbTx } from "./client";
 import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
 	InvalidRunEventError,
@@ -15,8 +15,6 @@ import {
 } from "./run-ownership";
 import { publishAgentSessionPointerInTx } from "./runtime-store";
 import { runEvents, runs } from "./schema";
-
-export { RunFenceError } from "./run-ownership";
 
 /**
  * Transaction helpers over `runs`/`run_events`, plus Agent-session pointer
@@ -137,9 +135,6 @@ export interface AdmitQueuedRunInput {
 export type RunAdmissionResult =
 	| { outcome: "created" | "existing"; run: RunRecord }
 	| { outcome: "not_found" };
-
-/** A Drizzle client scoped to one open transaction. */
-export type DbTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /**
  * Atomically admit the canonical client Run id and submitted User message.

@@ -27,7 +27,10 @@ export type StartRunQuery = (
 	run: RunRecord,
 	signal: AbortSignal,
 ) => Promise<
-	SupervisedQuery & Partial<ArtifactAwareQuery> & SessionMirrorEvidence
+	SupervisedQuery &
+		Partial<ArtifactAwareQuery> & {
+			sessionEvidence: SessionMirrorEvidence;
+		}
 >;
 
 export interface SdkRunProcessorDeps {
@@ -79,12 +82,11 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				startStopDeadline: deps.startStopDeadline,
 			});
 			const { disposition, ...streamMetadata } = outcome;
-			const mainSessionMirrored =
-				streamMetadata.sessionId !== null &&
-				query.hasMirroredMainSession(streamMetadata.sessionId);
+			const mirroredMainSessionId =
+				query.sessionEvidence.mirroredMainSessionId();
 			return {
 				disposition,
-				streamMetadata: { ...streamMetadata, mainSessionMirrored },
+				streamMetadata: { ...streamMetadata, mirroredMainSessionId },
 				artifactPublication:
 					disposition === "completed"
 						? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??

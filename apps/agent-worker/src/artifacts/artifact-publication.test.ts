@@ -16,7 +16,7 @@ import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import type { SupervisedQuery } from "../sdk/agent-stream";
 import { createSdkRunProcessor } from "../sdk/run-processor";
-import type { SessionMirrorEvidence } from "../sdk/session-store";
+import { withNoSessionMirrorEvidence } from "../sdk/testing/session-mirror-fixtures";
 import { Worker } from "../worker";
 import type { ArtifactManifestEntry } from "./artifact-manifest";
 import {
@@ -31,9 +31,6 @@ const encoder = new TextEncoder();
 const MIB = 1_024 * 1_024;
 const MAX_ARTIFACT_SIZE_BYTES = 100 * MIB;
 const MAX_CONVERSATION_ARTIFACT_BYTES = 1_024 * MIB;
-const noSessionEvidence: SessionMirrorEvidence = {
-	hasMirroredMainSession: () => false,
-};
 
 let tdb: TestDb;
 
@@ -179,9 +176,8 @@ function buildArtifactHarness(
 					workspace,
 					signal,
 				});
-				return Object.assign(
+				return withNoSessionMirrorEvidence(
 					withArtifactPublication(query, publication),
-					noSessionEvidence,
 				);
 			},
 		}),
@@ -291,7 +287,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 						workspace,
 						signal,
 					});
-					return Object.assign(
+					return withNoSessionMirrorEvidence(
 						withArtifactPublication(
 							successfulQuery(() => {
 								workspace.write("report.txt", encoder.encode("hello"), "2");
@@ -303,7 +299,6 @@ describe("Downloadable artifact publication through the Run loop", () => {
 							}),
 							publication,
 						),
-						noSessionEvidence,
 					);
 				},
 			}),

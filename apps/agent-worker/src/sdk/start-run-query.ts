@@ -459,7 +459,8 @@ function superviseTurn(input: {
 	renewalFailure: () => { error: unknown } | null;
 	forceCloseSignal: AbortSignal;
 	onDetachedSettleError: (error: unknown) => void;
-}): SupervisedQuery & Partial<ArtifactAwareQuery> & SessionMirrorEvidence {
+}): SupervisedQuery &
+	Partial<ArtifactAwareQuery> & { sessionEvidence: SessionMirrorEvidence } {
 	const {
 		underlying,
 		sessionEvidence,
@@ -471,7 +472,7 @@ function superviseTurn(input: {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
-		hasMirroredMainSession: sessionEvidence.hasMirroredMainSession,
+		sessionEvidence,
 		close: () => {
 			try {
 				underlying.close();

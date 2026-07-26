@@ -10,10 +10,10 @@ import type {
 	Options,
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
+import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	claimNextRunTx,
 	createQueuedRunTx,
-	RunFenceError,
 	type RunRecord,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
@@ -490,7 +490,9 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 			{ projectKey: "project-1", sessionId: "session-proven" },
 			[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
 		);
-		expect(query.hasMirroredMainSession("session-proven")).toBe(true);
+		expect(query.sessionEvidence.mirroredMainSessionId()).toBe(
+			"session-proven",
+		);
 		await consume(query);
 	});
 

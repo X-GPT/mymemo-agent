@@ -12,6 +12,7 @@ import {
 	RunEventType,
 	validateDurableRunEventSequence,
 } from "./run-events";
+import { RunFenceError, type RunOwnershipRef } from "./run-ownership";
 import {
 	ActiveRunConflictError,
 	type AdmitQueuedRunInput,
@@ -24,7 +25,6 @@ import {
 	loadRunStartedTx,
 	markLiveStreamFailedTx,
 	markStaleRunsTx,
-	RunFenceError,
 	RunInputMismatchError,
 	requestRunInterruptionTx,
 	transitionRunTerminalTx,
@@ -305,12 +305,14 @@ async function claimRun(
 	return claimed;
 }
 
-function owner(
-	runId = "run-1",
-	conversationId = "conv-1",
-	workerId = "worker-1",
-) {
-	return { runId, conversationId, workerId, userId: "user-1" };
+function owner(overrides: Partial<RunOwnershipRef> = {}): RunOwnershipRef {
+	return {
+		runId: "run-1",
+		conversationId: "conv-1",
+		workerId: "worker-1",
+		userId: "user-1",
+		...overrides,
+	};
 }
 
 /** Force a claimed run's locked_until past, as if the worker stalled. */
@@ -824,6 +826,32 @@ describe("transitionRunTerminalTx", () => {
 		expect(run?.status).toBe(status);
 	});
 
+	it("rolls back a written pointer when the terminal Outcome loses a status race", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await tdb.db
+			.update(runs)
+			.set({ status: "interrupt_requested" })
+			.where(eq(runs.runId, "run-1"));
+
+		await expect(
+			transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status: "done",
+				agentSessionId: "session-rolled-back",
+			}),
+		).rejects.toBeInstanceOf(RunFenceError);
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		const [run] = await tdb.db.select().from(runs);
+		expect(runtime?.agentSessionId).toBeNull();
+		expect(run?.status).toBe("interrupt_requested");
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
 	it("terminalizes without a pointer when the optional runtime row is absent", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
@@ -1050,7 +1078,7 @@ describe("transitionRunTerminalTx", () => {
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				owner: owner("run-1", "conv-1", "worker-2"),
+				owner: owner({ workerId: "worker-2" }),
 				status: "done",
 				agentSessionId: "session-new",
 			}),
@@ -1324,7 +1352,10 @@ describe("markLiveStreamFailedTx", () => {
 
 		await claimRun("run-terminal", "conv-terminal", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			owner: owner("run-terminal", "conv-terminal"),
+			owner: owner({
+				runId: "run-terminal",
+				conversationId: "conv-terminal",
+			}),
 			status: "done",
 		});
 		const marked = await markLiveStreamFailedTx(tdb.db, {
