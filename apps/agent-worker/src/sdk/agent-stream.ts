@@ -359,6 +359,9 @@ export async function consumeAgentStream(
 	const forceClosedResult = forceClosedPromise.then(
 		() => ({ type: "force_closed" }) as const,
 	);
+	// These catch boundaries intentionally differ: iterator failures originate
+	// in the provider stream and may repeat mirror payload detail, while
+	// query.close() below is a worker-side cleanup operation.
 	const reportUnexpectedStoppedStreamFailure = (error: unknown): void => {
 		if (isExpectedStopError(error)) return;
 		params.logger?.error({

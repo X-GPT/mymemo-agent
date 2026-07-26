@@ -3,10 +3,10 @@ import type {
 	SessionKey,
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Database } from "@mymemo/agent-db/client";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import { agentSessions } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import type { WorkerLogger } from "../logger";
 import {
 	buildAgentSessionQueryConfig,
 	conversationWorkingDirectory,
@@ -14,6 +14,11 @@ import {
 } from "./session-store";
 
 let tdb: TestDb;
+const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+
+function storeBinding(conversationId: string) {
+	return { conversationId, runId: "run-1", logger: silentLogger };
+}
 
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from empty tables via delete, keeping isolation without the cost — the
@@ -53,34 +58,18 @@ describe("conversationWorkingDirectory", () => {
 
 describe("createConversationSessionStore", () => {
 	it("round-trips appended entries on load", async () => {
-		const store = createConversationSessionStore(tdb.db, {
-			conversationId: "conv-1",
-		});
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
 		await store.append(mainKey(), [entry("a"), entry("b")]);
 
 		expect(await store.load(mainKey())).toEqual([entry("a"), entry("b")]);
 	});
 
-	it("logs a bounded error identity while preserving the append failure", async () => {
-		const databaseError = Object.assign(
-			new Error("postgres connection detail"),
-			{ name: "PostgresError", code: "ECONNRESET" },
-		);
+	it("logs a bounded error identity for a real database append failure", async () => {
 		const errors: Record<string, unknown>[] = [];
-		const failingDb = {
-			insert() {
-				return {
-					values() {
-						return {
-							async onConflictDoNothing() {
-								throw databaseError;
-							},
-						};
-					},
-				};
-			},
-		} as unknown as Database;
-		const store = createConversationSessionStore(failingDb, {
+		const store = createConversationSessionStore(tdb.db, {
 			conversationId: "conv-1",
 			runId: "run-1",
 			logger: {
@@ -91,35 +80,50 @@ describe("createConversationSessionStore", () => {
 				},
 			},
 		});
+		const invalidKey = {
+			...mainKey(),
+			projectKey: null,
+		} as unknown as SessionKey;
+		let databaseError: unknown;
 
-		await expect(store.append(mainKey(), [entry("a")])).rejects.toBe(
-			databaseError,
-		);
+		try {
+			await store.append(invalidKey, [entry("private transcript detail")]);
+		} catch (error) {
+			databaseError = error;
+		}
+
+		expect(databaseError).toBeInstanceOf(Error);
 		expect(errors).toEqual([
 			{
 				message: "agent session mirror append failed",
 				runId: "run-1",
 				conversationId: "conv-1",
-				errorType: "PostgresError",
+				errorType:
+					databaseError instanceof Error
+						? databaseError.name
+						: typeof databaseError,
 			},
 		]);
-		expect(JSON.stringify(errors)).not.toContain("postgres connection detail");
+		expect(JSON.stringify(errors)).not.toContain("private transcript detail");
 	});
 
 	it("returns null for a session that was never written", async () => {
-		const store = createConversationSessionStore(tdb.db, {
-			conversationId: "conv-1",
-		});
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
 		expect(await store.load(mainKey("unwritten"))).toBeNull();
 	});
 
 	it("scopes storage to the bound conversation", async () => {
-		const store1 = createConversationSessionStore(tdb.db, {
-			conversationId: "conv-1",
-		});
-		const store2 = createConversationSessionStore(tdb.db, {
-			conversationId: "conv-2",
-		});
+		const store1 = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
+		const store2 = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-2"),
+		);
 		await store1.append(mainKey(), [entry("only-conv-1")]);
 
 		// Same session key, different conversation — must not see conv-1's entry.
@@ -127,9 +131,10 @@ describe("createConversationSessionStore", () => {
 	});
 
 	it("lists subagent subkeys and sessions", async () => {
-		const store = createConversationSessionStore(tdb.db, {
-			conversationId: "conv-1",
-		});
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
 		await store.append(mainKey("sess-1"), [entry("main")]);
 		await store.append(mainKey("sess-1", "subagents/agent-1"), [entry("sub")]);
 
@@ -141,9 +146,10 @@ describe("createConversationSessionStore", () => {
 	});
 
 	it("deletes the named session", async () => {
-		const store = createConversationSessionStore(tdb.db, {
-			conversationId: "conv-1",
-		});
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
 		await store.append(mainKey(), [entry("a")]);
 		await store.delete?.(mainKey());
 
@@ -152,7 +158,12 @@ describe("createConversationSessionStore", () => {
 });
 
 describe("buildAgentSessionQueryConfig", () => {
-	const base = { db: undefined as never, conversationId: "conv-1" };
+	const base = {
+		db: undefined as never,
+		conversationId: "conv-1",
+		runId: "run-1",
+		logger: silentLogger,
+	};
 
 	function runtime(agentSessionId: string | null): ConversationRuntimeRecord {
 		return {

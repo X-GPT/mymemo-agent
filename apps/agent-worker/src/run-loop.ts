@@ -754,6 +754,8 @@ function artifactFailureLogFields(error: unknown): Record<string, unknown> {
 
 function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	const metadata = turnResult.streamMetadata;
+	// Keep pointer safety local to this injected RunProcessor seam even though
+	// finish() currently rejects mirror failures before reaching either caller.
 	if (
 		!metadata ||
 		metadata.sessionId === null ||

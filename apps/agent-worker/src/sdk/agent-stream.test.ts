@@ -931,144 +931,81 @@ describe("consumeAgentStream", () => {
 		expect(deadlineCancelled).toBe(true);
 	});
 
-	it("retains deadline close detail but redacts the late mirror drain", async () => {
-		const deadlineElapsed = deferred();
-		const nextRequested = deferred();
-		const lateNext = Promise.withResolvers<IteratorResult<SDKMessage>>();
-		const errors: Record<string, unknown>[] = [];
-		let nextCalls = 0;
-		const query: SupervisedQuery = {
-			async interrupt() {},
-			close() {
-				throw new Error("operational close detail");
-			},
-			[Symbol.asyncIterator]() {
-				return {
-					next() {
-						nextCalls++;
-						if (nextCalls === 1) {
-							return Promise.resolve({
-								done: false,
-								value: mirrorErrorMessage(),
-							});
-						}
-						nextRequested.resolve();
-						return lateNext.promise;
-					},
-				};
-			},
-		};
-		const consuming = consumeAgentStream({
-			runId: "run-1",
-			query,
-			interruptionSignal: new AbortController().signal,
-			abortRunScopedWork: () => {},
-			appendModelContents: async () => {},
-			startStopDeadline: () => ({
-				elapsed: deadlineElapsed.promise,
-				cancel() {},
-			}),
-			logger: {
-				info() {},
-				warn() {},
-				error(fields) {
-					errors.push(fields);
+	for (const closeTrigger of ["deadline", "operational signal"] as const) {
+		it(`retains ${closeTrigger} close detail while redacting the late mirror stream drain`, async () => {
+			const deadlineElapsed = deferred();
+			const forceCloseController = new AbortController();
+			const nextRequested = deferred();
+			const lateNext = Promise.withResolvers<IteratorResult<SDKMessage>>();
+			const errors: Record<string, unknown>[] = [];
+			let nextCalls = 0;
+			const query: SupervisedQuery = {
+				async interrupt() {},
+				close() {
+					throw new Error("operational close detail");
 				},
-			},
-		});
-		await nextRequested.promise;
-
-		deadlineElapsed.resolve();
-		expect(await consuming).toMatchObject({
-			disposition: "stopped",
-			mirrorErrorObserved: true,
-		});
-		lateNext.reject(new Error("transcript drain detail"));
-		await Promise.resolve();
-
-		expect(errors).toEqual([
-			{
-				message: "agent query force-close failed",
-				runId: "run-1",
-				error: "operational close detail",
-			},
-			{
-				message: "agent query failed while stopping",
-				runId: "run-1",
-			},
-		]);
-		expect(JSON.stringify(errors)).not.toContain("transcript drain detail");
-	});
-
-	it("retains operational close detail without exposing its inherited mirror drain", async () => {
-		const forceCloseController = new AbortController();
-		const nextRequested = deferred();
-		const lateNext = Promise.withResolvers<IteratorResult<SDKMessage>>();
-		const errors: Record<string, unknown>[] = [];
-		let nextCalls = 0;
-		const query: SupervisedQuery = {
-			async interrupt() {},
-			close() {
-				throw new Error("operational close detail");
-			},
-			[Symbol.asyncIterator]() {
-				return {
-					next() {
-						nextCalls++;
-						if (nextCalls === 1) {
-							return Promise.resolve({
-								done: false,
-								value: mirrorErrorMessage(),
-							});
-						}
-						nextRequested.resolve();
-						return lateNext.promise;
-					},
-				};
-			},
-		};
-		const consuming = consumeAgentStream({
-			runId: "run-1",
-			query,
-			interruptionSignal: new AbortController().signal,
-			forceCloseSignals: [forceCloseController.signal],
-			abortRunScopedWork: () => {},
-			appendModelContents: async () => {},
-			startStopDeadline: () => ({
-				elapsed: new Promise(() => {}),
-				cancel() {},
-			}),
-			logger: {
-				info() {},
-				warn() {},
-				error(fields) {
-					errors.push(fields);
+				[Symbol.asyncIterator]() {
+					return {
+						next() {
+							nextCalls++;
+							if (nextCalls === 1) {
+								return Promise.resolve({
+									done: false,
+									value: mirrorErrorMessage(),
+								});
+							}
+							nextRequested.resolve();
+							return lateNext.promise;
+						},
+					};
 				},
-			},
-		});
-		await nextRequested.promise;
-
-		forceCloseController.abort();
-		expect(await consuming).toMatchObject({
-			disposition: "stopped",
-			mirrorErrorObserved: true,
-		});
-		lateNext.reject(new Error("operational iterator detail"));
-		await Promise.resolve();
-
-		expect(errors).toEqual([
-			{
-				message: "agent query force-close failed",
+			};
+			const consuming = consumeAgentStream({
 				runId: "run-1",
-				error: "operational close detail",
-			},
-			{
-				message: "agent query failed while stopping",
-				runId: "run-1",
-			},
-		]);
-		expect(JSON.stringify(errors)).not.toContain("operational iterator detail");
-	});
+				query,
+				interruptionSignal: new AbortController().signal,
+				forceCloseSignals: [forceCloseController.signal],
+				abortRunScopedWork: () => {},
+				appendModelContents: async () => {},
+				startStopDeadline: () => ({
+					elapsed: deadlineElapsed.promise,
+					cancel() {},
+				}),
+				logger: {
+					info() {},
+					warn() {},
+					error(fields) {
+						errors.push(fields);
+					},
+				},
+			});
+			await nextRequested.promise;
+
+			if (closeTrigger === "deadline") deadlineElapsed.resolve();
+			else forceCloseController.abort();
+			expect(await consuming).toMatchObject({
+				disposition: "stopped",
+				mirrorErrorObserved: true,
+			});
+			lateNext.reject(new Error("provider stream drain detail"));
+			await Promise.resolve();
+
+			expect(errors).toEqual([
+				{
+					message: "agent query force-close failed",
+					runId: "run-1",
+					error: "operational close detail",
+				},
+				{
+					message: "agent query failed while stopping",
+					runId: "run-1",
+				},
+			]);
+			expect(JSON.stringify(errors)).not.toContain(
+				"provider stream drain detail",
+			);
+		});
+	}
 
 	it("redacts a mirror drain that began as an interruption", async () => {
 		const interruptionController = new AbortController();

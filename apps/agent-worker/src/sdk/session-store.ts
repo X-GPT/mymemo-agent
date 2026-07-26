@@ -46,8 +46,8 @@ export function createConversationSessionStore(
 	db: Database,
 	binding: {
 		conversationId: string;
-		runId?: string;
-		logger?: WorkerLogger;
+		runId: string;
+		logger: WorkerLogger;
 	},
 ): SessionStore {
 	const { conversationId, runId, logger } = binding;
@@ -62,7 +62,7 @@ export function createConversationSessionStore(
 			try {
 				await appendAgentSessionEntriesTx(db, ref(key), entries);
 			} catch (error) {
-				logger?.error({
+				logger.error({
 					message: "agent session mirror append failed",
 					runId,
 					conversationId,
@@ -125,8 +125,8 @@ export function buildAgentSessionQueryConfig(input: {
 	db: Database;
 	conversationId: string;
 	runtime: ConversationRuntimeRecord | null;
-	runId?: string;
-	logger?: WorkerLogger;
+	runId: string;
+	logger: WorkerLogger;
 }): AgentSessionQueryConfig {
 	const { db, conversationId, runtime, runId, logger } = input;
 	const config: AgentSessionQueryConfig = {
