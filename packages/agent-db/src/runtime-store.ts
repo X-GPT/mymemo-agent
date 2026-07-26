@@ -4,8 +4,8 @@ import type { Database, DbTx } from "./client";
 import {
 	ownedRunByUserConditions,
 	ownedRunByUserExists,
-	type RunOwnershipRef,
 	rejectRunFence,
+	type UserRunMutationOwner,
 } from "./run-ownership";
 import { conversationRuntime, orphanSandboxes, runs } from "./schema";
 
@@ -64,7 +64,7 @@ export async function loadConversationRuntimeTx(
  */
 export async function createConversationRuntimeTx(
 	db: Database,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 ): Promise<ConversationRuntimeRecord> {
 	return await db.transaction(async (tx) => {
 		const owned = await tx
@@ -107,7 +107,7 @@ export async function createConversationRuntimeTx(
  */
 export async function updateRuntimeSandboxTx(
 	db: Database,
-	input: RunOwnershipRef & { sandboxId: string | null },
+	input: UserRunMutationOwner & { sandboxId: string | null },
 ): Promise<ConversationRuntimeRecord> {
 	const row = await tryUpdateRuntimeRow(db, input, {
 		sandboxId: input.sandboxId,
@@ -126,11 +126,11 @@ export async function updateRuntimeSandboxTx(
  */
 export async function publishAgentSessionPointerInTx(
 	tx: DbTx,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 	agentSessionId: string,
-): Promise<ConversationRuntimeRecord | null> {
+): Promise<void> {
 	const row = await tryUpdateRuntimeRow(tx, owner, { agentSessionId });
-	if (row) return row;
+	if (row) return;
 
 	const [owned] = await tx
 		.select({ runId: runs.runId })
@@ -138,12 +138,11 @@ export async function publishAgentSessionPointerInTx(
 		.where(ownedRunByUserConditions(owner))
 		.for("share");
 	if (!owned) rejectRunFence(owner, "agent session pointer publication");
-	return null;
 }
 
 async function tryUpdateRuntimeRow(
 	db: Pick<Database, "update">,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 	set: PgUpdateSetSource<typeof conversationRuntime>,
 ): Promise<ConversationRuntimeRecord | null> {
 	const [row] = await db
@@ -167,7 +166,7 @@ async function tryUpdateRuntimeRow(
  */
 export async function markRuntimeSandboxTaintedTx(
 	db: Database,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 ): Promise<ConversationRuntimeRecord> {
 	const row = await tryUpdateRuntimeRow(db, owner, {
 		sandboxTainted: true,

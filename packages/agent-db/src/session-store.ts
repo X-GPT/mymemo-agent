@@ -19,11 +19,12 @@ import { agentSessions, runs } from "./schema";
  * one Drizzle instance; the adapter that imports SDK types lives in
  * agent-worker and delegates here.
  *
- * Every helper is keyed by `conversationId` — the stable identity the adapter
- * binds each call to — plus the SDK's `(sessionId, subpath)`. `projectKey` is
- * stored for fidelity with the SDK's cwd-derived key but is never a lookup key:
- * conversation id is 1:1 with a conversation's transcripts and does not depend
- * on reconstructing the SDK's cwd→key sanitization.
+ * Mutations take `conversationId` only from their Run owner — the stable
+ * identity the adapter binds each call to — plus the SDK's `(sessionId,
+ * subpath)`. `projectKey` is stored for fidelity with the SDK's cwd-derived key
+ * but is never a lookup key: conversation id is 1:1 with a conversation's
+ * transcripts and does not depend on reconstructing the SDK's cwd→key
+ * sanitization.
  */
 
 /**
@@ -38,15 +39,19 @@ export interface AgentSessionEntry {
 }
 
 /**
- * Identifies one transcript within a conversation. `subpath` undefined names
- * the main transcript (stored as `''`); a non-empty `subagents/agent-…` value
- * names a subagent transcript.
+ * Identifies one SDK transcript within its Run-bound conversation. `subpath`
+ * undefined names the main transcript (stored as `''`); a non-empty
+ * `subagents/agent-…` value names a subagent transcript.
  */
 export interface AgentSessionRef {
-	conversationId: string;
 	projectKey: string;
 	sessionId: string;
 	subpath?: string;
+}
+
+/** A transcript read ref, whose unfenced lookup must carry its Conversation. */
+export interface ConversationAgentSessionRef extends AgentSessionRef {
+	conversationId: string;
 }
 
 /** The main transcript's stored subpath — the empty string, since the SDK's
@@ -69,7 +74,7 @@ export function isMainAgentSessionRef(
  * id. Deduplicates by `entry.uuid`: `ON CONFLICT DO NOTHING` against the unique
  * `(conversation, session, subpath, uuid)` index drops a re-delivered uuid,
  * while uuid-less entries (NULL, distinct in the index) always insert. Empty
- * batches still validate Run ownership, then perform no insert.
+ * batches are pure no-ops.
  */
 export async function appendAgentSessionEntriesTx(
 	db: Database,
@@ -77,33 +82,33 @@ export async function appendAgentSessionEntriesTx(
 	entries: AgentSessionEntry[],
 	owner: RunMutationOwner,
 ): Promise<void> {
+	if (entries.length === 0) return;
 	const subpath = normalizeSubpath(ref.subpath);
-	assertOwnedConversation(ref.conversationId, owner, "session append");
 	await db.transaction(async (tx) => {
-		if (entries.length > 0) {
-			const rows = entries.map(
-				(entry) =>
-					sql`(${ref.conversationId}, ${ref.projectKey}, ${ref.sessionId}, ${subpath}, ${
-						typeof entry.uuid === "string" ? entry.uuid : null
-					}, ${JSON.stringify(entry)}::jsonb)`,
-			);
-			const columns = [
-				agentSessions.conversationId,
-				agentSessions.projectKey,
-				agentSessions.sessionId,
-				agentSessions.subpath,
-				agentSessions.uuid,
-				agentSessions.entry,
-			].map((column) => sql.identifier(column.name));
-			await tx.execute(sql`
-				insert into ${agentSessions} (${sql.join(columns, sql`, `)})
-				select ${sql.identifier("input")}.*
-				from (values ${sql.join(rows, sql`, `)}) as ${sql.identifier("input")}
-				(${sql.join(columns, sql`, `)})
-				where ${ownedRunExists(owner)}
-				on conflict do nothing
-			`);
-		}
+		const rows = entries.map(
+			(entry) =>
+				sql`(${owner.conversationId}, ${ref.projectKey}, ${ref.sessionId}, ${subpath}, ${
+					typeof entry.uuid === "string" ? entry.uuid : null
+				}, ${JSON.stringify(entry)}::jsonb)`,
+		);
+		const columns = [
+			agentSessions.conversationId,
+			agentSessions.projectKey,
+			agentSessions.sessionId,
+			agentSessions.subpath,
+			agentSessions.uuid,
+			agentSessions.entry,
+		].map((column) => sql.identifier(column.name));
+		// Drizzle's values insert has no WHERE clause. Keep the lease predicate in
+		// the INSERT itself with the smallest insert-select needed for the batch.
+		await tx.execute(sql`
+			insert into ${agentSessions} (${sql.join(columns, sql`, `)})
+			select ${sql.identifier("input")}.*
+			from (values ${sql.join(rows, sql`, `)}) as ${sql.identifier("input")}
+			(${sql.join(columns, sql`, `)})
+			where ${ownedRunExists(owner)}
+			on conflict do nothing
+		`);
 		await lockOwnedRunAfterMutation(tx, owner, "session append");
 	});
 }
@@ -116,7 +121,7 @@ export async function appendAgentSessionEntriesTx(
  */
 export async function loadAgentSessionEntriesTx(
 	db: Database,
-	ref: AgentSessionRef,
+	ref: ConversationAgentSessionRef,
 ): Promise<AgentSessionEntry[] | null> {
 	const rows = await db
 		.select({ entry: agentSessions.entry })
@@ -189,16 +194,15 @@ export async function listAgentSessionSubkeysTx(
  */
 export async function deleteAgentSessionTx(
 	db: Database,
-	input: { conversationId: string; sessionId: string; subpath?: string },
+	input: { sessionId: string; subpath?: string },
 	owner: RunMutationOwner,
 ): Promise<void> {
-	assertOwnedConversation(input.conversationId, owner, "session delete");
 	await db.transaction(async (tx) => {
 		await tx
 			.delete(agentSessions)
 			.where(
 				and(
-					transcriptWhere(input.conversationId, input.sessionId, input.subpath),
+					transcriptWhere(owner.conversationId, input.sessionId, input.subpath),
 					ownedRunExists(owner),
 				),
 			);
@@ -237,16 +241,6 @@ async function lockOwnedRunAfterMutation(
 		.where(ownedRunConditions(owner))
 		.for("share");
 	if (!owned) {
-		rejectRunFence(owner, operation);
-	}
-}
-
-function assertOwnedConversation(
-	conversationId: string,
-	owner: RunMutationOwner,
-	operation: string,
-): void {
-	if (conversationId !== owner.conversationId) {
 		rejectRunFence(owner, operation);
 	}
 }

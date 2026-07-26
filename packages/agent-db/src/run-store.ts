@@ -10,8 +10,8 @@ import {
 } from "./run-events";
 import {
 	RunFenceError,
-	type RunOwnershipRef,
 	runLeaseByUserConditions,
+	type UserRunMutationOwner,
 } from "./run-ownership";
 import { publishAgentSessionPointerInTx } from "./runtime-store";
 import { runEvents, runs } from "./schema";
@@ -517,7 +517,7 @@ export type TerminalOutcome =
 	  });
 
 export type TerminalTransitionInput = TerminalOutcome & {
-	owner: RunOwnershipRef;
+	owner: UserRunMutationOwner;
 };
 
 /**

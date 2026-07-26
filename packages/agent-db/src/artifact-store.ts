@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import type { RunOwnershipRef } from "./run-ownership";
+import type { UserRunMutationOwner } from "./run-ownership";
 import { type RunRecord, transitionRunTerminalInTx } from "./run-store";
 import { artifactObjects, conversationArtifacts } from "./schema";
 
@@ -59,7 +59,7 @@ export async function recordArtifactObjectsTx(
 export async function publishArtifactsAndTransitionRunDoneTx(
 	db: Database,
 	input: {
-		owner: RunOwnershipRef;
+		owner: UserRunMutationOwner;
 		artifacts: PublishedArtifact[];
 		agentSessionId?: string;
 	},

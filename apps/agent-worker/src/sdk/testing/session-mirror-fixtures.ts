@@ -12,3 +12,12 @@ export function withNoSessionMirrorEvidence(
 ): RunQuery {
 	return Object.assign(query, { sessionEvidence: noSessionMirrorEvidence });
 }
+
+export function withSessionMirrorEvidence(
+	query: SupervisedQuery & Partial<ArtifactAwareQuery>,
+	sessionId: string,
+): RunQuery {
+	return Object.assign(query, {
+		sessionEvidence: { mirroredMainSessionId: () => sessionId },
+	});
+}

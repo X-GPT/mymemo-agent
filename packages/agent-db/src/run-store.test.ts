@@ -12,7 +12,7 @@ import {
 	RunEventType,
 	validateDurableRunEventSequence,
 } from "./run-events";
-import { RunFenceError, type RunOwnershipRef } from "./run-ownership";
+import { RunFenceError, type UserRunMutationOwner } from "./run-ownership";
 import {
 	ActiveRunConflictError,
 	type AdmitQueuedRunInput,
@@ -305,7 +305,9 @@ async function claimRun(
 	return claimed;
 }
 
-function owner(overrides: Partial<RunOwnershipRef> = {}): RunOwnershipRef {
+function owner(
+	overrides: Partial<UserRunMutationOwner> = {},
+): UserRunMutationOwner {
 	return {
 		runId: "run-1",
 		conversationId: "conv-1",

@@ -72,7 +72,6 @@ export function createConversationSessionStore(
 	};
 	const mirroredMainSessionIds = new Set<string>();
 	const ref = (key: SessionKey) => ({
-		conversationId,
 		projectKey: key.projectKey,
 		sessionId: key.sessionId,
 		subpath: key.subpath,
@@ -104,9 +103,10 @@ export function createConversationSessionStore(
 			// appended; the agent-db layer types them as opaque JSON (no required
 			// `type`), so this narrowing cast restores the SDK's view. Deep-equal —
 			// not byte-equal — is all the SDK requires (jsonb may reorder keys).
-			return (await loadAgentSessionEntriesTx(db, ref(key))) as
-				| SessionStoreEntry[]
-				| null;
+			return (await loadAgentSessionEntriesTx(db, {
+				conversationId,
+				...ref(key),
+			})) as SessionStoreEntry[] | null;
 		},
 		async listSessions(_projectKey) {
 			// Conversation-bound: the SDK-supplied projectKey names this same
@@ -123,7 +123,6 @@ export function createConversationSessionStore(
 			await deleteAgentSessionTx(
 				db,
 				{
-					conversationId,
 					sessionId: key.sessionId,
 					subpath: key.subpath,
 				},

@@ -50,12 +50,12 @@ export const conversationRuntime = pgTable(
 		sandboxTainted: boolean("sandbox_tainted").notNull().default(false),
 		/**
 		 * The Claude Agent SDK session to resume this conversation from (ADR-0005):
-		 * the id the worker stores from the SDK's terminal result message. NULL
-		 * until a Run successfully mirrors an entry for the main session — a Run
-		 * with no pointer starts a fresh Agent session. The first value and every
-		 * later advance are published ONLY in the same ownership-fenced transaction
-		 * as `done` or `interrupted`; recovery and a Run that observed
-		 * `mirror_error` leave it unchanged.
+		 * the main-session id the bound SessionStore proves through a successful
+		 * non-empty transcript mirror. NULL until that evidence exists — a Run with
+		 * no pointer starts a fresh Agent session. The first value and every later
+		 * advance are published ONLY in the same ownership-fenced transaction as
+		 * `done` or `interrupted`; recovery and a Run that observed `mirror_error`
+		 * leave it unchanged.
 		 */
 		agentSessionId: text("agent_session_id"),
 		createdAt: timestamp("created_at", { withTimezone: true })

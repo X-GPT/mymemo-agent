@@ -3,10 +3,11 @@
 // is exercised by BOTH chat-api and agent-worker. Sandbox/taint mutations use
 // these helpers; run-store composes Agent-session pointer publication into the
 // terminal transaction through the same shared fence.
-// chat-api keeps this `@/features/conversation-runtime-store` surface as a thin
-// re-export so its imports stay stable.
+// chat-api keeps this `@/features/conversation-runtime-store` compatibility
+// surface over the runtime helpers and their user-bound mutation-owner type so
+// its imports stay stable.
 
-export type { RunOwnershipRef } from "@mymemo/agent-db/run-ownership";
+export type { UserRunMutationOwner } from "@mymemo/agent-db/run-ownership";
 export type {
 	ConversationRuntimeRecord,
 	OrphanSandboxRecord,

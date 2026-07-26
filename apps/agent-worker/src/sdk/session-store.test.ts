@@ -216,6 +216,8 @@ describe("createConversationSessionStore", () => {
 		);
 
 		expect(store.mirroredMainSessionId()).toBeNull();
+		await store.append(mainKey("sess-empty"), []);
+		expect(store.mirroredMainSessionId()).toBeNull();
 		await store.append(mainKey("sess-1", "subagents/agent-1"), [entry("sub")]);
 		expect(store.mirroredMainSessionId()).toBeNull();
 		await store.append(mainKey("sess-other"), [entry("other-main")]);

@@ -81,21 +81,25 @@ function ownerFor(conversationId: string) {
 }
 
 async function appendEntries(
-	ref: Parameters<typeof appendAgentSessionEntriesTx>[1],
+	ref: Parameters<typeof loadAgentSessionEntriesTx>[1],
 	entries: AgentSessionEntry[],
 ): Promise<void> {
+	const { conversationId, ...session } = ref;
 	await appendAgentSessionEntriesTx(
 		tdb.db,
-		ref,
+		session,
 		entries,
-		ownerFor(ref.conversationId),
+		ownerFor(conversationId),
 	);
 }
 
-async function deleteSession(
-	input: Parameters<typeof deleteAgentSessionTx>[1],
-): Promise<void> {
-	await deleteAgentSessionTx(tdb.db, input, ownerFor(input.conversationId));
+async function deleteSession(input: {
+	conversationId: string;
+	sessionId: string;
+	subpath?: string;
+}): Promise<void> {
+	const { conversationId, ...session } = input;
+	await deleteAgentSessionTx(tdb.db, session, ownerFor(conversationId));
 }
 
 describe("appendAgentSessionEntriesTx + loadAgentSessionEntriesTx", () => {
@@ -308,10 +312,10 @@ describe("SDK session mutation ownership fence", () => {
 		workerId: "worker-owned",
 	};
 	const REF = {
-		conversationId: OWNER.conversationId,
 		projectKey: "project-owned",
 		sessionId: "session-owned",
 	};
+	const READ_REF = { conversationId: OWNER.conversationId, ...REF };
 
 	async function insertOwnedRun(input: {
 		conversationId?: string;
@@ -344,7 +348,7 @@ describe("SDK session mutation ownership fence", () => {
 
 		await appendAgentSessionEntriesTx(tdb.db, REF, [entry(status)], OWNER);
 
-		expect(await loadAgentSessionEntriesTx(tdb.db, REF)).toEqual([
+		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toEqual([
 			entry(status),
 		]);
 	});
@@ -357,6 +361,7 @@ describe("SDK session mutation ownership fence", () => {
 	])("rejects mutations under %s without effect", async (_name, run) => {
 		await insertOwnedRun(run);
 		await tdb.db.insert(agentSessions).values({
+			conversationId: OWNER.conversationId,
 			...REF,
 			subpath: "",
 			uuid: "accepted",
@@ -370,18 +375,17 @@ describe("SDK session mutation ownership fence", () => {
 			deleteAgentSessionTx(
 				tdb.db,
 				{
-					conversationId: REF.conversationId,
 					sessionId: REF.sessionId,
 				},
 				OWNER,
 			),
 		).rejects.toThrow(/session delete.*rejected/i);
-		expect(await loadAgentSessionEntriesTx(tdb.db, REF)).toEqual([
+		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toEqual([
 			entry("accepted"),
 		]);
 	});
 
-	it("rejects even an empty append bound to a different Run id", async () => {
+	it("treats an empty append as a pure no-op", async () => {
 		await insertOwnedRun({});
 
 		await expect(
@@ -389,33 +393,8 @@ describe("SDK session mutation ownership fence", () => {
 				...OWNER,
 				runId: "run-other",
 			}),
-		).rejects.toThrow(/session append.*rejected/i);
-		expect(await loadAgentSessionEntriesTx(tdb.db, REF)).toBeNull();
-	});
-
-	it("rejects append and delete refs bound to a different Conversation", async () => {
-		await insertOwnedRun({});
-		const mismatchedRef = { ...REF, conversationId: "conv-other" };
-
-		await expect(
-			appendAgentSessionEntriesTx(
-				tdb.db,
-				mismatchedRef,
-				[entry("rejected")],
-				OWNER,
-			),
-		).rejects.toThrow(/session append.*rejected/i);
-		await expect(
-			deleteAgentSessionTx(
-				tdb.db,
-				{
-					conversationId: mismatchedRef.conversationId,
-					sessionId: mismatchedRef.sessionId,
-				},
-				OWNER,
-			),
-		).rejects.toThrow(/session delete.*rejected/i);
-		expect(await loadAgentSessionEntriesTx(tdb.db, mismatchedRef)).toBeNull();
+		).resolves.toBeUndefined();
+		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toBeNull();
 	});
 
 	it("rejects delete bound to a different Run id without effect", async () => {
@@ -426,13 +405,12 @@ describe("SDK session mutation ownership fence", () => {
 			deleteAgentSessionTx(
 				tdb.db,
 				{
-					conversationId: REF.conversationId,
 					sessionId: REF.sessionId,
 				},
 				{ ...OWNER, runId: "run-other" },
 			),
 		).rejects.toThrow(/session delete.*rejected/i);
-		expect(await loadAgentSessionEntriesTx(tdb.db, REF)).toEqual([
+		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toEqual([
 			entry("accepted"),
 		]);
 	});
@@ -444,16 +422,16 @@ describe("SDK session mutation ownership fence", () => {
 		await deleteAgentSessionTx(
 			tdb.db,
 			{
-				conversationId: REF.conversationId,
 				sessionId: REF.sessionId,
 			},
 			OWNER,
 		);
-		expect(await loadAgentSessionEntriesTx(tdb.db, REF)).toBeNull();
+		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toBeNull();
 	});
 
 	it("keeps Conversation-deletion cleanup administratively authorized", async () => {
 		await tdb.db.insert(agentSessions).values({
+			conversationId: OWNER.conversationId,
 			...REF,
 			subpath: "",
 			uuid: "cleanup",
@@ -461,9 +439,9 @@ describe("SDK session mutation ownership fence", () => {
 		});
 
 		await deleteConversationAgentSessionsTx(tdb.db, {
-			conversationId: REF.conversationId,
+			conversationId: OWNER.conversationId,
 		});
 
-		expect(await loadAgentSessionEntriesTx(tdb.db, REF)).toBeNull();
+		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toBeNull();
 	});
 });

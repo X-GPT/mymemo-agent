@@ -8,8 +8,8 @@ export interface RunMutationOwner {
 	workerId: string;
 }
 
-/** Full owner identity used when mutating Conversation-scoped runtime state. */
-export interface RunOwnershipRef extends RunMutationOwner {
+/** User-bound owner identity for Conversation-scoped Run mutations. */
+export interface UserRunMutationOwner extends RunMutationOwner {
 	userId: string;
 }
 
@@ -43,12 +43,12 @@ export function ownedRunConditions(owner: RunMutationOwner) {
 }
 
 /** User-bound Run identity and live lease, without imposing a status class. */
-export function runLeaseByUserConditions(owner: RunOwnershipRef) {
+export function runLeaseByUserConditions(owner: UserRunMutationOwner) {
 	return and(runLeaseConditions(owner), eq(runs.userId, owner.userId));
 }
 
 /** The stronger ownership predicate for user-owned Conversation state. */
-export function ownedRunByUserConditions(owner: RunOwnershipRef) {
+export function ownedRunByUserConditions(owner: UserRunMutationOwner) {
 	return and(
 		runLeaseByUserConditions(owner),
 		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
@@ -65,7 +65,7 @@ export function ownedRunExists(owner: RunMutationOwner) {
 }
 
 /** {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate. */
-export function ownedRunByUserExists(owner: RunOwnershipRef) {
+export function ownedRunByUserExists(owner: UserRunMutationOwner) {
 	return sql`exists (select 1 from ${runs} where ${ownedRunByUserConditions(owner)})`;
 }
 

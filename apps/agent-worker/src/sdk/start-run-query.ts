@@ -1,6 +1,6 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Database } from "@mymemo/agent-db/client";
-import type { RunOwnershipRef } from "@mymemo/agent-db/run-ownership";
+import type { UserRunMutationOwner } from "@mymemo/agent-db/run-ownership";
 import { loadRunStartedTx, type RunRecord } from "@mymemo/agent-db/run-store";
 import {
 	type ConversationRuntimeRecord,
@@ -41,7 +41,6 @@ import {
 	type AgentSessionQueryConfig,
 	buildAgentSessionQueryConfig,
 	conversationWorkingDirectory,
-	type SessionMirrorEvidence,
 } from "./session-store";
 
 /**
@@ -143,7 +142,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 		// Parse the frozen scope fail-closed before any side effect: a run whose
 		// scope cannot be trusted must not provision or query anything.
 		const documentScope = parseFrozenScope(started);
-		const owner: RunOwnershipRef = {
+		const owner: UserRunMutationOwner = {
 			userId: run.userId,
 			conversationId: run.conversationId,
 			runId: run.runId,
@@ -225,8 +224,10 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			});
 			const underlying = deps.query({ prompt: started.message, options });
 			return superviseTurn({
-				underlying: withArtifactPublication(underlying, artifactPublication),
-				sessionEvidence: sessionConfig.sessionStore,
+				underlying: Object.assign(
+					withArtifactPublication(underlying, artifactPublication),
+					{ sessionEvidence: sessionConfig.sessionStore },
+				),
 				settle,
 				renewalFailure: () => renewalFailure,
 				forceCloseSignal: forceCloseController.signal,
@@ -255,7 +256,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
  */
 async function provisionWorkspace(
 	deps: StartRunQueryDeps,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 ): Promise<{
 	provisioned: ProvisionedSandbox;
 	runtime: ConversationRuntimeRecord;
@@ -290,7 +291,7 @@ async function provisionWorkspace(
  * record it in the (deliberately unfenced) orphan ledger for the janitor. */
 async function killOrRecordOrphan(
 	deps: StartRunQueryDeps,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 	sandboxId: string,
 ): Promise<void> {
 	try {
@@ -329,7 +330,7 @@ async function killOrRecordOrphan(
  */
 async function recordReplacedSandbox(
 	deps: StartRunQueryDeps,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 	prior: ConversationRuntimeRecord,
 ): Promise<void> {
 	if (prior.sandboxId === null) return;
@@ -360,7 +361,7 @@ function buildQueryOptions(
 	deps: StartRunQueryDeps,
 	input: {
 		run: RunRecord;
-		owner: RunOwnershipRef;
+		owner: UserRunMutationOwner;
 		provisioned: ProvisionedSandbox;
 		documentScope: RunToolDeps["documentScope"];
 		toolController: AbortController;
@@ -451,8 +452,7 @@ function buildQueryOptions(
  * {@link SandboxRenewalError} so the run terminalizes `error`, never `done`.
  */
 function superviseTurn(input: {
-	underlying: SupervisedQuery;
-	sessionEvidence: SessionMirrorEvidence;
+	underlying: RunQuery;
 	settle: () => Promise<void>;
 	renewalFailure: () => { error: unknown } | null;
 	forceCloseSignal: AbortSignal;
@@ -460,7 +460,6 @@ function superviseTurn(input: {
 }): RunQuery {
 	const {
 		underlying,
-		sessionEvidence,
 		settle,
 		renewalFailure,
 		forceCloseSignal,
@@ -469,7 +468,7 @@ function superviseTurn(input: {
 	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
-		sessionEvidence,
+		sessionEvidence: underlying.sessionEvidence,
 		close: () => {
 			try {
 				underlying.close();

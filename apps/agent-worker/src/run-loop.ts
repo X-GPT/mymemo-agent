@@ -14,7 +14,7 @@ import {
 } from "@mymemo/agent-db/run-events";
 import {
 	RunFenceError,
-	type RunOwnershipRef,
+	type UserRunMutationOwner,
 } from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventsTx,
@@ -520,7 +520,7 @@ export class RunLoop {
 		turnResult: TurnResult,
 		failure?: { error: unknown },
 	): Promise<TerminalRunStatus | null> {
-		const owner: RunOwnershipRef = {
+		const owner: UserRunMutationOwner = {
 			userId: run.userId,
 			conversationId: run.conversationId,
 			runId: run.runId,
@@ -565,13 +565,17 @@ export class RunLoop {
 		// publishes the conversation's first or later usable resume pointer in
 		// that same ownership-fenced transaction (ADR-0005).
 		if (turnResult.artifactPublication) {
-			return this.publishArtifactsAndFinish(owner, turnResult, agentSessionId);
+			return this.publishArtifactsAndFinish(
+				owner,
+				turnResult.artifactPublication,
+				agentSessionId,
+			);
 		}
 		return this.terminalize(owner, { status: "done", agentSessionId });
 	}
 
 	private failRun(
-		owner: RunOwnershipRef,
+		owner: UserRunMutationOwner,
 		message: string,
 		fields: Record<string, unknown> = {},
 	): Promise<TerminalRunStatus | null> {
@@ -590,12 +594,10 @@ export class RunLoop {
 	}
 
 	private async publishArtifactsAndFinish(
-		owner: RunOwnershipRef,
-		turnResult: TurnResult,
+		owner: UserRunMutationOwner,
+		publication: NonNullable<TurnResult["artifactPublication"]>,
 		agentSessionId: string | undefined,
 	): Promise<TerminalRunStatus | null> {
-		const publication = turnResult.artifactPublication;
-		if (!publication) return null;
 		try {
 			await publishArtifactsAndTransitionRunDoneTx(this.opts.db, {
 				owner,
@@ -646,7 +648,7 @@ export class RunLoop {
 	 * that is fenced, stale-run recovery finishes the run.
 	 */
 	private async terminalize(
-		owner: RunOwnershipRef,
+		owner: UserRunMutationOwner,
 		outcome: TerminalOutcome,
 	): Promise<TerminalRunStatus | null> {
 		try {
@@ -673,7 +675,7 @@ export class RunLoop {
 	}
 
 	private async tryTerminalInterrupted(
-		owner: RunOwnershipRef,
+		owner: UserRunMutationOwner,
 		agentSessionId?: string,
 	): Promise<boolean> {
 		try {
