@@ -109,12 +109,15 @@ export async function updateRuntimeSandboxTx(
 	db: Database,
 	input: UserRunMutationOwner & { sandboxId: string | null },
 ): Promise<ConversationRuntimeRecord> {
-	const row = await tryUpdateRuntimeRow(db, input, {
-		sandboxId: input.sandboxId,
-		sandboxTainted: false,
-	});
-	if (!row) rejectRunFence(input, "sandbox pointer update");
-	return row;
+	return await updateRuntimeRowOrReject(
+		db,
+		input,
+		{
+			sandboxId: input.sandboxId,
+			sandboxTainted: false,
+		},
+		"sandbox pointer update",
+	);
 }
 
 /**
@@ -159,6 +162,17 @@ async function tryUpdateRuntimeRow(
 	return row ?? null;
 }
 
+async function updateRuntimeRowOrReject(
+	db: Pick<Database, "update">,
+	owner: UserRunMutationOwner,
+	set: PgUpdateSetSource<typeof conversationRuntime>,
+	operation: string,
+): Promise<ConversationRuntimeRecord> {
+	const row = await tryUpdateRuntimeRow(db, owner, set);
+	if (!row) rejectRunFence(owner, operation);
+	return row;
+}
+
 /**
  * Mark the current sandbox tainted (command cleanup unproven): the pointer is
  * kept so cleanup can find and kill it, but the sandbox must not be
@@ -168,11 +182,12 @@ export async function markRuntimeSandboxTaintedTx(
 	db: Database,
 	owner: UserRunMutationOwner,
 ): Promise<ConversationRuntimeRecord> {
-	const row = await tryUpdateRuntimeRow(db, owner, {
-		sandboxTainted: true,
-	});
-	if (!row) rejectRunFence(owner, "sandbox taint mark");
-	return row;
+	return await updateRuntimeRowOrReject(
+		db,
+		owner,
+		{ sandboxTainted: true },
+		"sandbox taint mark",
+	);
 }
 
 /** A persisted orphan-ledger row. */

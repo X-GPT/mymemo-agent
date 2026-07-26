@@ -70,7 +70,7 @@ export function createConversationSessionStore(
 		runId,
 		workerId,
 	};
-	const mirroredMainSessionIds = new Set<string>();
+	let latestMirroredMainSessionId: string | null = null;
 	const ref = (key: SessionKey) => ({
 		projectKey: key.projectKey,
 		sessionId: key.sessionId,
@@ -79,12 +79,13 @@ export function createConversationSessionStore(
 	return {
 		async append(key, entries) {
 			try {
-				await appendAgentSessionEntriesTx(db, ref(key), entries, owner);
+				await appendAgentSessionEntriesTx(db, {
+					owner,
+					ref: ref(key),
+					entries,
+				});
 				if (entries.length > 0 && isMainAgentSessionRef(key)) {
-					// Set preserves insertion order but does not move an existing key;
-					// reinsert so iteration reports actual mirror recency.
-					mirroredMainSessionIds.delete(key.sessionId);
-					mirroredMainSessionIds.add(key.sessionId);
+					latestMirroredMainSessionId = key.sessionId;
 				}
 			} catch (error) {
 				logger.error({
@@ -120,22 +121,22 @@ export function createConversationSessionStore(
 			});
 		},
 		async delete(key) {
-			await deleteAgentSessionTx(
-				db,
-				{
+			await deleteAgentSessionTx(db, {
+				owner,
+				ref: {
 					sessionId: key.sessionId,
 					subpath: key.subpath,
 				},
-				owner,
-			);
-			if (isMainAgentSessionRef(key)) {
-				mirroredMainSessionIds.delete(key.sessionId);
+			});
+			if (
+				isMainAgentSessionRef(key) &&
+				latestMirroredMainSessionId === key.sessionId
+			) {
+				latestMirroredMainSessionId = null;
 			}
 		},
 		mirroredMainSessionId() {
-			let latest: string | null = null;
-			for (const sessionId of mirroredMainSessionIds) latest = sessionId;
-			return latest;
+			return latestMirroredMainSessionId;
 		},
 	};
 }

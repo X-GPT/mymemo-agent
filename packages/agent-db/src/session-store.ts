@@ -78,10 +78,13 @@ export function isMainAgentSessionRef(
  */
 export async function appendAgentSessionEntriesTx(
 	db: Database,
-	ref: AgentSessionRef,
-	entries: AgentSessionEntry[],
-	owner: RunMutationOwner,
+	input: {
+		owner: RunMutationOwner;
+		ref: AgentSessionRef;
+		entries: AgentSessionEntry[];
+	},
 ): Promise<void> {
+	const { owner, ref, entries } = input;
 	if (entries.length === 0) return;
 	const subpath = normalizeSubpath(ref.subpath);
 	await db.transaction(async (tx) => {
@@ -99,8 +102,10 @@ export async function appendAgentSessionEntriesTx(
 			agentSessions.uuid,
 			agentSessions.entry,
 		].map((column) => sql.identifier(column.name));
-		// Drizzle's values insert has no WHERE clause. Keep the lease predicate in
-		// the INSERT itself with the smallest insert-select needed for the batch.
+		// Drizzle's values insert has no WHERE, while its typed insert-select
+		// requires every table column (including generated id/created_at). Keep
+		// this minimal raw batch insert so the lease predicate stays in-statement
+		// without supplying generated columns.
 		await tx.execute(sql`
 			insert into ${agentSessions} (${sql.join(columns, sql`, `)})
 			select ${sql.identifier("input")}.*
@@ -194,15 +199,18 @@ export async function listAgentSessionSubkeysTx(
  */
 export async function deleteAgentSessionTx(
 	db: Database,
-	input: { sessionId: string; subpath?: string },
-	owner: RunMutationOwner,
+	input: {
+		owner: RunMutationOwner;
+		ref: { sessionId: string; subpath?: string };
+	},
 ): Promise<void> {
+	const { owner, ref } = input;
 	await db.transaction(async (tx) => {
 		await tx
 			.delete(agentSessions)
 			.where(
 				and(
-					transcriptWhere(owner.conversationId, input.sessionId, input.subpath),
+					transcriptWhere(owner.conversationId, ref.sessionId, ref.subpath),
 					ownedRunExists(owner),
 				),
 			);

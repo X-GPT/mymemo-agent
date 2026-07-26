@@ -486,8 +486,9 @@ export async function appendRunEventsTx(
 
 /**
  * Move an owned run to a terminal status and append its one terminal event —
- * the status CAS, ownership clear (`locked_by`/`locked_until` → NULL),
- * `terminal_at`, sequence allocation, and event insert are one transaction.
+ * optional Agent-session pointer publication, the status CAS, ownership clear
+ * (`locked_by`/`locked_until` → NULL), `terminal_at`, sequence allocation, and
+ * event insert are one transaction.
  * The from-status CAS makes double-terminalization impossible (the second
  * caller finds no row and gets {@link RunFenceError}), which is what makes
  * "exactly one terminal event per run" hold. Fenced like an owned append:
@@ -521,8 +522,9 @@ export type TerminalTransitionInput = TerminalOutcome & {
 };
 
 /**
- * Transaction-scoped form of {@link transitionRunTerminalTx}. Artifact
- * publication uses it so current metadata and `run_done` share one commit.
+ * Transaction-scoped form of {@link transitionRunTerminalTx}. Callers compose
+ * other terminal facts through it; artifact publication, for example, commits
+ * current metadata, an optional Agent-session pointer, and `run_done` together.
  */
 export async function transitionRunTerminalInTx(
 	tx: DbTx,

@@ -271,7 +271,13 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				runId: run.runId,
 				workerId: "worker-1",
 			});
-			return messageQuery([initMessage("session-initialized")]);
+			const store = createConversationSessionStore(tdb.db, {
+				conversationId: run.conversationId,
+				runId: run.runId,
+				workerId: "worker-1",
+				logger: silentLogger,
+			});
+			return messageQuery([initMessage("session-initialized")], store);
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",

@@ -774,6 +774,42 @@ describe("RunLoop — agent session pointer", () => {
 		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
 	});
 
+	it("keeps qualifying evidence when error reconciliation loses to interruption", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			// The durable request lands after the last heartbeat, so loop-local
+			// interruption state remains false and the error CAS must reconcile.
+			await requestRunInterruptionTx(tdb.db, {
+				runId: ctx.run.runId,
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+			});
+			return {
+				disposition: "stopped",
+				streamMetadata: {
+					mirrorErrorObserved: false,
+					mirroredMainSessionId: "session-reconciled",
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(await readRuntime("conv-1")).toMatchObject({
+			agentSessionId: "session-reconciled",
+		});
+		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
+	});
+
 	it("terminalizes error without establishing a pointer after a mirror error stop", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {

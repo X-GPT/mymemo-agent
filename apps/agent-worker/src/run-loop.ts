@@ -545,19 +545,24 @@ export class RunLoop {
 			});
 		}
 		if (failure) {
-			return this.failRun(
-				owner,
-				"run failed",
-				artifactFailureLogFields(failure.error),
-			);
+			return this.failRun(owner, {
+				message: "run failed",
+				fields: artifactFailureLogFields(failure.error),
+				interruptedAgentSessionId: agentSessionId,
+			});
 		}
 		if (turnResult.streamMetadata?.mirrorErrorObserved) {
-			return this.failRun(owner, "agent session mirror failed", {
-				reason: "mirror_error",
+			return this.failRun(owner, {
+				message: "agent session mirror failed",
+				fields: { reason: "mirror_error" },
+				interruptedAgentSessionId: agentSessionId,
 			});
 		}
 		if (turnResult.disposition === "stopped") {
-			return this.failRun(owner, "run stopped before completion");
+			return this.failRun(owner, {
+				message: "run stopped before completion",
+				interruptedAgentSessionId: agentSessionId,
+			});
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
 		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
@@ -576,21 +581,28 @@ export class RunLoop {
 
 	private failRun(
 		owner: UserRunMutationOwner,
-		message: string,
-		fields: Record<string, unknown> = {},
+		input: {
+			message: string;
+			fields?: Record<string, unknown>;
+			interruptedAgentSessionId?: string;
+		},
 	): Promise<TerminalRunStatus | null> {
 		this.opts.logger.error({
-			message,
+			message: input.message,
 			workerId: this.workerId,
 			userId: owner.userId,
 			conversationId: owner.conversationId,
 			runId: owner.runId,
-			...fields,
+			...input.fields,
 		});
-		return this.terminalize(owner, {
-			status: "error",
-			payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-		});
+		return this.terminalize(
+			owner,
+			{
+				status: "error",
+				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
+			},
+			input.interruptedAgentSessionId,
+		);
 	}
 
 	private async publishArtifactsAndFinish(
@@ -633,10 +645,14 @@ export class RunLoop {
 							},
 						}),
 			});
-			return this.terminalize(owner, {
-				status: "error",
-				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-			});
+			return this.terminalize(
+				owner,
+				{
+					status: "error",
+					payload: { message: GENERIC_RUN_ERROR_MESSAGE },
+				},
+				agentSessionId,
+			);
 		}
 	}
 
@@ -644,12 +660,15 @@ export class RunLoop {
 	 * Append the run's terminal event through the fenced run-store helper, with
 	 * the late-interruption fallback the loop relies on: `done`/`error` lose to an
 	 * interruption the terminal CAS observes (the run is already
-	 * `interrupt_requested`), so on a fence rejection try `interrupted` once; if even
-	 * that is fenced, stale-run recovery finishes the run.
+	 * `interrupt_requested`), so on a fence rejection try `interrupted` once. An
+	 * error Outcome cannot itself carry a pointer, so qualifying evidence is
+	 * supplied separately for that reconciliation only. If even `interrupted` is
+	 * fenced, stale-run recovery finishes the run.
 	 */
 	private async terminalize(
 		owner: UserRunMutationOwner,
 		outcome: TerminalOutcome,
+		interruptedAgentSessionId?: string,
 	): Promise<TerminalRunStatus | null> {
 		try {
 			await transitionRunTerminalTx(this.opts.db, { owner, ...outcome });
@@ -658,7 +677,12 @@ export class RunLoop {
 			if (error instanceof RunFenceError) {
 				if (
 					outcome.status !== "interrupted" &&
-					(await this.tryTerminalInterrupted(owner, outcome.agentSessionId))
+					(await this.tryTerminalInterrupted(
+						owner,
+						outcome.status === "error"
+							? interruptedAgentSessionId
+							: outcome.agentSessionId,
+					))
 				) {
 					return "interrupted";
 				}
@@ -726,8 +750,9 @@ function artifactFailureLogFields(error: unknown): Record<string, unknown> {
 
 function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	const metadata = turnResult.streamMetadata;
-	// Keep pointer safety local to this injected RunProcessor seam even though
-	// finish() currently rejects mirror failures before reaching either caller.
+	// Keep pointer safety local to this injected RunProcessor seam. Interruption
+	// is reconciled before mirror-failure classification, so this guard is
+	// load-bearing for every terminal Outcome.
 	if (
 		!metadata ||
 		metadata.mirrorErrorObserved ||

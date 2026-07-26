@@ -14,6 +14,13 @@ import {
 } from "./agent-stream";
 import type { SessionMirrorEvidence } from "./session-store";
 
+/** A started query plus the Run-scoped continuity and artifact capabilities
+ * consumed after its SDK stream settles. */
+export type RunQuery = SupervisedQuery &
+	Partial<ArtifactAwareQuery> & {
+		sessionEvidence: SessionMirrorEvidence;
+	};
+
 /**
  * Start a Claude Agent SDK query for one claimed run. This is the seam between
  * run supervision (plan Task 7.2, this module) and everything a query needs that
@@ -23,11 +30,6 @@ import type { SessionMirrorEvidence } from "./session-store";
  * supervisor stop or fatal mirror failure; the returned query's interrupt/close
  * controls remain under stream supervision.
  */
-export type RunQuery = SupervisedQuery &
-	Partial<ArtifactAwareQuery> & {
-		sessionEvidence: SessionMirrorEvidence;
-	};
-
 export type StartRunQuery = (
 	run: RunRecord,
 	signal: AbortSignal,

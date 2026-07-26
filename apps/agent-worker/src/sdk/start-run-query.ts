@@ -9,10 +9,10 @@ import {
 	recordOrphanSandboxTx,
 	updateRuntimeSandboxTx,
 } from "@mymemo/agent-db/runtime-store";
-import {
-	type ArtifactAwareQuery,
-	type ArtifactPublisher,
-	withArtifactPublication,
+import type {
+	ArtifactPublication,
+	ArtifactPublicationSession,
+	ArtifactPublisher,
 } from "../artifacts/artifact-publication";
 import { ARTIFACT_ROOT } from "../artifacts/artifact-workspace";
 import type { BashToolLimits } from "../bash-tool/bash-tool";
@@ -41,6 +41,7 @@ import {
 	type AgentSessionQueryConfig,
 	buildAgentSessionQueryConfig,
 	conversationWorkingDirectory,
+	type SessionMirrorEvidence,
 } from "./session-store";
 
 /**
@@ -224,10 +225,9 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			});
 			const underlying = deps.query({ prompt: started.message, options });
 			return superviseTurn({
-				underlying: Object.assign(
-					withArtifactPublication(underlying, artifactPublication),
-					{ sessionEvidence: sessionConfig.sessionStore },
-				),
+				underlying,
+				artifactPublication,
+				sessionEvidence: sessionConfig.sessionStore,
 				settle,
 				renewalFailure: () => renewalFailure,
 				forceCloseSignal: forceCloseController.signal,
@@ -445,14 +445,18 @@ function buildQueryOptions(
 }
 
 /**
- * Wrap the SDK query so the turn's per-run resources settle when its stream
- * ends or the query is force-closed (renewal stops, the sandbox is left to
- * idle-pause), and a renewal failure can never end the turn cleanly: even when
- * the force-closed SDK stream ends without raising, the wrapper throws
- * {@link SandboxRenewalError} so the run terminalizes `error`, never `done`.
+ * Enrich the SDK query with this Run's continuity evidence and artifact result,
+ * while settling per-run resources when its stream ends or is force-closed
+ * (renewal stops, the sandbox is left to idle-pause). Artifacts publish only
+ * after both the SDK stream and renewal complete cleanly. A renewal failure can
+ * never end the turn cleanly: even when the force-closed SDK stream ends without
+ * raising, the wrapper throws {@link SandboxRenewalError} so the run
+ * terminalizes `error`, never `done`.
  */
 function superviseTurn(input: {
-	underlying: RunQuery;
+	underlying: SupervisedQuery;
+	artifactPublication: ArtifactPublicationSession;
+	sessionEvidence: SessionMirrorEvidence;
 	settle: () => Promise<void>;
 	renewalFailure: () => { error: unknown } | null;
 	forceCloseSignal: AbortSignal;
@@ -460,15 +464,17 @@ function superviseTurn(input: {
 }): RunQuery {
 	const {
 		underlying,
+		artifactPublication,
+		sessionEvidence,
 		settle,
 		renewalFailure,
 		forceCloseSignal,
 		onDetachedSettleError,
 	} = input;
-	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
+	let publication: ArtifactPublication | null = null;
 	return {
 		interrupt: () => underlying.interrupt(),
-		sessionEvidence: underlying.sessionEvidence,
+		sessionEvidence,
 		close: () => {
 			try {
 				underlying.close();
@@ -480,12 +486,7 @@ function superviseTurn(input: {
 			}
 		},
 		forceCloseSignal,
-		...(artifactQuery.getArtifactPublication
-			? {
-					getArtifactPublication: () =>
-						artifactQuery.getArtifactPublication?.() ?? null,
-				}
-			: {}),
+		getArtifactPublication: () => publication,
 		async *[Symbol.asyncIterator]() {
 			try {
 				for await (const message of underlying) {
@@ -493,6 +494,7 @@ function superviseTurn(input: {
 				}
 				const failure = renewalFailure();
 				if (failure) throw new SandboxRenewalError(failure.error);
+				publication = await artifactPublication.publish();
 			} catch (error) {
 				// A renewal failure explains any stream error it caused (the linked
 				// abort surfaces as an opaque AbortError); report the cause instead.
