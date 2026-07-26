@@ -1393,6 +1393,11 @@ describe("markStaleRunsTx", () => {
 
 	it("terminalizes a stale running run as error with a run_error event", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			agentSessionId: "session-existing",
+		});
 		await expireOwnership("run-1");
 
 		const recovered = await markStaleRunsTx(tdb.db);
@@ -1414,6 +1419,11 @@ describe("markStaleRunsTx", () => {
 			],
 		]);
 		expect(recovered[0]?.liveStreamFailedAt).toBeInstanceOf(Date);
+		const [runtime] = await tdb.db
+			.select()
+			.from(conversationRuntime)
+			.where(eq(conversationRuntime.conversationId, "conv-1"));
+		expect(runtime?.agentSessionId).toBe("session-existing");
 	});
 
 	it("terminalizes a stale interrupt_requested run as interrupted", async () => {

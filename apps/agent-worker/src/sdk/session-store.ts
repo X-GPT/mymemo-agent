@@ -48,12 +48,15 @@ export function conversationWorkingDirectory(conversationId: string): string {
 }
 
 /**
- * A Postgres-backed {@link SessionStore} bound to one conversation. Built per run
- * (a run belongs to exactly one conversation), it stamps every mirrored entry
- * with the conversation id — so a later turn on any worker reads back the same
- * transcript, and conversation-scoped deletion is exact — and delegates the SQL
- * to the shared agent-db helpers. `projectKey` from the SDK key is recorded but
- * not used as a lookup key; the bound conversation id is the stable identity.
+ * A Postgres-backed {@link ConversationSessionStore} bound to one claimed Run.
+ * It stamps every mirrored entry with the Run's conversation id and fences SDK
+ * append/delete mutations with the Run id, worker id, and live lease. A later
+ * turn on any worker can therefore read the same transcript, while stale
+ * workers cannot mutate it. The adapter also records this Run's latest
+ * successful non-empty main-session mirror as continuity evidence.
+ *
+ * `projectKey` from the SDK key is retained for fidelity but is not a lookup
+ * key; the bound conversation id is the stable transcript identity.
  */
 export function createConversationSessionStore(
 	db: Database,

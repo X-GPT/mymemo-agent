@@ -61,8 +61,9 @@ export interface TurnResult {
 	/** Cause-blind processor disposition; the supervisor chooses the Outcome. */
 	disposition: TurnDisposition;
 	/**
-	 * Continuity observations from the SDK stream. The supervisor alone decides
-	 * the Outcome and whether the resume pointer may advance.
+	 * SDK stream reliability plus continuity evidence from the bound
+	 * SessionStore. The supervisor alone decides the Outcome and whether the
+	 * resume pointer may advance.
 	 */
 	streamMetadata?: TurnStreamMetadata;
 	/** Changed files already ledgered and uploaded under fresh private keys. */
@@ -72,6 +73,14 @@ export interface TurnResult {
 /** A processor that reports nothing is normalized to a turn with no session
  * pointer to advance (the Milestone 3 synthetic turn). */
 const EMPTY_TURN: TurnResult = { disposition: "completed" };
+
+type TerminalizationIntent =
+	| Exclude<TerminalOutcome, { status: "error" }>
+	| (Extract<TerminalOutcome, { status: "error" }> & {
+			/** Proven continuity carried only if the error CAS must reconcile to
+			 * an interrupted Outcome. It is never sent with `run_error`. */
+			interruptionFallback?: { agentSessionId: string };
+	  });
 
 /**
  * One piece of canonical durable model content a processor can record while
@@ -548,20 +557,19 @@ export class RunLoop {
 			return this.failRun(owner, {
 				message: "run failed",
 				fields: artifactFailureLogFields(failure.error),
-				interruptedAgentSessionId: agentSessionId,
+				interruptionFallback: interruptionFallback(agentSessionId),
 			});
 		}
 		if (turnResult.streamMetadata?.mirrorErrorObserved) {
 			return this.failRun(owner, {
 				message: "agent session mirror failed",
 				fields: { reason: "mirror_error" },
-				interruptedAgentSessionId: agentSessionId,
 			});
 		}
 		if (turnResult.disposition === "stopped") {
 			return this.failRun(owner, {
 				message: "run stopped before completion",
-				interruptedAgentSessionId: agentSessionId,
+				interruptionFallback: interruptionFallback(agentSessionId),
 			});
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
@@ -584,7 +592,7 @@ export class RunLoop {
 		input: {
 			message: string;
 			fields?: Record<string, unknown>;
-			interruptedAgentSessionId?: string;
+			interruptionFallback?: { agentSessionId: string };
 		},
 	): Promise<TerminalRunStatus | null> {
 		this.opts.logger.error({
@@ -595,14 +603,13 @@ export class RunLoop {
 			runId: owner.runId,
 			...input.fields,
 		});
-		return this.terminalize(
-			owner,
-			{
-				status: "error",
-				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-			},
-			input.interruptedAgentSessionId,
-		);
+		return this.terminalize(owner, {
+			status: "error",
+			payload: { message: GENERIC_RUN_ERROR_MESSAGE },
+			...(input.interruptionFallback
+				? { interruptionFallback: input.interruptionFallback }
+				: {}),
+		});
 	}
 
 	private async publishArtifactsAndFinish(
@@ -645,14 +652,12 @@ export class RunLoop {
 							},
 						}),
 			});
-			return this.terminalize(
-				owner,
-				{
-					status: "error",
-					payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-				},
-				agentSessionId,
-			);
+			const fallback = interruptionFallback(agentSessionId);
+			return this.terminalize(owner, {
+				status: "error",
+				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
+				...(fallback ? { interruptionFallback: fallback } : {}),
+			});
 		}
 	}
 
@@ -661,15 +666,23 @@ export class RunLoop {
 	 * the late-interruption fallback the loop relies on: `done`/`error` lose to an
 	 * interruption the terminal CAS observes (the run is already
 	 * `interrupt_requested`), so on a fence rejection try `interrupted` once. An
-	 * error Outcome cannot itself carry a pointer, so qualifying evidence is
-	 * supplied separately for that reconciliation only. If even `interrupted` is
-	 * fenced, stale-run recovery finishes the run.
+	 * error intent can carry proven continuity only inside its explicit
+	 * `interruptionFallback`; the `run_error` Outcome itself never receives it.
+	 * If even `interrupted` is fenced, stale-run recovery finishes the run.
 	 */
 	private async terminalize(
 		owner: UserRunMutationOwner,
-		outcome: TerminalOutcome,
-		interruptedAgentSessionId?: string,
+		intent: TerminalizationIntent,
 	): Promise<TerminalRunStatus | null> {
+		const outcome: TerminalOutcome =
+			intent.status === "error"
+				? {
+						status: "error",
+						...(intent.payload !== undefined
+							? { payload: intent.payload }
+							: {}),
+					}
+				: intent;
 		try {
 			await transitionRunTerminalTx(this.opts.db, { owner, ...outcome });
 			return outcome.status;
@@ -679,9 +692,9 @@ export class RunLoop {
 					outcome.status !== "interrupted" &&
 					(await this.tryTerminalInterrupted(
 						owner,
-						outcome.status === "error"
-							? interruptedAgentSessionId
-							: outcome.agentSessionId,
+						intent.status === "error"
+							? intent.interruptionFallback?.agentSessionId
+							: intent.agentSessionId,
 					))
 				) {
 					return "interrupted";
@@ -752,7 +765,7 @@ function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 	const metadata = turnResult.streamMetadata;
 	// Keep pointer safety local to this injected RunProcessor seam. Interruption
 	// is reconciled before mirror-failure classification, so this guard is
-	// load-bearing for every terminal Outcome.
+	// load-bearing for done, interrupted, and error→interrupted reconciliation.
 	if (
 		!metadata ||
 		metadata.mirrorErrorObserved ||
@@ -761,4 +774,10 @@ function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
 		return undefined;
 	}
 	return metadata.mirroredMainSessionId;
+}
+
+function interruptionFallback(
+	agentSessionId: string | undefined,
+): { agentSessionId: string } | undefined {
+	return agentSessionId === undefined ? undefined : { agentSessionId };
 }

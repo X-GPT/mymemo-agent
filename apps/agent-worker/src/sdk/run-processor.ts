@@ -10,16 +10,14 @@ import {
 	consumeAgentStream,
 	onAbort,
 	type StartStopDeadline,
-	type SupervisedQuery,
 } from "./agent-stream";
 import type { SessionMirrorEvidence } from "./session-store";
 
 /** A started query plus the Run-scoped continuity and artifact capabilities
  * consumed after its SDK stream settles. */
-export type RunQuery = SupervisedQuery &
-	Partial<ArtifactAwareQuery> & {
-		sessionEvidence: SessionMirrorEvidence;
-	};
+export type RunQuery = ArtifactAwareQuery & {
+	sessionEvidence: SessionMirrorEvidence;
+};
 
 /**
  * Start a Claude Agent SDK query for one claimed run. This is the seam between

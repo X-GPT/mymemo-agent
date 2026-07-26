@@ -10,14 +10,30 @@ export const noSessionMirrorEvidence: SessionMirrorEvidence = {
 export function withNoSessionMirrorEvidence(
 	query: SupervisedQuery & Partial<ArtifactAwareQuery>,
 ): RunQuery {
-	return Object.assign(query, { sessionEvidence: noSessionMirrorEvidence });
+	return withSessionEvidence(query, noSessionMirrorEvidence);
 }
 
 export function withSessionMirrorEvidence(
 	query: SupervisedQuery & Partial<ArtifactAwareQuery>,
 	sessionId: string,
 ): RunQuery {
-	return Object.assign(query, {
-		sessionEvidence: { mirroredMainSessionId: () => sessionId },
+	return withSessionEvidence(query, {
+		mirroredMainSessionId: () => sessionId,
 	});
+}
+
+function withSessionEvidence(
+	query: SupervisedQuery & Partial<ArtifactAwareQuery>,
+	sessionEvidence: SessionMirrorEvidence,
+): RunQuery {
+	return {
+		interrupt: () => query.interrupt(),
+		close: () => query.close(),
+		...(query.forceCloseSignal
+			? { forceCloseSignal: query.forceCloseSignal }
+			: {}),
+		getArtifactPublication: () => query.getArtifactPublication?.() ?? null,
+		sessionEvidence,
+		[Symbol.asyncIterator]: () => query[Symbol.asyncIterator](),
+	};
 }

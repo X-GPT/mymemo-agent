@@ -38,6 +38,7 @@ import {
 import {
 	noSessionMirrorEvidence,
 	withNoSessionMirrorEvidence,
+	withSessionMirrorEvidence,
 } from "./testing/session-mirror-fixtures";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
@@ -177,6 +178,7 @@ function messageQuery(
 	return {
 		close() {},
 		async interrupt() {},
+		getArtifactPublication: () => null,
 		sessionEvidence,
 		async *[Symbol.asyncIterator]() {
 			for (const message of messages) yield message;
@@ -188,6 +190,7 @@ function stepQuery(steps: Array<SDKMessage | { throw: unknown }>): RunQuery {
 	return {
 		close() {},
 		async interrupt() {},
+		getArtifactPublication: () => null,
 		sessionEvidence: noSessionMirrorEvidence,
 		async *[Symbol.asyncIterator]() {
 			for (const step of steps) {
@@ -984,7 +987,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					once: true,
 				});
 				started.resolve();
-				return Object.assign(
+				return withSessionMirrorEvidence(
 					{
 						async interrupt() {
 							calls.push("interrupt");
@@ -999,7 +1002,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 							await closed.promise;
 						},
 					},
-					{ sessionEvidence: store },
+					"session-interrupted",
 				);
 			},
 			logger,
