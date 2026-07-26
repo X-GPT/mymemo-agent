@@ -99,8 +99,8 @@ on the SDK's `mirror_error` stream message, the processor aborts the Run-scoped
 controller that cancels active Tool/E2B work and invokes `Query.interrupt()` to
 stop model execution. The same 30-second clean-stop limit and `Query.close()`
 fallback apply. It still returns the neutral stream disposition and observed
-session metadata so the supervisor can reconcile the final Outcome against
-Postgres.
+mirror reliability so the supervisor can reconcile the final Outcome against
+Postgres and the bound SessionStore's direct mirror evidence.
 
 Interruption does not wait for SDK initialization. If the first Run is stopped
 before an Agent session is established and mirrored, it still becomes
@@ -118,11 +118,11 @@ policy described above.
 
 `Query.interrupt()` remains the cause-blind SDK mechanism used to stop model
 execution. The stream processor reports only a neutral `stopped` disposition
-plus observed session metadata; it does not receive or infer a domain stop
-cause. The Run supervisor reconciles its local abort state with the durable Run
-status and alone maps a durable user interruption to `interrupted`; absent that
-state, shutdown maps to `error`, ownership loss permits no terminal write, and
-sandbox-renewal failure remains an error. Stream-layer names follow the same boundary—`QueryInterruptedError`
+plus mirror reliability; it does not receive or infer a domain stop cause. The
+Run supervisor reconciles its local abort state with the durable Run status and
+alone maps a durable user interruption to `interrupted`; absent that state,
+shutdown maps to `error`, ownership loss permits no terminal write, and sandbox
+renewal failure remains an error. Stream-layer names follow the same boundary—`QueryInterruptedError`
 becomes `QueryStoppedError`, reserving “interruption” for the user-directed Run
 control and Outcome while retaining `interrupt()` only as the vendor SDK verb.
 

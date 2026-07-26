@@ -224,6 +224,19 @@ describe("createConversationSessionStore", () => {
 		expect(store.mirroredMainSessionId()).toBe("sess-1");
 	});
 
+	it("reports the most recently mirrored main session when a session repeats", async () => {
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
+
+		await store.append(mainKey("sess-a"), [entry("a-1")]);
+		await store.append(mainKey("sess-b"), [entry("b-1")]);
+		await store.append(mainKey("sess-a"), [entry("a-2")]);
+
+		expect(store.mirroredMainSessionId()).toBe("sess-a");
+	});
+
 	it("withdraws main-session evidence when the SDK deletes that session", async () => {
 		const store = createConversationSessionStore(
 			tdb.db,

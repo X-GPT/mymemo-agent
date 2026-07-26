@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 describe("Downloadable artifact publication", () => {
-	it("makes staged metadata current in the same transaction as run_done", async () => {
+	it("publishes the session pointer, staged metadata, and run_done together", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -46,6 +46,10 @@ describe("Downloadable artifact publication", () => {
 			conversationId: "conv-1",
 		});
 		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
 		await recordArtifactObjectsTx(tdb.db, {
 			objects: [
 				{
@@ -76,6 +80,7 @@ describe("Downloadable artifact publication", () => {
 					contentType: "application/octet-stream",
 				},
 			],
+			agentSessionId: "session-1",
 		});
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([
@@ -93,6 +98,9 @@ describe("Downloadable artifact publication", () => {
 			}),
 		]);
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("done");
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("session-1");
 		expect(
 			(await tdb.db.select().from(runEvents)).map((event) => event.type),
 		).toEqual(["run_done"]);

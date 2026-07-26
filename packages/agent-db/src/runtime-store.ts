@@ -3,7 +3,7 @@ import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Database, DbTx } from "./client";
 import {
 	ownedRunByUserConditions,
-	ownedRunExists,
+	ownedRunByUserExists,
 	type RunOwnershipRef,
 	rejectRunFence,
 } from "./run-ownership";
@@ -153,7 +153,7 @@ async function tryUpdateRuntimeRow(
 			and(
 				eq(conversationRuntime.userId, owner.userId),
 				eq(conversationRuntime.conversationId, owner.conversationId),
-				ownedRunExists(owner),
+				ownedRunByUserExists(owner),
 			),
 		)
 		.returning();

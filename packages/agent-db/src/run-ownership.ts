@@ -24,28 +24,48 @@ export class RunFenceError extends Error {
 /** Run statuses under which the owning worker may mutate private Run state. */
 const OWNED_ACTIVE_STATUSES = ["running", "interrupt_requested"] as const;
 
-/** The ownership predicate for Run-scoped mutations. */
-export function ownedRunConditions(owner: RunMutationOwner) {
+/** Run identity and live lease, without imposing a status class. */
+export function runLeaseConditions(owner: RunMutationOwner) {
 	return and(
 		eq(runs.runId, owner.runId),
 		eq(runs.conversationId, owner.conversationId),
-		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
 		eq(runs.lockedBy, owner.workerId),
 		sql`${runs.lockedUntil} > now()`,
 	);
 }
 
+/** The ownership predicate for Run-scoped mutations. */
+export function ownedRunConditions(owner: RunMutationOwner) {
+	return and(
+		runLeaseConditions(owner),
+		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
+	);
+}
+
+/** User-bound Run identity and live lease, without imposing a status class. */
+export function runLeaseByUserConditions(owner: RunOwnershipRef) {
+	return and(runLeaseConditions(owner), eq(runs.userId, owner.userId));
+}
+
 /** The stronger ownership predicate for user-owned Conversation state. */
 export function ownedRunByUserConditions(owner: RunOwnershipRef) {
-	return and(ownedRunConditions(owner), eq(runs.userId, owner.userId));
+	return and(
+		runLeaseByUserConditions(owner),
+		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
+	);
 }
 
 /**
- * {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate.
+ * {@link ownedRunConditions} as an in-statement `EXISTS` predicate.
  * Mutating statements carry this predicate themselves; an app-side check never
  * authorizes a later mutation.
  */
-export function ownedRunExists(owner: RunOwnershipRef) {
+export function ownedRunExists(owner: RunMutationOwner) {
+	return sql`exists (select 1 from ${runs} where ${ownedRunConditions(owner)})`;
+}
+
+/** {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate. */
+export function ownedRunByUserExists(owner: RunOwnershipRef) {
 	return sql`exists (select 1 from ${runs} where ${ownedRunByUserConditions(owner)})`;
 }
 

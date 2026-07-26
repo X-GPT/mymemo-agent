@@ -8,7 +8,6 @@ import {
 	consumeAgentStream,
 	isMirrorError,
 	type SupervisedQuery,
-	sessionIdFromResult,
 } from "./agent-stream";
 import { AssistantEnvelopeProtocolError } from "./assistant-message-assembler";
 import {
@@ -173,16 +172,6 @@ function onAssistantCommit(
 	};
 }
 
-describe("sessionIdFromResult", () => {
-	it("returns the session id only from a result message", () => {
-		expect(sessionIdFromResult(resultMessage("session-1"))).toBe("session-1");
-		expect(sessionIdFromResult(resultMessage())).toBeNull();
-		expect(
-			sessionIdFromResult(messageAt(textEnvelope({ completeText: "x" }), 0)),
-		).toBeNull();
-	});
-});
-
 describe("isMirrorError", () => {
 	it("is true only for a mirror_error system message", () => {
 		expect(isMirrorError(mirrorErrorMessage())).toBe(true);
@@ -327,7 +316,6 @@ describe("consumeAgentStream", () => {
 			}),
 		).resolves.toEqual({
 			disposition: "completed",
-			sessionId: "session-42",
 			mirrorErrorObserved: false,
 		});
 		expect(appended).toHaveLength(1);
@@ -923,7 +911,6 @@ describe("consumeAgentStream", () => {
 
 		expect(outcome).toEqual({
 			disposition: "stopped",
-			sessionId: "session-7",
 			mirrorErrorObserved: true,
 		});
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
@@ -1851,7 +1838,10 @@ describe("consumeAgentStream", () => {
 			"tool_call_args",
 			"tool_call_completed",
 		]);
-		expect(outcome.sessionId).toBe("session-1");
+		expect(outcome).toEqual({
+			disposition: "completed",
+			mirrorErrorObserved: false,
+		});
 	});
 
 	it("propagates a failed tool-use append so the run terminalizes error", async () => {

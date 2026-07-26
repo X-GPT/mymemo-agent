@@ -23,15 +23,15 @@ import type { SessionMirrorEvidence } from "./session-store";
  * supervisor stop or fatal mirror failure; the returned query's interrupt/close
  * controls remain under stream supervision.
  */
+export type RunQuery = SupervisedQuery &
+	Partial<ArtifactAwareQuery> & {
+		sessionEvidence: SessionMirrorEvidence;
+	};
+
 export type StartRunQuery = (
 	run: RunRecord,
 	signal: AbortSignal,
-) => Promise<
-	SupervisedQuery &
-		Partial<ArtifactAwareQuery> & {
-			sessionEvidence: SessionMirrorEvidence;
-		}
->;
+) => Promise<RunQuery>;
 
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;

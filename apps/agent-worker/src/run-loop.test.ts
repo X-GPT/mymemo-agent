@@ -679,7 +679,6 @@ describe("RunLoop — agent session pointer", () => {
 			return {
 				disposition: "completed",
 				streamMetadata: {
-					sessionId: "session-unproven",
 					mirrorErrorObserved: false,
 					mirroredMainSessionId: null,
 				},
@@ -710,7 +709,6 @@ describe("RunLoop — agent session pointer", () => {
 			return {
 				disposition: "completed",
 				streamMetadata: {
-					sessionId: "session-abc",
 					mirrorErrorObserved: false,
 					mirroredMainSessionId: "session-abc",
 				},
@@ -752,7 +750,6 @@ describe("RunLoop — agent session pointer", () => {
 			return {
 				disposition: "stopped",
 				streamMetadata: {
-					sessionId: "session-interrupted",
 					mirrorErrorObserved: false,
 					mirroredMainSessionId,
 				},
@@ -789,7 +786,6 @@ describe("RunLoop — agent session pointer", () => {
 			return {
 				disposition: "stopped",
 				streamMetadata: {
-					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
 					mirroredMainSessionId: "session-first",
 				},
@@ -816,7 +812,6 @@ describe("RunLoop — agent session pointer", () => {
 			return {
 				disposition: "completed",
 				streamMetadata: {
-					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
 					mirroredMainSessionId: "session-first",
 				},

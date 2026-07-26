@@ -46,10 +46,8 @@ import type { Worker } from "./worker";
  */
 export type TurnDisposition = "completed" | "stopped";
 
-/** SDK stream facts observed before the SessionStore evidence check determines
- * whether the result session is safe to resume. */
+/** SDK stream reliability facts used alongside the SessionStore evidence. */
 export interface AgentStreamMetadata {
-	sessionId: string | null;
 	mirrorErrorObserved: boolean;
 }
 

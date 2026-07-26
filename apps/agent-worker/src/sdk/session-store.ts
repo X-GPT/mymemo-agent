@@ -82,6 +82,9 @@ export function createConversationSessionStore(
 			try {
 				await appendAgentSessionEntriesTx(db, ref(key), entries, owner);
 				if (entries.length > 0 && isMainAgentSessionRef(key)) {
+					// Set preserves insertion order but does not move an existing key;
+					// reinsert so iteration reports actual mirror recency.
+					mirroredMainSessionIds.delete(key.sessionId);
 					mirroredMainSessionIds.add(key.sessionId);
 				}
 			} catch (error) {

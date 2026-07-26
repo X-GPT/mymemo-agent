@@ -9,19 +9,20 @@ import {
 	validateDurableRunEventSequence,
 } from "./run-events";
 import {
-	ownedRunByUserConditions,
 	RunFenceError,
 	type RunOwnershipRef,
+	runLeaseByUserConditions,
 } from "./run-ownership";
 import { publishAgentSessionPointerInTx } from "./runtime-store";
 import { runEvents, runs } from "./schema";
 
 /**
- * Transaction helpers over `runs`/`run_events`, plus Agent-session pointer
- * publication composed into terminal Run transactions (design doc "State
- * Ownership"). Shared by chat-api (run creation, interruption requests) and
- * agent-worker (claim/heartbeat/terminalize). Each helper owns one transaction:
- * sequence allocation is database-owned
+ * Narrow transaction helpers over `runs`/`run_events` — the only write path for
+ * Run state — plus Agent-session pointer publication composed into terminal Run
+ * transactions (design doc "State Ownership"). Shared by chat-api (run
+ * creation, interruption requests) and agent-worker
+ * (claim/heartbeat/terminalize). Each helper owns one transaction: sequence
+ * allocation is database-owned
  * (`runs.next_event_seq`, never app-side `max(seq) + 1`), and every status
  * change or append is fenced inside the same statement that performs it, so
  * app-side select/update races cannot happen through this module. The ownership
@@ -527,11 +528,6 @@ export async function transitionRunTerminalInTx(
 	tx: DbTx,
 	input: TerminalTransitionInput,
 ): Promise<RunRecord> {
-	if (input.status === "error" && input.agentSessionId !== undefined) {
-		throw new InvalidRunEventError(
-			"agent session pointer publication requires a done or interrupted Outcome",
-		);
-	}
 	if (input.payload?.reason === "stale_worker") {
 		throw new InvalidRunEventError(
 			"stale_worker is reserved for stale-Run recovery",
@@ -552,7 +548,7 @@ export async function transitionRunTerminalInTx(
 		})
 		.where(
 			and(
-				ownedRunByUserConditions(input.owner),
+				runLeaseByUserConditions(input.owner),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
 			),
 		)
@@ -560,7 +556,9 @@ export async function transitionRunTerminalInTx(
 	if (!row) {
 		throw new RunFenceError(
 			`terminal transition of run ${input.owner.runId} to ${input.status} rejected: ` +
-				`run is already terminal, not transitionable to ${input.status}, or worker ${input.owner.workerId} no longer owns it`,
+				`run is already terminal, not transitionable to ${input.status}, not owned by user ` +
+				`${input.owner.userId} in conversation ${input.owner.conversationId}, or worker ` +
+				`${input.owner.workerId} no longer owns it`,
 		);
 	}
 	await insertTerminalEvent(tx, row, input.status, input.payload ?? {});

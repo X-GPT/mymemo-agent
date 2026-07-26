@@ -75,15 +75,6 @@ export class AgentResultError extends Error {
 	override name = "AgentResultError" as const;
 }
 
-/** The session id the worker should store as the conversation's resume pointer:
- * the id on the terminal `result` message (verify note: "the worker always
- * stores the id from the result message"), or `null` on any other message. */
-export function sessionIdFromResult(message: SDKMessage): string | null {
-	return message.type === "result" && typeof message.session_id === "string"
-		? message.session_id
-		: null;
-}
-
 /** A `mirror_error` means the SDK dropped a transcript-mirror batch (at-most-once
  * delivery). It is a fail-fast stop signal, and the stored transcript is not
  * eligible to establish or advance the resume pointer. */
@@ -93,8 +84,8 @@ export function isMirrorError(message: SDKMessage): boolean {
 
 /**
  * What a settled stream reports back for supervisor reconciliation and
- * Conversation continuity (ADR-0005): its neutral disposition, observed
- * session id, and whether a `mirror_error` made the transcript unreliable.
+ * Conversation continuity (ADR-0005): its neutral disposition and whether a
+ * `mirror_error` made the transcript unreliable.
  */
 export interface AgentStreamOutcome extends AgentStreamMetadata {
 	/** Whether the query completed itself or settled after a stop request. */
@@ -159,7 +150,6 @@ export async function consumeAgentStream(
 	const { query, interruptionSignal, appendModelContents } = params;
 	const outcome: AgentStreamOutcome = {
 		disposition: "completed",
-		sessionId: null,
 		mirrorErrorObserved: false,
 	};
 	let liveMessageMatchesCompletion = true;
@@ -455,17 +445,14 @@ export async function consumeAgentStream(
 			}
 			if (next.result.done) break;
 			const message = next.result.value;
-			// Track continuity signals before the stop skip: the supervisor still
-			// needs the observed metadata for its pointer and Outcome decisions.
+			// Track mirror reliability before the stop skip: the supervisor still
+			// needs it for its pointer and Outcome decisions.
 			if (isMirrorError(message)) {
 				outcome.mirrorErrorObserved = true;
 				params.abortRunScopedWork(new Error("agent session mirror failed"));
 				stop();
 				continue;
 			}
-			const sessionId = sessionIdFromResult(message);
-			if (sessionId !== null) outcome.sessionId = sessionId;
-
 			if (stopRequested) continue;
 			const errorText = resultErrorText(message);
 			if (errorText !== null) {

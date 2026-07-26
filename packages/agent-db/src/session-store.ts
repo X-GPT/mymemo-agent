@@ -2,6 +2,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	ownedRunConditions,
+	ownedRunExists,
 	type RunMutationOwner,
 	rejectRunFence,
 } from "./run-ownership";
@@ -10,11 +11,13 @@ import { agentSessions, runs } from "./schema";
 /**
  * SDK-free persistence helpers over `agent_sessions`, used by the worker's
  * Claude Agent SDK `SessionStore` adapter (ADR-0005, Task 7.3). Append and
- * SDK-requested delete operations share a transaction with a `FOR SHARE`
- * ownership check against the active Run; reads and administrative
- * Conversation deletion are deliberately unfenced. The helpers live here so
- * the schema, fence, and SQL use the shared package's one Drizzle instance;
- * the adapter that imports SDK types lives in agent-worker and delegates here.
+ * SDK-requested delete statements carry the active-Run ownership fence as an
+ * `EXISTS` predicate. Their transaction then locks that ownership `FOR SHARE`
+ * after the mutation, so ownership loss before commit rolls the mutation back;
+ * reads and administrative Conversation deletion are deliberately unfenced.
+ * The helpers live here so the schema, fence, and SQL use the shared package's
+ * one Drizzle instance; the adapter that imports SDK types lives in
+ * agent-worker and delegates here.
  *
  * Every helper is keyed by `conversationId` — the stable identity the adapter
  * binds each call to — plus the SDK's `(sessionId, subpath)`. `projectKey` is
@@ -76,21 +79,32 @@ export async function appendAgentSessionEntriesTx(
 ): Promise<void> {
 	const subpath = normalizeSubpath(ref.subpath);
 	assertOwnedConversation(ref.conversationId, owner, "session append");
-	await withOwnedSessionMutation(db, owner, "session append", async (tx) => {
-		if (entries.length === 0) return;
-		await tx
-			.insert(agentSessions)
-			.values(
-				entries.map((entry) => ({
-					conversationId: ref.conversationId,
-					projectKey: ref.projectKey,
-					sessionId: ref.sessionId,
-					subpath,
-					uuid: typeof entry.uuid === "string" ? entry.uuid : null,
-					entry,
-				})),
-			)
-			.onConflictDoNothing();
+	await db.transaction(async (tx) => {
+		if (entries.length > 0) {
+			const rows = entries.map(
+				(entry) =>
+					sql`(${ref.conversationId}, ${ref.projectKey}, ${ref.sessionId}, ${subpath}, ${
+						typeof entry.uuid === "string" ? entry.uuid : null
+					}, ${JSON.stringify(entry)}::jsonb)`,
+			);
+			const columns = [
+				agentSessions.conversationId,
+				agentSessions.projectKey,
+				agentSessions.sessionId,
+				agentSessions.subpath,
+				agentSessions.uuid,
+				agentSessions.entry,
+			].map((column) => sql.identifier(column.name));
+			await tx.execute(sql`
+				insert into ${agentSessions} (${sql.join(columns, sql`, `)})
+				select ${sql.identifier("input")}.*
+				from (values ${sql.join(rows, sql`, `)}) as ${sql.identifier("input")}
+				(${sql.join(columns, sql`, `)})
+				where ${ownedRunExists(owner)}
+				on conflict do nothing
+			`);
+		}
+		await lockOwnedRunAfterMutation(tx, owner, "session append");
 	});
 }
 
@@ -179,12 +193,16 @@ export async function deleteAgentSessionTx(
 	owner: RunMutationOwner,
 ): Promise<void> {
 	assertOwnedConversation(input.conversationId, owner, "session delete");
-	await withOwnedSessionMutation(db, owner, "session delete", async (tx) => {
+	await db.transaction(async (tx) => {
 		await tx
 			.delete(agentSessions)
 			.where(
-				transcriptWhere(input.conversationId, input.sessionId, input.subpath),
+				and(
+					transcriptWhere(input.conversationId, input.sessionId, input.subpath),
+					ownedRunExists(owner),
+				),
 			);
+		await lockOwnedRunAfterMutation(tx, owner, "session delete");
 	});
 }
 
@@ -203,23 +221,24 @@ export async function deleteConversationAgentSessionsTx(
 		.where(eq(agentSessions.conversationId, input.conversationId));
 }
 
-async function withOwnedSessionMutation(
-	db: Database,
+/**
+ * Hold the statement-checked ownership through commit and classify any no-op
+ * mutation. This check runs after the mutation and never authorizes a later
+ * write.
+ */
+async function lockOwnedRunAfterMutation(
+	tx: DbTx,
 	owner: RunMutationOwner,
 	operation: string,
-	mutate: (tx: DbTx) => Promise<void>,
 ): Promise<void> {
-	await db.transaction(async (tx) => {
-		const [owned] = await tx
-			.select({ runId: runs.runId })
-			.from(runs)
-			.where(ownedRunConditions(owner))
-			.for("share");
-		if (!owned) {
-			rejectRunFence(owner, operation);
-		}
-		await mutate(tx);
-	});
+	const [owned] = await tx
+		.select({ runId: runs.runId })
+		.from(runs)
+		.where(ownedRunConditions(owner))
+		.for("share");
+	if (!owned) {
+		rejectRunFence(owner, operation);
+	}
 }
 
 function assertOwnedConversation(

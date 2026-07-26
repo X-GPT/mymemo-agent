@@ -20,8 +20,12 @@ import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import { Worker } from "../worker";
-import type { StartStopDeadline, SupervisedQuery } from "./agent-stream";
-import { createSdkRunProcessor, type StartRunQuery } from "./run-processor";
+import type { StartStopDeadline } from "./agent-stream";
+import {
+	createSdkRunProcessor,
+	type RunQuery,
+	type StartRunQuery,
+} from "./run-processor";
 import {
 	createConversationSessionStore,
 	type SessionMirrorEvidence,
@@ -169,7 +173,7 @@ function errorResultMessage(text: string): SDKMessage {
 function messageQuery(
 	messages: SDKMessage[],
 	sessionEvidence: SessionMirrorEvidence = noSessionMirrorEvidence,
-): SupervisedQuery & { sessionEvidence: SessionMirrorEvidence } {
+): RunQuery {
 	return {
 		close() {},
 		async interrupt() {},
@@ -180,9 +184,7 @@ function messageQuery(
 	};
 }
 
-function stepQuery(
-	steps: Array<SDKMessage | { throw: unknown }>,
-): SupervisedQuery & { sessionEvidence: SessionMirrorEvidence } {
+function stepQuery(steps: Array<SDKMessage | { throw: unknown }>): RunQuery {
 	return {
 		close() {},
 		async interrupt() {},

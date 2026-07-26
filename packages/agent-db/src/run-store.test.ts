@@ -870,30 +870,6 @@ describe("transitionRunTerminalTx", () => {
 		]);
 	});
 
-	it("rejects Agent-session pointer publication on an error Outcome", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
-		await tdb.db.insert(conversationRuntime).values({
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		await expect(
-			// @ts-expect-error Error Outcomes cannot publish resume pointers.
-			transitionRunTerminalTx(tdb.db, {
-				owner: owner(),
-				status: "error",
-				payload: { message: "Run failed" },
-				agentSessionId: "session-error",
-			}),
-		).rejects.toThrow(/pointer publication.*done or interrupted/i);
-
-		const [runtime] = await tdb.db.select().from(conversationRuntime);
-		const [run] = await tdb.db.select().from(runs);
-		expect(runtime?.agentSessionId).toBeNull();
-		expect(run?.status).toBe("running");
-		expect(await readEvents("run-1")).toEqual([]);
-	});
-
 	it("rejects terminalization with an incomplete Tool lifecycle", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {

@@ -29,7 +29,7 @@ import type { WorkerLogger } from "../logger";
 import type { ModelClientConfig } from "../model-client";
 import type { RunBinding } from "../sandbox-env";
 import { onAbort, type SupervisedQuery } from "./agent-stream";
-import type { StartRunQuery } from "./run-processor";
+import type { RunQuery, StartRunQuery } from "./run-processor";
 import {
 	createRunMcpServer,
 	EXECUTOR_ALLOWED_TOOLS,
@@ -214,18 +214,15 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				workerId: owner.workerId,
 				logger: deps.logger,
 			});
-			const options = buildQueryOptions(
-				deps,
-				{
-					run,
-					owner,
-					provisioned,
-					documentScope,
-					toolController,
-					claudeConfigDir: claudeConfigDir.path,
-				},
+			const options = buildQueryOptions(deps, {
+				run,
+				owner,
+				provisioned,
+				documentScope,
+				toolController,
+				claudeConfigDir: claudeConfigDir.path,
 				sessionConfig,
-			);
+			});
 			const underlying = deps.query({ prompt: started.message, options });
 			return superviseTurn({
 				underlying: withArtifactPublication(underlying, artifactPublication),
@@ -368,8 +365,8 @@ function buildQueryOptions(
 		documentScope: RunToolDeps["documentScope"];
 		toolController: AbortController;
 		claudeConfigDir: string;
+		sessionConfig: AgentSessionQueryConfig;
 	},
-	sessionConfig: AgentSessionQueryConfig,
 ): Options {
 	const {
 		run,
@@ -378,6 +375,7 @@ function buildQueryOptions(
 		documentScope,
 		toolController,
 		claudeConfigDir,
+		sessionConfig,
 	} = input;
 	const binding: RunBinding = {
 		userId: run.userId,
@@ -459,8 +457,7 @@ function superviseTurn(input: {
 	renewalFailure: () => { error: unknown } | null;
 	forceCloseSignal: AbortSignal;
 	onDetachedSettleError: (error: unknown) => void;
-}): SupervisedQuery &
-	Partial<ArtifactAwareQuery> & { sessionEvidence: SessionMirrorEvidence } {
+}): RunQuery {
 	const {
 		underlying,
 		sessionEvidence,
