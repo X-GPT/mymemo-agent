@@ -78,7 +78,7 @@ type TerminalizationIntent =
 	| Exclude<TerminalOutcome, { status: "error" }>
 	| (Extract<TerminalOutcome, { status: "error" }> & {
 			/** Proven continuity carried only if the error CAS must reconcile to
-			 * an interrupted Outcome. It is never sent with `run_error`. */
+			 * an interrupted Outcome; the terminal store ignores it for `run_error`. */
 			interruptionFallback?: string;
 	  });
 
@@ -665,27 +665,20 @@ export class RunLoop {
 	 * interruption the terminal CAS observes (the run is already
 	 * `interrupt_requested`), so on a fence rejection try `interrupted` once. An
 	 * error intent can carry proven continuity only inside its explicit
-	 * `interruptionFallback`; the `run_error` Outcome itself never receives it.
+	 * `interruptionFallback`; the durable `run_error` projection never receives it.
 	 * If even `interrupted` is fenced, stale-run recovery finishes the run.
 	 */
 	private async terminalize(
 		owner: UserRunMutationOwner,
 		intent: TerminalizationIntent,
 	): Promise<TerminalRunStatus | null> {
-		const outcome: TerminalOutcome =
-			intent.status === "error"
-				? {
-						status: "error",
-						payload: intent.payload,
-					}
-				: intent;
 		try {
-			await transitionRunTerminalTx(this.opts.db, { owner, ...outcome });
-			return outcome.status;
+			await transitionRunTerminalTx(this.opts.db, { owner, ...intent });
+			return intent.status;
 		} catch (error) {
 			if (error instanceof RunFenceError) {
 				if (
-					outcome.status !== "interrupted" &&
+					intent.status !== "interrupted" &&
 					(await this.tryTerminalInterrupted(
 						owner,
 						intent.status === "error"
@@ -699,7 +692,7 @@ export class RunLoop {
 					message: "could not terminalize run; leaving to stale-run recovery",
 					workerId: this.workerId,
 					runId: owner.runId,
-					intended: outcome.status,
+					intended: intent.status,
 				});
 				return null;
 			}

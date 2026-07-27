@@ -2,7 +2,6 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	ownedRunConditions,
-	ownedRunExists,
 	type RunMutationOwner,
 	rejectRunFence,
 } from "./run-ownership";
@@ -11,13 +10,13 @@ import { agentSessions, runs } from "./schema";
 /**
  * SDK-free persistence helpers over `agent_sessions`, used by the worker's
  * Claude Agent SDK `SessionStore` adapter (ADR-0005, Task 7.3). Append and
- * SDK-requested delete statements carry the active-Run ownership fence as an
- * `EXISTS` predicate. Their transaction then locks that ownership `FOR SHARE`
- * after the mutation, so ownership loss before commit rolls the mutation back;
- * reads and administrative Conversation deletion are deliberately unfenced.
- * The helpers live here so the schema, fence, and SQL use the shared package's
- * one Drizzle instance; the adapter that imports SDK types lives in
- * agent-worker and delegates here.
+ * SDK-requested delete transactions validate and lock active-Run ownership
+ * `FOR SHARE` after the mutation; a failed fence rolls the transaction back,
+ * while a successful lock holds ownership stable through commit. Reads and
+ * administrative Conversation deletion are deliberately unfenced. The helpers
+ * live here so the schema, fence, and SQL use the shared package's one Drizzle
+ * instance; the adapter that imports SDK types lives in agent-worker and
+ * delegates here.
  *
  * Mutations take `conversationId` only from their Run owner — the stable
  * identity the adapter binds each call to — plus the SDK's `(sessionId,
@@ -88,32 +87,19 @@ export async function appendAgentSessionEntriesTx(
 	if (entries.length === 0) return;
 	const subpath = normalizeSubpath(ref.subpath);
 	await db.transaction(async (tx) => {
-		const rows = entries.map(
-			(entry) =>
-				sql`(${owner.conversationId}, ${ref.projectKey}, ${ref.sessionId}, ${subpath}, ${
-					typeof entry.uuid === "string" ? entry.uuid : null
-				}, ${JSON.stringify(entry)}::jsonb)`,
-		);
-		const columns = [
-			agentSessions.conversationId,
-			agentSessions.projectKey,
-			agentSessions.sessionId,
-			agentSessions.subpath,
-			agentSessions.uuid,
-			agentSessions.entry,
-		].map((column) => sql.identifier(column.name));
-		// Drizzle's values insert has no WHERE, while its typed insert-select
-		// requires every table column (including generated id/created_at). Keep
-		// this minimal raw batch insert so the lease predicate stays in-statement
-		// without supplying generated columns.
-		await tx.execute(sql`
-			insert into ${agentSessions} (${sql.join(columns, sql`, `)})
-			select ${sql.identifier("input")}.*
-			from (values ${sql.join(rows, sql`, `)}) as ${sql.identifier("input")}
-			(${sql.join(columns, sql`, `)})
-			where ${ownedRunExists(owner)}
-			on conflict do nothing
-		`);
+		await tx
+			.insert(agentSessions)
+			.values(
+				entries.map((entry) => ({
+					conversationId: owner.conversationId,
+					projectKey: ref.projectKey,
+					sessionId: ref.sessionId,
+					subpath,
+					uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+					entry,
+				})),
+			)
+			.onConflictDoNothing();
 		await lockOwnedRunAfterMutation(tx, owner, "session append");
 	});
 }
@@ -208,12 +194,7 @@ export async function deleteAgentSessionTx(
 	await db.transaction(async (tx) => {
 		await tx
 			.delete(agentSessions)
-			.where(
-				and(
-					transcriptWhere(owner.conversationId, ref.sessionId, ref.subpath),
-					ownedRunExists(owner),
-				),
-			);
+			.where(transcriptWhere(owner.conversationId, ref.sessionId, ref.subpath));
 		await lockOwnedRunAfterMutation(tx, owner, "session delete");
 	});
 }
@@ -234,9 +215,9 @@ export async function deleteConversationAgentSessionsTx(
 }
 
 /**
- * Hold the statement-checked ownership through commit and classify any no-op
- * mutation. This check runs after the mutation and never authorizes a later
- * write.
+ * Validate and lock ownership after the mutation. A failed fence rejects the
+ * transaction and rolls the mutation back; a successful `FOR SHARE` lock keeps
+ * the ownership row stable through commit.
  */
 async function lockOwnedRunAfterMutation(
 	tx: DbTx,

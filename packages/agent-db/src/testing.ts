@@ -108,3 +108,30 @@ export async function createTestDatabase(
 		close: () => releaseClient(client),
 	};
 }
+
+/** Seed the two owned Runs shared by the package and worker SessionStore fence
+ * suites. Callers remain responsible for clearing their tables. */
+export async function seedAgentSessionFenceRuns(db: Database): Promise<void> {
+	await db.insert(schema.conversations).values([
+		{ userId: "user-1", conversationId: "conv-1", scope: "general" },
+		{ userId: "user-2", conversationId: "conv-2", scope: "general" },
+	]);
+	await db.insert(schema.runs).values([
+		{
+			runId: "run-conv-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+			status: "running",
+			lockedBy: "worker-1",
+			lockedUntil: new Date(Date.now() + 60_000),
+		},
+		{
+			runId: "run-conv-2",
+			userId: "user-2",
+			conversationId: "conv-2",
+			status: "running",
+			lockedBy: "worker-1",
+			lockedUntil: new Date(Date.now() + 60_000),
+		},
+	]);
+}

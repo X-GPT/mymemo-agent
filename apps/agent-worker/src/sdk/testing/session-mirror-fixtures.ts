@@ -33,11 +33,12 @@ function withSessionEvidence(
 		query.getArtifactPublication === undefined
 			? withArtifactPublication(query, { publish: async () => null })
 			: (query as ArtifactAwareQuery);
-	return new Proxy(artifactAwareQuery, {
-		get(target, property) {
-			if (property === "sessionEvidence") return sessionEvidence;
-			const value = Reflect.get(target, property, target);
-			return typeof value === "function" ? value.bind(target) : value;
-		},
-	}) as RunQuery;
+	return {
+		forceCloseSignal: artifactAwareQuery.forceCloseSignal,
+		interrupt: () => artifactAwareQuery.interrupt(),
+		close: () => artifactAwareQuery.close(),
+		getArtifactPublication: () => artifactAwareQuery.getArtifactPublication(),
+		sessionEvidence,
+		[Symbol.asyncIterator]: () => artifactAwareQuery[Symbol.asyncIterator](),
+	};
 }

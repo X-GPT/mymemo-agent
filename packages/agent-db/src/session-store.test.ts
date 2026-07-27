@@ -16,7 +16,11 @@ import {
 	listAgentSessionsTx,
 	loadAgentSessionEntriesTx,
 } from "./session-store";
-import { createTestDatabase, type TestDb } from "./testing";
+import {
+	createTestDatabase,
+	seedAgentSessionFenceRuns,
+	type TestDb,
+} from "./testing";
 
 let tdb: TestDb;
 
@@ -33,28 +37,7 @@ beforeEach(async () => {
 	await tdb.db.delete(agentSessions);
 	await tdb.db.delete(runs);
 	await tdb.db.delete(conversations);
-	await tdb.db.insert(conversations).values([
-		{ userId: "user-1", conversationId: "conv-1", scope: "general" },
-		{ userId: "user-2", conversationId: "conv-2", scope: "general" },
-	]);
-	await tdb.db.insert(runs).values([
-		{
-			runId: "run-conv-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "running",
-			lockedBy: "worker-1",
-			lockedUntil: new Date(Date.now() + 60_000),
-		},
-		{
-			runId: "run-conv-2",
-			userId: "user-2",
-			conversationId: "conv-2",
-			status: "running",
-			lockedBy: "worker-1",
-			lockedUntil: new Date(Date.now() + 60_000),
-		},
-	]);
+	await seedAgentSessionFenceRuns(tdb.db);
 });
 
 /** The main-transcript ref every test shares unless it needs a subagent. */

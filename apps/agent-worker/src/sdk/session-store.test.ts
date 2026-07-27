@@ -13,7 +13,11 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import { agentSessions, conversations, runs } from "@mymemo/agent-db/schema";
-import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import {
+	createTestDatabase,
+	seedAgentSessionFenceRuns,
+	type TestDb,
+} from "@mymemo/agent-db/testing";
 import type { WorkerLogger } from "../logger";
 import {
 	buildAgentSessionQueryConfig,
@@ -41,28 +45,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-	await tdb.db.insert(conversations).values([
-		{ userId: "user-1", conversationId: "conv-1", scope: "general" },
-		{ userId: "user-2", conversationId: "conv-2", scope: "general" },
-	]);
-	await tdb.db.insert(runs).values([
-		{
-			runId: "run-conv-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "running",
-			lockedBy: "worker-1",
-			lockedUntil: new Date(Date.now() + 60_000),
-		},
-		{
-			runId: "run-conv-2",
-			userId: "user-2",
-			conversationId: "conv-2",
-			status: "running",
-			lockedBy: "worker-1",
-			lockedUntil: new Date(Date.now() + 60_000),
-		},
-	]);
+	await seedAgentSessionFenceRuns(tdb.db);
 });
 
 afterAll(async () => {

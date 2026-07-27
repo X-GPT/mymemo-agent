@@ -5,6 +5,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
 	createQueuedRunTx,
+	type RunRecord,
 	requestRunInterruptionTx,
 } from "@mymemo/agent-db/run-store";
 import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
@@ -230,6 +231,25 @@ function buildWorker() {
 	});
 }
 
+async function createRuntimeFor(run: RunRecord): Promise<void> {
+	await createConversationRuntimeTx(tdb.db, {
+		userId: run.userId,
+		conversationId: run.conversationId,
+		runId: run.runId,
+		workerId: "worker-1",
+	});
+}
+
+async function createRuntimeSessionStoreFor(run: RunRecord) {
+	await createRuntimeFor(run);
+	return createConversationSessionStore(tdb.db, {
+		conversationId: run.conversationId,
+		runId: run.runId,
+		workerId: "worker-1",
+		logger: silentLogger,
+	});
+}
+
 function virtualStopDeadline(): {
 	startStopDeadline: StartStopDeadline;
 	elapse(): void;
@@ -268,18 +288,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("does not publish a pointer from an SDK initialization id alone", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
-			const store = createConversationSessionStore(tdb.db, {
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-				logger: silentLogger,
-			});
+			const store = await createRuntimeSessionStoreFor(run);
 			return messageQuery([initMessage("session-initialized")], store);
 		});
 		await createQueuedRunTx(tdb.db, {
@@ -302,18 +311,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("publishes the first pointer only when the bound store mirrored that main session", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
-			const store = createConversationSessionStore(tdb.db, {
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-				logger: silentLogger,
-			});
+			const store = await createRuntimeSessionStoreFor(run);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-proven" },
 				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
@@ -337,18 +335,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("does not publish a pointer from subagent-only mirroring", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
-			const store = createConversationSessionStore(tdb.db, {
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-				logger: silentLogger,
-			});
+			const store = await createRuntimeSessionStoreFor(run);
 			await store.append(
 				{
 					projectKey: "project-1",
@@ -726,12 +713,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const loop = buildLoop(
 			worker,
 			async (run, signal) => {
-				await createConversationRuntimeTx(tdb.db, {
-					userId: run.userId,
-					conversationId: run.conversationId,
-					runId: run.runId,
-					workerId: "worker-1",
-				});
+				await createRuntimeFor(run);
 				signal.addEventListener(
 					"abort",
 					() => {
@@ -855,12 +837,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("retains an existing session pointer after mirror_error", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
+			await createRuntimeFor(run);
 			await tdb.db
 				.update(conversationRuntime)
 				.set({ agentSessionId: "session-existing" })
@@ -967,18 +944,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const loop = buildLoop(
 			worker,
 			async (run, signal) => {
-				await createConversationRuntimeTx(tdb.db, {
-					userId: run.userId,
-					conversationId: run.conversationId,
-					runId: run.runId,
-					workerId: "worker-1",
-				});
-				const store = createConversationSessionStore(tdb.db, {
-					conversationId: run.conversationId,
-					runId: run.runId,
-					workerId: "worker-1",
-					logger: silentLogger,
-				});
+				const store = await createRuntimeSessionStoreFor(run);
 				await store.append(
 					{ projectKey: "project-1", sessionId: "session-interrupted" },
 					[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
@@ -1362,12 +1328,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("advances the agent-session pointer only after a valid successful stream", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
+			await createRuntimeFor(run);
 			return messageQuery(
 				[
 					...textEnvelope({ completeText: "answer" }),
@@ -1401,12 +1362,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("does not advance the agent-session pointer for an invalid envelope", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
+			await createRuntimeFor(run);
 			return messageQuery([
 				...textEnvelope({ completeText: "uncommitted" }).slice(0, -1),
 				resultMessage("session-invalid"),

@@ -1,8 +1,8 @@
 /**
  * Shared Run ownership vocabulary and SQL predicates. Worker-scoped mutations
  * use the Run/Conversation/worker/lease fence; Conversation runtime and
- * terminal mutations add the trusted user identity. The `EXISTS` forms let
- * mutating statements carry the same predicate inside the write itself.
+ * terminal mutations add the trusted user identity. Runtime pointer updates
+ * use the user-bound predicate's `EXISTS` form inside the write itself.
  */
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { runs } from "./schema";
@@ -59,15 +59,6 @@ export function ownedRunByUserConditions(owner: UserRunMutationOwner) {
 		runLeaseByUserConditions(owner),
 		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
 	);
-}
-
-/**
- * {@link ownedRunConditions} as an in-statement `EXISTS` predicate.
- * Mutating statements carry this predicate themselves; an app-side check never
- * authorizes a later mutation.
- */
-export function ownedRunExists(owner: RunMutationOwner) {
-	return sql`exists (select 1 from ${runs} where ${ownedRunConditions(owner)})`;
 }
 
 /** {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate. */

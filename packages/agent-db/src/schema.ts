@@ -29,10 +29,11 @@ import {
  * `(user_id, conversation_id)` — the composite primary key makes per-user /
  * per-conversation isolation a database invariant. This row replaces the old
  * `sandbox_leases` warm-pointer role only; unlike the lease it grants **no
- * active execution ownership** — that lives exclusively in `runs`, and every
- * mutation here must be fenced on the claiming run's `locked_by`/`locked_until`
- * through the conversation-runtime-store helpers, so a worker that lost its
- * run cannot overwrite pointers a recovered conversation now relies on.
+ * active execution ownership** — that lives exclusively in `runs`. Sandbox and
+ * taint mutations use the runtime-store helpers; Agent-session pointer updates
+ * compose through run-store's terminal transaction. Both paths fence on the
+ * claiming Run's `locked_by`/`locked_until`, so a worker that lost its Run
+ * cannot overwrite pointers a recovered Conversation now relies on.
  */
 export const conversationRuntime = pgTable(
 	"conversation_runtime",
