@@ -1,0 +1,58 @@
+name: Worker image
+
+# Build the final production-pruned image and exercise the SDK's native CLI
+# inside it. This needs no runtime credentials and catches both optional-dep
+# pruning and the Debian/glibc vs musl platform-binary trap.
+#
+# Split out of ci.yml purely so it can be path-filtered — `paths` is a
+# workflow-level trigger, not a job-level one, and a gate job would bill its
+# own rounded-up minute and save nothing. The list covers every tracked file
+# that can change the built image or the check's outcome: the Dockerfile, the
+# trees that survive into the final image, every workspace manifest
+# (--frozen-lockfile reads them all), .dockerignore (it decides what the COPYs
+# ingest), and the smoke script. The build context is wider than this — `COPY
+# apps apps` reads every app — but the manifests stage prunes it to
+# package.json files, so nothing else reaches the image. Untracked drift in the
+# `oven/bun:1` base image is not path-filterable and is caught by the
+# deploy-time build instead.
+#
+# Pull requests only. A main-push run would be pure duplicate work: nothing
+# gates on this workflow, and release-deploy.yml's plan job already runs the
+# same build and the same smoke check via
+# scripts/deploy/build_and_push_agent_image.sh before pushing to ECR. Coverage
+# is therefore PR-time plus deploy-time, and a post-merge run in between would
+# only buy a few minutes of notice at the cost of a billed minute every time.
+
+on:
+  pull_request:
+    paths:
+      - apps/agent-worker/**
+      - packages/agent-db/**
+      - packages/live-text/**
+      - apps/*/package.json
+      - packages/*/package.json
+      - package.json
+      - bun.lock
+      - .dockerignore
+      - scripts/smoke/agent-worker-image-check.sh
+      - .github/workflows/worker-image.yml
+
+# Plain ref keying is enough here — every run is a pull_request run, so the ref
+# is already per-PR. ci.yml needs its more careful keying only because it also
+# runs on main, where release-deploy.yml's per-commit gate must not lose a run.
+concurrency:
+  group: worker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build agent-worker image
+        run: >-
+          docker build --platform linux/amd64
+          -f apps/agent-worker/Dockerfile
+          -t mymemo-agent-worker:image-check .
+      - name: Exec-verify pinned Claude CLI
+        run: scripts/smoke/agent-worker-image-check.sh mymemo-agent-worker:image-check

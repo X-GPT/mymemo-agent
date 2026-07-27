@@ -163,9 +163,12 @@ for suite contents, target selection, and deterministic harness tests.
 
 ### Worker image check
 
-Every PR builds the final production-pruned worker image and runs this same
-credential-free gate; release deployment also runs it after build and before
-push:
+A PR that touches the worker image's inputs — the Dockerfile and the trees it
+COPYs, any workspace manifest, the lockfile, `.dockerignore`, or the check
+script — builds the final production-pruned image and runs this same
+credential-free gate (`.github/workflows/worker-image.yml`, path-filtered so
+unrelated PRs skip it). Release deployment runs it unconditionally, after
+build and before push:
 
 ```sh
 docker build --platform linux/amd64 \

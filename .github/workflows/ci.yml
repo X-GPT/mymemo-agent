@@ -5,6 +5,21 @@ on:
     branches: [main]
   pull_request:
 
+# Supersede in-flight runs for the same PR. Keyed on the PR number, so pushes
+# to one PR cancel each other and nothing else.
+#
+# A push to main has no pull_request.number and falls back to the unique
+# run id, putting every main run alone in its own group. That is deliberate
+# and load-bearing: release-deploy.yml triggers on `workflow_run` of this
+# workflow per commit, and Actions keeps at most one *pending* run per group —
+# a third arrival evicts the pending one even with cancel-in-progress false.
+# Grouping main at all could therefore silently drop a production deploy.
+#
+# Groups are repository-wide, not per-workflow, hence the `ci-` prefix.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,20 +38,7 @@ jobs:
       - run: bun run test
       - run: bun test e2e/relay-failure-matrix.integration.test.ts
 
-  # Build the final production-pruned image and exercise the SDK's native CLI
-  # inside it. This needs no runtime credentials and catches both optional-dep
-  # pruning and the Debian/glibc vs musl platform-binary trap.
-  worker-image:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Build agent-worker image
-        run: >-
-          docker build --platform linux/amd64
-          -f apps/agent-worker/Dockerfile
-          -t mymemo-agent-worker:image-check .
-      - name: Exec-verify pinned Claude CLI
-        run: scripts/smoke/agent-worker-image-check.sh mymemo-agent-worker:image-check
+  # The agent-worker image build lives in worker-image.yml, path-filtered.
 
   # Split-runtime AG-UI integration: runs chat-api plus a deterministic
   # test-only worker against real Postgres and Redis, so atomic admission,
