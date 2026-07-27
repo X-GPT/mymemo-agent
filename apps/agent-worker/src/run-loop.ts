@@ -70,8 +70,8 @@ export interface TurnResult {
 	artifactPublication?: { artifacts: PublishedArtifact[] } | null;
 }
 
-/** A processor that reports nothing is normalized to a turn with no session
- * pointer to advance (the Milestone 3 synthetic turn). */
+/** A processor that reports nothing is normalized to a completed turn with no
+ * continuity evidence or artifact publication. */
 const EMPTY_TURN: TurnResult = { disposition: "completed" };
 
 type TerminalizationIntent =
@@ -139,8 +139,8 @@ export interface RunProcessContext {
  *
  * A processor may return a {@link TurnResult} with mirror reliability and
  * SessionStore evidence; the supervisor alone decides whether that evidence
- * may advance continuity. Returning nothing is treated as a turn with no
- * continuity evidence, so the Milestone 3 synthetic processor needs no change.
+ * may advance continuity. Returning nothing is treated as a completed turn
+ * with no continuity evidence or artifact publication.
  */
 // biome-ignore lint/suspicious/noConfusingVoidType: `void` keeps a nothing-returning processor valid — `undefined` is not assignable from a void-returning async fn.
 type RunTurnResult = void | TurnResult;
@@ -676,9 +676,7 @@ export class RunLoop {
 			intent.status === "error"
 				? {
 						status: "error",
-						...(intent.payload !== undefined
-							? { payload: intent.payload }
-							: {}),
+						payload: intent.payload,
 					}
 				: intent;
 		try {

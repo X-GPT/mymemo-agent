@@ -3,7 +3,8 @@
 // is exercised by BOTH chat-api and agent-worker. Sandbox/taint mutations use
 // these helpers; run-store composes Agent-session pointer publication into the
 // terminal transaction through the same shared fence.
-// This legacy barrel exposes only the shared runtime records and operations.
+// No source currently imports this pre-existing compatibility barrel; it is
+// retained here without expanding its surface.
 export type {
 	ConversationRuntimeRecord,
 	OrphanSandboxRecord,

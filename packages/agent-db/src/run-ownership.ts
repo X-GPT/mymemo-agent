@@ -1,3 +1,9 @@
+/**
+ * Shared Run ownership vocabulary and SQL predicates. Worker-scoped mutations
+ * use the Run/Conversation/worker/lease fence; Conversation runtime and
+ * terminal mutations add the trusted user identity. The `EXISTS` forms let
+ * mutating statements carry the same predicate inside the write itself.
+ */
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { runs } from "./schema";
 

@@ -33,8 +33,11 @@ function withSessionEvidence(
 		query.getArtifactPublication === undefined
 			? withArtifactPublication(query, { publish: async () => null })
 			: (query as ArtifactAwareQuery);
-	return {
-		...artifactAwareQuery,
-		sessionEvidence,
-	};
+	return new Proxy(artifactAwareQuery, {
+		get(target, property) {
+			if (property === "sessionEvidence") return sessionEvidence;
+			const value = Reflect.get(target, property, target);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	}) as RunQuery;
 }
