@@ -84,23 +84,25 @@ export async function appendAgentSessionEntriesTx(
 	},
 ): Promise<void> {
 	const { owner, ref, entries } = input;
+	if (entries.length === 0) {
+		await assertOwnedRunForNoop(db, owner, "session append");
+		return;
+	}
 	const subpath = normalizeSubpath(ref.subpath);
 	await db.transaction(async (tx) => {
-		if (entries.length > 0) {
-			await tx
-				.insert(agentSessions)
-				.values(
-					entries.map((entry) => ({
-						conversationId: owner.conversationId,
-						projectKey: ref.projectKey,
-						sessionId: ref.sessionId,
-						subpath,
-						uuid: typeof entry.uuid === "string" ? entry.uuid : null,
-						entry,
-					})),
-				)
-				.onConflictDoNothing();
-		}
+		await tx
+			.insert(agentSessions)
+			.values(
+				entries.map((entry) => ({
+					conversationId: owner.conversationId,
+					projectKey: ref.projectKey,
+					sessionId: ref.sessionId,
+					subpath,
+					uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+					entry,
+				})),
+			)
+			.onConflictDoNothing();
 		await lockOwnedRunAfterMutation(tx, owner, "session append");
 	});
 }
@@ -233,6 +235,23 @@ async function lockOwnedRunAfterMutation(
 	if (!owned) {
 		rejectRunFence(owner, operation);
 	}
+}
+
+/**
+ * Validate a mutation-shaped no-op without opening a transaction. There is no
+ * write to protect with a lock, but the bound SessionStore call still rejects
+ * a worker whose ownership lease is no longer active.
+ */
+async function assertOwnedRunForNoop(
+	db: Database,
+	owner: RunMutationOwner,
+	operation: string,
+): Promise<void> {
+	const [owned] = await db
+		.select({ runId: runs.runId })
+		.from(runs)
+		.where(ownedRunConditions(owner));
+	if (!owned) rejectRunFence(owner, operation);
 }
 
 /**

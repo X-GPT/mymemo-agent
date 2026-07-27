@@ -84,7 +84,7 @@ export class RunProcessorFailure extends Error {
 
 	constructor(
 		readonly failure: unknown,
-		readonly turnResult: TurnResult,
+		readonly streamMetadata: TurnStreamMetadata,
 	) {
 		super("run processor failed");
 	}
@@ -476,7 +476,9 @@ export class RunLoop {
 		});
 		entry.liveStream = liveStream;
 		let turnResult: TurnResult = EMPTY_TURN;
-		let failure: { error: unknown } | undefined;
+		let failure:
+			| { error: unknown; streamMetadata?: TurnStreamMetadata }
+			| undefined;
 		try {
 			turnResult =
 				(await this.opts.processor({
@@ -493,8 +495,10 @@ export class RunLoop {
 				})) ?? EMPTY_TURN;
 		} catch (error) {
 			if (error instanceof RunProcessorFailure) {
-				turnResult = error.turnResult;
-				failure = { error: error.failure };
+				failure = {
+					error: error.failure,
+					streamMetadata: error.streamMetadata,
+				};
 			} else {
 				failure = { error };
 			}
@@ -541,7 +545,7 @@ export class RunLoop {
 		run: RunRecord,
 		state: RunEndState,
 		turnResult: TurnResult,
-		failure?: { error: unknown },
+		failure?: { error: unknown; streamMetadata?: TurnStreamMetadata },
 	): Promise<TerminalRunStatus | null> {
 		const owner: UserRunMutationOwner = {
 			userId: run.userId,
@@ -557,7 +561,9 @@ export class RunLoop {
 			});
 			return null;
 		}
-		const agentSessionId = resumableAgentSessionId(turnResult);
+		const agentSessionId = resumableAgentSessionId(
+			failure?.streamMetadata ?? turnResult.streamMetadata,
+		);
 		// Interruption wins over both success and failure: an SDK error raised
 		// while interrupting still surfaces as `interrupted`. A mirrored main
 		// session publishes its first or later resume pointer with this Outcome.
@@ -601,7 +607,7 @@ export class RunLoop {
 		return this.terminalize(owner, { status: "done", agentSessionId });
 	}
 
-	private failRun(
+	private async failRun(
 		owner: UserRunMutationOwner,
 		input: {
 			message: string;
@@ -617,14 +623,18 @@ export class RunLoop {
 			runId: owner.runId,
 			...input.fields,
 		});
-		return this.terminalize(
-			owner,
-			{
-				status: "error",
-				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-			},
-			input.interruptedAgentSessionId,
-		);
+		const outcome = {
+			status: "error",
+			payload: { message: GENERIC_RUN_ERROR_MESSAGE },
+		} as const satisfies TerminalOutcome;
+		if (await this.tryTerminalOutcome(owner, outcome)) return "error";
+		if (
+			await this.tryTerminalInterrupted(owner, input.interruptedAgentSessionId)
+		) {
+			return "interrupted";
+		}
+		this.warnTerminalRecovery(owner, outcome.status);
+		return null;
 	}
 
 	private async publishArtifactsAndFinish(
@@ -651,73 +661,68 @@ export class RunLoop {
 				});
 				return null;
 			}
-			this.opts.logger.error({
+			return this.failRun(owner, {
 				message: "run failed",
-				workerId: this.workerId,
-				userId: owner.userId,
-				conversationId: owner.conversationId,
-				runId: owner.runId,
-				...(error instanceof ArtifactQuotaError
-					? artifactFailureLogFields(error)
-					: {
-							error: "artifact metadata publication failed",
-							artifactFailure: {
-								category: "publication",
-								stage: "metadata",
+				fields:
+					error instanceof ArtifactQuotaError
+						? artifactFailureLogFields(error)
+						: {
+								error: "artifact metadata publication failed",
+								artifactFailure: {
+									category: "publication",
+									stage: "metadata",
+								},
 							},
-						}),
+				interruptedAgentSessionId: agentSessionId,
 			});
-			return this.terminalize(
-				owner,
-				{
-					status: "error",
-					payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-				},
-				agentSessionId,
-			);
 		}
 	}
 
 	/**
-	 * Append the run's terminal event through the fenced run-store helper, with
-	 * the late-interruption fallback the loop relies on: `done`/`error` lose to an
-	 * interruption the terminal CAS observes (the run is already
-	 * `interrupt_requested`), so on a fence rejection try `interrupted` once. An
-	 * proven continuity stays in the worker-only reconciliation argument; the
-	 * durable `run_error` input contains no extra field. If even `interrupted`
-	 * is fenced, stale-run recovery finishes the run.
+	 * Append a non-error terminal event through the fenced run-store helper.
+	 * `done` loses to an interruption the terminal CAS observes (the Run is
+	 * already `interrupt_requested`), so on a fence rejection it tries
+	 * `interrupted` once with the same proven continuity. If that transition is
+	 * also fenced, stale-Run recovery finishes the Run.
 	 */
 	private async terminalize(
 		owner: UserRunMutationOwner,
-		outcome: TerminalOutcome,
-		interruptedAgentSessionId?: string,
+		outcome: Exclude<TerminalOutcome, { status: "error" }>,
 	): Promise<TerminalRunStatus | null> {
+		if (await this.tryTerminalOutcome(owner, outcome)) return outcome.status;
+		if (
+			outcome.status === "done" &&
+			(await this.tryTerminalInterrupted(owner, outcome.agentSessionId))
+		) {
+			return "interrupted";
+		}
+		this.warnTerminalRecovery(owner, outcome.status);
+		return null;
+	}
+
+	private async tryTerminalOutcome(
+		owner: UserRunMutationOwner,
+		outcome: TerminalOutcome,
+	): Promise<boolean> {
 		try {
 			await transitionRunTerminalTx(this.opts.db, { owner, ...outcome });
-			return outcome.status;
+			return true;
 		} catch (error) {
-			if (error instanceof RunFenceError) {
-				if (
-					outcome.status !== "interrupted" &&
-					(await this.tryTerminalInterrupted(
-						owner,
-						outcome.status === "error"
-							? interruptedAgentSessionId
-							: outcome.agentSessionId,
-					))
-				) {
-					return "interrupted";
-				}
-				this.opts.logger.warn({
-					message: "could not terminalize run; leaving to stale-run recovery",
-					workerId: this.workerId,
-					runId: owner.runId,
-					intended: outcome.status,
-				});
-				return null;
-			}
+			if (error instanceof RunFenceError) return false;
 			throw error;
 		}
+	}
+
+	private warnTerminalRecovery(
+		owner: UserRunMutationOwner,
+		intended: TerminalRunStatus,
+	): void {
+		this.opts.logger.warn({
+			message: "could not terminalize run; leaving to stale-run recovery",
+			workerId: this.workerId,
+			runId: owner.runId,
+			intended,
+		});
 	}
 
 	private async tryTerminalInterrupted(
@@ -770,8 +775,9 @@ function artifactFailureLogFields(error: unknown): Record<string, unknown> {
 	return { error: toMessage(error) };
 }
 
-function resumableAgentSessionId(turnResult: TurnResult): string | undefined {
-	const metadata = turnResult.streamMetadata;
+function resumableAgentSessionId(
+	metadata: TurnStreamMetadata | undefined,
+): string | undefined {
 	// Keep pointer safety local to this injected RunProcessor seam. Interruption
 	// is reconciled before mirror-failure classification, so this guard is
 	// load-bearing for done, interrupted, and error→interrupted reconciliation.

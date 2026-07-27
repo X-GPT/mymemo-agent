@@ -221,6 +221,15 @@ Run even when its provisional response is absent from Conversation history. It
 is never client-facing or stored in the Workspace.
 _Avoid_: chat history (that is the user-visible record in run events)
 
+**Session mirror evidence**:
+A Run-local fact established only when its bound SessionStore successfully
+persists a non-empty batch for the main Agent session and has not subsequently
+observed that session's deletion. It can establish or advance the Conversation's
+resume pointer only in a qualifying `done` or `interrupted` terminal transaction.
+An SDK initialization id and subagent-only mirrors do not count, and a
+`mirror_error` disqualifies the Run's evidence.
+_Avoid_: SDK result id, initialization id, transcript contents
+
 **Split runtime**:
 The target architecture: the agent loop runs in trusted Fargate workers
 while untrusted filesystem and shell execution stays in E2B.

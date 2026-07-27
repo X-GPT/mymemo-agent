@@ -1,6 +1,10 @@
-// Pre-existing compatibility re-export over the shared runtime-store package.
-// No source currently imports this barrel; retain it without expanding its
-// surface so unrelated dead-code removal stays outside this change.
+// Persistent E2B workspace metadata (`conversation_runtime` / `orphan_sandboxes`)
+// lives in the shared `@mymemo/agent-db` data layer: the fenced write protocol
+// is exercised by BOTH chat-api and agent-worker (the worker mutates the
+// sandbox and session pointers through these helpers), so it has one definition
+// over one `pg` driver — the same reason the run-store queue helpers are shared.
+// chat-api keeps this `@/features/conversation-runtime-store` surface as a thin
+// re-export so its imports stay stable.
 export type {
 	ConversationRuntimeRecord,
 	OrphanSandboxRecord,

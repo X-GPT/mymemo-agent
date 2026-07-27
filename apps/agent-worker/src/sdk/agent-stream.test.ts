@@ -95,6 +95,18 @@ function fakeQuery(steps: Step[]): SupervisedQuery & { interrupts: number } {
 const noopRunScopeAbort: ConsumeAgentStreamParams["abortRunScopedWork"] =
 	() => {};
 
+async function streamFailure(
+	result: ReturnType<typeof consumeAgentStream>,
+): Promise<unknown> {
+	const outcome = await result;
+	expect(outcome.disposition).toBe("failed");
+	if (outcome.disposition !== "failed") {
+		throw new Error(`expected failed stream, received ${outcome.disposition}`);
+	}
+	expect(outcome.mirrorErrorObserved).toBe(false);
+	return outcome.error;
+}
+
 type AssistantCommit = Extract<
 	ModelContent,
 	{ kind: "assistant_message" }
@@ -269,19 +281,18 @@ describe("consumeAgentStream", () => {
 		};
 		let settled = false;
 
-		const result = consumeAgentStream({
-			abortRunScopedWork: noopRunScopeAbort,
-			query,
-			interruptionSignal: new AbortController().signal,
-			appendLiveEvent: async (event) => {
-				if (event.type !== EventType.TEXT_MESSAGE_CONTENT) return;
-				contentStarted.resolve();
-				await releaseContent.promise;
-			},
-			appendModelContents: async () => {},
-		}).then(
-			() => null,
-			(error: unknown) => error,
+		const result = streamFailure(
+			consumeAgentStream({
+				abortRunScopedWork: noopRunScopeAbort,
+				query,
+				interruptionSignal: new AbortController().signal,
+				appendLiveEvent: async (event) => {
+					if (event.type !== EventType.TEXT_MESSAGE_CONTENT) return;
+					contentStarted.resolve();
+					await releaseContent.promise;
+				},
+				appendModelContents: async () => {},
+			}),
 		);
 		void result.then(() => {
 			settled = true;
@@ -616,7 +627,7 @@ describe("consumeAgentStream", () => {
 			{ throw: new Error("iterator rejected after result") },
 		]);
 
-		await expect(
+		const failure = await streamFailure(
 			consumeAgentStream({
 				abortRunScopedWork: noopRunScopeAbort,
 				query,
@@ -625,7 +636,12 @@ describe("consumeAgentStream", () => {
 					appended.push(message),
 				),
 			}),
-		).rejects.toThrow("rate limited");
+		);
+		expect(failure).toEqual(
+			expect.objectContaining({
+				message: expect.stringContaining("rate limited"),
+			}),
+		);
 		expect(appended).toEqual([]);
 		expect(query.interrupts).toBe(0);
 	});
@@ -637,14 +653,16 @@ describe("consumeAgentStream", () => {
 			envelope.slice(0, 5).map((message) => ({ message })),
 		);
 
-		await expect(
-			consumeAgentStream({
-				abortRunScopedWork: noopRunScopeAbort,
-				query,
-				interruptionSignal: controller.signal,
-				appendModelContents: async () => {},
-			}),
-		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
+		expect(
+			await streamFailure(
+				consumeAgentStream({
+					abortRunScopedWork: noopRunScopeAbort,
+					query,
+					interruptionSignal: controller.signal,
+					appendModelContents: async () => {},
+				}),
+			),
+		).toBeInstanceOf(AssistantEnvelopeProtocolError);
 	});
 
 	it("fails closed when message_stop arrives before the envelope is complete", async () => {
@@ -657,14 +675,16 @@ describe("consumeAgentStream", () => {
 			{ message: streamEvent({ type: "message_stop" }) },
 		]);
 
-		await expect(
-			consumeAgentStream({
-				abortRunScopedWork: noopRunScopeAbort,
-				query,
-				interruptionSignal: new AbortController().signal,
-				appendModelContents: async () => {},
-			}),
-		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
+		expect(
+			await streamFailure(
+				consumeAgentStream({
+					abortRunScopedWork: noopRunScopeAbort,
+					query,
+					interruptionSignal: new AbortController().signal,
+					appendModelContents: async () => {},
+				}),
+			),
+		).toBeInstanceOf(AssistantEnvelopeProtocolError);
 	});
 
 	// Issue #244: a nominally successful stream with invalid envelope structure
@@ -732,14 +752,16 @@ describe("consumeAgentStream", () => {
 				].map((message) => ({ message })),
 			);
 
-			await expect(
-				consumeAgentStream({
-					abortRunScopedWork: noopRunScopeAbort,
-					query,
-					interruptionSignal: new AbortController().signal,
-					appendModelContents: captureModelContents(appended),
-				}),
-			).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
+			expect(
+				await streamFailure(
+					consumeAgentStream({
+						abortRunScopedWork: noopRunScopeAbort,
+						query,
+						interruptionSignal: new AbortController().signal,
+						appendModelContents: captureModelContents(appended),
+					}),
+				),
+			).toBeInstanceOf(AssistantEnvelopeProtocolError);
 			expect(appended).toEqual([]);
 		});
 	}
@@ -862,14 +884,16 @@ describe("consumeAgentStream", () => {
 			{ message: rejected },
 		]);
 
-		await expect(
-			consumeAgentStream({
-				abortRunScopedWork: noopRunScopeAbort,
-				query,
-				interruptionSignal: controller.signal,
-				appendModelContents: async () => {},
-			}),
-		).rejects.toBeInstanceOf(AgentResultError);
+		expect(
+			await streamFailure(
+				consumeAgentStream({
+					abortRunScopedWork: noopRunScopeAbort,
+					query,
+					interruptionSignal: controller.signal,
+					appendModelContents: async () => {},
+				}),
+			),
+		).toBeInstanceOf(AgentResultError);
 	});
 
 	it("stops immediately on mirror error through the bounded stop path", async () => {
@@ -1856,18 +1880,20 @@ describe("consumeAgentStream", () => {
 			],
 		});
 
-		await expect(
-			consumeAgentStream({
-				abortRunScopedWork: noopRunScopeAbort,
-				query: fakeQuery(messages.map((message) => ({ message }))),
-				interruptionSignal: new AbortController().signal,
-				appendModelContents: async (contents) => {
-					if (contents.some(({ kind }) => kind === "tool_call_started")) {
-						throw boom;
-					}
-				},
-			}),
-		).rejects.toBe(boom);
+		expect(
+			await streamFailure(
+				consumeAgentStream({
+					abortRunScopedWork: noopRunScopeAbort,
+					query: fakeQuery(messages.map((message) => ({ message }))),
+					interruptionSignal: new AbortController().signal,
+					appendModelContents: async (contents) => {
+						if (contents.some(({ kind }) => kind === "tool_call_started")) {
+							throw boom;
+						}
+					},
+				}),
+			),
+		).toBe(boom);
 	});
 
 	it("propagates a failed tool-result append so the run terminalizes error", async () => {
@@ -1887,18 +1913,20 @@ describe("consumeAgentStream", () => {
 			]),
 		];
 
-		await expect(
-			consumeAgentStream({
-				abortRunScopedWork: noopRunScopeAbort,
-				query: fakeQuery(messages.map((message) => ({ message }))),
-				interruptionSignal: new AbortController().signal,
-				appendModelContents: async (contents) => {
-					if (contents.some(({ kind }) => kind === "tool_call_result")) {
-						throw boom;
-					}
-				},
-			}),
-		).rejects.toBe(boom);
+		expect(
+			await streamFailure(
+				consumeAgentStream({
+					abortRunScopedWork: noopRunScopeAbort,
+					query: fakeQuery(messages.map((message) => ({ message }))),
+					interruptionSignal: new AbortController().signal,
+					appendModelContents: async (contents) => {
+						if (contents.some(({ kind }) => kind === "tool_call_result")) {
+							throw boom;
+						}
+					},
+				}),
+			),
+		).toBe(boom);
 	});
 
 	it("rejects a completed tool_use block without an id or name as a protocol violation", async () => {
@@ -1923,14 +1951,16 @@ describe("consumeAgentStream", () => {
 			streamEvent({ type: "message_stop" }),
 		];
 
-		await expect(
-			consumeAgentStream({
-				abortRunScopedWork: noopRunScopeAbort,
-				query: fakeQuery(messages.map((message) => ({ message }))),
-				interruptionSignal: new AbortController().signal,
-				appendModelContents: async () => {},
-			}),
-		).rejects.toBeInstanceOf(AssistantEnvelopeProtocolError);
+		expect(
+			await streamFailure(
+				consumeAgentStream({
+					abortRunScopedWork: noopRunScopeAbort,
+					query: fakeQuery(messages.map((message) => ({ message }))),
+					interruptionSignal: new AbortController().signal,
+					appendModelContents: async () => {},
+				}),
+			),
+		).toBeInstanceOf(AssistantEnvelopeProtocolError);
 	});
 
 	it("propagates iterator rejection without committing an open envelope", async () => {
@@ -1943,16 +1973,18 @@ describe("consumeAgentStream", () => {
 			{ throw: boom },
 		]);
 
-		await expect(
-			consumeAgentStream({
-				abortRunScopedWork: noopRunScopeAbort,
-				query,
-				interruptionSignal: controller.signal,
-				appendModelContents: onAssistantCommit((message) =>
-					appended.push(message),
-				),
-			}),
-		).rejects.toBe(boom);
+		expect(
+			await streamFailure(
+				consumeAgentStream({
+					abortRunScopedWork: noopRunScopeAbort,
+					query,
+					interruptionSignal: controller.signal,
+					appendModelContents: onAssistantCommit((message) =>
+						appended.push(message),
+					),
+				}),
+			),
+		).toBe(boom);
 		expect(appended).toEqual([]);
 		expect(query.interrupts).toBe(0);
 	});

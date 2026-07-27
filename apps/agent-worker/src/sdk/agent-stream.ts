@@ -92,6 +92,19 @@ export interface AgentStreamOutcome extends AgentStreamMetadata {
 	disposition: TurnDisposition;
 }
 
+/**
+ * An unstopped stream failure. The `false` literal is guaranteed by the stream
+ * consumer: observing `mirror_error` requests a stop, and stopped failures
+ * settle as a neutral `stopped` outcome instead.
+ */
+export interface AgentStreamFailure {
+	disposition: "failed";
+	mirrorErrorObserved: false;
+	error: unknown;
+}
+
+export type AgentStreamResult = AgentStreamOutcome | AgentStreamFailure;
+
 export interface ConsumeAgentStreamParams {
 	runId?: string;
 	query: SupervisedQuery;
@@ -140,13 +153,13 @@ export interface ConsumeAgentStreamParams {
  *  - the query is interrupted (once), and
  *  - any further content is ignored — never appended.
  *
- * The function resolves with a neutral `completed`/`stopped` disposition and
- * throws only for an unstopped SDK failure. Deciding the terminal status —
- * `interrupted`, `error`, or no write — belongs to the Run supervisor.
+ * The function resolves with a `completed`/`stopped` outcome or a typed
+ * unstopped failure. Deciding the terminal status — `interrupted`, `error`, or
+ * no write — belongs to the Run supervisor.
  */
 export async function consumeAgentStream(
 	params: ConsumeAgentStreamParams,
-): Promise<AgentStreamOutcome> {
+): Promise<AgentStreamResult> {
 	const { query, interruptionSignal, appendModelContents } = params;
 	const outcome: AgentStreamOutcome = {
 		disposition: "completed",
@@ -512,7 +525,11 @@ export async function consumeAgentStream(
 		}
 		settleStream();
 		await abandonOpenMessage();
-		throw error;
+		return {
+			disposition: "failed",
+			mirrorErrorObserved: false,
+			error,
+		};
 	} finally {
 		for (const removeAbortListener of removeAbortListeners) {
 			removeAbortListener();

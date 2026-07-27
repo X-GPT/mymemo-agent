@@ -3,7 +3,6 @@ import type { ArtifactAwareQuery } from "../artifacts/artifact-publication";
 import type { WorkerLogger } from "../logger";
 import { type RunProcessor, RunProcessorFailure } from "../run-loop";
 import {
-	type AgentStreamOutcome,
 	consumeAgentStream,
 	onAbort,
 	type StartStopDeadline,
@@ -63,45 +62,36 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				ctx.run,
 				runScopedController.signal,
 			);
-			try {
-				const outcome: AgentStreamOutcome = await consumeAgentStream({
-					runId: ctx.run.runId,
-					query,
-					interruptionSignal: ctx.interruptionSignal,
-					forceCloseSignals: [
-						ctx.shutdownSignal,
-						...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
-					],
-					ownershipLostSignal: ctx.ownershipLostSignal,
-					abortRunScopedWork: (reason) => runScopedController.abort(reason),
-					appendModelContents: ctx.appendModelContents,
-					appendLiveEvent: ctx.appendLiveEvent,
-					logger: deps.logger,
-					startStopDeadline: deps.startStopDeadline,
-				});
-				const { disposition, ...streamMetadata } = outcome;
-				const mirroredMainSessionId =
-					query.sessionEvidence.mirroredMainSessionId();
-				return {
-					disposition,
-					streamMetadata: { ...streamMetadata, mirroredMainSessionId },
-					artifactPublication:
-						disposition === "completed" ? query.getArtifactPublication() : null,
-				};
-			} catch (error) {
-				// `consumeAgentStream` turns every observed mirror_error into a
-				// stopped result; it throws only while the stream is still reliable.
-				// Preserve the independently mirrored main-session evidence so a
-				// concurrent durable interruption can still publish continuity.
-				throw new RunProcessorFailure(error, {
-					disposition: "stopped",
-					streamMetadata: {
-						mirrorErrorObserved: false,
-						mirroredMainSessionId:
-							query.sessionEvidence.mirroredMainSessionId(),
-					},
+			const result = await consumeAgentStream({
+				runId: ctx.run.runId,
+				query,
+				interruptionSignal: ctx.interruptionSignal,
+				forceCloseSignals: [
+					ctx.shutdownSignal,
+					...(query.forceCloseSignal ? [query.forceCloseSignal] : []),
+				],
+				ownershipLostSignal: ctx.ownershipLostSignal,
+				abortRunScopedWork: (reason) => runScopedController.abort(reason),
+				appendModelContents: ctx.appendModelContents,
+				appendLiveEvent: ctx.appendLiveEvent,
+				logger: deps.logger,
+				startStopDeadline: deps.startStopDeadline,
+			});
+			const mirroredMainSessionId =
+				query.sessionEvidence.mirroredMainSessionId();
+			if (result.disposition === "failed") {
+				throw new RunProcessorFailure(result.error, {
+					mirrorErrorObserved: result.mirrorErrorObserved,
+					mirroredMainSessionId,
 				});
 			}
+			const { disposition, ...streamMetadata } = result;
+			return {
+				disposition,
+				streamMetadata: { ...streamMetadata, mirroredMainSessionId },
+				artifactPublication:
+					disposition === "completed" ? query.getArtifactPublication() : null,
+			};
 		} finally {
 			removeSupervisorStopListener();
 		}
