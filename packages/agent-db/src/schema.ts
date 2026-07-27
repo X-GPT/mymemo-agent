@@ -29,10 +29,11 @@ import {
  * `(user_id, conversation_id)` — the composite primary key makes per-user /
  * per-conversation isolation a database invariant. This row replaces the old
  * `sandbox_leases` warm-pointer role only; unlike the lease it grants **no
- * active execution ownership** — that lives exclusively in `runs`, and every
- * mutation here must be fenced on the claiming run's `locked_by`/`locked_until`
- * through the conversation-runtime-store helpers, so a worker that lost its
- * run cannot overwrite pointers a recovered conversation now relies on.
+ * active execution ownership** — that lives exclusively in `runs`. Sandbox and
+ * taint mutations use the runtime-store helpers; Agent-session pointer updates
+ * compose through run-store's terminal transaction. Both paths fence on the
+ * claiming Run's `locked_by`/`locked_until`, so a worker that lost its Run
+ * cannot overwrite pointers a recovered Conversation now relies on.
  */
 export const conversationRuntime = pgTable(
 	"conversation_runtime",
@@ -50,11 +51,12 @@ export const conversationRuntime = pgTable(
 		sandboxTainted: boolean("sandbox_tainted").notNull().default(false),
 		/**
 		 * The Claude Agent SDK session to resume this conversation from (ADR-0005):
-		 * the id the worker stores from the SDK's terminal result message. NULL
-		 * until the first successful turn — a run with no pointer starts a fresh
-		 * agent session. It advances ONLY in the run's terminal-success transition,
-		 * under the same ownership fence as the rest of this row, so a stale worker
-		 * cannot move it; a run that observed a `mirror_error` leaves it unchanged.
+		 * the main-session id the bound SessionStore proves through a successful
+		 * non-empty transcript mirror. NULL until that evidence exists — a Run with
+		 * no pointer starts a fresh Agent session. The first value and every later
+		 * advance are published ONLY in the same ownership-fenced transaction as
+		 * `done` or `interrupted`; recovery and a Run that observed `mirror_error`
+		 * leave it unchanged.
 		 */
 		agentSessionId: text("agent_session_id"),
 		createdAt: timestamp("created_at", { withTimezone: true })

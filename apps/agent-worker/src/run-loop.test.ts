@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
+import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventTx,
 	claimNextRunTx,
 	createQueuedRunTx,
-	RunFenceError,
 	requestRunInterruptionTx,
 } from "@mymemo/agent-db/run-store";
 import {
@@ -667,7 +667,35 @@ describe("RunLoop — terminal outcomes", () => {
 });
 
 describe("RunLoop — agent session pointer", () => {
-	it("advances the resume pointer on a successful turn that reports a session", async () => {
+	it("does not establish the first pointer without main-session evidence", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			return {
+				disposition: "completed",
+				streamMetadata: {
+					mirrorErrorObserved: false,
+					mirroredMainSessionId: null,
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(await readRuntime("conv-1")).toMatchObject({
+			agentSessionId: null,
+		});
+	});
+
+	it("establishes the first pointer after a successful main-session append", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
 			// The runtime row is created while the run is owned (as E2B provisioning
@@ -681,8 +709,8 @@ describe("RunLoop — agent session pointer", () => {
 			return {
 				disposition: "completed",
 				streamMetadata: {
-					sessionId: "session-abc",
 					mirrorErrorObserved: false,
+					mirroredMainSessionId: "session-abc",
 				},
 			};
 		});
@@ -697,6 +725,152 @@ describe("RunLoop — agent session pointer", () => {
 		});
 	});
 
+	it.each([
+		["without main-session evidence", null, null, false],
+		[
+			"with main-session evidence",
+			"session-interrupted",
+			"session-interrupted",
+			false,
+		],
+		["with unreliable mirror evidence", "session-unreliable", null, true],
+	] as const)("terminalizes an interrupted first Run %s", async (_name, mirroredMainSessionId, expectedPointer, mirrorErrorObserved) => {
+		const worker = buildWorker(1);
+		const processorStarted = deferred();
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			processorStarted.resolve();
+			await new Promise<void>((resolve) => {
+				if (ctx.signal.aborted) return resolve();
+				ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			return {
+				disposition: "stopped",
+				streamMetadata: {
+					mirrorErrorObserved,
+					mirroredMainSessionId,
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick();
+		await processorStarted.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(await readRuntime("conv-1")).toMatchObject({
+			agentSessionId: expectedPointer,
+		});
+		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
+	});
+
+	it("keeps qualifying evidence when error reconciliation loses to interruption", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			// The durable request lands after the last heartbeat, so loop-local
+			// interruption state remains false and the error CAS must reconcile.
+			await requestRunInterruptionTx(tdb.db, {
+				runId: ctx.run.runId,
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+			});
+			return {
+				disposition: "stopped",
+				streamMetadata: {
+					mirrorErrorObserved: false,
+					mirroredMainSessionId: "session-reconciled",
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(await readRuntime("conv-1")).toMatchObject({
+			agentSessionId: "session-reconciled",
+		});
+		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
+	});
+
+	it("drops unreliable evidence when mirror-error reconciliation loses to interruption", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			await requestRunInterruptionTx(tdb.db, {
+				runId: ctx.run.runId,
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+			});
+			return {
+				disposition: "stopped",
+				streamMetadata: {
+					mirrorErrorObserved: true,
+					mirroredMainSessionId: "session-unreliable",
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(await readRuntime("conv-1")).toMatchObject({ agentSessionId: null });
+		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
+	});
+
+	it("keeps interruption-only continuity out of a plain error Outcome", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			return {
+				disposition: "stopped",
+				streamMetadata: {
+					mirrorErrorObserved: false,
+					mirroredMainSessionId: "session-interruption-fallback",
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("error");
+		expect(await readRuntime("conv-1")).toMatchObject({ agentSessionId: null });
+		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
+	});
+
 	it("terminalizes error without establishing a pointer after a mirror error stop", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
@@ -709,8 +883,8 @@ describe("RunLoop — agent session pointer", () => {
 			return {
 				disposition: "stopped",
 				streamMetadata: {
-					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
+					mirroredMainSessionId: "session-first",
 				},
 			};
 		});
@@ -735,8 +909,8 @@ describe("RunLoop — agent session pointer", () => {
 			return {
 				disposition: "completed",
 				streamMetadata: {
-					sessionId: "session-unreliable",
 					mirrorErrorObserved: true,
+					mirroredMainSessionId: "session-first",
 				},
 			};
 		});

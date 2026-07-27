@@ -12,6 +12,7 @@ import {
 	RunEventType,
 	validateDurableRunEventSequence,
 } from "./run-events";
+import { RunFenceError, type UserRunMutationOwner } from "./run-ownership";
 import {
 	ActiveRunConflictError,
 	type AdmitQueuedRunInput,
@@ -24,12 +25,11 @@ import {
 	loadRunStartedTx,
 	markLiveStreamFailedTx,
 	markStaleRunsTx,
-	RunFenceError,
 	RunInputMismatchError,
 	requestRunInterruptionTx,
 	transitionRunTerminalTx,
 } from "./run-store";
-import { conversations, runEvents, runs } from "./schema";
+import { conversationRuntime, conversations, runEvents, runs } from "./schema";
 import { createTestDatabase, type TestDb } from "./testing";
 
 let tdb: TestDb;
@@ -47,6 +47,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
+	await tdb.db.delete(conversationRuntime);
 	await tdb.db.delete(conversations);
 	await tdb.db.insert(conversations).values([
 		{
@@ -302,6 +303,18 @@ async function claimRun(
 		throw new Error(`test setup claimed ${claimed?.runId}, wanted ${runId}`);
 	}
 	return claimed;
+}
+
+function owner(
+	overrides: Partial<UserRunMutationOwner> = {},
+): UserRunMutationOwner {
+	return {
+		runId: "run-1",
+		conversationId: "conv-1",
+		workerId: "worker-1",
+		userId: "user-1",
+		...overrides,
+	};
 }
 
 /** Force a claimed run's locked_until past, as if the worker stalled. */
@@ -787,6 +800,78 @@ describe("appendRunEventTx", () => {
 });
 
 describe("transitionRunTerminalTx", () => {
+	it.each([
+		"done",
+		"interrupted",
+	] as const)("publishes the first Agent-session pointer atomically with %s", async (status) => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		if (status === "interrupted") {
+			await tdb.db
+				.update(runs)
+				.set({ status: "interrupt_requested" })
+				.where(eq(runs.runId, "run-1"));
+		}
+
+		await transitionRunTerminalTx(tdb.db, {
+			owner: owner(),
+			status,
+			agentSessionId: "session-first",
+		});
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		const [run] = await tdb.db.select().from(runs);
+		expect(runtime?.agentSessionId).toBe("session-first");
+		expect(run?.status).toBe(status);
+	});
+
+	it("rolls back a written pointer when the terminal Outcome loses a status race", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await tdb.db
+			.update(runs)
+			.set({ status: "interrupt_requested" })
+			.where(eq(runs.runId, "run-1"));
+
+		await expect(
+			transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status: "done",
+				agentSessionId: "session-rolled-back",
+			}),
+		).rejects.toBeInstanceOf(RunFenceError);
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		const [run] = await tdb.db.select().from(runs);
+		expect(runtime?.agentSessionId).toBeNull();
+		expect(run?.status).toBe("interrupt_requested");
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
+	it("terminalizes without a pointer when the optional runtime row is absent", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+
+		const terminal = await transitionRunTerminalTx(tdb.db, {
+			owner: owner(),
+			status: "done",
+			agentSessionId: "session-without-runtime",
+		});
+
+		const [run] = await tdb.db.select().from(runs);
+		expect(terminal.status).toBe("done");
+		expect(run?.status).toBe("done");
+		expect(await tdb.db.select().from(conversationRuntime)).toEqual([]);
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_done",
+		]);
+	});
+
 	it("rejects terminalization with an incomplete Tool lifecycle", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
@@ -803,8 +888,7 @@ describe("transitionRunTerminalTx", () => {
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "error",
 				payload: { message: "Run failed" },
 			}),
@@ -848,8 +932,7 @@ describe("transitionRunTerminalTx", () => {
 		}
 
 		const run = await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "error",
 			payload: { message: "Run failed" },
 		});
@@ -868,8 +951,7 @@ describe("transitionRunTerminalTx", () => {
 		});
 
 		const run = await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "done",
 		});
 
@@ -891,15 +973,13 @@ describe("transitionRunTerminalTx", () => {
 	it("rejects a second terminal transition for the same run", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "done",
 		});
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "error",
 				payload: { message: "boom" },
 			}),
@@ -917,15 +997,13 @@ describe("transitionRunTerminalTx", () => {
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "done",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
 
 		const run = await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "interrupted",
 		});
 		expect(run.status).toBe("interrupted");
@@ -945,8 +1023,7 @@ describe("transitionRunTerminalTx", () => {
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "error",
 				payload: { message: "sdk exploded mid-interrupt" },
 			}),
@@ -957,8 +1034,7 @@ describe("transitionRunTerminalTx", () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
 		const run = await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "error",
 			payload: { message: "sandbox died" },
 		});
@@ -972,23 +1048,34 @@ describe("transitionRunTerminalTx", () => {
 
 	it("rejects a terminal transition from a non-owner or expired ownership", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			agentSessionId: "session-old",
+		});
 
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-2",
+				owner: owner({ workerId: "worker-2" }),
 				status: "done",
+				agentSessionId: "session-new",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("session-old");
 
 		await expireOwnership("run-1");
 		await expect(
 			transitionRunTerminalTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				status: "done",
+				agentSessionId: "session-new",
 			}),
 		).rejects.toBeInstanceOf(RunFenceError);
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("session-old");
 	});
 });
 
@@ -1062,8 +1149,7 @@ describe("requestRunInterruptionTx", () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await requestRunInterruptionTx(tdb.db, ref);
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "interrupted",
 		});
 
@@ -1079,8 +1165,7 @@ describe("requestRunInterruptionTx", () => {
 	it("reports an already-terminal run without touching it", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "done",
 		});
 
@@ -1181,8 +1266,7 @@ describe("heartbeatRunTx", () => {
 	it("does not renew a terminal run", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			status: "done",
 		});
 
@@ -1246,8 +1330,10 @@ describe("markLiveStreamFailedTx", () => {
 
 		await claimRun("run-terminal", "conv-terminal", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-terminal",
-			workerId: "worker-1",
+			owner: owner({
+				runId: "run-terminal",
+				conversationId: "conv-terminal",
+			}),
 			status: "done",
 		});
 		const marked = await markLiveStreamFailedTx(tdb.db, {
@@ -1307,6 +1393,11 @@ describe("markStaleRunsTx", () => {
 
 	it("terminalizes a stale running run as error with a run_error event", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			agentSessionId: "session-existing",
+		});
 		await expireOwnership("run-1");
 
 		const recovered = await markStaleRunsTx(tdb.db);
@@ -1328,6 +1419,11 @@ describe("markStaleRunsTx", () => {
 			],
 		]);
 		expect(recovered[0]?.liveStreamFailedAt).toBeInstanceOf(Date);
+		const [runtime] = await tdb.db
+			.select()
+			.from(conversationRuntime)
+			.where(eq(conversationRuntime.conversationId, "conv-1"));
+		expect(runtime?.agentSessionId).toBe("session-existing");
 	});
 
 	it("terminalizes a stale interrupt_requested run as interrupted", async () => {

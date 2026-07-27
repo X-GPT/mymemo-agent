@@ -14,6 +14,8 @@ import * as schema from "./schema";
  * The worker's read-only KB credential is a separate connection, not Drizzle-managed.
  */
 export type Database = ReturnType<typeof createDatabase>;
+/** A Drizzle client scoped to one open writable-DB transaction. */
+export type DbTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export function createDatabase(databaseUrl: string) {
 	return drizzle({

@@ -1,16 +1,22 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
-import type { Database } from "./client";
-import { type DbTx, RunFenceError } from "./run-store";
+import type { Database, DbTx } from "./client";
+import {
+	ownedRunByUserConditions,
+	ownedRunByUserExists,
+	rejectRunFence,
+	type UserRunMutationOwner,
+} from "./run-ownership";
 import { conversationRuntime, orphanSandboxes, runs } from "./schema";
 
 /**
  * Narrow transaction helpers over `conversation_runtime` and
- * `orphan_sandboxes` — the only write path for persistent E2B workspace
- * metadata (design doc "State Ownership", Task 4.2). Shared by chat-api (which
- * owns run admission and conversation records) and agent-worker (which mutates
- * the sandbox and session pointers through these helpers), so the fenced write
- * protocol lives in exactly one place over one `pg` driver.
+ * `orphan_sandboxes`, plus the named in-transaction Agent-session pointer
+ * operation used by terminal Run transactions (design doc "State Ownership",
+ * Task 4.2). Shared by chat-api and agent-worker so the runtime write protocol
+ * lives in one place over one `pg` driver. Sandbox/taint helpers live here;
+ * Agent-session pointer publication is composed by run-store with the terminal
+ * Outcome.
  * The table grants no execution ownership of its own: every mutation is fenced
  * on the claiming run's ownership in `runs` (`status` active,
  * `locked_by = workerId`, `locked_until > now()`): every update carries the
@@ -26,52 +32,8 @@ import { conversationRuntime, orphanSandboxes, runs } from "./schema";
  * durable.
  */
 
-/** Run statuses under which the owning worker may mutate runtime metadata. */
-const OWNED_ACTIVE_STATUSES = ["running", "interrupt_requested"] as const;
-
 /** A persisted runtime row. */
 export type ConversationRuntimeRecord = typeof conversationRuntime.$inferSelect;
-
-/**
- * The identity a fenced mutation acts under: the conversation's runtime row
- * being mutated plus the run/worker whose live ownership authorizes it.
- */
-export interface RunOwnershipRef {
-	userId: string;
-	conversationId: string;
-	runId: string;
-	workerId: string;
-}
-
-/**
- * The ownership fence as conditions on `runs`: satisfiable only while
- * `workerId` holds the named run for this exact conversation with an
- * unexpired lock. The single source of the fence — both the `EXISTS` form
- * and the create-path `FOR SHARE` check are built from it.
- */
-function ownedRunConditions(owner: RunOwnershipRef) {
-	return and(
-		eq(runs.runId, owner.runId),
-		eq(runs.userId, owner.userId),
-		eq(runs.conversationId, owner.conversationId),
-		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
-		eq(runs.lockedBy, owner.workerId),
-		sql`${runs.lockedUntil} > now()`,
-	);
-}
-
-/** {@link ownedRunConditions} as a predicate a mutating statement carries
- * inside itself, never as a separate app-side check. */
-function ownedRunExists(owner: RunOwnershipRef) {
-	return sql`exists (select 1 from ${runs} where ${ownedRunConditions(owner)})`;
-}
-
-function fenceRejected(owner: RunOwnershipRef, operation: string): never {
-	throw new RunFenceError(
-		`${operation} for conversation ${owner.conversationId} rejected: ` +
-			`worker ${owner.workerId} no longer owns run ${owner.runId}`,
-	);
-}
 
 /** Load the runtime row, or `null` when the conversation has none yet.
  * Reads are not fenced — only mutations need ownership. */
@@ -102,15 +64,15 @@ export async function loadConversationRuntimeTx(
  */
 export async function createConversationRuntimeTx(
 	db: Database,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 ): Promise<ConversationRuntimeRecord> {
 	return await db.transaction(async (tx) => {
 		const owned = await tx
 			.select({ runId: runs.runId })
 			.from(runs)
-			.where(ownedRunConditions(owner))
+			.where(ownedRunByUserConditions(owner))
 			.for("share");
-		if (!owned[0]) fenceRejected(owner, "runtime row creation");
+		if (!owned[0]) rejectRunFence(owner, "runtime row creation");
 
 		const [inserted] = await tx
 			.insert(conversationRuntime)
@@ -145,26 +107,35 @@ export async function createConversationRuntimeTx(
  */
 export async function updateRuntimeSandboxTx(
 	db: Database,
-	input: RunOwnershipRef & { sandboxId: string | null },
+	input: UserRunMutationOwner & { sandboxId: string | null },
 ): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, input, "sandbox pointer update", {
+	const row = await tryUpdateRuntimeRow(db, input, {
 		sandboxId: input.sandboxId,
 		sandboxTainted: false,
 	});
+	if (!row) rejectRunFence(input, "sandbox pointer update");
+	return row;
 }
 
 /**
- * One fenced runtime UPDATE: the ownership predicate rides inside the same
- * statement as the write. Zero rows means the fence rejected (or the row was
- * never created — equally a caller that must stop treating the run as its
- * own), surfaced as {@link RunFenceError}.
+ * Publish a proven Agent-session pointer inside its caller's terminal
+ * transaction. The update carries the ownership fence in-statement. A missing
+ * optional runtime row leaves the pointer unpublished; a stale owner is still
+ * rejected by the terminal CAS in the same transaction.
  */
-async function fencedRuntimeUpdate(
+export async function publishAgentSessionPointerInTx(
+	tx: DbTx,
+	owner: UserRunMutationOwner,
+	agentSessionId: string,
+): Promise<void> {
+	await tryUpdateRuntimeRow(tx, owner, { agentSessionId });
+}
+
+async function tryUpdateRuntimeRow(
 	db: Pick<Database, "update">,
-	owner: RunOwnershipRef,
-	operation: string,
+	owner: UserRunMutationOwner,
 	set: PgUpdateSetSource<typeof conversationRuntime>,
-): Promise<ConversationRuntimeRecord> {
+): Promise<ConversationRuntimeRecord | null> {
 	const [row] = await db
 		.update(conversationRuntime)
 		.set({ ...set, updatedAt: sql`now()` })
@@ -172,12 +143,11 @@ async function fencedRuntimeUpdate(
 			and(
 				eq(conversationRuntime.userId, owner.userId),
 				eq(conversationRuntime.conversationId, owner.conversationId),
-				ownedRunExists(owner),
+				ownedRunByUserExists(owner),
 			),
 		)
 		.returning();
-	if (!row) fenceRejected(owner, operation);
-	return row;
+	return row ?? null;
 }
 
 /**
@@ -187,43 +157,11 @@ async function fencedRuntimeUpdate(
  */
 export async function markRuntimeSandboxTaintedTx(
 	db: Database,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 ): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, owner, "sandbox taint mark", {
-		sandboxTainted: true,
-	});
-}
-
-/**
- * Advance the conversation's Claude Agent SDK resume pointer to `agentSessionId`
- * (ADR-0005, Task 7.3). Fenced like every other runtime mutation, so this is
- * exactly what makes "the pointer advances only in the terminal-success
- * transition, and a stale worker cannot move it" true: a worker that lost the
- * run gets a {@link RunFenceError} and the pointer stays where the owner left
- * it. The caller advances it only after a turn terminalizes `done` with a clean
- * mirror; a `mirror_error` turn simply never calls this.
- */
-export async function advanceAgentSessionPointerTx(
-	db: Database,
-	input: RunOwnershipRef & { agentSessionId: string },
-): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(db, input, "agent session pointer advance", {
-		agentSessionId: input.agentSessionId,
-	});
-}
-
-/**
- * Transaction-scoped form of {@link advanceAgentSessionPointerTx}. Artifact
- * publication uses it so the canonical runtime fence and `run_done` share the
- * caller's transaction.
- */
-export async function advanceAgentSessionPointerInTx(
-	tx: DbTx,
-	input: RunOwnershipRef & { agentSessionId: string },
-): Promise<ConversationRuntimeRecord> {
-	return await fencedRuntimeUpdate(tx, input, "agent session pointer advance", {
-		agentSessionId: input.agentSessionId,
-	});
+	const row = await tryUpdateRuntimeRow(db, owner, { sandboxTainted: true });
+	if (!row) rejectRunFence(owner, "sandbox taint mark");
+	return row;
 }
 
 /** A persisted orphan-ledger row. */

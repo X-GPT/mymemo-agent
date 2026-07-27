@@ -8,6 +8,7 @@ export * from "./client";
 export * from "./migrations";
 export * from "./queue-metrics";
 export * from "./run-events";
+export * from "./run-ownership";
 export * from "./run-store";
 export * from "./runtime-store";
 export * from "./schema";

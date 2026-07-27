@@ -1,7 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+	SDKMessage,
+	SessionStoreEntry,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
 	createQueuedRunTx,
+	type RunRecord,
 	requestRunInterruptionTx,
 } from "@mymemo/agent-db/run-store";
 import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
@@ -17,15 +21,29 @@ import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import { Worker } from "../worker";
-import type { StartStopDeadline, SupervisedQuery } from "./agent-stream";
-import { createSdkRunProcessor, type StartRunQuery } from "./run-processor";
+import type { StartStopDeadline } from "./agent-stream";
+import {
+	createSdkRunProcessor,
+	type RunQuery,
+	type StartRunQuery,
+} from "./run-processor";
+import {
+	createConversationSessionStore,
+	type SessionMirrorEvidence,
+} from "./session-store";
 import {
 	assistantBlock,
 	streamEvent,
 	textEnvelope,
 } from "./testing/sdk-message-fixtures";
+import {
+	noSessionMirrorEvidence,
+	withNoSessionMirrorEvidence,
+	withSessionMirrorEvidence,
+} from "./testing/session-mirror-fixtures";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const noArtifactPublication = { getArtifactPublication: () => null };
 
 let tdb: TestDb;
 
@@ -138,6 +156,14 @@ function mirrorErrorMessage(): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
+function initMessage(sessionId: string): SDKMessage {
+	return {
+		type: "system",
+		subtype: "init",
+		session_id: sessionId,
+	} as unknown as SDKMessage;
+}
+
 function errorResultMessage(text: string): SDKMessage {
 	return {
 		type: "result",
@@ -147,10 +173,15 @@ function errorResultMessage(text: string): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
-function messageQuery(messages: SDKMessage[]): SupervisedQuery {
+function messageQuery(
+	messages: SDKMessage[],
+	sessionEvidence: SessionMirrorEvidence = noSessionMirrorEvidence,
+): RunQuery {
 	return {
 		close() {},
 		async interrupt() {},
+		getArtifactPublication: () => null,
+		sessionEvidence,
 		async *[Symbol.asyncIterator]() {
 			for (const message of messages) yield message;
 		},
@@ -159,10 +190,13 @@ function messageQuery(messages: SDKMessage[]): SupervisedQuery {
 
 function stepQuery(
 	steps: Array<SDKMessage | { throw: unknown }>,
-): SupervisedQuery {
+	sessionEvidence: SessionMirrorEvidence = noSessionMirrorEvidence,
+): RunQuery {
 	return {
 		close() {},
 		async interrupt() {},
+		getArtifactPublication: () => null,
+		sessionEvidence,
 		async *[Symbol.asyncIterator]() {
 			for (const step of steps) {
 				if ("throw" in step) throw step.throw;
@@ -197,6 +231,25 @@ function buildWorker() {
 		workerId: "worker-1",
 		maxConcurrentRuns: 1,
 		shutdownTimeoutMs: 1_000,
+		logger: silentLogger,
+	});
+}
+
+async function createRuntimeFor(run: RunRecord): Promise<void> {
+	await createConversationRuntimeTx(tdb.db, {
+		userId: run.userId,
+		conversationId: run.conversationId,
+		runId: run.runId,
+		workerId: "worker-1",
+	});
+}
+
+async function createRuntimeSessionStoreFor(run: RunRecord) {
+	await createRuntimeFor(run);
+	return createConversationSessionStore(tdb.db, {
+		conversationId: run.conversationId,
+		runId: run.runId,
+		workerId: "worker-1",
 		logger: silentLogger,
 	});
 }
@@ -236,6 +289,81 @@ async function readEvents(runId: string) {
 }
 
 describe("createSdkRunProcessor — through the run loop", () => {
+	it("does not publish a pointer from an SDK initialization id alone", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			const store = await createRuntimeSessionStoreFor(run);
+			return messageQuery([initMessage("session-initialized")], store);
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(runtime?.agentSessionId).toBeNull();
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_done",
+		]);
+	});
+
+	it("publishes the first pointer only when the bound store mirrored that main session", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			const store = await createRuntimeSessionStoreFor(run);
+			await store.append(
+				{ projectKey: "project-1", sessionId: "session-proven" },
+				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
+			);
+			return messageQuery([resultMessage("session-proven")], store);
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(runtime?.agentSessionId).toBe("session-proven");
+	});
+
+	it("does not publish a pointer from subagent-only mirroring", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			const store = await createRuntimeSessionStoreFor(run);
+			await store.append(
+				{
+					projectKey: "project-1",
+					sessionId: "session-subagent-only",
+					subpath: "subagents/agent-1",
+				},
+				[{ type: "user", uuid: "subagent-entry" } as SessionStoreEntry],
+			);
+			return messageQuery([resultMessage("session-subagent-only")], store);
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect((await readRun("run-1"))?.status).toBe("done");
+		expect(runtime?.agentSessionId).toBeNull();
+	});
+
 	it("commits one durable Assistant message for a complete provider envelope", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async () =>
@@ -589,12 +717,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const loop = buildLoop(
 			worker,
 			async (run, signal) => {
-				await createConversationRuntimeTx(tdb.db, {
-					userId: run.userId,
-					conversationId: run.conversationId,
-					runId: run.runId,
-					workerId: "worker-1",
-				});
+				await createRuntimeFor(run);
 				signal.addEventListener(
 					"abort",
 					() => {
@@ -603,7 +726,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					},
 					{ once: true },
 				);
-				return {
+				return withNoSessionMirrorEvidence({
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -621,7 +744,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 						artifactPublicationReads++;
 						return { artifacts: [] };
 					},
-				};
+				});
 			},
 			logger,
 			(timeoutMs) => {
@@ -678,7 +801,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			signal.addEventListener("abort", () => calls.push("tool-abort"), {
 				once: true,
 			});
-			return {
+			return withNoSessionMirrorEvidence({
+				...noArtifactPublication,
 				async interrupt() {
 					calls.push("interrupt");
 				},
@@ -690,7 +814,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					await releaseMirrorError.promise;
 					yield mirrorErrorMessage();
 				},
-			};
+			});
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -718,12 +842,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("retains an existing session pointer after mirror_error", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
+			await createRuntimeFor(run);
 			await tdb.db
 				.update(conversationRuntime)
 				.set({ agentSessionId: "session-existing" })
@@ -761,7 +880,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					once: true,
 				});
 				started.resolve();
-				return {
+				return withNoSessionMirrorEvidence({
+					...noArtifactPublication,
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -774,7 +894,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					async *[Symbol.asyncIterator]() {
 						await settled.promise;
 					},
-				};
+				});
 			},
 			silentLogger,
 			(timeoutMs) => {
@@ -829,25 +949,34 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const deadline = virtualStopDeadline();
 		const loop = buildLoop(
 			worker,
-			async (_run, signal) => {
+			async (run, signal) => {
+				const store = await createRuntimeSessionStoreFor(run);
+				await store.append(
+					{ projectKey: "project-1", sessionId: "session-interrupted" },
+					[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
+				);
 				signal.addEventListener("abort", () => calls.push("tool-abort"), {
 					once: true,
 				});
 				started.resolve();
-				return {
-					async interrupt() {
-						calls.push("interrupt");
-						interrupted.resolve();
+				return withSessionMirrorEvidence(
+					{
+						...noArtifactPublication,
+						async interrupt() {
+							calls.push("interrupt");
+							interrupted.resolve();
+						},
+						close() {
+							calls.push("close");
+							closed.resolve();
+						},
+						// biome-ignore lint/correctness/useYield: models a hung SDK query released only by close.
+						async *[Symbol.asyncIterator]() {
+							await closed.promise;
+						},
 					},
-					close() {
-						calls.push("close");
-						closed.resolve();
-					},
-					// biome-ignore lint/correctness/useYield: models a hung SDK query released only by close.
-					async *[Symbol.asyncIterator]() {
-						await closed.promise;
-					},
-				};
+					"session-interrupted",
+				);
 			},
 			logger,
 			deadline.startStopDeadline,
@@ -891,6 +1020,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			stopDeadlineMs: 30_000,
 		});
 		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect(runtime?.agentSessionId).toBe("session-interrupted");
 	});
 
 	it("force-closes immediately and writes no terminal Outcome after ownership loss", async () => {
@@ -903,7 +1034,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			worker,
 			async () => {
 				started.resolve();
-				return {
+				return withNoSessionMirrorEvidence({
+					...noArtifactPublication,
 					async interrupt() {
 						calls.push("interrupt");
 					},
@@ -914,7 +1046,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					async *[Symbol.asyncIterator]() {
 						await releaseStream.promise;
 					},
-				};
+				});
 			},
 			silentLogger,
 			deadline.startStopDeadline,
@@ -955,17 +1087,19 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const deadline = virtualStopDeadline();
 		const loop = buildLoop(
 			worker,
-			async () => ({
-				async interrupt() {},
-				close() {
-					closeCalled.resolve();
-				},
-				// biome-ignore lint/correctness/useYield: stream settlement is held past forced close to revoke the fence.
-				async *[Symbol.asyncIterator]() {
-					started.resolve();
-					await releaseStream.promise;
-				},
-			}),
+			async () =>
+				withNoSessionMirrorEvidence({
+					...noArtifactPublication,
+					async interrupt() {},
+					close() {
+						closeCalled.resolve();
+					},
+					// biome-ignore lint/correctness/useYield: stream settlement is held past forced close to revoke the fence.
+					async *[Symbol.asyncIterator]() {
+						started.resolve();
+						await releaseStream.promise;
+					},
+				}),
 			silentLogger,
 			deadline.startStopDeadline,
 		);
@@ -1009,27 +1143,29 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const calls: string[] = [];
 		const loop = buildLoop(
 			worker,
-			async () => ({
-				forceCloseSignal: forceCloseController.signal,
-				async interrupt() {
-					calls.push("interrupt");
-				},
-				close() {
-					calls.push("close");
-				},
-				async *[Symbol.asyncIterator]() {
-					started.resolve();
-					if (!forceCloseController.signal.aborted) {
-						await new Promise<void>((resolve) =>
-							forceCloseController.signal.addEventListener(
-								"abort",
-								() => resolve(),
-								{ once: true },
-							),
-						);
-					}
-				},
-			}),
+			async () =>
+				withNoSessionMirrorEvidence({
+					...noArtifactPublication,
+					forceCloseSignal: forceCloseController.signal,
+					async interrupt() {
+						calls.push("interrupt");
+					},
+					close() {
+						calls.push("close");
+					},
+					async *[Symbol.asyncIterator]() {
+						started.resolve();
+						if (!forceCloseController.signal.aborted) {
+							await new Promise<void>((resolve) =>
+								forceCloseController.signal.addEventListener(
+									"abort",
+									() => resolve(),
+									{ once: true },
+								),
+							);
+						}
+					},
+				}),
 			silentLogger,
 		);
 		await createQueuedRunTx(tdb.db, {
@@ -1058,21 +1194,23 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		let deadlines = 0;
 		const loop = buildLoop(
 			worker,
-			async (_run, _signal) => ({
-				async interrupt() {
-					calls.push("interrupt");
-					settled.resolve();
-				},
-				close() {
-					calls.push("close");
-					settled.resolve();
-				},
-				// biome-ignore lint/correctness/useYield: models a query stopped by worker shutdown.
-				async *[Symbol.asyncIterator]() {
-					started.resolve();
-					await settled.promise;
-				},
-			}),
+			async (_run, _signal) =>
+				withNoSessionMirrorEvidence({
+					...noArtifactPublication,
+					async interrupt() {
+						calls.push("interrupt");
+						settled.resolve();
+					},
+					close() {
+						calls.push("close");
+						settled.resolve();
+					},
+					// biome-ignore lint/correctness/useYield: models a query stopped by worker shutdown.
+					async *[Symbol.asyncIterator]() {
+						started.resolve();
+						await settled.promise;
+					},
+				}),
 			silentLogger,
 			() => {
 				deadlines++;
@@ -1105,20 +1243,22 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			const deadline = virtualStopDeadline();
 			const loop = buildLoop(
 				worker,
-				async () => ({
-					async interrupt() {
-						stopped.resolve();
-					},
-					close() {
-						stopped.resolve();
-					},
-					async *[Symbol.asyncIterator]() {
-						started.resolve();
-						await stopped.promise;
-						if (lateResult === "error") throw new Error("late SDK error");
-						yield resultMessage("late-session");
-					},
-				}),
+				async () =>
+					withNoSessionMirrorEvidence({
+						...noArtifactPublication,
+						async interrupt() {
+							stopped.resolve();
+						},
+						close() {
+							stopped.resolve();
+						},
+						async *[Symbol.asyncIterator]() {
+							started.resolve();
+							await stopped.promise;
+							if (lateResult === "error") throw new Error("late SDK error");
+							yield resultMessage("late-session");
+						},
+					}),
 				silentLogger,
 				deadline.startStopDeadline,
 			);
@@ -1172,6 +1312,40 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect(JSON.stringify(terminal?.payload)).not.toContain("model exploded");
 	});
 
+	it("preserves mirrored continuity when a thrown failure reconciles to interruption", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			const store = await createRuntimeSessionStoreFor(run);
+			await store.append(
+				{ projectKey: "project-1", sessionId: "session-reconciled" },
+				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
+			);
+			// Land the durable request after the loop's last heartbeat so local
+			// interruption state remains false and the error CAS must reconcile.
+			await requestRunInterruptionTx(tdb.db, {
+				runId: run.runId,
+				userId: run.userId,
+				conversationId: run.conversationId,
+			});
+			return stepQuery([{ throw: new Error("sandbox renewal failed") }], store);
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(runtime?.agentSessionId).toBe("session-reconciled");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_interrupted",
+		]);
+	});
+
 	it("records one error outcome for an SDK error result followed by rejection", async () => {
 		const worker = buildWorker();
 		const incomplete = textEnvelope({ completeText: "partial" }).slice(0, 4);
@@ -1200,16 +1374,18 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("advances the agent-session pointer only after a valid successful stream", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
-			return messageQuery([
-				...textEnvelope({ completeText: "answer" }),
-				resultMessage("session-valid"),
-			]);
+			await createRuntimeFor(run);
+			return messageQuery(
+				[
+					...textEnvelope({ completeText: "answer" }),
+					resultMessage("session-valid"),
+				],
+				{
+					mirroredMainSessionId() {
+						return "session-valid";
+					},
+				},
+			);
 		});
 		await createQueuedRunTx(tdb.db, {
 			runId: "run-1",
@@ -1232,12 +1408,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("does not advance the agent-session pointer for an invalid envelope", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: run.userId,
-				conversationId: run.conversationId,
-				runId: run.runId,
-				workerId: "worker-1",
-			});
+			await createRuntimeFor(run);
 			return messageQuery([
 				...textEnvelope({ completeText: "uncommitted" }).slice(0, -1),
 				resultMessage("session-invalid"),

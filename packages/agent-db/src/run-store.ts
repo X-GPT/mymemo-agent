@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import type { Database } from "./client";
+import type { Database, DbTx } from "./client";
 import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
 	InvalidRunEventError,
@@ -8,13 +8,21 @@ import {
 	type RunScope,
 	validateDurableRunEventSequence,
 } from "./run-events";
+import {
+	RunFenceError,
+	runLeaseByUserConditions,
+	type UserRunMutationOwner,
+} from "./run-ownership";
+import { publishAgentSessionPointerInTx } from "./runtime-store";
 import { runEvents, runs } from "./schema";
 
 /**
  * Narrow transaction helpers over `runs`/`run_events` — the only write path for
- * run state (design doc "State Ownership"), shared by chat-api (run creation,
- * interruption requests) and agent-worker (claim/heartbeat/terminalize). Each
- * helper owns one transaction: sequence allocation is database-owned
+ * Run state — plus Agent-session pointer publication composed into terminal Run
+ * transactions (design doc "State Ownership"). Shared by chat-api (run
+ * creation, interruption requests) and agent-worker
+ * (claim/heartbeat/terminalize). Each helper owns one transaction: sequence
+ * allocation is database-owned
  * (`runs.next_event_seq`, never app-side `max(seq) + 1`), and every status
  * change or append is fenced inside the same statement that performs it, so
  * app-side select/update races cannot happen through this module. The ownership
@@ -65,16 +73,6 @@ export type RecoveredRunRecord = RunRecord & {
  */
 export class ActiveRunConflictError extends Error {
 	override name = "ActiveRunConflictError";
-}
-
-/**
- * An ownership/status fence rejected the write: the run is not in a status
- * the append class allows, is owned by another worker, or the caller's
- * `locked_until` deadline has passed. The caller must stop treating the run
- * as its own; recovery (or the actual owner) is in charge now.
- */
-export class RunFenceError extends Error {
-	override name = "RunFenceError" as const;
 }
 
 /** An owned Run id was reused with different normalized admitted input. */
@@ -138,9 +136,6 @@ export interface AdmitQueuedRunInput {
 export type RunAdmissionResult =
 	| { outcome: "created" | "existing"; run: RunRecord }
 	| { outcome: "not_found" };
-
-/** A Drizzle client scoped to one open transaction. */
-export type DbTx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /**
  * Atomically admit the canonical client Run id and submitted User message.
@@ -491,8 +486,9 @@ export async function appendRunEventsTx(
 
 /**
  * Move an owned run to a terminal status and append its one terminal event —
- * the status CAS, ownership clear (`locked_by`/`locked_until` → NULL),
- * `terminal_at`, sequence allocation, and event insert are one transaction.
+ * optional Agent-session pointer publication, the status CAS, ownership clear
+ * (`locked_by`/`locked_until` → NULL), `terminal_at`, sequence allocation, and
+ * event insert are one transaction.
  * The from-status CAS makes double-terminalization impossible (the second
  * caller finds no row and gets {@link RunFenceError}), which is what makes
  * "exactly one terminal event per run" hold. Fenced like an owned append:
@@ -505,16 +501,30 @@ export async function transitionRunTerminalTx(
 	return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
 }
 
-export interface TerminalTransitionInput {
-	runId: string;
-	workerId: string;
-	status: TerminalRunStatus;
+interface TerminalOutcomeBase {
 	payload?: RunEventPayload;
 }
 
+export type TerminalOutcome =
+	| (TerminalOutcomeBase & {
+			status: "done" | "interrupted";
+			/** A session proven usable by a successful main-transcript mirror. When
+			 * present, pointer publication and the terminal Outcome are all-or-nothing. */
+			agentSessionId?: string;
+	  })
+	| (TerminalOutcomeBase & {
+			status: "error";
+			agentSessionId?: never;
+	  });
+
+export type TerminalTransitionInput = TerminalOutcome & {
+	owner: UserRunMutationOwner;
+};
+
 /**
- * Transaction-scoped form of {@link transitionRunTerminalTx}. Artifact
- * publication uses it so current metadata and `run_done` share one commit.
+ * Transaction-scoped form of {@link transitionRunTerminalTx}. Callers compose
+ * other terminal facts through it; artifact publication, for example, commits
+ * current metadata, an optional Agent-session pointer, and `run_done` together.
  */
 export async function transitionRunTerminalInTx(
 	tx: DbTx,
@@ -524,6 +534,9 @@ export async function transitionRunTerminalInTx(
 		throw new InvalidRunEventError(
 			"stale_worker is reserved for stale-Run recovery",
 		);
+	}
+	if (input.agentSessionId !== undefined) {
+		await publishAgentSessionPointerInTx(tx, input.owner, input.agentSessionId);
 	}
 	const [row] = await tx
 		.update(runs)
@@ -537,17 +550,17 @@ export async function transitionRunTerminalInTx(
 		})
 		.where(
 			and(
-				eq(runs.runId, input.runId),
+				runLeaseByUserConditions(input.owner),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
-				eq(runs.lockedBy, input.workerId),
-				sql`${runs.lockedUntil} > now()`,
 			),
 		)
 		.returning();
 	if (!row) {
 		throw new RunFenceError(
-			`terminal transition of run ${input.runId} to ${input.status} rejected: ` +
-				`run is already terminal, not transitionable to ${input.status}, or worker ${input.workerId} no longer owns it`,
+			`terminal transition of run ${input.owner.runId} to ${input.status} rejected: ` +
+				`run is already terminal, not transitionable to ${input.status}, not owned by user ` +
+				`${input.owner.userId} in conversation ${input.owner.conversationId}, or worker ` +
+				`${input.owner.workerId} no longer owns it`,
 		);
 	}
 	await insertTerminalEvent(tx, row, input.status, input.payload ?? {});

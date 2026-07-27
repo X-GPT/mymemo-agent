@@ -8,7 +8,6 @@
 export type {
 	ConversationRuntimeRecord,
 	OrphanSandboxRecord,
-	RunOwnershipRef,
 } from "@mymemo/agent-db/runtime-store";
 export {
 	createConversationRuntimeTx,

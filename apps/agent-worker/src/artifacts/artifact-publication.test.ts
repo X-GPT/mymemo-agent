@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
+import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
 import {
 	artifactObjects,
 	conversationArtifacts,
@@ -16,6 +17,10 @@ import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import type { SupervisedQuery } from "../sdk/agent-stream";
 import { createSdkRunProcessor } from "../sdk/run-processor";
+import {
+	withNoSessionMirrorEvidence,
+	withSessionMirrorEvidence,
+} from "../sdk/testing/session-mirror-fixtures";
 import { Worker } from "../worker";
 import type { ArtifactManifestEntry } from "./artifact-manifest";
 import {
@@ -175,7 +180,9 @@ function buildArtifactHarness(
 					workspace,
 					signal,
 				});
-				return withArtifactPublication(query, publication);
+				return withNoSessionMirrorEvidence(
+					withArtifactPublication(query, publication),
+				);
 			},
 		}),
 		heartbeatIntervalMs: 15_000,
@@ -279,21 +286,30 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			processor: createSdkRunProcessor({
 				logger: silentLogger,
 				startRunQuery: async (run, signal) => {
+					await createConversationRuntimeTx(tdb.db, {
+						userId: run.userId,
+						conversationId: run.conversationId,
+						runId: run.runId,
+						workerId: "worker-1",
+					});
 					const publication = await publisher.begin({
 						run,
 						workspace,
 						signal,
 					});
-					return withArtifactPublication(
-						successfulQuery(() => {
-							workspace.write("report.txt", encoder.encode("hello"), "2");
-							workspace.write(
-								"chart.bin",
-								new Uint8Array([0, 255, 1, 254]),
-								"2",
-							);
-						}),
-						publication,
+					return withSessionMirrorEvidence(
+						withArtifactPublication(
+							successfulQuery(() => {
+								workspace.write("report.txt", encoder.encode("hello"), "2");
+								workspace.write(
+									"chart.bin",
+									new Uint8Array([0, 255, 1, 254]),
+									"2",
+								);
+							}),
+							publication,
+						),
+						"session-1",
 					);
 				},
 			}),
@@ -338,6 +354,9 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			[104, 101, 108, 108, 111],
 		]);
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("done");
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("session-1");
 		expect(
 			(await tdb.db.select().from(runEvents)).map((event) => event.type),
 		).toEqual(["run_done"]);

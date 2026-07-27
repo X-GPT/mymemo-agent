@@ -29,6 +29,7 @@ import type { ConversationRef } from "@/features/conversation-store";
 // re-exported through their import binding; the rest are pure pass-throughs.
 export { ActiveRunConflictError, requestRunInterruptionTx };
 export type { RunInterruptionResult, RunRecord };
+export { RunFenceError } from "@mymemo/agent-db/run-ownership";
 export type {
 	AdmitQueuedRunInput,
 	MarkLiveStreamFailedResult,
@@ -47,7 +48,6 @@ export {
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
 	markStaleRunsTx,
-	RunFenceError,
 	RunInputMismatchError,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";

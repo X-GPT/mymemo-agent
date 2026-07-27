@@ -25,6 +25,7 @@ import type { WorkerLogger } from "../../../../agent-worker/src/logger";
 import { RunLoop } from "../../../../agent-worker/src/run-loop";
 import type { SupervisedQuery } from "../../../../agent-worker/src/sdk/agent-stream";
 import { createSdkRunProcessor } from "../../../../agent-worker/src/sdk/run-processor";
+import { withNoSessionMirrorEvidence } from "../../../../agent-worker/src/sdk/testing/session-mirror-fixtures";
 import { Worker } from "../../../../agent-worker/src/worker";
 import type {
 	ArtifactDownloadSigner,
@@ -84,6 +85,7 @@ class AcceptanceWorkspace implements ArtifactWorkspace {
 
 function successfulQuery(onStart: () => void): SupervisedQuery {
 	return {
+		close() {},
 		async interrupt() {},
 		async *[Symbol.asyncIterator]() {
 			onStart();
@@ -139,7 +141,9 @@ function createDeliveryHarness(
 				const query = queries.get(run.runId);
 				if (!query) throw new Error(`missing query for ${run.runId}`);
 				const publication = await publisher.begin({ run, workspace, signal });
-				return withArtifactPublication(query, publication);
+				return withNoSessionMirrorEvidence(
+					withArtifactPublication(query, publication),
+				);
 			},
 		}),
 		heartbeatIntervalMs: 15_000,

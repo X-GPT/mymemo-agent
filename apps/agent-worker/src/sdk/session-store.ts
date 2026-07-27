@@ -13,15 +13,28 @@ import type {
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Database } from "@mymemo/agent-db/client";
+import type { RunMutationOwner } from "@mymemo/agent-db/run-ownership";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import {
 	appendAgentSessionEntriesTx,
 	deleteAgentSessionTx,
+	isMainAgentSessionRef,
 	listAgentSessionSubkeysTx,
 	listAgentSessionsTx,
 	loadAgentSessionEntriesTx,
 } from "@mymemo/agent-db/session-store";
 import type { WorkerLogger } from "../logger";
+
+/** Query-level projection of the bound adapter's per-Run mirror evidence. */
+export interface SessionMirrorEvidence {
+	/** The latest main transcript that still exists after a successful non-empty
+	 * mirror during the current Run, or `null` when none qualifies. */
+	mirroredMainSessionId(): string | null;
+}
+
+export interface ConversationSessionStore
+	extends SessionStore,
+		SessionMirrorEvidence {}
 
 /**
  * The deterministic, conversation-stable working directory the worker runs every
@@ -35,24 +48,33 @@ export function conversationWorkingDirectory(conversationId: string): string {
 }
 
 /**
- * A Postgres-backed {@link SessionStore} bound to one conversation. Built per run
- * (a run belongs to exactly one conversation), it stamps every mirrored entry
- * with the conversation id — so a later turn on any worker reads back the same
- * transcript, and conversation-scoped deletion is exact — and delegates the SQL
- * to the shared agent-db helpers. `projectKey` from the SDK key is recorded but
- * not used as a lookup key; the bound conversation id is the stable identity.
+ * A Postgres-backed {@link ConversationSessionStore} bound to one claimed Run.
+ * It stamps every mirrored entry with the Run's conversation id and fences SDK
+ * append/delete mutations with the Run id, worker id, and live lease. A later
+ * turn on any worker can therefore read the same transcript, while stale
+ * workers cannot mutate it. The adapter also records this Run's latest
+ * successful non-empty main-session mirror as continuity evidence.
+ *
+ * `projectKey` from the SDK key is retained for fidelity but is not a lookup
+ * key; the bound conversation id is the stable transcript identity.
  */
 export function createConversationSessionStore(
 	db: Database,
 	binding: {
 		conversationId: string;
 		runId: string;
+		workerId: string;
 		logger: WorkerLogger;
 	},
-): SessionStore {
-	const { conversationId, runId, logger } = binding;
-	const ref = (key: SessionKey) => ({
+): ConversationSessionStore {
+	const { conversationId, runId, workerId, logger } = binding;
+	const owner: RunMutationOwner = {
 		conversationId,
+		runId,
+		workerId,
+	};
+	let latestMirroredMainSessionId: string | null = null;
+	const ref = (key: SessionKey) => ({
 		projectKey: key.projectKey,
 		sessionId: key.sessionId,
 		subpath: key.subpath,
@@ -60,7 +82,14 @@ export function createConversationSessionStore(
 	return {
 		async append(key, entries) {
 			try {
-				await appendAgentSessionEntriesTx(db, ref(key), entries);
+				await appendAgentSessionEntriesTx(db, {
+					owner,
+					ref: ref(key),
+					entries,
+				});
+				if (entries.length > 0 && isMainAgentSessionRef(key)) {
+					latestMirroredMainSessionId = key.sessionId;
+				}
 			} catch (error) {
 				logger.error({
 					message: "agent session mirror append failed",
@@ -78,9 +107,10 @@ export function createConversationSessionStore(
 			// appended; the agent-db layer types them as opaque JSON (no required
 			// `type`), so this narrowing cast restores the SDK's view. Deep-equal —
 			// not byte-equal — is all the SDK requires (jsonb may reorder keys).
-			return (await loadAgentSessionEntriesTx(db, ref(key))) as
-				| SessionStoreEntry[]
-				| null;
+			return (await loadAgentSessionEntriesTx(db, {
+				conversationId,
+				...ref(key),
+			})) as SessionStoreEntry[] | null;
 		},
 		async listSessions(_projectKey) {
 			// Conversation-bound: the SDK-supplied projectKey names this same
@@ -95,10 +125,21 @@ export function createConversationSessionStore(
 		},
 		async delete(key) {
 			await deleteAgentSessionTx(db, {
-				conversationId,
-				sessionId: key.sessionId,
-				subpath: key.subpath,
+				owner,
+				ref: {
+					sessionId: key.sessionId,
+					subpath: key.subpath,
+				},
 			});
+			if (
+				isMainAgentSessionRef(key) &&
+				latestMirroredMainSessionId === key.sessionId
+			) {
+				latestMirroredMainSessionId = null;
+			}
+		},
+		mirroredMainSessionId() {
+			return latestMirroredMainSessionId;
 		},
 	};
 }
@@ -110,7 +151,7 @@ export function createConversationSessionStore(
  * so a first turn starts fresh and a later turn resumes the prior transcript.
  */
 export interface AgentSessionQueryConfig {
-	sessionStore: SessionStore;
+	sessionStore: ConversationSessionStore;
 	cwd: string;
 	resume?: string;
 }
@@ -126,13 +167,15 @@ export function buildAgentSessionQueryConfig(input: {
 	conversationId: string;
 	runtime: ConversationRuntimeRecord | null;
 	runId: string;
+	workerId: string;
 	logger: WorkerLogger;
 }): AgentSessionQueryConfig {
-	const { db, conversationId, runtime, runId, logger } = input;
+	const { db, conversationId, runtime, runId, workerId, logger } = input;
 	const config: AgentSessionQueryConfig = {
 		sessionStore: createConversationSessionStore(db, {
 			conversationId,
 			runId,
+			workerId,
 			logger,
 		}),
 		cwd: conversationWorkingDirectory(conversationId),

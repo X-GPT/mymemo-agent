@@ -16,10 +16,7 @@ import {
 	orphanSandboxes,
 	runs,
 } from "@mymemo/agent-db/schema";
-import {
-	appendAgentSessionEntriesTx,
-	loadAgentSessionEntriesTx,
-} from "@mymemo/agent-db/session-store";
+import { loadAgentSessionEntriesTx } from "@mymemo/agent-db/session-store";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { and, eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
@@ -468,19 +465,23 @@ describe("deleted-conversation cleanup", () => {
 	it("deletes the deleted conversation's transcripts and keeps a surviving conversation's", async () => {
 		// A deleted conversation (no `conversations` row) with a stored transcript.
 		await insertRuntime({ userId: "user-1", conversationId: "conv-gone" });
-		await appendAgentSessionEntriesTx(
-			tdb.db,
-			{ conversationId: "conv-gone", projectKey: "p", sessionId: "sess-gone" },
-			[{ type: "user", uuid: "a" }],
-		);
+		await tdb.db.insert(agentSessions).values({
+			conversationId: "conv-gone",
+			projectKey: "p",
+			sessionId: "sess-gone",
+			uuid: "a",
+			entry: { type: "user", uuid: "a" },
+		});
 		// A surviving conversation whose transcript must be untouched.
 		await insertConversation("user-1", "conv-live");
 		await insertRuntime({ userId: "user-1", conversationId: "conv-live" });
-		await appendAgentSessionEntriesTx(
-			tdb.db,
-			{ conversationId: "conv-live", projectKey: "p", sessionId: "sess-live" },
-			[{ type: "user", uuid: "b" }],
-		);
+		await tdb.db.insert(agentSessions).values({
+			conversationId: "conv-live",
+			projectKey: "p",
+			sessionId: "sess-live",
+			uuid: "b",
+			entry: { type: "user", uuid: "b" },
+		});
 
 		await pass();
 

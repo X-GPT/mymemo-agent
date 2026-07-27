@@ -1,11 +1,23 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
 import type {
 	SessionKey,
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
-import { agentSessions } from "@mymemo/agent-db/schema";
-import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import { agentSessions, conversations, runs } from "@mymemo/agent-db/schema";
+import {
+	createTestDatabase,
+	seedAgentSessionFenceRun,
+	type TestDb,
+} from "@mymemo/agent-db/testing";
 import type { WorkerLogger } from "../logger";
 import {
 	buildAgentSessionQueryConfig,
@@ -17,7 +29,12 @@ let tdb: TestDb;
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
 function storeBinding(conversationId: string) {
-	return { conversationId, runId: "run-1", logger: silentLogger };
+	return {
+		conversationId,
+		runId: `run-${conversationId}`,
+		workerId: "worker-1",
+		logger: silentLogger,
+	};
 }
 
 // One PGlite instance for the whole file (spin-up is the slow part); each test
@@ -27,12 +44,29 @@ beforeAll(async () => {
 	tdb = await createTestDatabase();
 });
 
+beforeEach(async () => {
+	for (const [userId, conversationId] of [
+		["user-1", "conv-1"],
+		["user-2", "conv-2"],
+	] as const) {
+		const binding = storeBinding(conversationId);
+		await seedAgentSessionFenceRun(tdb.db, {
+			userId,
+			conversationId,
+			runId: binding.runId,
+			workerId: binding.workerId,
+		});
+	}
+});
+
 afterAll(async () => {
 	await tdb.close();
 });
 
 afterEach(async () => {
 	await tdb.db.delete(agentSessions);
+	await tdb.db.delete(runs);
+	await tdb.db.delete(conversations);
 });
 
 /** A main-transcript key for `conv-1`. projectKey is deliberately arbitrary —
@@ -71,7 +105,8 @@ describe("createConversationSessionStore", () => {
 		const errors: Record<string, unknown>[] = [];
 		const store = createConversationSessionStore(tdb.db, {
 			conversationId: "conv-1",
-			runId: "run-1",
+			runId: "run-conv-1",
+			workerId: "worker-1",
 			logger: {
 				info() {},
 				warn() {},
@@ -96,7 +131,7 @@ describe("createConversationSessionStore", () => {
 		expect(errors).toEqual([
 			{
 				message: "agent session mirror append failed",
-				runId: "run-1",
+				runId: "run-conv-1",
 				conversationId: "conv-1",
 				errorType:
 					databaseError instanceof Error
@@ -155,13 +190,70 @@ describe("createConversationSessionStore", () => {
 
 		expect(await store.load(mainKey())).toBeNull();
 	});
+
+	it("rejects mutations when the bound worker does not own the Run", async () => {
+		const store = createConversationSessionStore(tdb.db, {
+			...storeBinding("conv-1"),
+			workerId: "worker-stale",
+		});
+
+		await expect(store.append(mainKey(), [entry("rejected")])).rejects.toThrow(
+			/session append.*rejected/i,
+		);
+		expect(await store.load(mainKey())).toBeNull();
+	});
+
+	it("records evidence only after a successful append to that main session", async () => {
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
+
+		expect(store.mirroredMainSessionId()).toBeNull();
+		await store.append(mainKey("sess-empty"), []);
+		expect(store.mirroredMainSessionId()).toBeNull();
+		await store.append(mainKey("sess-1", "subagents/agent-1"), [entry("sub")]);
+		expect(store.mirroredMainSessionId()).toBeNull();
+		await store.append(mainKey("sess-other"), [entry("other-main")]);
+		expect(store.mirroredMainSessionId()).toBe("sess-other");
+		await store.append(mainKey("sess-1"), [entry("main")]);
+		expect(store.mirroredMainSessionId()).toBe("sess-1");
+	});
+
+	it("reports the most recently mirrored main session when a session repeats", async () => {
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
+
+		await store.append(mainKey("sess-a"), [entry("a-1")]);
+		await store.append(mainKey("sess-b"), [entry("b-1")]);
+		await store.append(mainKey("sess-a"), [entry("a-2")]);
+
+		expect(store.mirroredMainSessionId()).toBe("sess-a");
+	});
+
+	it("withdraws main-session evidence when the SDK deletes that session", async () => {
+		const store = createConversationSessionStore(
+			tdb.db,
+			storeBinding("conv-1"),
+		);
+		await store.append(mainKey("sess-1"), [entry("main")]);
+		expect(store.mirroredMainSessionId()).toBe("sess-1");
+
+		await store.delete?.(mainKey("sess-1"));
+
+		expect(store.mirroredMainSessionId()).toBeNull();
+		expect(await store.load(mainKey("sess-1"))).toBeNull();
+	});
 });
 
 describe("buildAgentSessionQueryConfig", () => {
 	const base = {
 		db: undefined as never,
 		conversationId: "conv-1",
-		runId: "run-1",
+		runId: "run-conv-1",
+		workerId: "worker-1",
 		logger: silentLogger,
 	};
 

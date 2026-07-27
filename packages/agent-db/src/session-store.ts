@@ -1,19 +1,29 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import type { Database } from "./client";
-import { agentSessions } from "./schema";
+import type { Database, DbTx } from "./client";
+import {
+	ownedRunConditions,
+	type RunMutationOwner,
+	rejectRunFence,
+} from "./run-ownership";
+import { agentSessions, runs } from "./schema";
 
 /**
- * Table-level helpers over `agent_sessions` — the raw read/write path the
- * worker's Claude Agent SDK `SessionStore` adapter is built on (ADR-0005, Task
- * 7.3). They live here, SDK-free, so the schema and its SQL stay in the shared
- * package over one drizzle instance; the adapter that `implements SessionStore`
- * (and imports the SDK types) lives in agent-worker and delegates to these.
+ * SDK-free persistence helpers over `agent_sessions`, used by the worker's
+ * Claude Agent SDK `SessionStore` adapter (ADR-0005, Task 7.3). Append and
+ * SDK-requested delete transactions validate and lock active-Run ownership
+ * `FOR SHARE` after the mutation; a failed fence rolls the transaction back,
+ * while a successful lock holds ownership stable through commit. Reads and
+ * administrative Conversation deletion are deliberately unfenced. The helpers
+ * live here so the schema, fence, and SQL use the shared package's one Drizzle
+ * instance; the adapter that imports SDK types lives in agent-worker and
+ * delegates here.
  *
- * Every helper is keyed by `conversationId` — the stable identity the adapter
- * binds each call to — plus the SDK's `(sessionId, subpath)`. `projectKey` is
- * stored for fidelity with the SDK's cwd-derived key but is never a lookup key:
- * conversation id is 1:1 with a conversation's transcripts and does not depend
- * on reconstructing the SDK's cwd→key sanitization.
+ * Mutations take `conversationId` only from their Run owner — the stable
+ * identity the adapter binds each call to — plus the SDK's `(sessionId,
+ * subpath)`. `projectKey` is stored for fidelity with the SDK's cwd-derived key
+ * but is never a lookup key: conversation id is 1:1 with a conversation's
+ * transcripts and does not depend on reconstructing the SDK's cwd→key
+ * sanitization.
  */
 
 /**
@@ -28,15 +38,19 @@ export interface AgentSessionEntry {
 }
 
 /**
- * Identifies one transcript within a conversation. `subpath` undefined names
- * the main transcript (stored as `''`); a non-empty `subagents/agent-…` value
- * names a subagent transcript.
+ * Identifies one SDK transcript within its Run-bound conversation. `subpath`
+ * undefined names the main transcript (stored as `''`); a non-empty
+ * `subagents/agent-…` value names a subagent transcript.
  */
 export interface AgentSessionRef {
-	conversationId: string;
 	projectKey: string;
 	sessionId: string;
 	subpath?: string;
+}
+
+/** A transcript read ref, whose unfenced lookup must carry its Conversation. */
+export interface ConversationAgentSessionRef extends AgentSessionRef {
+	conversationId: string;
 }
 
 /** The main transcript's stored subpath — the empty string, since the SDK's
@@ -47,33 +61,50 @@ function normalizeSubpath(subpath: string | undefined): string {
 	return subpath ?? MAIN_SUBPATH;
 }
 
+/** Whether an SDK key names the main transcript rather than a subagent. */
+export function isMainAgentSessionRef(
+	ref: Pick<AgentSessionRef, "subpath">,
+): boolean {
+	return normalizeSubpath(ref.subpath) === MAIN_SUBPATH;
+}
+
 /**
  * Mirror a batch of transcript entries, insertion-ordered by the `bigserial`
  * id. Deduplicates by `entry.uuid`: `ON CONFLICT DO NOTHING` against the unique
  * `(conversation, session, subpath, uuid)` index drops a re-delivered uuid,
  * while uuid-less entries (NULL, distinct in the index) always insert. Empty
- * batches no-op.
+ * batches write nothing but still validate the bound Run owner.
  */
 export async function appendAgentSessionEntriesTx(
 	db: Database,
-	ref: AgentSessionRef,
-	entries: AgentSessionEntry[],
+	input: {
+		owner: RunMutationOwner;
+		ref: AgentSessionRef;
+		entries: AgentSessionEntry[];
+	},
 ): Promise<void> {
-	if (entries.length === 0) return;
+	const { owner, ref, entries } = input;
+	if (entries.length === 0) {
+		await assertOwnedRunForNoop(db, owner, "session append");
+		return;
+	}
 	const subpath = normalizeSubpath(ref.subpath);
-	await db
-		.insert(agentSessions)
-		.values(
-			entries.map((entry) => ({
-				conversationId: ref.conversationId,
-				projectKey: ref.projectKey,
-				sessionId: ref.sessionId,
-				subpath,
-				uuid: typeof entry.uuid === "string" ? entry.uuid : null,
-				entry,
-			})),
-		)
-		.onConflictDoNothing();
+	await db.transaction(async (tx) => {
+		await tx
+			.insert(agentSessions)
+			.values(
+				entries.map((entry) => ({
+					conversationId: owner.conversationId,
+					projectKey: ref.projectKey,
+					sessionId: ref.sessionId,
+					subpath,
+					uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+					entry,
+				})),
+			)
+			.onConflictDoNothing();
+		await lockOwnedRunAfterMutation(tx, owner, "session append");
+	});
 }
 
 /**
@@ -84,7 +115,7 @@ export async function appendAgentSessionEntriesTx(
  */
 export async function loadAgentSessionEntriesTx(
 	db: Database,
-	ref: AgentSessionRef,
+	ref: ConversationAgentSessionRef,
 ): Promise<AgentSessionEntry[] | null> {
 	const rows = await db
 		.select({ entry: agentSessions.entry })
@@ -157,13 +188,18 @@ export async function listAgentSessionSubkeysTx(
  */
 export async function deleteAgentSessionTx(
 	db: Database,
-	input: { conversationId: string; sessionId: string; subpath?: string },
+	input: {
+		owner: RunMutationOwner;
+		ref: { sessionId: string; subpath?: string };
+	},
 ): Promise<void> {
-	await db
-		.delete(agentSessions)
-		.where(
-			transcriptWhere(input.conversationId, input.sessionId, input.subpath),
-		);
+	const { owner, ref } = input;
+	await db.transaction(async (tx) => {
+		await tx
+			.delete(agentSessions)
+			.where(transcriptWhere(owner.conversationId, ref.sessionId, ref.subpath));
+		await lockOwnedRunAfterMutation(tx, owner, "session delete");
+	});
 }
 
 /**
@@ -179,6 +215,43 @@ export async function deleteConversationAgentSessionsTx(
 	await db
 		.delete(agentSessions)
 		.where(eq(agentSessions.conversationId, input.conversationId));
+}
+
+/**
+ * Validate and lock ownership after the mutation. A failed fence rejects the
+ * transaction and rolls the mutation back; a successful `FOR SHARE` lock keeps
+ * the ownership row stable through commit.
+ */
+async function lockOwnedRunAfterMutation(
+	tx: DbTx,
+	owner: RunMutationOwner,
+	operation: string,
+): Promise<void> {
+	const [owned] = await tx
+		.select({ runId: runs.runId })
+		.from(runs)
+		.where(ownedRunConditions(owner))
+		.for("share");
+	if (!owned) {
+		rejectRunFence(owner, operation);
+	}
+}
+
+/**
+ * Validate a mutation-shaped no-op without opening a transaction. There is no
+ * write to protect with a lock, but the bound SessionStore call still rejects
+ * a worker whose ownership lease is no longer active.
+ */
+async function assertOwnedRunForNoop(
+	db: Database,
+	owner: RunMutationOwner,
+	operation: string,
+): Promise<void> {
+	const [owned] = await db
+		.select({ runId: runs.runId })
+		.from(runs)
+		.where(ownedRunConditions(owner));
+	if (!owned) rejectRunFence(owner, operation);
 }
 
 /**

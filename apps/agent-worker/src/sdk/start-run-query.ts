@@ -1,11 +1,11 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Database } from "@mymemo/agent-db/client";
+import type { UserRunMutationOwner } from "@mymemo/agent-db/run-ownership";
 import { loadRunStartedTx, type RunRecord } from "@mymemo/agent-db/run-store";
 import {
 	type ConversationRuntimeRecord,
 	createConversationRuntimeTx,
 	markRuntimeSandboxTaintedTx,
-	type RunOwnershipRef,
 	recordOrphanSandboxTx,
 	updateRuntimeSandboxTx,
 } from "@mymemo/agent-db/runtime-store";
@@ -29,7 +29,7 @@ import type { WorkerLogger } from "../logger";
 import type { ModelClientConfig } from "../model-client";
 import type { RunBinding } from "../sandbox-env";
 import { onAbort, type SupervisedQuery } from "./agent-stream";
-import type { StartRunQuery } from "./run-processor";
+import type { RunQuery, StartRunQuery } from "./run-processor";
 import {
 	createRunMcpServer,
 	EXECUTOR_ALLOWED_TOOLS,
@@ -38,8 +38,10 @@ import {
 } from "./run-tools";
 import { startSandboxRenewal } from "./sandbox-renewal";
 import {
+	type AgentSessionQueryConfig,
 	buildAgentSessionQueryConfig,
 	conversationWorkingDirectory,
+	type SessionMirrorEvidence,
 } from "./session-store";
 
 /**
@@ -141,7 +143,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 		// Parse the frozen scope fail-closed before any side effect: a run whose
 		// scope cannot be trusted must not provision or query anything.
 		const documentScope = parseFrozenScope(started);
-		const owner: RunOwnershipRef = {
+		const owner: UserRunMutationOwner = {
 			userId: run.userId,
 			conversationId: run.conversationId,
 			runId: run.runId,
@@ -204,18 +206,27 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 				workspace: provisioned.artifactWorkspace,
 				signal: toolController.signal,
 			});
+			const sessionConfig = buildAgentSessionQueryConfig({
+				db: deps.db,
+				conversationId: run.conversationId,
+				runtime,
+				runId: run.runId,
+				workerId: owner.workerId,
+				logger: deps.logger,
+			});
 			const options = buildQueryOptions(deps, {
 				run,
 				owner,
-				runtime,
 				provisioned,
 				documentScope,
 				toolController,
 				claudeConfigDir: claudeConfigDir.path,
+				sessionConfig,
 			});
 			const underlying = deps.query({ prompt: started.message, options });
 			return superviseTurn({
 				underlying: withArtifactPublication(underlying, artifactPublication),
+				sessionEvidence: sessionConfig.sessionStore,
 				settle,
 				renewalFailure: () => renewalFailure,
 				forceCloseSignal: forceCloseController.signal,
@@ -244,7 +255,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
  */
 async function provisionWorkspace(
 	deps: StartRunQueryDeps,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 ): Promise<{
 	provisioned: ProvisionedSandbox;
 	runtime: ConversationRuntimeRecord;
@@ -279,7 +290,7 @@ async function provisionWorkspace(
  * record it in the (deliberately unfenced) orphan ledger for the janitor. */
 async function killOrRecordOrphan(
 	deps: StartRunQueryDeps,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 	sandboxId: string,
 ): Promise<void> {
 	try {
@@ -318,7 +329,7 @@ async function killOrRecordOrphan(
  */
 async function recordReplacedSandbox(
 	deps: StartRunQueryDeps,
-	owner: RunOwnershipRef,
+	owner: UserRunMutationOwner,
 	prior: ConversationRuntimeRecord,
 ): Promise<void> {
 	if (prior.sandboxId === null) return;
@@ -349,22 +360,22 @@ function buildQueryOptions(
 	deps: StartRunQueryDeps,
 	input: {
 		run: RunRecord;
-		owner: RunOwnershipRef;
-		runtime: ConversationRuntimeRecord;
+		owner: UserRunMutationOwner;
 		provisioned: ProvisionedSandbox;
 		documentScope: RunToolDeps["documentScope"];
 		toolController: AbortController;
 		claudeConfigDir: string;
+		sessionConfig: AgentSessionQueryConfig;
 	},
 ): Options {
 	const {
 		run,
 		owner,
-		runtime,
 		provisioned,
 		documentScope,
 		toolController,
 		claudeConfigDir,
+		sessionConfig,
 	} = input;
 	const binding: RunBinding = {
 		userId: run.userId,
@@ -401,14 +412,6 @@ function buildQueryOptions(
 			});
 		},
 	};
-	const sessionConfig = buildAgentSessionQueryConfig({
-		db: deps.db,
-		conversationId: run.conversationId,
-		runtime,
-		runId: run.runId,
-		logger: deps.logger,
-	});
-
 	return {
 		// Provider envelope boundaries are the durable Assistant-message contract,
 		// so partial SDK stream events are required for live AG-UI text delivery.
@@ -441,29 +444,33 @@ function buildQueryOptions(
 }
 
 /**
- * Wrap the SDK query so the turn's per-run resources settle when its stream
- * ends or the query is force-closed (renewal stops, the sandbox is left to
- * idle-pause), and a renewal failure can never end the turn cleanly: even when
- * the force-closed SDK stream ends without raising, the wrapper throws
- * {@link SandboxRenewalError} so the run terminalizes `error`, never `done`.
+ * Enrich the artifact-aware query with this Run's continuity evidence while
+ * settling per-run resources when its stream ends or is force-closed (renewal
+ * stops, the sandbox is left to idle-pause). A renewal failure can never end
+ * the turn cleanly: even when the force-closed SDK stream ends without raising,
+ * the linked abort prevents the nested artifact publication from succeeding,
+ * and this wrapper throws {@link SandboxRenewalError} so the run terminalizes
+ * `error`, never `done`.
  */
 function superviseTurn(input: {
-	underlying: SupervisedQuery;
+	underlying: ArtifactAwareQuery;
+	sessionEvidence: SessionMirrorEvidence;
 	settle: () => Promise<void>;
 	renewalFailure: () => { error: unknown } | null;
 	forceCloseSignal: AbortSignal;
 	onDetachedSettleError: (error: unknown) => void;
-}): SupervisedQuery & Partial<ArtifactAwareQuery> {
+}): RunQuery {
 	const {
 		underlying,
+		sessionEvidence,
 		settle,
 		renewalFailure,
 		forceCloseSignal,
 		onDetachedSettleError,
 	} = input;
-	const artifactQuery = underlying as Partial<ArtifactAwareQuery>;
 	return {
 		interrupt: () => underlying.interrupt(),
+		sessionEvidence,
 		close: () => {
 			try {
 				underlying.close();
@@ -475,12 +482,7 @@ function superviseTurn(input: {
 			}
 		},
 		forceCloseSignal,
-		...(artifactQuery.getArtifactPublication
-			? {
-					getArtifactPublication: () =>
-						artifactQuery.getArtifactPublication?.() ?? null,
-				}
-			: {}),
+		getArtifactPublication: () => underlying.getArtifactPublication(),
 		async *[Symbol.asyncIterator]() {
 			try {
 				for await (const message of underlying) {

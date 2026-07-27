@@ -4,9 +4,9 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
 import { toMessage, type WorkerLogger } from "../logger";
 import type {
+	AgentStreamMetadata,
 	ModelContent,
 	TurnDisposition,
-	TurnStreamMetadata,
 } from "../run-loop";
 import { AgUiTextStream } from "./ag-ui-text-stream";
 import {
@@ -75,15 +75,6 @@ export class AgentResultError extends Error {
 	override name = "AgentResultError" as const;
 }
 
-/** The session id the worker should store as the conversation's resume pointer:
- * the id on the terminal `result` message (verify note: "the worker always
- * stores the id from the result message"), or `null` on any other message. */
-export function sessionIdFromResult(message: SDKMessage): string | null {
-	return message.type === "result" && typeof message.session_id === "string"
-		? message.session_id
-		: null;
-}
-
 /** A `mirror_error` means the SDK dropped a transcript-mirror batch (at-most-once
  * delivery). It is a fail-fast stop signal, and the stored transcript is not
  * eligible to establish or advance the resume pointer. */
@@ -93,13 +84,26 @@ export function isMirrorError(message: SDKMessage): boolean {
 
 /**
  * What a settled stream reports back for supervisor reconciliation and
- * Conversation continuity (ADR-0005): its neutral disposition, observed
- * session id, and whether a `mirror_error` made the transcript unreliable.
+ * Conversation continuity (ADR-0005): its neutral disposition and whether a
+ * `mirror_error` made the transcript unreliable.
  */
-export interface AgentStreamOutcome extends TurnStreamMetadata {
+export interface AgentStreamOutcome extends AgentStreamMetadata {
 	/** Whether the query completed itself or settled after a stop request. */
 	disposition: TurnDisposition;
 }
+
+/**
+ * An unstopped stream failure. The `false` literal is guaranteed by the stream
+ * consumer: observing `mirror_error` requests a stop, and stopped failures
+ * settle as a neutral `stopped` outcome instead.
+ */
+export interface AgentStreamFailure {
+	disposition: "failed";
+	mirrorErrorObserved: false;
+	error: unknown;
+}
+
+export type AgentStreamResult = AgentStreamOutcome | AgentStreamFailure;
 
 export interface ConsumeAgentStreamParams {
 	runId?: string;
@@ -149,17 +153,16 @@ export interface ConsumeAgentStreamParams {
  *  - the query is interrupted (once), and
  *  - any further content is ignored — never appended.
  *
- * The function resolves with a neutral `completed`/`stopped` disposition and
- * throws only for an unstopped SDK failure. Deciding the terminal status —
- * `interrupted`, `error`, or no write — belongs to the Run supervisor.
+ * The function resolves with a `completed`/`stopped` outcome or a typed
+ * unstopped failure. Deciding the terminal status — `interrupted`, `error`, or
+ * no write — belongs to the Run supervisor.
  */
 export async function consumeAgentStream(
 	params: ConsumeAgentStreamParams,
-): Promise<AgentStreamOutcome> {
+): Promise<AgentStreamResult> {
 	const { query, interruptionSignal, appendModelContents } = params;
 	const outcome: AgentStreamOutcome = {
 		disposition: "completed",
-		sessionId: null,
 		mirrorErrorObserved: false,
 	};
 	let liveMessageMatchesCompletion = true;
@@ -455,17 +458,14 @@ export async function consumeAgentStream(
 			}
 			if (next.result.done) break;
 			const message = next.result.value;
-			// Track continuity signals before the stop skip: the supervisor still
-			// needs the observed metadata for its pointer and Outcome decisions.
+			// Track mirror reliability before the stop skip: the supervisor still
+			// needs it for its pointer and Outcome decisions.
 			if (isMirrorError(message)) {
 				outcome.mirrorErrorObserved = true;
 				params.abortRunScopedWork(new Error("agent session mirror failed"));
 				stop();
 				continue;
 			}
-			const sessionId = sessionIdFromResult(message);
-			if (sessionId !== null) outcome.sessionId = sessionId;
-
 			if (stopRequested) continue;
 			const errorText = resultErrorText(message);
 			if (errorText !== null) {
@@ -525,7 +525,11 @@ export async function consumeAgentStream(
 		}
 		settleStream();
 		await abandonOpenMessage();
-		throw error;
+		return {
+			disposition: "failed",
+			mirrorErrorObserved: false,
+			error,
+		};
 	} finally {
 		for (const removeAbortListener of removeAbortListeners) {
 			removeAbortListener();

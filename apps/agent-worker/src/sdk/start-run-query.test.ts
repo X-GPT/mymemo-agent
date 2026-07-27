@@ -6,11 +6,14 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type {
+	Options,
+	SessionStoreEntry,
+} from "@anthropic-ai/claude-agent-sdk";
+import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	claimNextRunTx,
 	createQueuedRunTx,
-	RunFenceError,
 	type RunRecord,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
@@ -474,13 +477,23 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 			conversationId: "conv-1",
 		});
 
-		await h.startRunQuery(run, freshSignal());
+		const query = await h.startRunQuery(run, freshSignal());
 
-		expect(h.captured.options?.sessionStore).toBeDefined();
+		const sessionStore = h.captured.options?.sessionStore;
+		expect(sessionStore).toBeDefined();
 		expect(h.captured.options?.cwd).toBe(
 			conversationWorkingDirectory("conv-1"),
 		);
 		expect(h.captured.options?.resume).toBeUndefined();
+		if (!sessionStore) throw new Error("query has no SessionStore");
+		await sessionStore.append(
+			{ projectKey: "project-1", sessionId: "session-proven" },
+			[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
+		);
+		expect(query.sessionEvidence.mirroredMainSessionId()).toBe(
+			"session-proven",
+		);
+		await consume(query);
 	});
 
 	it("creates the conversation working directory before starting the query", async () => {
@@ -615,8 +628,12 @@ describe("createStartRunQuery — fenced provisioning", () => {
 		});
 		await first.startRunQuery(run1, freshSignal());
 		await transitionRunTerminalTx(tdb.db, {
-			runId: "run-1",
-			workerId: WORKER_ID,
+			owner: {
+				runId: "run-1",
+				workerId: WORKER_ID,
+				userId: "user-1",
+				conversationId: "conv-1",
+			},
 			status: "done",
 		});
 

@@ -1,17 +1,19 @@
 import type { RunRecord } from "@mymemo/agent-db/run-store";
-import type {
-	ArtifactAwareQuery,
-	ArtifactPublication,
-} from "../artifacts/artifact-publication";
+import type { ArtifactAwareQuery } from "../artifacts/artifact-publication";
 import type { WorkerLogger } from "../logger";
-import type { RunProcessor } from "../run-loop";
+import { type RunProcessor, RunProcessorFailure } from "../run-loop";
 import {
-	type AgentStreamOutcome,
 	consumeAgentStream,
 	onAbort,
 	type StartStopDeadline,
-	type SupervisedQuery,
 } from "./agent-stream";
+import type { SessionMirrorEvidence } from "./session-store";
+
+/** A started query plus the Run-scoped continuity and artifact capabilities
+ * consumed after its SDK stream settles. */
+export type RunQuery = ArtifactAwareQuery & {
+	sessionEvidence: SessionMirrorEvidence;
+};
 
 /**
  * Start a Claude Agent SDK query for one claimed run. This is the seam between
@@ -25,7 +27,7 @@ import {
 export type StartRunQuery = (
 	run: RunRecord,
 	signal: AbortSignal,
-) => Promise<SupervisedQuery & Partial<ArtifactAwareQuery>>;
+) => Promise<RunQuery>;
 
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
@@ -60,7 +62,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				ctx.run,
 				runScopedController.signal,
 			);
-			const outcome: AgentStreamOutcome = await consumeAgentStream({
+			const result = await consumeAgentStream({
 				runId: ctx.run.runId,
 				query,
 				interruptionSignal: ctx.interruptionSignal,
@@ -75,15 +77,20 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				logger: deps.logger,
 				startStopDeadline: deps.startStopDeadline,
 			});
-			const { disposition, ...streamMetadata } = outcome;
+			const mirroredMainSessionId =
+				query.sessionEvidence.mirroredMainSessionId();
+			if (result.disposition === "failed") {
+				throw new RunProcessorFailure(result.error, {
+					mirrorErrorObserved: result.mirrorErrorObserved,
+					mirroredMainSessionId,
+				});
+			}
+			const { disposition, ...streamMetadata } = result;
 			return {
 				disposition,
-				streamMetadata,
+				streamMetadata: { ...streamMetadata, mirroredMainSessionId },
 				artifactPublication:
-					disposition === "completed"
-						? ((query.getArtifactPublication?.() as ArtifactPublication | null) ??
-							null)
-						: null,
+					disposition === "completed" ? query.getArtifactPublication() : null,
 			};
 		} finally {
 			removeSupervisorStopListener();

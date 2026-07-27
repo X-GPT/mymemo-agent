@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import {
+	ArtifactQuotaError,
+	MAX_ARTIFACT_SIZE_BYTES,
 	publishArtifactsAndTransitionRunDoneTx,
 	recordArtifactObjectsTx,
 } from "./artifact-store";
@@ -32,7 +34,7 @@ afterEach(async () => {
 });
 
 describe("Downloadable artifact publication", () => {
-	it("makes staged metadata current in the same transaction as run_done", async () => {
+	it("publishes the session pointer, staged metadata, and run_done together", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -44,6 +46,10 @@ describe("Downloadable artifact publication", () => {
 			conversationId: "conv-1",
 		});
 		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
 		await recordArtifactObjectsTx(tdb.db, {
 			objects: [
 				{
@@ -74,6 +80,7 @@ describe("Downloadable artifact publication", () => {
 					contentType: "application/octet-stream",
 				},
 			],
+			agentSessionId: "session-1",
 		});
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([
@@ -91,6 +98,9 @@ describe("Downloadable artifact publication", () => {
 			}),
 		]);
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("done");
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("session-1");
 		expect(
 			(await tdb.db.select().from(runEvents)).map((event) => event.type),
 		).toEqual(["run_done"]);
@@ -204,5 +214,104 @@ describe("Downloadable artifact publication", () => {
 		).toBe("session-old");
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("running");
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
+	});
+
+	it("publishes artifacts and Outcome without a pointer when the runtime row is absent", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		await recordArtifactObjectsTx(tdb.db, {
+			objects: [
+				{
+					objectKey: "objects/opaque-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+					runId: "run-1",
+					path: "report.txt",
+				},
+			],
+		});
+
+		const run = await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+			owner: {
+				runId: "run-1",
+				workerId: "worker-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+			},
+			agentSessionId: "session-without-runtime",
+			artifacts: [
+				{
+					artifactId: "artifact-1",
+					path: "report.txt",
+					objectKey: "objects/opaque-1",
+					sizeBytes: 12,
+					contentType: "application/octet-stream",
+				},
+			],
+		});
+
+		expect(run.status).toBe("done");
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("done");
+		expect(await tdb.db.select().from(conversationArtifacts)).toHaveLength(1);
+		expect(
+			(await tdb.db.select().from(runEvents)).map((event) => event.type),
+		).toEqual(["run_done"]);
+		expect(await tdb.db.select().from(artifactObjects)).toEqual([
+			expect.objectContaining({ status: "current" }),
+		]);
+	});
+
+	it("leaves the first session pointer empty when artifact validation rejects publication", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+
+		await expect(
+			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+				owner: {
+					runId: "run-1",
+					workerId: "worker-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+				},
+				agentSessionId: "session-new",
+				artifacts: [
+					{
+						artifactId: "artifact-1",
+						path: "oversized.bin",
+						objectKey: "objects/oversized",
+						sizeBytes: MAX_ARTIFACT_SIZE_BYTES + 1,
+						contentType: "application/octet-stream",
+					},
+				],
+			}),
+		).rejects.toBeInstanceOf(ArtifactQuotaError);
+
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBeNull();
+		expect((await tdb.db.select().from(runs))[0]?.status).toBe("running");
+		expect(await tdb.db.select().from(runEvents)).toEqual([]);
 	});
 });
