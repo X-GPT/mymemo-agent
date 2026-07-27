@@ -972,8 +972,10 @@ describe("agent deployment config", () => {
 			join(root, "scripts", "deploy", "build_and_push_agent_image.sh"),
 			"utf8",
 		);
-		const ciWorkflow = readFileSync(
-			join(root, ".github", "workflows", "ci.yml"),
+		// The pre-merge image build lives in its own path-filtered workflow, not
+		// in ci.yml, so it can be skipped on pushes that cannot change the image.
+		const workerImageWorkflow = readFileSync(
+			join(root, ".github", "workflows", "worker-image.yml"),
 			"utf8",
 		);
 
@@ -981,7 +983,7 @@ describe("agent deployment config", () => {
 		expect(checkScript).toContain("--network none");
 		expect(checkScript).toContain("--entrypoint bun");
 		expect(checkScript).toContain("resolveAndVerifyClaudeCodeExecutable");
-		expect(ciWorkflow).toContain("agent-worker-image-check.sh");
+		expect(workerImageWorkflow).toContain("agent-worker-image-check.sh");
 
 		const buildIndex = buildScript.indexOf("docker build");
 		const checkIndex = buildScript.indexOf("agent-worker-image-check.sh");
