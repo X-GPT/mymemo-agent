@@ -1,8 +1,4 @@
-import {
-	type ArtifactAwareQuery,
-	withArtifactPublication,
-} from "../../artifacts/artifact-publication";
-import type { SupervisedQuery } from "../agent-stream";
+import type { ArtifactAwareQuery } from "../../artifacts/artifact-publication";
 import type { RunQuery } from "../run-processor";
 import type { SessionMirrorEvidence } from "../session-store";
 
@@ -11,13 +7,13 @@ export const noSessionMirrorEvidence: SessionMirrorEvidence = {
 };
 
 export function withNoSessionMirrorEvidence(
-	query: SupervisedQuery & Partial<ArtifactAwareQuery>,
+	query: ArtifactAwareQuery,
 ): RunQuery {
 	return withSessionEvidence(query, noSessionMirrorEvidence);
 }
 
 export function withSessionMirrorEvidence(
-	query: SupervisedQuery & Partial<ArtifactAwareQuery>,
+	query: ArtifactAwareQuery,
 	sessionId: string,
 ): RunQuery {
 	return withSessionEvidence(query, {
@@ -26,19 +22,15 @@ export function withSessionMirrorEvidence(
 }
 
 function withSessionEvidence(
-	query: SupervisedQuery & Partial<ArtifactAwareQuery>,
+	query: ArtifactAwareQuery,
 	sessionEvidence: SessionMirrorEvidence,
 ): RunQuery {
-	const artifactAwareQuery =
-		query.getArtifactPublication === undefined
-			? withArtifactPublication(query, { publish: async () => null })
-			: (query as ArtifactAwareQuery);
 	return {
-		forceCloseSignal: artifactAwareQuery.forceCloseSignal,
-		interrupt: () => artifactAwareQuery.interrupt(),
-		close: () => artifactAwareQuery.close(),
-		getArtifactPublication: () => artifactAwareQuery.getArtifactPublication(),
+		forceCloseSignal: query.forceCloseSignal,
+		interrupt: () => query.interrupt(),
+		close: () => query.close(),
+		getArtifactPublication: () => query.getArtifactPublication(),
 		sessionEvidence,
-		[Symbol.asyncIterator]: () => artifactAwareQuery[Symbol.asyncIterator](),
+		[Symbol.asyncIterator]: () => query[Symbol.asyncIterator](),
 	};
 }

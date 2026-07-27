@@ -73,7 +73,7 @@ export function isMainAgentSessionRef(
  * id. Deduplicates by `entry.uuid`: `ON CONFLICT DO NOTHING` against the unique
  * `(conversation, session, subpath, uuid)` index drops a re-delivered uuid,
  * while uuid-less entries (NULL, distinct in the index) always insert. Empty
- * batches are pure no-ops.
+ * batches write nothing but still validate the bound Run owner.
  */
 export async function appendAgentSessionEntriesTx(
 	db: Database,
@@ -84,22 +84,23 @@ export async function appendAgentSessionEntriesTx(
 	},
 ): Promise<void> {
 	const { owner, ref, entries } = input;
-	if (entries.length === 0) return;
 	const subpath = normalizeSubpath(ref.subpath);
 	await db.transaction(async (tx) => {
-		await tx
-			.insert(agentSessions)
-			.values(
-				entries.map((entry) => ({
-					conversationId: owner.conversationId,
-					projectKey: ref.projectKey,
-					sessionId: ref.sessionId,
-					subpath,
-					uuid: typeof entry.uuid === "string" ? entry.uuid : null,
-					entry,
-				})),
-			)
-			.onConflictDoNothing();
+		if (entries.length > 0) {
+			await tx
+				.insert(agentSessions)
+				.values(
+					entries.map((entry) => ({
+						conversationId: owner.conversationId,
+						projectKey: ref.projectKey,
+						sessionId: ref.sessionId,
+						subpath,
+						uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+						entry,
+					})),
+				)
+				.onConflictDoNothing();
+		}
 		await lockOwnedRunAfterMutation(tx, owner, "session append");
 	});
 }

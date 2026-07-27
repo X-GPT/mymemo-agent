@@ -15,7 +15,7 @@ import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import { agentSessions, conversations, runs } from "@mymemo/agent-db/schema";
 import {
 	createTestDatabase,
-	seedAgentSessionFenceRuns,
+	seedAgentSessionFenceRun,
 	type TestDb,
 } from "@mymemo/agent-db/testing";
 import type { WorkerLogger } from "../logger";
@@ -45,7 +45,18 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-	await seedAgentSessionFenceRuns(tdb.db);
+	for (const [userId, conversationId] of [
+		["user-1", "conv-1"],
+		["user-2", "conv-2"],
+	] as const) {
+		const binding = storeBinding(conversationId);
+		await seedAgentSessionFenceRun(tdb.db, {
+			userId,
+			conversationId,
+			runId: binding.runId,
+			workerId: binding.workerId,
+		});
+	}
 });
 
 afterAll(async () => {

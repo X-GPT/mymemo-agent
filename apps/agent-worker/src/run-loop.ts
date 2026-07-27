@@ -74,13 +74,21 @@ export interface TurnResult {
  * continuity evidence or artifact publication. */
 const EMPTY_TURN: TurnResult = { disposition: "completed" };
 
-type TerminalizationIntent =
-	| Exclude<TerminalOutcome, { status: "error" }>
-	| (Extract<TerminalOutcome, { status: "error" }> & {
-			/** Proven continuity carried only if the error CAS must reconcile to
-			 * an interrupted Outcome; the terminal store ignores it for `run_error`. */
-			interruptionFallback?: string;
-	  });
+/**
+ * A processor failure that still carries the turn facts needed for terminal
+ * reconciliation. The loop logs the original failure but retains only these
+ * bounded, worker-produced facts for its Outcome decision.
+ */
+export class RunProcessorFailure extends Error {
+	override name = "RunProcessorFailure" as const;
+
+	constructor(
+		readonly failure: unknown,
+		readonly turnResult: TurnResult,
+	) {
+		super("run processor failed");
+	}
+}
 
 /**
  * One piece of canonical durable model content a processor can record while
@@ -484,7 +492,12 @@ export class RunLoop {
 					appendLiveEvent: (event) => liveStream.append(event),
 				})) ?? EMPTY_TURN;
 		} catch (error) {
-			failure = { error };
+			if (error instanceof RunProcessorFailure) {
+				turnResult = error.turnResult;
+				failure = { error: error.failure };
+			} else {
+				failure = { error };
+			}
 		}
 		// Stop heartbeating this run before terminalizing: from here the loop owns
 		// the terminal transition and a concurrent heartbeat must not race it.
@@ -558,7 +571,7 @@ export class RunLoop {
 			return this.failRun(owner, {
 				message: "run failed",
 				fields: artifactFailureLogFields(failure.error),
-				interruptionFallback: agentSessionId,
+				interruptedAgentSessionId: agentSessionId,
 			});
 		}
 		if (turnResult.streamMetadata?.mirrorErrorObserved) {
@@ -570,7 +583,7 @@ export class RunLoop {
 		if (turnResult.disposition === "stopped") {
 			return this.failRun(owner, {
 				message: "run stopped before completion",
-				interruptionFallback: agentSessionId,
+				interruptedAgentSessionId: agentSessionId,
 			});
 		}
 		// Success: terminalize `done` directly — there is no end-of-turn
@@ -593,7 +606,7 @@ export class RunLoop {
 		input: {
 			message: string;
 			fields?: Record<string, unknown>;
-			interruptionFallback?: string;
+			interruptedAgentSessionId?: string;
 		},
 	): Promise<TerminalRunStatus | null> {
 		this.opts.logger.error({
@@ -604,11 +617,14 @@ export class RunLoop {
 			runId: owner.runId,
 			...input.fields,
 		});
-		return this.terminalize(owner, {
-			status: "error",
-			payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-			interruptionFallback: input.interruptionFallback,
-		});
+		return this.terminalize(
+			owner,
+			{
+				status: "error",
+				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
+			},
+			input.interruptedAgentSessionId,
+		);
 	}
 
 	private async publishArtifactsAndFinish(
@@ -651,11 +667,14 @@ export class RunLoop {
 							},
 						}),
 			});
-			return this.terminalize(owner, {
-				status: "error",
-				payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-				interruptionFallback: agentSessionId,
-			});
+			return this.terminalize(
+				owner,
+				{
+					status: "error",
+					payload: { message: GENERIC_RUN_ERROR_MESSAGE },
+				},
+				agentSessionId,
+			);
 		}
 	}
 
@@ -664,26 +683,27 @@ export class RunLoop {
 	 * the late-interruption fallback the loop relies on: `done`/`error` lose to an
 	 * interruption the terminal CAS observes (the run is already
 	 * `interrupt_requested`), so on a fence rejection try `interrupted` once. An
-	 * error intent can carry proven continuity only inside its explicit
-	 * `interruptionFallback`; the durable `run_error` projection never receives it.
-	 * If even `interrupted` is fenced, stale-run recovery finishes the run.
+	 * proven continuity stays in the worker-only reconciliation argument; the
+	 * durable `run_error` input contains no extra field. If even `interrupted`
+	 * is fenced, stale-run recovery finishes the run.
 	 */
 	private async terminalize(
 		owner: UserRunMutationOwner,
-		intent: TerminalizationIntent,
+		outcome: TerminalOutcome,
+		interruptedAgentSessionId?: string,
 	): Promise<TerminalRunStatus | null> {
 		try {
-			await transitionRunTerminalTx(this.opts.db, { owner, ...intent });
-			return intent.status;
+			await transitionRunTerminalTx(this.opts.db, { owner, ...outcome });
+			return outcome.status;
 		} catch (error) {
 			if (error instanceof RunFenceError) {
 				if (
-					intent.status !== "interrupted" &&
+					outcome.status !== "interrupted" &&
 					(await this.tryTerminalInterrupted(
 						owner,
-						intent.status === "error"
-							? intent.interruptionFallback
-							: intent.agentSessionId,
+						outcome.status === "error"
+							? interruptedAgentSessionId
+							: outcome.agentSessionId,
 					))
 				) {
 					return "interrupted";
@@ -692,7 +712,7 @@ export class RunLoop {
 					message: "could not terminalize run; leaving to stale-run recovery",
 					workerId: this.workerId,
 					runId: owner.runId,
-					intended: intent.status,
+					intended: outcome.status,
 				});
 				return null;
 			}

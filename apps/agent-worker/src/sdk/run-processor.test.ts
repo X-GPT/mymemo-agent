@@ -43,6 +43,7 @@ import {
 } from "./testing/session-mirror-fixtures";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const noArtifactPublication = { getArtifactPublication: () => null };
 
 let tdb: TestDb;
 
@@ -187,12 +188,15 @@ function messageQuery(
 	};
 }
 
-function stepQuery(steps: Array<SDKMessage | { throw: unknown }>): RunQuery {
+function stepQuery(
+	steps: Array<SDKMessage | { throw: unknown }>,
+	sessionEvidence: SessionMirrorEvidence = noSessionMirrorEvidence,
+): RunQuery {
 	return {
 		close() {},
 		async interrupt() {},
 		getArtifactPublication: () => null,
-		sessionEvidence: noSessionMirrorEvidence,
+		sessionEvidence,
 		async *[Symbol.asyncIterator]() {
 			for (const step of steps) {
 				if ("throw" in step) throw step.throw;
@@ -798,6 +802,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				once: true,
 			});
 			return withNoSessionMirrorEvidence({
+				...noArtifactPublication,
 				async interrupt() {
 					calls.push("interrupt");
 				},
@@ -876,6 +881,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				});
 				started.resolve();
 				return withNoSessionMirrorEvidence({
+					...noArtifactPublication,
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -955,6 +961,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				started.resolve();
 				return withSessionMirrorEvidence(
 					{
+						...noArtifactPublication,
 						async interrupt() {
 							calls.push("interrupt");
 							interrupted.resolve();
@@ -1028,6 +1035,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			async () => {
 				started.resolve();
 				return withNoSessionMirrorEvidence({
+					...noArtifactPublication,
 					async interrupt() {
 						calls.push("interrupt");
 					},
@@ -1081,6 +1089,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			worker,
 			async () =>
 				withNoSessionMirrorEvidence({
+					...noArtifactPublication,
 					async interrupt() {},
 					close() {
 						closeCalled.resolve();
@@ -1136,6 +1145,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			worker,
 			async () =>
 				withNoSessionMirrorEvidence({
+					...noArtifactPublication,
 					forceCloseSignal: forceCloseController.signal,
 					async interrupt() {
 						calls.push("interrupt");
@@ -1186,6 +1196,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			worker,
 			async (_run, _signal) =>
 				withNoSessionMirrorEvidence({
+					...noArtifactPublication,
 					async interrupt() {
 						calls.push("interrupt");
 						settled.resolve();
@@ -1234,6 +1245,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				worker,
 				async () =>
 					withNoSessionMirrorEvidence({
+						...noArtifactPublication,
 						async interrupt() {
 							stopped.resolve();
 						},
@@ -1298,6 +1310,40 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			"Run failed",
 		);
 		expect(JSON.stringify(terminal?.payload)).not.toContain("model exploded");
+	});
+
+	it("preserves mirrored continuity when a thrown failure reconciles to interruption", async () => {
+		const worker = buildWorker();
+		const loop = buildLoop(worker, async (run) => {
+			const store = await createRuntimeSessionStoreFor(run);
+			await store.append(
+				{ projectKey: "project-1", sessionId: "session-reconciled" },
+				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
+			);
+			// Land the durable request after the loop's last heartbeat so local
+			// interruption state remains false and the error CAS must reconcile.
+			await requestRunInterruptionTx(tdb.db, {
+				runId: run.runId,
+				userId: run.userId,
+				conversationId: run.conversationId,
+			});
+			return stepQuery([{ throw: new Error("sandbox renewal failed") }], store);
+		});
+		await createQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await worker.drain();
+
+		const [runtime] = await tdb.db.select().from(conversationRuntime);
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(runtime?.agentSessionId).toBe("session-reconciled");
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			"run_interrupted",
+		]);
 	});
 
 	it("records one error outcome for an SDK error result followed by rejection", async () => {

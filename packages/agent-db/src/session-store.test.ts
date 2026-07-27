@@ -18,7 +18,7 @@ import {
 } from "./session-store";
 import {
 	createTestDatabase,
-	seedAgentSessionFenceRuns,
+	seedAgentSessionFenceRun,
 	type TestDb,
 } from "./testing";
 
@@ -37,7 +37,18 @@ beforeEach(async () => {
 	await tdb.db.delete(agentSessions);
 	await tdb.db.delete(runs);
 	await tdb.db.delete(conversations);
-	await seedAgentSessionFenceRuns(tdb.db);
+	await seedAgentSessionFenceRun(tdb.db, {
+		userId: "user-1",
+		conversationId: "conv-1",
+		runId: "run-conv-1",
+		workerId: "worker-1",
+	});
+	await seedAgentSessionFenceRun(tdb.db, {
+		userId: "user-2",
+		conversationId: "conv-2",
+		runId: "run-conv-2",
+		workerId: "worker-1",
+	});
 });
 
 /** The main-transcript ref every test shares unless it needs a subagent. */
@@ -309,16 +320,12 @@ describe("SDK session mutation ownership fence", () => {
 		expired?: boolean;
 	}) {
 		const conversationId = input.conversationId ?? OWNER.conversationId;
-		await tdb.db
-			.insert(conversations)
-			.values({ userId: "user-owned", conversationId, scope: "general" })
-			.onConflictDoNothing();
-		await tdb.db.insert(runs).values({
+		await seedAgentSessionFenceRun(tdb.db, {
 			runId: OWNER.runId,
 			userId: "user-owned",
 			conversationId,
 			status: input.status ?? "running",
-			lockedBy: input.workerId ?? OWNER.workerId,
+			workerId: input.workerId ?? OWNER.workerId,
 			lockedUntil: input.expired
 				? new Date(Date.now() - 1_000)
 				: new Date(Date.now() + 60_000),
@@ -377,7 +384,7 @@ describe("SDK session mutation ownership fence", () => {
 		]);
 	});
 
-	it("treats an empty append as a pure no-op", async () => {
+	it("fences an empty append without writing transcript entries", async () => {
 		await insertOwnedRun({});
 
 		await expect(
@@ -386,7 +393,7 @@ describe("SDK session mutation ownership fence", () => {
 				ref: REF,
 				entries: [],
 			}),
-		).resolves.toBeUndefined();
+		).rejects.toThrow(/session append.*rejected/i);
 		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toBeNull();
 	});
 

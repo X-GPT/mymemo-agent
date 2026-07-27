@@ -123,24 +123,15 @@ export async function updateRuntimeSandboxTx(
 /**
  * Publish a proven Agent-session pointer inside its caller's terminal
  * transaction. The update carries the ownership fence in-statement. A missing
- * optional runtime row skips pointer publication only after the same
- * transaction classifies that zero-row result under an ownership lock; this
- * post-update check never authorizes the pointer mutation. A stale owner fails.
+ * optional runtime row leaves the pointer unpublished; a stale owner is still
+ * rejected by the terminal CAS in the same transaction.
  */
 export async function publishAgentSessionPointerInTx(
 	tx: DbTx,
 	owner: UserRunMutationOwner,
 	agentSessionId: string,
 ): Promise<void> {
-	const row = await tryUpdateRuntimeRow(tx, owner, { agentSessionId });
-	if (row) return;
-
-	const [owned] = await tx
-		.select({ runId: runs.runId })
-		.from(runs)
-		.where(ownedRunByUserConditions(owner))
-		.for("share");
-	if (!owned) rejectRunFence(owner, "agent session pointer publication");
+	await tryUpdateRuntimeRow(tx, owner, { agentSessionId });
 }
 
 async function tryUpdateRuntimeRow(
