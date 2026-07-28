@@ -41,28 +41,48 @@ The set of documents a conversation may access — `general`, `collection`, or
 _Avoid_: permissions, access level
 
 **Run**:
-One backend execution attempt serving a user message. At most one run per
-conversation is active at a time, and in v1 a run executes at most once —
+One backend execution attempt serving a user message. A Conversation's Runs are
+executed one at a time in submission order, and a Run executes at most once —
 never requeued or automatically retried.
 _Avoid_: job, task, attempt
 
+**Active Run**:
+A Run that has been admitted but has not yet reached its Outcome. A Conversation
+may hold only a bounded number of them at once; a submission past that bound is
+refused rather than accepted and delayed.
+_Avoid_: pending run, in-flight run, queued run (that is one status among several)
+
 **Run interruption**:
 A user-requested end to one queued or running Run that leaves its Conversation,
-Agent session, and Workspace available for later Runs. Once accepted before
-another Outcome, interruption wins the Run's Outcome and prevents Downloadable
-artifact publication.
+Agent session, and Workspace available for later Runs, and its Conversation's
+other active Runs unaffected. Once accepted before another Outcome, interruption
+wins the Run's Outcome and prevents Downloadable artifact publication.
 _Avoid_: cancellation, Conversation termination, HITL interrupt
 
 **Claim**:
-Taking exclusive execution ownership of a queued run. A v1 run is claimed at
-most once; a stale run is terminalized, never reclaimed.
-_Avoid_: job reservation
+Taking exclusive execution ownership of a Conversation in order to serve, one at
+a time in submission order, the Runs it had active at that moment. A Conversation
+is claimed many times over its life by any worker, and Runs submitted after a
+Claim are left for a later one.
+_Avoid_: job reservation, run claim
 
 **Ownership lease**:
-The time-bounded write authority a worker receives by claiming a Run, represented
-by `locked_by` and `locked_until` and renewed by heartbeat. After expiry, that
-worker's fenced writes are rejected and recovery may terminalize the stale Run.
-_Avoid_: sandbox lease (the decommissioned prototype concept)
+The time-bounded, exclusive write authority over one Conversation and every
+resource scoped to it, obtained by claiming it and kept alive by heartbeat. Once
+it lapses or is superseded, that holder's writes are rejected.
+_Avoid_: run lease, sandbox lease (the decommissioned prototype concept)
+
+**Ownership epoch**:
+The per-Conversation number identifying one Claim, increasing with every Claim.
+It names the holder in every fenced write, so a superseded holder is rejected
+even while it still believes it holds the lease.
+_Avoid_: fencing token, version, generation
+
+**Reclamation**:
+Terminalizing the Runs of a Conversation whose Ownership lease lapsed without
+release, so a Conversation whose worker vanished cannot hold Runs that never
+reach an Outcome. Distinct from Recovering, which is a client behavior.
+_Avoid_: recovery (that word is the client-side term), stale-run recovery
 
 **Run event**:
 One record in a Run's durable, ordered Postgres event log — the source of truth
@@ -90,7 +110,7 @@ _Avoid_: Recovering, resuming after a cursor
 Waiting for permanent Conversation history after a Live Stream becomes
 unusable, then replacing the Run's provisional client state with that durable
 projection.
-_Avoid_: Reconnecting
+_Avoid_: Reconnecting, Reclamation (that is the worker-side term)
 
 **Conversation history**:
 The durable, user-visible record of submitted messages, Assistant messages,
