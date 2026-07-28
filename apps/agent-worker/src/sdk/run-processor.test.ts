@@ -4,7 +4,6 @@ import type {
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
-	createQueuedRunTx,
 	type RunRecord,
 	requestRunInterruptionTx,
 } from "@mymemo/agent-db/run-store";
@@ -15,7 +14,11 @@ import {
 	runEvents,
 	runs,
 } from "@mymemo/agent-db/schema";
-import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import {
+	createTestDatabase,
+	seedQueuedRun,
+	type TestDb,
+} from "@mymemo/agent-db/testing";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
@@ -295,7 +298,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			const store = await createRuntimeSessionStoreFor(run);
 			return messageQuery([initMessage("session-initialized")], store);
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -322,7 +325,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			);
 			return messageQuery([resultMessage("session-proven")], store);
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -350,7 +353,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			);
 			return messageQuery([resultMessage("session-subagent-only")], store);
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -369,7 +372,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const loop = buildLoop(worker, async () =>
 			messageQuery(textEnvelope({ completeText: "Hello there." })),
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -408,7 +411,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			resultMessage(),
 		];
 		const loop = buildLoop(worker, async () => messageQuery(messages));
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -628,7 +631,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			const loop = buildLoop(worker, async () =>
 				messageQuery(fixture.messages),
 			);
-			await createQueuedRunTx(tdb.db, {
+			await seedQueuedRun(tdb.db, {
 				runId: "run-1",
 				userId: "user-1",
 				conversationId: "conv-1",
@@ -662,7 +665,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				}),
 			]),
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -685,7 +688,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			sawSignal = signal instanceof AbortSignal;
 			return messageQuery(textEnvelope({ completeText: "ok" }));
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -757,7 +760,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				};
 			},
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -816,7 +819,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				},
 			});
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -852,7 +855,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				mirrorErrorMessage(),
 			]);
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -907,7 +910,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				};
 			},
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -981,7 +984,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			logger,
 			deadline.startStopDeadline,
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1051,7 +1054,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			silentLogger,
 			deadline.startStopDeadline,
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1103,7 +1106,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			silentLogger,
 			deadline.startStopDeadline,
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1168,7 +1171,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				}),
 			silentLogger,
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1217,7 +1220,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				return { elapsed: new Promise(() => {}), cancel() {} };
 			},
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1262,7 +1265,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				silentLogger,
 				deadline.startStopDeadline,
 			);
-			await createQueuedRunTx(tdb.db, {
+			await seedQueuedRun(tdb.db, {
 				runId: "run-1",
 				userId: "user-1",
 				conversationId: "conv-1",
@@ -1291,7 +1294,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const loop = buildLoop(worker, async () =>
 			stepQuery([...incomplete, { throw: new Error("model exploded") }]),
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1329,7 +1332,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			});
 			return stepQuery([{ throw: new Error("sandbox renewal failed") }], store);
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1356,7 +1359,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				{ throw: new Error("iterator rejected after error result") },
 			]),
 		);
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1387,7 +1390,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				},
 			);
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1414,7 +1417,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				resultMessage("session-invalid"),
 			]);
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",

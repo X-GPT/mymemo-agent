@@ -20,19 +20,30 @@ import {
 	appendRunEventsTx,
 	appendRunEventTx,
 	claimNextRunTx,
-	createQueuedRunTx,
 	heartbeatRunTx,
 	loadRunStartedTx,
 	markLiveStreamFailedTx,
 	markStaleRunsTx,
 	RunInputMismatchError,
+	type RunRecord,
 	requestRunInterruptionTx,
+	type TerminalTransitionResult,
 	transitionRunTerminalTx,
 } from "./run-store";
 import { conversationRuntime, conversations, runEvents, runs } from "./schema";
-import { createTestDatabase, type TestDb } from "./testing";
+import { createTestDatabase, seedQueuedRun, type TestDb } from "./testing";
 
 let tdb: TestDb;
+
+/** Unwrap a terminal transition the test expects to have committed. */
+function committed(result: TerminalTransitionResult): RunRecord {
+	if (result.outcome !== "committed") {
+		throw new Error(
+			`expected a committed terminal transition, got ${JSON.stringify(result)}`,
+		);
+	}
+	return result.run;
+}
 
 // One PGlite (WASM) instance for the whole file — a per-test instance
 // multiplies WASM memory that is not reclaimed promptly and OOMs CI runners.
@@ -63,64 +74,6 @@ beforeEach(async () => {
 	]);
 });
 
-describe("createQueuedRunTx", () => {
-	it("creates a queued run with queue defaults", async () => {
-		const run = await createQueuedRunTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		expect(run).toMatchObject({
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "queued",
-			lockedBy: null,
-			lockedUntil: null,
-			heartbeatAt: null,
-			interruptRequestedAt: null,
-			nextEventSeq: 1,
-			terminalAt: null,
-		});
-	});
-
-	it("rejects a second active run for the same conversation", async () => {
-		await createQueuedRunTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		await expect(
-			createQueuedRunTx(tdb.db, {
-				runId: "run-2",
-				userId: "user-1",
-				conversationId: "conv-1",
-			}),
-		).rejects.toBeInstanceOf(ActiveRunConflictError);
-	});
-
-	it("allows a new run once the previous run is terminal", async () => {
-		await createQueuedRunTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-		await tdb.db
-			.update(runs)
-			.set({ status: "done" })
-			.where(eq(runs.runId, "run-1"));
-
-		const next = await createQueuedRunTx(tdb.db, {
-			runId: "run-2",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-		expect(next.status).toBe("queued");
-	});
-});
-
 describe("admitQueuedRunTx", () => {
 	const admission = {
 		runId: "client-run-1",
@@ -149,6 +102,11 @@ describe("admitQueuedRunTx", () => {
 				text: "Summarize my notes",
 			},
 			nextEventSeq: 2,
+			lockedBy: null,
+			lockedUntil: null,
+			heartbeatAt: null,
+			interruptRequestedAt: null,
+			terminalAt: null,
 		});
 		expect(await readEvents("client-run-1")).toMatchObject([
 			{
@@ -175,6 +133,26 @@ describe("admitQueuedRunTx", () => {
 		expect(retry).toMatchObject({
 			outcome: "existing",
 			run: { runId: "client-run-1", status: "queued" },
+		});
+		expect(await readEvents("client-run-1")).toHaveLength(1);
+	});
+
+	it("reattaches the active Run's own retry instead of raising backpressure against it", async () => {
+		// Re-admitting the conversation's *active* Run conflicts with both unique
+		// constraints at once: the `runs` primary key and
+		// `runs_one_active_per_conversation`. Admission arbitrates on `run_id`, and
+		// Postgres checks the arbiter index before the speculative insert, so the
+		// PK conflict resolves to DO NOTHING and the partial index never fires.
+		// Reverse that order and every in-flight client retry would be reported as
+		// a conflicting second Run.
+		await admitQueuedRunTx(tdb.db, admission);
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+
+		const retry = await admitQueuedRunTx(tdb.db, admission);
+
+		expect(retry).toMatchObject({
+			outcome: "existing",
+			run: { runId: "client-run-1", status: "running" },
 		});
 		expect(await readEvents("client-run-1")).toHaveLength(1);
 	});
@@ -216,6 +194,25 @@ describe("admitQueuedRunTx", () => {
 		).rejects.toBeInstanceOf(ActiveRunConflictError);
 	});
 
+	it("admits a fresh client Run id once the previous Run is terminal", async () => {
+		await admitQueuedRunTx(tdb.db, admission);
+		await tdb.db
+			.update(runs)
+			.set({ status: "done" })
+			.where(eq(runs.runId, "client-run-1"));
+
+		const next = await admitQueuedRunTx(tdb.db, {
+			...admission,
+			runId: "client-run-2",
+			messageId: "client-message-2",
+		});
+
+		expect(next).toMatchObject({
+			outcome: "created",
+			run: { runId: "client-run-2", status: "queued" },
+		});
+	});
+
 	it("rejects malformed canonical admission before writing the Run", async () => {
 		await expect(
 			admitQueuedRunTx(tdb.db, {
@@ -234,7 +231,7 @@ async function queueRun(runId: string, conversationId: string) {
 		.insert(conversations)
 		.values({ userId: "user-1", conversationId, scope: "general" })
 		.onConflictDoNothing();
-	return await createQueuedRunTx(tdb.db, {
+	return await seedQueuedRun(tdb.db, {
 		runId,
 		userId: "user-1",
 		conversationId,
@@ -828,7 +825,7 @@ describe("transitionRunTerminalTx", () => {
 		expect(run?.status).toBe(status);
 	});
 
-	it("rolls back a written pointer when the terminal Outcome loses a status race", async () => {
+	it("writes no pointer when the terminal Outcome loses a status race", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -839,14 +836,17 @@ describe("transitionRunTerminalTx", () => {
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
-		await expect(
-			transitionRunTerminalTx(tdb.db, {
-				owner: owner(),
-				status: "done",
-				agentSessionId: "session-rolled-back",
-			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		const result = await transitionRunTerminalTx(tdb.db, {
+			owner: owner(),
+			status: "done",
+			agentSessionId: "session-rolled-back",
+		});
 
+		expect(result).toEqual({
+			outcome: "rejected",
+			rejected: "status",
+			current: "interrupt_requested",
+		});
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		const [run] = await tdb.db.select().from(runs);
 		expect(runtime?.agentSessionId).toBeNull();
@@ -857,11 +857,13 @@ describe("transitionRunTerminalTx", () => {
 	it("terminalizes without a pointer when the optional runtime row is absent", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
-		const terminal = await transitionRunTerminalTx(tdb.db, {
-			owner: owner(),
-			status: "done",
-			agentSessionId: "session-without-runtime",
-		});
+		const terminal = committed(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status: "done",
+				agentSessionId: "session-without-runtime",
+			}),
+		);
 
 		const [run] = await tdb.db.select().from(runs);
 		expect(terminal.status).toBe("done");
@@ -931,11 +933,13 @@ describe("transitionRunTerminalTx", () => {
 			});
 		}
 
-		const run = await transitionRunTerminalTx(tdb.db, {
-			owner: owner(),
-			status: "error",
-			payload: { message: "Run failed" },
-		});
+		const run = committed(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status: "error",
+				payload: { message: "Run failed" },
+			}),
+		);
 
 		expect(run.status).toBe("error");
 	});
@@ -950,10 +954,12 @@ describe("transitionRunTerminalTx", () => {
 			appendClass: "model",
 		});
 
-		const run = await transitionRunTerminalTx(tdb.db, {
-			owner: owner(),
-			status: "done",
-		});
+		const run = committed(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status: "done",
+			}),
+		);
 
 		expect(run).toMatchObject({
 			runId: "run-1",
@@ -977,13 +983,15 @@ describe("transitionRunTerminalTx", () => {
 			status: "done",
 		});
 
-		await expect(
-			transitionRunTerminalTx(tdb.db, {
+		// The terminal transition cleared ownership, so the second attempt cannot
+		// even see a lease to argue about.
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
 				owner: owner(),
 				status: "error",
 				payload: { message: "boom" },
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 		const events = await readEvents("run-1");
 		expect(events.map((e) => e.type)).toEqual(["run_done"]);
 	});
@@ -995,17 +1003,25 @@ describe("transitionRunTerminalTx", () => {
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
-		await expect(
-			transitionRunTerminalTx(tdb.db, {
+		// The rejection names the status the Run actually holds, which is what
+		// lets the worker pick `interrupted` instead of retrying blindly.
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
 				owner: owner(),
 				status: "done",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
-
-		const run = await transitionRunTerminalTx(tdb.db, {
-			owner: owner(),
-			status: "interrupted",
+		).toEqual({
+			outcome: "rejected",
+			rejected: "status",
+			current: "interrupt_requested",
 		});
+
+		const run = committed(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status: "interrupted",
+			}),
+		);
 		expect(run.status).toBe("interrupted");
 		const events = await readEvents("run-1");
 		expect(events.map((e) => e.type)).toEqual(["run_interrupted"]);
@@ -1021,23 +1037,29 @@ describe("transitionRunTerminalTx", () => {
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
-		await expect(
-			transitionRunTerminalTx(tdb.db, {
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
 				owner: owner(),
 				status: "error",
 				payload: { message: "sdk exploded mid-interrupt" },
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({
+			outcome: "rejected",
+			rejected: "status",
+			current: "interrupt_requested",
+		});
 	});
 
 	it("marks a running run as error with the error payload", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
-		const run = await transitionRunTerminalTx(tdb.db, {
-			owner: owner(),
-			status: "error",
-			payload: { message: "sandbox died" },
-		});
+		const run = committed(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status: "error",
+				payload: { message: "sandbox died" },
+			}),
+		);
 
 		expect(run.status).toBe("error");
 		const events = await readEvents("run-1");
@@ -1054,25 +1076,25 @@ describe("transitionRunTerminalTx", () => {
 			agentSessionId: "session-old",
 		});
 
-		await expect(
-			transitionRunTerminalTx(tdb.db, {
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
 				owner: owner({ workerId: "worker-2" }),
 				status: "done",
 				agentSessionId: "session-new",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 		expect(
 			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
 		).toBe("session-old");
 
 		await expireOwnership("run-1");
-		await expect(
-			transitionRunTerminalTx(tdb.db, {
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
 				owner: owner(),
 				status: "done",
 				agentSessionId: "session-new",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 		expect(
 			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
 		).toBe("session-old");
@@ -1424,6 +1446,71 @@ describe("markStaleRunsTx", () => {
 			.from(conversationRuntime)
 			.where(eq(conversationRuntime.conversationId, "conv-1"));
 		expect(runtime?.agentSessionId).toBe("session-existing");
+	});
+
+	it("taints the conversation's sandbox so the next turn cannot reconnect to it", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			sandboxId: "sandbox-1",
+		});
+		await expireOwnership("run-1");
+
+		await markStaleRunsTx(tdb.db);
+
+		const [runtime] = await tdb.db
+			.select()
+			.from(conversationRuntime)
+			.where(eq(conversationRuntime.conversationId, "conv-1"));
+		expect(runtime).toMatchObject({
+			sandboxId: "sandbox-1",
+			sandboxTainted: true,
+		});
+	});
+
+	it("taints on a stale interruption too — cleanup is equally unproven", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			sandboxId: "sandbox-1",
+		});
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await expireOwnership("run-1");
+
+		await markStaleRunsTx(tdb.db);
+
+		const [runtime] = await tdb.db
+			.select()
+			.from(conversationRuntime)
+			.where(eq(conversationRuntime.conversationId, "conv-1"));
+		expect(runtime?.sandboxTainted).toBe(true);
+	});
+
+	it("leaves the sandbox untainted when an unclaimed queued run ages out", async () => {
+		await queueRun("run-queued", "conv-1");
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			sandboxId: "sandbox-1",
+		});
+		await tdb.db
+			.update(runs)
+			.set({ createdAt: sql`now() - interval '2 minutes'` })
+			.where(eq(runs.runId, "run-queued"));
+
+		await markStaleRunsTx(tdb.db);
+
+		const [runtime] = await tdb.db
+			.select()
+			.from(conversationRuntime)
+			.where(eq(conversationRuntime.conversationId, "conv-1"));
+		expect(runtime?.sandboxTainted).toBe(false);
 	});
 
 	it("terminalizes a stale interrupt_requested run as interrupted", async () => {

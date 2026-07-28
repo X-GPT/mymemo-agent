@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Database, DbTx } from "./client";
 import {
@@ -23,8 +23,9 @@ import { conversationRuntime, orphanSandboxes, runs } from "./schema";
  * fence as an `EXISTS` subquery inside the same statement that performs the
  * write, and row creation checks the same predicate `FOR SHARE` in its
  * transaction — so a worker that stalls past its lock cannot overwrite pointers
- * a recovered conversation now relies on. The one deliberate exception is
- * orphan recording, which exists precisely for the ownership-already-lost path.
+ * a recovered conversation now relies on. The two deliberate exceptions are
+ * orphan recording and recovery taint, which exist precisely for the
+ * ownership-already-lost path.
  *
  * `interrupt_requested` is inside the fence (mirroring the run-store
  * "cancellation" append class): command cleanup while an interruption stops
@@ -103,7 +104,8 @@ export async function createConversationRuntimeTx(
  * Store (or clear, with `null`) the conversation's current sandbox pointer.
  * Always resets `sandbox_tainted`: a newly stored pointer names a
  * just-created/just-verified sandbox, and a cleared pointer has nothing left
- * to taint. Taint is only ever set through {@link markRuntimeSandboxTaintedTx}.
+ * to taint. Taint is only ever set through {@link markRuntimeSandboxTaintedTx}
+ * or {@link taintRecoveredRuntimeSandboxInTx}.
  */
 export async function updateRuntimeSandboxTx(
 	db: Database,
@@ -162,6 +164,31 @@ export async function markRuntimeSandboxTaintedTx(
 	const row = await tryUpdateRuntimeRow(db, owner, { sandboxTainted: true });
 	if (!row) rejectRunFence(owner, "sandbox taint mark");
 	return row;
+}
+
+/**
+ * Taint the conversation's sandbox from stale-Run recovery, inside recovery's
+ * own transaction. The second deliberate exception to the ownership fence, and
+ * for the same reason as orphan recording: the run whose ownership would
+ * authorize the write is precisely the run that lost it, and its worker may be
+ * partitioned rather than dead — still writing to a workspace the next turn
+ * would otherwise reconnect to. Restricted to conversations that actually hold
+ * a sandbox, so taint keeps describing the current sandbox only.
+ */
+export async function taintRecoveredRuntimeSandboxInTx(
+	tx: DbTx,
+	input: { userId: string; conversationId: string },
+): Promise<void> {
+	await tx
+		.update(conversationRuntime)
+		.set({ sandboxTainted: true, updatedAt: sql`now()` })
+		.where(
+			and(
+				eq(conversationRuntime.userId, input.userId),
+				eq(conversationRuntime.conversationId, input.conversationId),
+				isNotNull(conversationRuntime.sandboxId),
+			),
+		);
 }
 
 /** A persisted orphan-ledger row. */

@@ -4,6 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import type { Database } from "./client";
 import { MIGRATIONS_DIR } from "./migrations";
+import { type RunRecord, toRunRecord } from "./run-store";
 import * as schema from "./schema";
 
 /**
@@ -107,6 +108,27 @@ export async function createTestDatabase(
 		db: drizzle(client, { schema }) as unknown as Database,
 		close: () => releaseClient(client),
 	};
+}
+
+/**
+ * Seed one `queued` run for tests that need a claimable row rather than a
+ * faithful admission. Production admission is `admitQueuedRunTx`, which also
+ * writes the `run_started` event and normalized input; tests exercising claim,
+ * heartbeat, terminal transitions, or runtime state care about none of that.
+ * A raw insert here, so the admission path keeps exactly one implementation and
+ * the `runs_one_active_per_conversation` violation surfaces as its native
+ * unique-violation error. The conversation row must already exist.
+ */
+export async function seedQueuedRun(
+	db: Database,
+	input: { runId: string; userId: string; conversationId: string },
+): Promise<RunRecord> {
+	const [row] = await db
+		.insert(schema.runs)
+		.values({ ...input, status: "queued" })
+		.returning();
+	if (!row) throw new Error(`insert of run ${input.runId} returned no row`);
+	return toRunRecord(row);
 }
 
 /** Seed one owned Run for SessionStore fence tests. Callers choose every

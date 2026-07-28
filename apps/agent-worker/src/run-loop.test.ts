@@ -4,7 +4,6 @@ import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventTx,
 	claimNextRunTx,
-	createQueuedRunTx,
 	requestRunInterruptionTx,
 } from "@mymemo/agent-db/run-store";
 import {
@@ -17,7 +16,11 @@ import {
 	runEvents,
 	runs,
 } from "@mymemo/agent-db/schema";
-import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import {
+	createTestDatabase,
+	seedQueuedRun,
+	type TestDb,
+} from "@mymemo/agent-db/testing";
 import {
 	createInMemoryLiveStreamRelay,
 	decodeAgUiLiveStreamEvent,
@@ -89,7 +92,7 @@ async function queueRun(runId: string, conversationId: string) {
 		.insert(conversations)
 		.values({ userId: "user-1", conversationId, scope: "general" })
 		.onConflictDoNothing();
-	await createQueuedRunTx(tdb.db, { runId, userId: "user-1", conversationId });
+	await seedQueuedRun(tdb.db, { runId, userId: "user-1", conversationId });
 }
 
 async function claimRun(
@@ -774,6 +777,74 @@ describe("RunLoop — agent session pointer", () => {
 			agentSessionId: expectedPointer,
 		});
 		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
+	});
+
+	it("reconciles a completed turn to interrupted from the refused done fence", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await createConversationRuntimeTx(tdb.db, {
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+				runId: ctx.run.runId,
+				workerId: "worker-1",
+			});
+			// The durable request lands after the last heartbeat, so loop-local
+			// interruption state stays false: the only thing that can tell the loop
+			// to follow up with `interrupted` is the rejection the `done` fence
+			// returns, which names the Run's actual status.
+			await requestRunInterruptionTx(tdb.db, {
+				runId: ctx.run.runId,
+				userId: ctx.run.userId,
+				conversationId: ctx.run.conversationId,
+			});
+			return {
+				disposition: "completed",
+				streamMetadata: {
+					mirrorErrorObserved: false,
+					mirroredMainSessionId: "session-reconciled-done",
+				},
+			};
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
+		expect(await readRuntime("conv-1")).toMatchObject({
+			agentSessionId: "session-reconciled-done",
+		});
+	});
+
+	it("leaves a Run to recovery instead of chasing interrupted after the lease is gone", async () => {
+		const worker = buildWorker(1);
+		const processorStarted = deferred();
+		const gate = deferred();
+		const loop = buildLoop(worker, async () => {
+			processorStarted.resolve();
+			await gate.promise;
+			return { disposition: "completed" };
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick();
+		await processorStarted.promise;
+		// Expire the lease without ticking, so the loop never observes the loss and
+		// reaches `finish()` believing it still owns the Run.
+		await expireOwnership("run-1");
+
+		gate.resolve();
+		await worker.drain();
+
+		// A lost lease is final: recovery owns the Run, so neither `done` nor a
+		// speculative `interrupted` may be written over it.
+		expect((await readRun("run-1"))?.status).toBe("running");
+		expect(await readEventTypes("run-1")).toEqual([]);
+
+		// The Run is left intact for the sweep, which closes it as a stale worker.
+		await loop.tick();
+		expect((await readRun("run-1"))?.status).toBe("error");
+		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
 	});
 
 	it("keeps qualifying evidence when error reconciliation loses to interruption", async () => {

@@ -5,7 +5,7 @@ import {
 	publishArtifactsAndTransitionRunDoneTx,
 	recordArtifactObjectsTx,
 } from "./artifact-store";
-import { claimNextRunTx, createQueuedRunTx } from "./run-store";
+import { claimNextRunTx, type TerminalTransitionResult } from "./run-store";
 import {
 	artifactObjects,
 	conversationArtifacts,
@@ -14,7 +14,7 @@ import {
 	runEvents,
 	runs,
 } from "./schema";
-import { createTestDatabase, type TestDb } from "./testing";
+import { createTestDatabase, seedQueuedRun, type TestDb } from "./testing";
 
 let tdb: TestDb;
 
@@ -40,7 +40,7 @@ describe("Downloadable artifact publication", () => {
 			conversationId: "conv-1",
 			scope: "general",
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -116,7 +116,7 @@ describe("Downloadable artifact publication", () => {
 			["run-1", "objects/one", "artifact-stable"],
 			["run-2", "objects/two", "artifact-ignored"],
 		] as const) {
-			await createQueuedRunTx(tdb.db, {
+			await seedQueuedRun(tdb.db, {
 				runId,
 				userId: "user-1",
 				conversationId: "conv-1",
@@ -181,7 +181,7 @@ describe("Downloadable artifact publication", () => {
 			conversationId: "conv-1",
 			agentSessionId: "session-old",
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -222,7 +222,7 @@ describe("Downloadable artifact publication", () => {
 			conversationId: "conv-1",
 			scope: "general",
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -240,7 +240,7 @@ describe("Downloadable artifact publication", () => {
 			],
 		});
 
-		const run = await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+		const result = await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
 			owner: {
 				runId: "run-1",
 				workerId: "worker-1",
@@ -259,7 +259,10 @@ describe("Downloadable artifact publication", () => {
 			],
 		});
 
-		expect(run.status).toBe("done");
+		expect(result).toMatchObject({
+			outcome: "committed",
+			run: { status: "done" },
+		});
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("done");
 		expect(await tdb.db.select().from(conversationArtifacts)).toHaveLength(1);
 		expect(
@@ -280,7 +283,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -313,5 +316,83 @@ describe("Downloadable artifact publication", () => {
 		).toBeNull();
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("running");
 		expect(await tdb.db.select().from(runEvents)).toEqual([]);
+	});
+
+	it.each([
+		[
+			"an interruption was requested",
+			{ status: "interrupt_requested" },
+			{
+				outcome: "rejected",
+				rejected: "status",
+				current: "interrupt_requested",
+			} satisfies TerminalTransitionResult,
+		],
+		[
+			"ownership expired",
+			{ lockedUntil: new Date(Date.now() - 1_000) },
+			{
+				outcome: "rejected",
+				rejected: "lease",
+			} satisfies TerminalTransitionResult,
+		],
+	])("takes the Run fence before any metadata write, so publication is a no-op once %s", async (_case, mutation, expected) => {
+		await tdb.db.insert(conversations).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+		});
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await seedQueuedRun(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		await recordArtifactObjectsTx(tdb.db, {
+			objects: [
+				{
+					objectKey: "objects/opaque-1",
+					userId: "user-1",
+					conversationId: "conv-1",
+					runId: "run-1",
+					path: "report.txt",
+				},
+			],
+		});
+		await tdb.db.update(runs).set(mutation);
+
+		const result = await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
+			owner: {
+				runId: "run-1",
+				workerId: "worker-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+			},
+			agentSessionId: "session-new",
+			artifacts: [
+				{
+					artifactId: "artifact-1",
+					path: "report.txt",
+					objectKey: "objects/opaque-1",
+					sizeBytes: 12,
+					contentType: "application/octet-stream",
+				},
+			],
+		});
+
+		expect(result).toEqual(expected);
+		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
+		expect(await tdb.db.select().from(runEvents)).toEqual([]);
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBeNull();
+		// The staged object stays `pending`, so cleanup still owns it.
+		expect((await tdb.db.select().from(artifactObjects))[0]?.status).toBe(
+			"pending",
+		);
 	});
 });

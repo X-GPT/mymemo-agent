@@ -11,8 +11,9 @@ import { agentSessions, runs } from "./schema";
  * SDK-free persistence helpers over `agent_sessions`, used by the worker's
  * Claude Agent SDK `SessionStore` adapter (ADR-0005, Task 7.3). Append and
  * SDK-requested delete transactions validate and lock active-Run ownership
- * `FOR SHARE` after the mutation; a failed fence rolls the transaction back,
- * while a successful lock holds ownership stable through commit. Reads and
+ * `FOR SHARE` *before* the mutation: a rejected fence writes nothing at all,
+ * and the lock then holds ownership stable through commit, so the mutation
+ * cannot be undercut by a concurrent terminal transition. Reads and
  * administrative Conversation deletion are deliberately unfenced. The helpers
  * live here so the schema, fence, and SQL use the shared package's one Drizzle
  * instance; the adapter that imports SDK types lives in agent-worker and
@@ -90,6 +91,7 @@ export async function appendAgentSessionEntriesTx(
 	}
 	const subpath = normalizeSubpath(ref.subpath);
 	await db.transaction(async (tx) => {
+		await lockOwnedRun(tx, owner, "session append");
 		await tx
 			.insert(agentSessions)
 			.values(
@@ -103,7 +105,6 @@ export async function appendAgentSessionEntriesTx(
 				})),
 			)
 			.onConflictDoNothing();
-		await lockOwnedRunAfterMutation(tx, owner, "session append");
 	});
 }
 
@@ -195,10 +196,10 @@ export async function deleteAgentSessionTx(
 ): Promise<void> {
 	const { owner, ref } = input;
 	await db.transaction(async (tx) => {
+		await lockOwnedRun(tx, owner, "session delete");
 		await tx
 			.delete(agentSessions)
 			.where(transcriptWhere(owner.conversationId, ref.sessionId, ref.subpath));
-		await lockOwnedRunAfterMutation(tx, owner, "session delete");
 	});
 }
 
@@ -218,11 +219,12 @@ export async function deleteConversationAgentSessionsTx(
 }
 
 /**
- * Validate and lock ownership after the mutation. A failed fence rejects the
- * transaction and rolls the mutation back; a successful `FOR SHARE` lock keeps
- * the ownership row stable through commit.
+ * Validate and lock ownership before the mutation. A failed fence rejects the
+ * transaction with nothing written; a successful `FOR SHARE` lock keeps the
+ * ownership row stable through commit, so a concurrent terminal transition
+ * cannot clear ownership underneath the write.
  */
-async function lockOwnedRunAfterMutation(
+async function lockOwnedRun(
 	tx: DbTx,
 	owner: RunMutationOwner,
 	operation: string,

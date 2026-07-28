@@ -8,11 +8,7 @@ import {
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { RunFenceError } from "./run-ownership";
-import {
-	claimNextRunTx,
-	createQueuedRunTx,
-	markStaleRunsTx,
-} from "./run-store";
+import { claimNextRunTx, markStaleRunsTx } from "./run-store";
 import {
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
@@ -26,7 +22,7 @@ import {
 	orphanSandboxes,
 	runs,
 } from "./schema";
-import { createTestDatabase, type TestDb } from "./testing";
+import { createTestDatabase, seedQueuedRun, type TestDb } from "./testing";
 
 let tdb: TestDb;
 
@@ -105,7 +101,7 @@ const OWNER = {
 
 /** Queue and claim OWNER's run so `worker-1` holds live run ownership. */
 async function claimOwnedRun() {
-	await createQueuedRunTx(tdb.db, {
+	await seedQueuedRun(tdb.db, {
 		runId: OWNER.runId,
 		userId: OWNER.userId,
 		conversationId: OWNER.conversationId,

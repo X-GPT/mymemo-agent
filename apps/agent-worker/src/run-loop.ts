@@ -25,6 +25,7 @@ import {
 	type RunRecord,
 	type TerminalOutcome,
 	type TerminalRunStatus,
+	type TerminalTransitionResult,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 import type {
@@ -190,6 +191,11 @@ interface ActiveEntry {
 
 const STALE_RUN_RECOVERY_INTERVAL_MS = 15_000;
 const GENERIC_RUN_ERROR_MESSAGE = "Run failed";
+
+type RejectedTerminal = Extract<
+	TerminalTransitionResult,
+	{ outcome: "rejected" }
+>;
 
 /**
  * The agent-worker control loop over the shared run-store helpers. One `tick`:
@@ -627,14 +633,14 @@ export class RunLoop {
 			status: "error",
 			payload: { message: GENERIC_RUN_ERROR_MESSAGE },
 		} as const satisfies TerminalOutcome;
-		if (await this.tryTerminalOutcome(owner, outcome)) return "error";
-		if (
-			await this.tryTerminalInterrupted(owner, input.interruptedAgentSessionId)
-		) {
-			return "interrupted";
-		}
-		this.warnTerminalRecovery(owner, outcome.status);
-		return null;
+		const result = await transitionRunTerminalTx(this.opts.db, {
+			owner,
+			...outcome,
+		});
+		if (result.outcome === "committed") return "error";
+		return this.reconcileRejectedTerminal(owner, result, outcome.status, {
+			agentSessionId: input.interruptedAgentSessionId,
+		});
 	}
 
 	private async publishArtifactsAndFinish(
@@ -642,25 +648,14 @@ export class RunLoop {
 		publication: NonNullable<TurnResult["artifactPublication"]>,
 		agentSessionId: string | undefined,
 	): Promise<TerminalRunStatus | null> {
+		let result: TerminalTransitionResult;
 		try {
-			await publishArtifactsAndTransitionRunDoneTx(this.opts.db, {
+			result = await publishArtifactsAndTransitionRunDoneTx(this.opts.db, {
 				owner,
 				artifacts: publication.artifacts,
 				agentSessionId,
 			});
-			return "done";
 		} catch (error) {
-			if (error instanceof RunFenceError) {
-				if (await this.tryTerminalInterrupted(owner, agentSessionId)) {
-					return "interrupted";
-				}
-				this.opts.logger.warn({
-					message: "could not publish artifacts; leaving to stale-run recovery",
-					workerId: this.workerId,
-					runId: owner.runId,
-				});
-				return null;
-			}
 			return this.failRun(owner, {
 				message: "run failed",
 				fields:
@@ -676,69 +671,78 @@ export class RunLoop {
 				interruptedAgentSessionId: agentSessionId,
 			});
 		}
+		if (result.outcome === "committed") return "done";
+		return this.reconcileRejectedTerminal(owner, result, "done", {
+			agentSessionId,
+			unresolvedMessage:
+				"could not publish artifacts; leaving to stale-run recovery",
+		});
 	}
 
 	/**
 	 * Append a non-error terminal event through the fenced run-store helper.
-	 * `done` loses to an interruption the terminal CAS observes (the Run is
-	 * already `interrupt_requested`), so on a fence rejection it tries
-	 * `interrupted` once with the same proven continuity. If that transition is
-	 * also fenced, stale-Run recovery finishes the Run.
+	 * `done` loses to an interruption the fence observes (the Run is already
+	 * `interrupt_requested`), which the rejection says outright, so the loop
+	 * follows up with exactly the one legal terminal instead of guessing.
 	 */
 	private async terminalize(
 		owner: UserRunMutationOwner,
 		outcome: Exclude<TerminalOutcome, { status: "error" }>,
 	): Promise<TerminalRunStatus | null> {
-		if (await this.tryTerminalOutcome(owner, outcome)) return outcome.status;
-		if (
-			outcome.status === "done" &&
-			(await this.tryTerminalInterrupted(owner, outcome.agentSessionId))
-		) {
-			return "interrupted";
-		}
-		this.warnTerminalRecovery(owner, outcome.status);
-		return null;
-	}
-
-	private async tryTerminalOutcome(
-		owner: UserRunMutationOwner,
-		outcome: TerminalOutcome,
-	): Promise<boolean> {
-		try {
-			await transitionRunTerminalTx(this.opts.db, { owner, ...outcome });
-			return true;
-		} catch (error) {
-			if (error instanceof RunFenceError) return false;
-			throw error;
-		}
-	}
-
-	private warnTerminalRecovery(
-		owner: UserRunMutationOwner,
-		intended: TerminalRunStatus,
-	): void {
-		this.opts.logger.warn({
-			message: "could not terminalize run; leaving to stale-run recovery",
-			workerId: this.workerId,
-			runId: owner.runId,
-			intended,
+		const result = await transitionRunTerminalTx(this.opts.db, {
+			owner,
+			...outcome,
+		});
+		if (result.outcome === "committed") return outcome.status;
+		return this.reconcileRejectedTerminal(owner, result, outcome.status, {
+			agentSessionId: outcome.agentSessionId,
 		});
 	}
 
-	private async tryTerminalInterrupted(
+	/**
+	 * Resolve a refused terminal transition. A lost lease is final — recovery
+	 * owns the Run and must not be raced. A status refusal means a durable
+	 * interruption landed while the lease is still live, and `interrupted` is the
+	 * one terminal that remains legal; a live lease is exactly what makes that
+	 * follow-up worth attempting. Both are ordinary outcomes, so only genuine
+	 * database failures propagate from here.
+	 */
+	private async reconcileRejectedTerminal(
 		owner: UserRunMutationOwner,
-		agentSessionId?: string,
-	): Promise<boolean> {
-		try {
-			await transitionRunTerminalTx(this.opts.db, {
+		rejection: RejectedTerminal,
+		intended: TerminalRunStatus,
+		options: {
+			agentSessionId?: string;
+			unresolvedMessage?: string;
+		} = {},
+	): Promise<TerminalRunStatus | null> {
+		let unresolved = rejection;
+		if (
+			rejection.rejected === "status" &&
+			rejection.current === "interrupt_requested"
+		) {
+			const interrupted = await transitionRunTerminalTx(this.opts.db, {
 				owner,
 				status: "interrupted",
-				agentSessionId,
+				agentSessionId: options.agentSessionId,
 			});
-			return true;
-		} catch {
-			return false;
+			if (interrupted.outcome === "committed") return "interrupted";
+			// Report why the follow-up failed, not why the first attempt did.
+			unresolved = interrupted;
 		}
+		this.opts.logger.warn({
+			message:
+				options.unresolvedMessage ??
+				"could not terminalize run; leaving to stale-run recovery",
+			workerId: this.workerId,
+			runId: owner.runId,
+			intended,
+			rejected: unresolved.rejected,
+			...(unresolved.rejected === "status"
+				? { currentStatus: unresolved.current }
+				: {}),
+		});
+		return null;
 	}
 }
 
