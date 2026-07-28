@@ -13,7 +13,10 @@ import {
 	runLeaseByUserConditions,
 	type UserRunMutationOwner,
 } from "./run-ownership";
-import { publishAgentSessionPointerInTx } from "./runtime-store";
+import {
+	publishAgentSessionPointerInTx,
+	taintRecoveredRuntimeSandboxInTx,
+} from "./runtime-store";
 import { runEvents, runs } from "./schema";
 
 /**
@@ -22,9 +25,10 @@ import { runEvents, runs } from "./schema";
  * transactions (design doc "State Ownership"). Shared by chat-api (run
  * creation, interruption requests) and agent-worker
  * (claim/heartbeat/terminalize). Each helper owns one transaction: sequence
- * allocation is database-owned
- * (`runs.next_event_seq`, never app-side `max(seq) + 1`), and every status
- * change or append is fenced inside the same statement that performs it, so
+ * allocation is database-owned (`runs.next_event_seq`, never app-side
+ * `max(seq) + 1`), and every status change or append carries its fence either
+ * inside the statement that performs it or, where a transaction composes
+ * several writes, in a `FOR UPDATE` lock taken before the first of them — so
  * app-side select/update races cannot happen through this module. The ownership
  * fence for v1 is `locked_by` + `locked_until` — no fencing token, because a run
  * is claimed exactly once (failed runs never requeue; stale runs are
@@ -139,9 +143,18 @@ export type RunAdmissionResult =
 
 /**
  * Atomically admit the canonical client Run id and submitted User message.
- * The insert deliberately uses `ON CONFLICT DO NOTHING` for both possible
- * admission conflicts: a conflicting Run id is classified by an ownership-
- * scoped read, while a different active Run remains normal backpressure.
+ * The insert arbitrates on `run_id` alone, so the two admission conflicts stay
+ * distinguishable at the database: a repeated Run id is absorbed by the arbiter
+ * and classified by the ownership-scoped read below, while a *different* active
+ * Run in the conversation violates `runs_one_active_per_conversation` and
+ * raises a real unique violation, mapped here to backpressure. Re-admitting the
+ * conversation's own active Run conflicts on both — Postgres checks the arbiter
+ * index before the speculative insert, so the retry reattaches rather than
+ * colliding with itself.
+ *
+ * That violation also aborts the enclosing transaction, so
+ * {@link ActiveRunConflictError} must propagate out of it: a composer may catch
+ * it to shape its own error, never to keep issuing statements.
  */
 export async function admitQueuedRunTx(
 	db: Database,
@@ -172,18 +185,32 @@ export async function admitQueuedRunInTx(
 	};
 	parseDurableRunEvent(RunEventType.Started, startedPayload);
 
-	const [inserted] = await tx
-		.insert(runs)
-		.values({
-			runId: input.runId,
-			userId: input.userId,
-			conversationId: input.conversationId,
-			normalizedInput,
-			status: "queued",
-			nextEventSeq: 2,
-		})
-		.onConflictDoNothing()
-		.returning();
+	let inserted: typeof runs.$inferSelect | undefined;
+	try {
+		[inserted] = await tx
+			.insert(runs)
+			.values({
+				runId: input.runId,
+				userId: input.userId,
+				conversationId: input.conversationId,
+				normalizedInput,
+				status: "queued",
+				nextEventSeq: 2,
+			})
+			.onConflictDoNothing({ target: runs.runId })
+			.returning();
+	} catch (error) {
+		// `runs` carries exactly two unique constraints, and the arbiter already
+		// absorbs the primary key, so a unique violation from this statement can
+		// only be `runs_one_active_per_conversation`.
+		if (isUniqueViolation(error)) {
+			throw new ActiveRunConflictError(
+				`conversation ${input.conversationId} already has an active run`,
+				{ cause: error },
+			);
+		}
+		throw error;
+	}
 
 	if (inserted) {
 		await tx.insert(runEvents).values({
@@ -201,8 +228,10 @@ export async function admitQueuedRunInTx(
 		.where(eq(runs.runId, input.runId))
 		.limit(1);
 	if (!existing) {
-		throw new ActiveRunConflictError(
-			`conversation ${input.conversationId} already has an active run`,
+		// The arbiter absorbed a `run_id` conflict, so the row existed a statement
+		// ago; only a concurrent delete of the whole Conversation can get here.
+		throw new Error(
+			`run ${input.runId} conflicted on admission but vanished before it could be read`,
 		);
 	}
 	if (
@@ -234,39 +263,6 @@ function normalizedInputsEqual(
 		stored.text === expected.text &&
 		Object.keys(stored).length === 3
 	);
-}
-
-/**
- * Insert one `queued` run. The `runs_one_active_per_conversation` partial
- * unique index enforces single-admission at the DB layer; a violation is
- * mapped to {@link ActiveRunConflictError}. Any other failure (including a
- * duplicate `runId`) is rethrown untouched.
- */
-export async function createQueuedRunTx(
-	db: Database,
-	input: { runId: string; userId: string; conversationId: string },
-): Promise<RunRecord> {
-	try {
-		const [row] = await db
-			.insert(runs)
-			.values({
-				runId: input.runId,
-				userId: input.userId,
-				conversationId: input.conversationId,
-				status: "queued",
-			})
-			.returning();
-		if (!row) throw new Error(`insert of run ${input.runId} returned no row`);
-		return toRunRecord(row);
-	} catch (error) {
-		if (isActiveRunConflict(error)) {
-			throw new ActiveRunConflictError(
-				`conversation ${input.conversationId} already has an active run`,
-				{ cause: error },
-			);
-		}
-		throw error;
-	}
 }
 
 /**
@@ -486,18 +482,24 @@ export async function appendRunEventsTx(
 
 /**
  * Move an owned run to a terminal status and append its one terminal event —
- * optional Agent-session pointer publication, the status CAS, ownership clear
- * (`locked_by`/`locked_until` → NULL), `terminal_at`, sequence allocation, and
- * event insert are one transaction.
- * The from-status CAS makes double-terminalization impossible (the second
- * caller finds no row and gets {@link RunFenceError}), which is what makes
- * "exactly one terminal event per run" hold. Fenced like an owned append:
- * only the worker holding live ownership may terminalize its run.
+ * the fence, optional Agent-session pointer publication, the status CAS,
+ * ownership clear (`locked_by`/`locked_until` → NULL), `terminal_at`, sequence
+ * allocation, and event insert are one transaction.
+ * The fence makes double-terminalization impossible (the second caller finds
+ * the Run already terminal and is rejected), which is what makes "exactly one
+ * terminal event per run" hold. Only the worker holding live ownership may
+ * terminalize its run.
+ *
+ * A refused fence is a {@link TerminalTransitionResult}, not an exception:
+ * losing to a durable interruption is an ordinary outcome the caller resolves,
+ * and the rejection says whether the lease is gone (stop — recovery owns the
+ * Run) or the status simply moved on (and to what). Genuine failures still
+ * throw.
  */
 export async function transitionRunTerminalTx(
 	db: Database,
 	input: TerminalTransitionInput,
-): Promise<RunRecord> {
+): Promise<TerminalTransitionResult> {
 	return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
 }
 
@@ -522,11 +524,84 @@ export type TerminalTransitionInput = TerminalOutcome & {
 };
 
 /**
+ * Why a fenced terminal transition was refused. `lease`: the caller no longer
+ * holds live ownership — expired, reclaimed by recovery, or the Run/
+ * Conversation/user identity does not match — so it must stop treating the Run
+ * as its own. `status`: ownership is still live, but the Run's current status
+ * does not permit the requested terminal (`done` after an interruption was
+ * requested, or a Run already terminalized); `current` says what the Run is
+ * actually in, which is what lets the caller pick its one legal follow-up
+ * instead of guessing.
+ */
+export type FenceRejection =
+	| { rejected: "lease" }
+	| { rejected: "status"; current: RunStatus };
+
+export type TerminalTransitionResult =
+	| { outcome: "committed"; run: RunRecord }
+	| ({ outcome: "rejected" } & FenceRejection);
+
+/**
+ * Take the terminal fence for `status` and hold it for the rest of the
+ * transaction. Fence-first: the row lock keeps ownership and status stable, so
+ * everything composed after this point either commits behind a fence that was
+ * already proven or rolls back with it — correctness stops depending on a
+ * final compare-and-set happening to throw. Returns `null` when the fence
+ * holds, or the classified rejection (one extra read, same transaction).
+ */
+export async function lockRunForTerminalInTx(
+	tx: DbTx,
+	owner: UserRunMutationOwner,
+	status: TerminalRunStatus,
+): Promise<FenceRejection | null> {
+	const [held] = await tx
+		.select({ runId: runs.runId })
+		.from(runs)
+		.where(
+			and(
+				runLeaseByUserConditions(owner),
+				inArray(runs.status, TERMINAL_FROM_STATUSES[status]),
+			),
+		)
+		.for("update");
+	if (held) return null;
+	// The lease predicate alone: if it still matches, ownership is live and the
+	// refusal was purely about status.
+	const [owned] = await tx
+		.select({ status: runs.status })
+		.from(runs)
+		.where(runLeaseByUserConditions(owner))
+		.limit(1);
+	if (!owned) return { rejected: "lease" };
+	return { rejected: "status", current: owned.status as RunStatus };
+}
+
+/**
  * Transaction-scoped form of {@link transitionRunTerminalTx}. Callers compose
  * other terminal facts through it; artifact publication, for example, commits
  * current metadata, an optional Agent-session pointer, and `run_done` together.
  */
 export async function transitionRunTerminalInTx(
+	tx: DbTx,
+	input: TerminalTransitionInput,
+): Promise<TerminalTransitionResult> {
+	const rejection = await lockRunForTerminalInTx(tx, input.owner, input.status);
+	if (rejection) return { outcome: "rejected", ...rejection };
+	return {
+		outcome: "committed",
+		run: await commitLockedRunTerminalInTx(tx, input),
+	};
+}
+
+/**
+ * Commit the terminal status, the ownership clear, and the one terminal event
+ * for a Run whose fence this transaction already holds through
+ * {@link lockRunForTerminalInTx}. Split out so a composer can write its own
+ * terminal facts between the fence and the Outcome — artifact publication
+ * swaps current metadata there — without the fence arriving late enough that
+ * only a thrown rollback could undo them.
+ */
+export async function commitLockedRunTerminalInTx(
 	tx: DbTx,
 	input: TerminalTransitionInput,
 ): Promise<RunRecord> {
@@ -557,10 +632,8 @@ export async function transitionRunTerminalInTx(
 		.returning();
 	if (!row) {
 		throw new RunFenceError(
-			`terminal transition of run ${input.owner.runId} to ${input.status} rejected: ` +
-				`run is already terminal, not transitionable to ${input.status}, not owned by user ` +
-				`${input.owner.userId} in conversation ${input.owner.conversationId}, or worker ` +
-				`${input.owner.workerId} no longer owns it`,
+			`terminal transition of run ${input.owner.runId} to ${input.status} ` +
+				`ran without holding its fence`,
 		);
 	}
 	await insertTerminalEvent(tx, row, input.status, input.payload ?? {});
@@ -808,8 +881,16 @@ export async function markLiveStreamFailedTx(
  * Each run's status CAS and terminal event share the transaction, and candidates
  * are taken `FOR UPDATE SKIP LOCKED`, so concurrent recovery loops across the
  * fleet split the work instead of blocking, and a run can never be
- * double-terminalized. Returns the runs it recovered so the caller can clean up
- * their sandbox side effects.
+ * double-terminalized.
+ *
+ * Recovering a claimed run also taints the conversation's sandbox in the same
+ * transaction: the lost owner may be partitioned rather than dead (a Bash
+ * command may run four times longer than the lock it stopped renewing), and E2B
+ * offers no compare-and-set to evict it, so taint is the only place the next
+ * turn can be stopped from reconnecting to a workspace someone else is still
+ * writing. Deliberately unfenced — this path exists precisely because run
+ * ownership is already gone. Returns the runs it recovered for logging and
+ * Live Stream telemetry.
  */
 export async function markStaleRunsTx(
 	db: Database,
@@ -818,6 +899,8 @@ export async function markStaleRunsTx(
 		const stale = await tx
 			.select({
 				runId: runs.runId,
+				userId: runs.userId,
+				conversationId: runs.conversationId,
 				status: runs.status,
 				liveStreamFailedAt: runs.liveStreamFailedAt,
 			})
@@ -862,6 +945,11 @@ export async function markStaleRunsTx(
 				)
 				.returning();
 			if (!row) continue;
+			if (candidate.status !== "queued") {
+				// Only a claimed run can have touched the workspace; an unclaimed
+				// queued run ages out without ever reaching a sandbox.
+				await taintRecoveredRuntimeSandboxInTx(tx, candidate);
+			}
 			// The stale_worker Outcome is the durable proof that an incomplete Tool
 			// prefix came from a crashed owner, so both recovery and history accept it.
 			await insertTerminalEvent(tx, row, status, {
@@ -889,25 +977,31 @@ export function toRunRecord(row: typeof runs.$inferSelect): RunRecord {
 	};
 }
 
-/**
- * True when the error chain already represents active-Run backpressure or is a
- * unique violation of the `runs_one_active_per_conversation` partial index.
- * Database errors are matched by constraint name (node-postgres exposes
- * `constraint`) with a message fallback (pglite in tests), so a duplicate
- * `runId` primary-key violation stays distinct.
- * Exported so strict admission and lower-level queue tests classify the same
- * database invariant identically.
- */
-export function isActiveRunConflict(error: unknown): boolean {
+/** Whether `error` or anything it wraps satisfies `match`. Callers classify by
+ * walking the chain because both admission and its composers re-wrap. */
+function inCauseChain(error: unknown, match: (e: Error) => boolean): boolean {
 	for (
 		let e: unknown = error;
 		e instanceof Error;
 		e = (e as { cause?: unknown }).cause
 	) {
-		if (e instanceof ActiveRunConflictError) return true;
-		const constraint = (e as { constraint?: unknown }).constraint;
-		if (constraint === "runs_one_active_per_conversation") return true;
-		if (e.message.includes("runs_one_active_per_conversation")) return true;
+		if (match(e)) return true;
 	}
 	return false;
+}
+
+/** SQLSTATE 23505 (unique_violation), on `pg` and pglite alike. Both drivers
+ * carry the code; nothing here reads a constraint name or an error message. */
+function isUniqueViolation(error: unknown): boolean {
+	return inCauseChain(error, (e) => (e as { code?: unknown }).code === "23505");
+}
+
+/**
+ * True when the error chain represents active-Run backpressure. Admission is
+ * the only place the `runs_one_active_per_conversation` violation can be
+ * raised, and it converts it there, so this is a plain cause-chain walk for
+ * callers that wrap admission in their own transaction.
+ */
+export function isActiveRunConflict(error: unknown): boolean {
+	return inCauseChain(error, (e) => e instanceof ActiveRunConflictError);
 }

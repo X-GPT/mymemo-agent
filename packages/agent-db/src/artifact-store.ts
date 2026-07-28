@@ -1,7 +1,11 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
 import type { UserRunMutationOwner } from "./run-ownership";
-import { type RunRecord, transitionRunTerminalInTx } from "./run-store";
+import {
+	commitLockedRunTerminalInTx,
+	lockRunForTerminalInTx,
+	type TerminalTransitionResult,
+} from "./run-store";
 import { artifactObjects, conversationArtifacts } from "./schema";
 
 export const MAX_CURRENT_ARTIFACT_PATHS = 100;
@@ -53,8 +57,11 @@ export async function recordArtifactObjectsTx(
 
 /**
  * Make every staged object current and terminalize its owned Run as `done` in
- * one fenced transaction. A rejection or persistence error rolls back both the
- * metadata swap and `run_done`, leaving the prior current set intact.
+ * one fenced transaction. The Run's terminal fence is taken first and held for
+ * the whole transaction, so the metadata swap runs behind proven ownership
+ * rather than behind a compare-and-set at the end that has to throw to undo it.
+ * A rejection writes nothing; a persistence error rolls back both the metadata
+ * swap and `run_done`, leaving the prior current set intact.
  */
 export async function publishArtifactsAndTransitionRunDoneTx(
 	db: Database,
@@ -63,12 +70,15 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 		artifacts: PublishedArtifact[];
 		agentSessionId?: string;
 	},
-): Promise<RunRecord> {
+): Promise<TerminalTransitionResult> {
 	if (input.artifacts.length === 0) {
 		throw new Error("artifact publication requires at least one staged object");
 	}
 	validatePublishedArtifacts(input.artifacts);
 	return await db.transaction(async (tx) => {
+		const rejection = await lockRunForTerminalInTx(tx, input.owner, "done");
+		if (rejection) return { outcome: "rejected", ...rejection };
+
 		const currentArtifacts = await tx
 			.select({
 				path: conversationArtifacts.path,
@@ -144,11 +154,14 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 				.where(inArray(artifactObjects.objectKey, supersededKeys));
 		}
 
-		return await transitionRunTerminalInTx(tx, {
-			owner: input.owner,
-			status: "done",
-			agentSessionId: input.agentSessionId,
-		});
+		return {
+			outcome: "committed",
+			run: await commitLockedRunTerminalInTx(tx, {
+				owner: input.owner,
+				status: "done",
+				agentSessionId: input.agentSessionId,
+			}),
+		};
 	});
 }
 

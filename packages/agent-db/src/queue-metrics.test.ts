@@ -8,9 +8,9 @@ import {
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { readRunQueueMetrics } from "./queue-metrics";
-import { claimNextRunTx, createQueuedRunTx } from "./run-store";
+import { claimNextRunTx } from "./run-store";
 import { conversations, runs } from "./schema";
-import { createTestDatabase, type TestDb } from "./testing";
+import { createTestDatabase, seedQueuedRun, type TestDb } from "./testing";
 
 let tdb: TestDb;
 
@@ -32,7 +32,7 @@ async function queueRun(runId: string, conversationId: string) {
 		.insert(conversations)
 		.values({ userId: "user-1", conversationId, scope: "general" })
 		.onConflictDoNothing();
-	return await createQueuedRunTx(tdb.db, {
+	return await seedQueuedRun(tdb.db, {
 		runId,
 		userId: "user-1",
 		conversationId,

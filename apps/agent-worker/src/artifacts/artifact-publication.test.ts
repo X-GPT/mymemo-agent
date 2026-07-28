@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
 import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
 import {
 	artifactObjects,
@@ -10,7 +9,11 @@ import {
 	runEvents,
 	runs,
 } from "@mymemo/agent-db/schema";
-import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import {
+	createTestDatabase,
+	seedQueuedRun,
+	type TestDb,
+} from "@mymemo/agent-db/testing";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
@@ -194,7 +197,7 @@ function buildArtifactHarness(
 		uploaded,
 		async queue(runId: string, query: SupervisedQuery) {
 			queries.set(runId, query);
-			await createQueuedRunTx(tdb.db, {
+			await seedQueuedRun(tdb.db, {
 				runId,
 				userId: "user-1",
 				conversationId: "conv-1",
@@ -322,7 +325,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			conversationId: "conv-1",
 			scope: "general",
 		});
-		await createQueuedRunTx(tdb.db, {
+		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",

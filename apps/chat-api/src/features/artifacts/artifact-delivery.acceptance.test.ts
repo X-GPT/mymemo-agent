@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { createQueuedRunTx } from "@mymemo/agent-db/run-store";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { asc, eq } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
@@ -10,7 +9,7 @@ import {
 	runEvents,
 	runs,
 } from "@/db/schema";
-import { createTestDatabase, type TestDb } from "@/db/testing";
+import { createTestDatabase, seedQueuedRun, type TestDb } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store";
 import type { ArtifactManifestEntry } from "../../../../agent-worker/src/artifacts/artifact-manifest";
@@ -163,7 +162,7 @@ function createDeliveryHarness(
 		},
 		async queue(runId: string, query: SupervisedQuery) {
 			queries.set(runId, query);
-			await createQueuedRunTx(tdb.db, {
+			await seedQueuedRun(tdb.db, {
 				runId,
 				userId: "member-1",
 				conversationId: "conversation-1",

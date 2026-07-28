@@ -13,7 +13,6 @@ import type {
 import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	claimNextRunTx,
-	createQueuedRunTx,
 	type RunRecord,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
@@ -24,7 +23,11 @@ import {
 	runEvents,
 	runs,
 } from "@mymemo/agent-db/schema";
-import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import {
+	createTestDatabase,
+	seedQueuedRun,
+	type TestDb,
+} from "@mymemo/agent-db/testing";
 import { eq } from "drizzle-orm";
 import type { ArtifactPublisher } from "../artifacts/artifact-publication";
 import {
@@ -90,7 +93,7 @@ async function createClaimedRun(input: {
 			scope: "general",
 		})
 		.onConflictDoNothing();
-	await createQueuedRunTx(tdb.db, {
+	await seedQueuedRun(tdb.db, {
 		runId: input.runId,
 		userId: USER_ID,
 		conversationId: input.conversationId,
