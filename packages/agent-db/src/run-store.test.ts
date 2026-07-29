@@ -138,10 +138,9 @@ describe("admitQueuedRunTx", () => {
 	});
 
 	it("reattaches the active Run's own retry instead of raising backpressure against it", async () => {
-		// The Conversation's own Active Run is excluded from the Active Run count,
-		// so the retry falls through to the `run_id` arbiter and reattaches. Count
-		// it instead and every in-flight client retry would be reported as a
-		// conflicting second Run.
+		// An already-admitted Run id skips the Active Run count and falls through
+		// to the `run_id` arbiter. Count it instead and every in-flight client
+		// retry would be reported as a conflicting second Run.
 		await admitQueuedRunTx(tdb.db, admission);
 		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
 
@@ -189,6 +188,46 @@ describe("admitQueuedRunTx", () => {
 		await expect(
 			admitQueuedRunTx(tdb.db, { ...admission, runId: "client-run-2" }),
 		).rejects.toBeInstanceOf(ActiveRunConflictError);
+	});
+
+	it("reattaches a finished Run's retry even while a later Run is active", async () => {
+		// Identity outranks the bound: this retry is about a Run that already
+		// reached its Outcome, so it must resolve to that Run — and let the caller
+		// answer with Conversation history — rather than be told the Conversation
+		// is busy with the unrelated Run that followed it.
+		await admitQueuedRunTx(tdb.db, admission);
+		await tdb.db
+			.update(runs)
+			.set({ status: "done" })
+			.where(eq(runs.runId, "client-run-1"));
+		await admitQueuedRunTx(tdb.db, {
+			...admission,
+			runId: "client-run-2",
+			messageId: "client-message-2",
+		});
+
+		const retry = await admitQueuedRunTx(tdb.db, admission);
+
+		expect(retry).toMatchObject({
+			outcome: "existing",
+			run: { runId: "client-run-1", status: "done" },
+		});
+	});
+
+	it("resolves a foreign Run id as absence even while the Conversation is busy", async () => {
+		await admitQueuedRunTx(tdb.db, {
+			...admission,
+			conversationId: "conv-2",
+			runId: "client-run-elsewhere",
+		});
+		await admitQueuedRunTx(tdb.db, admission);
+
+		expect(
+			await admitQueuedRunTx(tdb.db, {
+				...admission,
+				runId: "client-run-elsewhere",
+			}),
+		).toEqual({ outcome: "not_found" });
 	});
 
 	it("counts an interrupted-but-unfinished Run against the bound", async () => {

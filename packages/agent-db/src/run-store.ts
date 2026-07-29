@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
@@ -84,11 +84,11 @@ export class ActiveRunConflictError extends Error {
 }
 
 /** Statuses that make a Run count against {@link ACTIVE_RUN_DEPTH_BOUND}. */
-const ACTIVE_RUN_STATUSES: RunStatus[] = [
+const ACTIVE_RUN_STATUSES = [
 	"queued",
 	"running",
 	"interrupt_requested",
-];
+] as const satisfies RunStatus[];
 
 /**
  * How many Active Runs one Conversation may hold. Raising it is a product
@@ -197,9 +197,9 @@ export async function admitQueuedRunTx(
  *
  * The insert arbitrates on `run_id` alone, and that is now the only conflict it
  * can raise: a repeated Run id is absorbed by the arbiter and classified by the
- * ownership-scoped read below. A *different* Active Run in the Conversation is
- * refused before the insert by the explicit count, so no unique violation is
- * involved and the transaction stays usable after the throw.
+ * ownership-scoped read below. A *new* Run id arriving at a Conversation that is
+ * already at its bound is refused before the insert by the explicit count, so no
+ * unique violation is involved and the transaction stays usable after the throw.
  */
 export async function admitQueuedRunInTx(
 	tx: DbTx,
@@ -221,26 +221,39 @@ export async function admitQueuedRunInTx(
 	};
 	parseDurableRunEvent(RunEventType.Started, startedPayload);
 
-	// The Run being admitted is excluded from the count so an in-flight client
-	// retry of the Conversation's *own* Active Run reattaches below instead of
-	// being refused as a second Run. Everything else in the Conversation's Active
-	// set counts, `interrupt_requested` included: a Run being interrupted has not
-	// finished, and the next one waits for its Outcome.
-	const [active] = await tx
-		.select({ count: count() })
+	// The bound governs *new* work, so an already-admitted Run id skips it
+	// entirely and is resolved as the identity below — reattach, input mismatch,
+	// or foreign. That ordering is what the index-based detection got for free,
+	// because Postgres checked the `run_id` arbiter before the partial index
+	// could fire; making the bound explicit makes the ordering explicit too.
+	// Reverse it and a client retrying a Run that has since finished would be
+	// answered with backpressure about some other Run.
+	//
+	// A concurrent insert of the same Run id between this probe and the insert
+	// below is absorbed by that same arbiter, so the probe needs no lock.
+	const [known] = await tx
+		.select({ runId: runs.runId })
 		.from(runs)
-		.where(
-			and(
-				eq(runs.userId, input.userId),
-				eq(runs.conversationId, input.conversationId),
-				ne(runs.runId, input.runId),
-				inArray(runs.status, ACTIVE_RUN_STATUSES),
-			),
-		);
-	if ((active?.count ?? 0) >= ACTIVE_RUN_DEPTH_BOUND) {
-		throw new ActiveRunConflictError(
-			`conversation ${input.conversationId} already has an active run`,
-		);
+		.where(eq(runs.runId, input.runId))
+		.limit(1);
+	if (!known) {
+		// `interrupt_requested` counts with the rest of the Active set: a Run being
+		// interrupted has not finished, and the next one waits for its Outcome.
+		const [active] = await tx
+			.select({ count: count() })
+			.from(runs)
+			.where(
+				and(
+					eq(runs.userId, input.userId),
+					eq(runs.conversationId, input.conversationId),
+					inArray(runs.status, ACTIVE_RUN_STATUSES),
+				),
+			);
+		if ((active?.count ?? 0) >= ACTIVE_RUN_DEPTH_BOUND) {
+			throw new ActiveRunConflictError(
+				`conversation ${input.conversationId} already has an active run`,
+			);
+		}
 	}
 
 	const [inserted] = await tx
