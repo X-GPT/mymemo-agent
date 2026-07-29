@@ -1,15 +1,11 @@
 /**
- * Shared ownership vocabulary and SQL predicates. Worker-scoped mutations use
- * the Run/Conversation/worker/lease fence; Conversation runtime and terminal
- * mutations add the trusted user identity. Runtime pointer updates use the
- * user-bound predicate's `EXISTS` form inside the write itself.
- *
- * The Conversation Ownership epoch fence (ADR-0015) lives here too. It is the
- * fence the Claim protocol hands out, and the one every fenced write moves to;
- * the Run-lease predicates above it are what those writes still evaluate today.
+ * Shared Run ownership vocabulary and SQL predicates. Worker-scoped mutations
+ * use the Run/Conversation/worker/lease fence; Conversation runtime and
+ * terminal mutations add the trusted user identity. Runtime pointer updates
+ * use the user-bound predicate's `EXISTS` form inside the write itself.
  */
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { conversations, runs } from "./schema";
+import { runs } from "./schema";
 
 /** Run identity and lease holder required for any worker-owned mutation. */
 export interface RunMutationOwner {
@@ -68,37 +64,6 @@ export function ownedRunByUserConditions(owner: UserRunMutationOwner) {
 /** {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate. */
 export function ownedRunByUserExists(owner: UserRunMutationOwner) {
 	return sql`exists (select 1 from ${runs} where ${ownedRunByUserConditions(owner)})`;
-}
-
-/**
- * One Claim of a Conversation: the Conversation it took and the Ownership epoch
- * that Claim was given. This is the whole authority a fenced write needs — the
- * owning worker's id is provenance and deliberately absent here.
- */
-export interface ConversationOwner {
-	userId: string;
-	conversationId: string;
-	epoch: number;
-}
-
-/**
- * The Ownership epoch fence, as an in-statement `EXISTS` probe on the
- * `conversations` primary key. Both conjuncts are required and cover different
- * failures: the epoch fences a lease superseded by a re-Claim, and the live
- * deadline fences one that merely lapsed with no successor — a lapsed lease
- * keeps its epoch, so the epoch alone would let a worker whose Conversation is
- * about to be reclaimed keep writing.
- *
- * Deliberately a probe rather than a lock: fence reads then never conflict with
- * each other, only with the brief Claim and release writes.
- */
-export function conversationEpochExists(owner: ConversationOwner) {
-	return sql`exists (
-		select 1 from ${conversations} c
-		 where c.user_id = ${owner.userId}
-		   and c.conversation_id = ${owner.conversationId}
-		   and c.epoch = ${owner.epoch}
-		   and c.owner_until > now())`;
 }
 
 /** Raise the canonical bounded rejection for an owned worker mutation. */

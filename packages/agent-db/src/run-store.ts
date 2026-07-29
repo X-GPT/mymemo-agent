@@ -539,8 +539,9 @@ export type TerminalTransitionInput = TerminalOutcome & {
  * permanently deleted and took the Run with it — there is nothing left to
  * terminalize, recover, or hand back.
  *
- * This is the one fence vocabulary; every fenced write classifies into it
- * rather than growing a parallel shape of its own.
+ * This is the fence vocabulary. The writes that still throw an opaque
+ * {@link RunFenceError} classify into it as they adopt a typed rejection; none
+ * of them grows a parallel shape of its own.
  */
 export type FenceRejection =
 	| { rejected: "lease" }

@@ -1,22 +1,26 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import type { ConversationOwner } from "./run-ownership";
 import { conversations, runs } from "./schema";
 
 /**
- * The Claim protocol (ADR-0015): take exclusive execution ownership of one
- * Conversation, learn which Runs that Claim will serve, renew that ownership,
- * and release it.
+ * Conversation ownership and the Claim protocol (ADR-0015): take exclusive
+ * execution ownership of one Conversation, learn which Runs that Claim will
+ * serve, renew that ownership, and release it — plus the fence every owned
+ * write validates against.
  *
  * A worker Claims a Conversation, serves the Runs it had queued at that moment
  * one at a time in submission order, and releases. Every Claim increments the
- * Conversation's Ownership epoch, and `conversationEpochExists` is the fence
- * every owned write validates against. Runs submitted mid-drain are
- * deliberately left for a later Claim — that is what bounds drain length by the
- * admission depth bound with no second constant, sends a mid-drain arrival to
- * the back of the global queue by its own `created_at`, and lets release be
- * unconditional rather than carrying a "zero rows means work arrived, keep the
- * lease and loop" subtlety.
+ * Conversation's Ownership epoch. Runs submitted mid-drain are deliberately
+ * left for a later Claim — that is what bounds drain length by the admission
+ * depth bound with no second constant, sends a mid-drain arrival to the back of
+ * the global queue by its own `created_at`, and lets release be unconditional
+ * rather than carrying a "zero rows means work arrived, keep the lease and
+ * loop" subtlety.
+ *
+ * This module is deliberately the whole of ADR-0015, sitting beside the Run
+ * lease in `run-ownership.ts` rather than inside it: the two authorities
+ * coexist only until the fenced writes move onto the epoch, and a file boundary
+ * makes retiring the older one a deletion rather than surgery.
  *
  * Lock order is global and stated once: `conversations` before `runs`. The
  * Claim below holds to it by locking only the `conversations` side of its
@@ -30,10 +34,20 @@ import { conversations, runs } from "./schema";
  */
 const OWNERSHIP_LEASE_MS = 60_000;
 
-/** One queued Run inside a Claim's snapshot. */
-export interface ClaimedRun {
-	runId: string;
-	createdAt: Date;
+/** A Claim and a renewal must push the deadline the same distance. */
+function leaseDeadline() {
+	return sql`now() + (${OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
+}
+
+/**
+ * One Claim of a Conversation: the Conversation it took and the Ownership epoch
+ * that Claim was given. This is the whole authority a fenced write needs — the
+ * owning worker's id is provenance and deliberately absent.
+ */
+export interface ConversationOwner {
+	userId: string;
+	conversationId: string;
+	epoch: number;
 }
 
 /**
@@ -43,7 +57,7 @@ export interface ClaimedRun {
 export interface ClaimedConversation extends ConversationOwner {
 	ownerUntil: Date;
 	/** The queued Runs at Claim time, oldest submission first. */
-	runs: ClaimedRun[];
+	runIds: string[];
 }
 
 /**
@@ -87,7 +101,7 @@ export async function claimConversationTx(
 			.update(conversations)
 			.set({
 				ownerWorkerId: input.workerId,
-				ownerUntil: sql`now() + (${OWNERSHIP_LEASE_MS} * interval '1 millisecond')`,
+				ownerUntil: leaseDeadline(),
 				epoch: sql`${conversations.epoch} + 1`,
 			})
 			.where(
@@ -126,7 +140,7 @@ export async function claimConversationTx(
 		// were. A split placement is silently unbounded, and a reviewer checking
 		// only correctness would wave it through, so do not separate these.
 		const snapshot = await tx
-			.select({ runId: runs.runId, createdAt: runs.createdAt })
+			.select({ runId: runs.runId })
 			.from(runs)
 			.where(
 				and(
@@ -142,7 +156,7 @@ export async function claimConversationTx(
 			conversationId: claimed.conversationId,
 			epoch: claimed.epoch,
 			ownerUntil,
-			runs: snapshot,
+			runIds: snapshot.map((run) => run.runId),
 		};
 	});
 }
@@ -164,7 +178,7 @@ export async function releaseConversationTx(
 	const released = await db
 		.update(conversations)
 		.set({ ownerWorkerId: null, ownerUntil: null })
-		.where(ownedConversationConditions(owner))
+		.where(claimedConversationConditions(owner))
 		.returning({ conversationId: conversations.conversationId });
 	return released.length > 0;
 }
@@ -185,24 +199,40 @@ export async function renewConversationLeaseTx(
 ): Promise<Date | null> {
 	const [renewed] = await db
 		.update(conversations)
-		.set({
-			ownerUntil: sql`now() + (${OWNERSHIP_LEASE_MS} * interval '1 millisecond')`,
-		})
-		.where(
-			and(
-				ownedConversationConditions(owner),
-				sql`${conversations.ownerUntil} > now()`,
-			),
-		)
+		.set({ ownerUntil: leaseDeadline() })
+		.where(liveClaimConditions(owner))
 		.returning({ ownerUntil: conversations.ownerUntil });
 	return renewed?.ownerUntil ?? null;
 }
 
 /** This Claim's Conversation, identified by key and epoch. */
-function ownedConversationConditions(owner: ConversationOwner) {
+function claimedConversationConditions(owner: ConversationOwner) {
 	return and(
 		eq(conversations.userId, owner.userId),
 		eq(conversations.conversationId, owner.conversationId),
 		eq(conversations.epoch, owner.epoch),
 	);
+}
+
+/**
+ * The Ownership fence: this Claim's Conversation, with its lease still live.
+ * Both conjuncts are required and cover different failures — the epoch fences a
+ * lease superseded by a re-Claim, and the live deadline fences one that merely
+ * lapsed with no successor, since a lapsed lease keeps its epoch.
+ */
+function liveClaimConditions(owner: ConversationOwner) {
+	return and(
+		claimedConversationConditions(owner),
+		sql`${conversations.ownerUntil} > now()`,
+	);
+}
+
+/**
+ * {@link liveClaimConditions} as an in-statement `EXISTS` predicate — the form
+ * a fenced write on another table carries inside the statement that performs
+ * it. Deliberately a probe rather than a lock: fence reads then never conflict
+ * with each other, only with the brief Claim and release writes.
+ */
+export function conversationEpochExists(owner: ConversationOwner) {
+	return sql`exists (select 1 from ${conversations} where ${liveClaimConditions(owner)})`;
 }

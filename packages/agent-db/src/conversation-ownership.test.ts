@@ -9,14 +9,12 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import {
 	type ClaimedConversation,
+	type ConversationOwner,
 	claimConversationTx,
+	conversationEpochExists,
 	releaseConversationTx,
 	renewConversationLeaseTx,
 } from "./conversation-ownership";
-import {
-	type ConversationOwner,
-	conversationEpochExists,
-} from "./run-ownership";
 import { conversations, runs } from "./schema";
 import { createTestDatabase, type TestDb } from "./testing";
 
@@ -224,7 +222,7 @@ describe("the Claim's snapshot", () => {
 			await claimConversationTx(tdb.db, { workerId: "worker-1" }),
 		);
 
-		expect(claim.runs.map((run) => run.runId)).toEqual(["run-1"]);
+		expect(claim.runIds).toEqual(["run-1"]);
 	});
 
 	it("leaves a Run submitted after the Claim to a later Claim", async () => {
@@ -239,7 +237,7 @@ describe("the Claim's snapshot", () => {
 			.where(eq(runs.runId, "run-1"));
 		await seedRun({ runId: "run-2", conversationId: "conv-1" });
 
-		expect(claim.runs.map((run) => run.runId)).toEqual(["run-1"]);
+		expect(claim.runIds).toEqual(["run-1"]);
 	});
 });
 
