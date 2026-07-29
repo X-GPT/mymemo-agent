@@ -21,7 +21,13 @@
 		"db:generate": "drizzle-kit generate",
 		"format": "biome format --write",
 		"lint": "biome lint --write",
-		"check": "biome check --write"
+		"check": "biome check --write",
+		"proto:up": "bash prototype-conversation-ownership/up.sh up",
+		"proto:down": "bash prototype-conversation-ownership/up.sh down",
+		"proto:tui": "bun prototype-conversation-ownership/tui.ts",
+		"proto:explain": "bun prototype-conversation-ownership/explain.ts",
+		"proto:race": "bun prototype-conversation-ownership/race.ts",
+		"proto:bench": "bun prototype-conversation-ownership/bench.ts"
 	},
 	"peerDependencies": {
 		"drizzle-orm": "^0.45.2",
