@@ -1099,6 +1099,23 @@ describe("transitionRunTerminalTx", () => {
 			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
 		).toBe("session-old");
 	});
+
+	it("names a deleted Conversation as gone rather than a lost lease", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		// Permanent Conversation deletion; its Runs cascade with it. The worker
+		// has nothing left to terminalize and no successor to stand aside for,
+		// which is why this is not the `lease` rejection.
+		await tdb.db
+			.delete(conversations)
+			.where(eq(conversations.conversationId, "conv-1"));
+
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status: "done",
+			}),
+		).toEqual({ outcome: "rejected", rejected: "gone" });
+	});
 });
 
 describe("requestRunInterruptionTx", () => {

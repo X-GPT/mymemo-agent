@@ -216,6 +216,7 @@ function runRecord(input: {
 		updatedAt: now,
 		lockedBy: null,
 		lockedUntil: null,
+		executedByWorkerId: null,
 		heartbeatAt: null,
 		interruptRequestedAt: null,
 		liveStreamFailedAt: input.liveStreamFailedAt ?? null,
