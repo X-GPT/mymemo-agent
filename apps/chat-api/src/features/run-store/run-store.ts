@@ -56,7 +56,8 @@ export {
  * Queue admission failed: the conversation already has an active
  * (queued/running/interrupt_requested) run. A specialization of the shared
  * {@link ActiveRunConflictError} so the route can surface busy/backpressure with
- * a stable message; the partial unique index is the authority.
+ * a stable message; admission's Active Run count, taken under the Conversation
+ * row lock this module holds, is the authority.
  */
 export class ActiveRunExistsError extends ActiveRunConflictError {
 	override name = "ActiveRunExistsError" as const;

@@ -200,14 +200,34 @@ describe("claimConversationTx", () => {
 });
 
 describe("the Claim's snapshot", () => {
-	// A Conversation cannot yet hold more than one queued Run: the
-	// `runs_one_active_per_conversation` partial unique index still bounds it to
-	// one Active Run. So the snapshot's `created_at` ordering has no multi-Run
-	// case to exercise here — it first becomes reachable when admission enforces
-	// the Active Run bound explicitly and that index is dropped, which is where
-	// the ordering assertion belongs. What is exercisable now is which Runs the
-	// snapshot selects; the Claim's own candidate ordering, covered above,
-	// already evaluates the same `created_at` key.
+	it("holds the Conversation's queued Runs in submission order", async () => {
+		// Reachable only because the Active Run bound moved out of
+		// `runs_one_active_per_conversation` and into admission: no seed could put
+		// a Conversation's second queued Run in the table while that index stood.
+		// Seeded out of submission order so a snapshot that returned insertion
+		// order would pass by accident.
+		await seedRun({
+			runId: "run-third",
+			conversationId: "conv-1",
+			createdAt: new Date("2026-07-29T10:00:02Z"),
+		});
+		await seedRun({
+			runId: "run-first",
+			conversationId: "conv-1",
+			createdAt: new Date("2026-07-29T10:00:00Z"),
+		});
+		await seedRun({
+			runId: "run-second",
+			conversationId: "conv-1",
+			createdAt: new Date("2026-07-29T10:00:01Z"),
+		});
+
+		const claim = claimed(
+			await claimConversationTx(tdb.db, { workerId: "worker-1" }),
+		);
+
+		expect(claim.runIds).toEqual(["run-first", "run-second", "run-third"]);
+	});
 
 	it("holds the Conversation's queued Runs and nothing else", async () => {
 		await seedRun({ runId: "run-1", conversationId: "conv-1" });

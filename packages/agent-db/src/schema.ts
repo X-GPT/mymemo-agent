@@ -307,9 +307,11 @@ export const runs = pgTable(
 			foreignColumns: [conversations.userId, conversations.conversationId],
 			name: "runs_conversation_fk",
 		}).onDelete("cascade"),
-		uniqueIndex("runs_one_active_per_conversation")
-			.on(t.userId, t.conversationId)
-			.where(sql`${t.status} in ('queued', 'running', 'interrupt_requested')`),
+		// No `runs_one_active_per_conversation` here any more. The Active Run bound
+		// is admission's explicit count under the Conversation row lock
+		// (`admitQueuedRunInTx`), not a distributed database invariant — so it is
+		// readable in one place, and the database no longer guarantees that a
+		// writer starts one Run at a time.
 		// Queue claim: oldest queued run first (`FOR UPDATE SKIP LOCKED` scan).
 		index("runs_queue_claim_idx")
 			.on(t.createdAt)

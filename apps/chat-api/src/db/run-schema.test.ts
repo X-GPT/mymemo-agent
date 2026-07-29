@@ -134,75 +134,23 @@ describe("run queue schema", () => {
 		expect(rows).toEqual([{ column_name: "interrupt_requested_at" }]);
 	});
 
-	it("enforces one active run per conversation", async () => {
-		await tdb.db.insert(runs).values({
-			runId: "run-active-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-
-		await expectDbWriteToFail(() =>
-			tdb.db.insert(runs).values({
-				runId: "run-active-2",
-				userId: "user-1",
-				conversationId: "conv-1",
-				status: "running",
-			}),
-		);
-	});
-
-	it("keeps interrupt_requested inside the one-active-run backpressure", async () => {
-		await tdb.db.insert(runs).values({
-			runId: "run-stopping",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "interrupt_requested",
-		});
-
-		await expectDbWriteToFail(() =>
-			tdb.db.insert(runs).values({
-				runId: "run-next",
-				userId: "user-1",
-				conversationId: "conv-1",
-				status: "queued",
-			}),
-		);
-	});
-
-	it("terminal runs do not block a later run for the same conversation", async () => {
-		await tdb.db.insert(runs).values({
-			runId: "run-finished",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-		await tdb.db
-			.update(runs)
-			.set({ status: "done" })
-			.where(eq(runs.runId, "run-finished"));
-
-		await tdb.db.insert(runs).values({
-			runId: "run-next",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-	});
-
-	it("allows active runs for different conversations", async () => {
+	it("no longer bounds active runs per conversation", async () => {
+		// The Active Run bound is admission's explicit count under the Conversation
+		// row lock, not a database invariant. The schema accepting this pair is the
+		// point: what the database still guarantees is a single writer, not that
+		// the writer starts one Run at a time.
 		await tdb.db.insert(runs).values([
 			{
-				runId: "run-1",
+				runId: "run-active-1",
 				userId: "user-1",
 				conversationId: "conv-1",
 				status: "queued",
 			},
 			{
-				runId: "run-2",
+				runId: "run-active-2",
 				userId: "user-1",
-				conversationId: "conv-2",
-				status: "queued",
+				conversationId: "conv-1",
+				status: "running",
 			},
 		]);
 	});
@@ -215,7 +163,7 @@ describe("run queue schema", () => {
 		expect(names).toContain("runs_queue_claim_idx");
 		expect(names).toContain("runs_stale_recovery_idx");
 		expect(names).toContain("runs_cleanup_idx");
-		expect(names).toContain("runs_one_active_per_conversation");
+		expect(names).not.toContain("runs_one_active_per_conversation");
 	});
 
 	it("records ordered run events", async () => {

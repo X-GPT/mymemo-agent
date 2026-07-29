@@ -138,13 +138,10 @@ describe("admitQueuedRunTx", () => {
 	});
 
 	it("reattaches the active Run's own retry instead of raising backpressure against it", async () => {
-		// Re-admitting the conversation's *active* Run conflicts with both unique
-		// constraints at once: the `runs` primary key and
-		// `runs_one_active_per_conversation`. Admission arbitrates on `run_id`, and
-		// Postgres checks the arbiter index before the speculative insert, so the
-		// PK conflict resolves to DO NOTHING and the partial index never fires.
-		// Reverse that order and every in-flight client retry would be reported as
-		// a conflicting second Run.
+		// The Conversation's own Active Run is excluded from the Active Run count,
+		// so the retry falls through to the `run_id` arbiter and reattaches. Count
+		// it instead and every in-flight client retry would be reported as a
+		// conflicting second Run.
 		await admitQueuedRunTx(tdb.db, admission);
 		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
 
@@ -188,6 +185,24 @@ describe("admitQueuedRunTx", () => {
 
 	it("preserves active-Run backpressure for a different client Run id", async () => {
 		await admitQueuedRunTx(tdb.db, admission);
+
+		await expect(
+			admitQueuedRunTx(tdb.db, { ...admission, runId: "client-run-2" }),
+		).rejects.toBeInstanceOf(ActiveRunConflictError);
+	});
+
+	it("counts an interrupted-but-unfinished Run against the bound", async () => {
+		// `interrupt_requested` is Active: the Run has not reached its Outcome, and
+		// the next one waits for it.
+		await admitQueuedRunTx(tdb.db, admission);
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		expect(
+			await requestRunInterruptionTx(tdb.db, {
+				userId: "user-1",
+				conversationId: "conv-1",
+				runId: "client-run-1",
+			}),
+		).toMatchObject({ outcome: "interrupt_requested" });
 
 		await expect(
 			admitQueuedRunTx(tdb.db, { ...admission, runId: "client-run-2" }),

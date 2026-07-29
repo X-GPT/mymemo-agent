@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, count, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
@@ -17,7 +17,7 @@ import {
 	publishAgentSessionPointerInTx,
 	taintRecoveredRuntimeSandboxInTx,
 } from "./runtime-store";
-import { runEvents, runs } from "./schema";
+import { conversations, runEvents, runs } from "./schema";
 
 /**
  * Narrow transaction helpers over `runs`/`run_events` — the only write path for
@@ -77,11 +77,27 @@ export type RecoveredRunRecord = RunRecord & {
 /**
  * Queue admission failed: the conversation already has an active
  * (queued/running/interrupt_requested) run. Surfaced as busy/backpressure by
- * the caller; the partial unique index is the authority.
+ * the caller; {@link admitQueuedRunInTx}'s explicit count is the authority.
  */
 export class ActiveRunConflictError extends Error {
 	override name = "ActiveRunConflictError";
 }
+
+/** Statuses that make a Run count against {@link ACTIVE_RUN_DEPTH_BOUND}. */
+const ACTIVE_RUN_STATUSES: RunStatus[] = [
+	"queued",
+	"running",
+	"interrupt_requested",
+];
+
+/**
+ * How many Active Runs one Conversation may hold. Raising it is a product
+ * decision, not a tuning knob: the Claim's candidate scan walks `runs` in
+ * global submission order and probes `conversations` per row, so every queued
+ * Run on an already-owned Conversation is a row every idle worker walks past on
+ * every tick. This bound therefore bounds claim cost as much as drain length.
+ */
+const ACTIVE_RUN_DEPTH_BOUND = 1;
 
 /** An owned Run id was reused with different normalized admitted input. */
 export class RunInputMismatchError extends Error {
@@ -147,28 +163,44 @@ export type RunAdmissionResult =
 
 /**
  * Atomically admit the canonical client Run id and submitted User message.
- * The insert arbitrates on `run_id` alone, so the two admission conflicts stay
- * distinguishable at the database: a repeated Run id is absorbed by the arbiter
- * and classified by the ownership-scoped read below, while a *different* active
- * Run in the conversation violates `runs_one_active_per_conversation` and
- * raises a real unique violation, mapped here to backpressure. Re-admitting the
- * conversation's own active Run conflicts on both — Postgres checks the arbiter
- * index before the speculative insert, so the retry reattaches rather than
- * colliding with itself.
- *
- * That violation also aborts the enclosing transaction, so
- * {@link ActiveRunConflictError} must propagate out of it: a composer may catch
- * it to shape its own error, never to keep issuing statements.
+ * Standalone form, for callers with no Conversation lifecycle transaction of
+ * their own: it takes the Conversation row lock that {@link admitQueuedRunInTx}
+ * expects its composer to hold, because that lock is what makes the Active Run
+ * count authoritative. A Conversation that does not exist locks nothing, and
+ * admission then resolves the input against `runs` alone as it always has.
  */
 export async function admitQueuedRunTx(
 	db: Database,
 	input: AdmitQueuedRunInput,
 ): Promise<RunAdmissionResult> {
-	return await db.transaction((tx) => admitQueuedRunInTx(tx, input));
+	return await db.transaction(async (tx) => {
+		await tx
+			.select({ conversationId: conversations.conversationId })
+			.from(conversations)
+			.where(
+				and(
+					eq(conversations.userId, input.userId),
+					eq(conversations.conversationId, input.conversationId),
+				),
+			)
+			.for("update");
+		return await admitQueuedRunInTx(tx, input);
+	});
 }
 
-/** Transaction-scoped form used when Conversation lifecycle locking and Run
- * admission must share one commit boundary. */
+/**
+ * Transaction-scoped form used when Conversation lifecycle locking and Run
+ * admission must share one commit boundary. **The caller must already hold the
+ * Conversation row `FOR UPDATE`** — that lock serializes concurrent admissions
+ * for one Conversation, which is the whole reason the Active Run count below is
+ * authoritative.
+ *
+ * The insert arbitrates on `run_id` alone, and that is now the only conflict it
+ * can raise: a repeated Run id is absorbed by the arbiter and classified by the
+ * ownership-scoped read below. A *different* Active Run in the Conversation is
+ * refused before the insert by the explicit count, so no unique violation is
+ * involved and the transaction stays usable after the throw.
+ */
 export async function admitQueuedRunInTx(
 	tx: DbTx,
 	input: AdmitQueuedRunInput,
@@ -189,32 +221,40 @@ export async function admitQueuedRunInTx(
 	};
 	parseDurableRunEvent(RunEventType.Started, startedPayload);
 
-	let inserted: typeof runs.$inferSelect | undefined;
-	try {
-		[inserted] = await tx
-			.insert(runs)
-			.values({
-				runId: input.runId,
-				userId: input.userId,
-				conversationId: input.conversationId,
-				normalizedInput,
-				status: "queued",
-				nextEventSeq: 2,
-			})
-			.onConflictDoNothing({ target: runs.runId })
-			.returning();
-	} catch (error) {
-		// `runs` carries exactly two unique constraints, and the arbiter already
-		// absorbs the primary key, so a unique violation from this statement can
-		// only be `runs_one_active_per_conversation`.
-		if (isUniqueViolation(error)) {
-			throw new ActiveRunConflictError(
-				`conversation ${input.conversationId} already has an active run`,
-				{ cause: error },
-			);
-		}
-		throw error;
+	// The Run being admitted is excluded from the count so an in-flight client
+	// retry of the Conversation's *own* Active Run reattaches below instead of
+	// being refused as a second Run. Everything else in the Conversation's Active
+	// set counts, `interrupt_requested` included: a Run being interrupted has not
+	// finished, and the next one waits for its Outcome.
+	const [active] = await tx
+		.select({ count: count() })
+		.from(runs)
+		.where(
+			and(
+				eq(runs.userId, input.userId),
+				eq(runs.conversationId, input.conversationId),
+				ne(runs.runId, input.runId),
+				inArray(runs.status, ACTIVE_RUN_STATUSES),
+			),
+		);
+	if ((active?.count ?? 0) >= ACTIVE_RUN_DEPTH_BOUND) {
+		throw new ActiveRunConflictError(
+			`conversation ${input.conversationId} already has an active run`,
+		);
 	}
+
+	const [inserted] = await tx
+		.insert(runs)
+		.values({
+			runId: input.runId,
+			userId: input.userId,
+			conversationId: input.conversationId,
+			normalizedInput,
+			status: "queued",
+			nextEventSeq: 2,
+		})
+		.onConflictDoNothing({ target: runs.runId })
+		.returning();
 
 	if (inserted) {
 		await tx.insert(runEvents).values({
@@ -1025,17 +1065,10 @@ function inCauseChain(error: unknown, match: (e: Error) => boolean): boolean {
 	return false;
 }
 
-/** SQLSTATE 23505 (unique_violation), on `pg` and pglite alike. Both drivers
- * carry the code; nothing here reads a constraint name or an error message. */
-function isUniqueViolation(error: unknown): boolean {
-	return inCauseChain(error, (e) => (e as { code?: unknown }).code === "23505");
-}
-
 /**
- * True when the error chain represents active-Run backpressure. Admission is
- * the only place the `runs_one_active_per_conversation` violation can be
- * raised, and it converts it there, so this is a plain cause-chain walk for
- * callers that wrap admission in their own transaction.
+ * True when the error chain represents active-Run backpressure. Admission's
+ * Active Run count is the only place it is raised, so this is a plain
+ * cause-chain walk for callers that wrap admission in their own transaction.
  */
 export function isActiveRunConflict(error: unknown): boolean {
 	return inCauseChain(error, (e) => e instanceof ActiveRunConflictError);
