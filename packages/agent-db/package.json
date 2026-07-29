@@ -7,6 +7,7 @@
 		"./schema": "./src/schema.ts",
 		"./artifact-store": "./src/artifact-store.ts",
 		"./client": "./src/client.ts",
+		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-ownership": "./src/run-ownership.ts",
 		"./run-events": "./src/run-events.ts",
@@ -21,13 +22,7 @@
 		"db:generate": "drizzle-kit generate",
 		"format": "biome format --write",
 		"lint": "biome lint --write",
-		"check": "biome check --write",
-		"proto:up": "bash prototype-conversation-ownership/up.sh up",
-		"proto:down": "bash prototype-conversation-ownership/up.sh down",
-		"proto:tui": "bun prototype-conversation-ownership/tui.ts",
-		"proto:explain": "bun prototype-conversation-ownership/explain.ts",
-		"proto:race": "bun prototype-conversation-ownership/race.ts",
-		"proto:bench": "bun prototype-conversation-ownership/bench.ts"
+		"check": "biome check --write"
 	},
 	"peerDependencies": {
 		"drizzle-orm": "^0.45.2",

@@ -5,6 +5,7 @@
 
 export * from "./artifact-store";
 export * from "./client";
+export * from "./conversation-ownership";
 export * from "./migrations";
 export * from "./queue-metrics";
 export * from "./run-events";

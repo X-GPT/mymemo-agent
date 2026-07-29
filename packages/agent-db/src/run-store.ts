@@ -29,10 +29,14 @@ import { runEvents, runs } from "./schema";
  * `max(seq) + 1`), and every status change or append carries its fence either
  * inside the statement that performs it or, where a transaction composes
  * several writes, in a `FOR UPDATE` lock taken before the first of them — so
- * app-side select/update races cannot happen through this module. The ownership
- * fence for v1 is `locked_by` + `locked_until` — no fencing token, because a run
- * is claimed exactly once (failed runs never requeue; stale runs are
- * terminalized, never reclaimed).
+ * app-side select/update races cannot happen through this module. The fence
+ * these writes evaluate is still the Run lease (`locked_by` + `locked_until`),
+ * which carries no fencing token because a v1 run is claimed exactly once
+ * (failed runs never requeue; stale runs are terminalized, never reclaimed).
+ * Conversation-level ownership (ADR-0015) breaks that premise deliberately — a
+ * Conversation is Claimed many times — which is why the epoch it introduces is
+ * a necessary token rather than a redundant one, and why these writes move onto
+ * it.
  */
 
 /** All legal `runs.status` values (mirrors the DB check constraint). */
@@ -524,18 +528,25 @@ export type TerminalTransitionInput = TerminalOutcome & {
 };
 
 /**
- * Why a fenced terminal transition was refused. `lease`: the caller no longer
- * holds live ownership — expired, reclaimed by recovery, or the Run/
- * Conversation/user identity does not match — so it must stop treating the Run
- * as its own. `status`: ownership is still live, but the Run's current status
- * does not permit the requested terminal (`done` after an interruption was
- * requested, or a Run already terminalized); `current` says what the Run is
- * actually in, which is what lets the caller pick its one legal follow-up
- * instead of guessing.
+ * Why a fenced write was refused. `lease`: the caller no longer holds live
+ * ownership — expired, reclaimed by recovery, or the Run/Conversation/user
+ * identity does not match — so it must stop treating the Run as its own.
+ * `status`: ownership is still live, but the Run's current status does not
+ * permit the requested transition (`done` after an interruption was requested,
+ * or a Run already terminalized); `current` says what the Run is actually in,
+ * which is what lets the caller pick its one legal follow-up instead of
+ * guessing. `gone`: the Run no longer exists, which means its Conversation was
+ * permanently deleted and took the Run with it — there is nothing left to
+ * terminalize, recover, or hand back.
+ *
+ * This is the fence vocabulary. The writes that still throw an opaque
+ * {@link RunFenceError} classify into it as they adopt a typed rejection; none
+ * of them grows a parallel shape of its own.
  */
 export type FenceRejection =
 	| { rejected: "lease" }
-	| { rejected: "status"; current: RunStatus };
+	| { rejected: "status"; current: RunStatus }
+	| { rejected: "gone" };
 
 export type TerminalTransitionResult =
 	| { outcome: "committed"; run: RunRecord }
@@ -565,15 +576,39 @@ export async function lockRunForTerminalInTx(
 		)
 		.for("update");
 	if (held) return null;
-	// The lease predicate alone: if it still matches, ownership is live and the
-	// refusal was purely about status.
-	const [owned] = await tx
-		.select({ status: runs.status })
+	return await classifyRunFenceRejectionInTx(tx, owner);
+}
+
+/**
+ * Name why a fenced write found no row. One read, in the rejecting transaction
+ * and only on the zero-row path, so the happy path pays nothing for it.
+ *
+ * The Run row is read by id alone, then the fence is re-evaluated over it: no
+ * row at all is a deleted Conversation (Runs cascade with it) rather than a
+ * lost lease, and those tell the caller different things — one has nothing left
+ * to act on, the other has a successor that does.
+ *
+ * The fence re-evaluated here is deliberately the one the refused write itself
+ * evaluated, which is still the Run lease. It moves to the Conversation
+ * Ownership epoch in the same change that moves the fenced writes, not before:
+ * a Conversation holds no live Ownership lease until something Claims it, so
+ * re-pointing this read alone would report every status refusal as a lost lease.
+ */
+async function classifyRunFenceRejectionInTx(
+	tx: DbTx,
+	owner: UserRunMutationOwner,
+): Promise<FenceRejection> {
+	const [currentRun] = await tx
+		.select({
+			status: runs.status,
+			fenceHolds: sql<boolean>`coalesce((${runLeaseByUserConditions(owner)}), false)`,
+		})
 		.from(runs)
-		.where(runLeaseByUserConditions(owner))
+		.where(eq(runs.runId, owner.runId))
 		.limit(1);
-	if (!owned) return { rejected: "lease" };
-	return { rejected: "status", current: owned.status as RunStatus };
+	if (!currentRun) return { rejected: "gone" };
+	if (!currentRun.fenceHolds) return { rejected: "lease" };
+	return { rejected: "status", current: currentRun.status as RunStatus };
 }
 
 /**

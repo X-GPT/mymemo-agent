@@ -123,6 +123,25 @@ export const conversations = pgTable(
 			.defaultNow(),
 		/** Non-null while the Conversation is archived. */
 		archivedAt: timestamp("archived_at", { withTimezone: true }),
+		/**
+		 * The worker holding the current Claim. Provenance for log correlation
+		 * only — it carries no safety weight, because an epoch names exactly one
+		 * Claim and therefore exactly one worker. NULL while unowned.
+		 */
+		ownerWorkerId: text("owner_worker_id"),
+		/** Deadline of the current Ownership lease; NULL while unowned. */
+		ownerUntil: timestamp("owner_until", { withTimezone: true }),
+		/**
+		 * Ownership epoch (ADR-0015): incremented by every Claim, so it names one
+		 * Claim of this Conversation. Fenced writes validate a matching epoch
+		 * **and** a live `owner_until` — the two conjuncts cover different
+		 * failures, the epoch a lease superseded by a re-Claim and the deadline
+		 * one that merely lapsed with no successor. A token is necessary rather
+		 * than redundant here precisely because a Conversation is claimed many
+		 * times across its life, by different workers; the older
+		 * claimed-exactly-once argument does not survive that.
+		 */
+		epoch: integer("epoch").notNull().default(0),
 	},
 	(t) => [
 		primaryKey({ columns: [t.userId, t.conversationId] }),
@@ -139,6 +158,13 @@ export const conversations = pgTable(
 		index("conversations_archived_activity_idx")
 			.on(t.userId, t.lastActivityAt, t.conversationId)
 			.where(sql`${t.archivedAt} is not null`),
+		// Reclamation candidates: Conversations still holding an Ownership lease,
+		// which is where a lapsed one is found. Partial on the deadline because
+		// unowned Conversations are the overwhelming majority and none of them is
+		// ever a candidate.
+		index("conversations_reclamation_idx")
+			.on(t.ownerUntil)
+			.where(sql`${t.ownerUntil} is not null`),
 	],
 );
 
@@ -221,11 +247,14 @@ export const artifactObjects = pgTable(
  * backend execution attempt for a conversation. Execution ownership lives
  * here, not in sandbox/runtime metadata: only the worker named by `locked_by`
  * while `locked_until` is live may append owned run events in later
- * transaction helpers. There is deliberately no fencing token: a v1 run is
- * claimed exactly once (failed runs never requeue; stale runs are
- * terminalized, never reclaimed), so `locked_by` + `locked_until` is the
- * complete ownership fence — a token returns only with a future requeue
- * feature, in the same PR as that feature.
+ * transaction helpers. This lease carries no fencing token, on the argument
+ * that a v1 run is claimed exactly once (failed runs never requeue; stale runs
+ * are terminalized, never reclaimed).
+ *
+ * That argument does not survive Conversation-level ownership (ADR-0015), where
+ * one Conversation is Claimed many times by different workers. The token now
+ * exists, as `conversations.epoch`; this lease is only what fenced writes still
+ * evaluate until they move onto it.
  */
 export const runs = pgTable(
 	"runs",
@@ -242,6 +271,13 @@ export const runs = pgTable(
 		status: text("status").notNull(),
 		lockedBy: text("locked_by"),
 		lockedUntil: timestamp("locked_until", { withTimezone: true }),
+		/**
+		 * Which worker executed this Run, recorded when it starts. Provenance for
+		 * log correlation, never authority — that is the Conversation's Ownership
+		 * lease. Nothing writes it yet: the queued→running transition stamps it
+		 * when it adopts the epoch fence.
+		 */
+		executedByWorkerId: text("executed_by_worker_id"),
 		heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
 		interruptRequestedAt: timestamp("interrupt_requested_at", {
 			withTimezone: true,
@@ -353,6 +389,14 @@ export const agentSessions = pgTable(
 		uuid: text("uuid"),
 		/** The opaque JSONL transcript line, round-tripped as-is. */
 		entry: jsonb("entry").notNull(),
+		/**
+		 * The Ownership epoch of the Claim that mirrored this entry — provenance,
+		 * not a fence. Resume stays pointer-driven and never consults it; it
+		 * exists so "which Claim wrote this transcript" is answerable when a dead
+		 * attempt's transcript is the newest one. Nullable: entries mirrored
+		 * before Conversation ownership carry no epoch, and nothing writes it yet.
+		 */
+		epoch: integer("epoch"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
