@@ -1018,7 +1018,9 @@ export async function markStaleRunsTx(
 				.where(
 					and(
 						eq(runs.runId, candidate.runId),
-						inArray(runs.status, ["queued", "running", "interrupt_requested"]),
+						// Compare-and-set: only a Run still Active can be terminalized, so
+						// recovery cannot land on one that reached its Outcome under it.
+						inArray(runs.status, ACTIVE_RUN_STATUSES),
 					),
 				)
 				.returning();
