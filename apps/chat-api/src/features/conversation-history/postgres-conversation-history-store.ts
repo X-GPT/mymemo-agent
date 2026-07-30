@@ -18,6 +18,7 @@ import {
 	conversations,
 	runEvents,
 	runs,
+	TERMINAL_RUN_STATUSES,
 } from "@/db/schema";
 import type { ConversationScope } from "@/features/conversation-store";
 import type {
@@ -30,7 +31,6 @@ import type {
 } from "./conversation-history-store";
 import { InvalidConversationHistoryCursorError } from "./conversation-history-store";
 
-const TERMINAL_STATUSES = ["done", "error", "interrupted"] as const;
 // node-postgres exposes timestamps as millisecond Date values while Postgres
 // stores microseconds. Use that same precision for ordering and comparison so
 // Run-id tie-breaking cannot be skipped when a cursor round-trips through JSON.
@@ -88,7 +88,7 @@ export class PostgresConversationHistoryStore
 		const completeRunFilter = and(
 			eq(runs.userId, input.userId),
 			eq(runs.conversationId, input.conversationId),
-			inArray(runs.status, TERMINAL_STATUSES),
+			inArray(runs.status, TERMINAL_RUN_STATUSES),
 			cursor
 				? or(
 						lt(RUN_ORDER_CREATED_AT, cursor.createdAt),

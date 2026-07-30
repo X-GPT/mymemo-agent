@@ -256,12 +256,31 @@ export const ACTIVE_RUN_STATUSES = [
 	"interrupt_requested",
 ] as const;
 
-/** {@link ACTIVE_RUN_STATUSES} as an inlined SQL literal list. `sql.raw` rather
- * than a bound parameter because drizzle-kit serializes this predicate into
- * migration DDL, where a placeholder would be meaningless. */
-const ACTIVE_RUN_STATUS_LIST = sql.raw(
-	ACTIVE_RUN_STATUSES.map((status) => `'${status}'`).join(", "),
-);
+/**
+ * The Run statuses that are an Outcome — the Run is finished and will not
+ * change again. Shared for the same reason as {@link ACTIVE_RUN_STATUSES}:
+ * history's completed-Run paging, the cleanup sweep, and the
+ * `runs_cleanup_idx` predicate all have to mean the same three.
+ */
+export const TERMINAL_RUN_STATUSES = ["done", "error", "interrupted"] as const;
+
+/**
+ * Every legal `runs.status`. Spelling it as the two halves is what makes
+ * "a Run is Active or it is an Outcome, never both and never neither" true by
+ * construction rather than by three lists agreeing — `runs_status_check` below
+ * and the `RunStatus` union in `run-store.ts` are both derived from it.
+ */
+export const ALL_RUN_STATUSES = [
+	...ACTIVE_RUN_STATUSES,
+	...TERMINAL_RUN_STATUSES,
+] as const;
+
+/** A status tuple as an inlined SQL literal list. `sql.raw` rather than bound
+ * parameters because drizzle-kit serializes these predicates into migration
+ * DDL, where a placeholder would be meaningless. */
+function statusList(statuses: readonly string[]) {
+	return sql.raw(statuses.map((status) => `'${status}'`).join(", "));
+}
 
 /**
  * Durable run queue for the split-runtime worker (milestone 1). A run is one
@@ -321,7 +340,7 @@ export const runs = pgTable(
 	(t) => [
 		check(
 			"runs_status_check",
-			sql`${t.status} in ('queued', 'running', 'interrupt_requested', 'done', 'error', 'interrupted')`,
+			sql`${t.status} in (${statusList(ALL_RUN_STATUSES)})`,
 		),
 		foreignKey({
 			columns: [t.userId, t.conversationId],
@@ -341,7 +360,7 @@ export const runs = pgTable(
 		// concurrently-busy conversations rather than by every Run ever admitted.
 		index("runs_conversation_active_idx")
 			.on(t.userId, t.conversationId)
-			.where(sql`${t.status} in (${ACTIVE_RUN_STATUS_LIST})`),
+			.where(sql`${t.status} in (${statusList(ACTIVE_RUN_STATUSES)})`),
 		// Queue claim: oldest queued run first (`FOR UPDATE SKIP LOCKED` scan).
 		index("runs_queue_claim_idx")
 			.on(t.createdAt)
@@ -353,7 +372,7 @@ export const runs = pgTable(
 		// Cleanup/retention: terminal runs by when they finished.
 		index("runs_cleanup_idx")
 			.on(t.terminalAt)
-			.where(sql`${t.status} in ('done', 'error', 'interrupted')`),
+			.where(sql`${t.status} in (${statusList(TERMINAL_RUN_STATUSES)})`),
 	],
 );
 

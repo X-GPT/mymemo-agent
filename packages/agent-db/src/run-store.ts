@@ -17,7 +17,14 @@ import {
 	publishAgentSessionPointerInTx,
 	taintRecoveredRuntimeSandboxInTx,
 } from "./runtime-store";
-import { ACTIVE_RUN_STATUSES, conversations, runEvents, runs } from "./schema";
+import {
+	ACTIVE_RUN_STATUSES,
+	type ALL_RUN_STATUSES,
+	conversations,
+	runEvents,
+	runs,
+	TERMINAL_RUN_STATUSES,
+} from "./schema";
 
 /**
  * Narrow transaction helpers over `runs`/`run_events` — the only write path for
@@ -39,14 +46,10 @@ import { ACTIVE_RUN_STATUSES, conversations, runEvents, runs } from "./schema";
  * it.
  */
 
-/** All legal `runs.status` values (mirrors the DB check constraint). */
-export type RunStatus =
-	| "queued"
-	| "running"
-	| "interrupt_requested"
-	| "done"
-	| "error"
-	| "interrupted";
+/** All legal `runs.status` values. Derived from the same tuple `runs_status_check`
+ * is built from, so "mirrors the DB check constraint" is true by construction
+ * rather than by two lists being kept in step. */
+export type RunStatus = (typeof ALL_RUN_STATUSES)[number];
 
 /** The first admitted AG-UI input profile. Only client-authoritative fields
  * survive normalization; Scope and execution configuration remain server-owned. */
@@ -118,7 +121,7 @@ const APPEND_CLASS_STATUSES: Record<RunEventAppendClass, RunStatus[]> = {
 };
 
 /** The three terminal statuses a worker can transition an owned run into. */
-export type TerminalRunStatus = "done" | "error" | "interrupted";
+export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
 
 /** The helper owns the status→event-type mapping so a terminal run can never
  * carry a mismatched terminal event. Types come from the shared vocabulary so
@@ -913,7 +916,7 @@ export async function markLiveStreamFailedTx(
 				sql`${runs.lockedUntil} > now()`,
 			),
 			and(
-				inArray(runs.status, ["done", "error", "interrupted"]),
+				inArray(runs.status, TERMINAL_RUN_STATUSES),
 				isNull(runs.lockedBy),
 				isNull(runs.lockedUntil),
 			),

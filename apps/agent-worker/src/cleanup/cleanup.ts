@@ -6,6 +6,7 @@ import {
 	conversations,
 	orphanSandboxes,
 	runs,
+	TERMINAL_RUN_STATUSES,
 } from "@mymemo/agent-db/schema";
 import { deleteConversationAgentSessionsTx } from "@mymemo/agent-db/session-store";
 import { and, eq, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
@@ -125,7 +126,7 @@ async function sweepArtifactObjects(
 						eq(artifactObjects.status, "pending"),
 						or(
 							isNull(runs.runId),
-							inArray(runs.status, ["done", "error", "interrupted"]),
+							inArray(runs.status, TERMINAL_RUN_STATUSES),
 							and(
 								inArray(runs.status, ["running", "interrupt_requested"]),
 								or(isNull(runs.lockedUntil), lte(runs.lockedUntil, now)),
