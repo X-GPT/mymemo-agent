@@ -60,8 +60,8 @@ export async function loadConversationRuntimeTx(
  * is checked `FOR SHARE` in the same transaction as the insert, so stale-run
  * recovery cannot terminalize the authorizing run between check and insert.
  * Idempotent: if a previous attempt already created the row, the existing row
- * is returned unchanged (concurrent creators are impossible — the partial
- * unique index on `runs` allows only one active run per conversation).
+ * is returned unchanged. Idempotency is for the retry, not for concurrency: the
+ * authorizing Run's lease is what makes the Conversation single-writer.
  */
 export async function createConversationRuntimeTx(
 	db: Database,

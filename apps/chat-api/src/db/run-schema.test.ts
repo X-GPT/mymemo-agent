@@ -8,7 +8,13 @@ import {
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { createTestDatabase, type TestDb } from "@/db/testing";
-import { conversations, documentAccessEvents, runEvents, runs } from "./schema";
+import {
+	ACTIVE_RUN_STATUSES,
+	conversations,
+	documentAccessEvents,
+	runEvents,
+	runs,
+} from "./schema";
 
 let tdb: TestDb;
 
@@ -134,88 +140,64 @@ describe("run queue schema", () => {
 		expect(rows).toEqual([{ column_name: "interrupt_requested_at" }]);
 	});
 
-	it("enforces one active run per conversation", async () => {
-		await tdb.db.insert(runs).values({
-			runId: "run-active-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-
-		await expectDbWriteToFail(() =>
-			tdb.db.insert(runs).values({
+	it("no longer bounds active runs per conversation", async () => {
+		// The Active Run bound is admission's explicit count under the Conversation
+		// row lock, not a database invariant. The schema accepting this pair is the
+		// point: what the database still guarantees is a single writer, not that
+		// the writer starts one Run at a time.
+		await tdb.db.insert(runs).values([
+			{
+				runId: "run-active-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+				status: "queued",
+			},
+			{
 				runId: "run-active-2",
 				userId: "user-1",
 				conversationId: "conv-1",
 				status: "running",
-			}),
-		);
-	});
-
-	it("keeps interrupt_requested inside the one-active-run backpressure", async () => {
-		await tdb.db.insert(runs).values({
-			runId: "run-stopping",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "interrupt_requested",
-		});
-
-		await expectDbWriteToFail(() =>
-			tdb.db.insert(runs).values({
-				runId: "run-next",
-				userId: "user-1",
-				conversationId: "conv-1",
-				status: "queued",
-			}),
-		);
-	});
-
-	it("terminal runs do not block a later run for the same conversation", async () => {
-		await tdb.db.insert(runs).values({
-			runId: "run-finished",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-		await tdb.db
-			.update(runs)
-			.set({ status: "done" })
-			.where(eq(runs.runId, "run-finished"));
-
-		await tdb.db.insert(runs).values({
-			runId: "run-next",
-			userId: "user-1",
-			conversationId: "conv-1",
-			status: "queued",
-		});
-	});
-
-	it("allows active runs for different conversations", async () => {
-		await tdb.db.insert(runs).values([
-			{
-				runId: "run-1",
-				userId: "user-1",
-				conversationId: "conv-1",
-				status: "queued",
-			},
-			{
-				runId: "run-2",
-				userId: "user-1",
-				conversationId: "conv-2",
-				status: "queued",
 			},
 		]);
 	});
 
-	it("has the queue-claim, stale-recovery, and cleanup indexes", async () => {
+	it("has the conversation-active, queue-claim, stale-recovery, and cleanup indexes", async () => {
 		const { rows } = await tdb.db.execute(sql`
 			select indexname from pg_indexes where tablename = 'runs'
 		`);
 		const names = rows.map((row) => row.indexname);
+		expect(names).toContain("runs_conversation_active_idx");
 		expect(names).toContain("runs_queue_claim_idx");
 		expect(names).toContain("runs_stale_recovery_idx");
 		expect(names).toContain("runs_cleanup_idx");
-		expect(names).toContain("runs_one_active_per_conversation");
+		expect(names).not.toContain("runs_one_active_per_conversation");
+	});
+
+	it("keeps the conversation-active index non-unique and partial", async () => {
+		// The access path is wanted; the constraint is not. A regenerated schema
+		// that made this UNIQUE would silently reinstate the database-enforced
+		// Active Run bound this epic deliberately replaced — and the partial
+		// predicate is what keeps the index sized by busy conversations rather
+		// than by every Run ever admitted.
+		const { rows } = await tdb.db.execute(sql`
+			select indexdef from pg_indexes
+			where tablename = 'runs' and indexname = 'runs_conversation_active_idx'
+		`);
+		// Empty when the index is missing, which fails the first assertion loudly.
+		const definition = rows[0] ? String(rows[0].indexdef) : "";
+		expect(definition).toContain("CREATE INDEX");
+		expect(definition).not.toContain("UNIQUE");
+		expect(definition).toContain("(user_id, conversation_id)");
+		// Asserted by parts rather than as one string: Postgres normalizes an `in`
+		// list into its own `= ANY (ARRAY[...])` rendering, and pinning that exact
+		// spelling would make the test a hostage to the server version.
+		const [, predicate = ""] = definition.split(" WHERE ");
+		expect(predicate).toContain("status");
+		// Read from the shared tuple, so this asserts that what the database
+		// actually indexes is what admission actually filters on.
+		for (const status of ACTIVE_RUN_STATUSES) {
+			expect(predicate).toContain(status);
+		}
 	});
 
 	it("records ordered run events", async () => {

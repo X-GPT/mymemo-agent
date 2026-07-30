@@ -138,13 +138,9 @@ describe("admitQueuedRunTx", () => {
 	});
 
 	it("reattaches the active Run's own retry instead of raising backpressure against it", async () => {
-		// Re-admitting the conversation's *active* Run conflicts with both unique
-		// constraints at once: the `runs` primary key and
-		// `runs_one_active_per_conversation`. Admission arbitrates on `run_id`, and
-		// Postgres checks the arbiter index before the speculative insert, so the
-		// PK conflict resolves to DO NOTHING and the partial index never fires.
-		// Reverse that order and every in-flight client retry would be reported as
-		// a conflicting second Run.
+		// An already-admitted Run id skips the Active Run count and falls through
+		// to the `run_id` arbiter. Count it instead and every in-flight client
+		// retry would be reported as a conflicting second Run.
 		await admitQueuedRunTx(tdb.db, admission);
 		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
 
@@ -188,6 +184,64 @@ describe("admitQueuedRunTx", () => {
 
 	it("preserves active-Run backpressure for a different client Run id", async () => {
 		await admitQueuedRunTx(tdb.db, admission);
+
+		await expect(
+			admitQueuedRunTx(tdb.db, { ...admission, runId: "client-run-2" }),
+		).rejects.toBeInstanceOf(ActiveRunConflictError);
+	});
+
+	it("reattaches a finished Run's retry even while a later Run is active", async () => {
+		// Identity outranks the bound: this retry is about a Run that already
+		// reached its Outcome, so it must resolve to that Run — and let the caller
+		// answer with Conversation history — rather than be told the Conversation
+		// is busy with the unrelated Run that followed it.
+		await admitQueuedRunTx(tdb.db, admission);
+		await tdb.db
+			.update(runs)
+			.set({ status: "done" })
+			.where(eq(runs.runId, "client-run-1"));
+		await admitQueuedRunTx(tdb.db, {
+			...admission,
+			runId: "client-run-2",
+			messageId: "client-message-2",
+		});
+
+		const retry = await admitQueuedRunTx(tdb.db, admission);
+
+		expect(retry).toMatchObject({
+			outcome: "existing",
+			run: { runId: "client-run-1", status: "done" },
+		});
+	});
+
+	it("resolves a foreign Run id as absence even while the Conversation is busy", async () => {
+		await admitQueuedRunTx(tdb.db, {
+			...admission,
+			conversationId: "conv-2",
+			runId: "client-run-elsewhere",
+		});
+		await admitQueuedRunTx(tdb.db, admission);
+
+		expect(
+			await admitQueuedRunTx(tdb.db, {
+				...admission,
+				runId: "client-run-elsewhere",
+			}),
+		).toEqual({ outcome: "not_found" });
+	});
+
+	it("counts an interrupted-but-unfinished Run against the bound", async () => {
+		// `interrupt_requested` is Active: the Run has not reached its Outcome, and
+		// the next one waits for it.
+		await admitQueuedRunTx(tdb.db, admission);
+		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		expect(
+			await requestRunInterruptionTx(tdb.db, {
+				userId: "user-1",
+				conversationId: "conv-1",
+				runId: "client-run-1",
+			}),
+		).toMatchObject({ outcome: "interrupt_requested" });
 
 		await expect(
 			admitQueuedRunTx(tdb.db, { ...admission, runId: "client-run-2" }),

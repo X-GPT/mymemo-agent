@@ -1,0 +1,1 @@
+DROP INDEX "runs_one_active_per_conversation";

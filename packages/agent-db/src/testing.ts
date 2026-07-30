@@ -116,8 +116,9 @@ export async function createTestDatabase(
  * writes the `run_started` event and normalized input; tests exercising claim,
  * heartbeat, terminal transitions, or runtime state care about none of that.
  * A raw insert here, so the admission path keeps exactly one implementation and
- * the `runs_one_active_per_conversation` violation surfaces as its native
- * unique-violation error. The conversation row must already exist.
+ * the Active Run bound — admission's, not the database's — stays out of the way
+ * of seeding a Conversation several queued Runs. The conversation row must
+ * already exist.
  */
 export async function seedQueuedRun(
 	db: Database,

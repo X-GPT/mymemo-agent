@@ -13,7 +13,13 @@ import {
 } from "@mymemo/agent-db/run-events";
 import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
-import { conversations, runEvents, runs } from "@/db/schema";
+import {
+	ACTIVE_RUN_STATUSES,
+	conversations,
+	runEvents,
+	runs,
+	TERMINAL_RUN_STATUSES,
+} from "@/db/schema";
 import type { ConversationScope } from "@/features/conversation-store";
 import type {
 	ActiveRunSummary,
@@ -25,8 +31,6 @@ import type {
 } from "./conversation-history-store";
 import { InvalidConversationHistoryCursorError } from "./conversation-history-store";
 
-const TERMINAL_STATUSES = ["done", "error", "interrupted"] as const;
-const ACTIVE_STATUSES = ["queued", "running", "interrupt_requested"] as const;
 // node-postgres exposes timestamps as millisecond Date values while Postgres
 // stores microseconds. Use that same precision for ordering and comparison so
 // Run-id tie-breaking cannot be skipped when a cursor round-trips through JSON.
@@ -75,7 +79,7 @@ export class PostgresConversationHistoryStore
 							and(
 								eq(runs.userId, input.userId),
 								eq(runs.conversationId, input.conversationId),
-								inArray(runs.status, ACTIVE_STATUSES),
+								inArray(runs.status, ACTIVE_RUN_STATUSES),
 							),
 						)
 						.limit(1)
@@ -84,7 +88,7 @@ export class PostgresConversationHistoryStore
 		const completeRunFilter = and(
 			eq(runs.userId, input.userId),
 			eq(runs.conversationId, input.conversationId),
-			inArray(runs.status, TERMINAL_STATUSES),
+			inArray(runs.status, TERMINAL_RUN_STATUSES),
 			cursor
 				? or(
 						lt(RUN_ORDER_CREATED_AT, cursor.createdAt),
@@ -198,7 +202,7 @@ function projectActiveRun(
 }
 
 function isActiveStatus(status: string): status is ActiveRunSummary["status"] {
-	return ACTIVE_STATUSES.some((activeStatus) => activeStatus === status);
+	return ACTIVE_RUN_STATUSES.some((activeStatus) => activeStatus === status);
 }
 
 function encodeCursor(run: Pick<RunRow, "createdAt" | "runId"> | undefined) {

@@ -11,7 +11,7 @@ import {
 	sql,
 } from "drizzle-orm";
 import type { Database } from "@/db/client";
-import { conversations, runs } from "@/db/schema";
+import { ACTIVE_RUN_STATUSES, conversations, runs } from "@/db/schema";
 import type {
 	ConversationCreateInput,
 	ConversationDeleteResult,
@@ -24,12 +24,6 @@ import type {
 	ConversationUpdate,
 	ConversationUpdateResult,
 } from "./conversation-store";
-
-const ACTIVE_RUN_STATUSES = [
-	"queued",
-	"running",
-	"interrupt_requested",
-] as const;
 
 type ConversationRow = typeof conversations.$inferSelect;
 type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
