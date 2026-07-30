@@ -17,7 +17,7 @@ import {
 	publishAgentSessionPointerInTx,
 	taintRecoveredRuntimeSandboxInTx,
 } from "./runtime-store";
-import { conversations, runEvents, runs } from "./schema";
+import { ACTIVE_RUN_STATUSES, conversations, runEvents, runs } from "./schema";
 
 /**
  * Narrow transaction helpers over `runs`/`run_events` — the only write path for
@@ -77,20 +77,11 @@ export type RecoveredRunRecord = RunRecord & {
 /**
  * Queue admission failed: the conversation already has an active
  * (queued/running/interrupt_requested) run. Surfaced as busy/backpressure by
- * the caller; {@link admitQueuedRunInTx}'s explicit count is the authority.
+ * the caller; {@link admitQueuedRunInTx}'s explicit bound check is the authority.
  */
 export class ActiveRunConflictError extends Error {
 	override name = "ActiveRunConflictError";
 }
-
-/** Statuses that make a Run count against {@link ACTIVE_RUN_DEPTH_BOUND}. Must
- * stay identical to `runs_conversation_active_idx`'s predicate in `schema.ts`,
- * which is what keeps the bound check off a sequential scan. */
-const ACTIVE_RUN_STATUSES = [
-	"queued",
-	"running",
-	"interrupt_requested",
-] as const satisfies RunStatus[];
 
 /**
  * How many Active Runs one Conversation may hold. Raising it is a product
@@ -194,8 +185,8 @@ export async function admitQueuedRunTx(
  * Transaction-scoped form used when Conversation lifecycle locking and Run
  * admission must share one commit boundary. **The caller must already hold the
  * Conversation row `FOR UPDATE`** — that lock serializes concurrent admissions
- * for one Conversation, which is the whole reason the Active Run count below is
- * authoritative.
+ * for one Conversation, which is the whole reason the Active Run bound check
+ * below is authoritative.
  *
  * The insert arbitrates on `run_id` alone, and that is now the only conflict it
  * can raise. It also runs *first*, which is what keeps an already-admitted Run
@@ -279,7 +270,13 @@ export async function admitQueuedRunInTx(
 				eq(runs.userId, input.userId),
 				eq(runs.conversationId, input.conversationId),
 				ne(runs.runId, input.runId),
-				inArray(runs.status, ACTIVE_RUN_STATUSES),
+				// `satisfies` keeps the schema module's tuple honest against the
+				// status union, which lives here: `runs.status` is a text column, so
+				// nothing else in this statement would reject a typo.
+				inArray(
+					runs.status,
+					ACTIVE_RUN_STATUSES satisfies readonly RunStatus[],
+				),
 			),
 		)
 		.limit(ACTIVE_RUN_DEPTH_BOUND);

@@ -8,7 +8,13 @@ import {
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { createTestDatabase, type TestDb } from "@/db/testing";
-import { conversations, documentAccessEvents, runEvents, runs } from "./schema";
+import {
+	ACTIVE_RUN_STATUSES,
+	conversations,
+	documentAccessEvents,
+	runEvents,
+	runs,
+} from "./schema";
 
 let tdb: TestDb;
 
@@ -187,7 +193,9 @@ describe("run queue schema", () => {
 		// spelling would make the test a hostage to the server version.
 		const [, predicate = ""] = definition.split(" WHERE ");
 		expect(predicate).toContain("status");
-		for (const status of ["queued", "running", "interrupt_requested"]) {
+		// Read from the shared tuple, so this asserts that what the database
+		// actually indexes is what admission actually filters on.
+		for (const status of ACTIVE_RUN_STATUSES) {
 			expect(predicate).toContain(status);
 		}
 	});

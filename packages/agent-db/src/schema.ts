@@ -243,6 +243,27 @@ export const artifactObjects = pgTable(
 );
 
 /**
+ * The Run statuses that make a Run *Active* — submitted and not yet at its
+ * Outcome. One definition, because two things must agree on it byte for byte:
+ * admission's Active Run bound (`run-store.ts`) and the partial predicate of
+ * `runs_conversation_active_idx` below, which is what keeps that bound check off
+ * a sequential scan. Drift between them is silent — the query keeps working and
+ * simply stops using the index.
+ */
+export const ACTIVE_RUN_STATUSES = [
+	"queued",
+	"running",
+	"interrupt_requested",
+] as const;
+
+/** {@link ACTIVE_RUN_STATUSES} as an inlined SQL literal list. `sql.raw` rather
+ * than a bound parameter because drizzle-kit serializes this predicate into
+ * migration DDL, where a placeholder would be meaningless. */
+const ACTIVE_RUN_STATUS_LIST = sql.raw(
+	ACTIVE_RUN_STATUSES.map((status) => `'${status}'`).join(", "),
+);
+
+/**
  * Durable run queue for the split-runtime worker (milestone 1). A run is one
  * backend execution attempt for a conversation. Execution ownership lives
  * here, not in sandbox/runtime metadata: only the worker named by `locked_by`
@@ -320,7 +341,7 @@ export const runs = pgTable(
 		// concurrently-busy conversations rather than by every Run ever admitted.
 		index("runs_conversation_active_idx")
 			.on(t.userId, t.conversationId)
-			.where(sql`${t.status} in ('queued', 'running', 'interrupt_requested')`),
+			.where(sql`${t.status} in (${ACTIVE_RUN_STATUS_LIST})`),
 		// Queue claim: oldest queued run first (`FOR UPDATE SKIP LOCKED` scan).
 		index("runs_queue_claim_idx")
 			.on(t.createdAt)
