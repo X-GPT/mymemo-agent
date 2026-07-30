@@ -1,0 +1,1 @@
+CREATE INDEX "runs_conversation_active_idx" ON "runs" USING btree ("user_id","conversation_id") WHERE "runs"."status" in ('queued', 'running', 'interrupt_requested');

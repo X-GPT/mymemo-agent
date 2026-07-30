@@ -155,15 +155,35 @@ describe("run queue schema", () => {
 		]);
 	});
 
-	it("has the queue-claim, stale-recovery, and cleanup indexes", async () => {
+	it("has the conversation-active, queue-claim, stale-recovery, and cleanup indexes", async () => {
 		const { rows } = await tdb.db.execute(sql`
 			select indexname from pg_indexes where tablename = 'runs'
 		`);
 		const names = rows.map((row) => row.indexname);
+		expect(names).toContain("runs_conversation_active_idx");
 		expect(names).toContain("runs_queue_claim_idx");
 		expect(names).toContain("runs_stale_recovery_idx");
 		expect(names).toContain("runs_cleanup_idx");
 		expect(names).not.toContain("runs_one_active_per_conversation");
+	});
+
+	it("keeps the conversation-active index non-unique and partial", async () => {
+		// The access path is wanted; the constraint is not. A regenerated schema
+		// that made this UNIQUE would silently reinstate the database-enforced
+		// Active Run bound this epic deliberately replaced — and the partial
+		// predicate is what keeps the index sized by busy conversations rather
+		// than by every Run ever admitted.
+		const { rows } = await tdb.db.execute(sql`
+			select indexdef from pg_indexes
+			where tablename = 'runs' and indexname = 'runs_conversation_active_idx'
+		`);
+		const [definition] = rows.map((row) => String(row.indexdef));
+		expect(definition).toContain("CREATE INDEX");
+		expect(definition).not.toContain("UNIQUE");
+		expect(definition).toContain("(user_id, conversation_id)");
+		expect(definition).toContain(
+			"WHERE (status = ANY (ARRAY['queued'::text, 'running'::text, 'interrupt_requested'::text]))",
+		);
 	});
 
 	it("records ordered run events", async () => {
