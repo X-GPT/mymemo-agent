@@ -177,13 +177,19 @@ describe("run queue schema", () => {
 			select indexdef from pg_indexes
 			where tablename = 'runs' and indexname = 'runs_conversation_active_idx'
 		`);
-		const [definition] = rows.map((row) => String(row.indexdef));
+		// Empty when the index is missing, which fails the first assertion loudly.
+		const definition = rows[0] ? String(rows[0].indexdef) : "";
 		expect(definition).toContain("CREATE INDEX");
 		expect(definition).not.toContain("UNIQUE");
 		expect(definition).toContain("(user_id, conversation_id)");
-		expect(definition).toContain(
-			"WHERE (status = ANY (ARRAY['queued'::text, 'running'::text, 'interrupt_requested'::text]))",
-		);
+		// Asserted by parts rather than as one string: Postgres normalizes an `in`
+		// list into its own `= ANY (ARRAY[...])` rendering, and pinning that exact
+		// spelling would make the test a hostage to the server version.
+		const [, predicate = ""] = definition.split(" WHERE ");
+		expect(predicate).toContain("status");
+		for (const status of ["queued", "running", "interrupt_requested"]) {
+			expect(predicate).toContain(status);
+		}
 	});
 
 	it("records ordered run events", async () => {

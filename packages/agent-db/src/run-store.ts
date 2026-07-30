@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
@@ -83,7 +83,9 @@ export class ActiveRunConflictError extends Error {
 	override name = "ActiveRunConflictError";
 }
 
-/** Statuses that make a Run count against {@link ACTIVE_RUN_DEPTH_BOUND}. */
+/** Statuses that make a Run count against {@link ACTIVE_RUN_DEPTH_BOUND}. Must
+ * stay identical to `runs_conversation_active_idx`'s predicate in `schema.ts`,
+ * which is what keeps the bound check off a sequential scan. */
 const ACTIVE_RUN_STATUSES = [
 	"queued",
 	"running",
@@ -196,10 +198,13 @@ export async function admitQueuedRunTx(
  * authoritative.
  *
  * The insert arbitrates on `run_id` alone, and that is now the only conflict it
- * can raise: a repeated Run id is absorbed by the arbiter and classified by the
- * ownership-scoped read below. A *new* Run id arriving at a Conversation that is
- * already at its bound is refused before the insert by the explicit count, so no
- * unique violation is involved and the transaction stays usable after the throw.
+ * can raise. It also runs *first*, which is what keeps an already-admitted Run
+ * id resolving as an identity — reattach, input mismatch, or foreign — instead
+ * of colliding with a bound that has nothing to do with it. A genuinely new Run
+ * arriving at a Conversation already at its bound is refused after that insert,
+ * so {@link ActiveRunConflictError} must propagate out of the transaction and
+ * roll it back: a composer may catch it to shape its own error, never to keep
+ * issuing statements.
  */
 export async function admitQueuedRunInTx(
 	tx: DbTx,
@@ -221,41 +226,6 @@ export async function admitQueuedRunInTx(
 	};
 	parseDurableRunEvent(RunEventType.Started, startedPayload);
 
-	// The bound governs *new* work, so an already-admitted Run id skips it
-	// entirely and is resolved as the identity below — reattach, input mismatch,
-	// or foreign. That ordering is what the index-based detection got for free,
-	// because Postgres checked the `run_id` arbiter before the partial index
-	// could fire; making the bound explicit makes the ordering explicit too.
-	// Reverse it and a client retrying a Run that has since finished would be
-	// answered with backpressure about some other Run.
-	//
-	// A concurrent insert of the same Run id between this probe and the insert
-	// below is absorbed by that same arbiter, so the probe needs no lock.
-	const [known] = await tx
-		.select({ runId: runs.runId })
-		.from(runs)
-		.where(eq(runs.runId, input.runId))
-		.limit(1);
-	if (!known) {
-		// `interrupt_requested` counts with the rest of the Active set: a Run being
-		// interrupted has not finished, and the next one waits for its Outcome.
-		const [active] = await tx
-			.select({ count: count() })
-			.from(runs)
-			.where(
-				and(
-					eq(runs.userId, input.userId),
-					eq(runs.conversationId, input.conversationId),
-					inArray(runs.status, ACTIVE_RUN_STATUSES),
-				),
-			);
-		if ((active?.count ?? 0) >= ACTIVE_RUN_DEPTH_BOUND) {
-			throw new ActiveRunConflictError(
-				`conversation ${input.conversationId} already has an active run`,
-			);
-		}
-	}
-
 	const [inserted] = await tx
 		.insert(runs)
 		.values({
@@ -269,40 +239,63 @@ export async function admitQueuedRunInTx(
 		.onConflictDoNothing({ target: runs.runId })
 		.returning();
 
-	if (inserted) {
-		await tx.insert(runEvents).values({
-			runId: input.runId,
-			seq: 1,
-			type: RunEventType.Started,
-			payload: startedPayload,
-		});
-		return { outcome: "created", run: toRunRecord(inserted) };
+	if (!inserted) {
+		const [existing] = await tx
+			.select()
+			.from(runs)
+			.where(eq(runs.runId, input.runId))
+			.limit(1);
+		if (!existing) {
+			// The arbiter absorbed a `run_id` conflict, so the row existed a statement
+			// ago; only a concurrent delete of the whole Conversation can get here.
+			throw new Error(
+				`run ${input.runId} conflicted on admission but vanished before it could be read`,
+			);
+		}
+		if (
+			existing.userId !== input.userId ||
+			existing.conversationId !== input.conversationId
+		) {
+			return { outcome: "not_found" };
+		}
+		if (!normalizedInputsEqual(existing.normalizedInput, normalizedInput)) {
+			throw new RunInputMismatchError(
+				`run ${input.runId} was already admitted with different input`,
+			);
+		}
+		return { outcome: "existing", run: toRunRecord(existing) };
 	}
 
-	const [existing] = await tx
-		.select()
+	// A genuinely new Run, so the bound applies. The row just inserted is excluded
+	// from it; `interrupt_requested` counts with the rest of the Active set, since
+	// a Run being interrupted has not finished and the next one waits for its
+	// Outcome. `limit` rather than `count(*)`: the question is whether the bound
+	// is already met, so there is nothing to gain by counting past it.
+	const active = await tx
+		.select({ runId: runs.runId })
 		.from(runs)
-		.where(eq(runs.runId, input.runId))
-		.limit(1);
-	if (!existing) {
-		// The arbiter absorbed a `run_id` conflict, so the row existed a statement
-		// ago; only a concurrent delete of the whole Conversation can get here.
-		throw new Error(
-			`run ${input.runId} conflicted on admission but vanished before it could be read`,
+		.where(
+			and(
+				eq(runs.userId, input.userId),
+				eq(runs.conversationId, input.conversationId),
+				ne(runs.runId, input.runId),
+				inArray(runs.status, ACTIVE_RUN_STATUSES),
+			),
+		)
+		.limit(ACTIVE_RUN_DEPTH_BOUND);
+	if (active.length >= ACTIVE_RUN_DEPTH_BOUND) {
+		throw new ActiveRunConflictError(
+			`conversation ${input.conversationId} already has an active run`,
 		);
 	}
-	if (
-		existing.userId !== input.userId ||
-		existing.conversationId !== input.conversationId
-	) {
-		return { outcome: "not_found" };
-	}
-	if (!normalizedInputsEqual(existing.normalizedInput, normalizedInput)) {
-		throw new RunInputMismatchError(
-			`run ${input.runId} was already admitted with different input`,
-		);
-	}
-	return { outcome: "existing", run: toRunRecord(existing) };
+
+	await tx.insert(runEvents).values({
+		runId: input.runId,
+		seq: 1,
+		type: RunEventType.Started,
+		payload: startedPayload,
+	});
+	return { outcome: "created", run: toRunRecord(inserted) };
 }
 
 function normalizedInputsEqual(

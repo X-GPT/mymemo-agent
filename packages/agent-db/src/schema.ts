@@ -307,21 +307,17 @@ export const runs = pgTable(
 			foreignColumns: [conversations.userId, conversations.conversationId],
 			name: "runs_conversation_fk",
 		}).onDelete("cascade"),
-		// A conversation's Active Runs. Deliberately **not** unique: the Active Run
-		// bound is admission's explicit count under the Conversation row lock
-		// (`admitQueuedRunInTx`), not a distributed database invariant — so it is
-		// readable in one place, and the database no longer guarantees that a
-		// writer starts one Run at a time. This index constrains nothing; it is the
-		// access path `runs_one_active_per_conversation` also happened to provide,
-		// kept after that constraint was dropped because four hot reads need it —
-		// admission's count, the Archive/Permanent-deletion guard, the Claim's
-		// snapshot (`status = 'queued'` is inside this predicate), and the history
-		// store's captured active Run.
-		// Partial on purpose: it holds one entry per *Active* Run, so it stays
-		// bounded by concurrently-busy conversations rather than growing with every
-		// Run ever admitted. History paging reads terminal Runs and is outside this
-		// predicate — it was outside the dropped index's too, so it is unaffected
-		// either way.
+		// A conversation's Active Runs. Deliberately **not** unique — it constrains
+		// nothing. The Active Run bound is admission's explicit check under the
+		// Conversation row lock (`admitQueuedRunInTx`), so the database no longer
+		// guarantees that a writer starts one Run at a time. What survives here is
+		// only the access path `runs_one_active_per_conversation` also happened to
+		// provide, which four hot reads need: admission's bound check, the
+		// Archive/Permanent-deletion guard, the Claim's snapshot (`status =
+		// 'queued'` sits inside this predicate), and the history store's captured
+		// active Run.
+		// Partial on purpose: one entry per *Active* Run keeps it sized by
+		// concurrently-busy conversations rather than by every Run ever admitted.
 		index("runs_conversation_active_idx")
 			.on(t.userId, t.conversationId)
 			.where(sql`${t.status} in ('queued', 'running', 'interrupt_requested')`),
