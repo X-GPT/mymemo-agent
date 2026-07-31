@@ -79,6 +79,7 @@ function buildLoop(
 	processor: RunProcessor,
 	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 	liveStreamTelemetry?: LiveStreamTelemetry,
+	logger: WorkerLogger = silentLogger,
 ) {
 	return new RunLoop({
 		db: tdb.db,
@@ -87,8 +88,21 @@ function buildLoop(
 		liveStreamRelay,
 		liveStreamTelemetry,
 		heartbeatIntervalMs: 15_000,
-		logger: silentLogger,
+		logger,
 	});
+}
+
+/** A logger that records the messages the loop warns about. */
+function recordingLogger(): WorkerLogger & { warnings: string[] } {
+	const warnings: string[] = [];
+	return {
+		warnings,
+		info() {},
+		error() {},
+		warn(fields) {
+			warnings.push(String((fields as { message?: unknown }).message));
+		},
+	};
 }
 
 async function queueRun(runId: string, conversationId: string) {
@@ -395,6 +409,42 @@ describe("RunLoop — conversation drain", () => {
 		const ownership = await readOwnership("conv-1");
 		expect(ownership?.ownerWorkerId).toBe("worker-1");
 		expect(ownership?.ownerUntil).toBeInstanceOf(Date);
+	});
+
+	it("stops heartbeating a Run it abandoned, tick after tick", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		const logger = recordingLogger();
+		const loop = buildLoop(
+			worker,
+			async () => {
+				await gate.promise;
+			},
+			undefined,
+			undefined,
+			logger,
+		);
+		await queueRun("run-1", "conv-1");
+		await loop.tick();
+		await waitUntil(
+			async () => (await readRun("run-1"))?.status === "running",
+			"the drain to start its first snapshot Run",
+		);
+
+		// Stale-run recovery takes the Run while the Conversation lease stays live.
+		await expireOwnership("run-1");
+		await loop.tick(); // recovers the Run, then abandons it
+		await loop.tick();
+		await loop.tick();
+		gate.resolve();
+		await worker.drain();
+
+		// Detached on abandonment, so later ticks stop heartbeating it.
+		expect(
+			logger.warnings.filter(
+				(message) => message === "abandoning a run this worker no longer owns",
+			),
+		).toHaveLength(1);
 	});
 
 	it("skips a snapshot Run that reached its Outcome and serves the next", async () => {

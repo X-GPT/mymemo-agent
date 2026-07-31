@@ -498,6 +498,14 @@ function claimedRunConditions(owner: ConversationOwner, runId: string) {
  * only on the zero-row path. Separate from {@link classifyRunFenceRejectionInTx}
  * only because the two writes still evaluate different fences; #399 collapses
  * them when the terminal and append paths move onto the epoch.
+ *
+ * The lookup carries the write's Conversation scoping, so a Run outside the
+ * Claim is reported as `gone` rather than distinguished. That is deliberate:
+ * only a Run of the Claim's own snapshot can legitimately be asked about, and
+ * both readings tell the drain the same thing — stop, there is nothing here to
+ * serve. Dropping the scoping to tell them apart would be worse, because the
+ * epoch fence is on `conversations` and would then hold for a foreign Run,
+ * reporting it as a skippable `status` refusal.
  */
 async function classifyStartRejectionInTx(
 	tx: DbTx,

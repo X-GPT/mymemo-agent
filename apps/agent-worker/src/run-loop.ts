@@ -25,6 +25,7 @@ import {
 } from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventsTx,
+	type FenceRejection,
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
 	markStaleRunsTx,
@@ -207,13 +208,22 @@ interface ServedRun {
 interface ActiveDrain {
 	/** The Claim's authority: this Conversation, at this Ownership epoch. */
 	owner: ConversationOwner;
+	/**
+	 * The Run a tick may renew and interrupt — set for exactly as long as that is
+	 * true. It is cleared the moment the drain takes the Run back: just before the
+	 * terminal transition, so a concurrent tick cannot race the Outcome, and on
+	 * abandonment, so later ticks stop heartbeating a Run that is no longer this
+	 * worker's. `serveRun`'s `finally` is the backstop for the unwinding paths.
+	 */
 	served?: ServedRun;
 	/**
 	 * Why the drain stopped early, if it did. Both mean "do not release": a lost
 	 * lease belongs to a successor whose ownership releasing would revoke, and a
-	 * deleted Conversation has nothing left to release.
+	 * deleted Conversation has nothing left to release. Spelled as the fence
+	 * vocabulary minus the one rejection that does *not* stop a drain, so the two
+	 * cannot drift.
 	 */
-	halted?: "lease" | "gone";
+	halted?: Exclude<FenceRejection["rejected"], "status">;
 }
 
 /** Map key for one Conversation; the table's key is `(user, conversation)`. */
@@ -423,9 +433,11 @@ export class RunLoop {
 			try {
 				ownerUntil = await renewConversationLeaseTx(this.opts.db, drain.owner);
 			} catch (error) {
-				// Transient DB error: the next tick retries well before the 60s
-				// Ownership deadline actually lapses, so drop this beat rather than
-				// abandon a Conversation this worker still owns.
+				// Transient DB error: drop this Conversation's whole beat — the
+				// renewal and the served Run's interruption observation alike, since a
+				// database that just refused one is unlikely to answer the other. The
+				// next tick retries well before the 60s Ownership deadline actually
+				// lapses, so this is a dropped beat, not an abandoned Conversation.
 				this.opts.logger.error({
 					message: "ownership lease renewal failed",
 					workerId: this.workerId,
@@ -438,7 +450,7 @@ export class RunLoop {
 			// there its own cleanup owns this Conversation, not the renewal loop.
 			if (this.drains.get(key) !== drain) continue;
 			if (!ownerUntil) {
-				this.loseOwnership(key, drain);
+				this.loseOwnership(drain);
 				continue;
 			}
 			await this.observeServedRun(drain);
@@ -451,12 +463,20 @@ export class RunLoop {
 	 * owns its Runs. Halt the drain and abandon the Run in flight — and
 	 * deliberately do **not** release, which would revoke the successor's
 	 * ownership.
+	 *
+	 * Abandonment is in-memory only, and that is the whole of what stops a
+	 * superseded worker from terminalizing: the terminal transition still fences
+	 * on the bridge Run lease, which this worker still holds. So a lease lost
+	 * after the served Run detached (it detaches just before terminalizing) can
+	 * still commit that Run's Outcome. Contained rather than safe — the successor's
+	 * snapshot holds only `queued` Runs, so nothing re-executes it — and closed
+	 * properly when the terminal transition moves onto the epoch fence (#399).
 	 */
-	private loseOwnership(key: string, drain: ActiveDrain): void {
+	private loseOwnership(drain: ActiveDrain): void {
 		drain.halted = "lease";
 		// Stop renewing a Conversation that is no longer ours. In the ordinary case
 		// the drain's own cleanup removes this entry instead.
-		this.forgetDrain(key, drain);
+		this.forgetDrain(drain);
 		this.opts.logger.warn({
 			message: "halting drain after losing the Ownership lease",
 			workerId: this.workerId,
@@ -517,12 +537,15 @@ export class RunLoop {
 
 	/**
 	 * Stop serving the Run in flight without terminalizing it: its Outcome
-	 * belongs to whoever holds it now. `finish()` reads `lostOwnership` through
-	 * the retained entry and skips the terminal transition.
+	 * belongs to whoever holds it now. Detaching it here is what stops later
+	 * ticks from heartbeating a Run this worker no longer owns; `finish()` still
+	 * reads `lostOwnership` through the retained entry and skips the terminal
+	 * transition.
 	 */
 	private abandonServedRun(drain: ActiveDrain): void {
 		const served = drain.served;
 		if (!served) return;
+		drain.served = undefined;
 		served.entry.state.lostOwnership = true;
 		served.entry.controller.abort();
 		served.entry.ownershipLostController.abort();
@@ -542,16 +565,16 @@ export class RunLoop {
 					epoch: conversation.epoch,
 				},
 			};
-			const key = conversationKey(drain.owner);
-			this.drains.set(key, drain);
+			this.drains.set(conversationKey(drain.owner), drain);
 			const dispatched = this.opts.worker.tryStart(() =>
-				this.drainConversation(conversation, drain, key),
+				this.drainConversation(conversation, drain),
 			);
 			if (!dispatched) {
-				// Capacity vanished between the check and dispatch (a shutdown began).
-				// No Run was started, so release rather than hold a lease this worker
-				// cannot serve: the snapshot's Runs stay queued for the next Claim.
-				this.forgetDrain(key, drain);
+				// Capacity vanished between the check and the dispatch — a shutdown
+				// began, or an overlapping doorbell and timer tick both saw the last
+				// slot. No Run was started, so release rather than hold a lease this
+				// worker cannot serve: the snapshot's Runs stay queued for the next Claim.
+				this.forgetDrain(drain);
 				this.opts.logger.warn({
 					message: "claimed conversation not dispatched; releasing it",
 					workerId: this.workerId,
@@ -575,7 +598,6 @@ export class RunLoop {
 	private async drainConversation(
 		claim: ClaimedConversation,
 		drain: ActiveDrain,
-		key: string,
 	): Promise<void> {
 		try {
 			for (const runId of claim.runIds) {
@@ -599,7 +621,7 @@ export class RunLoop {
 				await this.serveRun(started.run, drain);
 			}
 		} finally {
-			this.forgetDrain(key, drain);
+			this.forgetDrain(drain);
 			if (!drain.halted) await this.releaseConversation(drain);
 		}
 	}
@@ -610,7 +632,8 @@ export class RunLoop {
 	 * same worker while the halted drain is still unwinding; a blind delete by key
 	 * would then stop renewing its successor's lease.
 	 */
-	private forgetDrain(key: string, drain: ActiveDrain): void {
+	private forgetDrain(drain: ActiveDrain): void {
+		const key = conversationKey(drain.owner);
 		if (this.drains.get(key) === drain) this.drains.delete(key);
 	}
 
@@ -683,7 +706,7 @@ export class RunLoop {
 			ownershipLostController: new AbortController(),
 			state: { interrupted: false, lostOwnership: false },
 		};
-		// Published before the first await, so a concurrent tick can renew this
+		// Attached before the first await, so a concurrent tick can renew this
 		// Run's lease and hand it an observed interruption for its whole life.
 		drain.served = { runId: run.runId, entry };
 		if (this.opts.worker.isDraining) {
@@ -695,13 +718,15 @@ export class RunLoop {
 			entry.shutdownController.abort();
 		}
 		try {
-			await this.runClaimed(run, drain, entry);
+			await this.executeServedRun(run, drain, entry);
 		} finally {
+			// Backstop: `executeServedRun` detaches the Run itself before
+			// terminalizing, so this only fires on a path that unwound first.
 			drain.served = undefined;
 		}
 	}
 
-	private async runClaimed(
+	private async executeServedRun(
 		run: RunRecord,
 		drain: ActiveDrain,
 		entry: ActiveEntry,
@@ -765,8 +790,8 @@ export class RunLoop {
 				failure = { error };
 			}
 		}
-		// Stop heartbeating this run before terminalizing: from here the drain owns
-		// the terminal transition and a concurrent heartbeat must not race it.
+		// Detach before terminalizing: from here the drain owns the terminal
+		// transition and a concurrent tick must not race it.
 		drain.served = undefined;
 		try {
 			const terminalStatus = await this.finish(

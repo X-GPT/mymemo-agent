@@ -493,7 +493,10 @@ describe("startClaimedRunTx", () => {
 			workerId: "worker-1",
 		});
 
-		expect(started.outcome).toBe("rejected");
+		// A Run outside the Claim is refused with a class that stops the drain,
+		// never one that skips and continues — which is the property that matters;
+		// it reports as `gone` because the scoped lookup cannot see it at all.
+		expect(started).toEqual({ outcome: "rejected", rejected: "gone" });
 		expect((await readRun("run-other"))?.status).toBe("queued");
 	});
 });
