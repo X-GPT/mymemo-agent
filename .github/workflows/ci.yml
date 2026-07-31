@@ -45,12 +45,18 @@ jobs:
   # durable completion, and relay-backed streaming are exercised on every PR
   # without live provider credentials. Task 9.7 owns the production SDK path's
   # credentialed smoke.
-  # `e2e/integration.test.ts` is gated on AGENT_DATABASE_URL.
+  #
+  # It also carries the Claim protocol's concurrency suite, which needs
+  # genuinely concurrent backends the PGlite harness structurally cannot
+  # provide. Both suites are gated on AGENT_DATABASE_URL.
   integration:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        # The major production runs (RDS `agent_db_engine_version`). The
+        # concurrency suite below is only evidence about production while these
+        # match.
+        image: postgres:17
         env:
           POSTGRES_USER: mymemo
           POSTGRES_PASSWORD: mymemo
@@ -75,4 +81,7 @@ jobs:
       # Apply the @mymemo/agent-db migrations to the service DB before the apps boot.
       - run: bun run db:migrate
         working-directory: apps/chat-api
+      # Ahead of the AG-UI lane: the Claim is global, so this suite wants a
+      # database no other suite has left claimable Conversations in.
+      - run: bun test packages/agent-db/src/conversation-ownership.postgres.test.ts
       - run: bun test e2e/integration.test.ts
