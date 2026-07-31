@@ -10,24 +10,30 @@ import {
 const config = {
 	minTasks: 1,
 	maxTasks: 20,
-	targetConcurrentRunsPerTask: 2,
+	targetConcurrentConversationsPerTask: 2,
 	scaleInCooldownMs: 10 * 60 * 1000,
 };
 
 describe("computeDesiredWorkerTasks", () => {
-	it("uses ceil((queuedRuns + runningRuns) / targetConcurrentRunsPerTask)", () => {
+	it("uses ceil((claimableConversations + ownedConversations) / targetConcurrentConversationsPerTask)", () => {
 		expect(
-			computeDesiredWorkerTasks({ queuedRuns: 12, runningRuns: 20 }, config),
+			computeDesiredWorkerTasks(
+				{ claimableConversations: 12, ownedConversations: 20 },
+				config,
+			),
 		).toBe(16);
 	});
 
 	it("clamps the desired task count to min and max", () => {
 		expect(
-			computeDesiredWorkerTasks({ queuedRuns: 0, runningRuns: 0 }, config),
+			computeDesiredWorkerTasks(
+				{ claimableConversations: 0, ownedConversations: 0 },
+				config,
+			),
 		).toBe(1);
 		expect(
 			computeDesiredWorkerTasks(
-				{ queuedRuns: 100, runningRuns: 100 },
+				{ claimableConversations: 100, ownedConversations: 100 },
 				{ ...config, maxTasks: 12 },
 			),
 		).toBe(12);
@@ -39,7 +45,7 @@ describe("decideWorkerScale", () => {
 		const now = new Date("2026-01-01T00:05:00Z");
 
 		const decision = decideWorkerScale({
-			metrics: { queuedRuns: 0, runningRuns: 0 },
+			metrics: { claimableConversations: 0, ownedConversations: 0 },
 			config,
 			state: {
 				currentDesiredTasks: 8,
@@ -58,7 +64,7 @@ describe("decideWorkerScale", () => {
 
 	it("allows scale-in after cooldown expires", () => {
 		const decision = decideWorkerScale({
-			metrics: { queuedRuns: 0, runningRuns: 0 },
+			metrics: { claimableConversations: 0, ownedConversations: 0 },
 			config,
 			state: {
 				currentDesiredTasks: 8,
@@ -86,7 +92,10 @@ describe("runWorkerScaler", () => {
 		const now = new Date("2026-01-01T00:11:00Z");
 
 		const result = await runWorkerScaler({
-			readMetrics: async () => ({ queuedRuns: 0, runningRuns: 0 }),
+			readMetrics: async () => ({
+				claimableConversations: 0,
+				ownedConversations: 0,
+			}),
 			desiredCountAdapter: adapter,
 			stateStore: state,
 			config,

@@ -1,6 +1,6 @@
 import { ECSClient } from "@aws-sdk/client-ecs";
 import { createDatabase } from "@mymemo/agent-db/client";
-import { readRunQueueMetrics } from "@mymemo/agent-db/queue-metrics";
+import { readConversationQueueMetrics } from "@mymemo/agent-db/queue-metrics";
 import { loadWorkerScalerConfigFromEnv } from "./config";
 import { EcsUpdateServiceAdapter } from "./ecs-adapter";
 import { EcsServiceStateStore } from "./ecs-state-store";
@@ -15,7 +15,7 @@ const target = {
 };
 
 const result = await runWorkerScaler({
-	readMetrics: () => readRunQueueMetrics(db),
+	readMetrics: () => readConversationQueueMetrics(db),
 	desiredCountAdapter: new EcsUpdateServiceAdapter(ecsClient, target),
 	stateStore: new EcsServiceStateStore({
 		client: ecsClient,

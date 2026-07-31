@@ -16,7 +16,11 @@ import {
 	renewConversationLeaseTx,
 } from "./conversation-ownership";
 import { conversations, runs } from "./schema";
-import { createTestDatabase, type TestDb } from "./testing";
+import {
+	createTestDatabase,
+	lapseConversationOwnership,
+	type TestDb,
+} from "./testing";
 
 let tdb: TestDb;
 
@@ -81,15 +85,10 @@ async function readOwnership(conversationId: string) {
 
 /** Force a lease to have lapsed without waiting out its real duration. */
 async function lapseLease(conversationId: string): Promise<void> {
-	await tdb.db
-		.update(conversations)
-		.set({ ownerUntil: sql`now() - interval '1 second'` })
-		.where(
-			and(
-				eq(conversations.userId, "user-1"),
-				eq(conversations.conversationId, conversationId),
-			),
-		);
+	await lapseConversationOwnership(tdb.db, {
+		userId: "user-1",
+		conversationId,
+	});
 }
 
 /**

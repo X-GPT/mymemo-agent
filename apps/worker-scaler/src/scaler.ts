@@ -1,9 +1,16 @@
-import type { RunQueueMetrics } from "@mymemo/agent-db/queue-metrics";
+import type { ConversationQueueMetrics } from "@mymemo/agent-db/queue-metrics";
 
 export interface WorkerScalerConfig {
 	minTasks: number;
 	maxTasks: number;
-	targetConcurrentRunsPerTask: number;
+	/**
+	 * How many concurrent Conversations one worker task serves (ADR-0015): a
+	 * claimed Conversation holds one worker slot for its whole drain, so this
+	 * mirrors the worker's per-task concurrency cap. The env var name
+	 * (`WORKER_SCALER_TARGET_CONCURRENT_RUNS_PER_TASK`) predates the
+	 * Conversation unit and is kept for config stability.
+	 */
+	targetConcurrentConversationsPerTask: number;
 	scaleInCooldownMs: number;
 }
 
@@ -35,14 +42,14 @@ export interface ScaleDecision {
 }
 
 export interface DecideWorkerScaleInput {
-	metrics: RunQueueMetrics;
+	metrics: ConversationQueueMetrics;
 	config: WorkerScalerConfig;
 	state: WorkerScalerState;
 	now: Date;
 }
 
 export interface RunWorkerScalerInput {
-	readMetrics(): Promise<RunQueueMetrics>;
+	readMetrics(): Promise<ConversationQueueMetrics>;
 	desiredCountAdapter: DesiredCountAdapter;
 	stateStore: ScalerStateStore;
 	config: WorkerScalerConfig;
@@ -50,20 +57,20 @@ export interface RunWorkerScalerInput {
 }
 
 export interface RunWorkerScalerResult {
-	metrics: RunQueueMetrics;
+	metrics: ConversationQueueMetrics;
 	decision: ScaleDecision;
 }
 
 export function computeDesiredWorkerTasks(
-	metrics: RunQueueMetrics,
+	metrics: ConversationQueueMetrics,
 	config: WorkerScalerConfig,
 ): number {
 	validateMetrics(metrics);
 	validateConfig(config);
 
 	const rawDesired = Math.ceil(
-		(metrics.queuedRuns + metrics.runningRuns) /
-			config.targetConcurrentRunsPerTask,
+		(metrics.claimableConversations + metrics.ownedConversations) /
+			config.targetConcurrentConversationsPerTask,
 	);
 	return clamp(rawDesired, config.minTasks, config.maxTasks);
 }
@@ -150,10 +157,12 @@ function validateConfig(config: WorkerScalerConfig): void {
 		);
 	}
 	if (
-		!Number.isInteger(config.targetConcurrentRunsPerTask) ||
-		config.targetConcurrentRunsPerTask <= 0
+		!Number.isInteger(config.targetConcurrentConversationsPerTask) ||
+		config.targetConcurrentConversationsPerTask <= 0
 	) {
-		throw new Error("targetConcurrentRunsPerTask must be a positive integer");
+		throw new Error(
+			"targetConcurrentConversationsPerTask must be a positive integer",
+		);
 	}
 	if (
 		!Number.isInteger(config.scaleInCooldownMs) ||
@@ -163,7 +172,7 @@ function validateConfig(config: WorkerScalerConfig): void {
 	}
 }
 
-function validateMetrics(metrics: RunQueueMetrics): void {
+function validateMetrics(metrics: ConversationQueueMetrics): void {
 	for (const [name, value] of Object.entries(metrics)) {
 		if (!Number.isInteger(value) || value < 0) {
 			throw new Error(`${name} must be a non-negative integer`);

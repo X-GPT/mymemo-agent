@@ -24,7 +24,7 @@ describe("loadWorkerScalerConfigFromEnv", () => {
 			scaler: {
 				minTasks: 1,
 				maxTasks: 20,
-				targetConcurrentRunsPerTask: 2,
+				targetConcurrentConversationsPerTask: 2,
 				scaleInCooldownMs: 600_000,
 			},
 		});
@@ -56,7 +56,7 @@ describe("loadWorkerScalerConfigFromEnv", () => {
 		expect(config.scaler).toEqual({
 			minTasks: 2,
 			maxTasks: 12,
-			targetConcurrentRunsPerTask: 4,
+			targetConcurrentConversationsPerTask: 4,
 			scaleInCooldownMs: 300_000,
 		});
 	});
