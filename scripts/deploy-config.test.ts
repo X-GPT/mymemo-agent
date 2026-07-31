@@ -776,6 +776,15 @@ describe("agent deployment config", () => {
 		expect(`${variables}\n${prodTfvars}\n${exampleTfvars}`).not.toContain(
 			'"17.9"',
 		);
+
+		// The two Postgres containers developers and CI actually run must track
+		// that major. The Claim protocol's concurrency suite
+		// (`packages/agent-db/src/conversation-ownership.postgres.test.ts`) is only
+		// evidence about production while they do, and both files say so in a
+		// comment — this is what stops an RDS bump from silently invalidating that
+		// claim while every test still passes.
+		expect(composeConfig).toContain("image: postgres:17");
+		expect(ciWorkflow).toContain("image: postgres:17");
 	});
 
 	it("shared infrastructure fallbacks are explicit and conditional", () => {
