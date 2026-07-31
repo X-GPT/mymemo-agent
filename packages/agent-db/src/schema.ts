@@ -386,8 +386,8 @@ export const runs = pgTable(
 		// at realistic lengths; a Conversation reaching thousands of Runs is when the
 		// indexable `date_trunc(... AT TIME ZONE 'UTC')` would start to earn the
 		// app-visible expression rewrite it requires.
-		// Partial on the same tuple as `runs_cleanup_idx`, which makes this the exact
-		// complement of `runs_conversation_active_idx`.
+		// The predicate makes this the exact complement of
+		// `runs_conversation_active_idx`: between them they partition the table.
 		index("runs_history_paging_idx")
 			.on(t.userId, t.conversationId)
 			.where(sql`${t.status} in (${statusList(TERMINAL_RUN_STATUSES)})`),

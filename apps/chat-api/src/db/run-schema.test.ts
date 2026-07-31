@@ -201,21 +201,18 @@ describe("run queue schema", () => {
 		}
 	});
 
-	it("keeps the history-paging index non-unique and partial", async () => {
-		// History paging reads one Conversation's Outcomes newest-first. Without
-		// this index that read is a sequential scan of every Run ever admitted;
-		// with it, cost tracks the Conversation's own history length instead.
+	it("keeps the history-paging index partial on Outcomes", async () => {
 		const { rows } = await tdb.db.execute(sql`
 			select indexdef from pg_indexes
 			where tablename = 'runs' and indexname = 'runs_history_paging_idx'
 		`);
 		// Empty when the index is missing, which fails the first assertion loudly.
+		// A unique index would fail it too — `CREATE UNIQUE INDEX` does not contain
+		// this substring.
 		const definition = rows[0] ? String(rows[0].indexdef) : "";
 		expect(definition).toContain("CREATE INDEX");
-		expect(definition).not.toContain("UNIQUE");
-		// Exactly the equality pair, and nothing trailing it. The paging query's
-		// `ORDER BY` is over a `date_trunc` expression no btree on the raw column
-		// can match, so ordering columns here would be index width buying nothing.
+		// Exactly the equality pair, nothing trailing it; the index's own comment
+		// in `schema.ts` carries why ordering columns would buy nothing here.
 		expect(definition).toContain("(user_id, conversation_id)");
 		// Asserted by parts rather than as one string, for the same reason as
 		// `runs_conversation_active_idx` above.
