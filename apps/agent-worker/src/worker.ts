@@ -2,7 +2,7 @@ import type { WorkerLogger } from "./logger";
 
 export interface WorkerOptions {
 	workerId: string;
-	maxConcurrentRuns: number;
+	maxConcurrentConversations: number;
 	shutdownTimeoutMs: number;
 	logger: WorkerLogger;
 }
@@ -10,21 +10,25 @@ export interface WorkerOptions {
 export interface HealthSnapshot {
 	status: "ok";
 	workerId: string;
-	activeRuns: number;
-	maxConcurrentRuns: number;
+	activeConversations: number;
+	maxConcurrentConversations: number;
 	draining: boolean;
 }
 
 /**
- * Bounded-concurrency task supervisor for the worker process. In the deployable
- * skeleton it owns concurrency limiting, active-task tracking, graceful drain,
- * and the health snapshot. The Postgres poll/claim loop (a later milestone)
- * drives it by calling `tryStart` for each claimed run; the skeleton keeps that
- * mechanism testable without a queue.
+ * Bounded-concurrency task supervisor for the worker process: concurrency
+ * limiting, active-task tracking, graceful drain, and the health snapshot.
+ *
+ * Its unit is the **Conversation**, not the Run (ADR-0015): the control loop
+ * calls `tryStart` once per Claimed Conversation, and that slot is held for the
+ * whole drain of that Conversation's snapshot rather than released between its
+ * Runs. Naming it after Runs is how the next reader mis-sizes the fleet — a
+ * Conversation serves its Runs one at a time, so a task's real ceiling is
+ * concurrent Conversations.
  */
 export class Worker {
 	readonly workerId: string;
-	private readonly maxConcurrentRuns: number;
+	private readonly maxConcurrentConversations: number;
 	private readonly shutdownTimeoutMs: number;
 	private readonly logger: WorkerLogger;
 	private readonly active = new Set<Promise<void>>();
@@ -32,7 +36,7 @@ export class Worker {
 
 	constructor(options: WorkerOptions) {
 		this.workerId = options.workerId;
-		this.maxConcurrentRuns = options.maxConcurrentRuns;
+		this.maxConcurrentConversations = options.maxConcurrentConversations;
 		this.shutdownTimeoutMs = options.shutdownTimeoutMs;
 		this.logger = options.logger;
 	}
@@ -46,24 +50,24 @@ export class Worker {
 	}
 
 	/**
-	 * Whether a new run may start right now — not draining and below the
-	 * concurrency cap. The claim loop checks this before claiming a run so it
-	 * never claims work it cannot immediately dispatch (an undispatched claim
-	 * would strand the run until stale-run recovery).
+	 * Whether another Conversation drain may start right now — not draining and
+	 * below the concurrency cap. The claim loop checks this before Claiming a
+	 * Conversation so it never claims work it cannot immediately dispatch.
 	 */
 	get hasCapacity(): boolean {
-		return !this.draining && this.active.size < this.maxConcurrentRuns;
+		return !this.draining && this.active.size < this.maxConcurrentConversations;
 	}
 
 	/**
 	 * Start a task if there is capacity and the worker is not draining. Returns
-	 * whether it started, so the caller (the future claim loop) can back off and
-	 * leave the run on the queue. Task failures are logged and isolated — one
-	 * failing run never rejects another or the supervisor.
+	 * whether it started, so the claim loop can back off and release the
+	 * Conversation instead of holding a lease it cannot serve. Task failures are
+	 * logged and isolated — one failing drain never rejects another or the
+	 * supervisor.
 	 */
 	tryStart(task: () => Promise<void>): boolean {
 		if (this.draining) return false;
-		if (this.active.size >= this.maxConcurrentRuns) return false;
+		if (this.active.size >= this.maxConcurrentConversations) return false;
 
 		const tracked = this.runIsolated(task);
 		this.active.add(tracked);
@@ -100,9 +104,9 @@ export class Worker {
 		if (this.active.size === 0) return;
 
 		this.logger.info({
-			message: "Draining active runs before shutdown",
+			message: "Draining active conversations before shutdown",
 			workerId: this.workerId,
-			activeRuns: this.active.size,
+			activeConversations: this.active.size,
 			timeoutMs: this.shutdownTimeoutMs,
 		});
 
@@ -118,9 +122,10 @@ export class Worker {
 
 		if (this.active.size > 0) {
 			this.logger.warn({
-				message: "Shutdown grace period elapsed with active runs remaining",
+				message:
+					"Shutdown grace period elapsed with active conversations remaining",
 				workerId: this.workerId,
-				activeRuns: this.active.size,
+				activeConversations: this.active.size,
 			});
 		}
 	}
@@ -129,8 +134,8 @@ export class Worker {
 		return {
 			status: "ok",
 			workerId: this.workerId,
-			activeRuns: this.active.size,
-			maxConcurrentRuns: this.maxConcurrentRuns,
+			activeConversations: this.active.size,
+			maxConcurrentConversations: this.maxConcurrentConversations,
 			draining: this.draining,
 		};
 	}

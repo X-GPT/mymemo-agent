@@ -60,8 +60,9 @@ export interface WorkerConfig {
 	fileLimits: FileToolLimits;
 	/** Bounds for one model-facing Bash invocation. */
 	bashLimits: BashToolLimits;
-	/** Conservative default run concurrency per worker task. */
-	maxConcurrentRuns: number;
+	/** Conservative default Conversation concurrency per worker task. One slot is
+	 * held for a whole Conversation drain, not per Run. */
+	maxConcurrentConversations: number;
 	/** Per-call cap for model-facing document search results. */
 	maxDocumentSearchResults: number;
 	/** Per-page cap for model-facing document inventory results. */
@@ -90,7 +91,7 @@ export interface WorkerConfig {
 	port: number;
 }
 
-const DEFAULT_MAX_CONCURRENT_RUNS = 2;
+const DEFAULT_MAX_CONCURRENT_CONVERSATIONS = 2;
 const DEFAULT_SANDBOX_IDLE_MS = 300_000;
 const DEFAULT_FILE_READ_MAX_BYTES = 65_536;
 const DEFAULT_FILE_READ_MAX_LINES = 2_000;
@@ -232,10 +233,10 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			maxStdoutBytes: bashMaxOutputBytes,
 			maxStderrBytes: bashMaxOutputBytes,
 		},
-		maxConcurrentRuns: positiveIntOr(
-			env.WORKER_MAX_CONCURRENT_RUNS,
-			DEFAULT_MAX_CONCURRENT_RUNS,
-			"WORKER_MAX_CONCURRENT_RUNS",
+		maxConcurrentConversations: positiveIntOr(
+			env.WORKER_MAX_CONCURRENT_CONVERSATIONS,
+			DEFAULT_MAX_CONCURRENT_CONVERSATIONS,
+			"WORKER_MAX_CONCURRENT_CONVERSATIONS",
 		),
 		maxDocumentSearchResults: positiveIntOr(
 			env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS,

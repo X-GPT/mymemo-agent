@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
+import { claimConversationTx } from "@mymemo/agent-db/conversation-ownership";
 import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventTx,
@@ -61,10 +62,13 @@ function deferred() {
 	return { promise, resolve };
 }
 
-function buildWorker(maxConcurrentRuns: number, workerId = "worker-1") {
+function buildWorker(
+	maxConcurrentConversations: number,
+	workerId = "worker-1",
+) {
 	return new Worker({
 		workerId,
-		maxConcurrentRuns,
+		maxConcurrentConversations,
 		shutdownTimeoutMs: 1_000,
 		logger: silentLogger,
 	});
@@ -115,8 +119,36 @@ async function expireOwnership(runId: string) {
 		.where(eq(runs.runId, runId));
 }
 
+/** Force an Ownership lease to have lapsed without waiting out its duration. */
+async function lapseOwnershipLease(conversationId: string) {
+	await tdb.db
+		.update(conversations)
+		.set({ ownerUntil: sql`now() - interval '1 second'` })
+		.where(eq(conversations.conversationId, conversationId));
+}
+
 async function readRun(runId: string) {
 	const [row] = await tdb.db.select().from(runs).where(eq(runs.runId, runId));
+	return row;
+}
+
+/** Push a run's created_at into the past so snapshot order is deterministic
+ * (PGlite can give two inserts the same timestamp). */
+async function backdateRun(runId: string, msAgo: number) {
+	await tdb.db
+		.update(runs)
+		.set({ createdAt: sql`now() - (${msAgo} * interval '1 millisecond')` })
+		.where(eq(runs.runId, runId));
+}
+
+async function readOwnership(conversationId: string) {
+	const [row] = await tdb.db
+		.select({
+			ownerWorkerId: conversations.ownerWorkerId,
+			ownerUntil: conversations.ownerUntil,
+		})
+		.from(conversations)
+		.where(eq(conversations.conversationId, conversationId));
 	return row;
 }
 
@@ -274,6 +306,216 @@ describe("RunLoop — heartbeat", () => {
 		expect(row?.status).toBe("running");
 		expect(row?.lockedBy).toBe("worker-2");
 		expect(await readEventTypes("run-1")).toEqual([]);
+	});
+});
+
+describe("RunLoop — conversation drain", () => {
+	it("serves a Claimed Conversation's snapshot in submission order", async () => {
+		const worker = buildWorker(1);
+		const served: string[] = [];
+		const loop = buildLoop(worker, async (ctx) => {
+			served.push(ctx.run.runId);
+		});
+		await queueRun("run-second", "conv-1");
+		await queueRun("run-first", "conv-1");
+		await backdateRun("run-first", 5_000);
+
+		// One slot for the whole drain: two Runs, one Claimed Conversation.
+		const claimed = await loop.tick();
+		await worker.drain();
+
+		expect(claimed).toBe(1);
+		expect(served).toEqual(["run-first", "run-second"]);
+		expect((await readRun("run-first"))?.status).toBe("done");
+		expect((await readRun("run-second"))?.status).toBe("done");
+		// Released, so the Conversation is immediately claimable again.
+		expect(await readOwnership("conv-1")).toMatchObject({
+			ownerWorkerId: null,
+			ownerUntil: null,
+		});
+	});
+
+	it("halts without terminalizing or releasing once the Ownership lease is lost", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		// Ignores the abort signal, so halting cannot depend on the processor.
+		const loop = buildLoop(worker, async () => {
+			await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await queueRun("run-2", "conv-1");
+		await backdateRun("run-1", 5_000);
+		await loop.tick(); // Claim + dispatch; the drain blocks on run-1
+		await waitUntil(
+			async () => (await readRun("run-1"))?.status === "running",
+			"the drain to start its first snapshot Run",
+		);
+
+		// A successor Claims the Conversation out from under this worker.
+		await lapseOwnershipLease("conv-1");
+		const successor = await claimConversationTx(tdb.db, {
+			workerId: "worker-2",
+		});
+		await loop.tick(); // renewal matches zero rows → halt
+		gate.resolve();
+		await worker.drain();
+
+		expect(successor?.conversationId).toBe("conv-1");
+		// Abandoned, not terminalized: the successor's Runs are not ours to end.
+		expect((await readRun("run-1"))?.status).toBe("running");
+		expect(await readEventTypes("run-1")).toEqual([]);
+		// Unstarted, and left for the successor rather than served under a dead lease.
+		expect((await readRun("run-2"))?.status).toBe("queued");
+		// Never released: releasing would revoke the successor's ownership.
+		expect(await readOwnership("conv-1")).toMatchObject({
+			ownerWorkerId: "worker-2",
+		});
+	});
+
+	it("leaves a lapsed lease in place instead of releasing it", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		const loop = buildLoop(worker, async () => {
+			await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick();
+		await waitUntil(
+			async () => (await readRun("run-1"))?.status === "running",
+			"the drain to start its first snapshot Run",
+		);
+
+		await lapseOwnershipLease("conv-1"); // no successor yet
+		await loop.tick(); // renewal matches zero rows → halt
+		gate.resolve();
+		await worker.drain();
+
+		// Releasing would clear the deadline a lapsed lease is *found* by, hiding
+		// the Conversation — and its abandoned Run — from Reclamation.
+		const ownership = await readOwnership("conv-1");
+		expect(ownership?.ownerWorkerId).toBe("worker-1");
+		expect(ownership?.ownerUntil).toBeInstanceOf(Date);
+	});
+
+	it("skips a snapshot Run that reached its Outcome and serves the next", async () => {
+		const worker = buildWorker(1);
+		const served: string[] = [];
+		const gate = deferred();
+		const loop = buildLoop(worker, async (ctx) => {
+			served.push(ctx.run.runId);
+			if (ctx.run.runId === "run-1") await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await queueRun("run-2", "conv-1");
+		await queueRun("run-3", "conv-1");
+		await backdateRun("run-1", 10_000);
+		await backdateRun("run-2", 5_000);
+		await loop.tick(); // Claim + dispatch; the drain blocks on run-1
+		await waitUntil(
+			async () => (await readRun("run-1"))?.status === "running",
+			"the drain to start its first snapshot Run",
+		);
+
+		// run-2 is interrupted while still queued, so it reaches its Outcome
+		// underneath the worker between the snapshot and its start.
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-2",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		gate.resolve();
+		await worker.drain();
+
+		expect(served).toEqual(["run-1", "run-3"]);
+		expect((await readRun("run-2"))?.status).toBe("interrupted");
+		expect((await readRun("run-3"))?.status).toBe("done");
+	});
+
+	it("leaves a Run submitted after the Claim to a later Claim", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		const loop = buildLoop(worker, async (ctx) => {
+			if (ctx.run.runId === "run-1") await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await loop.tick();
+		await waitUntil(
+			async () => (await readRun("run-1"))?.status === "running",
+			"the drain to start its first snapshot Run",
+		);
+
+		await queueRun("run-late", "conv-1"); // admitted mid-drain
+		gate.resolve();
+		await worker.drain();
+
+		expect((await readRun("run-late"))?.status).toBe("queued");
+
+		await loop.tick(); // the next Claim picks it up
+		await worker.drain();
+
+		expect((await readRun("run-late"))?.status).toBe("done");
+	});
+
+	it("stops the drain, with nothing to release, when the Conversation is gone", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		const loop = buildLoop(worker, async (ctx) => {
+			if (ctx.run.runId === "run-1") await gate.promise;
+		});
+		await queueRun("run-1", "conv-gone");
+		await queueRun("run-2", "conv-gone");
+		await backdateRun("run-1", 5_000);
+		await loop.tick();
+		await waitUntil(
+			async () => (await readRun("run-1"))?.status === "running",
+			"the drain to start its first snapshot Run",
+		);
+
+		// Permanent deletion takes the Conversation's Runs with it.
+		await tdb.db
+			.delete(conversations)
+			.where(eq(conversations.conversationId, "conv-gone"));
+		gate.resolve();
+		await worker.drain();
+
+		expect(worker.activeCount).toBe(0);
+		// The worker stayed healthy: the next tick serves unrelated work.
+		await queueRun("run-other", "conv-other");
+		expect(await loop.tick()).toBe(1);
+		await worker.drain();
+		expect((await readRun("run-other"))?.status).toBe("done");
+	});
+
+	it("releases on shutdown so unstarted snapshot Runs requeue immediately", async () => {
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, async (ctx) => {
+			await new Promise<void>((resolve) => {
+				if (ctx.signal.aborted) return resolve();
+				ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			throw new Error("interrupted by shutdown");
+		});
+		await queueRun("run-1", "conv-1");
+		await queueRun("run-2", "conv-1");
+		await backdateRun("run-1", 5_000);
+		await loop.tick();
+		await waitUntil(
+			async () => (await readRun("run-1"))?.status === "running",
+			"the drain to start its first snapshot Run",
+		);
+
+		await loop.stop();
+
+		expect((await readRun("run-1"))?.status).toBe("error");
+		expect((await readRun("run-2"))?.status).toBe("queued");
+		expect(await readOwnership("conv-1")).toMatchObject({
+			ownerWorkerId: null,
+			ownerUntil: null,
+		});
+		// Immediately claimable, rather than waiting out the lease.
+		expect(
+			(await claimConversationTx(tdb.db, { workerId: "worker-2" }))?.runIds,
+		).toEqual(["run-2"]);
 	});
 });
 

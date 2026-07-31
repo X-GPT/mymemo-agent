@@ -24,11 +24,11 @@ assign_public_ip = true
 chat_api_desired_count     = 1
 agent_worker_desired_count = 1
 
-e2b_template               = "sandbox-template-prod"
-worker_e2b_template        = "mymemo-agent-sandbox"
-openrouter_base_url        = "https://openrouter.ai/api"
-openrouter_default_model   = "anthropic/claude-sonnet-4"
-worker_max_concurrent_runs = 2
+e2b_template                        = "sandbox-template-prod"
+worker_e2b_template                 = "mymemo-agent-sandbox"
+openrouter_base_url                 = "https://openrouter.ai/api"
+openrouter_default_model            = "anthropic/claude-sonnet-4"
+worker_max_concurrent_conversations = 2
 
 # Temporary Live Streams only: one small node, with replication and backups
 # disabled in redis.tf.

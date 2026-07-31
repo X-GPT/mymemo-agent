@@ -1,6 +1,10 @@
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
+	type ConversationOwner,
+	conversationEpochExists,
+} from "./conversation-ownership";
+import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
 	InvalidRunEventError,
 	parseDurableRunEvent,
@@ -36,14 +40,19 @@ import {
  * `max(seq) + 1`), and every status change or append carries its fence either
  * inside the statement that performs it or, where a transaction composes
  * several writes, in a `FOR UPDATE` lock taken before the first of them — so
- * app-side select/update races cannot happen through this module. The fence
- * these writes evaluate is still the Run lease (`locked_by` + `locked_until`),
- * which carries no fencing token because a v1 run is claimed exactly once
- * (failed runs never requeue; stale runs are terminalized, never reclaimed).
- * Conversation-level ownership (ADR-0015) breaks that premise deliberately — a
- * Conversation is Claimed many times — which is why the epoch it introduces is
- * a necessary token rather than a redundant one, and why these writes move onto
- * it.
+ * app-side select/update races cannot happen through this module.
+ *
+ * Two fences coexist here, and which one a write evaluates is migrating.
+ * {@link startClaimedRunTx} — the drain's `queued` → `running` transition —
+ * already fences on the Conversation Ownership epoch (ADR-0015). Every other
+ * write still evaluates the Run lease (`locked_by` + `locked_until`), which the
+ * drain stamps at start and renews on its tick purely as a bridge; #399 moves
+ * the appends and terminal transitions onto the epoch and #402 deletes the lease.
+ * The lease carries no fencing token, on the argument that a v1 Run is claimed
+ * exactly once (failed runs never requeue; stale runs are terminalized, never
+ * reclaimed). Conversation-level ownership breaks that premise deliberately — a
+ * Conversation is Claimed many times — which is why the epoch is a necessary
+ * token rather than a redundant one.
  */
 
 /** All legal `runs.status` values. Derived from the same tuple `runs_status_check`
@@ -374,6 +383,12 @@ export async function loadRunStartedTx(
 const LOCK_DURATION_MS = 60_000;
 
 /**
+ * The Run-scoped claim, retiring: the worker now Claims a Conversation and
+ * serves its snapshot through {@link startClaimedRunTx}, so nothing in
+ * production calls this. It survives only as the fixture that puts a Run under
+ * a Run lease for the suites still covering lease-fenced writes, and goes with
+ * the lease itself (#402).
+ *
  * Claim the oldest queued run for `workerId`, or return `null` when the queue
  * is empty. One atomic statement: the candidate select (`FOR UPDATE SKIP
  * LOCKED`, so concurrent claimants skip each other's candidate instead of
@@ -411,6 +426,95 @@ export async function claimNextRunTx(
 		)
 		.returning();
 	return row ? toRunRecord(row) : null;
+}
+
+export type StartClaimedRunResult =
+	| { outcome: "started"; run: RunRecord }
+	| ({ outcome: "rejected" } & FenceRejection);
+
+/**
+ * Serve one Run of a Claimed Conversation: `queued` → `running` under the
+ * Ownership epoch fence, recording which worker executes it. This is the drain's
+ * per-Run entry point — the Conversation, not the Run, is what was claimed, so
+ * the authority here is the Claim's epoch and a live Ownership deadline.
+ *
+ * A refusal is a classified {@link FenceRejection} rather than an exception,
+ * because the drain answers the three cases differently: `lease` — a successor
+ * owns the Conversation, so halt and abandon without releasing; `status` — this
+ * Run reached its Outcome underneath us (a queued Run interrupted between the
+ * snapshot and here), so skip it and serve the next one; `gone` — the
+ * Conversation was deleted and took its Runs with it, so stop.
+ */
+export async function startClaimedRunTx(
+	db: Database,
+	input: { owner: ConversationOwner; runId: string; workerId: string },
+): Promise<StartClaimedRunResult> {
+	return await db.transaction(async (tx) => {
+		const [row] = await tx
+			.update(runs)
+			.set({
+				status: "running",
+				executedByWorkerId: input.workerId,
+				// Bridge, deleted with the Run lease itself (#402). Every other write
+				// to this Run — appends, the terminal transition, the Live Stream
+				// failure marker, stale-Run recovery — still evaluates `locked_by` +
+				// `locked_until`, so the drain stamps them here and renews them on its
+				// tick. They carry no authority: the epoch fence below is the fence.
+				lockedBy: input.workerId,
+				lockedUntil: sql`now() + (${LOCK_DURATION_MS} * interval '1 millisecond')`,
+				heartbeatAt: sql`now()`,
+				updatedAt: sql`now()`,
+			})
+			.where(
+				and(
+					claimedRunConditions(input.owner, input.runId),
+					eq(runs.status, "queued"),
+					conversationEpochExists(input.owner),
+				),
+			)
+			.returning();
+		if (row) return { outcome: "started", run: toRunRecord(row) };
+		return {
+			outcome: "rejected",
+			...(await classifyStartRejectionInTx(tx, input.owner, input.runId)),
+		};
+	});
+}
+
+/** The Run as a Claim addresses it: this Run, of this Claimed Conversation. The
+ * Conversation scoping is what keeps one Claim's authority from reaching a Run
+ * it never snapshotted. */
+function claimedRunConditions(owner: ConversationOwner, runId: string) {
+	return and(
+		eq(runs.runId, runId),
+		eq(runs.userId, owner.userId),
+		eq(runs.conversationId, owner.conversationId),
+	);
+}
+
+/**
+ * Name why {@link startClaimedRunTx} found no row, re-evaluating the epoch fence
+ * the refused write itself evaluated. One read, in the rejecting transaction and
+ * only on the zero-row path. Separate from {@link classifyRunFenceRejectionInTx}
+ * only because the two writes still evaluate different fences; #399 collapses
+ * them when the terminal and append paths move onto the epoch.
+ */
+async function classifyStartRejectionInTx(
+	tx: DbTx,
+	owner: ConversationOwner,
+	runId: string,
+): Promise<FenceRejection> {
+	const [current] = await tx
+		.select({
+			status: runs.status,
+			fenceHolds: sql<boolean>`${conversationEpochExists(owner)}`,
+		})
+		.from(runs)
+		.where(claimedRunConditions(owner, runId))
+		.limit(1);
+	if (!current) return { rejected: "gone" };
+	if (!current.fenceHolds) return { rejected: "lease" };
+	return { rejected: "status", current: current.status as RunStatus };
 }
 
 /**

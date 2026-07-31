@@ -167,8 +167,8 @@ variable "openrouter_default_model" {
   type        = string
 }
 
-variable "worker_max_concurrent_runs" {
-  description = "Maximum concurrent runs per agent-worker task."
+variable "worker_max_concurrent_conversations" {
+  description = "Maximum concurrent Conversation drains per agent-worker task. One slot is held for a whole drain, not per Run."
   type        = number
   default     = 2
 }

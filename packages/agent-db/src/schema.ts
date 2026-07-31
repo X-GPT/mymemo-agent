@@ -312,10 +312,9 @@ export const runs = pgTable(
 		lockedBy: text("locked_by"),
 		lockedUntil: timestamp("locked_until", { withTimezone: true }),
 		/**
-		 * Which worker executed this Run, recorded when it starts. Provenance for
-		 * log correlation, never authority — that is the Conversation's Ownership
-		 * lease. Nothing writes it yet: the queued→running transition stamps it
-		 * when it adopts the epoch fence.
+		 * Which worker executed this Run, stamped by the epoch-fenced queued→running
+		 * transition. Provenance for log correlation, never authority — that is the
+		 * Conversation's Ownership lease.
 		 */
 		executedByWorkerId: text("executed_by_worker_id"),
 		heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),

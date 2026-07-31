@@ -41,7 +41,7 @@ const logger = createLogger(process.env.LOG_LEVEL ?? "warn");
 const workerId = "integration-event-writer";
 const worker = new Worker({
 	workerId,
-	maxConcurrentRuns: 1,
+	maxConcurrentConversations: 1,
 	shutdownTimeoutMs: 1_000,
 	logger,
 });

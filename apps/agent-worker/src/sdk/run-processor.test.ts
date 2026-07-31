@@ -232,7 +232,7 @@ function buildLoop(
 function buildWorker() {
 	return new Worker({
 		workerId: "worker-1",
-		maxConcurrentRuns: 1,
+		maxConcurrentConversations: 1,
 		shutdownTimeoutMs: 1_000,
 		logger: silentLogger,
 	});
