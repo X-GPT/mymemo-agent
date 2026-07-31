@@ -1,8 +1,15 @@
-import type { RunQueueMetrics } from "@mymemo/agent-db/queue-metrics";
+import type { ConversationQueueMetrics } from "@mymemo/agent-db/queue-metrics";
 
 export interface WorkerScalerConfig {
 	minTasks: number;
 	maxTasks: number;
+	/**
+	 * How many concurrent units one worker task serves. The unit is the
+	 * Conversation (ADR-0015): a claimed Conversation holds one worker slot
+	 * for its whole drain, so this mirrors the worker's per-task concurrency
+	 * cap. The name predates the Conversation unit and is kept for config
+	 * stability.
+	 */
 	targetConcurrentRunsPerTask: number;
 	scaleInCooldownMs: number;
 }
@@ -35,14 +42,14 @@ export interface ScaleDecision {
 }
 
 export interface DecideWorkerScaleInput {
-	metrics: RunQueueMetrics;
+	metrics: ConversationQueueMetrics;
 	config: WorkerScalerConfig;
 	state: WorkerScalerState;
 	now: Date;
 }
 
 export interface RunWorkerScalerInput {
-	readMetrics(): Promise<RunQueueMetrics>;
+	readMetrics(): Promise<ConversationQueueMetrics>;
 	desiredCountAdapter: DesiredCountAdapter;
 	stateStore: ScalerStateStore;
 	config: WorkerScalerConfig;
@@ -50,19 +57,19 @@ export interface RunWorkerScalerInput {
 }
 
 export interface RunWorkerScalerResult {
-	metrics: RunQueueMetrics;
+	metrics: ConversationQueueMetrics;
 	decision: ScaleDecision;
 }
 
 export function computeDesiredWorkerTasks(
-	metrics: RunQueueMetrics,
+	metrics: ConversationQueueMetrics,
 	config: WorkerScalerConfig,
 ): number {
 	validateMetrics(metrics);
 	validateConfig(config);
 
 	const rawDesired = Math.ceil(
-		(metrics.queuedRuns + metrics.runningRuns) /
+		(metrics.claimableConversations + metrics.ownedConversations) /
 			config.targetConcurrentRunsPerTask,
 	);
 	return clamp(rawDesired, config.minTasks, config.maxTasks);
@@ -163,7 +170,7 @@ function validateConfig(config: WorkerScalerConfig): void {
 	}
 }
 
-function validateMetrics(metrics: RunQueueMetrics): void {
+function validateMetrics(metrics: ConversationQueueMetrics): void {
 	for (const [name, value] of Object.entries(metrics)) {
 		if (!Number.isInteger(value) || value < 0) {
 			throw new Error(`${name} must be a non-negative integer`);

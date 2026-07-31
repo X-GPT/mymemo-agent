@@ -91,6 +91,10 @@ export interface ClaimedConversation extends ConversationOwner {
  * Conversation is a row the scan walks past. The admission depth bound
  * therefore bounds claim cost as well as drain length, and every idle worker
  * pays it on every tick.
+ *
+ * The scaler's queue metric (`queue-metrics.ts`) mirrors this claimability
+ * predicate (plus a deliberate recency window) — keep the two in step if
+ * claimability changes.
  */
 export async function claimConversationTx(
 	db: Database,
