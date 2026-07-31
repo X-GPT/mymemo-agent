@@ -165,7 +165,7 @@ function buildArtifactHarness(
 	});
 	const worker = new Worker({
 		workerId: "worker-1",
-		maxConcurrentRuns: 1,
+		maxConcurrentConversations: 1,
 		shutdownTimeoutMs: 1_000,
 		logger,
 	});
@@ -278,7 +278,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		});
 		const worker = new Worker({
 			workerId: "worker-1",
-			maxConcurrentRuns: 1,
+			maxConcurrentConversations: 1,
 			shutdownTimeoutMs: 1_000,
 			logger: silentLogger,
 		});

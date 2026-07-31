@@ -8,6 +8,10 @@ import {
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import {
+	type ConversationOwner,
+	claimConversationTx,
+} from "./conversation-ownership";
+import {
 	InvalidRunEventError,
 	RunEventType,
 	validateDurableRunEventSequence,
@@ -27,11 +31,17 @@ import {
 	RunInputMismatchError,
 	type RunRecord,
 	requestRunInterruptionTx,
+	startClaimedRunTx,
 	type TerminalTransitionResult,
 	transitionRunTerminalTx,
 } from "./run-store";
 import { conversationRuntime, conversations, runEvents, runs } from "./schema";
-import { createTestDatabase, seedQueuedRun, type TestDb } from "./testing";
+import {
+	createTestDatabase,
+	lapseConversationOwnership,
+	seedQueuedRun,
+	type TestDb,
+} from "./testing";
 
 let tdb: TestDb;
 
@@ -301,6 +311,18 @@ async function backdateRun(runId: string, msAgo: number) {
 		.where(eq(runs.runId, runId));
 }
 
+async function readRun(runId: string) {
+	const [row] = await tdb.db.select().from(runs).where(eq(runs.runId, runId));
+	return row;
+}
+
+function lapseOwnershipLease(conversationId: string) {
+	return lapseConversationOwnership(tdb.db, {
+		userId: "user-1",
+		conversationId,
+	});
+}
+
 describe("claimNextRunTx", () => {
 	it("returns null when no run is queued", async () => {
 		const claimed = await claimNextRunTx(tdb.db, { workerId: "worker-1" });
@@ -338,6 +360,145 @@ describe("claimNextRunTx", () => {
 		expect(second).not.toBeNull();
 		expect(first?.runId).not.toBe(second?.runId);
 		expect(third).toBeNull();
+	});
+});
+
+describe("startClaimedRunTx", () => {
+	/** Claim the Conversation the seeded Runs belong to. */
+	async function claimConv(workerId = "worker-1"): Promise<ConversationOwner> {
+		const claim = await claimConversationTx(tdb.db, { workerId });
+		if (!claim) throw new Error("test setup claimed no Conversation");
+		return claim;
+	}
+
+	it("starts a snapshot Run and records which worker executes it", async () => {
+		await queueRun("run-1", "conv-1");
+		const owner = await claimConv();
+
+		const started = await startClaimedRunTx(tdb.db, {
+			owner,
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+
+		expect(started).toMatchObject({
+			outcome: "started",
+			run: {
+				runId: "run-1",
+				status: "running",
+				executedByWorkerId: "worker-1",
+			},
+		});
+	});
+
+	it("stamps the legacy Run lease so writes still fenced on it keep working", async () => {
+		await queueRun("run-1", "conv-1");
+		const owner = await claimConv();
+
+		await startClaimedRunTx(tdb.db, {
+			owner,
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+
+		const row = await readRun("run-1");
+		expect(row?.lockedBy).toBe("worker-1");
+		expect(row?.lockedUntil?.getTime()).toBeGreaterThan(Date.now());
+		await expect(
+			appendRunEventTx(tdb.db, {
+				runId: "run-1",
+				workerId: "worker-1",
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { messageId: "message-1", text: "bridged" },
+				appendClass: "model",
+			}),
+		).resolves.toMatchObject({ seq: 1 });
+	});
+
+	it("refuses a Claim a re-Claim superseded, leaving the Run queued", async () => {
+		await queueRun("run-1", "conv-1");
+		const superseded = await claimConv("worker-1");
+		await lapseOwnershipLease("conv-1");
+		await claimConv("worker-2");
+
+		const started = await startClaimedRunTx(tdb.db, {
+			owner: superseded,
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+
+		expect(started).toEqual({ outcome: "rejected", rejected: "lease" });
+		expect((await readRun("run-1"))?.status).toBe("queued");
+	});
+
+	it("refuses a lease that merely lapsed, with no successor", async () => {
+		await queueRun("run-1", "conv-1");
+		const owner = await claimConv();
+		await lapseOwnershipLease("conv-1");
+
+		expect(
+			await startClaimedRunTx(tdb.db, {
+				owner,
+				runId: "run-1",
+				workerId: "worker-1",
+			}),
+		).toEqual({ outcome: "rejected", rejected: "lease" });
+	});
+
+	it("names the current status when the Run reached its Outcome first", async () => {
+		await queueRun("run-1", "conv-1");
+		const owner = await claimConv();
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		expect(
+			await startClaimedRunTx(tdb.db, {
+				owner,
+				runId: "run-1",
+				workerId: "worker-1",
+			}),
+		).toEqual({
+			outcome: "rejected",
+			rejected: "status",
+			current: "interrupted",
+		});
+	});
+
+	it("reports a Run its deleted Conversation took with it as gone", async () => {
+		await queueRun("run-1", "conv-1");
+		const owner = await claimConv();
+		await tdb.db
+			.delete(conversations)
+			.where(eq(conversations.conversationId, "conv-1"));
+
+		expect(
+			await startClaimedRunTx(tdb.db, {
+				owner,
+				runId: "run-1",
+				workerId: "worker-1",
+			}),
+		).toEqual({ outcome: "rejected", rejected: "gone" });
+	});
+
+	it("serves only the Claimed Conversation's own Runs", async () => {
+		await queueRun("run-1", "conv-1");
+		await queueRun("run-other", "conv-2");
+		const owner = await claimConv();
+
+		const started = await startClaimedRunTx(tdb.db, {
+			owner,
+			runId: "run-other",
+			workerId: "worker-1",
+		});
+
+		// A Run outside the Claim is refused with a class that stops the drain,
+		// never one that skips and continues — which is the property that matters;
+		// it reports as `gone` because the scoped lookup cannot see it at all.
+		expect(started).toEqual({ outcome: "rejected", rejected: "gone" });
+		expect((await readRun("run-other"))?.status).toBe("queued");
 	});
 });
 

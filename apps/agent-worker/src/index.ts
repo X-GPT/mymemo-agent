@@ -46,7 +46,7 @@ const pathToClaudeCodeExecutable = resolveAndVerifyClaudeCodeExecutable();
 
 const worker = new Worker({
 	workerId,
-	maxConcurrentRuns: config.maxConcurrentRuns,
+	maxConcurrentConversations: config.maxConcurrentConversations,
 	shutdownTimeoutMs: config.shutdownTimeoutMs,
 	logger,
 });
@@ -138,7 +138,7 @@ cleanupLoop.start();
 logger.info({
 	message: "agent-worker started",
 	workerId,
-	maxConcurrentRuns: config.maxConcurrentRuns,
+	maxConcurrentConversations: config.maxConcurrentConversations,
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 });
 

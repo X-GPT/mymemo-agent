@@ -18,7 +18,7 @@ import {
 import { conversations, runs } from "./schema";
 import {
 	createTestDatabase,
-	lapseConversationLease,
+	lapseConversationOwnership,
 	type TestDb,
 } from "./testing";
 
@@ -85,7 +85,10 @@ async function readOwnership(conversationId: string) {
 
 /** Force a lease to have lapsed without waiting out its real duration. */
 async function lapseLease(conversationId: string): Promise<void> {
-	await lapseConversationLease(tdb.db, { userId: "user-1", conversationId });
+	await lapseConversationOwnership(tdb.db, {
+		userId: "user-1",
+		conversationId,
+	});
 }
 
 /**

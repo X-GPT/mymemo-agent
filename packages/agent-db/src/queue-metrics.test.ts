@@ -12,7 +12,7 @@ import { readConversationQueueMetrics } from "./queue-metrics";
 import { conversations, runs } from "./schema";
 import {
 	createTestDatabase,
-	lapseConversationLease,
+	lapseConversationOwnership,
 	seedQueuedRun,
 	type TestDb,
 } from "./testing";
@@ -71,7 +71,7 @@ describe("readConversationQueueMetrics", () => {
 		// A lapsed lease is claimable again.
 		await queueRun("run-owned-lapsed", "conv-owned-lapsed");
 		await claimConversation("conv-owned-lapsed", "worker-2");
-		await lapseConversationLease(tdb.db, {
+		await lapseConversationOwnership(tdb.db, {
 			userId: "user-1",
 			conversationId: "conv-owned-lapsed",
 		});

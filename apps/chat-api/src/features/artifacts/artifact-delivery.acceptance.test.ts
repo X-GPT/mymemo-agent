@@ -126,7 +126,7 @@ function createDeliveryHarness(
 	});
 	const worker = new Worker({
 		workerId: "acceptance-worker",
-		maxConcurrentRuns: 1,
+		maxConcurrentConversations: 1,
 		shutdownTimeoutMs: 1_000,
 		logger,
 	});

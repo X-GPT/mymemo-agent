@@ -142,7 +142,11 @@ services:
   # search/fetch return results for the seeded member. Local-only dev
   # credentials, inline.
   postgres:
-    image: postgres:16
+    # Pinned to the major production runs (RDS `agent_db_engine_version`), so
+    # local behaviour is evidence about production. Bumping the major strands
+    # the existing `pgdata` volume, which the server refuses to start against —
+    # `docker compose down -v` before the first run on a new major.
+    image: postgres:17
     environment:
       POSTGRES_USER: mymemo
       POSTGRES_PASSWORD: mymemo
