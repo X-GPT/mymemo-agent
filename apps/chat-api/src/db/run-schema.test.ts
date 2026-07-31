@@ -14,6 +14,7 @@ import {
 	documentAccessEvents,
 	runEvents,
 	runs,
+	TERMINAL_RUN_STATUSES,
 } from "./schema";
 
 let tdb: TestDb;
@@ -196,6 +197,30 @@ describe("run queue schema", () => {
 		// Read from the shared tuple, so this asserts that what the database
 		// actually indexes is what admission actually filters on.
 		for (const status of ACTIVE_RUN_STATUSES) {
+			expect(predicate).toContain(status);
+		}
+	});
+
+	it("keeps the history-paging index partial on Outcomes", async () => {
+		const { rows } = await tdb.db.execute(sql`
+			select indexdef from pg_indexes
+			where tablename = 'runs' and indexname = 'runs_history_paging_idx'
+		`);
+		// Empty when the index is missing, which fails the first assertion loudly.
+		// A unique index would fail it too — `CREATE UNIQUE INDEX` does not contain
+		// this substring.
+		const definition = rows[0] ? String(rows[0].indexdef) : "";
+		expect(definition).toContain("CREATE INDEX");
+		// Exactly the equality pair, nothing trailing it; the index's own comment
+		// in `schema.ts` carries why ordering columns would buy nothing here.
+		expect(definition).toContain("(user_id, conversation_id)");
+		// Asserted by parts rather than as one string, for the same reason as
+		// `runs_conversation_active_idx` above.
+		const [, predicate = ""] = definition.split(" WHERE ");
+		expect(predicate).toContain("status");
+		// Read from the shared tuple, so this catches a change to what counts as
+		// an Outcome that never reached the migration the database actually ran.
+		for (const status of TERMINAL_RUN_STATUSES) {
 			expect(predicate).toContain(status);
 		}
 	});

@@ -34,6 +34,10 @@ import { InvalidConversationHistoryCursorError } from "./conversation-history-st
 // node-postgres exposes timestamps as millisecond Date values while Postgres
 // stores microseconds. Use that same precision for ordering and comparison so
 // Run-id tie-breaking cannot be skipped when a cursor round-trips through JSON.
+// What it costs: no btree on the raw column can serve this `ORDER BY`, so
+// `runs_history_paging_idx` indexes only the equality filter and Postgres top-N
+// sorts the page. Retiring this truncation is the thing that would make an
+// ordered index path possible — revisit that index's shape if it ever goes.
 const RUN_ORDER_CREATED_AT = sql<Date>`date_trunc('milliseconds', ${runs.createdAt})`;
 
 type RunRow = typeof runs.$inferSelect;

@@ -373,6 +373,24 @@ export const runs = pgTable(
 		index("runs_cleanup_idx")
 			.on(t.terminalAt)
 			.where(sql`${t.status} in (${statusList(TERMINAL_RUN_STATUSES)})`),
+		// History paging: one Conversation's Outcomes. The equality pair plus the
+		// partial predicate is the whole access path — it turns a sequential scan of
+		// every Run ever admitted into an index scan of one Conversation's.
+		// It deliberately stops there. The paging query orders by
+		// `date_trunc('milliseconds', created_at)` (`RUN_ORDER_CREATED_AT` in
+		// chat-api's history store), and no btree on the raw column can match an
+		// expression sort key, so Postgres top-N sorts either way — trailing
+		// `created_at, run_id` measured as pure index width: same `Index Cond`,
+		// same buffers, same sort.
+		// So cost tracks the Conversation's history length, not the page size. Fine
+		// at realistic lengths; a Conversation reaching thousands of Runs is when the
+		// indexable `date_trunc(... AT TIME ZONE 'UTC')` would start to earn the
+		// app-visible expression rewrite it requires.
+		// The predicate makes this the exact complement of
+		// `runs_conversation_active_idx`: between them they partition the table.
+		index("runs_history_paging_idx")
+			.on(t.userId, t.conversationId)
+			.where(sql`${t.status} in (${statusList(TERMINAL_RUN_STATUSES)})`),
 	],
 );
 
