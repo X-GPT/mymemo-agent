@@ -9,7 +9,7 @@ describe("buildHealthResponse", () => {
 	it("serves the worker's health snapshot as JSON", async () => {
 		const worker = new Worker({
 			workerId: "worker-h",
-			maxConcurrentRuns: 2,
+			maxConcurrentConversations: 2,
 			shutdownTimeoutMs: 1_000,
 			logger: silentLogger,
 		});
@@ -19,8 +19,8 @@ describe("buildHealthResponse", () => {
 		expect(await res.json()).toEqual({
 			status: "ok",
 			workerId: "worker-h",
-			activeRuns: 0,
-			maxConcurrentRuns: 2,
+			activeConversations: 0,
+			maxConcurrentConversations: 2,
 			draining: false,
 		});
 	});

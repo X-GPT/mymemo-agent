@@ -236,7 +236,7 @@ function buildLoop(
 ): { loop: RunLoop; worker: Worker } {
 	const worker = new Worker({
 		workerId,
-		maxConcurrentRuns: 1,
+		maxConcurrentConversations: 1,
 		shutdownTimeoutMs: 1_000,
 		logger: silentLogger,
 	});

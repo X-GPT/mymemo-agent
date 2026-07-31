@@ -17,10 +17,10 @@ function deferred() {
 	return { promise, resolve };
 }
 
-function buildWorker(overrides: { maxConcurrentRuns?: number } = {}) {
+function buildWorker(overrides: { maxConcurrentConversations?: number } = {}) {
 	return new Worker({
 		workerId: "worker-test",
-		maxConcurrentRuns: overrides.maxConcurrentRuns ?? 2,
+		maxConcurrentConversations: overrides.maxConcurrentConversations ?? 2,
 		shutdownTimeoutMs: 1_000,
 		logger: silentLogger,
 	});
@@ -28,7 +28,7 @@ function buildWorker(overrides: { maxConcurrentRuns?: number } = {}) {
 
 describe("Worker — concurrency", () => {
 	it("starts tasks up to the configured concurrency, then refuses", () => {
-		const worker = buildWorker({ maxConcurrentRuns: 2 });
+		const worker = buildWorker({ maxConcurrentConversations: 2 });
 		const a = deferred();
 		const b = deferred();
 
@@ -43,7 +43,7 @@ describe("Worker — concurrency", () => {
 	});
 
 	it("frees a slot when a task completes", async () => {
-		const worker = buildWorker({ maxConcurrentRuns: 1 });
+		const worker = buildWorker({ maxConcurrentConversations: 1 });
 		const a = deferred();
 		expect(worker.tryStart(() => a.promise)).toBe(true);
 		expect(worker.tryStart(() => Promise.resolve())).toBe(false);
@@ -77,7 +77,7 @@ describe("Worker — graceful shutdown", () => {
 	it("returns within the grace period even if a task hangs", async () => {
 		const worker = new Worker({
 			workerId: "worker-test",
-			maxConcurrentRuns: 1,
+			maxConcurrentConversations: 1,
 			shutdownTimeoutMs: 30,
 			logger: silentLogger,
 		});
@@ -96,21 +96,21 @@ describe("Worker — graceful shutdown", () => {
 
 describe("Worker — health snapshot", () => {
 	it("is deterministic for a freshly configured worker", () => {
-		const worker = buildWorker({ maxConcurrentRuns: 3 });
+		const worker = buildWorker({ maxConcurrentConversations: 3 });
 		expect(worker.healthSnapshot()).toEqual({
 			status: "ok",
 			workerId: "worker-test",
-			activeRuns: 0,
-			maxConcurrentRuns: 3,
+			activeConversations: 0,
+			maxConcurrentConversations: 3,
 			draining: false,
 		});
 	});
 
-	it("reflects active runs and draining state", async () => {
-		const worker = buildWorker({ maxConcurrentRuns: 3 });
+	it("reflects active conversations and draining state", async () => {
+		const worker = buildWorker({ maxConcurrentConversations: 3 });
 		const a = deferred();
 		worker.tryStart(() => a.promise);
-		expect(worker.healthSnapshot().activeRuns).toBe(1);
+		expect(worker.healthSnapshot().activeConversations).toBe(1);
 
 		a.resolve();
 		await worker.shutdown();

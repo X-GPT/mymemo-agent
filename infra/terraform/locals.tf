@@ -84,7 +84,7 @@ locals {
     { name = "WORKER_E2B_TEMPLATE", value = var.worker_e2b_template },
     { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket },
     { name = "AWS_REGION", value = var.aws_region },
-    { name = "WORKER_MAX_CONCURRENT_RUNS", value = tostring(var.worker_max_concurrent_runs) },
+    { name = "WORKER_MAX_CONCURRENT_CONVERSATIONS", value = tostring(var.worker_max_concurrent_conversations) },
     { name = "WORKER_HEARTBEAT_INTERVAL_MS", value = tostring(var.worker_heartbeat_interval_ms) },
     { name = "WORKER_SHUTDOWN_TIMEOUT_MS", value = tostring(var.worker_shutdown_timeout_ms) },
     { name = "DB_SSL", value = var.db_ssl },

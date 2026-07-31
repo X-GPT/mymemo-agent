@@ -77,7 +77,7 @@ describe("loadWorkerConfigFromEnv — required settings", () => {
 describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 	it("defaults to conservative concurrency", () => {
 		const config = loadWorkerConfigFromEnv(baseEnv());
-		expect(config.maxConcurrentRuns).toBe(2);
+		expect(config.maxConcurrentConversations).toBe(2);
 	});
 
 	it("defaults heartbeat to 15s and a bounded shutdown grace", () => {
@@ -88,12 +88,12 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 
 	it("honors overrides for concurrency and intervals", () => {
 		const env = baseEnv();
-		env.WORKER_MAX_CONCURRENT_RUNS = "4";
+		env.WORKER_MAX_CONCURRENT_CONVERSATIONS = "4";
 		env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS = "12";
 		env.WORKER_HEARTBEAT_INTERVAL_MS = "10000";
 		env.WORKER_SHUTDOWN_TIMEOUT_MS = "5000";
 		const config = loadWorkerConfigFromEnv(env);
-		expect(config.maxConcurrentRuns).toBe(4);
+		expect(config.maxConcurrentConversations).toBe(4);
 		expect(config.maxDocumentSearchResults).toBe(12);
 		expect(config.heartbeatIntervalMs).toBe(10_000);
 		expect(config.shutdownTimeoutMs).toBe(5_000);
@@ -101,9 +101,9 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 
 	it("rejects a non-positive concurrency override", () => {
 		const env = baseEnv();
-		env.WORKER_MAX_CONCURRENT_RUNS = "0";
+		env.WORKER_MAX_CONCURRENT_CONVERSATIONS = "0";
 		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
-			/WORKER_MAX_CONCURRENT_RUNS/,
+			/WORKER_MAX_CONCURRENT_CONVERSATIONS/,
 		);
 	});
 
