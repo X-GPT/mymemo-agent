@@ -13,21 +13,25 @@ export interface ConversationQueueMetrics {
  * claimable unit is the Conversation — several Active Runs on one Conversation
  * are one drain — so a Run-shaped metric would request tasks that cannot
  * possibly help. Claimable means at least one recent queued Run and no live
- * Ownership lease; owned means a live lease, regardless of what remains
- * queued, because that Conversation occupies a worker slot until release.
+ * Ownership lease; owned means a live lease with a recent Active Run —
+ * a Conversation occupying a worker slot for work inside the window.
  * Deliberately reads no Run lease column — the Run lease is on its way out.
  *
- * The one-day recency window is deliberately stricter than the Claim's own
+ * The one-day recency window applies to both counts, as it did when the
+ * metric was Run-shaped. It is deliberately stricter than the Claim's own
  * claimability (`claimConversationTx` has no recency filter): a Conversation
  * whose only queued Run is over a day old is still claimable by a worker, but
  * scaling on it would hold tasks up for work that has already sat unserved
- * past any queue-age expectation. Owned needs no window — a live lease is at
- * most one renewal ahead of now.
+ * past any queue-age expectation. The owned side windows the Conversation's
+ * Active Runs the same way, preserving the old metric's exclusion of live
+ * work older than the window.
  *
  * Both counts drive from what they are proportional to, like the Claim
  * itself: claimable walks the queued `runs` (`runs_queue_claim_idx`) and
- * probes `conversations` by primary key, owned walks the live-lease partial
- * index — so neither scans the unboundedly growing `conversations` table.
+ * probes `conversations` by primary key; owned walks the live-lease partial
+ * index and probes the Conversation's Active Runs
+ * (`runs_conversation_active_idx`) — so neither scans the unboundedly growing
+ * `conversations` table.
  * Written against `db.execute` rather than the select builder because a
  * single-table select renders template column refs unqualified, which breaks
  * cross-table predicates like the join below.
@@ -51,7 +55,14 @@ export async function readConversationQueueMetrics(
 			) as claimable_conversations,
 			(select count(*)::int
 			   from ${conversations}
-			  where ${conversations.ownerUntil} > now()) as owned_conversations
+			  where ${conversations.ownerUntil} > now()
+			    and exists (
+			      select 1 from ${runs}
+			       where ${runs.userId} = ${conversations.userId}
+			         and ${runs.conversationId} = ${conversations.conversationId}
+			         and ${runs.status} in ('queued', 'running', 'interrupt_requested')
+			         and ${runs.createdAt} > now() - interval '1 day'
+			    )) as owned_conversations
 	`);
 	const [row] = result.rows;
 

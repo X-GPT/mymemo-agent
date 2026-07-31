@@ -10,12 +10,12 @@ import {
 const config = {
 	minTasks: 1,
 	maxTasks: 20,
-	targetConcurrentRunsPerTask: 2,
+	targetConcurrentConversationsPerTask: 2,
 	scaleInCooldownMs: 10 * 60 * 1000,
 };
 
 describe("computeDesiredWorkerTasks", () => {
-	it("uses ceil((claimableConversations + ownedConversations) / targetConcurrentRunsPerTask)", () => {
+	it("uses ceil((claimableConversations + ownedConversations) / targetConcurrentConversationsPerTask)", () => {
 		expect(
 			computeDesiredWorkerTasks(
 				{ claimableConversations: 12, ownedConversations: 20 },

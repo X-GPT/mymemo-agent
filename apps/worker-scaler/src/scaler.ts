@@ -4,13 +4,13 @@ export interface WorkerScalerConfig {
 	minTasks: number;
 	maxTasks: number;
 	/**
-	 * How many concurrent units one worker task serves. The unit is the
-	 * Conversation (ADR-0015): a claimed Conversation holds one worker slot
-	 * for its whole drain, so this mirrors the worker's per-task concurrency
-	 * cap. The name predates the Conversation unit and is kept for config
-	 * stability.
+	 * How many concurrent Conversations one worker task serves (ADR-0015): a
+	 * claimed Conversation holds one worker slot for its whole drain, so this
+	 * mirrors the worker's per-task concurrency cap. The env var name
+	 * (`WORKER_SCALER_TARGET_CONCURRENT_RUNS_PER_TASK`) predates the
+	 * Conversation unit and is kept for config stability.
 	 */
-	targetConcurrentRunsPerTask: number;
+	targetConcurrentConversationsPerTask: number;
 	scaleInCooldownMs: number;
 }
 
@@ -70,7 +70,7 @@ export function computeDesiredWorkerTasks(
 
 	const rawDesired = Math.ceil(
 		(metrics.claimableConversations + metrics.ownedConversations) /
-			config.targetConcurrentRunsPerTask,
+			config.targetConcurrentConversationsPerTask,
 	);
 	return clamp(rawDesired, config.minTasks, config.maxTasks);
 }
@@ -157,10 +157,12 @@ function validateConfig(config: WorkerScalerConfig): void {
 		);
 	}
 	if (
-		!Number.isInteger(config.targetConcurrentRunsPerTask) ||
-		config.targetConcurrentRunsPerTask <= 0
+		!Number.isInteger(config.targetConcurrentConversationsPerTask) ||
+		config.targetConcurrentConversationsPerTask <= 0
 	) {
-		throw new Error("targetConcurrentRunsPerTask must be a positive integer");
+		throw new Error(
+			"targetConcurrentConversationsPerTask must be a positive integer",
+		);
 	}
 	if (
 		!Number.isInteger(config.scaleInCooldownMs) ||

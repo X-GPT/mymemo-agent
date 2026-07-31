@@ -102,17 +102,30 @@ describe("readConversationQueueMetrics", () => {
 		});
 	});
 
-	it("counts a live-lease conversation as owned even with no queued runs", async () => {
-		await queueRun("run-owned-drained", "conv-owned-drained");
-		await claimConversation("conv-owned-drained", "worker-1");
+	it("applies the recency window to owned conversations", async () => {
+		// A live lease over a mid-drain (running) recent Run counts as owned.
+		await queueRun("run-owned-running", "conv-owned-running");
+		await claimConversation("conv-owned-running", "worker-1");
 		await tdb.db
 			.update(runs)
-			.set({ status: "done", terminalAt: sql`now()` })
-			.where(eq(runs.runId, "run-owned-drained"));
+			.set({ status: "running" })
+			.where(eq(runs.runId, "run-owned-running"));
 
 		await expect(readConversationQueueMetrics(tdb.db)).resolves.toEqual({
 			claimableConversations: 0,
 			ownedConversations: 1,
+		});
+
+		// Once its only Active Run falls outside the window, the lease alone
+		// no longer counts — the old Run-shaped metric excluded such work too.
+		await tdb.db
+			.update(runs)
+			.set({ createdAt: sql`now() - interval '2 days'` })
+			.where(eq(runs.runId, "run-owned-running"));
+
+		await expect(readConversationQueueMetrics(tdb.db)).resolves.toEqual({
+			claimableConversations: 0,
+			ownedConversations: 0,
 		});
 	});
 });

@@ -12,13 +12,13 @@ export interface WorkerScalerAppConfig {
 	scaler: {
 		minTasks: number;
 		maxTasks: number;
-		targetConcurrentRunsPerTask: number;
+		targetConcurrentConversationsPerTask: number;
 		scaleInCooldownMs: number;
 	};
 }
 
 const DEFAULT_MIN_TASKS = 1;
-const DEFAULT_TARGET_CONCURRENT_RUNS_PER_TASK = 2;
+const DEFAULT_TARGET_CONCURRENT_CONVERSATIONS_PER_TASK = 2;
 const DEFAULT_SCALE_IN_COOLDOWN_MS = 10 * 60 * 1000;
 
 /**
@@ -102,9 +102,9 @@ export function loadWorkerScalerConfigFromEnv(env: Env): WorkerScalerAppConfig {
 		scaler: {
 			minTasks,
 			maxTasks,
-			targetConcurrentRunsPerTask: positiveIntOr(
+			targetConcurrentConversationsPerTask: positiveIntOr(
 				env.WORKER_SCALER_TARGET_CONCURRENT_RUNS_PER_TASK,
-				DEFAULT_TARGET_CONCURRENT_RUNS_PER_TASK,
+				DEFAULT_TARGET_CONCURRENT_CONVERSATIONS_PER_TASK,
 				"WORKER_SCALER_TARGET_CONCURRENT_RUNS_PER_TASK",
 			),
 			scaleInCooldownMs: positiveIntOr(
