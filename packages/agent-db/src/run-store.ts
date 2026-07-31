@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, type SQL, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
@@ -493,36 +493,25 @@ function claimedRunConditions(owner: ConversationOwner, runId: string) {
 }
 
 /**
- * Name why {@link startClaimedRunTx} found no row, re-evaluating the epoch fence
- * the refused write itself evaluated. One read, in the rejecting transaction and
- * only on the zero-row path. Separate from {@link classifyRunFenceRejectionInTx}
- * only because the two writes still evaluate different fences; #399 collapses
- * them when the terminal and append paths move onto the epoch.
- *
- * The lookup carries the write's Conversation scoping, so a Run outside the
- * Claim is reported as `gone` rather than distinguished. That is deliberate:
- * only a Run of the Claim's own snapshot can legitimately be asked about, and
- * both readings tell the drain the same thing — stop, there is nothing here to
- * serve. Dropping the scoping to tell them apart would be worse, because the
- * epoch fence is on `conversations` and would then hold for a foreign Run,
- * reporting it as a skippable `status` refusal.
+ * Name why {@link startClaimedRunTx} found no row. The lookup carries the
+ * write's Conversation scoping, so a Run outside the Claim is reported as `gone`
+ * rather than distinguished. That is deliberate: only a Run of the Claim's own
+ * snapshot can legitimately be asked about, and both readings tell the drain the
+ * same thing — stop, there is nothing here to serve. Dropping the scoping to
+ * tell them apart would be worse, because the epoch fence is on `conversations`
+ * and would then hold for a foreign Run, reporting it as a skippable `status`
+ * refusal.
  */
-async function classifyStartRejectionInTx(
+function classifyStartRejectionInTx(
 	tx: DbTx,
 	owner: ConversationOwner,
 	runId: string,
 ): Promise<FenceRejection> {
-	const [current] = await tx
-		.select({
-			status: runs.status,
-			fenceHolds: sql<boolean>`${conversationEpochExists(owner)}`,
-		})
-		.from(runs)
-		.where(claimedRunConditions(owner, runId))
-		.limit(1);
-	if (!current) return { rejected: "gone" };
-	if (!current.fenceHolds) return { rejected: "lease" };
-	return { rejected: "status", current: current.status as RunStatus };
+	return classifyFenceRejectionInTx(
+		tx,
+		claimedRunConditions(owner, runId),
+		conversationEpochExists(owner),
+	);
 }
 
 /**
@@ -741,32 +730,48 @@ export async function lockRunForTerminalInTx(
  * Name why a fenced write found no row. One read, in the rejecting transaction
  * and only on the zero-row path, so the happy path pays nothing for it.
  *
- * The Run row is read by id alone, then the fence is re-evaluated over it: no
- * row at all is a deleted Conversation (Runs cascade with it) rather than a
- * lost lease, and those tell the caller different things — one has nothing left
- * to act on, the other has a successor that does.
- *
- * The fence re-evaluated here is deliberately the one the refused write itself
- * evaluated, which is still the Run lease. It moves to the Conversation
- * Ownership epoch in the same change that moves the fenced writes, not before:
- * a Conversation holds no live Ownership lease until something Claims it, so
- * re-pointing this read alone would report every status refusal as a lost lease.
+ * `where` locates the Run the refused write addressed and `fenceHolds` is the
+ * fence that write evaluated — the two things that differ between fenced writes.
+ * The reading of the three cases does not differ and lives only here: no row at
+ * all is a deleted Conversation (Runs cascade with it) rather than a lost lease,
+ * and those tell the caller different things — one has nothing left to act on,
+ * the other has a successor that does.
  */
-async function classifyRunFenceRejectionInTx(
+async function classifyFenceRejectionInTx(
 	tx: DbTx,
-	owner: UserRunMutationOwner,
+	where: SQL | undefined,
+	fenceHolds: SQL,
 ): Promise<FenceRejection> {
 	const [currentRun] = await tx
 		.select({
 			status: runs.status,
-			fenceHolds: sql<boolean>`coalesce((${runLeaseByUserConditions(owner)}), false)`,
+			fenceHolds: sql<boolean>`coalesce((${fenceHolds}), false)`,
 		})
 		.from(runs)
-		.where(eq(runs.runId, owner.runId))
+		.where(where)
 		.limit(1);
 	if (!currentRun) return { rejected: "gone" };
 	if (!currentRun.fenceHolds) return { rejected: "lease" };
 	return { rejected: "status", current: currentRun.status as RunStatus };
+}
+
+/**
+ * The fence re-evaluated for a Run-lease write is deliberately the one that
+ * write itself evaluated, which is still the Run lease. It moves to the
+ * Conversation Ownership epoch in the same change that moves the fenced writes,
+ * not before: a Conversation holds no live Ownership lease until something
+ * Claims it, so re-pointing this read alone would report every status refusal as
+ * a lost lease.
+ */
+function classifyRunFenceRejectionInTx(
+	tx: DbTx,
+	owner: UserRunMutationOwner,
+): Promise<FenceRejection> {
+	return classifyFenceRejectionInTx(
+		tx,
+		eq(runs.runId, owner.runId),
+		runLeaseByUserConditions(owner) ?? sql`false`,
+	);
 }
 
 /**

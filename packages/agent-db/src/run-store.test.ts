@@ -36,7 +36,12 @@ import {
 	transitionRunTerminalTx,
 } from "./run-store";
 import { conversationRuntime, conversations, runEvents, runs } from "./schema";
-import { createTestDatabase, seedQueuedRun, type TestDb } from "./testing";
+import {
+	createTestDatabase,
+	lapseConversationOwnership,
+	seedQueuedRun,
+	type TestDb,
+} from "./testing";
 
 let tdb: TestDb;
 
@@ -311,12 +316,11 @@ async function readRun(runId: string) {
 	return row;
 }
 
-/** Force an Ownership lease to have lapsed without waiting out its duration. */
-async function lapseOwnershipLease(conversationId: string) {
-	await tdb.db
-		.update(conversations)
-		.set({ ownerUntil: sql`now() - interval '1 second'` })
-		.where(eq(conversations.conversationId, conversationId));
+function lapseOwnershipLease(conversationId: string) {
+	return lapseConversationOwnership(tdb.db, {
+		userId: "user-1",
+		conversationId,
+	});
 }
 
 describe("claimNextRunTx", () => {
@@ -397,10 +401,7 @@ describe("startClaimedRunTx", () => {
 			workerId: "worker-1",
 		});
 
-		const [row] = await tdb.db
-			.select()
-			.from(runs)
-			.where(eq(runs.runId, "run-1"));
+		const row = await readRun("run-1");
 		expect(row?.lockedBy).toBe("worker-1");
 		expect(row?.lockedUntil?.getTime()).toBeGreaterThan(Date.now());
 		await expect(

@@ -5,7 +5,6 @@ import {
 } from "@mymemo/agent-db/artifact-store";
 import type { Database } from "@mymemo/agent-db/client";
 import {
-	type ClaimedConversation,
 	type ConversationOwner,
 	claimConversationTx,
 	releaseConversationTx,
@@ -190,6 +189,7 @@ interface RunEndState {
 }
 
 interface ActiveEntry {
+	runId: string;
 	controller: AbortController;
 	interruptionController: AbortController;
 	shutdownController: AbortController;
@@ -198,24 +198,24 @@ interface ActiveEntry {
 	liveStream?: RunLiveStream;
 }
 
-/** The snapshot Run a drain is serving right now. */
-interface ServedRun {
-	runId: string;
-	entry: ActiveEntry;
-}
-
 /** One Claimed Conversation being drained by this worker. */
 interface ActiveDrain {
-	/** The Claim's authority: this Conversation, at this Ownership epoch. */
+	/** The Claim's authority: this Conversation, at this Ownership epoch. The
+	 * lease deadline is deliberately not kept — renewal moves it, so a retained
+	 * copy would be stale from the first tick. */
 	owner: ConversationOwner;
+	/** The Claim's snapshot: the Runs to serve, in submission order. Runs
+	 * submitted after the Claim are never appended here. */
+	runIds: readonly string[];
 	/**
 	 * The Run a tick may renew and interrupt — set for exactly as long as that is
-	 * true. It is cleared the moment the drain takes the Run back: just before the
+	 * true. {@link RunLoop.detachServedRun} is the only thing that clears it, and
+	 * doing so is the load-bearing act that hands the Run back: before the
 	 * terminal transition, so a concurrent tick cannot race the Outcome, and on
 	 * abandonment, so later ticks stop heartbeating a Run that is no longer this
-	 * worker's. `serveRun`'s `finally` is the backstop for the unwinding paths.
+	 * worker's.
 	 */
-	served?: ServedRun;
+	served?: ActiveEntry;
 	/**
 	 * Why the drain stopped early, if it did. Both mean "do not release": a lost
 	 * lease belongs to a successor whose ownership releasing would revoke, and a
@@ -362,15 +362,13 @@ export class RunLoop {
 		// Stop every in-flight run before draining: cancel Tool/E2B work, then
 		// force-close private SDK resources without granting the user-interruption
 		// grace window. `state.interrupted` stays false, so shutdown drains to
-		// `error`, never a false `done`. Each drain then sees `running === false`,
-		// stops serving its snapshot, and releases its Conversation, so the Runs it
-		// never started are picked up by the next Claim instead of waiting out the
-		// lease. Snapshot the map: a finishing drain deletes itself.
+		// `error`, never a false `done`. Each drain then sees the supervisor
+		// draining, stops serving its snapshot, and releases its Conversation, so
+		// the Runs it never started are picked up by the next Claim instead of
+		// waiting out the lease. Snapshot the map: a finishing drain deletes itself.
 		for (const drain of [...this.drains.values()]) {
-			const served = drain.served;
-			if (!served) continue;
-			served.entry.controller.abort();
-			served.entry.shutdownController.abort();
+			drain.served?.controller.abort();
+			drain.served?.shutdownController.abort();
 		}
 		await this.opts.worker.shutdown();
 	}
@@ -529,26 +527,35 @@ export class RunLoop {
 			return;
 		}
 		if (renewed.status === "interrupt_requested") {
-			served.entry.state.interrupted = true;
-			served.entry.controller.abort();
-			served.entry.interruptionController.abort();
+			served.state.interrupted = true;
+			served.controller.abort();
+			served.interruptionController.abort();
 		}
 	}
 
 	/**
+	 * Hand the Run in flight back from the tick loop, so no later tick renews or
+	 * interrupts it. The only writer of `drain.served`, because forgetting to
+	 * detach is silent: the Run keeps being heartbeated, and a terminal
+	 * transition can race a tick that still believes it owns it.
+	 */
+	private detachServedRun(drain: ActiveDrain): ActiveEntry | undefined {
+		const served = drain.served;
+		drain.served = undefined;
+		return served;
+	}
+
+	/**
 	 * Stop serving the Run in flight without terminalizing it: its Outcome
-	 * belongs to whoever holds it now. Detaching it here is what stops later
-	 * ticks from heartbeating a Run this worker no longer owns; `finish()` still
-	 * reads `lostOwnership` through the retained entry and skips the terminal
-	 * transition.
+	 * belongs to whoever holds it now. `finish()` still reads `lostOwnership`
+	 * through the detached entry and skips the terminal transition.
 	 */
 	private abandonServedRun(drain: ActiveDrain): void {
-		const served = drain.served;
+		const served = this.detachServedRun(drain);
 		if (!served) return;
-		drain.served = undefined;
-		served.entry.state.lostOwnership = true;
-		served.entry.controller.abort();
-		served.entry.ownershipLostController.abort();
+		served.state.lostOwnership = true;
+		served.controller.abort();
+		served.ownershipLostController.abort();
 	}
 
 	private async claimAndDrain(): Promise<number> {
@@ -564,10 +571,11 @@ export class RunLoop {
 					conversationId: conversation.conversationId,
 					epoch: conversation.epoch,
 				},
+				runIds: conversation.runIds,
 			};
 			this.drains.set(conversationKey(drain.owner), drain);
 			const dispatched = this.opts.worker.tryStart(() =>
-				this.drainConversation(conversation, drain),
+				this.drainConversation(drain),
 			);
 			if (!dispatched) {
 				// Capacity vanished between the check and the dispatch — a shutdown
@@ -595,14 +603,13 @@ export class RunLoop {
 	 * bounds a drain by the admission depth bound rather than by an open-ended
 	 * queue.
 	 */
-	private async drainConversation(
-		claim: ClaimedConversation,
-		drain: ActiveDrain,
-	): Promise<void> {
+	private async drainConversation(drain: ActiveDrain): Promise<void> {
 		try {
-			for (const runId of claim.runIds) {
+			for (const runId of drain.runIds) {
 				// A lost lease halts the drain immediately: a successor owns this
-				// Conversation and this worker must write nothing more to it.
+				// Conversation and this worker must write nothing more to it. This is
+				// the one place a drain stops, so a refused start only has to record
+				// why.
 				if (drain.halted) return;
 				// Shutdown stops the drain once the Run in flight has terminalized.
 				// The supervisor's own flag, not `running`: `tick()` is directly
@@ -615,7 +622,7 @@ export class RunLoop {
 					workerId: this.workerId,
 				});
 				if (started.outcome === "rejected") {
-					if (this.rejectionStopsDrain(drain, runId, started)) return;
+					this.noteRefusedStart(drain, runId, started);
 					continue;
 				}
 				await this.serveRun(started.run, drain);
@@ -638,18 +645,19 @@ export class RunLoop {
 	}
 
 	/**
-	 * Decide what a refused start means for the drain. A `status` refusal is the
+	 * Record what a refused start means for the drain. A `status` refusal is the
 	 * Run reaching its Outcome underneath this worker — a queued Run interrupted
 	 * between the snapshot and here — so the drain skips it and serves the next.
 	 * The other two stop the drain: `lease` because a successor owns the
 	 * Conversation, `gone` because it was deleted and took its Runs with it.
-	 * Returns whether the drain must stop.
+	 * Stopping is left to `halted` and the loop's own guard rather than reported
+	 * back, so there is one answer to "is this drain still running", not two.
 	 */
-	private rejectionStopsDrain(
+	private noteRefusedStart(
 		drain: ActiveDrain,
 		runId: string,
 		rejection: RejectedRunStart,
-	): boolean {
+	): void {
 		if (rejection.rejected === "status") {
 			this.opts.logger.info({
 				message: "skipping a snapshot run that already reached its Outcome",
@@ -658,7 +666,7 @@ export class RunLoop {
 				runId,
 				currentStatus: rejection.current,
 			});
-			return false;
+			return;
 		}
 		drain.halted = rejection.rejected;
 		this.opts.logger.warn({
@@ -670,7 +678,6 @@ export class RunLoop {
 			conversationId: drain.owner.conversationId,
 			runId,
 		});
-		return true;
 	}
 
 	/**
@@ -700,6 +707,7 @@ export class RunLoop {
 
 	private async serveRun(run: RunRecord, drain: ActiveDrain): Promise<void> {
 		const entry: ActiveEntry = {
+			runId: run.runId,
 			controller: new AbortController(),
 			interruptionController: new AbortController(),
 			shutdownController: new AbortController(),
@@ -708,7 +716,7 @@ export class RunLoop {
 		};
 		// Attached before the first await, so a concurrent tick can renew this
 		// Run's lease and hand it an observed interruption for its whole life.
-		drain.served = { runId: run.runId, entry };
+		drain.served = entry;
 		if (this.opts.worker.isDraining) {
 			// Shutdown swept the drains before this Run reached the map — its start
 			// was already in flight when `stop()` ran. Abort it at birth so it takes
@@ -722,7 +730,7 @@ export class RunLoop {
 		} finally {
 			// Backstop: `executeServedRun` detaches the Run itself before
 			// terminalizing, so this only fires on a path that unwound first.
-			drain.served = undefined;
+			this.detachServedRun(drain);
 		}
 	}
 
@@ -792,7 +800,7 @@ export class RunLoop {
 		}
 		// Detach before terminalizing: from here the drain owns the terminal
 		// transition and a concurrent tick must not race it.
-		drain.served = undefined;
+		this.detachServedRun(drain);
 		try {
 			const terminalStatus = await this.finish(
 				run,

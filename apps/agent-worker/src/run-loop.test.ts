@@ -19,6 +19,7 @@ import {
 } from "@mymemo/agent-db/schema";
 import {
 	createTestDatabase,
+	lapseConversationOwnership,
 	seedQueuedRun,
 	type TestDb,
 } from "@mymemo/agent-db/testing";
@@ -79,7 +80,6 @@ function buildLoop(
 	processor: RunProcessor,
 	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 	liveStreamTelemetry?: LiveStreamTelemetry,
-	logger: WorkerLogger = silentLogger,
 ) {
 	return new RunLoop({
 		db: tdb.db,
@@ -88,21 +88,19 @@ function buildLoop(
 		liveStreamRelay,
 		liveStreamTelemetry,
 		heartbeatIntervalMs: 15_000,
-		logger,
+		logger: silentLogger,
 	});
 }
 
-/** A logger that records the messages the loop warns about. */
-function recordingLogger(): WorkerLogger & { warnings: string[] } {
-	const warnings: string[] = [];
-	return {
-		warnings,
-		info() {},
-		error() {},
-		warn(fields) {
-			warnings.push(String((fields as { message?: unknown }).message));
-		},
-	};
+/** Claim and dispatch, then wait until the drain has actually started serving —
+ * the Claim's own tick returns before the dispatched drain reaches its first
+ * Run, so every drain test needs this before it can act on the Run in flight. */
+async function startDrain(loop: RunLoop, runId = "run-1") {
+	await loop.tick();
+	await waitUntil(
+		async () => (await readRun(runId))?.status === "running",
+		`the drain to start serving ${runId}`,
+	);
 }
 
 async function queueRun(runId: string, conversationId: string) {
@@ -133,12 +131,11 @@ async function expireOwnership(runId: string) {
 		.where(eq(runs.runId, runId));
 }
 
-/** Force an Ownership lease to have lapsed without waiting out its duration. */
-async function lapseOwnershipLease(conversationId: string) {
-	await tdb.db
-		.update(conversations)
-		.set({ ownerUntil: sql`now() - interval '1 second'` })
-		.where(eq(conversations.conversationId, conversationId));
+function lapseOwnershipLease(conversationId: string) {
+	return lapseConversationOwnership(tdb.db, {
+		userId: "user-1",
+		conversationId,
+	});
 }
 
 async function readRun(runId: string) {
@@ -359,11 +356,7 @@ describe("RunLoop — conversation drain", () => {
 		await queueRun("run-1", "conv-1");
 		await queueRun("run-2", "conv-1");
 		await backdateRun("run-1", 5_000);
-		await loop.tick(); // Claim + dispatch; the drain blocks on run-1
-		await waitUntil(
-			async () => (await readRun("run-1"))?.status === "running",
-			"the drain to start its first snapshot Run",
-		);
+		await startDrain(loop);
 
 		// A successor Claims the Conversation out from under this worker.
 		await lapseOwnershipLease("conv-1");
@@ -393,11 +386,7 @@ describe("RunLoop — conversation drain", () => {
 			await gate.promise;
 		});
 		await queueRun("run-1", "conv-1");
-		await loop.tick();
-		await waitUntil(
-			async () => (await readRun("run-1"))?.status === "running",
-			"the drain to start its first snapshot Run",
-		);
+		await startDrain(loop);
 
 		await lapseOwnershipLease("conv-1"); // no successor yet
 		await loop.tick(); // renewal matches zero rows → halt
@@ -411,25 +400,50 @@ describe("RunLoop — conversation drain", () => {
 		expect(ownership?.ownerUntil).toBeInstanceOf(Date);
 	});
 
+	it("halts without releasing when a refused start is what reveals the lost lease", async () => {
+		const worker = buildWorker(1);
+		const gate = deferred();
+		const loop = buildLoop(worker, async (ctx) => {
+			if (ctx.run.runId === "run-1") await gate.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await queueRun("run-2", "conv-1");
+		await backdateRun("run-1", 5_000);
+		await startDrain(loop);
+
+		// The lease lapses with no successor and no further tick, so the drain
+		// learns of it from the next Run's refused start rather than from renewal.
+		await lapseOwnershipLease("conv-1");
+		gate.resolve();
+		await worker.drain();
+
+		expect((await readRun("run-2"))?.status).toBe("queued");
+		// Same reason as a renewal-detected loss: releasing here would clear the
+		// deadline Reclamation finds a lapsed lease by.
+		const ownership = await readOwnership("conv-1");
+		expect(ownership?.ownerWorkerId).toBe("worker-1");
+		expect(ownership?.ownerUntil).toBeInstanceOf(Date);
+	});
+
 	it("stops heartbeating a Run it abandoned, tick after tick", async () => {
 		const worker = buildWorker(1);
 		const gate = deferred();
-		const logger = recordingLogger();
-		const loop = buildLoop(
+		const warnings: string[] = [];
+		const loop = new RunLoop({
+			db: tdb.db,
 			worker,
-			async () => {
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
+			processor: async () => {
 				await gate.promise;
 			},
-			undefined,
-			undefined,
-			logger,
-		);
+			heartbeatIntervalMs: 15_000,
+			logger: {
+				...silentLogger,
+				warn: (event) => warnings.push(String(event.message)),
+			},
+		});
 		await queueRun("run-1", "conv-1");
-		await loop.tick();
-		await waitUntil(
-			async () => (await readRun("run-1"))?.status === "running",
-			"the drain to start its first snapshot Run",
-		);
+		await startDrain(loop);
 
 		// Stale-run recovery takes the Run while the Conversation lease stays live.
 		await expireOwnership("run-1");
@@ -441,7 +455,7 @@ describe("RunLoop — conversation drain", () => {
 
 		// Detached on abandonment, so later ticks stop heartbeating it.
 		expect(
-			logger.warnings.filter(
+			warnings.filter(
 				(message) => message === "abandoning a run this worker no longer owns",
 			),
 		).toHaveLength(1);
@@ -460,11 +474,7 @@ describe("RunLoop — conversation drain", () => {
 		await queueRun("run-3", "conv-1");
 		await backdateRun("run-1", 10_000);
 		await backdateRun("run-2", 5_000);
-		await loop.tick(); // Claim + dispatch; the drain blocks on run-1
-		await waitUntil(
-			async () => (await readRun("run-1"))?.status === "running",
-			"the drain to start its first snapshot Run",
-		);
+		await startDrain(loop);
 
 		// run-2 is interrupted while still queued, so it reaches its Outcome
 		// underneath the worker between the snapshot and its start.
@@ -488,11 +498,7 @@ describe("RunLoop — conversation drain", () => {
 			if (ctx.run.runId === "run-1") await gate.promise;
 		});
 		await queueRun("run-1", "conv-1");
-		await loop.tick();
-		await waitUntil(
-			async () => (await readRun("run-1"))?.status === "running",
-			"the drain to start its first snapshot Run",
-		);
+		await startDrain(loop);
 
 		await queueRun("run-late", "conv-1"); // admitted mid-drain
 		gate.resolve();
@@ -515,11 +521,7 @@ describe("RunLoop — conversation drain", () => {
 		await queueRun("run-1", "conv-gone");
 		await queueRun("run-2", "conv-gone");
 		await backdateRun("run-1", 5_000);
-		await loop.tick();
-		await waitUntil(
-			async () => (await readRun("run-1"))?.status === "running",
-			"the drain to start its first snapshot Run",
-		);
+		await startDrain(loop);
 
 		// Permanent deletion takes the Conversation's Runs with it.
 		await tdb.db
@@ -548,11 +550,7 @@ describe("RunLoop — conversation drain", () => {
 		await queueRun("run-1", "conv-1");
 		await queueRun("run-2", "conv-1");
 		await backdateRun("run-1", 5_000);
-		await loop.tick();
-		await waitUntil(
-			async () => (await readRun("run-1"))?.status === "running",
-			"the drain to start its first snapshot Run",
-		);
+		await startDrain(loop);
 
 		await loop.stop();
 

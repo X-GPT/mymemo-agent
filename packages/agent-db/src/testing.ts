@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
+import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import type { Database } from "./client";
 import { MIGRATIONS_DIR } from "./migrations";
@@ -130,6 +131,27 @@ export async function seedQueuedRun(
 		.returning();
 	if (!row) throw new Error(`insert of run ${input.runId} returned no row`);
 	return toRunRecord(row);
+}
+
+/**
+ * Force a Conversation's Ownership lease to have lapsed, without waiting out its
+ * real duration. Shared rather than per-file because every drain, fence, and
+ * Reclamation suite across both packages needs the same lapse, and the ADR-0015
+ * cutover moves the columns it writes.
+ */
+export async function lapseConversationOwnership(
+	db: Database,
+	input: { userId: string; conversationId: string },
+): Promise<void> {
+	await db
+		.update(schema.conversations)
+		.set({ ownerUntil: sql`now() - interval '1 second'` })
+		.where(
+			and(
+				eq(schema.conversations.userId, input.userId),
+				eq(schema.conversations.conversationId, input.conversationId),
+			),
+		);
 }
 
 /** Seed one owned Run for SessionStore fence tests. Callers choose every
