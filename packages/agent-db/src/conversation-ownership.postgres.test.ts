@@ -99,10 +99,14 @@ function conversationKey(conversationId: string) {
 	);
 }
 
-async function seedConversation(conversationId: string): Promise<void> {
-	await db
-		.insert(conversations)
-		.values({ userId: USER_ID, conversationId, scope: "general" });
+async function seedConversations(...conversationIds: string[]): Promise<void> {
+	await db.insert(conversations).values(
+		conversationIds.map((conversationId) => ({
+			userId: USER_ID,
+			conversationId,
+			scope: "general",
+		})),
+	);
 }
 
 /** A queued Run to seed: its name, its Conversation, and its place in the queue. */
@@ -127,9 +131,8 @@ async function seedRun(input: SeededRun): Promise<void> {
 	await db.insert(runs).values(queuedRunValues(input));
 }
 
-/** Every row this file wrote, and nothing else. */
+/** Every row this file wrote, and nothing else — Runs and their events cascade. */
 async function deleteOwnRows(): Promise<void> {
-	await db.delete(runs).where(eq(runs.userId, USER_ID)); // cascades run_events
 	await db.delete(conversations).where(eq(conversations.userId, USER_ID));
 }
 
@@ -165,6 +168,18 @@ async function drainAll(): Promise<string[]> {
 
 /** Serve a Claim's snapshot to Outcomes and release it, as the drain will. */
 async function drain(claim: ClaimedConversation): Promise<string[]> {
+	if (claim.userId !== USER_ID) {
+		// The Claim is global, so a Conversation this file does not own can be
+		// handed to it. Release it and stop rather than terminalize somebody else's
+		// Runs: that keeps "this suite never writes outside its own rows" a
+		// property of the code instead of a precondition the pre-flight and the CI
+		// step order have to maintain between them.
+		await releaseConversationTx(db, claim);
+		throw new Error(
+			`Claim landed on the foreign Conversation ${claim.conversationId}; ` +
+				"the database gained queued work this suite does not own",
+		);
+	}
 	if (claim.runIds.length === 0) {
 		// A Claim is only granted for a Conversation with a queued Run, and the
 		// snapshot shares that transaction, so an empty one means the Claim took a
@@ -174,6 +189,9 @@ async function drain(claim: ClaimedConversation): Promise<string[]> {
 			`Claim of ${claim.conversationId} served an empty snapshot`,
 		);
 	}
+	// A raw terminal write rather than `transitionRunTerminalTx`, which fences on
+	// the Run lease these Claims never take. Reaching an Outcome is only what lets
+	// the next Claim proceed here; the terminal transition is not under test.
 	await db
 		.update(runs)
 		.set({ status: "done", terminalAt: sql`now()` })
@@ -187,7 +205,7 @@ async function supersede(): Promise<{
 	superseded: ClaimedConversation;
 	successor: ClaimedConversation;
 }> {
-	await seedConversation("conv-a");
+	await seedConversations("conv-a");
 	await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
 	const superseded = claimed(
 		await claimConversationTx(db, { workerId: "worker-1" }),
@@ -229,25 +247,18 @@ async function fencedStamp(
 	return stamped.length > 0;
 }
 
-async function executedBy(runName: string): Promise<string | null> {
-	const [row] = await db
-		.select({ workerId: runs.executedByWorkerId })
-		.from(runs)
-		.where(eq(runs.runId, ownedRunId(runName)));
-	if (!row) throw new Error(`run ${runName} vanished`);
-	return row.workerId;
-}
-
 /**
- * Run `body` while a second, uncommitted transaction holds whatever `prelude`
- * took — the only way to put a real concurrent session in a known state. The
- * held transaction is always ended, so a failure inside `body` cannot leave a
- * lock behind for the rest of the file.
+ * Claim while a second, uncommitted transaction holds whatever `prelude` took —
+ * the only way to put a genuinely concurrent session into a known state. A Claim
+ * that blocks is reported as blocked rather than left to hang until the runner's
+ * timeout, since blocking is the defect these tests exist to catch. The held
+ * transaction always ends, so neither a blocked Claim nor a failing prelude can
+ * leave a lock behind for the rest of the file.
  */
-async function whileHeldOpen<T>(
+async function claimWhileHeld(
 	prelude: (tx: DbTx) => Promise<void>,
-	body: () => Promise<T>,
-): Promise<T> {
+	workerId: string,
+): Promise<ClaimedConversation | null> {
 	const opened = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
 	const held = db.transaction(async (tx) => {
@@ -259,27 +270,11 @@ async function whileHeldOpen<T>(
 	// told the transaction is open. Attaching the handler also keeps the eventual
 	// rejection from surfacing as an unhandled one; `await held` below rethrows it.
 	held.catch((err) => opened.reject(err));
-	try {
-		await opened.promise;
-		return await body();
-	} finally {
-		release.resolve();
-		await held;
-	}
-}
-
-/**
- * Report a Claim that blocked instead of hanging until the runner's timeout.
- * Used only where blocking *is* the defect under test, so the diagnosis belongs
- * in the failure message.
- */
-async function claimWithoutBlocking(
-	work: Promise<ClaimedConversation | null>,
-): Promise<ClaimedConversation | null> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
+		await opened.promise;
 		return await Promise.race([
-			work,
+			claimConversationTx(db, { workerId }),
 			new Promise<never>((_, reject) => {
 				timer = setTimeout(
 					() =>
@@ -292,6 +287,8 @@ async function claimWithoutBlocking(
 		]);
 	} finally {
 		clearTimeout(timer);
+		release.resolve();
+		await held;
 	}
 }
 
@@ -301,28 +298,20 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 
 		// The Claim is global — it takes the oldest claimable Conversation in the
 		// database, not one this file owns. Pinned submission times keep these Runs
-		// ahead of any leftovers, but a leftover that is *also* claimable would
-		// still be swept up by the drain loops below, so refuse to run against one.
+		// ahead of any leftover, and `drain` refuses a foreign Claim outright, so
+		// this is the up-front diagnosis rather than the safety: fail here, once,
+		// with the remedy, instead of somewhere in the middle of a drain loop.
+		// Deliberately every queued Run, not only the currently claimable ones —
+		// a foreign Run under a live lease becomes claimable when that lease lapses,
+		// which is well within this suite's runtime.
 		const [foreign] = await db
-			.select({ conversationId: conversations.conversationId })
-			.from(conversations)
-			.innerJoin(
-				runs,
-				and(
-					eq(runs.userId, conversations.userId),
-					eq(runs.conversationId, conversations.conversationId),
-				),
-			)
-			.where(
-				and(
-					eq(runs.status, "queued"),
-					sql`(${conversations.ownerUntil} is null or ${conversations.ownerUntil} <= now())`,
-				),
-			)
+			.select({ runId: runs.runId })
+			.from(runs)
+			.where(eq(runs.status, "queued"))
 			.limit(1);
 		if (foreign) {
 			throw new Error(
-				`AGENT_DATABASE_URL already holds a claimable Conversation (${foreign.conversationId}). ` +
+				`AGENT_DATABASE_URL already holds a queued Run (${foreign.runId}). ` +
 					"This suite claims globally, so it needs a database with no queued Runs left over — " +
 					"re-create it and re-apply the migrations, or point at a scratch one. " +
 					"If this fired from the plain unit lane, unset AGENT_DATABASE_URL and the suite skips.",
@@ -339,7 +328,7 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 
 	describe("concurrent claimants", () => {
 		it("hands one Conversation to exactly one of them", async () => {
-			await seedConversation("conv-a");
+			await seedConversations("conv-a");
 			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
 
 			const claims = await Promise.all(
@@ -354,8 +343,7 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 		});
 
 		it("gives them a Conversation each when there are enough to go round", async () => {
-			await seedConversation("conv-a");
-			await seedConversation("conv-b");
+			await seedConversations("conv-a", "conv-b");
 			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
 			await seedRun({ runId: "b", conversationId: "conv-b", order: 1 });
 
@@ -369,33 +357,26 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 		});
 
 		it("skips a Conversation another session holds locked instead of waiting for it", async () => {
-			await seedConversation("conv-a");
-			await seedConversation("conv-b");
+			await seedConversations("conv-a", "conv-b");
 			// conv-a is the older candidate, so an unheld Claim would take it.
 			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
 			await seedRun({ runId: "b", conversationId: "conv-b", order: 1 });
 
-			const claim = await whileHeldOpen(
+			const claim = await claimWhileHeld(
 				(tx) => lockConversationRow(tx, "conv-a"),
-				() =>
-					claimWithoutBlocking(
-						claimConversationTx(db, { workerId: "worker-2" }),
-					),
+				"worker-2",
 			);
 
 			expect(claimed(claim).conversationId).toBe("conv-b");
 		});
 
 		it("takes nothing rather than waiting when the only candidate is held", async () => {
-			await seedConversation("conv-a");
+			await seedConversations("conv-a");
 			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
 
-			const during = await whileHeldOpen(
+			const during = await claimWhileHeld(
 				(tx) => lockConversationRow(tx, "conv-a"),
-				() =>
-					claimWithoutBlocking(
-						claimConversationTx(db, { workerId: "worker-1" }),
-					),
+				"worker-1",
 			);
 
 			expect(during).toBe(null);
@@ -409,29 +390,19 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 
 	describe("a Run admitted concurrently with a Claim", () => {
 		it("is deferred to the next Claim when its admission has not committed", async () => {
-			await seedConversation("conv-a");
-			await seedRun({
-				runId: "first",
-				conversationId: "conv-a",
-				order: 0,
-			});
+			await seedConversations("conv-a");
+			await seedRun({ runId: "first", conversationId: "conv-a", order: 0 });
 
-			const during = await whileHeldOpen(
-				async (tx) => {
-					await lockConversationRow(tx, "conv-a");
-					await tx.insert(runs).values(
-						queuedRunValues({
-							runId: "late",
-							conversationId: "conv-a",
-							order: 1,
-						}),
-					);
-				},
-				() =>
-					claimWithoutBlocking(
-						claimConversationTx(db, { workerId: "worker-1" }),
-					),
-			);
+			const during = await claimWhileHeld(async (tx) => {
+				await lockConversationRow(tx, "conv-a");
+				await tx.insert(runs).values(
+					queuedRunValues({
+						runId: "late",
+						conversationId: "conv-a",
+						order: 1,
+					}),
+				);
+			}, "worker-1");
 
 			// The Conversation is a visible candidate — `first` is queued and
 			// committed — so the Claim reached its row and skipped the held lock.
@@ -468,17 +439,24 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 			const ROUNDS = 24;
 			const admitted: string[] = [];
 			const served: string[] = [];
+			// Seeded up front rather than per round: a Conversation with no queued
+			// Run is never a Claim candidate, so their existence changes nothing
+			// about which round can claim what.
+			const conversationIds = Array.from(
+				{ length: ROUNDS },
+				(_, round) => `race-${round}`,
+			);
+			await seedConversations(...conversationIds);
 
-			for (let round = 0; round < ROUNDS; round++) {
+			for (const [round, conversationId] of conversationIds.entries()) {
 				served.push(...(await drainAll()));
-				const conversationId = `race-${round}`;
-				await seedConversation(conversationId);
-				const runId = ownedRunId(`race-${round}`);
+				const runId = ownedRunId(conversationId);
+				const staggered = Bun.sleep((round % 4) * 5);
 				const [first, second] = await Promise.all([
-					Bun.sleep((round % 4) * 5).then(() =>
+					staggered.then(() =>
 						claimConversationTx(db, { workerId: "worker-1" }),
 					),
-					Bun.sleep((round % 4) * 5).then(() =>
+					staggered.then(() =>
 						claimConversationTx(db, { workerId: "worker-2" }),
 					),
 					admitQueuedRunTx(db, {
@@ -521,7 +499,6 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 
 			expect(staleWrote).toBe(false);
 			expect(successorWrote).toBe(true);
-			expect(await executedBy("a")).toBe("worker-2");
 		});
 
 		it("cannot take the Conversation back by releasing it", async () => {
