@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
 import { claimConversationTx } from "@mymemo/agent-db/conversation-ownership";
-import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	appendRunEventTx,
 	claimNextRunTx,
@@ -377,6 +376,62 @@ describe("RunLoop — conversation drain", () => {
 		expect(await readOwnership("conv-1")).toMatchObject({
 			ownerWorkerId: "worker-2",
 		});
+	});
+
+	it("halts when an append is the first write to discover a lapsed Ownership lease", async () => {
+		const worker = buildWorker(1);
+		const processorReady = deferred();
+		const gate = deferred();
+		const loop = buildLoop(worker, async (ctx) => {
+			processorReady.resolve();
+			await gate.promise;
+			await ctx.appendModelContent({
+				kind: "assistant_message",
+				payload: { messageId: "message-too-late", text: "too late" },
+			});
+		});
+		await queueRun("run-1", "conv-1");
+		await startDrain(loop);
+		await processorReady.promise;
+
+		await lapseOwnershipLease("conv-1");
+		gate.resolve();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("running");
+		expect(await readEventTypes("run-1")).toEqual([]);
+		expect(await readOwnership("conv-1")).toMatchObject({
+			ownerWorkerId: "worker-1",
+			ownerUntil: expect.any(Date),
+		});
+	});
+
+	it("lets interruption win when an append first observes interrupt_requested", async () => {
+		const worker = buildWorker(1);
+		const processorReady = deferred();
+		const gate = deferred();
+		const loop = buildLoop(worker, async (ctx) => {
+			processorReady.resolve();
+			await gate.promise;
+			await ctx.appendModelContent({
+				kind: "assistant_message",
+				payload: { messageId: "message-too-late", text: "too late" },
+			});
+		});
+		await queueRun("run-1", "conv-1");
+		await startDrain(loop);
+		await processorReady.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			userId: "user-1",
+			conversationId: "conv-1",
+			runId: "run-1",
+		});
+
+		gate.resolve();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
 	});
 
 	it("leaves a lapsed lease in place instead of releasing it", async () => {
@@ -1119,9 +1174,9 @@ describe("RunLoop — agent session pointer", () => {
 		await queueRun("run-1", "conv-1");
 		await loop.tick();
 		await processorStarted.promise;
-		// Expire the lease without ticking, so the loop never observes the loss and
+		// Lapse Ownership without ticking, so the loop never observes the loss and
 		// reaches `finish()` believing it still owns the Run.
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
 		gate.resolve();
 		await worker.drain();
@@ -1132,6 +1187,9 @@ describe("RunLoop — agent session pointer", () => {
 		expect(await readEventTypes("run-1")).toEqual([]);
 
 		// The Run is left intact for the sweep, which closes it as a stale worker.
+		// Reclamation remains Run-lease-scoped until #400, so expire that temporary
+		// bridge only after proving the epoch-fenced terminal refusal above.
+		await expireOwnership("run-1");
 		await loop.tick();
 		expect((await readRun("run-1"))?.status).toBe("error");
 		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
@@ -1419,15 +1477,20 @@ describe("RunLoop — stale-run recovery", () => {
 
 		await loop.tick();
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-stale",
-				workerId: "stale-worker",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: {
+					userId: "user-1",
+					conversationId: "conv-1",
+					epoch: 0,
+					runId: "run-stale",
+					workerId: "stale-worker",
+				},
 				type: "assistant_message_completed",
 				payload: { messageId: "message-too-late", text: "too late" },
 				appendClass: "model",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
 	});
 

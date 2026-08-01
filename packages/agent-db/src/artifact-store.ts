@@ -1,9 +1,11 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import type { UserRunMutationOwner } from "./run-ownership";
 import {
+	classifyRunWriteRejectionTx,
 	commitLockedRunTerminalInTx,
 	lockRunForTerminalInTx,
+	type RunWriteOwner,
+	TerminalFenceChangedError,
 	type TerminalTransitionResult,
 } from "./run-store";
 import { artifactObjects, conversationArtifacts } from "./schema";
@@ -66,7 +68,7 @@ export async function recordArtifactObjectsTx(
 export async function publishArtifactsAndTransitionRunDoneTx(
 	db: Database,
 	input: {
-		owner: UserRunMutationOwner;
+		owner: RunWriteOwner;
 		artifacts: PublishedArtifact[];
 		agentSessionId?: string;
 	},
@@ -75,94 +77,105 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 		throw new Error("artifact publication requires at least one staged object");
 	}
 	validatePublishedArtifacts(input.artifacts);
-	return await db.transaction(async (tx) => {
-		const rejection = await lockRunForTerminalInTx(tx, input.owner, "done");
-		if (rejection) return { outcome: "rejected", ...rejection };
+	try {
+		return await db.transaction(async (tx) => {
+			const rejection = await lockRunForTerminalInTx(tx, input.owner, "done");
+			if (rejection) return { outcome: "rejected", ...rejection };
 
-		const currentArtifacts = await tx
-			.select({
-				path: conversationArtifacts.path,
-				objectKey: conversationArtifacts.objectKey,
-				sizeBytes: conversationArtifacts.sizeBytes,
-			})
-			.from(conversationArtifacts)
-			.where(
-				and(
-					eq(conversationArtifacts.userId, input.owner.userId),
-					eq(conversationArtifacts.conversationId, input.owner.conversationId),
-				),
-			)
-			.for("update");
-		validatePostUpsertQuota(currentArtifacts, input.artifacts);
-
-		const paths = input.artifacts.map((artifact) => artifact.path);
-		const changedPaths = new Set(paths);
-		const existing = currentArtifacts.filter((artifact) =>
-			changedPaths.has(artifact.path),
-		);
-
-		const objectKeys = input.artifacts.map((artifact) => artifact.objectKey);
-		const promoted = await tx
-			.update(artifactObjects)
-			.set({ status: "current", committedAt: sql`now()` })
-			.where(
-				and(
-					inArray(artifactObjects.objectKey, objectKeys),
-					eq(artifactObjects.userId, input.owner.userId),
-					eq(artifactObjects.conversationId, input.owner.conversationId),
-					eq(artifactObjects.runId, input.owner.runId),
-					eq(artifactObjects.status, "pending"),
-				),
-			)
-			.returning({ objectKey: artifactObjects.objectKey });
-		if (promoted.length !== input.artifacts.length) {
-			throw new Error(
-				"artifact publication ledger did not match the staged set",
-			);
-		}
-
-		for (const artifact of input.artifacts) {
-			await tx
-				.insert(conversationArtifacts)
-				.values({
-					...artifact,
-					userId: input.owner.userId,
-					conversationId: input.owner.conversationId,
+			const currentArtifacts = await tx
+				.select({
+					path: conversationArtifacts.path,
+					objectKey: conversationArtifacts.objectKey,
+					sizeBytes: conversationArtifacts.sizeBytes,
 				})
-				.onConflictDoUpdate({
-					target: [
-						conversationArtifacts.userId,
-						conversationArtifacts.conversationId,
-						conversationArtifacts.path,
-					],
-					set: {
-						objectKey: artifact.objectKey,
-						sizeBytes: artifact.sizeBytes,
-						contentType: artifact.contentType,
-						updatedAt: sql`now()`,
-					},
-				});
-		}
+				.from(conversationArtifacts)
+				.where(
+					and(
+						eq(conversationArtifacts.userId, input.owner.userId),
+						eq(
+							conversationArtifacts.conversationId,
+							input.owner.conversationId,
+						),
+					),
+				)
+				.for("update");
+			validatePostUpsertQuota(currentArtifacts, input.artifacts);
 
-		const supersededKeys = existing
-			.map((artifact) => artifact.objectKey)
-			.filter((key) => !objectKeys.includes(key));
-		if (supersededKeys.length > 0) {
-			await tx
+			const paths = input.artifacts.map((artifact) => artifact.path);
+			const changedPaths = new Set(paths);
+			const existing = currentArtifacts.filter((artifact) =>
+				changedPaths.has(artifact.path),
+			);
+
+			const objectKeys = input.artifacts.map((artifact) => artifact.objectKey);
+			const promoted = await tx
 				.update(artifactObjects)
-				.set({ status: "superseded", supersededAt: sql`now()` })
-				.where(inArray(artifactObjects.objectKey, supersededKeys));
-		}
+				.set({ status: "current", committedAt: sql`now()` })
+				.where(
+					and(
+						inArray(artifactObjects.objectKey, objectKeys),
+						eq(artifactObjects.userId, input.owner.userId),
+						eq(artifactObjects.conversationId, input.owner.conversationId),
+						eq(artifactObjects.runId, input.owner.runId),
+						eq(artifactObjects.status, "pending"),
+					),
+				)
+				.returning({ objectKey: artifactObjects.objectKey });
+			if (promoted.length !== input.artifacts.length) {
+				throw new Error(
+					"artifact publication ledger did not match the staged set",
+				);
+			}
 
+			for (const artifact of input.artifacts) {
+				await tx
+					.insert(conversationArtifacts)
+					.values({
+						...artifact,
+						userId: input.owner.userId,
+						conversationId: input.owner.conversationId,
+					})
+					.onConflictDoUpdate({
+						target: [
+							conversationArtifacts.userId,
+							conversationArtifacts.conversationId,
+							conversationArtifacts.path,
+						],
+						set: {
+							objectKey: artifact.objectKey,
+							sizeBytes: artifact.sizeBytes,
+							contentType: artifact.contentType,
+							updatedAt: sql`now()`,
+						},
+					});
+			}
+
+			const supersededKeys = existing
+				.map((artifact) => artifact.objectKey)
+				.filter((key) => !objectKeys.includes(key));
+			if (supersededKeys.length > 0) {
+				await tx
+					.update(artifactObjects)
+					.set({ status: "superseded", supersededAt: sql`now()` })
+					.where(inArray(artifactObjects.objectKey, supersededKeys));
+			}
+
+			return {
+				outcome: "committed",
+				run: await commitLockedRunTerminalInTx(tx, {
+					owner: input.owner,
+					status: "done",
+					agentSessionId: input.agentSessionId,
+				}),
+			};
+		});
+	} catch (error) {
+		if (!(error instanceof TerminalFenceChangedError)) throw error;
 		return {
-			outcome: "committed",
-			run: await commitLockedRunTerminalInTx(tx, {
-				owner: input.owner,
-				status: "done",
-				agentSessionId: input.agentSessionId,
-			}),
+			outcome: "rejected",
+			...(await classifyRunWriteRejectionTx(db, input.owner)),
 		};
-	});
+	}
 }
 
 function validatePublishedArtifacts(artifacts: PublishedArtifact[]): void {

@@ -16,6 +16,7 @@ import {
 } from "@mymemo/agent-db/schema";
 import {
 	createTestDatabase,
+	lapseConversationOwnership,
 	seedQueuedRun,
 	type TestDb,
 } from "@mymemo/agent-db/testing";
@@ -1122,19 +1123,16 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		deadline.elapse();
 		await closeCalled.promise;
 
-		await tdb.db
-			.update(runs)
-			.set({
-				lockedBy: "worker-2",
-				lockedUntil: new Date(Date.now() + 60_000),
-			})
-			.where(eq(runs.runId, "run-1"));
+		await lapseConversationOwnership(tdb.db, {
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
 		releaseStream.resolve();
 		await worker.drain();
 
 		expect(await readRun("run-1")).toMatchObject({
 			status: "interrupt_requested",
-			lockedBy: "worker-2",
+			lockedBy: "worker-1",
 		});
 		expect(await readEvents("run-1")).toEqual([]);
 	});

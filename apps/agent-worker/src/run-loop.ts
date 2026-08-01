@@ -19,16 +19,13 @@ import {
 	type ToolCallStartedPayload,
 } from "@mymemo/agent-db/run-events";
 import {
-	RunFenceError,
-	type UserRunMutationOwner,
-} from "@mymemo/agent-db/run-ownership";
-import {
 	appendRunEventsTx,
 	type FenceRejection,
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
 	markStaleRunsTx,
 	type RunRecord,
+	type RunWriteOwner,
 	type StartClaimedRunResult,
 	startClaimedRunTx,
 	type TerminalOutcome,
@@ -142,7 +139,7 @@ export interface RunProcessContext {
 	 * permits no post-fence drain and must close private SDK resources now. */
 	ownershipLostSignal: AbortSignal;
 	appendModelContent(content: ModelContent): Promise<void>;
-	/** Atomically append an ordered group of model events under one Run fence. */
+	/** Atomically append an ordered group under one Ownership epoch fence. */
 	appendModelContents(contents: readonly ModelContent[]): Promise<void>;
 	/** Append one standard event to this Run's Live Stream. Failure is
 	 * absorbed by the producer so it cannot change model execution. */
@@ -240,6 +237,13 @@ type RejectedTerminal = Extract<
 >;
 
 type RejectedRunStart = Extract<StartClaimedRunResult, { outcome: "rejected" }>;
+
+/** Internal control-flow signal: the typed rejection has already been applied
+ * to the drain state, so it must stop the processor without being mistaken for
+ * an SDK/model failure that deserves an `error` Outcome. */
+class RunWriteRejectedError extends Error {
+	override readonly name = "RunWriteRejectedError";
+}
 
 /**
  * The agent-worker control loop over the shared queue helpers. Its unit is the
@@ -462,13 +466,10 @@ export class RunLoop {
 	 * deliberately do **not** release, which would revoke the successor's
 	 * ownership.
 	 *
-	 * Abandonment is in-memory only, and that is the whole of what stops a
-	 * superseded worker from terminalizing: the terminal transition still fences
-	 * on the bridge Run lease, which this worker still holds. So a lease lost
-	 * after the served Run detached (it detaches just before terminalizing) can
-	 * still commit that Run's Outcome. Contained rather than safe — the successor's
-	 * snapshot holds only `queued` Runs, so nothing re-executes it — and closed
-	 * properly when the terminal transition moves onto the epoch fence (#399).
+	 * Abandonment stops in-memory work promptly; the epoch fence is the durable
+	 * backstop for a write already racing this signal. A terminal transition that
+	 * detached just before renewal observed the loss still carries the old epoch
+	 * and is therefore rejected rather than committing under a successor's Claim.
 	 */
 	private loseOwnership(drain: ActiveDrain): void {
 		drain.halted = "lease";
@@ -487,12 +488,11 @@ export class RunLoop {
 	/**
 	 * Renew the served Run's legacy Run lease and observe a durable interruption.
 	 *
-	 * Bridge, deleted with the Run lease itself (#402). The Ownership renewal
-	 * above is the authority, but this Run's appends, terminal transition, Live
-	 * Stream failure marker, and stale-Run recovery all still evaluate
-	 * `locked_by`/`locked_until`, so the drain renews them on the same cadence.
-	 * Once those writes fence on the epoch this becomes the plain status read the
-	 * drain still needs, since Conversation-scoped renewal returns no Run row.
+	 * Bridge, deleted with the Run lease itself (#402). Ownership renewal above is
+	 * the authority; this temporary heartbeat remains for Run-scoped stale
+	 * recovery and the Conversation-scoped stores moving in #400/#401. It also
+	 * returns the served Run's status, which the drain still needs because
+	 * Conversation-scoped renewal returns no Run row.
 	 */
 	private async observeServedRun(drain: ActiveDrain): Promise<void> {
 		const served = drain.served;
@@ -622,7 +622,7 @@ export class RunLoop {
 					workerId: this.workerId,
 				});
 				if (started.outcome === "rejected") {
-					this.noteRefusedStart(drain, runId, started);
+					this.noteRejectedRunWrite(drain, runId, started);
 					continue;
 				}
 				await this.serveRun(started.run, drain);
@@ -645,22 +645,31 @@ export class RunLoop {
 	}
 
 	/**
-	 * Record what a refused start means for the drain. A `status` refusal is the
-	 * Run reaching its Outcome underneath this worker — a queued Run interrupted
-	 * between the snapshot and here — so the drain skips it and serves the next.
-	 * The other two stop the drain: `lease` because a successor owns the
-	 * Conversation, `gone` because it was deleted and took its Runs with it.
-	 * Stopping is left to `halted` and the loop's own guard rather than reported
-	 * back, so there is one answer to "is this drain still running", not two.
+	 * Apply the shared rejection vocabulary to any fenced Run write. A `status`
+	 * refusal skips that write; an in-flight `interrupt_requested` also aborts the
+	 * processor so `interrupted` can win. `lease` and `gone` halt the drain without
+	 * release. Keeping this decision in one place prevents start, append, and
+	 * terminal paths from assigning different meanings to the same rejection.
 	 */
-	private noteRefusedStart(
+	private noteRejectedRunWrite(
 		drain: ActiveDrain,
 		runId: string,
-		rejection: RejectedRunStart,
+		rejection: RejectedRunStart | RejectedTerminal,
+		entry?: ActiveEntry,
 	): void {
 		if (rejection.rejected === "status") {
+			if (entry) {
+				if (rejection.current === "interrupt_requested") {
+					entry.state.interrupted = true;
+					entry.controller.abort();
+					entry.interruptionController.abort();
+				} else {
+					entry.state.lostOwnership = true;
+					entry.controller.abort();
+				}
+			}
 			this.opts.logger.info({
-				message: "skipping a snapshot run that already reached its Outcome",
+				message: "skipping a Run write refused by its current status",
 				workerId: this.workerId,
 				conversationId: drain.owner.conversationId,
 				runId,
@@ -669,6 +678,11 @@ export class RunLoop {
 			return;
 		}
 		drain.halted = rejection.rejected;
+		if (entry) {
+			entry.state.lostOwnership = true;
+			entry.controller.abort();
+			entry.ownershipLostController.abort();
+		}
 		this.opts.logger.warn({
 			message:
 				rejection.rejected === "gone"
@@ -739,23 +753,29 @@ export class RunLoop {
 		drain: ActiveDrain,
 		entry: ActiveEntry,
 	): Promise<void> {
+		const owner: RunWriteOwner = {
+			...drain.owner,
+			runId: run.runId,
+			workerId: this.workerId,
+		};
 		const liveStream = await RunLiveStream.open({
 			relay: this.opts.liveStreamRelay,
 			runId: run.runId,
 			conversationId: run.conversationId,
 			markLiveStreamFailed: async () => {
 				const result = await markLiveStreamFailedTx(this.opts.db, {
-					runId: run.runId,
-					workerId: this.workerId,
+					owner,
 				});
-				if (result.outcome === "fence_rejected") {
+				if (result.outcome === "rejected") {
 					this.opts.logger.warn({
-						message: "could not mark Live Stream failed through Run fence",
+						message:
+							"could not mark Live Stream failed through Ownership fence",
 						workerId: this.workerId,
 						runId: run.runId,
+						rejected: result.rejected,
 					});
-					throw new RunFenceError(
-						"Run fence rejected the Live Stream failure marker",
+					throw new Error(
+						"Ownership fence rejected Live Stream failure marker",
 					);
 				}
 				if (result.run.liveStreamFailedAt === null) {
@@ -783,13 +803,15 @@ export class RunLoop {
 					shutdownSignal: entry.shutdownController.signal,
 					ownershipLostSignal: entry.ownershipLostController.signal,
 					appendModelContent: (content) =>
-						this.appendModelContent(run.runId, content),
+						this.appendModelContent(owner, drain, entry, content),
 					appendModelContents: (contents) =>
-						this.appendModelContents(run.runId, contents),
+						this.appendModelContents(owner, drain, entry, contents),
 					appendLiveEvent: (event) => liveStream.append(event),
 				})) ?? EMPTY_TURN;
 		} catch (error) {
-			if (error instanceof RunProcessorFailure) {
+			if (error instanceof RunWriteRejectedError) {
+				// The typed rejection already updated the drain/Run state.
+			} else if (error instanceof RunProcessorFailure) {
 				failure = {
 					error: error.failure,
 					streamMetadata: error.streamMetadata,
@@ -803,7 +825,8 @@ export class RunLoop {
 		this.detachServedRun(drain);
 		try {
 			const terminalStatus = await this.finish(
-				run,
+				owner,
+				drain,
 				entry.state,
 				turnResult,
 				failure,
@@ -815,39 +838,41 @@ export class RunLoop {
 	}
 
 	private async appendModelContent(
-		runId: string,
+		owner: RunWriteOwner,
+		drain: ActiveDrain,
+		entry: ActiveEntry,
 		content: ModelContent,
 	): Promise<void> {
-		await this.appendModelContents(runId, [content]);
+		await this.appendModelContents(owner, drain, entry, [content]);
 	}
 
 	private async appendModelContents(
-		runId: string,
+		owner: RunWriteOwner,
+		drain: ActiveDrain,
+		entry: ActiveEntry,
 		contents: readonly ModelContent[],
 	): Promise<void> {
-		await appendRunEventsTx(this.opts.db, {
-			runId,
-			workerId: this.workerId,
+		const result = await appendRunEventsTx(this.opts.db, {
+			owner,
 			events: contents.map((content) => ({
 				type: MODEL_CONTENT_EVENT_TYPES[content.kind],
 				payload: content.payload,
 			})),
 			appendClass: "model",
 		});
+		if (result.outcome === "rejected") {
+			this.noteRejectedRunWrite(drain, owner.runId, result, entry);
+			throw new RunWriteRejectedError();
+		}
 	}
 
 	private async finish(
-		run: RunRecord,
+		owner: RunWriteOwner,
+		drain: ActiveDrain,
 		state: RunEndState,
 		turnResult: TurnResult,
 		failure?: { error: unknown; streamMetadata?: TurnStreamMetadata },
 	): Promise<TerminalRunStatus | null> {
-		const owner: UserRunMutationOwner = {
-			userId: run.userId,
-			conversationId: run.conversationId,
-			runId: run.runId,
-			workerId: this.workerId,
-		};
 		if (state.lostOwnership) {
 			this.opts.logger.warn({
 				message: "abandoning run after ownership loss",
@@ -863,26 +888,26 @@ export class RunLoop {
 		// while interrupting still surfaces as `interrupted`. A mirrored main
 		// session publishes its first or later resume pointer with this Outcome.
 		if (state.interrupted) {
-			return this.terminalize(owner, {
+			return this.terminalize(owner, drain, {
 				status: "interrupted",
 				agentSessionId,
 			});
 		}
 		if (failure) {
-			return this.failRun(owner, {
+			return this.failRun(owner, drain, {
 				message: "run failed",
 				fields: artifactFailureLogFields(failure.error),
 				interruptedAgentSessionId: agentSessionId,
 			});
 		}
 		if (turnResult.streamMetadata?.mirrorErrorObserved) {
-			return this.failRun(owner, {
+			return this.failRun(owner, drain, {
 				message: "agent session mirror failed",
 				fields: { reason: "mirror_error" },
 			});
 		}
 		if (turnResult.disposition === "stopped") {
-			return this.failRun(owner, {
+			return this.failRun(owner, drain, {
 				message: "run stopped before completion",
 				interruptedAgentSessionId: agentSessionId,
 			});
@@ -895,15 +920,17 @@ export class RunLoop {
 		if (turnResult.artifactPublication) {
 			return this.publishArtifactsAndFinish(
 				owner,
+				drain,
 				turnResult.artifactPublication,
 				agentSessionId,
 			);
 		}
-		return this.terminalize(owner, { status: "done", agentSessionId });
+		return this.terminalize(owner, drain, { status: "done", agentSessionId });
 	}
 
 	private async failRun(
-		owner: UserRunMutationOwner,
+		owner: RunWriteOwner,
+		drain: ActiveDrain,
 		input: {
 			message: string;
 			fields?: Record<string, unknown>;
@@ -927,13 +954,20 @@ export class RunLoop {
 			...outcome,
 		});
 		if (result.outcome === "committed") return "error";
-		return this.reconcileRejectedTerminal(owner, result, outcome.status, {
-			agentSessionId: input.interruptedAgentSessionId,
-		});
+		return this.reconcileRejectedTerminal(
+			owner,
+			drain,
+			result,
+			outcome.status,
+			{
+				agentSessionId: input.interruptedAgentSessionId,
+			},
+		);
 	}
 
 	private async publishArtifactsAndFinish(
-		owner: UserRunMutationOwner,
+		owner: RunWriteOwner,
+		drain: ActiveDrain,
 		publication: NonNullable<TurnResult["artifactPublication"]>,
 		agentSessionId: string | undefined,
 	): Promise<TerminalRunStatus | null> {
@@ -945,7 +979,7 @@ export class RunLoop {
 				agentSessionId,
 			});
 		} catch (error) {
-			return this.failRun(owner, {
+			return this.failRun(owner, drain, {
 				message: "run failed",
 				fields:
 					error instanceof ArtifactQuotaError
@@ -961,7 +995,7 @@ export class RunLoop {
 			});
 		}
 		if (result.outcome === "committed") return "done";
-		return this.reconcileRejectedTerminal(owner, result, "done", {
+		return this.reconcileRejectedTerminal(owner, drain, result, "done", {
 			agentSessionId,
 			unresolvedMessage:
 				"could not publish artifacts; leaving to stale-run recovery",
@@ -975,7 +1009,8 @@ export class RunLoop {
 	 * follows up with exactly the one legal terminal instead of guessing.
 	 */
 	private async terminalize(
-		owner: UserRunMutationOwner,
+		owner: RunWriteOwner,
+		drain: ActiveDrain,
 		outcome: Exclude<TerminalOutcome, { status: "error" }>,
 	): Promise<TerminalRunStatus | null> {
 		const result = await transitionRunTerminalTx(this.opts.db, {
@@ -983,9 +1018,15 @@ export class RunLoop {
 			...outcome,
 		});
 		if (result.outcome === "committed") return outcome.status;
-		return this.reconcileRejectedTerminal(owner, result, outcome.status, {
-			agentSessionId: outcome.agentSessionId,
-		});
+		return this.reconcileRejectedTerminal(
+			owner,
+			drain,
+			result,
+			outcome.status,
+			{
+				agentSessionId: outcome.agentSessionId,
+			},
+		);
 	}
 
 	/**
@@ -997,7 +1038,8 @@ export class RunLoop {
 	 * database failures propagate from here.
 	 */
 	private async reconcileRejectedTerminal(
-		owner: UserRunMutationOwner,
+		owner: RunWriteOwner,
+		drain: ActiveDrain,
 		rejection: RejectedTerminal,
 		intended: TerminalRunStatus,
 		options: {
@@ -1019,6 +1061,7 @@ export class RunLoop {
 			// Report why the follow-up failed, not why the first attempt did.
 			unresolved = interrupted;
 		}
+		this.noteRejectedRunWrite(drain, owner.runId, unresolved);
 		this.opts.logger.warn({
 			message:
 				options.unresolvedMessage ??

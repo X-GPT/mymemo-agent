@@ -13,11 +13,6 @@ import {
 	validateDurableRunEventSequence,
 } from "./run-events";
 import {
-	RunFenceError,
-	runLeaseByUserConditions,
-	type UserRunMutationOwner,
-} from "./run-ownership";
-import {
 	publishAgentSessionPointerInTx,
 	taintRecoveredRuntimeSandboxInTx,
 } from "./runtime-store";
@@ -42,17 +37,11 @@ import {
  * several writes, in a `FOR UPDATE` lock taken before the first of them — so
  * app-side select/update races cannot happen through this module.
  *
- * Two fences coexist here, and which one a write evaluates is migrating.
- * {@link startClaimedRunTx} — the drain's `queued` → `running` transition —
- * already fences on the Conversation Ownership epoch (ADR-0015). Every other
- * write still evaluates the Run lease (`locked_by` + `locked_until`), which the
- * drain stamps at start and renews on its tick purely as a bridge; #399 moves
- * the appends and terminal transitions onto the epoch and #402 deletes the lease.
- * The lease carries no fencing token, on the argument that a v1 Run is claimed
- * exactly once (failed runs never requeue; stale runs are terminalized, never
- * reclaimed). Conversation-level ownership breaks that premise deliberately — a
- * Conversation is Claimed many times — which is why the epoch is a necessary
- * token rather than a redundant one.
+ * Run-state writes — start, event append, terminal transition, and the active
+ * Live Stream failure marker — fence on the Conversation Ownership epoch
+ * (ADR-0015). The legacy Run lease remains temporarily for heartbeat,
+ * Run-scoped stale recovery, and the Conversation-scoped stores migrating in
+ * #400–#402; it no longer authorizes these Run-state writes.
  */
 
 /** All legal `runs.status` values. Derived from the same tuple `runs_status_check`
@@ -123,6 +112,15 @@ export type RunEventPayload = Record<string, unknown>;
  * the terminal transition helpers.
  */
 export type RunEventAppendClass = "model" | "cancellation";
+
+/** One Run addressed through the Claim that owns its Conversation. The epoch
+ * is the Run-state authority. `workerId` remains temporarily for the
+ * Conversation-scoped writes composed into terminal transactions; #401 moves
+ * those writes to the epoch and removes that bridge. */
+export interface RunWriteOwner extends ConversationOwner {
+	runId: string;
+	workerId: string;
+}
 
 const APPEND_CLASS_STATUSES: Record<RunEventAppendClass, RunStatus[]> = {
 	model: ["running"],
@@ -385,9 +383,9 @@ const LOCK_DURATION_MS = 60_000;
 /**
  * The Run-scoped claim, retiring: the worker now Claims a Conversation and
  * serves its snapshot through {@link startClaimedRunTx}, so nothing in
- * production calls this. It survives only as the fixture that puts a Run under
- * a Run lease for the suites still covering lease-fenced writes, and goes with
- * the lease itself (#402).
+ * production calls this. It survives only as the fixture for the transitional
+ * runtime/recovery paths that still read the Run lease, and goes with the lease
+ * itself (#402).
  *
  * Claim the oldest queued run for `workerId`, or return `null` when the queue
  * is empty. One atomic statement: the candidate select (`FOR UPDATE SKIP
@@ -455,11 +453,9 @@ export async function startClaimedRunTx(
 			.set({
 				status: "running",
 				executedByWorkerId: input.workerId,
-				// Bridge, deleted with the Run lease itself (#402). Every other write
-				// to this Run — appends, the terminal transition, the Live Stream
-				// failure marker, stale-Run recovery — still evaluates `locked_by` +
-				// `locked_until`, so the drain stamps them here and renews them on its
-				// tick. They carry no authority: the epoch fence below is the fence.
+				// Bridge, deleted with the Run lease itself (#402). Heartbeat,
+				// Run-scoped stale recovery, and the Conversation-scoped stores still
+				// evaluate it until #400/#401; it carries no authority for Run state.
 				lockedBy: input.workerId,
 				lockedUntil: sql`now() + (${LOCK_DURATION_MS} * interval '1 millisecond')`,
 				heartbeatAt: sql`now()`,
@@ -517,30 +513,38 @@ function classifyStartRejectionInTx(
 /**
  * Append one owned run event, allocating `seq` from `runs.next_event_seq` and
  * inserting the event row in the same transaction — the counter update carries
- * the fence for the append class (status set, `locked_by = workerId`,
- * `locked_until > now()`), so a stale or non-owning worker cannot allocate a
- * sequence number at all. Throws {@link RunFenceError} when the fence rejects.
+ * the append status and Ownership epoch fence, so a superseded Claim cannot
+ * allocate a sequence number at all. A refusal is classified through the same
+ * {@link FenceRejection} vocabulary as every other fenced Run write.
  */
 export async function appendRunEventTx(
 	db: Database,
 	input: {
-		runId: string;
-		workerId: string;
+		owner: RunWriteOwner;
 		type: string;
 		payload: RunEventPayload;
 		appendClass: RunEventAppendClass;
 	},
-): Promise<{ seq: number }> {
-	const [appended] = await appendRunEventsTx(db, {
-		runId: input.runId,
-		workerId: input.workerId,
+): Promise<AppendRunEventResult> {
+	const result = await appendRunEventsTx(db, {
+		owner: input.owner,
 		appendClass: input.appendClass,
 		events: [{ type: input.type, payload: input.payload }],
 	});
+	if (result.outcome === "rejected") return result;
+	const [appended] = result.events;
 	if (!appended)
 		throw new Error("single Run-event append returned no sequence");
-	return appended;
+	return { outcome: "appended", seq: appended.seq };
 }
+
+export type AppendRunEventResult =
+	| { outcome: "appended"; seq: number }
+	| ({ outcome: "rejected"; seq?: never } & FenceRejection);
+
+export type AppendRunEventsResult =
+	| { outcome: "appended"; events: Array<{ seq: number }> }
+	| ({ outcome: "rejected" } & FenceRejection);
 
 /**
  * Append a non-empty ordered batch under one Run-row fence and transaction.
@@ -550,12 +554,11 @@ export async function appendRunEventTx(
 export async function appendRunEventsTx(
 	db: Database,
 	input: {
-		runId: string;
-		workerId: string;
+		owner: RunWriteOwner;
 		events: readonly { type: string; payload: RunEventPayload }[];
 		appendClass: RunEventAppendClass;
 	},
-): Promise<Array<{ seq: number }>> {
+): Promise<AppendRunEventsResult> {
 	if (input.events.length === 0) {
 		throw new Error("Run-event append batch must not be empty");
 	}
@@ -568,18 +571,21 @@ export async function appendRunEventsTx(
 			})
 			.where(
 				and(
-					eq(runs.runId, input.runId),
+					claimedRunConditions(input.owner, input.owner.runId),
 					inArray(runs.status, APPEND_CLASS_STATUSES[input.appendClass]),
-					eq(runs.lockedBy, input.workerId),
-					sql`${runs.lockedUntil} > now()`,
+					conversationEpochExists(input.owner),
 				),
 			)
 			.returning({ nextEventSeq: runs.nextEventSeq });
 		if (!allocated) {
-			throw new RunFenceError(
-				`${input.appendClass} append to run ${input.runId} rejected: ` +
-					`run is not in an appendable status or worker ${input.workerId} no longer owns it`,
-			);
+			return {
+				outcome: "rejected",
+				...(await classifyFenceRejectionInTx(
+					tx,
+					claimedRunConditions(input.owner, input.owner.runId),
+					conversationEpochExists(input.owner),
+				)),
+			};
 		}
 		for (const event of input.events) {
 			const durableEvent = parseDurableRunEvent(event.type, event.payload);
@@ -606,7 +612,7 @@ export async function appendRunEventsTx(
 				.from(runEvents)
 				.where(
 					and(
-						eq(runEvents.runId, input.runId),
+						eq(runEvents.runId, input.owner.runId),
 						inArray(runEvents.type, [
 							RunEventType.Started,
 							...CANONICAL_MODEL_RUN_EVENT_TYPES,
@@ -621,25 +627,27 @@ export async function appendRunEventsTx(
 		}
 		const firstSeq = allocated.nextEventSeq - input.events.length;
 		const appended = input.events.map((event, index) => ({
-			runId: input.runId,
+			runId: input.owner.runId,
 			seq: firstSeq + index,
 			type: event.type,
 			payload: event.payload,
 		}));
 		await tx.insert(runEvents).values(appended);
-		return appended.map(({ seq }) => ({ seq }));
+		return {
+			outcome: "appended",
+			events: appended.map(({ seq }) => ({ seq })),
+		};
 	});
 }
 
 /**
  * Move an owned run to a terminal status and append its one terminal event —
  * the fence, optional Agent-session pointer publication, the status CAS,
- * ownership clear (`locked_by`/`locked_until` → NULL), `terminal_at`, sequence
+ * legacy lease clear (`locked_by`/`locked_until` → NULL), `terminal_at`, sequence
  * allocation, and event insert are one transaction.
  * The fence makes double-terminalization impossible (the second caller finds
  * the Run already terminal and is rejected), which is what makes "exactly one
- * terminal event per run" hold. Only the worker holding live ownership may
- * terminalize its run.
+ * terminal event per run" hold. Only the live Claim's epoch may terminalize it.
  *
  * A refused fence is a {@link TerminalTransitionResult}, not an exception:
  * losing to a durable interruption is an ordinary outcome the caller resolves,
@@ -651,7 +659,15 @@ export async function transitionRunTerminalTx(
 	db: Database,
 	input: TerminalTransitionInput,
 ): Promise<TerminalTransitionResult> {
-	return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
+	try {
+		return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
+	} catch (error) {
+		if (!(error instanceof TerminalFenceChangedError)) throw error;
+		return {
+			outcome: "rejected",
+			...(await classifyRunWriteRejectionTx(db, input.owner)),
+		};
+	}
 }
 
 interface TerminalOutcomeBase {
@@ -671,7 +687,7 @@ export type TerminalOutcome =
 	  });
 
 export type TerminalTransitionInput = TerminalOutcome & {
-	owner: UserRunMutationOwner;
+	owner: RunWriteOwner;
 };
 
 /**
@@ -686,9 +702,8 @@ export type TerminalTransitionInput = TerminalOutcome & {
  * permanently deleted and took the Run with it — there is nothing left to
  * terminalize, recover, or hand back.
  *
- * This is the fence vocabulary. The writes that still throw an opaque
- * {@link RunFenceError} classify into it as they adopt a typed rejection; none
- * of them grows a parallel shape of its own.
+ * This is the one fence vocabulary for every Run-state write; no operation
+ * grows a parallel rejection shape of its own.
  */
 export type FenceRejection =
 	| { rejected: "lease" }
@@ -700,16 +715,16 @@ export type TerminalTransitionResult =
 	| ({ outcome: "rejected" } & FenceRejection);
 
 /**
- * Take the terminal fence for `status` and hold it for the rest of the
- * transaction. Fence-first: the row lock keeps ownership and status stable, so
- * everything composed after this point either commits behind a fence that was
- * already proven or rolls back with it — correctness stops depending on a
- * final compare-and-set happening to throw. Returns `null` when the fence
- * holds, or the classified rejection (one extra read, same transaction).
+ * Take the terminal fence for `status` before any composed terminal facts. The
+ * Run-row lock keeps status stable; the epoch is rechecked by the final status
+ * update because it lives on the independently mutable Conversation row. Any
+ * failed final recheck rolls the transaction back and is classified at the
+ * public boundary. Returns `null` when the initial fence holds, or the
+ * classified rejection (one extra read, same transaction).
  */
 export async function lockRunForTerminalInTx(
 	tx: DbTx,
-	owner: UserRunMutationOwner,
+	owner: RunWriteOwner,
 	status: TerminalRunStatus,
 ): Promise<FenceRejection | null> {
 	const [held] = await tx
@@ -717,13 +732,14 @@ export async function lockRunForTerminalInTx(
 		.from(runs)
 		.where(
 			and(
-				runLeaseByUserConditions(owner),
+				claimedRunConditions(owner, owner.runId),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[status]),
+				conversationEpochExists(owner),
 			),
 		)
 		.for("update");
 	if (held) return null;
-	return await classifyRunFenceRejectionInTx(tx, owner);
+	return await classifyRunWriteRejectionInTx(tx, owner);
 }
 
 /**
@@ -756,22 +772,34 @@ async function classifyFenceRejectionInTx(
 }
 
 /**
- * The fence re-evaluated for a Run-lease write is deliberately the one that
- * write itself evaluated, which is still the Run lease. It moves to the
- * Conversation Ownership epoch in the same change that moves the fenced writes,
- * not before: a Conversation holds no live Ownership lease until something
- * Claims it, so re-pointing this read alone would report every status refusal as
- * a lost lease.
+ * Re-evaluate exactly the epoch fence the refused Run write evaluated. Keeping
+ * the classifier on that authority is what distinguishes a live-epoch status
+ * refusal from a lost Claim.
  */
-function classifyRunFenceRejectionInTx(
+function classifyRunWriteRejectionInTx(
 	tx: DbTx,
-	owner: UserRunMutationOwner,
+	owner: RunWriteOwner,
 ): Promise<FenceRejection> {
 	return classifyFenceRejectionInTx(
 		tx,
-		eq(runs.runId, owner.runId),
-		runLeaseByUserConditions(owner) ?? sql`false`,
+		claimedRunConditions(owner, owner.runId),
+		conversationEpochExists(owner),
 	);
+}
+
+/** Classify a final terminal epoch recheck after its transaction rolled back. */
+export async function classifyRunWriteRejectionTx(
+	db: Database,
+	owner: RunWriteOwner,
+): Promise<FenceRejection> {
+	return await db.transaction((tx) => classifyRunWriteRejectionInTx(tx, owner));
+}
+
+/** Internal rollback signal for a final terminal epoch recheck. Public
+ * terminal APIs catch it and return {@link FenceRejection}; it is exported only
+ * so the artifact composer can preserve the same transaction boundary. */
+export class TerminalFenceChangedError extends Error {
+	override readonly name = "TerminalFenceChangedError";
 }
 
 /**
@@ -792,7 +820,7 @@ export async function transitionRunTerminalInTx(
 }
 
 /**
- * Commit the terminal status, the ownership clear, and the one terminal event
+ * Commit the terminal status, the legacy lease clear, and one terminal event
  * for a Run whose fence this transaction already holds through
  * {@link lockRunForTerminalInTx}. Split out so a composer can write its own
  * terminal facts between the fence and the Outcome — artifact publication
@@ -823,13 +851,14 @@ export async function commitLockedRunTerminalInTx(
 		})
 		.where(
 			and(
-				runLeaseByUserConditions(input.owner),
+				claimedRunConditions(input.owner, input.owner.runId),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
+				conversationEpochExists(input.owner),
 			),
 		)
 		.returning();
 	if (!row) {
-		throw new RunFenceError(
+		throw new TerminalFenceChangedError(
 			`terminal transition of run ${input.owner.runId} to ${input.status} ` +
 				`ran without holding its fence`,
 		);
@@ -1005,48 +1034,53 @@ export async function heartbeatRunTx(
 
 export type MarkLiveStreamFailedResult =
 	| { outcome: "marked" | "already_failed"; run: RunRecord }
-	| { outcome: "fence_rejected" };
+	| ({ outcome: "rejected" } & FenceRejection);
 
 /**
  * Monotonically record that a Run's Live Stream is unusable without changing
- * its execution status. Active writes require the same live worker ownership
- * fence as model appends. Once terminalization has cleared ownership, the
- * immutable Run permits only the idempotent NULL-to-time marker write; this
- * lets a terminal Redis publication failure safely race the terminal commit.
+ * its execution status. Active writes require the same Ownership epoch fence
+ * as model appends. A terminal Run is immutable, so terminal status alone
+ * permits the idempotent NULL-to-time marker write; this lets a terminal Redis
+ * publication failure safely race the terminal commit without depending on
+ * legacy Run lease columns that terminalization happens to clear.
  */
 export async function markLiveStreamFailedTx(
 	db: Database,
-	input: { runId: string; workerId: string },
+	input: { owner: RunWriteOwner },
 ): Promise<MarkLiveStreamFailedResult> {
 	return await db.transaction(async (tx) => {
 		const [before] = await tx
 			.select()
 			.from(runs)
-			.where(eq(runs.runId, input.runId))
+			.where(claimedRunConditions(input.owner, input.owner.runId))
 			.for("update");
-		if (!before) return { outcome: "fence_rejected" };
+		if (!before) return { outcome: "rejected", rejected: "gone" };
 
 		const writeAllowed = or(
 			and(
 				inArray(runs.status, ["running", "interrupt_requested"]),
-				eq(runs.lockedBy, input.workerId),
-				sql`${runs.lockedUntil} > now()`,
+				conversationEpochExists(input.owner),
 			),
-			and(
-				inArray(runs.status, TERMINAL_RUN_STATUSES),
-				isNull(runs.lockedBy),
-				isNull(runs.lockedUntil),
-			),
+			inArray(runs.status, TERMINAL_RUN_STATUSES),
 		);
 		if (before.liveStreamFailedAt !== null) {
 			const [authorized] = await tx
 				.select()
 				.from(runs)
-				.where(and(eq(runs.runId, input.runId), writeAllowed))
+				.where(
+					and(
+						claimedRunConditions(input.owner, input.owner.runId),
+						writeAllowed,
+					),
+				)
 				.limit(1);
-			return authorized
-				? { outcome: "already_failed", run: toRunRecord(authorized) }
-				: { outcome: "fence_rejected" };
+			if (authorized) {
+				return { outcome: "already_failed", run: toRunRecord(authorized) };
+			}
+			return {
+				outcome: "rejected",
+				...(await classifyRunWriteRejectionInTx(tx, input.owner)),
+			};
 		}
 
 		const [row] = await tx
@@ -1057,13 +1091,18 @@ export async function markLiveStreamFailedTx(
 			})
 			.where(
 				and(
-					eq(runs.runId, input.runId),
+					claimedRunConditions(input.owner, input.owner.runId),
 					isNull(runs.liveStreamFailedAt),
 					writeAllowed,
 				),
 			)
 			.returning();
-		if (!row) return { outcome: "fence_rejected" };
+		if (!row) {
+			return {
+				outcome: "rejected",
+				...(await classifyRunWriteRejectionInTx(tx, input.owner)),
+			};
+		}
 		return {
 			outcome: "marked",
 			run: toRunRecord(row),

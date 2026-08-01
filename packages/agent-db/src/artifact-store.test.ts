@@ -5,7 +5,15 @@ import {
 	publishArtifactsAndTransitionRunDoneTx,
 	recordArtifactObjectsTx,
 } from "./artifact-store";
-import { claimNextRunTx, type TerminalTransitionResult } from "./run-store";
+import {
+	claimConversationTx,
+	releaseConversationTx,
+} from "./conversation-ownership";
+import {
+	type RunWriteOwner,
+	startClaimedRunTx,
+	type TerminalTransitionResult,
+} from "./run-store";
 import {
 	artifactObjects,
 	conversationArtifacts,
@@ -33,6 +41,23 @@ afterEach(async () => {
 	await tdb.db.delete(conversations);
 });
 
+async function claimRun(
+	runId: string,
+	workerId = "worker-1",
+): Promise<RunWriteOwner> {
+	const claim = await claimConversationTx(tdb.db, { workerId });
+	if (!claim) throw new Error("test setup claimed no Conversation");
+	const started = await startClaimedRunTx(tdb.db, {
+		owner: claim,
+		runId,
+		workerId,
+	});
+	if (started.outcome !== "started") {
+		throw new Error(`test setup could not start ${runId}`);
+	}
+	return { ...claim, runId, workerId };
+}
+
 describe("Downloadable artifact publication", () => {
 	it("publishes the session pointer, staged metadata, and run_done together", async () => {
 		await tdb.db.insert(conversations).values({
@@ -45,7 +70,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		const owner = await claimRun("run-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -65,12 +90,7 @@ describe("Downloadable artifact publication", () => {
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 
 		await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-			owner: {
-				runId: "run-1",
-				workerId: "worker-1",
-				userId: "user-1",
-				conversationId: "conv-1",
-			},
+			owner,
 			artifacts: [
 				{
 					artifactId: "artifact-1",
@@ -121,7 +141,7 @@ describe("Downloadable artifact publication", () => {
 				userId: "user-1",
 				conversationId: "conv-1",
 			});
-			await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+			const owner = await claimRun(runId);
 			await recordArtifactObjectsTx(tdb.db, {
 				objects: [
 					{
@@ -134,12 +154,7 @@ describe("Downloadable artifact publication", () => {
 				],
 			});
 			await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-				owner: {
-					runId,
-					workerId: "worker-1",
-					userId: "user-1",
-					conversationId: "conv-1",
-				},
+				owner,
 				artifacts: [
 					{
 						artifactId,
@@ -150,6 +165,7 @@ describe("Downloadable artifact publication", () => {
 					},
 				],
 			});
+			await releaseConversationTx(tdb.db, owner);
 		}
 
 		const [current] = await tdb.db.select().from(conversationArtifacts);
@@ -186,16 +202,11 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		const owner = await claimRun("run-1");
 
 		await expect(
 			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-				owner: {
-					runId: "run-1",
-					workerId: "worker-1",
-					userId: "user-1",
-					conversationId: "conv-1",
-				},
+				owner,
 				agentSessionId: "session-new",
 				artifacts: [
 					{
@@ -227,7 +238,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		const owner = await claimRun("run-1");
 		await recordArtifactObjectsTx(tdb.db, {
 			objects: [
 				{
@@ -241,12 +252,7 @@ describe("Downloadable artifact publication", () => {
 		});
 
 		const result = await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-			owner: {
-				runId: "run-1",
-				workerId: "worker-1",
-				userId: "user-1",
-				conversationId: "conv-1",
-			},
+			owner,
 			agentSessionId: "session-without-runtime",
 			artifacts: [
 				{
@@ -288,16 +294,11 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		const owner = await claimRun("run-1");
 
 		await expect(
 			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-				owner: {
-					runId: "run-1",
-					workerId: "worker-1",
-					userId: "user-1",
-					conversationId: "conv-1",
-				},
+				owner,
 				agentSessionId: "session-new",
 				artifacts: [
 					{
@@ -321,6 +322,7 @@ describe("Downloadable artifact publication", () => {
 	it.each([
 		[
 			"an interruption was requested",
+			"run",
 			{ status: "interrupt_requested" },
 			{
 				outcome: "rejected",
@@ -330,13 +332,14 @@ describe("Downloadable artifact publication", () => {
 		],
 		[
 			"ownership expired",
-			{ lockedUntil: new Date(Date.now() - 1_000) },
+			"conversation",
+			{ ownerUntil: new Date(Date.now() - 1_000) },
 			{
 				outcome: "rejected",
 				rejected: "lease",
 			} satisfies TerminalTransitionResult,
 		],
-	])("takes the Run fence before any metadata write, so publication is a no-op once %s", async (_case, mutation, expected) => {
+	])("takes the Run fence before any metadata write, so publication is a no-op once %s", async (_case, target, mutation, expected) => {
 		await tdb.db.insert(conversations).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -351,7 +354,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		const owner = await claimRun("run-1");
 		await recordArtifactObjectsTx(tdb.db, {
 			objects: [
 				{
@@ -363,15 +366,17 @@ describe("Downloadable artifact publication", () => {
 				},
 			],
 		});
-		await tdb.db.update(runs).set(mutation);
+		if (target === "run" && "status" in mutation) {
+			await tdb.db.update(runs).set({ status: mutation.status });
+		} else {
+			if (!("ownerUntil" in mutation)) throw new Error("invalid test case");
+			await tdb.db
+				.update(conversations)
+				.set({ ownerUntil: mutation.ownerUntil });
+		}
 
 		const result = await publishArtifactsAndTransitionRunDoneTx(tdb.db, {
-			owner: {
-				runId: "run-1",
-				workerId: "worker-1",
-				userId: "user-1",
-				conversationId: "conv-1",
-			},
+			owner,
 			agentSessionId: "session-new",
 			artifacts: [
 				{
