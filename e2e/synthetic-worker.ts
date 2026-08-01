@@ -113,8 +113,8 @@ const processor: RunProcessor = async (ctx) => {
 	const scenario = resolveSyntheticScenario(ctx.run.normalizedInput?.text);
 	if (scenario === "stale_crash") {
 		await database.$client.query(
-			"update runs set locked_until = now() - interval '1 second' where run_id = $1 and locked_by = $2",
-			[ctx.run.runId, workerId],
+			"update conversations set owner_until = now() - interval '1 second' where user_id = $1 and conversation_id = $2 and owner_worker_id = $3",
+			[ctx.run.userId, ctx.run.conversationId, workerId],
 		);
 		process.exit(17);
 	}

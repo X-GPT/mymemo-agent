@@ -453,10 +453,11 @@ describe("ADR-0014 relay failure matrix", () => {
 		await readerAttached.observed;
 		await killRedisClientsByNamePrefix(producerClientName);
 		// This root-level test uses the underlying PGlite client to avoid importing
-		// a second Drizzle instance; keep the simulated lease expiry Run-scoped.
+		// a second Drizzle instance; expire the Conversation Ownership lease that
+		// Reclamation uses as its durable boundary.
 		await testDatabase.db.$client.query(
-			"update runs set locked_until = $1 where run_id = $2",
-			[new Date(0), runId],
+			"update conversations set owner_until = $1 where conversation_id = $2",
+			[new Date(0), conversationId],
 		);
 		const recovery = buildLoop(
 			async () => {},
