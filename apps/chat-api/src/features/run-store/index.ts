@@ -22,7 +22,6 @@ export {
 	claimNextRunTx,
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
-	markStaleRunsTx,
 	PostgresRunStore,
 	RunFenceError,
 	RunInputMismatchError,

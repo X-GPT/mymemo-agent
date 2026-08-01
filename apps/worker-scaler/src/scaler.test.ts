@@ -15,10 +15,10 @@ const config = {
 };
 
 describe("computeDesiredWorkerTasks", () => {
-	it("uses ceil((claimableConversations + ownedConversations) / targetConcurrentConversationsPerTask)", () => {
+	it("uses ceil((demandConversations + ownedConversations) / targetConcurrentConversationsPerTask)", () => {
 		expect(
 			computeDesiredWorkerTasks(
-				{ claimableConversations: 12, ownedConversations: 20 },
+				{ demandConversations: 12, ownedConversations: 20 },
 				config,
 			),
 		).toBe(16);
@@ -27,13 +27,13 @@ describe("computeDesiredWorkerTasks", () => {
 	it("clamps the desired task count to min and max", () => {
 		expect(
 			computeDesiredWorkerTasks(
-				{ claimableConversations: 0, ownedConversations: 0 },
+				{ demandConversations: 0, ownedConversations: 0 },
 				config,
 			),
 		).toBe(1);
 		expect(
 			computeDesiredWorkerTasks(
-				{ claimableConversations: 100, ownedConversations: 100 },
+				{ demandConversations: 100, ownedConversations: 100 },
 				{ ...config, maxTasks: 12 },
 			),
 		).toBe(12);
@@ -45,7 +45,7 @@ describe("decideWorkerScale", () => {
 		const now = new Date("2026-01-01T00:05:00Z");
 
 		const decision = decideWorkerScale({
-			metrics: { claimableConversations: 0, ownedConversations: 0 },
+			metrics: { demandConversations: 0, ownedConversations: 0 },
 			config,
 			state: {
 				currentDesiredTasks: 8,
@@ -64,7 +64,7 @@ describe("decideWorkerScale", () => {
 
 	it("allows scale-in after cooldown expires", () => {
 		const decision = decideWorkerScale({
-			metrics: { claimableConversations: 0, ownedConversations: 0 },
+			metrics: { demandConversations: 0, ownedConversations: 0 },
 			config,
 			state: {
 				currentDesiredTasks: 8,
@@ -93,7 +93,7 @@ describe("runWorkerScaler", () => {
 
 		const result = await runWorkerScaler({
 			readMetrics: async () => ({
-				claimableConversations: 0,
+				demandConversations: 0,
 				ownedConversations: 0,
 			}),
 			desiredCountAdapter: adapter,

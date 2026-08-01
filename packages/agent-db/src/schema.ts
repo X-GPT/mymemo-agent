@@ -43,7 +43,7 @@ export const conversationRuntime = pgTable(
 		/** Current E2B sandbox (running or paused); NULL when none exists. */
 		sandboxId: text("sandbox_id"),
 		/**
-		 * True when command cleanup could not be proven (stale-run recovery,
+		 * True when command cleanup could not be proven (Reclamation,
 		 * failed command-tree kill): the sandbox must not be reused until
 		 * replaced. Reset whenever the pointer is replaced or cleared — taint
 		 * describes the current sandbox only.
@@ -331,6 +331,10 @@ export const runs = pgTable(
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
+		/**
+		 * Last state or liveness change. While queued, Reclamation refreshes this
+		 * as the unowned queue-backstop clock without changing createdAt ordering.
+		 */
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -364,7 +368,8 @@ export const runs = pgTable(
 		index("runs_queue_claim_idx")
 			.on(t.createdAt)
 			.where(sql`${t.status} = 'queued'`),
-		// Stale-run recovery: active runs whose lock deadline has passed.
+		// Legacy Run-lease access path, removed with the lease in #402. Reclamation
+		// scans `conversations.owner_until`; no production path scans this index.
 		index("runs_stale_recovery_idx")
 			.on(t.lockedUntil)
 			.where(sql`${t.status} in ('running', 'interrupt_requested')`),

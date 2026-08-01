@@ -273,7 +273,7 @@ describe("validateDurableRunEventSequence", () => {
 		).not.toThrow();
 	});
 
-	it("accepts an incomplete Tool prefix closed by stale recovery", () => {
+	it("accepts an incomplete Tool prefix closed by Reclamation", () => {
 		expect(() =>
 			validateDurableRunEventSequence([
 				{

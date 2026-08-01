@@ -14,7 +14,7 @@ import {
 } from "./run-events";
 import {
 	publishAgentSessionPointerInTx,
-	taintRecoveredRuntimeSandboxInTx,
+	taintRuntimeSandboxForReclamationInTx,
 } from "./runtime-store";
 import {
 	ACTIVE_RUN_STATUSES,
@@ -39,9 +39,9 @@ import {
  *
  * Run-state writes — start, event append, terminal transition, and the active
  * Live Stream failure marker — fence on the Conversation Ownership epoch
- * (ADR-0015). The legacy Run lease remains temporarily for heartbeat,
- * Run-scoped stale recovery, and the Conversation-scoped stores migrating in
- * #400–#402; it no longer authorizes these Run-state writes.
+ * (ADR-0015). The legacy Run lease remains temporarily for heartbeat and the
+ * Conversation-scoped stores migrating in #401–#402; it no longer authorizes
+ * these Run-state writes.
  */
 
 /** All legal `runs.status` values. Derived from the same tuple `runs_status_check`
@@ -69,11 +69,27 @@ export type RunRecord = Omit<
 	status: RunStatus;
 };
 
-/** A stale Run after terminal recovery, plus whether that transaction created
+/** A Run terminalized by Reclamation, plus whether that transaction created
  * its null-to-time Live Stream failure marker. */
-export type RecoveredRunRecord = RunRecord & {
-	liveStreamFailureMarkedByRecovery: boolean;
+export type ReclaimedRunRecord = RunRecord & {
+	liveStreamFailureMarkedByReclamation: boolean;
 };
+
+/** One Conversation reclaimed in one transaction, including every Run that
+ * reached an Outcome as part of that Reclamation. */
+export interface ReclaimedConversation {
+	userId: string;
+	conversationId: string;
+	runs: ReclaimedRunRecord[];
+}
+
+/** Old queued Runs expired from one unowned Conversation. This is the retained
+ * queue-age backstop, not Reclamation: no Ownership lease was lost. */
+export interface ExpiredQueuedRuns {
+	userId: string;
+	conversationId: string;
+	runs: RunRecord[];
+}
 
 /**
  * Queue admission failed: the conversation already has an active
@@ -92,6 +108,13 @@ export class ActiveRunConflictError extends Error {
  * every tick. This bound therefore bounds claim cost as much as drain length.
  */
 const ACTIVE_RUN_DEPTH_BOUND = 1;
+
+/** How long a queued Run may remain continuously eligible on an unowned
+ * Conversation before the queue-age backstop ends it. Reclamation refreshes
+ * `updated_at` to start a new window for legitimately waiting work. This
+ * deliberately matches today's 60-second Ownership lease, but remains a
+ * distinct policy so lease tuning cannot silently retune queue expiration. */
+const UNOWNED_QUEUE_TIMEOUT_MS = 60_000;
 
 /** An owned Run id was reused with different normalized admitted input. */
 export class RunInputMismatchError extends Error {
@@ -383,9 +406,9 @@ const LOCK_DURATION_MS = 60_000;
 /**
  * The Run-scoped claim, retiring: the worker now Claims a Conversation and
  * serves its snapshot through {@link startClaimedRunTx}, so nothing in
- * production calls this. It survives only as the fixture for the transitional
- * runtime/recovery paths that still read the Run lease, and goes with the lease
- * itself (#402).
+ * production calls this. It survives only as the fixture for transitional
+ * Conversation-scoped stores that still read the Run lease, and goes with the
+ * lease itself (#402).
  *
  * Claim the oldest queued run for `workerId`, or return `null` when the queue
  * is empty. One atomic statement: the candidate select (`FOR UPDATE SKIP
@@ -428,7 +451,7 @@ export async function claimNextRunTx(
 
 /**
  * Why a fenced write was refused. `lease`: the caller no longer holds live
- * ownership — expired, reclaimed by recovery, or the Run/Conversation/user
+ * ownership — expired, taken by Reclamation, or the Run/Conversation/user
  * identity does not match — so it must stop treating the Run as its own.
  * `status`: ownership is still live, but the Run's current status does not
  * permit the requested transition (`done` after an interruption was requested,
@@ -476,9 +499,9 @@ export async function startClaimedRunTx(
 			.set({
 				status: "running",
 				executedByWorkerId: input.workerId,
-				// Bridge, deleted with the Run lease itself (#402). Heartbeat,
-				// Run-scoped stale recovery, and the Conversation-scoped stores still
-				// evaluate it until #400/#401; it carries no authority for Run state.
+				// Bridge, deleted with the Run lease itself (#402). Heartbeat and the
+				// Conversation-scoped stores still evaluate it until #401; it carries no
+				// authority for Run state.
 				lockedBy: input.workerId,
 				lockedUntil: sql`now() + (${LOCK_DURATION_MS} * interval '1 millisecond')`,
 				heartbeatAt: sql`now()`,
@@ -674,7 +697,7 @@ export async function appendRunEventsTx(
  *
  * A refused fence is a {@link TerminalTransitionResult}, not an exception:
  * losing to a durable interruption is an ordinary outcome the caller resolves,
- * and the rejection says whether the lease is gone (stop — recovery owns the
+ * and the rejection says whether the lease is gone (stop — Reclamation owns the
  * Run) or the status simply moved on (and to what). Genuine failures still
  * throw.
  */
@@ -842,7 +865,7 @@ export async function commitLockedRunTerminalInTx(
 ): Promise<RunRecord> {
 	if (input.payload?.reason === "stale_worker") {
 		throw new InvalidRunEventError(
-			"stale_worker is reserved for stale-Run recovery",
+			"stale_worker is reserved for the Run liveness sweep",
 		);
 	}
 	if (input.agentSessionId !== undefined) {
@@ -1012,14 +1035,13 @@ export async function requestRunInterruptionTx(
 }
 
 /**
- * Renew the caller's ownership of an active run — push `locked_until` ahead —
- * and return the fresh row, so the worker's control loop both keeps the run
- * alive and observes `interrupt_requested` through this one call. This is the
- * transitional legacy Run-lease heartbeat retained for Run-scoped recovery and
- * the runtime/session paths migrating in #401/#402: active status, matching
+ * Renew the caller's legacy Run lease — push `locked_until` ahead — and return
+ * the fresh row, so the worker's control loop observes `interrupt_requested`
+ * through this one call. This temporary heartbeat remains for the
+ * runtime/session paths migrating in #401/#402: active status, matching
  * `locked_by`, and an unexpired `locked_until`. Returns `null` when the fence
- * rejects — expired ownership is never revived (the run belongs to stale-run
- * recovery now), and the caller must abandon the run locally.
+ * rejects — expired ownership is never revived, and the caller must abandon
+ * the Run locally.
  */
 export async function heartbeatRunTx(
 	db: Database,
@@ -1123,29 +1145,33 @@ export async function markLiveStreamFailedTx(
 }
 
 /**
- * Stale-run recovery: terminalize every active run that can no longer make
- * progress. Expired `interrupt_requested` becomes `interrupted` — the user's
- * accepted control, never reclassified as an error; expired `running`
- * and old unclaimed `queued` runs become `error` (a v1 run is never reclaimed).
- * Each run's status CAS and terminal event share the transaction, and candidates
- * are taken `FOR UPDATE SKIP LOCKED`, so concurrent recovery loops across the
- * fleet split the work instead of blocking, and a run can never be
- * double-terminalized.
+ * Reclaim one Conversation whose Ownership lease lapsed without release. The
+ * Conversation row is taken `FOR UPDATE SKIP LOCKED`, exactly as a Claim takes
+ * it, so Claim, admission, and Reclamation cannot interleave on one
+ * Conversation while concurrent reclaimers split work instead of blocking.
  *
- * Recovering a claimed run also taints the conversation's sandbox in the same
- * transaction: the lost owner may be partitioned rather than dead (a Bash
- * command may run four times longer than the lock it stopped renewing), and E2B
- * offers no compare-and-set to evict it, so taint is the only place the next
- * turn can be stopped from reconnecting to a workspace someone else is still
- * writing. Deliberately unfenced — this path exists precisely because run
- * ownership is already gone. Returns the runs it recovered for logging and
- * Live Stream telemetry.
+ * One transaction terminalizes every started Active Run, taints the current
+ * Workspace when command cleanup is unproven, and clears the Ownership columns.
+ * Never-started queued Runs remain for the next Claim. An accepted interruption
+ * remains `interrupted`; every running Run becomes `error`. The durable terminal
+ * reason and Live Stream failure-marker behavior are unchanged.
  */
-export async function markStaleRunsTx(
+export async function reclaimConversationTx(
 	db: Database,
-): Promise<RecoveredRunRecord[]> {
+): Promise<ReclaimedConversation | null> {
 	return await db.transaction(async (tx) => {
-		const stale = await tx
+		const [candidate] = await tx
+			.select({
+				userId: conversations.userId,
+				conversationId: conversations.conversationId,
+			})
+			.from(conversations)
+			.where(sql`${conversations.ownerUntil} <= now()`)
+			.for("update", { skipLocked: true })
+			.limit(1);
+		if (!candidate) return null;
+
+		const runsToReclaim = await tx
 			.select({
 				runId: runs.runId,
 				userId: runs.userId,
@@ -1155,67 +1181,195 @@ export async function markStaleRunsTx(
 			})
 			.from(runs)
 			.where(
-				sql`(
-					${runs.status} in ('running', 'interrupt_requested')
-					and ${runs.lockedUntil} <= now()
-				) or (
-					${runs.status} = 'queued'
-					and ${runs.createdAt} <= now() - interval '${sql.raw(
-						String(LOCK_DURATION_MS),
-					)} milliseconds'
-				)`,
+				and(
+					eq(runs.userId, candidate.userId),
+					eq(runs.conversationId, candidate.conversationId),
+					inArray(runs.status, ["running", "interrupt_requested"]),
+				),
 			)
-			.for("update", { skipLocked: true });
+			// Deliberately wait for a Run row rather than skip it: clearing Ownership
+			// while omitting a started Run would strand that Run permanently. A holder
+			// can only have locked this row before the lease lapsed, and these
+			// transactions contain database work only (no provider, E2B, or network
+			// calls), so the wait is bounded by that short transaction. Once it commits,
+			// Postgres rechecks the status predicate before returning the row.
+			.for("update");
 
-		const recovered: RecoveredRunRecord[] = [];
-		for (const candidate of stale) {
-			const status: TerminalRunStatus =
-				candidate.status === "interrupt_requested" ? "interrupted" : "error";
-			const [row] = await tx
-				.update(runs)
-				.set({
-					status,
-					nextEventSeq: sql`${runs.nextEventSeq} + 1`,
-					...(candidate.status === "queued"
-						? {}
-						: {
-								liveStreamFailedAt: sql`coalesce(${runs.liveStreamFailedAt}, now())`,
-							}),
-					lockedBy: null,
-					lockedUntil: null,
-					terminalAt: sql`now()`,
-					updatedAt: sql`now()`,
-				})
-				.where(
-					and(
-						eq(runs.runId, candidate.runId),
-						// Compare-and-set: only a Run still Active can be terminalized, so
-						// recovery cannot land on one that reached its Outcome under it.
-						inArray(runs.status, ACTIVE_RUN_STATUSES),
-					),
-				)
-				.returning();
-			if (!row) continue;
-			if (candidate.status !== "queued") {
-				// Only a claimed run can have touched the workspace; an unclaimed
-				// queued run ages out without ever reaching a sandbox.
-				await taintRecoveredRuntimeSandboxInTx(tx, candidate);
-			}
-			// The stale_worker Outcome is the durable proof that an incomplete Tool
-			// prefix came from a crashed owner, so both recovery and history accept it.
-			await insertTerminalEvent(tx, row, status, {
-				...(status === "error" ? { message: "Run failed" } : {}),
-				reason: "stale_worker",
-			});
-			recovered.push({
-				...toRunRecord(row),
-				liveStreamFailureMarkedByRecovery:
-					candidate.status !== "queued" &&
-					candidate.liveStreamFailedAt === null,
-			});
+		const terminalizedRuns = await terminalizeRunsForLivenessSweepInTx(
+			tx,
+			runsToReclaim,
+		);
+		const reclaimedRuns = terminalizedRuns.map(
+			({ liveStreamFailureMarkedNow, ...run }) => ({
+				...run,
+				liveStreamFailureMarkedByReclamation: liveStreamFailureMarkedNow,
+			}),
+		);
+		if (runsToReclaim.length > 0) {
+			await taintRuntimeSandboxForReclamationInTx(tx, candidate);
 		}
-		return recovered;
+		// Preserve queued Runs without letting the unowned queue-age backstop race
+		// the next Claim after Ownership is cleared. `created_at` remains the stable
+		// submission/Claim order; `updated_at` starts a fresh timeout window because
+		// these Runs were legitimately waiting behind the vanished owner's work.
+		await tx
+			.update(runs)
+			.set({ updatedAt: sql`now()` })
+			.where(
+				and(
+					eq(runs.userId, candidate.userId),
+					eq(runs.conversationId, candidate.conversationId),
+					eq(runs.status, "queued"),
+				),
+			);
+		await tx
+			.update(conversations)
+			.set({ ownerWorkerId: null, ownerUntil: null })
+			.where(
+				and(
+					eq(conversations.userId, candidate.userId),
+					eq(conversations.conversationId, candidate.conversationId),
+				),
+			);
+
+		return {
+			userId: candidate.userId,
+			conversationId: candidate.conversationId,
+			runs: reclaimedRuns,
+		};
 	});
+}
+
+/**
+ * Expire old queued Runs only when their Conversation is unowned and their
+ * queue-backstop timestamp has also stayed old for the whole timeout. The
+ * second deadline gives Runs preserved by Reclamation a fresh window to be
+ * Claimed without changing their `created_at` queue order. The Conversation row
+ * is locked with `FOR UPDATE SKIP LOCKED`, so this backstop cannot race
+ * admission or Claim and never waits behind their lifecycle lock.
+ */
+export async function expireUnownedQueuedRunsTx(
+	db: Database,
+): Promise<ExpiredQueuedRuns | null> {
+	return await db.transaction(async (tx) => {
+		const result = await tx.execute<{
+			user_id: string;
+			conversation_id: string;
+		}>(sql`
+			select c.user_id, c.conversation_id
+			  from ${runs} r
+			  join ${conversations} c using (user_id, conversation_id)
+			 where r.status = 'queued'
+			   and r.created_at <= now() - interval '${sql.raw(
+						String(UNOWNED_QUEUE_TIMEOUT_MS),
+					)} milliseconds'
+			   and r.updated_at <= now() - interval '${sql.raw(
+						String(UNOWNED_QUEUE_TIMEOUT_MS),
+					)} milliseconds'
+			   and c.owner_until is null
+			 order by r.created_at
+			   for update of c skip locked
+			 limit 1
+		`);
+		const [candidateRow] = result.rows;
+		const candidate = candidateRow
+			? {
+					userId: candidateRow.user_id,
+					conversationId: candidateRow.conversation_id,
+				}
+			: null;
+		if (!candidate) return null;
+
+		const queuedRunsToExpire = await tx
+			.select({
+				runId: runs.runId,
+				userId: runs.userId,
+				conversationId: runs.conversationId,
+				status: runs.status,
+				liveStreamFailedAt: runs.liveStreamFailedAt,
+			})
+			.from(runs)
+			.where(
+				and(
+					eq(runs.userId, candidate.userId),
+					eq(runs.conversationId, candidate.conversationId),
+					eq(runs.status, "queued"),
+					sql`${runs.createdAt} <= now() - interval '${sql.raw(
+						String(UNOWNED_QUEUE_TIMEOUT_MS),
+					)} milliseconds'`,
+					sql`${runs.updatedAt} <= now() - interval '${sql.raw(
+						String(UNOWNED_QUEUE_TIMEOUT_MS),
+					)} milliseconds'`,
+				),
+			)
+			.for("update");
+		const terminalized = await terminalizeRunsForLivenessSweepInTx(
+			tx,
+			queuedRunsToExpire,
+		);
+		return {
+			...candidate,
+			runs: terminalized.map(
+				({ liveStreamFailureMarkedNow: _, ...run }) => run,
+			),
+		};
+	});
+}
+
+type RunLivenessSweepCandidate = Pick<
+	typeof runs.$inferSelect,
+	"runId" | "status" | "liveStreamFailedAt"
+>;
+
+type RunLivenessSweepResult = RunRecord & {
+	liveStreamFailureMarkedNow: boolean;
+};
+
+async function terminalizeRunsForLivenessSweepInTx(
+	tx: DbTx,
+	candidates: RunLivenessSweepCandidate[],
+): Promise<RunLivenessSweepResult[]> {
+	const terminalizedRuns: RunLivenessSweepResult[] = [];
+	for (const candidate of candidates) {
+		const status: TerminalRunStatus =
+			candidate.status === "interrupt_requested" ? "interrupted" : "error";
+		const [row] = await tx
+			.update(runs)
+			.set({
+				status,
+				nextEventSeq: sql`${runs.nextEventSeq} + 1`,
+				...(candidate.status === "queued"
+					? {}
+					: {
+							liveStreamFailedAt: sql`coalesce(${runs.liveStreamFailedAt}, now())`,
+						}),
+				lockedBy: null,
+				lockedUntil: null,
+				terminalAt: sql`now()`,
+				updatedAt: sql`now()`,
+			})
+			.where(
+				and(
+					eq(runs.runId, candidate.runId),
+					// Compare-and-set: only a Run still Active can be terminalized, so
+					// this transaction cannot overwrite an Outcome that landed first.
+					inArray(runs.status, ACTIVE_RUN_STATUSES),
+				),
+			)
+			.returning();
+		if (!row) continue;
+		// Preserve the existing durable terminal reason consumed by history.
+		await insertTerminalEvent(tx, row, status, {
+			...(status === "error" ? { message: "Run failed" } : {}),
+			reason: "stale_worker",
+		});
+		terminalizedRuns.push({
+			...toRunRecord(row),
+			liveStreamFailureMarkedNow:
+				candidate.status !== "queued" && candidate.liveStreamFailedAt === null,
+		});
+	}
+	return terminalizedRuns;
 }
 
 /** Narrow a persisted row to a {@link RunRecord}: rows are only ever written

@@ -3,8 +3,8 @@ import { EventType } from "@ag-ui/core";
 import { claimConversationTx } from "@mymemo/agent-db/conversation-ownership";
 import {
 	appendRunEventTx,
-	claimNextRunTx,
 	requestRunInterruptionTx,
+	startClaimedRunTx,
 } from "@mymemo/agent-db/run-store";
 import {
 	createConversationRuntimeTx,
@@ -28,7 +28,7 @@ import {
 	type LiveStreamRelay,
 	type LiveStreamTelemetry,
 } from "@mymemo/live-text";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
 import { RunLoop, type RunProcessor } from "./run-loop";
 import { Worker } from "./worker";
@@ -116,18 +116,19 @@ async function claimRun(
 	workerId: string,
 ) {
 	await queueRun(runId, conversationId);
-	const claimed = await claimNextRunTx(tdb.db, { workerId });
-	if (claimed?.runId !== runId) {
-		throw new Error(`test setup claimed ${claimed?.runId}, wanted ${runId}`);
+	const claim = await claimConversationTx(tdb.db, { workerId });
+	if (!claim || !claim.runIds.includes(runId)) {
+		throw new Error(`test setup did not Claim ${runId}`);
 	}
-	return claimed;
-}
-
-async function expireOwnership(runId: string) {
-	await tdb.db
-		.update(runs)
-		.set({ lockedUntil: sql`now() - interval '1 second'` })
-		.where(eq(runs.runId, runId));
+	const started = await startClaimedRunTx(tdb.db, {
+		owner: claim,
+		runId,
+		workerId,
+	});
+	if (started.outcome !== "started") {
+		throw new Error(`test setup could not start ${runId}`);
+	}
+	return claim;
 }
 
 function lapseOwnershipLease(conversationId: string) {
@@ -149,6 +150,16 @@ async function backdateRun(runId: string, msAgo: number) {
 		.update(runs)
 		.set({ createdAt: sql`now() - (${msAgo} * interval '1 millisecond')` })
 		.where(eq(runs.runId, runId));
+}
+
+async function ageRunsPastQueueTimeout(...runIds: string[]) {
+	await tdb.db
+		.update(runs)
+		.set({
+			createdAt: sql`now() - interval '2 minutes'`,
+			updatedAt: sql`now() - interval '2 minutes'`,
+		})
+		.where(inArray(runs.runId, runIds));
 }
 
 async function readOwnership(conversationId: string) {
@@ -311,7 +322,7 @@ describe("RunLoop — heartbeat", () => {
 		await worker.drain();
 
 		// We must not terminalize a run we no longer own: no terminal event from
-		// us, and the thief's ownership is untouched (recovery is its problem now).
+		// us, and the thief's ownership is untouched (Reclamation is its problem now).
 		const row = await readRun("run-1");
 		expect(row?.status).toBe("running");
 		expect(row?.lockedBy).toBe("worker-2");
@@ -357,16 +368,20 @@ describe("RunLoop — conversation drain", () => {
 		await backdateRun("run-1", 5_000);
 		await startDrain(loop);
 
-		// A successor Claims the Conversation out from under this worker.
-		await lapseOwnershipLease("conv-1");
-		const successor = await claimConversationTx(tdb.db, {
-			workerId: "worker-2",
-		});
+		// Establish the successor state directly so this test isolates the drain's
+		// lost-epoch response; the Claim/Reclamation handoff is covered at the DB seam.
+		await tdb.db
+			.update(conversations)
+			.set({
+				ownerWorkerId: "worker-2",
+				ownerUntil: sql`now() + interval '1 minute'`,
+				epoch: sql`${conversations.epoch} + 1`,
+			})
+			.where(eq(conversations.conversationId, "conv-1"));
 		await loop.tick(); // renewal matches zero rows → halt
 		gate.resolve();
 		await worker.drain();
 
-		expect(successor?.conversationId).toBe("conv-1");
 		// Abandoned, not terminalized: the successor's Runs are not ours to end.
 		expect((await readRun("run-1"))?.status).toBe("running");
 		expect(await readEventTypes("run-1")).toEqual([]);
@@ -434,7 +449,7 @@ describe("RunLoop — conversation drain", () => {
 		expect(await readEventTypes("run-1")).toEqual(["run_interrupted"]);
 	});
 
-	it("leaves a lapsed lease in place instead of releasing it", async () => {
+	it("lets Reclamation clear a lapsed lease while halting its old drain", async () => {
 		const worker = buildWorker(1);
 		const gate = deferred();
 		const loop = buildLoop(worker, async () => {
@@ -448,11 +463,12 @@ describe("RunLoop — conversation drain", () => {
 		gate.resolve();
 		await worker.drain();
 
-		// Releasing would clear the deadline a lapsed lease is *found* by, hiding
-		// the Conversation — and its abandoned Run — from Reclamation.
 		const ownership = await readOwnership("conv-1");
-		expect(ownership?.ownerWorkerId).toBe("worker-1");
-		expect(ownership?.ownerUntil).toBeInstanceOf(Date);
+		expect(ownership).toMatchObject({
+			ownerWorkerId: null,
+			ownerUntil: null,
+		});
+		expect((await readRun("run-1"))?.status).toBe("error");
 	});
 
 	it("halts without releasing when a refused start is what reveals the lost lease", async () => {
@@ -500,9 +516,9 @@ describe("RunLoop — conversation drain", () => {
 		await queueRun("run-1", "conv-1");
 		await startDrain(loop);
 
-		// Stale-run recovery takes the Run while the Conversation lease stays live.
-		await expireOwnership("run-1");
-		await loop.tick(); // recovers the Run, then abandons it
+		// Reclamation takes the whole Conversation after its Ownership lease lapses.
+		await lapseOwnershipLease("conv-1");
+		await loop.tick(); // reclaims the Run, then observes the lost lease
 		await loop.tick();
 		await loop.tick();
 		gate.resolve();
@@ -511,7 +527,8 @@ describe("RunLoop — conversation drain", () => {
 		// Detached on abandonment, so later ticks stop heartbeating it.
 		expect(
 			warnings.filter(
-				(message) => message === "abandoning a run this worker no longer owns",
+				(message) =>
+					message === "halting drain after losing the Ownership lease",
 			),
 		).toHaveLength(1);
 	});
@@ -1199,7 +1216,7 @@ describe("RunLoop — agent session pointer", () => {
 		});
 	});
 
-	it("leaves a Run to recovery instead of chasing interrupted after the lease is gone", async () => {
+	it("leaves a Run to Reclamation instead of chasing interrupted after the lease is gone", async () => {
 		const worker = buildWorker(1);
 		const processorStarted = deferred();
 		const gate = deferred();
@@ -1218,15 +1235,12 @@ describe("RunLoop — agent session pointer", () => {
 		gate.resolve();
 		await worker.drain();
 
-		// A lost lease is final: recovery owns the Run, so neither `done` nor a
+		// A lost lease is final: Reclamation owns the Run, so neither `done` nor a
 		// speculative `interrupted` may be written over it.
 		expect((await readRun("run-1"))?.status).toBe("running");
 		expect(await readEventTypes("run-1")).toEqual([]);
 
-		// The Run is left intact for the sweep, which closes it as a stale worker.
-		// Reclamation remains Run-lease-scoped until #400, so expire that temporary
-		// bridge only after proving the epoch-fenced terminal refusal above.
-		await expireOwnership("run-1");
+		// The Run is left intact for Reclamation, which records stale_worker.
 		await loop.tick();
 		expect((await readRun("run-1"))?.status).toBe("error");
 		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
@@ -1406,10 +1420,37 @@ describe("RunLoop — shutdown", () => {
 	});
 });
 
-describe("RunLoop — stale-run recovery", () => {
-	it("observes the degradation marker and duration created by stale recovery", async () => {
+describe("RunLoop — Conversation Reclamation", () => {
+	it("reclaims every lapsed Conversation in one tick", async () => {
+		await claimRun("run-a", "conv-a", "vanished-a");
+		await claimRun("run-b", "conv-b", "vanished-b");
+		await lapseOwnershipLease("conv-a");
+		await lapseOwnershipLease("conv-b");
+		const loop = buildLoop(buildWorker(1), appendMessageProcessor);
+
+		expect(await loop.tick()).toBe(0);
+		expect((await readRun("run-a"))?.status).toBe("error");
+		expect((await readRun("run-b"))?.status).toBe("error");
+	});
+
+	it("claims an old queued Run immediately after reclaiming its lapsed Conversation", async () => {
+		await claimRun("run-running", "conv-1", "vanished-worker");
+		await queueRun("run-queued", "conv-1");
+		await ageRunsPastQueueTimeout("run-queued");
+		await lapseOwnershipLease("conv-1");
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendMessageProcessor);
+
+		expect(await loop.tick()).toBe(1);
+		await worker.drain();
+
+		expect((await readRun("run-running"))?.status).toBe("error");
+		expect((await readRun("run-queued"))?.status).toBe("done");
+	});
+
+	it("observes the degradation marker and duration created by Reclamation", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
-		await expireOwnership("run-stale");
+		await lapseOwnershipLease("conv-1");
 		const metrics: Record<string, unknown>[] = [];
 		const telemetry: LiveStreamTelemetry = {
 			record(operation, result, options) {
@@ -1441,13 +1482,13 @@ describe("RunLoop — stale-run recovery", () => {
 		]);
 	});
 
-	it("ends an existing degradation during stale recovery without duplicating its start", async () => {
+	it("ends an existing degradation during Reclamation without duplicating its start", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await tdb.db
 			.update(runs)
 			.set({ liveStreamFailedAt: new Date(Date.now() - 1_000) })
 			.where(eq(runs.runId, "run-stale"));
-		await expireOwnership("run-stale");
+		await lapseOwnershipLease("conv-1");
 		const metrics: Record<string, unknown>[] = [];
 		const telemetry: LiveStreamTelemetry = {
 			record(operation, result, options) {
@@ -1474,9 +1515,9 @@ describe("RunLoop — stale-run recovery", () => {
 		]);
 	});
 
-	it("terminalizes stale running runs as error during a tick", async () => {
+	it("terminalizes a running Run after its Ownership lease lapses", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
-		await expireOwnership("run-stale");
+		await lapseOwnershipLease("conv-1");
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor);
 
@@ -1488,14 +1529,14 @@ describe("RunLoop — stale-run recovery", () => {
 		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
 	});
 
-	it("terminalizes stale interrupt-requested runs as interrupted during a tick", async () => {
+	it("terminalizes interrupt-requested after its Ownership lease lapses", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-stale",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await expireOwnership("run-stale");
+		await lapseOwnershipLease("conv-1");
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor);
 
@@ -1506,9 +1547,9 @@ describe("RunLoop — stale-run recovery", () => {
 		expect(await readEventTypes("run-stale")).toEqual(["run_interrupted"]);
 	});
 
-	it("rejects stale worker appends after loop recovery terminalizes the run", async () => {
-		await claimRun("run-stale", "conv-1", "stale-worker");
-		await expireOwnership("run-stale");
+	it("rejects the former owner's appends after Reclamation terminalizes the Run", async () => {
+		const lapsedOwner = await claimRun("run-stale", "conv-1", "stale-worker");
+		await lapseOwnershipLease("conv-1");
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor);
 
@@ -1517,9 +1558,7 @@ describe("RunLoop — stale-run recovery", () => {
 		expect(
 			await appendRunEventTx(tdb.db, {
 				owner: {
-					userId: "user-1",
-					conversationId: "conv-1",
-					epoch: 0,
+					...lapsedOwner,
 					runId: "run-stale",
 					workerId: "stale-worker",
 				},
@@ -1531,7 +1570,7 @@ describe("RunLoop — stale-run recovery", () => {
 		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
 	});
 
-	it("does not double-terminalize when recovery beats an active processor", async () => {
+	it("does not double-terminalize when Reclamation beats an active processor", async () => {
 		const worker = buildWorker(1);
 		const gate = deferred();
 		const liveStreamRelay = createInMemoryLiveStreamRelay();
@@ -1544,9 +1583,9 @@ describe("RunLoop — stale-run recovery", () => {
 		);
 		await queueRun("run-1", "conv-1");
 		await loop.tick(); // claim + dispatch (processor blocks)
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
-		await loop.tick(); // recovers stale run, then observes lost ownership
+		await loop.tick(); // reclaims the Conversation, then observes lost ownership
 		gate.resolve();
 		await worker.drain();
 
@@ -1557,6 +1596,21 @@ describe("RunLoop — stale-run recovery", () => {
 				.outcome,
 		).toBe("no_producer");
 		await liveStreamRelay.close();
+	});
+});
+
+describe("RunLoop — unowned queue timeout", () => {
+	it("expires an old queued Run without claiming its Conversation", async () => {
+		await queueRun("run-old", "conv-1");
+		await ageRunsPastQueueTimeout("run-old");
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendMessageProcessor);
+
+		const claimed = await loop.tick();
+
+		expect(claimed).toBe(0);
+		expect((await readRun("run-old"))?.status).toBe("error");
+		expect(await readEventTypes("run-old")).toEqual(["run_error"]);
 	});
 });
 

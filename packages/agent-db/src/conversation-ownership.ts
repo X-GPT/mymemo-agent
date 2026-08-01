@@ -61,8 +61,11 @@ export interface ClaimedConversation extends ConversationOwner {
 }
 
 /**
- * Claim one claimable Conversation — at least one queued Run, no live Ownership
- * lease — and snapshot the Runs it will serve.
+ * Claim one claimable Conversation — at least one queued Run and no Ownership
+ * lease — and snapshot the Runs it will serve. A lapsed lease is deliberately
+ * not a Claim candidate: Reclamation must first terminalize the vanished
+ * owner's Runs, taint its Workspace, and clear the ownership columns. Only then
+ * may a later Run take a fresh Claim.
  *
  * The Claim is a single `UPDATE` whose candidate subquery joins `runs`, orders
  * by the Run's `created_at`, and takes `FOR UPDATE OF c SKIP LOCKED` on the
@@ -92,9 +95,9 @@ export interface ClaimedConversation extends ConversationOwner {
  * therefore bounds claim cost as well as drain length, and every idle worker
  * pays it on every tick.
  *
- * The scaler's queue metric (`queue-metrics.ts`) mirrors this claimability
- * predicate (plus a deliberate recency window) — keep the two in step if
- * claimability changes.
+ * The scaler's demand metric (`queue-metrics.ts`) counts lapsed leases so it can
+ * start a worker to perform Reclamation. After Reclamation clears the Ownership
+ * columns, the Conversation becomes eligible for this Claim predicate.
  */
 export async function claimConversationTx(
 	db: Database,
@@ -114,7 +117,7 @@ export async function claimConversationTx(
 					  from ${conversations} c
 					  join ${runs} r using (user_id, conversation_id)
 					 where r.status = 'queued'
-					   and (c.owner_until is null or c.owner_until <= now())
+					   and c.owner_until is null
 					 order by r.created_at
 					   for update of c skip locked
 					 limit 1)`,

@@ -5,7 +5,7 @@
  * `timeoutMs` expiry nor `commands.kill(pid)` cleans up a command's
  * descendants: a backgrounded child survives and reparents to init. So before
  * enabling Bash we must run every command as the leader of its own process
- * group and signal the whole group on timeout / cancel / stale-run recovery.
+ * group and signal the whole group on timeout / cancel / Reclamation.
  *
  * This module produces three shell fragments the worker feeds to E2B:
  *  - {@link WRAPPER_PROGRAM} runs the user command as a fresh session leader

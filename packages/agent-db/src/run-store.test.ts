@@ -6,7 +6,7 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import {
 	type ConversationOwner,
 	claimConversationTx,
@@ -23,13 +23,14 @@ import {
 	appendRunEventsTx,
 	appendRunEventTx,
 	claimNextRunTx,
+	expireUnownedQueuedRunsTx,
 	heartbeatRunTx,
 	loadRunStartedTx,
 	markLiveStreamFailedTx,
-	markStaleRunsTx,
 	RunInputMismatchError,
 	type RunRecord,
 	type RunWriteOwner,
+	reclaimConversationTx,
 	requestRunInterruptionTx,
 	startClaimedRunTx,
 	type TerminalTransitionResult,
@@ -311,6 +312,16 @@ async function backdateRun(runId: string, msAgo: number) {
 		.where(eq(runs.runId, runId));
 }
 
+async function ageRunsPastQueueTimeout(...runIds: string[]) {
+	await tdb.db
+		.update(runs)
+		.set({
+			createdAt: sql`now() - interval '2 minutes'`,
+			updatedAt: sql`now() - interval '2 minutes'`,
+		})
+		.where(inArray(runs.runId, runIds));
+}
+
 async function readRun(runId: string) {
 	const [row] = await tdb.db.select().from(runs).where(eq(runs.runId, runId));
 	return row;
@@ -414,20 +425,22 @@ describe("startClaimedRunTx", () => {
 		).toMatchObject({ outcome: "appended", seq: 1 });
 	});
 
-	it("refuses a Claim a re-Claim superseded, leaving the Run queued", async () => {
+	it("refuses a superseded Claim from starting the successor's queued Run", async () => {
 		await queueRun("run-1", "conv-1");
 		const superseded = await claimConv("worker-1");
 		await lapseOwnershipLease("conv-1");
+		await reclaimConversationTx(tdb.db);
+		await queueRun("run-2", "conv-1");
 		await claimConv("worker-2");
 
 		const started = await startClaimedRunTx(tdb.db, {
 			owner: superseded,
-			runId: "run-1",
+			runId: "run-2",
 			workerId: "worker-1",
 		});
 
 		expect(started).toEqual({ outcome: "rejected", rejected: "lease" });
-		expect((await readRun("run-1"))?.status).toBe("queued");
+		expect((await readRun("run-2"))?.status).toBe("queued");
 	});
 
 	it("refuses a lease that merely lapsed, with no successor", async () => {
@@ -1700,8 +1713,8 @@ describe("markLiveStreamFailedTx", () => {
 	});
 });
 
-describe("markStaleRunsTx", () => {
-	it("still closes a stale Run after a crash left an incomplete Tool prefix", async () => {
+describe("Run liveness sweep transactions", () => {
+	it("Reclamation closes a Run after a crash left an incomplete Tool prefix", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
 			owner: owner(),
@@ -1713,11 +1726,11 @@ describe("markStaleRunsTx", () => {
 			},
 			appendClass: "model",
 		});
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
-		const recovered = await markStaleRunsTx(tdb.db);
+		const reclamation = await reclaimConversationTx(tdb.db);
 
-		expect(recovered).toMatchObject([
+		expect(reclamation?.runs).toMatchObject([
 			{
 				runId: "run-1",
 				status: "error",
@@ -1732,22 +1745,23 @@ describe("markStaleRunsTx", () => {
 		expect(() => validateDurableRunEventSequence(events)).not.toThrow();
 	});
 
-	it("terminalizes a stale running run as error with a run_error event", async () => {
+	it("terminalizes a running Run after its Ownership lease lapses", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
 			agentSessionId: "session-existing",
 		});
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
-		const recovered = await markStaleRunsTx(tdb.db);
+		const reclamation = await reclaimConversationTx(tdb.db);
+		const reclaimedRuns = reclamation?.runs ?? [];
 
-		expect(recovered.map((r) => [r.runId, r.status])).toEqual([
+		expect(reclaimedRuns.map((r) => [r.runId, r.status])).toEqual([
 			["run-1", "error"],
 		]);
-		expect(recovered[0]?.lockedBy).toBeNull();
-		expect(recovered[0]?.terminalAt).toBeInstanceOf(Date);
+		expect(reclaimedRuns[0]?.lockedBy).toBeNull();
+		expect(reclaimedRuns[0]?.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.type, e.payload])).toEqual([
 			[
@@ -1759,12 +1773,47 @@ describe("markStaleRunsTx", () => {
 				},
 			],
 		]);
-		expect(recovered[0]?.liveStreamFailedAt).toBeInstanceOf(Date);
+		expect(reclaimedRuns[0]?.liveStreamFailedAt).toBeInstanceOf(Date);
 		const [runtime] = await tdb.db
 			.select()
 			.from(conversationRuntime)
 			.where(eq(conversationRuntime.conversationId, "conv-1"));
 		expect(runtime?.agentSessionId).toBe("session-existing");
+	});
+
+	it("terminalizes started Runs and gives queued Runs a fresh timeout window for the next Claim", async () => {
+		await claimRun("run-running", "conv-1", "worker-1");
+		await queueRun("run-interrupted", "conv-1");
+		await queueRun("run-queued", "conv-1");
+		await tdb.db
+			.update(runs)
+			.set({ status: "interrupt_requested" })
+			.where(eq(runs.runId, "run-interrupted"));
+		await ageRunsPastQueueTimeout("run-interrupted", "run-queued");
+		await lapseOwnershipLease("conv-1");
+
+		const reclaimed = await reclaimConversationTx(tdb.db);
+
+		expect(
+			reclaimed?.runs
+				.map((run) => [run.runId, run.status])
+				.sort(([left], [right]) => String(left).localeCompare(String(right))),
+		).toEqual([
+			["run-interrupted", "interrupted"],
+			["run-running", "error"],
+		]);
+		expect(await readEvents("run-interrupted")).toMatchObject([
+			{ type: "run_interrupted", payload: { reason: "stale_worker" } },
+		]);
+		expect((await readRun("run-queued"))?.status).toBe("queued");
+		expect(await readEvents("run-queued")).toEqual([]);
+		expect(await expireUnownedQueuedRunsTx(tdb.db)).toBeNull();
+		expect(
+			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
+		).toMatchObject({
+			conversationId: "conv-1",
+			runIds: ["run-queued"],
+		});
 	});
 
 	it("taints the conversation's sandbox so the next turn cannot reconnect to it", async () => {
@@ -1774,9 +1823,9 @@ describe("markStaleRunsTx", () => {
 			conversationId: "conv-1",
 			sandboxId: "sandbox-1",
 		});
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
-		await markStaleRunsTx(tdb.db);
+		await reclaimConversationTx(tdb.db);
 
 		const [runtime] = await tdb.db
 			.select()
@@ -1786,9 +1835,51 @@ describe("markStaleRunsTx", () => {
 			sandboxId: "sandbox-1",
 			sandboxTainted: true,
 		});
+		const [conversation] = await tdb.db
+			.select()
+			.from(conversations)
+			.where(eq(conversations.conversationId, "conv-1"));
+		expect(conversation).toMatchObject({
+			ownerWorkerId: null,
+			ownerUntil: null,
+		});
 	});
 
-	it("taints on a stale interruption too — cleanup is equally unproven", async () => {
+	it("preserves the Workspace when the lapsed Conversation has no started Active Run", async () => {
+		await claimRun("run-done", "conv-1", "worker-1");
+		await tdb.db
+			.update(runs)
+			.set({ status: "done", terminalAt: sql`now()` })
+			.where(eq(runs.runId, "run-done"));
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			sandboxId: "sandbox-1",
+		});
+		await lapseOwnershipLease("conv-1");
+
+		const reclamation = await reclaimConversationTx(tdb.db);
+
+		expect(reclamation?.runs).toEqual([]);
+		const [runtime] = await tdb.db
+			.select()
+			.from(conversationRuntime)
+			.where(eq(conversationRuntime.conversationId, "conv-1"));
+		expect(runtime).toMatchObject({
+			sandboxId: "sandbox-1",
+			sandboxTainted: false,
+		});
+		const [conversation] = await tdb.db
+			.select()
+			.from(conversations)
+			.where(eq(conversations.conversationId, "conv-1"));
+		expect(conversation).toMatchObject({
+			ownerWorkerId: null,
+			ownerUntil: null,
+		});
+	});
+
+	it("taints after an accepted interruption too — command cleanup is equally unproven", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -1800,9 +1891,9 @@ describe("markStaleRunsTx", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
-		await markStaleRunsTx(tdb.db);
+		await reclaimConversationTx(tdb.db);
 
 		const [runtime] = await tdb.db
 			.select()
@@ -1818,12 +1909,9 @@ describe("markStaleRunsTx", () => {
 			conversationId: "conv-1",
 			sandboxId: "sandbox-1",
 		});
-		await tdb.db
-			.update(runs)
-			.set({ createdAt: sql`now() - interval '2 minutes'` })
-			.where(eq(runs.runId, "run-queued"));
+		await ageRunsPastQueueTimeout("run-queued");
 
-		await markStaleRunsTx(tdb.db);
+		await expireUnownedQueuedRunsTx(tdb.db);
 
 		const [runtime] = await tdb.db
 			.select()
@@ -1832,18 +1920,18 @@ describe("markStaleRunsTx", () => {
 		expect(runtime?.sandboxTainted).toBe(false);
 	});
 
-	it("terminalizes a stale interrupt_requested run as interrupted", async () => {
+	it("terminalizes interrupt_requested after its Ownership lease lapses", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
-		const recovered = await markStaleRunsTx(tdb.db);
+		const reclaimedRuns = (await reclaimConversationTx(tdb.db))?.runs ?? [];
 
-		expect(recovered.map((r) => [r.runId, r.status])).toEqual([
+		expect(reclaimedRuns.map((r) => [r.runId, r.status])).toEqual([
 			["run-1", "interrupted"],
 		]);
 		const events = await readEvents("run-1");
@@ -1854,9 +1942,9 @@ describe("markStaleRunsTx", () => {
 		await queueRun("run-queued", "conv-1");
 		await claimRun("run-live", "conv-2", "worker-1");
 
-		const recovered = await markStaleRunsTx(tdb.db);
+		const reclamation = await reclaimConversationTx(tdb.db);
 
-		expect(recovered).toEqual([]);
+		expect(reclamation).toBeNull();
 		const [queued] = await tdb.db
 			.select()
 			.from(runs)
@@ -1869,16 +1957,23 @@ describe("markStaleRunsTx", () => {
 		expect(live?.status).toBe("running");
 	});
 
+	it("does not age out a queued Run waiting behind work in a live Conversation", async () => {
+		await claimRun("run-running", "conv-1", "worker-1");
+		await queueRun("run-waiting", "conv-1");
+		await ageRunsPastQueueTimeout("run-waiting");
+
+		expect(await expireUnownedQueuedRunsTx(tdb.db)).toBeNull();
+		expect((await readRun("run-running"))?.status).toBe("running");
+		expect((await readRun("run-waiting"))?.status).toBe("queued");
+	});
+
 	it("terminalizes old unclaimed queued runs as error", async () => {
 		await queueRun("run-queued", "conv-1");
-		await tdb.db
-			.update(runs)
-			.set({ createdAt: sql`now() - interval '2 minutes'` })
-			.where(eq(runs.runId, "run-queued"));
+		await ageRunsPastQueueTimeout("run-queued");
 
-		const recovered = await markStaleRunsTx(tdb.db);
+		const expiredRuns = (await expireUnownedQueuedRunsTx(tdb.db))?.runs ?? [];
 
-		expect(recovered.map((r) => [r.runId, r.status])).toEqual([
+		expect(expiredRuns.map((r) => [r.runId, r.status])).toEqual([
 			["run-queued", "error"],
 		]);
 		const events = await readEvents("run-queued");
@@ -1887,20 +1982,20 @@ describe("markStaleRunsTx", () => {
 
 	it("never double-terminalizes: a second sweep finds nothing", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
-		await expireOwnership("run-1");
-		await markStaleRunsTx(tdb.db);
+		await lapseOwnershipLease("conv-1");
+		await reclaimConversationTx(tdb.db);
 
-		const again = await markStaleRunsTx(tdb.db);
+		const again = await reclaimConversationTx(tdb.db);
 
-		expect(again).toEqual([]);
+		expect(again).toBeNull();
 		const events = await readEvents("run-1");
 		expect(events.map((e) => e.type)).toEqual(["run_error"]);
 	});
 
-	it("rejects the stale worker's appends once recovery has terminalized", async () => {
+	it("rejects the former owner's appends once Reclamation has terminalized", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
-		await expireOwnership("run-1");
-		await markStaleRunsTx(tdb.db);
+		await lapseOwnershipLease("conv-1");
+		await reclaimConversationTx(tdb.db);
 
 		expect(
 			await appendRunEventTx(tdb.db, {
@@ -1909,7 +2004,7 @@ describe("markStaleRunsTx", () => {
 				payload: {},
 				appendClass: "model",
 			}),
-		).toEqual({ outcome: "rejected", rejected: "status", current: "error" });
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 	});
 });
 
