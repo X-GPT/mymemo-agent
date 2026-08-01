@@ -56,12 +56,12 @@ async function claimConversation(conversationId: string, workerId: string) {
 describe("readConversationQueueMetrics", () => {
 	it("returns zero counts for an empty queue", async () => {
 		await expect(readConversationQueueMetrics(tdb.db)).resolves.toEqual({
-			claimableConversations: 0,
+			demandConversations: 0,
 			ownedConversations: 0,
 		});
 	});
 
-	it("counts claimable and owned conversations", async () => {
+	it("counts demand and owned Conversations", async () => {
 		// Owned with a live lease: counts as owned, not claimable, even though
 		// its queued Run would otherwise qualify. Claimed first because the
 		// Claim takes the globally oldest queued Run's Conversation.
@@ -76,7 +76,7 @@ describe("readConversationQueueMetrics", () => {
 			conversationId: "conv-owned-lapsed",
 		});
 
-		// One Conversation with several queued Runs is one claimable unit.
+		// One Conversation with several queued Runs is one unit of demand.
 		await queueRun("run-queued-1a", "conv-queued-multi");
 		await queueRun("run-queued-1b", "conv-queued-multi");
 		await queueRun("run-queued-2", "conv-queued-single");
@@ -97,7 +97,7 @@ describe("readConversationQueueMetrics", () => {
 			.where(eq(runs.runId, "run-done"));
 
 		await expect(readConversationQueueMetrics(tdb.db)).resolves.toEqual({
-			claimableConversations: 3,
+			demandConversations: 3,
 			ownedConversations: 1,
 		});
 	});
@@ -112,7 +112,7 @@ describe("readConversationQueueMetrics", () => {
 			.where(eq(runs.runId, "run-owned-running"));
 
 		await expect(readConversationQueueMetrics(tdb.db)).resolves.toEqual({
-			claimableConversations: 0,
+			demandConversations: 0,
 			ownedConversations: 1,
 		});
 
@@ -124,7 +124,7 @@ describe("readConversationQueueMetrics", () => {
 			.where(eq(runs.runId, "run-owned-running"));
 
 		await expect(readConversationQueueMetrics(tdb.db)).resolves.toEqual({
-			claimableConversations: 0,
+			demandConversations: 0,
 			ownedConversations: 0,
 		});
 	});

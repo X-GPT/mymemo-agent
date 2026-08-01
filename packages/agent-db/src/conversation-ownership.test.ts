@@ -169,16 +169,13 @@ describe("claimConversationTx", () => {
 			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
 		).toBeNull();
 		const reclamation = await reclaimConversationTx(tdb.db);
-		expect(reclamation?.runs).toMatchObject([
-			{ runId: "run-1", status: "error" },
-		]);
-		await seedRun({ runId: "run-2", conversationId: "conv-1" });
+		expect(reclamation?.runs).toEqual([]);
 		const successor = claimed(
 			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
 		);
 
 		expect(successor.epoch).toBe(lapsed.epoch + 1);
-		expect(successor.runIds).toEqual(["run-2"]);
+		expect(successor.runIds).toEqual(["run-1"]);
 		expect(await readOwnership("conv-1")).toMatchObject({
 			ownerWorkerId: "worker-2",
 		});

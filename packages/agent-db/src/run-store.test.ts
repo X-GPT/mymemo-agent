@@ -1771,7 +1771,7 @@ describe("Run liveness transactions", () => {
 		expect(runtime?.agentSessionId).toBe("session-existing");
 	});
 
-	it("terminalizes every non-terminal Run of the lapsed Conversation in one pass", async () => {
+	it("terminalizes started Runs and leaves queued Runs for the next Claim", async () => {
 		await claimRun("run-running", "conv-1", "worker-1");
 		await queueRun("run-interrupted", "conv-1");
 		await queueRun("run-queued", "conv-1");
@@ -1789,12 +1789,19 @@ describe("Run liveness transactions", () => {
 				.sort(([left], [right]) => String(left).localeCompare(String(right))),
 		).toEqual([
 			["run-interrupted", "interrupted"],
-			["run-queued", "error"],
 			["run-running", "error"],
 		]);
 		expect(await readEvents("run-interrupted")).toMatchObject([
 			{ type: "run_interrupted", payload: { reason: "stale_worker" } },
 		]);
+		expect((await readRun("run-queued"))?.status).toBe("queued");
+		expect(await readEvents("run-queued")).toEqual([]);
+		expect(
+			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
+		).toMatchObject({
+			conversationId: "conv-1",
+			runIds: ["run-queued"],
+		});
 	});
 
 	it("taints the conversation's sandbox so the next turn cannot reconnect to it", async () => {
@@ -1815,6 +1822,40 @@ describe("Run liveness transactions", () => {
 		expect(runtime).toMatchObject({
 			sandboxId: "sandbox-1",
 			sandboxTainted: true,
+		});
+		const [conversation] = await tdb.db
+			.select()
+			.from(conversations)
+			.where(eq(conversations.conversationId, "conv-1"));
+		expect(conversation).toMatchObject({
+			ownerWorkerId: null,
+			ownerUntil: null,
+		});
+	});
+
+	it("preserves the Workspace when the lapsed Conversation has no started Active Run", async () => {
+		await claimRun("run-done", "conv-1", "worker-1");
+		await tdb.db
+			.update(runs)
+			.set({ status: "done", terminalAt: sql`now()` })
+			.where(eq(runs.runId, "run-done"));
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "user-1",
+			conversationId: "conv-1",
+			sandboxId: "sandbox-1",
+		});
+		await lapseOwnershipLease("conv-1");
+
+		const reclamation = await reclaimConversationTx(tdb.db);
+
+		expect(reclamation?.runs).toEqual([]);
+		const [runtime] = await tdb.db
+			.select()
+			.from(conversationRuntime)
+			.where(eq(conversationRuntime.conversationId, "conv-1"));
+		expect(runtime).toMatchObject({
+			sandboxId: "sandbox-1",
+			sandboxTainted: false,
 		});
 		const [conversation] = await tdb.db
 			.select()

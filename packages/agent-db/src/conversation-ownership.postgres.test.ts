@@ -210,6 +210,10 @@ async function supersede(): Promise<{
 	const superseded = claimed(
 		await claimConversationTx(db, { workerId: "worker-1" }),
 	);
+	await db
+		.update(runs)
+		.set({ status: "running" })
+		.where(eq(runs.runId, ownedRunId("a")));
 	await lapseLease("conv-a");
 	const reclamation = await reclaimConversationTx(db);
 	if (reclamation?.conversationId !== "conv-a") {

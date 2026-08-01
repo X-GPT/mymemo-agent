@@ -3,7 +3,6 @@ import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
 	conversationEpochExists,
-	OWNERSHIP_LEASE_MS,
 } from "./conversation-ownership";
 import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
@@ -109,6 +108,11 @@ export class ActiveRunConflictError extends Error {
  * every tick. This bound therefore bounds claim cost as much as drain length.
  */
 const ACTIVE_RUN_DEPTH_BOUND = 1;
+
+/** How long an unowned queued Run may wait before the queue-age backstop ends
+ * it. This deliberately matches today's 60-second Ownership lease, but remains
+ * a distinct policy so lease tuning cannot silently retune queue expiration. */
+const UNOWNED_QUEUE_TIMEOUT_MS = 60_000;
 
 /** An owned Run id was reused with different normalized admitted input. */
 export class RunInputMismatchError extends Error {
@@ -1144,9 +1148,10 @@ export async function markLiveStreamFailedTx(
  * it, so Claim, admission, and Reclamation cannot interleave on one
  * Conversation while concurrent reclaimers split work instead of blocking.
  *
- * One transaction terminalizes every Active Run, taints the current Workspace,
- * and clears the Ownership columns. An accepted interruption remains
- * `interrupted`; every other Active Run becomes `error`. The durable terminal
+ * One transaction terminalizes every started Active Run, taints the current
+ * Workspace when command cleanup is unproven, and clears the Ownership columns.
+ * Never-started queued Runs remain for the next Claim. An accepted interruption
+ * remains `interrupted`; every running Run becomes `error`. The durable terminal
  * reason and Live Stream failure-marker behavior are unchanged.
  */
 export async function reclaimConversationTx(
@@ -1177,9 +1182,15 @@ export async function reclaimConversationTx(
 				and(
 					eq(runs.userId, candidate.userId),
 					eq(runs.conversationId, candidate.conversationId),
-					inArray(runs.status, ACTIVE_RUN_STATUSES),
+					inArray(runs.status, ["running", "interrupt_requested"]),
 				),
 			)
+			// Deliberately wait for a Run row rather than skip it: clearing Ownership
+			// while omitting a started Run would strand that Run permanently. A holder
+			// can only have locked this row before the lease lapsed, and these
+			// transactions contain database work only (no provider, E2B, or network
+			// calls), so the wait is bounded by that short transaction. Once it commits,
+			// Postgres rechecks the status predicate before returning the row.
 			.for("update");
 
 		const terminalizedRuns = await terminalizeRunsForLivenessSweepInTx(
@@ -1192,7 +1203,9 @@ export async function reclaimConversationTx(
 				liveStreamFailureMarkedByReclamation: liveStreamFailureMarkedNow,
 			}),
 		);
-		await taintRuntimeSandboxForReclamationInTx(tx, candidate);
+		if (runsToReclaim.length > 0) {
+			await taintRuntimeSandboxForReclamationInTx(tx, candidate);
+		}
 		await tx
 			.update(conversations)
 			.set({ ownerWorkerId: null, ownerUntil: null })
@@ -1220,25 +1233,29 @@ export async function expireUnownedQueuedRunsTx(
 	db: Database,
 ): Promise<ExpiredQueuedRuns | null> {
 	return await db.transaction(async (tx) => {
-		const [candidate] = await tx
-			.select({
-				userId: conversations.userId,
-				conversationId: conversations.conversationId,
-			})
-			.from(conversations)
-			.where(
-				sql`${conversations.ownerUntil} is null and exists (
-					select 1 from ${runs}
-					 where ${runs.userId} = ${conversations.userId}
-					   and ${runs.conversationId} = ${conversations.conversationId}
-					   and ${runs.status} = 'queued'
-					   and ${runs.createdAt} <= now() - interval '${sql.raw(
-								String(OWNERSHIP_LEASE_MS),
-							)} milliseconds'
-				)`,
-			)
-			.for("update", { skipLocked: true })
-			.limit(1);
+		const result = await tx.execute<{
+			user_id: string;
+			conversation_id: string;
+		}>(sql`
+			select c.user_id, c.conversation_id
+			  from ${runs} r
+			  join ${conversations} c using (user_id, conversation_id)
+			 where r.status = 'queued'
+			   and r.created_at <= now() - interval '${sql.raw(
+						String(UNOWNED_QUEUE_TIMEOUT_MS),
+					)} milliseconds'
+			   and c.owner_until is null
+			 order by r.created_at
+			   for update of c skip locked
+			 limit 1
+		`);
+		const [candidateRow] = result.rows;
+		const candidate = candidateRow
+			? {
+					userId: candidateRow.user_id,
+					conversationId: candidateRow.conversation_id,
+				}
+			: null;
 		if (!candidate) return null;
 
 		const queuedRunsToExpire = await tx
@@ -1256,7 +1273,7 @@ export async function expireUnownedQueuedRunsTx(
 					eq(runs.conversationId, candidate.conversationId),
 					eq(runs.status, "queued"),
 					sql`${runs.createdAt} <= now() - interval '${sql.raw(
-						String(OWNERSHIP_LEASE_MS),
+						String(UNOWNED_QUEUE_TIMEOUT_MS),
 					)} milliseconds'`,
 				),
 			)

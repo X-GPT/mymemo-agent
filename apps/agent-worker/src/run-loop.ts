@@ -396,46 +396,42 @@ export class RunLoop {
 
 	private async tryReclaimConversations(): Promise<void> {
 		try {
-			await this.reclaimConversations();
+			for (;;) {
+				const reclamation = await reclaimConversationTx(this.opts.db);
+				if (!reclamation) break;
+				if (reclamation.runs.length > 0) {
+					this.opts.logger.warn({
+						message: "reclaimed Conversation",
+						workerId: this.workerId,
+						conversationId: reclamation.conversationId,
+						reclaimedRuns: reclamation.runs.map((run) => ({
+							runId: run.runId,
+							status: run.status,
+						})),
+					});
+				}
+				for (const run of reclamation.runs) {
+					if (run.liveStreamFailedAt === null) continue;
+					if (run.liveStreamFailureMarkedByReclamation) {
+						this.opts.liveStreamTelemetry?.record("degradation", "started", {
+							reason: "stale_worker",
+						});
+					}
+					this.opts.liveStreamTelemetry?.record("degradation", "ended", {
+						reason: "stale_worker",
+						durationMs: Math.max(
+							0,
+							Date.now() - run.liveStreamFailedAt.getTime(),
+						),
+					});
+				}
+			}
 		} catch (error) {
 			this.opts.logger.error({
 				message: "Conversation Reclamation failed",
 				workerId: this.workerId,
 				error: toMessage(error),
 			});
-		}
-	}
-
-	private async reclaimConversations(): Promise<void> {
-		for (;;) {
-			const reclamation = await reclaimConversationTx(this.opts.db);
-			if (!reclamation) break;
-			if (reclamation.runs.length > 0) {
-				this.opts.logger.warn({
-					message: "reclaimed Conversation",
-					workerId: this.workerId,
-					conversationId: reclamation.conversationId,
-					reclaimedRuns: reclamation.runs.map((run) => ({
-						runId: run.runId,
-						status: run.status,
-					})),
-				});
-			}
-			for (const run of reclamation.runs) {
-				if (run.liveStreamFailedAt === null) continue;
-				if (run.liveStreamFailureMarkedByReclamation) {
-					this.opts.liveStreamTelemetry?.record("degradation", "started", {
-						reason: "stale_worker",
-					});
-				}
-				this.opts.liveStreamTelemetry?.record("degradation", "ended", {
-					reason: "stale_worker",
-					durationMs: Math.max(
-						0,
-						Date.now() - run.liveStreamFailedAt.getTime(),
-					),
-				});
-			}
 		}
 	}
 

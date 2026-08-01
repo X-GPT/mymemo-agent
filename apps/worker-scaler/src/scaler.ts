@@ -69,7 +69,7 @@ export function computeDesiredWorkerTasks(
 	validateConfig(config);
 
 	const rawDesired = Math.ceil(
-		(metrics.claimableConversations + metrics.ownedConversations) /
+		(metrics.demandConversations + metrics.ownedConversations) /
 			config.targetConcurrentConversationsPerTask,
 	);
 	return clamp(rawDesired, config.minTasks, config.maxTasks);

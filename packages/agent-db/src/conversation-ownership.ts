@@ -32,7 +32,7 @@ import { conversations, runs } from "./schema";
  * the Run lease uses, renewed on the worker's 15s heartbeat — four missed
  * renewals before the Conversation becomes reclaimable.
  */
-export const OWNERSHIP_LEASE_MS = 60_000;
+const OWNERSHIP_LEASE_MS = 60_000;
 
 /** A Claim and a renewal must push the deadline the same distance. */
 function leaseDeadline() {
@@ -95,9 +95,9 @@ export interface ClaimedConversation extends ConversationOwner {
  * therefore bounds claim cost as well as drain length, and every idle worker
  * pays it on every tick.
  *
- * The scaler's queue metric (`queue-metrics.ts`) also counts lapsed leases as
- * demand, so it can start a worker to perform Reclamation; after Reclamation
- * clears the ownership columns, this Claim predicate and the metric agree.
+ * The scaler's demand metric (`queue-metrics.ts`) counts lapsed leases so it can
+ * start a worker to perform Reclamation. After Reclamation clears the Ownership
+ * columns, the Conversation becomes eligible for this Claim predicate.
  */
 export async function claimConversationTx(
 	db: Database,

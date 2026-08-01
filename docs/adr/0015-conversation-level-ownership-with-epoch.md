@@ -53,6 +53,14 @@ cost is that the common case, a follow-up typed while a turn runs, always
 pays a release, a re-Claim, and an E2B reconnect. That is sub-second against
 a turn measured in seconds to minutes.
 
+A lapsed Ownership lease is deliberately not eligible for a fresh Claim.
+Reclamation first terminalizes the vanished owner's `running` and
+`interrupt_requested` Runs, taints the Workspace when command cleanup is
+unproven, and clears Ownership. Never-started `queued` Runs remain queued and
+make the released Conversation immediately eligible for its next Claim. This
+ordering prevents a fresh holder from reconnecting to or writing alongside the
+vanished holder before Reclamation establishes the durable boundary.
+
 ## Considered options
 
 - **Keep ownership on the Run.** Rejected: it leaves the granularity

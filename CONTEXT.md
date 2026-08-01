@@ -79,9 +79,10 @@ even while it still believes it holds the lease.
 _Avoid_: fencing token, version, generation
 
 **Reclamation**:
-Terminalizing the Runs of a Conversation whose Ownership lease lapsed without
-release, so a Conversation whose worker vanished cannot hold Runs that never
-reach an Outcome. Distinct from Recovering, which is a client behavior.
+Terminalizing the started Runs of a Conversation whose Ownership lease lapsed
+without release, so a Conversation whose worker vanished cannot hold executing
+Runs that never reach an Outcome. Never-started queued Runs remain for the next
+Claim. Distinct from Recovering, which is a client behavior.
 _Avoid_: recovery (that word is the client-side term), stale-run recovery
 
 **Run event**:
