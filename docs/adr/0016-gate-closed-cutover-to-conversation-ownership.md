@@ -38,6 +38,6 @@ than machinery we write.
   two-phase rollout becomes correct and this ADR should be superseded rather
   than worked around.
 - The migration is not additive-only — dropped columns and a dropped index
-  mean the previous worker image cannot run against the new schema. Rollback
-  is a restore, not a redeploy, so the window must not be treated as
-  reversible once workers are back up and writing.
+  mean the previous worker image cannot run against the new schema. Because the
+  gated surface's rows may be discarded, rollback is a database reset to the
+  target image's schema plus redeploy, not a database restore.

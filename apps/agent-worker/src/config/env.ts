@@ -76,7 +76,7 @@ export interface WorkerConfig {
 		/** Byte cap on the summed content written by one LoadDocuments call. */
 		perCallMaxBytes: number;
 	};
-	/** How often an active run heartbeats its lease (ms). */
+	/** How often active Conversation drains renew their Ownership lease (ms). */
 	heartbeatIntervalMs: number;
 	/** Grace period to drain active runs on shutdown before forcing exit (ms). */
 	shutdownTimeoutMs: number;

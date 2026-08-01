@@ -22,9 +22,7 @@ import {
 	admitQueuedRunTx,
 	appendRunEventsTx,
 	appendRunEventTx,
-	claimNextRunTx,
 	expireUnownedQueuedRunsTx,
-	heartbeatRunTx,
 	loadRunStartedTx,
 	markLiveStreamFailedTx,
 	RunInputMismatchError,
@@ -113,9 +111,7 @@ describe("admitQueuedRunTx", () => {
 				text: "Summarize my notes",
 			},
 			nextEventSeq: 2,
-			lockedBy: null,
-			lockedUntil: null,
-			heartbeatAt: null,
+			executedByWorkerId: null,
 			interruptRequestedAt: null,
 			terminalAt: null,
 		});
@@ -153,7 +149,10 @@ describe("admitQueuedRunTx", () => {
 		// to the `run_id` arbiter. Count it instead and every in-flight client
 		// retry would be reported as a conflicting second Run.
 		await admitQueuedRunTx(tdb.db, admission);
-		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		await tdb.db
+			.update(runs)
+			.set({ status: "running", executedByWorkerId: "worker-1" })
+			.where(eq(runs.runId, admission.runId));
 
 		const retry = await admitQueuedRunTx(tdb.db, admission);
 
@@ -245,7 +244,10 @@ describe("admitQueuedRunTx", () => {
 		// `interrupt_requested` is Active: the Run has not reached its Outcome, and
 		// the next one waits for it.
 		await admitQueuedRunTx(tdb.db, admission);
-		await claimNextRunTx(tdb.db, { workerId: "worker-1" });
+		await tdb.db
+			.update(runs)
+			.set({ status: "running", executedByWorkerId: "worker-1" })
+			.where(eq(runs.runId, admission.runId));
 		expect(
 			await requestRunInterruptionTx(tdb.db, {
 				userId: "user-1",
@@ -334,46 +336,6 @@ function lapseOwnershipLease(conversationId: string) {
 	});
 }
 
-describe("claimNextRunTx", () => {
-	it("returns null when no run is queued", async () => {
-		const claimed = await claimNextRunTx(tdb.db, { workerId: "worker-1" });
-		expect(claimed).toBeNull();
-	});
-
-	it("claims the oldest queued run and takes execution ownership", async () => {
-		await queueRun("run-newer", "conv-1");
-		await queueRun("run-older", "conv-2");
-		await backdateRun("run-older", 5_000);
-
-		const claimed = await claimNextRunTx(tdb.db, { workerId: "worker-1" });
-
-		expect(claimed).toMatchObject({
-			runId: "run-older",
-			status: "running",
-			lockedBy: "worker-1",
-		});
-		expect(claimed?.lockedUntil?.getTime()).toBeGreaterThan(Date.now());
-		expect(claimed?.heartbeatAt).toBeInstanceOf(Date);
-	});
-
-	// PGlite is single-connection, so this exercises the claim CAS, not true
-	// cross-connection FOR UPDATE SKIP LOCKED contention — that is covered by
-	// the local-Postgres integration layer of the testing plan.
-	it("never hands the same run to two claimants", async () => {
-		await queueRun("run-1", "conv-1");
-		await queueRun("run-2", "conv-2");
-
-		const first = await claimNextRunTx(tdb.db, { workerId: "worker-1" });
-		const second = await claimNextRunTx(tdb.db, { workerId: "worker-2" });
-		const third = await claimNextRunTx(tdb.db, { workerId: "worker-3" });
-
-		expect(first).not.toBeNull();
-		expect(second).not.toBeNull();
-		expect(first?.runId).not.toBe(second?.runId);
-		expect(third).toBeNull();
-	});
-});
-
 describe("startClaimedRunTx", () => {
 	/** Claim the Conversation the seeded Runs belong to. */
 	async function claimConv(workerId = "worker-1"): Promise<ConversationOwner> {
@@ -400,29 +362,6 @@ describe("startClaimedRunTx", () => {
 				executedByWorkerId: "worker-1",
 			},
 		});
-	});
-
-	it("stamps the legacy Run lease for the temporary heartbeat bridge", async () => {
-		await queueRun("run-1", "conv-1");
-		const owner = await claimConv();
-
-		await startClaimedRunTx(tdb.db, {
-			owner,
-			runId: "run-1",
-			workerId: "worker-1",
-		});
-
-		const row = await readRun("run-1");
-		expect(row?.lockedBy).toBe("worker-1");
-		expect(row?.lockedUntil?.getTime()).toBeGreaterThan(Date.now());
-		expect(
-			await appendRunEventTx(tdb.db, {
-				owner: { ...owner, runId: "run-1", workerId: "worker-1" },
-				type: RunEventType.AssistantMessageCompleted,
-				payload: { messageId: "message-1", text: "bridged" },
-				appendClass: "model",
-			}),
-		).toMatchObject({ outcome: "appended", seq: 1 });
 	});
 
 	it("refuses a superseded Claim from starting the successor's queued Run", async () => {
@@ -544,14 +483,6 @@ function owner(overrides: Partial<RunWriteOwner> = {}): RunWriteOwner {
 		epoch: 1,
 		...overrides,
 	};
-}
-
-/** Force a claimed run's locked_until past, as if the worker stalled. */
-async function expireOwnership(runId: string) {
-	await tdb.db
-		.update(runs)
-		.set({ lockedUntil: sql`now() - interval '1 second'` })
-		.where(eq(runs.runId, runId));
 }
 
 async function readEvents(runId: string) {
@@ -863,20 +794,6 @@ describe("appendRunEventTx", () => {
 				owner: owner({ workerId: "worker-2" }),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: { messageId: "message-1", text: "epoch owns this" },
-				appendClass: "model",
-			}),
-		).toMatchObject({ outcome: "appended", seq: 1 });
-	});
-
-	it("does not use the legacy Run lease deadline as the append fence", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
-		await expireOwnership("run-1");
-
-		expect(
-			await appendRunEventTx(tdb.db, {
-				owner: owner(),
-				type: RunEventType.AssistantMessageCompleted,
-				payload: { messageId: "message-1", text: "still owned" },
 				appendClass: "model",
 			}),
 		).toMatchObject({ outcome: "appended", seq: 1 });
@@ -1244,8 +1161,7 @@ describe("transitionRunTerminalTx", () => {
 		expect(run).toMatchObject({
 			runId: "run-1",
 			status: "done",
-			lockedBy: null,
-			lockedUntil: null,
+			executedByWorkerId: "worker-1",
 		});
 		expect(run.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
@@ -1263,8 +1179,7 @@ describe("transitionRunTerminalTx", () => {
 			status: "done",
 		});
 
-		// The epoch still holds, so the classifier names the immutable status rather
-		// than inferring ownership loss from the cleared legacy Run lease.
+		// The epoch still holds, so the classifier names the immutable status.
 		expect(
 			await transitionRunTerminalTx(tdb.db, {
 				owner: owner(),
@@ -1411,8 +1326,7 @@ describe("requestRunInterruptionTx", () => {
 		expect(result.run).toMatchObject({
 			runId: "run-1",
 			status: "interrupted",
-			lockedBy: null,
-			lockedUntil: null,
+			executedByWorkerId: null,
 		});
 		expect(result.run.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
@@ -1431,7 +1345,7 @@ describe("requestRunInterruptionTx", () => {
 		if (result.outcome !== "interrupt_requested")
 			throw new Error("unreachable");
 		expect(result.run.status).toBe("interrupt_requested");
-		expect(result.run.lockedBy).toBe("worker-1");
+		expect(result.run.executedByWorkerId).toBe("worker-1");
 		expect(result.run.interruptRequestedAt).toBeInstanceOf(Date);
 		// No terminal event yet: the owning worker appends run_interrupted when it
 		// actually terminalizes.
@@ -1521,83 +1435,6 @@ describe("requestRunInterruptionTx", () => {
 	});
 });
 
-describe("heartbeatRunTx", () => {
-	it("extends the lock deadline for the owning worker", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
-		// Pull the deadline near expiry so the fixed-duration renewal is visible.
-		await tdb.db
-			.update(runs)
-			.set({ lockedUntil: sql`now() + interval '1 second'` })
-			.where(eq(runs.runId, "run-1"));
-
-		const renewed = await heartbeatRunTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
-		});
-
-		expect(renewed).not.toBeNull();
-		expect(renewed?.lockedUntil?.getTime()).toBeGreaterThan(
-			Date.now() + 30_000,
-		);
-		expect(renewed?.heartbeatAt).toBeInstanceOf(Date);
-	});
-
-	it("lets the control loop observe a pending interruption request", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
-		await requestRunInterruptionTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		const renewed = await heartbeatRunTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
-		});
-
-		expect(renewed?.status).toBe("interrupt_requested");
-		expect(renewed?.interruptRequestedAt).toBeInstanceOf(Date);
-	});
-
-	it("does not renew for a worker that does not own the run", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
-
-		const renewed = await heartbeatRunTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-2",
-		});
-
-		expect(renewed).toBeNull();
-	});
-
-	it("does not revive expired ownership", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
-		await expireOwnership("run-1");
-
-		const renewed = await heartbeatRunTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
-		});
-
-		expect(renewed).toBeNull();
-	});
-
-	it("does not renew a terminal run", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
-		await transitionRunTerminalTx(tdb.db, {
-			owner: owner(),
-			status: "done",
-		});
-
-		const renewed = await heartbeatRunTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
-		});
-
-		expect(renewed).toBeNull();
-	});
-});
-
 describe("markLiveStreamFailedTx", () => {
 	it("rejects an active marker after the Ownership lease lapses", async () => {
 		await queueRun("run-1", "conv-1");
@@ -1678,13 +1515,6 @@ describe("markLiveStreamFailedTx", () => {
 			}),
 			status: "done",
 		});
-		await tdb.db
-			.update(runs)
-			.set({
-				lockedBy: "legacy-provenance",
-				lockedUntil: sql`now() + interval '1 hour'`,
-			})
-			.where(eq(runs.runId, "run-terminal"));
 		const marked = await markLiveStreamFailedTx(tdb.db, {
 			owner: owner({
 				runId: "run-terminal",
@@ -1760,7 +1590,7 @@ describe("Run liveness sweep transactions", () => {
 		expect(reclaimedRuns.map((r) => [r.runId, r.status])).toEqual([
 			["run-1", "error"],
 		]);
-		expect(reclaimedRuns[0]?.lockedBy).toBeNull();
+		expect(reclaimedRuns[0]?.executedByWorkerId).toBe("worker-1");
 		expect(reclaimedRuns[0]?.terminalAt).toBeInstanceOf(Date);
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.type, e.payload])).toEqual([

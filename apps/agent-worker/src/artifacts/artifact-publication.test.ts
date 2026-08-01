@@ -15,7 +15,7 @@ import {
 	type TestDb,
 } from "@mymemo/agent-db/testing";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import type { SupervisedQuery } from "../sdk/agent-stream";
@@ -812,19 +812,20 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		await h.loop.tick();
 		await blocked.started;
 		await tdb.db
-			.update(runs)
+			.update(conversations)
 			.set({
-				lockedBy: "worker-2",
-				lockedUntil: new Date(Date.now() + 60_000),
+				epoch: sql`${conversations.epoch} + 1`,
+				ownerWorkerId: "worker-2",
+				ownerUntil: new Date(Date.now() + 60_000),
 			})
-			.where(eq(runs.runId, "run-1"));
+			.where(eq(conversations.conversationId, "conv-1"));
 		await h.loop.tick();
 		await h.worker.drain();
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 		expect((await tdb.db.select().from(runs))[0]).toMatchObject({
 			status: "running",
-			lockedBy: "worker-2",
+			executedByWorkerId: "worker-1",
 		});
 		expect(await tdb.db.select().from(runEvents)).toEqual([]);
 	});

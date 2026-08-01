@@ -124,14 +124,7 @@ async function sweepArtifactObjects(
 				or(
 					and(
 						eq(artifactObjects.status, "pending"),
-						or(
-							isNull(runs.runId),
-							inArray(runs.status, TERMINAL_RUN_STATUSES),
-							and(
-								inArray(runs.status, ["running", "interrupt_requested"]),
-								or(isNull(runs.lockedUntil), lte(runs.lockedUntil, now)),
-							),
-						),
+						or(isNull(runs.runId), inArray(runs.status, TERMINAL_RUN_STATUSES)),
 					),
 					and(
 						eq(artifactObjects.status, "superseded"),

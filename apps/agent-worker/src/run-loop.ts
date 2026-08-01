@@ -22,7 +22,7 @@ import {
 	appendRunEventsTx,
 	expireUnownedQueuedRunsTx,
 	type FenceRejection,
-	heartbeatRunTx,
+	loadExecutingRunTx,
 	markLiveStreamFailedTx,
 	type RunRecord,
 	type RunWriteOwner,
@@ -151,7 +151,7 @@ export interface RunProcessContext {
 
 /**
  * Produces one claimed run's turn. Injected so the control loop's
- * claim/heartbeat/terminalize behavior is tested independently of what a turn
+ * Claim/renew/terminalize behavior is tested independently of what a turn
  * does.
  *
  * A processor may return a {@link TurnResult} with mirror reliability and
@@ -172,7 +172,7 @@ export interface RunLoopOptions {
 	liveStreamRelay: LiveStreamRelay;
 	/** Payload-free Live Stream relay operation metrics. */
 	liveStreamTelemetry?: LiveStreamTelemetry;
-	/** How often {@link RunLoop.start}'s timer fires a tick (lease renewal + Claim). */
+	/** How often {@link RunLoop.start}'s timer fires a tick (Ownership renewal + Claim). */
 	heartbeatIntervalMs: number;
 	/** Optional doorbell whose ring triggers an immediate tick. */
 	doorbell?: RunDoorbell;
@@ -181,12 +181,12 @@ export interface RunLoopOptions {
 
 /** Per-run loop-local state, resolved once processing ends into a terminal. */
 interface RunEndState {
-	/** A heartbeat observed `interrupt_requested`; the terminal must be `interrupted`. */
+	/** A status observation saw `interrupt_requested`; the terminal must be `interrupted`. */
 	interrupted: boolean;
 	/** A fenced write found that another path already chose a non-interruption
 	 * status, so this worker must not attempt another terminal transition. */
 	skipTerminalization: boolean;
-	/** A heartbeat lost the ownership fence; Reclamation owns the Run — do not
+	/** Ownership renewal lost the fence; Reclamation owns the Run — do not
 	 * terminalize it. */
 	lostOwnership: boolean;
 }
@@ -211,11 +211,11 @@ interface ActiveDrain {
 	 * submitted after the Claim are never appended here. */
 	runIds: readonly string[];
 	/**
-	 * The Run a tick may renew and interrupt — set for exactly as long as that is
+	 * The Run a tick may observe and interrupt — set for exactly as long as that is
 	 * true. {@link RunLoop.detachServedRun} is the only thing that clears it, and
 	 * doing so is the load-bearing act that hands the Run back: before the
 	 * terminal transition, so a concurrent tick cannot race the Outcome, and on
-	 * abandonment, so later ticks stop heartbeating a Run that is no longer this
+	 * abandonment, so later ticks stop observing a Run that is no longer this
 	 * worker's.
 	 */
 	served?: ActiveEntry;
@@ -253,8 +253,8 @@ class RunWriteRejectedError extends Error {
  *     reclaims lapsed Ownership so preserved queued Runs remain available to
  *     this tick's Claim;
  *  2. renews each owned Conversation's Ownership lease — a renewal matching zero
- *     rows is the lost-lease signal — and observes a durable interruption of the
- *     Run being served; and
+ *     rows is the lost-lease signal — and reads the served Run's status to
+ *     observe a durable interruption; and
  *  3. Claims Conversations up to the supervisor's remaining capacity and
  *     dispatches each as one supervised drain.
  *
@@ -267,8 +267,12 @@ class RunWriteRejectedError extends Error {
  * Ownership and single-terminalization are enforced by the DB fences in the
  * helpers, not here: two workers cannot Claim one Conversation (`FOR UPDATE
  * SKIP LOCKED`), a superseded or lapsed Claim is refused by the epoch fence, and
- * Reclamation CASes the same Active statuses as worker terminalization. This loop's
- * job is to turn those helpers into a warm, bounded-concurrency service.
+ * Reclamation CASes the same Active statuses as worker terminalization. This
+ * loop's job is to turn those helpers into a warm, bounded-concurrency service.
+ * At-most-one-executing is deliberately a program-order property here: one
+ * drain awaits each snapshot Run before starting the next. The database
+ * guarantees this Claim is the only writer, but no longer constrains that
+ * writer to start only one Run at a time.
  */
 export class RunLoop {
 	private readonly drains = new Map<string, ActiveDrain>();
@@ -325,7 +329,7 @@ export class RunLoop {
 			// Rings coalesce so a burst of admissions costs one trailing claim pass,
 			// and doorbell ticks never run concurrently with each other. A doorbell
 			// tick MAY overlap a timer tick — that is safe: claiming is `FOR UPDATE
-			// SKIP LOCKED` and heartbeats/terminals are fenced, so overlap costs a
+			// SKIP LOCKED` and renewals/terminals are fenced, so overlap costs a
 			// redundant query, never a double claim.
 			const ticker = new DoorbellTicker(
 				async () => {
@@ -520,32 +524,30 @@ export class RunLoop {
 	}
 
 	/**
-	 * Renew the served Run's legacy Run lease and observe a durable interruption.
-	 *
-	 * Bridge, deleted with the Run lease itself (#402). Ownership renewal above is
-	 * the authority; this temporary heartbeat returns the served Run's status,
-	 * which the drain still needs because Conversation-scoped renewal returns no
-	 * Run row.
+	 * Read the served Run's status to observe a durable interruption. This read is
+	 * not an ownership predicate: the Conversation epoch and live deadline remain
+	 * the sole authority for every write.
 	 */
 	private async observeServedRun(drain: ActiveDrain): Promise<void> {
 		const served = drain.served;
 		if (!served) return;
-		let renewed: RunRecord | null;
+		let observed: RunRecord | null;
 		try {
-			renewed = await heartbeatRunTx(this.opts.db, {
+			observed = await loadExecutingRunTx(this.opts.db, {
+				userId: drain.owner.userId,
+				conversationId: drain.owner.conversationId,
 				runId: served.runId,
-				workerId: this.workerId,
 			});
 		} catch (error) {
 			this.opts.logger.error({
-				message: "run heartbeat failed",
+				message: "run status observation failed",
 				workerId: this.workerId,
 				runId: served.runId,
 				error: toMessage(error),
 			});
 			return;
 		}
-		if (!renewed) {
+		if (!observed) {
 			// This Run reached its Outcome under us while the Conversation lease
 			// stayed live. It is no longer ours to terminalize, but the Conversation
 			// still is, so only the Run is
@@ -559,7 +561,7 @@ export class RunLoop {
 			this.abandonServedRun(drain);
 			return;
 		}
-		if (renewed.status === "interrupt_requested") {
+		if (observed.status === "interrupt_requested") {
 			served.state.interrupted = true;
 			served.controller.abort();
 			served.interruptionController.abort();
@@ -567,9 +569,9 @@ export class RunLoop {
 	}
 
 	/**
-	 * Hand the Run in flight back from the tick loop, so no later tick renews or
+	 * Hand the Run in flight back from the tick loop, so no later tick observes or
 	 * interrupts it. The only writer of `drain.served`, because forgetting to
-	 * detach is silent: the Run keeps being heartbeated, and a terminal
+	 * detach is silent: the Run keeps being observed, and a terminal
 	 * transition can race a tick that still believes it owns it.
 	 */
 	private detachServedRun(drain: ActiveDrain): ActiveEntry | undefined {

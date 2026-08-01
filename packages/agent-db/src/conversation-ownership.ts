@@ -17,9 +17,8 @@ import { conversations, runs } from "./schema";
  * rather than carrying a "zero rows means work arrived, keep the lease and
  * loop" subtlety.
  *
- * This module is deliberately the whole of ADR-0015. The temporary Run-lease
- * stamping and heartbeat bridge remains in `run-store.ts` until #402, but it
- * exposes no competing mutation predicate.
+ * This module is deliberately the whole of ADR-0015. No Run-scoped lease or
+ * competing ownership predicate exists.
  *
  * Lock order is global and stated once: `conversations` before `runs`. The
  * Claim below holds to it by locking only the `conversations` side of its
@@ -27,9 +26,9 @@ import { conversations, runs } from "./schema";
  */
 
 /**
- * How far ahead a Claim or a renewal pushes `owner_until`. The same 60s hold
- * the Run lease uses, renewed on the worker's 15s heartbeat — four missed
- * renewals before the Conversation becomes reclaimable.
+ * How far ahead a Claim or renewal pushes `owner_until`: a 60s hold renewed on
+ * the worker's 15s heartbeat, allowing four missed renewals before the
+ * Conversation becomes reclaimable.
  */
 const OWNERSHIP_LEASE_MS = 60_000;
 

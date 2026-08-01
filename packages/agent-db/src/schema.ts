@@ -19,7 +19,7 @@ import {
  * Drizzle schema for the writable agent database (`mymemo_agent`), distinct from
  * the worker's read-only KB. This file is the single source of truth for the
  * writable DB shared by `chat-api` (run creation, SSE projection) and
- * `agent-worker` (the claim/heartbeat/terminalize loop): types are inferred from
+ * `agent-worker` (the Claim/renew/terminalize loop): types are inferred from
  * it, and `drizzle-kit generate` emits the SQL migrations under `drizzle/` from
  * it. Do not hand-edit the generated DDL — change a table here and regenerate.
  */
@@ -29,11 +29,11 @@ import {
  * `(user_id, conversation_id)` — the composite primary key makes per-user /
  * per-conversation isolation a database invariant. This row replaces the old
  * `sandbox_leases` warm-pointer role only; unlike the lease it grants **no
- * active execution ownership** — that lives exclusively in `runs`. Sandbox and
- * taint mutations use the runtime-store helpers; Agent-session pointer updates
- * compose through run-store's terminal transaction. Both paths fence on the
- * claiming Run's `locked_by`/`locked_until`, so a worker that lost its Run
- * cannot overwrite pointers a recovered Conversation now relies on.
+ * active execution ownership** — that lives exclusively on the Conversation.
+ * Sandbox and taint mutations use the runtime-store helpers; Agent-session
+ * pointer updates compose through run-store's terminal transaction. Both paths
+ * fence on the live Conversation Ownership epoch, so a superseded worker cannot
+ * overwrite pointers a later Claim now relies on.
  */
 export const conversationRuntime = pgTable(
 	"conversation_runtime",
@@ -283,18 +283,11 @@ function statusList(statuses: readonly string[]) {
 }
 
 /**
- * Durable run queue for the split-runtime worker (milestone 1). A run is one
- * backend execution attempt for a conversation. Execution ownership lives
- * here, not in sandbox/runtime metadata: only the worker named by `locked_by`
- * while `locked_until` is live may append owned run events in later
- * transaction helpers. This lease carries no fencing token, on the argument
- * that a v1 run is claimed exactly once (failed runs never requeue; stale runs
- * are terminalized, never reclaimed).
- *
- * That argument does not survive Conversation-level ownership (ADR-0015), where
- * one Conversation is Claimed many times by different workers. The token now
- * exists, as `conversations.epoch`; this lease is only what fenced writes still
- * evaluate until they move onto it.
+ * Durable run queue for the split-runtime worker. Execution ownership lives on
+ * the Conversation and every write validates its live Ownership epoch
+ * (ADR-0015). The epoch is necessary because a Conversation is Claimed many
+ * times over its life, by different workers: once Claim-at-most-once is false,
+ * worker identity cannot distinguish a stale holder from its successor.
  */
 export const runs = pgTable(
 	"runs",
@@ -309,15 +302,12 @@ export const runs = pgTable(
 		 */
 		normalizedInput: jsonb("normalized_input"),
 		status: text("status").notNull(),
-		lockedBy: text("locked_by"),
-		lockedUntil: timestamp("locked_until", { withTimezone: true }),
 		/**
 		 * Which worker executed this Run, stamped by the epoch-fenced queued→running
 		 * transition. Provenance for log correlation, never authority — that is the
 		 * Conversation's Ownership lease.
 		 */
 		executedByWorkerId: text("executed_by_worker_id"),
-		heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
 		interruptRequestedAt: timestamp("interrupt_requested_at", {
 			withTimezone: true,
 		}),
@@ -368,11 +358,6 @@ export const runs = pgTable(
 		index("runs_queue_claim_idx")
 			.on(t.createdAt)
 			.where(sql`${t.status} = 'queued'`),
-		// Legacy Run-lease access path, removed with the lease in #402. Reclamation
-		// scans `conversations.owner_until`; no production path scans this index.
-		index("runs_stale_recovery_idx")
-			.on(t.lockedUntil)
-			.where(sql`${t.status} in ('running', 'interrupt_requested')`),
 		// Cleanup/retention: terminal runs by when they finished.
 		index("runs_cleanup_idx")
 			.on(t.terminalAt)

@@ -40,7 +40,7 @@ export interface SdkRunProcessorDeps {
  * The Milestone 7 run processor: start the run's SDK query and consume its
  * stream under supervision, persisting complete Assistant messages as Run
  * events (plan Task 7.2). It slots into the same {@link RunProcessor} seam the
- * synthetic processor used, so the control loop's claim/heartbeat/terminalize
+ * synthetic processor used, so the control loop's Claim/renew/terminalize
  * behavior — including mapping this processor's throw to `error` and a
  * supervisor-observed interruption to `interrupted` — is unchanged.
  *

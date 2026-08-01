@@ -67,9 +67,7 @@ describe("run queue schema", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			status: "queued",
-			lockedBy: null,
-			lockedUntil: null,
-			heartbeatAt: null,
+			executedByWorkerId: null,
 			interruptRequestedAt: null,
 			normalizedInput: null,
 			liveStreamFailedAt: null,
@@ -80,12 +78,18 @@ describe("run queue schema", () => {
 		expect(run?.updatedAt).toBeInstanceOf(Date);
 	});
 
-	it("carries no fencing_token or visibility columns (rebaselined)", async () => {
+	it("carries no retired Run-lease, fencing-token, or visibility columns", async () => {
 		const { rows } = await tdb.db.execute(sql`
 			select table_name, column_name
 			from information_schema.columns
 			where table_name in ('runs', 'run_events')
-				and column_name in ('fencing_token', 'visibility')
+				and column_name in (
+					'locked_by',
+					'locked_until',
+					'heartbeat_at',
+					'fencing_token',
+					'visibility'
+				)
 		`);
 		expect(rows).toEqual([]);
 	});
@@ -162,15 +166,15 @@ describe("run queue schema", () => {
 		]);
 	});
 
-	it("has the conversation-active, queue-claim, stale-recovery, and cleanup indexes", async () => {
+	it("has the conversation-active, queue-claim, and cleanup indexes", async () => {
 		const { rows } = await tdb.db.execute(sql`
 			select indexname from pg_indexes where tablename = 'runs'
 		`);
 		const names = rows.map((row) => row.indexname);
 		expect(names).toContain("runs_conversation_active_idx");
 		expect(names).toContain("runs_queue_claim_idx");
-		expect(names).toContain("runs_stale_recovery_idx");
 		expect(names).toContain("runs_cleanup_idx");
+		expect(names).not.toContain("runs_stale_recovery_idx");
 		expect(names).not.toContain("runs_one_active_per_conversation");
 	});
 
@@ -272,10 +276,9 @@ describe("run queue schema", () => {
 			"runs_notify_interrupt_requested",
 			"runs_notify_queued",
 		]);
-		// The WHEN clauses are the silence guarantees: heartbeat `locked_until`
-		// renewals never ring (the UPDATE trigger requires the committed
-		// `running` → `interrupt_requested` status transition), and a queued
-		// interruption (queued → `interrupted` directly) rings nothing.
+		// The WHEN clauses are the silence guarantees: only the committed `running`
+		// → `interrupt_requested` status transition rings the UPDATE trigger, and a
+		// queued interruption (`queued` → `interrupted` directly) rings nothing.
 		const definitions = triggers.map((row) => String(row.def));
 		expect(definitions[0]).toContain("AFTER UPDATE OF status ON public.runs");
 		expect(definitions[0]).toContain(

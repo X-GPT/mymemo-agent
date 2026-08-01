@@ -29,8 +29,8 @@ import {
  * Narrow transaction helpers over `runs`/`run_events` — the only write path for
  * Run state — plus Agent-session pointer publication composed into terminal Run
  * transactions (design doc "State Ownership"). Shared by chat-api (run
- * creation, interruption requests) and agent-worker
- * (claim/heartbeat/terminalize). Each helper owns one transaction: sequence
+ * creation and interruption requests) and agent-worker (start, append, and
+ * terminalize). Each helper owns one transaction: sequence
  * allocation is database-owned (`runs.next_event_seq`, never app-side
  * `max(seq) + 1`), and every status change or append carries its fence either
  * inside the statement that performs it or, where a transaction composes
@@ -39,8 +39,9 @@ import {
  *
  * Run-state writes — start, event append, terminal transition, and the active
  * Live Stream failure marker — fence on the Conversation Ownership epoch
- * (ADR-0015). The legacy Run lease remains temporarily for heartbeat-based
- * interruption observation until #402; it no longer authorizes any write.
+ * (ADR-0015). The epoch is necessary because a Conversation is Claimed many
+ * times by different workers; worker identity alone cannot distinguish a stale
+ * holder from a later Claim by the same process.
  */
 
 /** All legal `runs.status` values. Derived from the same tuple `runs_status_check`
@@ -397,56 +398,6 @@ export async function loadRunStartedTx(
 	};
 }
 
-/** How far ahead a claim/heartbeat pushes `locked_until` (design: 60s hold,
- * 15s heartbeat — four missed heartbeats before a run is recoverable). */
-const LOCK_DURATION_MS = 60_000;
-
-/**
- * The Run-scoped claim, retiring: the worker now Claims a Conversation and
- * serves its snapshot through {@link startClaimedRunTx}, so nothing in
- * production calls this. It survives only as the fixture for transitional
- * Conversation-scoped stores that still read the Run lease, and goes with the
- * lease itself (#402).
- *
- * Claim the oldest queued run for `workerId`, or return `null` when the queue
- * is empty. One atomic statement: the candidate select (`FOR UPDATE SKIP
- * LOCKED`, so concurrent claimants skip each other's candidate instead of
- * blocking or double-claiming), the `status = 'queued'` recheck, and the
- * ownership write all happen inside a single UPDATE — never a separate
- * app-side select followed by an update.
- */
-export async function claimNextRunTx(
-	db: Database,
-	input: { workerId: string },
-): Promise<RunRecord | null> {
-	const [row] = await db
-		.update(runs)
-		.set({
-			status: "running",
-			lockedBy: input.workerId,
-			lockedUntil: sql`now() + (${LOCK_DURATION_MS} * interval '1 millisecond')`,
-			heartbeatAt: sql`now()`,
-			updatedAt: sql`now()`,
-		})
-		.where(
-			and(
-				eq(runs.status, "queued"),
-				eq(
-					runs.runId,
-					sql`(
-					select candidate.run_id from runs as candidate
-					where candidate.status = 'queued'
-					order by candidate.created_at
-					for update skip locked
-					limit 1
-				)`,
-				),
-			),
-		)
-		.returning();
-	return row ? toRunRecord(row) : null;
-}
-
 /**
  * Why a fenced write was refused. `lease`: the caller no longer holds live
  * ownership — expired, taken by Reclamation, or the Run/Conversation/user
@@ -497,11 +448,6 @@ export async function startClaimedRunTx(
 			.set({
 				status: "running",
 				executedByWorkerId: input.workerId,
-				// Bridge, deleted with the Run lease itself (#402). The worker still
-				// renews it to observe interruption state; it carries no write authority.
-				lockedBy: input.workerId,
-				lockedUntil: sql`now() + (${LOCK_DURATION_MS} * interval '1 millisecond')`,
-				heartbeatAt: sql`now()`,
 				updatedAt: sql`now()`,
 			})
 			.where(
@@ -518,6 +464,31 @@ export async function startClaimedRunTx(
 			...(await classifyStartRejectionInTx(tx, input.owner, input.runId)),
 		};
 	});
+}
+
+/**
+ * Read the status of the Run currently served by a Conversation drain. This is
+ * interruption observation only, not authority: every mutation still carries
+ * the Conversation Ownership epoch fence. A missing row means the Run reached
+ * an Outcome or its Conversation was deleted while the processor was active.
+ */
+export async function loadExecutingRunTx(
+	db: Database,
+	input: { userId: string; conversationId: string; runId: string },
+): Promise<RunRecord | null> {
+	const [row] = await db
+		.select()
+		.from(runs)
+		.where(
+			and(
+				eq(runs.runId, input.runId),
+				eq(runs.userId, input.userId),
+				eq(runs.conversationId, input.conversationId),
+				inArray(runs.status, ["running", "interrupt_requested"]),
+			),
+		)
+		.limit(1);
+	return row ? toRunRecord(row) : null;
 }
 
 /** The Run as a Claim addresses it: this Run, of this Claimed Conversation. The
@@ -686,8 +657,7 @@ export async function appendRunEventsTx(
 /**
  * Move an owned run to a terminal status and append its one terminal event —
  * the fence, optional Agent-session pointer publication, the status CAS,
- * legacy lease clear (`locked_by`/`locked_until` → NULL), `terminal_at`, sequence
- * allocation, and event insert are one transaction.
+ * `terminal_at`, sequence allocation, and event insert are one transaction.
  * The fence makes double-terminalization impossible (the second caller finds
  * the Run already terminal and is rejected), which is what makes "exactly one
  * terminal event per run" hold. Only the live Claim's epoch may terminalize it.
@@ -849,8 +819,8 @@ export async function transitionRunTerminalInTx(
 }
 
 /**
- * Commit the terminal status, the legacy lease clear, and one terminal event
- * for a Run whose fence this transaction already holds through
+ * Commit the terminal status and one terminal event for a Run whose fence this
+ * transaction already holds through
  * {@link lockRunForTerminalInTx}. Split out so a composer can write its own
  * terminal facts between the fence and the Outcome — artifact publication
  * swaps current metadata there — without the fence arriving late enough that
@@ -873,8 +843,6 @@ export async function commitLockedRunTerminalInTx(
 		.set({
 			status: input.status,
 			nextEventSeq: sql`${runs.nextEventSeq} + 1`,
-			lockedBy: null,
-			lockedUntil: null,
 			terminalAt: sql`now()`,
 			updatedAt: sql`now()`,
 		})
@@ -991,8 +959,6 @@ export async function requestRunInterruptionTx(
 					status: "interrupted",
 					nextEventSeq: sql`${runs.nextEventSeq} + 1`,
 					interruptRequestedAt: sql`now()`,
-					lockedBy: null,
-					lockedUntil: null,
 					terminalAt: sql`now()`,
 					updatedAt: sql`now()`,
 				})
@@ -1031,37 +997,6 @@ export async function requestRunInterruptionTx(
 	});
 }
 
-/**
- * Renew the caller's legacy Run lease — push `locked_until` ahead — and return
- * the fresh row, so the worker's control loop observes `interrupt_requested`
- * through this one call. This temporary heartbeat remains until #402 solely to
- * surface the Run's interruption state. Returns `null` when the legacy lease
- * rejects — expired ownership is never revived, and the caller must abandon
- * the Run locally.
- */
-export async function heartbeatRunTx(
-	db: Database,
-	input: { runId: string; workerId: string },
-): Promise<RunRecord | null> {
-	const [row] = await db
-		.update(runs)
-		.set({
-			heartbeatAt: sql`now()`,
-			lockedUntil: sql`now() + (${LOCK_DURATION_MS} * interval '1 millisecond')`,
-			updatedAt: sql`now()`,
-		})
-		.where(
-			and(
-				eq(runs.runId, input.runId),
-				inArray(runs.status, ["running", "interrupt_requested"]),
-				eq(runs.lockedBy, input.workerId),
-				sql`${runs.lockedUntil} > now()`,
-			),
-		)
-		.returning();
-	return row ? toRunRecord(row) : null;
-}
-
 export type MarkLiveStreamFailedResult =
 	| { outcome: "marked" | "already_failed"; run: RunRecord }
 	| RunWriteRejected;
@@ -1072,7 +1007,7 @@ export type MarkLiveStreamFailedResult =
  * as model appends. A terminal Run is immutable, so terminal status alone
  * permits the idempotent NULL-to-time marker write; this lets a terminal Redis
  * publication failure safely race the terminal commit without depending on
- * legacy Run lease columns that terminalization happens to clear.
+ * any historical execution-provenance field.
  */
 export async function markLiveStreamFailedTx(
 	db: Database,
@@ -1339,8 +1274,6 @@ async function terminalizeRunsForLivenessSweepInTx(
 					: {
 							liveStreamFailedAt: sql`coalesce(${runs.liveStreamFailedAt}, now())`,
 						}),
-				lockedBy: null,
-				lockedUntil: null,
 				terminalAt: sql`now()`,
 				updatedAt: sql`now()`,
 			})
