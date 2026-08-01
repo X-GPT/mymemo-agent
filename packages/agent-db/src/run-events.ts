@@ -216,7 +216,7 @@ export function validateDurableRunEventSequence(
 	>();
 	let terminalSeen = false;
 	let terminalOutcome: RunOutcome | null = null;
-	let staleRecoveryOutcome = false;
+	let reclamationOutcome = false;
 
 	for (const event of events) {
 		const parsed = parseDurableRunEvent(event.type, event.payload);
@@ -291,7 +291,7 @@ export function validateDurableRunEventSequence(
 			case RunEventType.Interrupted:
 				terminalSeen = true;
 				terminalOutcome = parsed.payload.outcome;
-				staleRecoveryOutcome =
+				reclamationOutcome =
 					parsed.payload.outcome !== "done" &&
 					parsed.payload.reason === "stale_worker";
 				break;
@@ -299,7 +299,7 @@ export function validateDurableRunEventSequence(
 	}
 
 	if (options.allowIncomplete) return;
-	if (!staleRecoveryOutcome) {
+	if (!reclamationOutcome) {
 		for (const state of toolStates.values()) {
 			if (state === "started" || state === "args") {
 				invalidSequence("Tool invocation lifecycle is incomplete");

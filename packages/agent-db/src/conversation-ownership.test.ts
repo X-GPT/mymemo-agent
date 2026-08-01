@@ -15,6 +15,7 @@ import {
 	releaseConversationTx,
 	renewConversationLeaseTx,
 } from "./conversation-ownership";
+import { reclaimConversationTx } from "./run-store";
 import { conversations, runs } from "./schema";
 import {
 	createTestDatabase,
@@ -157,18 +158,27 @@ describe("claimConversationTx", () => {
 		});
 	});
 
-	it("claims a Conversation whose lease lapsed, superseding the old epoch", async () => {
+	it("leaves a lapsed Conversation for Reclamation before the next Claim", async () => {
 		await seedRun({ runId: "run-1", conversationId: "conv-1" });
 		const lapsed = claimed(
 			await claimConversationTx(tdb.db, { workerId: "worker-1" }),
 		);
 		await lapseLease("conv-1");
 
+		expect(
+			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
+		).toBeNull();
+		const reclamation = await reclaimConversationTx(tdb.db);
+		expect(reclamation?.runs).toMatchObject([
+			{ runId: "run-1", status: "error" },
+		]);
+		await seedRun({ runId: "run-2", conversationId: "conv-1" });
 		const successor = claimed(
 			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
 		);
 
 		expect(successor.epoch).toBe(lapsed.epoch + 1);
+		expect(successor.runIds).toEqual(["run-2"]);
 		expect(await readOwnership("conv-1")).toMatchObject({
 			ownerWorkerId: "worker-2",
 		});
@@ -285,6 +295,8 @@ describe("releaseConversationTx", () => {
 			await claimConversationTx(tdb.db, { workerId: "worker-1" }),
 		);
 		await lapseLease("conv-1");
+		await reclaimConversationTx(tdb.db);
+		await seedRun({ runId: "run-2", conversationId: "conv-1" });
 		const successor = claimed(
 			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
 		);
@@ -330,6 +342,8 @@ describe("renewConversationLeaseTx", () => {
 			await claimConversationTx(tdb.db, { workerId: "worker-1" }),
 		);
 		await lapseLease("conv-1");
+		await reclaimConversationTx(tdb.db);
+		await seedRun({ runId: "run-2", conversationId: "conv-1" });
 		await claimConversationTx(tdb.db, { workerId: "worker-2" });
 
 		expect(await renewConversationLeaseTx(tdb.db, superseded)).toBe(null);
@@ -362,12 +376,14 @@ describe("conversationEpochExists", () => {
 			await claimConversationTx(tdb.db, { workerId: "worker-1" }),
 		);
 		await lapseLease("conv-1");
+		await reclaimConversationTx(tdb.db);
+		await seedRun({ runId: "run-2", conversationId: "conv-1" });
 		const successor = claimed(
 			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
 		);
 
 		expect(await fenceAdmits(superseded, "run-1")).toBe(false);
-		expect(await fenceAdmits(successor, "run-1")).toBe(true);
+		expect(await fenceAdmits(successor, "run-2")).toBe(true);
 	});
 
 	it("refuses a lease that merely lapsed, with no successor", async () => {

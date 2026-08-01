@@ -24,7 +24,7 @@ import { conversationRuntime, orphanSandboxes, runs } from "./schema";
  * write, and row creation checks the same predicate `FOR SHARE` in its
  * transaction — so a worker that stalls past its lock cannot overwrite pointers
  * a recovered conversation now relies on. The two deliberate exceptions are
- * orphan recording and recovery taint, which exist precisely for the
+ * orphan recording and Reclamation taint, which exist precisely for the
  * ownership-already-lost path.
  *
  * `interrupt_requested` is inside the fence (mirroring the run-store
@@ -57,8 +57,8 @@ export async function loadConversationRuntimeTx(
 
 /**
  * Create the conversation's runtime row (empty pointers). The fence
- * is checked `FOR SHARE` in the same transaction as the insert, so stale-run
- * recovery cannot terminalize the authorizing run between check and insert.
+ * is checked `FOR SHARE` in the same transaction as the insert, so Reclamation
+ * cannot terminalize the authorizing Run between check and insert.
  * Idempotent: if a previous attempt already created the row, the existing row
  * is returned unchanged. Idempotency is for the retry, not for concurrency: the
  * authorizing Run's lease is what makes the Conversation single-writer.
@@ -167,8 +167,8 @@ export async function markRuntimeSandboxTaintedTx(
 }
 
 /**
- * Taint the conversation's sandbox from stale-Run recovery, inside recovery's
- * own transaction. The second deliberate exception to the ownership fence, and
+ * Taint the Conversation's sandbox from Reclamation, inside Reclamation's own
+ * transaction. The second deliberate exception to the ownership fence, and
  * for the same reason as orphan recording: the run whose ownership would
  * authorize the write is precisely the run that lost it, and its worker may be
  * partitioned rather than dead — still writing to a workspace the next turn

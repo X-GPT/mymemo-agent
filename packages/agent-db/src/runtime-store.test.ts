@@ -8,7 +8,7 @@ import {
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { RunFenceError } from "./run-ownership";
-import { claimNextRunTx, markStaleRunsTx } from "./run-store";
+import { claimNextRunTx, reclaimConversationTx } from "./run-store";
 import {
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
@@ -22,7 +22,12 @@ import {
 	orphanSandboxes,
 	runs,
 } from "./schema";
-import { createTestDatabase, seedQueuedRun, type TestDb } from "./testing";
+import {
+	createTestDatabase,
+	lapseConversationOwnership,
+	seedQueuedRun,
+	type TestDb,
+} from "./testing";
 
 let tdb: TestDb;
 
@@ -231,12 +236,12 @@ describe("updateRuntimeSandboxTx", () => {
 		).toMatchObject({ sandboxId: null });
 	});
 
-	it("rejects the update after stale-run recovery terminalizes the run", async () => {
+	it("rejects the update after Reclamation terminalizes the Run", async () => {
 		await claimOwnedRun();
 		await createConversationRuntimeTx(tdb.db, OWNER);
 		await updateRuntimeSandboxTx(tdb.db, { ...OWNER, sandboxId: "sbx-1" });
-		await expireOwnership();
-		await markStaleRunsTx(tdb.db);
+		await lapseConversationOwnership(tdb.db, OWNER);
+		await reclaimConversationTx(tdb.db);
 
 		await expect(
 			updateRuntimeSandboxTx(tdb.db, { ...OWNER, sandboxId: "sbx-2" }),

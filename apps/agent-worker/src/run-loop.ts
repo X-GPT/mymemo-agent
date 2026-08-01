@@ -23,10 +23,10 @@ import {
 	type FenceRejection,
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
-	markStaleRunsTx,
 	type RunRecord,
 	type RunWriteOwner,
 	type RunWriteRejected,
+	reclaimConversationTx,
 	startClaimedRunTx,
 	type TerminalOutcome,
 	type TerminalRunStatus,
@@ -183,7 +183,7 @@ interface RunEndState {
 	/** A fenced write found that another path already chose a non-interruption
 	 * status, so this worker must not attempt another terminal transition. */
 	skipTerminalization: boolean;
-	/** A heartbeat lost the ownership fence; recovery owns the run — do not
+	/** A heartbeat lost the ownership fence; Reclamation owns the Run — do not
 	 * terminalize it. */
 	lostOwnership: boolean;
 }
@@ -231,7 +231,7 @@ function conversationKey(owner: ConversationOwner): string {
 	return `${owner.userId}/${owner.conversationId}`;
 }
 
-const STALE_RUN_RECOVERY_INTERVAL_MS = 15_000;
+const RECLAMATION_INTERVAL_MS = 15_000;
 const GENERIC_RUN_ERROR_MESSAGE = "Run failed";
 
 /** Internal control-flow signal: the typed rejection has already been applied
@@ -246,30 +246,30 @@ class RunWriteRejectedError extends Error {
  * Conversation (ADR-0015): a worker Claims a Conversation, serves the Runs it
  * had queued at that moment one at a time in submission order, and releases.
  * One `tick`:
- *  1. terminalizes stale runs through the shared recovery helper;
+ *  1. reclaims Conversations whose Ownership lease lapsed;
  *  2. renews each owned Conversation's Ownership lease — a renewal matching zero
  *     rows is the lost-lease signal — and observes a durable interruption of the
  *     Run being served; and
  *  3. Claims Conversations up to the supervisor's remaining capacity and
  *     dispatches each as one supervised drain.
  *
- * `tick` is the whole loop and is directly awaitable, so tests drive recovery,
+ * `tick` is the whole loop and is directly awaitable, so tests drive Reclamation,
  * claim, renewal, and terminalization deterministically (PGlite + explicit
  * ticks, no wall-clock timers — Bun lacks `setInterval` fake timers). `start`
- * schedules both `tick` and the at-least-15s recovery sweep; `stop`
+ * schedules both `tick` and the at-least-15s Reclamation sweep; `stop`
  * unschedules them and drains in-flight work.
  *
  * Ownership and single-terminalization are enforced by the DB fences in the
  * helpers, not here: two workers cannot Claim one Conversation (`FOR UPDATE
  * SKIP LOCKED`), a superseded or lapsed Claim is refused by the epoch fence, and
- * recovery CASes the same active statuses as worker terminalization. This loop's
+ * Reclamation CASes the same Active statuses as worker terminalization. This loop's
  * job is to turn those helpers into a warm, bounded-concurrency service.
  */
 export class RunLoop {
 	private readonly drains = new Map<string, ActiveDrain>();
 	private running = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
-	private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+	private reclamationTimer: ReturnType<typeof setTimeout> | undefined;
 	private doorbellUnsubscribe: (() => void) | undefined;
 
 	constructor(private readonly opts: RunLoopOptions) {}
@@ -279,13 +279,13 @@ export class RunLoop {
 	}
 
 	/**
-	 * Run one control-loop iteration: recover stale runs, renew the Ownership
+	 * Run one control-loop iteration: reclaim lapsed Conversations, renew the Ownership
 	 * lease of every Conversation this worker is draining, then Claim and
 	 * dispatch Conversations up to capacity. Returns how many Conversations were
 	 * Claimed this tick.
 	 */
 	async tick(): Promise<number> {
-		await this.tryRecoverStaleRuns();
+		await this.tryReclaimConversations();
 		await this.renewOwnedConversations();
 		return this.claimAndDrain();
 	}
@@ -312,9 +312,9 @@ export class RunLoop {
 			}
 		};
 		void runTick();
-		this.recoveryTimer = setTimeout(
-			() => void this.runRecoveryTimer(),
-			STALE_RUN_RECOVERY_INTERVAL_MS,
+		this.reclamationTimer = setTimeout(
+			() => void this.runReclamationTimer(),
+			RECLAMATION_INTERVAL_MS,
 		);
 		if (this.opts.doorbell) {
 			// Rings coalesce so a burst of admissions costs one trailing claim pass,
@@ -355,9 +355,9 @@ export class RunLoop {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
-		if (this.recoveryTimer) {
-			clearTimeout(this.recoveryTimer);
-			this.recoveryTimer = undefined;
+		if (this.reclamationTimer) {
+			clearTimeout(this.reclamationTimer);
+			this.reclamationTimer = undefined;
 		}
 		// Stop every in-flight run before draining: cancel Tool/E2B work, then
 		// force-close private SDK resources without granting the user-interruption
@@ -373,54 +373,62 @@ export class RunLoop {
 		await this.opts.worker.shutdown();
 	}
 
-	private async runRecoveryTimer(): Promise<void> {
+	private async runReclamationTimer(): Promise<void> {
 		if (!this.running) return;
 		try {
-			await this.tryRecoverStaleRuns();
+			await this.tryReclaimConversations();
 		} finally {
 			if (this.running) {
-				this.recoveryTimer = setTimeout(
-					() => void this.runRecoveryTimer(),
-					STALE_RUN_RECOVERY_INTERVAL_MS,
+				this.reclamationTimer = setTimeout(
+					() => void this.runReclamationTimer(),
+					RECLAMATION_INTERVAL_MS,
 				);
 			}
 		}
 	}
 
-	private async tryRecoverStaleRuns(): Promise<void> {
+	private async tryReclaimConversations(): Promise<void> {
 		try {
-			await this.recoverStaleRuns();
+			await this.reclaimConversations();
 		} catch (error) {
 			this.opts.logger.error({
-				message: "stale-run recovery failed",
+				message: "Conversation Reclamation failed",
 				workerId: this.workerId,
 				error: toMessage(error),
 			});
 		}
 	}
 
-	private async recoverStaleRuns(): Promise<void> {
-		const recovered = await markStaleRunsTx(this.opts.db);
-		if (recovered.length === 0) return;
-		this.opts.logger.warn({
-			message: "recovered stale runs",
-			workerId: this.workerId,
-			recoveredRuns: recovered.map((run) => ({
-				runId: run.runId,
-				status: run.status,
-			})),
-		});
-		for (const run of recovered) {
-			if (run.liveStreamFailedAt === null) continue;
-			if (run.liveStreamFailureMarkedByRecovery) {
-				this.opts.liveStreamTelemetry?.record("degradation", "started", {
-					reason: "stale_worker",
+	private async reclaimConversations(): Promise<void> {
+		for (;;) {
+			const reclamation = await reclaimConversationTx(this.opts.db);
+			if (!reclamation) break;
+			if (reclamation.runs.length > 0) {
+				this.opts.logger.warn({
+					message: "reclaimed Conversation",
+					workerId: this.workerId,
+					conversationId: reclamation.conversationId,
+					reclaimedRuns: reclamation.runs.map((run) => ({
+						runId: run.runId,
+						status: run.status,
+					})),
 				});
 			}
-			this.opts.liveStreamTelemetry?.record("degradation", "ended", {
-				reason: "stale_worker",
-				durationMs: Math.max(0, Date.now() - run.liveStreamFailedAt.getTime()),
-			});
+			for (const run of reclamation.runs) {
+				if (run.liveStreamFailedAt === null) continue;
+				if (run.liveStreamFailureMarkedByReclamation) {
+					this.opts.liveStreamTelemetry?.record("degradation", "started", {
+						reason: "stale_worker",
+					});
+				}
+				this.opts.liveStreamTelemetry?.record("degradation", "ended", {
+					reason: "stale_worker",
+					durationMs: Math.max(
+						0,
+						Date.now() - run.liveStreamFailedAt.getTime(),
+					),
+				});
+			}
 		}
 	}
 
@@ -485,8 +493,8 @@ export class RunLoop {
 	 * Renew the served Run's legacy Run lease and observe a durable interruption.
 	 *
 	 * Bridge, deleted with the Run lease itself (#402). Ownership renewal above is
-	 * the authority; this temporary heartbeat remains for Run-scoped stale
-	 * recovery and the Conversation-scoped stores moving in #400/#401. It also
+	 * the authority; this temporary heartbeat remains for the Conversation-scoped
+	 * stores moving in #401. It also
 	 * returns the served Run's status, which the drain still needs because
 	 * Conversation-scoped renewal returns no Run row.
 	 */
@@ -510,7 +518,7 @@ export class RunLoop {
 		}
 		if (!renewed) {
 			// This Run reached its Outcome under us while the Conversation lease
-			// stayed live — stale-run recovery, most likely. It is no longer ours to
+			// stayed live. It is no longer ours to
 			// terminalize, but the Conversation still is, so only the Run is
 			// abandoned and the drain continues with the rest of its snapshot.
 			this.opts.logger.warn({
@@ -1012,8 +1020,7 @@ export class RunLoop {
 		if (result.outcome === "committed") return "done";
 		return this.reconcileRejectedTerminal(owner, drain, result, "done", {
 			agentSessionId,
-			unresolvedMessage:
-				"could not publish artifacts; leaving to stale-run recovery",
+			unresolvedMessage: "could not publish artifacts; leaving to Reclamation",
 		});
 	}
 
@@ -1045,7 +1052,7 @@ export class RunLoop {
 	}
 
 	/**
-	 * Resolve a refused terminal transition. A lost lease is final — recovery
+	 * Resolve a refused terminal transition. A lost lease is final — Reclamation
 	 * owns the Run and must not be raced. A status refusal means a durable
 	 * interruption landed while the lease is still live, and `interrupted` is the
 	 * one terminal that remains legal; a live lease is exactly what makes that
@@ -1080,7 +1087,7 @@ export class RunLoop {
 		this.opts.logger.warn({
 			message:
 				options.unresolvedMessage ??
-				"could not terminalize run; leaving to stale-run recovery",
+				"could not terminalize run; leaving to Reclamation",
 			workerId: this.workerId,
 			runId: owner.runId,
 			intended,

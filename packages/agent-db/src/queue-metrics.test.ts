@@ -68,7 +68,7 @@ describe("readConversationQueueMetrics", () => {
 		await queueRun("run-owned-live", "conv-owned-live");
 		await claimConversation("conv-owned-live", "worker-1");
 
-		// A lapsed lease is claimable again.
+		// A lapsed lease counts as demand so a worker starts and reclaims it.
 		await queueRun("run-owned-lapsed", "conv-owned-lapsed");
 		await claimConversation("conv-owned-lapsed", "worker-2");
 		await lapseConversationOwnership(tdb.db, {

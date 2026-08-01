@@ -17,11 +17,11 @@ import {
 	releaseConversationTx,
 	renewConversationLeaseTx,
 } from "./conversation-ownership";
-import { admitQueuedRunTx } from "./run-store";
+import { admitQueuedRunTx, reclaimConversationTx } from "./run-store";
 import { conversations, runs } from "./schema";
 
 /**
- * The Claim protocol's concurrency properties (ADR-0015), against real
+ * The Claim and Reclamation protocol's concurrency properties (ADR-0015), against real
  * PostgreSQL.
  *
  * These are the properties Conversation-level ownership rests on, and they are
@@ -211,6 +211,11 @@ async function supersede(): Promise<{
 		await claimConversationTx(db, { workerId: "worker-1" }),
 	);
 	await lapseLease("conv-a");
+	const reclamation = await reclaimConversationTx(db);
+	if (reclamation?.conversationId !== "conv-a") {
+		throw new Error("test setup failed to reclaim conv-a");
+	}
+	await seedRun({ runId: "successor", conversationId: "conv-a", order: 1 });
 	const successor = claimed(
 		await claimConversationTx(db, { workerId: "worker-2" }),
 	);
@@ -291,6 +296,40 @@ async function claimWhileHeld(
 	}
 }
 
+/** Reclaim while another transaction holds a Conversation row lock. */
+async function reclaimWhileHeld(
+	conversationId: string,
+): Promise<Awaited<ReturnType<typeof reclaimConversationTx>>> {
+	const opened = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const held = db.transaction(async (tx) => {
+		await lockConversationRow(tx, conversationId);
+		opened.resolve();
+		await release.promise;
+	});
+	held.catch((error) => opened.reject(error));
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await opened.promise;
+		return await Promise.race([
+			reclaimConversationTx(db),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() =>
+						reject(
+							new Error(`Reclamation blocked for over ${NON_BLOCKING_MS}ms`),
+						),
+					NON_BLOCKING_MS,
+				);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		release.resolve();
+		await held;
+	}
+}
+
 describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 	beforeAll(async () => {
 		db = createDatabase(DB_URL);
@@ -323,6 +362,76 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 	afterAll(async () => {
 		await deleteOwnRows();
 		await db.$client.end();
+	});
+
+	describe("concurrent reclaimers", () => {
+		it("split lapsed Conversations without double-terminalizing their Runs", async () => {
+			await seedConversations("conv-a", "conv-b");
+			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
+			await seedRun({ runId: "b", conversationId: "conv-b", order: 1 });
+			await db
+				.update(runs)
+				.set({ status: "running" })
+				.where(eq(runs.userId, USER_ID));
+			await db
+				.update(conversations)
+				.set({
+					ownerWorkerId: "vanished-worker",
+					ownerUntil: sql`now() - interval '1 second'`,
+				})
+				.where(eq(conversations.userId, USER_ID));
+
+			const reclaimed = await Promise.all([
+				reclaimConversationTx(db),
+				reclaimConversationTx(db),
+			]);
+
+			expect(
+				reclaimed
+					.map((result) => result?.conversationId)
+					.filter((id): id is string => id !== undefined)
+					.sort(),
+			).toEqual(["conv-a", "conv-b"]);
+			const outcomes = await db
+				.select({ runId: runs.runId, status: runs.status })
+				.from(runs)
+				.where(eq(runs.userId, USER_ID));
+			expect(
+				outcomes.map(({ runId, status }) => [runId, status]).sort(),
+			).toEqual([
+				[ownedRunId("a"), "error"],
+				[ownedRunId("b"), "error"],
+			]);
+		});
+
+		it("skips a lapsed Conversation another session holds instead of blocking", async () => {
+			await seedConversations("conv-a", "conv-b");
+			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
+			await seedRun({ runId: "b", conversationId: "conv-b", order: 1 });
+			await db
+				.update(runs)
+				.set({ status: "running" })
+				.where(eq(runs.userId, USER_ID));
+			await db
+				.update(conversations)
+				.set({
+					ownerWorkerId: "vanished-worker",
+					ownerUntil: sql`now() - interval '1 second'`,
+				})
+				.where(eq(conversations.userId, USER_ID));
+
+			const reclaimed = await reclaimWhileHeld("conv-a");
+
+			expect(reclaimed?.conversationId).toBe("conv-b");
+			expect(
+				(
+					await db
+						.select()
+						.from(runs)
+						.where(eq(runs.runId, ownedRunId("a")))
+				)[0]?.status,
+			).toBe("running");
+		});
 	});
 
 	describe("concurrent claimants", () => {

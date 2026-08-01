@@ -21,7 +21,7 @@ export interface UserRunMutationOwner extends RunMutationOwner {
 
 /**
  * An ownership/status fence rejected a worker mutation. The caller must stop
- * treating the Run as its own; recovery or the actual owner is now in charge.
+ * treating the Run as its own; Reclamation or the actual owner is now in charge.
  */
 export class RunFenceError extends Error {
 	override name = "RunFenceError" as const;
