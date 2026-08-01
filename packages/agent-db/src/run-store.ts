@@ -1014,11 +1014,12 @@ export async function requestRunInterruptionTx(
 /**
  * Renew the caller's ownership of an active run — push `locked_until` ahead —
  * and return the fresh row, so the worker's control loop both keeps the run
- * alive and observes `interrupt_requested` through this one call. Fenced like an
- * append: active status, matching `locked_by`, and an unexpired
- * `locked_until`. Returns `null` when the fence rejects — expired ownership
- * is never revived (the run belongs to stale-run recovery now), and the
- * caller must abandon the run locally.
+ * alive and observes `interrupt_requested` through this one call. This is the
+ * transitional legacy Run-lease heartbeat retained for Run-scoped recovery and
+ * the runtime/session paths migrating in #401/#402: active status, matching
+ * `locked_by`, and an unexpired `locked_until`. Returns `null` when the fence
+ * rejects — expired ownership is never revived (the run belongs to stale-run
+ * recovery now), and the caller must abandon the run locally.
  */
 export async function heartbeatRunTx(
 	db: Database,
