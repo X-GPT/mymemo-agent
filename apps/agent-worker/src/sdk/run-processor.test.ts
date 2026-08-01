@@ -4,7 +4,6 @@ import type {
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
-	type RunRecord,
 	type RunWriteOwner,
 	requestRunInterruptionTx,
 } from "@mymemo/agent-db/run-store";
@@ -244,13 +243,10 @@ async function createRuntimeFor(owner: RunWriteOwner): Promise<void> {
 	await createConversationRuntimeTx(tdb.db, owner);
 }
 
-async function createRuntimeSessionStoreFor(
-	run: RunRecord,
-	owner: RunWriteOwner,
-) {
+async function createRuntimeSessionStoreFor(owner: RunWriteOwner) {
 	await createRuntimeFor(owner);
 	return createConversationSessionStore(tdb.db, {
-		owner: { ...owner, conversationId: run.conversationId, runId: run.runId },
+		owner,
 		logger: silentLogger,
 	});
 }
@@ -292,8 +288,8 @@ async function readEvents(runId: string) {
 describe("createSdkRunProcessor — through the run loop", () => {
 	it("does not publish a pointer from an SDK initialization id alone", async () => {
 		const worker = buildWorker();
-		const loop = buildLoop(worker, async (run, _signal, owner) => {
-			const store = await createRuntimeSessionStoreFor(run, owner);
+		const loop = buildLoop(worker, async (_run, _signal, owner) => {
+			const store = await createRuntimeSessionStoreFor(owner);
 			return messageQuery([initMessage("session-initialized")], store);
 		});
 		await seedQueuedRun(tdb.db, {
@@ -315,8 +311,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	it("publishes the first pointer only when the bound store mirrored that main session", async () => {
 		const worker = buildWorker();
-		const loop = buildLoop(worker, async (run, _signal, owner) => {
-			const store = await createRuntimeSessionStoreFor(run, owner);
+		const loop = buildLoop(worker, async (_run, _signal, owner) => {
+			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-proven" },
 				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
@@ -339,8 +335,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	it("does not publish a pointer from subagent-only mirroring", async () => {
 		const worker = buildWorker();
-		const loop = buildLoop(worker, async (run, _signal, owner) => {
-			const store = await createRuntimeSessionStoreFor(run, owner);
+		const loop = buildLoop(worker, async (_run, _signal, owner) => {
+			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{
 					projectKey: "project-1",
@@ -960,8 +956,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const deadline = virtualStopDeadline();
 		const loop = buildLoop(
 			worker,
-			async (run, signal, owner) => {
-				const store = await createRuntimeSessionStoreFor(run, owner);
+			async (_run, signal, owner) => {
+				const store = await createRuntimeSessionStoreFor(owner);
 				await store.append(
 					{ projectKey: "project-1", sessionId: "session-interrupted" },
 					[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
@@ -1323,7 +1319,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("preserves mirrored continuity when a thrown failure reconciles to interruption", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (run, _signal, owner) => {
-			const store = await createRuntimeSessionStoreFor(run, owner);
+			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-reconciled" },
 				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
