@@ -331,6 +331,10 @@ export const runs = pgTable(
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
+		/**
+		 * Last state or liveness change. While queued, Reclamation refreshes this
+		 * as the unowned queue-backstop clock without changing createdAt ordering.
+		 */
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),

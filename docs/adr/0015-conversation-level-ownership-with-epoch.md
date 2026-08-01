@@ -60,6 +60,11 @@ unproven, and clears Ownership. Never-started `queued` Runs remain queued and
 make the released Conversation immediately eligible for its next Claim. This
 ordering prevents a fresh holder from reconnecting to or writing alongside the
 vanished holder before Reclamation establishes the durable boundary.
+Reclamation also refreshes preserved queued Runs' queue-backstop timestamp in
+the same transaction without changing their submission order. Each worker tick
+runs that backstop before Reclamation as the fast path, while the refreshed
+timestamp prevents another worker's concurrent backstop from expiring a Run
+between the Ownership clear and the fresh Claim.
 
 ## Considered options
 

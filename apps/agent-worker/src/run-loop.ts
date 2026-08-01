@@ -247,8 +247,9 @@ class RunWriteRejectedError extends Error {
  * Conversation (ADR-0015): a worker Claims a Conversation, serves the Runs it
  * had queued at that moment one at a time in submission order, and releases.
  * One `tick`:
- *  1. reclaims Conversations whose Ownership lease lapsed and expires old
- *     queued Runs whose Conversation is unowned;
+ *  1. expires old queued Runs whose Conversation was already unowned, then
+ *     reclaims lapsed Ownership so preserved queued Runs remain available to
+ *     this tick's Claim;
  *  2. renews each owned Conversation's Ownership lease — a renewal matching zero
  *     rows is the lost-lease signal — and observes a durable interruption of the
  *     Run being served; and
@@ -281,10 +282,10 @@ export class RunLoop {
 	}
 
 	/**
-	 * Run one control-loop iteration: reclaim lapsed Conversations, renew the Ownership
-	 * lease of every Conversation this worker is draining, then Claim and
-	 * dispatch Conversations up to capacity. Returns how many Conversations were
-	 * Claimed this tick.
+	 * Run one control-loop iteration: expire already-unowned queued Runs, reclaim
+	 * lapsed Conversations, renew the Ownership lease of every Conversation this
+	 * worker is draining, then Claim and dispatch Conversations up to capacity.
+	 * Returns how many Conversations were Claimed this tick.
 	 */
 	async tick(): Promise<number> {
 		await this.tryRunLivenessSweep();
@@ -390,8 +391,8 @@ export class RunLoop {
 	}
 
 	private async tryRunLivenessSweep(): Promise<void> {
-		await this.tryReclaimConversations();
 		await this.tryExpireUnownedQueuedRuns();
+		await this.tryReclaimConversations();
 	}
 
 	private async tryReclaimConversations(): Promise<void> {

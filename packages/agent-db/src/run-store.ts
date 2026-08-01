@@ -109,9 +109,11 @@ export class ActiveRunConflictError extends Error {
  */
 const ACTIVE_RUN_DEPTH_BOUND = 1;
 
-/** How long an unowned queued Run may wait before the queue-age backstop ends
- * it. This deliberately matches today's 60-second Ownership lease, but remains
- * a distinct policy so lease tuning cannot silently retune queue expiration. */
+/** How long a queued Run may remain continuously eligible on an unowned
+ * Conversation before the queue-age backstop ends it. Reclamation refreshes
+ * `updated_at` to start a new window for legitimately waiting work. This
+ * deliberately matches today's 60-second Ownership lease, but remains a
+ * distinct policy so lease tuning cannot silently retune queue expiration. */
 const UNOWNED_QUEUE_TIMEOUT_MS = 60_000;
 
 /** An owned Run id was reused with different normalized admitted input. */
@@ -1206,6 +1208,20 @@ export async function reclaimConversationTx(
 		if (runsToReclaim.length > 0) {
 			await taintRuntimeSandboxForReclamationInTx(tx, candidate);
 		}
+		// Preserve queued Runs without letting the unowned queue-age backstop race
+		// the next Claim after Ownership is cleared. `created_at` remains the stable
+		// submission/Claim order; `updated_at` starts a fresh timeout window because
+		// these Runs were legitimately waiting behind the vanished owner's work.
+		await tx
+			.update(runs)
+			.set({ updatedAt: sql`now()` })
+			.where(
+				and(
+					eq(runs.userId, candidate.userId),
+					eq(runs.conversationId, candidate.conversationId),
+					eq(runs.status, "queued"),
+				),
+			);
 		await tx
 			.update(conversations)
 			.set({ ownerWorkerId: null, ownerUntil: null })
@@ -1225,9 +1241,12 @@ export async function reclaimConversationTx(
 }
 
 /**
- * Expire old queued Runs only when their Conversation is unowned. The
- * Conversation row is locked with `FOR UPDATE SKIP LOCKED`, so this backstop
- * cannot race admission or Claim and never waits behind their lifecycle lock.
+ * Expire old queued Runs only when their Conversation is unowned and their
+ * queue-backstop timestamp has also stayed old for the whole timeout. The
+ * second deadline gives Runs preserved by Reclamation a fresh window to be
+ * Claimed without changing their `created_at` queue order. The Conversation row
+ * is locked with `FOR UPDATE SKIP LOCKED`, so this backstop cannot race
+ * admission or Claim and never waits behind their lifecycle lock.
  */
 export async function expireUnownedQueuedRunsTx(
 	db: Database,
@@ -1242,6 +1261,9 @@ export async function expireUnownedQueuedRunsTx(
 			  join ${conversations} c using (user_id, conversation_id)
 			 where r.status = 'queued'
 			   and r.created_at <= now() - interval '${sql.raw(
+						String(UNOWNED_QUEUE_TIMEOUT_MS),
+					)} milliseconds'
+			   and r.updated_at <= now() - interval '${sql.raw(
 						String(UNOWNED_QUEUE_TIMEOUT_MS),
 					)} milliseconds'
 			   and c.owner_until is null
@@ -1273,6 +1295,9 @@ export async function expireUnownedQueuedRunsTx(
 					eq(runs.conversationId, candidate.conversationId),
 					eq(runs.status, "queued"),
 					sql`${runs.createdAt} <= now() - interval '${sql.raw(
+						String(UNOWNED_QUEUE_TIMEOUT_MS),
+					)} milliseconds'`,
+					sql`${runs.updatedAt} <= now() - interval '${sql.raw(
 						String(UNOWNED_QUEUE_TIMEOUT_MS),
 					)} milliseconds'`,
 				),

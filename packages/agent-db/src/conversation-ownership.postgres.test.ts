@@ -17,7 +17,11 @@ import {
 	releaseConversationTx,
 	renewConversationLeaseTx,
 } from "./conversation-ownership";
-import { admitQueuedRunTx, reclaimConversationTx } from "./run-store";
+import {
+	admitQueuedRunTx,
+	expireUnownedQueuedRunsTx,
+	reclaimConversationTx,
+} from "./run-store";
 import { conversations, runs } from "./schema";
 
 /**
@@ -419,6 +423,49 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 						.where(eq(runs.runId, ownedRunId("a")))
 				)[0]?.status,
 			).toBe("running");
+		});
+
+		it("preserves an old queued Run when queue expiration races Reclamation", async () => {
+			await seedConversations("conv-a");
+			await seedRun({ runId: "running", conversationId: "conv-a", order: 0 });
+			await seedRun({ runId: "queued", conversationId: "conv-a", order: 1 });
+			await db
+				.update(runs)
+				.set({ status: "running" })
+				.where(eq(runs.runId, ownedRunId("running")));
+			await db
+				.update(runs)
+				.set({ updatedAt: submittedAt(1) })
+				.where(eq(runs.runId, ownedRunId("queued")));
+			await db
+				.update(conversations)
+				.set({
+					ownerWorkerId: "vanished-worker",
+					ownerUntil: sql`now() - interval '1 second'`,
+				})
+				.where(conversationKey("conv-a"));
+
+			const [reclaimed, expired] = await Promise.all([
+				reclaimConversationTx(db),
+				expireUnownedQueuedRunsTx(db),
+			]);
+
+			expect(reclaimed?.conversationId).toBe("conv-a");
+			expect(expired).toBeNull();
+			expect(
+				(
+					await db
+						.select({ status: runs.status })
+						.from(runs)
+						.where(eq(runs.runId, ownedRunId("queued")))
+				)[0]?.status,
+			).toBe("queued");
+			expect(
+				await claimConversationTx(db, { workerId: "successor-worker" }),
+			).toMatchObject({
+				conversationId: "conv-a",
+				runIds: [ownedRunId("queued")],
+			});
 		});
 	});
 

@@ -28,7 +28,7 @@ import {
 	type LiveStreamRelay,
 	type LiveStreamTelemetry,
 } from "@mymemo/live-text";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
 import { RunLoop, type RunProcessor } from "./run-loop";
 import { Worker } from "./worker";
@@ -150,6 +150,16 @@ async function backdateRun(runId: string, msAgo: number) {
 		.update(runs)
 		.set({ createdAt: sql`now() - (${msAgo} * interval '1 millisecond')` })
 		.where(eq(runs.runId, runId));
+}
+
+async function ageRunsPastQueueTimeout(...runIds: string[]) {
+	await tdb.db
+		.update(runs)
+		.set({
+			createdAt: sql`now() - interval '2 minutes'`,
+			updatedAt: sql`now() - interval '2 minutes'`,
+		})
+		.where(inArray(runs.runId, runIds));
 }
 
 async function readOwnership(conversationId: string) {
@@ -1423,6 +1433,21 @@ describe("RunLoop — Conversation Reclamation", () => {
 		expect((await readRun("run-b"))?.status).toBe("error");
 	});
 
+	it("claims an old queued Run immediately after reclaiming its lapsed Conversation", async () => {
+		await claimRun("run-running", "conv-1", "vanished-worker");
+		await queueRun("run-queued", "conv-1");
+		await ageRunsPastQueueTimeout("run-queued");
+		await lapseOwnershipLease("conv-1");
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendMessageProcessor);
+
+		expect(await loop.tick()).toBe(1);
+		await worker.drain();
+
+		expect((await readRun("run-running"))?.status).toBe("error");
+		expect((await readRun("run-queued"))?.status).toBe("done");
+	});
+
 	it("observes the degradation marker and duration created by Reclamation", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await lapseOwnershipLease("conv-1");
@@ -1577,10 +1602,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 describe("RunLoop — unowned queue timeout", () => {
 	it("expires an old queued Run without claiming its Conversation", async () => {
 		await queueRun("run-old", "conv-1");
-		await tdb.db
-			.update(runs)
-			.set({ createdAt: sql`now() - interval '2 minutes'` })
-			.where(eq(runs.runId, "run-old"));
+		await ageRunsPastQueueTimeout("run-old");
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor);
 

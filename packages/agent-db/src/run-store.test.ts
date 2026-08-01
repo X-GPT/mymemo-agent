@@ -6,7 +6,7 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import {
 	type ConversationOwner,
 	claimConversationTx,
@@ -310,6 +310,16 @@ async function backdateRun(runId: string, msAgo: number) {
 		.update(runs)
 		.set({ createdAt: sql`now() - (${msAgo} * interval '1 millisecond')` })
 		.where(eq(runs.runId, runId));
+}
+
+async function ageRunsPastQueueTimeout(...runIds: string[]) {
+	await tdb.db
+		.update(runs)
+		.set({
+			createdAt: sql`now() - interval '2 minutes'`,
+			updatedAt: sql`now() - interval '2 minutes'`,
+		})
+		.where(inArray(runs.runId, runIds));
 }
 
 async function readRun(runId: string) {
@@ -1771,7 +1781,7 @@ describe("Run liveness sweep transactions", () => {
 		expect(runtime?.agentSessionId).toBe("session-existing");
 	});
 
-	it("terminalizes started Runs and leaves queued Runs for the next Claim", async () => {
+	it("terminalizes started Runs and gives queued Runs a fresh timeout window for the next Claim", async () => {
 		await claimRun("run-running", "conv-1", "worker-1");
 		await queueRun("run-interrupted", "conv-1");
 		await queueRun("run-queued", "conv-1");
@@ -1779,6 +1789,7 @@ describe("Run liveness sweep transactions", () => {
 			.update(runs)
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-interrupted"));
+		await ageRunsPastQueueTimeout("run-interrupted", "run-queued");
 		await lapseOwnershipLease("conv-1");
 
 		const reclaimed = await reclaimConversationTx(tdb.db);
@@ -1796,6 +1807,7 @@ describe("Run liveness sweep transactions", () => {
 		]);
 		expect((await readRun("run-queued"))?.status).toBe("queued");
 		expect(await readEvents("run-queued")).toEqual([]);
+		expect(await expireUnownedQueuedRunsTx(tdb.db)).toBeNull();
 		expect(
 			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
 		).toMatchObject({
@@ -1897,10 +1909,7 @@ describe("Run liveness sweep transactions", () => {
 			conversationId: "conv-1",
 			sandboxId: "sandbox-1",
 		});
-		await tdb.db
-			.update(runs)
-			.set({ createdAt: sql`now() - interval '2 minutes'` })
-			.where(eq(runs.runId, "run-queued"));
+		await ageRunsPastQueueTimeout("run-queued");
 
 		await expireUnownedQueuedRunsTx(tdb.db);
 
@@ -1951,10 +1960,7 @@ describe("Run liveness sweep transactions", () => {
 	it("does not age out a queued Run waiting behind work in a live Conversation", async () => {
 		await claimRun("run-running", "conv-1", "worker-1");
 		await queueRun("run-waiting", "conv-1");
-		await tdb.db
-			.update(runs)
-			.set({ createdAt: sql`now() - interval '2 minutes'` })
-			.where(eq(runs.runId, "run-waiting"));
+		await ageRunsPastQueueTimeout("run-waiting");
 
 		expect(await expireUnownedQueuedRunsTx(tdb.db)).toBeNull();
 		expect((await readRun("run-running"))?.status).toBe("running");
@@ -1963,10 +1969,7 @@ describe("Run liveness sweep transactions", () => {
 
 	it("terminalizes old unclaimed queued runs as error", async () => {
 		await queueRun("run-queued", "conv-1");
-		await tdb.db
-			.update(runs)
-			.set({ createdAt: sql`now() - interval '2 minutes'` })
-			.where(eq(runs.runId, "run-queued"));
+		await ageRunsPastQueueTimeout("run-queued");
 
 		const expiredRuns = (await expireUnownedQueuedRunsTx(tdb.db))?.runs ?? [];
 
