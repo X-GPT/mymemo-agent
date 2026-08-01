@@ -863,7 +863,7 @@ export async function commitLockedRunTerminalInTx(
 ): Promise<RunRecord> {
 	if (input.payload?.reason === "stale_worker") {
 		throw new InvalidRunEventError(
-			"stale_worker is reserved for worker liveness sweeps",
+			"stale_worker is reserved for the Run liveness sweep",
 		);
 	}
 	if (input.agentSessionId !== undefined) {

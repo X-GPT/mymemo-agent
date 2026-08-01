@@ -258,7 +258,7 @@ class RunWriteRejectedError extends Error {
  * `tick` is the whole loop and is directly awaitable, so tests drive Reclamation,
  * claim, renewal, and terminalization deterministically (PGlite + explicit
  * ticks, no wall-clock timers — Bun lacks `setInterval` fake timers). `start`
- * schedules both `tick` and the at-least-15s Run-liveness sweep; `stop`
+ * schedules both `tick` and the at-least-15s Run liveness sweep; `stop`
  * unschedules them and drains in-flight work.
  *
  * Ownership and single-terminalization are enforced by the DB fences in the
@@ -521,8 +521,8 @@ export class RunLoop {
 	 *
 	 * Bridge, deleted with the Run lease itself (#402). Ownership renewal above is
 	 * the authority; this temporary heartbeat remains for the Conversation-scoped
-	 * stores moving in #401. It also
-	 * returns the served Run's status, which the drain still needs because
+	 * stores moving in #401. It also returns the served Run's status, which the
+	 * drain still needs because
 	 * Conversation-scoped renewal returns no Run row.
 	 */
 	private async observeServedRun(drain: ActiveDrain): Promise<void> {
@@ -545,8 +545,8 @@ export class RunLoop {
 		}
 		if (!renewed) {
 			// This Run reached its Outcome under us while the Conversation lease
-			// stayed live. It is no longer ours to
-			// terminalize, but the Conversation still is, so only the Run is
+			// stayed live. It is no longer ours to terminalize, but the Conversation
+			// still is, so only the Run is
 			// abandoned and the drain continues with the rest of its snapshot.
 			this.opts.logger.warn({
 				message: "abandoning a run this worker no longer owns",

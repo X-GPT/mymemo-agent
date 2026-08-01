@@ -1703,7 +1703,7 @@ describe("markLiveStreamFailedTx", () => {
 	});
 });
 
-describe("Run liveness transactions", () => {
+describe("Run liveness sweep transactions", () => {
 	it("Reclamation closes a Run after a crash left an incomplete Tool prefix", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
