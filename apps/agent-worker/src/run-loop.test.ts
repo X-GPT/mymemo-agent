@@ -623,6 +623,43 @@ describe("RunLoop — conversation drain", () => {
 });
 
 describe("RunLoop — terminal outcomes", () => {
+	it("halts without release when the failure marker first observes lost ownership", async () => {
+		let processorCalls = 0;
+		const liveStreamRelay: LiveStreamRelay = {
+			async openProducer() {
+				await lapseConversationOwnership(tdb.db, {
+					userId: "user-1",
+					conversationId: "conv-1",
+				});
+				throw new Error("relay unavailable");
+			},
+			async attach() {
+				return { outcome: "no_producer" };
+			},
+			async close() {},
+		};
+		const worker = buildWorker(1);
+		const loop = buildLoop(
+			worker,
+			async () => {
+				processorCalls += 1;
+			},
+			liveStreamRelay,
+		);
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		expect(processorCalls).toBe(0);
+		expect((await readRun("run-1"))?.status).toBe("running");
+		expect(await readEventTypes("run-1")).toEqual([]);
+		expect(await readOwnership("conv-1")).toMatchObject({
+			ownerWorkerId: "worker-1",
+			ownerUntil: expect.any(Date),
+		});
+	});
+
 	it("marks the Live Stream failed and continues when the relay cannot open a producer", async () => {
 		const liveStreamRelay = createInMemoryLiveStreamRelay();
 		await liveStreamRelay.close();

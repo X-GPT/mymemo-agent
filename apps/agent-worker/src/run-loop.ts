@@ -26,7 +26,6 @@ import {
 	markStaleRunsTx,
 	type RunRecord,
 	type RunWriteOwner,
-	type StartClaimedRunResult,
 	startClaimedRunTx,
 	type TerminalOutcome,
 	type TerminalRunStatus,
@@ -180,6 +179,9 @@ export interface RunLoopOptions {
 interface RunEndState {
 	/** A heartbeat observed `interrupt_requested`; the terminal must be `interrupted`. */
 	interrupted: boolean;
+	/** A fenced write found that another path already chose a non-interruption
+	 * status, so this worker must not attempt another terminal transition. */
+	skipTerminalization: boolean;
 	/** A heartbeat lost the ownership fence; recovery owns the run — do not
 	 * terminalize it. */
 	lostOwnership: boolean;
@@ -236,7 +238,7 @@ type RejectedTerminal = Extract<
 	{ outcome: "rejected" }
 >;
 
-type RejectedRunStart = Extract<StartClaimedRunResult, { outcome: "rejected" }>;
+type RejectedRunWrite = { outcome: "rejected" } & FenceRejection;
 
 /** Internal control-flow signal: the typed rejection has already been applied
  * to the drain state, so it must stop the processor without being mistaken for
@@ -654,7 +656,7 @@ export class RunLoop {
 	private noteRejectedRunWrite(
 		drain: ActiveDrain,
 		runId: string,
-		rejection: RejectedRunStart | RejectedTerminal,
+		rejection: RejectedRunWrite,
 		entry?: ActiveEntry,
 	): void {
 		if (rejection.rejected === "status") {
@@ -664,7 +666,7 @@ export class RunLoop {
 					entry.controller.abort();
 					entry.interruptionController.abort();
 				} else {
-					entry.state.lostOwnership = true;
+					entry.state.skipTerminalization = true;
 					entry.controller.abort();
 				}
 			}
@@ -726,7 +728,11 @@ export class RunLoop {
 			interruptionController: new AbortController(),
 			shutdownController: new AbortController(),
 			ownershipLostController: new AbortController(),
-			state: { interrupted: false, lostOwnership: false },
+			state: {
+				interrupted: false,
+				skipTerminalization: false,
+				lostOwnership: false,
+			},
 		};
 		// Attached before the first await, so a concurrent tick can renew this
 		// Run's lease and hand it an observed interruption for its whole life.
@@ -767,6 +773,7 @@ export class RunLoop {
 					owner,
 				});
 				if (result.outcome === "rejected") {
+					this.noteRejectedRunWrite(drain, run.runId, result, entry);
 					this.opts.logger.warn({
 						message:
 							"could not mark Live Stream failed through Ownership fence",
@@ -790,6 +797,10 @@ export class RunLoop {
 			telemetry: this.opts.liveStreamTelemetry,
 		});
 		entry.liveStream = liveStream;
+		if (entry.state.lostOwnership || entry.state.skipTerminalization) {
+			await liveStream.close();
+			return;
+		}
 		let turnResult: TurnResult = EMPTY_TURN;
 		let failure:
 			| { error: unknown; streamMetadata?: TurnStreamMetadata }
@@ -876,6 +887,14 @@ export class RunLoop {
 		if (state.lostOwnership) {
 			this.opts.logger.warn({
 				message: "abandoning run after ownership loss",
+				workerId: this.workerId,
+				runId: owner.runId,
+			});
+			return null;
+		}
+		if (state.skipTerminalization) {
+			this.opts.logger.info({
+				message: "skipping terminal transition after status rejection",
 				workerId: this.workerId,
 				runId: owner.runId,
 			});
