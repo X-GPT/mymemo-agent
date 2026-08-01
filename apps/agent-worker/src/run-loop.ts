@@ -20,6 +20,7 @@ import {
 } from "@mymemo/agent-db/run-events";
 import {
 	appendRunEventsTx,
+	expireUnownedQueuedRunsTx,
 	type FenceRejection,
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
@@ -231,7 +232,7 @@ function conversationKey(owner: ConversationOwner): string {
 	return `${owner.userId}/${owner.conversationId}`;
 }
 
-const RECLAMATION_INTERVAL_MS = 15_000;
+const RUN_LIVENESS_SWEEP_INTERVAL_MS = 15_000;
 const GENERIC_RUN_ERROR_MESSAGE = "Run failed";
 
 /** Internal control-flow signal: the typed rejection has already been applied
@@ -246,7 +247,8 @@ class RunWriteRejectedError extends Error {
  * Conversation (ADR-0015): a worker Claims a Conversation, serves the Runs it
  * had queued at that moment one at a time in submission order, and releases.
  * One `tick`:
- *  1. reclaims Conversations whose Ownership lease lapsed;
+ *  1. reclaims Conversations whose Ownership lease lapsed and expires old
+ *     queued Runs whose Conversation is unowned;
  *  2. renews each owned Conversation's Ownership lease — a renewal matching zero
  *     rows is the lost-lease signal — and observes a durable interruption of the
  *     Run being served; and
@@ -256,7 +258,7 @@ class RunWriteRejectedError extends Error {
  * `tick` is the whole loop and is directly awaitable, so tests drive Reclamation,
  * claim, renewal, and terminalization deterministically (PGlite + explicit
  * ticks, no wall-clock timers — Bun lacks `setInterval` fake timers). `start`
- * schedules both `tick` and the at-least-15s Reclamation sweep; `stop`
+ * schedules both `tick` and the at-least-15s Run-liveness sweep; `stop`
  * unschedules them and drains in-flight work.
  *
  * Ownership and single-terminalization are enforced by the DB fences in the
@@ -269,7 +271,7 @@ export class RunLoop {
 	private readonly drains = new Map<string, ActiveDrain>();
 	private running = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
-	private reclamationTimer: ReturnType<typeof setTimeout> | undefined;
+	private runLivenessSweepTimer: ReturnType<typeof setTimeout> | undefined;
 	private doorbellUnsubscribe: (() => void) | undefined;
 
 	constructor(private readonly opts: RunLoopOptions) {}
@@ -285,7 +287,7 @@ export class RunLoop {
 	 * Claimed this tick.
 	 */
 	async tick(): Promise<number> {
-		await this.tryReclaimConversations();
+		await this.tryRunLivenessSweep();
 		await this.renewOwnedConversations();
 		return this.claimAndDrain();
 	}
@@ -312,9 +314,9 @@ export class RunLoop {
 			}
 		};
 		void runTick();
-		this.reclamationTimer = setTimeout(
-			() => void this.runReclamationTimer(),
-			RECLAMATION_INTERVAL_MS,
+		this.runLivenessSweepTimer = setTimeout(
+			() => void this.onRunLivenessSweepTimer(),
+			RUN_LIVENESS_SWEEP_INTERVAL_MS,
 		);
 		if (this.opts.doorbell) {
 			// Rings coalesce so a burst of admissions costs one trailing claim pass,
@@ -355,9 +357,9 @@ export class RunLoop {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
-		if (this.reclamationTimer) {
-			clearTimeout(this.reclamationTimer);
-			this.reclamationTimer = undefined;
+		if (this.runLivenessSweepTimer) {
+			clearTimeout(this.runLivenessSweepTimer);
+			this.runLivenessSweepTimer = undefined;
 		}
 		// Stop every in-flight run before draining: cancel Tool/E2B work, then
 		// force-close private SDK resources without granting the user-interruption
@@ -373,18 +375,23 @@ export class RunLoop {
 		await this.opts.worker.shutdown();
 	}
 
-	private async runReclamationTimer(): Promise<void> {
+	private async onRunLivenessSweepTimer(): Promise<void> {
 		if (!this.running) return;
 		try {
-			await this.tryReclaimConversations();
+			await this.tryRunLivenessSweep();
 		} finally {
 			if (this.running) {
-				this.reclamationTimer = setTimeout(
-					() => void this.runReclamationTimer(),
-					RECLAMATION_INTERVAL_MS,
+				this.runLivenessSweepTimer = setTimeout(
+					() => void this.onRunLivenessSweepTimer(),
+					RUN_LIVENESS_SWEEP_INTERVAL_MS,
 				);
 			}
 		}
+	}
+
+	private async tryRunLivenessSweep(): Promise<void> {
+		await this.tryReclaimConversations();
+		await this.tryExpireUnownedQueuedRuns();
 	}
 
 	private async tryReclaimConversations(): Promise<void> {
@@ -429,6 +436,30 @@ export class RunLoop {
 					),
 				});
 			}
+		}
+	}
+
+	private async tryExpireUnownedQueuedRuns(): Promise<void> {
+		try {
+			for (;;) {
+				const expiration = await expireUnownedQueuedRunsTx(this.opts.db);
+				if (!expiration) break;
+				this.opts.logger.warn({
+					message: "expired unowned queued Runs",
+					workerId: this.workerId,
+					conversationId: expiration.conversationId,
+					expiredRuns: expiration.runs.map((run) => ({
+						runId: run.runId,
+						status: run.status,
+					})),
+				});
+			}
+		} catch (error) {
+			this.opts.logger.error({
+				message: "unowned queue timeout sweep failed",
+				workerId: this.workerId,
+				error: toMessage(error),
+			});
 		}
 	}
 

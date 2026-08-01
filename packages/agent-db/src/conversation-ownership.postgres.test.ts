@@ -252,17 +252,18 @@ async function fencedStamp(
 }
 
 /**
- * Claim while a second, uncommitted transaction holds whatever `prelude` took —
- * the only way to put a genuinely concurrent session into a known state. A Claim
- * that blocks is reported as blocked rather than left to hang until the runner's
- * timeout, since blocking is the defect these tests exist to catch. The held
- * transaction always ends, so neither a blocked Claim nor a failing prelude can
- * leave a lock behind for the rest of the file.
+ * Run an operation while a second, uncommitted transaction holds whatever
+ * `prelude` took — the only way to put a genuinely concurrent session into a
+ * known state. A blocked operation is reported rather than left to hang until
+ * the runner's timeout, since blocking is the defect these tests exist to catch.
+ * The held transaction always ends, so neither a blocked operation nor a failing
+ * prelude can leave a lock behind for the rest of the file.
  */
-async function claimWhileHeld(
+async function operateWhileHeld<T>(
 	prelude: (tx: DbTx) => Promise<void>,
-	workerId: string,
-): Promise<ClaimedConversation | null> {
+	operation: () => Promise<T>,
+	operationName: string,
+): Promise<T> {
 	const opened = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
 	const held = db.transaction(async (tx) => {
@@ -278,12 +279,14 @@ async function claimWhileHeld(
 	try {
 		await opened.promise;
 		return await Promise.race([
-			claimConversationTx(db, { workerId }),
+			operation(),
 			new Promise<never>((_, reject) => {
 				timer = setTimeout(
 					() =>
 						reject(
-							new Error(`the Claim blocked for over ${NON_BLOCKING_MS}ms`),
+							new Error(
+								`${operationName} blocked for over ${NON_BLOCKING_MS}ms`,
+							),
 						),
 					NON_BLOCKING_MS,
 				);
@@ -296,38 +299,15 @@ async function claimWhileHeld(
 	}
 }
 
-/** Reclaim while another transaction holds a Conversation row lock. */
-async function reclaimWhileHeld(
-	conversationId: string,
-): Promise<Awaited<ReturnType<typeof reclaimConversationTx>>> {
-	const opened = Promise.withResolvers<void>();
-	const release = Promise.withResolvers<void>();
-	const held = db.transaction(async (tx) => {
-		await lockConversationRow(tx, conversationId);
-		opened.resolve();
-		await release.promise;
-	});
-	held.catch((error) => opened.reject(error));
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		await opened.promise;
-		return await Promise.race([
-			reclaimConversationTx(db),
-			new Promise<never>((_, reject) => {
-				timer = setTimeout(
-					() =>
-						reject(
-							new Error(`Reclamation blocked for over ${NON_BLOCKING_MS}ms`),
-						),
-					NON_BLOCKING_MS,
-				);
-			}),
-		]);
-	} finally {
-		clearTimeout(timer);
-		release.resolve();
-		await held;
-	}
+async function claimWhileHeld(
+	prelude: (tx: DbTx) => Promise<void>,
+	workerId: string,
+): Promise<ClaimedConversation | null> {
+	return await operateWhileHeld(
+		prelude,
+		() => claimConversationTx(db, { workerId }),
+		"the Claim",
+	);
 }
 
 describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
@@ -420,7 +400,11 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 				})
 				.where(eq(conversations.userId, USER_ID));
 
-			const reclaimed = await reclaimWhileHeld("conv-a");
+			const reclaimed = await operateWhileHeld(
+				(tx) => lockConversationRow(tx, "conv-a"),
+				() => reclaimConversationTx(db),
+				"Reclamation",
+			);
 
 			expect(reclaimed?.conversationId).toBe("conv-b");
 			expect(

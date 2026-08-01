@@ -1230,7 +1230,7 @@ describe("RunLoop — agent session pointer", () => {
 		expect((await readRun("run-1"))?.status).toBe("running");
 		expect(await readEventTypes("run-1")).toEqual([]);
 
-		// The Run is left intact for Reclamation, which closes it as a stale worker.
+		// The Run is left intact for Reclamation, which records stale_worker.
 		await loop.tick();
 		expect((await readRun("run-1"))?.status).toBe("error");
 		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
@@ -1490,7 +1490,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 		]);
 	});
 
-	it("terminalizes stale running runs as error during a tick", async () => {
+	it("terminalizes a running Run after its Ownership lease lapses", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await lapseOwnershipLease("conv-1");
 		const worker = buildWorker(1);
@@ -1504,7 +1504,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
 	});
 
-	it("terminalizes stale interrupt-requested runs as interrupted during a tick", async () => {
+	it("terminalizes interrupt-requested after its Ownership lease lapses", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-stale",
@@ -1522,8 +1522,8 @@ describe("RunLoop — Conversation Reclamation", () => {
 		expect(await readEventTypes("run-stale")).toEqual(["run_interrupted"]);
 	});
 
-	it("rejects stale worker appends after Reclamation terminalizes the Run", async () => {
-		const staleOwner = await claimRun("run-stale", "conv-1", "stale-worker");
+	it("rejects the former owner's appends after Reclamation terminalizes the Run", async () => {
+		const lapsedOwner = await claimRun("run-stale", "conv-1", "stale-worker");
 		await lapseOwnershipLease("conv-1");
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor);
@@ -1533,7 +1533,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 		expect(
 			await appendRunEventTx(tdb.db, {
 				owner: {
-					...staleOwner,
+					...lapsedOwner,
 					runId: "run-stale",
 					workerId: "stale-worker",
 				},
@@ -1571,6 +1571,24 @@ describe("RunLoop — Conversation Reclamation", () => {
 				.outcome,
 		).toBe("no_producer");
 		await liveStreamRelay.close();
+	});
+});
+
+describe("RunLoop — unowned queue timeout", () => {
+	it("expires an old queued Run without claiming its Conversation", async () => {
+		await queueRun("run-old", "conv-1");
+		await tdb.db
+			.update(runs)
+			.set({ createdAt: sql`now() - interval '2 minutes'` })
+			.where(eq(runs.runId, "run-old"));
+		const worker = buildWorker(1);
+		const loop = buildLoop(worker, appendMessageProcessor);
+
+		const claimed = await loop.tick();
+
+		expect(claimed).toBe(0);
+		expect((await readRun("run-old"))?.status).toBe("error");
+		expect(await readEventTypes("run-old")).toEqual(["run_error"]);
 	});
 });
 

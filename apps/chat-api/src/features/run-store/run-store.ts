@@ -15,7 +15,7 @@ import type { ConversationRef } from "@/features/conversation-store";
 
 /**
  * chat-api's run-store surface. The concurrency-critical transaction helpers
- * (claim, append, terminal, heartbeat, interrupt, stale recovery) and their types
+ * (claim, append, terminal, heartbeat, and interrupt) and their types
  * live in the shared `@mymemo/agent-db` package, so chat-api and agent-worker
  * run one implementation of the queue protocol over the same `runs`/`run_events`
  * tables. They are re-exported here so the feature barrel and existing
@@ -47,7 +47,6 @@ export {
 	claimNextRunTx,
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
-	markStaleRunsTx,
 	RunInputMismatchError,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";

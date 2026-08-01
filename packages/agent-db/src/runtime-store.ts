@@ -105,7 +105,7 @@ export async function createConversationRuntimeTx(
  * Always resets `sandbox_tainted`: a newly stored pointer names a
  * just-created/just-verified sandbox, and a cleared pointer has nothing left
  * to taint. Taint is only ever set through {@link markRuntimeSandboxTaintedTx}
- * or {@link taintRecoveredRuntimeSandboxInTx}.
+ * or {@link taintRuntimeSandboxForReclamationInTx}.
  */
 export async function updateRuntimeSandboxTx(
 	db: Database,
@@ -175,7 +175,7 @@ export async function markRuntimeSandboxTaintedTx(
  * would otherwise reconnect to. Restricted to conversations that actually hold
  * a sandbox, so taint keeps describing the current sandbox only.
  */
-export async function taintRecoveredRuntimeSandboxInTx(
+export async function taintRuntimeSandboxForReclamationInTx(
 	tx: DbTx,
 	input: { userId: string; conversationId: string },
 ): Promise<void> {

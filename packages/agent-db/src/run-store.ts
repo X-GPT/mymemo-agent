@@ -15,7 +15,7 @@ import {
 } from "./run-events";
 import {
 	publishAgentSessionPointerInTx,
-	taintRecoveredRuntimeSandboxInTx,
+	taintRuntimeSandboxForReclamationInTx,
 } from "./runtime-store";
 import {
 	ACTIVE_RUN_STATUSES,
@@ -82,6 +82,14 @@ export interface ReclaimedConversation {
 	userId: string;
 	conversationId: string;
 	runs: ReclaimedRunRecord[];
+}
+
+/** Old queued Runs expired from one unowned Conversation. This is the retained
+ * queue-age backstop, not Reclamation: no Ownership lease was lost. */
+export interface ExpiredQueuedRuns {
+	userId: string;
+	conversationId: string;
+	runs: RunRecord[];
 }
 
 /**
@@ -850,7 +858,9 @@ export async function commitLockedRunTerminalInTx(
 	input: TerminalTransitionInput,
 ): Promise<RunRecord> {
 	if (input.payload?.reason === "stale_worker") {
-		throw new InvalidRunEventError("stale_worker is reserved for Reclamation");
+		throw new InvalidRunEventError(
+			"stale_worker is reserved for worker liveness sweeps",
+		);
 	}
 	if (input.agentSessionId !== undefined) {
 		await publishAgentSessionPointerInTx(tx, input.owner, input.agentSessionId);
@@ -1138,12 +1148,6 @@ export async function markLiveStreamFailedTx(
  * and clears the Ownership columns. An accepted interruption remains
  * `interrupted`; every other Active Run becomes `error`. The durable terminal
  * reason and Live Stream failure-marker behavior are unchanged.
- *
- * The same sweep retains the queue-age backstop, but only for old queued Runs
- * whose Conversation is already unowned. This distinguishes "nobody picked it
- * up" from a queued Run legitimately waiting inside a live Conversation drain.
- * Queue-age candidates do not taint a Workspace because no vanished owner is
- * being reclaimed.
  */
 export async function reclaimConversationTx(
 	db: Database,
@@ -1153,27 +1157,14 @@ export async function reclaimConversationTx(
 			.select({
 				userId: conversations.userId,
 				conversationId: conversations.conversationId,
-				ownerUntil: conversations.ownerUntil,
 			})
 			.from(conversations)
-			.where(
-				sql`${conversations.ownerUntil} <= now()
-					or (${conversations.ownerUntil} is null and exists (
-						select 1 from ${runs}
-						 where ${runs.userId} = ${conversations.userId}
-						   and ${runs.conversationId} = ${conversations.conversationId}
-						   and ${runs.status} = 'queued'
-							   and ${runs.createdAt} <= now() - interval '${sql.raw(
-										String(OWNERSHIP_LEASE_MS),
-									)} milliseconds'
-					))`,
-			)
+			.where(sql`${conversations.ownerUntil} <= now()`)
 			.for("update", { skipLocked: true })
 			.limit(1);
 		if (!candidate) return null;
 
-		const reclaimsLapsedOwnership = candidate.ownerUntil !== null;
-		const stale = await tx
+		const runsToReclaim = await tx
 			.select({
 				runId: runs.runId,
 				userId: runs.userId,
@@ -1186,72 +1177,31 @@ export async function reclaimConversationTx(
 				and(
 					eq(runs.userId, candidate.userId),
 					eq(runs.conversationId, candidate.conversationId),
-					reclaimsLapsedOwnership
-						? inArray(runs.status, ACTIVE_RUN_STATUSES)
-						: and(
-								eq(runs.status, "queued"),
-								sql`${runs.createdAt} <= now() - interval '${sql.raw(
-									String(OWNERSHIP_LEASE_MS),
-								)} milliseconds'`,
-							),
+					inArray(runs.status, ACTIVE_RUN_STATUSES),
 				),
 			)
 			.for("update");
 
-		const reclaimedRuns: ReclaimedRunRecord[] = [];
-		for (const staleRun of stale) {
-			const status: TerminalRunStatus =
-				staleRun.status === "interrupt_requested" ? "interrupted" : "error";
-			const [row] = await tx
-				.update(runs)
-				.set({
-					status,
-					nextEventSeq: sql`${runs.nextEventSeq} + 1`,
-					...(staleRun.status === "queued"
-						? {}
-						: {
-								liveStreamFailedAt: sql`coalesce(${runs.liveStreamFailedAt}, now())`,
-							}),
-					lockedBy: null,
-					lockedUntil: null,
-					terminalAt: sql`now()`,
-					updatedAt: sql`now()`,
-				})
-				.where(
-					and(
-						eq(runs.runId, staleRun.runId),
-						// Compare-and-set: only a Run still Active can be terminalized, so
-						// Reclamation cannot land on one that reached its Outcome under it.
-						inArray(runs.status, ACTIVE_RUN_STATUSES),
-					),
-				)
-				.returning();
-			if (!row) continue;
-			// The stale_worker Outcome is the durable proof that an incomplete Tool
-			// prefix came from a crashed owner, so Reclamation and history accept it.
-			await insertTerminalEvent(tx, row, status, {
-				...(status === "error" ? { message: "Run failed" } : {}),
-				reason: "stale_worker",
-			});
-			reclaimedRuns.push({
-				...toRunRecord(row),
-				liveStreamFailureMarkedByReclamation:
-					staleRun.status !== "queued" && staleRun.liveStreamFailedAt === null,
-			});
-		}
-
-		if (reclaimsLapsedOwnership) {
-			await taintRecoveredRuntimeSandboxInTx(tx, candidate);
-			await tx
-				.update(conversations)
-				.set({ ownerWorkerId: null, ownerUntil: null })
-				.where(
-					and(
-						eq(conversations.userId, candidate.userId),
-						eq(conversations.conversationId, candidate.conversationId),
-					),
-				);
-		}
+		const terminalizedRuns = await terminalizeRunsForLivenessSweepInTx(
+			tx,
+			runsToReclaim,
+		);
+		const reclaimedRuns = terminalizedRuns.map(
+			({ liveStreamFailureMarkedNow, ...run }) => ({
+				...run,
+				liveStreamFailureMarkedByReclamation: liveStreamFailureMarkedNow,
+			}),
+		);
+		await taintRuntimeSandboxForReclamationInTx(tx, candidate);
+		await tx
+			.update(conversations)
+			.set({ ownerWorkerId: null, ownerUntil: null })
+			.where(
+				and(
+					eq(conversations.userId, candidate.userId),
+					eq(conversations.conversationId, candidate.conversationId),
+				),
+			);
 
 		return {
 			userId: candidate.userId,
@@ -1259,6 +1209,125 @@ export async function reclaimConversationTx(
 			runs: reclaimedRuns,
 		};
 	});
+}
+
+/**
+ * Expire old queued Runs only when their Conversation is unowned. The
+ * Conversation row is locked with `FOR UPDATE SKIP LOCKED`, so this backstop
+ * cannot race admission or Claim and never waits behind their lifecycle lock.
+ */
+export async function expireUnownedQueuedRunsTx(
+	db: Database,
+): Promise<ExpiredQueuedRuns | null> {
+	return await db.transaction(async (tx) => {
+		const [candidate] = await tx
+			.select({
+				userId: conversations.userId,
+				conversationId: conversations.conversationId,
+			})
+			.from(conversations)
+			.where(
+				sql`${conversations.ownerUntil} is null and exists (
+					select 1 from ${runs}
+					 where ${runs.userId} = ${conversations.userId}
+					   and ${runs.conversationId} = ${conversations.conversationId}
+					   and ${runs.status} = 'queued'
+					   and ${runs.createdAt} <= now() - interval '${sql.raw(
+								String(OWNERSHIP_LEASE_MS),
+							)} milliseconds'
+				)`,
+			)
+			.for("update", { skipLocked: true })
+			.limit(1);
+		if (!candidate) return null;
+
+		const queuedRunsToExpire = await tx
+			.select({
+				runId: runs.runId,
+				userId: runs.userId,
+				conversationId: runs.conversationId,
+				status: runs.status,
+				liveStreamFailedAt: runs.liveStreamFailedAt,
+			})
+			.from(runs)
+			.where(
+				and(
+					eq(runs.userId, candidate.userId),
+					eq(runs.conversationId, candidate.conversationId),
+					eq(runs.status, "queued"),
+					sql`${runs.createdAt} <= now() - interval '${sql.raw(
+						String(OWNERSHIP_LEASE_MS),
+					)} milliseconds'`,
+				),
+			)
+			.for("update");
+		const terminalized = await terminalizeRunsForLivenessSweepInTx(
+			tx,
+			queuedRunsToExpire,
+		);
+		return {
+			...candidate,
+			runs: terminalized.map(
+				({ liveStreamFailureMarkedNow: _, ...run }) => run,
+			),
+		};
+	});
+}
+
+type RunLivenessSweepCandidate = Pick<
+	typeof runs.$inferSelect,
+	"runId" | "status" | "liveStreamFailedAt"
+>;
+
+type RunLivenessSweepResult = RunRecord & {
+	liveStreamFailureMarkedNow: boolean;
+};
+
+async function terminalizeRunsForLivenessSweepInTx(
+	tx: DbTx,
+	candidates: RunLivenessSweepCandidate[],
+): Promise<RunLivenessSweepResult[]> {
+	const terminalizedRuns: RunLivenessSweepResult[] = [];
+	for (const candidate of candidates) {
+		const status: TerminalRunStatus =
+			candidate.status === "interrupt_requested" ? "interrupted" : "error";
+		const [row] = await tx
+			.update(runs)
+			.set({
+				status,
+				nextEventSeq: sql`${runs.nextEventSeq} + 1`,
+				...(candidate.status === "queued"
+					? {}
+					: {
+							liveStreamFailedAt: sql`coalesce(${runs.liveStreamFailedAt}, now())`,
+						}),
+				lockedBy: null,
+				lockedUntil: null,
+				terminalAt: sql`now()`,
+				updatedAt: sql`now()`,
+			})
+			.where(
+				and(
+					eq(runs.runId, candidate.runId),
+					// Compare-and-set: only a Run still Active can be terminalized, so
+					// this transaction cannot overwrite an Outcome that landed first.
+					inArray(runs.status, ACTIVE_RUN_STATUSES),
+				),
+			)
+			.returning();
+		if (!row) continue;
+		// Preserve the existing durable terminal reason consumed by history.
+		await insertTerminalEvent(tx, row, status, {
+			...(status === "error" ? { message: "Run failed" } : {}),
+			reason: "stale_worker",
+		});
+		terminalizedRuns.push({
+			...toRunRecord(row),
+			liveStreamFailureMarkedNow:
+				candidate.status !== "queued" && candidate.liveStreamFailedAt === null,
+		});
+	}
+	return terminalizedRuns;
 }
 
 /** Narrow a persisted row to a {@link RunRecord}: rows are only ever written
