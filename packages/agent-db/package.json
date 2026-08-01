@@ -9,7 +9,6 @@
 		"./client": "./src/client.ts",
 		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./run-store": "./src/run-store.ts",
-		"./run-ownership": "./src/run-ownership.ts",
 		"./run-events": "./src/run-events.ts",
 		"./queue-metrics": "./src/queue-metrics.ts",
 		"./runtime-store": "./src/runtime-store.ts",

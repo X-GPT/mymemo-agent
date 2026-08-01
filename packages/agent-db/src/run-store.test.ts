@@ -402,7 +402,7 @@ describe("startClaimedRunTx", () => {
 		});
 	});
 
-	it("stamps the legacy Run lease so writes still fenced on it keep working", async () => {
+	it("stamps the legacy Run lease for the temporary heartbeat bridge", async () => {
 		await queueRun("run-1", "conv-1");
 		const owner = await claimConv();
 

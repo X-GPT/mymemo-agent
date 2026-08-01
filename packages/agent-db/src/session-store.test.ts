@@ -357,6 +357,26 @@ describe("SDK session mutation ownership fence", () => {
 		]);
 	});
 
+	it("keeps transcript writes authorized after a Run terminalizes while the Claim remains live", async () => {
+		await insertOwnedConversation({});
+		await tdb.db.insert(runs).values({
+			userId: OWNER.userId,
+			conversationId: OWNER.conversationId,
+			runId: "run-terminal",
+			status: "done",
+		});
+
+		await appendAgentSessionEntriesTx(tdb.db, {
+			owner: OWNER,
+			ref: REF,
+			entries: [entry("after-terminal")],
+		});
+
+		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toEqual([
+			entry("after-terminal"),
+		]);
+	});
+
 	it.each([
 		["a different Conversation", { conversationId: "conv-other" }],
 		["a different user", { userId: "user-other" }],

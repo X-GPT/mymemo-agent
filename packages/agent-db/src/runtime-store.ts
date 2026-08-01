@@ -3,11 +3,11 @@ import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
-	liveConversationOwnershipConditions,
 	liveConversationOwnershipExists,
+	lockLiveConversationOwnershipTx,
 	rejectConversationOwnership,
 } from "./conversation-ownership";
-import { conversationRuntime, conversations, orphanSandboxes } from "./schema";
+import { conversationRuntime, orphanSandboxes } from "./schema";
 
 /**
  * Narrow transaction helpers over `conversation_runtime` and
@@ -67,12 +67,7 @@ export async function createConversationRuntimeTx(
 	owner: ConversationOwner,
 ): Promise<ConversationRuntimeRecord> {
 	return await db.transaction(async (tx) => {
-		const owned = await tx
-			.select({ conversationId: conversations.conversationId })
-			.from(conversations)
-			.where(liveConversationOwnershipConditions(owner))
-			.for("share");
-		if (!owned[0]) rejectConversationOwnership(owner, "runtime row creation");
+		await lockLiveConversationOwnershipTx(tx, owner, "runtime row creation");
 
 		const [inserted] = await tx
 			.insert(conversationRuntime)

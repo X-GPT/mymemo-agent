@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import type { Database } from "./client";
+import type { Database, DbTx } from "./client";
 import { conversations, runs } from "./schema";
 
 /**
@@ -17,10 +17,9 @@ import { conversations, runs } from "./schema";
  * rather than carrying a "zero rows means work arrived, keep the lease and
  * loop" subtlety.
  *
- * This module is deliberately the whole of ADR-0015, sitting beside the Run
- * lease in `run-ownership.ts` rather than inside it: the two authorities
- * coexist only until the fenced writes move onto the epoch, and a file boundary
- * makes retiring the older one a deletion rather than surgery.
+ * This module is deliberately the whole of ADR-0015. The temporary Run-lease
+ * stamping and heartbeat bridge remains in `run-store.ts` until #402, but it
+ * exposes no competing mutation predicate.
  *
  * Lock order is global and stated once: `conversations` before `runs`. The
  * Claim below holds to it by locking only the `conversations` side of its
@@ -248,6 +247,24 @@ export function liveConversationOwnershipConditions(owner: ConversationOwner) {
  */
 export function liveConversationOwnershipExists(owner: ConversationOwner) {
 	return sql`exists (select 1 from ${conversations} where ${liveConversationOwnershipConditions(owner)})`;
+}
+
+/**
+ * Validate and lock a live Claim before a transaction mutates another table.
+ * The `FOR SHARE` lock keeps ownership stable through commit, so release or
+ * Reclamation cannot revoke the authorizing Claim underneath the mutation.
+ */
+export async function lockLiveConversationOwnershipTx(
+	tx: DbTx,
+	owner: ConversationOwner,
+	operation: string,
+): Promise<void> {
+	const [owned] = await tx
+		.select({ conversationId: conversations.conversationId })
+		.from(conversations)
+		.where(liveConversationOwnershipConditions(owner))
+		.for("share");
+	if (!owned) rejectConversationOwnership(owner, operation);
 }
 
 /** Raise the canonical bounded rejection for a Conversation-owned mutation. */

@@ -1,8 +1,9 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import type { Database, DbTx } from "./client";
+import type { Database } from "./client";
 import {
 	type ConversationOwner,
 	liveConversationOwnershipConditions,
+	lockLiveConversationOwnershipTx,
 	rejectConversationOwnership,
 } from "./conversation-ownership";
 import { agentSessions, conversations } from "./schema";
@@ -91,7 +92,7 @@ export async function appendAgentSessionEntriesTx(
 	}
 	const subpath = normalizeSubpath(ref.subpath);
 	await db.transaction(async (tx) => {
-		await lockConversationOwnership(tx, owner, "session append");
+		await lockLiveConversationOwnershipTx(tx, owner, "session append");
 		await tx
 			.insert(agentSessions)
 			.values(
@@ -197,7 +198,7 @@ export async function deleteAgentSessionTx(
 ): Promise<void> {
 	const { owner, ref } = input;
 	await db.transaction(async (tx) => {
-		await lockConversationOwnership(tx, owner, "session delete");
+		await lockLiveConversationOwnershipTx(tx, owner, "session delete");
 		await tx
 			.delete(agentSessions)
 			.where(transcriptWhere(owner.conversationId, ref.sessionId, ref.subpath));
@@ -217,27 +218,6 @@ export async function deleteConversationAgentSessionsTx(
 	await db
 		.delete(agentSessions)
 		.where(eq(agentSessions.conversationId, input.conversationId));
-}
-
-/**
- * Validate and lock ownership before the mutation. A failed fence rejects the
- * transaction with nothing written; a successful `FOR SHARE` lock keeps the
- * ownership row stable through commit, so release or Reclamation cannot clear
- * ownership underneath the write.
- */
-async function lockConversationOwnership(
-	tx: DbTx,
-	owner: ConversationOwner,
-	operation: string,
-): Promise<void> {
-	const [owned] = await tx
-		.select({ conversationId: conversations.conversationId })
-		.from(conversations)
-		.where(liveConversationOwnershipConditions(owner))
-		.for("share");
-	if (!owned) {
-		rejectConversationOwnership(owner, operation);
-	}
 }
 
 /**
