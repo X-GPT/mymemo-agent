@@ -466,8 +466,9 @@ export const agentSessions = pgTable(
 		 * The Ownership epoch of the Claim that mirrored this entry — provenance,
 		 * not a fence. Resume stays pointer-driven and never consults it; it
 		 * exists so "which Claim wrote this transcript" is answerable when a dead
-		 * attempt's transcript is the newest one. Nullable: entries mirrored
-		 * before Conversation ownership carry no epoch, and nothing writes it yet.
+		 * attempt's transcript is the newest one. Current appends stamp the Claim
+		 * epoch; the column stays nullable for entries mirrored before Conversation
+		 * ownership.
 		 */
 		epoch: integer("epoch"),
 		createdAt: timestamp("created_at", { withTimezone: true })

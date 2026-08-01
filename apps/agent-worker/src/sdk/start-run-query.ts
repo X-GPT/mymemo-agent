@@ -1,7 +1,10 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Database } from "@mymemo/agent-db/client";
-import type { UserRunMutationOwner } from "@mymemo/agent-db/run-ownership";
-import { loadRunStartedTx, type RunRecord } from "@mymemo/agent-db/run-store";
+import {
+	loadRunStartedTx,
+	type RunRecord,
+	type RunWriteOwner,
+} from "@mymemo/agent-db/run-store";
 import {
 	type ConversationRuntimeRecord,
 	createConversationRuntimeTx,
@@ -105,7 +108,6 @@ interface ClaudeConfigDirectory {
 
 export interface StartRunQueryDeps {
 	db: Database;
-	workerId: string;
 	provisioner: SandboxProvisioner;
 	/** Kills a fresh sandbox the fence refused to point to (never a live one). */
 	janitor: SandboxJanitor;
@@ -138,18 +140,11 @@ export interface StartRunQueryDeps {
 }
 
 export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
-	return async (run, signal) => {
+	return async (run, signal, owner) => {
 		const started = await loadRunStartedTx(deps.db, { runId: run.runId });
 		// Parse the frozen scope fail-closed before any side effect: a run whose
 		// scope cannot be trusted must not provision or query anything.
 		const documentScope = parseFrozenScope(started);
-		const owner: UserRunMutationOwner = {
-			userId: run.userId,
-			conversationId: run.conversationId,
-			runId: run.runId,
-			workerId: deps.workerId,
-		};
-
 		const { provisioned, runtime } = await provisionWorkspace(deps, owner);
 		let claudeConfigDir: ClaudeConfigDirectory;
 		try {
@@ -208,10 +203,8 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
 			});
 			const sessionConfig = buildAgentSessionQueryConfig({
 				db: deps.db,
-				conversationId: run.conversationId,
+				owner,
 				runtime,
-				runId: run.runId,
-				workerId: owner.workerId,
 				logger: deps.logger,
 			});
 			const options = buildQueryOptions(deps, {
@@ -255,7 +248,7 @@ export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {
  */
 async function provisionWorkspace(
 	deps: StartRunQueryDeps,
-	owner: UserRunMutationOwner,
+	owner: RunWriteOwner,
 ): Promise<{
 	provisioned: ProvisionedSandbox;
 	runtime: ConversationRuntimeRecord;
@@ -290,7 +283,7 @@ async function provisionWorkspace(
  * record it in the (deliberately unfenced) orphan ledger for the janitor. */
 async function killOrRecordOrphan(
 	deps: StartRunQueryDeps,
-	owner: UserRunMutationOwner,
+	owner: RunWriteOwner,
 	sandboxId: string,
 ): Promise<void> {
 	try {
@@ -329,7 +322,7 @@ async function killOrRecordOrphan(
  */
 async function recordReplacedSandbox(
 	deps: StartRunQueryDeps,
-	owner: UserRunMutationOwner,
+	owner: RunWriteOwner,
 	prior: ConversationRuntimeRecord,
 ): Promise<void> {
 	if (prior.sandboxId === null) return;
@@ -360,7 +353,7 @@ function buildQueryOptions(
 	deps: StartRunQueryDeps,
 	input: {
 		run: RunRecord;
-		owner: UserRunMutationOwner;
+		owner: RunWriteOwner;
 		provisioned: ProvisionedSandbox;
 		documentScope: RunToolDeps["documentScope"];
 		toolController: AbortController;

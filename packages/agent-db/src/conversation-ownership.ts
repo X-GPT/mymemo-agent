@@ -50,6 +50,11 @@ export interface ConversationOwner {
 	epoch: number;
 }
 
+/** A Conversation's live Ownership fence rejected a worker mutation. */
+export class ConversationOwnershipFenceError extends Error {
+	override name = "ConversationOwnershipFenceError" as const;
+}
+
 /**
  * A Conversation this worker now owns, the epoch that names this Claim, its
  * lease deadline, and the Runs the Claim will serve.
@@ -207,7 +212,7 @@ export async function renewConversationLeaseTx(
 	const [renewed] = await db
 		.update(conversations)
 		.set({ ownerUntil: leaseDeadline() })
-		.where(liveClaimConditions(owner))
+		.where(liveConversationOwnershipConditions(owner))
 		.returning({ ownerUntil: conversations.ownerUntil });
 	return renewed?.ownerUntil ?? null;
 }
@@ -227,7 +232,7 @@ function claimedConversationConditions(owner: ConversationOwner) {
  * lease superseded by a re-Claim, and the live deadline fences one that merely
  * lapsed with no successor, since a lapsed lease keeps its epoch.
  */
-function liveClaimConditions(owner: ConversationOwner) {
+export function liveConversationOwnershipConditions(owner: ConversationOwner) {
 	return and(
 		claimedConversationConditions(owner),
 		sql`${conversations.ownerUntil} > now()`,
@@ -235,11 +240,23 @@ function liveClaimConditions(owner: ConversationOwner) {
 }
 
 /**
- * {@link liveClaimConditions} as an in-statement `EXISTS` predicate — the form
- * a fenced write on another table carries inside the statement that performs
- * it. Deliberately a probe rather than a lock: fence reads then never conflict
- * with each other, only with the brief Claim and release writes.
+ * {@link liveConversationOwnershipConditions} as an in-statement `EXISTS`
+ * predicate — the form a fenced write on another table carries inside the
+ * statement that performs it. Deliberately a probe rather than a lock: fence
+ * reads then never conflict with each other, only with the brief Claim and
+ * release writes.
  */
-export function conversationEpochExists(owner: ConversationOwner) {
-	return sql`exists (select 1 from ${conversations} where ${liveClaimConditions(owner)})`;
+export function liveConversationOwnershipExists(owner: ConversationOwner) {
+	return sql`exists (select 1 from ${conversations} where ${liveConversationOwnershipConditions(owner)})`;
+}
+
+/** Raise the canonical bounded rejection for a Conversation-owned mutation. */
+export function rejectConversationOwnership(
+	owner: Pick<ConversationOwner, "conversationId">,
+	operation: string,
+): never {
+	throw new ConversationOwnershipFenceError(
+		`${operation} for conversation ${owner.conversationId} rejected: ` +
+			"the Ownership epoch is stale or its lease has lapsed",
+	);
 }

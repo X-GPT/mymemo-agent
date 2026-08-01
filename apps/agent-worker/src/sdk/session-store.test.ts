@@ -15,7 +15,7 @@ import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import { agentSessions, conversations, runs } from "@mymemo/agent-db/schema";
 import {
 	createTestDatabase,
-	seedAgentSessionFenceRun,
+	seedAgentSessionFenceConversation,
 	type TestDb,
 } from "@mymemo/agent-db/testing";
 import type { WorkerLogger } from "../logger";
@@ -30,9 +30,13 @@ const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 
 function storeBinding(conversationId: string) {
 	return {
-		conversationId,
-		runId: `run-${conversationId}`,
-		workerId: "worker-1",
+		owner: {
+			userId: conversationId === "conv-1" ? "user-1" : "user-2",
+			conversationId,
+			epoch: 1,
+			runId: `run-${conversationId}`,
+			workerId: "worker-1",
+		},
 		logger: silentLogger,
 	};
 }
@@ -50,11 +54,11 @@ beforeEach(async () => {
 		["user-2", "conv-2"],
 	] as const) {
 		const binding = storeBinding(conversationId);
-		await seedAgentSessionFenceRun(tdb.db, {
+		await seedAgentSessionFenceConversation(tdb.db, {
 			userId,
 			conversationId,
-			runId: binding.runId,
-			workerId: binding.workerId,
+			workerId: "worker-1",
+			epoch: binding.owner.epoch,
 		});
 	}
 });
@@ -104,9 +108,7 @@ describe("createConversationSessionStore", () => {
 	it("logs a bounded error identity for a real database append failure", async () => {
 		const errors: Record<string, unknown>[] = [];
 		const store = createConversationSessionStore(tdb.db, {
-			conversationId: "conv-1",
-			runId: "run-conv-1",
-			workerId: "worker-1",
+			owner: storeBinding("conv-1").owner,
 			logger: {
 				info() {},
 				warn() {},
@@ -191,10 +193,10 @@ describe("createConversationSessionStore", () => {
 		expect(await store.load(mainKey())).toBeNull();
 	});
 
-	it("rejects mutations when the bound worker does not own the Run", async () => {
+	it("rejects mutations when the bound Ownership epoch is stale", async () => {
 		const store = createConversationSessionStore(tdb.db, {
 			...storeBinding("conv-1"),
-			workerId: "worker-stale",
+			owner: { ...storeBinding("conv-1").owner, epoch: 2 },
 		});
 
 		await expect(store.append(mainKey(), [entry("rejected")])).rejects.toThrow(
@@ -251,9 +253,7 @@ describe("createConversationSessionStore", () => {
 describe("buildAgentSessionQueryConfig", () => {
 	const base = {
 		db: undefined as never,
-		conversationId: "conv-1",
-		runId: "run-conv-1",
-		workerId: "worker-1",
+		owner: storeBinding("conv-1").owner,
 		logger: silentLogger,
 	};
 

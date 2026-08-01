@@ -1,4 +1,4 @@
-import type { RunRecord } from "@mymemo/agent-db/run-store";
+import type { RunRecord, RunWriteOwner } from "@mymemo/agent-db/run-store";
 import type { ArtifactAwareQuery } from "../artifacts/artifact-publication";
 import type { WorkerLogger } from "../logger";
 import { type RunProcessor, RunProcessorFailure } from "../run-loop";
@@ -27,6 +27,7 @@ export type RunQuery = ArtifactAwareQuery & {
 export type StartRunQuery = (
 	run: RunRecord,
 	signal: AbortSignal,
+	owner: RunWriteOwner,
 ) => Promise<RunQuery>;
 
 export interface SdkRunProcessorDeps {
@@ -61,6 +62,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 			const query = await deps.startRunQuery(
 				ctx.run,
 				runScopedController.signal,
+				ctx.owner,
 			);
 			const result = await consumeAgentStream({
 				runId: ctx.run.runId,

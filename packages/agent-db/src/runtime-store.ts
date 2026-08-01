@@ -2,12 +2,12 @@ import { and, eq, isNotNull, sql } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { Database, DbTx } from "./client";
 import {
-	ownedRunByUserConditions,
-	ownedRunByUserExists,
-	rejectRunFence,
-	type UserRunMutationOwner,
-} from "./run-ownership";
-import { conversationRuntime, orphanSandboxes, runs } from "./schema";
+	type ConversationOwner,
+	liveConversationOwnershipConditions,
+	liveConversationOwnershipExists,
+	rejectConversationOwnership,
+} from "./conversation-ownership";
+import { conversationRuntime, conversations, orphanSandboxes } from "./schema";
 
 /**
  * Narrow transaction helpers over `conversation_runtime` and
@@ -18,12 +18,11 @@ import { conversationRuntime, orphanSandboxes, runs } from "./schema";
  * Agent-session pointer publication is composed by run-store with the terminal
  * Outcome.
  * The table grants no execution ownership of its own: every mutation is fenced
- * on the claiming run's ownership in `runs` (`status` active,
- * `locked_by = workerId`, `locked_until > now()`): every update carries the
- * fence as an `EXISTS` subquery inside the same statement that performs the
- * write, and row creation checks the same predicate `FOR SHARE` in its
- * transaction — so a worker that stalls past its lock cannot overwrite pointers
- * a recovered conversation now relies on. The two deliberate exceptions are
+ * on the Conversation's live Ownership fence. Every update carries that fence
+ * as an `EXISTS` subquery inside the same statement that performs the write,
+ * and row creation checks the same predicate `FOR SHARE` in its transaction —
+ * so a worker whose Claim lapses or is superseded cannot overwrite pointers a
+ * later Claim now relies on. The two deliberate exceptions are
  * orphan recording and Reclamation taint, which exist precisely for the
  * ownership-already-lost path.
  *
@@ -58,22 +57,22 @@ export async function loadConversationRuntimeTx(
 /**
  * Create the conversation's runtime row (empty pointers). The fence
  * is checked `FOR SHARE` in the same transaction as the insert, so Reclamation
- * cannot terminalize the authorizing Run between check and insert.
+ * cannot release or supersede the authorizing Claim between check and insert.
  * Idempotent: if a previous attempt already created the row, the existing row
  * is returned unchanged. Idempotency is for the retry, not for concurrency: the
- * authorizing Run's lease is what makes the Conversation single-writer.
+ * Ownership lease is what makes the Conversation single-writer.
  */
 export async function createConversationRuntimeTx(
 	db: Database,
-	owner: UserRunMutationOwner,
+	owner: ConversationOwner,
 ): Promise<ConversationRuntimeRecord> {
 	return await db.transaction(async (tx) => {
 		const owned = await tx
-			.select({ runId: runs.runId })
-			.from(runs)
-			.where(ownedRunByUserConditions(owner))
+			.select({ conversationId: conversations.conversationId })
+			.from(conversations)
+			.where(liveConversationOwnershipConditions(owner))
 			.for("share");
-		if (!owned[0]) rejectRunFence(owner, "runtime row creation");
+		if (!owned[0]) rejectConversationOwnership(owner, "runtime row creation");
 
 		const [inserted] = await tx
 			.insert(conversationRuntime)
@@ -109,13 +108,13 @@ export async function createConversationRuntimeTx(
  */
 export async function updateRuntimeSandboxTx(
 	db: Database,
-	input: UserRunMutationOwner & { sandboxId: string | null },
+	input: ConversationOwner & { sandboxId: string | null },
 ): Promise<ConversationRuntimeRecord> {
 	const row = await tryUpdateRuntimeRow(db, input, {
 		sandboxId: input.sandboxId,
 		sandboxTainted: false,
 	});
-	if (!row) rejectRunFence(input, "sandbox pointer update");
+	if (!row) rejectConversationOwnership(input, "sandbox pointer update");
 	return row;
 }
 
@@ -127,7 +126,7 @@ export async function updateRuntimeSandboxTx(
  */
 export async function publishAgentSessionPointerInTx(
 	tx: DbTx,
-	owner: UserRunMutationOwner,
+	owner: ConversationOwner,
 	agentSessionId: string,
 ): Promise<void> {
 	await tryUpdateRuntimeRow(tx, owner, { agentSessionId });
@@ -135,7 +134,7 @@ export async function publishAgentSessionPointerInTx(
 
 async function tryUpdateRuntimeRow(
 	db: Pick<Database, "update">,
-	owner: UserRunMutationOwner,
+	owner: ConversationOwner,
 	set: PgUpdateSetSource<typeof conversationRuntime>,
 ): Promise<ConversationRuntimeRecord | null> {
 	const [row] = await db
@@ -145,7 +144,7 @@ async function tryUpdateRuntimeRow(
 			and(
 				eq(conversationRuntime.userId, owner.userId),
 				eq(conversationRuntime.conversationId, owner.conversationId),
-				ownedRunByUserExists(owner),
+				liveConversationOwnershipExists(owner),
 			),
 		)
 		.returning();
@@ -159,10 +158,10 @@ async function tryUpdateRuntimeRow(
  */
 export async function markRuntimeSandboxTaintedTx(
 	db: Database,
-	owner: UserRunMutationOwner,
+	owner: ConversationOwner,
 ): Promise<ConversationRuntimeRecord> {
 	const row = await tryUpdateRuntimeRow(db, owner, { sandboxTainted: true });
-	if (!row) rejectRunFence(owner, "sandbox taint mark");
+	if (!row) rejectConversationOwnership(owner, "sandbox taint mark");
 	return row;
 }
 
@@ -197,7 +196,7 @@ export type OrphanSandboxRecord = typeof orphanSandboxes.$inferSelect;
 /**
  * Record a sandbox that escaped database ownership (created, then the fenced
  * pointer update failed and the kill could not be confirmed). Deliberately
- * unfenced — this path exists precisely because run ownership is already
+ * unfenced — this path exists precisely because Ownership is already
  * lost. Idempotent per sandbox id: re-recording returns the original row
  * unchanged, so a retrying worker cannot overwrite the first record.
  */

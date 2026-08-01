@@ -59,7 +59,6 @@ const sandboxJanitor = createE2bSandboxJanitor(config.e2bApiKey);
 const artifactObjectJanitor = createS3ArtifactObjectJanitor(config.artifact);
 const startRunQuery = createStartRunQuery({
 	db,
-	workerId,
 	provisioner: createE2bSandboxProvisioner({
 		apiKey: config.e2bApiKey,
 		template: config.e2bTemplate,

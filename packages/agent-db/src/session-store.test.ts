@@ -18,7 +18,7 @@ import {
 } from "./session-store";
 import {
 	createTestDatabase,
-	seedAgentSessionFenceRun,
+	seedAgentSessionFenceConversation,
 	type TestDb,
 } from "./testing";
 
@@ -37,16 +37,14 @@ beforeEach(async () => {
 	await tdb.db.delete(agentSessions);
 	await tdb.db.delete(runs);
 	await tdb.db.delete(conversations);
-	await seedAgentSessionFenceRun(tdb.db, {
+	await seedAgentSessionFenceConversation(tdb.db, {
 		userId: "user-1",
 		conversationId: "conv-1",
-		runId: "run-conv-1",
 		workerId: "worker-1",
 	});
-	await seedAgentSessionFenceRun(tdb.db, {
+	await seedAgentSessionFenceConversation(tdb.db, {
 		userId: "user-2",
 		conversationId: "conv-2",
-		runId: "run-conv-2",
 		workerId: "worker-1",
 	});
 });
@@ -68,9 +66,9 @@ function entry(
 
 function ownerFor(conversationId: string) {
 	return {
+		userId: conversationId === "conv-1" ? "user-1" : "user-2",
 		conversationId,
-		runId: `run-${conversationId}`,
-		workerId: "worker-1",
+		epoch: 1,
 	};
 }
 
@@ -303,9 +301,9 @@ describe("deleteConversationAgentSessionsTx", () => {
 
 describe("SDK session mutation ownership fence", () => {
 	const OWNER = {
+		userId: "user-owned",
 		conversationId: "conv-owned",
-		runId: "run-owned",
-		workerId: "worker-owned",
+		epoch: 7,
 	};
 	const REF = {
 		projectKey: "project-owned",
@@ -313,49 +311,59 @@ describe("SDK session mutation ownership fence", () => {
 	};
 	const READ_REF = { conversationId: OWNER.conversationId, ...REF };
 
-	async function insertOwnedRun(input: {
+	async function insertOwnedConversation(input: {
 		conversationId?: string;
-		status?: "running" | "interrupt_requested" | "done";
-		workerId?: string;
+		userId?: string;
+		epoch?: number;
 		expired?: boolean;
 	}) {
-		const conversationId = input.conversationId ?? OWNER.conversationId;
-		await seedAgentSessionFenceRun(tdb.db, {
-			runId: OWNER.runId,
-			userId: "user-owned",
-			conversationId,
-			status: input.status ?? "running",
-			workerId: input.workerId ?? OWNER.workerId,
-			lockedUntil: input.expired
+		await tdb.db.insert(conversations).values({
+			userId: input.userId ?? OWNER.userId,
+			conversationId: input.conversationId ?? OWNER.conversationId,
+			scope: "general",
+			epoch: input.epoch ?? OWNER.epoch,
+			ownerWorkerId: "worker-owned",
+			ownerUntil: input.expired
 				? new Date(Date.now() - 1_000)
 				: new Date(Date.now() + 60_000),
 		});
 	}
 
-	it.each([
-		"running",
-		"interrupt_requested",
-	] as const)("allows the matching owner to append while the Run is %s", async (status) => {
-		await insertOwnedRun({ status });
+	it("records the Claim epoch on every mirrored transcript entry", async () => {
+		await insertOwnedConversation({});
 
 		await appendAgentSessionEntriesTx(tdb.db, {
 			owner: OWNER,
 			ref: REF,
-			entries: [entry(status)],
+			entries: [entry("provenance")],
+		});
+
+		expect((await tdb.db.select().from(agentSessions))[0]?.epoch).toBe(
+			OWNER.epoch,
+		);
+	});
+
+	it("allows the current epoch to append without borrowing authority from a Run", async () => {
+		await insertOwnedConversation({});
+
+		await appendAgentSessionEntriesTx(tdb.db, {
+			owner: OWNER,
+			ref: REF,
+			entries: [entry("accepted")],
 		});
 
 		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toEqual([
-			entry(status),
+			entry("accepted"),
 		]);
 	});
 
 	it.each([
 		["a different Conversation", { conversationId: "conv-other" }],
-		["a different worker", { workerId: "worker-stale" }],
+		["a different user", { userId: "user-other" }],
+		["a stale epoch", { epoch: OWNER.epoch + 1 }],
 		["an expired lease", { expired: true }],
-		["a terminal Run", { status: "done" as const }],
-	])("rejects mutations under %s without effect", async (_name, run) => {
-		await insertOwnedRun(run);
+	])("rejects mutations under %s without effect", async (_name, claim) => {
+		await insertOwnedConversation(claim);
 		await tdb.db.insert(agentSessions).values({
 			conversationId: OWNER.conversationId,
 			...REF,
@@ -385,11 +393,11 @@ describe("SDK session mutation ownership fence", () => {
 	});
 
 	it("fences an empty append without writing transcript entries", async () => {
-		await insertOwnedRun({});
+		await insertOwnedConversation({ epoch: OWNER.epoch + 1 });
 
 		await expect(
 			appendAgentSessionEntriesTx(tdb.db, {
-				owner: { ...OWNER, runId: "run-other" },
+				owner: OWNER,
 				ref: REF,
 				entries: [],
 			}),
@@ -397,42 +405,8 @@ describe("SDK session mutation ownership fence", () => {
 		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toBeNull();
 	});
 
-	it("rejects append bound to a different Run id without effect", async () => {
-		await insertOwnedRun({});
-
-		await expect(
-			appendAgentSessionEntriesTx(tdb.db, {
-				owner: { ...OWNER, runId: "run-other" },
-				ref: REF,
-				entries: [entry("rejected")],
-			}),
-		).rejects.toThrow(/session append.*rejected/i);
-		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toBeNull();
-	});
-
-	it("rejects delete bound to a different Run id without effect", async () => {
-		await insertOwnedRun({});
-		await appendAgentSessionEntriesTx(tdb.db, {
-			owner: OWNER,
-			ref: REF,
-			entries: [entry("accepted")],
-		});
-
-		await expect(
-			deleteAgentSessionTx(tdb.db, {
-				owner: { ...OWNER, runId: "run-other" },
-				ref: {
-					sessionId: REF.sessionId,
-				},
-			}),
-		).rejects.toThrow(/session delete.*rejected/i);
-		expect(await loadAgentSessionEntriesTx(tdb.db, READ_REF)).toEqual([
-			entry("accepted"),
-		]);
-	});
-
 	it("allows the matching owner to delete an SDK session", async () => {
-		await insertOwnedRun({});
+		await insertOwnedConversation({});
 		await appendAgentSessionEntriesTx(tdb.db, {
 			owner: OWNER,
 			ref: REF,

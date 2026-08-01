@@ -11,7 +11,7 @@ import {
 	type ClaimedConversation,
 	type ConversationOwner,
 	claimConversationTx,
-	conversationEpochExists,
+	liveConversationOwnershipExists,
 	releaseConversationTx,
 	renewConversationLeaseTx,
 } from "./conversation-ownership";
@@ -103,7 +103,7 @@ async function fenceAdmits(
 	const rows = await tdb.db
 		.select({ runId: runs.runId })
 		.from(runs)
-		.where(and(eq(runs.runId, runId), conversationEpochExists(owner)));
+		.where(and(eq(runs.runId, runId), liveConversationOwnershipExists(owner)));
 	return rows.length > 0;
 }
 
@@ -357,7 +357,7 @@ describe("renewConversationLeaseTx", () => {
 	});
 });
 
-describe("conversationEpochExists", () => {
+describe("liveConversationOwnershipExists", () => {
 	it("admits the Claim that holds the live lease", async () => {
 		await seedRun({ runId: "run-1", conversationId: "conv-1" });
 		const claim = claimed(

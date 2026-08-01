@@ -154,17 +154,16 @@ export async function lapseConversationOwnership(
 		);
 }
 
-/** Seed one owned Run for SessionStore fence tests. Callers choose every
- * identity explicitly and remain responsible for clearing their tables. */
-export async function seedAgentSessionFenceRun(
+/** Seed one live Conversation Claim for SessionStore fence tests. Callers choose
+ * every identity explicitly and remain responsible for clearing their tables. */
+export async function seedAgentSessionFenceConversation(
 	db: Database,
 	input: {
 		userId: string;
 		conversationId: string;
-		runId: string;
 		workerId: string;
-		status?: "running" | "interrupt_requested" | "done";
-		lockedUntil?: Date;
+		epoch?: number;
+		ownerUntil?: Date;
 	},
 ): Promise<void> {
 	await db
@@ -173,14 +172,9 @@ export async function seedAgentSessionFenceRun(
 			userId: input.userId,
 			conversationId: input.conversationId,
 			scope: "general",
+			epoch: input.epoch ?? 1,
+			ownerWorkerId: input.workerId,
+			ownerUntil: input.ownerUntil ?? new Date(Date.now() + 60_000),
 		})
 		.onConflictDoNothing();
-	await db.insert(schema.runs).values({
-		runId: input.runId,
-		userId: input.userId,
-		conversationId: input.conversationId,
-		status: input.status ?? "running",
-		lockedBy: input.workerId,
-		lockedUntil: input.lockedUntil ?? new Date(Date.now() + 60_000),
-	});
 }

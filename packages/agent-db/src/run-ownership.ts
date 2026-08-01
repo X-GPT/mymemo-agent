@@ -1,8 +1,7 @@
 /**
- * Shared Run ownership vocabulary and SQL predicates. Worker-scoped mutations
- * use the Run/Conversation/worker/lease fence; Conversation runtime and
- * terminal mutations add the trusted user identity. Runtime pointer updates
- * use the user-bound predicate's `EXISTS` form inside the write itself.
+ * Transitional Run-lease vocabulary retained until #402 removes the bridge.
+ * Conversation-scoped mutations no longer use these predicates; they validate
+ * the Conversation's live Ownership fence directly.
  */
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { runs } from "./schema";
@@ -14,15 +13,7 @@ export interface RunMutationOwner {
 	workerId: string;
 }
 
-/** User-bound owner identity for Conversation-scoped Run mutations. */
-export interface UserRunMutationOwner extends RunMutationOwner {
-	userId: string;
-}
-
-/**
- * An ownership/status fence rejected a worker mutation. The caller must stop
- * treating the Run as its own; Reclamation or the actual owner is now in charge.
- */
+/** A worker ownership/status fence rejected a mutation. */
 export class RunFenceError extends Error {
 	override name = "RunFenceError" as const;
 }
@@ -45,34 +36,5 @@ export function ownedRunConditions(owner: RunMutationOwner) {
 	return and(
 		runLeaseConditions(owner),
 		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
-	);
-}
-
-/** User-bound Run identity and live lease, without imposing a status class. */
-export function runLeaseByUserConditions(owner: UserRunMutationOwner) {
-	return and(runLeaseConditions(owner), eq(runs.userId, owner.userId));
-}
-
-/** The stronger ownership predicate for user-owned Conversation state. */
-export function ownedRunByUserConditions(owner: UserRunMutationOwner) {
-	return and(
-		runLeaseByUserConditions(owner),
-		inArray(runs.status, [...OWNED_ACTIVE_STATUSES]),
-	);
-}
-
-/** {@link ownedRunByUserConditions} as an in-statement `EXISTS` predicate. */
-export function ownedRunByUserExists(owner: UserRunMutationOwner) {
-	return sql`exists (select 1 from ${runs} where ${ownedRunByUserConditions(owner)})`;
-}
-
-/** Raise the canonical bounded rejection for an owned worker mutation. */
-export function rejectRunFence(
-	owner: RunMutationOwner,
-	operation: string,
-): never {
-	throw new RunFenceError(
-		`${operation} for conversation ${owner.conversationId} rejected: ` +
-			`worker ${owner.workerId} no longer owns run ${owner.runId}`,
 	);
 }

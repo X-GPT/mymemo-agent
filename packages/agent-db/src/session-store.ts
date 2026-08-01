@@ -1,25 +1,25 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
-	ownedRunConditions,
-	type RunMutationOwner,
-	rejectRunFence,
-} from "./run-ownership";
-import { agentSessions, runs } from "./schema";
+	type ConversationOwner,
+	liveConversationOwnershipConditions,
+	rejectConversationOwnership,
+} from "./conversation-ownership";
+import { agentSessions, conversations } from "./schema";
 
 /**
  * SDK-free persistence helpers over `agent_sessions`, used by the worker's
  * Claude Agent SDK `SessionStore` adapter (ADR-0005, Task 7.3). Append and
- * SDK-requested delete transactions validate and lock active-Run ownership
- * `FOR SHARE` *before* the mutation: a rejected fence writes nothing at all,
- * and the lock then holds ownership stable through commit, so the mutation
- * cannot be undercut by a concurrent terminal transition. Reads and
+ * SDK-requested delete transactions validate and lock the Conversation's live
+ * Ownership fence `FOR SHARE` *before* the mutation: a rejected fence writes
+ * nothing at all, and the lock then holds ownership stable through commit, so
+ * the mutation cannot be undercut by release or Reclamation. Reads and
  * administrative Conversation deletion are deliberately unfenced. The helpers
  * live here so the schema, fence, and SQL use the shared package's one Drizzle
  * instance; the adapter that imports SDK types lives in agent-worker and
  * delegates here.
  *
- * Mutations take `conversationId` only from their Run owner — the stable
+ * Mutations take `conversationId` only from their Conversation owner — the stable
  * identity the adapter binds each call to — plus the SDK's `(sessionId,
  * subpath)`. `projectKey` is stored for fidelity with the SDK's cwd-derived key
  * but is never a lookup key: conversation id is 1:1 with a conversation's
@@ -39,7 +39,7 @@ export interface AgentSessionEntry {
 }
 
 /**
- * Identifies one SDK transcript within its Run-bound conversation. `subpath`
+ * Identifies one SDK transcript within its Claim-owned Conversation. `subpath`
  * undefined names the main transcript (stored as `''`); a non-empty
  * `subagents/agent-…` value names a subagent transcript.
  */
@@ -74,29 +74,30 @@ export function isMainAgentSessionRef(
  * id. Deduplicates by `entry.uuid`: `ON CONFLICT DO NOTHING` against the unique
  * `(conversation, session, subpath, uuid)` index drops a re-delivered uuid,
  * while uuid-less entries (NULL, distinct in the index) always insert. Empty
- * batches write nothing but still validate the bound Run owner.
+ * batches write nothing but still validate the bound Conversation owner.
  */
 export async function appendAgentSessionEntriesTx(
 	db: Database,
 	input: {
-		owner: RunMutationOwner;
+		owner: ConversationOwner;
 		ref: AgentSessionRef;
 		entries: AgentSessionEntry[];
 	},
 ): Promise<void> {
 	const { owner, ref, entries } = input;
 	if (entries.length === 0) {
-		await assertOwnedRunForNoop(db, owner, "session append");
+		await assertConversationOwnershipForNoop(db, owner, "session append");
 		return;
 	}
 	const subpath = normalizeSubpath(ref.subpath);
 	await db.transaction(async (tx) => {
-		await lockOwnedRun(tx, owner, "session append");
+		await lockConversationOwnership(tx, owner, "session append");
 		await tx
 			.insert(agentSessions)
 			.values(
 				entries.map((entry) => ({
 					conversationId: owner.conversationId,
+					epoch: owner.epoch,
 					projectKey: ref.projectKey,
 					sessionId: ref.sessionId,
 					subpath,
@@ -190,13 +191,13 @@ export async function listAgentSessionSubkeysTx(
 export async function deleteAgentSessionTx(
 	db: Database,
 	input: {
-		owner: RunMutationOwner;
+		owner: ConversationOwner;
 		ref: { sessionId: string; subpath?: string };
 	},
 ): Promise<void> {
 	const { owner, ref } = input;
 	await db.transaction(async (tx) => {
-		await lockOwnedRun(tx, owner, "session delete");
+		await lockConversationOwnership(tx, owner, "session delete");
 		await tx
 			.delete(agentSessions)
 			.where(transcriptWhere(owner.conversationId, ref.sessionId, ref.subpath));
@@ -221,39 +222,39 @@ export async function deleteConversationAgentSessionsTx(
 /**
  * Validate and lock ownership before the mutation. A failed fence rejects the
  * transaction with nothing written; a successful `FOR SHARE` lock keeps the
- * ownership row stable through commit, so a concurrent terminal transition
- * cannot clear ownership underneath the write.
+ * ownership row stable through commit, so release or Reclamation cannot clear
+ * ownership underneath the write.
  */
-async function lockOwnedRun(
+async function lockConversationOwnership(
 	tx: DbTx,
-	owner: RunMutationOwner,
+	owner: ConversationOwner,
 	operation: string,
 ): Promise<void> {
 	const [owned] = await tx
-		.select({ runId: runs.runId })
-		.from(runs)
-		.where(ownedRunConditions(owner))
+		.select({ conversationId: conversations.conversationId })
+		.from(conversations)
+		.where(liveConversationOwnershipConditions(owner))
 		.for("share");
 	if (!owned) {
-		rejectRunFence(owner, operation);
+		rejectConversationOwnership(owner, operation);
 	}
 }
 
 /**
  * Validate a mutation-shaped no-op without opening a transaction. There is no
  * write to protect with a lock, but the bound SessionStore call still rejects
- * a worker whose ownership lease is no longer active.
+ * a Claim whose Ownership lease is no longer active.
  */
-async function assertOwnedRunForNoop(
+async function assertConversationOwnershipForNoop(
 	db: Database,
-	owner: RunMutationOwner,
+	owner: ConversationOwner,
 	operation: string,
 ): Promise<void> {
 	const [owned] = await db
-		.select({ runId: runs.runId })
-		.from(runs)
-		.where(ownedRunConditions(owner));
-	if (!owned) rejectRunFence(owner, operation);
+		.select({ conversationId: conversations.conversationId })
+		.from(conversations)
+		.where(liveConversationOwnershipConditions(owner));
+	if (!owned) rejectConversationOwnership(owner, operation);
 }
 
 /**

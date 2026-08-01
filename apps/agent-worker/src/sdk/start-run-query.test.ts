@@ -11,12 +11,13 @@ import type {
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
+	ConversationOwnershipFenceError,
 	claimConversationTx,
 	releaseConversationTx,
 } from "@mymemo/agent-db/conversation-ownership";
-import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
 	type RunRecord,
+	type RunWriteOwner,
 	startClaimedRunTx,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
@@ -61,6 +62,7 @@ const WORKER_ID = "worker-1";
 const USER_ID = "user-1";
 
 let tdb: TestDb;
+const owners = new Map<string, RunWriteOwner>();
 
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from empty tables via delete, keeping isolation without the cost.
@@ -73,6 +75,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	owners.clear();
 	await tdb.db.delete(runs); // cascades run_events
 	await tdb.db.delete(conversationRuntime);
 	await tdb.db.delete(orphanSandboxes);
@@ -131,6 +134,11 @@ async function createClaimedRun(input: {
 	if (started.outcome !== "started") {
 		throw new Error(`test setup could not start ${input.runId}`);
 	}
+	owners.set(input.runId, {
+		...claim,
+		runId: input.runId,
+		workerId: WORKER_ID,
+	});
 	return started.run;
 }
 
@@ -221,7 +229,7 @@ interface FakeProvisionConfig {
 	sandboxId: string;
 	isNew: boolean;
 	renewError?: Error;
-	/** Runs inside provisionForRun — lets a test sabotage run ownership between
+	/** Runs inside provisionForRun — lets a test supersede Ownership between
 	 * the runtime-row ensure and the fenced pointer update. */
 	onProvision?: (input: ProvisionForRunInput) => Promise<void>;
 }
@@ -277,7 +285,6 @@ function buildHarness(
 	let underlying: SupervisedQuery = immediateQuery();
 	const deps: StartRunQueryDeps = {
 		db: tdb.db,
-		workerId: WORKER_ID,
 		provisioner,
 		janitor: {
 			async killSandbox(sandboxId) {
@@ -351,8 +358,13 @@ function buildHarness(
 		},
 		logger: silentLogger,
 	};
+	const startRunQuery = createStartRunQuery(deps);
 	return {
-		startRunQuery: createStartRunQuery(deps),
+		startRunQuery(run: RunRecord, signal: AbortSignal) {
+			const owner = owners.get(run.runId);
+			if (!owner) throw new Error(`test setup has no owner for ${run.runId}`);
+			return startRunQuery(run, signal, owner);
+		},
 		calls,
 		handle,
 		killed,
@@ -719,12 +731,12 @@ describe("createStartRunQuery — fenced provisioning", () => {
 			provision: {
 				sandboxId: "sb-new",
 				isNew: true,
-				// Steal ownership between the runtime-row ensure and the repoint.
+				// Supersede the Claim between the runtime-row ensure and the repoint.
 				onProvision: async () => {
 					await tdb.db
-						.update(runs)
-						.set({ lockedBy: "other-worker" })
-						.where(eq(runs.runId, "run-1"));
+						.update(conversations)
+						.set({ epoch: 2, ownerWorkerId: "other-worker" })
+						.where(eq(conversations.conversationId, "conv-1"));
 				},
 			},
 		});
@@ -734,7 +746,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 		});
 
 		await expect(h.startRunQuery(run, freshSignal())).rejects.toBeInstanceOf(
-			RunFenceError,
+			ConversationOwnershipFenceError,
 		);
 
 		expect(h.killed).toEqual(["sb-new"]);
@@ -753,9 +765,9 @@ describe("createStartRunQuery — fenced provisioning", () => {
 				isNew: true,
 				onProvision: async () => {
 					await tdb.db
-						.update(runs)
-						.set({ lockedBy: "other-worker" })
-						.where(eq(runs.runId, "run-1"));
+						.update(conversations)
+						.set({ epoch: 2, ownerWorkerId: "other-worker" })
+						.where(eq(conversations.conversationId, "conv-1"));
 				},
 			},
 			killError: new Error("e2b unreachable"),
@@ -766,7 +778,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 		});
 
 		await expect(h.startRunQuery(run, freshSignal())).rejects.toBeInstanceOf(
-			RunFenceError,
+			ConversationOwnershipFenceError,
 		);
 
 		const orphans = await readOrphans();

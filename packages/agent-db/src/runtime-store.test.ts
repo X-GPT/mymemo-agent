@@ -6,9 +6,12 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { eq, sql } from "drizzle-orm";
-import { RunFenceError } from "./run-ownership";
-import { claimNextRunTx, reclaimConversationTx } from "./run-store";
+import { sql } from "drizzle-orm";
+import {
+	ConversationOwnershipFenceError,
+	claimConversationTx,
+} from "./conversation-ownership";
+import { reclaimConversationTx, startClaimedRunTx } from "./run-store";
 import {
 	createConversationRuntimeTx,
 	loadConversationRuntimeTx,
@@ -102,27 +105,35 @@ const OWNER = {
 	conversationId: "conv-1",
 	runId: "run-1",
 	workerId: "worker-1",
+	epoch: 1,
 };
 
-/** Queue and claim OWNER's run so `worker-1` holds live run ownership. */
+/** Claim OWNER's Conversation and start its Run. */
 async function claimOwnedRun() {
 	await seedQueuedRun(tdb.db, {
 		runId: OWNER.runId,
 		userId: OWNER.userId,
 		conversationId: OWNER.conversationId,
 	});
-	const claimed = await claimNextRunTx(tdb.db, { workerId: OWNER.workerId });
-	if (claimed?.runId !== OWNER.runId) {
-		throw new Error("test setup failed to claim the owned run");
+	const claimed = await claimConversationTx(tdb.db, {
+		workerId: OWNER.workerId,
+	});
+	if (claimed?.epoch !== OWNER.epoch) {
+		throw new Error("test setup failed to Claim the Conversation");
+	}
+	const started = await startClaimedRunTx(tdb.db, {
+		owner: claimed,
+		runId: OWNER.runId,
+		workerId: OWNER.workerId,
+	});
+	if (started.outcome !== "started") {
+		throw new Error("test setup failed to start the owned Run");
 	}
 }
 
-/** Expire the owner's lock so the run is ownership-lost (stale). */
+/** Lapse the Ownership lease without waiting for its real deadline. */
 async function expireOwnership() {
-	await tdb.db
-		.update(runs)
-		.set({ lockedUntil: sql`now() - interval '1 second'` })
-		.where(eq(runs.runId, OWNER.runId));
+	await lapseConversationOwnership(tdb.db, OWNER);
 }
 
 describe("loadConversationRuntimeTx", () => {
@@ -137,7 +148,7 @@ describe("loadConversationRuntimeTx", () => {
 });
 
 describe("createConversationRuntimeTx", () => {
-	it("creates an empty runtime row when the caller owns the active run", async () => {
+	it("creates an empty runtime row while the caller owns the Conversation", async () => {
 		await claimOwnedRun();
 
 		const runtime = await createConversationRuntimeTx(tdb.db, OWNER);
@@ -169,13 +180,13 @@ describe("createConversationRuntimeTx", () => {
 		});
 	});
 
-	it("rejects creation after run ownership is lost", async () => {
+	it("rejects creation after the Ownership lease lapses", async () => {
 		await claimOwnedRun();
 		await expireOwnership();
 
 		await expect(
 			createConversationRuntimeTx(tdb.db, OWNER),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).rejects.toBeInstanceOf(ConversationOwnershipFenceError);
 		expect(
 			await loadConversationRuntimeTx(tdb.db, {
 				userId: OWNER.userId,
@@ -184,17 +195,17 @@ describe("createConversationRuntimeTx", () => {
 		).toBeNull();
 	});
 
-	it("rejects creation by a worker that does not hold the run", async () => {
+	it("rejects creation under a stale Ownership epoch", async () => {
 		await claimOwnedRun();
 
 		await expect(
-			createConversationRuntimeTx(tdb.db, { ...OWNER, workerId: "worker-2" }),
-		).rejects.toBeInstanceOf(RunFenceError);
+			createConversationRuntimeTx(tdb.db, { ...OWNER, epoch: OWNER.epoch + 1 }),
+		).rejects.toBeInstanceOf(ConversationOwnershipFenceError);
 	});
 });
 
 describe("updateRuntimeSandboxTx", () => {
-	it("stores the current sandbox id while the run is owned", async () => {
+	it("stores the current sandbox id while the Conversation is owned", async () => {
 		await claimOwnedRun();
 		await createConversationRuntimeTx(tdb.db, OWNER);
 
@@ -220,14 +231,34 @@ describe("updateRuntimeSandboxTx", () => {
 		expect(runtime.sandboxId).toBeNull();
 	});
 
-	it("rejects the update after run ownership is lost", async () => {
+	it("rejects the update after the Ownership lease lapses", async () => {
 		await claimOwnedRun();
 		await createConversationRuntimeTx(tdb.db, OWNER);
 		await expireOwnership();
 
 		await expect(
 			updateRuntimeSandboxTx(tdb.db, { ...OWNER, sandboxId: "sbx-stale" }),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).rejects.toBeInstanceOf(ConversationOwnershipFenceError);
+		expect(
+			await loadConversationRuntimeTx(tdb.db, {
+				userId: OWNER.userId,
+				conversationId: OWNER.conversationId,
+			}),
+		).toMatchObject({ sandboxId: null });
+	});
+
+	it("rejects a stale Ownership epoch even while the legacy Run lease is live", async () => {
+		await claimOwnedRun();
+		await createConversationRuntimeTx(tdb.db, OWNER);
+		await tdb.db.update(conversations).set({
+			epoch: OWNER.epoch + 1,
+			ownerWorkerId: "worker-2",
+			ownerUntil: new Date(Date.now() + 60_000),
+		});
+
+		await expect(
+			updateRuntimeSandboxTx(tdb.db, { ...OWNER, sandboxId: "sbx-stale" }),
+		).rejects.toBeInstanceOf(ConversationOwnershipFenceError);
 		expect(
 			await loadConversationRuntimeTx(tdb.db, {
 				userId: OWNER.userId,
@@ -245,7 +276,7 @@ describe("updateRuntimeSandboxTx", () => {
 
 		await expect(
 			updateRuntimeSandboxTx(tdb.db, { ...OWNER, sandboxId: "sbx-2" }),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).rejects.toBeInstanceOf(ConversationOwnershipFenceError);
 		expect(
 			await loadConversationRuntimeTx(tdb.db, {
 				userId: OWNER.userId,
@@ -283,29 +314,29 @@ describe("markRuntimeSandboxTaintedTx", () => {
 		});
 	});
 
-	it("rejects the taint mark after run ownership is lost", async () => {
+	it("rejects the taint mark after the Ownership lease lapses", async () => {
 		await claimOwnedRun();
 		await createConversationRuntimeTx(tdb.db, OWNER);
 		await expireOwnership();
 
 		await expect(
 			markRuntimeSandboxTaintedTx(tdb.db, OWNER),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).rejects.toBeInstanceOf(ConversationOwnershipFenceError);
 	});
 });
 
 describe("recordOrphanSandboxTx", () => {
 	it("records a replacement sandbox after the fenced update failed", async () => {
 		// The issue's recovery sequence: worker created a replacement sandbox,
-		// lost run ownership before the fenced pointer update, and its kill of
+		// lost Conversation ownership before the fenced pointer update, and its kill of
 		// the replacement could not be confirmed — the ledger insert must
-		// succeed precisely because ownership is already gone.
+		// succeed precisely because Ownership is already gone.
 		await claimOwnedRun();
 		await createConversationRuntimeTx(tdb.db, OWNER);
 		await expireOwnership();
 		await expect(
 			updateRuntimeSandboxTx(tdb.db, { ...OWNER, sandboxId: "sbx-orphan" }),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).rejects.toBeInstanceOf(ConversationOwnershipFenceError);
 
 		const orphan = await recordOrphanSandboxTx(tdb.db, {
 			sandboxId: "sbx-orphan",
