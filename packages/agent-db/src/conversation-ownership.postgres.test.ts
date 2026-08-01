@@ -189,9 +189,9 @@ async function drain(claim: ClaimedConversation): Promise<string[]> {
 			`Claim of ${claim.conversationId} served an empty snapshot`,
 		);
 	}
-	// A raw terminal write rather than `transitionRunTerminalTx`, which fences on
-	// the Run lease these Claims never take. Reaching an Outcome is only what lets
-	// the next Claim proceed here; the terminal transition is not under test.
+	// A raw terminal write because this Claim-protocol suite does not exercise the
+	// Run transition helpers. Reaching an Outcome is only what lets the next Claim
+	// proceed here; terminalization is not under test.
 	await db
 		.update(runs)
 		.set({ status: "done", terminalAt: sql`now()` })
@@ -228,9 +228,8 @@ async function lapseLease(conversationId: string): Promise<void> {
 /**
  * The shape a fenced write carries: the statement's own predicate ANDed with the
  * Ownership fence, so a refused write is zero rows rather than an error. It
- * stamps the executing worker onto the Run — what the queued→running transition
- * will do once it adopts the fence — which makes "whose write landed" readable
- * off the Run afterwards.
+ * stamps the executing worker onto the Run, like the queued→running transition,
+ * which makes "whose write landed" readable off the Run afterwards.
  */
 async function fencedStamp(
 	owner: ConversationOwner,

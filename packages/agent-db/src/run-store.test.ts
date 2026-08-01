@@ -16,7 +16,6 @@ import {
 	RunEventType,
 	validateDurableRunEventSequence,
 } from "./run-events";
-import { RunFenceError, type UserRunMutationOwner } from "./run-ownership";
 import {
 	ActiveRunConflictError,
 	type AdmitQueuedRunInput,
@@ -30,6 +29,7 @@ import {
 	markStaleRunsTx,
 	RunInputMismatchError,
 	type RunRecord,
+	type RunWriteOwner,
 	requestRunInterruptionTx,
 	startClaimedRunTx,
 	type TerminalTransitionResult,
@@ -404,15 +404,14 @@ describe("startClaimedRunTx", () => {
 		const row = await readRun("run-1");
 		expect(row?.lockedBy).toBe("worker-1");
 		expect(row?.lockedUntil?.getTime()).toBeGreaterThan(Date.now());
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: { ...owner, runId: "run-1", workerId: "worker-1" },
 				type: RunEventType.AssistantMessageCompleted,
 				payload: { messageId: "message-1", text: "bridged" },
 				appendClass: "model",
 			}),
-		).resolves.toMatchObject({ seq: 1 });
+		).toMatchObject({ outcome: "appended", seq: 1 });
 	});
 
 	it("refuses a Claim a re-Claim superseded, leaving the Run queued", async () => {
@@ -507,24 +506,29 @@ async function claimRun(
 	runId: string,
 	conversationId: string,
 	workerId: string,
-) {
+): Promise<RunWriteOwner> {
 	await queueRun(runId, conversationId);
 	await backdateRun(runId, 5_000);
-	const claimed = await claimNextRunTx(tdb.db, { workerId });
-	if (claimed?.runId !== runId) {
-		throw new Error(`test setup claimed ${claimed?.runId}, wanted ${runId}`);
+	const claim = await claimConversationTx(tdb.db, { workerId });
+	if (!claim) throw new Error("test setup claimed no Conversation");
+	const started = await startClaimedRunTx(tdb.db, {
+		owner: claim,
+		runId,
+		workerId,
+	});
+	if (started.outcome !== "started") {
+		throw new Error(`test setup could not start ${runId}`);
 	}
-	return claimed;
+	return { ...claim, runId, workerId };
 }
 
-function owner(
-	overrides: Partial<UserRunMutationOwner> = {},
-): UserRunMutationOwner {
+function owner(overrides: Partial<RunWriteOwner> = {}): RunWriteOwner {
 	return {
 		runId: "run-1",
 		conversationId: "conv-1",
 		workerId: "worker-1",
 		userId: "user-1",
+		epoch: 1,
 		...overrides,
 	};
 }
@@ -546,26 +550,55 @@ async function readEvents(runId: string) {
 }
 
 describe("appendRunEventTx", () => {
+	it("rejects a lapsed Ownership epoch without allocating a sequence number", async () => {
+		await queueRun("run-1", "conv-1");
+		const claim = await claimConversationTx(tdb.db, {
+			workerId: "worker-1",
+		});
+		if (!claim) throw new Error("test setup claimed no Conversation");
+		await startClaimedRunTx(tdb.db, {
+			owner: claim,
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+		await lapseOwnershipLease("conv-1");
+
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: {
+					userId: claim.userId,
+					conversationId: claim.conversationId,
+					epoch: claim.epoch,
+					runId: "run-1",
+					workerId: "worker-1",
+				},
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { messageId: "message-1", text: "too late" },
+				appendClass: "model",
+			}),
+		).toEqual({ outcome: "rejected", rejected: "lease" });
+		expect((await readRun("run-1"))?.nextEventSeq).toBe(1);
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
 	it("allocates monotonic database-owned sequence numbers", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
 		const first = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "hel" },
 			appendClass: "model",
 		});
 		const second = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-2", text: "lo" },
 			appendClass: "model",
 		});
 
-		expect(first.seq).toBe(1);
-		expect(second.seq).toBe(2);
+		expect(first).toEqual({ outcome: "appended", seq: 1 });
+		expect(second).toEqual({ outcome: "appended", seq: 2 });
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.seq, e.type])).toEqual([
 			[1, RunEventType.AssistantMessageCompleted],
@@ -582,8 +615,7 @@ describe("appendRunEventTx", () => {
 
 		await expect(
 			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: { text: "missing a stable message id" },
 				appendClass: "model",
@@ -603,8 +635,7 @@ describe("appendRunEventTx", () => {
 
 		await expect(
 			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				type: RunEventType.Done,
 				payload: { outcome: "done" },
 				appendClass: "model",
@@ -618,8 +649,7 @@ describe("appendRunEventTx", () => {
 
 		await expect(
 			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				type: RunEventType.Started,
 				payload: {
 					runId: "run-1",
@@ -672,8 +702,7 @@ describe("appendRunEventTx", () => {
 
 		for (const event of events) {
 			await appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				...event,
 				appendClass: "model",
 			});
@@ -711,12 +740,14 @@ describe("appendRunEventTx", () => {
 
 		expect(
 			await appendRunEventsTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				events,
 				appendClass: "model",
 			}),
-		).toEqual([{ seq: 1 }, { seq: 2 }, { seq: 3 }]);
+		).toEqual({
+			outcome: "appended",
+			events: [{ seq: 1 }, { seq: 2 }, { seq: 3 }],
+		});
 		expect(
 			(await readEvents("run-1")).map(({ seq, type, payload }) => ({
 				seq,
@@ -730,8 +761,7 @@ describe("appendRunEventTx", () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		const append = (type: string, payload: Record<string, unknown>) =>
 			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				type,
 				payload,
 				appendClass: "model",
@@ -795,47 +825,48 @@ describe("appendRunEventTx", () => {
 		).rejects.toBeInstanceOf(InvalidRunEventError);
 	});
 
-	it("rejects a model append on a run that is not running", async () => {
+	it("classifies a model append on a queued Run as a status rejection", async () => {
 		await queueRun("run-1", "conv-1");
+		const claim = await claimConversationTx(tdb.db, {
+			workerId: "worker-1",
+		});
+		if (!claim) throw new Error("test setup claimed no Conversation");
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: {},
 				appendClass: "model",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({ outcome: "rejected", rejected: "status", current: "queued" });
 	});
 
-	it("rejects an append from a worker that does not own the run", async () => {
+	it("does not treat worker provenance as append authority", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-2",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner({ workerId: "worker-2" }),
 				type: RunEventType.AssistantMessageCompleted,
-				payload: {},
+				payload: { messageId: "message-1", text: "epoch owns this" },
 				appendClass: "model",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toMatchObject({ outcome: "appended", seq: 1 });
 	});
 
-	it("rejects a stale worker append after locked_until has passed", async () => {
+	it("does not use the legacy Run lease deadline as the append fence", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await expireOwnership("run-1");
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
-				payload: {},
+				payload: { messageId: "message-1", text: "still owned" },
 				appendClass: "model",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toMatchObject({ outcome: "appended", seq: 1 });
 	});
 
 	it("rejects model appends after interruption is requested", async () => {
@@ -845,23 +876,25 @@ describe("appendRunEventTx", () => {
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: {},
 				appendClass: "model",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({
+			outcome: "rejected",
+			rejected: "status",
+			current: "interrupt_requested",
+		});
 	});
 
 	it("sequences canonical Tool lifecycle events with Assistant text", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
 		const toolStart = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.ToolCallStarted,
 			payload: {
 				toolCallId: "tool-1",
@@ -871,22 +904,19 @@ describe("appendRunEventTx", () => {
 			appendClass: "model",
 		});
 		const toolArgs = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.ToolCallArgs,
 			payload: { toolCallId: "tool-1", delta: '{"command":"ls"}' },
 			appendClass: "model",
 		});
 		const toolEnd = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.ToolCallCompleted,
 			payload: { toolCallId: "tool-1" },
 			appendClass: "model",
 		});
 		const toolResult = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.ToolCallResult,
 			payload: {
 				messageId: "tool-message-1",
@@ -897,20 +927,19 @@ describe("appendRunEventTx", () => {
 			appendClass: "model",
 		});
 		const text = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "done" },
 			appendClass: "model",
 		});
 
-		expect([
-			toolStart.seq,
-			toolArgs.seq,
-			toolEnd.seq,
-			toolResult.seq,
-			text.seq,
-		]).toEqual([1, 2, 3, 4, 5]);
+		expect([toolStart, toolArgs, toolEnd, toolResult, text]).toEqual([
+			{ outcome: "appended", seq: 1 },
+			{ outcome: "appended", seq: 2 },
+			{ outcome: "appended", seq: 3 },
+			{ outcome: "appended", seq: 4 },
+			{ outcome: "appended", seq: 5 },
+		]);
 		expect((await readEvents("run-1")).map((e) => [e.seq, e.type])).toEqual([
 			[1, RunEventType.ToolCallStarted],
 			[2, RunEventType.ToolCallArgs],
@@ -929,10 +958,9 @@ describe("appendRunEventTx", () => {
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner(),
 				type: RunEventType.ToolCallStarted,
 				payload: {
 					toolCallId: "tool-1",
@@ -941,18 +969,21 @@ describe("appendRunEventTx", () => {
 				},
 				appendClass: "model",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({
+			outcome: "rejected",
+			rejected: "status",
+			current: "interrupt_requested",
+		});
 	});
 
 	// …or the worker no longer owns it.
 	it("rejects a tool-event append from a worker that lost ownership", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner(),
 				type: RunEventType.ToolCallResult,
 				payload: {
 					messageId: "tool-message-1",
@@ -962,15 +993,14 @@ describe("appendRunEventTx", () => {
 				},
 				appendClass: "model",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 	});
 
 	it("allows cancellation audit appends while running or interrupt_requested", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
 		const whileRunning = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: "model_interrupt_requested",
 			payload: {},
 			appendClass: "cancellation",
@@ -980,38 +1010,63 @@ describe("appendRunEventTx", () => {
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 		const whileInterruptRequested = await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: "command_canceled",
 			payload: {},
 			appendClass: "cancellation",
 		});
 
-		expect(whileRunning.seq).toBe(1);
-		expect(whileInterruptRequested.seq).toBe(2);
+		expect(whileRunning).toEqual({ outcome: "appended", seq: 1 });
+		expect(whileInterruptRequested).toEqual({ outcome: "appended", seq: 2 });
 	});
 
-	it("still fences cancellation audit appends by lock deadline", async () => {
+	it("fences cancellation audit appends by the Ownership deadline", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner(),
 				type: "command_canceled",
 				payload: {},
 				appendClass: "cancellation",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 	});
 });
 
 describe("transitionRunTerminalTx", () => {
+	it("rejects a lapsed Ownership epoch without committing an Outcome", async () => {
+		await queueRun("run-1", "conv-1");
+		const claim = await claimConversationTx(tdb.db, {
+			workerId: "worker-1",
+		});
+		if (!claim) throw new Error("test setup claimed no Conversation");
+		await startClaimedRunTx(tdb.db, {
+			owner: claim,
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+		await lapseOwnershipLease("conv-1");
+
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: {
+					...claim,
+					runId: "run-1",
+					workerId: "worker-1",
+				},
+				status: "done",
+			}),
+		).toEqual({ outcome: "rejected", rejected: "lease" });
+		expect((await readRun("run-1"))?.status).toBe("running");
+		expect(await readEvents("run-1")).toEqual([]);
+	});
+
 	it.each([
 		"done",
 		"interrupted",
@@ -1092,8 +1147,7 @@ describe("transitionRunTerminalTx", () => {
 	it("rejects terminalization with an incomplete Tool lifecycle", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.ToolCallStarted,
 			payload: {
 				toolCallId: "tool-1",
@@ -1141,8 +1195,7 @@ describe("transitionRunTerminalTx", () => {
 			},
 		] as const) {
 			await appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+				owner: owner(),
 				...event,
 				appendClass: "model",
 			});
@@ -1162,8 +1215,7 @@ describe("transitionRunTerminalTx", () => {
 	it("completes a running run and appends exactly one run_done event", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "hi" },
 			appendClass: "model",
@@ -1198,15 +1250,15 @@ describe("transitionRunTerminalTx", () => {
 			status: "done",
 		});
 
-		// The terminal transition cleared ownership, so the second attempt cannot
-		// even see a lease to argue about.
+		// The epoch still holds, so the classifier names the immutable status rather
+		// than inferring ownership loss from the cleared legacy Run lease.
 		expect(
 			await transitionRunTerminalTx(tdb.db, {
 				owner: owner(),
 				status: "error",
 				payload: { message: "boom" },
 			}),
-		).toEqual({ outcome: "rejected", rejected: "lease" });
+		).toEqual({ outcome: "rejected", rejected: "status", current: "done" });
 		const events = await readEvents("run-1");
 		expect(events.map((e) => e.type)).toEqual(["run_done"]);
 	});
@@ -1283,7 +1335,7 @@ describe("transitionRunTerminalTx", () => {
 		]);
 	});
 
-	it("rejects a terminal transition from a non-owner or expired ownership", async () => {
+	it("rejects a terminal transition from a superseded or lapsed Claim", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -1293,7 +1345,7 @@ describe("transitionRunTerminalTx", () => {
 
 		expect(
 			await transitionRunTerminalTx(tdb.db, {
-				owner: owner({ workerId: "worker-2" }),
+				owner: owner({ epoch: 999, workerId: "worker-2" }),
 				status: "done",
 				agentSessionId: "session-new",
 			}),
@@ -1302,7 +1354,7 @@ describe("transitionRunTerminalTx", () => {
 			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
 		).toBe("session-old");
 
-		await expireOwnership("run-1");
+		await lapseOwnershipLease("conv-1");
 		expect(
 			await transitionRunTerminalTx(tdb.db, {
 				owner: owner(),
@@ -1534,19 +1586,42 @@ describe("heartbeatRunTx", () => {
 });
 
 describe("markLiveStreamFailedTx", () => {
-	it("marks an active Run only through its live ownership fence", async () => {
+	it("rejects an active marker after the Ownership lease lapses", async () => {
+		await queueRun("run-1", "conv-1");
+		const claim = await claimConversationTx(tdb.db, {
+			workerId: "worker-1",
+		});
+		if (!claim) throw new Error("test setup claimed no Conversation");
+		await startClaimedRunTx(tdb.db, {
+			owner: claim,
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+		await lapseOwnershipLease("conv-1");
+
+		expect(
+			await markLiveStreamFailedTx(tdb.db, {
+				owner: {
+					...claim,
+					runId: "run-1",
+					workerId: "worker-1",
+				},
+			}),
+		).toEqual({ outcome: "rejected", rejected: "lease" });
+		expect((await readRun("run-1"))?.liveStreamFailedAt).toBeNull();
+	});
+
+	it("marks an active Run only through its live Ownership epoch", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 
 		expect(
 			await markLiveStreamFailedTx(tdb.db, {
-				runId: "run-1",
-				workerId: "other-worker",
+				owner: owner({ epoch: 999, workerId: "other-worker" }),
 			}),
-		).toEqual({ outcome: "fence_rejected" });
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 
 		const marked = await markLiveStreamFailedTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 		});
 		expect(marked.outcome).toBe("marked");
 		if (marked.outcome !== "marked") throw new Error("unreachable");
@@ -1557,14 +1632,12 @@ describe("markLiveStreamFailedTx", () => {
 	it("is idempotent for the owning worker without moving the timestamp", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		const first = await markLiveStreamFailedTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 		});
 		if (first.outcome !== "marked") throw new Error("unreachable");
 
 		const again = await markLiveStreamFailedTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 		});
 
 		expect(again.outcome).toBe("already_failed");
@@ -1574,13 +1647,15 @@ describe("markLiveStreamFailedTx", () => {
 
 	it("rejects expired ownership but permits the monotonic null-to-time write after terminalization", async () => {
 		await claimRun("run-expired", "conv-expired", "worker-1");
-		await expireOwnership("run-expired");
+		await lapseOwnershipLease("conv-expired");
 		expect(
 			await markLiveStreamFailedTx(tdb.db, {
-				runId: "run-expired",
-				workerId: "worker-1",
+				owner: owner({
+					runId: "run-expired",
+					conversationId: "conv-expired",
+				}),
 			}),
-		).toEqual({ outcome: "fence_rejected" });
+		).toEqual({ outcome: "rejected", rejected: "lease" });
 
 		await claimRun("run-terminal", "conv-terminal", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
@@ -1590,9 +1665,18 @@ describe("markLiveStreamFailedTx", () => {
 			}),
 			status: "done",
 		});
+		await tdb.db
+			.update(runs)
+			.set({
+				lockedBy: "legacy-provenance",
+				lockedUntil: sql`now() + interval '1 hour'`,
+			})
+			.where(eq(runs.runId, "run-terminal"));
 		const marked = await markLiveStreamFailedTx(tdb.db, {
-			runId: "run-terminal",
-			workerId: "worker-1",
+			owner: owner({
+				runId: "run-terminal",
+				conversationId: "conv-terminal",
+			}),
 		});
 
 		expect(marked.outcome).toBe("marked");
@@ -1603,8 +1687,12 @@ describe("markLiveStreamFailedTx", () => {
 			(await readEvents("run-terminal")).map(({ payload }) => payload),
 		).toEqual([{ outcome: "done" }]);
 		const again = await markLiveStreamFailedTx(tdb.db, {
-			runId: "run-terminal",
-			workerId: "any-worker-after-terminal",
+			owner: owner({
+				runId: "run-terminal",
+				conversationId: "conv-terminal",
+				epoch: 999,
+				workerId: "any-worker-after-terminal",
+			}),
 		});
 		expect(again.outcome).toBe("already_failed");
 		if (again.outcome !== "already_failed") throw new Error("unreachable");
@@ -1616,8 +1704,7 @@ describe("markStaleRunsTx", () => {
 	it("still closes a stale Run after a crash left an incomplete Tool prefix", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
-			runId: "run-1",
-			workerId: "worker-1",
+			owner: owner(),
 			type: RunEventType.ToolCallStarted,
 			payload: {
 				toolCallId: "tool-1",
@@ -1815,15 +1902,14 @@ describe("markStaleRunsTx", () => {
 		await expireOwnership("run-1");
 		await markStaleRunsTx(tdb.db);
 
-		await expect(
-			appendRunEventTx(tdb.db, {
-				runId: "run-1",
-				workerId: "worker-1",
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: {},
 				appendClass: "model",
 			}),
-		).rejects.toBeInstanceOf(RunFenceError);
+		).toEqual({ outcome: "rejected", rejected: "status", current: "error" });
 	});
 });
 

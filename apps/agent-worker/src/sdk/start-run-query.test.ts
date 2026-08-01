@@ -10,10 +10,14 @@ import type {
 	Options,
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
+import {
+	claimConversationTx,
+	releaseConversationTx,
+} from "@mymemo/agent-db/conversation-ownership";
 import { RunFenceError } from "@mymemo/agent-db/run-ownership";
 import {
-	claimNextRunTx,
 	type RunRecord,
+	startClaimedRunTx,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 import {
@@ -117,13 +121,17 @@ async function createClaimedRun(input: {
 			summaryId: input.summaryId ?? null,
 		},
 	});
-	const claimed = await claimNextRunTx(tdb.db, { workerId: WORKER_ID });
-	if (claimed?.runId !== input.runId) {
-		throw new Error(
-			`test setup claimed ${claimed?.runId}, wanted ${input.runId}`,
-		);
+	const claim = await claimConversationTx(tdb.db, { workerId: WORKER_ID });
+	if (!claim) throw new Error("test setup claimed no Conversation");
+	const started = await startClaimedRunTx(tdb.db, {
+		owner: claim,
+		runId: input.runId,
+		workerId: WORKER_ID,
+	});
+	if (started.outcome !== "started") {
+		throw new Error(`test setup could not start ${input.runId}`);
 	}
-	return claimed;
+	return started.run;
 }
 
 async function insertRuntimeRow(input: {
@@ -636,8 +644,14 @@ describe("createStartRunQuery — fenced provisioning", () => {
 				workerId: WORKER_ID,
 				userId: "user-1",
 				conversationId: "conv-1",
+				epoch: 1,
 			},
 			status: "done",
+		});
+		await releaseConversationTx(tdb.db, {
+			userId: "user-1",
+			conversationId: "conv-1",
+			epoch: 1,
 		});
 
 		const second = buildHarness({

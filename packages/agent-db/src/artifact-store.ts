@@ -1,9 +1,10 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import type { UserRunMutationOwner } from "./run-ownership";
 import {
 	commitLockedRunTerminalInTx,
+	executeTerminalRunTransaction,
 	lockRunForTerminalInTx,
+	type RunWriteOwner,
 	type TerminalTransitionResult,
 } from "./run-store";
 import { artifactObjects, conversationArtifacts } from "./schema";
@@ -57,16 +58,16 @@ export async function recordArtifactObjectsTx(
 
 /**
  * Make every staged object current and terminalize its owned Run as `done` in
- * one fenced transaction. The Run's terminal fence is taken first and held for
- * the whole transaction, so the metadata swap runs behind proven ownership
- * rather than behind a compare-and-set at the end that has to throw to undo it.
- * A rejection writes nothing; a persistence error rolls back both the metadata
- * swap and `run_done`, leaving the prior current set intact.
+ * one fenced transaction. The Run-status lock is taken before the metadata
+ * swap and held throughout; the final terminal compare-and-set rechecks the
+ * independently mutable Ownership epoch. Losing that recheck classifies the
+ * rejection before throwing the internal rollback signal, so no metadata or
+ * `run_done` commits and the prior current set remains intact.
  */
 export async function publishArtifactsAndTransitionRunDoneTx(
 	db: Database,
 	input: {
-		owner: UserRunMutationOwner;
+		owner: RunWriteOwner;
 		artifacts: PublishedArtifact[];
 		agentSessionId?: string;
 	},
@@ -75,7 +76,7 @@ export async function publishArtifactsAndTransitionRunDoneTx(
 		throw new Error("artifact publication requires at least one staged object");
 	}
 	validatePublishedArtifacts(input.artifacts);
-	return await db.transaction(async (tx) => {
+	return await executeTerminalRunTransaction(db, async (tx) => {
 		const rejection = await lockRunForTerminalInTx(tx, input.owner, "done");
 		if (rejection) return { outcome: "rejected", ...rejection };
 
