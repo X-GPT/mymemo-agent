@@ -13,7 +13,7 @@ import {
 	type ClaimedConversation,
 	type ConversationOwner,
 	claimConversationTx,
-	conversationEpochExists,
+	liveConversationOwnershipExists,
 	releaseConversationTx,
 	renewConversationLeaseTx,
 } from "./conversation-ownership";
@@ -253,7 +253,10 @@ async function fencedStamp(
 		.update(runs)
 		.set({ executedByWorkerId: workerId })
 		.where(
-			and(eq(runs.runId, ownedRunId(runName)), conversationEpochExists(owner)),
+			and(
+				eq(runs.runId, ownedRunId(runName)),
+				liveConversationOwnershipExists(owner),
+			),
 		)
 		.returning({ runId: runs.runId });
 	return stamped.length > 0;

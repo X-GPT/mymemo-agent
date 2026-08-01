@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, ne, or, type SQL, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
-	conversationEpochExists,
+	liveConversationOwnershipExists,
 } from "./conversation-ownership";
 import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
@@ -39,9 +39,8 @@ import {
  *
  * Run-state writes — start, event append, terminal transition, and the active
  * Live Stream failure marker — fence on the Conversation Ownership epoch
- * (ADR-0015). The legacy Run lease remains temporarily for heartbeat and the
- * Conversation-scoped stores migrating in #401–#402; it no longer authorizes
- * these Run-state writes.
+ * (ADR-0015). The legacy Run lease remains temporarily for heartbeat-based
+ * interruption observation until #402; it no longer authorizes any write.
  */
 
 /** All legal `runs.status` values. Derived from the same tuple `runs_status_check`
@@ -137,9 +136,8 @@ export type RunEventPayload = Record<string, unknown>;
 export type RunEventAppendClass = "model" | "cancellation";
 
 /** One Run addressed through the Claim that owns its Conversation. The epoch
- * is the Run-state authority. `workerId` remains temporarily for the
- * Conversation-scoped writes composed into terminal transactions; #401 moves
- * those writes to the epoch and removes that bridge. */
+ * is the write authority. `workerId` is provenance for orphan-sandbox records,
+ * never fence authority. */
 export interface RunWriteOwner extends ConversationOwner {
 	runId: string;
 	workerId: string;
@@ -499,9 +497,8 @@ export async function startClaimedRunTx(
 			.set({
 				status: "running",
 				executedByWorkerId: input.workerId,
-				// Bridge, deleted with the Run lease itself (#402). Heartbeat and the
-				// Conversation-scoped stores still evaluate it until #401; it carries no
-				// authority for Run state.
+				// Bridge, deleted with the Run lease itself (#402). The worker still
+				// renews it to observe interruption state; it carries no write authority.
 				lockedBy: input.workerId,
 				lockedUntil: sql`now() + (${LOCK_DURATION_MS} * interval '1 millisecond')`,
 				heartbeatAt: sql`now()`,
@@ -511,7 +508,7 @@ export async function startClaimedRunTx(
 				and(
 					claimedRunConditions(input.owner, input.runId),
 					eq(runs.status, "queued"),
-					conversationEpochExists(input.owner),
+					liveConversationOwnershipExists(input.owner),
 				),
 			)
 			.returning();
@@ -552,7 +549,7 @@ function classifyStartRejectionInTx(
 	return classifyFenceRejectionInTx(
 		tx,
 		claimedRunConditions(owner, runId),
-		conversationEpochExists(owner),
+		liveConversationOwnershipExists(owner),
 	);
 }
 
@@ -619,7 +616,7 @@ export async function appendRunEventsTx(
 				and(
 					claimedRunConditions(input.owner, input.owner.runId),
 					inArray(runs.status, APPEND_CLASS_STATUSES[input.appendClass]),
-					conversationEpochExists(input.owner),
+					liveConversationOwnershipExists(input.owner),
 				),
 			)
 			.returning({ nextEventSeq: runs.nextEventSeq });
@@ -629,7 +626,7 @@ export async function appendRunEventsTx(
 				...(await classifyFenceRejectionInTx(
 					tx,
 					claimedRunConditions(input.owner, input.owner.runId),
-					conversationEpochExists(input.owner),
+					liveConversationOwnershipExists(input.owner),
 				)),
 			};
 		}
@@ -754,7 +751,7 @@ export async function lockRunForTerminalInTx(
 			and(
 				claimedRunConditions(owner, owner.runId),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[status]),
-				conversationEpochExists(owner),
+				liveConversationOwnershipExists(owner),
 			),
 		)
 		.for("update");
@@ -803,7 +800,7 @@ function classifyRunWriteRejectionInTx(
 	return classifyFenceRejectionInTx(
 		tx,
 		claimedRunConditions(owner, owner.runId),
-		conversationEpochExists(owner),
+		liveConversationOwnershipExists(owner),
 	);
 }
 
@@ -885,7 +882,7 @@ export async function commitLockedRunTerminalInTx(
 			and(
 				claimedRunConditions(input.owner, input.owner.runId),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
-				conversationEpochExists(input.owner),
+				liveConversationOwnershipExists(input.owner),
 			),
 		)
 		.returning();
@@ -1037,9 +1034,8 @@ export async function requestRunInterruptionTx(
 /**
  * Renew the caller's legacy Run lease — push `locked_until` ahead — and return
  * the fresh row, so the worker's control loop observes `interrupt_requested`
- * through this one call. This temporary heartbeat remains for the
- * runtime/session paths migrating in #401/#402: active status, matching
- * `locked_by`, and an unexpired `locked_until`. Returns `null` when the fence
+ * through this one call. This temporary heartbeat remains until #402 solely to
+ * surface the Run's interruption state. Returns `null` when the legacy lease
  * rejects — expired ownership is never revived, and the caller must abandon
  * the Run locally.
  */
@@ -1093,7 +1089,7 @@ export async function markLiveStreamFailedTx(
 		const writeAllowed = or(
 			and(
 				inArray(runs.status, ["running", "interrupt_requested"]),
-				conversationEpochExists(input.owner),
+				liveConversationOwnershipExists(input.owner),
 			),
 			inArray(runs.status, TERMINAL_RUN_STATUSES),
 		);

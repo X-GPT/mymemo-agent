@@ -13,7 +13,7 @@ import type {
 	SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Database } from "@mymemo/agent-db/client";
-import type { RunMutationOwner } from "@mymemo/agent-db/run-ownership";
+import type { RunWriteOwner } from "@mymemo/agent-db/run-store";
 import type { ConversationRuntimeRecord } from "@mymemo/agent-db/runtime-store";
 import {
 	appendAgentSessionEntriesTx,
@@ -50,9 +50,9 @@ export function conversationWorkingDirectory(conversationId: string): string {
 /**
  * A Postgres-backed {@link ConversationSessionStore} bound to one claimed Run.
  * It stamps every mirrored entry with the Run's conversation id and fences SDK
- * append/delete mutations with the Run id, worker id, and live lease. A later
- * turn on any worker can therefore read the same transcript, while stale
- * workers cannot mutate it. The adapter also records this Run's latest
+ * append/delete mutations with the Conversation's live Ownership fence. A
+ * later turn on any worker can therefore read the same transcript, while stale
+ * Claims cannot mutate it. The adapter also records this Run's latest
  * successful non-empty main-session mirror as continuity evidence.
  *
  * `projectKey` from the SDK key is retained for fidelity but is not a lookup
@@ -61,18 +61,12 @@ export function conversationWorkingDirectory(conversationId: string): string {
 export function createConversationSessionStore(
 	db: Database,
 	binding: {
-		conversationId: string;
-		runId: string;
-		workerId: string;
+		owner: RunWriteOwner;
 		logger: WorkerLogger;
 	},
 ): ConversationSessionStore {
-	const { conversationId, runId, workerId, logger } = binding;
-	const owner: RunMutationOwner = {
-		conversationId,
-		runId,
-		workerId,
-	};
+	const { owner, logger } = binding;
+	const { conversationId, runId } = owner;
 	let latestMirroredMainSessionId: string | null = null;
 	const ref = (key: SessionKey) => ({
 		projectKey: key.projectKey,
@@ -164,21 +158,14 @@ export interface AgentSessionQueryConfig {
  */
 export function buildAgentSessionQueryConfig(input: {
 	db: Database;
-	conversationId: string;
+	owner: RunWriteOwner;
 	runtime: ConversationRuntimeRecord | null;
-	runId: string;
-	workerId: string;
 	logger: WorkerLogger;
 }): AgentSessionQueryConfig {
-	const { db, conversationId, runtime, runId, workerId, logger } = input;
+	const { db, owner, runtime, logger } = input;
 	const config: AgentSessionQueryConfig = {
-		sessionStore: createConversationSessionStore(db, {
-			conversationId,
-			runId,
-			workerId,
-			logger,
-		}),
-		cwd: conversationWorkingDirectory(conversationId),
+		sessionStore: createConversationSessionStore(db, { owner, logger }),
+		cwd: conversationWorkingDirectory(owner.conversationId),
 	};
 	const resume = runtime?.agentSessionId ?? undefined;
 	if (resume) config.resume = resume;

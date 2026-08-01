@@ -288,13 +288,8 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			processor: createSdkRunProcessor({
 				logger: silentLogger,
-				startRunQuery: async (run, signal) => {
-					await createConversationRuntimeTx(tdb.db, {
-						userId: run.userId,
-						conversationId: run.conversationId,
-						runId: run.runId,
-						workerId: "worker-1",
-					});
+				startRunQuery: async (run, signal, owner) => {
+					await createConversationRuntimeTx(tdb.db, owner);
 					const publication = await publisher.begin({
 						run,
 						workspace,

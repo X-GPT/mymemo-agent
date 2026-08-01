@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import type { Database } from "./client";
+import type { Database, DbTx } from "./client";
 import { conversations, runs } from "./schema";
 
 /**
@@ -17,10 +17,9 @@ import { conversations, runs } from "./schema";
  * rather than carrying a "zero rows means work arrived, keep the lease and
  * loop" subtlety.
  *
- * This module is deliberately the whole of ADR-0015, sitting beside the Run
- * lease in `run-ownership.ts` rather than inside it: the two authorities
- * coexist only until the fenced writes move onto the epoch, and a file boundary
- * makes retiring the older one a deletion rather than surgery.
+ * This module is deliberately the whole of ADR-0015. The temporary Run-lease
+ * stamping and heartbeat bridge remains in `run-store.ts` until #402, but it
+ * exposes no competing mutation predicate.
  *
  * Lock order is global and stated once: `conversations` before `runs`. The
  * Claim below holds to it by locking only the `conversations` side of its
@@ -48,6 +47,11 @@ export interface ConversationOwner {
 	userId: string;
 	conversationId: string;
 	epoch: number;
+}
+
+/** A Conversation's live Ownership fence rejected a worker mutation. */
+export class ConversationOwnershipFenceError extends Error {
+	override name = "ConversationOwnershipFenceError" as const;
 }
 
 /**
@@ -207,7 +211,7 @@ export async function renewConversationLeaseTx(
 	const [renewed] = await db
 		.update(conversations)
 		.set({ ownerUntil: leaseDeadline() })
-		.where(liveClaimConditions(owner))
+		.where(liveConversationOwnershipConditions(owner))
 		.returning({ ownerUntil: conversations.ownerUntil });
 	return renewed?.ownerUntil ?? null;
 }
@@ -227,7 +231,7 @@ function claimedConversationConditions(owner: ConversationOwner) {
  * lease superseded by a re-Claim, and the live deadline fences one that merely
  * lapsed with no successor, since a lapsed lease keeps its epoch.
  */
-function liveClaimConditions(owner: ConversationOwner) {
+export function liveConversationOwnershipConditions(owner: ConversationOwner) {
 	return and(
 		claimedConversationConditions(owner),
 		sql`${conversations.ownerUntil} > now()`,
@@ -235,11 +239,41 @@ function liveClaimConditions(owner: ConversationOwner) {
 }
 
 /**
- * {@link liveClaimConditions} as an in-statement `EXISTS` predicate — the form
- * a fenced write on another table carries inside the statement that performs
- * it. Deliberately a probe rather than a lock: fence reads then never conflict
- * with each other, only with the brief Claim and release writes.
+ * {@link liveConversationOwnershipConditions} as an in-statement `EXISTS`
+ * predicate — the form a fenced write on another table carries inside the
+ * statement that performs it. Deliberately a probe rather than a lock: fence
+ * reads then never conflict with each other, only with the brief Claim and
+ * release writes.
  */
-export function conversationEpochExists(owner: ConversationOwner) {
-	return sql`exists (select 1 from ${conversations} where ${liveClaimConditions(owner)})`;
+export function liveConversationOwnershipExists(owner: ConversationOwner) {
+	return sql`exists (select 1 from ${conversations} where ${liveConversationOwnershipConditions(owner)})`;
+}
+
+/**
+ * Validate and lock a live Claim before a transaction mutates another table.
+ * The `FOR SHARE` lock keeps ownership stable through commit, so release or
+ * Reclamation cannot revoke the authorizing Claim underneath the mutation.
+ */
+export async function lockLiveConversationOwnershipTx(
+	tx: DbTx,
+	owner: ConversationOwner,
+	operation: string,
+): Promise<void> {
+	const [owned] = await tx
+		.select({ conversationId: conversations.conversationId })
+		.from(conversations)
+		.where(liveConversationOwnershipConditions(owner))
+		.for("share");
+	if (!owned) rejectConversationOwnership(owner, operation);
+}
+
+/** Raise the canonical bounded rejection for a Conversation-owned mutation. */
+export function rejectConversationOwnership(
+	owner: Pick<ConversationOwner, "conversationId">,
+	operation: string,
+): never {
+	throw new ConversationOwnershipFenceError(
+		`${operation} for conversation ${owner.conversationId} rejected: ` +
+			"the Ownership epoch is stale or its lease has lapsed",
+	);
 }

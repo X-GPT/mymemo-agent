@@ -1072,12 +1072,7 @@ describe("RunLoop — agent session pointer", () => {
 	it("does not establish the first pointer without main-session evidence", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			return {
 				disposition: "completed",
 				streamMetadata: {
@@ -1102,12 +1097,7 @@ describe("RunLoop — agent session pointer", () => {
 		const loop = buildLoop(worker, async (ctx) => {
 			// The runtime row is created while the run is owned (as E2B provisioning
 			// will), so the fenced pointer advance in `finish()` has a row to update.
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			return {
 				disposition: "completed",
 				streamMetadata: {
@@ -1140,12 +1130,7 @@ describe("RunLoop — agent session pointer", () => {
 		const worker = buildWorker(1);
 		const processorStarted = deferred();
 		const loop = buildLoop(worker, async (ctx) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			processorStarted.resolve();
 			await new Promise<void>((resolve) => {
 				if (ctx.signal.aborted) return resolve();
@@ -1181,12 +1166,7 @@ describe("RunLoop — agent session pointer", () => {
 	it("reconciles a completed turn to interrupted from the refused done fence", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			// The durable request lands after the last heartbeat, so loop-local
 			// interruption state stays false: the only thing that can tell the loop
 			// to follow up with `interrupted` is the rejection the `done` fence
@@ -1249,12 +1229,7 @@ describe("RunLoop — agent session pointer", () => {
 	it("keeps qualifying evidence when error reconciliation loses to interruption", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			// The durable request lands after the last heartbeat, so loop-local
 			// interruption state remains false and the error CAS must reconcile.
 			await requestRunInterruptionTx(tdb.db, {
@@ -1285,12 +1260,7 @@ describe("RunLoop — agent session pointer", () => {
 	it("drops unreliable evidence when mirror-error reconciliation loses to interruption", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			await requestRunInterruptionTx(tdb.db, {
 				runId: ctx.run.runId,
 				userId: ctx.run.userId,
@@ -1317,12 +1287,7 @@ describe("RunLoop — agent session pointer", () => {
 	it("keeps interruption-only continuity out of a plain error Outcome", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			return {
 				disposition: "stopped",
 				streamMetadata: {
@@ -1344,12 +1309,7 @@ describe("RunLoop — agent session pointer", () => {
 	it("terminalizes error without establishing a pointer after a mirror error stop", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			return {
 				disposition: "stopped",
 				streamMetadata: {
@@ -1370,12 +1330,7 @@ describe("RunLoop — agent session pointer", () => {
 	it("defensively rejects a completed processor result that reports a mirror error", async () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, async (ctx) => {
-			await createConversationRuntimeTx(tdb.db, {
-				userId: ctx.run.userId,
-				conversationId: ctx.run.conversationId,
-				runId: ctx.run.runId,
-				workerId: "worker-1",
-			});
+			await createConversationRuntimeTx(tdb.db, ctx.owner);
 			return {
 				disposition: "completed",
 				streamMetadata: {

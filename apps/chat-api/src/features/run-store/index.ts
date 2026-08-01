@@ -23,7 +23,6 @@ export {
 	heartbeatRunTx,
 	markLiveStreamFailedTx,
 	PostgresRunStore,
-	RunFenceError,
 	RunInputMismatchError,
 	requestRunInterruptionTx,
 	transitionRunTerminalTx,

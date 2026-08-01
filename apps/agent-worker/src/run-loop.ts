@@ -129,6 +129,8 @@ const MODEL_CONTENT_EVENT_TYPES = {
  */
 export interface RunProcessContext {
 	run: RunRecord;
+	/** The Claim authority shared by every Run- and Conversation-scoped write. */
+	owner: RunWriteOwner;
 	/** Cancels active Tool/E2B work for every supervisor stop cause. */
 	signal: AbortSignal;
 	/** Fires only after durable interruption is observed; grants the bounded
@@ -521,10 +523,9 @@ export class RunLoop {
 	 * Renew the served Run's legacy Run lease and observe a durable interruption.
 	 *
 	 * Bridge, deleted with the Run lease itself (#402). Ownership renewal above is
-	 * the authority; this temporary heartbeat remains for the Conversation-scoped
-	 * stores moving in #401. It also returns the served Run's status, which the
-	 * drain still needs because
-	 * Conversation-scoped renewal returns no Run row.
+	 * the authority; this temporary heartbeat returns the served Run's status,
+	 * which the drain still needs because Conversation-scoped renewal returns no
+	 * Run row.
 	 */
 	private async observeServedRun(drain: ActiveDrain): Promise<void> {
 		const served = drain.served;
@@ -842,6 +843,7 @@ export class RunLoop {
 			turnResult =
 				(await this.opts.processor({
 					run,
+					owner,
 					signal: entry.controller.signal,
 					interruptionSignal: entry.interruptionController.signal,
 					shutdownSignal: entry.shutdownController.signal,
