@@ -426,9 +426,32 @@ export async function claimNextRunTx(
 	return row ? toRunRecord(row) : null;
 }
 
+/**
+ * Why a fenced write was refused. `lease`: the caller no longer holds live
+ * ownership — expired, reclaimed by recovery, or the Run/Conversation/user
+ * identity does not match — so it must stop treating the Run as its own.
+ * `status`: ownership is still live, but the Run's current status does not
+ * permit the requested transition (`done` after an interruption was requested,
+ * or a Run already terminalized); `current` says what the Run is actually in,
+ * which is what lets the caller pick its one legal follow-up instead of
+ * guessing. `gone`: the Run no longer exists, which means its Conversation was
+ * permanently deleted and took the Run with it — there is nothing left to
+ * terminalize, recover, or hand back.
+ *
+ * This is the one fence vocabulary for every Run-state write; no operation
+ * grows a parallel rejection shape of its own.
+ */
+export type FenceRejection =
+	| { rejected: "lease" }
+	| { rejected: "status"; current: RunStatus }
+	| { rejected: "gone" };
+
+/** Shared rejected arm returned by every fenced Run-state write. */
+export type RunWriteRejected = { outcome: "rejected" } & FenceRejection;
+
 export type StartClaimedRunResult =
 	| { outcome: "started"; run: RunRecord }
-	| ({ outcome: "rejected" } & FenceRejection);
+	| RunWriteRejected;
 
 /**
  * Serve one Run of a Claimed Conversation: `queued` → `running` under the
@@ -540,11 +563,11 @@ export async function appendRunEventTx(
 
 export type AppendRunEventResult =
 	| { outcome: "appended"; seq: number }
-	| ({ outcome: "rejected"; seq?: never } & FenceRejection);
+	| RunWriteRejected;
 
 export type AppendRunEventsResult =
 	| { outcome: "appended"; events: Array<{ seq: number }> }
-	| ({ outcome: "rejected" } & FenceRejection);
+	| RunWriteRejected;
 
 /**
  * Append a non-empty ordered batch under one Run-row fence and transaction.
@@ -659,15 +682,9 @@ export async function transitionRunTerminalTx(
 	db: Database,
 	input: TerminalTransitionInput,
 ): Promise<TerminalTransitionResult> {
-	try {
-		return await db.transaction((tx) => transitionRunTerminalInTx(tx, input));
-	} catch (error) {
-		if (!(error instanceof TerminalFenceChangedError)) throw error;
-		return {
-			outcome: "rejected",
-			...(await classifyRunWriteRejectionTx(db, input.owner)),
-		};
-	}
+	return await executeTerminalRunTransaction(db, (tx) =>
+		transitionRunTerminalInTx(tx, input),
+	);
 }
 
 interface TerminalOutcomeBase {
@@ -690,29 +707,9 @@ export type TerminalTransitionInput = TerminalOutcome & {
 	owner: RunWriteOwner;
 };
 
-/**
- * Why a fenced write was refused. `lease`: the caller no longer holds live
- * ownership — expired, reclaimed by recovery, or the Run/Conversation/user
- * identity does not match — so it must stop treating the Run as its own.
- * `status`: ownership is still live, but the Run's current status does not
- * permit the requested transition (`done` after an interruption was requested,
- * or a Run already terminalized); `current` says what the Run is actually in,
- * which is what lets the caller pick its one legal follow-up instead of
- * guessing. `gone`: the Run no longer exists, which means its Conversation was
- * permanently deleted and took the Run with it — there is nothing left to
- * terminalize, recover, or hand back.
- *
- * This is the one fence vocabulary for every Run-state write; no operation
- * grows a parallel rejection shape of its own.
- */
-export type FenceRejection =
-	| { rejected: "lease" }
-	| { rejected: "status"; current: RunStatus }
-	| { rejected: "gone" };
-
 export type TerminalTransitionResult =
 	| { outcome: "committed"; run: RunRecord }
-	| ({ outcome: "rejected" } & FenceRejection);
+	| RunWriteRejected;
 
 /**
  * Take the terminal fence for `status` before any composed terminal facts. The
@@ -787,19 +784,31 @@ function classifyRunWriteRejectionInTx(
 	);
 }
 
-/** Classify a final terminal epoch recheck after its transaction rolled back. */
-export async function classifyRunWriteRejectionTx(
-	db: Database,
-	owner: RunWriteOwner,
-): Promise<FenceRejection> {
-	return await db.transaction((tx) => classifyRunWriteRejectionInTx(tx, owner));
+/** Internal rollback signal carrying the rejection classified in the same
+ * transaction as the failed final epoch check. */
+class TerminalFenceChangedError extends Error {
+	override readonly name = "TerminalFenceChangedError";
+
+	constructor(
+		readonly rejection: FenceRejection,
+		message: string,
+	) {
+		super(message);
+	}
 }
 
-/** Internal rollback signal for a final terminal epoch recheck. Public
- * terminal APIs catch it and return {@link FenceRejection}; it is exported only
- * so the artifact composer can preserve the same transaction boundary. */
-export class TerminalFenceChangedError extends Error {
-	override readonly name = "TerminalFenceChangedError";
+/** Run a terminal transaction, rolling back composed facts when its final epoch
+ * check loses and returning the rejection classified before that rollback. */
+export async function executeTerminalRunTransaction<T>(
+	db: Database,
+	operation: (tx: DbTx) => Promise<T>,
+): Promise<T | RunWriteRejected> {
+	try {
+		return await db.transaction(operation);
+	} catch (error) {
+		if (!(error instanceof TerminalFenceChangedError)) throw error;
+		return { outcome: "rejected", ...error.rejection };
+	}
 }
 
 /**
@@ -858,7 +867,9 @@ export async function commitLockedRunTerminalInTx(
 		)
 		.returning();
 	if (!row) {
+		const rejection = await classifyRunWriteRejectionInTx(tx, input.owner);
 		throw new TerminalFenceChangedError(
+			rejection,
 			`terminal transition of run ${input.owner.runId} to ${input.status} ` +
 				`ran without holding its fence`,
 		);
@@ -1034,7 +1045,7 @@ export async function heartbeatRunTx(
 
 export type MarkLiveStreamFailedResult =
 	| { outcome: "marked" | "already_failed"; run: RunRecord }
-	| ({ outcome: "rejected" } & FenceRejection);
+	| RunWriteRejected;
 
 /**
  * Monotonically record that a Run's Live Stream is unusable without changing

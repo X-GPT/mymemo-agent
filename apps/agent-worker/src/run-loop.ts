@@ -26,6 +26,7 @@ import {
 	markStaleRunsTx,
 	type RunRecord,
 	type RunWriteOwner,
+	type RunWriteRejected,
 	startClaimedRunTx,
 	type TerminalOutcome,
 	type TerminalRunStatus,
@@ -232,13 +233,6 @@ function conversationKey(owner: ConversationOwner): string {
 
 const STALE_RUN_RECOVERY_INTERVAL_MS = 15_000;
 const GENERIC_RUN_ERROR_MESSAGE = "Run failed";
-
-type RejectedTerminal = Extract<
-	TerminalTransitionResult,
-	{ outcome: "rejected" }
->;
-
-type RejectedRunWrite = { outcome: "rejected" } & FenceRejection;
 
 /** Internal control-flow signal: the typed rejection has already been applied
  * to the drain state, so it must stop the processor without being mistaken for
@@ -647,29 +641,15 @@ export class RunLoop {
 	}
 
 	/**
-	 * Apply the shared rejection vocabulary to any fenced Run write. A `status`
-	 * refusal skips that write; an in-flight `interrupt_requested` also aborts the
-	 * processor so `interrupted` can win. `lease` and `gone` halt the drain without
-	 * release. Keeping this decision in one place prevents start, append, and
-	 * terminal paths from assigning different meanings to the same rejection.
+	 * Apply the drain-level meaning shared by every fenced Run write: `status`
+	 * skips the write, while `lease` and `gone` halt without release.
 	 */
 	private noteRejectedRunWrite(
 		drain: ActiveDrain,
 		runId: string,
-		rejection: RejectedRunWrite,
-		entry?: ActiveEntry,
+		rejection: RunWriteRejected,
 	): void {
 		if (rejection.rejected === "status") {
-			if (entry) {
-				if (rejection.current === "interrupt_requested") {
-					entry.state.interrupted = true;
-					entry.controller.abort();
-					entry.interruptionController.abort();
-				} else {
-					entry.state.skipTerminalization = true;
-					entry.controller.abort();
-				}
-			}
 			this.opts.logger.info({
 				message: "skipping a Run write refused by its current status",
 				workerId: this.workerId,
@@ -680,11 +660,6 @@ export class RunLoop {
 			return;
 		}
 		drain.halted = rejection.rejected;
-		if (entry) {
-			entry.state.lostOwnership = true;
-			entry.controller.abort();
-			entry.ownershipLostController.abort();
-		}
 		this.opts.logger.warn({
 			message:
 				rejection.rejected === "gone"
@@ -694,6 +669,30 @@ export class RunLoop {
 			conversationId: drain.owner.conversationId,
 			runId,
 		});
+	}
+
+	/** Apply a rejection to the Run currently executing, then record its
+	 * drain-level meaning through {@link noteRejectedRunWrite}. */
+	private noteRejectedActiveRunWrite(
+		drain: ActiveDrain,
+		entry: ActiveEntry,
+		rejection: RunWriteRejected,
+	): void {
+		if (rejection.rejected === "status") {
+			if (rejection.current === "interrupt_requested") {
+				entry.state.interrupted = true;
+				entry.controller.abort();
+				entry.interruptionController.abort();
+			} else {
+				entry.state.skipTerminalization = true;
+				entry.controller.abort();
+			}
+		} else {
+			entry.state.lostOwnership = true;
+			entry.controller.abort();
+			entry.ownershipLostController.abort();
+		}
+		this.noteRejectedRunWrite(drain, entry.runId, rejection);
 	}
 
 	/**
@@ -773,7 +772,7 @@ export class RunLoop {
 					owner,
 				});
 				if (result.outcome === "rejected") {
-					this.noteRejectedRunWrite(drain, run.runId, result, entry);
+					this.noteRejectedActiveRunWrite(drain, entry, result);
 					this.opts.logger.warn({
 						message:
 							"could not mark Live Stream failed through Ownership fence",
@@ -781,9 +780,7 @@ export class RunLoop {
 						runId: run.runId,
 						rejected: result.rejected,
 					});
-					throw new Error(
-						"Ownership fence rejected Live Stream failure marker",
-					);
+					throw new RunWriteRejectedError();
 				}
 				if (result.run.liveStreamFailedAt === null) {
 					throw new Error("Live Stream failure marker timestamp is missing");
@@ -820,15 +817,14 @@ export class RunLoop {
 					appendLiveEvent: (event) => liveStream.append(event),
 				})) ?? EMPTY_TURN;
 		} catch (error) {
-			if (error instanceof RunWriteRejectedError) {
-				// The typed rejection already updated the drain/Run state.
-			} else if (error instanceof RunProcessorFailure) {
-				failure = {
-					error: error.failure,
-					streamMetadata: error.streamMetadata,
-				};
-			} else {
-				failure = { error };
+			if (!(error instanceof RunWriteRejectedError)) {
+				failure =
+					error instanceof RunProcessorFailure
+						? {
+								error: error.failure,
+								streamMetadata: error.streamMetadata,
+							}
+						: { error };
 			}
 		}
 		// Detach before terminalizing: from here the drain owns the terminal
@@ -872,7 +868,7 @@ export class RunLoop {
 			appendClass: "model",
 		});
 		if (result.outcome === "rejected") {
-			this.noteRejectedRunWrite(drain, owner.runId, result, entry);
+			this.noteRejectedActiveRunWrite(drain, entry, result);
 			throw new RunWriteRejectedError();
 		}
 	}
@@ -1059,7 +1055,7 @@ export class RunLoop {
 	private async reconcileRejectedTerminal(
 		owner: RunWriteOwner,
 		drain: ActiveDrain,
-		rejection: RejectedTerminal,
+		rejection: RunWriteRejected,
 		intended: TerminalRunStatus,
 		options: {
 			agentSessionId?: string;

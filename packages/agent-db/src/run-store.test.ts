@@ -597,8 +597,8 @@ describe("appendRunEventTx", () => {
 			appendClass: "model",
 		});
 
-		expect(first.seq).toBe(1);
-		expect(second.seq).toBe(2);
+		expect(first).toEqual({ outcome: "appended", seq: 1 });
+		expect(second).toEqual({ outcome: "appended", seq: 2 });
 		const events = await readEvents("run-1");
 		expect(events.map((e) => [e.seq, e.type])).toEqual([
 			[1, RunEventType.AssistantMessageCompleted],
@@ -933,13 +933,13 @@ describe("appendRunEventTx", () => {
 			appendClass: "model",
 		});
 
-		expect([
-			toolStart.seq,
-			toolArgs.seq,
-			toolEnd.seq,
-			toolResult.seq,
-			text.seq,
-		]).toEqual([1, 2, 3, 4, 5]);
+		expect([toolStart, toolArgs, toolEnd, toolResult, text]).toEqual([
+			{ outcome: "appended", seq: 1 },
+			{ outcome: "appended", seq: 2 },
+			{ outcome: "appended", seq: 3 },
+			{ outcome: "appended", seq: 4 },
+			{ outcome: "appended", seq: 5 },
+		]);
 		expect((await readEvents("run-1")).map((e) => [e.seq, e.type])).toEqual([
 			[1, RunEventType.ToolCallStarted],
 			[2, RunEventType.ToolCallArgs],
@@ -1016,8 +1016,8 @@ describe("appendRunEventTx", () => {
 			appendClass: "cancellation",
 		});
 
-		expect(whileRunning.seq).toBe(1);
-		expect(whileInterruptRequested.seq).toBe(2);
+		expect(whileRunning).toEqual({ outcome: "appended", seq: 1 });
+		expect(whileInterruptRequested).toEqual({ outcome: "appended", seq: 2 });
 	});
 
 	it("fences cancellation audit appends by the Ownership deadline", async () => {
