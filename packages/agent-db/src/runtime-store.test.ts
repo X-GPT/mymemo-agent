@@ -247,7 +247,7 @@ describe("updateRuntimeSandboxTx", () => {
 		).toMatchObject({ sandboxId: null });
 	});
 
-	it("rejects a stale Ownership epoch even while the legacy Run lease is live", async () => {
+	it("rejects a stale Ownership epoch even while the successor's lease is live", async () => {
 		await claimOwnedRun();
 		await createConversationRuntimeTx(tdb.db, OWNER);
 		await tdb.db.update(conversations).set({

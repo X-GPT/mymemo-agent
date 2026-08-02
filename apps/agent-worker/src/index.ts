@@ -29,7 +29,7 @@ import { generateWorkerId } from "./worker-id";
 
 // Entrypoint: the only place that reads the environment. Boots the worker —
 // validated config, structured logger, worker id, a health endpoint, the
-// Postgres-backed claim/heartbeat/terminalize loop, the real Claude Agent SDK
+// Postgres-backed Claim/renew/terminalize loop, the real Claude Agent SDK
 // processor over E2B, and graceful shutdown.
 const config = loadWorkerConfigFromEnv(Bun.env);
 const logger = createLogger(config.logLevel);

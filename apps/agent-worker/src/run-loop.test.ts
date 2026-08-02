@@ -262,7 +262,7 @@ describe("RunLoop — claim isolation", () => {
 
 		expect(claimedA).toBe(1);
 		expect(claimedB).toBe(0);
-		expect((await readRun("run-1"))?.lockedBy).toBe("worker-a");
+		expect((await readRun("run-1"))?.executedByWorkerId).toBe("worker-a");
 
 		gate.resolve();
 		await workerA.drain();
@@ -270,8 +270,8 @@ describe("RunLoop — claim isolation", () => {
 	});
 });
 
-describe("RunLoop — heartbeat", () => {
-	it("renews the lock deadline for a run it owns", async () => {
+describe("RunLoop — Ownership renewal", () => {
+	it("renews the Conversation deadline while serving a Run", async () => {
 		const worker = buildWorker(1);
 		const gate = deferred();
 		const loop = buildLoop(worker, async () => {
@@ -282,21 +282,23 @@ describe("RunLoop — heartbeat", () => {
 
 		// Pull the deadline near expiry so the fixed-duration renewal is visible.
 		await tdb.db
-			.update(runs)
-			.set({ lockedUntil: sql`now() + interval '1 second'` })
-			.where(eq(runs.runId, "run-1"));
+			.update(conversations)
+			.set({ ownerUntil: sql`now() + interval '1 second'` })
+			.where(eq(conversations.conversationId, "conv-1"));
 
-		await loop.tick(); // heartbeats the active run
+		await loop.tick(); // renews the active Conversation
 
-		const row = await readRun("run-1");
-		expect(row?.lockedBy).toBe("worker-1");
-		expect(row?.lockedUntil?.getTime()).toBeGreaterThan(Date.now() + 30_000);
+		const ownership = await readOwnership("conv-1");
+		expect(ownership?.ownerWorkerId).toBe("worker-1");
+		expect(ownership?.ownerUntil?.getTime()).toBeGreaterThan(
+			Date.now() + 30_000,
+		);
 
 		gate.resolve();
 		await worker.drain();
 	});
 
-	it("abandons a run whose ownership it lost without terminalizing it", async () => {
+	it("abandons a Run whose Conversation ownership it lost", async () => {
 		const worker = buildWorker(1);
 		const gate = deferred();
 		// A processor that ignores the abort signal — proves abandonment does not
@@ -307,25 +309,26 @@ describe("RunLoop — heartbeat", () => {
 		await queueRun("run-1", "conv-1");
 		await loop.tick(); // claim + dispatch (processor blocks)
 
-		// Another worker steals the run: the heartbeat fence (locked_by = us) is
-		// now rejected, so heartbeatRunTx returns null.
+		// A later Claim supersedes this one. The next renewal rejects the stale epoch.
 		await tdb.db
-			.update(runs)
+			.update(conversations)
 			.set({
-				lockedBy: "worker-2",
-				lockedUntil: sql`now() + interval '60 seconds'`,
+				epoch: sql`${conversations.epoch} + 1`,
+				ownerWorkerId: "worker-2",
+				ownerUntil: sql`now() + interval '60 seconds'`,
 			})
-			.where(eq(runs.runId, "run-1"));
+			.where(eq(conversations.conversationId, "conv-1"));
 
-		await loop.tick(); // heartbeat observes the lost fence → abandons
+		await loop.tick(); // Ownership renewal observes the lost fence → abandons
 		gate.resolve();
 		await worker.drain();
 
-		// We must not terminalize a run we no longer own: no terminal event from
-		// us, and the thief's ownership is untouched (Reclamation is its problem now).
+		// We must not terminalize a Run we no longer own: no terminal event from us,
+		// and the successor's Conversation ownership is untouched.
 		const row = await readRun("run-1");
 		expect(row?.status).toBe("running");
-		expect(row?.lockedBy).toBe("worker-2");
+		expect(row?.executedByWorkerId).toBe("worker-1");
+		expect((await readOwnership("conv-1"))?.ownerWorkerId).toBe("worker-2");
 		expect(await readEventTypes("run-1")).toEqual([]);
 	});
 });
@@ -496,7 +499,7 @@ describe("RunLoop — conversation drain", () => {
 		expect(ownership?.ownerUntil).toBeInstanceOf(Date);
 	});
 
-	it("stops heartbeating a Run it abandoned, tick after tick", async () => {
+	it("stops observing a Run it abandoned, tick after tick", async () => {
 		const worker = buildWorker(1);
 		const gate = deferred();
 		const warnings: string[] = [];
@@ -524,7 +527,7 @@ describe("RunLoop — conversation drain", () => {
 		gate.resolve();
 		await worker.drain();
 
-		// Detached on abandonment, so later ticks stop heartbeating it.
+		// Detached on abandonment, so later ticks stop observing it.
 		expect(
 			warnings.filter(
 				(message) =>
@@ -1052,7 +1055,7 @@ describe("RunLoop — terminal outcomes", () => {
 			.set({ status: "interrupt_requested", interruptRequestedAt: sql`now()` })
 			.where(eq(runs.runId, "run-1"));
 
-		await loop.tick(); // heartbeat observes interrupt_requested → aborts the run
+		await loop.tick(); // status observation sees interrupt_requested → aborts the run
 		await worker.drain();
 		await consume;
 
@@ -1649,7 +1652,7 @@ describe("RunLoop — synthetic end-to-end smoke", () => {
 		expect(claimed).toBe(1);
 		const row = await readRun("run-smoke");
 		expect(row?.status).toBe("done");
-		expect(row?.lockedBy).toBeNull();
+		expect(row?.executedByWorkerId).toBe("worker-1");
 		// The durable event log carries the complete Assistant message ahead of the
 		// terminal frame.
 		expect(await readEventTypes("run-smoke")).toEqual([

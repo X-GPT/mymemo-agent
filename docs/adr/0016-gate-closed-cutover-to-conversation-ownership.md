@@ -2,6 +2,10 @@
 
 Status: accepted
 
+Amended by issue #402's final contract cutover: because the gated surface's
+rows are explicitly disposable, the rollback consequence below is reset and
+redeploy rather than the database restore this ADR originally required.
+
 ADR-0002 refused a coexistence flag between the prototype and split-runtime
 paths because they enforced "one active turn per conversation" with
 different authorities, leaving no single authority for the invariant: two
@@ -38,6 +42,6 @@ than machinery we write.
   two-phase rollout becomes correct and this ADR should be superseded rather
   than worked around.
 - The migration is not additive-only — dropped columns and a dropped index
-  mean the previous worker image cannot run against the new schema. Rollback
-  is a restore, not a redeploy, so the window must not be treated as
-  reversible once workers are back up and writing.
+  mean the previous worker image cannot run against the new schema. Because the
+  gated surface's rows may be discarded, rollback is a database reset to the
+  target image's schema plus redeploy, not a database restore.

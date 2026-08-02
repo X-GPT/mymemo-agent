@@ -21,7 +21,7 @@ import {
 	type TestDb,
 } from "@mymemo/agent-db/testing";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
 import { Worker } from "../worker";
@@ -69,6 +69,9 @@ afterAll(async () => {
 afterEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
 	await tdb.db.delete(conversationRuntime);
+	await tdb.db
+		.update(conversations)
+		.set({ ownerWorkerId: null, ownerUntil: null });
 });
 
 interface EnvelopeBlock {
@@ -939,7 +942,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		]);
 	});
 
-	it("keeps heartbeating a hung interrupted Run and force-closes it after the deadline", async () => {
+	it("keeps renewing Ownership for a hung interrupted Run and force-closes it after the deadline", async () => {
 		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const interrupted = Promise.withResolvers<void>();
@@ -1008,11 +1011,12 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect((await readRun("run-1"))?.status).toBe("interrupt_requested");
 
 		await tdb.db
-			.update(runs)
-			.set({ lockedUntil: new Date(Date.now() + 1_000) })
-			.where(eq(runs.runId, "run-1"));
+			.update(conversations)
+			.set({ ownerUntil: new Date(Date.now() + 1_000) })
+			.where(eq(conversations.conversationId, "conv-1"));
 		await loop.tick();
-		expect((await readRun("run-1"))?.lockedUntil?.getTime()).toBeGreaterThan(
+		const [conversation] = await tdb.db.select().from(conversations);
+		expect(conversation?.ownerUntil?.getTime()).toBeGreaterThan(
 			Date.now() + 30_000,
 		);
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
@@ -1066,12 +1070,13 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		await loop.tick();
 		await started.promise;
 		await tdb.db
-			.update(runs)
+			.update(conversations)
 			.set({
-				lockedBy: "worker-2",
-				lockedUntil: new Date(Date.now() + 60_000),
+				epoch: sql`${conversations.epoch} + 1`,
+				ownerWorkerId: "worker-2",
+				ownerUntil: new Date(Date.now() + 60_000),
 			})
-			.where(eq(runs.runId, "run-1"));
+			.where(eq(conversations.conversationId, "conv-1"));
 		await loop.tick();
 		await Promise.resolve();
 
@@ -1081,7 +1086,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 		expect(await readRun("run-1")).toMatchObject({
 			status: "running",
-			lockedBy: "worker-2",
+			executedByWorkerId: "worker-1",
 		});
 		expect(await readEvents("run-1")).toEqual([]);
 	});
@@ -1135,7 +1140,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 		expect(await readRun("run-1")).toMatchObject({
 			status: "interrupt_requested",
-			lockedBy: "worker-1",
+			executedByWorkerId: "worker-1",
 		});
 		expect(await readEvents("run-1")).toEqual([]);
 	});

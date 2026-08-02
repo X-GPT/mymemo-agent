@@ -16,7 +16,8 @@ export interface ConversationQueueMetrics {
  * Ownership lease: an unowned Conversation can be Claimed, while a lapsed one
  * first needs Reclamation. Owned means a live lease with a recent Active Run —
  * a Conversation occupying a worker slot for work inside the window.
- * Deliberately reads no Run lease column — the Run lease is on its way out.
+ * There is no Run lease: only the Conversation Ownership deadline contributes
+ * to either count.
  *
  * The one-day recency window applies to both counts, as it did when the
  * metric was Run-shaped. It is deliberately stricter than the Claim's own

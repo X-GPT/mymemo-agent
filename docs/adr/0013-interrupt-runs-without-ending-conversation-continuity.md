@@ -40,12 +40,14 @@ later Run may inspect or repair that state. Interruption prevents Downloadable
 artifact publication for the Run; it does not provide filesystem transactions
 or restore a pre-Run snapshot.
 
-Direct mirror appends are fenced by the Run's active status, `locked_by`, and
-unexpired `locked_until`, just like other worker writes. Entries accepted before
-ownership expires remain in the transcript; appends from a worker after it loses
-ownership are rejected. This fence establishes authority, not perfect worker
-health: a dead, paused, partitioned, or merely delayed worker can look the same
-to its peers, so a heartbeat lease defines when its write authority ends.
+Direct mirror appends are fenced by the Run's active status and the live
+Conversation Ownership epoch (ADR-0015), just like other worker writes. Entries
+accepted before ownership expires remain in the transcript; appends from a
+worker after its Claim lapses or is superseded are rejected. This fence
+establishes authority, not perfect worker health: a dead, paused, partitioned,
+or merely delayed worker can look the same to its peers, so the Ownership lease
+defines when its write authority ends and the epoch distinguishes successive
+Claims.
 
 The same atomic fence applies when the SDK asks its SessionStore to delete a
 session or subpath; trusting Claude Code's transcript-management semantics does
@@ -62,18 +64,19 @@ would turn an ordinary stop-time flush into a false `mirror_error`.
 
 The existing Postgres Run doorbell is generalized beyond queued inserts: the
 committed transition to `interrupt_requested` also emits a best-effort wake-up,
-which triggers the worker's normal tick to re-read owned Run state and call the
-SDK stop mechanism. PostgreSQL delivers the notification only after commit; its
-payload is advisory rather than authority. The normal database heartbeat remains
-the fallback when a notification is delayed or lost, and notification delivery
-is not itself the interruption's acceptance point.
+which triggers the worker's normal tick to read the executing Run's status and
+call the SDK stop mechanism. PostgreSQL delivers the notification only after
+commit; its payload is advisory rather than authority. Periodic Ownership
+renewal plus the same status read remains the fallback when a notification is
+delayed or lost, and notification delivery is not itself the interruption's
+acceptance point.
 
 After observing `interrupt_requested`, the owner calls `Query.interrupt()` and
 allows at most 30 seconds for a clean SDK stop. If it does not settle, the worker
 calls `Query.close()` to terminate the underlying CLI process and resources,
 records the forced close internally, and still commits the already-accepted
 `interrupted` Outcome if its ownership fence still passes. Ownership loss instead
-leaves terminalization to recovery. The Run remains active and blocks new
+leaves terminalization to Reclamation. The Run remains active and blocks new
 admission during that bounded stop period; all public-content, artifact, and
 stale-owner fences continue to apply.
 
@@ -147,18 +150,19 @@ as `202 { status: "interrupted" }` after the user interruption wins. A Run
 already terminalized as `done` or `error` returns `409`, while a missing or
 foreign Run remains ownership-safe `404`.
 
-`interrupt_requested` remains an active Run state. The owning worker retains its
-lease while stopping model and Tool execution, and the one-active-Run invariant
-continues to reject admission of another Run for that Conversation. Only the
+`interrupt_requested` remains an active Run state. The owning worker retains the
+Conversation Ownership lease while stopping model and Tool execution, and
+admission's Active Run bound continues to reject another Run for that
+Conversation. Only the
 durable transition to `interrupted` releases that backpressure. A queued Run is
 already terminalized inside the interruption request and therefore releases it
 immediately. This prevents the outgoing and incoming Runs from concurrently
 mutating the same Agent session or Workspace.
 
-If that owner disappears after `interrupt_requested` commits, stale-Run recovery
+If that owner disappears after `interrupt_requested` commits, Reclamation
 finishes the already-accepted user control by transitioning the Run to
 `interrupted` and appending `run_interrupted`; it does not reclassify the Run as
-an error. Recovery never establishes or changes an Agent-session pointer because
+an error. Reclamation never establishes or changes an Agent-session pointer because
 it lacks both current ownership and the processor's mirror-health evidence. The
 existing pointer, if any, remains unchanged until a later owned Run succeeds.
 

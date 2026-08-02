@@ -70,7 +70,7 @@ all real. Three findings amend the wiring and are binding on it:
   remaps to `interrupted` after a durable user request (interruption wins over
   failure). With a
   held-open streaming input, generation halts but the stream **never ends**
-  and the consuming worker would hang until stale-run recovery.
+  and the consuming worker would hang until Reclamation.
 
 ## Considered Options
 

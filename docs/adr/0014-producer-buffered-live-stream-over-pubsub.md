@@ -47,7 +47,7 @@ either way — the savings are stored bytes and the adapter machinery (the
   producer answers, the Run terminalizes (serve history), or
   `live_stream_failed_at` is set (`410`). The reference design's one-shot
   1000 ms timeout — which conflates a dead producer with a busy one — is not
-  ported; a dead producer's Run is terminalized by stale-Run recovery, which
+  ported; a dead producer's Run is terminalized by Reclamation, which
   ends the loop.
 - **Terminal means history.** The worker publishes the terminal event to the
   live channel only after its Postgres commit (ordering rule unchanged), then
@@ -68,10 +68,10 @@ either way — the savings are stored bytes and the adapter machinery (the
   stays required, authenticated `rediss://`, validated at startup.
 - **Accepted durability loss: the backlog dies with the producer.** If a
   worker dies mid-Run, a newly attaching reader gets no backlog during the
-  stale window — it retries silently until stale-Run recovery terminalizes the
+  stale window — it retries silently until Reclamation terminalizes the
   Run, then recovers from history with no partial Assistant text. An
   already-connected client keeps what it received. The window is bounded by
-  the existing heartbeat/lease/recovery machinery and affects only
+  Conversation Ownership lease expiry and Reclamation, and affects only
   provisional content on a Run that is terminalizing abnormally. This is the
   essential price of removing the store.
 - **Bespoke implementation.** The `vercel/resumable-stream` package is not

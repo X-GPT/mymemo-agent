@@ -19,8 +19,6 @@ export {
 	appendRunEventTx,
 	ConversationArchivedError,
 	ConversationNotFoundError,
-	claimNextRunTx,
-	heartbeatRunTx,
 	markLiveStreamFailedTx,
 	PostgresRunStore,
 	RunInputMismatchError,

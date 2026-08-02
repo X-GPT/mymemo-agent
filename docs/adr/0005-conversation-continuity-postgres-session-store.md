@@ -40,8 +40,8 @@ per-conversation resume pointer stored in `conversation_runtime`.
   deletion. An SDK delete of that main session withdraws the Run's evidence.
   Recovery never establishes or changes it.
 - Every SDK transcript append or delete is atomically fenced by the active Run's
-  status, `locked_by`, and unexpired `locked_until`. A stale worker cannot mutate
-  the shared session after losing its ownership lease.
+  status and the live Conversation Ownership epoch (ADR-0015). A stale worker
+  cannot mutate the shared session after its Claim lapses or is superseded.
 - A `mirror_error` is fatal rather than best-effort: it stops model and Tool
   execution and makes a still-running Run end as `error`. A user interruption
   already committed in Postgres still wins and ends as `interrupted`. A mirror

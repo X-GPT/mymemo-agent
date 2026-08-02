@@ -155,15 +155,21 @@ describe("Downloadable artifact object cleanup", () => {
 		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
 	});
 
-	it("deletes a pending object after its owning Run becomes stale", async () => {
+	it("keeps a pending object until Reclamation terminalizes its Run", async () => {
 		await insertConversation("user-1", "conv-gone");
+		await tdb.db
+			.update(conversations)
+			.set({
+				ownerWorkerId: "worker-gone",
+				ownerUntil: new Date("2026-07-16T00:09:59.000Z"),
+			})
+			.where(eq(conversations.conversationId, "conv-gone"));
 		await tdb.db.insert(runs).values({
 			runId: "run-stale",
 			userId: "user-1",
 			conversationId: "conv-gone",
 			status: "running",
-			lockedBy: "worker-gone",
-			lockedUntil: new Date("2026-07-16T00:09:59.000Z"),
+			executedByWorkerId: "worker-gone",
 		});
 		await tdb.db.insert(artifactObjects).values({
 			objectKey: "objects/stale",
@@ -175,19 +181,18 @@ describe("Downloadable artifact object cleanup", () => {
 
 		await pass({ now: new Date("2026-07-16T00:10:00.000Z") });
 
-		expect(artifactJanitor.deleted).toEqual(["objects/stale"]);
-		expect(await tdb.db.select().from(artifactObjects)).toEqual([]);
+		expect(artifactJanitor.deleted).toEqual([]);
+		expect(await tdb.db.select().from(artifactObjects)).toHaveLength(1);
 	});
 
-	it("keeps a pending object while its owning Run has a live lock", async () => {
+	it("keeps a pending object while its owning Run is executing", async () => {
 		await insertConversation("user-1", "conv-live");
 		await tdb.db.insert(runs).values({
 			runId: "run-active",
 			userId: "user-1",
 			conversationId: "conv-live",
 			status: "running",
-			lockedBy: "worker-live",
-			lockedUntil: new Date("2026-07-16T00:10:01.000Z"),
+			executedByWorkerId: "worker-live",
 		});
 		await tdb.db.insert(artifactObjects).values({
 			objectKey: "objects/uploading",
