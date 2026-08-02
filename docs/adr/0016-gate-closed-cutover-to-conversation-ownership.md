@@ -2,6 +2,10 @@
 
 Status: accepted
 
+Amended by issue #402's final contract cutover: because the gated surface's
+rows are explicitly disposable, the rollback consequence below is reset and
+redeploy rather than the database restore this ADR originally required.
+
 ADR-0002 refused a coexistence flag between the prototype and split-runtime
 paths because they enforced "one active turn per conversation" with
 different authorities, leaving no single authority for the invariant: two

@@ -71,7 +71,7 @@ either way — the savings are stored bytes and the adapter machinery (the
   stale window — it retries silently until Reclamation terminalizes the
   Run, then recovers from history with no partial Assistant text. An
   already-connected client keeps what it received. The window is bounded by
-  the existing heartbeat/lease/recovery machinery and affects only
+  Conversation Ownership lease expiry and Reclamation, and affects only
   provisional content on a Run that is terminalizing abnormally. This is the
   essential price of removing the store.
 - **Bespoke implementation.** The `vercel/resumable-stream` package is not

@@ -86,10 +86,10 @@ export interface ClaimedConversation extends ConversationOwner {
  * plan and stays available as a portability fallback only, at one extra round
  * trip.
  *
- * **No index is added for the Claim.** `runs_queue_claim_idx` — which already
- * exists, for the Run-scoped claim — is what makes this plan sort-free, with
- * LockRows directly under Limit; that placement is what makes SKIP LOCKED skip
- * in queue order rather than in scan order.
+ * **No index is added for the Claim.** `runs_queue_claim_idx` — originally
+ * added for the retired Run-scoped claim and retained for this Claim — is what
+ * makes this plan sort-free, with LockRows directly under Limit; that placement
+ * is what makes SKIP LOCKED skip in queue order rather than in scan order.
  *
  * Claim cost is O(queued Runs ahead of the first claimable Conversation), since
  * the candidate scan walks `runs` in global `created_at` order and probes

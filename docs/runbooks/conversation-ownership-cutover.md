@@ -31,8 +31,19 @@ scan order. Record the plan with the deployment change. Do not turn it into a CI
 assertion: planner and statistics changes can alter EXPLAIN output without a
 queue-protocol regression.
 
-The generated migration DDL was also diffed once against
-`packages/agent-db/src/schema.ts`. It contains exactly:
+The one-time generated-schema audit compared
+`packages/agent-db/drizzle/meta/0017_snapshot.json` with
+`packages/agent-db/src/schema.ts` across all four state tables touched by the
+ownership and continuity sequence. It confirmed:
+
+- `conversations` has `owner_worker_id`, `owner_until`, and `epoch`, plus the
+  partial Reclamation index;
+- `conversation_runtime.agent_session_id` is present;
+- `agent_sessions.epoch` and its transcript indexes are present; and
+- `runs.executed_by_worker_id` remains while the three Run-lease columns and
+  stale-recovery index are absent.
+
+The final generated migration DDL contains exactly:
 
 - `DROP INDEX runs_stale_recovery_idx`;
 - drops of `runs.locked_by`, `runs.locked_until`, and `runs.heartbeat_at`;
