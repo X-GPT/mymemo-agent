@@ -1573,6 +1573,53 @@ describe("RunLoop — unowned queue timeout", () => {
 });
 
 describe("RunLoop — model-content append", () => {
+	it("surfaces the durable sequence numbers assigned to single and batched content", async () => {
+		const worker = buildWorker(1);
+		const surfacedSequences: number[] = [];
+		const loop = buildLoop(worker, async (ctx) => {
+			surfacedSequences.push(
+				await ctx.appendModelContent({
+					kind: "assistant_message",
+					payload: { messageId: "message-1", text: "running a command" },
+				}),
+			);
+			surfacedSequences.push(
+				...(await ctx.appendModelContents([
+					{
+						kind: "tool_call_started",
+						payload: {
+							toolCallId: "tool-1",
+							toolCallName: "Bash",
+							parentMessageId: "message-1",
+						},
+					},
+					{
+						kind: "tool_call_args",
+						payload: { toolCallId: "tool-1", delta: '{"command":"pwd"}' },
+					},
+					{
+						kind: "tool_call_completed",
+						payload: { toolCallId: "tool-1" },
+					},
+				])),
+			);
+		});
+		await queueRun("run-1", "conv-1");
+
+		await loop.tick();
+		await worker.drain();
+
+		const durableSequences = await tdb.db
+			.select({ seq: runEvents.seq })
+			.from(runEvents)
+			.where(eq(runEvents.runId, "run-1"))
+			.orderBy(runEvents.seq);
+		expect(surfacedSequences).toEqual(
+			durableSequences.slice(0, -1).map(({ seq }) => seq),
+		);
+		expect((await readRun("run-1"))?.status).toBe("done");
+	});
+
 	it("maps each model-content kind to its durable event type", async () => {
 		const worker = buildWorker(1);
 		// One turn recording an Assistant message, a Tool invocation, and its result;

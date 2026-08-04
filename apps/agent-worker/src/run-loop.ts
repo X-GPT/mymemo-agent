@@ -141,9 +141,9 @@ export interface RunProcessContext {
 	/** Fires only when the ownership fence is lost. Unlike a normal stop, this
 	 * permits no post-fence drain and must close private SDK resources now. */
 	ownershipLostSignal: AbortSignal;
-	appendModelContent(content: ModelContent): Promise<void>;
+	appendModelContent(content: ModelContent): Promise<number>;
 	/** Atomically append an ordered group under one Ownership epoch fence. */
-	appendModelContents(contents: readonly ModelContent[]): Promise<void>;
+	appendModelContents(contents: readonly ModelContent[]): Promise<number[]>;
 	/** Append one standard event to this Run's Live Stream. Failure is
 	 * absorbed by the producer so it cannot change model execution. */
 	appendLiveEvent(event: LiveStreamEvent): Promise<void>;
@@ -889,8 +889,14 @@ export class RunLoop {
 		drain: ActiveDrain,
 		entry: ActiveEntry,
 		content: ModelContent,
-	): Promise<void> {
-		await this.appendModelContents(owner, drain, entry, [content]);
+	): Promise<number> {
+		const [seq] = await this.appendModelContents(owner, drain, entry, [
+			content,
+		]);
+		if (seq === undefined) {
+			throw new Error("single model-content append returned no sequence");
+		}
+		return seq;
 	}
 
 	private async appendModelContents(
@@ -898,7 +904,7 @@ export class RunLoop {
 		drain: ActiveDrain,
 		entry: ActiveEntry,
 		contents: readonly ModelContent[],
-	): Promise<void> {
+	): Promise<number[]> {
 		const result = await appendRunEventsTx(this.opts.db, {
 			owner,
 			events: contents.map((content) => ({
@@ -911,6 +917,7 @@ export class RunLoop {
 			this.noteRejectedActiveRunWrite(drain, entry, result);
 			throw new RunWriteRejectedError();
 		}
+		return result.events.map(({ seq }) => seq);
 	}
 
 	private async finish(
