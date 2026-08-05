@@ -1,4 +1,8 @@
 import type { UiNode } from "@mymemo/agent-db/run-events";
+import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
+// Vendored from https://unpkg.com/vega-lite@5.23.0/build/vega-lite-schema.json
+// SHA-256: 1aeeda8aa44dcce60f6b6fb7d8b650487e3e389a8284a2040e590be9a4c7610e
+import vegaLiteV5Schema from "./schemas/vega-lite-v5.23.0.schema.json";
 
 export const UI_PAYLOAD_VERSION = 1 as const;
 
@@ -10,6 +14,8 @@ export const UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER =
 export const UI_PAYLOAD_LIMITS = {
 	envelopeBytes: 16 * 1_024,
 	titleCharacters: 200,
+	chartSpecBytes: 8 * 1_024,
+	chartDataRows: 200,
 	diagramSourceBytes: 4 * 1_024,
 	tableRows: 50,
 	tableColumns: 8,
@@ -28,6 +34,11 @@ export const UiPayloadRule = {
 	ComponentUnknown: "component_unknown",
 	ExtraProperty: "extra_property",
 	TitleTooLong: "title_too_long",
+	ChartSpecTooLarge: "chart_spec_too_large",
+	ChartSchemaInvalid: "chart_schema_invalid",
+	ChartDataNotInline: "chart_data_not_inline",
+	ChartDataValuesInvalid: "chart_data_values_invalid",
+	ChartDataRowsTooMany: "chart_data_rows_too_many",
 	DiagramSourceTooLarge: "diagram_source_too_large",
 	TableRowsTooMany: "table_rows_too_many",
 	TableColumnsTooMany: "table_columns_too_many",
@@ -58,7 +69,12 @@ export type UiPayloadValidationResult =
 	| { ok: true; value: UiNode }
 	| { ok: false; violation: UiPayloadViolation };
 
-type SupportedComponent = "diagram" | "table" | "citation-card" | "card";
+type SupportedComponent =
+	| "chart"
+	| "diagram"
+	| "table"
+	| "citation-card"
+	| "card";
 
 type ComponentDefinition = {
 	nodeKeys: readonly string[];
@@ -70,6 +86,11 @@ type ComponentDefinition = {
 };
 
 const COMPONENT_DEFINITIONS: Record<SupportedComponent, ComponentDefinition> = {
+	chart: {
+		nodeKeys: ["component", "props"],
+		propKeys: ["title", "spec"],
+		validate: (_node, props) => validateChartProps(props),
+	},
 	diagram: {
 		nodeKeys: ["component", "props"],
 		propKeys: ["title", "source"],
@@ -94,6 +115,9 @@ const COMPONENT_DEFINITIONS: Record<SupportedComponent, ComponentDefinition> = {
 
 const TABLE_ALIGNS = ["left", "center", "right"] as const;
 const CARD_TONES = ["neutral", "info", "success", "warning", "danger"] as const;
+export const CHART_SCHEMA_DETAIL_CHARACTERS = 300;
+
+let cachedVegaLiteValidator: ValidateFunction | undefined;
 
 /** Validate one model-authored v1 catalog envelope without performing I/O. */
 export function validateUiPayload(input: unknown): UiPayloadValidationResult {
@@ -163,6 +187,145 @@ function serializedEnvelopeBytes(payload: Record<string, unknown>): number {
 			payload,
 		}),
 	);
+}
+
+function validateChartProps(
+	props: Record<string, unknown>,
+): UiPayloadValidationResult | undefined {
+	const invalidTitle = validateTitle(props.title, "chart");
+	if (invalidTitle) return invalidTitle;
+	if (!isRecord(props.spec)) {
+		return violation(
+			UiPayloadRule.ComponentInvalid,
+			"chart spec must be an object",
+		);
+	}
+
+	const specBytes = utf8ByteLength(JSON.stringify(props.spec));
+	if (specBytes > UI_PAYLOAD_LIMITS.chartSpecBytes) {
+		return violation(
+			UiPayloadRule.ChartSpecTooLarge,
+			`serialized chart spec is ${specBytes} bytes, over the ${UI_PAYLOAD_LIMITS.chartSpecBytes}-byte limit; shrink the spec`,
+		);
+	}
+
+	const validateSpec = getVegaLiteValidator();
+	if (!validateSpec(props.spec)) {
+		return violation(
+			UiPayloadRule.ChartSchemaInvalid,
+			boundedVegaLiteError(validateSpec.errors?.[0]),
+		);
+	}
+
+	const dataInspection = inspectChartData(props.spec);
+	if (dataInspection.nonInlinePath !== undefined) {
+		return violation(
+			UiPayloadRule.ChartDataNotInline,
+			`${dataInspection.nonInlinePath} must use inline data.values; inline the data source`,
+		);
+	}
+	if (dataInspection.invalidValuesPath !== undefined) {
+		return violation(
+			UiPayloadRule.ChartDataValuesInvalid,
+			`${dataInspection.invalidValuesPath} must be an array so every inline row can be counted; convert values to an array`,
+		);
+	}
+	if (dataInspection.rows > UI_PAYLOAD_LIMITS.chartDataRows) {
+		return violation(
+			UiPayloadRule.ChartDataRowsTooMany,
+			`chart has ${dataInspection.rows} inline data rows, over the ${UI_PAYLOAD_LIMITS.chartDataRows}-row limit; remove rows`,
+		);
+	}
+}
+
+function getVegaLiteValidator(): ValidateFunction {
+	if (cachedVegaLiteValidator === undefined) {
+		cachedVegaLiteValidator = new Ajv({
+			allErrors: false,
+			strict: false,
+			validateFormats: false,
+		}).compile(vegaLiteV5Schema);
+	}
+	return cachedVegaLiteValidator;
+}
+
+function boundedVegaLiteError(error: ErrorObject | undefined): string {
+	const path = error?.instancePath || "/";
+	const message = error?.message ?? "does not match the pinned schema";
+	return `Vega-Lite spec is invalid at ${path}: ${message}`.slice(
+		0,
+		CHART_SCHEMA_DETAIL_CHARACTERS,
+	);
+}
+
+function inspectChartData(spec: Record<string, unknown>): {
+	rows: number;
+	nonInlinePath?: string;
+	invalidValuesPath?: string;
+} {
+	let rows = 0;
+	let nonInlinePath: string | undefined;
+	let invalidValuesPath: string | undefined;
+
+	const visitData = (data: unknown, path: string) => {
+		if (nonInlinePath !== undefined || invalidValuesPath !== undefined) return;
+		if (data === null) return;
+		if (!isRecord(data) || !Object.hasOwn(data, "values")) {
+			nonInlinePath = path;
+			return;
+		}
+		if (!Array.isArray(data.values)) {
+			invalidValuesPath = `${path}.values`;
+			return;
+		}
+		rows += data.values.length;
+	};
+
+	const visitSpec = (candidate: unknown, path: string) => {
+		if (
+			!isRecord(candidate) ||
+			nonInlinePath !== undefined ||
+			invalidValuesPath !== undefined
+		) {
+			return;
+		}
+		if (Object.hasOwn(candidate, "datasets")) {
+			nonInlinePath = `${path}.datasets`;
+			return;
+		}
+		if (Object.hasOwn(candidate, "data")) {
+			visitData(candidate.data, `${path}.data`);
+		}
+		if (Array.isArray(candidate.transform)) {
+			for (const [index, transform] of candidate.transform.entries()) {
+				if (
+					isRecord(transform) &&
+					isRecord(transform.from) &&
+					Object.hasOwn(transform.from, "data")
+				) {
+					visitData(
+						transform.from.data,
+						`${path}.transform[${index}].from.data`,
+					);
+				}
+			}
+		}
+		for (const property of ["layer", "concat", "hconcat", "vconcat"] as const) {
+			const children = candidate[property];
+			if (!Array.isArray(children)) continue;
+			for (const [index, child] of children.entries()) {
+				visitSpec(child, `${path}.${property}[${index}]`);
+			}
+		}
+		if (Object.hasOwn(candidate, "spec")) {
+			visitSpec(candidate.spec, `${path}.spec`);
+		}
+	};
+
+	visitSpec(spec, "chart spec");
+	if (nonInlinePath !== undefined) return { rows, nonInlinePath };
+	if (invalidValuesPath !== undefined) return { rows, invalidValuesPath };
+	return { rows };
 }
 
 function validateCard(
