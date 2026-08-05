@@ -218,9 +218,9 @@ export async function consumeAgentStream(
 			tool: PublicToolName;
 			argumentsJson: string;
 		}> = [];
-		const uiPayloads: Array<{
-			payload: Extract<ModelContent, { kind: "ui_payload" }>["payload"];
-		}> = [];
+		const uiPayloads: Array<
+			Extract<ModelContent, { kind: "ui_payload" }>["payload"]
+		> = [];
 		for (const toolUse of commit.toolUses) {
 			if (isPresentUiToolName(toolUse.name)) {
 				presentUiUseIds.add(toolUse.id);
@@ -237,11 +237,9 @@ export async function consumeAgentStream(
 					continue;
 				}
 				uiPayloads.push({
-					payload: {
-						messageId: commit.messageId,
-						version: UI_PAYLOAD_VERSION,
-						payload: validation.value,
-					},
+					messageId: commit.messageId,
+					version: UI_PAYLOAD_VERSION,
+					payload: validation.value,
 				});
 				continue;
 			}
@@ -288,7 +286,7 @@ export async function consumeAgentStream(
 					},
 				},
 				...uiPayloads.map(
-					({ payload }) => ({ kind: "ui_payload", payload }) as const,
+					(payload) => ({ kind: "ui_payload", payload }) as const,
 				),
 			];
 			const sequences = await appendWhileRunning(envelopeContents);
@@ -302,7 +300,7 @@ export async function consumeAgentStream(
 					name: "mymemo.generative_ui",
 					value: {
 						eventId: `${params.runId}:${sequence}`,
-						...uiPayload.payload,
+						...uiPayload,
 					},
 				});
 			}

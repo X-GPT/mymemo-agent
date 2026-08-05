@@ -421,6 +421,75 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		await relay.close();
 	});
 
+	it("retains a committed PresentUI payload when the Run terminalizes interrupted", async () => {
+		const envelopeConsumed = Promise.withResolvers<void>();
+		const querySettled = Promise.withResolvers<void>();
+		const worker = buildWorker();
+		const messages = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-ui-1",
+					name: "mcp__mymemo-executor__PresentUI",
+					input: {
+						version: 1,
+						payload: {
+							component: "diagram",
+							props: { source: "flowchart LR\nA --> B" },
+						},
+					},
+				},
+			],
+		});
+		const loop = buildLoop(worker, async () => ({
+			...noArtifactPublication,
+			sessionEvidence: noSessionMirrorEvidence,
+			close() {
+				querySettled.resolve();
+			},
+			async interrupt() {
+				querySettled.resolve();
+			},
+			async *[Symbol.asyncIterator]() {
+				for (const message of messages) yield message;
+				envelopeConsumed.resolve();
+				await querySettled.promise;
+			},
+		}));
+		await seedQueuedRun(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await envelopeConsumed.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+		await loop.tick();
+		await worker.drain();
+
+		expect((await readRun("run-1"))?.status).toBe("interrupted");
+		const durable = await readEvents("run-1");
+		expect(durable.map(({ type }) => type)).toEqual([
+			"assistant_message_completed",
+			"ui_payload",
+			"run_interrupted",
+		]);
+		const assistant = durable[0]?.payload as {
+			messageId: string;
+			text: string;
+		};
+		expect(assistant.text).toBe("");
+		expect(durable[1]?.payload).toMatchObject({
+			messageId: assistant.messageId,
+			version: 1,
+			payload: { component: "diagram" },
+		});
+	});
+
 	it("does not publish a pointer from an SDK initialization id alone", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (_run, _signal, owner) => {
