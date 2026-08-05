@@ -1630,6 +1630,17 @@ describe("RunLoop — model-content append", () => {
 				payload: { messageId: "message-1", text: "listed" },
 			});
 			await ctx.appendModelContent({
+				kind: "ui_payload",
+				payload: {
+					messageId: "message-1",
+					version: 1,
+					payload: {
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
+					},
+				},
+			});
+			await ctx.appendModelContent({
 				kind: "tool_call_started",
 				payload: {
 					toolCallId: "tool-1",
@@ -1668,6 +1679,7 @@ describe("RunLoop — model-content append", () => {
 			.orderBy(runEvents.seq);
 		expect(events.map((e) => e.type)).toEqual([
 			"assistant_message_completed",
+			"ui_payload",
 			"tool_call_started",
 			"tool_call_args",
 			"tool_call_completed",
@@ -1679,6 +1691,14 @@ describe("RunLoop — model-content append", () => {
 			text: "listed",
 		});
 		expect(events[1]?.payload).toEqual({
+			messageId: "message-1",
+			version: 1,
+			payload: {
+				component: "diagram",
+				props: { source: "flowchart LR\nA --> B" },
+			},
+		});
+		expect(events[2]?.payload).toEqual({
 			toolCallId: "tool-1",
 			toolCallName: "Bash",
 			parentMessageId: "message-1",

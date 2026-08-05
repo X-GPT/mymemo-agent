@@ -115,10 +115,18 @@ type AssistantCommit = Extract<
 /** Record every atomic model-content batch, preserving event order. */
 function captureModelContents(
 	appended: ModelContent[],
-): (contents: readonly ModelContent[]) => Promise<void> {
+): (contents: readonly ModelContent[]) => Promise<number[]> {
 	return async (contents) => {
+		const firstSequence = appended.length + 1;
 		appended.push(...contents);
+		return contents.map((_, index) => firstSequence + index);
 	};
+}
+
+async function assignSyntheticSequences(
+	contents: readonly ModelContent[],
+): Promise<number[]> {
+	return contents.map((_, index) => index + 1);
 }
 
 type ModelContentPayloadByKind = {
@@ -173,7 +181,7 @@ function bashResultText(overrides: Record<string, unknown>): string {
  * rather than silently dropping it. */
 function onAssistantCommit(
 	handle: (payload: AssistantCommit) => void,
-): (contents: readonly ModelContent[]) => Promise<void> {
+): (contents: readonly ModelContent[]) => Promise<number[]> {
 	return async (contents) => {
 		for (const content of contents) {
 			if (content.kind !== "assistant_message") {
@@ -181,6 +189,7 @@ function onAssistantCommit(
 			}
 			handle(content.payload);
 		}
+		return assignSyntheticSequences(contents);
 	};
 }
 
@@ -245,7 +254,7 @@ describe("consumeAgentStream", () => {
 			appendLiveEvent: async (event) => {
 				events.push(event as unknown as Record<string, unknown>);
 			},
-			appendModelContents: async () => {},
+			appendModelContents: assignSyntheticSequences,
 		});
 
 		expect(events).toEqual([
@@ -291,7 +300,7 @@ describe("consumeAgentStream", () => {
 					contentStarted.resolve();
 					await releaseContent.promise;
 				},
-				appendModelContents: async () => {},
+				appendModelContents: assignSyntheticSequences,
 			}),
 		);
 		void result.then(() => {
@@ -431,7 +440,7 @@ describe("consumeAgentStream", () => {
 			query,
 			interruptionSignal: stopController.signal,
 			ownershipLostSignal: ownershipController.signal,
-			appendModelContents: async () => {},
+			appendModelContents: assignSyntheticSequences,
 			startStopDeadline: () => ({
 				elapsed: deadlineElapsed.promise,
 				cancel() {},
@@ -481,7 +490,7 @@ describe("consumeAgentStream", () => {
 			abortRunScopedWork: noopRunScopeAbort,
 			query,
 			interruptionSignal: stopController.signal,
-			appendModelContents: async () => {},
+			appendModelContents: assignSyntheticSequences,
 			startStopDeadline: () => ({
 				elapsed: deadlineElapsed.promise,
 				cancel() {},
@@ -519,7 +528,7 @@ describe("consumeAgentStream", () => {
 			query,
 			interruptionSignal: new AbortController().signal,
 			forceCloseSignals: [forceCloseController.signal],
-			appendModelContents: async () => {},
+			appendModelContents: assignSyntheticSequences,
 			logger: {
 				info() {},
 				warn() {},
@@ -561,7 +570,7 @@ describe("consumeAgentStream", () => {
 			abortRunScopedWork: noopRunScopeAbort,
 			query,
 			interruptionSignal: stopController.signal,
-			appendModelContents: async () => {},
+			appendModelContents: assignSyntheticSequences,
 			logger: {
 				info() {},
 				warn() {},
@@ -602,7 +611,7 @@ describe("consumeAgentStream", () => {
 			query,
 			interruptionSignal: stopController.signal,
 			ownershipLostSignal: ownershipController.signal,
-			appendModelContents: async () => {},
+			appendModelContents: assignSyntheticSequences,
 			startStopDeadline: () => {
 				deadlines++;
 				return { elapsed: new Promise(() => {}), cancel() {} };
@@ -659,7 +668,7 @@ describe("consumeAgentStream", () => {
 					abortRunScopedWork: noopRunScopeAbort,
 					query,
 					interruptionSignal: controller.signal,
-					appendModelContents: async () => {},
+					appendModelContents: assignSyntheticSequences,
 				}),
 			),
 		).toBeInstanceOf(AssistantEnvelopeProtocolError);
@@ -681,7 +690,7 @@ describe("consumeAgentStream", () => {
 					abortRunScopedWork: noopRunScopeAbort,
 					query,
 					interruptionSignal: new AbortController().signal,
-					appendModelContents: async () => {},
+					appendModelContents: assignSyntheticSequences,
 				}),
 			),
 		).toBeInstanceOf(AssistantEnvelopeProtocolError);
@@ -890,7 +899,7 @@ describe("consumeAgentStream", () => {
 					abortRunScopedWork: noopRunScopeAbort,
 					query,
 					interruptionSignal: controller.signal,
-					appendModelContents: async () => {},
+					appendModelContents: assignSyntheticSequences,
 				}),
 			),
 		).toBeInstanceOf(AgentResultError);
@@ -921,7 +930,7 @@ describe("consumeAgentStream", () => {
 			query,
 			interruptionSignal: new AbortController().signal,
 			abortRunScopedWork: () => calls.push("tool-abort"),
-			appendModelContents: async () => {},
+			appendModelContents: assignSyntheticSequences,
 			startStopDeadline: (timeoutMs) => {
 				deadlineMs = timeoutMs;
 				return {
@@ -977,7 +986,7 @@ describe("consumeAgentStream", () => {
 				interruptionSignal: new AbortController().signal,
 				forceCloseSignals: [forceCloseController.signal],
 				abortRunScopedWork: () => {},
-				appendModelContents: async () => {},
+				appendModelContents: assignSyntheticSequences,
 				startStopDeadline: () => ({
 					elapsed: deadlineElapsed.promise,
 					cancel() {},
@@ -1030,7 +1039,7 @@ describe("consumeAgentStream", () => {
 			]),
 			interruptionSignal: interruptionController.signal,
 			abortRunScopedWork: () => {},
-			appendModelContents: async () => {},
+			appendModelContents: assignSyntheticSequences,
 			startStopDeadline: () => ({
 				elapsed: new Promise(() => {}),
 				cancel() {},
@@ -1173,10 +1182,12 @@ describe("consumeAgentStream", () => {
 			query: fakeQuery(messages.map((message) => ({ message }))),
 			interruptionSignal: new AbortController().signal,
 			appendModelContents: async (contents) => {
+				const firstSequence = appended.length + 1;
 				appended.push(...contents);
 				for (const content of contents) {
 					operations.push(`durable:${content.kind}`);
 				}
+				return contents.map((_, index) => firstSequence + index);
 			},
 			appendLiveEvent: async (event) => {
 				liveEvents.push(event as unknown as Record<string, unknown>);
@@ -1438,6 +1449,247 @@ describe("consumeAgentStream", () => {
 			"tool_call_args",
 			"tool_call_completed",
 		]);
+	});
+
+	it("atomically commits PresentUI payloads before Tool batches and publishes their durable ids", async () => {
+		const batches: ModelContent[][] = [];
+		const liveEvents: Array<Record<string, unknown>> = [];
+		const { logger, warnings } = spyLogger();
+		let nextSequence = 40;
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-ui-1",
+						name: "mcp__mymemo-executor__PresentUI",
+						input: {
+							version: 1,
+							payload: {
+								component: "diagram",
+								props: { source: "flowchart LR\nA --> B" },
+							},
+						},
+					},
+					{
+						toolUseId: "toolu-bash-1",
+						name: "mcp__mymemo-executor__Bash",
+						input: { command: "true" },
+					},
+					{
+						toolUseId: "toolu-ui-2",
+						name: "mcp__mymemo-executor__PresentUI",
+						input: {
+							version: 1,
+							payload: {
+								component: "table",
+								props: {
+									columns: [{ key: "name", label: "Name" }],
+									rows: [{ name: "Ada" }],
+								},
+							},
+						},
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-ui-1", text: '{"accepted":true}' },
+				{ toolUseId: "toolu-bash-1", text: bashResultText({}) },
+				{ toolUseId: "toolu-ui-2", text: '{"accepted":true}' },
+			]),
+		];
+
+		await consumeAgentStream({
+			abortRunScopedWork: noopRunScopeAbort,
+			runId: "run-1",
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			interruptionSignal: new AbortController().signal,
+			appendModelContents: async (contents) => {
+				batches.push([...contents]);
+				return contents.map(() => nextSequence++);
+			},
+			appendLiveEvent: async (event) => {
+				liveEvents.push(event as unknown as Record<string, unknown>);
+			},
+			logger,
+		});
+
+		expect(batches.map((batch) => batch.map(({ kind }) => kind))).toEqual([
+			["assistant_message", "ui_payload", "ui_payload"],
+			["tool_call_started", "tool_call_args", "tool_call_completed"],
+			["tool_call_result"],
+		]);
+		const owningMessage = batches[0]?.[0];
+		expect(owningMessage?.kind).toBe("assistant_message");
+		if (owningMessage?.kind !== "assistant_message") {
+			throw new Error("expected owning Assistant message");
+		}
+		expect(owningMessage.payload.text).toBe("");
+		expect(
+			liveEvents.filter((event) => event.type === EventType.CUSTOM),
+		).toEqual([
+			{
+				type: EventType.CUSTOM,
+				name: "mymemo.generative_ui",
+				value: {
+					eventId: "run-1:41",
+					messageId: owningMessage.payload.messageId,
+					version: 1,
+					payload: {
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
+					},
+				},
+			},
+			{
+				type: EventType.CUSTOM,
+				name: "mymemo.generative_ui",
+				value: {
+					eventId: "run-1:42",
+					messageId: owningMessage.payload.messageId,
+					version: 1,
+					payload: {
+						component: "table",
+						props: {
+							columns: [{ key: "name", label: "Name" }],
+							rows: [{ name: "Ada" }],
+						},
+					},
+				},
+			},
+		]);
+		expect(
+			batches.flat().filter(({ kind }) => kind.startsWith("tool_call")),
+		).toHaveLength(4);
+		expect(warnings).toEqual([]);
+	});
+
+	it("drops invalid PresentUI input and logs only its rule, component, and byte counts", async () => {
+		const appended: ModelContent[] = [];
+		const { logger, warnings } = spyLogger();
+		const messages = [
+			...toolEnvelope({
+				toolUses: [
+					{
+						toolUseId: "toolu-ui-invalid",
+						name: "mcp__mymemo-executor__PresentUI",
+						input: {
+							version: 1,
+							payload: {
+								component: "diagram",
+								props: { source: "flowchart LR\nA --> B" },
+								"sensitive-payload-key": "sensitive-payload-value",
+							},
+						},
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-ui-invalid", text: '{"accepted":false}' },
+			]),
+		];
+
+		await consumeAgentStream({
+			abortRunScopedWork: noopRunScopeAbort,
+			runId: "run-1",
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			interruptionSignal: new AbortController().signal,
+			appendModelContents: captureModelContents(appended),
+			logger,
+		});
+
+		expect(appended).toEqual([]);
+		expect(warnings).toEqual([
+			{
+				message: "UI payload omitted: validation failed",
+				runId: "run-1",
+				rule: "extra_property",
+				component: "diagram",
+				envelopeBytes: expect.any(Number),
+				payloadBytes: expect.any(Number),
+			},
+		]);
+		expect(JSON.stringify(warnings)).not.toContain("sensitive-payload");
+	});
+
+	it("drops a validated PresentUI call when stop arrives before envelope commit", async () => {
+		const appended: ModelContent[] = [];
+		const controller = new AbortController();
+		const envelope = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-ui-1",
+					name: "mcp__mymemo-executor__PresentUI",
+					input: {
+						version: 1,
+						payload: {
+							component: "diagram",
+							props: { source: "flowchart LR\nA --> B" },
+						},
+					},
+				},
+			],
+		});
+		const query = fakeQuery([
+			...envelope.slice(0, -1).map((message) => ({ message })),
+			{
+				message: messageAt(envelope, envelope.length - 1),
+				before: () => controller.abort(),
+			},
+		]);
+
+		const outcome = await consumeAgentStream({
+			abortRunScopedWork: noopRunScopeAbort,
+			query,
+			interruptionSignal: controller.signal,
+			appendModelContents: captureModelContents(appended),
+		});
+
+		expect(outcome.disposition).toBe("stopped");
+		expect(appended).toEqual([]);
+	});
+
+	it("retains an atomically committed PresentUI payload when stop wins before publication", async () => {
+		const appended: ModelContent[] = [];
+		const liveEvents: Array<Record<string, unknown>> = [];
+		const controller = new AbortController();
+		const messages = toolEnvelope({
+			toolUses: [
+				{
+					toolUseId: "toolu-ui-1",
+					name: "mcp__mymemo-executor__PresentUI",
+					input: {
+						version: 1,
+						payload: {
+							component: "diagram",
+							props: { source: "flowchart LR\nA --> B" },
+						},
+					},
+				},
+			],
+		});
+
+		const outcome = await consumeAgentStream({
+			abortRunScopedWork: noopRunScopeAbort,
+			runId: "run-1",
+			query: fakeQuery(messages.map((message) => ({ message }))),
+			interruptionSignal: controller.signal,
+			appendModelContents: async (contents) => {
+				const firstSequence = appended.length + 1;
+				appended.push(...contents);
+				controller.abort();
+				return contents.map((_, index) => firstSequence + index);
+			},
+			appendLiveEvent: async (event) => {
+				liveEvents.push(event as unknown as Record<string, unknown>);
+			},
+		});
+
+		expect(outcome.disposition).toBe("stopped");
+		expect(appended.map(({ kind }) => kind)).toEqual([
+			"assistant_message",
+			"ui_payload",
+		]);
+		expect(liveEvents).toEqual([]);
 	});
 
 	it("appends no tool event before message_stop commits the envelope", async () => {
@@ -1781,11 +2033,13 @@ describe("consumeAgentStream", () => {
 			query,
 			interruptionSignal: controller.signal,
 			appendModelContents: async (contents) => {
+				const firstSequence = appended.length + 1;
 				appended.push(...contents);
 				if (appended.length === 1) {
 					markAppendStarted();
 					await appendGate;
 				}
+				return contents.map((_, index) => firstSequence + index);
 			},
 		});
 
@@ -1890,6 +2144,7 @@ describe("consumeAgentStream", () => {
 						if (contents.some(({ kind }) => kind === "tool_call_started")) {
 							throw boom;
 						}
+						return assignSyntheticSequences(contents);
 					},
 				}),
 			),
@@ -1923,6 +2178,7 @@ describe("consumeAgentStream", () => {
 						if (contents.some(({ kind }) => kind === "tool_call_result")) {
 							throw boom;
 						}
+						return assignSyntheticSequences(contents);
 					},
 				}),
 			),
@@ -1957,7 +2213,7 @@ describe("consumeAgentStream", () => {
 					abortRunScopedWork: noopRunScopeAbort,
 					query: fakeQuery(messages.map((message) => ({ message }))),
 					interruptionSignal: new AbortController().signal,
-					appendModelContents: async () => {},
+					appendModelContents: assignSyntheticSequences,
 				}),
 			),
 		).toBeInstanceOf(AssistantEnvelopeProtocolError);

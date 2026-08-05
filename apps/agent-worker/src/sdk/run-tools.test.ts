@@ -11,6 +11,7 @@ import type { ScopedDocumentQueryClient } from "../documents/client";
 import { DOCS_CACHE_DIRNAME } from "../documents/load-documents-tool";
 import type { SandboxFileClient } from "../file-tools/file-tools";
 import type { RunBinding } from "../sandbox-env";
+import { UiPayloadRule } from "../ui-payload-validator";
 import {
 	buildRunTools,
 	createRunMcpServer,
@@ -175,7 +176,7 @@ function toolsByName(deps: RunToolDeps) {
 }
 
 describe("buildRunTools — surface", () => {
-	it("exposes the file, Bash, and document executor tools", () => {
+	it("exposes the file, Bash, document, and UI executor tools", () => {
 		const names = buildRunTools(buildDeps().deps)
 			.map((t) => t.name)
 			.sort();
@@ -186,6 +187,7 @@ describe("buildRunTools — surface", () => {
 			"Grep",
 			"ListDocuments",
 			"LoadDocuments",
+			"PresentUI",
 			"Read",
 			"SearchDocuments",
 			"Write",
@@ -202,15 +204,59 @@ describe("buildRunTools — surface", () => {
 		expect([...EXECUTOR_ALLOWED_TOOLS].sort()).toEqual([...built].sort());
 	});
 
-	// Same drift pin for the ADR-0009 client projection: a ninth executor tool
-	// must force an explicit projection decision (a name in the allowlist, with
-	// or without a per-tool projection yet) rather than silently shipping a tool
-	// the client stream can never show.
-	it("the tool-event projection allowlist names exactly the built tools", () => {
-		const built = buildRunTools(buildDeps().deps).map(
-			(t) => `mcp__${EXECUTOR_SERVER_NAME}__${t.name}`,
+	// PresentUI is content, not Tool activity (ADR-0017). Every other executor
+	// tool remains explicitly classified for the ADR-0009 Tool projection.
+	it("the tool-event projection allowlist excludes only PresentUI", () => {
+		const projectable = buildRunTools(buildDeps().deps)
+			.filter((tool) => tool.name !== "PresentUI")
+			.map((t) => `mcp__${EXECUTOR_SERVER_NAME}__${t.name}`);
+		expect(allowlistedExecutorToolNames().sort()).toEqual(projectable.sort());
+	});
+});
+
+describe("buildRunTools — PresentUI", () => {
+	it("returns a bounded acknowledgement for a valid catalog payload", async () => {
+		const result = await toolsByName(buildDeps().deps).PresentUI?.handler(
+			{
+				version: 1,
+				payload: {
+					component: "diagram",
+					props: { source: "flowchart LR\nA --> B" },
+				},
+			},
+			{},
 		);
-		expect(allowlistedExecutorToolNames().sort()).toEqual([...built].sort());
+
+		expect(result?.isError).toBeUndefined();
+		const text = (result?.content?.[0] as { text: string }).text;
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(256);
+		expect(JSON.parse(text)).toEqual({
+			accepted: true,
+			component: "diagram",
+			version: 1,
+		});
+	});
+
+	it("returns the validator's typed rule and bounded repair detail", async () => {
+		const result = await toolsByName(buildDeps().deps).PresentUI?.handler(
+			{
+				version: 1,
+				payload: {
+					component: "x".repeat(10_000),
+					props: {},
+				},
+			},
+			{},
+		);
+
+		expect(result?.isError).toBe(true);
+		const text = (result?.content?.[0] as { text: string }).text;
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(1_024);
+		expect(JSON.parse(text)).toEqual({
+			error: "invalid_ui_payload",
+			rule: UiPayloadRule.ComponentUnknown,
+			detail: expect.any(String),
+		});
 	});
 });
 
@@ -375,6 +421,39 @@ describe("createRunMcpServer", () => {
 			for (const tool of tools) {
 				expect(tool._meta?.["anthropic/alwaysLoad"]).toBe(true);
 			}
+		} finally {
+			await client.close();
+			await server.instance.close();
+		}
+	});
+
+	it("lets the shared validator reject malformed PresentUI arguments", async () => {
+		const server = createRunMcpServer(buildDeps().deps);
+		const [clientTransport, serverTransport] =
+			InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "test-client", version: "1.0.0" });
+		await server.instance.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		try {
+			const result = await client.callTool({
+				name: "PresentUI",
+				arguments: {
+					version: 1,
+					payload: {
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
+					},
+					extra: true,
+				},
+			});
+			expect(result.isError).toBe(true);
+			const content = result.content as Array<{ type: string; text: string }>;
+			const text = content[0]?.text ?? "";
+			expect(JSON.parse(text)).toMatchObject({
+				error: "invalid_ui_payload",
+				rule: UiPayloadRule.ExtraProperty,
+			});
 		} finally {
 			await client.close();
 			await server.instance.close();

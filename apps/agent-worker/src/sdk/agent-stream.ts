@@ -8,6 +8,11 @@ import type {
 	ModelContent,
 	TurnDisposition,
 } from "../run-loop";
+import {
+	isSupportedUiComponent,
+	UI_PAYLOAD_VERSION,
+	validateUiPayload,
+} from "../ui-payload-validator";
 import { AgUiTextStream } from "./ag-ui-text-stream";
 import {
 	AssistantEnvelopeProtocolError,
@@ -15,6 +20,7 @@ import {
 	type EnvelopeCommit,
 } from "./assistant-message-assembler";
 import {
+	isPresentUiToolName,
 	projectToolResult,
 	projectToolUse,
 	publicToolName,
@@ -119,8 +125,8 @@ export interface ConsumeAgentStreamParams {
 	 * when the stream reports a fatal transcript mirror failure. */
 	abortRunScopedWork: (reason: unknown) => void;
 	/** Atomically persists canonical model-content events, fenced to `running`
-	 * upstream. Single events use a one-item batch. */
-	appendModelContents: (contents: readonly ModelContent[]) => Promise<void>;
+	 * upstream. Resolves with assigned durable sequence numbers in batch order. */
+	appendModelContents: (contents: readonly ModelContent[]) => Promise<number[]>;
 	/** Sequential relay-backed AG-UI publication. The bound Run producer absorbs
 	 * Redis failures so this callback never changes the model Outcome. */
 	appendLiveEvent?: (event: AGUIEvent) => Promise<void>;
@@ -137,10 +143,13 @@ export interface ConsumeAgentStreamParams {
  * Tool lifecycle events as run content events, under the run's abort signal
  * (plan Task 7.2, ADR-0012).
  *
- * At one envelope's `message_stop`, its Assistant message is appended first;
- * Tool-only envelopes persist that message with empty text. Each projected
- * `tool_use` then commits its start/arguments/end batch before those standard
- * AG-UI events are published. A `tool_result` derives only from a complete,
+ * At one envelope's `message_stop`, its Assistant message and validated
+ * PresentUI payloads commit atomically, then each payload publishes as a
+ * sequence-identified AG-UI CUSTOM event. PresentUI invocations and results
+ * never enter Tool projection. Tool-only envelopes persist their owning
+ * Assistant message with empty text. Each projected `tool_use` then commits
+ * its start/arguments/end batch before those standard AG-UI events publish.
+ * A `tool_result` derives only from a complete,
  * non-replay SDK user message and matches the invocation through a provider-id
  * map that never leaves the worker. Results without a committed invocation are
  * logged and omitted; correlation is never fabricated. Omissions
@@ -187,15 +196,20 @@ export async function consumeAgentStream(
 		string,
 		{ tool: PublicToolName; toolCallId: string }
 	>();
+	const presentUiUseIds = new Set<string>();
 	const appendWhileRunning = async (
 		contents: readonly ModelContent[],
-	): Promise<void> => {
+	): Promise<number[]> => {
 		if (stopRequested) throw new QueryStoppedError();
-		await appendModelContents(contents);
+		const sequences = await appendModelContents(contents);
+		if (sequences.length !== contents.length) {
+			throw new Error("model-content append returned the wrong sequence count");
+		}
 		// The append itself is not abortable. Recheck after it settles so shutdown
 		// cannot let the rest of the envelope append while the DB Run is still
 		// fenced as running.
 		if (stopRequested) throw new QueryStoppedError();
+		return sequences;
 	};
 
 	const commitEnvelope = async (commit: EnvelopeCommit): Promise<void> => {
@@ -204,7 +218,31 @@ export async function consumeAgentStream(
 			tool: PublicToolName;
 			argumentsJson: string;
 		}> = [];
+		const uiPayloads: Array<
+			Extract<ModelContent, { kind: "ui_payload" }>["payload"]
+		> = [];
 		for (const toolUse of commit.toolUses) {
+			if (isPresentUiToolName(toolUse.name)) {
+				presentUiUseIds.add(toolUse.id);
+				const validation = validateUiPayload(toolUse.input);
+				if (!validation.ok) {
+					params.logger?.warn({
+						message: "UI payload omitted: validation failed",
+						runId: params.runId,
+						rule: validation.violation.rule,
+						component: uiComponentForLog(toolUse.input),
+						envelopeBytes: serializedBytes(toolUse.input),
+						payloadBytes: serializedBytes(uiPayloadValue(toolUse.input)),
+					});
+					continue;
+				}
+				uiPayloads.push({
+					messageId: commit.messageId,
+					version: UI_PAYLOAD_VERSION,
+					payload: validation.value,
+				});
+				continue;
+			}
 			const tool = publicToolName(toolUse.name);
 			if (tool === null) {
 				params.logger?.warn({
@@ -231,8 +269,15 @@ export async function consumeAgentStream(
 			});
 		}
 
-		if (commit.text !== null || projectedToolUses.length > 0) {
-			await appendWhileRunning([
+		if (
+			commit.text !== null ||
+			projectedToolUses.length > 0 ||
+			uiPayloads.length > 0
+		) {
+			if (uiPayloads.length > 0 && !params.runId) {
+				throw new Error("runId is required to publish a UI payload");
+			}
+			const envelopeContents: ModelContent[] = [
 				{
 					kind: "assistant_message",
 					payload: {
@@ -240,7 +285,25 @@ export async function consumeAgentStream(
 						text: commit.text?.text ?? "",
 					},
 				},
-			]);
+				...uiPayloads.map(
+					(payload) => ({ kind: "ui_payload", payload }) as const,
+				),
+			];
+			const sequences = await appendWhileRunning(envelopeContents);
+			for (const [index, uiPayload] of uiPayloads.entries()) {
+				const sequence = sequences[index + 1];
+				if (sequence === undefined) {
+					throw new Error("UI payload append returned no durable sequence");
+				}
+				await appendLiveEvent({
+					type: EventType.CUSTOM,
+					name: "mymemo.generative_ui",
+					value: {
+						eventId: `${params.runId}:${sequence}`,
+						...uiPayload,
+					},
+				});
+			}
 		}
 		for (const projected of projectedToolUses) {
 			const toolCallId = randomUUID();
@@ -288,6 +351,9 @@ export async function consumeAgentStream(
 		userMessage: Extract<SDKMessage, { type: "user" }>,
 	): Promise<void> => {
 		for (const block of toolResultBlocks(userMessage)) {
+			if (block.toolUseId !== null && presentUiUseIds.delete(block.toolUseId)) {
+				continue;
+			}
 			const invocation =
 				block.toolUseId !== null
 					? toolInvocationsByUseId.get(block.toolUseId)
@@ -535,6 +601,35 @@ export async function consumeAgentStream(
 			removeAbortListener();
 		}
 	}
+}
+
+function uiPayloadValue(input: unknown): unknown {
+	return isRecord(input) ? input.payload : undefined;
+}
+
+function uiComponentForLog(input: unknown): string {
+	const payload = uiPayloadValue(input);
+	if (!isRecord(payload) || typeof payload.component !== "string") {
+		return "unknown";
+	}
+	return isSupportedUiComponent(payload.component)
+		? payload.component
+		: "unknown";
+}
+
+function serializedBytes(value: unknown): number {
+	try {
+		const serialized = JSON.stringify(value);
+		return serialized === undefined
+			? 0
+			: new TextEncoder().encode(serialized).byteLength;
+	} catch {
+		return 0;
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function onAbort(

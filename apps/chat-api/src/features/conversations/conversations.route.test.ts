@@ -1634,6 +1634,19 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 				messageId: "assistant-1",
 				delta: "hello",
 			},
+			{
+				type: EventType.CUSTOM,
+				name: "mymemo.generative_ui",
+				value: {
+					eventId: "run-1:2",
+					messageId: "assistant-1",
+					version: 1,
+					payload: {
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
+					},
+				},
+			},
 			{ type: EventType.TEXT_MESSAGE_END, messageId: "assistant-1" },
 		];
 		for (const event of tailEvents) {
@@ -1665,6 +1678,19 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 				type: "TEXT_MESSAGE_CONTENT",
 				messageId: "assistant-1",
 				delta: "hello",
+			},
+			{
+				type: "CUSTOM",
+				name: "mymemo.generative_ui",
+				value: {
+					eventId: "run-1:2",
+					messageId: "assistant-1",
+					version: 1,
+					payload: {
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
+					},
+				},
 			},
 			{ type: "TEXT_MESSAGE_END", messageId: "assistant-1" },
 			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "run-1" },

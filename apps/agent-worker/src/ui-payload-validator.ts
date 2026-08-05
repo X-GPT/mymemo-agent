@@ -148,7 +148,7 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 			"component must be a string",
 		);
 	}
-	if (!isSupportedComponent(component)) {
+	if (!isSupportedUiComponent(component)) {
 		return violation(
 			UiPayloadRule.ComponentUnknown,
 			`component "${component}" is not supported`,
@@ -592,7 +592,10 @@ function validateTitle(
 	}
 }
 
-function isSupportedComponent(value: string): value is SupportedComponent {
+/** Runtime catalog membership check for safe diagnostics and validation. */
+export function isSupportedUiComponent(
+	value: string,
+): value is SupportedComponent {
 	return Object.hasOwn(COMPONENT_DEFINITIONS, value);
 }
 

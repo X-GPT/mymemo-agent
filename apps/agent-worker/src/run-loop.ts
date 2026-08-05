@@ -17,6 +17,7 @@ import {
 	type ToolCallCompletedPayload,
 	type ToolCallResultPayload,
 	type ToolCallStartedPayload,
+	type UiPayloadEventPayload,
 } from "@mymemo/agent-db/run-events";
 import {
 	appendRunEventsTx,
@@ -99,16 +100,17 @@ export class RunProcessorFailure extends Error {
 
 /**
  * One piece of canonical durable model content a processor can record while
- * its run is `running`: a complete Assistant message or one Tool lifecycle
- * event (ADR-0012). The payload is already the client-safe shape — the loop
- * persists it verbatim under the event type its kind maps to.
+ * its run is `running`: a complete Assistant message, validated UI payload, or
+ * Tool lifecycle event (ADR-0012/0017). The payload is already client-safe —
+ * the loop persists it verbatim under the event type its kind maps to.
  */
 export type ModelContent =
 	| { kind: "assistant_message"; payload: AssistantMessageCompletedPayload }
 	| { kind: "tool_call_started"; payload: ToolCallStartedPayload }
 	| { kind: "tool_call_args"; payload: ToolCallArgsPayload }
 	| { kind: "tool_call_completed"; payload: ToolCallCompletedPayload }
-	| { kind: "tool_call_result"; payload: ToolCallResultPayload };
+	| { kind: "tool_call_result"; payload: ToolCallResultPayload }
+	| { kind: "ui_payload"; payload: UiPayloadEventPayload };
 
 /** The loop owns the kind→event-type mapping in exactly one place, so a
  * processor can never write a payload under a mismatched vocabulary type. */
@@ -118,6 +120,7 @@ const MODEL_CONTENT_EVENT_TYPES = {
 	tool_call_args: RunEventType.ToolCallArgs,
 	tool_call_completed: RunEventType.ToolCallCompleted,
 	tool_call_result: RunEventType.ToolCallResult,
+	ui_payload: RunEventType.UiPayload,
 } as const satisfies Record<ModelContent["kind"], RunEventType>;
 
 /**

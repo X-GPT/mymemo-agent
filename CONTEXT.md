@@ -146,9 +146,9 @@ opaque, MyMemo-issued message id regardless of how many content blocks carry
 it. Assistant text remains provisional in the Live Stream until the provider
 response completes; the complete message is then committed to Postgres before
 its completion event is appended to the Live Stream. A textless response
-exposes its identity through its Tool invocations. If its Run is interrupted or
-fails before completion, its provisional text does not enter permanent
-Conversation history.
+exposes its identity through its Tool invocations or its durable generative UI
+payloads. If its Run is interrupted or fails before completion, its provisional
+text does not enter permanent Conversation history.
 _Avoid_: token stream
 
 **Tool invocation**:
