@@ -1,10 +1,5 @@
 import { Buffer } from "node:buffer";
-import {
-	type AssistantMessage,
-	EventType,
-	type Message,
-	type ToolCall,
-} from "@ag-ui/core";
+import { EventType, type ToolCall } from "@ag-ui/core";
 import {
 	InvalidRunEventError,
 	parseDurableRunEvent,
@@ -23,6 +18,8 @@ import {
 import type { ConversationScope } from "@/features/conversation-store";
 import type {
 	ActiveRunSummary,
+	ConversationHistoryAssistantMessage,
+	ConversationHistoryMessage,
 	ConversationHistoryPage,
 	ConversationHistoryPageInput,
 	ConversationHistoryRun,
@@ -252,11 +249,11 @@ function projectCompleteRun(
 	events: RunEventRow[],
 ): ConversationHistoryRun {
 	validateDurableRunEventSequence(events);
-	const parsed = events.flatMap((event) => {
-		const value = parseDurableRunEvent(event.type, event.payload);
-		return value ? [value] : [];
+	const parsed = events.flatMap((row) => {
+		const event = parseDurableRunEvent(row.type, row.payload);
+		return event ? [{ event, seq: row.seq }] : [];
 	});
-	const started = parsed[0];
+	const started = parsed[0]?.event;
 	if (
 		started?.type !== RunEventType.Started ||
 		started.payload.runId !== run.runId ||
@@ -265,26 +262,32 @@ function projectCompleteRun(
 		throw new InvalidRunEventError("invalid durable Run start");
 	}
 
-	const messages: Message[] = [
+	const messages: ConversationHistoryMessage[] = [
 		{
 			id: started.payload.messageId,
 			role: "user",
 			content: started.payload.message,
 		},
 	];
-	const assistantMessages = new Map<string, AssistantMessage>();
+	const assistantMessages = new Map<
+		string,
+		ConversationHistoryAssistantMessage
+	>();
 	const toolCalls = new Map<string, ToolCall>();
 	const ensureAssistantMessage = (messageId: string) => {
 		const existing = assistantMessages.get(messageId);
 		if (existing) return existing;
-		const message: AssistantMessage = { id: messageId, role: "assistant" };
+		const message: ConversationHistoryAssistantMessage = {
+			id: messageId,
+			role: "assistant",
+		};
 		assistantMessages.set(messageId, message);
 		messages.push(message);
 		return message;
 	};
 	let terminalEvent: RunTerminalEvent | null = null;
 	let terminalStatus: "done" | "error" | "interrupted" | null = null;
-	for (const event of parsed.slice(1)) {
+	for (const { event, seq } of parsed.slice(1)) {
 		switch (event.type) {
 			case RunEventType.AssistantMessageCompleted:
 				if (event.payload.text) {
@@ -322,6 +325,19 @@ function projectCompleteRun(
 					...(event.payload.isError ? { error: event.payload.content } : {}),
 				});
 				break;
+			case RunEventType.UiPayload: {
+				const assistant = ensureAssistantMessage(event.payload.messageId);
+				assistant.generativeUi = [
+					...(assistant.generativeUi ?? []),
+					{
+						eventId: `${run.runId}:${seq}`,
+						messageId: event.payload.messageId,
+						version: event.payload.version,
+						payload: event.payload.payload,
+					},
+				];
+				break;
+			}
 			case RunEventType.Done:
 				terminalStatus = "done";
 				terminalEvent = {

@@ -1,11 +1,14 @@
 export { default as conversationHistoryRoutes } from "./conversation-history.route";
 export type {
 	ActiveRunSummary,
+	ConversationHistoryAssistantMessage,
+	ConversationHistoryMessage,
 	ConversationHistoryPage,
 	ConversationHistoryPageInput,
 	ConversationHistoryRun,
 	ConversationHistoryStore,
 	ConversationSummary,
+	GenerativeUiPart,
 	RunInterruptedEvent,
 	RunTerminalEvent,
 } from "./conversation-history-store";
