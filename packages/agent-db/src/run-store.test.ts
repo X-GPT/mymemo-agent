@@ -661,6 +661,126 @@ describe("appendRunEventTx", () => {
 		).toEqual(events.map((event, index) => ({ seq: index + 1, ...event })));
 	});
 
+	it("appends a UI payload only after its owning Assistant completes", async () => {
+		await admitQueuedRunTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+			messageId: "user-message-1",
+			text: "Show the results",
+			scope: "general",
+			collectionId: null,
+			summaryId: null,
+		});
+		const claim = await claimConversationTx(tdb.db, {
+			workerId: "worker-1",
+		});
+		if (!claim) throw new Error("test setup claimed no Conversation");
+		const started = await startClaimedRunTx(tdb.db, {
+			owner: claim,
+			runId: "run-1",
+			workerId: "worker-1",
+		});
+		if (started.outcome !== "started") {
+			throw new Error("test setup could not start run-1");
+		}
+		const runOwner = { ...claim, runId: "run-1", workerId: "worker-1" };
+		const appendUiPayload = (messageId: string) =>
+			appendRunEventTx(tdb.db, {
+				owner: runOwner,
+				type: RunEventType.UiPayload,
+				payload: {
+					messageId,
+					version: 1,
+					payload: { component: "chart", props: { spec: {} } },
+				},
+				appendClass: "model",
+			});
+
+		await expect(appendUiPayload("assistant-message-1")).rejects.toBeInstanceOf(
+			InvalidRunEventError,
+		);
+		await expect(appendUiPayload("user-message-1")).rejects.toBeInstanceOf(
+			InvalidRunEventError,
+		);
+		await appendRunEventTx(tdb.db, {
+			owner: runOwner,
+			type: RunEventType.AssistantMessageCompleted,
+			payload: { messageId: "assistant-message-1", text: "Here it is." },
+			appendClass: "model",
+		});
+		expect(await appendUiPayload("assistant-message-1")).toEqual({
+			outcome: "appended",
+			seq: 3,
+		});
+
+		await appendRunEventsTx(tdb.db, {
+			owner: runOwner,
+			appendClass: "model",
+			events: [
+				{
+					type: RunEventType.ToolCallStarted,
+					payload: {
+						toolCallId: "tool-1",
+						toolCallName: "Read",
+						parentMessageId: "assistant-message-1",
+					},
+				},
+				{
+					type: RunEventType.ToolCallArgs,
+					payload: { toolCallId: "tool-1", delta: "{}" },
+				},
+				{
+					type: RunEventType.ToolCallCompleted,
+					payload: { toolCallId: "tool-1" },
+				},
+				{
+					type: RunEventType.ToolCallResult,
+					payload: {
+						messageId: "tool-message-1",
+						toolCallId: "tool-1",
+						content: "Read completed",
+						isError: false,
+					},
+				},
+			],
+		});
+		await expect(appendUiPayload("tool-message-1")).rejects.toBeInstanceOf(
+			InvalidRunEventError,
+		);
+	});
+
+	it("fences UI payload appends by Ownership epoch and running status", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		const input = {
+			type: RunEventType.UiPayload,
+			payload: {
+				messageId: "assistant-message-1",
+				version: 1,
+				payload: { component: "table", props: { columns: [], rows: [] } },
+			},
+			appendClass: "model",
+		} as const;
+
+		expect(
+			await appendRunEventTx(tdb.db, {
+				owner: owner({ epoch: 999, workerId: "worker-2" }),
+				...input,
+			}),
+		).toEqual({ outcome: "rejected", rejected: "lease" });
+		await tdb.db
+			.update(runs)
+			.set({ status: "interrupt_requested" })
+			.where(eq(runs.runId, "run-1"));
+		expect(
+			await appendRunEventTx(tdb.db, { owner: owner(), ...input }),
+		).toEqual({
+			outcome: "rejected",
+			rejected: "status",
+			current: "interrupt_requested",
+		});
+	});
+
 	it("atomically appends one complete Tool invocation lifecycle", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		const events = [
@@ -970,6 +1090,48 @@ describe("appendRunEventTx", () => {
 });
 
 describe("transitionRunTerminalTx", () => {
+	it.each([
+		"done",
+		"interrupted",
+	] as const)("validates and retains UI payloads when a Run becomes %s", async (status) => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await appendRunEventTx(tdb.db, {
+			owner: owner(),
+			type: RunEventType.AssistantMessageCompleted,
+			payload: { messageId: "assistant-message-1", text: "Results" },
+			appendClass: "model",
+		});
+		await appendRunEventTx(tdb.db, {
+			owner: owner(),
+			type: RunEventType.UiPayload,
+			payload: {
+				messageId: "assistant-message-1",
+				version: 1,
+				payload: { component: "diagram", props: { source: "flowchart LR" } },
+			},
+			appendClass: "model",
+		});
+		if (status === "interrupted") {
+			await requestRunInterruptionTx(tdb.db, {
+				runId: "run-1",
+				userId: "user-1",
+				conversationId: "conv-1",
+			});
+		}
+
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: owner(),
+				status,
+			}),
+		).toMatchObject({ outcome: "committed", run: { status } });
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			RunEventType.AssistantMessageCompleted,
+			RunEventType.UiPayload,
+			status === "done" ? RunEventType.Done : RunEventType.Interrupted,
+		]);
+	});
+
 	it("rejects a lapsed Ownership epoch without committing an Outcome", async () => {
 		await queueRun("run-1", "conv-1");
 		const claim = await claimConversationTx(tdb.db, {
