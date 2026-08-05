@@ -781,6 +781,37 @@ describe("appendRunEventTx", () => {
 		});
 	});
 
+	it("rejects a UI payload through the cancellation append class", async () => {
+		await claimRun("run-1", "conv-1", "worker-1");
+		await appendRunEventTx(tdb.db, {
+			owner: owner(),
+			type: RunEventType.AssistantMessageCompleted,
+			payload: { messageId: "assistant-message-1", text: "Results" },
+			appendClass: "model",
+		});
+		await requestRunInterruptionTx(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await expect(
+			appendRunEventTx(tdb.db, {
+				owner: owner(),
+				type: RunEventType.UiPayload,
+				payload: {
+					messageId: "assistant-message-1",
+					version: 1,
+					payload: { component: "chart", props: { spec: {} } },
+				},
+				appendClass: "cancellation",
+			}),
+		).rejects.toBeInstanceOf(InvalidRunEventError);
+		expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
+			RunEventType.AssistantMessageCompleted,
+		]);
+	});
+
 	it("atomically appends one complete Tool invocation lifecycle", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		const events = [
