@@ -21,6 +21,8 @@ export const RunEventType = {
 	ToolCallArgs: "tool_call_args",
 	ToolCallCompleted: "tool_call_completed",
 	ToolCallResult: "tool_call_result",
+	/** One validated display-only component payload (ADR-0017). */
+	UiPayload: "ui_payload",
 	/** Terminal: the run finished successfully. */
 	Done: "run_done",
 	/** Terminal: the run failed. Payload `{ message }`. */
@@ -37,6 +39,7 @@ export const CANONICAL_MODEL_RUN_EVENT_TYPES = [
 	RunEventType.ToolCallArgs,
 	RunEventType.ToolCallCompleted,
 	RunEventType.ToolCallResult,
+	RunEventType.UiPayload,
 ] as const;
 
 export interface RunStartedPayload {
@@ -56,6 +59,41 @@ export interface AssistantMessageCompletedPayload {
 	[key: string]: unknown;
 	messageId: string;
 	text: string;
+}
+
+export type UiComponent =
+	| "chart"
+	| "diagram"
+	| "table"
+	| "citation-card"
+	| "card";
+
+export interface UiChildNode {
+	component: Exclude<UiComponent, "card">;
+	props: Record<string, unknown>;
+}
+
+export interface UiNode {
+	component: UiComponent;
+	props: Record<string, unknown>;
+	children?: (string | UiChildNode)[];
+}
+
+/** The validated v1 write-side envelope. */
+export interface UiPayloadEventPayload {
+	[key: string]: unknown;
+	messageId: string;
+	version: 1;
+	payload: UiNode;
+}
+
+/** The read-side envelope. Unknown positive versions stay opaque so an older
+ * reader can preserve them for the client's framed fallback. */
+export interface ParsedUiPayloadEventPayload {
+	[key: string]: unknown;
+	messageId: string;
+	version: number;
+	payload: Record<string, unknown>;
 }
 
 /**
@@ -184,6 +222,10 @@ export type DurableRunEvent =
 	  }
 	| { type: typeof RunEventType.ToolCallResult; payload: ToolCallResultPayload }
 	| {
+			type: typeof RunEventType.UiPayload;
+			payload: ParsedUiPayloadEventPayload;
+	  }
+	| {
 			type:
 				| typeof RunEventType.Done
 				| typeof RunEventType.Error
@@ -286,6 +328,17 @@ export function validateDurableRunEventSequence(
 				toolResultMessageIds.add(parsed.payload.messageId);
 				toolStates.set(parsed.payload.toolCallId, "result");
 				break;
+			case RunEventType.UiPayload:
+				if (
+					submittedMessageIds.has(parsed.payload.messageId) ||
+					toolResultMessageIds.has(parsed.payload.messageId)
+				) {
+					invalidSequence("duplicate messageId");
+				}
+				if (!completedAssistantMessageIds.has(parsed.payload.messageId)) {
+					invalidSequence("UI payload has no completed Assistant message");
+				}
+				break;
 			case RunEventType.Done:
 			case RunEventType.Error:
 			case RunEventType.Interrupted:
@@ -346,6 +399,9 @@ export function parseDurableRunEvent(
 			break;
 		case RunEventType.ToolCallResult:
 			if (isToolCallResultPayload(payload)) return { type, payload };
+			break;
+		case RunEventType.UiPayload:
+			if (isUiPayloadEventPayload(payload)) return { type, payload };
 			break;
 		case RunEventType.Done:
 			if (isRunOutcomePayload(payload, "done")) return { type, payload };
@@ -425,6 +481,47 @@ export function isToolCallResultPayload(
 		isNonEmptyString(value.toolCallId) &&
 		typeof value.content === "string" &&
 		typeof value.isError === "boolean"
+	);
+}
+
+export function isUiPayloadEventPayload(
+	value: unknown,
+): value is ParsedUiPayloadEventPayload {
+	if (
+		!isPlainRecord(value) ||
+		!isNonEmptyString(value.messageId) ||
+		typeof value.version !== "number" ||
+		!Number.isInteger(value.version) ||
+		value.version <= 0 ||
+		!isPlainRecord(value.payload)
+	) {
+		return false;
+	}
+
+	return value.version !== 1 || isUiNode(value.payload);
+}
+
+function isUiNode(value: unknown): boolean {
+	return (
+		isPlainRecord(value) &&
+		isNonEmptyString(value.component) &&
+		isPlainRecord(value.props) &&
+		(!("children" in value) ||
+			(value.component === "card" &&
+				Array.isArray(value.children) &&
+				value.children.every(
+					(child) => typeof child === "string" || isUiChildNode(child),
+				)))
+	);
+}
+
+function isUiChildNode(value: unknown): boolean {
+	return (
+		isPlainRecord(value) &&
+		isNonEmptyString(value.component) &&
+		value.component !== "card" &&
+		isPlainRecord(value.props) &&
+		!("children" in value)
 	);
 }
 

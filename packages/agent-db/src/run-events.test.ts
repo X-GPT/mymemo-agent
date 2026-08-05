@@ -3,8 +3,10 @@ import {
 	InvalidRunEventError,
 	isToolResultPayload,
 	isToolUsePayload,
+	isUiPayloadEventPayload,
 	parseDurableRunEvent,
 	RunEventType,
+	type UiPayloadEventPayload,
 	validateDurableRunEventSequence,
 } from "./run-events";
 
@@ -122,6 +124,132 @@ describe("parseDurableRunEvent", () => {
 				text: "obsolete",
 			}),
 		).toBe(null);
+	});
+
+	it("round-trips the v1 UI payload shape", () => {
+		const payload = {
+			messageId: "assistant-message-1",
+			version: 1,
+			payload: {
+				component: "card",
+				props: { title: "Quarterly results", tone: "info" },
+				children: [
+					"Revenue increased.",
+					{
+						component: "table",
+						props: {
+							columns: [{ key: "quarter", label: "Quarter" }],
+							rows: [{ quarter: "Q1" }],
+						},
+					},
+				],
+			},
+		} satisfies UiPayloadEventPayload;
+
+		expect(parseDurableRunEvent(RunEventType.UiPayload, payload)).toEqual({
+			type: RunEventType.UiPayload,
+			payload,
+		});
+	});
+
+	it("accepts future UI components and preserves unknown versions", () => {
+		const futureComponent = {
+			messageId: "assistant-message-1",
+			version: 1,
+			payload: {
+				component: "timeline",
+				props: { entries: [] },
+			},
+		};
+		const futureVersion = {
+			messageId: "assistant-message-1",
+			version: 2,
+			payload: {
+				root: { kind: "timeline", entries: [] },
+			},
+		};
+
+		expect(isUiPayloadEventPayload(futureComponent)).toBe(true);
+		expect(isUiPayloadEventPayload(futureVersion)).toBe(true);
+		expect(parseDurableRunEvent(RunEventType.UiPayload, futureVersion)).toEqual(
+			{
+				type: RunEventType.UiPayload,
+				payload: futureVersion,
+			},
+		);
+	});
+
+	it("rejects structurally corrupt UI payloads", () => {
+		const valid = {
+			messageId: "assistant-message-1",
+			version: 1,
+			payload: { component: "chart", props: { spec: {} } },
+		};
+
+		expect(isUiPayloadEventPayload({ ...valid, messageId: "" })).toBe(false);
+		expect(isUiPayloadEventPayload({ ...valid, version: 0 })).toBe(false);
+		expect(
+			isUiPayloadEventPayload({
+				...valid,
+				payload: { component: "", props: {} },
+			}),
+		).toBe(false);
+		expect(
+			isUiPayloadEventPayload({
+				...valid,
+				payload: { component: "chart", props: [] },
+			}),
+		).toBe(false);
+		expect(
+			isUiPayloadEventPayload({
+				...valid,
+				payload: { component: "card", props: {}, children: [42] },
+			}),
+		).toBe(false);
+		expect(
+			isUiPayloadEventPayload({
+				...valid,
+				payload: { component: "chart", props: {}, children: ["invalid"] },
+			}),
+		).toBe(false);
+		expect(
+			isUiPayloadEventPayload({
+				...valid,
+				payload: { component: "chart", props: {}, children: undefined },
+			}),
+		).toBe(false);
+		expect(
+			isUiPayloadEventPayload({
+				...valid,
+				payload: {
+					component: "card",
+					props: {},
+					children: [{ component: "card", props: {} }],
+				},
+			}),
+		).toBe(false);
+		expect(
+			isUiPayloadEventPayload({
+				...valid,
+				payload: {
+					component: "card",
+					props: {},
+					children: [
+						{
+							component: "table",
+							props: {},
+							children: ["too deep"],
+						},
+					],
+				},
+			}),
+		).toBe(false);
+		expect(() =>
+			parseDurableRunEvent(RunEventType.UiPayload, {
+				...valid,
+				payload: { component: "table" },
+			}),
+		).toThrow(InvalidRunEventError);
 	});
 });
 
