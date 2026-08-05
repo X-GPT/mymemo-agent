@@ -1,5 +1,6 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import type { UiNode } from "@mymemo/agent-db/run-events";
+import Ajv from "ajv";
 import {
 	UI_PAYLOAD_LIMITS,
 	UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
@@ -64,8 +65,70 @@ function tableAtSerializedEventBytes(targetBytes: number) {
 	throw new Error(`could not construct a ${targetBytes}-byte table fixture`);
 }
 
+function chartSpecAtSerializedBytes(targetBytes: number) {
+	const spec = {
+		data: { values: [{ value: 1 }] },
+		mark: "point",
+		description: "",
+	};
+	const baseBytes = new TextEncoder().encode(JSON.stringify(spec)).byteLength;
+	return { ...spec, description: "x".repeat(targetBytes - baseBytes) };
+}
+
+const prototypeChart = {
+	component: "chart",
+	props: {
+		title: "Documents by topic",
+		spec: {
+			$schema: "https://vega.github.io/schema/vega-lite/v5.json",
+			width: "container",
+			height: 220,
+			data: {
+				values: [
+					{ topic: "Onboarding", docs: 9 },
+					{ topic: "Benefits", docs: 6 },
+					{ topic: "Security", docs: 5 },
+					{ topic: "Engineering", docs: 12 },
+					{ topic: "Legal", docs: 4 },
+				],
+			},
+			mark: { type: "bar", cornerRadiusEnd: 3 },
+			encoding: {
+				x: {
+					field: "topic",
+					type: "nominal",
+					axis: { labelAngle: 0 },
+					sort: "-y",
+				},
+				y: {
+					field: "docs",
+					type: "quantitative",
+					title: "documents",
+				},
+				color: { value: "#4f46e5" },
+			},
+		},
+	},
+};
+
 describe("validateUiPayload", () => {
+	it("compiles the pinned Vega-Lite schema lazily once", () => {
+		const compile = spyOn(Ajv.prototype, "compile");
+
+		expectValid({ component: "diagram", props: { source: "A-->B" } });
+		expect(compile).toHaveBeenCalledTimes(0);
+		expectValid(prototypeChart);
+		expectValid(prototypeChart);
+		expect(compile).toHaveBeenCalledTimes(1);
+
+		compile.mockRestore();
+	});
+
 	it.each([
+		{
+			name: "chart",
+			payload: prototypeChart,
+		},
 		{
 			name: "diagram",
 			payload: {
@@ -158,6 +221,178 @@ describe("validateUiPayload", () => {
 		expectValid(payload);
 	});
 
+	it("rejects a Vega-Lite schema violation with bounded repair detail", () => {
+		const result = validateUiPayload({
+			version: UI_PAYLOAD_VERSION,
+			payload: {
+				component: "chart",
+				props: {
+					spec: {
+						data: { values: [{ category: "A", value: 1 }] },
+						mark: "not-a-vega-lite-mark",
+					},
+				},
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			violation: { rule: UiPayloadRule.ChartSchemaInvalid },
+		});
+		if (!result.ok) {
+			expect(result.violation.detail).toContain("Vega-Lite");
+			expect(result.violation.detail.length).toBeLessThanOrEqual(300);
+		}
+	});
+
+	it.each([
+		{
+			name: "top-level data",
+			spec: { data: { url: "https://example.com/data.json" }, mark: "point" },
+		},
+		{
+			name: "layer data",
+			spec: {
+				layer: [
+					{
+						data: { url: "https://example.com/data.json" },
+						mark: "point",
+					},
+				],
+			},
+		},
+		{
+			name: "facet sub-spec data",
+			spec: {
+				data: { values: [{ group: "A", value: 1 }] },
+				facet: { field: "group" },
+				spec: {
+					data: { url: "https://example.com/data.json" },
+					mark: "point",
+				},
+			},
+		},
+		{
+			name: "concat data",
+			spec: {
+				concat: [
+					{
+						data: { url: "https://example.com/data.json" },
+						mark: "point",
+					},
+				],
+			},
+		},
+		{
+			name: "transform lookup data",
+			spec: {
+				data: { values: [{ key: "A" }] },
+				transform: [
+					{
+						lookup: "key",
+						from: {
+							data: { url: "https://example.com/data.json" },
+							key: "key",
+							fields: ["value"],
+						},
+					},
+				],
+				mark: "point",
+			},
+		},
+	])("rejects data.url in $name", ({ spec }) => {
+		expectPayloadViolation(
+			{ component: "chart", props: { spec } },
+			UiPayloadRule.ChartDataNotInline,
+			"inline",
+		);
+	});
+
+	it.each([
+		{ name: "named data", data: { name: "runtime-data" } },
+		{ name: "generated data", data: { sequence: { start: 0, stop: 10 } } },
+	])("rejects $name because data.values is the only source", ({ data }) => {
+		expectPayloadViolation(
+			{ component: "chart", props: { spec: { data, mark: "point" } } },
+			UiPayloadRule.ChartDataNotInline,
+			"values",
+		);
+	});
+
+	it("rejects inline values whose rows are not individually countable", () => {
+		expectPayloadViolation(
+			{
+				component: "chart",
+				props: {
+					spec: {
+						data: {
+							values: [
+								"value",
+								...Array.from({ length: 201 }, (_, i) => i),
+							].join("\n"),
+							format: { type: "csv" },
+						},
+						mark: "point",
+					},
+				},
+			},
+			UiPayloadRule.ChartDataValuesInvalid,
+			"array",
+		);
+	});
+
+	it("sums inline rows across every chart data block", () => {
+		const layeredChart = (secondBlockRows: number) => ({
+			component: "chart",
+			props: {
+				spec: {
+					layer: [
+						{
+							data: {
+								values: Array.from({ length: 100 }, (_, value) => ({ value })),
+							},
+							mark: "point",
+						},
+						{
+							data: {
+								values: Array.from({ length: secondBlockRows }, (_, value) => ({
+									value,
+								})),
+							},
+							mark: "point",
+						},
+					],
+				},
+			},
+		});
+
+		expectValid(layeredChart(100));
+		expectPayloadViolation(
+			layeredChart(101),
+			UiPayloadRule.ChartDataRowsTooMany,
+			"201",
+		);
+	});
+
+	it("enforces the exact serialized chart spec boundary", () => {
+		const atBoundary = chartSpecAtSerializedBytes(
+			UI_PAYLOAD_LIMITS.chartSpecBytes,
+		);
+		const overBoundary = chartSpecAtSerializedBytes(
+			UI_PAYLOAD_LIMITS.chartSpecBytes + 1,
+		);
+
+		expect(
+			new TextEncoder().encode(JSON.stringify(atBoundary)).byteLength,
+		).toBe(UI_PAYLOAD_LIMITS.chartSpecBytes);
+		expectValid({ component: "chart", props: { spec: atBoundary } });
+		expectPayloadViolation(
+			{ component: "chart", props: { spec: overBoundary } },
+			UiPayloadRule.ChartSpecTooLarge,
+			`${UI_PAYLOAD_LIMITS.chartSpecBytes + 1}`,
+		);
+	});
+
 	it.each([
 		{
 			name: "a missing version",
@@ -175,10 +410,10 @@ describe("validateUiPayload", () => {
 			detail: "version",
 		},
 		{
-			name: "an unknown component (including chart until #420)",
-			input: { version: 1, payload: { component: "chart", props: {} } },
+			name: "an unknown component",
+			input: { version: 1, payload: { component: "image", props: {} } },
 			rule: UiPayloadRule.ComponentUnknown,
-			detail: "chart",
+			detail: "image",
 		},
 		{
 			name: "a component inherited from Object.prototype",
@@ -581,6 +816,10 @@ describe("validateUiPayload", () => {
 
 	it.each([
 		{
+			component: "chart",
+			props: { spec: { data: { values: [] }, mark: "point" } },
+		},
+		{
 			component: "diagram",
 			props: { source: "A-->B" },
 		},
@@ -719,6 +958,11 @@ describe("validateUiPayload", () => {
 			ComponentUnknown: "component_unknown",
 			ExtraProperty: "extra_property",
 			TitleTooLong: "title_too_long",
+			ChartSpecTooLarge: "chart_spec_too_large",
+			ChartSchemaInvalid: "chart_schema_invalid",
+			ChartDataNotInline: "chart_data_not_inline",
+			ChartDataValuesInvalid: "chart_data_values_invalid",
+			ChartDataRowsTooMany: "chart_data_rows_too_many",
 			DiagramSourceTooLarge: "diagram_source_too_large",
 			TableRowsTooMany: "table_rows_too_many",
 			TableColumnsTooMany: "table_columns_too_many",

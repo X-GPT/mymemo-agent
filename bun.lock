@@ -22,6 +22,7 @@
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@mymemo/agent-db": "workspace:*",
         "@mymemo/live-text": "workspace:*",
+        "ajv": "^8.18.0",
         "drizzle-orm": "^0.45.2",
         "e2b": "^2.14.0",
         "pg": "^8.22.0",
