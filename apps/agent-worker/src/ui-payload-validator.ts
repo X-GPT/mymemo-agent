@@ -58,12 +58,42 @@ export type UiPayloadValidationResult =
 	| { ok: true; value: UiNode }
 	| { ok: false; violation: UiPayloadViolation };
 
-const COMPONENT_PROP_KEYS = {
-	diagram: ["title", "source"],
-	table: ["title", "columns", "rows"],
-	"citation-card": ["title", "snippet", "source", "relevance"],
-	card: ["title", "tone"],
-} as const;
+type SupportedComponent = "diagram" | "table" | "citation-card" | "card";
+
+type ComponentDefinition = {
+	nodeKeys: readonly string[];
+	propKeys: readonly string[];
+	validate: (
+		node: Record<string, unknown>,
+		props: Record<string, unknown>,
+	) => UiPayloadValidationResult | undefined;
+};
+
+const COMPONENT_DEFINITIONS: Record<SupportedComponent, ComponentDefinition> = {
+	diagram: {
+		nodeKeys: ["component", "props"],
+		propKeys: ["title", "source"],
+		validate: (_node, props) => validateDiagramProps(props),
+	},
+	table: {
+		nodeKeys: ["component", "props"],
+		propKeys: ["title", "columns", "rows"],
+		validate: (_node, props) => validateTableProps(props),
+	},
+	"citation-card": {
+		nodeKeys: ["component", "props"],
+		propKeys: ["title", "snippet", "source", "relevance"],
+		validate: (_node, props) => validateCitationCardProps(props),
+	},
+	card: {
+		nodeKeys: ["component", "props", "children"],
+		propKeys: ["title", "tone"],
+		validate: (node) => validateCard(node),
+	},
+};
+
+const TABLE_ALIGNS = ["left", "center", "right"] as const;
+const CARD_TONES = ["neutral", "info", "success", "warning", "danger"] as const;
 
 /** Validate one model-authored v1 catalog envelope without performing I/O. */
 export function validateUiPayload(input: unknown): UiPayloadValidationResult {
@@ -94,19 +124,15 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 			"component must be a string",
 		);
 	}
-	if (!Object.hasOwn(COMPONENT_PROP_KEYS, component)) {
+	if (!isSupportedComponent(component)) {
 		return violation(
 			UiPayloadRule.ComponentUnknown,
 			`component "${component}" is not supported`,
 		);
 	}
+	const definition = COMPONENT_DEFINITIONS[component];
 
-	const nodeExtra = firstExtraKey(
-		input.payload,
-		component === "card"
-			? ["component", "props", "children"]
-			: ["component", "props"],
-	);
+	const nodeExtra = firstExtraKey(input.payload, definition.nodeKeys);
 	if (nodeExtra !== undefined) return extraProperty(nodeExtra);
 	if (!isRecord(input.payload.props)) {
 		return violation(
@@ -114,27 +140,10 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 			`${component} props must be an object`,
 		);
 	}
-	const propsExtra = firstExtraKey(
-		input.payload.props,
-		COMPONENT_PROP_KEYS[component as keyof typeof COMPONENT_PROP_KEYS],
-	);
+	const propsExtra = firstExtraKey(input.payload.props, definition.propKeys);
 	if (propsExtra !== undefined) return extraProperty(propsExtra);
-	if (component === "diagram") {
-		const invalid = validateDiagramProps(input.payload.props);
-		if (invalid) return invalid;
-	}
-	if (component === "table") {
-		const invalid = validateTableProps(input.payload.props);
-		if (invalid) return invalid;
-	}
-	if (component === "citation-card") {
-		const invalid = validateCitationCardProps(input.payload.props);
-		if (invalid) return invalid;
-	}
-	if (component === "card") {
-		const invalid = validateCard(input.payload);
-		if (invalid) return invalid;
-	}
+	const invalid = definition.validate(input.payload, input.payload.props);
+	if (invalid) return invalid;
 	const envelopeBytes = serializedEnvelopeBytes(input.payload);
 	if (envelopeBytes > UI_PAYLOAD_LIMITS.envelopeBytes) {
 		return violation(
@@ -160,16 +169,9 @@ function validateCard(
 	node: Record<string, unknown>,
 ): UiPayloadValidationResult | undefined {
 	const props = node.props as Record<string, unknown>;
-	const invalidTitle = validateOptionalTitle(props.title, "card");
+	const invalidTitle = validateTitle(props.title, "card");
 	if (invalidTitle) return invalidTitle;
-	if (
-		props.tone !== undefined &&
-		props.tone !== "neutral" &&
-		props.tone !== "info" &&
-		props.tone !== "success" &&
-		props.tone !== "warning" &&
-		props.tone !== "danger"
-	) {
+	if (props.tone !== undefined && !isAllowedString(props.tone, CARD_TONES)) {
 		return violation(
 			UiPayloadRule.CardToneInvalid,
 			"card tone must be neutral, info, success, warning, or danger",
@@ -221,13 +223,7 @@ function validateCard(
 function validateCitationCardProps(
 	props: Record<string, unknown>,
 ): UiPayloadValidationResult | undefined {
-	if (typeof props.title !== "string") {
-		return violation(
-			UiPayloadRule.ComponentInvalid,
-			"citation-card title must be a string",
-		);
-	}
-	const invalidTitle = validateOptionalTitle(props.title, "citation-card");
+	const invalidTitle = validateTitle(props.title, "citation-card", true);
 	if (invalidTitle) return invalidTitle;
 	if (typeof props.snippet !== "string") {
 		return violation(
@@ -309,7 +305,7 @@ function citationSourceTooLong(field: string): UiPayloadValidationResult {
 function validateTableProps(
 	props: Record<string, unknown>,
 ): UiPayloadValidationResult | undefined {
-	const invalidTitle = validateOptionalTitle(props.title, "table");
+	const invalidTitle = validateTitle(props.title, "table");
 	if (invalidTitle) return invalidTitle;
 	if (!Array.isArray(props.columns) || !Array.isArray(props.rows)) {
 		return violation(
@@ -354,9 +350,7 @@ function validateTableProps(
 		}
 		if (
 			column.align !== undefined &&
-			column.align !== "left" &&
-			column.align !== "center" &&
-			column.align !== "right"
+			!isAllowedString(column.align, TABLE_ALIGNS)
 		) {
 			return violation(
 				UiPayloadRule.TableAlignInvalid,
@@ -399,7 +393,7 @@ function validateTableProps(
 function validateDiagramProps(
 	props: Record<string, unknown>,
 ): UiPayloadValidationResult | undefined {
-	const invalidTitle = validateOptionalTitle(props.title, "diagram");
+	const invalidTitle = validateTitle(props.title, "diagram");
 	if (invalidTitle) return invalidTitle;
 	if (typeof props.source !== "string") {
 		return violation(
@@ -415,11 +409,12 @@ function validateDiagramProps(
 	}
 }
 
-function validateOptionalTitle(
+function validateTitle(
 	value: unknown,
 	component: string,
+	required = false,
 ): UiPayloadValidationResult | undefined {
-	if (value === undefined) return;
+	if (value === undefined && !required) return;
 	if (typeof value !== "string") {
 		return violation(
 			UiPayloadRule.ComponentInvalid,
@@ -432,6 +427,17 @@ function validateOptionalTitle(
 			`${component} title must be at most ${UI_PAYLOAD_LIMITS.titleCharacters} characters; shrink title`,
 		);
 	}
+}
+
+function isSupportedComponent(value: string): value is SupportedComponent {
+	return Object.hasOwn(COMPONENT_DEFINITIONS, value);
+}
+
+function isAllowedString(
+	value: unknown,
+	allowed: readonly string[],
+): value is string {
+	return typeof value === "string" && allowed.includes(value);
 }
 
 function extraProperty(property: string): UiPayloadValidationResult {
