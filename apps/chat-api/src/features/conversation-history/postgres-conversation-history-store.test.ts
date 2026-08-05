@@ -457,6 +457,193 @@ describe("PostgresConversationHistoryStore", () => {
 		]);
 	});
 
+	it("projects durable generative UI into its owning Assistant messages", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "member-1",
+			conversationId: "conversation-1",
+			scope: "general",
+		});
+		await tdb.db.insert(runs).values({
+			runId: "run-ui",
+			userId: "member-1",
+			conversationId: "conversation-1",
+			status: "done",
+			terminalAt: new Date("2026-07-20T01:00:05.000Z"),
+			nextEventSeq: 12,
+		});
+		await tdb.db.insert(runEvents).values([
+			{
+				runId: "run-ui",
+				seq: 1,
+				type: RunEventType.Started,
+				payload: {
+					runId: "run-ui",
+					conversationId: "conversation-1",
+					messageId: "user-ui",
+					message: "Show the comparison",
+					scope: "general",
+					collectionId: null,
+					summaryId: null,
+				},
+			},
+			{
+				runId: "run-ui",
+				seq: 2,
+				type: RunEventType.ToolCallStarted,
+				payload: {
+					toolCallId: "tool-call-ui",
+					toolCallName: "Read",
+					parentMessageId: "assistant-1",
+				},
+			},
+			{
+				runId: "run-ui",
+				seq: 3,
+				type: RunEventType.ToolCallArgs,
+				payload: { toolCallId: "tool-call-ui", delta: "{}" },
+			},
+			{
+				runId: "run-ui",
+				seq: 4,
+				type: RunEventType.ToolCallCompleted,
+				payload: { toolCallId: "tool-call-ui" },
+			},
+			{
+				runId: "run-ui",
+				seq: 5,
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { messageId: "assistant-1", text: "First answer" },
+			},
+			{
+				runId: "run-ui",
+				seq: 6,
+				type: RunEventType.UiPayload,
+				payload: {
+					messageId: "assistant-1",
+					version: 1,
+					payload: {
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
+					},
+				},
+			},
+			{
+				runId: "run-ui",
+				seq: 7,
+				type: RunEventType.ToolCallResult,
+				payload: {
+					messageId: "tool-message-ui",
+					toolCallId: "tool-call-ui",
+					content: "Read complete",
+					isError: false,
+				},
+			},
+			{
+				runId: "run-ui",
+				seq: 8,
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { messageId: "assistant-2", text: "Second answer" },
+			},
+			{
+				runId: "run-ui",
+				seq: 9,
+				type: RunEventType.UiPayload,
+				payload: {
+					messageId: "assistant-2",
+					version: 7,
+					payload: {
+						component: "future-component",
+						props: { future: true },
+					},
+				},
+			},
+			{
+				runId: "run-ui",
+				seq: 10,
+				type: RunEventType.UiPayload,
+				payload: {
+					messageId: "assistant-1",
+					version: 1,
+					payload: {
+						component: "table",
+						props: { columns: [], rows: [] },
+					},
+				},
+			},
+			{
+				runId: "run-ui",
+				seq: 11,
+				type: RunEventType.Done,
+				payload: { outcome: "done" },
+			},
+		]);
+
+		const page = await new PostgresConversationHistoryStore(tdb.db).getPage({
+			userId: "member-1",
+			conversationId: "conversation-1",
+			limit: 20,
+			cursor: null,
+		});
+
+		expect(page?.runs[0]?.messages).toEqual([
+			{ id: "user-ui", role: "user", content: "Show the comparison" },
+			{
+				id: "assistant-1",
+				role: "assistant",
+				content: "First answer",
+				toolCalls: [
+					{
+						id: "tool-call-ui",
+						type: "function",
+						function: { name: "Read", arguments: "{}" },
+					},
+				],
+				generativeUi: [
+					{
+						eventId: "run-ui:6",
+						messageId: "assistant-1",
+						version: 1,
+						payload: {
+							component: "diagram",
+							props: { source: "flowchart LR\nA --> B" },
+						},
+					},
+					{
+						eventId: "run-ui:10",
+						messageId: "assistant-1",
+						version: 1,
+						payload: {
+							component: "table",
+							props: { columns: [], rows: [] },
+						},
+					},
+				],
+			},
+			{
+				id: "tool-message-ui",
+				role: "tool",
+				toolCallId: "tool-call-ui",
+				content: "Read complete",
+			},
+			{
+				id: "assistant-2",
+				role: "assistant",
+				content: "Second answer",
+				generativeUi: [
+					{
+						eventId: "run-ui:9",
+						messageId: "assistant-2",
+						version: 7,
+						payload: {
+							component: "future-component",
+							props: { future: true },
+						},
+					},
+				],
+			},
+		]);
+	});
+
 	it("keeps error and interruption Outcomes only in terminal events", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "member-1",
@@ -536,6 +723,102 @@ describe("PostgresConversationHistoryStore", () => {
 		]);
 	});
 
+	it("retains committed generative UI when a Run is interrupted", async () => {
+		await tdb.db.insert(conversations).values({
+			userId: "member-1",
+			conversationId: "conversation-1",
+			scope: "general",
+		});
+		await tdb.db.insert(runs).values({
+			runId: "run-interrupted-ui",
+			userId: "member-1",
+			conversationId: "conversation-1",
+			status: "interrupted",
+			terminalAt: new Date("2026-07-20T01:00:05.000Z"),
+			nextEventSeq: 5,
+		});
+		await tdb.db.insert(runEvents).values([
+			{
+				runId: "run-interrupted-ui",
+				seq: 1,
+				type: RunEventType.Started,
+				payload: {
+					runId: "run-interrupted-ui",
+					conversationId: "conversation-1",
+					messageId: "user-interrupted-ui",
+					message: "Show progress",
+					scope: "general",
+					collectionId: null,
+					summaryId: null,
+				},
+			},
+			{
+				runId: "run-interrupted-ui",
+				seq: 2,
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { messageId: "assistant-interrupted-ui", text: "Progress" },
+			},
+			{
+				runId: "run-interrupted-ui",
+				seq: 3,
+				type: RunEventType.UiPayload,
+				payload: {
+					messageId: "assistant-interrupted-ui",
+					version: 1,
+					payload: {
+						component: "card",
+						props: { title: "Committed" },
+					},
+				},
+			},
+			{
+				runId: "run-interrupted-ui",
+				seq: 4,
+				type: RunEventType.Interrupted,
+				payload: { outcome: "interrupted" },
+			},
+		]);
+
+		const page = await new PostgresConversationHistoryStore(tdb.db).getPage({
+			userId: "member-1",
+			conversationId: "conversation-1",
+			limit: 20,
+			cursor: null,
+		});
+
+		expect(page?.runs[0]).toEqual({
+			runId: "run-interrupted-ui",
+			messages: [
+				{
+					id: "user-interrupted-ui",
+					role: "user",
+					content: "Show progress",
+				},
+				{
+					id: "assistant-interrupted-ui",
+					role: "assistant",
+					content: "Progress",
+					generativeUi: [
+						{
+							eventId: "run-interrupted-ui:3",
+							messageId: "assistant-interrupted-ui",
+							version: 1,
+							payload: {
+								component: "card",
+								props: { title: "Committed" },
+							},
+						},
+					],
+				},
+			],
+			terminalEvent: {
+				type: "RUN_INTERRUPTED",
+				threadId: "conversation-1",
+				runId: "run-interrupted-ui",
+			},
+		});
+	});
+
 	it("skips unknown events but rejects a malformed known event as corruption", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "member-1",
@@ -593,8 +876,12 @@ describe("PostgresConversationHistoryStore", () => {
 		await tdb.db
 			.update(runEvents)
 			.set({
-				type: RunEventType.AssistantMessageCompleted,
-				payload: { text: "missing messageId" },
+				type: RunEventType.UiPayload,
+				payload: {
+					messageId: "assistant-1",
+					version: 1,
+					payload: "not an object",
+				},
 			})
 			.where(and(eq(runEvents.runId, "run-1"), eq(runEvents.seq, 2)));
 		await expect(

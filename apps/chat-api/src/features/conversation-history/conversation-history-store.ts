@@ -1,4 +1,10 @@
-import type { Message, RunErrorEvent, RunFinishedEvent } from "@ag-ui/core";
+import type {
+	AssistantMessage,
+	Message,
+	RunErrorEvent,
+	RunFinishedEvent,
+} from "@ag-ui/core";
+import type { ParsedUiPayloadEventPayload } from "@mymemo/agent-db/run-events";
 import type { RunInterruptedEvent } from "@mymemo/live-text";
 import type { ConversationScope } from "@/features/conversation-store";
 
@@ -20,9 +26,21 @@ export type RunTerminalEvent =
 	| RunErrorEvent
 	| RunInterruptedEvent;
 
+export interface GenerativeUiPart extends ParsedUiPayloadEventPayload {
+	eventId: string;
+}
+
+export type ConversationHistoryAssistantMessage = AssistantMessage & {
+	generativeUi?: GenerativeUiPart[];
+};
+
+export type ConversationHistoryMessage =
+	| Exclude<Message, AssistantMessage>
+	| ConversationHistoryAssistantMessage;
+
 export interface ConversationHistoryRun {
 	runId: string;
-	messages: Message[];
+	messages: ConversationHistoryMessage[];
 	terminalEvent: RunTerminalEvent | null;
 }
 

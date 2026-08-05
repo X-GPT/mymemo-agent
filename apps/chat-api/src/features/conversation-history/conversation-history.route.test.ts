@@ -53,21 +53,9 @@ describe("GET /v1/conversations/:conversationId/history", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual({
-			conversation: {
-				conversationId: "conversation-1",
-				title: "Quarterly plan",
-				scope: "general",
-				collectionId: null,
-				summaryId: null,
-				createdAt: "2026-07-20T01:00:00.000Z",
-				lastActivityAt: "2026-07-20T02:00:00.000Z",
-				archivedAt: null,
-			},
-			runs: [],
-			nextCursor: null,
-			activeRun: { runId: "run-active", status: "running" },
-		});
+		expect(await response.text()).toBe(
+			'{"conversation":{"conversationId":"conversation-1","title":"Quarterly plan","scope":"general","collectionId":null,"summaryId":null,"createdAt":"2026-07-20T01:00:00.000Z","lastActivityAt":"2026-07-20T02:00:00.000Z","archivedAt":null},"runs":[],"nextCursor":null,"activeRun":{"runId":"run-active","status":"running"}}',
+		);
 		expect(calls).toEqual([
 			{
 				userId: "member-1",
@@ -76,6 +64,75 @@ describe("GET /v1/conversations/:conversationId/history", () => {
 				cursor: null,
 			},
 		]);
+	});
+
+	it("serializes generative UI additively and omits it from messages without payloads", async () => {
+		const historyStore: ConversationHistoryStore = {
+			async getPage() {
+				return {
+					conversation: {
+						conversationId: "conversation-1",
+						title: null,
+						scope: "general",
+						collectionId: null,
+						summaryId: null,
+						createdAt: new Date("2026-07-20T01:00:00.000Z"),
+						lastActivityAt: new Date("2026-07-20T02:00:00.000Z"),
+						archivedAt: null,
+					},
+					runs: [
+						{
+							runId: "run-1",
+							messages: [
+								{
+									id: "assistant-ui",
+									role: "assistant",
+									content: "Visual answer",
+									generativeUi: [
+										{
+											eventId: "run-1:3",
+											messageId: "assistant-ui",
+											version: 1,
+											payload: {
+												component: "diagram",
+												props: { source: "flowchart LR\nA --> B" },
+											},
+										},
+									],
+								},
+								{
+									id: "assistant-text",
+									role: "assistant",
+									content: "Text-only answer",
+								},
+							],
+							terminalEvent: null,
+						},
+					],
+					nextCursor: null,
+					activeRun: null,
+				};
+			},
+		};
+		const deps = {
+			conversationHistoryStore: historyStore,
+		} as unknown as AppDeps;
+		const app = createApp({ logLevel: "silent" } as ApiConfig, deps);
+
+		const response = await app.request(
+			"/v1/conversations/conversation-1/history",
+			{ headers: identityHeaders },
+		);
+
+		expect(response.status).toBe(200);
+		const body = await response.text();
+		expect(body).toContain(
+			'"generativeUi":[{"eventId":"run-1:3","messageId":"assistant-ui","version":1',
+		);
+		expect(body).toContain(
+			'{"id":"assistant-text","role":"assistant","content":"Text-only answer"}',
+		);
+		expect(body).not.toContain('"id":"assistant-text","generativeUi"');
 	});
 
 	it("rejects invalid cursors and hides durable-history corruption", async () => {
