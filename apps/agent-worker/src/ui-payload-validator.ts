@@ -1,6 +1,7 @@
 import type { UiNode } from "@mymemo/agent-db/run-events";
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
-// Vendored from vega-lite@5.23.0 build/vega-lite-schema.json.
+// Vendored from https://unpkg.com/vega-lite@5.23.0/build/vega-lite-schema.json
+// SHA-256: 1aeeda8aa44dcce60f6b6fb7d8b650487e3e389a8284a2040e590be9a4c7610e
 import vegaLiteV5Schema from "./schemas/vega-lite-v5.23.0.schema.json";
 
 export const UI_PAYLOAD_VERSION = 1 as const;
@@ -114,7 +115,7 @@ const COMPONENT_DEFINITIONS: Record<SupportedComponent, ComponentDefinition> = {
 
 const TABLE_ALIGNS = ["left", "center", "right"] as const;
 const CARD_TONES = ["neutral", "info", "success", "warning", "danger"] as const;
-const CHART_SCHEMA_DETAIL_CHARACTERS = 300;
+export const CHART_SCHEMA_DETAIL_CHARACTERS = 300;
 
 let cachedVegaLiteValidator: ValidateFunction | undefined;
 
@@ -268,6 +269,7 @@ function inspectChartData(spec: Record<string, unknown>): {
 
 	const visitData = (data: unknown, path: string) => {
 		if (nonInlinePath !== undefined || invalidValuesPath !== undefined) return;
+		if (data === null) return;
 		if (!isRecord(data) || !Object.hasOwn(data, "values")) {
 			nonInlinePath = path;
 			return;

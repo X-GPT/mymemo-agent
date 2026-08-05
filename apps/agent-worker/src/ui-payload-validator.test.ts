@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import type { UiNode } from "@mymemo/agent-db/run-events";
 import Ajv from "ajv";
 import {
+	CHART_SCHEMA_DETAIL_CHARACTERS,
 	UI_PAYLOAD_LIMITS,
 	UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
 	UI_PAYLOAD_VERSION,
@@ -75,7 +76,7 @@ function chartSpecAtSerializedBytes(targetBytes: number) {
 	return { ...spec, description: "x".repeat(targetBytes - baseBytes) };
 }
 
-const prototypeChart = {
+const exemplarChart = {
 	component: "chart",
 	props: {
 		title: "Documents by topic",
@@ -114,12 +115,15 @@ const prototypeChart = {
 describe("validateUiPayload", () => {
 	it("compiles the pinned Vega-Lite schema lazily once", () => {
 		const compile = spyOn(Ajv.prototype, "compile");
+		const callsBeforeValidation = compile.mock.calls.length;
 
 		expectValid({ component: "diagram", props: { source: "A-->B" } });
-		expect(compile).toHaveBeenCalledTimes(0);
-		expectValid(prototypeChart);
-		expectValid(prototypeChart);
-		expect(compile).toHaveBeenCalledTimes(1);
+		expect(compile).toHaveBeenCalledTimes(callsBeforeValidation);
+		expectValid(exemplarChart);
+		const callsAfterFirstChart = compile.mock.calls.length;
+		expect(callsAfterFirstChart - callsBeforeValidation).toBeLessThanOrEqual(1);
+		expectValid(exemplarChart);
+		expect(compile).toHaveBeenCalledTimes(callsAfterFirstChart);
 
 		compile.mockRestore();
 	});
@@ -127,7 +131,7 @@ describe("validateUiPayload", () => {
 	it.each([
 		{
 			name: "chart",
-			payload: prototypeChart,
+			payload: exemplarChart,
 		},
 		{
 			name: "diagram",
@@ -241,8 +245,17 @@ describe("validateUiPayload", () => {
 		});
 		if (!result.ok) {
 			expect(result.violation.detail).toContain("Vega-Lite");
-			expect(result.violation.detail.length).toBeLessThanOrEqual(300);
+			expect(result.violation.detail.length).toBeLessThanOrEqual(
+				CHART_SCHEMA_DETAIL_CHARACTERS,
+			);
 		}
+	});
+
+	it("admits schema-valid charts with an explicit no-data source", () => {
+		expectValid({
+			component: "chart",
+			props: { spec: { data: null, mark: "point" } },
+		});
 	});
 
 	it.each([
