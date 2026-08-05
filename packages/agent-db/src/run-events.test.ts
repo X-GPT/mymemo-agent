@@ -152,21 +152,31 @@ describe("parseDurableRunEvent", () => {
 		});
 	});
 
-	it("accepts structurally sound future UI versions and components", () => {
-		const payload = {
+	it("accepts future UI components and preserves unknown versions", () => {
+		const futureComponent = {
 			messageId: "assistant-message-1",
-			version: 2,
+			version: 1,
 			payload: {
 				component: "timeline",
 				props: { entries: [] },
 			},
 		};
+		const futureVersion = {
+			messageId: "assistant-message-1",
+			version: 2,
+			payload: {
+				root: { kind: "timeline", entries: [] },
+			},
+		};
 
-		expect(isUiPayloadEventPayload(payload)).toBe(true);
-		expect(parseDurableRunEvent(RunEventType.UiPayload, payload)).toEqual({
-			type: RunEventType.UiPayload,
-			payload,
-		});
+		expect(isUiPayloadEventPayload(futureComponent)).toBe(true);
+		expect(isUiPayloadEventPayload(futureVersion)).toBe(true);
+		expect(parseDurableRunEvent(RunEventType.UiPayload, futureVersion)).toEqual(
+			{
+				type: RunEventType.UiPayload,
+				payload: futureVersion,
+			},
+		);
 	});
 
 	it("rejects structurally corrupt UI payloads", () => {
@@ -200,6 +210,12 @@ describe("parseDurableRunEvent", () => {
 			isUiPayloadEventPayload({
 				...valid,
 				payload: { component: "chart", props: {}, children: ["invalid"] },
+			}),
+		).toBe(false);
+		expect(
+			isUiPayloadEventPayload({
+				...valid,
+				payload: { component: "chart", props: {}, children: undefined },
 			}),
 		).toBe(false);
 		expect(

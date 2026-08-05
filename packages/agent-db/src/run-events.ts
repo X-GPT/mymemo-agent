@@ -68,39 +68,33 @@ export type UiComponent =
 	| "citation-card"
 	| "card";
 
-export interface UiChildNode<
-	TComponent extends string = Exclude<UiComponent, "card">,
-> {
-	component: TComponent;
+export interface UiChildNode {
+	component: Exclude<UiComponent, "card">;
 	props: Record<string, unknown>;
 }
 
-export interface UiNode<
-	TComponent extends string = UiComponent,
-	TChild extends UiChildNode<string> = UiChildNode,
-> {
-	component: TComponent;
+export interface UiNode {
+	component: UiComponent;
 	props: Record<string, unknown>;
-	children?: (string | TChild)[];
+	children?: (string | UiChildNode)[];
 }
 
-/** The v1 write-side envelope by default. Generic parameters let the shared
- * read guard represent structurally sound future versions without pretending
- * they use the v1 catalog. */
-export interface UiPayloadEventPayload<
-	TVersion extends number = 1,
-	TNode extends UiNode<string, UiChildNode<string>> = UiNode,
-> {
+/** The validated v1 write-side envelope. */
+export interface UiPayloadEventPayload {
 	[key: string]: unknown;
 	messageId: string;
-	version: TVersion;
-	payload: TNode;
+	version: 1;
+	payload: UiNode;
 }
 
-export type ParsedUiPayloadEventPayload = UiPayloadEventPayload<
-	number,
-	UiNode<string, UiChildNode<string>>
->;
+/** The read-side envelope. Unknown positive versions stay opaque so an older
+ * reader can preserve them for the client's framed fallback. */
+export interface ParsedUiPayloadEventPayload {
+	[key: string]: unknown;
+	messageId: string;
+	version: number;
+	payload: Record<string, unknown>;
+}
 
 /**
  * The nine short public tool names a client may see (ADR-0009). Tool events
@@ -493,24 +487,26 @@ export function isToolCallResultPayload(
 export function isUiPayloadEventPayload(
 	value: unknown,
 ): value is ParsedUiPayloadEventPayload {
-	return (
-		isPlainRecord(value) &&
-		isNonEmptyString(value.messageId) &&
-		Number.isInteger(value.version) &&
-		typeof value.version === "number" &&
-		value.version > 0 &&
-		isUiNode(value.payload)
-	);
+	if (
+		!isPlainRecord(value) ||
+		!isNonEmptyString(value.messageId) ||
+		typeof value.version !== "number" ||
+		!Number.isInteger(value.version) ||
+		value.version <= 0 ||
+		!isPlainRecord(value.payload)
+	) {
+		return false;
+	}
+
+	return value.version !== 1 || isUiNode(value.payload);
 }
 
-export function isUiNode(
-	value: unknown,
-): value is UiNode<string, UiChildNode<string>> {
+function isUiNode(value: unknown): boolean {
 	return (
 		isPlainRecord(value) &&
 		isNonEmptyString(value.component) &&
 		isPlainRecord(value.props) &&
-		(value.children === undefined ||
+		(!("children" in value) ||
 			(value.component === "card" &&
 				Array.isArray(value.children) &&
 				value.children.every(
@@ -519,7 +515,7 @@ export function isUiNode(
 	);
 }
 
-export function isUiChildNode(value: unknown): value is UiChildNode<string> {
+function isUiChildNode(value: unknown): boolean {
 	return (
 		isPlainRecord(value) &&
 		isNonEmptyString(value.component) &&

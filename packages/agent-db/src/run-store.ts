@@ -620,12 +620,12 @@ export async function appendRunEventsTx(
 				event.type,
 			),
 		);
-		if (canonicalEvents.length > 0 && input.appendClass !== "model") {
-			throw new InvalidRunEventError(
-				"canonical model events require the model append class",
-			);
-		}
 		if (canonicalEvents.length > 0) {
+			if (input.appendClass !== "model") {
+				throw new InvalidRunEventError(
+					"canonical model events require the model append class",
+				);
+			}
 			const priorCanonicalEvents = await tx
 				.select({ type: runEvents.type, payload: runEvents.payload })
 				.from(runEvents)
