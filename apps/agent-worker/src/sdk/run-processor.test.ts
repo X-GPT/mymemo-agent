@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { EventType } from "@ag-ui/core";
 import type {
 	SDKMessage,
 	SessionStoreEntry,
@@ -20,7 +21,12 @@ import {
 	seedQueuedRun,
 	type TestDb,
 } from "@mymemo/agent-db/testing";
-import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
+import {
+	createInMemoryLiveStreamRelay,
+	decodeAgUiLiveStreamEvent,
+	type LiveStreamEvent,
+	type LiveStreamRelay,
+} from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { RunLoop } from "../run-loop";
@@ -39,6 +45,8 @@ import {
 	assistantBlock,
 	streamEvent,
 	textEnvelope,
+	toolEnvelope,
+	toolResultUserMessage,
 } from "./testing/sdk-message-fixtures";
 import {
 	noSessionMirrorEvidence,
@@ -218,11 +226,12 @@ function buildLoop(
 	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
 	startStopDeadline?: StartStopDeadline,
+	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 ) {
 	return new RunLoop({
 		db: tdb.db,
 		worker,
-		liveStreamRelay: createInMemoryLiveStreamRelay(),
+		liveStreamRelay,
 		processor: createSdkRunProcessor({
 			startRunQuery,
 			logger,
@@ -288,7 +297,130 @@ async function readEvents(runId: string) {
 	return rows;
 }
 
+async function collectAttachedEvents(
+	relay: LiveStreamRelay,
+	runId: string,
+): Promise<LiveStreamEvent[]> {
+	const attached = await relay.attach(runId, new AbortController().signal);
+	if (attached.outcome !== "attached") {
+		throw new Error(`expected ${runId} Live Stream attachment`);
+	}
+	const events: LiveStreamEvent[] = [];
+	for await (const chunk of attached.events) {
+		events.push(decodeAgUiLiveStreamEvent(chunk));
+	}
+	return events;
+}
+
 describe("createSdkRunProcessor — through the run loop", () => {
+	it("carries scripted PresentUI through the durable fence and Live Stream reconnect", async () => {
+		const relay = createInMemoryLiveStreamRelay();
+		const processorStarted = Promise.withResolvers<void>();
+		const startQuery = Promise.withResolvers<void>();
+		const envelopeConsumed = Promise.withResolvers<void>();
+		const finishQuery = Promise.withResolvers<void>();
+		const worker = buildWorker();
+		const uiInput = {
+			version: 1,
+			payload: {
+				component: "diagram",
+				props: { source: "flowchart LR\nA --> B" },
+			},
+		};
+		const messages = [
+			...toolEnvelope({
+				text: "Here is the process.",
+				toolUses: [
+					{
+						toolUseId: "toolu-ui-1",
+						name: "mcp__mymemo-executor__PresentUI",
+						input: uiInput,
+					},
+				],
+			}),
+			toolResultUserMessage([
+				{ toolUseId: "toolu-ui-1", text: '{"accepted":true}' },
+			]),
+		];
+		const loop = buildLoop(
+			worker,
+			async () => {
+				processorStarted.resolve();
+				await startQuery.promise;
+				return {
+					close() {},
+					async interrupt() {},
+					getArtifactPublication: () => null,
+					sessionEvidence: noSessionMirrorEvidence,
+					async *[Symbol.asyncIterator]() {
+						for (const message of messages) yield message;
+						envelopeConsumed.resolve();
+						await finishQuery.promise;
+						yield resultMessage();
+					},
+				};
+			},
+			silentLogger,
+			undefined,
+			relay,
+		);
+		await seedQueuedRun(tdb.db, {
+			runId: "run-1",
+			userId: "user-1",
+			conversationId: "conv-1",
+		});
+
+		await loop.tick();
+		await processorStarted.promise;
+		const originalEvents = collectAttachedEvents(relay, "run-1");
+		startQuery.resolve();
+		await envelopeConsumed.promise;
+		const reconnectEvents = collectAttachedEvents(relay, "run-1");
+		finishQuery.resolve();
+		await worker.drain();
+		const [original, reconnect] = await Promise.all([
+			originalEvents,
+			reconnectEvents,
+		]);
+
+		const durable = await readEvents("run-1");
+		expect(durable.map(({ type }) => type)).toEqual([
+			"assistant_message_completed",
+			"ui_payload",
+			"run_done",
+		]);
+		const assistant = durable[0]?.payload as {
+			messageId: string;
+			text: string;
+		};
+		expect(assistant.text).toBe("Here is the process.");
+		expect(durable[1]?.payload).toEqual({
+			messageId: assistant.messageId,
+			version: 1,
+			payload: uiInput.payload,
+		});
+		const expectedUiEvent = {
+			type: EventType.CUSTOM,
+			name: "mymemo.generative_ui",
+			value: {
+				eventId: `run-1:${durable[1]?.seq}`,
+				messageId: assistant.messageId,
+				version: 1,
+				payload: uiInput.payload,
+			},
+		} satisfies LiveStreamEvent;
+		for (const events of [original, reconnect]) {
+			expect(events.filter(({ type }) => type === "CUSTOM")).toEqual([
+				expectedUiEvent,
+			]);
+			expect(
+				events.some(({ type }) => type.toString().startsWith("TOOL_CALL")),
+			).toBe(false);
+		}
+		expect(reconnect).toEqual(original);
+		await relay.close();
+	});
+
 	it("does not publish a pointer from an SDK initialization id alone", async () => {
 		const worker = buildWorker();
 		const loop = buildLoop(worker, async (_run, _signal, owner) => {

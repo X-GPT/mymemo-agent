@@ -3,6 +3,7 @@ import type {
 	ToolResultPayload,
 	ToolUsePayload,
 } from "@mymemo/agent-db/run-events";
+import { PRESENT_UI_TOOL_NAME } from "../present-ui-tool";
 import { EXECUTOR_SERVER_NAME } from "./run-tools";
 
 /**
@@ -82,6 +83,12 @@ export function allowlistedExecutorToolNames(): string[] {
 export function publicToolName(toolName: unknown): PublicToolName | null {
 	if (typeof toolName !== "string") return null;
 	return PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME.get(toolName) ?? null;
+}
+
+/** PresentUI is deliberately classified outside ADR-0009 Tool projection: its
+ * validated payload is Assistant content and its invocation/result stay hidden. */
+export function isPresentUiToolName(toolName: unknown): boolean {
+	return toolName === `mcp__${EXECUTOR_SERVER_NAME}__${PRESENT_UI_TOOL_NAME}`;
 }
 
 /** One projected tool event, or the log-worthy reason it must be omitted. */

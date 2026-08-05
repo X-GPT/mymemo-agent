@@ -10,7 +10,7 @@ architecture and trust boundaries.
 | App | Location | Role |
 |-----|----------|------|
 | **chat-api** | `apps/chat-api/` | AI chat service; owns Conversation resources, strict Run admission, producer-buffered Live Stream attachment, history, and artifact delivery |
-| **agent-worker** | `apps/agent-worker/` | Split-runtime Fargate worker; claims Runs, holds worker-only credentials, executes Claude Agent SDK turns, and publishes standard AG-UI events |
+| **agent-worker** | `apps/agent-worker/` | Split-runtime Fargate worker; claims Runs, holds worker-only credentials, executes Claude Agent SDK turns, and publishes standard AG-UI events including validated display-only UI payloads |
 
 Shared libraries live under `packages/` (e.g. `@mymemo/agent-db`).
 

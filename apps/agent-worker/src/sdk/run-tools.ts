@@ -4,7 +4,7 @@ import {
 	type SdkMcpToolDefinition,
 	tool,
 } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
+import { type ZodRawShape, z } from "zod";
 import {
 	type BashToolLimits,
 	type CommandAuditEvent,
@@ -25,6 +25,11 @@ import {
 	runWriteFileTool,
 	type SandboxFileClient,
 } from "../file-tools/file-tools";
+import {
+	PRESENT_UI_TOOL_DESCRIPTION,
+	PRESENT_UI_TOOL_NAME,
+	runPresentUiTool,
+} from "../present-ui-tool";
 import type { RunBinding } from "../sandbox-env";
 
 /**
@@ -65,7 +70,15 @@ const EXECUTOR_TOOL_NAMES = [
 	"ListDocuments",
 	"SearchDocuments",
 	"LoadDocuments",
+	PRESENT_UI_TOOL_NAME,
 ] as const;
+
+const PRESENT_UI_INPUT_SCHEMA = z
+	.object({
+		version: z.unknown().optional(),
+		payload: z.unknown().optional(),
+	})
+	.catchall(z.unknown());
 
 /**
  * The fail-closed query allowlist (ADR-0006): exactly the executor tools, in
@@ -247,6 +260,15 @@ export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
 						limits: deps.documentLoad,
 					}),
 				),
+		),
+		tool(
+			PRESENT_UI_TOOL_NAME,
+			PRESENT_UI_TOOL_DESCRIPTION,
+			// The SDK declaration accepts only a raw shape even though its runtime
+			// also accepts a Zod object. Keep catchall so unknown envelope fields
+			// reach the shared validator instead of being stripped before its verdict.
+			PRESENT_UI_INPUT_SCHEMA as unknown as ZodRawShape,
+			async (input) => toCallToolResult(runPresentUiTool(input)),
 		),
 	];
 }

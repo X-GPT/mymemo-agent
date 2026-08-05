@@ -42,6 +42,61 @@ it("publishes RUN_STARTED through the terminal event over one relay producer", a
 	await relay.close();
 });
 
+it("replays a generative UI CUSTOM event identically to a mid-Run reconnect", async () => {
+	const relay = createInMemoryLiveStreamRelay();
+	const stream = await RunLiveStream.open({
+		relay,
+		runId: "run-1",
+		conversationId: "conv-1",
+		async markLiveStreamFailed() {
+			throw new Error("must not mark a healthy Stream");
+		},
+		logger: silentLogger,
+	});
+	const live = await relay.attach("run-1", new AbortController().signal);
+	expect(live.outcome).toBe("attached");
+	if (live.outcome !== "attached") throw new Error("expected live attachment");
+
+	const uiEvent = {
+		type: EventType.CUSTOM,
+		name: "mymemo.generative_ui",
+		value: {
+			eventId: "run-1:7",
+			messageId: "assistant-1",
+			version: 1,
+			payload: {
+				component: "diagram",
+				props: { source: "flowchart LR\nA --> B" },
+			},
+		},
+	} as const;
+	await stream.append(uiEvent);
+	const reconnect = await relay.attach("run-1", new AbortController().signal);
+	expect(reconnect.outcome).toBe("attached");
+	if (reconnect.outcome !== "attached") {
+		throw new Error("expected reconnect attachment");
+	}
+	await stream.finish("done");
+
+	const consume = async (events: AsyncIterable<Uint8Array>) => {
+		const decoded = [];
+		for await (const event of events)
+			decoded.push(decodeAgUiLiveStreamEvent(event));
+		return decoded;
+	};
+	const [liveEvents, replayedEvents] = await Promise.all([
+		consume(live.events),
+		consume(reconnect.events),
+	]);
+	expect(replayedEvents).toEqual(liveEvents);
+	expect(liveEvents).toEqual([
+		{ type: EventType.RUN_STARTED, threadId: "conv-1", runId: "run-1" },
+		uiEvent,
+		{ type: EventType.RUN_FINISHED, threadId: "conv-1", runId: "run-1" },
+	]);
+	await relay.close();
+});
+
 it("observes a payload-safe degradation transition separately from Run outcome", async () => {
 	const logs: Record<string, unknown>[] = [];
 	const metrics: LiveStreamMetricEvent[] = [];

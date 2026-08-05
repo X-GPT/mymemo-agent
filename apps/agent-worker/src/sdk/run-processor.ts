@@ -75,7 +75,7 @@ export function createSdkRunProcessor(deps: SdkRunProcessorDeps): RunProcessor {
 				ownershipLostSignal: ctx.ownershipLostSignal,
 				abortRunScopedWork: (reason) => runScopedController.abort(reason),
 				appendModelContents: async (contents) => {
-					await ctx.appendModelContents(contents);
+					return ctx.appendModelContents(contents);
 				},
 				appendLiveEvent: ctx.appendLiveEvent,
 				logger: deps.logger,
