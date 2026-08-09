@@ -551,6 +551,7 @@ describe("PostgresConversationHistoryStore", () => {
 				payload: {
 					messageId: "assistant-2",
 					version: 7,
+					futureEnvelopeField: { nested: true },
 					payload: {
 						component: "future-component",
 						props: { future: true },
@@ -634,6 +635,7 @@ describe("PostgresConversationHistoryStore", () => {
 						eventId: "run-ui:9",
 						messageId: "assistant-2",
 						version: 7,
+						futureEnvelopeField: { nested: true },
 						payload: {
 							component: "future-component",
 							props: { future: true },
@@ -819,7 +821,7 @@ describe("PostgresConversationHistoryStore", () => {
 		});
 	});
 
-	it("skips unknown events but rejects a malformed known event as corruption", async () => {
+	it("skips unknown events but rejects malformed known events as corruption", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "member-1",
 			conversationId: "conversation-1",
@@ -882,6 +884,22 @@ describe("PostgresConversationHistoryStore", () => {
 					version: 1,
 					payload: "not an object",
 				},
+			})
+			.where(and(eq(runEvents.runId, "run-1"), eq(runEvents.seq, 2)));
+		await expect(
+			store.getPage({
+				userId: "member-1",
+				conversationId: "conversation-1",
+				limit: 20,
+				cursor: null,
+			}),
+		).rejects.toThrow("invalid payload for durable event");
+
+		await tdb.db
+			.update(runEvents)
+			.set({
+				type: RunEventType.AssistantMessageCompleted,
+				payload: { text: "missing messageId" },
 			})
 			.where(and(eq(runEvents.runId, "run-1"), eq(runEvents.seq, 2)));
 		await expect(

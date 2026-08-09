@@ -327,15 +327,11 @@ function projectCompleteRun(
 				break;
 			case RunEventType.UiPayload: {
 				const assistant = ensureAssistantMessage(event.payload.messageId);
-				assistant.generativeUi = [
-					...(assistant.generativeUi ?? []),
-					{
-						eventId: `${run.runId}:${seq}`,
-						messageId: event.payload.messageId,
-						version: event.payload.version,
-						payload: event.payload.payload,
-					},
-				];
+				assistant.generativeUi ??= [];
+				assistant.generativeUi.push({
+					...event.payload,
+					eventId: `${run.runId}:${seq}`,
+				});
 				break;
 			}
 			case RunEventType.Done:
