@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import Ajv from "ajv";
 import type {
 	CommandAuditEvent,
 	RawCommandOutcome,
@@ -218,11 +219,8 @@ describe("buildRunTools — PresentUI", () => {
 	it("returns a bounded acknowledgement for a valid catalog payload", async () => {
 		const result = await toolsByName(buildDeps().deps).PresentUI?.handler(
 			{
-				version: 1,
-				payload: {
-					component: "diagram",
-					props: { source: "flowchart LR\nA --> B" },
-				},
+				component: "diagram",
+				props: { source: "flowchart LR\nA --> B" },
 			},
 			{},
 		);
@@ -233,18 +231,14 @@ describe("buildRunTools — PresentUI", () => {
 		expect(JSON.parse(text)).toEqual({
 			accepted: true,
 			component: "diagram",
-			version: 1,
 		});
 	});
 
 	it("returns the validator's typed rule and bounded repair detail", async () => {
 		const result = await toolsByName(buildDeps().deps).PresentUI?.handler(
 			{
-				version: 1,
-				payload: {
-					component: "x".repeat(10_000),
-					props: {},
-				},
+				component: "x".repeat(10_000),
+				props: {},
 			},
 			{},
 		);
@@ -256,6 +250,24 @@ describe("buildRunTools — PresentUI", () => {
 			error: "invalid_ui_payload",
 			rule: UiPayloadRule.ComponentUnknown,
 			detail: expect.any(String),
+		});
+	});
+
+	it("returns a typed repair error for a stringified component payload", async () => {
+		const result = await toolsByName(buildDeps().deps).PresentUI?.handler(
+			JSON.stringify({
+				component: "diagram",
+				props: { source: "flowchart LR\nA --> B" },
+			}) as unknown as Record<string, unknown>,
+			{},
+		);
+
+		expect(result?.isError).toBe(true);
+		const text = (result?.content?.[0] as { text: string }).text;
+		expect(JSON.parse(text)).toEqual({
+			error: "invalid_ui_payload",
+			rule: UiPayloadRule.EnvelopeInvalid,
+			detail: expect.stringContaining("object"),
 		});
 	});
 });
@@ -427,6 +439,101 @@ describe("createRunMcpServer", () => {
 		}
 	});
 
+	it("describes direct, typed PresentUI component arguments to the model", async () => {
+		const server = createRunMcpServer(buildDeps().deps);
+		const [clientTransport, serverTransport] =
+			InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "test-client", version: "1.0.0" });
+		await server.instance.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		try {
+			const { tools } = await client.listTools();
+			const presentUi = tools.find(({ name }) => name === "PresentUI");
+			if (!presentUi) throw new Error("PresentUI schema is missing");
+			const validate = new Ajv({ strict: false }).compile(
+				presentUi.inputSchema,
+			);
+
+			for (const payload of [
+				{
+					component: "chart",
+					props: { spec: { data: { values: [] }, mark: "point" } },
+				},
+				{
+					component: "diagram",
+					props: { source: "flowchart LR\nA --> B" },
+				},
+				{
+					component: "table",
+					props: {
+						columns: [{ key: "name", label: "Name" }],
+						rows: [{ name: "Ada" }],
+					},
+				},
+				{
+					component: "citation-card",
+					props: { title: "Source", snippet: "Evidence", source: {} },
+				},
+				{ component: "card", props: {}, children: ["Summary"] },
+			]) {
+				expect(validate(payload)).toBe(true);
+			}
+
+			expect(validate({})).toBe(false);
+			expect(validate({ component: "diagram" })).toBe(false);
+			expect(validate({ props: { source: "A --> B" } })).toBe(false);
+			expect(validate({ component: "diagram", props: {} })).toBe(false);
+			expect(
+				validate({
+					component: "table",
+					props: { columns: [] },
+				}),
+			).toBe(false);
+			expect(
+				validate({
+					component: "citation-card",
+					props: { title: "Source", source: {} },
+				}),
+			).toBe(false);
+			expect(
+				validate(
+					JSON.stringify({
+						component: "diagram",
+						props: { source: "A --> B" },
+					}),
+				),
+			).toBe(false);
+			expect(
+				validate({
+					component: "diagram",
+					props: { source: "A --> B" },
+					version: 1,
+				}),
+			).toBe(false);
+			expect(
+				validate({
+					component: "diagram",
+					props: { source: "A --> B", interactive: true },
+				}),
+			).toBe(false);
+			expect(
+				validate({
+					component: "citation-card",
+					props: {
+						title: "Source",
+						snippet: "Evidence",
+						source: { url: "https://example.com" },
+					},
+				}),
+			).toBe(false);
+			expect(JSON.stringify(presentUi.inputSchema)).not.toContain('"version"');
+		} finally {
+			await client.close();
+			await server.instance.close();
+		}
+	});
+
 	it("lets the shared validator reject malformed PresentUI arguments", async () => {
 		const server = createRunMcpServer(buildDeps().deps);
 		const [clientTransport, serverTransport] =
@@ -439,11 +546,8 @@ describe("createRunMcpServer", () => {
 			const result = await client.callTool({
 				name: "PresentUI",
 				arguments: {
-					version: 1,
-					payload: {
-						component: "diagram",
-						props: { source: "flowchart LR\nA --> B" },
-					},
+					component: "diagram",
+					props: { source: "flowchart LR\nA --> B" },
 					extra: true,
 				},
 			});
@@ -454,6 +558,112 @@ describe("createRunMcpServer", () => {
 				error: "invalid_ui_payload",
 				rule: UiPayloadRule.ExtraProperty,
 			});
+		} finally {
+			await client.close();
+			await server.instance.close();
+		}
+	});
+
+	it("returns a typed repair error for stringified PresentUI over MCP", async () => {
+		const server = createRunMcpServer(buildDeps().deps);
+		const [clientTransport, serverTransport] =
+			InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "test-client", version: "1.0.0" });
+		await server.instance.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		try {
+			const result = await client.callTool({
+				name: "PresentUI",
+				arguments: {
+					payload: JSON.stringify({
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
+					}),
+				},
+			});
+			expect(result.isError).toBe(true);
+			const content = result.content as Array<{ type: string; text: string }>;
+			const text = content[0]?.text ?? "";
+			expect(JSON.parse(text)).toEqual({
+				error: "invalid_ui_payload",
+				rule: UiPayloadRule.ComponentInvalid,
+				detail: expect.stringContaining("component"),
+			});
+		} finally {
+			await client.close();
+			await server.instance.close();
+		}
+	});
+
+	it("preserves the validator's specific repair rule over MCP", async () => {
+		const server = createRunMcpServer(buildDeps().deps);
+		const [clientTransport, serverTransport] =
+			InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "test-client", version: "1.0.0" });
+		await server.instance.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		try {
+			for (const [payload, rule] of [
+				[{ component: "image", props: {} }, UiPayloadRule.ComponentUnknown],
+				[{ component: "diagram", props: {} }, UiPayloadRule.ComponentInvalid],
+			] as const) {
+				const result = await client.callTool({
+					name: "PresentUI",
+					arguments: payload,
+				});
+				expect(result.isError).toBe(true);
+				const content = result.content as Array<{
+					type: string;
+					text: string;
+				}>;
+				const text = content[0]?.text ?? "";
+				expect(JSON.parse(text)).toMatchObject({
+					error: "invalid_ui_payload",
+					rule,
+				});
+			}
+		} finally {
+			await client.close();
+			await server.instance.close();
+		}
+	});
+
+	it("rejects model-authored PresentUI envelope fields over MCP", async () => {
+		const server = createRunMcpServer(buildDeps().deps);
+		const [clientTransport, serverTransport] =
+			InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "test-client", version: "1.0.0" });
+		await server.instance.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		try {
+			for (const [field, value] of [
+				["version", 2],
+				["messageId", "model-message"],
+				["interactive", true],
+			] as const) {
+				const result = await client.callTool({
+					name: "PresentUI",
+					arguments: {
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
+						[field]: value,
+					},
+				});
+				expect(result.isError).toBe(true);
+				const content = result.content as Array<{
+					type: string;
+					text: string;
+				}>;
+				const text = content[0]?.text ?? "";
+				expect(JSON.parse(text)).toEqual({
+					error: "invalid_ui_payload",
+					rule: UiPayloadRule.ExtraProperty,
+					detail: `${field} is not allowed; remove it`,
+				});
+			}
 		} finally {
 			await client.close();
 			await server.instance.close();

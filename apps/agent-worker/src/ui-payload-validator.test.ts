@@ -20,7 +20,7 @@ function expectViolation(input: unknown, rule: UiPayloadRule, detail: string) {
 }
 
 function expectValid(payload: unknown) {
-	expect(validateUiPayload({ version: UI_PAYLOAD_VERSION, payload })).toEqual({
+	expect(validateUiPayload(payload)).toEqual({
 		ok: true,
 		value: payload as UiNode,
 	});
@@ -31,7 +31,7 @@ function expectPayloadViolation(
 	rule: UiPayloadRule,
 	detail: string,
 ) {
-	expectViolation({ version: UI_PAYLOAD_VERSION, payload }, rule, detail);
+	expectViolation(payload, rule, detail);
 }
 
 function serializedEventBytes(payload: unknown, messageId: string): number {
@@ -227,14 +227,11 @@ describe("validateUiPayload", () => {
 
 	it("rejects a Vega-Lite schema violation with bounded repair detail", () => {
 		const result = validateUiPayload({
-			version: UI_PAYLOAD_VERSION,
-			payload: {
-				component: "chart",
-				props: {
-					spec: {
-						data: { values: [{ category: "A", value: 1 }] },
-						mark: "not-a-vega-lite-mark",
-					},
+			component: "chart",
+			props: {
+				spec: {
+					data: { values: [{ category: "A", value: 1 }] },
+					mark: "not-a-vega-lite-mark",
 				},
 			},
 		});
@@ -408,37 +405,22 @@ describe("validateUiPayload", () => {
 
 	it.each([
 		{
-			name: "a missing version",
-			input: { payload: { component: "diagram", props: { source: "A-->B" } } },
-			rule: UiPayloadRule.VersionInvalid,
-			detail: "version",
-		},
-		{
-			name: "an unknown version",
-			input: {
-				version: 2,
-				payload: { component: "diagram", props: { source: "A-->B" } },
-			},
-			rule: UiPayloadRule.VersionInvalid,
-			detail: "version",
-		},
-		{
 			name: "an unknown component",
-			input: { version: 1, payload: { component: "image", props: {} } },
+			input: { component: "image", props: {} },
 			rule: UiPayloadRule.ComponentUnknown,
 			detail: "image",
 		},
 		{
 			name: "a component inherited from Object.prototype",
-			input: { version: 1, payload: { component: "toString", props: {} } },
+			input: { component: "toString", props: {} },
 			rule: UiPayloadRule.ComponentUnknown,
 			detail: "toString",
 		},
 		{
-			name: "an extra envelope property",
+			name: "an attempted model-authored message id",
 			input: {
-				version: 1,
-				payload: { component: "diagram", props: { source: "A-->B" } },
+				component: "diagram",
+				props: { source: "A-->B" },
 				messageId: "not accepted from the model",
 			},
 			rule: UiPayloadRule.ExtraProperty,
@@ -447,12 +429,9 @@ describe("validateUiPayload", () => {
 		{
 			name: "an extra node property",
 			input: {
-				version: 1,
-				payload: {
-					component: "diagram",
-					props: { source: "A-->B" },
-					interactive: true,
-				},
+				component: "diagram",
+				props: { source: "A-->B" },
+				interactive: true,
 			},
 			rule: UiPayloadRule.ExtraProperty,
 			detail: "interactive",
@@ -460,11 +439,8 @@ describe("validateUiPayload", () => {
 		{
 			name: "an extra component property",
 			input: {
-				version: 1,
-				payload: {
-					component: "diagram",
-					props: { source: "A-->B", url: "https://example.com" },
-				},
+				component: "diagram",
+				props: { source: "A-->B", url: "https://example.com" },
 			},
 			rule: UiPayloadRule.ExtraProperty,
 			detail: "url",
@@ -472,11 +448,8 @@ describe("validateUiPayload", () => {
 		{
 			name: "an empty-named extra property",
 			input: {
-				version: 1,
-				payload: {
-					component: "diagram",
-					props: { source: "A-->B", "": true },
-				},
+				component: "diagram",
+				props: { source: "A-->B", "": true },
 			},
 			rule: UiPayloadRule.ExtraProperty,
 			detail: "not allowed",
@@ -501,13 +474,10 @@ describe("validateUiPayload", () => {
 
 		expectViolation(
 			{
-				version: UI_PAYLOAD_VERSION,
-				payload: {
-					...atBoundary,
-					props: {
-						...atBoundary.props,
-						title: `${atBoundary.props.title}x`,
-					},
+				...atBoundary,
+				props: {
+					...atBoundary.props,
+					title: `${atBoundary.props.title}x`,
 				},
 			},
 			UiPayloadRule.TitleTooLong,
@@ -515,13 +485,10 @@ describe("validateUiPayload", () => {
 		);
 		expectViolation(
 			{
-				version: UI_PAYLOAD_VERSION,
-				payload: {
-					...atBoundary,
-					props: {
-						...atBoundary.props,
-						source: `${atBoundary.props.source}x`,
-					},
+				...atBoundary,
+				props: {
+					...atBoundary.props,
+					source: `${atBoundary.props.source}x`,
 				},
 			},
 			UiPayloadRule.DiagramSourceTooLarge,
@@ -871,28 +838,28 @@ describe("validateUiPayload", () => {
 
 	it.each([
 		{
-			name: "a non-object envelope",
+			name: "a non-object component payload",
 			input: null,
 			rule: UiPayloadRule.EnvelopeInvalid,
-			detail: "envelope",
+			detail: "object",
 		},
 		{
 			name: "missing component props",
-			input: { version: 1, payload: { component: "diagram" } },
+			input: { component: "diagram" },
 			rule: UiPayloadRule.ComponentInvalid,
 			detail: "props",
 		},
 		{
 			name: "a diagram missing source",
-			input: { version: 1, payload: { component: "diagram", props: {} } },
+			input: { component: "diagram", props: {} },
 			rule: UiPayloadRule.ComponentInvalid,
 			detail: "source",
 		},
 		{
 			name: "a table with malformed columns",
 			input: {
-				version: 1,
-				payload: { component: "table", props: { columns: {}, rows: [] } },
+				component: "table",
+				props: { columns: {}, rows: [] },
 			},
 			rule: UiPayloadRule.ComponentInvalid,
 			detail: "columns",
@@ -900,13 +867,10 @@ describe("validateUiPayload", () => {
 		{
 			name: "an extra column property",
 			input: {
-				version: 1,
-				payload: {
-					component: "table",
-					props: {
-						columns: [{ key: "a", label: "A", width: 100 }],
-						rows: [],
-					},
+				component: "table",
+				props: {
+					columns: [{ key: "a", label: "A", width: 100 }],
+					rows: [],
 				},
 			},
 			rule: UiPayloadRule.ExtraProperty,
@@ -915,11 +879,8 @@ describe("validateUiPayload", () => {
 		{
 			name: "a citation missing required fields",
 			input: {
-				version: 1,
-				payload: {
-					component: "citation-card",
-					props: { title: "Source", source: {} },
-				},
+				component: "citation-card",
+				props: { title: "Source", source: {} },
 			},
 			rule: UiPayloadRule.ComponentInvalid,
 			detail: "snippet",
@@ -927,14 +888,11 @@ describe("validateUiPayload", () => {
 		{
 			name: "an extra citation source property",
 			input: {
-				version: 1,
-				payload: {
-					component: "citation-card",
-					props: {
-						title: "Source",
-						snippet: "Evidence",
-						source: { author: "Unknown" },
-					},
+				component: "citation-card",
+				props: {
+					title: "Source",
+					snippet: "Evidence",
+					source: { author: "Unknown" },
 				},
 			},
 			rule: UiPayloadRule.ExtraProperty,
@@ -943,18 +901,15 @@ describe("validateUiPayload", () => {
 		{
 			name: "a child node with its own children slot",
 			input: {
-				version: 1,
-				payload: {
-					component: "card",
-					props: {},
-					children: [
-						{
-							component: "diagram",
-							props: { source: "A-->B" },
-							children: [],
-						},
-					],
-				},
+				component: "card",
+				props: {},
+				children: [
+					{
+						component: "diagram",
+						props: { source: "A-->B" },
+						children: [],
+					},
+				],
 			},
 			rule: UiPayloadRule.ExtraProperty,
 			detail: "children",
@@ -966,7 +921,6 @@ describe("validateUiPayload", () => {
 	it("exports the stable model-repair rule vocabulary", () => {
 		expect(UiPayloadRule).toEqual({
 			EnvelopeInvalid: "envelope_invalid",
-			VersionInvalid: "version_invalid",
 			ComponentInvalid: "component_invalid",
 			ComponentUnknown: "component_unknown",
 			ExtraProperty: "extra_property",

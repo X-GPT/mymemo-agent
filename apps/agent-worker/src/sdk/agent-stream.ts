@@ -10,6 +10,7 @@ import type {
 } from "../run-loop";
 import {
 	isSupportedUiComponent,
+	UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
 	UI_PAYLOAD_VERSION,
 	validateUiPayload,
 } from "../ui-payload-validator";
@@ -224,15 +225,20 @@ export async function consumeAgentStream(
 		for (const toolUse of commit.toolUses) {
 			if (isPresentUiToolName(toolUse.name)) {
 				presentUiUseIds.add(toolUse.id);
-				const validation = validateUiPayload(toolUse.input);
+				const uiPayload = toolUse.input;
+				const validation = validateUiPayload(uiPayload);
 				if (!validation.ok) {
 					params.logger?.warn({
 						message: "UI payload omitted: validation failed",
 						runId: params.runId,
 						rule: validation.violation.rule,
 						component: uiComponentForLog(toolUse.input),
-						envelopeBytes: serializedBytes(toolUse.input),
-						payloadBytes: serializedBytes(uiPayloadValue(toolUse.input)),
+						envelopeBytes: serializedBytes({
+							messageId: UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
+							version: UI_PAYLOAD_VERSION,
+							payload: uiPayload,
+						}),
+						payloadBytes: serializedBytes(uiPayload),
 					});
 					continue;
 				}
@@ -603,18 +609,11 @@ export async function consumeAgentStream(
 	}
 }
 
-function uiPayloadValue(input: unknown): unknown {
-	return isRecord(input) ? input.payload : undefined;
-}
-
 function uiComponentForLog(input: unknown): string {
-	const payload = uiPayloadValue(input);
-	if (!isRecord(payload) || typeof payload.component !== "string") {
+	if (!isRecord(input) || typeof input.component !== "string") {
 		return "unknown";
 	}
-	return isSupportedUiComponent(payload.component)
-		? payload.component
-		: "unknown";
+	return isSupportedUiComponent(input.component) ? input.component : "unknown";
 }
 
 function serializedBytes(value: unknown): number {

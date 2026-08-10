@@ -1,4 +1,4 @@
-import { UI_PAYLOAD_VERSION, validateUiPayload } from "./ui-payload-validator";
+import { validateUiPayload } from "./ui-payload-validator";
 
 export const PRESENT_UI_TOOL_NAME = "PresentUI";
 
@@ -47,7 +47,6 @@ export function runPresentUiTool(input: unknown): PresentUiToolResult {
 				text: JSON.stringify({
 					accepted: true,
 					component: result.value.component,
-					version: UI_PAYLOAD_VERSION,
 				}),
 			},
 		],
