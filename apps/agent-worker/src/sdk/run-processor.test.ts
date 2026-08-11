@@ -321,11 +321,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const finishQuery = Promise.withResolvers<void>();
 		const worker = buildWorker();
 		const uiInput = {
-			version: 1,
-			payload: {
-				component: "diagram",
-				props: { source: "flowchart LR\nA --> B" },
-			},
+			component: "diagram",
+			props: { source: "flowchart LR\nA --> B" },
 		};
 		const messages = [
 			...toolEnvelope({
@@ -397,7 +394,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect(durable[1]?.payload).toEqual({
 			messageId: assistant.messageId,
 			version: 1,
-			payload: uiInput.payload,
+			payload: uiInput,
 		});
 		const expectedUiEvent = {
 			type: EventType.CUSTOM,
@@ -406,7 +403,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				eventId: `run-1:${durable[1]?.seq}`,
 				messageId: assistant.messageId,
 				version: 1,
-				payload: uiInput.payload,
+				payload: uiInput,
 			},
 		} satisfies LiveStreamEvent;
 		for (const events of [original, reconnect]) {
@@ -431,11 +428,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 					toolUseId: "toolu-ui-1",
 					name: "mcp__mymemo-executor__PresentUI",
 					input: {
-						version: 1,
-						payload: {
-							component: "diagram",
-							props: { source: "flowchart LR\nA --> B" },
-						},
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
 					},
 				},
 			],

@@ -1463,11 +1463,8 @@ describe("consumeAgentStream", () => {
 						toolUseId: "toolu-ui-1",
 						name: "mcp__mymemo-executor__PresentUI",
 						input: {
-							version: 1,
-							payload: {
-								component: "diagram",
-								props: { source: "flowchart LR\nA --> B" },
-							},
+							component: "diagram",
+							props: { source: "flowchart LR\nA --> B" },
 						},
 					},
 					{
@@ -1479,13 +1476,10 @@ describe("consumeAgentStream", () => {
 						toolUseId: "toolu-ui-2",
 						name: "mcp__mymemo-executor__PresentUI",
 						input: {
-							version: 1,
-							payload: {
-								component: "table",
-								props: {
-									columns: [{ key: "name", label: "Name" }],
-									rows: [{ name: "Ada" }],
-								},
+							component: "table",
+							props: {
+								columns: [{ key: "name", label: "Name" }],
+								rows: [{ name: "Ada" }],
 							},
 						},
 					},
@@ -1573,12 +1567,9 @@ describe("consumeAgentStream", () => {
 						toolUseId: "toolu-ui-invalid",
 						name: "mcp__mymemo-executor__PresentUI",
 						input: {
-							version: 1,
-							payload: {
-								component: "diagram",
-								props: { source: "flowchart LR\nA --> B" },
-								"sensitive-payload-key": "sensitive-payload-value",
-							},
+							component: "diagram",
+							props: { source: "flowchart LR\nA --> B" },
+							version: 2,
 						},
 					},
 				],
@@ -1608,7 +1599,7 @@ describe("consumeAgentStream", () => {
 				payloadBytes: expect.any(Number),
 			},
 		]);
-		expect(JSON.stringify(warnings)).not.toContain("sensitive-payload");
+		expect(JSON.stringify(warnings)).not.toContain("version");
 	});
 
 	it("drops a validated PresentUI call when stop arrives before envelope commit", async () => {
@@ -1620,11 +1611,8 @@ describe("consumeAgentStream", () => {
 					toolUseId: "toolu-ui-1",
 					name: "mcp__mymemo-executor__PresentUI",
 					input: {
-						version: 1,
-						payload: {
-							component: "diagram",
-							props: { source: "flowchart LR\nA --> B" },
-						},
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
 					},
 				},
 			],
@@ -1658,11 +1646,8 @@ describe("consumeAgentStream", () => {
 					toolUseId: "toolu-ui-1",
 					name: "mcp__mymemo-executor__PresentUI",
 					input: {
-						version: 1,
-						payload: {
-							component: "diagram",
-							props: { source: "flowchart LR\nA --> B" },
-						},
+						component: "diagram",
+						props: { source: "flowchart LR\nA --> B" },
 					},
 				},
 			],

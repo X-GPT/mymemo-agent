@@ -27,9 +27,13 @@ export const UI_PAYLOAD_LIMITS = {
 	cardChildCharacters: 1_000,
 } as const;
 
+/**
+ * Stable model-repair vocabulary. The legacy `Envelope` names refer to the
+ * worker-owned durable `{ messageId, version, payload }` envelope, never a
+ * wrapper authored by the model.
+ */
 export const UiPayloadRule = {
 	EnvelopeInvalid: "envelope_invalid",
-	VersionInvalid: "version_invalid",
 	ComponentInvalid: "component_invalid",
 	ComponentUnknown: "component_unknown",
 	ExtraProperty: "extra_property",
@@ -119,29 +123,15 @@ export const CHART_SCHEMA_DETAIL_CHARACTERS = 300;
 
 let cachedVegaLiteValidator: ValidateFunction | undefined;
 
-/** Validate one model-authored v1 catalog envelope without performing I/O. */
+/** Validate one model-authored v1 catalog component without performing I/O. */
 export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 	if (!isRecord(input)) {
 		return violation(
 			UiPayloadRule.EnvelopeInvalid,
-			"payload envelope must be an object",
+			"UI component payload must be an object",
 		);
 	}
-	const envelopeExtra = firstExtraKey(input, ["version", "payload"]);
-	if (envelopeExtra !== undefined) return extraProperty(envelopeExtra);
-	if (input.version !== UI_PAYLOAD_VERSION) {
-		return violation(
-			UiPayloadRule.VersionInvalid,
-			`version must be ${UI_PAYLOAD_VERSION}`,
-		);
-	}
-	if (!isRecord(input.payload)) {
-		return violation(
-			UiPayloadRule.ComponentInvalid,
-			"payload must contain one component object",
-		);
-	}
-	const component = input.payload.component;
+	const component = input.component;
 	if (typeof component !== "string") {
 		return violation(
 			UiPayloadRule.ComponentInvalid,
@@ -156,19 +146,19 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 	}
 	const definition = COMPONENT_DEFINITIONS[component];
 
-	const nodeExtra = firstExtraKey(input.payload, definition.nodeKeys);
+	const nodeExtra = firstExtraKey(input, definition.nodeKeys);
 	if (nodeExtra !== undefined) return extraProperty(nodeExtra);
-	if (!isRecord(input.payload.props)) {
+	if (!isRecord(input.props)) {
 		return violation(
 			UiPayloadRule.ComponentInvalid,
 			`${component} props must be an object`,
 		);
 	}
-	const propsExtra = firstExtraKey(input.payload.props, definition.propKeys);
+	const propsExtra = firstExtraKey(input.props, definition.propKeys);
 	if (propsExtra !== undefined) return extraProperty(propsExtra);
-	const invalid = definition.validate(input.payload, input.payload.props);
+	const invalid = definition.validate(input, input.props);
 	if (invalid) return invalid;
-	const envelopeBytes = serializedEnvelopeBytes(input.payload);
+	const envelopeBytes = serializedUiPayloadEnvelopeBytes(input);
 	if (envelopeBytes > UI_PAYLOAD_LIMITS.envelopeBytes) {
 		return violation(
 			UiPayloadRule.EnvelopeTooLarge,
@@ -176,10 +166,11 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 		);
 	}
 
-	return { ok: true, value: input.payload as unknown as UiNode };
+	return { ok: true, value: input as unknown as UiNode };
 }
 
-function serializedEnvelopeBytes(payload: Record<string, unknown>): number {
+/** Serialized size of the worker-owned durable envelope for a model payload. */
+export function serializedUiPayloadEnvelopeBytes(payload: unknown): number {
 	return utf8ByteLength(
 		JSON.stringify({
 			messageId: UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
@@ -375,10 +366,7 @@ function validateCard(
 				`card child ${index} cannot be another card; flatten the card`,
 			);
 		}
-		const childResult = validateUiPayload({
-			version: UI_PAYLOAD_VERSION,
-			payload: child,
-		});
+		const childResult = validateUiPayload(child);
 		if (!childResult.ok) return childResult;
 	}
 }
