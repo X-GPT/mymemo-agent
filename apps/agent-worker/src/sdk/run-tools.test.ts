@@ -451,6 +451,22 @@ describe("createRunMcpServer", () => {
 			const { tools } = await client.listTools();
 			const presentUi = tools.find(({ name }) => name === "PresentUI");
 			if (!presentUi) throw new Error("PresentUI schema is missing");
+			expect(presentUi.inputSchema).toMatchObject({
+				type: "object",
+				properties: {
+					component: {
+						type: "string",
+						enum: ["chart", "diagram", "table", "citation-card", "card"],
+					},
+				},
+				required: ["component", "props"],
+				additionalProperties: false,
+			});
+			expect(Array.isArray(presentUi.inputSchema.oneOf)).toBe(false);
+			const propsSchema = (
+				presentUi.inputSchema.properties as Record<string, unknown>
+			).props as Record<string, unknown>;
+			expect(propsSchema.anyOf).toHaveLength(5);
 			const validate = new Ajv({ strict: false }).compile(
 				presentUi.inputSchema,
 			);
@@ -483,19 +499,6 @@ describe("createRunMcpServer", () => {
 			expect(validate({})).toBe(false);
 			expect(validate({ component: "diagram" })).toBe(false);
 			expect(validate({ props: { source: "A --> B" } })).toBe(false);
-			expect(validate({ component: "diagram", props: {} })).toBe(false);
-			expect(
-				validate({
-					component: "table",
-					props: { columns: [] },
-				}),
-			).toBe(false);
-			expect(
-				validate({
-					component: "citation-card",
-					props: { title: "Source", source: {} },
-				}),
-			).toBe(false);
 			expect(
 				validate(
 					JSON.stringify({

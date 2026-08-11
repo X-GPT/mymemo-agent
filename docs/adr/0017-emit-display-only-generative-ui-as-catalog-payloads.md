@@ -37,7 +37,11 @@ The model emits a payload by calling one dedicated executor tool,
 **`PresentUI`**, on the existing `mymemo-executor` in-process MCP server and
 the pinned ADR-0006 allowlist. Its JSON args are the payload — exactly one
 self-contained component tree per call. The model never supplies the durable
-envelope's `messageId` or `version`. The executor validates and persists;
+envelope's `messageId` or `version`. Claude Code omits MCP tools whose input
+schema has a top-level `oneOf`, so the model-visible schema is a direct root
+object with the component enum and a nested union of the five strict prop
+shapes; the executor remains authoritative for component/props correlation
+and card-only children. The executor validates and persists;
 the model receives a bounded ack, or on validation failure a typed error
 result naming the violated rule, and may repair and retry. An invalid payload
 is **never persisted**: no invalid content ever reaches a client, and there

@@ -168,13 +168,24 @@ const UI_CARD_SCHEMA = z
 	})
 	.strict();
 
-const UI_NODE_CONTRACT_SCHEMA = z.discriminatedUnion("component", [
-	UI_CHART_SCHEMA,
-	UI_DIAGRAM_SCHEMA,
-	UI_TABLE_SCHEMA,
-	UI_CITATION_CARD_SCHEMA,
-	UI_CARD_SCHEMA,
-]);
+// Claude Code omits MCP tools whose input schema has a top-level `oneOf`, even
+// though it is valid JSON Schema. Keep the direct root object it supports and
+// expose the five strict prop shapes as a nested union. The authoritative
+// validator retains exact component-to-props correlation and rejects children
+// on every component except card.
+const UI_NODE_ROOT_SCHEMA = z
+	.object({
+		component: z.enum(["chart", "diagram", "table", "citation-card", "card"]),
+		props: z.union([
+			UI_CHART_SCHEMA.shape.props,
+			UI_DIAGRAM_SCHEMA.shape.props,
+			UI_TABLE_SCHEMA.shape.props,
+			UI_CITATION_CARD_SCHEMA.shape.props,
+			UI_CARD_SCHEMA.shape.props,
+		]),
+		children: UI_CARD_SCHEMA.shape.children,
+	})
+	.strict();
 
 /**
  * Expose one schema to the model while preserving the raw value at runtime.
@@ -188,7 +199,7 @@ function modelSchemaWithRawRuntime<T extends z.ZodType>(modelSchema: T) {
 		const { $schema: _schema, ...jsonSchema } = z.toJSONSchema(modelSchema, {
 			target: "draft-7",
 		});
-		return { type: "object", ...jsonSchema };
+		return { ...jsonSchema, type: "object" };
 	};
 	return runtimeSchema;
 }
@@ -196,9 +207,7 @@ function modelSchemaWithRawRuntime<T extends z.ZodType>(modelSchema: T) {
 // The Claude SDK types tool input as a raw shape even though the MCP runtime
 // accepts a full Zod object. The runtime object preserves every direct UiNode
 // field for authoritative validation while the model sees the catalog schema.
-const PRESENT_UI_INPUT_SCHEMA = modelSchemaWithRawRuntime(
-	UI_NODE_CONTRACT_SCHEMA,
-);
+const PRESENT_UI_INPUT_SCHEMA = modelSchemaWithRawRuntime(UI_NODE_ROOT_SCHEMA);
 
 /**
  * The fail-closed query allowlist (ADR-0006): exactly the executor tools, in
