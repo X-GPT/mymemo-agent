@@ -10,7 +10,7 @@ import type {
 } from "../run-loop";
 import {
 	isSupportedUiComponent,
-	UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
+	serializedUiPayloadEnvelopeBytes,
 	UI_PAYLOAD_VERSION,
 	validateUiPayload,
 } from "../ui-payload-validator";
@@ -233,11 +233,7 @@ export async function consumeAgentStream(
 						runId: params.runId,
 						rule: validation.violation.rule,
 						component: uiComponentForLog(toolUse.input),
-						envelopeBytes: serializedBytes({
-							messageId: UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
-							version: UI_PAYLOAD_VERSION,
-							payload: uiPayload,
-						}),
+						envelopeBytes: serializedUiPayloadEnvelopeBytes(uiPayload),
 						payloadBytes: serializedBytes(uiPayload),
 					});
 					continue;

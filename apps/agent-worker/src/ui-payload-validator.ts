@@ -27,6 +27,11 @@ export const UI_PAYLOAD_LIMITS = {
 	cardChildCharacters: 1_000,
 } as const;
 
+/**
+ * Stable model-repair vocabulary. The legacy `Envelope` names refer to the
+ * worker-owned durable `{ messageId, version, payload }` envelope, never a
+ * wrapper authored by the model.
+ */
 export const UiPayloadRule = {
 	EnvelopeInvalid: "envelope_invalid",
 	ComponentInvalid: "component_invalid",
@@ -153,7 +158,7 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 	if (propsExtra !== undefined) return extraProperty(propsExtra);
 	const invalid = definition.validate(input, input.props);
 	if (invalid) return invalid;
-	const envelopeBytes = serializedEnvelopeBytes(input);
+	const envelopeBytes = serializedUiPayloadEnvelopeBytes(input);
 	if (envelopeBytes > UI_PAYLOAD_LIMITS.envelopeBytes) {
 		return violation(
 			UiPayloadRule.EnvelopeTooLarge,
@@ -164,7 +169,8 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 	return { ok: true, value: input as unknown as UiNode };
 }
 
-function serializedEnvelopeBytes(payload: Record<string, unknown>): number {
+/** Serialized size of the worker-owned durable envelope for a model payload. */
+export function serializedUiPayloadEnvelopeBytes(payload: unknown): number {
 	return utf8ByteLength(
 		JSON.stringify({
 			messageId: UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,

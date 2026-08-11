@@ -3,8 +3,8 @@ import type { UiNode } from "@mymemo/agent-db/run-events";
 import Ajv from "ajv";
 import {
 	CHART_SCHEMA_DETAIL_CHARACTERS,
+	serializedUiPayloadEnvelopeBytes,
 	UI_PAYLOAD_LIMITS,
-	UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
 	UI_PAYLOAD_VERSION,
 	UiPayloadRule,
 	validateUiPayload,
@@ -49,9 +49,7 @@ function tableAtSerializedEventBytes(targetBytes: number) {
 		Object.fromEntries(columns.map(({ key }) => [key, ""])),
 	);
 	const payload = { component: "table", props: { columns, rows } };
-	let remaining =
-		targetBytes -
-		serializedEventBytes(payload, UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER);
+	let remaining = targetBytes - serializedUiPayloadEnvelopeBytes(payload);
 	for (const row of rows) {
 		for (const { key } of columns) {
 			const characters = Math.min(
@@ -777,9 +775,9 @@ describe("validateUiPayload", () => {
 		const overBoundary = tableAtSerializedEventBytes(
 			UI_PAYLOAD_LIMITS.envelopeBytes + 1,
 		);
-		expect(
-			serializedEventBytes(atBoundary, UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER),
-		).toBe(UI_PAYLOAD_LIMITS.envelopeBytes);
+		expect(serializedUiPayloadEnvelopeBytes(atBoundary)).toBe(
+			UI_PAYLOAD_LIMITS.envelopeBytes,
+		);
 		expect(
 			serializedEventBytes(atBoundary, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
 		).toBe(UI_PAYLOAD_LIMITS.envelopeBytes);

@@ -191,7 +191,7 @@ const UI_NODE_ROOT_SCHEMA = z
  * Expose one schema to the model while preserving the raw value at runtime.
  * The MCP SDK otherwise parses away malformed input before PresentUI can return
  * the validator's typed repair rule. This Zod hook is pinned by the model-schema
- * and MCP-handler regression tests below the SDK version in package.json.
+ * and MCP-handler regression tests and by the exact Zod version in package.json.
  */
 function modelSchemaWithRawRuntime<T extends z.ZodType>(modelSchema: T) {
 	const runtimeSchema = z.object({}).passthrough();
