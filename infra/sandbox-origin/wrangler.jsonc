@@ -1,0 +1,18 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "mymemo-sandbox-origin",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-01",
+	"observability": {
+		"enabled": true
+	},
+	// No bindings on purpose. This Worker holds no secret, reads no database,
+	// and reaches no other service — it serves untrusted markup and nothing
+	// else. Adding a binding here widens what a composition bug can reach.
+	//
+	// Deployed to the account's workers.dev subdomain, which is already its own
+	// registrable domain (`workers.dev` is on the Public Suffix List), so no
+	// domain purchase or DNS record is needed to stand this up. A dedicated
+	// vanity domain is a pre-launch step, not a prerequisite — see README.md.
+	"workers_dev": true
+}
