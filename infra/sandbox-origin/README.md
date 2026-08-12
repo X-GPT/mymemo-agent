@@ -79,7 +79,10 @@ frames it cross-origin with a fake `ADMIN_SECRET_TOKEN` in its localStorage.
 `?drop=frame-ancestors,sandbox` omits directives, to bisect the envelope one
 directive at a time.
 
-**The local harness cannot exercise the framed case.** Chrome blocks *every*
-opaque-origin frame load of an `http://localhost` target — verified to be
-independent of this policy, since it still happens with `frame-ancestors` and
-`sandbox` both removed. Framed behaviour needs the real HTTPS origin.
+**Trust the deployed origin over the local harness for negative results.** The
+local run produced one false negative: same-origin loads reported blocked
+(`ERR_BLOCKED_BY_CLIENT` — the test browser's own request blocker, not a CSP
+verdict) that the deployed origin then proved work. The same artifact blocked
+every opaque-origin frame load of a localhost target, so the framed case also
+needs the real HTTPS origin. Full account in
+`docs/verification/sandbox-origin-envelope.md`.

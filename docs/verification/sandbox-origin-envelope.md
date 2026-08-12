@@ -1,12 +1,25 @@
 # Sandbox origin: envelope verification
 
-**Measured 2026-08-12, Chrome, against `infra/sandbox-origin` served locally**
+**Measured 2026-08-12, Chrome — first against `infra/sandbox-origin` served
+locally, then re-verified against the deployed origin
+`https://mymemo-sandbox-origin.bruce-waynezu.workers.dev`**
 ([#438](https://github.com/X-GPT/mymemo-agent/issues/438), map
 [#430](https://github.com/X-GPT/mymemo-agent/issues/430)).
 
 Every row below is an observation from a real browser, not an inference. Where
 the local harness could not settle a question, that is stated as such rather
 than filled in.
+
+**Deploy verification:** Cloudflare's edge passes the CSP through
+byte-for-byte (`verify.sh` fully green over TLS), TLS provisions, the origin
+sets no cookie, and the in-page probe reports every channel contained with
+WebRTC as the sole known gap.
+
+> **Correction (same day):** the local harness produced one **false
+> negative**, recorded below in its own section. The first version of this
+> document claimed `'self'` matches nothing at an opaque origin; the deployed
+> origin disproved that. Local claims that the deployed origin confirmed are
+> kept; that one is retracted.
 
 The policy under test is `infra/sandbox-origin/src/policy.ts`. Its shape:
 `default-src 'none'` with `connect-src`, `form-action`, `base-uri`,
@@ -52,42 +65,43 @@ This was previously an *unwritten* assumption. It is now demonstrated, but it
 remains an assumption about mymemo-web: a future move to cookie auth would
 silently weaken this lane. That belongs in the ADR as a stated precondition.
 
+## Retracted: the `'self'`-matches-nothing claim (a harness false negative)
+
+The local harness reported same-origin `<script src>`, `<img src>` and
+`<link rel=stylesheet>` loads as blocked at the opaque origin, and the first
+version of this document concluded the runtime and libraries had to be inlined
+into every composed document. **The deployed origin disproved this**: on
+`https://mymemo-sandbox-origin.bruce-waynezu.workers.dev`, under the identical
+CSP with `sandbox allow-scripts`, the probe's same-origin script **executed**
+— libraries **can** be served as same-origin files, and HTTP caching across
+payloads works normally.
+
+The deployed behaviour is also what CSP specifies: `'self'` is bound to the
+**response URL's origin** when the policy is parsed, not to the document's
+post-sandbox opaque origin, so sandboxing does not sever it.
+
+The local failure's own error code was the tell, missed at the time:
+`net::ERR_BLOCKED_BY_CLIENT` is a *client-side request blocker* (here, the
+in-app browser pane used for the local run), not a CSP verdict — CSP blocks
+log as `securitypolicyviolation`. The same artifact explains the harness's
+inability to load opaque-origin *frames* of localhost targets, previously
+attributed to Chrome loopback behaviour.
+
+**Rules this adds for every future measurement in this lane:**
+
+1. `ERR_BLOCKED_BY_CLIENT` is never CSP evidence. Only a
+   `securitypolicyviolation` event (or a console CSP violation) proves the
+   policy acted — the same rule the `sendBeacon` trap already established for
+   the opposite direction.
+2. A *negative* result (a load failing) from an embedded/test browser is
+   untrusted until reproduced in a stock browser against the real origin.
+
+Consequence for the map: ticket #441's original premise dissolves — the
+composed document may load the runtime and libraries as cacheable same-origin
+files under plain `allow-scripts`, no `allow-same-origin` and no per-payload
+PSL-wildcard origin required for that purpose.
+
 ## Known gaps
-
-### `'self'` matches nothing — the runtime and every library must be inlined
-
-Under the opaque origin, `'self'` resolves to nothing. Measured:
-
-| Load | Result |
-|---|---|
-| Same-origin `<script src>` | **blocked** (`net::ERR_BLOCKED_BY_CLIENT`) |
-| Same-origin `<img src>` | **blocked** |
-| Same-origin `<link rel=stylesheet>` | **blocked** |
-| `data:` image | loaded |
-| `blob:` URL creation | works, scoped as `blob:null/…` |
-
-This cuts across a decision already taken. [#431](https://github.com/X-GPT/mymemo-agent/issues/431)
-settled that we "serve a versioned document from the sandbox origin carrying
-the CSS reset, the component styling, the named design tokens and the
-**self-hosted libraries**." Serving them is fine; loading them *as files* is
-not. Every byte of the runtime and of every bundled library must be **inlined
-into each composed document**.
-
-Consequences, which #439 and #437 have to price in:
-
-- **No HTTP caching across payloads.** A conversation with N sandboxed frames
-  transfers the library set N times. This gives the map's "per-conversation
-  frame cost" fog a concrete mechanism.
-- **The library budget is per-document, not amortised.** A 100 KB charting
-  library is 100 KB on every frame load.
-- The `run_events` payload is unaffected — the durable event holds only the
-  fragment, so ADR-0009's 16 KiB cap is untouched. The weight lands on the
-  *served document*, which is not durable.
-
-The escape hatch is granting `allow-same-origin`, which restores `'self'` — but
-that also restores storage and defeats the opaque origin, so it is only
-defensible on a **per-payload origin**, which is the PSL-wildcard pattern the
-big vendors use. That is a real fork, and it is now ticketed.
 
 ### WebRTC survives the envelope
 
@@ -100,17 +114,19 @@ system surveyed.
 
 ## Not settled here
 
-- **The framed case.** Chrome blocked every opaque-origin frame load of an
-  `http://localhost` target. This is *not* caused by the policy: it still
-  happens with `frame-ancestors` and `sandbox` both stripped from the header,
-  and it does not happen when the frame keeps a real origin
-  (no `sandbox` attribute, or `allow-scripts allow-same-origin`). It is a
-  property of the plain-HTTP loopback harness. The parent-DOM probe, the
-  `frame-ancestors` enforcement check and the height protocol therefore need
-  the real HTTPS origin — they are #432's to settle after deploy.
-- **Cloudflare edge behaviour**: that TLS provisions and that the edge passes
-  the CSP header through untouched. Deploy-time facts.
+- **The framed case.** The local run could not exercise it: every
+  opaque-origin frame load of an `http://localhost` target was refused with
+  `ERR_BLOCKED_BY_CLIENT` — not the policy (it persisted with
+  `frame-ancestors` and `sandbox` both stripped) but the test browser's own
+  request blocker, per the retraction above. The parent-DOM probe, the
+  `frame-ancestors` enforcement check and the height protocol need a
+  mymemo.ai-origin embedder (or a dev origin temporarily added to
+  `frame-ancestors`) against the deployed HTTPS origin — they are #432's.
 - **Hostile payload behaviour** (throw / hang / CPU spin) — #432.
+
+Settled since the first version of this document by the deploy: TLS
+provisions, and Cloudflare's edge passes the CSP header through untouched
+(`verify.sh` green against the live origin, 2026-08-12).
 
 ## Reproducing
 

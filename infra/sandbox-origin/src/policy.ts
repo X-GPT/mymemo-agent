@@ -45,14 +45,13 @@ function directives(extraFrameAncestors: readonly string[]): string[] {
 		"script-src 'self' 'unsafe-inline'",
 		"style-src 'self' 'unsafe-inline'",
 
-		// MEASURED (2026-08-12, Chrome): under `sandbox allow-scripts` the
-		// document's origin is opaque, so `'self'` matches NOTHING — same-origin
-		// script, image and stylesheet loads are all blocked. `data:` and
-		// `blob:` still work. The served runtime and every library must
-		// therefore be INLINED into the composed document; they cannot be
-		// fetched as files. `'self'` is retained only to state intent, and
-		// starts working only if `allow-same-origin` is ever granted.
-		// See docs/verification/sandbox-origin-envelope.md.
+		// MEASURED on the deployed origin (2026-08-12, Chrome): `'self'` works
+		// under `sandbox allow-scripts` — CSP binds it to the response URL's
+		// origin at parse time, not the document's post-sandbox opaque origin —
+		// so the runtime and libraries CAN be served as same-origin files and
+		// HTTP-cached. (An earlier local measurement claimed the opposite; that
+		// was the test harness's own request blocker, ERR_BLOCKED_BY_CLIENT,
+		// not a CSP verdict.) See docs/verification/sandbox-origin-envelope.md.
 		"img-src 'self' data: blob:",
 		"font-src 'self' data:",
 
