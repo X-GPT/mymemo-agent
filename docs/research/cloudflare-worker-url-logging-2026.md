@@ -29,6 +29,20 @@ Nobody had checked whether the platform permits that. The origin is a Cloudflare
 
 ---
 
+## First: what this risk actually is
+
+**Added after the first draft, because the rest of this document reads more alarming than the risk
+warrants.** The URL in question always points at **our own origin** — that is precisely why CSP
+cannot close the channel, and equally why the channel does not reach anyone hostile. Every path to
+an attacker-controlled host is closed (`connect-src 'none'`, every fetch directive host-free). So
+the bytes land in **our** Cloudflare logs, which the party who planted the script cannot read.
+
+This is therefore **data hygiene, not exfiltration**: one payload's worth of what the model was
+already displaying to the user, sitting in a third-party log for 24 h to 30 days, readable by anyone
+with access to our Cloudflare account. Real, worth one honest paragraph in ADR-0018, and *not* worth
+engineering against. Read every "still records the secret" below in that light — it means the bytes
+are written somewhere they should not be, never that an attacker receives them.
+
 ## Bottom line
 
 **The clause as written is not keepable, and should not go into ADR-0018 in that form.**
