@@ -45,12 +45,21 @@ Three independent reasons, in descending order of importance:
    Real-time logs redact hex/base64-shaped query values — and pass all-lowercase values through
    verbatim. A payload controls its own encoding. **[MEASURED]**
 
-**What *is* achievable** is a narrower, configuration-level promise: no query-string-bearing record
-is *retained* in any surface we control, because the one on-by-default retaining surface
-(Workers Logs invocation logs) has a documented off-switch, and every other retaining surface is
-opt-in and we decline it. What survives regardless is **live observability to authorized operators**
-(`wrangler tail` / dashboard Live logs, not stored, no documented off-switch) and **counter-only
-analytics** (no URL dimension, 3-month retention, no documented off-switch).
+4. **At least one retaining surface has no off-switch at all, once the origin sits on a zone.**
+   `firewallEventsAdaptive.clientRequestQuery` records the query string on **every plan including
+   Free**, and it fires whenever any security product acts on the request — so **blocking the
+   exfiltration request still records the secret**. Added after the first draft; see
+   [the zone section](#the-sharpest-zone-surface-firewalleventsadaptiveclientrequestquery--not-opt-in-not-suppressible).
+   **[DOC]**
+
+**What *is* achievable** is a narrower, configuration-level promise, and it is narrower still than
+this document first claimed: no query-string-bearing record is *retained* in any surface we control
+**and can configure**, because the one on-by-default retaining surface (Workers Logs invocation logs)
+has a documented off-switch and every other *opt-in* retaining surface we decline. What survives
+regardless is **live observability to authorized operators** (`wrangler tail` / dashboard Live logs,
+not stored, no documented off-switch), **counter-only analytics** (no URL dimension, 3-month
+retention, no documented off-switch), and — on a zone — **Security Events, which is not
+configurable away** (reason 4).
 
 The durable protection is therefore not "don't log the URL". It is **do not let a secret exist in a
 place where the payload can move it into a URL** — see [What ADR-0018 should say](#what-adr-0018-should-say).
@@ -360,6 +369,71 @@ move to a vanity domain **adds** it. I could find **no Cloudflare sentence stati
 directly**; it follows from the scoping language above, not from an explicit doc claim. Treat the
 vanity-domain migration as *widening* the surface, and re-verify at that time.
 
+### The sharpest zone surface: `firewallEventsAdaptive.clientRequestQuery` — NOT opt-in, NOT suppressible
+
+**Added 2026-08-12 after the first draft.** The zone discussion above framed the added surfaces as
+opt-in ones we can decline. **One of them is neither.** Every quote here was re-opened and verified
+verbatim at its source URL before being recorded.
+
+Security Events is powered by the `firewallEventsAdaptive` GraphQL dataset, which carries the query
+string as **its own dedicated field**. The tutorial selects it directly and publishes a live response
+proving it returns data **[DOC]**
+(<https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-firewall-events/>):
+
+```graphql
+action
+clientAsn
+clientCountryName
+clientIP
+clientRequestPath
+clientRequestQuery
+datetime
+source
+userAgent
+```
+
+> `"clientRequestPath": "/%3Cscript%3Ealert()%3C/script%3E",`
+> `"clientRequestQuery": "",`
+
+Note the sample also shows attacker-controlled bytes preserved verbatim (URL-encoded, not sanitized).
+The matching Logpush field is documented **[DOC]**
+(<https://developers.cloudflare.com/logs/logpush/logpush-job/datasets/zone/firewall_events/>):
+
+> **ClientRequestQuery** — "The query string requested by the visitor."
+
+**It is available on every plan, including Free** **[DOC]**
+(<https://developers.cloudflare.com/analytics/graphql-api/features/discovery/settings/>):
+
+> Although we allow access to ALL plans for the essential datasets (like `httpRequestsAdaptiveGroups`,
+> `firewallEventsAdaptive`, etc), users on larger plans benefit from an extended set of datasets and
+> wider query limits.
+
+Retention **[DOC]** (<https://developers.cloudflare.com/waf/analytics/security-events/>): Free 24 h ·
+Pro 24 h · Business 3 days · Enterprise 30 days.
+
+**Why this is worse than the other zone surfaces.** It is not a job we decline to create or a dataset
+we decline to enable — it is a byproduct of any security product *acting* on the request: Managed
+Rules, Bot Fight Mode, IP Access rules, UA blocking, rate limiting, Browser Integrity Check. So:
+
+> **Blocking the exfiltration request still records the secret.** The defence writes the payload's
+> bytes into a queryable store.
+
+There is no off-switch short of having no security rule fire at all. This is the strongest argument
+in this document for the reframe in [What ADR-0018 should say](#what-adr-0018-should-say): the
+guarantee must be that **no secret exists to put in a URL**, because at least one URL-recording
+surface cannot be configured away once the origin sits on a zone.
+
+**[UNDOCUMENTED]** Whether Security Events / WAF fire at all for a `*.workers.dev` request. A
+corpus-wide search of Cloudflare's own `waf` documentation export returns **zero** occurrences of
+`workers.dev` (and zero of "custom domain"). So today's exposure is unknown rather than known-absent,
+and the vanity-domain migration is where this surface becomes unambiguously live.
+
+**Correction to an earlier draft claim:** the dataset name `workersOverviewAdaptiveGroups` does not
+exist in Cloudflare's documentation. The real names are `workersOverviewRequestsAdaptiveGroups` and
+`workersOverviewDataAdaptiveGroups`, neither of which has a published field list.
+
+---
+
 Practical consequence for the migration: putting the sandbox origin on a zone brings zone HTTP
 request logging into scope. Logpush there is opt-in and its `field_names` can omit
 `ClientRequestURI` **[DOC]**
@@ -456,6 +530,10 @@ Note this is a change we must actually make: the Worker currently ships `"observ
   unverified.
 - Cloudflare's heuristic URL redaction MUST NOT be relied on: it is documented as heuristic and
   bypassable, and was measured to pass all-lowercase query values through verbatim.
+- **Once the origin sits on a zone, `firewallEventsAdaptive.clientRequestQuery` records the query
+  string on every plan including Free, with no off-switch** — it fires whenever any security product
+  acts on the request, so *blocking the exfiltration request still records the secret*. Retention
+  24 h (Free/Pro) to 30 days (Enterprise). This is the residual that most justifies amendment 3.
 
 **3. Put the real invariant where it belongs — on the secret, not on the log.** The load-bearing
 protection is the one already recorded in the map's memory: MyMemo auth is a **non-ambient,
