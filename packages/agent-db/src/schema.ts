@@ -238,6 +238,13 @@ export const canaryCampaigns = pgTable(
 			.notNull()
 			.default("preparing"),
 		verdict: text("verdict", { enum: CANARY_VERDICTS }),
+		/** Early bounded result that requests cleanup before a final report exists. */
+		provisionalVerdict: text("provisional_verdict", {
+			enum: CANARY_VERDICTS,
+		}),
+		cleanupRequestedAt: timestamp("cleanup_requested_at", {
+			withTimezone: true,
+		}),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -262,6 +269,10 @@ export const canaryCampaigns = pgTable(
 			sql`${t.verdict} is null or ${t.verdict} in ('pass_for_rollout_review', 'fail', 'inconclusive')`,
 		),
 		check(
+			"canary_campaigns_provisional_verdict_check",
+			sql`${t.provisionalVerdict} is null or ${t.provisionalVerdict} in ('pass_for_rollout_review', 'fail', 'inconclusive')`,
+		),
+		check(
 			"canary_campaigns_complete_verdict_check",
 			sql`(${t.lifecycle} = 'complete') = (${t.verdict} is not null)`,
 		),
@@ -273,8 +284,10 @@ export const canaryCampaigns = pgTable(
  * Non-cascading transactional outbox for AgentCore dispatch. It stores only
  * identifiers, lane, and timestamps; no prompt, model content, document
  * details, artifact data, or credentials can enter the queue boundary through
- * this record. `published_at IS NULL` is the pending state for the later
- * publisher slice.
+ * this record. Publication uses an expiring database lease; a confirmed send
+ * advances `published_at`, while an ambiguous send becomes eligible again only
+ * after `publish_claim_until`. Manual replay is audited on the same immutable
+ * dispatch identity.
  */
 export const canaryDispatchOutbox = pgTable(
 	"canary_dispatch_outbox",
@@ -294,6 +307,15 @@ export const canaryDispatchOutbox = pgTable(
 			.notNull()
 			.defaultNow(),
 		publishedAt: timestamp("published_at", { withTimezone: true }),
+		publishClaimedBy: text("publish_claimed_by"),
+		publishClaimUntil: timestamp("publish_claim_until", {
+			withTimezone: true,
+		}),
+		publishAttempts: integer("publish_attempts").notNull().default(0),
+		replayRequestedAt: timestamp("replay_requested_at", {
+			withTimezone: true,
+		}),
+		replayRequestedBy: text("replay_requested_by"),
 		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 	},
 	(t) => [
@@ -309,6 +331,7 @@ export const canaryDispatchOutbox = pgTable(
 		index("canary_dispatch_outbox_pending_idx")
 			.on(t.admittedAt)
 			.where(sql`${t.publishedAt} is null`),
+		index("canary_dispatch_outbox_publish_claim_idx").on(t.publishClaimUntil),
 		index("canary_dispatch_outbox_expiry_idx").on(t.expiresAt),
 	],
 );

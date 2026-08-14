@@ -11,6 +11,7 @@
 	},
 	"dependencies": {
 		"@mymemo/agent-db": "workspace:*",
+		"agentcore-canary-dispatch": "workspace:*",
 		"pg": "^8.22.0",
 		"zod": "4.3.6"
 	},

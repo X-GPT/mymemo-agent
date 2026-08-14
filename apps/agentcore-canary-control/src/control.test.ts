@@ -164,6 +164,35 @@ describe("the operator Canary control boundary", () => {
 		]);
 	});
 
+	it("attempts immediate publication through the shared publisher only after admission commits", async () => {
+		let calls = 0;
+		const control = createCanaryControl({
+			db: tdb.db,
+			config,
+			verifier: new RecordingVerifier(),
+			publisher: {
+				publishPending: async () => {
+					calls += 1;
+					expect(await tdb.db.select().from(canaryDispatchOutbox)).toHaveLength(
+						1,
+					);
+					return { status: "enabled" as const };
+				},
+			},
+		});
+
+		await expect(
+			control.start({
+				idempotencyKey: "operator-approved-449",
+				campaignVersion: config.campaignVersion,
+			}),
+		).resolves.toMatchObject({
+			outcome: "created",
+			publication: { status: "enabled" },
+		});
+		expect(calls).toBe(1);
+	});
+
 	it("reattaches an exact retry without re-verifying or creating another scenario", async () => {
 		const verifier = new RecordingVerifier();
 		const control = createCanaryControl({ db: tdb.db, config, verifier });
