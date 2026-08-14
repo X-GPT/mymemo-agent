@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
+import { startCanaryCampaignTx } from "@mymemo/agent-db/canary-control";
+import { markFargateLaneAwareDeploymentReady } from "@mymemo/agent-db/execution-lane-deployment";
 import {
 	createInMemoryLiveStreamRelay,
 	createLiveStreamTelemetry,
@@ -11,7 +13,12 @@ import {
 } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
-import { conversations, runs } from "@/db/schema";
+import {
+	canaryCampaigns,
+	canaryDispatchOutbox,
+	conversations,
+	runs,
+} from "@/db/schema";
 import { createTestDatabase } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import type {
@@ -814,6 +821,61 @@ describe("PATCH /v1/conversations/:id", () => {
 });
 
 describe("DELETE /v1/conversations/:id", () => {
+	it("deletes an AgentCore-canary Conversation through HTTP without deleting its audit", async () => {
+		const tdb = await createTestDatabase();
+		try {
+			await markFargateLaneAwareDeploymentReady(tdb.db);
+			await startCanaryCampaignTx(tdb.db, {
+				campaignId: "campaign-delete",
+				idempotencyKey: "key-delete",
+				campaignVersion: "v1",
+				fixtureVersion: "fixture-v1",
+				fixtureChecksum: "fixture-checksum",
+				model: "model",
+				scenarioId: "scenario",
+				userId: "member-1",
+				conversationId: "canary-delete",
+				collectionId: "canary-collection",
+				runId: "canary-delete-run",
+				messageId: "canary-delete-message",
+				dispatchId: "canary-delete-dispatch",
+				prompt: "configured synthetic prompt",
+			});
+			await tdb.db
+				.update(runs)
+				.set({ status: "done", terminalAt: new Date() })
+				.where(eq(runs.runId, "canary-delete-run"));
+			const app = buildApp(
+				new PostgresConversationStore(tdb.db),
+				gateThatFailsIfConsulted(),
+			);
+
+			const deleted = await app.request("/v1/conversations/canary-delete", {
+				method: "DELETE",
+				headers: identityHeaders,
+			});
+
+			expect(deleted.status).toBe(204);
+			expect(await tdb.db.select().from(runs)).toEqual([]);
+			expect(await tdb.db.select().from(canaryCampaigns)).toMatchObject([
+				{
+					campaignId: "campaign-delete",
+					conversationId: "canary-delete",
+					runId: "canary-delete-run",
+				},
+			]);
+			expect(await tdb.db.select().from(canaryDispatchOutbox)).toMatchObject([
+				{
+					dispatchId: "canary-delete-dispatch",
+					conversationId: "canary-delete",
+					runId: "canary-delete-run",
+				},
+			]);
+		} finally {
+			await tdb.close();
+		}
+	});
+
 	it("rejects an active Run, then permanently removes every user-visible resource", async () => {
 		const tdb = await createTestDatabase();
 		try {
