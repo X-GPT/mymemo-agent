@@ -90,5 +90,13 @@ describe("Acquisition receipt", () => {
 			workerId: "boot-1/invocation-9",
 			committedAt: "2026-08-14T16:01:00.000Z",
 		});
+		expect(() =>
+			parseAcquisitionReceipt(
+				JSON.stringify({
+					...receipt,
+					runtimeSessionId: "another-session",
+				}),
+			),
+		).toThrow("invalid AgentCore Acquisition receipt");
 	});
 });

@@ -21,18 +21,18 @@ const dispatchIdentityKeys = Object.keys(
 	dispatchIdentityShape,
 ) as (keyof typeof dispatchIdentityShape)[];
 
-const dispatchEnvelopeSchema = z
-	.strictObject({
-		...dispatchIdentityShape,
-		admittedAt: z.iso.datetime(),
-	})
+const dispatchIdentitySchema = z
+	.strictObject(dispatchIdentityShape)
 	.refine((value) => value.runtimeSessionId === value.conversationId, {
 		message: "Runtime session mismatch",
 	});
 
-const acquisitionReceiptSchema = z
-	.strictObject({
-		...dispatchIdentityShape,
+const dispatchEnvelopeSchema = dispatchIdentitySchema.safeExtend({
+	admittedAt: z.iso.datetime(),
+});
+
+const acquisitionReceiptSchema = dispatchIdentitySchema
+	.safeExtend({
 		disposition: z.enum([
 			"acquired",
 			"already_acquired",
@@ -45,9 +45,6 @@ const acquisitionReceiptSchema = z
 		committedAt: z.iso.datetime(),
 	})
 	.superRefine((value, context) => {
-		if (value.runtimeSessionId !== value.conversationId) {
-			context.addIssue({ code: "custom", message: "Runtime session mismatch" });
-		}
 		const owns = isOwnershipDisposition(value.disposition);
 		if (owns !== (value.ownershipEpoch !== null && value.workerId !== null)) {
 			context.addIssue({

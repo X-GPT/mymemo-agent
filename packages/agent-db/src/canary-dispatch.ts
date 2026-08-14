@@ -27,7 +27,22 @@ import {
 
 const DISPATCH_PUBLISH_LEASE_MS = 3 * 60_000;
 const DISPATCH_PENDING_DEADLINE_MS = 5 * 60_000;
+const ACTIVE_CANARY_CAMPAIGN_LIFECYCLES = [
+	"preparing",
+	"provisioning",
+	"running",
+] as const;
 export const MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE = 10;
+
+function activeCanaryCampaignCondition() {
+	return inArray(canaryCampaigns.lifecycle, [
+		...ACTIVE_CANARY_CAMPAIGN_LIFECYCLES,
+	]);
+}
+
+function dispatchPendingDeadline(now: Date): Date {
+	return new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS);
+}
 
 export interface CanaryDispatchIdentity {
 	schemaVersion: 1;
@@ -72,6 +87,7 @@ export async function claimCanaryDispatchesTx(
 	},
 ): Promise<CanaryDispatchIdentity[]> {
 	const now = input.now ?? new Date();
+	const pendingDeadline = dispatchPendingDeadline(now);
 	const limit = Math.max(
 		0,
 		Math.min(
@@ -87,13 +103,7 @@ export async function claimCanaryDispatchesTx(
 		const activeCampaigns = await tx
 			.select({ campaignId: canaryCampaigns.campaignId })
 			.from(canaryCampaigns)
-			.where(
-				inArray(canaryCampaigns.lifecycle, [
-					"preparing",
-					"provisioning",
-					"running",
-				]),
-			)
+			.where(activeCanaryCampaignCondition())
 			.for("share");
 		const activeCampaignIds = activeCampaigns.map(
 			({ campaignId }) => campaignId,
@@ -109,10 +119,7 @@ export async function claimCanaryDispatchesTx(
 					input.dispatchId
 						? eq(canaryDispatchOutbox.dispatchId, input.dispatchId)
 						: undefined,
-					gt(
-						canaryDispatchOutbox.admittedAt,
-						new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS),
-					),
+					gt(canaryDispatchOutbox.admittedAt, pendingDeadline),
 					gt(canaryDispatchOutbox.expiresAt, now),
 					or(
 						isNull(canaryDispatchOutbox.publishClaimUntil),
@@ -198,6 +205,11 @@ export async function requestCanaryDispatchReplayTx(
 		throw new Error("manual replay requires an operator identity");
 	}
 	const now = input.now ?? new Date();
+	const pendingDeadline = dispatchPendingDeadline(now);
+	const activeCampaignIds = db
+		.select({ campaignId: canaryCampaigns.campaignId })
+		.from(canaryCampaigns)
+		.where(activeCanaryCampaignCondition());
 	const replay = await db
 		.update(canaryDispatchOutbox)
 		.set({
@@ -207,16 +219,9 @@ export async function requestCanaryDispatchReplayTx(
 		.where(
 			and(
 				eq(canaryDispatchOutbox.dispatchId, input.dispatchId),
-				gt(
-					canaryDispatchOutbox.admittedAt,
-					new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS),
-				),
+				gt(canaryDispatchOutbox.admittedAt, pendingDeadline),
 				gt(canaryDispatchOutbox.expiresAt, now),
-				sql`exists (
-					select 1 from ${canaryCampaigns} campaign
-					where campaign.campaign_id = ${canaryDispatchOutbox.campaignId}
-					  and campaign.lifecycle in ('preparing', 'provisioning', 'running')
-				)`,
+				inArray(canaryDispatchOutbox.campaignId, activeCampaignIds),
 			),
 		)
 		.returning({ dispatchId: canaryDispatchOutbox.dispatchId });
@@ -233,6 +238,7 @@ export async function markOverdueCanaryDispatchesTx(
 	input: { now?: Date } = {},
 ): Promise<{ campaignIds: string[] }> {
 	const now = input.now ?? new Date();
+	const pendingDeadline = dispatchPendingDeadline(now);
 	return await db.transaction(async (tx) => {
 		// Match every other Campaign/outbox mutation: Campaign first, then outbox.
 		// This also prevents two repair invocations from marking the same Campaign.
@@ -241,11 +247,7 @@ export async function markOverdueCanaryDispatchesTx(
 			.from(canaryCampaigns)
 			.where(
 				and(
-					inArray(canaryCampaigns.lifecycle, [
-						"preparing",
-						"provisioning",
-						"running",
-					]),
+					activeCanaryCampaignCondition(),
 					sql`exists (
 						select 1 from ${canaryDispatchOutbox} dispatch
 						join ${runs} exact_run
@@ -253,7 +255,7 @@ export async function markOverdueCanaryDispatchesTx(
 						 and exact_run.user_id = dispatch.user_id
 						 and exact_run.conversation_id = dispatch.conversation_id
 						where dispatch.campaign_id = ${canaryCampaigns.campaignId}
-						  and dispatch.admitted_at <= ${new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS)}
+						  and dispatch.admitted_at <= ${pendingDeadline}
 						  and exact_run.status = 'queued'
 					)`,
 				),
@@ -268,10 +270,7 @@ export async function markOverdueCanaryDispatchesTx(
 			.where(
 				and(
 					inArray(canaryDispatchOutbox.campaignId, candidateCampaignIds),
-					lte(
-						canaryDispatchOutbox.admittedAt,
-						new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS),
-					),
+					lte(canaryDispatchOutbox.admittedAt, pendingDeadline),
 					sql`exists (
 						select 1 from ${runs} exact_run
 						where exact_run.run_id = ${canaryDispatchOutbox.runId}
@@ -418,10 +417,6 @@ export async function acquireCanaryDispatchTx(
 		) {
 			return { disposition: "invalid_dispatch" };
 		}
-		if (run.status !== "queued") {
-			return { disposition: "invalid_dispatch" };
-		}
-
 		const epoch = conversation.epoch + 1;
 		await tx
 			.update(conversations)

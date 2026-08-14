@@ -37,6 +37,8 @@ export function createCanaryDispatchPublisher(options: {
 		async publishPending(
 			input: { dispatchId?: string } = {},
 		): Promise<CanaryPublishResult> {
+			// Timeout marking is lifecycle maintenance, not delivery. It must continue
+			// while the gate blocks every claim and SQS send below.
 			const overdue = await options.store.markOverdue();
 			if (!(await options.control.isEnabled())) {
 				return {
