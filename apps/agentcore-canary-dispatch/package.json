@@ -1,16 +1,8 @@
 {
 	"name": "agentcore-canary-dispatch",
 	"exports": {
-		".": "./src/index.ts",
-		"./acquisition-boundary": "./src/acquisition-boundary.ts",
-		"./aws-adapters": "./src/aws-adapters.ts",
-		"./contract": "./src/contract.ts",
-		"./consumer": "./src/consumer.ts",
-		"./invariants": "./src/invariants.ts",
-		"./handlers": "./src/handlers.ts",
 		"./publisher": "./src/publisher.ts",
-		"./production": "./src/production.ts",
-		"./receipt-stream": "./src/receipt-stream.ts"
+		"./production": "./src/production.ts"
 	},
 	"scripts": {
 		"test": "bun test --timeout=30000",

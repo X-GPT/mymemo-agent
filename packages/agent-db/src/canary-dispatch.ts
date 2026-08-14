@@ -8,6 +8,7 @@ import {
 	lte,
 	ne,
 	or,
+	type SQLWrapper,
 	sql,
 } from "drizzle-orm";
 import type { Database } from "./client";
@@ -17,7 +18,7 @@ import {
 	liveConversationOwnershipState,
 } from "./conversation-ownership";
 import { AGENTCORE_CANARY_EXECUTION_LANE } from "./execution-lane";
-import type { TerminalRunStatus } from "./run-store";
+import { isTerminalRunStatus, type TerminalRunStatus } from "./run-store";
 import {
 	canaryCampaigns,
 	canaryDispatchOutbox,
@@ -42,6 +43,20 @@ function activeCanaryCampaignCondition() {
 
 function dispatchPendingDeadline(now: Date): Date {
 	return new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS);
+}
+
+function queuedExactRunExists(input: {
+	runId: SQLWrapper;
+	userId: SQLWrapper;
+	conversationId: SQLWrapper;
+}) {
+	return sql`exists (
+		select 1 from ${runs} exact_run
+		where exact_run.run_id = ${input.runId}
+		  and exact_run.user_id = ${input.userId}
+		  and exact_run.conversation_id = ${input.conversationId}
+		  and exact_run.status = 'queued'
+	)`;
 }
 
 export interface CanaryDispatchIdentity {
@@ -249,14 +264,14 @@ export async function markOverdueCanaryDispatchesTx(
 				and(
 					activeCanaryCampaignCondition(),
 					sql`exists (
-						select 1 from ${canaryDispatchOutbox} dispatch
-						join ${runs} exact_run
-						  on exact_run.run_id = dispatch.run_id
-						 and exact_run.user_id = dispatch.user_id
-						 and exact_run.conversation_id = dispatch.conversation_id
-						where dispatch.campaign_id = ${canaryCampaigns.campaignId}
-						  and dispatch.admitted_at <= ${pendingDeadline}
-						  and exact_run.status = 'queued'
+						select 1 from ${canaryDispatchOutbox}
+						where ${canaryDispatchOutbox.campaignId} = ${canaryCampaigns.campaignId}
+						  and ${canaryDispatchOutbox.admittedAt} <= ${pendingDeadline}
+						  and ${queuedExactRunExists({
+								runId: canaryDispatchOutbox.runId,
+								userId: canaryDispatchOutbox.userId,
+								conversationId: canaryDispatchOutbox.conversationId,
+							})}
 					)`,
 				),
 			)
@@ -271,13 +286,11 @@ export async function markOverdueCanaryDispatchesTx(
 				and(
 					inArray(canaryDispatchOutbox.campaignId, candidateCampaignIds),
 					lte(canaryDispatchOutbox.admittedAt, pendingDeadline),
-					sql`exists (
-						select 1 from ${runs} exact_run
-						where exact_run.run_id = ${canaryDispatchOutbox.runId}
-						  and exact_run.user_id = ${canaryDispatchOutbox.userId}
-						  and exact_run.conversation_id = ${canaryDispatchOutbox.conversationId}
-						  and exact_run.status = 'queued'
-					)`,
+					queuedExactRunExists({
+						runId: canaryDispatchOutbox.runId,
+						userId: canaryDispatchOutbox.userId,
+						conversationId: canaryDispatchOutbox.conversationId,
+					}),
 				),
 			)
 			.for("update");
@@ -412,11 +425,7 @@ export async function acquireCanaryDispatchTx(
 		) {
 			return { disposition: "temporarily_unavailable" };
 		}
-		if (
-			run.status === "done" ||
-			run.status === "error" ||
-			run.status === "interrupted"
-		) {
+		if (isTerminalRunStatus(run.status)) {
 			return { disposition: "terminal", status: run.status };
 		}
 		if (

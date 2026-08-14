@@ -26,6 +26,10 @@ export interface CanaryPublishResult {
 	ambiguousDispatchIds: string[];
 }
 
+export type CanaryImmediatePublishResult =
+	| CanaryPublishResult
+	| { status: "failed" };
+
 /** Shared by the immediate launcher attempt and the minute repair invocation. */
 export function createCanaryDispatchPublisher(options: {
 	publisherId: string;

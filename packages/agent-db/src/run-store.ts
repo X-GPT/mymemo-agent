@@ -160,6 +160,12 @@ const APPEND_CLASS_STATUSES: Record<RunEventAppendClass, RunStatus[]> = {
 /** The three terminal statuses a worker can transition an owned run into. */
 export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
 
+export function isTerminalRunStatus(
+	status: string,
+): status is TerminalRunStatus {
+	return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
+}
+
 /** The helper owns the status→event-type mapping so a terminal run can never
  * carry a mismatched terminal event. Types come from the shared vocabulary so
  * the projector reads exactly what the terminal transition writes. */

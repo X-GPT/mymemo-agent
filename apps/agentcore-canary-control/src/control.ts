@@ -7,7 +7,10 @@ import {
 	startCanaryCampaignTx,
 } from "@mymemo/agent-db/canary-control";
 import type { Database } from "@mymemo/agent-db/client";
-import type { CanaryPublishResult } from "agentcore-canary-dispatch/publisher";
+import type {
+	CanaryImmediatePublishResult,
+	CanaryPublishResult,
+} from "agentcore-canary-dispatch/publisher";
 import type { CanaryFixtureConfig, CanaryFixtureVerifier } from "./fixture";
 
 export interface CanaryControlConfig {
@@ -117,7 +120,9 @@ export function createCanaryControl(options: {
 
 	return {
 		async start(rawRequest: unknown) {
-			const withPublication = async <T>(result: T) => {
+			const withPublication = async <T>(
+				result: T,
+			): Promise<T & { publication: CanaryImmediatePublishResult }> => {
 				try {
 					return { ...result, publication: await publisher.publishPending() };
 				} catch {
