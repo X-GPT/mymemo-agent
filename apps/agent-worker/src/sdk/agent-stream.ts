@@ -7,7 +7,7 @@ import type {
 	AgentStreamMetadata,
 	ModelContent,
 	TurnDisposition,
-} from "../run-loop";
+} from "../run-serving";
 import {
 	isSupportedUiComponent,
 	serializedUiPayloadEnvelopeBytes,

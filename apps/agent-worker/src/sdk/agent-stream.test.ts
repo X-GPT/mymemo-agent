@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ModelContent } from "../run-loop";
+import type { ModelContent } from "../run-serving";
 import {
 	AgentResultError,
 	type ConsumeAgentStreamParams,
