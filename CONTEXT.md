@@ -40,6 +40,79 @@ The set of documents a conversation may access — `general`, `collection`, or
 `document`. Resolved once at conversation creation, then only ever re-read.
 _Avoid_: permissions, access level
 
+**Execution lane**:
+The immutable classification of a Conversation that determines which runtime
+may claim and execute its Runs. A Conversation never mixes runtimes.
+_Avoid_: Run target, worker preference, routing hint
+
+**AgentCore canary**:
+An operator-triggered, traffic-free production exercise that runs only
+synthetic Conversations on the AgentCore execution lane while Fargate remains
+the user-traffic runtime.
+_Avoid_: rollout, shadow traffic, production migration
+
+**Canary campaign**:
+One bounded, on-demand AgentCore canary exercise over a fresh synthetic
+Conversation, ending in a recorded Canary verdict and explicit cleanup.
+_Avoid_: scheduled probe, continuous canary, rollout stage
+
+**Canary scenario**:
+One versioned behavior probe within a Canary campaign, represented by one exact
+Run whose identity is stable across control-plane retries.
+_Avoid_: Run retry, test attempt, workflow step
+
+**Canary verdict**:
+The outcome of a Canary campaign: `pass_for_rollout_review`, `fail`, or
+`inconclusive`. An observed requirement violation is a failure; inconclusive
+means the required behavior could not be observed. A verdict informs a separate
+rollout decision and never changes user routing itself.
+_Avoid_: rollout approval, deployment status, Run Outcome
+
+**Canary fixture**:
+The versioned synthetic identity, collection, documents, and expected outputs
+used by every Canary campaign. It contains no real-user data.
+_Avoid_: test user, production sample, general Scope
+
+**AgentCore dispatch**:
+An at-least-once request for AgentCore to acquire one exact Run from an
+AgentCore-canary Conversation. Repeated delivery never creates another Run.
+_Avoid_: Run retry, job, invocation attempt
+
+**Durable acquisition**:
+The committed transition in which one AgentCore invocation obtains live
+Conversation Ownership and starts its exact dispatched Run. Runtime entry or
+an HTTP response alone is not acquisition.
+_Avoid_: container start, invocation acceptance, queue acknowledgement
+
+**Dispatch disposition**:
+The typed result of evaluating an AgentCore dispatch against durable Run and
+Ownership state, determining whether delivery is acknowledged or retried.
+_Avoid_: duplicate-or-missing, HTTP status, Run Outcome
+
+**Acquisition receipt**:
+The versioned, machine-readable proof that an AgentCore dispatch reached one
+specific Dispatch disposition. It is emitted only after the disposition's
+durable facts commit and contains no user or secret content.
+_Avoid_: AG-UI event, HTTP success, log line
+
+**Runtime session**:
+The AgentCore compute-lifecycle identity used to reconnect or stop the compute
+serving a synthetic Conversation. It is not the Claude Agent session and does
+not own Run ordering or continuity.
+_Avoid_: Agent session, Conversation, worker id
+
+**Campaign record**:
+The durable control record for one Canary campaign, including its identity,
+version, synthetic Conversation, lifecycle status, Canary verdict, and evidence
+location.
+_Avoid_: Step Functions execution, workflow run, Run
+
+**Canary report**:
+The signed, bounded evidence artifact derived from a Canary campaign, recording
+every gate, observation, cleanup result, cost estimate, and Canary verdict
+without user content or secret values.
+_Avoid_: log bundle, rollout approval, Conversation history
+
 **Run**:
 One backend execution attempt serving a user message. A Conversation's Runs are
 executed one at a time in submission order, and a Run executes at most once —
