@@ -118,8 +118,8 @@ const runLoop = new RunLoop({
 // Worker-embedded external-resource cleanup (Task 8.1, ADR-0007/ADR-0011).
 // Single-flighted across replicas by a Postgres advisory lock taken on a
 // dedicated connection from Drizzle's underlying pg pool (`db.$client`). The
-// The pass reconciles E2B sandboxes and S3 artifact objects from Postgres
-// ledgers; it never lists either provider.
+// The pass expires bounded Canary audit and reconciles E2B sandboxes and S3
+// artifact objects from Postgres ledgers; it never lists either provider.
 const cleanupLoop = new CleanupLoop({
 	db,
 	pool: db.$client as unknown as AdvisoryLockPool,

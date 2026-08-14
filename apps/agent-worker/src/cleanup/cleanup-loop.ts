@@ -25,7 +25,8 @@ export interface CleanupLoopOptions {
 }
 
 /**
- * The worker-embedded cleanup loop (Task 8.1, extended by ADR-0011). On a timer it attempts one
+ * The worker-embedded cleanup loop (Task 8.1, extended by ADR-0011 and
+ * ADR-0024). On a timer it attempts one
  * {@link runCleanupPass} under the Postgres advisory lock, so across replicas at
  * most one pass runs at a time. It is intentionally independent of the run loop
  * — its own timer, its own error isolation — so a cleanup failure can never

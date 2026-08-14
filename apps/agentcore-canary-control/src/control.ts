@@ -141,6 +141,9 @@ export function createCanaryControl(options: {
 				db,
 				request.idempotencyKey,
 			);
+			// This read-only fast path avoids re-verifying the KB fixture for an exact
+			// retry. startCanaryCampaignTx repeats the checks under its transaction;
+			// only that path is authoritative when concurrent starts race.
 			if (existing) {
 				requireCanaryCampaignMatchesInput(existing, campaignInput);
 				return { outcome: "existing" as const, campaign: existing, identities };

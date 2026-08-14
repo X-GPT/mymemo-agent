@@ -1,4 +1,5 @@
 import { createDatabase } from "@mymemo/agent-db/client";
+import { z } from "zod";
 import {
 	type CanaryControlConfig,
 	createCanaryControl,
@@ -21,6 +22,40 @@ function requireEnv(env: Env, name: string): string {
 	return value;
 }
 
+const nonEmptyString = z.string().trim().min(1);
+const controlConfigSchema = z.strictObject({
+	campaignVersion: nonEmptyString,
+	fixture: z.strictObject({
+		version: nonEmptyString,
+		checksum: nonEmptyString,
+		identity: z.strictObject({
+			kind: z.literal("non_human"),
+			userId: nonEmptyString,
+		}),
+		collectionId: nonEmptyString,
+		documents: z.array(
+			z.strictObject({
+				documentId: nonEmptyString,
+				version: z.number().int().positive(),
+				contentSha256: nonEmptyString,
+			}),
+		),
+	}),
+	scenario: z.strictObject({
+		id: nonEmptyString,
+		prompt: nonEmptyString,
+		model: nonEmptyString,
+	}),
+}) satisfies z.ZodType<CanaryControlConfig>;
+
+function parseControlConfig(value: unknown): CanaryControlConfig {
+	const parsed = controlConfigSchema.safeParse(value);
+	if (!parsed.success) {
+		throw new Error("CANARY_CONTROL_CONFIG_JSON is invalid");
+	}
+	return parsed.data;
+}
+
 /** Deployment-only configuration. The operator invocation supplies none of it. */
 export function loadCanaryControlHandlerConfigFromEnv(
 	env: Env,
@@ -32,13 +67,6 @@ export function loadCanaryControlHandlerConfigFromEnv(
 	} catch {
 		throw new Error("CANARY_CONTROL_CONFIG_JSON must be valid JSON");
 	}
-	if (
-		typeof control !== "object" ||
-		control === null ||
-		Array.isArray(control)
-	) {
-		throw new Error("CANARY_CONTROL_CONFIG_JSON must be an object");
-	}
 
 	return {
 		agentDatabaseUrl: requireEnv(env, "AGENT_DATABASE_URL"),
@@ -47,7 +75,7 @@ export function loadCanaryControlHandlerConfigFromEnv(
 			env,
 			"CANARY_APPROVED_SYNTHETIC_USER_ID",
 		),
-		control: control as CanaryControlConfig,
+		control: parseControlConfig(control),
 	};
 }
 

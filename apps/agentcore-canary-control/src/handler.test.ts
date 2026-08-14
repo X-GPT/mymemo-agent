@@ -63,4 +63,35 @@ describe("the operator-only Canary Lambda entrypoint", () => {
 			}),
 		).toThrow("CANARY_APPROVED_SYNTHETIC_USER_ID is required");
 	});
+
+	it("rejects malformed deployment configuration with a named config error", () => {
+		const baseEnv = {
+			AGENT_DATABASE_URL: "postgres://agent",
+			KB_DATABASE_URL: "postgres://kb",
+			CANARY_APPROVED_SYNTHETIC_USER_ID: "canary-service",
+		};
+
+		for (const malformed of [
+			{},
+			{ campaignVersion: "v1", fixture: {}, scenario: {} },
+			{
+				campaignVersion: "v1",
+				fixture: {
+					version: "fixture-v1",
+					checksum: "0".repeat(64),
+					identity: { kind: "human", userId: "real-user" },
+					collectionId: "collection",
+					documents: [],
+				},
+				scenario: { id: "scenario", prompt: "prompt", model: "model" },
+			},
+		]) {
+			expect(() =>
+				loadCanaryControlHandlerConfigFromEnv({
+					...baseEnv,
+					CANARY_CONTROL_CONFIG_JSON: JSON.stringify(malformed),
+				}),
+			).toThrow("CANARY_CONTROL_CONFIG_JSON is invalid");
+		}
+	});
 });

@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { Pool } from "pg";
+
 export interface CanaryFixtureDocument {
 	documentId: string;
 	version: number;
@@ -101,8 +104,10 @@ interface FixtureDocumentRow {
 
 /**
  * Verify the pre-provisioned synthetic collection against the current indexed
- * document versions. Both collection ownership and document workspace are
- * pinned to the configured non-human identity, so a real user's collection or
+ * document versions. The KB contract maps `workspace_id` to the member code
+ * stored as the Conversation's `userId`; collection membership is therefore
+ * pinned through passage workspace, not `content_collection.member_code`
+ * (which uses a different representation). A real user's collection or
  * document cannot satisfy the fixture check.
  */
 export function createCanaryFixtureVerifier(
@@ -182,6 +187,3 @@ export function createCanaryFixtureDb(kbDatabaseUrl: string): CanaryFixtureDb {
 			(await pool.query(text, params)).rows as T[],
 	};
 }
-
-import { createHash } from "node:crypto";
-import { Pool } from "pg";
