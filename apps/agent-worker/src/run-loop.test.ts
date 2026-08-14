@@ -1406,6 +1406,49 @@ describe("RunLoop — agent session pointer", () => {
 });
 
 describe("RunLoop — shutdown", () => {
+	it("signals shutdown after a terminal status rejects an in-flight append", async () => {
+		const worker = buildWorker(1);
+		const processorStarted = deferred();
+		const attemptAppend = deferred();
+		const appendRejected = deferred();
+		const shutdownObserved = deferred();
+		let owner: Parameters<RunProcessor>[0]["owner"] | undefined;
+		const loop = buildLoop(worker, async (ctx) => {
+			owner = ctx.owner;
+			processorStarted.resolve();
+			await attemptAppend.promise;
+			try {
+				await ctx.appendModelContent({
+					kind: "assistant_message",
+					payload: { messageId: "message-late", text: "too late" },
+				});
+			} catch {
+				appendRejected.resolve();
+				await new Promise<void>((resolve) => {
+					if (ctx.shutdownSignal.aborted) return resolve();
+					ctx.shutdownSignal.addEventListener("abort", () => resolve(), {
+						once: true,
+					});
+				});
+				shutdownObserved.resolve();
+			}
+		});
+		await queueRun("run-1", "conv-1");
+		await startDrain(loop);
+		await processorStarted.promise;
+		if (!owner) throw new Error("processor did not expose its Run owner");
+		expect(
+			await transitionRunTerminalTx(tdb.db, { owner, status: "done" }),
+		).toMatchObject({ outcome: "committed" });
+
+		attemptAppend.resolve();
+		await appendRejected.promise;
+		await loop.stop();
+
+		await shutdownObserved.promise;
+		expect((await readRun("run-1"))?.status).toBe("done");
+	});
+
 	it("interrupts in-flight runs on stop and terminalizes them as error", async () => {
 		const worker = buildWorker(1);
 		let sawAbort = false;

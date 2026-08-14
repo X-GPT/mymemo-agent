@@ -191,13 +191,13 @@ describe("serveStartedRun", () => {
 		expect(await resultPromise).toEqual({ type: "terminal", status: null });
 	});
 
-	it("detaches when a model append discovers a terminal Run status", async () => {
+	it("keeps a status-rejected Run attached until the next heartbeat", async () => {
 		const { claim, run } = await startRun();
 		const processorStarted = deferred();
 		const attemptAppend = deferred();
 		const appendRejected = deferred();
 		const releaseProcessor = deferred();
-		const detached = deferred();
+		let detachments = 0;
 		const serving = createRunServing({
 			db: tdb.db,
 			processor: async (ctx) => {
@@ -222,7 +222,7 @@ describe("serveStartedRun", () => {
 			owner,
 			shutdownSignal: new AbortController().signal,
 			onDetached: (event) => {
-				if (event.type === "run_detached") detached.resolve();
+				if (event.type === "run_detached") detachments++;
 			},
 		});
 		await processorStarted.promise;
@@ -232,17 +232,20 @@ describe("serveStartedRun", () => {
 
 		attemptAppend.resolve();
 		await appendRejected.promise;
-		await detached.promise;
+		expect(detachments).toBe(0);
 		await tdb.db
 			.update(conversations)
 			.set({ ownerUntil: sql`now() + interval '1 second'` })
 			.where(eq(conversations.conversationId, run.conversationId));
 		await serving.heartbeat();
+		expect(detachments).toBe(1);
 		const [ownership] = await tdb.db
 			.select({ ownerUntil: conversations.ownerUntil })
 			.from(conversations)
 			.where(eq(conversations.conversationId, run.conversationId));
-		expect(ownership?.ownerUntil?.getTime()).toBeLessThan(Date.now() + 30_000);
+		expect(ownership?.ownerUntil?.getTime()).toBeGreaterThan(
+			Date.now() + 30_000,
+		);
 
 		releaseProcessor.resolve();
 		expect(await resultPromise).toEqual({ type: "terminal", status: null });
@@ -313,7 +316,9 @@ describe("serveStartedRun", () => {
 			.select({ ownerUntil: conversations.ownerUntil })
 			.from(conversations)
 			.where(eq(conversations.conversationId, run.conversationId));
-		expect(ownership?.ownerUntil?.getTime()).toBeLessThan(Date.now() + 30_000);
+		expect(ownership?.ownerUntil?.getTime()).toBeGreaterThan(
+			Date.now() + 30_000,
+		);
 		processorGate.resolve();
 
 		expect(await resultPromise).toEqual({

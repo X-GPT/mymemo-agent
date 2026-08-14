@@ -139,7 +139,9 @@ export interface ServeStartedRunInput {
 	shutdownSignal: AbortSignal;
 	/** Lets the runtime resume drain-level renewal before terminalization or while
 	 * an abandoned processor unwinds, and halt immediately on Ownership loss. A
-	 * later terminal-fence rejection can report Ownership loss after detachment. */
+	 * later terminal-fence rejection can report Ownership loss after detachment.
+	 * This early liveness notification complements, rather than replaces, the
+	 * final platform-neutral result returned by `serveStartedRun`. */
 	onDetached?: (detachment: RunServingDetachment) => void;
 }
 
@@ -222,9 +224,7 @@ class OwnedRunServing implements RunServing {
 	}
 
 	async heartbeat(): Promise<void> {
-		await Promise.all(
-			[...this.active].map((entry) => this.heartbeatEntry(entry)),
-		);
+		for (const entry of [...this.active]) await this.heartbeatEntry(entry);
 	}
 
 	private createEntry(input: ServeStartedRunInput): ActiveServing {
@@ -271,12 +271,7 @@ class OwnedRunServing implements RunServing {
 	}
 
 	private heartbeatEntry(entry: ActiveServing): Promise<void> {
-		if (
-			!this.active.has(entry) ||
-			entry.state.ownershipLoss ||
-			entry.state.skipTerminalizationReason ||
-			entry.input.shutdownSignal.aborted
-		) {
+		if (!this.active.has(entry) || entry.state.ownershipLoss) {
 			return Promise.resolve();
 		}
 		return this.performHeartbeat(entry);
@@ -318,8 +313,7 @@ class OwnedRunServing implements RunServing {
 			// stayed live. Stop the private SDK immediately and detach only this Run;
 			// the caller may continue draining the Conversation snapshot.
 			entry.state.skipTerminalizationReason = "already_terminal";
-			entry.controller.abort();
-			entry.ownershipLostController.abort();
+			this.abortForOwnershipLoss(entry);
 			this.options.logger.warn({
 				message: "abandoning a run this worker no longer owns",
 				workerId: owner.workerId,
@@ -330,17 +324,25 @@ class OwnedRunServing implements RunServing {
 			return;
 		}
 		if (observed.status === "interrupt_requested") {
-			entry.state.interrupted = true;
-			entry.controller.abort();
-			entry.interruptionController.abort();
+			this.noteInterrupted(entry);
 		}
+	}
+
+	private noteInterrupted(entry: ActiveServing): void {
+		entry.state.interrupted = true;
+		entry.controller.abort();
+		entry.interruptionController.abort();
+	}
+
+	private abortForOwnershipLoss(entry: ActiveServing): void {
+		entry.controller.abort();
+		entry.ownershipLostController.abort();
 	}
 
 	private noteOwnershipLost(entry: ActiveServing, loss: OwnershipLoss): void {
 		if (entry.state.ownershipLoss) return;
 		entry.state.ownershipLoss = loss.reason;
-		entry.controller.abort();
-		entry.ownershipLostController.abort();
+		this.abortForOwnershipLoss(entry);
 		this.options.logger.warn({
 			message: "abandoning run after ownership loss",
 			workerId: entry.input.owner.workerId,
@@ -358,13 +360,10 @@ class OwnedRunServing implements RunServing {
 		const classified = classifyRunWriteRejection(rejection);
 		if (classified.type === "status") {
 			if (classified.current === "interrupt_requested") {
-				entry.state.interrupted = true;
-				entry.controller.abort();
-				entry.interruptionController.abort();
+				this.noteInterrupted(entry);
 			} else {
 				entry.state.skipTerminalizationReason = "status";
 				entry.controller.abort();
-				this.detachRun(entry);
 			}
 			this.options.logger.info({
 				message: "skipping a Run write refused by its current status",
