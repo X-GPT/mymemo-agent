@@ -4,15 +4,10 @@ import {
 	renewConversationLeaseTx,
 } from "@mymemo/agent-db/conversation-ownership";
 import { loadExecutingRunTx } from "@mymemo/agent-db/run-store";
+import { toMessage, type WorkerLogger } from "agent-worker/logger";
 import type { RunServing } from "agent-worker/run-serving";
 import type { CommittedCanaryAcquisition } from "agentcore-canary-dispatch/acquisition-boundary";
 import type { CanaryRuntimeDependencies } from "./runtime";
-
-interface RuntimeLogger {
-	info(record: Record<string, unknown>): void;
-	warn(record: Record<string, unknown>): void;
-	error(record: Record<string, unknown>): void;
-}
 
 /** Bind exact AgentCore acquisition to the same already-running Run-serving
  * seam Fargate uses, without importing its Claim, drain, expiration, or
@@ -21,7 +16,7 @@ export function createCanaryExecutionServices(options: {
 	db: Database;
 	acquire(rawEnvelope: string): Promise<CommittedCanaryAcquisition>;
 	runServing: RunServing;
-	logger: RuntimeLogger;
+	logger: WorkerLogger;
 }): Pick<
 	CanaryRuntimeDependencies,
 	"acquire" | "serve" | "heartbeat" | "release"
@@ -63,7 +58,7 @@ export function createCanaryExecutionServices(options: {
 					message: "AgentCore Ownership lease renewal failed",
 					workerId: input.workerId,
 					conversationId: input.owner.conversationId,
-					error: error instanceof Error ? error.message : String(error),
+					error: toMessage(error),
 				});
 				return "alive";
 			}
@@ -85,7 +80,7 @@ export function createCanaryExecutionServices(options: {
 					workerId: input.workerId,
 					conversationId: input.owner.conversationId,
 					runId: input.runId,
-					error: error instanceof Error ? error.message : String(error),
+					error: toMessage(error),
 				});
 			}
 		},

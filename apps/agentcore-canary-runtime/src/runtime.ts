@@ -3,29 +3,27 @@ import type {
 	CanaryDispatchIdentity,
 } from "@mymemo/agent-db/canary-dispatch";
 import type { ConversationOwner } from "@mymemo/agent-db/conversation-ownership";
+import type { ServeStartedRunResult } from "agent-worker/run-serving";
+import type { CommittedCanaryAcquisition } from "agentcore-canary-dispatch/acquisition-boundary";
 import {
 	parseCanaryDispatchEnvelope,
 	sameCanaryDispatch,
 } from "agentcore-canary-dispatch/contract";
 
-export interface CanaryRuntimeAcquisition {
-	dispatch: CanaryDispatchIdentity;
-	result: AcquireCanaryDispatchResult;
-	receiptLine: string;
-}
+export type CanaryRuntimeAcquisition = CommittedCanaryAcquisition;
 
 type AcquiredDispatch = Extract<
 	AcquireCanaryDispatchResult,
 	{ disposition: "acquired" }
 >;
 
-export type RuntimeServingResult =
-	| { type: "terminal"; status: "done" | "error" | "interrupted" | null }
-	| { type: "ownership_lost"; reason: "lease" | "gone" }
-	| {
-			type: "shutdown";
-			status: "done" | "error" | "interrupted" | null;
-	  };
+export type RuntimeServingResult = ServeStartedRunResult;
+
+export interface AcquiredExecutionIdentity {
+	owner: ConversationOwner;
+	workerId: string;
+	runId: string;
+}
 
 export interface CanaryRuntimeDependencies {
 	acquire(rawEnvelope: string): Promise<CanaryRuntimeAcquisition>;
@@ -38,17 +36,10 @@ export interface CanaryRuntimeDependencies {
 			reason?: "lease" | "gone";
 		}): void;
 	}): Promise<RuntimeServingResult>;
-	heartbeat(input: {
-		owner: ConversationOwner;
-		workerId: string;
-		runId: string;
-		detached: boolean;
-	}): Promise<"alive" | "lost">;
-	release(input: {
-		owner: ConversationOwner;
-		workerId: string;
-		runId: string;
-	}): Promise<void>;
+	heartbeat(
+		input: AcquiredExecutionIdentity & { detached: boolean },
+	): Promise<"alive" | "lost">;
+	release(input: AcquiredExecutionIdentity): Promise<void>;
 	onExecutionError?(error: unknown, dispatch: CanaryDispatchIdentity): void;
 	heartbeatIntervalMs: number;
 }
@@ -68,6 +59,10 @@ export class RuntimeBusyError extends Error {
 
 export class RuntimeShuttingDownError extends Error {
 	override readonly name = "RuntimeShuttingDownError";
+}
+
+export class RuntimeSessionMismatchError extends Error {
+	override readonly name = "RuntimeSessionMismatchError";
 }
 
 export interface RuntimeInvocation {
@@ -144,7 +139,7 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 			}
 			const dispatch = parseCanaryDispatchEnvelope(input.rawEnvelope);
 			if (dispatch.runtimeSessionId !== input.runtimeSessionId) {
-				throw new Error("Runtime session mismatch");
+				throw new RuntimeSessionMismatchError("Runtime session mismatch");
 			}
 			const occupied = active?.dispatch ?? pendingDispatch;
 			if (occupied && !sameCanaryDispatch(occupied, dispatch)) {
@@ -178,7 +173,23 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 				done: Promise.resolve(),
 			};
 			if (active) {
-				throw new Error("duplicate dispatch unexpectedly acquired Ownership");
+				if (pendingAcquisitions.size === 0) pendingDispatch = undefined;
+				if (
+					active.acquisition.owner.epoch === acquired.result.owner.epoch &&
+					active.acquisition.workerId === acquired.result.workerId
+				) {
+					return {
+						body: new Blob([acquired.receiptLine]).stream(),
+					};
+				}
+				await dependencies.release({
+					owner: acquired.result.owner,
+					workerId: acquired.result.workerId,
+					runId: acquired.dispatch.runId,
+				});
+				throw new RuntimeBusyError(
+					"AgentCore Runtime acquired duplicate work while busy",
+				);
 			}
 			active = entry;
 			pendingDispatch = undefined;
@@ -200,13 +211,6 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 				},
 			});
 			return { body };
-		},
-
-		async waitForIdle(): Promise<void> {
-			while (pendingAcquisitions.size > 0 || active) {
-				await Promise.allSettled([...pendingAcquisitions]);
-				await active?.done;
-			}
 		},
 
 		async shutdown(timeoutMs = 30_000): Promise<void> {

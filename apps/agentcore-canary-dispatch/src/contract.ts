@@ -56,6 +56,10 @@ const acquisitionReceiptSchema = dispatchIdentitySchema
 
 export type AcquisitionReceipt = z.infer<typeof acquisitionReceiptSchema>;
 
+export class InvalidCanaryDispatchEnvelopeError extends Error {
+	override readonly name = "InvalidCanaryDispatchEnvelopeError";
+}
+
 function isOwnershipDisposition(
 	disposition: AcquireCanaryDispatchResult["disposition"],
 ): disposition is "acquired" | "already_acquired" {
@@ -91,11 +95,19 @@ export function serializeCanaryDispatchEnvelope(
 export function parseCanaryDispatchEnvelope(
 	value: string,
 ): CanaryDispatchIdentity {
-	const parsed = dispatchEnvelopeSchema.safeParse(
-		parseJson(value, "AgentCore dispatch envelope"),
-	);
+	let decoded: unknown;
+	try {
+		decoded = JSON.parse(value);
+	} catch {
+		throw new InvalidCanaryDispatchEnvelopeError(
+			"invalid AgentCore dispatch envelope",
+		);
+	}
+	const parsed = dispatchEnvelopeSchema.safeParse(decoded);
 	if (!parsed.success) {
-		throw new Error("invalid AgentCore dispatch envelope");
+		throw new InvalidCanaryDispatchEnvelopeError(
+			"invalid AgentCore dispatch envelope",
+		);
 	}
 	return { ...parsed.data, admittedAt: new Date(parsed.data.admittedAt) };
 }

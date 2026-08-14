@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { claimConversationTx } from "@mymemo/agent-db/conversation-ownership";
-import { startClaimedRunTx } from "@mymemo/agent-db/run-store";
+import {
+	requestRunInterruptionTx,
+	startClaimedRunTx,
+} from "@mymemo/agent-db/run-store";
 import { conversations, runs } from "@mymemo/agent-db/schema";
 import {
 	createTestDatabase,
@@ -13,8 +16,13 @@ import {
 } from "@mymemo/live-text";
 import { startRedisTestServer } from "@mymemo/test-support/redis-test-server";
 import { createRunServing, type RunServing } from "agent-worker/run-serving";
+import {
+	createAcquisitionReceipt,
+	serializeCanaryDispatchEnvelope,
+} from "agentcore-canary-dispatch/contract";
 import { eq, sql } from "drizzle-orm";
 import { createCanaryExecutionServices } from "./execution-services";
+import { createCanaryRuntime } from "./runtime";
 
 let tdb: TestDb;
 
@@ -27,6 +35,14 @@ afterAll(async () => {
 });
 
 const silentLogger = { info() {}, warn() {}, error() {} };
+
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
 
 async function startOwnedRun(input: {
 	conversationId: string;
@@ -79,27 +95,11 @@ function dispatchFor(input: {
 
 describe("AgentCore one-shot execution services", () => {
 	it("serves the exact acquired Run once and releases its live Ownership", async () => {
-		await tdb.db.insert(conversations).values({
-			userId: "canary-service-user",
+		const owner = await startOwnedRun({
 			conversationId: "conv-runtime-451",
-			scope: "general",
-		});
-		await seedQueuedRun(tdb.db, {
-			runId: "run-runtime-451",
-			userId: "canary-service-user",
-			conversationId: "conv-runtime-451",
-		});
-		const owner = await claimConversationTx(tdb.db, {
-			workerId: "boot-451/invocation-1",
-		});
-		if (!owner) throw new Error("test did not Claim the Conversation");
-		const started = await startClaimedRunTx(tdb.db, {
-			owner,
 			runId: "run-runtime-451",
 			workerId: "boot-451/invocation-1",
 		});
-		if (started.outcome !== "started")
-			throw new Error("test Run did not start");
 
 		let serveCount = 0;
 		const runServing: RunServing = {
@@ -166,6 +166,72 @@ describe("AgentCore one-shot execution services", () => {
 			.from(conversations)
 			.where(eq(conversations.conversationId, owner.conversationId));
 		expect(stored?.ownerWorkerId).toBeNull();
+	});
+
+	it("observes durable interruption through the complete one-shot Runtime", async () => {
+		const conversationId = "conv-runtime-interruption-451";
+		const runId = "run-runtime-interruption-451";
+		const workerId = "boot-451/invocation-interruption";
+		const owner = await startOwnedRun({ conversationId, runId, workerId });
+		const dispatch = dispatchFor({
+			conversationId,
+			runId,
+			dispatchId: "dispatch-runtime-interruption-451",
+		});
+		const result = { disposition: "acquired", owner, workerId } as const;
+		const receiptLine = `${JSON.stringify(
+			createAcquisitionReceipt(dispatch, result),
+		)}\n`;
+		const processorStarted = deferred();
+		const relay = createInMemoryLiveStreamRelay();
+		const runServing = createRunServing({
+			db: tdb.db,
+			processor: async (context) => {
+				processorStarted.resolve();
+				await new Promise<void>((resolve) => {
+					if (context.signal.aborted) resolve();
+					else {
+						context.signal.addEventListener("abort", () => resolve(), {
+							once: true,
+						});
+					}
+				});
+				throw new Error("processor stopped after interruption");
+			},
+			liveStreamRelay: relay,
+			logger: silentLogger,
+		});
+		const services = createCanaryExecutionServices({
+			db: tdb.db,
+			acquire: async () => ({ dispatch, result, receiptLine }),
+			runServing,
+			logger: silentLogger,
+		});
+		const runtime = createCanaryRuntime({
+			...services,
+			heartbeatIntervalMs: 60_000,
+		});
+
+		const invocation = await runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(dispatch),
+			runtimeSessionId: conversationId,
+		});
+		await processorStarted.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			userId: dispatch.userId,
+			conversationId,
+			runId,
+		});
+		await runServing.heartbeat();
+
+		expect(await new Response(invocation.body).text()).toBe(receiptLine);
+		const [stored] = await tdb.db
+			.select({ status: runs.status })
+			.from(runs)
+			.where(eq(runs.runId, runId));
+		expect(stored?.status).toBe("interrupted");
+		expect(runtime.health()).toEqual({ status: "Healthy" });
+		await relay.close();
 	});
 
 	it("runs a clientless Redis Live Stream through the one-shot serving seam", async () => {

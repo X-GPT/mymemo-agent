@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import {
 	createAcquisitionReceipt,
+	InvalidCanaryDispatchEnvelopeError,
 	parseAcquisitionReceipt,
 	parseCanaryDispatchEnvelope,
 	sameCanaryDispatch,
@@ -59,6 +60,9 @@ describe("Canary dispatch envelope", () => {
 				}),
 			),
 		).toThrow("invalid AgentCore dispatch envelope");
+		expect(() => parseCanaryDispatchEnvelope("not-json")).toThrow(
+			InvalidCanaryDispatchEnvelopeError,
+		);
 		expect(() =>
 			parseCanaryDispatchEnvelope(
 				JSON.stringify({

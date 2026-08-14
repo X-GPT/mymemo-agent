@@ -1,7 +1,7 @@
 import { createProductionCanaryRuntimeFromEnv } from "./production";
 import { startRuntimeServer } from "./server";
 
-const production = createProductionCanaryRuntimeFromEnv(Bun.env);
+const production = await createProductionCanaryRuntimeFromEnv(Bun.env);
 const server = startRuntimeServer(
 	production.runtime,
 	production.bootstrap.port,

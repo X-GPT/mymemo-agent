@@ -1,8 +1,17 @@
-import { RuntimeBusyError, RuntimeShuttingDownError } from "./runtime";
+import { InvalidCanaryDispatchEnvelopeError } from "agentcore-canary-dispatch/contract";
+import {
+	RuntimeBusyError,
+	RuntimeSessionMismatchError,
+	RuntimeShuttingDownError,
+} from "./runtime";
 
 export const AGENTCORE_RUNTIME_SESSION_HEADER =
 	"x-amzn-bedrock-agentcore-runtime-session-id";
 const MAX_INVOCATION_BYTES = 64 * 1024;
+
+class RuntimeInvocationBodyTooLargeError extends Error {
+	override readonly name = "RuntimeInvocationBodyTooLargeError";
+}
 
 interface RuntimeRequestBoundary {
 	health(): { status: "Healthy" | "HealthyBusy" };
@@ -15,7 +24,9 @@ interface RuntimeRequestBoundary {
 async function readBoundedBody(request: Request): Promise<string> {
 	const declared = request.headers.get("content-length");
 	if (declared && Number(declared) > MAX_INVOCATION_BYTES) {
-		throw new Error("AgentCore invocation body is too large");
+		throw new RuntimeInvocationBodyTooLargeError(
+			"AgentCore invocation body is too large",
+		);
 	}
 	if (!request.body) return "";
 
@@ -29,7 +40,9 @@ async function readBoundedBody(request: Request): Promise<string> {
 			if (part.done) break;
 			bytes += part.value.byteLength;
 			if (bytes > MAX_INVOCATION_BYTES) {
-				throw new Error("AgentCore invocation body is too large");
+				throw new RuntimeInvocationBodyTooLargeError(
+					"AgentCore invocation body is too large",
+				);
 			}
 			body += decoder.decode(part.value, { stream: true });
 		}
@@ -46,10 +59,9 @@ function jsonError(message: string, status: number): Response {
 
 function isInvalidRequest(error: unknown): boolean {
 	return (
-		error instanceof Error &&
-		(error.message === "Runtime session mismatch" ||
-			error.message === "invalid AgentCore dispatch envelope" ||
-			error.message === "AgentCore invocation body is too large")
+		error instanceof RuntimeSessionMismatchError ||
+		error instanceof InvalidCanaryDispatchEnvelopeError ||
+		error instanceof RuntimeInvocationBodyTooLargeError
 	);
 }
 

@@ -70,7 +70,7 @@ describe("AgentCore canary Runtime", () => {
 			workerId: "boot-1/invocation-1",
 		});
 		let serveCount = 0;
-		let released = false;
+		const released = deferred<void>();
 		let executionSignal: AbortSignal | undefined;
 		const runtime = createCanaryRuntime({
 			acquire: async () => acquired,
@@ -81,7 +81,7 @@ describe("AgentCore canary Runtime", () => {
 			},
 			heartbeat: async () => "alive",
 			release: async () => {
-				released = true;
+				released.resolve();
 			},
 			heartbeatIntervalMs: 10,
 		});
@@ -99,12 +99,11 @@ describe("AgentCore canary Runtime", () => {
 		expect(runtime.health()).toEqual({ status: "HealthyBusy" });
 		expect(serveCount).toBe(1);
 		expect(executionSignal?.aborted).toBe(false);
-		expect(released).toBe(false);
 
 		served.resolve({ type: "terminal", status: "done" });
-		await runtime.waitForIdle();
+		await released.promise;
+		await Bun.sleep(0);
 
-		expect(released).toBe(true);
 		expect(runtime.health()).toEqual({ status: "Healthy" });
 	});
 
@@ -156,7 +155,7 @@ describe("AgentCore canary Runtime", () => {
 			heartbeatIntervalMs: 10,
 		});
 
-		await runtime.invoke({
+		const original = await runtime.invoke({
 			rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
 			runtimeSessionId: activeDispatch.runtimeSessionId,
 		});
@@ -177,7 +176,53 @@ describe("AgentCore canary Runtime", () => {
 		expect(serveCount).toBe(1);
 
 		serving.resolve({ type: "terminal", status: "done" });
-		await runtime.waitForIdle();
+		await new Response(original.body).text();
+	});
+
+	it("releases an unexpected second acquisition without wedging capacity", async () => {
+		const dispatched = dispatch("run-double-acquired");
+		const serving = deferred<{
+			type: "terminal";
+			status: "done";
+		}>();
+		let acquisitionCount = 0;
+		const releasedEpochs: number[] = [];
+		const runtime = createCanaryRuntime({
+			acquire: async () => {
+				acquisitionCount++;
+				return acquisition(dispatched, {
+					disposition: "acquired",
+					owner: {
+						userId: dispatched.userId,
+						conversationId: dispatched.conversationId,
+						epoch: acquisitionCount,
+					},
+					workerId: `boot-1/invocation-${acquisitionCount}`,
+				});
+			},
+			serve: async () => await serving.promise,
+			heartbeat: async () => "alive",
+			release: async ({ owner }) => {
+				releasedEpochs.push(owner.epoch);
+			},
+			heartbeatIntervalMs: 10,
+		});
+
+		const original = await runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
+			runtimeSessionId: dispatched.runtimeSessionId,
+		});
+		await expect(
+			runtime.invoke({
+				rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
+				runtimeSessionId: dispatched.runtimeSessionId,
+			}),
+		).rejects.toBeInstanceOf(RuntimeBusyError);
+		expect(releasedEpochs).toEqual([2]);
+
+		serving.resolve({ type: "terminal", status: "done" });
+		await new Response(original.body).text();
+		expect(runtime.health()).toEqual({ status: "Healthy" });
 	});
 
 	it("keeps capacity reserved when a duplicate attempt fails during the original acquisition", async () => {
@@ -230,8 +275,8 @@ describe("AgentCore canary Runtime", () => {
 				workerId: "boot-1/invocation-acquiring",
 			}),
 		);
-		await original;
-		await runtime.waitForIdle();
+		const invocation = await original;
+		await new Response(invocation.body).text();
 	});
 
 	it("stays busy after Run detachment and does not release after renewal loses Ownership", async () => {
@@ -268,7 +313,7 @@ describe("AgentCore canary Runtime", () => {
 			heartbeatIntervalMs: 1,
 		});
 
-		await runtime.invoke({
+		const invocation = await runtime.invoke({
 			rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
 			runtimeSessionId: dispatched.runtimeSessionId,
 		});
@@ -276,7 +321,7 @@ describe("AgentCore canary Runtime", () => {
 		expect(runtime.health()).toEqual({ status: "HealthyBusy" });
 
 		finishServing.resolve({ type: "terminal", status: null });
-		await runtime.waitForIdle();
+		await new Response(invocation.body).text();
 		expect(releaseCount).toBe(0);
 		expect(runtime.health()).toEqual({ status: "Healthy" });
 	});

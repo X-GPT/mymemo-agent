@@ -101,4 +101,24 @@ describe("AgentCore Runtime HTTP contract", () => {
 		expect(response.status).toBe(400);
 		expect(fixture.acquisitionCount).toBe(0);
 	});
+
+	it("does not misclassify an internal failure by matching its message", async () => {
+		const response = await createRuntimeRequestHandler({
+			health: () => ({ status: "Healthy" }),
+			invoke: async () => {
+				throw new Error("invalid AgentCore dispatch envelope");
+			},
+		})(
+			new Request("http://runtime/invocations", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					[AGENTCORE_RUNTIME_SESSION_HEADER]: dispatch.runtimeSessionId,
+				},
+				body: serializeCanaryDispatchEnvelope(dispatch),
+			}),
+		);
+
+		expect(response.status).toBe(503);
+	});
 });
