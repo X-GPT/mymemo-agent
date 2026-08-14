@@ -181,14 +181,17 @@ aligned instead of casting around them.
 
 ### agentcore-canary-control / agentcore-canary-dispatch
 
-Required for the dispatch boundary (the control Lambda also uses these for its immediate publish attempt):
+Required:
+
 - `AGENT_DATABASE_URL` — writable `mymemo_agent` DB holding Campaign, outbox, Conversation Ownership, and exact Run state
 - `AWS_REGION` — region for SSM, SQS, and AgentCore clients
 - `CANARY_DISPATCH_QUEUE_URL` — encrypted standard Canary dispatch queue URL
 - `CANARY_ENABLED_PARAMETER_NAME` — SSM parameter whose only enabling value is exactly `enabled`; missing, unreadable, or any other value fails closed
 - `CANARY_AGENT_RUNTIME_ARN` — exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity
 
-The control Lambda additionally requires its existing `KB_DATABASE_URL`, `CANARY_APPROVED_SYNTHETIC_USER_ID`, and `CANARY_CONTROL_CONFIG_JSON` fixture authority.
+Control-only required:
+
+- `KB_DATABASE_URL`, `CANARY_APPROVED_SYNTHETIC_USER_ID`, and `CANARY_CONTROL_CONFIG_JSON` — existing synthetic-fixture authority used by the control Lambda
 
 ### chat-api
 

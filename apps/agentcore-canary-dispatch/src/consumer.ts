@@ -77,7 +77,7 @@ export function createCanaryDispatchConsumer(options: {
 					messageId: record.messageId,
 					dispatchId: dispatch.dispatchId,
 				});
-				return "retry";
+				return "ack";
 			}
 
 			switch (receipt.disposition) {

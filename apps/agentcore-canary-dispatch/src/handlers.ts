@@ -56,17 +56,15 @@ export function createManualReplayHandler(options: {
 	return async (event: unknown, context: LambdaContext) => {
 		const parsed = manualReplaySchema.safeParse(event);
 		if (!parsed.success) throw new Error("invalid manual replay request");
-		const replayed = await options.replay(parsed.data);
-		if (!replayed) throw new Error("Canary dispatch was not found");
+		const eligible = await options.replay(parsed.data);
+		if (!eligible)
+			throw new Error("Canary dispatch is not eligible for replay");
 		const publication = await options.publish(
 			`manual-replay/${requireRequestId(context)}`,
 		);
-		if (
-			!publication.publishedDispatchIds.includes(parsed.data.dispatchId) &&
-			!publication.ambiguousDispatchIds.includes(parsed.data.dispatchId)
-		) {
-			throw new Error("Canary dispatch is not eligible for replay");
-		}
-		return { replayed, publication };
+		const replayed =
+			publication.publishedDispatchIds.includes(parsed.data.dispatchId) ||
+			publication.ambiguousDispatchIds.includes(parsed.data.dispatchId);
+		return { replayed, deferred: !replayed, publication };
 	};
 }

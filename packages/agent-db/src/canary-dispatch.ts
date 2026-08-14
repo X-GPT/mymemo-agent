@@ -175,7 +175,7 @@ export async function confirmCanaryDispatchPublishedTx(
 	return confirmed.length > 0;
 }
 
-/** Audit an operator replay request without changing any dispatch identity. */
+/** Audit an eligible operator replay request without disturbing a live lease. */
 export async function requestCanaryDispatchReplayTx(
 	db: Database,
 	input: { dispatchId: string; requestedBy: string; now?: Date },
@@ -183,15 +183,28 @@ export async function requestCanaryDispatchReplayTx(
 	if (input.requestedBy.trim() === "") {
 		throw new Error("manual replay requires an operator identity");
 	}
+	const now = input.now ?? new Date();
 	const replay = await db
 		.update(canaryDispatchOutbox)
 		.set({
-			replayRequestedAt: input.now ?? new Date(),
+			replayRequestedAt: now,
 			replayRequestedBy: input.requestedBy,
-			publishClaimedBy: null,
-			publishClaimUntil: null,
 		})
-		.where(eq(canaryDispatchOutbox.dispatchId, input.dispatchId))
+		.where(
+			and(
+				eq(canaryDispatchOutbox.dispatchId, input.dispatchId),
+				gt(
+					canaryDispatchOutbox.admittedAt,
+					new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS),
+				),
+				gt(canaryDispatchOutbox.expiresAt, now),
+				sql`exists (
+					select 1 from ${canaryCampaigns} campaign
+					where campaign.campaign_id = ${canaryDispatchOutbox.campaignId}
+					  and campaign.lifecycle in ('preparing', 'provisioning', 'running')
+				)`,
+			),
+		)
 		.returning({ dispatchId: canaryDispatchOutbox.dispatchId });
 	return replay.length > 0;
 }
@@ -313,8 +326,6 @@ export async function acquireCanaryDispatchTx(
 		if (
 			!conversation ||
 			conversation.executionLane !== AGENTCORE_CANARY_EXECUTION_LANE ||
-			input.dispatch.expectedExecutionLane !==
-				AGENTCORE_CANARY_EXECUTION_LANE ||
 			input.dispatch.runtimeSessionId !== input.dispatch.conversationId
 		) {
 			return { disposition: "invalid_dispatch" };

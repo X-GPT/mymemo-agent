@@ -34,16 +34,16 @@ export function createCanaryDispatchPublisher(options: {
 }) {
 	return {
 		async publishPending(): Promise<CanaryPublishResult> {
-			const overdue = await options.store.markOverdue();
 			if (!(await options.control.isEnabled())) {
 				return {
 					status: "disabled",
-					overdueCampaignIds: overdue.campaignIds,
+					overdueCampaignIds: [],
 					publishedDispatchIds: [],
 					ambiguousDispatchIds: [],
 				};
 			}
 
+			const overdue = await options.store.markOverdue();
 			const claimed = await options.store.claim({
 				publisherId: options.publisherId,
 				limit: CANARY_QUEUE_INVARIANTS.publisherBatchSize,

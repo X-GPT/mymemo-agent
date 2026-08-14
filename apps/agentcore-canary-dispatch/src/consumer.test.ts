@@ -275,7 +275,7 @@ describe("Canary SQS consumer", () => {
 		]);
 	});
 
-	it("retries a receipt whose identifiers do not exactly correlate", async () => {
+	it("acknowledges and alarms for a poison receipt whose identifiers do not exactly correlate", async () => {
 		const mismatched = { ...dispatch, runId: "another-run" };
 		const alarms: unknown[] = [];
 		const consumer = createCanaryDispatchConsumer({
@@ -307,9 +307,7 @@ describe("Canary SQS consumer", () => {
 					},
 				],
 			}),
-		).resolves.toEqual({
-			batchItemFailures: [{ itemIdentifier: "mismatch" }],
-		});
+		).resolves.toEqual({ batchItemFailures: [] });
 		expect(alarms).toEqual([
 			{
 				reason: "receipt_mismatch",

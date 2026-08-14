@@ -78,20 +78,42 @@ describe("Canary dispatch Lambda handlers", () => {
 				{ dispatchId: "dispatch-450", requestedBy: "operator@example.com" },
 				{ awsRequestId: "manual-request-1" },
 			),
-		).resolves.toEqual({ replayed: true, publication: enabledPublication });
+		).resolves.toEqual({
+			replayed: true,
+			deferred: false,
+			publication: enabledPublication,
+		});
 		expect(calls).toEqual([
 			"replay:dispatch-450:operator@example.com",
 			"publish:manual-replay/manual-request-1",
 		]);
 	});
 
-	it("does not report replay success when the exact dispatch is no longer publishable", async () => {
+	it("defers an eligible replay while the exact dispatch remains leased", async () => {
 		const handler = createManualReplayHandler({
 			replay: async () => true,
 			publish: async () => ({
 				...enabledPublication,
 				publishedDispatchIds: [],
 			}),
+		});
+
+		await expect(
+			handler(
+				{ dispatchId: "dispatch-450", requestedBy: "operator@example.com" },
+				{ awsRequestId: "manual-request-1" },
+			),
+		).resolves.toEqual({
+			replayed: false,
+			deferred: true,
+			publication: { ...enabledPublication, publishedDispatchIds: [] },
+		});
+	});
+
+	it("rejects a replay request when the exact dispatch is no longer eligible", async () => {
+		const handler = createManualReplayHandler({
+			replay: async () => false,
+			publish: async () => enabledPublication,
 		});
 
 		await expect(

@@ -477,12 +477,56 @@ describe("claimCanaryDispatchesTx", () => {
 		]);
 	});
 
-	it("keeps an audited replay past the pending deadline unpublishable", async () => {
-		await requestCanaryDispatchReplayTx(tdb.db, {
-			dispatchId: campaign.dispatchId,
-			requestedBy: "operator@example.com",
-			now: new Date("2026-08-14T16:06:00.000Z"),
+	it("preserves a live publisher lease when auditing a manual replay", async () => {
+		await claimCanaryDispatchesTx(tdb.db, {
+			publisherId: "publisher-1",
+			now: new Date("2026-08-14T16:01:00.000Z"),
 		});
+
+		await expect(
+			requestCanaryDispatchReplayTx(tdb.db, {
+				dispatchId: campaign.dispatchId,
+				requestedBy: "operator@example.com",
+				now: new Date("2026-08-14T16:02:00.000Z"),
+			}),
+		).resolves.toBe(true);
+		expect(
+			await tdb.db
+				.select({
+					publishClaimedBy: canaryDispatchOutbox.publishClaimedBy,
+					publishClaimUntil: canaryDispatchOutbox.publishClaimUntil,
+					replayRequestedBy: canaryDispatchOutbox.replayRequestedBy,
+				})
+				.from(canaryDispatchOutbox),
+		).toEqual([
+			{
+				publishClaimedBy: "publisher-1",
+				publishClaimUntil: new Date("2026-08-14T16:04:00.000Z"),
+				replayRequestedBy: "operator@example.com",
+			},
+		]);
+		await expect(
+			claimCanaryDispatchesTx(tdb.db, {
+				publisherId: "manual-replay-publisher",
+				now: new Date("2026-08-14T16:02:01.000Z"),
+			}),
+		).resolves.toEqual([]);
+		await expect(
+			claimCanaryDispatchesTx(tdb.db, {
+				publisherId: "manual-replay-publisher",
+				now: new Date("2026-08-14T16:04:00.001Z"),
+			}),
+		).resolves.toEqual([dispatch]);
+	});
+
+	it("rejects a replay past the pending deadline without auditing it", async () => {
+		await expect(
+			requestCanaryDispatchReplayTx(tdb.db, {
+				dispatchId: campaign.dispatchId,
+				requestedBy: "operator@example.com",
+				now: new Date("2026-08-14T16:06:00.000Z"),
+			}),
+		).resolves.toBe(false);
 
 		await expect(
 			claimCanaryDispatchesTx(tdb.db, {
@@ -494,7 +538,7 @@ describe("claimCanaryDispatchesTx", () => {
 			await tdb.db
 				.select({ requestedBy: canaryDispatchOutbox.replayRequestedBy })
 				.from(canaryDispatchOutbox),
-		).toEqual([{ requestedBy: "operator@example.com" }]);
+		).toEqual([{ requestedBy: null }]);
 	});
 
 	it("marks five-minute pending work inconclusive and initiates Campaign cleanup", async () => {

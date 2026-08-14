@@ -53,7 +53,7 @@ describe("Canary dispatch publisher", () => {
 			publishedDispatchIds: [],
 			ambiguousDispatchIds: [],
 		});
-		expect(calls).toEqual(["overdue", "control"]);
+		expect(calls).toEqual(["control"]);
 	});
 
 	it("confirms a successful SQS send only after the leased claim returns", async () => {
