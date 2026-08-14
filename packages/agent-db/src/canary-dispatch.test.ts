@@ -268,6 +268,20 @@ describe("acquireCanaryDispatchTx", () => {
 		).resolves.toEqual({ disposition: "terminal", status: "done" });
 	});
 
+	it("classifies a queued Run from a cleaning Campaign as permanently invalid", async () => {
+		await tdb.db
+			.update(canaryCampaigns)
+			.set({ lifecycle: "cleaning", provisionalVerdict: "inconclusive" })
+			.where(eq(canaryCampaigns.campaignId, campaign.campaignId));
+
+		await expect(
+			acquireCanaryDispatchTx(tdb.db, {
+				dispatch,
+				workerId: "agentcore-boot/late-invocation",
+			}),
+		).resolves.toEqual({ disposition: "invalid_dispatch" });
+	});
+
 	it("classifies identity, session, and lane mismatches as invalid without acquiring", async () => {
 		for (const mismatched of [
 			{ ...dispatch, userId: "another-user" },
@@ -308,6 +322,23 @@ describe("acquireCanaryDispatchTx", () => {
 });
 
 describe("claimCanaryDispatchesTx", () => {
+	it("can restrict a manual publisher claim to one exact dispatch", async () => {
+		await expect(
+			claimCanaryDispatchesTx(tdb.db, {
+				publisherId: "manual-replay-publisher",
+				dispatchId: "another-dispatch",
+				now: new Date("2026-08-14T16:01:00.000Z"),
+			}),
+		).resolves.toEqual([]);
+		await expect(
+			claimCanaryDispatchesTx(tdb.db, {
+				publisherId: "manual-replay-publisher",
+				dispatchId: campaign.dispatchId,
+				now: new Date("2026-08-14T16:01:00.000Z"),
+			}),
+		).resolves.toEqual([dispatch]);
+	});
+
 	it("leases an eligible pending dispatch for three minutes and returns its content-free identity", async () => {
 		const claimed = await claimCanaryDispatchesTx(tdb.db, {
 			publisherId: "publisher-1",
@@ -573,5 +604,26 @@ describe("claimCanaryDispatchesTx", () => {
 				now: new Date("2026-08-14T16:00:01.000Z"),
 			}),
 		).resolves.toEqual([]);
+	});
+
+	it("marks a published but never acquired dispatch overdue", async () => {
+		await tdb.db
+			.update(canaryDispatchOutbox)
+			.set({
+				admittedAt: new Date("2026-08-14T15:54:59.000Z"),
+				publishedAt: new Date("2026-08-14T15:55:00.000Z"),
+			})
+			.where(eq(canaryDispatchOutbox.dispatchId, campaign.dispatchId));
+
+		await expect(
+			markOverdueCanaryDispatchesTx(tdb.db, {
+				now: new Date("2026-08-14T16:00:00.000Z"),
+			}),
+		).resolves.toEqual({ campaignIds: [campaign.campaignId] });
+		expect(
+			await tdb.db
+				.select({ lifecycle: canaryCampaigns.lifecycle })
+				.from(canaryCampaigns),
+		).toEqual([{ lifecycle: "cleaning" }]);
 	});
 });

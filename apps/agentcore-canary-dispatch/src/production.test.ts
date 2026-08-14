@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	createEmbeddedMetricCanaryDispatchAlarm,
 	loadCanaryDispatchConfigFromEnv,
+	loadCanaryDispatchPublisherConfigFromEnv,
 } from "./production";
 
 describe("Canary dispatch production configuration", () => {
@@ -26,6 +27,23 @@ describe("Canary dispatch production configuration", () => {
 		expect(() => loadCanaryDispatchConfigFromEnv({})).toThrow(
 			"AGENT_DATABASE_URL is required",
 		);
+	});
+
+	it("loads the control publisher without requiring consumer-only Runtime authority", () => {
+		expect(
+			loadCanaryDispatchPublisherConfigFromEnv({
+				AGENT_DATABASE_URL: "postgres://agent",
+				AWS_REGION: "us-west-2",
+				CANARY_DISPATCH_QUEUE_URL:
+					"https://sqs.us-west-2.amazonaws.com/123/canary",
+				CANARY_ENABLED_PARAMETER_NAME: "/mymemo/canary/enabled",
+			}),
+		).toEqual({
+			agentDatabaseUrl: "postgres://agent",
+			awsRegion: "us-west-2",
+			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/canary",
+			enabledParameterName: "/mymemo/canary/enabled",
+		});
 	});
 
 	it("emits a bounded CloudWatch embedded metric without dispatch content", async () => {
@@ -55,5 +73,31 @@ describe("Canary dispatch production configuration", () => {
 			},
 		});
 		expect(records[0]).not.toContain("prompt");
+	});
+
+	it("reports disabled retries separately from poison dispatches", async () => {
+		const records: string[] = [];
+		const alarm = createEmbeddedMetricCanaryDispatchAlarm((record) => {
+			records.push(record);
+		});
+
+		await alarm.raise({
+			reason: "disabled_delivery",
+			messageId: "sqs-message-2",
+		});
+
+		expect(JSON.parse(records[0] ?? "")).toMatchObject({
+			reason: "disabled_delivery",
+			DisabledDelivery: 1,
+			_aws: {
+				CloudWatchMetrics: [
+					{
+						Namespace: "MyMemo/AgentCoreCanary",
+						Metrics: [{ Name: "DisabledDelivery", Unit: "Count" }],
+					},
+				],
+			},
+		});
+		expect(records[0]).not.toContain("PoisonDispatch");
 	});
 });

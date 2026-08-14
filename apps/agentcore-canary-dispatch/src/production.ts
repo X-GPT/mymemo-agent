@@ -24,11 +24,14 @@ import { createCanaryDispatchPublisher } from "./publisher";
 
 type Env = Record<string, string | undefined>;
 
-export interface CanaryDispatchConfig {
+export interface CanaryDispatchPublisherConfig {
 	agentDatabaseUrl: string;
 	awsRegion: string;
 	queueUrl: string;
 	enabledParameterName: string;
+}
+
+export interface CanaryDispatchConfig extends CanaryDispatchPublisherConfig {
 	agentRuntimeArn: string;
 }
 
@@ -38,14 +41,22 @@ function requireEnv(env: Env, name: string): string {
 	return value;
 }
 
-export function loadCanaryDispatchConfigFromEnv(
+export function loadCanaryDispatchPublisherConfigFromEnv(
 	env: Env,
-): CanaryDispatchConfig {
+): CanaryDispatchPublisherConfig {
 	return {
 		agentDatabaseUrl: requireEnv(env, "AGENT_DATABASE_URL"),
 		awsRegion: requireEnv(env, "AWS_REGION"),
 		queueUrl: requireEnv(env, "CANARY_DISPATCH_QUEUE_URL"),
 		enabledParameterName: requireEnv(env, "CANARY_ENABLED_PARAMETER_NAME"),
+	};
+}
+
+export function loadCanaryDispatchConfigFromEnv(
+	env: Env,
+): CanaryDispatchConfig {
+	return {
+		...loadCanaryDispatchPublisherConfigFromEnv(env),
 		agentRuntimeArn: requireEnv(env, "CANARY_AGENT_RUNTIME_ARN"),
 	};
 }
@@ -55,6 +66,10 @@ export function createEmbeddedMetricCanaryDispatchAlarm(
 ): CanaryDispatchAlarm {
 	return {
 		async raise(input): Promise<void> {
+			const metricName =
+				input.reason === "disabled_delivery"
+					? "DisabledDelivery"
+					: "PoisonDispatch";
 			log(
 				JSON.stringify({
 					_aws: {
@@ -63,20 +78,20 @@ export function createEmbeddedMetricCanaryDispatchAlarm(
 							{
 								Namespace: "MyMemo/AgentCoreCanary",
 								Dimensions: [["reason"]],
-								Metrics: [{ Name: "PoisonDispatch", Unit: "Count" }],
+								Metrics: [{ Name: metricName, Unit: "Count" }],
 							},
 						],
 					},
 					...input,
-					PoisonDispatch: 1,
+					[metricName]: 1,
 				}),
 			);
 		},
 	};
 }
 
-export function createCanaryDispatchProductionServices(
-	config: CanaryDispatchConfig,
+function createProductionPublisherResources(
+	config: CanaryDispatchPublisherConfig,
 ) {
 	const db = createDatabase(config.agentDatabaseUrl);
 	const control = createSsmCanaryEnablementControl({
@@ -88,6 +103,29 @@ export function createCanaryDispatchProductionServices(
 		queueUrl: config.queueUrl,
 	});
 	const store = createDatabaseCanaryDispatchPublisherStore({ db });
+	return {
+		db,
+		control,
+		publish: async (publisherId: string, dispatchId?: string) =>
+			await createCanaryDispatchPublisher({
+				publisherId,
+				control,
+				store,
+				queue,
+			}).publishPending({ dispatchId }),
+	};
+}
+
+export function createCanaryDispatchProductionPublisher(
+	config: CanaryDispatchPublisherConfig,
+) {
+	return createProductionPublisherResources(config).publish;
+}
+
+export function createCanaryDispatchProductionServices(
+	config: CanaryDispatchConfig,
+) {
+	const { db, control, publish } = createProductionPublisherResources(config);
 	const acquisition = createDatabaseCanaryAcquisitionBoundary({
 		db,
 		bootId: crypto.randomUUID(),
@@ -103,13 +141,7 @@ export function createCanaryDispatchProductionServices(
 	});
 
 	return {
-		publish: async (publisherId: string) =>
-			await createCanaryDispatchPublisher({
-				publisherId,
-				control,
-				store,
-				queue,
-			}).publishPending(),
+		publish,
 		consume: consumer.handle,
 		acquire: acquisition.handle,
 		replay: async (input: { dispatchId: string; requestedBy: string }) =>

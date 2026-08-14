@@ -63,8 +63,8 @@ describe("Canary dispatch publisher", () => {
 			control: { isEnabled: async () => true },
 			store: {
 				markOverdue: async () => ({ campaignIds: [] }),
-				claim: async ({ limit }) => {
-					calls.push(`claim-committed:${limit}`);
+				claim: async ({ dispatchId, limit }) => {
+					calls.push(`claim-committed:${dispatchId}:${limit}`);
 					return [dispatch];
 				},
 				confirm: async () => {
@@ -79,13 +79,19 @@ describe("Canary dispatch publisher", () => {
 			},
 		});
 
-		await expect(publisher.publishPending()).resolves.toEqual({
+		await expect(
+			publisher.publishPending({ dispatchId: dispatch.dispatchId }),
+		).resolves.toEqual({
 			status: "enabled",
 			overdueCampaignIds: [],
 			publishedDispatchIds: [dispatch.dispatchId],
 			ambiguousDispatchIds: [],
 		});
-		expect(calls).toEqual(["claim-committed:10", "send", "confirm"]);
+		expect(calls).toEqual([
+			`claim-committed:${dispatch.dispatchId}:10`,
+			"send",
+			"confirm",
+		]);
 	});
 
 	it("leaves an ambiguous SQS send leased for later exact replay", async () => {

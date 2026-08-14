@@ -17,7 +17,7 @@ import {
 import { createDatabase, type Database } from "./client";
 import { claimConversationTx } from "./conversation-ownership";
 import { markFargateLaneAwareDeploymentReady } from "./execution-lane-deployment";
-import { requestRunInterruptionTx } from "./run-store";
+import { requestRunInterruptionTx, transitionRunTerminalTx } from "./run-store";
 import {
 	canaryCampaigns,
 	canaryDispatchOutbox,
@@ -268,6 +268,40 @@ describe.skipIf(!RUN)(
 					status: expect.stringMatching(/^(interrupted|interrupt_requested)$/),
 				},
 			]);
+		});
+
+		it("serializes a terminal commit against a duplicate exact acquisition", async () => {
+			const exact = input(0);
+			await startCanaryCampaignTx(db, exact);
+			const dispatch = await loadDispatch(exact);
+			const first = await acquireCanaryDispatchTx(db, {
+				dispatch,
+				workerId: "agentcore-terminal-owner",
+			});
+			if (first.disposition !== "acquired") {
+				throw new Error("test setup did not acquire the Run");
+			}
+
+			const [duplicate, terminal] = await Promise.all([
+				acquireCanaryDispatchTx(db, {
+					dispatch,
+					workerId: "agentcore-terminal-racer",
+				}),
+				transitionRunTerminalTx(db, {
+					owner: {
+						...first.owner,
+						runId: exact.runId,
+						workerId: first.workerId,
+					},
+					status: "done",
+				}),
+			]);
+
+			expect(["already_acquired", "terminal"]).toContain(duplicate.disposition);
+			expect(terminal).toMatchObject({
+				outcome: "committed",
+				run: { status: "done" },
+			});
 		});
 
 		it("rejects a lane-mismatched dispatch while Fargate can Claim the queued Run", async () => {

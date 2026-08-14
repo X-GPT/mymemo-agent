@@ -9,6 +9,7 @@ export interface CanaryDispatchPublisherStore {
 	markOverdue(): Promise<{ campaignIds: string[] }>;
 	claim(input: {
 		publisherId: string;
+		dispatchId?: string;
 		limit: number;
 	}): Promise<CanaryDispatchIdentity[]>;
 	confirm(input: { dispatchId: string; publisherId: string }): Promise<boolean>;
@@ -33,7 +34,9 @@ export function createCanaryDispatchPublisher(options: {
 	queue: CanaryDispatchQueue;
 }) {
 	return {
-		async publishPending(): Promise<CanaryPublishResult> {
+		async publishPending(
+			input: { dispatchId?: string } = {},
+		): Promise<CanaryPublishResult> {
 			if (!(await options.control.isEnabled())) {
 				return {
 					status: "disabled",
@@ -46,6 +49,7 @@ export function createCanaryDispatchPublisher(options: {
 			const overdue = await options.store.markOverdue();
 			const claimed = await options.store.claim({
 				publisherId: options.publisherId,
+				dispatchId: input.dispatchId,
 				limit: CANARY_QUEUE_INVARIANTS.publisherBatchSize,
 			});
 			const result: CanaryPublishResult = {

@@ -31,11 +31,23 @@ import { conversations, runs } from "./schema";
  * the worker's 15s heartbeat, allowing four missed renewals before the
  * Conversation becomes reclaimable.
  */
-const OWNERSHIP_LEASE_MS = 60_000;
+export const CONVERSATION_OWNERSHIP_LEASE_MS = 60_000;
 
 /** A Claim and a renewal must push the deadline the same distance. */
 function leaseDeadline() {
-	return sql`now() + (${OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
+	return sql`now() + (${CONVERSATION_OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
+}
+
+/** Whether a fetched Conversation row currently carries live Ownership. */
+export function hasLiveConversationOwnership(
+	conversation: { ownerWorkerId: string | null; ownerUntil: Date | null },
+	now: Date,
+): conversation is { ownerWorkerId: string; ownerUntil: Date } {
+	return (
+		conversation.ownerWorkerId !== null &&
+		conversation.ownerUntil !== null &&
+		conversation.ownerUntil.getTime() > now.getTime()
+	);
 }
 
 /**

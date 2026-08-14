@@ -43,7 +43,6 @@ describe("Canary dispatch Lambda handlers", () => {
 		await expect(
 			handler({
 				Records: [
-					{ messageId: "message-1", body: "first", eventSource: "aws:sqs" },
 					{ messageId: "message-2", body: "second", eventSource: "aws:sqs" },
 				],
 			}),
@@ -52,12 +51,24 @@ describe("Canary dispatch Lambda handlers", () => {
 		});
 		expect(events).toEqual([
 			{
+				Records: [{ messageId: "message-2", body: "second" }],
+			},
+		]);
+	});
+
+	it("rejects an SQS batch larger than the configured one-record boundary", async () => {
+		const handler = createCanaryConsumerHandler({
+			handle: async () => ({ batchItemFailures: [] }),
+		});
+
+		await expect(
+			handler({
 				Records: [
 					{ messageId: "message-1", body: "first" },
 					{ messageId: "message-2", body: "second" },
 				],
-			},
-		]);
+			}),
+		).rejects.toThrow("invalid Canary SQS event");
 	});
 
 	it("audits manual replay before invoking the shared publisher", async () => {
@@ -67,8 +78,8 @@ describe("Canary dispatch Lambda handlers", () => {
 				calls.push(`replay:${input.dispatchId}:${input.requestedBy}`);
 				return true;
 			},
-			publish: async (publisherId) => {
-				calls.push(`publish:${publisherId}`);
+			publish: async (publisherId, dispatchId) => {
+				calls.push(`publish:${publisherId}:${dispatchId}`);
 				return enabledPublication;
 			},
 		});
@@ -85,7 +96,7 @@ describe("Canary dispatch Lambda handlers", () => {
 		});
 		expect(calls).toEqual([
 			"replay:dispatch-450:operator@example.com",
-			"publish:manual-replay/manual-request-1",
+			"publish:manual-replay/manual-request-1:dispatch-450",
 		]);
 	});
 

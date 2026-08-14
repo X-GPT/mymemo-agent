@@ -1,7 +1,7 @@
 import { createDatabase } from "@mymemo/agent-db/client";
 import {
-	createCanaryDispatchProductionServices,
-	loadCanaryDispatchConfigFromEnv,
+	createCanaryDispatchProductionPublisher,
+	loadCanaryDispatchPublisherConfigFromEnv,
 } from "agentcore-canary-dispatch/production";
 import { z } from "zod";
 import {
@@ -97,8 +97,8 @@ export function createCanaryControlHandler(control: {
 function createProductionHandler(env: Env) {
 	const config = loadCanaryControlHandlerConfigFromEnv(env);
 	const db = createDatabase(config.agentDatabaseUrl);
-	const dispatch = createCanaryDispatchProductionServices(
-		loadCanaryDispatchConfigFromEnv(env),
+	const publish = createCanaryDispatchProductionPublisher(
+		loadCanaryDispatchPublisherConfigFromEnv(env),
 	);
 	const fixtureDb = createCanaryFixtureDb(config.kbDatabaseUrl);
 	const verifier = createCanaryFixtureVerifier(fixtureDb, {
@@ -111,7 +111,7 @@ function createProductionHandler(env: Env) {
 			verifier,
 			publisher: {
 				publishPending: async () =>
-					await dispatch.publish(`control/${crypto.randomUUID()}`),
+					await publish(`control/${crypto.randomUUID()}`),
 			},
 		}),
 	);

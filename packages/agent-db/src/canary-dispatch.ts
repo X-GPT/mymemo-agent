@@ -11,7 +11,11 @@ import {
 	sql,
 } from "drizzle-orm";
 import type { Database } from "./client";
-import type { ConversationOwner } from "./conversation-ownership";
+import {
+	CONVERSATION_OWNERSHIP_LEASE_MS,
+	type ConversationOwner,
+	hasLiveConversationOwnership,
+} from "./conversation-ownership";
 import { AGENTCORE_CANARY_EXECUTION_LANE } from "./execution-lane";
 import type { TerminalRunStatus } from "./run-store";
 import {
@@ -21,7 +25,6 @@ import {
 	runs,
 } from "./schema";
 
-const AGENTCORE_OWNERSHIP_LEASE_MS = 60_000;
 const DISPATCH_PUBLISH_LEASE_MS = 3 * 60_000;
 const DISPATCH_PENDING_DEADLINE_MS = 5 * 60_000;
 const MAX_PUBLISH_BATCH_SIZE = 10;
@@ -61,7 +64,12 @@ export type AcquireCanaryDispatchResult =
  */
 export async function claimCanaryDispatchesTx(
 	db: Database,
-	input: { publisherId: string; now?: Date; limit?: number },
+	input: {
+		publisherId: string;
+		dispatchId?: string;
+		now?: Date;
+		limit?: number;
+	},
 ): Promise<CanaryDispatchIdentity[]> {
 	const now = input.now ?? new Date();
 	const limit = Math.max(
@@ -95,6 +103,9 @@ export async function claimCanaryDispatchesTx(
 			.where(
 				and(
 					inArray(canaryDispatchOutbox.campaignId, activeCampaignIds),
+					input.dispatchId
+						? eq(canaryDispatchOutbox.dispatchId, input.dispatchId)
+						: undefined,
 					gt(
 						canaryDispatchOutbox.admittedAt,
 						new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS),
@@ -210,9 +221,9 @@ export async function requestCanaryDispatchReplayTx(
 }
 
 /**
- * Turn a dispatch that never reached a confirmed first publication within five
- * minutes into an inconclusive Campaign cleanup request. The final verdict is
- * still written only after cleanup/reporting completes.
+ * Turn a dispatch whose exact Run was not acquired within five minutes into an
+ * inconclusive Campaign cleanup request. The final verdict is still written
+ * only after cleanup/reporting completes.
  */
 export async function markOverdueCanaryDispatchesTx(
 	db: Database,
@@ -234,9 +245,13 @@ export async function markOverdueCanaryDispatchesTx(
 					]),
 					sql`exists (
 						select 1 from ${canaryDispatchOutbox} dispatch
+						join ${runs} exact_run
+						  on exact_run.run_id = dispatch.run_id
+						 and exact_run.user_id = dispatch.user_id
+						 and exact_run.conversation_id = dispatch.conversation_id
 						where dispatch.campaign_id = ${canaryCampaigns.campaignId}
-						  and dispatch.published_at is null
 						  and dispatch.admitted_at <= ${new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS)}
+						  and exact_run.status = 'queued'
 					)`,
 				),
 			)
@@ -250,11 +265,17 @@ export async function markOverdueCanaryDispatchesTx(
 			.where(
 				and(
 					inArray(canaryDispatchOutbox.campaignId, candidateCampaignIds),
-					isNull(canaryDispatchOutbox.publishedAt),
 					lte(
 						canaryDispatchOutbox.admittedAt,
 						new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS),
 					),
+					sql`exists (
+						select 1 from ${runs} exact_run
+						where exact_run.run_id = ${canaryDispatchOutbox.runId}
+						  and exact_run.user_id = ${canaryDispatchOutbox.userId}
+						  and exact_run.conversation_id = ${canaryDispatchOutbox.conversationId}
+						  and exact_run.status = 'queued'
+					)`,
 				),
 			)
 			.for("update");
@@ -362,9 +383,7 @@ export async function acquireCanaryDispatchTx(
 		}
 		if (
 			(run.status === "running" || run.status === "interrupt_requested") &&
-			conversation.ownerUntil !== null &&
-			conversation.ownerUntil.getTime() > now.getTime() &&
-			conversation.ownerWorkerId !== null
+			hasLiveConversationOwnership(conversation, now)
 		) {
 			return {
 				disposition: "already_acquired",
@@ -394,7 +413,7 @@ export async function acquireCanaryDispatchTx(
 			campaign.lifecycle === "cleaning" ||
 			campaign.lifecycle === "complete"
 		) {
-			return { disposition: "temporarily_unavailable" };
+			return { disposition: "invalid_dispatch" };
 		}
 		if (run.status !== "queued") {
 			return { disposition: "invalid_dispatch" };
@@ -406,7 +425,7 @@ export async function acquireCanaryDispatchTx(
 			.set({
 				epoch,
 				ownerWorkerId: input.workerId,
-				ownerUntil: new Date(now.getTime() + AGENTCORE_OWNERSHIP_LEASE_MS),
+				ownerUntil: new Date(now.getTime() + CONVERSATION_OWNERSHIP_LEASE_MS),
 			})
 			.where(
 				and(

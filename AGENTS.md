@@ -179,7 +179,7 @@ aligned instead of casting around them.
 
 ## Environment Variables
 
-### agentcore-canary-control / agentcore-canary-dispatch
+### agentcore-canary-dispatch
 
 Required:
 
@@ -189,8 +189,14 @@ Required:
 - `CANARY_ENABLED_PARAMETER_NAME` — SSM parameter whose only enabling value is exactly `enabled`; missing, unreadable, or any other value fails closed
 - `CANARY_AGENT_RUNTIME_ARN` — exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity
 
-Control-only required:
+### agentcore-canary-control
 
+Required:
+
+- `AGENT_DATABASE_URL` — writable `mymemo_agent` DB holding Campaign, outbox, Conversation Ownership, and exact Run state
+- `AWS_REGION` — region for SSM and SQS clients used by immediate publication
+- `CANARY_DISPATCH_QUEUE_URL` — encrypted standard Canary dispatch queue URL
+- `CANARY_ENABLED_PARAMETER_NAME` — fail-closed SSM control parameter; the control path does not require the consumer-only `CANARY_AGENT_RUNTIME_ARN`
 - `KB_DATABASE_URL`, `CANARY_APPROVED_SYNTHETIC_USER_ID`, and `CANARY_CONTROL_CONFIG_JSON` — existing synthetic-fixture authority used by the control Lambda
 
 ### chat-api

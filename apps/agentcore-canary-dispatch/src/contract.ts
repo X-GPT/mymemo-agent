@@ -45,9 +45,7 @@ const acquisitionReceiptSchema = z
 		if (value.runtimeSessionId !== value.conversationId) {
 			context.addIssue({ code: "custom", message: "Runtime session mismatch" });
 		}
-		const owns =
-			value.disposition === "acquired" ||
-			value.disposition === "already_acquired";
+		const owns = isOwnershipDisposition(value.disposition);
 		if (owns !== (value.ownershipEpoch !== null && value.workerId !== null)) {
 			context.addIssue({
 				code: "custom",
@@ -57,6 +55,21 @@ const acquisitionReceiptSchema = z
 	});
 
 export type AcquisitionReceipt = z.infer<typeof acquisitionReceiptSchema>;
+
+function isOwnershipDisposition(
+	disposition: AcquireCanaryDispatchResult["disposition"],
+): disposition is "acquired" | "already_acquired" {
+	return disposition === "acquired" || disposition === "already_acquired";
+}
+
+function hasOwnership(
+	result: AcquireCanaryDispatchResult,
+): result is Extract<
+	AcquireCanaryDispatchResult,
+	{ disposition: "acquired" | "already_acquired" }
+> {
+	return isOwnershipDisposition(result.disposition);
+}
 
 function parseJson(value: string, description: string): unknown {
 	try {
@@ -93,9 +106,7 @@ export function createAcquisitionReceipt(
 	result: AcquireCanaryDispatchResult,
 	committedAt = new Date(),
 ): AcquisitionReceipt {
-	const owns =
-		result.disposition === "acquired" ||
-		result.disposition === "already_acquired";
+	const owns = hasOwnership(result);
 	return {
 		schemaVersion: 1,
 		dispatchId: dispatch.dispatchId,

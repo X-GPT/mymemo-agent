@@ -78,9 +78,10 @@ export function createDatabaseCanaryDispatchPublisherStore(options: {
 	return {
 		markOverdue: async () =>
 			await markOverdueCanaryDispatchesTx(options.db, { now: now() }),
-		claim: async ({ publisherId, limit }) =>
+		claim: async ({ publisherId, dispatchId, limit }) =>
 			await claimCanaryDispatchesTx(options.db, {
 				publisherId,
+				dispatchId,
 				limit,
 				now: now(),
 			}),
