@@ -31,11 +31,22 @@ import { conversations, runs } from "./schema";
  * the worker's 15s heartbeat, allowing four missed renewals before the
  * Conversation becomes reclaimable.
  */
-const OWNERSHIP_LEASE_MS = 60_000;
+export const CONVERSATION_OWNERSHIP_LEASE_MS = 60_000;
 
-/** A Claim and a renewal must push the deadline the same distance. */
-function leaseDeadline() {
-	return sql`now() + (${OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
+/** The shared database-time expression for Ownership mutations and their Run writes. */
+export function conversationOwnershipClock(now?: Date) {
+	return now ? sql`${now}::timestamptz` : sql`now()`;
+}
+
+/** A Claim, renewal, or exact acquisition pushes the same database deadline. */
+export function conversationOwnershipLeaseDeadline(now?: Date) {
+	return sql`${conversationOwnershipClock(now)} + (${CONVERSATION_OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
+}
+
+/** The one database-clock predicate defining whether Ownership is live. */
+export function liveConversationOwnershipState(now?: Date) {
+	return sql<boolean>`${conversations.ownerWorkerId} is not null
+		and ${conversations.ownerUntil} > ${conversationOwnershipClock(now)}`;
 }
 
 /**
@@ -112,7 +123,7 @@ export async function claimConversationTx(
 			.update(conversations)
 			.set({
 				ownerWorkerId: input.workerId,
-				ownerUntil: leaseDeadline(),
+				ownerUntil: conversationOwnershipLeaseDeadline(),
 				epoch: sql`${conversations.epoch} + 1`,
 			})
 			.where(
@@ -211,7 +222,7 @@ export async function renewConversationLeaseTx(
 ): Promise<Date | null> {
 	const [renewed] = await db
 		.update(conversations)
-		.set({ ownerUntil: leaseDeadline() })
+		.set({ ownerUntil: conversationOwnershipLeaseDeadline() })
 		.where(liveConversationOwnershipConditions(owner))
 		.returning({ ownerUntil: conversations.ownerUntil });
 	return renewed?.ownerUntil ?? null;
@@ -235,7 +246,7 @@ function claimedConversationConditions(owner: ConversationOwner) {
 export function liveConversationOwnershipConditions(owner: ConversationOwner) {
 	return and(
 		claimedConversationConditions(owner),
-		sql`${conversations.ownerUntil} > now()`,
+		liveConversationOwnershipState(),
 	);
 }
 

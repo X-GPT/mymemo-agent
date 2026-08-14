@@ -8,6 +8,7 @@
 		"./artifact-store": "./src/artifact-store.ts",
 		"./canary": "./src/canary.ts",
 		"./canary-control": "./src/canary-control.ts",
+		"./canary-dispatch": "./src/canary-dispatch.ts",
 		"./client": "./src/client.ts",
 		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./execution-lane": "./src/execution-lane.ts",

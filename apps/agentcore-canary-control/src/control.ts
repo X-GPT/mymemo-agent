@@ -7,6 +7,10 @@ import {
 	startCanaryCampaignTx,
 } from "@mymemo/agent-db/canary-control";
 import type { Database } from "@mymemo/agent-db/client";
+import type {
+	CanaryImmediatePublishResult,
+	CanaryPublishResult,
+} from "agentcore-canary-dispatch/publisher";
 import type { CanaryFixtureConfig, CanaryFixtureVerifier } from "./fixture";
 
 export interface CanaryControlConfig {
@@ -102,8 +106,9 @@ export function createCanaryControl(options: {
 	db: Database;
 	config: CanaryControlConfig;
 	verifier: CanaryFixtureVerifier;
+	publisher: { publishPending(): Promise<CanaryPublishResult> };
 }) {
-	const { db, config, verifier } = options;
+	const { db, config, verifier, publisher } = options;
 	requireConfigured(config.campaignVersion, "Campaign version");
 	requireConfigured(config.fixture.version, "fixture version");
 	requireConfigured(config.fixture.checksum, "fixture checksum");
@@ -115,6 +120,17 @@ export function createCanaryControl(options: {
 
 	return {
 		async start(rawRequest: unknown) {
+			const withPublication = async <T>(
+				result: T,
+			): Promise<T & { publication: CanaryImmediatePublishResult }> => {
+				try {
+					return { ...result, publication: await publisher.publishPending() };
+				} catch {
+					// Admission already committed. The immediate publish is an optimization;
+					// the durable outbox remains eligible for scheduled repair.
+					return { ...result, publication: { status: "failed" as const } };
+				}
+			};
 			const request = parseCanaryStartRequest(rawRequest);
 			if (request.campaignVersion !== config.campaignVersion) {
 				throw new Error(
@@ -146,7 +162,11 @@ export function createCanaryControl(options: {
 			// only that path is authoritative when concurrent starts race.
 			if (existing) {
 				requireCanaryCampaignMatchesInput(existing, campaignInput);
-				return { outcome: "existing" as const, campaign: existing, identities };
+				return await withPublication({
+					outcome: "existing" as const,
+					campaign: existing,
+					identities,
+				});
 			}
 			const active = await findActiveCanaryCampaign(db);
 			if (active) {
@@ -159,7 +179,10 @@ export function createCanaryControl(options: {
 
 			await verifier.verify(config.fixture);
 			const result = await startCanaryCampaignTx(db, campaignInput);
-			return { ...result, identities };
+			const response = { ...result, identities };
+			return result.outcome === "active_campaign"
+				? response
+				: await withPublication(response);
 		},
 	};
 }
