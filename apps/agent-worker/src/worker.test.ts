@@ -99,6 +99,7 @@ describe("Worker — health snapshot", () => {
 		const worker = buildWorker({ maxConcurrentConversations: 3 });
 		expect(worker.healthSnapshot()).toEqual({
 			status: "ok",
+			executionLane: "fargate",
 			workerId: "worker-test",
 			activeConversations: 0,
 			maxConcurrentConversations: 3,

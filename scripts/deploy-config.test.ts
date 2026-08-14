@@ -556,6 +556,15 @@ describe("agent deployment config", () => {
 			join(root, "scripts", "deploy", "roll_ecs_services.sh"),
 			"utf8",
 		);
+		const laneAssertionScript = readFileSync(
+			join(
+				root,
+				"scripts",
+				"deploy",
+				"run_execution_lane_deployment_assertion.sh",
+			),
+			"utf8",
+		);
 
 		expect(ecsConfig).toContain("ignore_changes = [task_definition]");
 		expect(outputs).toContain('output "chat_api_task_definition_arn"');
@@ -571,6 +580,33 @@ describe("agent deployment config", () => {
 		);
 		expect(rolloutScript).toContain(
 			'--task-definition "$agent_worker_task_definition"',
+		);
+		expect(ecsConfig).not.toContain("body.executionLane !== 'fargate'");
+		expect(readFileSync(join(terraformDir, "locals.tf"), "utf8")).toContain(
+			'MYMEMO_FARGATE_EXECUTION_LANE_AWARE", value = "true"',
+		);
+		expect(rolloutScript).toContain(
+			'expected_task_definition="$agent_worker_task_definition"',
+		);
+		expect(rolloutScript).toContain(
+			"Fargate deployment is not fully execution-lane-aware",
+		);
+		expect(rolloutScript).toContain(
+			"run_execution_lane_deployment_assertion.sh",
+		);
+		expect(rolloutScript).toContain("prepare-fargate-deployment");
+		expect(rolloutScript).toContain("mark-fargate-lane-aware");
+		expect(rolloutScript.indexOf("prepare-fargate-deployment")).toBeLessThan(
+			rolloutScript.indexOf("aws ecs update-service"),
+		);
+		expect(
+			rolloutScript.indexOf("mark-fargate-lane-aware"),
+		).toBeGreaterThan(rolloutScript.indexOf("for task_definition in"));
+		expect(laneAssertionScript).toContain(
+			'command: ["db:execution-lane-deployment"]',
+		);
+		expect(laneAssertionScript).toContain(
+			'CANDIDATE_FARGATE_LANE_AWARE", value: candidateLaneAware',
 		);
 	});
 
@@ -907,6 +943,7 @@ describe("agent deployment config", () => {
 			"prod_smoke.sh",
 			"roll_ecs_services.sh",
 			"run_agent_migration.sh",
+			"run_execution_lane_deployment_assertion.sh",
 		]) {
 			const content = readFileSync(
 				join(root, "scripts", "deploy", script),

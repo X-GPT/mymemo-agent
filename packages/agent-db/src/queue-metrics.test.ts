@@ -54,6 +54,33 @@ async function claimConversation(conversationId: string, workerId: string) {
 }
 
 describe("readConversationQueueMetrics", () => {
+	it("excludes AgentCore-canary demand and owned work from Fargate scaling", async () => {
+		await queueRun("run-agentcore-queued", "conv-agentcore-queued");
+		await queueRun("run-agentcore-owned", "conv-agentcore-owned");
+		await tdb.db
+			.update(conversations)
+			.set({ executionLane: "agentcore_canary" })
+			.where(
+				sql`${conversations.conversationId} in ('conv-agentcore-queued', 'conv-agentcore-owned')`,
+			);
+		await tdb.db
+			.update(conversations)
+			.set({
+				ownerWorkerId: "agentcore-invocation",
+				ownerUntil: sql`now() + interval '1 minute'`,
+			})
+			.where(eq(conversations.conversationId, "conv-agentcore-owned"));
+		await tdb.db
+			.update(runs)
+			.set({ status: "running" })
+			.where(eq(runs.runId, "run-agentcore-owned"));
+
+		await expect(readConversationQueueMetrics(tdb.db)).resolves.toEqual({
+			demandConversations: 0,
+			ownedConversations: 0,
+		});
+	});
+
 	it("returns zero counts for an empty queue", async () => {
 		await expect(readConversationQueueMetrics(tdb.db)).resolves.toEqual({
 			demandConversations: 0,

@@ -5,6 +5,11 @@ import {
 	liveConversationOwnershipExists,
 } from "./conversation-ownership";
 import {
+	AGENTCORE_CANARY_EXECUTION_LANE,
+	FARGATE_EXECUTION_LANE,
+	requireConversationExecutionLane,
+} from "./execution-lane";
+import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
 	InvalidRunEventError,
 	parseDurableRunEvent,
@@ -112,9 +117,12 @@ const ACTIVE_RUN_DEPTH_BOUND = 1;
 /** How long a queued Run may remain continuously eligible on an unowned
  * Conversation before the queue-age backstop ends it. Reclamation refreshes
  * `updated_at` to start a new window for legitimately waiting work. This
- * deliberately matches today's 60-second Ownership lease, but remains a
- * distinct policy so lease tuning cannot silently retune queue expiration. */
-const UNOWNED_QUEUE_TIMEOUT_MS = 60_000;
+ * The Fargate window deliberately matches today's 60-second Ownership lease,
+ * but remains a distinct policy so lease tuning cannot silently retune queue
+ * expiration. AgentCore-canary work gets ten minutes for dispatch and cold
+ * start. */
+const FARGATE_UNOWNED_QUEUE_TIMEOUT_MS = 60_000;
+const AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS = 10 * 60_000;
 
 /** An owned Run id was reused with different normalized admitted input. */
 export class RunInputMismatchError extends Error {
@@ -1191,17 +1199,21 @@ export async function expireUnownedQueuedRunsTx(
 		const result = await tx.execute<{
 			user_id: string;
 			conversation_id: string;
+			execution_lane: string;
 		}>(sql`
-			select c.user_id, c.conversation_id
+			select c.user_id, c.conversation_id, c.execution_lane
 			  from ${runs} r
 			  join ${conversations} c using (user_id, conversation_id)
 			 where r.status = 'queued'
-			   and r.created_at <= now() - interval '${sql.raw(
-						String(UNOWNED_QUEUE_TIMEOUT_MS),
-					)} milliseconds'
-			   and r.updated_at <= now() - interval '${sql.raw(
-						String(UNOWNED_QUEUE_TIMEOUT_MS),
-					)} milliseconds'
+			   and (
+			     (c.execution_lane = ${FARGATE_EXECUTION_LANE}
+			       and r.created_at <= now() - interval '${sql.raw(String(FARGATE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
+			       and r.updated_at <= now() - interval '${sql.raw(String(FARGATE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds')
+			     or
+			     (c.execution_lane = ${AGENTCORE_CANARY_EXECUTION_LANE}
+			       and r.created_at <= now() - interval '${sql.raw(String(AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
+			       and r.updated_at <= now() - interval '${sql.raw(String(AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds')
+			   )
 			   and c.owner_until is null
 			 order by r.created_at
 			   for update of c skip locked
@@ -1212,9 +1224,16 @@ export async function expireUnownedQueuedRunsTx(
 			? {
 					userId: candidateRow.user_id,
 					conversationId: candidateRow.conversation_id,
+					executionLane: requireConversationExecutionLane(
+						candidateRow.execution_lane,
+					),
 				}
 			: null;
 		if (!candidate) return null;
+		const timeoutMs =
+			candidate.executionLane === FARGATE_EXECUTION_LANE
+				? FARGATE_UNOWNED_QUEUE_TIMEOUT_MS
+				: AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS;
 
 		const queuedRunsToExpire = await tx
 			.select({
@@ -1230,12 +1249,8 @@ export async function expireUnownedQueuedRunsTx(
 					eq(runs.userId, candidate.userId),
 					eq(runs.conversationId, candidate.conversationId),
 					eq(runs.status, "queued"),
-					sql`${runs.createdAt} <= now() - interval '${sql.raw(
-						String(UNOWNED_QUEUE_TIMEOUT_MS),
-					)} milliseconds'`,
-					sql`${runs.updatedAt} <= now() - interval '${sql.raw(
-						String(UNOWNED_QUEUE_TIMEOUT_MS),
-					)} milliseconds'`,
+					sql`${runs.createdAt} <= now() - interval '${sql.raw(String(timeoutMs))} milliseconds'`,
+					sql`${runs.updatedAt} <= now() - interval '${sql.raw(String(timeoutMs))} milliseconds'`,
 				),
 			)
 			.for("update");
@@ -1244,7 +1259,8 @@ export async function expireUnownedQueuedRunsTx(
 			queuedRunsToExpire,
 		);
 		return {
-			...candidate,
+			userId: candidate.userId,
+			conversationId: candidate.conversationId,
 			runs: terminalized.map(
 				({ liveStreamFailureMarkedNow: _, ...run }) => run,
 			),

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { Database } from "./client";
+import { FARGATE_EXECUTION_LANE } from "./execution-lane";
 import { conversations, runs } from "./schema";
 
 export interface ConversationQueueMetrics {
@@ -52,12 +53,14 @@ export async function readConversationQueueMetrics(
 			     on ${conversations.userId} = ${runs.userId}
 			    and ${conversations.conversationId} = ${runs.conversationId}
 			  where ${runs.status} = 'queued'
+			    and ${conversations.executionLane} = ${FARGATE_EXECUTION_LANE}
 			    and ${runs.createdAt} > now() - interval '1 day'
 			    and (${conversations.ownerUntil} is null or ${conversations.ownerUntil} <= now())
 			) as demand_conversations,
 			(select count(*)::int
 			   from ${conversations}
 			  where ${conversations.ownerUntil} > now()
+			    and ${conversations.executionLane} = ${FARGATE_EXECUTION_LANE}
 			    and exists (
 			      select 1 from ${runs}
 			       where ${runs.userId} = ${conversations.userId}

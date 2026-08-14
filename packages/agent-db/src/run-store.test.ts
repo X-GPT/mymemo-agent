@@ -1737,6 +1737,56 @@ describe("markLiveStreamFailedTx", () => {
 });
 
 describe("Run liveness sweep transactions", () => {
+	it("uses the ten-minute queued backstop for AgentCore-canary Conversations", async () => {
+		await tdb.db
+			.update(conversations)
+			.set({ executionLane: "agentcore_canary" })
+			.where(eq(conversations.conversationId, "conv-1"));
+		await queueRun("run-agentcore-queued", "conv-1");
+		await ageRunsPastQueueTimeout("run-agentcore-queued");
+
+		expect(await expireUnownedQueuedRunsTx(tdb.db)).toBeNull();
+		expect((await readRun("run-agentcore-queued"))?.status).toBe("queued");
+
+		await tdb.db
+			.update(runs)
+			.set({
+				createdAt: sql`now() - interval '11 minutes'`,
+				updatedAt: sql`now() - interval '11 minutes'`,
+			})
+			.where(eq(runs.runId, "run-agentcore-queued"));
+
+		expect(
+			(await expireUnownedQueuedRunsTx(tdb.db))?.runs.map((run) => run.status),
+		).toEqual(["error"]);
+	});
+
+	it("reclaims expired AgentCore-canary Ownership through the shared fence", async () => {
+		await tdb.db
+			.update(conversations)
+			.set({
+				executionLane: "agentcore_canary",
+				ownerWorkerId: "dead-agentcore-invocation",
+				ownerUntil: sql`now() - interval '1 second'`,
+				epoch: 1,
+			})
+			.where(eq(conversations.conversationId, "conv-1"));
+		await tdb.db.insert(runs).values({
+			runId: "run-agentcore-running",
+			userId: "user-1",
+			conversationId: "conv-1",
+			status: "running",
+			executedByWorkerId: "dead-agentcore-invocation",
+		});
+
+		const reclamation = await reclaimConversationTx(tdb.db);
+
+		expect(reclamation).toMatchObject({
+			conversationId: "conv-1",
+			runs: [{ runId: "run-agentcore-running", status: "error" }],
+		});
+	});
+
 	it("Reclamation closes a Run after a crash left an incomplete Tool prefix", async () => {
 		await claimRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
