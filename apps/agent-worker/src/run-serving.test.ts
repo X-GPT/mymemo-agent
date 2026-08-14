@@ -191,6 +191,63 @@ describe("serveStartedRun", () => {
 		expect(await resultPromise).toEqual({ type: "terminal", status: null });
 	});
 
+	it("detaches when a model append discovers a terminal Run status", async () => {
+		const { claim, run } = await startRun();
+		const processorStarted = deferred();
+		const attemptAppend = deferred();
+		const appendRejected = deferred();
+		const releaseProcessor = deferred();
+		const detached = deferred();
+		const serving = createRunServing({
+			db: tdb.db,
+			processor: async (ctx) => {
+				processorStarted.resolve();
+				await attemptAppend.promise;
+				try {
+					await ctx.appendModelContent({
+						kind: "assistant_message",
+						payload: { messageId: "message-late", text: "too late" },
+					});
+				} catch {
+					appendRejected.resolve();
+					await releaseProcessor.promise;
+				}
+			},
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
+			logger: silentLogger,
+		});
+		const owner = { ...claim, runId: run.runId, workerId: "worker-1" };
+		const resultPromise = serving.serveStartedRun({
+			run,
+			owner,
+			shutdownSignal: new AbortController().signal,
+			onDetached: (event) => {
+				if (event.type === "run_detached") detached.resolve();
+			},
+		});
+		await processorStarted.promise;
+		expect(
+			await transitionRunTerminalTx(tdb.db, { owner, status: "done" }),
+		).toMatchObject({ outcome: "committed" });
+
+		attemptAppend.resolve();
+		await appendRejected.promise;
+		await detached.promise;
+		await tdb.db
+			.update(conversations)
+			.set({ ownerUntil: sql`now() + interval '1 second'` })
+			.where(eq(conversations.conversationId, run.conversationId));
+		await serving.heartbeat();
+		const [ownership] = await tdb.db
+			.select({ ownerUntil: conversations.ownerUntil })
+			.from(conversations)
+			.where(eq(conversations.conversationId, run.conversationId));
+		expect(ownership?.ownerUntil?.getTime()).toBeLessThan(Date.now() + 30_000);
+
+		releaseProcessor.resolve();
+		expect(await resultPromise).toEqual({ type: "terminal", status: null });
+	});
+
 	it("lets durable interruption win over processor failure", async () => {
 		const { claim, run } = await startRun();
 		const serving = createRunServing({
@@ -262,6 +319,46 @@ describe("serveStartedRun", () => {
 		expect(await resultPromise).toEqual({
 			type: "shutdown",
 			status: "error",
+		});
+	});
+
+	it("lets durable interruption committed during shutdown win", async () => {
+		const { claim, run } = await startRun();
+		const shutdownController = new AbortController();
+		const processorStopped = deferred();
+		const releaseProcessor = deferred();
+		const serving = createRunServing({
+			db: tdb.db,
+			processor: async (ctx) => {
+				await new Promise<void>((resolve) => {
+					if (ctx.signal.aborted) return resolve();
+					ctx.signal.addEventListener("abort", () => resolve(), { once: true });
+				});
+				processorStopped.resolve();
+				await releaseProcessor.promise;
+				throw new Error("runtime stopped");
+			},
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
+			logger: silentLogger,
+		});
+		const resultPromise = serving.serveStartedRun({
+			run,
+			owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+			shutdownSignal: shutdownController.signal,
+		});
+
+		shutdownController.abort();
+		await processorStopped.promise;
+		await requestRunInterruptionTx(tdb.db, {
+			userId: run.userId,
+			conversationId: run.conversationId,
+			runId: run.runId,
+		});
+		releaseProcessor.resolve();
+
+		expect(await resultPromise).toEqual({
+			type: "shutdown",
+			status: "interrupted",
 		});
 	});
 

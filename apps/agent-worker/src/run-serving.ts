@@ -4,7 +4,6 @@ import {
 	publishArtifactsAndTransitionRunDoneTx,
 } from "@mymemo/agent-db/artifact-store";
 import type { Database } from "@mymemo/agent-db/client";
-import { renewConversationLeaseTx } from "@mymemo/agent-db/conversation-ownership";
 import {
 	type AssistantMessageCompletedPayload,
 	RunEventType,
@@ -34,7 +33,13 @@ import type {
 import { ArtifactValidationError } from "./artifacts/artifact-manifest";
 import { ArtifactPublicationError } from "./artifacts/artifact-publication";
 import { toMessage, type WorkerLogger } from "./logger";
+import { renewOwnershipLease } from "./ownership-lease";
 import { RunLiveStream } from "./run-live-stream";
+import {
+	classifyRunWriteRejection,
+	type OwnershipLoss,
+	type OwnershipLossReason,
+} from "./run-write-rejection";
 
 export type TurnDisposition = "completed" | "stopped";
 
@@ -113,20 +118,9 @@ type RunTurnResult = void | TurnResult;
 
 export type RunProcessor = (ctx: RunProcessContext) => Promise<RunTurnResult>;
 
-/** The Conversation-level reasons a live Ownership fence can reject work. */
-export type OwnershipLossReason = Exclude<
-	RunWriteRejected["rejected"],
-	"status"
->;
-export type OwnershipLossSource = "heartbeat" | "write";
-
 export type RunServingDetachment =
 	| { type: "run_detached" }
-	| {
-			type: "ownership_lost";
-			reason: OwnershipLossReason;
-			source: OwnershipLossSource;
-	  };
+	| ({ type: "ownership_lost" } & OwnershipLoss);
 
 export interface RunServingOptions {
 	db: Database;
@@ -167,7 +161,7 @@ export type ServeStartedRunResult =
 
 interface RunEndState {
 	interrupted: boolean;
-	skipTerminalization: boolean;
+	skipTerminalizationReason?: "already_terminal" | "status";
 	ownershipLoss?: OwnershipLossReason;
 }
 
@@ -180,7 +174,6 @@ interface ActiveServing {
 	detached: boolean;
 	ownershipLossNotified: boolean;
 	liveStream?: RunLiveStream;
-	heartbeatInFlight?: Promise<void>;
 	shutdownListener: () => void;
 }
 
@@ -201,7 +194,8 @@ class RunWriteRejectedError extends Error {
 export interface RunServing {
 	serveStartedRun(input: ServeStartedRunInput): Promise<ServeStartedRunResult>;
 	/** Renew Ownership and observe interruption for every attached Run. The
-	 * runtime control plane owns the timer/doorbell cadence. */
+	 * runtime control plane owns the timer/doorbell cadence and renews Claim
+	 * windows before Run start and after this seam detaches. */
 	heartbeat(): Promise<void>;
 }
 
@@ -242,7 +236,7 @@ class OwnedRunServing implements RunServing {
 			controller,
 			interruptionController: new AbortController(),
 			ownershipLostController: new AbortController(),
-			state: { interrupted: false, skipTerminalization: false },
+			state: { interrupted: false },
 			detached: false,
 			ownershipLossNotified: false,
 			shutdownListener,
@@ -263,10 +257,9 @@ class OwnedRunServing implements RunServing {
 		entry.input.onDetached?.({ type: "run_detached" });
 	}
 
-	private notifyOwnershipLoss(
+	private emitOwnershipLossDetachment(
 		entry: ActiveServing,
-		reason: OwnershipLossReason,
-		source: OwnershipLossSource,
+		loss: OwnershipLoss,
 	): void {
 		if (!entry.detached) {
 			entry.detached = true;
@@ -274,45 +267,36 @@ class OwnedRunServing implements RunServing {
 		}
 		if (entry.ownershipLossNotified) return;
 		entry.ownershipLossNotified = true;
-		entry.input.onDetached?.({ type: "ownership_lost", reason, source });
+		entry.input.onDetached?.({ type: "ownership_lost", ...loss });
 	}
 
 	private heartbeatEntry(entry: ActiveServing): Promise<void> {
 		if (
 			!this.active.has(entry) ||
 			entry.state.ownershipLoss ||
-			entry.state.skipTerminalization ||
+			entry.state.skipTerminalizationReason ||
 			entry.input.shutdownSignal.aborted
 		) {
 			return Promise.resolve();
 		}
-		if (entry.heartbeatInFlight) return entry.heartbeatInFlight;
-		const heartbeat = this.performHeartbeat(entry).finally(() => {
-			if (entry.heartbeatInFlight === heartbeat) {
-				entry.heartbeatInFlight = undefined;
-			}
-		});
-		entry.heartbeatInFlight = heartbeat;
-		return heartbeat;
+		return this.performHeartbeat(entry);
 	}
 
 	private async performHeartbeat(entry: ActiveServing): Promise<void> {
 		const { owner } = entry.input;
-		let ownerUntil: Date | null;
-		try {
-			ownerUntil = await renewConversationLeaseTx(this.options.db, owner);
-		} catch (error) {
-			this.options.logger.error({
-				message: "ownership lease renewal failed",
-				workerId: owner.workerId,
-				conversationId: owner.conversationId,
-				error: toMessage(error),
-			});
-			return;
-		}
+		const renewal = await renewOwnershipLease({
+			db: this.options.db,
+			owner,
+			workerId: owner.workerId,
+			logger: this.options.logger,
+		});
+		if (renewal.type === "retry") return;
 		if (!this.active.has(entry)) return;
-		if (!ownerUntil) {
-			this.noteOwnershipLost(entry, "lease", "heartbeat");
+		if (renewal.type === "lost") {
+			this.noteOwnershipLost(entry, {
+				reason: "lease",
+				source: "heartbeat",
+			});
 			return;
 		}
 
@@ -333,7 +317,7 @@ class OwnedRunServing implements RunServing {
 			// This Run reached its Outcome under us while the Conversation lease
 			// stayed live. Stop the private SDK immediately and detach only this Run;
 			// the caller may continue draining the Conversation snapshot.
-			entry.state.skipTerminalization = true;
+			entry.state.skipTerminalizationReason = "already_terminal";
 			entry.controller.abort();
 			entry.ownershipLostController.abort();
 			this.options.logger.warn({
@@ -352,13 +336,9 @@ class OwnedRunServing implements RunServing {
 		}
 	}
 
-	private noteOwnershipLost(
-		entry: ActiveServing,
-		reason: OwnershipLossReason,
-		source: OwnershipLossSource,
-	): void {
+	private noteOwnershipLost(entry: ActiveServing, loss: OwnershipLoss): void {
 		if (entry.state.ownershipLoss) return;
-		entry.state.ownershipLoss = reason;
+		entry.state.ownershipLoss = loss.reason;
 		entry.controller.abort();
 		entry.ownershipLostController.abort();
 		this.options.logger.warn({
@@ -366,22 +346,23 @@ class OwnedRunServing implements RunServing {
 			workerId: entry.input.owner.workerId,
 			conversationId: entry.input.owner.conversationId,
 			runId: entry.input.owner.runId,
-			reason,
+			reason: loss.reason,
 		});
-		this.notifyOwnershipLoss(entry, reason, source);
+		this.emitOwnershipLossDetachment(entry, loss);
 	}
 
 	private noteRejectedWrite(
 		entry: ActiveServing,
 		rejection: RunWriteRejected,
 	): void {
-		if (rejection.rejected === "status") {
-			if (rejection.current === "interrupt_requested") {
+		const classified = classifyRunWriteRejection(rejection);
+		if (classified.type === "status") {
+			if (classified.current === "interrupt_requested") {
 				entry.state.interrupted = true;
 				entry.controller.abort();
 				entry.interruptionController.abort();
 			} else {
-				entry.state.skipTerminalization = true;
+				entry.state.skipTerminalizationReason = "status";
 				entry.controller.abort();
 				this.detachRun(entry);
 			}
@@ -390,11 +371,14 @@ class OwnedRunServing implements RunServing {
 				workerId: entry.input.owner.workerId,
 				conversationId: entry.input.owner.conversationId,
 				runId: entry.input.owner.runId,
-				currentStatus: rejection.current,
+				currentStatus: classified.current,
 			});
 			return;
 		}
-		this.noteOwnershipLost(entry, rejection.rejected, "write");
+		this.noteOwnershipLost(entry, {
+			reason: classified.reason,
+			source: "write",
+		});
 	}
 
 	private async serveEntry(
@@ -430,7 +414,7 @@ class OwnedRunServing implements RunServing {
 			telemetry: this.options.liveStreamTelemetry,
 		});
 		entry.liveStream = liveStream;
-		if (entry.state.ownershipLoss || entry.state.skipTerminalization) {
+		if (entry.state.ownershipLoss || entry.state.skipTerminalizationReason) {
 			await liveStream.close();
 			return this.classifyResult(entry, null);
 		}
@@ -529,12 +513,14 @@ class OwnedRunServing implements RunServing {
 		if (entry.state.ownershipLoss) {
 			return null;
 		}
-		if (entry.state.skipTerminalization) {
-			this.options.logger.info({
-				message: "skipping terminal transition after status rejection",
-				workerId: entry.input.owner.workerId,
-				runId: entry.input.owner.runId,
-			});
+		if (entry.state.skipTerminalizationReason) {
+			if (entry.state.skipTerminalizationReason === "status") {
+				this.options.logger.info({
+					message: "skipping terminal transition after status rejection",
+					workerId: entry.input.owner.workerId,
+					runId: entry.input.owner.runId,
+				});
+			}
 			return null;
 		}
 

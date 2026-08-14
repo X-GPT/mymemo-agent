@@ -3,7 +3,6 @@ import {
 	type ConversationOwner,
 	claimConversationTx,
 	releaseConversationTx,
-	renewConversationLeaseTx,
 } from "@mymemo/agent-db/conversation-ownership";
 import {
 	expireUnownedQueuedRunsTx,
@@ -14,14 +13,18 @@ import {
 } from "@mymemo/agent-db/run-store";
 import type { LiveStreamRelay, LiveStreamTelemetry } from "@mymemo/live-text";
 import { toMessage, type WorkerLogger } from "./logger";
+import { renewOwnershipLease } from "./ownership-lease";
 import { DoorbellTicker, type RunDoorbell } from "./run-doorbell";
 import {
 	createRunServing,
-	type OwnershipLossReason,
-	type OwnershipLossSource,
 	type RunProcessor,
 	type RunServing,
 } from "./run-serving";
+import {
+	classifyRunWriteRejection,
+	type OwnershipLoss,
+	type OwnershipLossReason,
+} from "./run-write-rejection";
 import type { Worker } from "./worker";
 
 export interface RunLoopOptions {
@@ -305,23 +308,21 @@ export class RunLoop {
 	private async renewDrainsWithoutActiveRuns(): Promise<void> {
 		for (const [key, drain] of [...this.drains]) {
 			if (drain.served) continue;
-			let ownerUntil: Date | null;
-			try {
-				ownerUntil = await renewConversationLeaseTx(this.opts.db, drain.owner);
-			} catch (error) {
-				this.opts.logger.error({
-					message: "ownership lease renewal failed",
-					workerId: this.workerId,
-					conversationId: drain.owner.conversationId,
-					error: toMessage(error),
-				});
-				continue;
-			}
+			const renewal = await renewOwnershipLease({
+				db: this.opts.db,
+				owner: drain.owner,
+				workerId: this.workerId,
+				logger: this.opts.logger,
+			});
+			if (renewal.type === "retry") continue;
 			// The drain may have finished and released during the round trip; from
 			// there its own cleanup owns this Conversation, not the renewal loop.
 			if (this.drains.get(key) !== drain) continue;
-			if (ownerUntil) continue;
-			this.haltDrainAfterOwnershipLoss(drain, undefined, "lease", "heartbeat");
+			if (renewal.type === "renewed") continue;
+			this.haltDrainAfterOwnershipLoss(drain, undefined, {
+				reason: "lease",
+				source: "heartbeat",
+			});
 		}
 	}
 
@@ -420,31 +421,34 @@ export class RunLoop {
 		runId: string,
 		rejection: RunWriteRejected,
 	): void {
-		if (rejection.rejected === "status") {
+		const classified = classifyRunWriteRejection(rejection);
+		if (classified.type === "status") {
 			this.opts.logger.info({
 				message: "skipping a Run write refused by its current status",
 				workerId: this.workerId,
 				conversationId: drain.owner.conversationId,
 				runId,
-				currentStatus: rejection.current,
+				currentStatus: classified.current,
 			});
 			return;
 		}
-		this.haltDrainAfterOwnershipLoss(drain, runId, rejection.rejected, "write");
+		this.haltDrainAfterOwnershipLoss(drain, runId, {
+			reason: classified.reason,
+			source: "write",
+		});
 	}
 
 	private haltDrainAfterOwnershipLoss(
 		drain: ActiveDrain,
 		runId: string | undefined,
-		reason: OwnershipLossReason,
-		source: OwnershipLossSource,
+		loss: OwnershipLoss,
 	): void {
 		if (!drain.halted) {
 			this.opts.logger.warn({
 				message:
-					reason === "gone"
+					loss.reason === "gone"
 						? "stopping drain: the conversation no longer exists"
-						: source === "write"
+						: loss.source === "write"
 							? "stopping drain: the Ownership lease is gone"
 							: "halting drain after losing the Ownership lease",
 				workerId: this.workerId,
@@ -452,7 +456,7 @@ export class RunLoop {
 				runId,
 			});
 		}
-		drain.halted = reason;
+		drain.halted = loss.reason;
 		this.forgetDrain(drain);
 	}
 
@@ -504,12 +508,7 @@ export class RunLoop {
 				onDetached: (detachment) => {
 					if (drain.served === entry) drain.served = undefined;
 					if (detachment.type === "ownership_lost") {
-						this.haltDrainAfterOwnershipLoss(
-							drain,
-							run.runId,
-							detachment.reason,
-							detachment.source,
-						);
+						this.haltDrainAfterOwnershipLoss(drain, run.runId, detachment);
 					}
 				},
 			});
