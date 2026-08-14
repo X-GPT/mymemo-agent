@@ -43,7 +43,6 @@ export interface RunLoopOptions {
 }
 
 interface ActiveEntry {
-	runId: string;
 	shutdownController: AbortController;
 }
 
@@ -487,7 +486,6 @@ export class RunLoop {
 
 	private async serveRun(run: RunRecord, drain: ActiveDrain): Promise<void> {
 		const entry: ActiveEntry = {
-			runId: run.runId,
 			shutdownController: new AbortController(),
 		};
 		// Attach before the first await so shutdown can reach a start that was
