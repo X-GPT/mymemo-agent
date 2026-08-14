@@ -289,10 +289,15 @@ describe("run queue schema", () => {
 		expect(definitions[1]).toContain("WHEN ((new.status = 'queued'::text))");
 		expect(definitions[1]).toContain("EXECUTE FUNCTION notify_run_doorbell()");
 		const { rows: functions } = await tdb.db.execute(sql`
-			select proname from pg_proc
+			select proname, pg_get_functiondef(oid) as def from pg_proc
 			where proname in ('notify_run_doorbell', 'notify_run_queued')
 		`);
-		expect(functions).toEqual([{ proname: "notify_run_doorbell" }]);
+		expect(functions.map((row) => row.proname)).toEqual([
+			"notify_run_doorbell",
+		]);
+		const functionDefinition = String(functions[0]?.def);
+		expect(functionDefinition).toContain("execution_lane");
+		expect(functionDefinition).toContain("execution_lane = 'fargate'");
 	});
 
 	it("installs a trigger that notifies listeners when run events are inserted", async () => {

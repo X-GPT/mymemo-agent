@@ -339,6 +339,18 @@ describe("POST /v1/conversations", () => {
 		});
 		expect(res.status).toBe(400);
 	});
+
+	it("does not let public callers select an execution lane", async () => {
+		const { store, created } = fakeStore();
+		const res = await buildApp(store).request("/v1/conversations", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify({ executionLane: "agentcore_canary" }),
+		});
+
+		expect(res.status).toBe(400);
+		expect(created).toHaveLength(0);
+	});
 });
 
 describe("GET /v1/conversations", () => {

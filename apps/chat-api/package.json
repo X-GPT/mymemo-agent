@@ -6,7 +6,8 @@
 		"format": "biome format --write",
 		"lint": "biome lint --write",
 		"check": "biome check --write",
-		"db:migrate": "bun run src/db/migrate.ts"
+		"db:migrate": "bun run src/db/migrate.ts",
+		"db:execution-lane-deployment": "bun run src/db/execution-lane-deployment.ts"
 	},
 	"dependencies": {
 		"@ag-ui/core": "^0.0.57",

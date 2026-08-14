@@ -14,6 +14,10 @@ import {
 	timestamp,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
+import {
+	CONVERSATION_EXECUTION_LANES,
+	FARGATE_EXECUTION_LANE,
+} from "./execution-lane";
 
 /**
  * Drizzle schema for the writable agent database (`mymemo_agent`), distinct from
@@ -108,6 +112,12 @@ export const conversations = pgTable(
 		conversationId: text("conversation_id").notNull(),
 		/** 'general' | 'collection' | 'document' — frozen at creation. */
 		scope: text("scope").notNull(),
+		/** Immutable runtime classification; public creation always takes default. */
+		executionLane: text("execution_lane", {
+			enum: CONVERSATION_EXECUTION_LANES,
+		})
+			.notNull()
+			.default(FARGATE_EXECUTION_LANE),
 		/** Non-null only for collection scope. */
 		collectionId: text("collection_id"),
 		/** Non-null only for document scope. */
@@ -152,6 +162,10 @@ export const conversations = pgTable(
 			"conversations_scope_check",
 			sql`${t.scope} in ('general', 'collection', 'document')`,
 		),
+		check(
+			"conversations_execution_lane_check",
+			sql`${t.executionLane} in ('fargate', 'agentcore_canary')`,
+		),
 		index("conversations_regular_activity_idx")
 			.on(t.userId, t.lastActivityAt, t.conversationId)
 			.where(sql`${t.archivedAt} is null`),
@@ -165,6 +179,33 @@ export const conversations = pgTable(
 		index("conversations_reclamation_idx")
 			.on(t.ownerUntil)
 			.where(sql`${t.ownerUntil} is not null`),
+	],
+);
+
+/**
+ * Durable rollout fence for the later operator-only AgentCore creation path.
+ * Absence is fail-closed. The Fargate rollout marks this row ready only after
+ * every running task uses the lane-aware task definition; preparing a safe
+ * lane-unaware rollback clears it before the service can be rolled back.
+ */
+export const executionLaneDeployments = pgTable(
+	"execution_lane_deployments",
+	{
+		executionLane: text("execution_lane", {
+			enum: [FARGATE_EXECUTION_LANE],
+		})
+			.primaryKey()
+			.default(FARGATE_EXECUTION_LANE),
+		laneAware: boolean("lane_aware").notNull().default(false),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		check(
+			"execution_lane_deployments_lane_check",
+			sql`${t.executionLane} = 'fargate'`,
+		),
 	],
 );
 

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { eq } from "drizzle-orm";
 import {
 	agentSessions,
 	artifactObjects,
@@ -61,6 +62,11 @@ describe("PostgresConversationStore", () => {
 		});
 		expect(persisted?.createdAt).toBeInstanceOf(Date);
 		expect(persisted?.lastActivityAt).toEqual(persisted?.createdAt);
+		const [row] = await tdb.db
+			.select({ executionLane: conversations.executionLane })
+			.from(conversations)
+			.where(eq(conversations.conversationId, "conv-1"));
+		expect(row?.executionLane).toBe("fargate");
 	});
 
 	it("round-trips general and document scopes with null id columns", async () => {

@@ -356,8 +356,12 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 	});
 
 	describe("concurrent reclaimers", () => {
-		it("split lapsed Conversations without double-terminalizing their Runs", async () => {
+		it("split lapsed Conversations across both lanes without double-terminalizing their Runs", async () => {
 			await seedConversations("conv-a", "conv-b");
+			await db
+				.update(conversations)
+				.set({ executionLane: "agentcore_canary" })
+				.where(conversationKey("conv-a"));
 			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
 			await seedRun({ runId: "b", conversationId: "conv-b", order: 1 });
 			await db
@@ -473,6 +477,48 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 	});
 
 	describe("concurrent claimants", () => {
+		it("keeps a Fargate Claim isolated from concurrent AgentCore-canary acquisition", async () => {
+			await seedConversations("conv-agentcore", "conv-fargate");
+			await db
+				.update(conversations)
+				.set({ executionLane: "agentcore_canary" })
+				.where(conversationKey("conv-agentcore"));
+			await seedRun({
+				runId: "agentcore",
+				conversationId: "conv-agentcore",
+				order: 0,
+			});
+			await seedRun({
+				runId: "fargate",
+				conversationId: "conv-fargate",
+				order: 1,
+			});
+
+			const claim = await claimWhileHeld(async (tx) => {
+				await lockConversationRow(tx, "conv-agentcore");
+				await tx
+					.update(conversations)
+					.set({
+						ownerWorkerId: "agentcore-invocation",
+						ownerUntil: sql`now() + interval '60 seconds'`,
+					})
+					.where(conversationKey("conv-agentcore"));
+			}, "fargate-worker");
+
+			expect(claim).toMatchObject({
+				conversationId: "conv-fargate",
+				runIds: [ownedRunId("fargate")],
+			});
+			expect(
+				(
+					await db
+						.select({ ownerWorkerId: conversations.ownerWorkerId })
+						.from(conversations)
+						.where(conversationKey("conv-agentcore"))
+				)[0]?.ownerWorkerId,
+			).toBe("agentcore-invocation");
+		});
+
 		it("hands one Conversation to exactly one of them", async () => {
 			await seedConversations("conv-a");
 			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });

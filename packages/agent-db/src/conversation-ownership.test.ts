@@ -108,6 +108,33 @@ async function fenceAdmits(
 }
 
 describe("claimConversationTx", () => {
+	it("claims only Fargate Conversations", async () => {
+		await tdb.db
+			.update(conversations)
+			.set({ executionLane: "agentcore_canary" })
+			.where(eq(conversations.conversationId, "conv-1"));
+		await seedRun({
+			runId: "run-agentcore",
+			conversationId: "conv-1",
+			createdAt: new Date("2026-07-29T10:00:00Z"),
+		});
+		await seedRun({
+			runId: "run-fargate",
+			conversationId: "conv-2",
+			createdAt: new Date("2026-07-29T10:00:01Z"),
+		});
+
+		expect(
+			await claimConversationTx(tdb.db, { workerId: "fargate-worker" }),
+		).toMatchObject({
+			conversationId: "conv-2",
+			runIds: ["run-fargate"],
+		});
+		expect(
+			await claimConversationTx(tdb.db, { workerId: "another-worker" }),
+		).toBeNull();
+	});
+
 	it("takes a Conversation with a queued Run, and reports its identity, epoch, and deadline", async () => {
 		await seedRun({ runId: "run-1", conversationId: "conv-1" });
 		const before = Date.now();

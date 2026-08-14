@@ -18,6 +18,7 @@ describe("buildHealthResponse", () => {
 		expect(res.headers.get("content-type")).toContain("application/json");
 		expect(await res.json()).toEqual({
 			status: "ok",
+			executionLane: "fargate",
 			workerId: "worker-h",
 			activeConversations: 0,
 			maxConcurrentConversations: 2,
