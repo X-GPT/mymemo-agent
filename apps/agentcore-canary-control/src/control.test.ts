@@ -184,6 +184,29 @@ describe("the operator Canary control boundary", () => {
 		expect(await tdb.db.select().from(canaryDispatchOutbox)).toHaveLength(1);
 	});
 
+	it("refuses same-key reuse after the deployed prompt changes", async () => {
+		const verifier = new RecordingVerifier();
+		const request = {
+			idempotencyKey: "operator-approved-449",
+			campaignVersion: config.campaignVersion,
+		};
+		await createCanaryControl({ db: tdb.db, config, verifier }).start(request);
+		const changedControl = createCanaryControl({
+			db: tdb.db,
+			config: {
+				...config,
+				scenario: { ...config.scenario, prompt: "changed deployed prompt" },
+			},
+			verifier,
+		});
+
+		await expect(changedControl.start(request)).rejects.toThrow(
+			"different Canary Campaign input",
+		);
+		expect(await tdb.db.select().from(runs)).toHaveLength(1);
+		expect(await tdb.db.select().from(canaryDispatchOutbox)).toHaveLength(1);
+	});
+
 	it("refuses a different key from durable exclusivity before fixture work", async () => {
 		const verifier = new RecordingVerifier();
 		const control = createCanaryControl({ db: tdb.db, config, verifier });

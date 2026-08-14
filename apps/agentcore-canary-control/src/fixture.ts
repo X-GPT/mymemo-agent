@@ -36,7 +36,7 @@ function sortedDocuments(
 	documents: readonly CanaryFixtureDocument[],
 ): CanaryFixtureDocument[] {
 	return [...documents].sort((a, b) =>
-		a.documentId.localeCompare(b.documentId),
+		a.documentId < b.documentId ? -1 : a.documentId > b.documentId ? 1 : 0,
 	);
 }
 
@@ -107,10 +107,17 @@ interface FixtureDocumentRow {
  */
 export function createCanaryFixtureVerifier(
 	db: CanaryFixtureDb,
+	options: { approvedSyntheticUserId: string },
 ): CanaryFixtureVerifier {
 	return {
 		async verify(configured) {
 			validateConfiguredFixture(configured);
+			if (
+				options.approvedSyntheticUserId.trim() === "" ||
+				configured.identity.userId !== options.approvedSyntheticUserId
+			) {
+				fail("identity is not the deployment-approved synthetic identity");
+			}
 			const rows = await db.query<FixtureDocumentRow>(
 				`WITH current_documents AS (
 					SELECT DISTINCT ON (d.source_asset_id)
@@ -132,7 +139,6 @@ export function createCanaryFixtureVerifier(
 				  JOIN passage p ON p.id = pc.passage_id
 				  JOIN current_documents cd ON cd."documentId" = p.document_id
 				 WHERE c.compat_str_id = $2
-				   AND c.member_code = $1
 				   AND p.workspace_id = $1
 				   AND p.status = 'active'
 				 ORDER BY cd."documentId"`,

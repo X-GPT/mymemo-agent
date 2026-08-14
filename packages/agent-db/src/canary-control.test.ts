@@ -11,6 +11,7 @@ import {
 	admitCanaryScenarioTx,
 	advanceCanaryCampaignTx,
 	CanaryAdmissionError,
+	computeCanaryCampaignInputChecksum,
 	expireCanaryAuditRecordsTx,
 	startCanaryCampaignTx,
 } from "./canary-control";
@@ -74,6 +75,7 @@ async function seedConfiguredCampaign(
 		campaignVersion: campaign.campaignVersion,
 		fixtureVersion: campaign.fixtureVersion,
 		fixtureChecksum: campaign.fixtureChecksum,
+		inputChecksum: computeCanaryCampaignInputChecksum(campaign),
 		model: campaign.model,
 		scenarioId: campaign.scenarioId,
 		userId: campaign.userId,
@@ -144,6 +146,19 @@ describe("startCanaryCampaignTx", () => {
 				publishedAt: null,
 			},
 		]);
+	});
+
+	it("refuses same-key reuse when deployment-owned prompt input changes", async () => {
+		await startCanaryCampaignTx(tdb.db, campaign);
+
+		await expect(
+			startCanaryCampaignTx(tdb.db, {
+				...campaign,
+				prompt: "a changed deployed prompt",
+			}),
+		).rejects.toThrow("different Canary Campaign input");
+		expect(await tdb.db.select().from(runs)).toHaveLength(1);
+		expect(await tdb.db.select().from(canaryDispatchOutbox)).toHaveLength(1);
 	});
 
 	it("reattaches exact control and admission retries without duplicating durable work", async () => {

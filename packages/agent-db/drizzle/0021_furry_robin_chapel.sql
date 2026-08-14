@@ -1,0 +1,1 @@
+ALTER TABLE "canary_campaigns" ADD COLUMN "input_checksum" text NOT NULL;

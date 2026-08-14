@@ -224,6 +224,7 @@ export const canaryCampaigns = pgTable(
 		campaignVersion: text("campaign_version").notNull(),
 		fixtureVersion: text("fixture_version").notNull(),
 		fixtureChecksum: text("fixture_checksum").notNull(),
+		inputChecksum: text("input_checksum").notNull(),
 		model: text("model").notNull(),
 		scenarioId: text("scenario_id").notNull(),
 		userId: text("user_id").notNull(),

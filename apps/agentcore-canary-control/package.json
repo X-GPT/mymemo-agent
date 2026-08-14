@@ -1,5 +1,8 @@
 {
 	"name": "agentcore-canary-control",
+	"exports": {
+		"./handler": "./src/handler.ts"
+	},
 	"scripts": {
 		"test": "bun test --timeout=30000",
 		"format": "biome format --write",

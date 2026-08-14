@@ -3,6 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import {
 	type CanaryFixtureConfig,
 	type CanaryFixtureDb,
+	computeCanaryFixtureChecksum,
 	createCanaryFixtureVerifier,
 } from "./fixture";
 
@@ -73,7 +74,7 @@ beforeAll(async () => {
 			('fixture-current-passage', 'fixture-doc-v3', 'agentcore-canary-service', 'active'),
 			('real-passage', 'real-doc-v1', 'real-member', 'active');
 		INSERT INTO content_collection VALUES
-			(449, 'agentcore-canary-fixture', 'agentcore-canary-service'),
+			(449, 'agentcore-canary-fixture', 'a-different-storage-representation'),
 			(450, 'real-collection', 'real-member');
 		INSERT INTO passage_collection VALUES
 			('fixture-old-passage', '449'),
@@ -88,38 +89,137 @@ afterAll(async () => {
 
 describe("the configured Canary fixture verifier", () => {
 	it("verifies the non-human identity, collection, current document versions, content, and checksum", async () => {
-		const verifier = createCanaryFixtureVerifier(db);
+		const verifier = createCanaryFixtureVerifier(db, {
+			approvedSyntheticUserId: configuredFixture.identity.userId,
+		});
 
 		await expect(verifier.verify(configuredFixture)).resolves.toBeUndefined();
 	});
 
-	it("refuses identity, collection, inventory, version, content, and checksum drift", async () => {
-		const verifier = createCanaryFixtureVerifier(db);
-		const cases: CanaryFixtureConfig[] = [
-			{
-				...configuredFixture,
-				identity: { kind: "non_human", userId: "real-member" },
-			},
-			{ ...configuredFixture, collectionId: "real-collection" },
-			{ ...configuredFixture, documents: [] },
-			{
-				...configuredFixture,
-				documents: [{ ...configuredDocument, version: 2 }],
-			},
-			{
-				...configuredFixture,
-				documents: [
-					{
-						...configuredDocument,
-						contentSha256: "0".repeat(64),
-					},
-				],
-			},
-			{ ...configuredFixture, checksum: "0".repeat(64) },
-		];
+	it("refuses an identity that is not independently deployment-approved", async () => {
+		const identity = { kind: "non_human" as const, userId: "real-member" };
+		const changed = {
+			...configuredFixture,
+			identity,
+			checksum: computeCanaryFixtureChecksum({
+				version: configuredFixture.version,
+				identity,
+				collectionId: configuredFixture.collectionId,
+				documents: configuredFixture.documents,
+			}),
+		};
+		const verifier = createCanaryFixtureVerifier(db, {
+			approvedSyntheticUserId: configuredFixture.identity.userId,
+		});
 
-		for (const drifted of cases) {
-			await expect(verifier.verify(drifted)).rejects.toThrow("Canary fixture");
+		await expect(verifier.verify(changed)).rejects.toThrow(
+			"deployment-approved synthetic identity",
+		);
+	});
+
+	it("refuses actual KB-side identity drift", async () => {
+		const verifier = createCanaryFixtureVerifier(db, {
+			approvedSyntheticUserId: configuredFixture.identity.userId,
+		});
+		await client.exec(
+			"UPDATE passage SET workspace_id = 'wrong-workspace' WHERE id = 'fixture-current-passage'",
+		);
+		try {
+			await expect(verifier.verify(configuredFixture)).rejects.toThrow(
+				"drifted",
+			);
+		} finally {
+			await client.exec(
+				"UPDATE passage SET workspace_id = 'agentcore-canary-service' WHERE id = 'fixture-current-passage'",
+			);
 		}
+	});
+
+	it("refuses actual KB-side collection drift", async () => {
+		const verifier = createCanaryFixtureVerifier(db, {
+			approvedSyntheticUserId: configuredFixture.identity.userId,
+		});
+		await client.exec(
+			"UPDATE content_collection SET compat_str_id = 'wrong-collection' WHERE compat_int_id = 449",
+		);
+		try {
+			await expect(verifier.verify(configuredFixture)).rejects.toThrow(
+				"drifted",
+			);
+		} finally {
+			await client.exec(
+				"UPDATE content_collection SET compat_str_id = 'agentcore-canary-fixture' WHERE compat_int_id = 449",
+			);
+		}
+	});
+
+	it("refuses actual KB-side inventory drift", async () => {
+		const verifier = createCanaryFixtureVerifier(db, {
+			approvedSyntheticUserId: configuredFixture.identity.userId,
+		});
+		await client.exec(`
+			INSERT INTO source_asset VALUES ('extra-asset', 'agentcore-canary-service', 'ready');
+			INSERT INTO document VALUES ('extra-doc-v1', 'extra-asset', 'agentcore-canary-service', 1, 'extra fixture body', 'active');
+			INSERT INTO passage VALUES ('extra-passage', 'extra-doc-v1', 'agentcore-canary-service', 'active');
+			INSERT INTO passage_collection VALUES ('extra-passage', '449');
+		`);
+		try {
+			await expect(verifier.verify(configuredFixture)).rejects.toThrow(
+				"drifted",
+			);
+		} finally {
+			await client.exec(`
+				DELETE FROM passage_collection WHERE passage_id = 'extra-passage';
+				DELETE FROM passage WHERE id = 'extra-passage';
+				DELETE FROM document WHERE id = 'extra-doc-v1';
+				DELETE FROM source_asset WHERE id = 'extra-asset';
+			`);
+		}
+	});
+
+	it("refuses actual KB-side document-version drift", async () => {
+		const verifier = createCanaryFixtureVerifier(db, {
+			approvedSyntheticUserId: configuredFixture.identity.userId,
+		});
+		await client.exec(
+			"UPDATE document SET version = 4 WHERE id = 'fixture-doc-v3'",
+		);
+		try {
+			await expect(verifier.verify(configuredFixture)).rejects.toThrow(
+				"drifted",
+			);
+		} finally {
+			await client.exec(
+				"UPDATE document SET version = 3 WHERE id = 'fixture-doc-v3'",
+			);
+		}
+	});
+
+	it("refuses actual KB-side document-content drift", async () => {
+		const verifier = createCanaryFixtureVerifier(db, {
+			approvedSyntheticUserId: configuredFixture.identity.userId,
+		});
+		await client.exec(
+			"UPDATE document SET canonical_markdown = 'changed body' WHERE id = 'fixture-doc-v3'",
+		);
+		try {
+			await expect(verifier.verify(configuredFixture)).rejects.toThrow(
+				"drifted",
+			);
+		} finally {
+			await client.exec(
+				"UPDATE document SET canonical_markdown = 'synthetic fixture body v3' WHERE id = 'fixture-doc-v3'",
+			);
+		}
+	});
+
+	it("refuses a locally inconsistent configured checksum before querying KB", async () => {
+		const verifier = createCanaryFixtureVerifier(db, {
+			approvedSyntheticUserId: configuredFixture.identity.userId,
+		});
+
+		await expect(
+			verifier.verify({ ...configuredFixture, checksum: "0".repeat(64) }),
+		).rejects.toThrow("checksum does not match");
 	});
 });

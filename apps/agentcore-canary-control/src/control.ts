@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import {
 	findActiveCanaryCampaign,
 	findCanaryCampaignByIdempotencyKey,
+	requireCanaryCampaignMatchesInput,
+	type StartCanaryCampaignInput,
 	startCanaryCampaignTx,
 } from "@mymemo/agent-db/canary-control";
 import type { Database } from "@mymemo/agent-db/client";
@@ -123,27 +125,24 @@ export function createCanaryControl(options: {
 				...request,
 				scenarioId: config.scenario.id,
 			});
+			const campaignInput: StartCanaryCampaignInput = {
+				...identities,
+				idempotencyKey: request.idempotencyKey,
+				campaignVersion: config.campaignVersion,
+				fixtureVersion: config.fixture.version,
+				fixtureChecksum: config.fixture.checksum,
+				model: config.scenario.model,
+				scenarioId: config.scenario.id,
+				userId: config.fixture.identity.userId,
+				collectionId: config.fixture.collectionId,
+				prompt: config.scenario.prompt,
+			};
 			const existing = await findCanaryCampaignByIdempotencyKey(
 				db,
 				request.idempotencyKey,
 			);
 			if (existing) {
-				if (
-					existing.campaignId !== identities.campaignId ||
-					existing.campaignVersion !== config.campaignVersion ||
-					existing.fixtureVersion !== config.fixture.version ||
-					existing.fixtureChecksum !== config.fixture.checksum ||
-					existing.model !== config.scenario.model ||
-					existing.scenarioId !== config.scenario.id ||
-					existing.userId !== config.fixture.identity.userId ||
-					existing.conversationId !== identities.conversationId ||
-					existing.runId !== identities.runId ||
-					existing.messageId !== identities.messageId
-				) {
-					throw new Error(
-						"idempotency key is bound to a different Campaign configuration",
-					);
-				}
+				requireCanaryCampaignMatchesInput(existing, campaignInput);
 				return { outcome: "existing" as const, campaign: existing, identities };
 			}
 			const active = await findActiveCanaryCampaign(db);
@@ -156,18 +155,7 @@ export function createCanaryControl(options: {
 			}
 
 			await verifier.verify(config.fixture);
-			const result = await startCanaryCampaignTx(db, {
-				...identities,
-				idempotencyKey: request.idempotencyKey,
-				campaignVersion: config.campaignVersion,
-				fixtureVersion: config.fixture.version,
-				fixtureChecksum: config.fixture.checksum,
-				model: config.scenario.model,
-				scenarioId: config.scenario.id,
-				userId: config.fixture.identity.userId,
-				collectionId: config.fixture.collectionId,
-				prompt: config.scenario.prompt,
-			});
+			const result = await startCanaryCampaignTx(db, campaignInput);
 			return { ...result, identities };
 		},
 	};

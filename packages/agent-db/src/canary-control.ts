@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, eq, inArray, lte, ne } from "drizzle-orm";
 import {
 	CANARY_CAMPAIGN_LIFECYCLES,
@@ -32,6 +33,31 @@ export type CanaryCampaignRecord = typeof canaryCampaigns.$inferSelect;
 export type StartCanaryCampaignResult =
 	| { outcome: "created" | "existing"; campaign: CanaryCampaignRecord }
 	| { outcome: "active_campaign"; campaign: CanaryCampaignRecord };
+
+export function computeCanaryCampaignInputChecksum(
+	input: StartCanaryCampaignInput,
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				campaignId: input.campaignId,
+				idempotencyKey: input.idempotencyKey,
+				campaignVersion: input.campaignVersion,
+				fixtureVersion: input.fixtureVersion,
+				fixtureChecksum: input.fixtureChecksum,
+				model: input.model,
+				scenarioId: input.scenarioId,
+				userId: input.userId,
+				conversationId: input.conversationId,
+				collectionId: input.collectionId,
+				runId: input.runId,
+				messageId: input.messageId,
+				dispatchId: input.dispatchId,
+				prompt: input.prompt,
+			}),
+		)
+		.digest("hex");
+}
 
 export async function findCanaryCampaignByIdempotencyKey(
 	db: Database,
@@ -153,29 +179,14 @@ export class CanaryCampaignInputMismatchError extends Error {
 	override name = "CanaryCampaignInputMismatchError" as const;
 }
 
-function campaignMatchesInput(
-	campaign: CanaryCampaignRecord,
-	input: StartCanaryCampaignInput,
-): boolean {
-	return (
-		campaign.campaignId === input.campaignId &&
-		campaign.campaignVersion === input.campaignVersion &&
-		campaign.fixtureVersion === input.fixtureVersion &&
-		campaign.fixtureChecksum === input.fixtureChecksum &&
-		campaign.model === input.model &&
-		campaign.scenarioId === input.scenarioId &&
-		campaign.userId === input.userId &&
-		campaign.conversationId === input.conversationId &&
-		campaign.runId === input.runId &&
-		campaign.messageId === input.messageId
-	);
-}
-
-function requireCampaignMatchesInput(
+export function requireCanaryCampaignMatchesInput(
 	campaign: CanaryCampaignRecord,
 	input: StartCanaryCampaignInput,
 ): void {
-	if (!campaignMatchesInput(campaign, input)) {
+	if (
+		campaign.idempotencyKey !== input.idempotencyKey ||
+		campaign.inputChecksum !== computeCanaryCampaignInputChecksum(input)
+	) {
 		throw new CanaryCampaignInputMismatchError(
 			"idempotency key is already bound to different Canary Campaign input",
 		);
@@ -214,7 +225,7 @@ async function admitCanaryScenarioInTx(
 			"Canary scenario does not match an active configured Campaign",
 		);
 	}
-	requireCampaignMatchesInput(campaign, input);
+	requireCanaryCampaignMatchesInput(campaign, input);
 
 	const [conversation] = await tx
 		.select()
@@ -304,7 +315,7 @@ export async function startCanaryCampaignTx(
 			.where(eq(canaryCampaigns.idempotencyKey, input.idempotencyKey))
 			.limit(1);
 		if (sameKey) {
-			requireCampaignMatchesInput(sameKey, input);
+			requireCanaryCampaignMatchesInput(sameKey, input);
 			return { outcome: "existing", campaign: sameKey };
 		}
 
@@ -317,6 +328,7 @@ export async function startCanaryCampaignTx(
 				campaignVersion: input.campaignVersion,
 				fixtureVersion: input.fixtureVersion,
 				fixtureChecksum: input.fixtureChecksum,
+				inputChecksum: computeCanaryCampaignInputChecksum(input),
 				model: input.model,
 				scenarioId: input.scenarioId,
 				userId: input.userId,
@@ -333,7 +345,7 @@ export async function startCanaryCampaignTx(
 				.where(eq(canaryCampaigns.idempotencyKey, input.idempotencyKey))
 				.limit(1);
 			if (reattached) {
-				requireCampaignMatchesInput(reattached, input);
+				requireCanaryCampaignMatchesInput(reattached, input);
 				return { outcome: "existing", campaign: reattached };
 			}
 			const [active] = await tx
