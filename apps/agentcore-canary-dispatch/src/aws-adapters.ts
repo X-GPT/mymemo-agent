@@ -1,3 +1,4 @@
+import { InvokeAgentRuntimeCommand } from "@aws-sdk/client-bedrock-agentcore";
 import {
 	SendMessageCommand,
 	type SendMessageCommandOutput,
@@ -148,5 +149,3 @@ export function createBedrockAgentCoreRuntimeInvoker(options: {
 		},
 	};
 }
-
-import { InvokeAgentRuntimeCommand } from "@aws-sdk/client-bedrock-agentcore";

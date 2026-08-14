@@ -156,10 +156,11 @@ export async function confirmCanaryDispatchPublishedTx(
 		now?: Date;
 	},
 ): Promise<boolean> {
+	const now = input.now ?? new Date();
 	const confirmed = await db
 		.update(canaryDispatchOutbox)
 		.set({
-			publishedAt: input.now ?? new Date(),
+			publishedAt: now,
 			publishClaimedBy: null,
 			publishClaimUntil: null,
 		})
@@ -167,6 +168,7 @@ export async function confirmCanaryDispatchPublishedTx(
 			and(
 				eq(canaryDispatchOutbox.dispatchId, input.dispatchId),
 				eq(canaryDispatchOutbox.publishClaimedBy, input.publisherId),
+				gt(canaryDispatchOutbox.publishClaimUntil, now),
 			),
 		)
 		.returning({ dispatchId: canaryDispatchOutbox.dispatchId });

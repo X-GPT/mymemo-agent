@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CanarySqsBatchResponse, CanarySqsEvent } from "./consumer";
+import type { CanaryPublishResult } from "./publisher";
 
 const nonEmptyString = z.string().trim().min(1).max(500);
 const sqsEventSchema = z.object({
@@ -15,7 +16,7 @@ const manualReplaySchema = z.strictObject({
 	requestedBy: nonEmptyString,
 });
 
-interface LambdaContext {
+export interface LambdaContext {
 	awsRequestId: string;
 }
 
@@ -27,7 +28,7 @@ function requireRequestId(context: LambdaContext): string {
 }
 
 export function createCanaryPublisherHandler(options: {
-	publish(publisherId: string): Promise<unknown>;
+	publish(publisherId: string): Promise<CanaryPublishResult>;
 }) {
 	return async (_event: unknown, context: LambdaContext) =>
 		await options.publish(`lambda/${requireRequestId(context)}`);
@@ -50,7 +51,7 @@ export function createCanaryConsumerHandler(consumer: {
 
 export function createManualReplayHandler(options: {
 	replay(input: { dispatchId: string; requestedBy: string }): Promise<boolean>;
-	publish(publisherId: string): Promise<unknown>;
+	publish(publisherId: string): Promise<CanaryPublishResult>;
 }) {
 	return async (event: unknown, context: LambdaContext) => {
 		const parsed = manualReplaySchema.safeParse(event);
@@ -60,6 +61,12 @@ export function createManualReplayHandler(options: {
 		const publication = await options.publish(
 			`manual-replay/${requireRequestId(context)}`,
 		);
+		if (
+			!publication.publishedDispatchIds.includes(parsed.data.dispatchId) &&
+			!publication.ambiguousDispatchIds.includes(parsed.data.dispatchId)
+		) {
+			throw new Error("Canary dispatch is not eligible for replay");
+		}
 		return { replayed, publication };
 	};
 }

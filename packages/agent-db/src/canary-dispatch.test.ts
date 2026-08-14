@@ -416,6 +416,26 @@ describe("claimCanaryDispatchesTx", () => {
 		).resolves.toEqual([]);
 	});
 
+	it("refuses confirmation after the publisher's lease expires", async () => {
+		await claimCanaryDispatchesTx(tdb.db, {
+			publisherId: "publisher-1",
+			now: new Date("2026-08-14T16:01:00.000Z"),
+		});
+
+		await expect(
+			confirmCanaryDispatchPublishedTx(tdb.db, {
+				dispatchId: campaign.dispatchId,
+				publisherId: "publisher-1",
+				now: new Date("2026-08-14T16:04:00.000Z"),
+			}),
+		).resolves.toBe(false);
+		expect(
+			await tdb.db
+				.select({ publishedAt: canaryDispatchOutbox.publishedAt })
+				.from(canaryDispatchOutbox),
+		).toEqual([{ publishedAt: null }]);
+	});
+
 	it("audits a manual replay and republishes the same Run identity", async () => {
 		await claimCanaryDispatchesTx(tdb.db, {
 			publisherId: "publisher-1",
@@ -455,6 +475,26 @@ describe("claimCanaryDispatchesTx", () => {
 				publishAttempts: 2,
 			},
 		]);
+	});
+
+	it("keeps an audited replay past the pending deadline unpublishable", async () => {
+		await requestCanaryDispatchReplayTx(tdb.db, {
+			dispatchId: campaign.dispatchId,
+			requestedBy: "operator@example.com",
+			now: new Date("2026-08-14T16:06:00.000Z"),
+		});
+
+		await expect(
+			claimCanaryDispatchesTx(tdb.db, {
+				publisherId: "manual-replay-publisher",
+				now: new Date("2026-08-14T16:06:01.000Z"),
+			}),
+		).resolves.toEqual([]);
+		expect(
+			await tdb.db
+				.select({ requestedBy: canaryDispatchOutbox.replayRequestedBy })
+				.from(canaryDispatchOutbox),
+		).toEqual([{ requestedBy: "operator@example.com" }]);
 	});
 
 	it("marks five-minute pending work inconclusive and initiates Campaign cleanup", async () => {

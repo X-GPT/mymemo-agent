@@ -7,6 +7,7 @@ import {
 	startCanaryCampaignTx,
 } from "@mymemo/agent-db/canary-control";
 import type { Database } from "@mymemo/agent-db/client";
+import type { CanaryPublishResult } from "agentcore-canary-dispatch/publisher";
 import type { CanaryFixtureConfig, CanaryFixtureVerifier } from "./fixture";
 
 export interface CanaryControlConfig {
@@ -102,7 +103,7 @@ export function createCanaryControl(options: {
 	db: Database;
 	config: CanaryControlConfig;
 	verifier: CanaryFixtureVerifier;
-	publisher?: { publishPending(): Promise<unknown> };
+	publisher: { publishPending(): Promise<CanaryPublishResult> };
 }) {
 	const { db, config, verifier, publisher } = options;
 	requireConfigured(config.campaignVersion, "Campaign version");
@@ -116,10 +117,10 @@ export function createCanaryControl(options: {
 
 	return {
 		async start(rawRequest: unknown) {
-			const withPublication = async <T>(result: T) =>
-				publisher
-					? { ...result, publication: await publisher.publishPending() }
-					: result;
+			const withPublication = async <T>(result: T) => ({
+				...result,
+				publication: await publisher.publishPending(),
+			});
 			const request = parseCanaryStartRequest(rawRequest);
 			if (request.campaignVersion !== config.campaignVersion) {
 				throw new Error(

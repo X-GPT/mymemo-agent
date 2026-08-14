@@ -6,32 +6,30 @@ import { z } from "zod";
 
 const nonEmptyString = z.string().trim().min(1);
 
+const dispatchIdentityShape = {
+	schemaVersion: z.literal(1),
+	dispatchId: nonEmptyString,
+	campaignId: nonEmptyString,
+	scenarioId: nonEmptyString,
+	userId: nonEmptyString,
+	conversationId: nonEmptyString,
+	runId: nonEmptyString,
+	runtimeSessionId: nonEmptyString,
+	expectedExecutionLane: z.literal("agentcore_canary"),
+} as const;
+
 const dispatchEnvelopeSchema = z
 	.strictObject({
-		schemaVersion: z.literal(1),
-		dispatchId: nonEmptyString,
-		campaignId: nonEmptyString,
-		scenarioId: nonEmptyString,
-		userId: nonEmptyString,
-		conversationId: nonEmptyString,
-		runId: nonEmptyString,
-		runtimeSessionId: nonEmptyString,
-		expectedExecutionLane: z.literal("agentcore_canary"),
+		...dispatchIdentityShape,
 		admittedAt: z.iso.datetime(),
 	})
-	.refine((value) => value.runtimeSessionId === value.conversationId);
+	.refine((value) => value.runtimeSessionId === value.conversationId, {
+		message: "Runtime session mismatch",
+	});
 
 const acquisitionReceiptSchema = z
 	.strictObject({
-		schemaVersion: z.literal(1),
-		dispatchId: nonEmptyString,
-		campaignId: nonEmptyString,
-		scenarioId: nonEmptyString,
-		userId: nonEmptyString,
-		conversationId: nonEmptyString,
-		runId: nonEmptyString,
-		runtimeSessionId: nonEmptyString,
-		expectedExecutionLane: z.literal("agentcore_canary"),
+		...dispatchIdentityShape,
 		disposition: z.enum([
 			"acquired",
 			"already_acquired",

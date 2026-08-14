@@ -16,6 +16,7 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import type { CanaryPublishResult } from "agentcore-canary-dispatch/publisher";
 import {
 	createCanaryControl,
 	deriveCanaryScenarioIdentities,
@@ -65,6 +66,16 @@ const config = {
 		model: "configured-model",
 	},
 } as const;
+
+const enabledPublication: CanaryPublishResult = {
+	status: "enabled",
+	overdueCampaignIds: [],
+	publishedDispatchIds: [],
+	ambiguousDispatchIds: [],
+};
+const publisher = {
+	publishPending: async () => enabledPublication,
+};
 
 class RecordingVerifier implements CanaryFixtureVerifier {
 	verified: CanaryFixtureConfig[] = [];
@@ -124,7 +135,12 @@ describe("the operator Canary control boundary", () => {
 
 	it("verifies the configured fixture then admits deterministic configuration-owned identities", async () => {
 		const verifier = new RecordingVerifier();
-		const control = createCanaryControl({ db: tdb.db, config, verifier });
+		const control = createCanaryControl({
+			db: tdb.db,
+			config,
+			verifier,
+			publisher,
+		});
 
 		const created = await control.start({
 			idempotencyKey: "operator-approved-449",
@@ -176,7 +192,7 @@ describe("the operator Canary control boundary", () => {
 					expect(await tdb.db.select().from(canaryDispatchOutbox)).toHaveLength(
 						1,
 					);
-					return { status: "enabled" as const };
+					return enabledPublication;
 				},
 			},
 		});
@@ -195,7 +211,12 @@ describe("the operator Canary control boundary", () => {
 
 	it("reattaches an exact retry without re-verifying or creating another scenario", async () => {
 		const verifier = new RecordingVerifier();
-		const control = createCanaryControl({ db: tdb.db, config, verifier });
+		const control = createCanaryControl({
+			db: tdb.db,
+			config,
+			verifier,
+			publisher,
+		});
 		const request = {
 			idempotencyKey: "operator-approved-449",
 			campaignVersion: config.campaignVersion,
@@ -219,7 +240,12 @@ describe("the operator Canary control boundary", () => {
 			idempotencyKey: "operator-approved-449",
 			campaignVersion: config.campaignVersion,
 		};
-		await createCanaryControl({ db: tdb.db, config, verifier }).start(request);
+		await createCanaryControl({
+			db: tdb.db,
+			config,
+			verifier,
+			publisher,
+		}).start(request);
 		const changedControl = createCanaryControl({
 			db: tdb.db,
 			config: {
@@ -227,6 +253,7 @@ describe("the operator Canary control boundary", () => {
 				scenario: { ...config.scenario, prompt: "changed deployed prompt" },
 			},
 			verifier,
+			publisher,
 		});
 
 		await expect(changedControl.start(request)).rejects.toThrow(
@@ -238,7 +265,12 @@ describe("the operator Canary control boundary", () => {
 
 	it("refuses a different key from durable exclusivity before fixture work", async () => {
 		const verifier = new RecordingVerifier();
-		const control = createCanaryControl({ db: tdb.db, config, verifier });
+		const control = createCanaryControl({
+			db: tdb.db,
+			config,
+			verifier,
+			publisher,
+		});
 		await control.start({
 			idempotencyKey: "operator-approved-449",
 			campaignVersion: config.campaignVersion,
@@ -266,7 +298,12 @@ describe("the operator Canary control boundary", () => {
 				throw new Error("Canary fixture checksum mismatch");
 			},
 		};
-		const control = createCanaryControl({ db: tdb.db, config, verifier });
+		const control = createCanaryControl({
+			db: tdb.db,
+			config,
+			verifier,
+			publisher,
+		});
 
 		await expect(
 			control.start({

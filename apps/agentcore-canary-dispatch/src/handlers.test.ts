@@ -4,6 +4,14 @@ import {
 	createCanaryPublisherHandler,
 	createManualReplayHandler,
 } from "./handlers";
+import type { CanaryPublishResult } from "./publisher";
+
+const enabledPublication: CanaryPublishResult = {
+	status: "enabled",
+	overdueCampaignIds: [],
+	publishedDispatchIds: ["dispatch-450"],
+	ambiguousDispatchIds: [],
+};
 
 describe("Canary dispatch Lambda handlers", () => {
 	it("gives immediate and scheduled publication the same invocation-scoped behavior", async () => {
@@ -11,13 +19,13 @@ describe("Canary dispatch Lambda handlers", () => {
 		const handler = createCanaryPublisherHandler({
 			publish: async (publisherId) => {
 				publishers.push(publisherId);
-				return { status: "enabled" as const };
+				return enabledPublication;
 			},
 		});
 
 		await expect(
 			handler({}, { awsRequestId: "lambda-request-1" }),
-		).resolves.toEqual({ status: "enabled" });
+		).resolves.toEqual(enabledPublication);
 		expect(publishers).toEqual(["lambda/lambda-request-1"]);
 	});
 
@@ -61,7 +69,7 @@ describe("Canary dispatch Lambda handlers", () => {
 			},
 			publish: async (publisherId) => {
 				calls.push(`publish:${publisherId}`);
-				return { status: "enabled" as const };
+				return enabledPublication;
 			},
 		});
 
@@ -70,10 +78,27 @@ describe("Canary dispatch Lambda handlers", () => {
 				{ dispatchId: "dispatch-450", requestedBy: "operator@example.com" },
 				{ awsRequestId: "manual-request-1" },
 			),
-		).resolves.toEqual({ replayed: true, publication: { status: "enabled" } });
+		).resolves.toEqual({ replayed: true, publication: enabledPublication });
 		expect(calls).toEqual([
 			"replay:dispatch-450:operator@example.com",
 			"publish:manual-replay/manual-request-1",
 		]);
+	});
+
+	it("does not report replay success when the exact dispatch is no longer publishable", async () => {
+		const handler = createManualReplayHandler({
+			replay: async () => true,
+			publish: async () => ({
+				...enabledPublication,
+				publishedDispatchIds: [],
+			}),
+		});
+
+		await expect(
+			handler(
+				{ dispatchId: "dispatch-450", requestedBy: "operator@example.com" },
+				{ awsRequestId: "manual-request-1" },
+			),
+		).rejects.toThrow("Canary dispatch is not eligible for replay");
 	});
 });

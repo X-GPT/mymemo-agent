@@ -31,6 +31,7 @@ describe("AgentCore acquisition boundary", () => {
 			finishCommit = resolve;
 		});
 		const boundary = createCanaryAcquisitionBoundary({
+			control: { isEnabled: async () => true },
 			acquire: async (input) => {
 				expect(input).toEqual({
 					dispatch,
@@ -71,5 +72,22 @@ describe("AgentCore acquisition boundary", () => {
 			workerId: "boot-1/invocation-1",
 			committedAt: "2026-08-14T16:01:00.000Z",
 		});
+	});
+
+	it("fails closed before Durable acquisition when dispatch is disabled", async () => {
+		let acquired = false;
+		const boundary = createCanaryAcquisitionBoundary({
+			control: { isEnabled: async () => false },
+			acquire: async () => {
+				acquired = true;
+				return { disposition: "temporarily_unavailable" };
+			},
+			createWorkerId: () => "boot-1/invocation-1",
+		});
+
+		await expect(
+			boundary.handle(serializeCanaryDispatchEnvelope(dispatch)),
+		).rejects.toThrow("Canary dispatch is disabled");
+		expect(acquired).toBe(false);
 	});
 });

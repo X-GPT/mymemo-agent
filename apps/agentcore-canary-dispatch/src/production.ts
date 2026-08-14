@@ -18,6 +18,7 @@ import {
 	createCanaryConsumerHandler,
 	createCanaryPublisherHandler,
 	createManualReplayHandler,
+	type LambdaContext,
 } from "./handlers";
 import { createCanaryDispatchPublisher } from "./publisher";
 
@@ -90,6 +91,7 @@ export function createCanaryDispatchProductionServices(
 	const acquisition = createDatabaseCanaryAcquisitionBoundary({
 		db,
 		bootId: crypto.randomUUID(),
+		control,
 	});
 	const consumer = createCanaryDispatchConsumer({
 		control,
@@ -126,10 +128,7 @@ function services() {
 	return productionServices;
 }
 
-export async function publisherHandler(
-	event: unknown,
-	context: { awsRequestId: string },
-) {
+export async function publisherHandler(event: unknown, context: LambdaContext) {
 	return await createCanaryPublisherHandler({ publish: services().publish })(
 		event,
 		context,
@@ -144,7 +143,7 @@ export async function consumerHandler(event: unknown) {
 
 export async function manualReplayHandler(
 	event: unknown,
-	context: { awsRequestId: string },
+	context: LambdaContext,
 ) {
 	const current = services();
 	return await createManualReplayHandler({
