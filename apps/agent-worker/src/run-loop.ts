@@ -7,7 +7,6 @@ import {
 } from "@mymemo/agent-db/conversation-ownership";
 import {
 	expireUnownedQueuedRunsTx,
-	type FenceRejection,
 	type RunRecord,
 	type RunWriteRejected,
 	reclaimConversationTx,
@@ -18,6 +17,7 @@ import { toMessage, type WorkerLogger } from "./logger";
 import { DoorbellTicker, type RunDoorbell } from "./run-doorbell";
 import {
 	createRunServing,
+	type OwnershipLossReason,
 	type RunProcessor,
 	type RunServing,
 } from "./run-serving";
@@ -57,11 +57,10 @@ interface ActiveDrain {
 	/**
 	 * Why the drain stopped early, if it did. Both mean "do not release": a lost
 	 * lease belongs to a successor whose ownership releasing would revoke, and a
-	 * deleted Conversation has nothing left to release. Spelled as the fence
-	 * vocabulary minus the one rejection that does *not* stop a drain, so the two
-	 * cannot drift.
+	 * deleted Conversation has nothing left to release. Shared with the serving
+	 * seam so the two layers cannot drift on the Ownership-loss vocabulary.
 	 */
-	halted?: Exclude<FenceRejection["rejected"], "status">;
+	halted?: OwnershipLossReason;
 }
 
 /** Map key for one Conversation; the table's key is `(user, conversation)`. */
@@ -428,22 +427,13 @@ export class RunLoop {
 			});
 			return;
 		}
-		drain.halted = rejection.rejected;
-		this.opts.logger.warn({
-			message:
-				rejection.rejected === "gone"
-					? "stopping drain: the conversation no longer exists"
-					: "stopping drain: the Ownership lease is gone",
-			workerId: this.workerId,
-			conversationId: drain.owner.conversationId,
-			runId,
-		});
+		this.haltDrainAfterOwnershipLoss(drain, runId, rejection.rejected);
 	}
 
 	private haltDrainAfterOwnershipLoss(
 		drain: ActiveDrain,
 		runId: string | undefined,
-		reason: "lease" | "gone",
+		reason: OwnershipLossReason,
 	): void {
 		if (!drain.halted) {
 			this.opts.logger.warn({
@@ -497,7 +487,7 @@ export class RunLoop {
 			entry.shutdownController.abort();
 		}
 		try {
-			const result = await this.runServing.serveStartedRun({
+			await this.runServing.serveStartedRun({
 				run,
 				owner: {
 					...drain.owner,
@@ -508,9 +498,6 @@ export class RunLoop {
 				onOwnershipLost: (reason) =>
 					this.haltDrainAfterOwnershipLoss(drain, run.runId, reason),
 			});
-			if (result.type === "ownership_lost") {
-				this.haltDrainAfterOwnershipLoss(drain, run.runId, result.reason);
-			}
 		} finally {
 			if (drain.served === entry) drain.served = undefined;
 		}

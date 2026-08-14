@@ -99,7 +99,8 @@ export interface RunProcessContext {
 	interruptionSignal: AbortSignal;
 	/** Fires on runtime shutdown. */
 	shutdownSignal: AbortSignal;
-	/** Fires only when the Conversation Ownership fence is lost. */
+	/** Fires when this worker must immediately stop private SDK work because the
+	 * Conversation fence was lost or the Run reached an Outcome elsewhere. */
 	ownershipLostSignal: AbortSignal;
 	appendModelContent(content: ModelContent): Promise<number>;
 	appendModelContents(contents: readonly ModelContent[]): Promise<number[]>;
@@ -111,6 +112,9 @@ export interface RunProcessContext {
 type RunTurnResult = void | TurnResult;
 
 export type RunProcessor = (ctx: RunProcessContext) => Promise<RunTurnResult>;
+
+/** The Conversation-level reasons a live Ownership fence can reject work. */
+export type OwnershipLossReason = "lease" | "gone";
 
 export interface RunServingOptions {
 	db: Database;
@@ -129,7 +133,7 @@ export interface ServeStartedRunInput {
 	/** Runtime shutdown, distinct from durable user interruption. */
 	shutdownSignal: AbortSignal;
 	/** Lets a runtime stop managing the superseded Conversation immediately. */
-	onOwnershipLost?: (reason: "lease" | "gone") => void;
+	onOwnershipLost?: (reason: OwnershipLossReason) => void;
 }
 
 /** The complete result of serving one already-started Run. */
@@ -141,7 +145,7 @@ export type ServeStartedRunResult =
 	  }
 	| {
 			type: "ownership_lost";
-			reason: "lease" | "gone";
+			reason: OwnershipLossReason;
 	  }
 	| {
 			type: "shutdown";
@@ -151,7 +155,7 @@ export type ServeStartedRunResult =
 interface RunEndState {
 	interrupted: boolean;
 	skipTerminalization: boolean;
-	ownershipLoss?: "lease" | "gone";
+	ownershipLoss?: OwnershipLossReason;
 }
 
 interface ActiveServing {
@@ -203,7 +207,7 @@ class PostgresRunServing implements RunServing {
 		this.active.add(entry);
 		this.scheduleHeartbeat(entry);
 		try {
-			return await this.execute(entry);
+			return await this.serveEntry(entry);
 		} finally {
 			this.active.delete(entry);
 			if (entry.heartbeatTimer) clearTimeout(entry.heartbeatTimer);
@@ -213,7 +217,7 @@ class PostgresRunServing implements RunServing {
 
 	async heartbeat(): Promise<void> {
 		await Promise.all(
-			[...this.active].map((entry) => this.heartbeatEntry(entry)),
+			[...this.active].map((entry) => this.runHeartbeatCycle(entry)),
 		);
 	}
 
@@ -239,36 +243,45 @@ class PostgresRunServing implements RunServing {
 	}
 
 	private scheduleHeartbeat(entry: ActiveServing): void {
+		if (entry.heartbeatTimer) clearTimeout(entry.heartbeatTimer);
 		entry.heartbeatTimer = setTimeout(() => {
-			void this.heartbeatEntry(entry)
-				.catch((error) => {
-					this.options.logger.error({
-						message: "Run-serving heartbeat failed",
-						workerId: entry.input.owner.workerId,
-						runId: entry.input.owner.runId,
-						error: toMessage(error),
-					});
-				})
-				.finally(() => {
-					if (
-						this.active.has(entry) &&
-						!entry.state.ownershipLoss &&
-						!entry.input.shutdownSignal.aborted
-					) {
-						this.scheduleHeartbeat(entry);
-					}
+			entry.heartbeatTimer = undefined;
+			void this.runHeartbeatCycle(entry).catch((error) => {
+				this.options.logger.error({
+					message: "Run-serving heartbeat failed",
+					workerId: entry.input.owner.workerId,
+					runId: entry.input.owner.runId,
+					error: toMessage(error),
 				});
+			});
 		}, this.options.heartbeatIntervalMs);
 	}
 
-	private heartbeatEntry(entry: ActiveServing): Promise<void> {
-		if (
-			!this.active.has(entry) ||
-			entry.state.ownershipLoss ||
-			entry.input.shutdownSignal.aborted
-		) {
-			return Promise.resolve();
+	/** One prompted or scheduled heartbeat resets the next scheduled beat, so
+	 * an always-on runtime tick cannot double the renewal query rate. */
+	private async runHeartbeatCycle(entry: ActiveServing): Promise<void> {
+		if (entry.heartbeatTimer) {
+			clearTimeout(entry.heartbeatTimer);
+			entry.heartbeatTimer = undefined;
 		}
+		try {
+			await this.heartbeatEntry(entry);
+		} finally {
+			if (this.shouldHeartbeat(entry)) this.scheduleHeartbeat(entry);
+		}
+	}
+
+	private shouldHeartbeat(entry: ActiveServing): boolean {
+		return (
+			this.active.has(entry) &&
+			!entry.state.ownershipLoss &&
+			!entry.state.skipTerminalization &&
+			!entry.input.shutdownSignal.aborted
+		);
+	}
+
+	private heartbeatEntry(entry: ActiveServing): Promise<void> {
+		if (!this.shouldHeartbeat(entry)) return Promise.resolve();
 		if (entry.heartbeatInFlight) return entry.heartbeatInFlight;
 		const heartbeat = this.performHeartbeat(entry).finally(() => {
 			if (entry.heartbeatInFlight === heartbeat) {
@@ -313,8 +326,18 @@ class PostgresRunServing implements RunServing {
 		}
 		if (!this.active.has(entry)) return;
 		if (!observed) {
+			// This Run reached its Outcome under us while the Conversation lease
+			// stayed live. Stop the private SDK immediately and detach only this Run;
+			// the caller may continue draining the Conversation snapshot.
 			entry.state.skipTerminalization = true;
 			entry.controller.abort();
+			entry.ownershipLostController.abort();
+			this.options.logger.warn({
+				message: "abandoning a run this worker no longer owns",
+				workerId: owner.workerId,
+				conversationId: owner.conversationId,
+				runId: owner.runId,
+			});
 			return;
 		}
 		if (observed.status === "interrupt_requested") {
@@ -326,7 +349,7 @@ class PostgresRunServing implements RunServing {
 
 	private noteOwnershipLost(
 		entry: ActiveServing,
-		reason: "lease" | "gone",
+		reason: OwnershipLossReason,
 	): void {
 		if (entry.state.ownershipLoss) return;
 		entry.state.ownershipLoss = reason;
@@ -367,7 +390,9 @@ class PostgresRunServing implements RunServing {
 		this.noteOwnershipLost(entry, rejection.rejected);
 	}
 
-	private async execute(entry: ActiveServing): Promise<ServeStartedRunResult> {
+	private async serveEntry(
+		entry: ActiveServing,
+	): Promise<ServeStartedRunResult> {
 		const { run, owner, shutdownSignal } = entry.input;
 		const liveStream = await RunLiveStream.open({
 			relay: this.options.liveStreamRelay,
@@ -400,7 +425,7 @@ class PostgresRunServing implements RunServing {
 		entry.liveStream = liveStream;
 		if (entry.state.ownershipLoss || entry.state.skipTerminalization) {
 			await liveStream.close();
-			return this.result(entry, null);
+			return this.classifyResult(entry, null);
 		}
 
 		let turnResult: TurnResult = EMPTY_TURN;
@@ -437,13 +462,13 @@ class PostgresRunServing implements RunServing {
 		try {
 			const terminalStatus = await this.finish(entry, turnResult, failure);
 			if (terminalStatus) await liveStream.finish(terminalStatus);
-			return this.result(entry, terminalStatus);
+			return this.classifyResult(entry, terminalStatus);
 		} finally {
 			await liveStream.close();
 		}
 	}
 
-	private result(
+	private classifyResult(
 		entry: ActiveServing,
 		status: TerminalRunStatus | null,
 	): ServeStartedRunResult {
@@ -491,12 +516,19 @@ class PostgresRunServing implements RunServing {
 		turnResult: TurnResult,
 		failure?: { error: unknown; streamMetadata?: TurnStreamMetadata },
 	): Promise<TerminalRunStatus | null> {
-		if (entry.state.ownershipLoss) return null;
-		if (entry.state.skipTerminalization) return null;
+		if (entry.state.ownershipLoss) {
+			return null;
+		}
+		if (entry.state.skipTerminalization) {
+			return null;
+		}
 
 		const agentSessionId = resumableAgentSessionId(
 			failure?.streamMetadata ?? turnResult.streamMetadata,
 		);
+		// Interruption wins over both success and failure: an SDK error raised
+		// while interrupting still surfaces as `interrupted`. A mirrored main
+		// session publishes its first or later resume pointer with this Outcome.
 		if (entry.state.interrupted) {
 			return this.terminalize(entry, {
 				status: "interrupted",
@@ -522,6 +554,9 @@ class PostgresRunServing implements RunServing {
 				interruptedAgentSessionId: agentSessionId,
 			});
 		}
+		// Success terminalizes `done` directly — there is no end-of-turn
+		// checkpoint (ADR-0007); the paused sandbox is the persisted workspace.
+		// The same fenced transaction publishes a usable resume pointer (ADR-0005).
 		if (turnResult.artifactPublication) {
 			return this.publishArtifactsAndFinish(
 				entry,
@@ -598,6 +633,9 @@ class PostgresRunServing implements RunServing {
 		});
 	}
 
+	/** Append a non-error terminal event through the fenced Run-store helper.
+	 * A concurrent durable interruption rejects `done`, then reconciliation
+	 * follows up with the one terminal transition that remains legal. */
 	private async terminalize(
 		entry: ActiveServing,
 		outcome: Exclude<TerminalOutcome, { status: "error" }>,
@@ -612,6 +650,8 @@ class PostgresRunServing implements RunServing {
 		});
 	}
 
+	/** Resolve a refused terminal transition. Ownership loss leaves the Run to
+	 * Reclamation; an interruption status refusal is retried as `interrupted`. */
 	private async reconcileRejectedTerminal(
 		entry: ActiveServing,
 		rejection: RunWriteRejected,
@@ -687,6 +727,8 @@ function artifactFailureLogFields(error: unknown): Record<string, unknown> {
 function resumableAgentSessionId(
 	metadata: TurnStreamMetadata | undefined,
 ): string | undefined {
+	// Interruption is reconciled before mirror-failure classification, so this
+	// guard is load-bearing for done, interrupted, and error→interrupted Outcomes.
 	if (
 		!metadata ||
 		metadata.mirrorErrorObserved ||

@@ -1,10 +1,18 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { recordArtifactObjectsTx } from "@mymemo/agent-db/artifact-store";
 import { claimConversationTx } from "@mymemo/agent-db/conversation-ownership";
 import {
 	requestRunInterruptionTx,
 	startClaimedRunTx,
+	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
-import { conversations, runs } from "@mymemo/agent-db/schema";
+import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
+import {
+	conversationArtifacts,
+	conversationRuntime,
+	conversations,
+	runs,
+} from "@mymemo/agent-db/schema";
 import {
 	createTestDatabase,
 	seedQueuedRun,
@@ -133,6 +141,57 @@ describe("serveStartedRun", () => {
 		expect(stored?.status).toBe("running");
 	});
 
+	it("abandons a Run that already reached an Outcome without halting its Conversation", async () => {
+		const { claim, run } = await startRun();
+		const processorStarted = deferred();
+		const ownershipStopped = deferred();
+		const releaseProcessor = deferred();
+		const serving = createRunServing({
+			db: tdb.db,
+			processor: async (ctx) => {
+				if (ctx.ownershipLostSignal.aborted) ownershipStopped.resolve();
+				else {
+					ctx.ownershipLostSignal.addEventListener(
+						"abort",
+						() => ownershipStopped.resolve(),
+						{ once: true },
+					);
+				}
+				processorStarted.resolve();
+				await ownershipStopped.promise;
+				await releaseProcessor.promise;
+			},
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
+			heartbeatIntervalMs: 5,
+			logger: silentLogger,
+		});
+		const owner = { ...claim, runId: run.runId, workerId: "worker-1" };
+		const resultPromise = serving.serveStartedRun({
+			run,
+			owner,
+			shutdownSignal: new AbortController().signal,
+		});
+		await processorStarted.promise;
+
+		expect(
+			await transitionRunTerminalTx(tdb.db, { owner, status: "done" }),
+		).toMatchObject({ outcome: "committed" });
+		await ownershipStopped.promise;
+		await tdb.db
+			.update(conversations)
+			.set({ ownerUntil: sql`now() + interval '1 second'` })
+			.where(eq(conversations.conversationId, run.conversationId));
+		await Bun.sleep(20);
+		const [ownership] = await tdb.db
+			.select({ ownerUntil: conversations.ownerUntil })
+			.from(conversations)
+			.where(eq(conversations.conversationId, run.conversationId));
+		expect(ownership?.ownerUntil?.getTime()).toBeLessThan(Date.now() + 30_000);
+
+		releaseProcessor.resolve();
+		expect(await resultPromise).toEqual({ type: "terminal", status: null });
+	});
+
 	it("lets durable interruption win over processor failure", async () => {
 		const { claim, run } = await startRun();
 		const serving = createRunServing({
@@ -206,5 +265,126 @@ describe("serveStartedRun", () => {
 			type: "shutdown",
 			status: "error",
 		});
+	});
+
+	it("degrades Live Stream publication without changing durable execution", async () => {
+		const { claim, run } = await startRun();
+		const liveStreamRelay = createInMemoryLiveStreamRelay();
+		await liveStreamRelay.close();
+		const serving = createRunServing({
+			db: tdb.db,
+			processor: async (ctx) => {
+				await ctx.appendModelContent({
+					kind: "assistant_message",
+					payload: { messageId: "message-1", text: "still durable" },
+				});
+			},
+			liveStreamRelay,
+			heartbeatIntervalMs: 15_000,
+			logger: silentLogger,
+		});
+
+		expect(
+			await serving.serveStartedRun({
+				run,
+				owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+				shutdownSignal: new AbortController().signal,
+			}),
+		).toEqual({ type: "terminal", status: "done" });
+		const [stored] = await tdb.db
+			.select({
+				status: runs.status,
+				liveStreamFailedAt: runs.liveStreamFailedAt,
+			})
+			.from(runs)
+			.where(eq(runs.runId, run.runId));
+		expect(stored).toMatchObject({
+			status: "done",
+			liveStreamFailedAt: expect.any(Date),
+		});
+	});
+
+	it("fails closed on unreliable mirror evidence", async () => {
+		const { claim, run } = await startRun();
+		const serving = createRunServing({
+			db: tdb.db,
+			processor: async () => ({
+				disposition: "completed",
+				streamMetadata: {
+					mirrorErrorObserved: true,
+					mirroredMainSessionId: "session-unreliable",
+				},
+			}),
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
+			heartbeatIntervalMs: 15_000,
+			logger: silentLogger,
+		});
+
+		expect(
+			await serving.serveStartedRun({
+				run,
+				owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+				shutdownSignal: new AbortController().signal,
+			}),
+		).toEqual({ type: "terminal", status: "error" });
+	});
+
+	it("publishes staged artifacts and resumable session evidence atomically", async () => {
+		const { claim, run } = await startRun();
+		const owner = { ...claim, runId: run.runId, workerId: "worker-1" };
+		await createConversationRuntimeTx(tdb.db, claim);
+		await recordArtifactObjectsTx(tdb.db, {
+			objects: [
+				{
+					objectKey: "objects/opaque-1",
+					userId: run.userId,
+					conversationId: run.conversationId,
+					runId: run.runId,
+					path: "report.txt",
+				},
+			],
+		});
+		const serving = createRunServing({
+			db: tdb.db,
+			processor: async () => ({
+				disposition: "completed",
+				streamMetadata: {
+					mirrorErrorObserved: false,
+					mirroredMainSessionId: "session-1",
+				},
+				artifactPublication: {
+					artifacts: [
+						{
+							artifactId: "artifact-1",
+							path: "report.txt",
+							objectKey: "objects/opaque-1",
+							sizeBytes: 12,
+							contentType: "text/plain",
+						},
+					],
+				},
+			}),
+			liveStreamRelay: createInMemoryLiveStreamRelay(),
+			heartbeatIntervalMs: 15_000,
+			logger: silentLogger,
+		});
+
+		expect(
+			await serving.serveStartedRun({
+				run,
+				owner,
+				shutdownSignal: new AbortController().signal,
+			}),
+		).toEqual({ type: "terminal", status: "done" });
+		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([
+			expect.objectContaining({
+				artifactId: "artifact-1",
+				objectKey: "objects/opaque-1",
+				path: "report.txt",
+			}),
+		]);
+		expect(await tdb.db.select().from(conversationRuntime)).toEqual([
+			expect.objectContaining({ agentSessionId: "session-1" }),
+		]);
 	});
 });
