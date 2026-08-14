@@ -5,6 +5,7 @@ import {
 	appendRunEventTx,
 	requestRunInterruptionTx,
 	startClaimedRunTx,
+	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 import {
 	createConversationRuntimeTx,
@@ -565,6 +566,57 @@ describe("RunLoop — conversation drain", () => {
 		expect(served).toEqual(["run-1", "run-3"]);
 		expect((await readRun("run-2"))?.status).toBe("interrupted");
 		expect((await readRun("run-3"))?.status).toBe("done");
+	});
+
+	it("renews the Conversation while an abandoned Run unwinds", async () => {
+		const worker = buildWorker(1);
+		const processorStarted = deferred();
+		const abandoned = deferred();
+		const releaseProcessor = deferred();
+		let firstOwner: Parameters<RunProcessor>[0]["owner"] | undefined;
+		const loop = buildLoop(worker, async (ctx) => {
+			if (ctx.run.runId !== "run-1") return;
+			firstOwner = ctx.owner;
+			if (ctx.ownershipLostSignal.aborted) abandoned.resolve();
+			else {
+				ctx.ownershipLostSignal.addEventListener(
+					"abort",
+					() => abandoned.resolve(),
+					{ once: true },
+				);
+			}
+			processorStarted.resolve();
+			await abandoned.promise;
+			await releaseProcessor.promise;
+		});
+		await queueRun("run-1", "conv-1");
+		await queueRun("run-2", "conv-1");
+		await backdateRun("run-1", 5_000);
+		await startDrain(loop);
+		await processorStarted.promise;
+		if (!firstOwner) throw new Error("processor did not expose its Run owner");
+
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: firstOwner,
+				status: "done",
+			}),
+		).toMatchObject({ outcome: "committed" });
+		await loop.tick();
+		await abandoned.promise;
+
+		await tdb.db
+			.update(conversations)
+			.set({ ownerUntil: sql`now() + interval '1 second'` })
+			.where(eq(conversations.conversationId, "conv-1"));
+		await loop.tick();
+		expect(
+			(await readOwnership("conv-1"))?.ownerUntil?.getTime(),
+		).toBeGreaterThan(Date.now() + 30_000);
+
+		releaseProcessor.resolve();
+		await worker.drain();
+		expect((await readRun("run-2"))?.status).toBe("done");
 	});
 
 	it("leaves a Run submitted after the Claim to a later Claim", async () => {

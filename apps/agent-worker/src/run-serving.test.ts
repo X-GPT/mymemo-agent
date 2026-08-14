@@ -84,7 +84,6 @@ describe("serveStartedRun", () => {
 				});
 			},
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
-			heartbeatIntervalMs: 15_000,
 			logger: silentLogger,
 		});
 
@@ -111,7 +110,6 @@ describe("serveStartedRun", () => {
 				await gate.promise;
 			},
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
-			heartbeatIntervalMs: 5,
 			logger: silentLogger,
 		});
 		const resultPromise = serving.serveStartedRun({
@@ -127,6 +125,7 @@ describe("serveStartedRun", () => {
 				ownerUntil: sql`now() + interval '60 seconds'`,
 			})
 			.where(eq(conversations.conversationId, run.conversationId));
+		await serving.heartbeat();
 
 		gate.resolve();
 
@@ -162,7 +161,6 @@ describe("serveStartedRun", () => {
 				await releaseProcessor.promise;
 			},
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
-			heartbeatIntervalMs: 5,
 			logger: silentLogger,
 		});
 		const owner = { ...claim, runId: run.runId, workerId: "worker-1" };
@@ -176,12 +174,13 @@ describe("serveStartedRun", () => {
 		expect(
 			await transitionRunTerminalTx(tdb.db, { owner, status: "done" }),
 		).toMatchObject({ outcome: "committed" });
+		await serving.heartbeat();
 		await ownershipStopped.promise;
 		await tdb.db
 			.update(conversations)
 			.set({ ownerUntil: sql`now() + interval '1 second'` })
 			.where(eq(conversations.conversationId, run.conversationId));
-		await Bun.sleep(20);
+		await serving.heartbeat();
 		const [ownership] = await tdb.db
 			.select({ ownerUntil: conversations.ownerUntil })
 			.from(conversations)
@@ -204,7 +203,6 @@ describe("serveStartedRun", () => {
 				throw new Error("processor stopped");
 			},
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
-			heartbeatIntervalMs: 5,
 			logger: silentLogger,
 		});
 		const resultPromise = serving.serveStartedRun({
@@ -217,6 +215,7 @@ describe("serveStartedRun", () => {
 			conversationId: run.conversationId,
 			runId: run.runId,
 		});
+		await serving.heartbeat();
 
 		expect(await resultPromise).toEqual({
 			type: "terminal",
@@ -239,7 +238,6 @@ describe("serveStartedRun", () => {
 				throw new Error("runtime stopped");
 			},
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
-			heartbeatIntervalMs: 5,
 			logger: silentLogger,
 		});
 		const resultPromise = serving.serveStartedRun({
@@ -253,7 +251,7 @@ describe("serveStartedRun", () => {
 			.where(eq(conversations.conversationId, run.conversationId));
 
 		shutdownController.abort();
-		await Bun.sleep(20);
+		await serving.heartbeat();
 		const [ownership] = await tdb.db
 			.select({ ownerUntil: conversations.ownerUntil })
 			.from(conversations)
@@ -280,7 +278,6 @@ describe("serveStartedRun", () => {
 				});
 			},
 			liveStreamRelay,
-			heartbeatIntervalMs: 15_000,
 			logger: silentLogger,
 		});
 
@@ -316,7 +313,6 @@ describe("serveStartedRun", () => {
 				},
 			}),
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
-			heartbeatIntervalMs: 15_000,
 			logger: silentLogger,
 		});
 
@@ -365,7 +361,6 @@ describe("serveStartedRun", () => {
 				},
 			}),
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
-			heartbeatIntervalMs: 15_000,
 			logger: silentLogger,
 		});
 

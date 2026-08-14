@@ -114,14 +114,25 @@ type RunTurnResult = void | TurnResult;
 export type RunProcessor = (ctx: RunProcessContext) => Promise<RunTurnResult>;
 
 /** The Conversation-level reasons a live Ownership fence can reject work. */
-export type OwnershipLossReason = "lease" | "gone";
+export type OwnershipLossReason = Exclude<
+	RunWriteRejected["rejected"],
+	"status"
+>;
+export type OwnershipLossSource = "heartbeat" | "write";
+
+export type RunServingDetachment =
+	| { type: "run_detached" }
+	| {
+			type: "ownership_lost";
+			reason: OwnershipLossReason;
+			source: OwnershipLossSource;
+	  };
 
 export interface RunServingOptions {
 	db: Database;
 	processor: RunProcessor;
 	liveStreamRelay: LiveStreamRelay;
 	liveStreamTelemetry?: LiveStreamTelemetry;
-	heartbeatIntervalMs: number;
 	logger: WorkerLogger;
 }
 
@@ -132,8 +143,10 @@ export interface ServeStartedRunInput {
 	owner: RunWriteOwner;
 	/** Runtime shutdown, distinct from durable user interruption. */
 	shutdownSignal: AbortSignal;
-	/** Lets a runtime stop managing the superseded Conversation immediately. */
-	onOwnershipLost?: (reason: OwnershipLossReason) => void;
+	/** Lets the runtime resume drain-level renewal before terminalization or while
+	 * an abandoned processor unwinds, and halt immediately on Ownership loss. A
+	 * later terminal-fence rejection can report Ownership loss after detachment. */
+	onDetached?: (detachment: RunServingDetachment) => void;
 }
 
 /** The complete result of serving one already-started Run. */
@@ -164,8 +177,9 @@ interface ActiveServing {
 	interruptionController: AbortController;
 	ownershipLostController: AbortController;
 	state: RunEndState;
+	detached: boolean;
+	ownershipLossNotified: boolean;
 	liveStream?: RunLiveStream;
-	heartbeatTimer?: ReturnType<typeof setTimeout>;
 	heartbeatInFlight?: Promise<void>;
 	shutdownListener: () => void;
 }
@@ -186,16 +200,16 @@ class RunWriteRejectedError extends Error {
  */
 export interface RunServing {
 	serveStartedRun(input: ServeStartedRunInput): Promise<ServeStartedRunResult>;
-	/** Prompt all active heartbeats now. The internal timers remain authoritative;
-	 * this keeps an always-on runtime's timer/doorbell tick deterministic. */
+	/** Renew Ownership and observe interruption for every attached Run. The
+	 * runtime control plane owns the timer/doorbell cadence. */
 	heartbeat(): Promise<void>;
 }
 
 export function createRunServing(options: RunServingOptions): RunServing {
-	return new PostgresRunServing(options);
+	return new OwnedRunServing(options);
 }
 
-class PostgresRunServing implements RunServing {
+class OwnedRunServing implements RunServing {
 	private readonly active = new Set<ActiveServing>();
 
 	constructor(private readonly options: RunServingOptions) {}
@@ -205,19 +219,17 @@ class PostgresRunServing implements RunServing {
 	): Promise<ServeStartedRunResult> {
 		const entry = this.createEntry(input);
 		this.active.add(entry);
-		this.scheduleHeartbeat(entry);
 		try {
 			return await this.serveEntry(entry);
 		} finally {
-			this.active.delete(entry);
-			if (entry.heartbeatTimer) clearTimeout(entry.heartbeatTimer);
+			this.detachRun(entry);
 			input.shutdownSignal.removeEventListener("abort", entry.shutdownListener);
 		}
 	}
 
 	async heartbeat(): Promise<void> {
 		await Promise.all(
-			[...this.active].map((entry) => this.runHeartbeatCycle(entry)),
+			[...this.active].map((entry) => this.heartbeatEntry(entry)),
 		);
 	}
 
@@ -231,6 +243,8 @@ class PostgresRunServing implements RunServing {
 			interruptionController: new AbortController(),
 			ownershipLostController: new AbortController(),
 			state: { interrupted: false, skipTerminalization: false },
+			detached: false,
+			ownershipLossNotified: false,
 			shutdownListener,
 		};
 		if (input.shutdownSignal.aborted) shutdownListener();
@@ -242,46 +256,36 @@ class PostgresRunServing implements RunServing {
 		return entry;
 	}
 
-	private scheduleHeartbeat(entry: ActiveServing): void {
-		if (entry.heartbeatTimer) clearTimeout(entry.heartbeatTimer);
-		entry.heartbeatTimer = setTimeout(() => {
-			entry.heartbeatTimer = undefined;
-			void this.runHeartbeatCycle(entry).catch((error) => {
-				this.options.logger.error({
-					message: "Run-serving heartbeat failed",
-					workerId: entry.input.owner.workerId,
-					runId: entry.input.owner.runId,
-					error: toMessage(error),
-				});
-			});
-		}, this.options.heartbeatIntervalMs);
+	private detachRun(entry: ActiveServing): void {
+		if (entry.detached) return;
+		entry.detached = true;
+		this.active.delete(entry);
+		entry.input.onDetached?.({ type: "run_detached" });
 	}
 
-	/** One prompted or scheduled heartbeat resets the next scheduled beat, so
-	 * an always-on runtime tick cannot double the renewal query rate. */
-	private async runHeartbeatCycle(entry: ActiveServing): Promise<void> {
-		if (entry.heartbeatTimer) {
-			clearTimeout(entry.heartbeatTimer);
-			entry.heartbeatTimer = undefined;
+	private notifyOwnershipLoss(
+		entry: ActiveServing,
+		reason: OwnershipLossReason,
+		source: OwnershipLossSource,
+	): void {
+		if (!entry.detached) {
+			entry.detached = true;
+			this.active.delete(entry);
 		}
-		try {
-			await this.heartbeatEntry(entry);
-		} finally {
-			if (this.shouldHeartbeat(entry)) this.scheduleHeartbeat(entry);
-		}
-	}
-
-	private shouldHeartbeat(entry: ActiveServing): boolean {
-		return (
-			this.active.has(entry) &&
-			!entry.state.ownershipLoss &&
-			!entry.state.skipTerminalization &&
-			!entry.input.shutdownSignal.aborted
-		);
+		if (entry.ownershipLossNotified) return;
+		entry.ownershipLossNotified = true;
+		entry.input.onDetached?.({ type: "ownership_lost", reason, source });
 	}
 
 	private heartbeatEntry(entry: ActiveServing): Promise<void> {
-		if (!this.shouldHeartbeat(entry)) return Promise.resolve();
+		if (
+			!this.active.has(entry) ||
+			entry.state.ownershipLoss ||
+			entry.state.skipTerminalization ||
+			entry.input.shutdownSignal.aborted
+		) {
+			return Promise.resolve();
+		}
 		if (entry.heartbeatInFlight) return entry.heartbeatInFlight;
 		const heartbeat = this.performHeartbeat(entry).finally(() => {
 			if (entry.heartbeatInFlight === heartbeat) {
@@ -308,7 +312,7 @@ class PostgresRunServing implements RunServing {
 		}
 		if (!this.active.has(entry)) return;
 		if (!ownerUntil) {
-			this.noteOwnershipLost(entry, "lease");
+			this.noteOwnershipLost(entry, "lease", "heartbeat");
 			return;
 		}
 
@@ -338,6 +342,7 @@ class PostgresRunServing implements RunServing {
 				conversationId: owner.conversationId,
 				runId: owner.runId,
 			});
+			this.detachRun(entry);
 			return;
 		}
 		if (observed.status === "interrupt_requested") {
@@ -350,6 +355,7 @@ class PostgresRunServing implements RunServing {
 	private noteOwnershipLost(
 		entry: ActiveServing,
 		reason: OwnershipLossReason,
+		source: OwnershipLossSource,
 	): void {
 		if (entry.state.ownershipLoss) return;
 		entry.state.ownershipLoss = reason;
@@ -362,7 +368,7 @@ class PostgresRunServing implements RunServing {
 			runId: entry.input.owner.runId,
 			reason,
 		});
-		entry.input.onOwnershipLost?.(reason);
+		this.notifyOwnershipLoss(entry, reason, source);
 	}
 
 	private noteRejectedWrite(
@@ -377,6 +383,7 @@ class PostgresRunServing implements RunServing {
 			} else {
 				entry.state.skipTerminalization = true;
 				entry.controller.abort();
+				this.detachRun(entry);
 			}
 			this.options.logger.info({
 				message: "skipping a Run write refused by its current status",
@@ -387,7 +394,7 @@ class PostgresRunServing implements RunServing {
 			});
 			return;
 		}
-		this.noteOwnershipLost(entry, rejection.rejected);
+		this.noteOwnershipLost(entry, rejection.rejected, "write");
 	}
 
 	private async serveEntry(
@@ -458,6 +465,9 @@ class PostgresRunServing implements RunServing {
 						: { error };
 			}
 		}
+		// Detach before terminalizing: the drain-level loop owns renewal from here,
+		// and a concurrent heartbeat must not race this Run's terminal transition.
+		this.detachRun(entry);
 
 		try {
 			const terminalStatus = await this.finish(entry, turnResult, failure);
@@ -520,6 +530,11 @@ class PostgresRunServing implements RunServing {
 			return null;
 		}
 		if (entry.state.skipTerminalization) {
+			this.options.logger.info({
+				message: "skipping terminal transition after status rejection",
+				workerId: entry.input.owner.workerId,
+				runId: entry.input.owner.runId,
+			});
 			return null;
 		}
 

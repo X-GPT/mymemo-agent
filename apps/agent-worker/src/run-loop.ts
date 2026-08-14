@@ -18,6 +18,7 @@ import { DoorbellTicker, type RunDoorbell } from "./run-doorbell";
 import {
 	createRunServing,
 	type OwnershipLossReason,
+	type OwnershipLossSource,
 	type RunProcessor,
 	type RunServing,
 } from "./run-serving";
@@ -112,7 +113,6 @@ export class RunLoop {
 			processor: opts.processor,
 			liveStreamRelay: opts.liveStreamRelay,
 			liveStreamTelemetry: opts.liveStreamTelemetry,
-			heartbeatIntervalMs: opts.heartbeatIntervalMs,
 			logger: opts.logger,
 		});
 	}
@@ -317,8 +317,11 @@ export class RunLoop {
 				});
 				continue;
 			}
-			if (this.drains.get(key) !== drain || ownerUntil) continue;
-			this.haltDrainAfterOwnershipLoss(drain, undefined, "lease");
+			// The drain may have finished and released during the round trip; from
+			// there its own cleanup owns this Conversation, not the renewal loop.
+			if (this.drains.get(key) !== drain) continue;
+			if (ownerUntil) continue;
+			this.haltDrainAfterOwnershipLoss(drain, undefined, "lease", "heartbeat");
 		}
 	}
 
@@ -427,20 +430,23 @@ export class RunLoop {
 			});
 			return;
 		}
-		this.haltDrainAfterOwnershipLoss(drain, runId, rejection.rejected);
+		this.haltDrainAfterOwnershipLoss(drain, runId, rejection.rejected, "write");
 	}
 
 	private haltDrainAfterOwnershipLoss(
 		drain: ActiveDrain,
 		runId: string | undefined,
 		reason: OwnershipLossReason,
+		source: OwnershipLossSource,
 	): void {
 		if (!drain.halted) {
 			this.opts.logger.warn({
 				message:
 					reason === "gone"
 						? "stopping drain: the conversation no longer exists"
-						: "halting drain after losing the Ownership lease",
+						: source === "write"
+							? "stopping drain: the Ownership lease is gone"
+							: "halting drain after losing the Ownership lease",
 				workerId: this.workerId,
 				conversationId: drain.owner.conversationId,
 				runId,
@@ -495,8 +501,17 @@ export class RunLoop {
 					workerId: this.workerId,
 				},
 				shutdownSignal: entry.shutdownController.signal,
-				onOwnershipLost: (reason) =>
-					this.haltDrainAfterOwnershipLoss(drain, run.runId, reason),
+				onDetached: (detachment) => {
+					if (drain.served === entry) drain.served = undefined;
+					if (detachment.type === "ownership_lost") {
+						this.haltDrainAfterOwnershipLoss(
+							drain,
+							run.runId,
+							detachment.reason,
+							detachment.source,
+						);
+					}
+				},
 			});
 		} finally {
 			if (drain.served === entry) drain.served = undefined;
