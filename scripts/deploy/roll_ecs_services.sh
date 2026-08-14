@@ -6,6 +6,63 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/lib/load_config.sh"
 load_deploy_config
 
+lane_awareness_label="com.mymemo.agent-worker.execution-lane-aware"
+
+read_agent_worker_lane_awareness() {
+  local image="$1"
+  local registry image_path repository_name image_id manifest config_digest download_url
+
+  registry="${image%%/*}"
+  image_path="${image#*/}"
+  if [[ "$registry" == "$image" ]]; then
+    echo "Agent-worker task definition does not reference an ECR image: $image" >&2
+    return 1
+  fi
+  if [[ "$image_path" == *@sha256:* ]]; then
+    repository_name="${image_path%@*}"
+    image_id="imageDigest=${image_path#*@}"
+  elif [[ "$image_path" == *:* ]]; then
+    repository_name="${image_path%:*}"
+    image_id="imageTag=${image_path##*:}"
+  else
+    repository_name="$image_path"
+    image_id="imageTag=latest"
+  fi
+
+  manifest="$(
+    aws ecr batch-get-image \
+      --region "$AWS_REGION" \
+      --registry-id "${registry%%.*}" \
+      --repository-name "$repository_name" \
+      --image-ids "$image_id" \
+      --accepted-media-types \
+        application/vnd.docker.distribution.manifest.v2+json \
+        application/vnd.oci.image.manifest.v1+json \
+      --query 'images[0].imageManifest' \
+      --output text
+  )"
+  if [[ -z "$manifest" || "$manifest" == "None" ]]; then
+    echo "Could not load the agent-worker image manifest for $image" >&2
+    return 1
+  fi
+  config_digest="$(
+    bun -e 'const manifest = JSON.parse(process.argv[1]); if (typeof manifest.config?.digest !== "string") throw new Error("image manifest has no config digest"); console.log(manifest.config.digest);' \
+      "$manifest"
+  )"
+  download_url="$(
+    aws ecr get-download-url-for-layer \
+      --region "$AWS_REGION" \
+      --registry-id "${registry%%.*}" \
+      --repository-name "$repository_name" \
+      --layer-digest "$config_digest" \
+      --query downloadUrl \
+      --output text
+  )"
+  bun -e 'const response = await fetch(process.argv[1]); if (!response.ok) throw new Error(`image config download failed: ${response.status}`); const imageConfig = await response.json(); console.log(imageConfig.config?.Labels?.[process.argv[2]] === "true" ? "true" : "false");' \
+    "$download_url" \
+    "$lane_awareness_label"
+}
+
 ecs_cluster_arn="$(
   terraform -chdir=infra/terraform output -raw shared_ecs_cluster_arn
 )"
@@ -26,15 +83,13 @@ agent_worker_task_definition="${AGENT_WORKER_TASK_DEFINITION_ARN:-$(
   terraform -chdir=infra/terraform output -raw agent_worker_task_definition_arn
 )}"
 
-candidate_lane_aware="$(
+candidate_image="$(
   aws ecs describe-task-definition \
     --task-definition "$agent_worker_task_definition" \
-    --query 'taskDefinition.containerDefinitions[?name==`agent-worker`] | [0].environment[?name==`MYMEMO_FARGATE_EXECUTION_LANE_AWARE`] | [0].value' \
+    --query 'taskDefinition.containerDefinitions[?name==`agent-worker`] | [0].image' \
     --output text
 )"
-if [[ "$candidate_lane_aware" != "true" ]]; then
-  candidate_lane_aware="false"
-fi
+candidate_lane_aware="$(read_agent_worker_lane_awareness "$candidate_image")"
 
 "$script_dir/run_execution_lane_deployment_assertion.sh" \
   prepare-fargate-deployment \
@@ -74,25 +129,40 @@ running_task_arns="$(
     --query 'taskArns' \
     --output text
 )"
+stopping_task_arns="$(
+  aws ecs list-tasks \
+    --cluster "$ecs_cluster_arn" \
+    --service-name "$agent_worker_service_name" \
+    --desired-status STOPPED \
+    --query 'taskArns' \
+    --output text
+)"
+if [[ "$running_task_arns" == "None" ]]; then
+  running_task_arns=""
+fi
+if [[ "$stopping_task_arns" == "None" ]]; then
+  stopping_task_arns=""
+fi
+active_task_arns="$running_task_arns $stopping_task_arns"
 
 if [[ "$service_task_definition" != "$expected_task_definition" ]]; then
   echo "Fargate deployment is not fully execution-lane-aware: service uses $service_task_definition, expected $expected_task_definition" >&2
   exit 1
 fi
 
-if [[ -n "$running_task_arns" && "$running_task_arns" != "None" ]]; then
-  running_task_definitions="$(
+if [[ -n "${active_task_arns// /}" ]]; then
+  active_task_definitions="$(
     # Intentional word splitting: AWS emits one tab-separated ARN per task.
     # shellcheck disable=SC2086
     aws ecs describe-tasks \
       --cluster "$ecs_cluster_arn" \
-      --tasks $running_task_arns \
-      --query 'tasks[].taskDefinitionArn' \
+      --tasks $active_task_arns \
+      --query 'tasks[?lastStatus != `STOPPED`].taskDefinitionArn' \
       --output text
   )"
-  for task_definition in $running_task_definitions; do
+  for task_definition in $active_task_definitions; do
     if [[ "$task_definition" != "$expected_task_definition" ]]; then
-      echo "Fargate deployment is not fully execution-lane-aware: running task uses $task_definition, expected $expected_task_definition" >&2
+      echo "Fargate deployment is not fully execution-lane-aware: active task uses $task_definition, expected $expected_task_definition" >&2
       exit 1
     fi
   done

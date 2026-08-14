@@ -79,7 +79,6 @@ locals {
   agent_worker_environment = concat([
     { name = "PORT", value = tostring(var.agent_worker_port) },
     { name = "LOG_LEVEL", value = var.log_level },
-    { name = "MYMEMO_FARGATE_EXECUTION_LANE_AWARE", value = "true" },
     { name = "OPENROUTER_BASE_URL", value = var.openrouter_base_url },
     { name = "OPENROUTER_DEFAULT_MODEL", value = var.openrouter_default_model },
     { name = "WORKER_E2B_TEMPLATE", value = var.worker_e2b_template },

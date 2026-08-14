@@ -8,6 +8,16 @@ fi
 
 image="$1"
 
+lane_aware="$(
+  docker image inspect \
+    --format '{{ index .Config.Labels "com.mymemo.agent-worker.execution-lane-aware" }}' \
+    "$image"
+)"
+if [[ "$lane_aware" != "true" ]]; then
+  echo "Agent-worker image is missing its execution-lane-aware capability label" >&2
+  exit 1
+fi
+
 # Override the worker entrypoint so this remains credential-free: importing the
 # production boot helper resolves the SDK-owned glibc binary from the final
 # image's pruned node_modules and exec-verifies it with `--version`.

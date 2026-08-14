@@ -116,8 +116,8 @@ const ACTIVE_RUN_DEPTH_BOUND = 1;
 
 /** How long a queued Run may remain continuously eligible on an unowned
  * Conversation before the queue-age backstop ends it. Reclamation refreshes
- * `updated_at` to start a new window for legitimately waiting work. This
- * The Fargate window deliberately matches today's 60-second Ownership lease,
+ * `updated_at` to start a new window for legitimately waiting work. The
+ * Fargate window deliberately matches today's 60-second Ownership lease,
  * but remains a distinct policy so lease tuning cannot silently retune queue
  * expiration. AgentCore-canary work gets ten minutes for dispatch and cold
  * start. */
@@ -1205,15 +1205,13 @@ export async function expireUnownedQueuedRunsTx(
 			  from ${runs} r
 			  join ${conversations} c using (user_id, conversation_id)
 			 where r.status = 'queued'
-			   and (
-			     (c.execution_lane = ${FARGATE_EXECUTION_LANE}
-			       and r.created_at <= now() - interval '${sql.raw(String(FARGATE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
-			       and r.updated_at <= now() - interval '${sql.raw(String(FARGATE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds')
-			     or
-			     (c.execution_lane = ${AGENTCORE_CANARY_EXECUTION_LANE}
-			       and r.created_at <= now() - interval '${sql.raw(String(AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
-			       and r.updated_at <= now() - interval '${sql.raw(String(AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds')
-			   )
+			   and greatest(r.created_at, r.updated_at) <= now() -
+			     case c.execution_lane
+			       when ${FARGATE_EXECUTION_LANE}
+			         then interval '${sql.raw(String(FARGATE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
+			       when ${AGENTCORE_CANARY_EXECUTION_LANE}
+			         then interval '${sql.raw(String(AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
+			     end
 			   and c.owner_until is null
 			 order by r.created_at
 			   for update of c skip locked
@@ -1249,8 +1247,7 @@ export async function expireUnownedQueuedRunsTx(
 					eq(runs.userId, candidate.userId),
 					eq(runs.conversationId, candidate.conversationId),
 					eq(runs.status, "queued"),
-					sql`${runs.createdAt} <= now() - interval '${sql.raw(String(timeoutMs))} milliseconds'`,
-					sql`${runs.updatedAt} <= now() - interval '${sql.raw(String(timeoutMs))} milliseconds'`,
+					sql`greatest(${runs.createdAt}, ${runs.updatedAt}) <= now() - interval '${sql.raw(String(timeoutMs))} milliseconds'`,
 				),
 			)
 			.for("update");

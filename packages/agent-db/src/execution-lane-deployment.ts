@@ -6,6 +6,19 @@ import {
 } from "./execution-lane";
 import { conversations, executionLaneDeployments } from "./schema";
 
+async function setFargateLaneAwareness(
+	tx: DbTx,
+	laneAware: boolean,
+): Promise<void> {
+	await tx
+		.insert(executionLaneDeployments)
+		.values({ executionLane: FARGATE_EXECUTION_LANE, laneAware })
+		.onConflictDoUpdate({
+			target: executionLaneDeployments.executionLane,
+			set: { laneAware, updatedAt: new Date() },
+		});
+}
+
 /**
  * Gate the later canary-creation transaction on the durable record written only
  * after ECS has fully converged to a lane-aware Fargate task definition. The
@@ -31,16 +44,7 @@ export async function assertAgentCoreCanaryCreationReady(
 export async function markFargateLaneAwareDeploymentReady(
 	db: Database,
 ): Promise<void> {
-	await db
-		.insert(executionLaneDeployments)
-		.values({
-			executionLane: FARGATE_EXECUTION_LANE,
-			laneAware: true,
-		})
-		.onConflictDoUpdate({
-			target: executionLaneDeployments.executionLane,
-			set: { laneAware: true, updatedAt: new Date() },
-		});
+	await db.transaction(async (tx) => setFargateLaneAwareness(tx, true));
 }
 
 /**
@@ -54,16 +58,7 @@ export async function assertFargateRollbackAllowed(
 ): Promise<void> {
 	if (input.candidateLaneAware) return;
 	await db.transaction(async (tx) => {
-		await tx
-			.insert(executionLaneDeployments)
-			.values({
-				executionLane: FARGATE_EXECUTION_LANE,
-				laneAware: false,
-			})
-			.onConflictDoUpdate({
-				target: executionLaneDeployments.executionLane,
-				set: { laneAware: false, updatedAt: new Date() },
-			});
+		await setFargateLaneAwareness(tx, false);
 		const [agentCoreConversation] = await tx
 			.select({ conversationId: conversations.conversationId })
 			.from(conversations)
