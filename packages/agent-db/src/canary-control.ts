@@ -11,6 +11,8 @@ import { assertAgentCoreCanaryCreationReady } from "./execution-lane-deployment"
 import { admitQueuedRunInTx } from "./run-store";
 import { canaryCampaigns, canaryDispatchOutbox, conversations } from "./schema";
 
+const CANARY_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+
 export interface StartCanaryCampaignInput {
 	campaignId: string;
 	idempotencyKey: string;
@@ -99,6 +101,7 @@ export async function advanceCanaryCampaignTx(
 		expectedLifecycle: CanaryCampaignLifecycle;
 		lifecycle: CanaryCampaignLifecycle;
 		verdict?: CanaryVerdict;
+		now?: Date;
 	},
 ): Promise<AdvanceCanaryCampaignResult> {
 	const from = CANARY_CAMPAIGN_LIFECYCLES.indexOf(input.expectedLifecycle);
@@ -113,24 +116,36 @@ export async function advanceCanaryCampaignTx(
 		throw new Error("a Canary verdict is legal only at completion");
 	}
 
-	const [advanced] = await db
-		.update(canaryCampaigns)
-		.set({
-			lifecycle: input.lifecycle,
-			verdict: input.verdict,
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(canaryCampaigns.campaignId, input.campaignId),
-				eq(canaryCampaigns.lifecycle, input.expectedLifecycle),
-			),
-		)
-		.returning();
-	return advanced ? { outcome: "advanced", ...advanced } : { outcome: "stale" };
+	const now = input.now ?? new Date();
+	const expiresAt = new Date(now.getTime() + CANARY_AUDIT_RETENTION_MS);
+	return await db.transaction(async (tx) => {
+		const [advanced] = await tx
+			.update(canaryCampaigns)
+			.set({
+				lifecycle: input.lifecycle,
+				verdict: input.verdict,
+				updatedAt: now,
+				...(input.lifecycle === "complete" ? { expiresAt } : {}),
+			})
+			.where(
+				and(
+					eq(canaryCampaigns.campaignId, input.campaignId),
+					eq(canaryCampaigns.lifecycle, input.expectedLifecycle),
+				),
+			)
+			.returning();
+		if (!advanced) return { outcome: "stale" };
+		if (input.lifecycle === "complete") {
+			await tx
+				.update(canaryDispatchOutbox)
+				.set({ expiresAt })
+				.where(eq(canaryDispatchOutbox.campaignId, input.campaignId));
+		}
+		return { outcome: "advanced", ...advanced };
+	});
 }
 
-/** Remove completed Campaign/outbox audit only after its 30-day deadline. */
+/** Remove completed Campaign/outbox audit only after its completion-anchored deadline. */
 export async function expireCanaryAuditRecordsTx(
 	db: Database,
 	input: { now?: Date } = {},
@@ -153,12 +168,7 @@ export async function expireCanaryAuditRecordsTx(
 		}
 		const dispatches = await tx
 			.delete(canaryDispatchOutbox)
-			.where(
-				and(
-					inArray(canaryDispatchOutbox.campaignId, campaignIds),
-					lte(canaryDispatchOutbox.expiresAt, now),
-				),
-			)
+			.where(inArray(canaryDispatchOutbox.campaignId, campaignIds))
 			.returning({ dispatchId: canaryDispatchOutbox.dispatchId });
 		const campaigns = await tx
 			.delete(canaryCampaigns)
@@ -302,7 +312,10 @@ async function admitCanaryScenarioInTx(
 /**
  * Create the first configured scenario and its pending dispatch in one commit.
  * The caller supplies only trusted, configuration-derived values; the operator
- * request boundary lives above this shared database behavior.
+ * request boundary lives above this shared database behavior. The caller must
+ * verify the external KB fixture first: KB and agent state use separate trust
+ * domains and cannot share a database transaction. This commit binds the
+ * verified fixture version and checksum into the Campaign input checksum.
  */
 export async function startCanaryCampaignTx(
 	db: Database,
@@ -336,6 +349,10 @@ export async function startCanaryCampaignTx(
 				runId: input.runId,
 				messageId: input.messageId,
 			})
+			// Both the idempotency-key constraint and the partial one-active-Campaign
+			// constraint are expected concurrency authorities, so this insert cannot
+			// target only one of them. The recovery reads below classify the exact
+			// constraint outcome and reject any unrelated identifier collision.
 			.onConflictDoNothing()
 			.returning();
 		if (!createdCampaign) {
@@ -347,6 +364,16 @@ export async function startCanaryCampaignTx(
 			if (reattached) {
 				requireCanaryCampaignMatchesInput(reattached, input);
 				return { outcome: "existing", campaign: reattached };
+			}
+			const [sameId] = await tx
+				.select()
+				.from(canaryCampaigns)
+				.where(eq(canaryCampaigns.campaignId, input.campaignId))
+				.limit(1);
+			if (sameId) {
+				throw new CanaryCampaignInputMismatchError(
+					"campaign ID is already bound to different Canary Campaign input",
+				);
 			}
 			const [active] = await tx
 				.select()

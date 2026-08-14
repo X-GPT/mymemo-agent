@@ -214,7 +214,8 @@ export const executionLaneDeployments = pgTable(
  * Durable control record for one operator-triggered AgentCore canary campaign.
  * Conversation and Run identifiers are copied as audit facts, deliberately
  * without foreign keys: synthetic data is deleted after evidence extraction,
- * while this bounded, content-free control record remains for 30 days.
+ * while this bounded, content-free control record remains for 30 days after
+ * Campaign completion.
  */
 export const canaryCampaigns = pgTable(
 	"canary_campaigns",

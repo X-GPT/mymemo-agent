@@ -11,6 +11,7 @@ import {
 	admitCanaryScenarioTx,
 	advanceCanaryCampaignTx,
 	CanaryAdmissionError,
+	CanaryCampaignInputMismatchError,
 	computeCanaryCampaignInputChecksum,
 	expireCanaryAuditRecordsTx,
 	startCanaryCampaignTx,
@@ -213,6 +214,17 @@ describe("startCanaryCampaignTx", () => {
 		expect(await tdb.db.select().from(canaryDispatchOutbox)).toHaveLength(1);
 	});
 
+	it("rejects a Campaign-id collision instead of reporting ordinary active-Campaign contention", async () => {
+		await startCanaryCampaignTx(tdb.db, campaign);
+
+		await expect(
+			startCanaryCampaignTx(tdb.db, {
+				...campaign,
+				idempotencyKey: "operator-key-collision",
+			}),
+		).rejects.toBeInstanceOf(CanaryCampaignInputMismatchError);
+	});
+
 	it("ordinary Fargate admission never creates an AgentCore dispatch", async () => {
 		await tdb.db.insert(conversations).values({
 			userId: "member-1",
@@ -371,18 +383,36 @@ describe("startCanaryCampaignTx", () => {
 				lifecycle: "complete",
 			}),
 		).rejects.toThrow("verdict");
-		await expect(
-			advanceCanaryCampaignTx(tdb.db, {
-				campaignId: campaign.campaignId,
-				expectedLifecycle: "running",
-				lifecycle: "complete",
-				verdict: "inconclusive",
-			}),
-		).resolves.toMatchObject({
+		const completedAt = new Date("2030-01-01T00:00:00.000Z");
+		const completed = await advanceCanaryCampaignTx(tdb.db, {
+			campaignId: campaign.campaignId,
+			expectedLifecycle: "running",
+			lifecycle: "complete",
+			verdict: "inconclusive",
+			now: completedAt,
+		});
+		expect(completed).toMatchObject({
 			outcome: "advanced",
 			lifecycle: "complete",
 			verdict: "inconclusive",
 		});
+		if (completed.outcome !== "advanced") throw new Error("unreachable");
+		expect(completed.expiresAt.getTime()).toBe(
+			new Date("2030-01-31T00:00:00.000Z").getTime(),
+		);
+		const [dispatch] = await tdb.db.select().from(canaryDispatchOutbox);
+		expect(dispatch?.expiresAt.getTime()).toBe(
+			new Date("2030-01-31T00:00:00.000Z").getTime(),
+		);
+
+		await expect(
+			advanceCanaryCampaignTx(tdb.db, {
+				campaignId: campaign.campaignId,
+				expectedLifecycle: "complete",
+				lifecycle: "complete",
+				verdict: "inconclusive",
+			}),
+		).rejects.toThrow("monotonic");
 
 		await tdb.db
 			.update(canaryCampaigns)
@@ -399,5 +429,29 @@ describe("startCanaryCampaignTx", () => {
 		});
 		expect(await tdb.db.select().from(canaryCampaigns)).toEqual([]);
 		expect(await tdb.db.select().from(canaryDispatchOutbox)).toEqual([]);
+	});
+
+	it("expires every dispatch audit with its completed Campaign even if a child deadline drifted", async () => {
+		await startCanaryCampaignTx(tdb.db, campaign);
+		await advanceCanaryCampaignTx(tdb.db, {
+			campaignId: campaign.campaignId,
+			expectedLifecycle: "preparing",
+			lifecycle: "complete",
+			verdict: "inconclusive",
+		});
+		await tdb.db
+			.update(canaryCampaigns)
+			.set({ expiresAt: new Date("2030-01-01T00:00:00.000Z") })
+			.where(eq(canaryCampaigns.campaignId, campaign.campaignId));
+		await tdb.db
+			.update(canaryDispatchOutbox)
+			.set({ expiresAt: new Date("2030-02-01T00:00:00.000Z") })
+			.where(eq(canaryDispatchOutbox.campaignId, campaign.campaignId));
+
+		await expect(
+			expireCanaryAuditRecordsTx(tdb.db, {
+				now: new Date("2030-01-02T00:00:00.000Z"),
+			}),
+		).resolves.toEqual({ campaignsDeleted: 1, dispatchesDeleted: 1 });
 	});
 });
