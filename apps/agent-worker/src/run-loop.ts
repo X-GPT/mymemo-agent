@@ -1,8 +1,3 @@
-import {
-	ArtifactQuotaError,
-	type PublishedArtifact,
-	publishArtifactsAndTransitionRunDoneTx,
-} from "@mymemo/agent-db/artifact-store";
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	type ConversationOwner,
@@ -11,161 +6,22 @@ import {
 	renewConversationLeaseTx,
 } from "@mymemo/agent-db/conversation-ownership";
 import {
-	type AssistantMessageCompletedPayload,
-	RunEventType,
-	type ToolCallArgsPayload,
-	type ToolCallCompletedPayload,
-	type ToolCallResultPayload,
-	type ToolCallStartedPayload,
-	type UiPayloadEventPayload,
-} from "@mymemo/agent-db/run-events";
-import {
-	appendRunEventsTx,
 	expireUnownedQueuedRunsTx,
 	type FenceRejection,
-	loadExecutingRunTx,
-	markLiveStreamFailedTx,
 	type RunRecord,
-	type RunWriteOwner,
 	type RunWriteRejected,
 	reclaimConversationTx,
 	startClaimedRunTx,
-	type TerminalOutcome,
-	type TerminalRunStatus,
-	type TerminalTransitionResult,
-	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
-import type {
-	LiveStreamEvent,
-	LiveStreamRelay,
-	LiveStreamTelemetry,
-} from "@mymemo/live-text";
-import { ArtifactValidationError } from "./artifacts/artifact-manifest";
-import { ArtifactPublicationError } from "./artifacts/artifact-publication";
+import type { LiveStreamRelay, LiveStreamTelemetry } from "@mymemo/live-text";
 import { toMessage, type WorkerLogger } from "./logger";
 import { DoorbellTicker, type RunDoorbell } from "./run-doorbell";
-import { RunLiveStream } from "./run-live-stream";
+import {
+	createRunServing,
+	type RunProcessor,
+	type RunServing,
+} from "./run-serving";
 import type { Worker } from "./worker";
-
-/**
- * What a processor reports back about the turn it just ran. Workspace files
- * need no end-of-turn handling (ADR-0007): the sandbox idle-pauses once the
- * turn stops renewing it, and the paused sandbox *is* the persisted workspace.
- */
-export type TurnDisposition = "completed" | "stopped";
-
-/** SDK stream reliability facts used alongside the SessionStore evidence. */
-export interface AgentStreamMetadata {
-	mirrorErrorObserved: boolean;
-}
-
-export interface TurnStreamMetadata extends AgentStreamMetadata {
-	/** The main session proven resumable by the bound SessionStore during this
-	 * Run. Initialization and subagent mirrors do not count. */
-	mirroredMainSessionId: string | null;
-}
-
-export interface TurnResult {
-	/** Cause-blind processor disposition; the supervisor chooses the Outcome. */
-	disposition: TurnDisposition;
-	/**
-	 * SDK stream reliability plus continuity evidence from the bound
-	 * SessionStore. The supervisor alone decides the Outcome and whether the
-	 * resume pointer may advance.
-	 */
-	streamMetadata?: TurnStreamMetadata;
-	/** Changed files already ledgered and uploaded under fresh private keys. */
-	artifactPublication?: { artifacts: PublishedArtifact[] } | null;
-}
-
-/** A processor that reports nothing is normalized to a completed turn with no
- * continuity evidence or artifact publication. */
-const EMPTY_TURN: TurnResult = { disposition: "completed" };
-
-/**
- * A processor failure that still carries the turn facts needed for terminal
- * reconciliation. The loop logs the original failure but retains only these
- * bounded, worker-produced facts for its Outcome decision.
- */
-export class RunProcessorFailure extends Error {
-	override name = "RunProcessorFailure" as const;
-
-	constructor(
-		readonly failure: unknown,
-		readonly streamMetadata: TurnStreamMetadata,
-	) {
-		super("run processor failed");
-	}
-}
-
-/**
- * One piece of canonical durable model content a processor can record while
- * its run is `running`: a complete Assistant message, validated UI payload, or
- * Tool lifecycle event (ADR-0012/0017). The payload is already client-safe —
- * the loop persists it verbatim under the event type its kind maps to.
- */
-export type ModelContent =
-	| { kind: "assistant_message"; payload: AssistantMessageCompletedPayload }
-	| { kind: "tool_call_started"; payload: ToolCallStartedPayload }
-	| { kind: "tool_call_args"; payload: ToolCallArgsPayload }
-	| { kind: "tool_call_completed"; payload: ToolCallCompletedPayload }
-	| { kind: "tool_call_result"; payload: ToolCallResultPayload }
-	| { kind: "ui_payload"; payload: UiPayloadEventPayload };
-
-/** The loop owns the kind→event-type mapping in exactly one place, so a
- * processor can never write a payload under a mismatched vocabulary type. */
-const MODEL_CONTENT_EVENT_TYPES = {
-	assistant_message: RunEventType.AssistantMessageCompleted,
-	tool_call_started: RunEventType.ToolCallStarted,
-	tool_call_args: RunEventType.ToolCallArgs,
-	tool_call_completed: RunEventType.ToolCallCompleted,
-	tool_call_result: RunEventType.ToolCallResult,
-	ui_payload: RunEventType.UiPayload,
-} as const satisfies Record<ModelContent["kind"], RunEventType>;
-
-/**
- * What a claimed run's processing is handed. `appendModelContent` is the bound
- * durable model-content append for this owned run (fenced by the run store to
- * `running`, all kinds alike); `signal` fires when the loop observes
- * interruption or loses ownership, so long-running processing can stop
- * promptly.
- */
-export interface RunProcessContext {
-	run: RunRecord;
-	/** The Claim authority shared by every Run- and Conversation-scoped write. */
-	owner: RunWriteOwner;
-	/** Cancels active Tool/E2B work for every supervisor stop cause. */
-	signal: AbortSignal;
-	/** Fires only after durable interruption is observed; grants the bounded
-	 * private SDK stop window while the ownership lease remains live. */
-	interruptionSignal: AbortSignal;
-	/** Fires on worker shutdown; private SDK resources must close immediately. */
-	shutdownSignal: AbortSignal;
-	/** Fires only when the ownership fence is lost. Unlike a normal stop, this
-	 * permits no post-fence drain and must close private SDK resources now. */
-	ownershipLostSignal: AbortSignal;
-	appendModelContent(content: ModelContent): Promise<number>;
-	/** Atomically append an ordered group under one Ownership epoch fence. */
-	appendModelContents(contents: readonly ModelContent[]): Promise<number[]>;
-	/** Append one standard event to this Run's Live Stream. Failure is
-	 * absorbed by the producer so it cannot change model execution. */
-	appendLiveEvent(event: LiveStreamEvent): Promise<void>;
-}
-
-/**
- * Produces one claimed run's turn. Injected so the control loop's
- * Claim/renew/terminalize behavior is tested independently of what a turn
- * does.
- *
- * A processor may return a {@link TurnResult} with mirror reliability and
- * SessionStore evidence; the supervisor alone decides whether that evidence
- * may advance continuity. Returning nothing is treated as a completed turn
- * with no continuity evidence or artifact publication.
- */
-// biome-ignore lint/suspicious/noConfusingVoidType: `void` keeps a nothing-returning processor valid — `undefined` is not assignable from a void-returning async fn.
-type RunTurnResult = void | TurnResult;
-
-export type RunProcessor = (ctx: RunProcessContext) => Promise<RunTurnResult>;
 
 export interface RunLoopOptions {
 	db: Database;
@@ -182,26 +38,9 @@ export interface RunLoopOptions {
 	logger: WorkerLogger;
 }
 
-/** Per-run loop-local state, resolved once processing ends into a terminal. */
-interface RunEndState {
-	/** A status observation saw `interrupt_requested`; the terminal must be `interrupted`. */
-	interrupted: boolean;
-	/** A fenced write found that another path already chose a non-interruption
-	 * status, so this worker must not attempt another terminal transition. */
-	skipTerminalization: boolean;
-	/** Ownership renewal lost the fence; Reclamation owns the Run — do not
-	 * terminalize it. */
-	lostOwnership: boolean;
-}
-
 interface ActiveEntry {
 	runId: string;
-	controller: AbortController;
-	interruptionController: AbortController;
 	shutdownController: AbortController;
-	ownershipLostController: AbortController;
-	state: RunEndState;
-	liveStream?: RunLiveStream;
 }
 
 /** One Claimed Conversation being drained by this worker. */
@@ -213,14 +52,7 @@ interface ActiveDrain {
 	/** The Claim's snapshot: the Runs to serve, in submission order. Runs
 	 * submitted after the Claim are never appended here. */
 	runIds: readonly string[];
-	/**
-	 * The Run a tick may observe and interrupt — set for exactly as long as that is
-	 * true. {@link RunLoop.detachServedRun} is the only thing that clears it, and
-	 * doing so is the load-bearing act that hands the Run back: before the
-	 * terminal transition, so a concurrent tick cannot race the Outcome, and on
-	 * abandonment, so later ticks stop observing a Run that is no longer this
-	 * worker's.
-	 */
+	/** The Run whose runtime-shutdown signal this control loop owns. */
 	served?: ActiveEntry;
 	/**
 	 * Why the drain stopped early, if it did. Both mean "do not release": a lost
@@ -238,15 +70,6 @@ function conversationKey(owner: ConversationOwner): string {
 }
 
 const RUN_LIVENESS_SWEEP_INTERVAL_MS = 15_000;
-const GENERIC_RUN_ERROR_MESSAGE = "Run failed";
-
-/** Internal control-flow signal: the typed rejection has already been applied
- * to the drain state, so it must stop the processor without being mistaken for
- * an SDK/model failure that deserves an `error` Outcome. */
-class RunWriteRejectedError extends Error {
-	override readonly name = "RunWriteRejectedError";
-}
-
 /**
  * The agent-worker control loop over the shared queue helpers. Its unit is the
  * Conversation (ADR-0015): a worker Claims a Conversation, serves the Runs it
@@ -255,9 +78,8 @@ class RunWriteRejectedError extends Error {
  *  1. expires old queued Runs whose Conversation was already unowned, then
  *     reclaims lapsed Ownership so preserved queued Runs remain available to
  *     this tick's Claim;
- *  2. renews each owned Conversation's Ownership lease — a renewal matching zero
- *     rows is the lost-lease signal — and reads the served Run's status to
- *     observe a durable interruption; and
+ *  2. renews Claims between snapshot Runs and prompts the shared Run-serving
+ *     seam's active-Run heartbeats; and
  *  3. Claims Conversations up to the supervisor's remaining capacity and
  *     dispatches each as one supervised drain.
  *
@@ -279,12 +101,22 @@ class RunWriteRejectedError extends Error {
  */
 export class RunLoop {
 	private readonly drains = new Map<string, ActiveDrain>();
+	private readonly runServing: RunServing;
 	private running = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private runLivenessSweepTimer: ReturnType<typeof setTimeout> | undefined;
 	private doorbellUnsubscribe: (() => void) | undefined;
 
-	constructor(private readonly opts: RunLoopOptions) {}
+	constructor(private readonly opts: RunLoopOptions) {
+		this.runServing = createRunServing({
+			db: opts.db,
+			processor: opts.processor,
+			liveStreamRelay: opts.liveStreamRelay,
+			liveStreamTelemetry: opts.liveStreamTelemetry,
+			heartbeatIntervalMs: opts.heartbeatIntervalMs,
+			logger: opts.logger,
+		});
+	}
 
 	private get workerId(): string {
 		return this.opts.worker.workerId;
@@ -298,7 +130,8 @@ export class RunLoop {
 	 */
 	async tick(): Promise<number> {
 		await this.tryRunLivenessSweep();
-		await this.renewOwnedConversations();
+		await this.renewDrainsWithoutActiveRuns();
+		await this.runServing.heartbeat();
 		return this.claimAndDrain();
 	}
 
@@ -379,7 +212,6 @@ export class RunLoop {
 		// the Runs it never started are picked up by the next Claim instead of
 		// waiting out the lease. Snapshot the map: a finishing drain deletes itself.
 		for (const drain of [...this.drains.values()]) {
-			drain.served?.controller.abort();
 			drain.served?.shutdownController.abort();
 		}
 		await this.opts.worker.shutdown();
@@ -469,18 +301,15 @@ export class RunLoop {
 		}
 	}
 
-	private async renewOwnedConversations(): Promise<void> {
-		// Snapshot: a drain finishing mid-iteration removes itself from the map.
+	/** Preserve the Claim across start/between-Run windows. Once a Run is
+	 * attached, the shared Run-serving seam is the sole renewal owner. */
+	private async renewDrainsWithoutActiveRuns(): Promise<void> {
 		for (const [key, drain] of [...this.drains]) {
+			if (drain.served) continue;
 			let ownerUntil: Date | null;
 			try {
 				ownerUntil = await renewConversationLeaseTx(this.opts.db, drain.owner);
 			} catch (error) {
-				// Transient DB error: drop this Conversation's whole beat — the
-				// renewal and the served Run's interruption observation alike, since a
-				// database that just refused one is unlikely to answer the other. The
-				// next tick retries well before the 60s Ownership deadline actually
-				// lapses, so this is a dropped beat, not an abandoned Conversation.
 				this.opts.logger.error({
 					message: "ownership lease renewal failed",
 					workerId: this.workerId,
@@ -489,111 +318,9 @@ export class RunLoop {
 				});
 				continue;
 			}
-			// The drain may have finished and released during the round trip; from
-			// there its own cleanup owns this Conversation, not the renewal loop.
-			if (this.drains.get(key) !== drain) continue;
-			if (!ownerUntil) {
-				this.loseOwnership(drain);
-				continue;
-			}
-			await this.observeServedRun(drain);
+			if (this.drains.get(key) !== drain || ownerUntil) continue;
+			this.haltDrainAfterOwnershipLoss(drain, undefined, "lease");
 		}
-	}
-
-	/**
-	 * A renewal that matched zero rows is the lost-lease signal: either a
-	 * successor Claimed this Conversation, or the lease lapsed and Reclamation
-	 * owns its Runs. Halt the drain and abandon the Run in flight — and
-	 * deliberately do **not** release, which would revoke the successor's
-	 * ownership.
-	 *
-	 * Abandonment stops in-memory work promptly; the epoch fence is the durable
-	 * backstop for a write already racing this signal. A terminal transition that
-	 * detached just before renewal observed the loss still carries the old epoch
-	 * and is therefore rejected rather than committing under a successor's Claim.
-	 */
-	private loseOwnership(drain: ActiveDrain): void {
-		drain.halted = "lease";
-		// Stop renewing a Conversation that is no longer ours. In the ordinary case
-		// the drain's own cleanup removes this entry instead.
-		this.forgetDrain(drain);
-		this.opts.logger.warn({
-			message: "halting drain after losing the Ownership lease",
-			workerId: this.workerId,
-			conversationId: drain.owner.conversationId,
-			runId: drain.served?.runId,
-		});
-		this.abandonServedRun(drain);
-	}
-
-	/**
-	 * Read the served Run's status to observe a durable interruption. This read is
-	 * not an ownership predicate: the Conversation epoch and live deadline remain
-	 * the sole authority for every write.
-	 */
-	private async observeServedRun(drain: ActiveDrain): Promise<void> {
-		const served = drain.served;
-		if (!served) return;
-		let observed: RunRecord | null;
-		try {
-			observed = await loadExecutingRunTx(this.opts.db, {
-				userId: drain.owner.userId,
-				conversationId: drain.owner.conversationId,
-				runId: served.runId,
-			});
-		} catch (error) {
-			this.opts.logger.error({
-				message: "run status observation failed",
-				workerId: this.workerId,
-				runId: served.runId,
-				error: toMessage(error),
-			});
-			return;
-		}
-		if (!observed) {
-			// This Run reached its Outcome under us while the Conversation lease
-			// stayed live. It is no longer ours to terminalize, but the Conversation
-			// still is, so only the Run is
-			// abandoned and the drain continues with the rest of its snapshot.
-			this.opts.logger.warn({
-				message: "abandoning a run this worker no longer owns",
-				workerId: this.workerId,
-				conversationId: drain.owner.conversationId,
-				runId: served.runId,
-			});
-			this.abandonServedRun(drain);
-			return;
-		}
-		if (observed.status === "interrupt_requested") {
-			served.state.interrupted = true;
-			served.controller.abort();
-			served.interruptionController.abort();
-		}
-	}
-
-	/**
-	 * Hand the Run in flight back from the tick loop, so no later tick observes or
-	 * interrupts it. The only writer of `drain.served`, because forgetting to
-	 * detach is silent: the Run keeps being observed, and a terminal
-	 * transition can race a tick that still believes it owns it.
-	 */
-	private detachServedRun(drain: ActiveDrain): ActiveEntry | undefined {
-		const served = drain.served;
-		drain.served = undefined;
-		return served;
-	}
-
-	/**
-	 * Stop serving the Run in flight without terminalizing it: its Outcome
-	 * belongs to whoever holds it now. `finish()` still reads `lostOwnership`
-	 * through the detached entry and skips the terminal transition.
-	 */
-	private abandonServedRun(drain: ActiveDrain): void {
-		const served = this.detachServedRun(drain);
-		if (!served) return;
-		served.state.lostOwnership = true;
-		served.controller.abort();
-		served.ownershipLostController.abort();
 	}
 
 	private async claimAndDrain(): Promise<number> {
@@ -713,28 +440,24 @@ export class RunLoop {
 		});
 	}
 
-	/** Apply a rejection to the Run currently executing, then record its
-	 * drain-level meaning through {@link noteRejectedRunWrite}. */
-	private noteRejectedActiveRunWrite(
+	private haltDrainAfterOwnershipLoss(
 		drain: ActiveDrain,
-		entry: ActiveEntry,
-		rejection: RunWriteRejected,
+		runId: string | undefined,
+		reason: "lease" | "gone",
 	): void {
-		if (rejection.rejected === "status") {
-			if (rejection.current === "interrupt_requested") {
-				entry.state.interrupted = true;
-				entry.controller.abort();
-				entry.interruptionController.abort();
-			} else {
-				entry.state.skipTerminalization = true;
-				entry.controller.abort();
-			}
-		} else {
-			entry.state.lostOwnership = true;
-			entry.controller.abort();
-			entry.ownershipLostController.abort();
+		if (!drain.halted) {
+			this.opts.logger.warn({
+				message:
+					reason === "gone"
+						? "stopping drain: the conversation no longer exists"
+						: "halting drain after losing the Ownership lease",
+				workerId: this.workerId,
+				conversationId: drain.owner.conversationId,
+				runId,
+			});
 		}
-		this.noteRejectedRunWrite(drain, entry.runId, rejection);
+		drain.halted = reason;
+		this.forgetDrain(drain);
 	}
 
 	/**
@@ -765,428 +488,31 @@ export class RunLoop {
 	private async serveRun(run: RunRecord, drain: ActiveDrain): Promise<void> {
 		const entry: ActiveEntry = {
 			runId: run.runId,
-			controller: new AbortController(),
-			interruptionController: new AbortController(),
 			shutdownController: new AbortController(),
-			ownershipLostController: new AbortController(),
-			state: {
-				interrupted: false,
-				skipTerminalization: false,
-				lostOwnership: false,
-			},
 		};
-		// Attached before the first await, so a concurrent tick can renew this
-		// Run's lease and hand it an observed interruption for its whole life.
+		// Attach before the first await so shutdown can reach a start that was
+		// already in flight when `stop()` swept the active drains.
 		drain.served = entry;
 		if (this.opts.worker.isDraining) {
-			// Shutdown swept the drains before this Run reached the map — its start
-			// was already in flight when `stop()` ran. Abort it at birth so it takes
-			// the same path an in-flight Run does instead of running out the grace
-			// period unsupervised.
-			entry.controller.abort();
 			entry.shutdownController.abort();
 		}
 		try {
-			await this.executeServedRun(run, drain, entry);
-		} finally {
-			// Backstop: `executeServedRun` detaches the Run itself before
-			// terminalizing, so this only fires on a path that unwound first.
-			this.detachServedRun(drain);
-		}
-	}
-
-	private async executeServedRun(
-		run: RunRecord,
-		drain: ActiveDrain,
-		entry: ActiveEntry,
-	): Promise<void> {
-		const owner: RunWriteOwner = {
-			...drain.owner,
-			runId: run.runId,
-			workerId: this.workerId,
-		};
-		const liveStream = await RunLiveStream.open({
-			relay: this.opts.liveStreamRelay,
-			runId: run.runId,
-			conversationId: run.conversationId,
-			markLiveStreamFailed: async () => {
-				const result = await markLiveStreamFailedTx(this.opts.db, {
-					owner,
-				});
-				if (result.outcome === "rejected") {
-					this.noteRejectedActiveRunWrite(drain, entry, result);
-					this.opts.logger.warn({
-						message:
-							"could not mark Live Stream failed through Ownership fence",
-						workerId: this.workerId,
-						runId: run.runId,
-						rejected: result.rejected,
-					});
-					throw new RunWriteRejectedError();
-				}
-				if (result.run.liveStreamFailedAt === null) {
-					throw new Error("Live Stream failure marker timestamp is missing");
-				}
-				return {
-					outcome: result.outcome,
-					failedAt: result.run.liveStreamFailedAt,
-				};
-			},
-			logger: this.opts.logger,
-			telemetry: this.opts.liveStreamTelemetry,
-		});
-		entry.liveStream = liveStream;
-		if (entry.state.lostOwnership || entry.state.skipTerminalization) {
-			await liveStream.close();
-			return;
-		}
-		let turnResult: TurnResult = EMPTY_TURN;
-		let failure:
-			| { error: unknown; streamMetadata?: TurnStreamMetadata }
-			| undefined;
-		try {
-			turnResult =
-				(await this.opts.processor({
-					run,
-					owner,
-					signal: entry.controller.signal,
-					interruptionSignal: entry.interruptionController.signal,
-					shutdownSignal: entry.shutdownController.signal,
-					ownershipLostSignal: entry.ownershipLostController.signal,
-					appendModelContent: (content) =>
-						this.appendModelContent(owner, drain, entry, content),
-					appendModelContents: (contents) =>
-						this.appendModelContents(owner, drain, entry, contents),
-					appendLiveEvent: (event) => liveStream.append(event),
-				})) ?? EMPTY_TURN;
-		} catch (error) {
-			if (!(error instanceof RunWriteRejectedError)) {
-				failure =
-					error instanceof RunProcessorFailure
-						? {
-								error: error.failure,
-								streamMetadata: error.streamMetadata,
-							}
-						: { error };
+			const result = await this.runServing.serveStartedRun({
+				run,
+				owner: {
+					...drain.owner,
+					runId: run.runId,
+					workerId: this.workerId,
+				},
+				shutdownSignal: entry.shutdownController.signal,
+				onOwnershipLost: (reason) =>
+					this.haltDrainAfterOwnershipLoss(drain, run.runId, reason),
+			});
+			if (result.type === "ownership_lost") {
+				this.haltDrainAfterOwnershipLoss(drain, run.runId, result.reason);
 			}
-		}
-		// Detach before terminalizing: from here the drain owns the terminal
-		// transition and a concurrent tick must not race it.
-		this.detachServedRun(drain);
-		try {
-			const terminalStatus = await this.finish(
-				owner,
-				drain,
-				entry.state,
-				turnResult,
-				failure,
-			);
-			if (terminalStatus) await liveStream.finish(terminalStatus);
 		} finally {
-			await liveStream.close();
+			if (drain.served === entry) drain.served = undefined;
 		}
 	}
-
-	private async appendModelContent(
-		owner: RunWriteOwner,
-		drain: ActiveDrain,
-		entry: ActiveEntry,
-		content: ModelContent,
-	): Promise<number> {
-		const [seq] = await this.appendModelContents(owner, drain, entry, [
-			content,
-		]);
-		if (seq === undefined) {
-			throw new Error("single model-content append returned no sequence");
-		}
-		return seq;
-	}
-
-	private async appendModelContents(
-		owner: RunWriteOwner,
-		drain: ActiveDrain,
-		entry: ActiveEntry,
-		contents: readonly ModelContent[],
-	): Promise<number[]> {
-		const result = await appendRunEventsTx(this.opts.db, {
-			owner,
-			events: contents.map((content) => ({
-				type: MODEL_CONTENT_EVENT_TYPES[content.kind],
-				payload: content.payload,
-			})),
-			appendClass: "model",
-		});
-		if (result.outcome === "rejected") {
-			this.noteRejectedActiveRunWrite(drain, entry, result);
-			throw new RunWriteRejectedError();
-		}
-		return result.events.map(({ seq }) => seq);
-	}
-
-	private async finish(
-		owner: RunWriteOwner,
-		drain: ActiveDrain,
-		state: RunEndState,
-		turnResult: TurnResult,
-		failure?: { error: unknown; streamMetadata?: TurnStreamMetadata },
-	): Promise<TerminalRunStatus | null> {
-		if (state.lostOwnership) {
-			this.opts.logger.warn({
-				message: "abandoning run after ownership loss",
-				workerId: this.workerId,
-				runId: owner.runId,
-			});
-			return null;
-		}
-		if (state.skipTerminalization) {
-			this.opts.logger.info({
-				message: "skipping terminal transition after status rejection",
-				workerId: this.workerId,
-				runId: owner.runId,
-			});
-			return null;
-		}
-		const agentSessionId = resumableAgentSessionId(
-			failure?.streamMetadata ?? turnResult.streamMetadata,
-		);
-		// Interruption wins over both success and failure: an SDK error raised
-		// while interrupting still surfaces as `interrupted`. A mirrored main
-		// session publishes its first or later resume pointer with this Outcome.
-		if (state.interrupted) {
-			return this.terminalize(owner, drain, {
-				status: "interrupted",
-				agentSessionId,
-			});
-		}
-		if (failure) {
-			return this.failRun(owner, drain, {
-				message: "run failed",
-				fields: artifactFailureLogFields(failure.error),
-				interruptedAgentSessionId: agentSessionId,
-			});
-		}
-		if (turnResult.streamMetadata?.mirrorErrorObserved) {
-			return this.failRun(owner, drain, {
-				message: "agent session mirror failed",
-				fields: { reason: "mirror_error" },
-			});
-		}
-		if (turnResult.disposition === "stopped") {
-			return this.failRun(owner, drain, {
-				message: "run stopped before completion",
-				interruptedAgentSessionId: agentSessionId,
-			});
-		}
-		// Success: terminalize `done` directly — there is no end-of-turn
-		// checkpoint (ADR-0007); the sandbox idle-pauses once renewal stops and is
-		// itself the persisted workspace. The terminal-success transition also
-		// publishes the conversation's first or later usable resume pointer in
-		// that same ownership-fenced transaction (ADR-0005).
-		if (turnResult.artifactPublication) {
-			return this.publishArtifactsAndFinish(
-				owner,
-				drain,
-				turnResult.artifactPublication,
-				agentSessionId,
-			);
-		}
-		return this.terminalize(owner, drain, { status: "done", agentSessionId });
-	}
-
-	private async failRun(
-		owner: RunWriteOwner,
-		drain: ActiveDrain,
-		input: {
-			message: string;
-			fields?: Record<string, unknown>;
-			interruptedAgentSessionId?: string;
-		},
-	): Promise<TerminalRunStatus | null> {
-		this.opts.logger.error({
-			message: input.message,
-			workerId: this.workerId,
-			userId: owner.userId,
-			conversationId: owner.conversationId,
-			runId: owner.runId,
-			...input.fields,
-		});
-		const outcome = {
-			status: "error",
-			payload: { message: GENERIC_RUN_ERROR_MESSAGE },
-		} as const satisfies TerminalOutcome;
-		const result = await transitionRunTerminalTx(this.opts.db, {
-			owner,
-			...outcome,
-		});
-		if (result.outcome === "committed") return "error";
-		return this.reconcileRejectedTerminal(
-			owner,
-			drain,
-			result,
-			outcome.status,
-			{
-				agentSessionId: input.interruptedAgentSessionId,
-			},
-		);
-	}
-
-	private async publishArtifactsAndFinish(
-		owner: RunWriteOwner,
-		drain: ActiveDrain,
-		publication: NonNullable<TurnResult["artifactPublication"]>,
-		agentSessionId: string | undefined,
-	): Promise<TerminalRunStatus | null> {
-		let result: TerminalTransitionResult;
-		try {
-			result = await publishArtifactsAndTransitionRunDoneTx(this.opts.db, {
-				owner,
-				artifacts: publication.artifacts,
-				agentSessionId,
-			});
-		} catch (error) {
-			return this.failRun(owner, drain, {
-				message: "run failed",
-				fields:
-					error instanceof ArtifactQuotaError
-						? artifactFailureLogFields(error)
-						: {
-								error: "artifact metadata publication failed",
-								artifactFailure: {
-									category: "publication",
-									stage: "metadata",
-								},
-							},
-				interruptedAgentSessionId: agentSessionId,
-			});
-		}
-		if (result.outcome === "committed") return "done";
-		return this.reconcileRejectedTerminal(owner, drain, result, "done", {
-			agentSessionId,
-			unresolvedMessage: "could not publish artifacts; leaving to Reclamation",
-		});
-	}
-
-	/**
-	 * Append a non-error terminal event through the fenced run-store helper.
-	 * `done` loses to an interruption the fence observes (the Run is already
-	 * `interrupt_requested`), which the rejection says outright, so the loop
-	 * follows up with exactly the one legal terminal instead of guessing.
-	 */
-	private async terminalize(
-		owner: RunWriteOwner,
-		drain: ActiveDrain,
-		outcome: Exclude<TerminalOutcome, { status: "error" }>,
-	): Promise<TerminalRunStatus | null> {
-		const result = await transitionRunTerminalTx(this.opts.db, {
-			owner,
-			...outcome,
-		});
-		if (result.outcome === "committed") return outcome.status;
-		return this.reconcileRejectedTerminal(
-			owner,
-			drain,
-			result,
-			outcome.status,
-			{
-				agentSessionId: outcome.agentSessionId,
-			},
-		);
-	}
-
-	/**
-	 * Resolve a refused terminal transition. A lost lease is final — Reclamation
-	 * owns the Run and must not be raced. A status refusal means a durable
-	 * interruption landed while the lease is still live, and `interrupted` is the
-	 * one terminal that remains legal; a live lease is exactly what makes that
-	 * follow-up worth attempting. Both are ordinary outcomes, so only genuine
-	 * database failures propagate from here.
-	 */
-	private async reconcileRejectedTerminal(
-		owner: RunWriteOwner,
-		drain: ActiveDrain,
-		rejection: RunWriteRejected,
-		intended: TerminalRunStatus,
-		options: {
-			agentSessionId?: string;
-			unresolvedMessage?: string;
-		} = {},
-	): Promise<TerminalRunStatus | null> {
-		let unresolved = rejection;
-		if (
-			rejection.rejected === "status" &&
-			rejection.current === "interrupt_requested"
-		) {
-			const interrupted = await transitionRunTerminalTx(this.opts.db, {
-				owner,
-				status: "interrupted",
-				agentSessionId: options.agentSessionId,
-			});
-			if (interrupted.outcome === "committed") return "interrupted";
-			// Report why the follow-up failed, not why the first attempt did.
-			unresolved = interrupted;
-		}
-		this.noteRejectedRunWrite(drain, owner.runId, unresolved);
-		this.opts.logger.warn({
-			message:
-				options.unresolvedMessage ??
-				"could not terminalize run; leaving to Reclamation",
-			workerId: this.workerId,
-			runId: owner.runId,
-			intended,
-			rejected: unresolved.rejected,
-			...(unresolved.rejected === "status"
-				? { currentStatus: unresolved.current }
-				: {}),
-		});
-		return null;
-	}
-}
-
-function artifactFailureLogFields(error: unknown): Record<string, unknown> {
-	if (error instanceof ArtifactQuotaError) {
-		return {
-			error: error.message,
-			artifactFailure: {
-				category: "quota",
-				quota: error.quota,
-				actual: error.actual,
-				limit: error.limit,
-			},
-		};
-	}
-	if (error instanceof ArtifactValidationError) {
-		return {
-			error: error.message,
-			artifactFailure: {
-				category: "validation",
-				reason: error.code,
-			},
-		};
-	}
-	if (error instanceof ArtifactPublicationError) {
-		return {
-			error: error.message,
-			artifactFailure: {
-				category: "publication",
-				stage: error.stage,
-			},
-		};
-	}
-	return { error: toMessage(error) };
-}
-
-function resumableAgentSessionId(
-	metadata: TurnStreamMetadata | undefined,
-): string | undefined {
-	// Keep pointer safety local to this injected RunProcessor seam. Interruption
-	// is reconciled before mirror-failure classification, so this guard is
-	// load-bearing for done, interrupted, and error→interrupted reconciliation.
-	if (
-		!metadata ||
-		metadata.mirrorErrorObserved ||
-		metadata.mirroredMainSessionId === null
-	) {
-		return undefined;
-	}
-	return metadata.mirroredMainSessionId;
 }

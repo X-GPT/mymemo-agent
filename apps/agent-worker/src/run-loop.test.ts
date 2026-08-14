@@ -30,7 +30,8 @@ import {
 } from "@mymemo/live-text";
 import { eq, inArray, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
-import { RunLoop, type RunProcessor } from "./run-loop";
+import { RunLoop } from "./run-loop";
+import type { RunProcessor } from "./run-serving";
 import { Worker } from "./worker";
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
