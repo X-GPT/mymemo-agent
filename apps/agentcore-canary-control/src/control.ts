@@ -117,10 +117,15 @@ export function createCanaryControl(options: {
 
 	return {
 		async start(rawRequest: unknown) {
-			const withPublication = async <T>(result: T) => ({
-				...result,
-				publication: await publisher.publishPending(),
-			});
+			const withPublication = async <T>(result: T) => {
+				try {
+					return { ...result, publication: await publisher.publishPending() };
+				} catch {
+					// Admission already committed. The immediate publish is an optimization;
+					// the durable outbox remains eligible for scheduled repair.
+					return { ...result, publication: { status: "failed" as const } };
+				}
+			};
 			const request = parseCanaryStartRequest(rawRequest);
 			if (request.campaignVersion !== config.campaignVersion) {
 				throw new Error(

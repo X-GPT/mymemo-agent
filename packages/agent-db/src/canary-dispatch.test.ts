@@ -6,7 +6,7 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
 	computeCanaryCampaignInputChecksum,
 	type StartCanaryCampaignInput,
@@ -164,6 +164,26 @@ describe("acquireCanaryDispatchTx", () => {
 				executedByWorkerId: "agentcore-boot/invocation-1",
 			},
 		]);
+	});
+
+	it("uses the database clock for a production exact-acquisition lease", async () => {
+		await acquireCanaryDispatchTx(tdb.db, {
+			dispatch,
+			workerId: "agentcore-boot/invocation-1",
+		});
+
+		const [state] = await tdb.db
+			.select({
+				ownerUntil: conversations.ownerUntil,
+				databaseNow: sql<string>`now()`,
+			})
+			.from(conversations)
+			.where(eq(conversations.conversationId, campaign.conversationId));
+		if (!state?.ownerUntil) throw new Error("acquisition wrote no lease");
+		const remainingMs =
+			state.ownerUntil.getTime() - new Date(state.databaseNow).getTime();
+		expect(remainingMs).toBeGreaterThan(55_000);
+		expect(remainingMs).toBeLessThanOrEqual(60_000);
 	});
 
 	it("reports a live duplicate as already acquired without changing its Ownership", async () => {

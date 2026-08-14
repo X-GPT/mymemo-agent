@@ -43,12 +43,7 @@ export function createCanaryConsumerHandler(consumer: {
 	return async (event: unknown): Promise<CanarySqsBatchResponse> => {
 		const parsed = sqsEventSchema.safeParse(event);
 		if (!parsed.success) throw new Error("invalid Canary SQS event");
-		return await consumer.handle({
-			Records: parsed.data.Records.map(({ messageId, body }) => ({
-				messageId,
-				body,
-			})),
-		});
+		return await consumer.handle(parsed.data);
 	};
 }
 

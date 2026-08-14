@@ -35,10 +35,6 @@ export interface CanarySqsBatchResponse {
 	batchItemFailures: Array<{ itemIdentifier: string }>;
 }
 
-function assertNever(value: never): never {
-	throw new Error(`unexpected acquisition disposition: ${String(value)}`);
-}
-
 export function createCanaryDispatchConsumer(options: {
 	control: CanaryEnablementControl;
 	runtime: AgentCoreRuntimeInvoker;
@@ -94,8 +90,13 @@ export function createCanaryDispatchConsumer(options: {
 						dispatchId: dispatch.dispatchId,
 					});
 					return "ack";
+				default: {
+					const unexpected: never = receipt.disposition;
+					throw new Error(
+						`unexpected acquisition disposition: ${String(unexpected)}`,
+					);
+				}
 			}
-			return assertNever(receipt.disposition);
 		} catch {
 			// Invocation, stream, parse, and alarm failures are ambiguous. None
 			// authorizes deletion of the SQS delivery.

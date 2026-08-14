@@ -12,9 +12,9 @@ import {
 } from "drizzle-orm";
 import type { Database } from "./client";
 import {
-	CONVERSATION_OWNERSHIP_LEASE_MS,
 	type ConversationOwner,
-	hasLiveConversationOwnership,
+	conversationOwnershipLeaseDeadline,
+	liveConversationOwnershipState,
 } from "./conversation-ownership";
 import { AGENTCORE_CANARY_EXECUTION_LANE } from "./execution-lane";
 import type { TerminalRunStatus } from "./run-store";
@@ -319,7 +319,6 @@ export async function acquireCanaryDispatchTx(
 		now?: Date;
 	},
 ): Promise<AcquireCanaryDispatchResult> {
-	const now = input.now ?? new Date();
 	return await db.transaction(async (tx) => {
 		const [campaign] = await tx
 			.select()
@@ -337,7 +336,15 @@ export async function acquireCanaryDispatchTx(
 		}
 
 		const [conversation] = await tx
-			.select()
+			.select({
+				userId: conversations.userId,
+				conversationId: conversations.conversationId,
+				executionLane: conversations.executionLane,
+				epoch: conversations.epoch,
+				ownerWorkerId: conversations.ownerWorkerId,
+				ownerUntil: conversations.ownerUntil,
+				hasLiveOwnership: liveConversationOwnershipState(input.now),
+			})
 			.from(conversations)
 			.where(
 				and(
@@ -385,7 +392,8 @@ export async function acquireCanaryDispatchTx(
 		}
 		if (
 			(run.status === "running" || run.status === "interrupt_requested") &&
-			hasLiveConversationOwnership(conversation, now)
+			conversation.hasLiveOwnership &&
+			conversation.ownerWorkerId !== null
 		) {
 			return {
 				disposition: "already_acquired",
@@ -423,7 +431,7 @@ export async function acquireCanaryDispatchTx(
 			.set({
 				epoch,
 				ownerWorkerId: input.workerId,
-				ownerUntil: new Date(now.getTime() + CONVERSATION_OWNERSHIP_LEASE_MS),
+				ownerUntil: conversationOwnershipLeaseDeadline(input.now),
 			})
 			.where(
 				and(
@@ -436,7 +444,7 @@ export async function acquireCanaryDispatchTx(
 			.set({
 				status: "running",
 				executedByWorkerId: input.workerId,
-				updatedAt: now,
+				updatedAt: input.now ?? sql`now()`,
 			})
 			.where(eq(runs.runId, input.dispatch.runId));
 

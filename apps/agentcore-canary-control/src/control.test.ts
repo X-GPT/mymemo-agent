@@ -209,6 +209,32 @@ describe("the operator Canary control boundary", () => {
 		expect(calls).toBe(1);
 	});
 
+	it("keeps a committed admission successful when the immediate publish attempt fails", async () => {
+		const control = createCanaryControl({
+			db: tdb.db,
+			config,
+			verifier: new RecordingVerifier(),
+			publisher: {
+				publishPending: async () => {
+					throw new Error("publisher unavailable");
+				},
+			},
+		});
+
+		await expect(
+			control.start({
+				idempotencyKey: "operator-approved-449",
+				campaignVersion: config.campaignVersion,
+			}),
+		).resolves.toMatchObject({
+			outcome: "created",
+			publication: { status: "failed" },
+		});
+		expect(await tdb.db.select().from(canaryCampaigns)).toHaveLength(1);
+		expect(await tdb.db.select().from(runs)).toHaveLength(1);
+		expect(await tdb.db.select().from(canaryDispatchOutbox)).toHaveLength(1);
+	});
+
 	it("reattaches an exact retry without re-verifying or creating another scenario", async () => {
 		const verifier = new RecordingVerifier();
 		const control = createCanaryControl({
