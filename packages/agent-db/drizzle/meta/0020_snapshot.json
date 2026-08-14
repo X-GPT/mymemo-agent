@@ -294,6 +294,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "input_checksum": {
+          "name": "input_checksum",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "model": {
           "name": "model",
           "type": "text",

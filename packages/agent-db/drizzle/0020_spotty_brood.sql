@@ -4,6 +4,7 @@ CREATE TABLE "canary_campaigns" (
 	"campaign_version" text NOT NULL,
 	"fixture_version" text NOT NULL,
 	"fixture_checksum" text NOT NULL,
+	"input_checksum" text NOT NULL,
 	"model" text NOT NULL,
 	"scenario_id" text NOT NULL,
 	"user_id" text NOT NULL,
