@@ -239,6 +239,47 @@ describe("Canary SQS consumer", () => {
 		]);
 	});
 
+	it("isolates an alarm adapter failure to its record", async () => {
+		let invoked = 0;
+		const consumer = createCanaryDispatchConsumer({
+			control: { isEnabled: async () => true },
+			runtime: {
+				invoke: async () => {
+					invoked += 1;
+					return {
+						chunks: wireChunks(
+							createAcquisitionReceipt(dispatch, {
+								disposition: "terminal",
+								status: "done",
+							}),
+						),
+						close: () => {},
+					};
+				},
+			},
+			alarm: {
+				raise: async () => {
+					throw new Error("alarm unavailable");
+				},
+			},
+		});
+
+		await expect(
+			consumer.handle({
+				Records: [
+					{ messageId: "malformed", body: "not-json" },
+					{
+						messageId: "valid",
+						body: serializeCanaryDispatchEnvelope(dispatch),
+					},
+				],
+			}),
+		).resolves.toEqual({
+			batchItemFailures: [{ itemIdentifier: "malformed" }],
+		});
+		expect(invoked).toBe(1);
+	});
+
 	it("fails closed without Runtime acquisition when disabled", async () => {
 		let invoked = false;
 		const alarms: unknown[] = [];

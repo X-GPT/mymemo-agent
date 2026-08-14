@@ -155,6 +155,7 @@ describe("acquireCanaryDispatchTx", () => {
 				.select({
 					status: runs.status,
 					executedByWorkerId: runs.executedByWorkerId,
+					updatedAt: runs.updatedAt,
 				})
 				.from(runs)
 				.where(eq(runs.runId, campaign.runId)),
@@ -162,6 +163,7 @@ describe("acquireCanaryDispatchTx", () => {
 			{
 				status: "running",
 				executedByWorkerId: "agentcore-boot/invocation-1",
+				updatedAt: new Date("2026-08-14T16:01:00.000Z"),
 			},
 		]);
 	});
@@ -180,10 +182,16 @@ describe("acquireCanaryDispatchTx", () => {
 			.from(conversations)
 			.where(eq(conversations.conversationId, campaign.conversationId));
 		if (!state?.ownerUntil) throw new Error("acquisition wrote no lease");
+		const [run] = await tdb.db
+			.select({ updatedAt: runs.updatedAt })
+			.from(runs)
+			.where(eq(runs.runId, campaign.runId));
+		if (!run) throw new Error("acquisition run is missing");
 		const remainingMs =
 			state.ownerUntil.getTime() - new Date(state.databaseNow).getTime();
 		expect(remainingMs).toBeGreaterThan(55_000);
 		expect(remainingMs).toBeLessThanOrEqual(60_000);
+		expect(state.ownerUntil.getTime() - run.updatedAt.getTime()).toBe(60_000);
 	});
 
 	it("reports a live duplicate as already acquired without changing its Ownership", async () => {

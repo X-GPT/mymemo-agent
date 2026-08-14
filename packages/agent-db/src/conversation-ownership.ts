@@ -33,19 +33,20 @@ import { conversations, runs } from "./schema";
  */
 export const CONVERSATION_OWNERSHIP_LEASE_MS = 60_000;
 
-function ownershipClock(now?: Date) {
+/** The shared database-time expression for Ownership mutations and their Run writes. */
+export function conversationOwnershipClock(now?: Date) {
 	return now ? sql`${now}::timestamptz` : sql`now()`;
 }
 
 /** A Claim, renewal, or exact acquisition pushes the same database deadline. */
 export function conversationOwnershipLeaseDeadline(now?: Date) {
-	return sql`${ownershipClock(now)} + (${CONVERSATION_OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
+	return sql`${conversationOwnershipClock(now)} + (${CONVERSATION_OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
 }
 
 /** The one database-clock predicate defining whether Ownership is live. */
 export function liveConversationOwnershipState(now?: Date) {
 	return sql<boolean>`${conversations.ownerWorkerId} is not null
-		and ${conversations.ownerUntil} > ${ownershipClock(now)}`;
+		and ${conversations.ownerUntil} > ${conversationOwnershipClock(now)}`;
 }
 
 /**

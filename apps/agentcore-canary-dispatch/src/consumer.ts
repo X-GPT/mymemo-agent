@@ -115,7 +115,15 @@ export function createCanaryDispatchConsumer(options: {
 		async handle(event: CanarySqsEvent): Promise<CanarySqsBatchResponse> {
 			const failures: CanarySqsBatchResponse["batchItemFailures"] = [];
 			for (const record of event.Records) {
-				if ((await processRecord(record)) === "retry") {
+				let disposition: "ack" | "retry";
+				try {
+					disposition = await processRecord(record);
+				} catch {
+					// Keep an adapter failure scoped to this record so the partial-batch
+					// response still preserves decisions made for the remaining records.
+					disposition = "retry";
+				}
+				if (disposition === "retry") {
 					failures.push({ itemIdentifier: record.messageId });
 				}
 			}

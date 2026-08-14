@@ -14,6 +14,7 @@ import {
 import type { Database } from "./client";
 import {
 	type ConversationOwner,
+	conversationOwnershipClock,
 	conversationOwnershipLeaseDeadline,
 	liveConversationOwnershipState,
 } from "./conversation-ownership";
@@ -453,7 +454,7 @@ export async function acquireCanaryDispatchTx(
 			.set({
 				status: "running",
 				executedByWorkerId: input.workerId,
-				updatedAt: input.now ?? sql`now()`,
+				updatedAt: conversationOwnershipClock(input.now),
 			})
 			.where(eq(runs.runId, input.dispatch.runId));
 
