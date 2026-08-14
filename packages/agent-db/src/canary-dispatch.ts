@@ -27,7 +27,7 @@ import {
 
 const DISPATCH_PUBLISH_LEASE_MS = 3 * 60_000;
 const DISPATCH_PENDING_DEADLINE_MS = 5 * 60_000;
-const MAX_PUBLISH_BATCH_SIZE = 10;
+export const MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE = 10;
 
 export interface CanaryDispatchIdentity {
 	schemaVersion: 1;
@@ -74,7 +74,10 @@ export async function claimCanaryDispatchesTx(
 	const now = input.now ?? new Date();
 	const limit = Math.max(
 		0,
-		Math.min(input.limit ?? MAX_PUBLISH_BATCH_SIZE, MAX_PUBLISH_BATCH_SIZE),
+		Math.min(
+			input.limit ?? MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE,
+			MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE,
+		),
 	);
 	if (limit === 0) return [];
 

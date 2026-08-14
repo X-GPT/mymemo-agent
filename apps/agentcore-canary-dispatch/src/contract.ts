@@ -17,6 +17,9 @@ const dispatchIdentityShape = {
 	runtimeSessionId: nonEmptyString,
 	expectedExecutionLane: z.literal("agentcore_canary"),
 } as const;
+const dispatchIdentityKeys = Object.keys(
+	dispatchIdentityShape,
+) as (keyof typeof dispatchIdentityShape)[];
 
 const dispatchEnvelopeSchema = z
 	.strictObject({
@@ -107,16 +110,9 @@ export function createAcquisitionReceipt(
 	committedAt = new Date(),
 ): AcquisitionReceipt {
 	const owns = hasOwnership(result);
+	const { admittedAt: _admittedAt, ...identity } = dispatch;
 	return {
-		schemaVersion: 1,
-		dispatchId: dispatch.dispatchId,
-		campaignId: dispatch.campaignId,
-		scenarioId: dispatch.scenarioId,
-		userId: dispatch.userId,
-		conversationId: dispatch.conversationId,
-		runId: dispatch.runId,
-		runtimeSessionId: dispatch.runtimeSessionId,
-		expectedExecutionLane: dispatch.expectedExecutionLane,
+		...identity,
 		disposition: result.disposition,
 		ownershipEpoch: owns ? result.owner.epoch : null,
 		workerId: owns ? result.workerId : null,
@@ -138,14 +134,5 @@ export function receiptCorrelatesDispatch(
 	receipt: AcquisitionReceipt,
 	dispatch: CanaryDispatchIdentity,
 ): boolean {
-	return (
-		receipt.dispatchId === dispatch.dispatchId &&
-		receipt.campaignId === dispatch.campaignId &&
-		receipt.scenarioId === dispatch.scenarioId &&
-		receipt.userId === dispatch.userId &&
-		receipt.conversationId === dispatch.conversationId &&
-		receipt.runId === dispatch.runId &&
-		receipt.runtimeSessionId === dispatch.runtimeSessionId &&
-		receipt.expectedExecutionLane === dispatch.expectedExecutionLane
-	);
+	return dispatchIdentityKeys.every((key) => receipt[key] === dispatch[key]);
 }

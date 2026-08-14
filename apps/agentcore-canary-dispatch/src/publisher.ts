@@ -37,16 +37,16 @@ export function createCanaryDispatchPublisher(options: {
 		async publishPending(
 			input: { dispatchId?: string } = {},
 		): Promise<CanaryPublishResult> {
+			const overdue = await options.store.markOverdue();
 			if (!(await options.control.isEnabled())) {
 				return {
 					status: "disabled",
-					overdueCampaignIds: [],
+					overdueCampaignIds: overdue.campaignIds,
 					publishedDispatchIds: [],
 					ambiguousDispatchIds: [],
 				};
 			}
 
-			const overdue = await options.store.markOverdue();
 			const claimed = await options.store.claim({
 				publisherId: options.publisherId,
 				dispatchId: input.dispatchId,

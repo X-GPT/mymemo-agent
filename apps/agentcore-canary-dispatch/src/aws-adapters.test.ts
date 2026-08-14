@@ -84,6 +84,26 @@ describe("AgentCore Runtime invoker", () => {
 		await invocation.close();
 		expect(destroyed).toBe(true);
 	});
+
+	it("cancels a receipt stream when no synchronous destroy method exists", async () => {
+		let cancelled = false;
+		async function* responseChunks() {
+			yield new TextEncoder().encode("receipt\n");
+		}
+		const response = Object.assign(responseChunks(), {
+			cancel: async () => {
+				cancelled = true;
+			},
+		});
+		const invoker = createBedrockAgentCoreRuntimeInvoker({
+			agentRuntimeArn: "arn:aws:bedrock-agentcore:us-west-2:123:runtime/canary",
+			client: { send: async () => ({ response }) },
+		});
+
+		const invocation = await invoker.invoke(dispatch);
+		await invocation.close();
+		expect(cancelled).toBe(true);
+	});
 });
 
 describe("SQS Canary dispatch queue", () => {

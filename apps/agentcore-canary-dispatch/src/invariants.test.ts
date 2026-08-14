@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE } from "@mymemo/agent-db/canary-dispatch";
 import { CANARY_QUEUE_INVARIANTS } from "./invariants";
 
 describe("production Canary queue invariants", () => {
@@ -19,6 +20,9 @@ describe("production Canary queue invariants", () => {
 		});
 		expect(CANARY_QUEUE_INVARIANTS.visibilityTimeoutSeconds).toBeGreaterThan(
 			CANARY_QUEUE_INVARIANTS.consumerTimeoutSeconds,
+		);
+		expect(CANARY_QUEUE_INVARIANTS.publisherBatchSize).toBe(
+			MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE,
 		);
 	});
 });

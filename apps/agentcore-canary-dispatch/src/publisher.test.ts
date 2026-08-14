@@ -29,7 +29,7 @@ describe("Canary dispatch publisher", () => {
 			store: {
 				markOverdue: async () => {
 					calls.push("overdue");
-					return { campaignIds: [] };
+					return { campaignIds: ["overdue-campaign"] };
 				},
 				claim: async () => {
 					calls.push("claim");
@@ -49,11 +49,11 @@ describe("Canary dispatch publisher", () => {
 
 		await expect(publisher.publishPending()).resolves.toEqual({
 			status: "disabled",
-			overdueCampaignIds: [],
+			overdueCampaignIds: ["overdue-campaign"],
 			publishedDispatchIds: [],
 			ambiguousDispatchIds: [],
 		});
-		expect(calls).toEqual(["control"]);
+		expect(calls).toEqual(["overdue", "control"]);
 	});
 
 	it("confirms a successful SQS send only after the leased claim returns", async () => {

@@ -128,22 +128,17 @@ export function createBedrockAgentCoreRuntimeInvoker(options: {
 			return {
 				chunks,
 				async close() {
-					if (
-						typeof response === "object" &&
-						response !== null &&
-						"destroy" in response &&
-						typeof response.destroy === "function"
-					) {
-						response.destroy();
+					if (typeof response !== "object" || response === null) return;
+					const closable = response as {
+						destroy?: () => void;
+						cancel?: () => void | Promise<void>;
+					};
+					if (typeof closable.destroy === "function") {
+						closable.destroy();
 						return;
 					}
-					if (
-						typeof response === "object" &&
-						response !== null &&
-						"cancel" in response &&
-						typeof response.cancel === "function"
-					) {
-						await response.cancel();
+					if (typeof closable.cancel === "function") {
+						await closable.cancel();
 					}
 				},
 			};
