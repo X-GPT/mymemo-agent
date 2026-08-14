@@ -100,6 +100,16 @@ export function parseCanaryDispatchEnvelope(
 	return { ...parsed.data, admittedAt: new Date(parsed.data.admittedAt) };
 }
 
+export function sameCanaryDispatch(
+	left: CanaryDispatchIdentity,
+	right: CanaryDispatchIdentity,
+): boolean {
+	return (
+		dispatchIdentityKeys.every((key) => left[key] === right[key]) &&
+		left.admittedAt.getTime() === right.admittedAt.getTime()
+	);
+}
+
 /** Constructed by the Runtime boundary only after acquisition transaction return. */
 export function createAcquisitionReceipt(
 	dispatch: CanaryDispatchIdentity,

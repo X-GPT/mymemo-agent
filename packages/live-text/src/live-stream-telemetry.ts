@@ -1,4 +1,7 @@
-export type LiveStreamService = "agent-worker" | "chat-api";
+export type LiveStreamService =
+	| "agent-worker"
+	| "agentcore-canary-runtime"
+	| "chat-api";
 
 export type LiveStreamOperation =
 	| "attach_attempt"

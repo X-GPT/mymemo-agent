@@ -1,0 +1,334 @@
+import { describe, expect, it } from "bun:test";
+import type {
+	AcquireCanaryDispatchResult,
+	CanaryDispatchIdentity,
+} from "@mymemo/agent-db/canary-dispatch";
+import {
+	createAcquisitionReceipt,
+	serializeCanaryDispatchEnvelope,
+} from "agentcore-canary-dispatch/contract";
+import {
+	createCanaryRuntime,
+	RuntimeBusyError,
+	RuntimeShuttingDownError,
+} from "./runtime";
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
+
+function dispatch(runId = "run-451"): CanaryDispatchIdentity {
+	return {
+		schemaVersion: 1,
+		dispatchId: `dispatch-${runId}`,
+		campaignId: "campaign-451",
+		scenarioId: "baseline-v1",
+		userId: "canary-service-user",
+		conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045101",
+		runId,
+		runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045101",
+		expectedExecutionLane: "agentcore_canary",
+		admittedAt: new Date("2026-08-14T18:00:00.000Z"),
+	};
+}
+
+function acquisition(
+	dispatched: CanaryDispatchIdentity,
+	result: AcquireCanaryDispatchResult,
+) {
+	return {
+		dispatch: dispatched,
+		result,
+		receiptLine: `${JSON.stringify(
+			createAcquisitionReceipt(
+				dispatched,
+				result,
+				new Date("2026-08-14T18:00:01.000Z"),
+			),
+		)}\n`,
+	};
+}
+
+describe("AgentCore canary Runtime", () => {
+	it("keeps detached acquired work busy until shared Run serving ends", async () => {
+		const dispatched = dispatch();
+		const served = deferred<{
+			type: "terminal";
+			status: "done";
+		}>();
+		const acquired = acquisition(dispatched, {
+			disposition: "acquired",
+			owner: {
+				userId: dispatched.userId,
+				conversationId: dispatched.conversationId,
+				epoch: 7,
+			},
+			workerId: "boot-1/invocation-1",
+		});
+		let serveCount = 0;
+		let released = false;
+		let executionSignal: AbortSignal | undefined;
+		const runtime = createCanaryRuntime({
+			acquire: async () => acquired,
+			serve: async ({ shutdownSignal }) => {
+				serveCount++;
+				executionSignal = shutdownSignal;
+				return await served.promise;
+			},
+			heartbeat: async () => "alive",
+			release: async () => {
+				released = true;
+			},
+			heartbeatIntervalMs: 10,
+		});
+
+		expect(runtime.health()).toEqual({ status: "Healthy" });
+		const invocation = await runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
+			runtimeSessionId: dispatched.runtimeSessionId,
+		});
+		const reader = invocation.body.getReader();
+		const first = await reader.read();
+		expect(new TextDecoder().decode(first.value)).toBe(acquired.receiptLine);
+		await reader.cancel("consumer disconnected after receipt");
+
+		expect(runtime.health()).toEqual({ status: "HealthyBusy" });
+		expect(serveCount).toBe(1);
+		expect(executionSignal?.aborted).toBe(false);
+		expect(released).toBe(false);
+
+		served.resolve({ type: "terminal", status: "done" });
+		await runtime.waitForIdle();
+
+		expect(released).toBe(true);
+		expect(runtime.health()).toEqual({ status: "Healthy" });
+	});
+
+	it("returns an exact duplicate disposition while refusing different work at capacity", async () => {
+		const activeDispatch = dispatch("run-active");
+		const otherDispatch = {
+			...dispatch("run-other"),
+			conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045102",
+			runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045102",
+		};
+		const serving = deferred<{
+			type: "terminal";
+			status: "done";
+		}>();
+		let acquisitionCount = 0;
+		let serveCount = 0;
+		const runtime = createCanaryRuntime({
+			acquire: async () => {
+				acquisitionCount++;
+				return acquisition(
+					activeDispatch,
+					acquisitionCount === 1
+						? {
+								disposition: "acquired",
+								owner: {
+									userId: activeDispatch.userId,
+									conversationId: activeDispatch.conversationId,
+									epoch: 8,
+								},
+								workerId: "boot-1/invocation-1",
+							}
+						: {
+								disposition: "already_acquired",
+								owner: {
+									userId: activeDispatch.userId,
+									conversationId: activeDispatch.conversationId,
+									epoch: 8,
+								},
+								workerId: "boot-1/invocation-1",
+							},
+				);
+			},
+			serve: async () => {
+				serveCount++;
+				return await serving.promise;
+			},
+			heartbeat: async () => "alive",
+			release: async () => {},
+			heartbeatIntervalMs: 10,
+		});
+
+		await runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
+			runtimeSessionId: activeDispatch.runtimeSessionId,
+		});
+		const duplicate = await runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
+			runtimeSessionId: activeDispatch.runtimeSessionId,
+		});
+		expect(await new Response(duplicate.body).text()).toContain(
+			'"disposition":"already_acquired"',
+		);
+		await expect(
+			runtime.invoke({
+				rawEnvelope: serializeCanaryDispatchEnvelope(otherDispatch),
+				runtimeSessionId: otherDispatch.runtimeSessionId,
+			}),
+		).rejects.toBeInstanceOf(RuntimeBusyError);
+		expect(acquisitionCount).toBe(2);
+		expect(serveCount).toBe(1);
+
+		serving.resolve({ type: "terminal", status: "done" });
+		await runtime.waitForIdle();
+	});
+
+	it("keeps capacity reserved when a duplicate attempt fails during the original acquisition", async () => {
+		const activeDispatch = dispatch("run-acquiring");
+		const otherDispatch = {
+			...dispatch("run-waiting"),
+			conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045103",
+			runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045103",
+		};
+		const firstAcquisition = deferred<ReturnType<typeof acquisition>>();
+		let acquisitionCount = 0;
+		const runtime = createCanaryRuntime({
+			acquire: async () => {
+				acquisitionCount++;
+				if (acquisitionCount === 1) return await firstAcquisition.promise;
+				throw new Error("duplicate acquisition failed");
+			},
+			serve: async () => ({ type: "terminal", status: "done" }),
+			heartbeat: async () => "alive",
+			release: async () => {},
+			heartbeatIntervalMs: 10,
+		});
+
+		const original = runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
+			runtimeSessionId: activeDispatch.runtimeSessionId,
+		});
+		await expect(
+			runtime.invoke({
+				rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
+				runtimeSessionId: activeDispatch.runtimeSessionId,
+			}),
+		).rejects.toThrow("duplicate acquisition failed");
+		await expect(
+			runtime.invoke({
+				rawEnvelope: serializeCanaryDispatchEnvelope(otherDispatch),
+				runtimeSessionId: otherDispatch.runtimeSessionId,
+			}),
+		).rejects.toBeInstanceOf(RuntimeBusyError);
+		expect(acquisitionCount).toBe(2);
+
+		firstAcquisition.resolve(
+			acquisition(activeDispatch, {
+				disposition: "acquired",
+				owner: {
+					userId: activeDispatch.userId,
+					conversationId: activeDispatch.conversationId,
+					epoch: 12,
+				},
+				workerId: "boot-1/invocation-acquiring",
+			}),
+		);
+		await original;
+		await runtime.waitForIdle();
+	});
+
+	it("stays busy after Run detachment and does not release after renewal loses Ownership", async () => {
+		const dispatched = dispatch("run-detached");
+		const finishServing = deferred<{
+			type: "terminal";
+			status: null;
+		}>();
+		const ownershipLost = deferred<void>();
+		let releaseCount = 0;
+		const runtime = createCanaryRuntime({
+			acquire: async () =>
+				acquisition(dispatched, {
+					disposition: "acquired",
+					owner: {
+						userId: dispatched.userId,
+						conversationId: dispatched.conversationId,
+						epoch: 9,
+					},
+					workerId: "boot-1/invocation-detached",
+				}),
+			serve: async ({ onDetached }) => {
+				onDetached({ type: "run_detached" });
+				return await finishServing.promise;
+			},
+			heartbeat: async ({ detached }) => {
+				if (!detached) return "alive";
+				ownershipLost.resolve();
+				return "lost";
+			},
+			release: async () => {
+				releaseCount++;
+			},
+			heartbeatIntervalMs: 1,
+		});
+
+		await runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
+			runtimeSessionId: dispatched.runtimeSessionId,
+		});
+		await ownershipLost.promise;
+		expect(runtime.health()).toEqual({ status: "HealthyBusy" });
+
+		finishServing.resolve({ type: "terminal", status: null });
+		await runtime.waitForIdle();
+		expect(releaseCount).toBe(0);
+		expect(runtime.health()).toEqual({ status: "Healthy" });
+	});
+
+	it("rejects acquisition during graceful shutdown and lets shared serving terminalize and release", async () => {
+		const dispatched = dispatch("run-shutdown");
+		let releaseCount = 0;
+		const shutdownObserved = deferred<void>();
+		const runtime = createCanaryRuntime({
+			acquire: async () =>
+				acquisition(dispatched, {
+					disposition: "acquired",
+					owner: {
+						userId: dispatched.userId,
+						conversationId: dispatched.conversationId,
+						epoch: 10,
+					},
+					workerId: "boot-1/invocation-shutdown",
+				}),
+			serve: async ({ shutdownSignal }) => {
+				await new Promise<void>((resolve) => {
+					if (shutdownSignal.aborted) resolve();
+					else
+						shutdownSignal.addEventListener("abort", () => resolve(), {
+							once: true,
+						});
+				});
+				shutdownObserved.resolve();
+				return { type: "shutdown", status: "error" };
+			},
+			heartbeat: async () => "alive",
+			release: async () => {
+				releaseCount++;
+			},
+			heartbeatIntervalMs: 5,
+		});
+
+		await runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
+			runtimeSessionId: dispatched.runtimeSessionId,
+		});
+		const shutdown = runtime.shutdown(50);
+		await shutdownObserved.promise;
+		await expect(
+			runtime.invoke({
+				rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
+				runtimeSessionId: dispatched.runtimeSessionId,
+			}),
+		).rejects.toBeInstanceOf(RuntimeShuttingDownError);
+		await shutdown;
+
+		expect(releaseCount).toBe(1);
+		expect(runtime.health()).toEqual({ status: "Healthy" });
+	});
+});

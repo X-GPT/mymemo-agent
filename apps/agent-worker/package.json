@@ -1,5 +1,11 @@
 {
 	"name": "agent-worker",
+	"exports": {
+		"./config": "./src/config/env.ts",
+		"./logger": "./src/logger.ts",
+		"./production-run-resources": "./src/production-run-resources.ts",
+		"./run-serving": "./src/run-serving.ts"
+	},
 	"scripts": {
 		"test": "bun test --timeout=30000",
 		"dev": "bun run --hot src/index.ts",
