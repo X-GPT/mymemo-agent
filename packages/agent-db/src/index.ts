@@ -4,6 +4,8 @@
 // production imports. Import the test harness from `@mymemo/agent-db/testing`.
 
 export * from "./artifact-store";
+export * from "./canary";
+export * from "./canary-control";
 export * from "./client";
 export * from "./conversation-ownership";
 export * from "./execution-lane";
