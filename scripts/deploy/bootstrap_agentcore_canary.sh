@@ -8,7 +8,6 @@ aws_profile="mymemo"
 region="us-west-2"
 account_id="637423444544"
 repository="X-GPT/mymemo-agent"
-github_environment="production-agentcore-canary"
 confirmation="${1:-}"
 
 if [[ "${confirmation}" != "bootstrap-mymemo-agentcore-canary-prod" ]]; then
@@ -30,8 +29,6 @@ if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
   exit 1
 fi
 
-scripts/deploy/verify_github_canary_environment.sh production-agentcore-canary
-
 caller_account="$(aws --profile "${aws_profile}" sts get-caller-identity --query Account --output text)"
 if [[ "${caller_account}" != "${account_id}" ]]; then
   echo "The mymemo profile must target AWS account ${account_id}." >&2
@@ -39,7 +36,7 @@ if [[ "${caller_account}" != "${account_id}" ]]; then
 fi
 
 github_variable() {
-  gh variable get "$1" --repo "${repository}" --env "${github_environment}"
+  gh variable get "$1" --repo "${repository}"
 }
 
 export AWS_PROFILE="${aws_profile}"

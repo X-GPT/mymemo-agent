@@ -7,21 +7,21 @@ VPC, database, Redis, artifact-bucket, ECS, load-balancer, or routing resources.
 
 ## Deployment authority
 
-Create one GitHub Environment named `production-agentcore-canary` with the
-canary operator as its required reviewer. Configure its non-secret variables
-referenced by `agentcore-canary-deploy.yml`. The permission-separated deployment
-and campaign-launch roles share this single operator approval boundary. The
-campaign-launch role is reserved for the temporary #453 verification workflow;
-that workflow is removed after the campaign, and normal production has no
-control-path trigger. The one-time operator bootstrap script uses the mandatory
-`mymemo` profile and the same AWS-6.x canary root, locked state, and fail-closed
-plan classifier to create only the immutable ECR repository, the two
-Environment-assumable canary roles, and the disabled repair-rule shell. It
-creates no reusable bootstrap principal. The narrower deployment role cannot
-mutate those roles or enable/redefine the repair schedule; it may attach only
-the publisher target and publisher-only
-EventBridge permission. Rerun the separately controlled operator bootstrap
-whenever those bootstrap-owned contracts intentionally change.
+Configure the repository's non-secret variables referenced by
+`agentcore-canary-deploy.yml`. The permission-separated deployment and
+campaign-launch roles accept GitHub OIDC only from this repository's `main`
+branch. Image promotion remains a manual workflow with an explicit typed
+confirmation. The campaign-launch role is reserved for the temporary #453
+verification workflow; that workflow is removed after the campaign, and normal
+production has no control-path trigger. The one-time operator bootstrap script
+uses the mandatory `mymemo` profile and the same AWS-6.x canary root, locked
+state, and fail-closed plan classifier to create only the immutable ECR
+repository, the two GitHub-assumable canary roles, and the disabled repair-rule
+shell. It creates no reusable bootstrap principal. The narrower deployment role
+cannot mutate those roles or enable/redefine the repair schedule; it may attach
+only the publisher target and publisher-only EventBridge permission. Rerun the
+separately controlled operator bootstrap whenever those bootstrap-owned
+contracts intentionally change.
 
 Before the first workflow deployment, run this separately controlled one-time
 operator command from the reviewed `main` revision:
@@ -64,9 +64,9 @@ The inspection performs no Lambda or Runtime invocation and cannot admit a Run.
 
 Issue #452 installs the preflight capability but deliberately leaves the
 deployment dormant: its workflow does not create NAT/EIP or invoke the preflight
-Lambda. Issue #453 owns the temporary operator-approved network window, two-hour
-expiry, preflight orchestration, and verified NAT/EIP cleanup through the same
-`production-agentcore-canary` Environment.
+Lambda. Issue #453 owns the temporary network window, two-hour expiry, preflight
+orchestration, and verified NAT/EIP cleanup through its manual workflow from
+`main`.
 
 During that #453 campaign-network window, `campaign_network_enabled=true` while
 `dispatch_enabled=false`. The preflight task sets `ROLLBACK_RUNTIME_IMAGE_DIGEST`

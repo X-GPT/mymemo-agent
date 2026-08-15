@@ -715,7 +715,7 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 			oneString(equalsRecord["token.actions.githubusercontent.com:aud"]) ===
 				"sts.amazonaws.com" &&
 			oneString(equalsRecord["token.actions.githubusercontent.com:sub"]) ===
-				"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary"
+				"repo:X-GPT/mymemo-agent:ref:refs/heads/main"
 		);
 	}
 

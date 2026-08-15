@@ -59,7 +59,7 @@ data "aws_iam_policy_document" "states_trust" {
   }
 }
 
-data "aws_iam_policy_document" "github_operator_trust" {
+data "aws_iam_policy_document" "github_main_trust" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -77,7 +77,7 @@ data "aws_iam_policy_document" "github_operator_trust" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_owner}/${var.github_repository}:environment:production-agentcore-canary"]
+      values   = ["repo:${var.github_owner}/${var.github_repository}:ref:refs/heads/main"]
     }
   }
 }
@@ -405,7 +405,7 @@ resource "aws_iam_role_policy" "control" {
 
 resource "aws_iam_role" "deployment" {
   name               = "${local.name_prefix}-deployment"
-  assume_role_policy = data.aws_iam_policy_document.github_operator_trust.json
+  assume_role_policy = data.aws_iam_policy_document.github_main_trust.json
 }
 
 data "aws_iam_policy_document" "deployment" {
@@ -788,7 +788,7 @@ resource "aws_iam_role_policy" "deployment" {
 
 resource "aws_iam_role" "campaign_launch" {
   name               = "${local.name_prefix}-campaign-launch"
-  assume_role_policy = data.aws_iam_policy_document.github_operator_trust.json
+  assume_role_policy = data.aws_iam_policy_document.github_main_trust.json
 }
 
 resource "aws_iam_role" "task" {

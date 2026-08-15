@@ -254,9 +254,9 @@ describe("AgentCore canary Terraform plan classification", () => {
 			).toBe(false);
 		}
 
-		const githubOperatorTrust = (
+		const githubMainTrust = (
 			providerAccount: string,
-			environment = "production-agentcore-canary",
+			subject = "repo:X-GPT/mymemo-agent:ref:refs/heads/main",
 		) =>
 			JSON.stringify({
 				Version: "2012-10-17",
@@ -270,7 +270,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 						Condition: {
 							StringEquals: {
 								"token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-								"token.actions.githubusercontent.com:sub": `repo:X-GPT/mymemo-agent:environment:${environment}`,
+								"token.actions.githubusercontent.com:sub": subject,
 							},
 						},
 					},
@@ -284,7 +284,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 				classifyAgentCoreCanaryPlan(
 					plan([
 						change(address, "aws_iam_role", ["create"], null, {
-							assume_role_policy: githubOperatorTrust("637423444544"),
+							assume_role_policy: githubMainTrust("637423444544"),
 						}),
 					]),
 				),
@@ -294,7 +294,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 			classifyAgentCoreCanaryPlan(
 				plan([
 					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
-						assume_role_policy: githubOperatorTrust("111111111111"),
+						assume_role_policy: githubMainTrust("111111111111"),
 					}),
 				]),
 			).safe,
@@ -308,9 +308,9 @@ describe("AgentCore canary Terraform plan classification", () => {
 						["create"],
 						null,
 						{
-							assume_role_policy: githubOperatorTrust(
+							assume_role_policy: githubMainTrust(
 								"637423444544",
-								"production-agentcore-canary-campaign",
+								"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary",
 							),
 						},
 					),
