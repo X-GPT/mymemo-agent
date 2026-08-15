@@ -168,6 +168,21 @@ describe("dormant AgentCore canary infrastructure", () => {
 			join(root, "scripts", "deploy", "bootstrap_agentcore_canary.sh"),
 			"utf8",
 		);
+		const artifactPublication = readFileSync(
+			join(
+				root,
+				"apps",
+				"agent-worker",
+				"src",
+				"artifacts",
+				"artifact-publication.ts",
+			),
+			"utf8",
+		);
+		const planClassifier = readFileSync(
+			join(root, "scripts", "deploy", "classify_agentcore_canary_plan.ts"),
+			"utf8",
+		);
 
 		for (const role of [
 			"deployment",
@@ -197,6 +212,24 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(/resources\s*=\s*local\.exact_secret_arns/);
 		expect(source).toMatch(
 			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?actions\s*=\s*\["s3:AbortMultipartUpload", "s3:PutObject"\]/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{var\.artifact_bucket_name\}\/objects\/\*"\]/,
+		);
+		expect(artifactPublication).toMatch(
+			/deps\.createObjectKey\s*\?\?\s*\(\(\)\s*=>\s*`objects\/\$\{crypto\.randomUUID\(\)\}`\)/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"CreateCanaryEventMappingOnly"[\s\S]*?actions\s*=\s*\["lambda:CreateEventSourceMapping"\][\s\S]*?resources\s*=\s*\["\*"\][\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"UpdateCanaryEventMappingOnly"[\s\S]*?actions\s*=\s*\["lambda:UpdateEventSourceMapping"\][\s\S]*?event-source-mapping:\*[\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
+		);
+		expect(planClassifier).toMatch(
+			/CreateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:CreateEventSourceMapping"\][\s\S]*?resourcePatterns:\s*\["\*"\][\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
+		);
+		expect(planClassifier).toMatch(
+			/UpdateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:UpdateEventSourceMapping"\][\s\S]*?event-source-mapping:\*[\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
 		);
 		expect(source).not.toMatch(
 			/resource\s+"aws_iam_role_policy"\s+"campaign_launch"[\s\S]*?(rds:|secretsmanager:GetSecretValue)/,

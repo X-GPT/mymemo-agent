@@ -305,11 +305,19 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			},
 		},
 	},
-	ManageCanaryEventMappingOnly: {
-		actions: [
-			"lambda:CreateEventSourceMapping",
-			"lambda:UpdateEventSourceMapping",
-		],
+	CreateCanaryEventMappingOnly: {
+		actions: ["lambda:CreateEventSourceMapping"],
+		resourcePatterns: ["*"],
+		conditions: {
+			ArnLike: {
+				"lambda:FunctionArn": [
+					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer",
+				],
+			},
+		},
+	},
+	UpdateCanaryEventMappingOnly: {
+		actions: ["lambda:UpdateEventSourceMapping"],
 		resourcePatterns: [
 			"arn:aws:lambda:us-west-2:637423444544:event-source-mapping:*",
 		],

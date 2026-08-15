@@ -150,7 +150,7 @@ data "aws_iam_policy_document" "runtime" {
   statement {
     sid       = "WriteSyntheticArtifactsOnly"
     actions   = ["s3:AbortMultipartUpload", "s3:PutObject"]
-    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/conversations/*"]
+    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/objects/*"]
   }
 
   statement {
@@ -602,11 +602,20 @@ data "aws_iam_policy_document" "deployment" {
   }
 
   statement {
-    sid = "ManageCanaryEventMappingOnly"
-    actions = [
-      "lambda:CreateEventSourceMapping",
-      "lambda:UpdateEventSourceMapping",
-    ]
+    sid       = "CreateCanaryEventMappingOnly"
+    actions   = ["lambda:CreateEventSourceMapping"]
+    resources = ["*"]
+
+    condition {
+      test     = "ArnLike"
+      variable = "lambda:FunctionArn"
+      values   = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:${local.name_prefix}-consumer"]
+    }
+  }
+
+  statement {
+    sid       = "UpdateCanaryEventMappingOnly"
+    actions   = ["lambda:UpdateEventSourceMapping"]
     resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:event-source-mapping:*"]
 
     condition {
