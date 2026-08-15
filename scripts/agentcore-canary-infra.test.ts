@@ -207,6 +207,18 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).not.toContain('aws_iam_role_policy" "campaign_launch"');
 		expect(source).not.toContain('output "campaign_launch_role_arn"');
 		expect(source).toMatch(
+			/sid\s*=\s*"CreateFunctionLogGroups"[\s\S]*?actions\s*=\s*\["logs:CreateLogGroup"\][\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-\*"/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"WriteFunctionLogs"[\s\S]*?"logs:CreateLogStream"[\s\S]*?"logs:PutLogEvents"[\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-\*:\*"/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"CreatePreflightLogGroup"[\s\S]*?actions\s*=\s*\["logs:CreateLogGroup"\][\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-preflight"/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"WritePreflightLogs"[\s\S]*?"logs:CreateLogStream"[\s\S]*?"logs:PutLogEvents"[\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-preflight:\*"/,
+		);
+		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
 		expect(source).toMatch(
@@ -458,6 +470,16 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(
 			workflow.match(/name: Confirm manual production intent/g),
 		).toHaveLength(1);
+		expect(workflow).toMatch(
+			/name: Confirm manual production intent[\s\S]*?CONFIRM_DEPLOY: \$\{\{ inputs\.confirm_deploy \}\}[\s\S]*?"\$\{CONFIRM_DEPLOY\}"/,
+		);
+		expect(workflow).not.toMatch(/"\$\{\{ inputs\.confirm_deploy \}\}"/);
+		expect(workflow).toMatch(
+			/name: Resolve an existing image digest for promotion or rollback[\s\S]*?RUNTIME_IMAGE_DIGEST_INPUT: \$\{\{ inputs\.runtime_image_digest \}\}[\s\S]*?runtime_image_digest="\$\{RUNTIME_IMAGE_DIGEST_INPUT\}"/,
+		);
+		expect(workflow).not.toMatch(
+			/runtime_image_digest="\$\{\{ inputs\.runtime_image_digest \}\}"/,
+		);
 		expect(workflow).not.toContain("verify_github_canary_environment.sh");
 		expect(deploymentAdr).toContain("exact `main`-branch subject");
 		expect(deploymentAdr).not.toMatch(/Environment-(protected|approved)/i);

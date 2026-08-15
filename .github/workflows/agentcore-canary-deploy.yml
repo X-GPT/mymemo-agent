@@ -48,8 +48,10 @@ jobs:
       id-token: write
     steps:
       - name: Confirm manual production intent
+        env:
+          CONFIRM_DEPLOY: ${{ inputs.confirm_deploy }}
         run: |
-          if [[ "${{ inputs.confirm_deploy }}" != "deploy-mymemo-agentcore-canary-prod" ]]; then
+          if [[ "${CONFIRM_DEPLOY}" != "deploy-mymemo-agentcore-canary-prod" ]]; then
             echo "confirm_deploy must be deploy-mymemo-agentcore-canary-prod" >&2
             exit 1
           fi
@@ -98,8 +100,10 @@ jobs:
           echo "EXPECTED_RUNTIME_IMAGE_DIGEST=${runtime_image_digest}" >> "${GITHUB_ENV}"
       - name: Resolve an existing image digest for promotion or rollback
         if: inputs.runtime_image_digest != ''
+        env:
+          RUNTIME_IMAGE_DIGEST_INPUT: ${{ inputs.runtime_image_digest }}
         run: |
-          runtime_image_digest="${{ inputs.runtime_image_digest }}"
+          runtime_image_digest="${RUNTIME_IMAGE_DIGEST_INPUT}"
           [[ "${runtime_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           repository_uri="$(aws --profile mymemo ecr describe-repositories --region "${AWS_REGION}" --repository-names mymemo/agentcore-canary-runtime --query 'repositories[0].repositoryUri' --output text)"
           aws --profile mymemo ecr describe-images --region "${AWS_REGION}" --repository-name mymemo/agentcore-canary-runtime --image-ids imageDigest="${runtime_image_digest}" --query 'imageDetails[0].imageDigest' --output text | grep -Fxq "${runtime_image_digest}"

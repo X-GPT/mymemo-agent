@@ -207,9 +207,14 @@ data "aws_iam_policy_document" "lambda_base" {
   }
 
   statement {
-    sid = "FunctionLogs"
+    sid       = "CreateFunctionLogGroups"
+    actions   = ["logs:CreateLogGroup"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.name_prefix}-*"]
+  }
+
+  statement {
+    sid = "WriteFunctionLogs"
     actions = [
-      "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:PutLogEvents",
     ]
@@ -262,9 +267,14 @@ data "aws_iam_policy_document" "preflight" {
   }
 
   statement {
-    sid = "FunctionLogs"
+    sid       = "CreatePreflightLogGroup"
+    actions   = ["logs:CreateLogGroup"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.name_prefix}-preflight"]
+  }
+
+  statement {
+    sid = "WritePreflightLogs"
     actions = [
-      "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:PutLogEvents",
     ]
