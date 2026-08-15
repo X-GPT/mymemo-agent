@@ -52,6 +52,14 @@ describe("AgentCore Runtime configuration", () => {
 		}
 	});
 
+	it("distinguishes a missing secret ARN from a malformed one", () => {
+		const env = bootstrapEnv();
+		delete env.CANARY_REDIS_URL_SECRET_ARN;
+		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
+			"CANARY_REDIS_URL_SECRET_ARN is required",
+		);
+	});
+
 	it("rejects secret ARNs outside the commercial AWS partition", () => {
 		const env = bootstrapEnv();
 		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN =

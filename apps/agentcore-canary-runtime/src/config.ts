@@ -41,7 +41,7 @@ export interface RuntimeBootstrapConfig {
 }
 
 function secretArn(env: Env, name: string): string {
-	return exactSecretArn(env[name], name);
+	return exactSecretArn(requireEnv(env, name), name);
 }
 
 function positiveInt(
