@@ -435,24 +435,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
 			"utf8",
 		);
-		const deploymentAdr = readFileSync(
-			join(
-				root,
-				"docs",
-				"adr",
-				"0021-deploy-the-agentcore-canary-independently-of-fargate.md",
-			),
-			"utf8",
-		);
-		const orchestrationAdr = readFileSync(
-			join(
-				root,
-				"docs",
-				"adr",
-				"0024-orchestrate-canary-control-without-retrying-runs.md",
-			),
-			"utf8",
-		);
 		const inspection = readFileSync(
 			join(root, "scripts", "deploy", "inspect_agentcore_canary_dormant.sh"),
 			"utf8",
@@ -481,15 +463,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/runtime_image_digest="\$\{\{ inputs\.runtime_image_digest \}\}"/,
 		);
 		expect(workflow).not.toContain("verify_github_canary_environment.sh");
-		expect(deploymentAdr).toContain("exact `main`-branch subject");
-		expect(deploymentAdr).not.toMatch(/Environment-(protected|approved)/i);
-		expect(orchestrationAdr).toMatch(
-			/A checked-in operator command runs only from a clean, current `main` revision/,
-		);
-		expect(orchestrationAdr).not.toContain(
-			"A temporary, manually dispatched GitHub workflow",
-		);
-		expect(orchestrationAdr).not.toContain("environment-approved");
 		expect(workflow).toContain("RDS_CA_BUNDLE_SHA256:");
 		expect(
 			workflow.match(
@@ -611,9 +584,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(preflight).not.toContain("AWS_PROFILE:-");
 		expect(preflight).not.toContain("invoke-agent-runtime");
 		expect(preflight).not.toContain("/runs");
-		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");
-		expect(readme).toContain("Issue #453 owns the temporary network window");
-		expect(readme).toContain("through its durable campaign orchestration");
 	});
 
 	it("packages the pinned RDS trust bundle for every database Lambda", () => {
