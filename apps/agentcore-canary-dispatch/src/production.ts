@@ -66,11 +66,24 @@ export async function resolveCanaryDispatchConfigFromSecretArns(
 	env: Env,
 	readCurrentSecret: CurrentSecretReader,
 ): Promise<CanaryDispatchConfig> {
+	return {
+		...(await resolveCanaryDispatchPublisherConfigFromSecretArns(
+			env,
+			readCurrentSecret,
+		)),
+		agentRuntimeArn: requireEnv(env, "CANARY_AGENT_RUNTIME_ARN"),
+	};
+}
+
+export async function resolveCanaryDispatchPublisherConfigFromSecretArns(
+	env: Env,
+	readCurrentSecret: CurrentSecretReader,
+): Promise<CanaryDispatchPublisherConfig> {
 	const secretArn = exactSecretArn(
 		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN,
 		"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
 	);
-	return loadCanaryDispatchConfigFromEnv({
+	return loadCanaryDispatchPublisherConfigFromEnv({
 		...env,
 		AGENT_DATABASE_URL: verifiedDatabaseUrl(
 			await readCurrentSecret(secretArn),
@@ -175,9 +188,17 @@ const services = createRetryableAsyncSingleton(async () => {
 	return createCanaryDispatchProductionServices(config);
 });
 
+const publisher = createRetryableAsyncSingleton(async () => {
+	const config = await resolveCanaryDispatchPublisherConfigFromSecretArns(
+		process.env,
+		createAwsCurrentSecretReader(requireEnv(process.env, "AWS_REGION")),
+	);
+	return createCanaryDispatchProductionPublisher(config);
+});
+
 export async function publisherHandler(event: unknown, context: LambdaContext) {
 	return await createCanaryPublisherHandler({
-		publish: (await services()).publish,
+		publish: await publisher(),
 	})(event, context);
 }
 

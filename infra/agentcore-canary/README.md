@@ -11,8 +11,10 @@ Create a GitHub Environment named `production-agentcore-canary` with at least
 one required reviewer and configure its non-secret variables referenced by
 `agentcore-canary-deploy.yml`. The OIDC subject is bound exactly to that
 Environment. The one-time bootstrap option creates only the immutable ECR
-repository and the narrower canary deployment role through the existing
-repository deployment role.
+repository plus the two Environment-assumable canary roles (deployment and
+campaign launch) through the existing repository deployment role. Those two
+roles cannot be mutated by the narrower deployment role; rerun the approved
+bootstrap whenever their inline policies intentionally change.
 
 Run **Deploy dormant AgentCore canary** manually and enter
 `deploy-mymemo-agentcore-canary-prod`. Leaving `runtime_image_digest` empty

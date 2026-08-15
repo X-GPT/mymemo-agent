@@ -208,9 +208,21 @@ data "aws_iam_policy_document" "lambda_base" {
   }
 
   statement {
-    sid       = "ReadAgentDatabaseUrl"
-    actions   = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"]
+    sid       = "DescribeAgentDatabaseUrl"
+    actions   = ["secretsmanager:DescribeSecret"]
     resources = [var.agent_database_url_secret_arn]
+  }
+
+  statement {
+    sid       = "ReadCurrentAgentDatabaseUrl"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [var.agent_database_url_secret_arn]
+
+    condition {
+      test     = "ForAnyValue:StringEquals"
+      variable = "secretsmanager:VersionStage"
+      values   = ["AWSCURRENT"]
+    }
   }
 
   statement {
@@ -248,9 +260,21 @@ data "aws_iam_policy_document" "preflight" {
   }
 
   statement {
-    sid       = "ReadPreflightDatabaseUrls"
-    actions   = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"]
+    sid       = "DescribePreflightDatabaseUrls"
+    actions   = ["secretsmanager:DescribeSecret"]
     resources = [var.agent_database_url_secret_arn, var.kb_database_url_secret_arn]
+  }
+
+  statement {
+    sid       = "ReadCurrentPreflightDatabaseUrls"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [var.agent_database_url_secret_arn, var.kb_database_url_secret_arn]
+
+    condition {
+      test     = "ForAnyValue:StringEquals"
+      variable = "secretsmanager:VersionStage"
+      values   = ["AWSCURRENT"]
+    }
   }
 }
 
@@ -613,6 +637,9 @@ data "aws_iam_policy_document" "deployment" {
     resources = local.exact_secret_arns
   }
 
+  # The Environment-assumable deployment and campaign-launch roles are owned by
+  # the separately approved bootstrap. This role cannot mutate either itself or
+  # the second GitHub-assumable principal into direct secret-reading authority.
   statement {
     sid = "ManageCanaryRolesOnly"
     actions = [
@@ -621,7 +648,15 @@ data "aws_iam_policy_document" "deployment" {
       "iam:PutRolePolicy",
       "iam:TagRole",
     ]
-    resources = ["arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-*"]
+    resources = [
+      "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-consumer",
+      "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-control",
+      "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-fault-injection",
+      "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-preflight",
+      "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-publisher",
+      "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-runtime",
+      "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-task",
+    ]
   }
 }
 
@@ -649,7 +684,7 @@ resource "aws_iam_role" "fault_injection" {
 data "aws_iam_policy_document" "campaign_launch" {
   statement {
     actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.control.arn]
+    resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:${local.name_prefix}-control"]
   }
 }
 

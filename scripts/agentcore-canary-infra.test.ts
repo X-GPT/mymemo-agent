@@ -160,6 +160,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 
 	it("separates least-privilege roles and protects GitHub authority with the production Environment", () => {
 		const source = terraformSource();
+		const workflow = readFileSync(
+			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
+			"utf8",
+		);
 
 		for (const role of [
 			"deployment",
@@ -185,6 +189,14 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/resource\s+"aws_iam_role_policy"\s+"campaign_launch"[\s\S]*?(rds:|secretsmanager:GetSecretValue)/,
 		);
 		expect(source).not.toContain("iam:UpdateAssumeRolePolicy");
+		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(3);
+		const managedRoles = source.match(
+			/sid\s*=\s*"ManageCanaryRolesOnly"([\s\S]*?)\n\s*}/,
+		)?.[1];
+		expect(managedRoles).not.toContain("-deployment");
+		expect(managedRoles).not.toContain("-campaign-launch");
+		expect(workflow).toContain("-target=aws_iam_role.campaign_launch");
+		expect(workflow).toContain("-target=aws_iam_role_policy.campaign_launch");
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_function"\s+"preflight"[\s\S]*?role\s*=\s*aws_iam_role\.preflight\.arn/,
 		);
@@ -209,6 +221,29 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_event_source_mapping"\s+"consumer"[\s\S]*?precondition[\s\S]*?!var\.dispatch_enabled\s*\|\|\s*var\.campaign_network_enabled/,
+		);
+	});
+
+	it("keeps the publisher cold-start contract free of consumer-only Runtime authority", () => {
+		const lambdas = readFileSync(join(terraformDir, "lambdas.tf"), "utf8");
+		const publisher = lambdas.match(
+			/resource\s+"aws_lambda_function"\s+"publisher"([\s\S]*?)resource\s+"aws_lambda_function"\s+"consumer"/,
+		)?.[1];
+		const consumer = lambdas.match(
+			/resource\s+"aws_lambda_function"\s+"consumer"([\s\S]*?)resource\s+"aws_lambda_function"\s+"control"/,
+		)?.[1];
+		const production = readFileSync(
+			join(root, "apps", "agentcore-canary-dispatch", "src", "production.ts"),
+			"utf8",
+		);
+
+		expect(publisher).not.toContain("CANARY_AGENT_RUNTIME_ARN");
+		expect(consumer).toContain("CANARY_AGENT_RUNTIME_ARN");
+		expect(production).toMatch(
+			/const publisher = createRetryableAsyncSingleton[\s\S]*?resolveCanaryDispatchPublisherConfigFromSecretArns/,
+		);
+		expect(production).toMatch(
+			/export async function publisherHandler[\s\S]*?publish: await publisher\(\)/,
 		);
 	});
 

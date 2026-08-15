@@ -202,6 +202,11 @@ Required:
 - `CANARY_APPROVED_SYNTHETIC_USER_ID` and `CANARY_CONTROL_CONFIG_JSON` — existing synthetic-fixture authority used by the control Lambda
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS` — `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
 
+The separately deployed `preflightHandler` from this package uses only
+`AWS_REGION`, the two database-secret ARNs, and the packaged RDS CA path. It does
+not require `CANARY_APPROVED_SYNTHETIC_USER_ID` or
+`CANARY_CONTROL_CONFIG_JSON` and has no control/Run-admission dependency.
+
 ### agentcore-canary-runtime
 
 Required non-secret bootstrap values:

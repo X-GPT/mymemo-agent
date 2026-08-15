@@ -7,7 +7,7 @@ on:
         description: "Type deploy-mymemo-agentcore-canary-prod"
         required: true
       bootstrap_canary_authority:
-        description: "One-time creation of the immutable ECR repository and Environment-bound deployment role"
+        description: "Bootstrap the immutable ECR repository and Environment-bound deployment/campaign roles"
         type: boolean
         default: false
       runtime_image_digest:
@@ -95,6 +95,8 @@ jobs:
           terraform -chdir=infra/agentcore-canary init
           terraform -chdir=infra/agentcore-canary plan \
             -target=aws_ecr_repository.runtime \
+            -target=aws_iam_role.campaign_launch \
+            -target=aws_iam_role_policy.campaign_launch \
             -target=aws_iam_role.deployment \
             -target=aws_iam_role_policy.deployment \
             -out=agentcore-canary-bootstrap.tfplan

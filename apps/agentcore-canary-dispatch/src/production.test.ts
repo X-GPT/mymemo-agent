@@ -4,6 +4,7 @@ import {
 	loadCanaryDispatchConfigFromEnv,
 	loadCanaryDispatchPublisherConfigFromEnv,
 	resolveCanaryDispatchConfigFromSecretArns,
+	resolveCanaryDispatchPublisherConfigFromSecretArns,
 } from "./production";
 
 describe("Canary dispatch production configuration", () => {
@@ -85,6 +86,29 @@ describe("Canary dispatch production configuration", () => {
 				async () => "postgresql://agent.example/mymemo_agent?sslmode=require",
 			),
 		).rejects.toThrow("AGENT_DATABASE_URL must use sslmode=verify-full");
+	});
+
+	it("resolves publisher secrets without consumer-only Runtime authority", async () => {
+		const secretArn =
+			"arn:aws:secretsmanager:us-west-2:123456789012:secret:canary-agent-db-AbCdEf";
+		const config = await resolveCanaryDispatchPublisherConfigFromSecretArns(
+			{
+				AWS_REGION: "us-west-2",
+				CANARY_AGENT_DATABASE_URL_SECRET_ARN: secretArn,
+				CANARY_DISPATCH_QUEUE_URL:
+					"https://sqs.us-west-2.amazonaws.com/123/canary",
+				CANARY_ENABLED_PARAMETER_NAME: "/mymemo/canary/enabled",
+			},
+			async () => "postgresql://agent.example/mymemo_agent?sslmode=verify-full",
+		);
+
+		expect(config).toEqual({
+			agentDatabaseUrl:
+				"postgresql://agent.example/mymemo_agent?sslmode=verify-full",
+			awsRegion: "us-west-2",
+			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/canary",
+			enabledParameterName: "/mymemo/canary/enabled",
+		});
 	});
 
 	it("emits a bounded CloudWatch embedded metric without dispatch content", async () => {
