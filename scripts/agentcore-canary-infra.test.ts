@@ -200,6 +200,15 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/sid\s*=\s*"WritePreflightLogs"[\s\S]*?"logs:CreateLogStream"[\s\S]*?"logs:PutLogEvents"[\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-preflight:\*"/,
 		);
 		expect(source).toMatch(
+			/sid\s*=\s*"ManageCanaryRuntimeLogGroup"[\s\S]*?"logs:CreateLogGroup"[\s\S]*?"logs:DescribeLogStreams"[\s\S]*?log-group:\/aws\/bedrock-agentcore\/runtimes\/mymemo_agentcore_canary_\$\{var\.environment\}-\*"/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"WriteCanaryRuntimeLogs"[\s\S]*?"logs:CreateLogStream"[\s\S]*?"logs:PutLogEvents"[\s\S]*?log-group:\/aws\/bedrock-agentcore\/runtimes\/mymemo_agentcore_canary_\$\{var\.environment\}-\*:log-stream:\*"/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"RuntimeTracing"[\s\S]*?"xray:GetSamplingRules"[\s\S]*?resources\s*=\s*\["\*"\]/,
+		);
+		expect(source).toMatch(
 			/sid\s*=\s*"CreateCanaryRuntimeOnly"[\s\S]*?actions\s*=\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resources\s*=\s*\["\*"\][\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy[\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\(aws_subnet\.private\)\[\*\]\.id[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?local\.runtime_security_group_ids[\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\s*=\s*\["false"\][\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?values\s*=\s*\["false"\]/,
 		);
 		expect(source).toMatch(
@@ -256,10 +265,19 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/sid\s*=\s*"UpdateCanaryEventMappingOnly"[\s\S]*?actions\s*=\s*\["lambda:UpdateEventSourceMapping"\][\s\S]*?event-source-mapping:\*[\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
 		);
 		expect(planClassifier).toMatch(
-			/CreateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:CreateEventSourceMapping"\][\s\S]*?resourcePatterns:\s*\["\*"\][\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
+			/CreateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:CreateEventSourceMapping"\][\s\S]*?resourcePatterns:\s*\["\*"\][\s\S]*?"lambda:FunctionArn": \[CANARY_CONSUMER_ARN\]/,
 		);
 		expect(planClassifier).toMatch(
-			/UpdateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:UpdateEventSourceMapping"\][\s\S]*?event-source-mapping:\*[\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
+			/UpdateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:UpdateEventSourceMapping"\][\s\S]*?regionalArn\("lambda", "event-source-mapping:\*"\)[\s\S]*?"lambda:FunctionArn": \[CANARY_CONSUMER_ARN\]/,
+		);
+		expect(planClassifier).not.toContain("approvedGithubRolePolicy");
+		expect(planClassifier.match(/637423444544/g)).toHaveLength(1);
+		expect(planClassifier.match(/us-west-2/g)).toHaveLength(1);
+		expect(
+			planClassifier.match(/mymemo-agent-agentcore-canary-prod/g),
+		).toHaveLength(1);
+		expect(planClassifier.match(/mymemo_agentcore_canary_prod/g)).toHaveLength(
+			1,
 		);
 		expect(source).not.toContain("iam:UpdateAssumeRolePolicy");
 		expect(source).toMatch(

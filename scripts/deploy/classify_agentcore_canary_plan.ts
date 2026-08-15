@@ -21,6 +21,48 @@ export interface PlanClassification {
 	reasons: string[];
 }
 
+// These values are intentionally classifier-owned. Importing them from the
+// Terraform under review would let one boundary change approve itself.
+const CLASSIFIER_ACCOUNT_ID = "637423444544";
+const CLASSIFIER_REGION = "us-west-2";
+const CLASSIFIER_RESOURCE_PREFIX = "mymemo-agent-agentcore-canary-prod";
+const CLASSIFIER_RUNTIME_PREFIX = "mymemo_agentcore_canary_prod";
+const DEPLOYMENT_ROLE_POLICY_ADDRESS = "aws_iam_role_policy.deployment";
+
+function regionalArn(service: string, resource: string): string {
+	return `arn:aws:${service}:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:${resource}`;
+}
+
+function iamArn(resource: string): string {
+	return `arn:aws:iam::${CLASSIFIER_ACCOUNT_ID}:${resource}`;
+}
+
+function canaryRoleArn(suffix: string): string {
+	return iamArn(`role/${CLASSIFIER_RESOURCE_PREFIX}-${suffix}`);
+}
+
+function canaryFunctionArn(suffix: string): string {
+	return regionalArn(
+		"lambda",
+		`function:${CLASSIFIER_RESOURCE_PREFIX}-${suffix}`,
+	);
+}
+
+const CANARY_RUNTIME_ARN_PATTERN = regionalArn(
+	"bedrock-agentcore",
+	`runtime/${CLASSIFIER_RUNTIME_PREFIX}-*`,
+);
+const CANARY_STATE_MACHINE_ARN_PATTERN = regionalArn(
+	"states",
+	`stateMachine:${CLASSIFIER_RESOURCE_PREFIX}-*`,
+);
+const CANARY_REPAIR_RULE_ARN = regionalArn(
+	"events",
+	`rule/${CLASSIFIER_RESOURCE_PREFIX}-repair`,
+);
+const CANARY_PUBLISHER_ARN = canaryFunctionArn("publisher");
+const CANARY_CONSUMER_ARN = canaryFunctionArn("consumer");
+
 // This explicit list is an independent, fail-closed safety boundary. Do not
 // derive it from the Terraform under classification: every new owned resource
 // must be reviewed and added here deliberately.
@@ -95,9 +137,6 @@ const STATES_ROLE_ADDRESSES = new Set([
 	"aws_iam_role.task",
 ]);
 const GITHUB_ROLE_ADDRESSES = new Set(["aws_iam_role.deployment"]);
-const GITHUB_ROLE_POLICY_ADDRESSES = new Set([
-	"aws_iam_role_policy.deployment",
-]);
 
 interface PolicyRule {
 	actions: string[];
@@ -115,14 +154,10 @@ const LAMBDA_PASS_ROLE_SUFFIXES = {
 function lambdaPassRoleRule(suffix: string): PolicyRule {
 	return {
 		actions: ["iam:PassRole"],
-		resourcePatterns: [
-			`arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-${suffix}`,
-		],
+		resourcePatterns: [canaryRoleArn(suffix)],
 		conditions: {
 			ArnEquals: {
-				"iam:AssociatedResourceArn": [
-					`arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-${suffix}`,
-				],
+				"iam:AssociatedResourceArn": [canaryFunctionArn(suffix)],
 			},
 			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
 		},
@@ -213,13 +248,13 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"ecr:ListTagsForResource",
 		],
 		resourcePatterns: [
-			"arn:aws:ecr:us-west-2:637423444544:repository/mymemo/agentcore-canary-runtime",
+			regionalArn("ecr", "repository/mymemo/agentcore-canary-runtime"),
 		],
 	},
 	ReadCanaryEnablementOnly: {
 		actions: ["ssm:GetParameter"],
 		resourcePatterns: [
-			"arn:aws:ssm:us-west-2:637423444544:parameter/mymemo/agentcore-canary/prod/enabled",
+			regionalArn("ssm", "parameter/mymemo/agentcore-canary/prod/enabled"),
 		],
 	},
 	CreateCanaryRuntimeOnly: {
@@ -253,15 +288,11 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"bedrock-agentcore:CreateAgentRuntimeEndpoint",
 			"bedrock-agentcore:TagResource",
 		],
-		resourcePatterns: [
-			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*",
-		],
+		resourcePatterns: [CANARY_RUNTIME_ARN_PATTERN],
 	},
 	UpdateCanaryRuntimeOnly: {
 		actions: ["bedrock-agentcore:UpdateAgentRuntime"],
-		resourcePatterns: [
-			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*",
-		],
+		resourcePatterns: [CANARY_RUNTIME_ARN_PATTERN],
 		conditions: {
 			"ForAllValues:StringEquals": {
 				"bedrock-agentcore:securityGroups": Array.from(
@@ -286,7 +317,7 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"cloudwatch:TagResource",
 		],
 		resourcePatterns: [
-			"arn:aws:cloudwatch:us-west-2:637423444544:alarm:mymemo-agent-agentcore-canary-prod-*",
+			regionalArn("cloudwatch", `alarm:${CLASSIFIER_RESOURCE_PREFIX}-*`),
 		],
 	},
 	ManageCanaryRepositoryOnly: {
@@ -301,25 +332,19 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"ecr:UploadLayerPart",
 		],
 		resourcePatterns: [
-			"arn:aws:ecr:us-west-2:637423444544:repository/mymemo/agentcore-canary-runtime",
+			regionalArn("ecr", "repository/mymemo/agentcore-canary-runtime"),
 		],
 	},
 	ManageCanaryRepairRuleOnly: {
 		actions: ["events:DisableRule"],
-		resourcePatterns: [
-			"arn:aws:events:us-west-2:637423444544:rule/mymemo-agent-agentcore-canary-prod-repair",
-		],
+		resourcePatterns: [CANARY_REPAIR_RULE_ARN],
 	},
 	ManageCanaryRepairTargetOnly: {
 		actions: ["events:PutTargets"],
-		resourcePatterns: [
-			"arn:aws:events:us-west-2:637423444544:rule/mymemo-agent-agentcore-canary-prod-repair",
-		],
+		resourcePatterns: [CANARY_REPAIR_RULE_ARN],
 		conditions: {
 			"ForAnyValue:ArnEquals": {
-				"events:TargetArn": [
-					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-publisher",
-				],
+				"events:TargetArn": [CANARY_PUBLISHER_ARN],
 			},
 		},
 	},
@@ -331,15 +356,11 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"lambda:UpdateFunctionCode",
 			"lambda:UpdateFunctionConfiguration",
 		],
-		resourcePatterns: [
-			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-*",
-		],
+		resourcePatterns: [canaryFunctionArn("*")],
 	},
 	ManageCanaryRepairPermissionOnly: {
 		actions: ["lambda:AddPermission"],
-		resourcePatterns: [
-			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-publisher",
-		],
+		resourcePatterns: [CANARY_PUBLISHER_ARN],
 		conditions: {
 			StringEquals: {
 				"lambda:Principal": ["events.amazonaws.com"],
@@ -351,54 +372,40 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 		resourcePatterns: ["*"],
 		conditions: {
 			ArnLike: {
-				"lambda:FunctionArn": [
-					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer",
-				],
+				"lambda:FunctionArn": [CANARY_CONSUMER_ARN],
 			},
 		},
 	},
 	UpdateCanaryEventMappingOnly: {
 		actions: ["lambda:UpdateEventSourceMapping"],
-		resourcePatterns: [
-			"arn:aws:lambda:us-west-2:637423444544:event-source-mapping:*",
-		],
+		resourcePatterns: [regionalArn("lambda", "event-source-mapping:*")],
 		conditions: {
 			ArnLike: {
-				"lambda:FunctionArn": [
-					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer",
-				],
+				"lambda:FunctionArn": [CANARY_CONSUMER_ARN],
 			},
 		},
 	},
 	ManageCanaryQueuesOnly: {
 		actions: ["sqs:CreateQueue", "sqs:SetQueueAttributes", "sqs:TagQueue"],
-		resourcePatterns: [
-			"arn:aws:sqs:us-west-2:637423444544:mymemo-agent-agentcore-canary-prod-*",
-		],
+		resourcePatterns: [regionalArn("sqs", `${CLASSIFIER_RESOURCE_PREFIX}-*`)],
 	},
 	ManageCanaryParameterOnly: {
 		actions: ["ssm:AddTagsToResource", "ssm:PutParameter"],
 		resourcePatterns: [
-			"arn:aws:ssm:us-west-2:637423444544:parameter/mymemo/agentcore-canary/prod/*",
+			regionalArn("ssm", "parameter/mymemo/agentcore-canary/prod/*"),
 		],
 	},
 	InspectCanaryRolesOnly: {
 		actions: ["iam:SimulatePrincipalPolicy"],
-		resourcePatterns: [
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-*",
-		],
+		resourcePatterns: [canaryRoleArn("*")],
 	},
 	...LAMBDA_PASS_ROLE_RULES,
 	PassRuntimeRoleOnly: {
 		actions: ["iam:PassRole"],
-		resourcePatterns: [
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-runtime",
-		],
+		resourcePatterns: [canaryRoleArn("runtime")],
 		conditions: {
 			ArnLike: {
-				"iam:AssociatedResourceArn": [
-					"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*",
-				],
+				"iam:AssociatedResourceArn": [CANARY_RUNTIME_ARN_PATTERN],
 			},
 			StringEquals: {
 				"iam:PassedToService": ["bedrock-agentcore.amazonaws.com"],
@@ -458,12 +465,12 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 	ManageCanaryKeyAliasOnly: {
 		actions: ["kms:CreateAlias"],
 		resourcePatterns: [
-			"arn:aws:kms:us-west-2:637423444544:alias/mymemo-agent-agentcore-canary-prod",
-			"arn:aws:kms:us-west-2:637423444544:key/*",
+			regionalArn("kms", `alias/${CLASSIFIER_RESOURCE_PREFIX}`),
+			regionalArn("kms", "key/*"),
 		],
 		conditions: {
 			StringEquals: {
-				"kms:RequestAlias": ["alias/mymemo-agent-agentcore-canary-prod"],
+				"kms:RequestAlias": [`alias/${CLASSIFIER_RESOURCE_PREFIX}`],
 			},
 		},
 	},
@@ -472,7 +479,9 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 		resourcePatterns: Array.from(
 			{ length: 5 },
 			() =>
-				/^arn:aws:secretsmanager:us-west-2:637423444544:secret:[A-Za-z0-9/_+=.@-]+$/,
+				new RegExp(
+					`^arn:aws:secretsmanager:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:secret:[A-Za-z0-9/_+=.@-]+$`,
+				),
 		),
 	},
 	ManageCanaryRolesOnly: {
@@ -483,13 +492,13 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"iam:TagRole",
 		],
 		resourcePatterns: [
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-consumer",
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-control",
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-fault-injection",
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-preflight",
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-publisher",
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-runtime",
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-task",
+			canaryRoleArn("consumer"),
+			canaryRoleArn("control"),
+			canaryRoleArn("fault-injection"),
+			canaryRoleArn("preflight"),
+			canaryRoleArn("publisher"),
+			canaryRoleArn("runtime"),
+			canaryRoleArn("task"),
 		],
 	},
 };
@@ -623,13 +632,6 @@ function approvedDeploymentPolicy(value: unknown): boolean {
 	return seen.size === Object.keys(DEPLOYMENT_POLICY_RULES).length;
 }
 
-function approvedGithubRolePolicy(address: string, value: unknown): boolean {
-	if (address === "aws_iam_role_policy.deployment") {
-		return approvedDeploymentPolicy(value);
-	}
-	return false;
-}
-
 function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 	const policy = parsePolicy(value);
 	if (!policy || !exactObjectKeys(policy, ["Statement", "Version"]))
@@ -682,10 +684,11 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 			singleStringValue(principalRecord.Service) === "states.amazonaws.com" &&
 			exactObjectKeys(conditionRecord, ["ArnLike", "StringEquals"]) &&
 			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
-			singleStringValue(equalsRecord["aws:SourceAccount"]) === "637423444544" &&
+			singleStringValue(equalsRecord["aws:SourceAccount"]) ===
+				CLASSIFIER_ACCOUNT_ID &&
 			exactObjectKeys(arnLikeRecord, ["aws:SourceArn"]) &&
 			singleStringValue(arnLikeRecord["aws:SourceArn"]) ===
-				"arn:aws:states:us-west-2:637423444544:stateMachine:mymemo-agent-agentcore-canary-prod-*"
+				CANARY_STATE_MACHINE_ARN_PATTERN
 		);
 	}
 
@@ -702,10 +705,11 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 				"bedrock-agentcore.amazonaws.com" &&
 			exactObjectKeys(conditionRecord, ["ArnLike", "StringEquals"]) &&
 			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
-			singleStringValue(equalsRecord["aws:SourceAccount"]) === "637423444544" &&
+			singleStringValue(equalsRecord["aws:SourceAccount"]) ===
+				CLASSIFIER_ACCOUNT_ID &&
 			exactObjectKeys(arnLikeRecord, ["aws:SourceArn"]) &&
 			singleStringValue(arnLikeRecord["aws:SourceArn"]) ===
-				"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*"
+				CANARY_RUNTIME_ARN_PATTERN
 		);
 	}
 
@@ -715,7 +719,7 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 			singleStringValue(trust.Action) === "sts:AssumeRoleWithWebIdentity" &&
 			exactObjectKeys(principalRecord, ["Federated"]) &&
 			singleStringValue(principalRecord.Federated) ===
-				"arn:aws:iam::637423444544:oidc-provider/token.actions.githubusercontent.com" &&
+				iamArn("oidc-provider/token.actions.githubusercontent.com") &&
 			exactObjectKeys(conditionRecord, ["StringEquals"]) &&
 			exactObjectKeys(equalsRecord, [
 				"token.actions.githubusercontent.com:aud",
@@ -778,12 +782,9 @@ export function classifyAgentCoreCanaryPlan(
 		}
 		if (
 			type === "aws_iam_role_policy" &&
-			GITHUB_ROLE_POLICY_ADDRESSES.has(resourceBaseAddress(address)) &&
+			resourceBaseAddress(address) === DEPLOYMENT_ROLE_POLICY_ADDRESS &&
 			(actions.includes("create") || actions.includes("update")) &&
-			!approvedGithubRolePolicy(
-				resourceBaseAddress(address),
-				resource.change?.after?.policy,
-			)
+			!approvedDeploymentPolicy(resource.change?.after?.policy)
 		) {
 			reasons.push(`${address} has unapproved GitHub role permissions`);
 		}

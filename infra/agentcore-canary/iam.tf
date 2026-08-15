@@ -131,13 +131,26 @@ data "aws_iam_policy_document" "runtime" {
   }
 
   statement {
-    sid = "RuntimeTelemetry"
+    sid = "ManageCanaryRuntimeLogGroup"
     actions = [
       "logs:CreateLogGroup",
-      "logs:CreateLogStream",
-      "logs:DescribeLogGroups",
       "logs:DescribeLogStreams",
+    ]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agentcore_canary_${var.environment}-*"]
+  }
+
+  statement {
+    sid = "WriteCanaryRuntimeLogs"
+    actions = [
+      "logs:CreateLogStream",
       "logs:PutLogEvents",
+    ]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agentcore_canary_${var.environment}-*:log-stream:*"]
+  }
+
+  statement {
+    sid = "RuntimeTracing"
+    actions = [
       "xray:GetSamplingRules",
       "xray:GetSamplingTargets",
       "xray:PutTelemetryRecords",
