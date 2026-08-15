@@ -10,6 +10,7 @@ import {
 	createSqsCanaryDispatchQueue,
 	createSsmCanaryEnablementControl,
 } from "./aws-adapters";
+import { createRetryableAsyncSingleton, requireEnv } from "./config-utils";
 import {
 	type CanaryDispatchAlarm,
 	createCanaryDispatchConsumer,
@@ -24,9 +25,7 @@ import { createCanaryDispatchPublisher } from "./publisher";
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
-	createRetryableAsyncSingleton,
 	exactSecretArn,
-	requireEnv,
 	verifiedDatabaseUrl,
 } from "./secret-config";
 
@@ -96,7 +95,7 @@ export function createEmbeddedMetricCanaryDispatchAlarm(
 						CloudWatchMetrics: [
 							{
 								Namespace: "MyMemo/AgentCoreCanary",
-								Dimensions: [["reason"]],
+								Dimensions: [[], ["reason"]],
 								Metrics: [{ Name: metricName, Unit: "Count" }],
 							},
 						],

@@ -2,37 +2,15 @@ import {
 	GetSecretValueCommand,
 	SecretsManagerClient,
 } from "@aws-sdk/client-secrets-manager";
+import type { Env } from "./config-utils";
 
 const SECRET_ARN_PATTERN =
 	/^arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+$/;
 
-export type Env = Record<string, string | undefined>;
 export type CurrentSecretReader = (arn: string) => Promise<string>;
 
 export interface SecretCommandClient {
 	send(command: GetSecretValueCommand): Promise<{ SecretString?: string }>;
-}
-
-export function createRetryableAsyncSingleton<T>(
-	create: () => Promise<T>,
-): () => Promise<T> {
-	let current: Promise<T> | undefined;
-	return async () => {
-		current ??= create();
-		const attempt = current;
-		try {
-			return await attempt;
-		} catch (error) {
-			if (current === attempt) current = undefined;
-			throw error;
-		}
-	};
-}
-
-export function requireEnv(env: Env, name: string): string {
-	const value = env[name];
-	if (!value || value.trim() === "") throw new Error(`${name} is required`);
-	return value;
 }
 
 export function exactSecretArn(

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
 	createCurrentSecretReader,
-	createRetryableAsyncSingleton,
 	verifiedDatabaseUrl,
 } from "./secret-config";
 
@@ -36,31 +35,5 @@ describe("AgentCore canary secret configuration", () => {
 				"AGENT_DATABASE_URL",
 			),
 		).toThrow("AGENT_DATABASE_URL must use sslmode=verify-full");
-	});
-
-	it("shares concurrent initialization and retries after a failure", async () => {
-		let attempts = 0;
-		const singleton = createRetryableAsyncSingleton(async () => {
-			attempts++;
-			if (attempts === 1) throw new Error("temporary failure");
-			return { ready: true };
-		});
-
-		const first = singleton();
-		const concurrent = singleton();
-		const failures = await Promise.allSettled([first, concurrent]);
-		expect(failures).toHaveLength(2);
-		for (const failure of failures) {
-			expect(failure.status).toBe("rejected");
-			if (failure.status === "rejected") {
-				expect(failure.reason).toEqual(new Error("temporary failure"));
-			}
-		}
-		expect(attempts).toBe(1);
-
-		const recovered = await singleton();
-		expect(recovered).toEqual({ ready: true });
-		expect(await singleton()).toBe(recovered);
-		expect(attempts).toBe(2);
 	});
 });

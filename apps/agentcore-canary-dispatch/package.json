@@ -3,6 +3,7 @@
 	"exports": {
 		"./acquisition-boundary": "./src/acquisition-boundary.ts",
 		"./aws-adapters": "./src/aws-adapters.ts",
+		"./config-utils": "./src/config-utils.ts",
 		"./contract": "./src/contract.ts",
 		"./publisher": "./src/publisher.ts",
 		"./production": "./src/production.ts",

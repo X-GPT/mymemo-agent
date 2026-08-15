@@ -1,10 +1,12 @@
 import { createDatabase } from "@mymemo/agent-db/client";
+import {
+	createRetryableAsyncSingleton,
+	requireEnv,
+} from "agentcore-canary-dispatch/config-utils";
 import { createCanaryDispatchProductionPublisher } from "agentcore-canary-dispatch/production";
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
-	createRetryableAsyncSingleton,
-	requireEnv,
 	resolveCanaryDatabaseUrlsFromSecretArns,
 } from "agentcore-canary-dispatch/secret-config";
 import { z } from "zod";

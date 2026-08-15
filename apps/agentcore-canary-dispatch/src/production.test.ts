@@ -107,6 +107,7 @@ describe("Canary dispatch production configuration", () => {
 			_aws: {
 				CloudWatchMetrics: [
 					{
+						Dimensions: [[], ["reason"]],
 						Namespace: "MyMemo/AgentCoreCanary",
 						Metrics: [{ Name: "PoisonDispatch", Unit: "Count" }],
 					},
@@ -133,6 +134,7 @@ describe("Canary dispatch production configuration", () => {
 			_aws: {
 				CloudWatchMetrics: [
 					{
+						Dimensions: [[], ["reason"]],
 						Namespace: "MyMemo/AgentCoreCanary",
 						Metrics: [{ Name: "DisabledDelivery", Unit: "Count" }],
 					},

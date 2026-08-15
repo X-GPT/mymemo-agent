@@ -395,16 +395,7 @@ data "aws_iam_policy_document" "deployment" {
       "cloudwatch:GetMetricStatistics",
       "cloudwatch:ListTagsForResource",
       "ec2:Describe*",
-      "ecr:BatchCheckLayerAvailability",
-      "ecr:BatchGetImage",
-      "ecr:DescribeImages",
-      "ecr:DescribeImageScanFindings",
-      "ecr:DescribeRepositories",
       "ecr:GetAuthorizationToken",
-      "ecr:GetDownloadUrlForLayer",
-      "ecr:GetLifecyclePolicy",
-      "ecr:ListImages",
-      "ecr:ListTagsForResource",
       "events:DescribeRule",
       "events:ListTagsForResource",
       "events:ListTargetsByRule",
@@ -431,10 +422,30 @@ data "aws_iam_policy_document" "deployment" {
       "sqs:GetQueueUrl",
       "sqs:ListQueueTags",
       "ssm:DescribeParameters",
-      "ssm:GetParameter",
       "ssm:ListTagsForResource",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid = "ReadCanaryRepositoryOnly"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:DescribeImages",
+      "ecr:DescribeImageScanFindings",
+      "ecr:DescribeRepositories",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:ListImages",
+      "ecr:ListTagsForResource",
+    ]
+    resources = ["arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/mymemo/agentcore-canary-runtime"]
+  }
+
+  statement {
+    sid       = "ReadCanaryEnablementOnly"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/mymemo/agentcore-canary/${var.environment}/enabled"]
   }
 
   statement {
@@ -466,7 +477,6 @@ data "aws_iam_policy_document" "deployment" {
       "ecr:PutImage",
       "ecr:PutImageScanningConfiguration",
       "ecr:PutImageTagMutability",
-      "ecr:PutLifecyclePolicy",
       "ecr:TagResource",
       "ecr:UploadLayerPart",
     ]

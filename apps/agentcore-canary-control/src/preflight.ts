@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
+import { requireEnv } from "agentcore-canary-dispatch/config-utils";
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
-	requireEnv,
 	resolveCanaryDatabaseUrlsFromSecretArns,
 } from "agentcore-canary-dispatch/secret-config";
 import { Client, type ClientConfig } from "pg";
@@ -16,7 +16,7 @@ interface PreflightDependencies {
 }
 
 async function connectWithVerifiedTls(
-	_name: string,
+	name: string,
 	url: string,
 	ca: string,
 ): Promise<void> {
@@ -24,6 +24,10 @@ async function connectWithVerifiedTls(
 	try {
 		await client.connect();
 		await client.query("SELECT 1");
+	} catch (error) {
+		throw new Error(`${name} verified TLS connectivity failed`, {
+			cause: error,
+		});
 	} finally {
 		await client.end().catch(() => undefined);
 	}

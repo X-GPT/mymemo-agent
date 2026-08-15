@@ -193,6 +193,18 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 		expect(source).not.toContain('sid = "InvokeConnectivityPreflightOnly"');
 		expect(source).toMatch(
+			/sid\s*=\s*"ReadCanaryRepositoryOnly"[\s\S]*?resources\s*=\s*\["arn:aws:ecr:\$\{var\.aws_region\}:\$\{var\.aws_account_id\}:repository\/mymemo\/agentcore-canary-runtime"\]/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"ReadCanaryEnablementOnly"[\s\S]*?resources\s*=\s*\["arn:aws:ssm:\$\{var\.aws_region\}:\$\{var\.aws_account_id\}:parameter\/mymemo\/agentcore-canary\/\$\{var\.environment\}\/enabled"\]/,
+		);
+		const broadRead = source.match(
+			/sid\s*=\s*"ReadCanaryControlPlane"([\s\S]*?)\n\s*}/,
+		)?.[1];
+		expect(broadRead).not.toContain("ecr:BatchGetImage");
+		expect(broadRead).not.toContain("ecr:GetDownloadUrlForLayer");
+		expect(broadRead).not.toContain("ssm:GetParameter");
+		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"task"[\s\S]*?aws_lambda_function\.preflight\.arn/,
 		);
 		expect(source).toMatch(

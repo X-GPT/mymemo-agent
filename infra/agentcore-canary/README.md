@@ -62,6 +62,12 @@ and scoped session-cleanup authority. Issue #453 closes the window through its
 separately reviewed cleanup path because the normal deployment classifier
 deliberately rejects resource deletion.
 
+`PoisonDispatch` and `DisabledDelivery` are emitted both dimensionlessly for
+the #452 alarms and with the bounded `reason` dimension for diagnosis. The
+remaining Campaign-deadline, cleanup, lane, NAT-expiry, Reclamation, and
+Workspace-taint signals are provisioned dormant here; the #453 orchestrator and
+watchdog own emitting them when a Campaign exists.
+
 Turning off dispatch, deleting campaign NAT/EIP, or fully decommissioning this
 state cannot roll Fargate or change user routing because those resources do not
 exist in this state.
