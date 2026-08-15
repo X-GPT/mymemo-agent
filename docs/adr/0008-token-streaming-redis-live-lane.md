@@ -49,11 +49,18 @@ provisional Live preview from authoritative Assistant-message storage.
   visible text in content-block order and appends that complete text as one
   `assistant_text` run event. Partial `stream_event` text is preview-only, and
   the terminal `result.result` echo remains ignored.
-- At `message_stop`, the worker also compares the locally accumulated partial
-  text with the completed-block aggregate exactly. A mismatch does not fail the
-  run: the completed-block aggregate still commits and replaces the inaccurate
-  preview, the worker records a payload-free mismatch metric, and live preview
-  stays disabled for the rest of that run.
+- ~~At `message_stop`, the worker also compares the locally accumulated partial
+  text with the completed-block aggregate exactly.~~ **Withdrawn (2026-08-14).**
+  The worker no longer accumulates partial text and performs no such comparison.
+  The two texts were never independent: the provider's streaming protocol sends
+  no finished block text, so the completed block the SDK hands us is itself a
+  reconstruction of the same deltas we saw. The check therefore compared our
+  accumulation against the SDK's accumulation of identical input, and the
+  accumulated copy existed for no other purpose — no live or durable path ever
+  read it. Envelope-structure violations already fail closed and are what a
+  changed SDK stream shape actually trips; a content-level check on top of them
+  did not earn its machinery. Partial text remains preview-only and undurable,
+  which is unchanged.
 - `message_stop` is the only event that may commit an envelope. Run interruption,
   ownership loss, shutdown, an SDK error result, or iterator rejection abandons
   the open assembler and ignores its late events; no accumulated partial or
@@ -201,8 +208,9 @@ synthetic valid or malformed fixtures. It verified that the design can:
 - commit exactly once and only at `message_stop`, concatenating completed
   visible blocks in content-block order;
 - abandon incomplete envelopes without a durable text append; and
-- prove that partial/complete mismatch preserves the completed-block commit,
-  disables further preview for the run, and reports only payload-free telemetry.
+- ~~prove that partial/complete mismatch preserves the completed-block commit,
+  disables further preview for the run, and reports only payload-free
+  telemetry.~~ Withdrawn with the comparison itself (see the Decision above).
 
 The prototype also verified that the terminal result echo is ignored and that
 an SDK error result followed by iterator rejection yields only one outcome. Its

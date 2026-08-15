@@ -19,7 +19,6 @@ interface ActiveEnvelope {
 	activeBlock: ActiveBlock | null;
 	nextBlockIndex: number;
 	messageDeltaSeen: boolean;
-	partialText: string;
 	completedText: string;
 	toolUses: CompletedToolUse[];
 }
@@ -30,7 +29,6 @@ export class AssistantEnvelopeProtocolError extends Error {
 
 export interface AssistantMessageAssemblerOptions {
 	createMessageId?: () => string;
-	onPartialCompleteMismatch?: () => void;
 }
 
 /**
@@ -102,19 +100,11 @@ const KNOWN_BLOCK_DELTA_TYPES: ReadonlyMap<string, readonly string[]> = new Map<
  */
 export class AssistantMessageAssembler {
 	readonly #createMessageId: () => string;
-	readonly #onPartialCompleteMismatch: () => void;
 	readonly #issuedMessageIds = new Set<string>();
 	#active: ActiveEnvelope | null = null;
-	#livePreviewEnabled = true;
 
 	constructor(options: AssistantMessageAssemblerOptions = {}) {
 		this.#createMessageId = options.createMessageId ?? randomUUID;
-		this.#onPartialCompleteMismatch =
-			options.onPartialCompleteMismatch ?? (() => {});
-	}
-
-	get livePreviewEnabled(): boolean {
-		return this.#livePreviewEnabled;
 	}
 
 	accept(message: SDKMessage): AssistantAssembly | null {
@@ -188,7 +178,6 @@ export class AssistantMessageAssembler {
 			activeBlock: null,
 			nextBlockIndex: 0,
 			messageDeltaSeen: false,
-			partialText: "",
 			completedText: "",
 			toolUses: [],
 		};
@@ -225,7 +214,6 @@ export class AssistantMessageAssembler {
 			}
 			const active = this.#active;
 			if (active === null) return null;
-			active.partialText += delta.text;
 			return {
 				type: "partial_text",
 				messageId: active.messageId,
@@ -302,10 +290,6 @@ export class AssistantMessageAssembler {
 		const active = this.#requireEnvelope("message_stop");
 		if (active.activeBlock !== null) {
 			this.#violation("message_stop arrived before content_block_stop");
-		}
-		if (active.partialText !== active.completedText) {
-			this.#livePreviewEnabled = false;
-			this.#onPartialCompleteMismatch();
 		}
 		this.#active = null;
 		return {

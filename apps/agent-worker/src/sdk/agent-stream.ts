@@ -16,7 +16,6 @@ import {
 } from "../ui-payload-validator";
 import { AgUiTextStream } from "./ag-ui-text-stream";
 import {
-	AssistantEnvelopeProtocolError,
 	AssistantMessageAssembler,
 	type EnvelopeCommit,
 } from "./assistant-message-assembler";
@@ -175,16 +174,10 @@ export async function consumeAgentStream(
 		disposition: "completed",
 		mirrorErrorObserved: false,
 	};
-	let liveMessageMatchesCompletion = true;
-	const assembler = new AssistantMessageAssembler({
-		onPartialCompleteMismatch: () => {
-			liveMessageMatchesCompletion = false;
-		},
-	});
+	const assembler = new AssistantMessageAssembler();
 	const abandonOpenMessage = async (): Promise<void> => {
 		assembler.abandon();
 		await agUiText.abandon();
-		liveMessageMatchesCompletion = true;
 	};
 	const appendLiveEvent = async (event: AGUIEvent): Promise<void> => {
 		await params.appendLiveEvent?.(event);
@@ -562,24 +555,17 @@ export async function consumeAgentStream(
 						assembled.commit.text.text,
 					);
 				}
-				if (!liveMessageMatchesCompletion) {
-					throw new AssistantEnvelopeProtocolError(
-						"Assistant partial text did not match its completed response",
-					);
-				}
 				const liveMessageId = await agUiText.flushMessage();
 				await commitEnvelope(assembled.commit);
 				if (
 					assembled.commit.text !== null &&
-					liveMessageId === assembled.commit.text.messageId &&
-					liveMessageMatchesCompletion
+					liveMessageId === assembled.commit.text.messageId
 				) {
 					await appendLiveEvent({
 						type: EventType.TEXT_MESSAGE_END,
 						messageId: liveMessageId,
 					});
 				}
-				liveMessageMatchesCompletion = true;
 			}
 		}
 		if (stopRequested) return settleStopped();
