@@ -429,6 +429,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 			join(root, "scripts", "deploy", "agentcore_canary_aws_checks.sh"),
 			"utf8",
 		);
+		const inspectionChecks = `${inspection}\n${sharedChecks}`;
 
 		expect(workflow).toContain("workflow_dispatch:");
 		expect(workflow).not.toMatch(/\n\s+(push|workflow_run):/);
@@ -472,8 +473,15 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"campaign_nat_gateway_ids",
 			"campaign_eip_allocation_ids",
 		]) {
-			expect(inspection).toContain(requiredCheck);
+			expect(inspectionChecks).toContain(requiredCheck);
 		}
+		expect(inspection).toContain("verify_agentcore_canary_disabled_dispatch");
+		expect(inspection).toContain(
+			"verify_agentcore_canary_runtime_configuration",
+		);
+		expect(inspection).toContain(
+			"verify_agentcore_canary_consumer_runtime_authority",
+		);
 		expect(inspection).toMatch(
 			/verify_agentcore_canary_current_secrets "\$\{region\}" "\$\{tf_output\}"/,
 		);
@@ -515,13 +523,34 @@ describe("dormant AgentCore canary infrastructure", () => {
 			'resource "aws_lambda_function" "preflight"',
 		);
 		expect(preflight).toContain("preflight_function_name");
+		expect(preflight).toContain(".runtime_image_digest.value");
 		expect(preflight).toContain("lambda invoke");
 		expect(preflight).toContain("runAdmitted == false");
 		expect(preflight).toContain("describe-images");
 		expect(preflight).toContain("StopRuntimeSession");
 		expect(preflight).toContain("verify_agentcore_canary_alarms");
 		expect(preflight).toContain("verify_agentcore_canary_current_secrets");
+		expect(preflight).toContain("verify_agentcore_canary_disabled_dispatch");
+		expect(preflight).toContain(
+			"verify_agentcore_canary_runtime_configuration",
+		);
+		expect(preflight).toContain(
+			"verify_agentcore_canary_consumer_runtime_authority",
+		);
+		expect(preflight).toContain("configurationVerified:true");
+		expect(preflight).toContain("dispatchEnabled:false");
 		expect(sharedChecks).toContain("describe-alarms");
+		for (const liveCheck of [
+			"get-event-source-mapping",
+			"describe-rule",
+			"get-parameter",
+			"get-agent-runtime",
+			"get-agent-runtime-endpoint",
+			"metadataConfiguration.requireMMDSV2",
+			"simulate-principal-policy",
+		]) {
+			expect(sharedChecks).toContain(liveCheck);
+		}
 		expect(preflight).toContain("ApproximateNumberOfMessagesDelayed");
 		expect(preflight).toContain('aws_profile="mymemo"');
 		expect(preflight).not.toContain("AWS_PROFILE:-");

@@ -8,14 +8,9 @@ expected_digest="${EXPECTED_RUNTIME_IMAGE_DIGEST:?EXPECTED_RUNTIME_IMAGE_DIGEST 
 source "scripts/deploy/agentcore_canary_aws_checks.sh"
 
 tf_output="$(terraform -chdir="${terraform_dir}" output -json)"
-runtime_id="$(jq -r '.agent_runtime_id.value' <<<"${tf_output}")"
 runtime_arn="$(jq -r '.agent_runtime_arn.value' <<<"${tf_output}")"
 queue_url="$(jq -r '.dispatch_queue_url.value' <<<"${tf_output}")"
 dlq_url="$(jq -r '.dead_letter_queue_url.value' <<<"${tf_output}")"
-mapping_uuid="$(jq -r '.consumer_event_source_mapping_uuid.value' <<<"${tf_output}")"
-repair_rule="$(jq -r '.repair_rule_name.value' <<<"${tf_output}")"
-enabled_parameter="$(jq -r '.enabled_parameter_name.value' <<<"${tf_output}")"
-consumer_role_arn="$(jq -r '.consumer_role_arn.value' <<<"${tf_output}")"
 
 [[ "$(jq '.campaign_nat_gateway_ids.value | length' <<<"${tf_output}")" == "0" ]]
 [[ "$(jq '.campaign_eip_allocation_ids.value | length' <<<"${tf_output}")" == "0" ]]
@@ -29,26 +24,12 @@ dlq_attributes="$(aws --profile "${aws_profile}" sqs get-queue-attributes --regi
 jq -e '(.Attributes.FifoQueue // "false") == "false" and .Attributes.VisibilityTimeout == "300" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and .Attributes.ApproximateNumberOfMessagesDelayed == "0" and (.Attributes.RedrivePolicy | fromjson | .maxReceiveCount == 3)' <<<"${queue_attributes}" >/dev/null
 jq -e '(.Attributes.FifoQueue // "false") == "false" and .Attributes.VisibilityTimeout == "300" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and .Attributes.ApproximateNumberOfMessagesDelayed == "0"' <<<"${dlq_attributes}" >/dev/null
 
-mapping="$(aws --profile "${aws_profile}" lambda get-event-source-mapping --region "${region}" --uuid "${mapping_uuid}")"
-jq -e '.BatchSize == 1 and .State == "Disabled" and (.FunctionResponseTypes | index("ReportBatchItemFailures")) != null' <<<"${mapping}" >/dev/null
-consumer_function="$(jq -r '.FunctionArn | split(":")[-1]' <<<"${mapping}")"
-consumer_configuration="$(aws --profile "${aws_profile}" lambda get-function-configuration --region "${region}" --function-name "${consumer_function}")"
-jq -e '.Timeout == 120' <<<"${consumer_configuration}" >/dev/null
-[[ "$(aws --profile "${aws_profile}" lambda get-function-concurrency --region "${region}" --function-name "${consumer_function}" --query ReservedConcurrentExecutions --output text)" == "1" ]]
-
-rule="$(aws --profile "${aws_profile}" events describe-rule --region "${region}" --name "${repair_rule}")"
-jq -e '.State == "DISABLED" and .ScheduleExpression == "rate(1 minute)"' <<<"${rule}" >/dev/null
-[[ "$(aws --profile "${aws_profile}" ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "disabled" ]]
-
-runtime="$(aws --profile "${aws_profile}" bedrock-agentcore-control get-agent-runtime --region "${region}" --agent-runtime-id "${runtime_id}")"
-jq -e --arg digest "${expected_digest}" '.status == "READY" and .metadataConfiguration.requireMMDSV2 == true and .networkConfiguration.networkMode == "VPC" and .protocolConfiguration.serverProtocol == "HTTP" and (.agentRuntimeArtifact.containerConfiguration.containerUri | endswith("@" + $digest)) and .lifecycleConfiguration.maxLifetime == 3600' <<<"${runtime}" >/dev/null
+verify_agentcore_canary_disabled_dispatch "${region}" "${tf_output}"
+runtime_configuration="$(verify_agentcore_canary_runtime_configuration "${region}" "${tf_output}" "${expected_digest}")"
+runtime="$(jq -c '.runtime' <<<"${runtime_configuration}")"
 runtime_version="$(jq -r '.agentRuntimeVersion' <<<"${runtime}")"
-endpoint="$(aws --profile "${aws_profile}" bedrock-agentcore-control get-agent-runtime-endpoint --region "${region}" --agent-runtime-id "${runtime_id}" --endpoint-name DEFAULT)"
-jq -e --arg version "${runtime_version}" '.name == "DEFAULT" and .status == "READY" and .liveVersion == $version' <<<"${endpoint}" >/dev/null
-endpoint_arn="${runtime_arn}/runtime-endpoint/DEFAULT"
-
-simulation="$(aws --profile "${aws_profile}" iam simulate-principal-policy --policy-source-arn "${consumer_role_arn}" --action-names bedrock-agentcore:InvokeAgentRuntime --resource-arns "${runtime_arn}" "${endpoint_arn}")"
-jq -e '[.EvaluationResults[].EvalDecision] | length == 2 and all(. == "allowed")' <<<"${simulation}" >/dev/null
+endpoint="$(jq -c '.endpoint' <<<"${runtime_configuration}")"
+verify_agentcore_canary_consumer_runtime_authority "${region}" "${tf_output}"
 
 verify_agentcore_canary_current_secrets "${region}" "${tf_output}"
 verify_agentcore_canary_alarms "${region}" "${tf_output}"

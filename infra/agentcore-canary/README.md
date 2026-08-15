@@ -77,10 +77,12 @@ AWS_REGION=us-west-2 scripts/deploy/preflight_agentcore_canary.sh
 The dedicated preflight Lambda has no Run-store or control entrypoint. It reads
 only the two exact AWSCURRENT database secrets, requires `sslmode=verify-full`,
 loads the bundled RDS CA, and executes `SELECT 1` over certificate-verified TLS.
-The wrapper also proves empty queues, secret metadata, alarms, rollback image,
-and scoped session-cleanup authority. Issue #453 closes the window through its
-separately reviewed cleanup path because the normal deployment classifier
-deliberately rejects resource deletion.
+The wrapper also revalidates the disabled mapping, repair rule, and SSM flag;
+the ready digest-pinned Runtime, MMDSv2, `DEFAULT` endpoint, and consumer
+invocation authority; plus empty queues, secret metadata, alarms, rollback
+image, and scoped session-cleanup authority. Issue #453 closes the window
+through its separately reviewed cleanup path because the normal deployment
+classifier deliberately rejects resource deletion.
 
 `PoisonDispatch` and `DisabledDelivery` are emitted both dimensionlessly for
 the #452 alarms and with the bounded `reason` dimension for diagnosis. The

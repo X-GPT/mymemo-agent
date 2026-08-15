@@ -9,6 +9,7 @@ source "scripts/deploy/agentcore_canary_aws_checks.sh"
 
 tf_output="$(terraform -chdir="${terraform_dir}" output -json)"
 runtime_arn="$(jq -r '.agent_runtime_arn.value' <<<"${tf_output}")"
+expected_digest="$(jq -r '.runtime_image_digest.value' <<<"${tf_output}")"
 preflight_function="$(jq -r '.preflight_function_name.value' <<<"${tf_output}")"
 fault_role_arn="$(jq -r '.fault_injection_role_arn.value' <<<"${tf_output}")"
 queue_url="$(jq -r '.dispatch_queue_url.value' <<<"${tf_output}")"
@@ -18,6 +19,10 @@ dlq_url="$(jq -r '.dead_letter_queue_url.value' <<<"${tf_output}")"
 # window. It is not part of the dormant deployment, where both lists are empty.
 [[ "$(jq '.campaign_nat_gateway_ids.value | length' <<<"${tf_output}")" == "1" ]]
 [[ "$(jq '.campaign_eip_allocation_ids.value | length' <<<"${tf_output}")" == "1" ]]
+
+verify_agentcore_canary_disabled_dispatch "${region}" "${tf_output}"
+verify_agentcore_canary_runtime_configuration "${region}" "${tf_output}" "${expected_digest}" >/dev/null
+verify_agentcore_canary_consumer_runtime_authority "${region}" "${tf_output}"
 
 response_file="$(mktemp /tmp/mymemo-agentcore-preflight.XXXXXX)"
 trap 'rm -f "${response_file}"' EXIT
@@ -39,4 +44,4 @@ endpoint_arn="${runtime_arn}/runtime-endpoint/DEFAULT"
 cleanup_simulation="$(aws --profile "${aws_profile}" iam simulate-principal-policy --policy-source-arn "${fault_role_arn}" --action-names bedrock-agentcore:StopRuntimeSession --resource-arns "${runtime_arn}" "${endpoint_arn}")"
 jq -e '[.EvaluationResults[].EvalDecision] | length == 2 and all(. == "allowed")' <<<"${cleanup_simulation}" >/dev/null
 
-jq -n --arg rollbackDigest "${rollback_digest}" '{health:"ok", verifiedTls:true, runAdmitted:false, queueDepth:0, dlqDepth:0, rollbackDigest:$rollbackDigest, cleanupAuthority:true}'
+jq -n --arg rollbackDigest "${rollback_digest}" '{health:"ok", verifiedTls:true, configurationVerified:true, dispatchEnabled:false, runAdmitted:false, queueDepth:0, dlqDepth:0, rollbackDigest:$rollbackDigest, cleanupAuthority:true}'
