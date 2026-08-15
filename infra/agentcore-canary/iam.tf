@@ -499,12 +499,6 @@ data "aws_iam_policy_document" "deployment" {
   }
 
   statement {
-    sid       = "InvokeConnectivityPreflightOnly"
-    actions   = ["lambda:InvokeFunction"]
-    resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:${local.name_prefix}-preflight"]
-  }
-
-  statement {
     sid = "ManageCanaryEventMappingOnly"
     actions = [
       "lambda:CreateEventSourceMapping",
@@ -660,6 +654,7 @@ data "aws_iam_policy_document" "task" {
     actions = ["lambda:InvokeFunction"]
     resources = [
       aws_lambda_function.control.arn,
+      aws_lambda_function.preflight.arn,
       aws_lambda_function.publisher.arn,
     ]
   }

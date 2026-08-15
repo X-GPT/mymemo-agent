@@ -13,6 +13,22 @@ export interface SecretCommandClient {
 	send(command: GetSecretValueCommand): Promise<{ SecretString?: string }>;
 }
 
+export function createRetryableAsyncSingleton<T>(
+	create: () => Promise<T>,
+): () => Promise<T> {
+	let current: Promise<T> | undefined;
+	return async () => {
+		current ??= create();
+		const attempt = current;
+		try {
+			return await attempt;
+		} catch (error) {
+			if (current === attempt) current = undefined;
+			throw error;
+		}
+	};
+}
+
 export function requireEnv(env: Env, name: string): string {
 	const value = env[name];
 	if (!value || value.trim() === "") throw new Error(`${name} is required`);
@@ -34,15 +50,20 @@ export function verifiedDatabaseUrl(value: string, name: string): string {
 	try {
 		url = new URL(value);
 	} catch {
-		throw new Error(`${name} must use sslmode=verify-full`);
+		throw new Error(
+			`${name} must be a PostgreSQL URL using sslmode=verify-full`,
+		);
 	}
 	if (
 		(url.protocol !== "postgresql:" && url.protocol !== "postgres:") ||
-		!url.hostname ||
-		url.searchParams.get("sslmode") !== "verify-full"
+		!url.hostname
 	) {
-		throw new Error(`${name} must use sslmode=verify-full`);
+		throw new Error(
+			`${name} must be a PostgreSQL URL using sslmode=verify-full`,
+		);
 	}
+	if (url.searchParams.get("sslmode") !== "verify-full")
+		throw new Error(`${name} must use sslmode=verify-full`);
 	return value;
 }
 

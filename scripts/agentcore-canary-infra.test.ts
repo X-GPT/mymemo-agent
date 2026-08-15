@@ -91,6 +91,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/container_uri\s*=\s*"\$\{aws_ecr_repository\.runtime\.repository_url\}@\$\{var\.runtime_image_digest\}"/,
 		);
 		expect(source).toContain('image_tag_mutability = "IMMUTABLE"');
+		expect(source).not.toContain('resource "aws_ecr_lifecycle_policy"');
 		expect(source).toMatch(/network_mode\s*=\s*"VPC"/);
 		expect(source).toMatch(/server_protocol\s*=\s*"HTTP"/);
 		expect(source).toMatch(/max_lifetime\s*=\s*3600/);
@@ -190,6 +191,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"preflight"[\s\S]*?resources\s*=\s*\[var\.agent_database_url_secret_arn, var\.kb_database_url_secret_arn\]/,
 		);
+		expect(source).not.toContain('sid = "InvokeConnectivityPreflightOnly"');
+		expect(source).toMatch(
+			/data\s+"aws_iam_policy_document"\s+"task"[\s\S]*?aws_lambda_function\.preflight\.arn/,
+		);
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_event_source_mapping"\s+"consumer"[\s\S]*?precondition[\s\S]*?!var\.dispatch_enabled\s*\|\|\s*var\.campaign_network_enabled/,
 		);
@@ -255,6 +260,15 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(
 			workflow.match(/name: Confirm manual production intent/g),
 		).toHaveLength(2);
+		expect(
+			workflow.match(/verify_github_canary_environment\.sh/g),
+		).toHaveLength(2);
+		expect(workflow).toContain("RDS_CA_BUNDLE_SHA256:");
+		expect(
+			workflow.match(
+				/e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3/g,
+			),
+		).toHaveLength(1);
 		expect(workflow).toContain("platforms: linux/arm64");
 		expect(workflow).toContain("docker pull --platform linux/arm64");
 		expect(workflow).toContain(
@@ -315,6 +329,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(preflight).toContain("describe-alarms");
 		expect(preflight).not.toContain("invoke-agent-runtime");
 		expect(preflight).not.toContain("/runs");
+		expect(readFileSync(join(terraformDir, "README.md"), "utf8")).toContain(
+			"Issue #453 owns the separately approved network window",
+		);
 	});
 
 	it("packages the pinned RDS trust bundle for every database Lambda", () => {

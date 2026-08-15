@@ -24,6 +24,7 @@ import { createCanaryDispatchPublisher } from "./publisher";
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
+	createRetryableAsyncSingleton,
 	exactSecretArn,
 	requireEnv,
 	verifiedDatabaseUrl,
@@ -167,25 +168,13 @@ export function createCanaryDispatchProductionServices(
 	};
 }
 
-let productionServicesPromise:
-	| Promise<ReturnType<typeof createCanaryDispatchProductionServices>>
-	| undefined;
-
-async function services() {
-	productionServicesPromise ??= resolveCanaryDispatchConfigFromSecretArns(
+const services = createRetryableAsyncSingleton(async () => {
+	const config = await resolveCanaryDispatchConfigFromSecretArns(
 		process.env,
 		createAwsCurrentSecretReader(requireEnv(process.env, "AWS_REGION")),
-	).then((config) => createCanaryDispatchProductionServices(config));
-	const current = productionServicesPromise;
-	try {
-		return await current;
-	} catch (error) {
-		if (productionServicesPromise === current) {
-			productionServicesPromise = undefined;
-		}
-		throw error;
-	}
-}
+	);
+	return createCanaryDispatchProductionServices(config);
+});
 
 export async function publisherHandler(event: unknown, context: LambdaContext) {
 	return await createCanaryPublisherHandler({

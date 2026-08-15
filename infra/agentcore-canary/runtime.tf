@@ -12,24 +12,6 @@ resource "aws_ecr_repository" "runtime" {
   }
 }
 
-resource "aws_ecr_lifecycle_policy" "runtime" {
-  repository = aws_ecr_repository.runtime.name
-
-  policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Retain digest-addressable release images; expire only abandoned untagged uploads"
-      selection = {
-        tagStatus   = "untagged"
-        countType   = "sinceImagePushed"
-        countUnit   = "days"
-        countNumber = 30
-      }
-      action = { type = "expire" }
-    }]
-  })
-}
-
 resource "aws_bedrockagentcore_agent_runtime" "canary" {
   agent_runtime_name    = "mymemo_agentcore_canary_${var.environment}"
   description           = "Dormant synthetic-only MyMemo AgentCore canary"

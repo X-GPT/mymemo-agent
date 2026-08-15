@@ -22,6 +22,7 @@ concurrency:
 env:
   AWS_REGION: us-west-2
   AWS_ACCOUNT_ID: "637423444544"
+  RDS_CA_BUNDLE_SHA256: e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3
   TF_INPUT: false
   TF_IN_AUTOMATION: true
   TF_VAR_aws_region: us-west-2
@@ -49,6 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production-agentcore-canary
     permissions:
+      actions: read
       contents: read
       id-token: write
     steps:
@@ -65,6 +67,14 @@ jobs:
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
+      - name: Verify protected GitHub Environment has required reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/deploy/verify_github_canary_environment.sh
+      # This one-time, Environment-approved bootstrap must use the existing
+      # repository deployment role to create the narrower canary role and ECR
+      # repository. The reviewer check above runs before OIDC credentials, and
+      # the fail-closed plan classifier bounds the only permitted changes.
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy
@@ -78,7 +88,7 @@ jobs:
       - name: Build Lambda packages for Terraform hashing
         run: |
           curl --fail --silent --show-error --location https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem --output /tmp/rds-global-bundle.pem
-          echo "e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3  /tmp/rds-global-bundle.pem" | sha256sum --check
+          echo "${RDS_CA_BUNDLE_SHA256}  /tmp/rds-global-bundle.pem" | sha256sum --check
           scripts/deploy/build_agentcore_canary_lambdas.sh dist/agentcore-canary-lambdas /tmp/rds-global-bundle.pem
       - name: Bootstrap only canary authority and repository
         run: |
@@ -170,7 +180,7 @@ jobs:
       - name: Build Lambda deployment packages with the digest-pinned RDS CA
         run: |
           curl --fail --silent --show-error --location https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem --output /tmp/rds-global-bundle.pem
-          echo "e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3  /tmp/rds-global-bundle.pem" | sha256sum --check
+          echo "${RDS_CA_BUNDLE_SHA256}  /tmp/rds-global-bundle.pem" | sha256sum --check
           scripts/deploy/build_agentcore_canary_lambdas.sh dist/agentcore-canary-lambdas /tmp/rds-global-bundle.pem
       - name: Plan and reject destructive or shared-resource changes
         run: |

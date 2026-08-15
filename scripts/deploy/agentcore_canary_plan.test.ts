@@ -98,6 +98,49 @@ describe("AgentCore canary Terraform plan classification", () => {
 		expect(result.reasons.join(" ")).toContain("IAM trust mutation");
 	});
 
+	it("accepts only the expected trust policy when creating a canary role", () => {
+		const lambdaTrust = JSON.stringify({
+			Version: "2012-10-17",
+			Statement: [
+				{
+					Effect: "Allow",
+					Action: "sts:AssumeRole",
+					Principal: { Service: "lambda.amazonaws.com" },
+				},
+			],
+		});
+		expect(
+			classifyAgentCoreCanaryPlan(
+				plan([
+					change("aws_iam_role.preflight", "aws_iam_role", ["create"], null, {
+						assume_role_policy: lambdaTrust,
+					}),
+				]),
+			),
+		).toEqual({ safe: true, reasons: [] });
+
+		const widened = classifyAgentCoreCanaryPlan(
+			plan([
+				change("aws_iam_role.preflight", "aws_iam_role", ["create"], null, {
+					assume_role_policy: JSON.stringify({
+						Version: "2012-10-17",
+						Statement: [
+							{
+								Effect: "Allow",
+								Action: "sts:AssumeRole",
+								Principal: { AWS: "*" },
+							},
+						],
+					}),
+				}),
+			]),
+		);
+		expect(widened.safe).toBe(false);
+		expect(widened.reasons).toContain(
+			"aws_iam_role.preflight has unapproved IAM trust on creation",
+		);
+	});
+
 	it("requires an independently locked AWS 6.x provider satisfying >= 6.50", () => {
 		expect(
 			verifyAgentCoreProviderLock(`

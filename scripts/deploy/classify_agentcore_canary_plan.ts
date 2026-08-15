@@ -36,7 +36,6 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_cloudwatch_metric_alarm.lambda_errors",
 	"aws_cloudwatch_metric_alarm.lambda_throttles",
 	"aws_cloudwatch_metric_alarm.validation",
-	"aws_ecr_lifecycle_policy.runtime",
 	"aws_ecr_repository.runtime",
 	"aws_eip.campaign",
 	"aws_iam_role.campaign_launch",
@@ -87,6 +86,148 @@ function resourceBaseAddress(address: string): string {
 	return address.replace(/\[.*$/, "");
 }
 
+const LAMBDA_ROLE_ADDRESSES = new Set([
+	"aws_iam_role.consumer",
+	"aws_iam_role.control",
+	"aws_iam_role.preflight",
+	"aws_iam_role.publisher",
+]);
+const STATES_ROLE_ADDRESSES = new Set([
+	"aws_iam_role.fault_injection",
+	"aws_iam_role.task",
+]);
+const GITHUB_ROLE_ADDRESSES = new Set([
+	"aws_iam_role.campaign_launch",
+	"aws_iam_role.deployment",
+]);
+
+function oneString(value: unknown): string | undefined {
+	if (typeof value === "string") return value;
+	if (
+		Array.isArray(value) &&
+		value.length === 1 &&
+		typeof value[0] === "string"
+	) {
+		return value[0];
+	}
+	return undefined;
+}
+
+function parsePolicy(value: unknown): Record<string, unknown> | undefined {
+	try {
+		const parsed = typeof value === "string" ? JSON.parse(value) : value;
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function exactObjectKeys(
+	value: Record<string, unknown>,
+	expected: string[],
+): boolean {
+	return (
+		Object.keys(value).sort().join("\0") === expected.slice().sort().join("\0")
+	);
+}
+
+function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
+	const policy = parsePolicy(value);
+	if (!policy || !exactObjectKeys(policy, ["Statement", "Version"]))
+		return false;
+	const statements = policy.Statement;
+	if (!Array.isArray(statements) || statements.length !== 1) return false;
+	const statement = statements[0];
+	if (!statement || typeof statement !== "object" || Array.isArray(statement))
+		return false;
+	const trust = statement as Record<string, unknown>;
+	if (trust.Effect !== "Allow") return false;
+	const principal = trust.Principal;
+	if (!principal || typeof principal !== "object" || Array.isArray(principal))
+		return false;
+	const principalRecord = principal as Record<string, unknown>;
+
+	if (LAMBDA_ROLE_ADDRESSES.has(address)) {
+		return (
+			exactObjectKeys(trust, ["Action", "Effect", "Principal"]) &&
+			oneString(trust.Action) === "sts:AssumeRole" &&
+			exactObjectKeys(principalRecord, ["Service"]) &&
+			oneString(principalRecord.Service) === "lambda.amazonaws.com"
+		);
+	}
+
+	const condition = trust.Condition;
+	if (!condition || typeof condition !== "object" || Array.isArray(condition))
+		return false;
+	const conditionRecord = condition as Record<string, unknown>;
+	const stringEquals = conditionRecord.StringEquals;
+	if (
+		!stringEquals ||
+		typeof stringEquals !== "object" ||
+		Array.isArray(stringEquals)
+	) {
+		return false;
+	}
+	const equalsRecord = stringEquals as Record<string, unknown>;
+
+	if (STATES_ROLE_ADDRESSES.has(address)) {
+		return (
+			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
+			oneString(trust.Action) === "sts:AssumeRole" &&
+			exactObjectKeys(principalRecord, ["Service"]) &&
+			oneString(principalRecord.Service) === "states.amazonaws.com" &&
+			exactObjectKeys(conditionRecord, ["StringEquals"]) &&
+			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
+			/^\d{12}$/.test(oneString(equalsRecord["aws:SourceAccount"]) ?? "")
+		);
+	}
+
+	if (address === "aws_iam_role.runtime") {
+		const arnLike = conditionRecord.ArnLike;
+		if (!arnLike || typeof arnLike !== "object" || Array.isArray(arnLike))
+			return false;
+		const arnLikeRecord = arnLike as Record<string, unknown>;
+		return (
+			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
+			oneString(trust.Action) === "sts:AssumeRole" &&
+			exactObjectKeys(principalRecord, ["Service"]) &&
+			oneString(principalRecord.Service) ===
+				"bedrock-agentcore.amazonaws.com" &&
+			exactObjectKeys(conditionRecord, ["ArnLike", "StringEquals"]) &&
+			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
+			/^\d{12}$/.test(oneString(equalsRecord["aws:SourceAccount"]) ?? "") &&
+			exactObjectKeys(arnLikeRecord, ["aws:SourceArn"]) &&
+			/^arn:aws:bedrock-agentcore:[a-z0-9-]+:\d{12}:runtime\/\*$/.test(
+				oneString(arnLikeRecord["aws:SourceArn"]) ?? "",
+			)
+		);
+	}
+
+	if (GITHUB_ROLE_ADDRESSES.has(address)) {
+		return (
+			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
+			oneString(trust.Action) === "sts:AssumeRoleWithWebIdentity" &&
+			exactObjectKeys(principalRecord, ["Federated"]) &&
+			/^arn:aws:iam::\d{12}:oidc-provider\/token\.actions\.githubusercontent\.com$/.test(
+				oneString(principalRecord.Federated) ?? "",
+			) &&
+			exactObjectKeys(conditionRecord, ["StringEquals"]) &&
+			exactObjectKeys(equalsRecord, [
+				"token.actions.githubusercontent.com:aud",
+				"token.actions.githubusercontent.com:sub",
+			]) &&
+			oneString(equalsRecord["token.actions.githubusercontent.com:aud"]) ===
+				"sts.amazonaws.com" &&
+			oneString(equalsRecord["token.actions.githubusercontent.com:sub"]) ===
+				"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary"
+		);
+	}
+
+	return false;
+}
+
 export function classifyAgentCoreCanaryPlan(
 	plan: TerraformPlan,
 ): PlanClassification {
@@ -111,6 +252,16 @@ export function classifyAgentCoreCanaryPlan(
 		}
 		if (actions.includes("forget")) {
 			reasons.push(`${address} requests removal from Terraform state`);
+		}
+		if (
+			type === "aws_iam_role" &&
+			actions.includes("create") &&
+			!approvedCreatedRoleTrust(
+				resourceBaseAddress(address),
+				resource.change?.after?.assume_role_policy,
+			)
+		) {
+			reasons.push(`${address} has unapproved IAM trust on creation`);
 		}
 		if (
 			type === "aws_iam_role" &&

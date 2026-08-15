@@ -41,9 +41,14 @@ The inspection performs no Lambda or Runtime invocation and cannot admit a Run.
 
 ## Non-Run network preflight
 
-During an independently approved campaign-network window, apply with
-`campaign_network_enabled=true` while keeping `dispatch_enabled=false`, set
-`ROLLBACK_RUNTIME_IMAGE_DIGEST` to the retained prior digest, and run:
+Issue #452 installs the preflight capability but deliberately leaves the
+deployment dormant: its workflow does not create NAT/EIP or invoke the preflight
+Lambda. Issue #453 owns the separately approved network window, two-hour expiry,
+preflight orchestration, and verified NAT/EIP cleanup.
+
+During that #453 campaign-network window, `campaign_network_enabled=true` while
+`dispatch_enabled=false`. The preflight task sets `ROLLBACK_RUNTIME_IMAGE_DIGEST`
+to the retained prior digest and executes:
 
 ```bash
 AWS_REGION=us-west-2 scripts/deploy/preflight_agentcore_canary.sh
@@ -53,9 +58,9 @@ The dedicated preflight Lambda has no Run-store or control entrypoint. It reads
 only the two exact AWSCURRENT database secrets, requires `sslmode=verify-full`,
 loads the bundled RDS CA, and executes `SELECT 1` over certificate-verified TLS.
 The wrapper also proves empty queues, secret metadata, alarms, rollback image,
-and scoped session-cleanup authority. Close the window afterward by applying
-`campaign_network_enabled=false`; the plan classifier deliberately rejects the
-resulting deletions, so use the separately reviewed campaign cleanup procedure.
+and scoped session-cleanup authority. Issue #453 closes the window through its
+separately reviewed cleanup path because the normal deployment classifier
+deliberately rejects resource deletion.
 
 Turning off dispatch, deleting campaign NAT/EIP, or fully decommissioning this
 state cannot roll Fargate or change user routing because those resources do not

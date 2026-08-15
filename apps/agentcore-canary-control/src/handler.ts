@@ -3,6 +3,7 @@ import { createCanaryDispatchProductionPublisher } from "agentcore-canary-dispat
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
+	createRetryableAsyncSingleton,
 	requireEnv,
 	resolveCanaryDatabaseUrlsFromSecretArns,
 } from "agentcore-canary-dispatch/secret-config";
@@ -134,22 +135,11 @@ async function createProductionHandler(env: Env) {
 	);
 }
 
-let productionHandlerPromise:
-	| ReturnType<typeof createProductionHandler>
-	| undefined;
+const productionHandler = createRetryableAsyncSingleton(() =>
+	createProductionHandler(process.env),
+);
 
 /** Operator-only Lambda entrypoint; it is not mounted on chat-api. */
 export async function handler(event: unknown) {
-	productionHandlerPromise ??= createProductionHandler(process.env);
-	const current = productionHandlerPromise;
-	let productionHandler: Awaited<typeof current>;
-	try {
-		productionHandler = await current;
-	} catch (error) {
-		if (productionHandlerPromise === current) {
-			productionHandlerPromise = undefined;
-		}
-		throw error;
-	}
-	return await productionHandler(event);
+	return await (await productionHandler())(event);
 }
