@@ -111,6 +111,9 @@ describe("AgentCore Runtime image contract", () => {
 			join(root, "apps/agentcore-canary-runtime/src/image-cli-contract.ts"),
 			"utf8",
 		);
+		const workerPackage = JSON.parse(
+			readFileSync(join(root, "apps/agent-worker/package.json"), "utf8"),
+		) as { exports: Record<string, string> };
 		const workflow = readFileSync(workflowPath, "utf8");
 		expect(smoke).toContain("--network none");
 		expect(smoke).toContain("run src/image-cli-contract.ts");
@@ -118,6 +121,10 @@ describe("AgentCore Runtime image contract", () => {
 		expect(smoke).toContain("/ping");
 		expect(smoke).toContain("/invocations");
 		expect(cliContract).toContain("resolveAndVerifyClaudeCodeExecutable");
+		expect(cliContract).toContain('from "agent-worker/claude-code-executable"');
+		expect(workerPackage.exports["./claude-code-executable"]).toBe(
+			"./src/sdk/claude-code-executable.ts",
+		);
 		expect(cliContract).toContain('signal !== "SIGSEGV"');
 		expect(workflow).toContain("platforms: linux/arm64");
 		expect(workflow).toContain("agentcore-canary-runtime-image-check.sh");

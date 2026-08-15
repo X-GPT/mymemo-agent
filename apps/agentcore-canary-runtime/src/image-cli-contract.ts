@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { resolveAndVerifyClaudeCodeExecutable } from "../../agent-worker/src/sdk/claude-code-executable";
+import { resolveAndVerifyClaudeCodeExecutable } from "agent-worker/claude-code-executable";
 
 const caPath = process.env.RDS_CA_BUNDLE_PATH;
 if (!caPath) throw new Error("RDS CA bundle path missing");
