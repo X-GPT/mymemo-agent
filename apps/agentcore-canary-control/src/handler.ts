@@ -141,5 +141,15 @@ let productionHandlerPromise:
 /** Operator-only Lambda entrypoint; it is not mounted on chat-api. */
 export async function handler(event: unknown) {
 	productionHandlerPromise ??= createProductionHandler(process.env);
-	return await (await productionHandlerPromise)(event);
+	const current = productionHandlerPromise;
+	let productionHandler: Awaited<typeof current>;
+	try {
+		productionHandler = await current;
+	} catch (error) {
+		if (productionHandlerPromise === current) {
+			productionHandlerPromise = undefined;
+		}
+		throw error;
+	}
+	return await productionHandler(event);
 }

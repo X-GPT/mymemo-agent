@@ -70,7 +70,7 @@ resource "aws_lambda_function" "control" {
 
 resource "aws_lambda_function" "preflight" {
   function_name    = "${local.name_prefix}-preflight"
-  role             = aws_iam_role.control.arn
+  role             = aws_iam_role.preflight.arn
   runtime          = "nodejs22.x"
   architectures    = ["arm64"]
   handler          = "index.preflightHandler"

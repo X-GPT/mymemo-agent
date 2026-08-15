@@ -62,8 +62,19 @@ resource "aws_eip" "campaign" {
 resource "aws_nat_gateway" "campaign" {
   count = var.campaign_network_enabled ? 1 : 0
 
+  # The ordinary production stack explicitly records that its inherited ECS
+  # subnets are public/default subnets. Fail before opening a campaign window if
+  # that shared-network contract changes, because a NAT Gateway requires an
+  # Internet Gateway route in its placement subnet.
   allocation_id = aws_eip.campaign[0].id
   subnet_id     = data.terraform_remote_state.mymemo_agent.outputs.shared_infra.ecs_subnet_ids[0]
+
+  lifecycle {
+    precondition {
+      condition     = data.terraform_remote_state.mymemo_agent.outputs.assign_public_ip
+      error_message = "The campaign NAT Gateway requires the shared public ECS subnet contract."
+    }
+  }
 
   tags = {
     Name       = "${local.name_prefix}-campaign"

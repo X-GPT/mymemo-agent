@@ -176,7 +176,15 @@ async function services() {
 		process.env,
 		createAwsCurrentSecretReader(requireEnv(process.env, "AWS_REGION")),
 	).then((config) => createCanaryDispatchProductionServices(config));
-	return await productionServicesPromise;
+	const current = productionServicesPromise;
+	try {
+		return await current;
+	} catch (error) {
+		if (productionServicesPromise === current) {
+			productionServicesPromise = undefined;
+		}
+		throw error;
+	}
 }
 
 export async function publisherHandler(event: unknown, context: LambdaContext) {

@@ -47,7 +47,6 @@ locals {
   }
 
   lambda_common_environment = {
-    AWS_REGION                           = var.aws_region
     CANARY_ENABLED_PARAMETER_NAME        = aws_ssm_parameter.enabled.name
     CANARY_AGENT_DATABASE_URL_SECRET_ARN = var.agent_database_url_secret_arn
     CANARY_DISPATCH_QUEUE_URL            = aws_sqs_queue.dispatch.url

@@ -52,6 +52,21 @@ describe("AgentCore canary Terraform plan classification", () => {
 		}
 	});
 
+	it("rejects removed-block plans that forget canary resources", () => {
+		const result = classifyAgentCoreCanaryPlan(
+			plan([
+				change("aws_lambda_function.consumer", "aws_lambda_function", [
+					"forget",
+				]),
+			]),
+		);
+
+		expect(result.safe).toBe(false);
+		expect(result.reasons).toContain(
+			"aws_lambda_function.consumer requests removal from Terraform state",
+		);
+	});
+
 	it("rejects shared-resource mutation and ordinary-stack decommission", () => {
 		for (const [address, type] of [
 			["aws_ecs_service.agent_worker", "aws_ecs_service"],

@@ -27,8 +27,8 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(versions).toContain(
 			'key          = "mymemo-agent/agentcore-canary-prod.tfstate"',
 		);
-		expect(versions).toContain("use_lockfile = true");
-		expect(versions).toContain("encrypt      = true");
+		expect(versions).toMatch(/use_lockfile\s*=\s*true/);
+		expect(versions).toMatch(/encrypt\s*=\s*true/);
 		expect(versions).toMatch(/version\s*=\s*">= 6\.50, < 7\.0"/);
 		expect(versions).not.toContain("hashicorp/awscc");
 		expect(existsSync(join(terraformDir, ".terraform.lock.hcl"))).toBe(true);
@@ -94,6 +94,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(/network_mode\s*=\s*"VPC"/);
 		expect(source).toMatch(/server_protocol\s*=\s*"HTTP"/);
 		expect(source).toMatch(/max_lifetime\s*=\s*3600/);
+		// Warning-only Terraform checks cannot enforce the deployment invariants.
 		expect(source).not.toMatch(/\ncheck\s+"/);
 		expect(source).toMatch(
 			/resource\s+"aws_bedrockagentcore_agent_runtime"\s+"canary"[\s\S]*?precondition[\s\S]*?local\.exact_secret_arn_pattern/,
@@ -122,19 +123,28 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(
 			/NODE_EXTRA_CA_CERTS\s*=\s*"\/etc\/ssl\/certs\/rds-global-bundle\.pem"/,
 		);
+		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
+		const lambdaEnvironment = locals.match(
+			/lambda_common_environment\s*=\s*\{([\s\S]*?)\n\s*\}/,
+		)?.[1];
+		expect(lambdaEnvironment).toBeDefined();
+		expect(lambdaEnvironment).not.toMatch(/\bAWS_REGION\s*=/);
 	});
 
 	it("keeps private networking while making NAT and EIP campaign-scoped", () => {
 		const source = terraformSource();
 
 		expect(source).toContain('resource "aws_subnet" "private"');
-		expect(source).toContain("map_public_ip_on_launch = false");
+		expect(source).toMatch(/map_public_ip_on_launch\s*=\s*false/);
 		expect(source).toContain('resource "aws_security_group" "canary"');
 		expect(source).toMatch(
 			/resource\s+"aws_eip"\s+"campaign"[\s\S]*?count\s*=\s*var\.campaign_network_enabled\s*\?\s*1\s*:\s*0/,
 		);
 		expect(source).toMatch(
 			/resource\s+"aws_nat_gateway"\s+"campaign"[\s\S]*?count\s*=\s*var\.campaign_network_enabled\s*\?\s*1\s*:\s*0/,
+		);
+		expect(source).toMatch(
+			/resource\s+"aws_nat_gateway"\s+"campaign"[\s\S]*?precondition[\s\S]*?outputs\.assign_public_ip/,
 		);
 		expect(source).toMatch(
 			/variable\s+"campaign_network_enabled"[\s\S]*?default\s*=\s*false/,
@@ -158,6 +168,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"consumer",
 			"runtime",
 			"fault_injection",
+			"preflight",
 		]) {
 			expect(source).toContain(`resource "aws_iam_role" "${role}"`);
 		}
@@ -165,7 +176,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
-		expect(source).toContain("resources = local.exact_secret_arns");
+		expect(source).toMatch(/resources\s*=\s*local\.exact_secret_arns/);
 		expect(source).toMatch(
 			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?actions\s*=\s*\["s3:AbortMultipartUpload", "s3:PutObject"\]/,
 		);
@@ -173,6 +184,12 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/resource\s+"aws_iam_role_policy"\s+"campaign_launch"[\s\S]*?(rds:|secretsmanager:GetSecretValue)/,
 		);
 		expect(source).not.toContain("iam:UpdateAssumeRolePolicy");
+		expect(source).toMatch(
+			/resource\s+"aws_lambda_function"\s+"preflight"[\s\S]*?role\s*=\s*aws_iam_role\.preflight\.arn/,
+		);
+		expect(source).toMatch(
+			/data\s+"aws_iam_policy_document"\s+"preflight"[\s\S]*?resources\s*=\s*\[var\.agent_database_url_secret_arn, var\.kb_database_url_secret_arn\]/,
+		);
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_event_source_mapping"\s+"consumer"[\s\S]*?precondition[\s\S]*?!var\.dispatch_enabled\s*\|\|\s*var\.campaign_network_enabled/,
 		);
@@ -235,6 +252,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(workflow).not.toMatch(/\n\s+(push|workflow_run):/);
 		expect(workflow).toContain("environment: production-agentcore-canary");
 		expect(workflow).toContain("deploy-mymemo-agentcore-canary-prod");
+		expect(
+			workflow.match(/name: Confirm manual production intent/g),
+		).toHaveLength(2);
 		expect(workflow).toContain("platforms: linux/arm64");
 		expect(workflow).toContain("docker pull --platform linux/arm64");
 		expect(workflow).toContain(

@@ -83,7 +83,7 @@ resource "aws_iam_role" "runtime" {
 
 data "aws_iam_policy_document" "runtime" {
   statement {
-    sid       = "PullOnlyPinnedRuntimeImage"
+    sid       = "PullFromCanaryRuntimeRepoOnly"
     actions   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
     resources = [aws_ecr_repository.runtime.arn]
   }
@@ -181,6 +181,11 @@ resource "aws_iam_role" "control" {
   assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
 }
 
+resource "aws_iam_role" "preflight" {
+  name               = "${local.name_prefix}-preflight"
+  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
+}
+
 data "aws_iam_policy_document" "lambda_base" {
   statement {
     sid = "VpcAttachment"
@@ -219,6 +224,40 @@ data "aws_iam_policy_document" "lambda_base" {
     actions   = ["kms:Decrypt"]
     resources = [aws_kms_key.canary.arn]
   }
+}
+
+data "aws_iam_policy_document" "preflight" {
+  statement {
+    sid = "VpcAttachment"
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:DeleteNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "FunctionLogs"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.name_prefix}-preflight:*"]
+  }
+
+  statement {
+    sid       = "ReadPreflightDatabaseUrls"
+    actions   = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"]
+    resources = [var.agent_database_url_secret_arn, var.kb_database_url_secret_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "preflight" {
+  name   = "${local.name_prefix}-preflight"
+  role   = aws_iam_role.preflight.id
+  policy = data.aws_iam_policy_document.preflight.json
 }
 
 resource "aws_iam_role_policy" "publisher_base" {

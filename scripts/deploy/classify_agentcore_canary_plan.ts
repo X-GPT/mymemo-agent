@@ -21,31 +21,6 @@ export interface PlanClassification {
 	reasons: string[];
 }
 
-const CANARY_OWNED_RESOURCE_TYPES = new Set([
-	"aws_bedrockagentcore_agent_runtime",
-	"aws_cloudwatch_event_rule",
-	"aws_cloudwatch_event_target",
-	"aws_cloudwatch_metric_alarm",
-	"aws_ecr_lifecycle_policy",
-	"aws_ecr_repository",
-	"aws_eip",
-	"aws_iam_role",
-	"aws_iam_role_policy",
-	"aws_kms_alias",
-	"aws_kms_key",
-	"aws_lambda_event_source_mapping",
-	"aws_lambda_function",
-	"aws_lambda_permission",
-	"aws_nat_gateway",
-	"aws_route",
-	"aws_route_table",
-	"aws_route_table_association",
-	"aws_security_group",
-	"aws_sqs_queue",
-	"aws_ssm_parameter",
-	"aws_subnet",
-]);
-
 // This explicit list is an independent, fail-closed safety boundary. Do not
 // derive it from the Terraform under classification: every new owned resource
 // must be reviewed and added here deliberately.
@@ -69,6 +44,7 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_iam_role.control",
 	"aws_iam_role.deployment",
 	"aws_iam_role.fault_injection",
+	"aws_iam_role.preflight",
 	"aws_iam_role.publisher",
 	"aws_iam_role.runtime",
 	"aws_iam_role.task",
@@ -79,6 +55,7 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_iam_role_policy.control_base",
 	"aws_iam_role_policy.deployment",
 	"aws_iam_role_policy.fault_injection",
+	"aws_iam_role_policy.preflight",
 	"aws_iam_role_policy.publisher",
 	"aws_iam_role_policy.publisher_base",
 	"aws_iam_role_policy.runtime",
@@ -101,6 +78,10 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_ssm_parameter.enabled",
 	"aws_subnet.private",
 ]);
+
+const CANARY_OWNED_RESOURCE_TYPES = new Set(
+	[...CANARY_OWNED_RESOURCE_ADDRESSES].map((address) => address.split(".")[0]),
+);
 
 function resourceBaseAddress(address: string): string {
 	return address.replace(/\[.*$/, "");
@@ -127,6 +108,9 @@ export function classifyAgentCoreCanaryPlan(
 		}
 		if (actions.includes("delete")) {
 			reasons.push(`${address} requests deletion or replacement`);
+		}
+		if (actions.includes("forget")) {
+			reasons.push(`${address} requests removal from Terraform state`);
 		}
 		if (
 			type === "aws_iam_role" &&

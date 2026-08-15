@@ -70,6 +70,7 @@ export async function runCanaryNetworkPreflight(
 		dependencies.connect("kbDatabase", kbDatabaseUrl, ca),
 	]);
 
+	// Both flags are reachable only after both verified-TLS connections resolve.
 	return {
 		health: "ok" as const,
 		agentDatabaseTls: true,

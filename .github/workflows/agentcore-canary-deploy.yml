@@ -52,6 +52,12 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Confirm manual production intent
+        run: |
+          if [[ "${{ inputs.confirm_deploy }}" != "deploy-mymemo-agentcore-canary-prod" ]]; then
+            echo "confirm_deploy must be deploy-mymemo-agentcore-canary-prod" >&2
+            exit 1
+          fi
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
