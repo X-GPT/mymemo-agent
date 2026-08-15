@@ -25,8 +25,8 @@ jq -e '.FunctionError == null' <<<"${invocation}" >/dev/null
 jq -e '.health == "ok" and .agentDatabaseTls == true and .kbDatabaseTls == true and .runAdmitted == false' "${response_file}" >/dev/null
 
 for queue in "${queue_url}" "${dlq_url}"; do
-  attributes="$(aws --profile "${aws_profile}" sqs get-queue-attributes --region "${region}" --queue-url "${queue}" --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible)"
-  jq -e '.Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0"' <<<"${attributes}" >/dev/null
+  attributes="$(aws --profile "${aws_profile}" sqs get-queue-attributes --region "${region}" --queue-url "${queue}" --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible ApproximateNumberOfMessagesDelayed)"
+  jq -e '.Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and .Attributes.ApproximateNumberOfMessagesDelayed == "0"' <<<"${attributes}" >/dev/null
 done
 
 for secret_arn in $(jq -r '.runtime_secret_arns.value[]' <<<"${tf_output}"); do

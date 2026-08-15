@@ -108,25 +108,24 @@ const GITHUB_ROLE_POLICY_ADDRESSES = new Set([
 interface PolicyRule {
 	actions: string[];
 	resourcePatterns: (string | RegExp)[];
-	condition?: {
-		operator: string;
-		key: string;
-		value: string;
-	};
+	conditions?: Record<string, Record<string, string[]>>;
 }
 
 const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
+	DedicatedTerraformStateBucket: {
+		actions: ["s3:GetBucketVersioning", "s3:ListBucket"],
+		resourcePatterns: ["arn:aws:s3:::mymemo-terraform-state-bucket"],
+	},
 	DedicatedTerraformState: {
-		actions: [
-			"s3:DeleteObject",
-			"s3:GetBucketVersioning",
-			"s3:GetObject",
-			"s3:ListBucket",
-			"s3:PutObject",
-		],
+		actions: ["s3:GetObject", "s3:PutObject"],
 		resourcePatterns: [
-			"arn:aws:s3:::mymemo-terraform-state-bucket",
-			"arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/agentcore-canary-prod.tfstate*",
+			"arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/agentcore-canary-prod.tfstate",
+		],
+	},
+	DedicatedTerraformLock: {
+		actions: ["s3:DeleteObject", "s3:GetObject", "s3:PutObject"],
+		resourcePatterns: [
+			"arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/agentcore-canary-prod.tfstate.tflock",
 		],
 	},
 	ReadOnlySharedTerraformOutputs: {
@@ -234,20 +233,26 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 		],
 	},
 	ManageCanaryRepairRuleOnly: {
-		actions: [
-			"events:DisableRule",
-			"events:EnableRule",
-			"events:PutRule",
-			"events:PutTargets",
-			"events:TagResource",
-		],
+		actions: ["events:DisableRule"],
 		resourcePatterns: [
 			"arn:aws:events:us-west-2:637423444544:rule/mymemo-agent-agentcore-canary-prod-repair",
 		],
 	},
+	ManageCanaryRepairTargetOnly: {
+		actions: ["events:PutTargets"],
+		resourcePatterns: [
+			"arn:aws:events:us-west-2:637423444544:rule/mymemo-agent-agentcore-canary-prod-repair",
+		],
+		conditions: {
+			"ForAnyValue:ArnEquals": {
+				"events:TargetArn": [
+					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-publisher",
+				],
+			},
+		},
+	},
 	ManageCanaryFunctionsOnly: {
 		actions: [
-			"lambda:AddPermission",
 			"lambda:CreateFunction",
 			"lambda:PutFunctionConcurrency",
 			"lambda:TagResource",
@@ -258,6 +263,17 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-*",
 		],
 	},
+	ManageCanaryRepairPermissionOnly: {
+		actions: ["lambda:AddPermission"],
+		resourcePatterns: [
+			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-publisher",
+		],
+		conditions: {
+			StringEquals: {
+				"lambda:Principal": ["events.amazonaws.com"],
+			},
+		},
+	},
 	ManageCanaryEventMappingOnly: {
 		actions: [
 			"lambda:CreateEventSourceMapping",
@@ -266,11 +282,12 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 		resourcePatterns: [
 			"arn:aws:lambda:us-west-2:637423444544:event-source-mapping:*",
 		],
-		condition: {
-			operator: "ArnLike",
-			key: "lambda:FunctionArn",
-			value:
-				"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer",
+		conditions: {
+			ArnLike: {
+				"lambda:FunctionArn": [
+					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer",
+				],
+			},
 		},
 	},
 	ManageCanaryQueuesOnly: {
@@ -285,11 +302,83 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"arn:aws:ssm:us-west-2:637423444544:parameter/mymemo/agentcore-canary/prod/*",
 		],
 	},
-	PassAndInspectCanaryRolesOnly: {
-		actions: ["iam:PassRole", "iam:SimulatePrincipalPolicy"],
+	InspectCanaryRolesOnly: {
+		actions: ["iam:SimulatePrincipalPolicy"],
 		resourcePatterns: [
 			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-*",
 		],
+	},
+	PassConsumerRoleOnly: {
+		actions: ["iam:PassRole"],
+		resourcePatterns: [
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-consumer",
+		],
+		conditions: {
+			ArnEquals: {
+				"iam:AssociatedResourceArn": [
+					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer",
+				],
+			},
+			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
+		},
+	},
+	PassControlRoleOnly: {
+		actions: ["iam:PassRole"],
+		resourcePatterns: [
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-control",
+		],
+		conditions: {
+			ArnEquals: {
+				"iam:AssociatedResourceArn": [
+					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-control",
+				],
+			},
+			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
+		},
+	},
+	PassPreflightRoleOnly: {
+		actions: ["iam:PassRole"],
+		resourcePatterns: [
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-preflight",
+		],
+		conditions: {
+			ArnEquals: {
+				"iam:AssociatedResourceArn": [
+					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-preflight",
+				],
+			},
+			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
+		},
+	},
+	PassPublisherRoleOnly: {
+		actions: ["iam:PassRole"],
+		resourcePatterns: [
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-publisher",
+		],
+		conditions: {
+			ArnEquals: {
+				"iam:AssociatedResourceArn": [
+					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-publisher",
+				],
+			},
+			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
+		},
+	},
+	PassRuntimeRoleOnly: {
+		actions: ["iam:PassRole"],
+		resourcePatterns: [
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-runtime",
+		],
+		conditions: {
+			ArnLike: {
+				"iam:AssociatedResourceArn": [
+					"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*",
+				],
+			},
+			StringEquals: {
+				"iam:PassedToService": ["bedrock-agentcore.amazonaws.com"],
+			},
+		},
 	},
 	CreateTaggedCanaryNetworkAndKey: {
 		actions: [
@@ -298,14 +387,29 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"ec2:CreateRouteTable",
 			"ec2:CreateSecurityGroup",
 			"ec2:CreateSubnet",
-			"ec2:CreateTags",
 			"kms:CreateKey",
 		],
 		resourcePatterns: ["*"],
-		condition: {
-			operator: "StringEquals",
-			key: "aws:RequestTag/Application",
-			value: "mymemo-agentcore-canary",
+		conditions: {
+			StringEquals: {
+				"aws:RequestTag/Application": ["mymemo-agentcore-canary"],
+			},
+		},
+	},
+	TagCanaryNetworkOnCreate: {
+		actions: ["ec2:CreateTags"],
+		resourcePatterns: ["*"],
+		conditions: {
+			StringEquals: {
+				"aws:RequestTag/Application": ["mymemo-agentcore-canary"],
+				"ec2:CreateAction": [
+					"AllocateAddress",
+					"CreateNatGateway",
+					"CreateRouteTable",
+					"CreateSecurityGroup",
+					"CreateSubnet",
+				],
+			},
 		},
 	},
 	ManageTaggedCanaryNetworkAndKey: {
@@ -320,10 +424,10 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"kms:TagResource",
 		],
 		resourcePatterns: ["*"],
-		condition: {
-			operator: "StringEquals",
-			key: "aws:ResourceTag/Application",
-			value: "mymemo-agentcore-canary",
+		conditions: {
+			StringEquals: {
+				"aws:ResourceTag/Application": ["mymemo-agentcore-canary"],
+			},
 		},
 	},
 	ManageCanaryKeyAliasOnly: {
@@ -332,10 +436,10 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"arn:aws:kms:us-west-2:637423444544:alias/mymemo-agent-agentcore-canary-prod",
 			"arn:aws:kms:us-west-2:637423444544:key/*",
 		],
-		condition: {
-			operator: "StringEquals",
-			key: "kms:RequestAlias",
-			value: "alias/mymemo-agent-agentcore-canary-prod",
+		conditions: {
+			StringEquals: {
+				"kms:RequestAlias": ["alias/mymemo-agent-agentcore-canary-prod"],
+			},
 		},
 	},
 	InspectRequiredSecretMetadataOnly: {
@@ -419,23 +523,26 @@ function matchesResourcePatterns(
 	return unmatched.length === 0;
 }
 
-function approvedCondition(
+function approvedConditions(
 	value: unknown,
-	expected: PolicyRule["condition"],
+	expected: PolicyRule["conditions"],
 ): boolean {
 	if (!expected) return value === undefined;
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const condition = value as Record<string, unknown>;
-	if (!exactObjectKeys(condition, [expected.operator])) return false;
-	const operator = condition[expected.operator];
-	if (!operator || typeof operator !== "object" || Array.isArray(operator)) {
-		return false;
+	if (!exactObjectKeys(condition, Object.keys(expected))) return false;
+	for (const [operatorName, expectedEntries] of Object.entries(expected)) {
+		const operator = condition[operatorName];
+		if (!operator || typeof operator !== "object" || Array.isArray(operator)) {
+			return false;
+		}
+		const entries = operator as Record<string, unknown>;
+		if (!exactObjectKeys(entries, Object.keys(expectedEntries))) return false;
+		for (const [key, expectedValues] of Object.entries(expectedEntries)) {
+			if (!sameStrings(entries[key], expectedValues)) return false;
+		}
 	}
-	const entries = operator as Record<string, unknown>;
-	return (
-		exactObjectKeys(entries, [expected.key]) &&
-		oneString(entries[expected.key]) === expected.value
-	);
+	return true;
 }
 
 function parsePolicy(value: unknown): Record<string, unknown> | undefined {
@@ -474,7 +581,7 @@ function approvedDeploymentPolicy(value: unknown): boolean {
 		const sid = oneString(statement.Sid);
 		const rule = sid ? DEPLOYMENT_POLICY_RULES[sid] : undefined;
 		if (!sid || !rule || seen.has(sid)) return false;
-		const expectedKeys = rule.condition
+		const expectedKeys = rule.conditions
 			? ["Action", "Condition", "Effect", "Resource", "Sid"]
 			: ["Action", "Effect", "Resource", "Sid"];
 		if (
@@ -482,7 +589,7 @@ function approvedDeploymentPolicy(value: unknown): boolean {
 			statement.Effect !== "Allow" ||
 			!sameStrings(statement.Action, rule.actions) ||
 			!matchesResourcePatterns(statement.Resource, rule.resourcePatterns) ||
-			!approvedCondition(statement.Condition, rule.condition)
+			!approvedConditions(statement.Condition, rule.conditions)
 		) {
 			return false;
 		}

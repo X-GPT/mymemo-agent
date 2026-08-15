@@ -433,18 +433,24 @@ resource "aws_iam_role" "deployment" {
 
 data "aws_iam_policy_document" "deployment" {
   statement {
-    sid = "DedicatedTerraformState"
+    sid = "DedicatedTerraformStateBucket"
     actions = [
-      "s3:DeleteObject",
       "s3:GetBucketVersioning",
-      "s3:GetObject",
       "s3:ListBucket",
-      "s3:PutObject",
     ]
-    resources = [
-      "arn:aws:s3:::mymemo-terraform-state-bucket",
-      "arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/agentcore-canary-prod.tfstate*",
-    ]
+    resources = ["arn:aws:s3:::mymemo-terraform-state-bucket"]
+  }
+
+  statement {
+    sid       = "DedicatedTerraformState"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/agentcore-canary-prod.tfstate"]
+  }
+
+  statement {
+    sid       = "DedicatedTerraformLock"
+    actions   = ["s3:DeleteObject", "s3:GetObject", "s3:PutObject"]
+    resources = ["arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/agentcore-canary-prod.tfstate.tflock"]
   }
 
   statement {
@@ -554,21 +560,26 @@ data "aws_iam_policy_document" "deployment" {
   }
 
   statement {
-    sid = "ManageCanaryRepairRuleOnly"
-    actions = [
-      "events:DisableRule",
-      "events:EnableRule",
-      "events:PutRule",
-      "events:PutTargets",
-      "events:TagResource",
-    ]
+    sid       = "ManageCanaryRepairRuleOnly"
+    actions   = ["events:DisableRule"]
     resources = ["arn:aws:events:${var.aws_region}:${var.aws_account_id}:rule/${local.name_prefix}-repair"]
+  }
+
+  statement {
+    sid       = "ManageCanaryRepairTargetOnly"
+    actions   = ["events:PutTargets"]
+    resources = ["arn:aws:events:${var.aws_region}:${var.aws_account_id}:rule/${local.name_prefix}-repair"]
+
+    condition {
+      test     = "ForAnyValue:ArnEquals"
+      variable = "events:TargetArn"
+      values   = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:${local.name_prefix}-publisher"]
+    }
   }
 
   statement {
     sid = "ManageCanaryFunctionsOnly"
     actions = [
-      "lambda:AddPermission",
       "lambda:CreateFunction",
       "lambda:PutFunctionConcurrency",
       "lambda:TagResource",
@@ -576,6 +587,18 @@ data "aws_iam_policy_document" "deployment" {
       "lambda:UpdateFunctionConfiguration",
     ]
     resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:${local.name_prefix}-*"]
+  }
+
+  statement {
+    sid       = "ManageCanaryRepairPermissionOnly"
+    actions   = ["lambda:AddPermission"]
+    resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:${local.name_prefix}-publisher"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "lambda:Principal"
+      values   = ["events.amazonaws.com"]
+    }
   }
 
   statement {
@@ -613,12 +636,54 @@ data "aws_iam_policy_document" "deployment" {
   }
 
   statement {
-    sid = "PassAndInspectCanaryRolesOnly"
-    actions = [
-      "iam:PassRole",
-      "iam:SimulatePrincipalPolicy",
-    ]
+    sid       = "InspectCanaryRolesOnly"
+    actions   = ["iam:SimulatePrincipalPolicy"]
     resources = ["arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-*"]
+  }
+
+  dynamic "statement" {
+    for_each = {
+      consumer  = "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-consumer"
+      control   = "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-control"
+      preflight = "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-preflight"
+      publisher = "arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-publisher"
+    }
+
+    content {
+      sid       = "Pass${title(statement.key)}RoleOnly"
+      actions   = ["iam:PassRole"]
+      resources = [statement.value]
+
+      condition {
+        test     = "StringEquals"
+        variable = "iam:PassedToService"
+        values   = ["lambda.amazonaws.com"]
+      }
+
+      condition {
+        test     = "ArnEquals"
+        variable = "iam:AssociatedResourceArn"
+        values   = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:${local.name_prefix}-${statement.key}"]
+      }
+    }
+  }
+
+  statement {
+    sid       = "PassRuntimeRoleOnly"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-runtime"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["bedrock-agentcore.amazonaws.com"]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "iam:AssociatedResourceArn"
+      values   = ["arn:aws:bedrock-agentcore:${var.aws_region}:${var.aws_account_id}:runtime/mymemo_agentcore_canary_prod-*"]
+    }
   }
 
   statement {
@@ -629,7 +694,6 @@ data "aws_iam_policy_document" "deployment" {
       "ec2:CreateRouteTable",
       "ec2:CreateSecurityGroup",
       "ec2:CreateSubnet",
-      "ec2:CreateTags",
       "kms:CreateKey",
     ]
     resources = ["*"]
@@ -638,6 +702,30 @@ data "aws_iam_policy_document" "deployment" {
       test     = "StringEquals"
       variable = "aws:RequestTag/Application"
       values   = ["mymemo-agentcore-canary"]
+    }
+  }
+
+  statement {
+    sid       = "TagCanaryNetworkOnCreate"
+    actions   = ["ec2:CreateTags"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Application"
+      values   = ["mymemo-agentcore-canary"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values = [
+        "AllocateAddress",
+        "CreateNatGateway",
+        "CreateRouteTable",
+        "CreateSecurityGroup",
+        "CreateSubnet",
+      ]
     }
   }
 

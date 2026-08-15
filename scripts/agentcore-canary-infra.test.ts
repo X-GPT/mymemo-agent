@@ -198,6 +198,13 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/resource\s+"aws_iam_role_policy"\s+"campaign_launch"[\s\S]*?(rds:|secretsmanager:GetSecretValue)/,
 		);
 		expect(source).not.toContain("iam:UpdateAssumeRolePolicy");
+		expect(source).toMatch(
+			/sid\s*=\s*"DedicatedTerraformState"[\s\S]*?actions\s*=\s*\["s3:GetObject", "s3:PutObject"\][\s\S]*?agentcore-canary-prod\.tfstate"/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"DedicatedTerraformLock"[\s\S]*?"s3:DeleteObject"[\s\S]*?agentcore-canary-prod\.tfstate\.tflock"/,
+		);
+		expect(source).not.toContain("agentcore-canary-prod.tfstate*");
 		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(4);
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"states_trust"[\s\S]*?variable\s*=\s*"aws:SourceArn"[\s\S]*?stateMachine:\$\{local\.name_prefix\}-\*/,
@@ -219,6 +226,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(managedRoles).not.toContain("-campaign-launch");
 		expect(workflow).toContain("-target=aws_iam_role.campaign_launch");
 		expect(workflow).toContain("-target=aws_iam_role_policy.campaign_launch");
+		expect(workflow).toContain("-target=aws_cloudwatch_event_rule.repair");
+		expect(workflow).toMatch(
+			/previous_runtime_image_digest[\s\S]*?sha256:0{64}[\s\S]*?previous_runtime_image_digest=""/,
+		);
 		expect(workflow).toContain(
 			"verify_github_canary_environment.sh production-agentcore-canary production-agentcore-canary-campaign",
 		);
@@ -259,6 +270,18 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_event_source_mapping"\s+"consumer"[\s\S]*?precondition[\s\S]*?!var\.dispatch_enabled\s*\|\|\s*var\.campaign_network_enabled/,
 		);
+		expect(source).toMatch(
+			/sid\s*=\s*"TagCanaryNetworkOnCreate"[\s\S]*?variable\s*=\s*"ec2:CreateAction"/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"ManageCanaryRepairTargetOnly"[\s\S]*?variable\s*=\s*"events:TargetArn"[\s\S]*?-publisher/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"ManageCanaryRepairPermissionOnly"[\s\S]*?variable\s*=\s*"lambda:Principal"[\s\S]*?events\.amazonaws\.com/,
+		);
+		expect(source).toContain('variable = "iam:AssociatedResourceArn"');
+		expect(source).not.toContain('"events:EnableRule"');
+		expect(source).not.toContain('"events:PutRule"');
 	});
 
 	it("keeps the publisher cold-start contract free of consumer-only Runtime authority", () => {
@@ -386,6 +409,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(inspection).toContain(
 			'(.Attributes.FifoQueue // "false") == "false"',
 		);
+		expect(
+			inspection.match(/ApproximateNumberOfMessagesDelayed/g),
+		).toHaveLength(2);
 		expect(inspection).not.toContain("!= *.fifo");
 		expect(inspection).toContain("describe-nat-gateways");
 		expect(inspection).toContain("describe-addresses");
@@ -411,6 +437,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(preflight).toContain("describe-images");
 		expect(preflight).toContain("StopRuntimeSession");
 		expect(preflight).toContain("describe-alarms");
+		expect(preflight).toContain("ApproximateNumberOfMessagesDelayed");
 		expect(preflight).not.toContain("invoke-agent-runtime");
 		expect(preflight).not.toContain("/runs");
 		expect(readFileSync(join(terraformDir, "README.md"), "utf8")).toContain(

@@ -14,10 +14,12 @@ referenced by `agentcore-canary-deploy.yml`. Deployment and campaign-launch
 OIDC subjects are bound to the two non-overlapping Environments so one approval
 cannot combine code-update and control-invocation authority. The one-time
 bootstrap option verifies both Environments, then creates only the immutable
-ECR repository plus the two Environment-assumable canary roles through the
-existing repository deployment role. Those two roles cannot be mutated by the
-narrower deployment role; rerun the approved bootstrap whenever their inline
-policies intentionally change.
+ECR repository, the two Environment-assumable canary roles, and the disabled
+repair-rule shell through the existing repository deployment role. The
+narrower deployment role cannot mutate those roles or enable/redefine the
+repair schedule; it may attach only the publisher target and publisher-only
+EventBridge permission. Rerun the approved bootstrap whenever those
+bootstrap-owned contracts intentionally change.
 
 Run **Deploy dormant AgentCore canary** manually and enter
 `deploy-mymemo-agentcore-canary-prod`. Leaving `runtime_image_digest` empty
