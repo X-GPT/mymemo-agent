@@ -111,6 +111,37 @@ interface PolicyRule {
 	conditions?: Record<string, Record<string, string[]>>;
 }
 
+const LAMBDA_PASS_ROLE_SUFFIXES = {
+	PassConsumerRoleOnly: "consumer",
+	PassControlRoleOnly: "control",
+	PassPreflightRoleOnly: "preflight",
+	PassPublisherRoleOnly: "publisher",
+} as const;
+
+function lambdaPassRoleRule(suffix: string): PolicyRule {
+	return {
+		actions: ["iam:PassRole"],
+		resourcePatterns: [
+			`arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-${suffix}`,
+		],
+		conditions: {
+			ArnEquals: {
+				"iam:AssociatedResourceArn": [
+					`arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-${suffix}`,
+				],
+			},
+			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
+		},
+	};
+}
+
+const LAMBDA_PASS_ROLE_RULES = Object.fromEntries(
+	Object.entries(LAMBDA_PASS_ROLE_SUFFIXES).map(([sid, suffix]) => [
+		sid,
+		lambdaPassRoleRule(suffix),
+	]),
+) as Record<string, PolicyRule>;
+
 const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 	DedicatedTerraformStateBucket: {
 		actions: ["s3:GetBucketVersioning", "s3:ListBucket"],
@@ -308,62 +339,7 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-*",
 		],
 	},
-	PassConsumerRoleOnly: {
-		actions: ["iam:PassRole"],
-		resourcePatterns: [
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-consumer",
-		],
-		conditions: {
-			ArnEquals: {
-				"iam:AssociatedResourceArn": [
-					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer",
-				],
-			},
-			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
-		},
-	},
-	PassControlRoleOnly: {
-		actions: ["iam:PassRole"],
-		resourcePatterns: [
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-control",
-		],
-		conditions: {
-			ArnEquals: {
-				"iam:AssociatedResourceArn": [
-					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-control",
-				],
-			},
-			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
-		},
-	},
-	PassPreflightRoleOnly: {
-		actions: ["iam:PassRole"],
-		resourcePatterns: [
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-preflight",
-		],
-		conditions: {
-			ArnEquals: {
-				"iam:AssociatedResourceArn": [
-					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-preflight",
-				],
-			},
-			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
-		},
-	},
-	PassPublisherRoleOnly: {
-		actions: ["iam:PassRole"],
-		resourcePatterns: [
-			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-publisher",
-		],
-		conditions: {
-			ArnEquals: {
-				"iam:AssociatedResourceArn": [
-					"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-publisher",
-				],
-			},
-			StringEquals: { "iam:PassedToService": ["lambda.amazonaws.com"] },
-		},
-	},
+	...LAMBDA_PASS_ROLE_RULES,
 	PassRuntimeRoleOnly: {
 		actions: ["iam:PassRole"],
 		resourcePatterns: [

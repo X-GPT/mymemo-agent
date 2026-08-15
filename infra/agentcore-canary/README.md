@@ -13,20 +13,26 @@ reviewer. Configure the deployment Environment's non-secret variables
 referenced by `agentcore-canary-deploy.yml`. Deployment and campaign-launch
 OIDC subjects are bound to the two non-overlapping Environments so one approval
 cannot combine code-update and control-invocation authority. The one-time
-bootstrap option passes the `production-agentcore-canary` Environment approval,
-verifies both Environments, then uses a dedicated Environment-trusted bootstrap
-role to create only the immutable ECR repository, the two Environment-assumable
-canary roles, and the disabled repair-rule shell. The
+operator bootstrap script uses the mandatory `mymemo` profile and the same
+AWS-6.x canary root, locked state, and fail-closed plan classifier to create only
+the immutable ECR repository, the two Environment-assumable canary roles, and
+the disabled repair-rule shell. It creates no reusable bootstrap principal. The
 narrower deployment role cannot mutate those roles or enable/redefine the
 repair schedule; it may attach only the publisher target and publisher-only
-EventBridge permission. Rerun the approved bootstrap whenever those
-bootstrap-owned contracts intentionally change.
+EventBridge permission. Rerun the separately controlled operator bootstrap
+whenever those bootstrap-owned contracts intentionally change.
 
-Before the first canary bootstrap, apply `infra/bootstrap-iam` once through its
-documented administrator path to create the dedicated least-privilege bootstrap
-role. Its trust is bound to `production-agentcore-canary`; its policy cannot
-delete bootstrap-owned resources or mutate EventBridge targets, and the
-classified bootstrap plan pins the repair-rule shell to its disabled state.
+Before the first workflow deployment, run this separately controlled one-time
+operator command from the reviewed `main` revision:
+
+```bash
+scripts/deploy/bootstrap_agentcore_canary.sh bootstrap-mymemo-agentcore-canary-prod
+```
+
+It reads the protected Environment's non-secret Terraform inputs through `gh`,
+verifies account `637423444544`, builds the Lambda packages, and applies only
+the classified bootstrap targets into the dedicated canary state. The GitHub
+workflow has no bootstrap path and cannot acquire this authority.
 
 Run **Deploy dormant AgentCore canary** manually and enter
 `deploy-mymemo-agentcore-canary-prod`. Leaving `runtime_image_digest` empty

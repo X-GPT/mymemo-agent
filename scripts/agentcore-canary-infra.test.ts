@@ -164,9 +164,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
 			"utf8",
 		);
-		const bootstrap = workflow.match(
-			/\n {2}bootstrap:([\s\S]*?)\n {2}deploy:/,
-		)?.[1];
+		const bootstrapScript = readFileSync(
+			join(root, "scripts", "deploy", "bootstrap_agentcore_canary.sh"),
+			"utf8",
+		);
 
 		for (const role of [
 			"deployment",
@@ -230,9 +231,22 @@ describe("dormant AgentCore canary infrastructure", () => {
 		)?.[1];
 		expect(managedRoles).not.toContain("-deployment");
 		expect(managedRoles).not.toContain("-campaign-launch");
-		expect(workflow).toContain("-target=aws_iam_role.campaign_launch");
-		expect(workflow).toContain("-target=aws_iam_role_policy.campaign_launch");
-		expect(workflow).toContain("-target=aws_cloudwatch_event_rule.repair");
+		expect(bootstrapScript).toContain("-target=aws_iam_role.campaign_launch");
+		expect(bootstrapScript).toContain(
+			"-target=aws_iam_role_policy.campaign_launch",
+		);
+		expect(bootstrapScript).toContain(
+			"-target=aws_cloudwatch_event_rule.repair",
+		);
+		expect(bootstrapScript).toContain(
+			"classify_agentcore_canary_plan.sh agentcore-canary-bootstrap.tfplan",
+		);
+		expect(bootstrapScript).toContain(
+			"terraform -chdir=infra/agentcore-canary apply",
+		);
+		expect(bootstrapScript).toContain('aws_profile="mymemo"');
+		expect(bootstrapScript).not.toContain("AWS_PROFILE:-");
+		expect(bootstrapScript).toContain("git rev-parse origin/main");
 		expect(workflow).toMatch(
 			/previous_runtime_image_digest[\s\S]*?sha256:0{64}[\s\S]*?previous_runtime_image_digest=""/,
 		);
@@ -243,25 +257,15 @@ describe("dormant AgentCore canary infrastructure", () => {
 			workflow.match(
 				/verify_github_canary_environment\.sh production-agentcore-canary production-agentcore-canary-campaign/g,
 			),
-		).toHaveLength(2);
-		expect(bootstrap).toContain("environment: production-agentcore-canary");
-		expect(bootstrap).toContain("role/mymemo-agent-agentcore-canary-bootstrap");
-		expect(bootstrap).not.toContain("role/mymemo-agent-github-actions-deploy");
+		).toHaveLength(1);
+		expect(workflow).not.toContain("bootstrap_canary_authority");
+		expect(workflow).not.toContain("agentcore-canary-bootstrap");
 		const bootstrapIam = readFileSync(
 			join(root, "infra", "bootstrap-iam", "main.tf"),
 			"utf8",
 		);
-		expect(bootstrapIam).toMatch(
-			/data\s+"aws_iam_policy_document"\s+"agentcore_canary_bootstrap_trust"[\s\S]*?environment:production-agentcore-canary/,
-		);
-		expect(bootstrapIam).toMatch(
-			/resource\s+"aws_iam_role"\s+"agentcore_canary_bootstrap"[\s\S]*?name\s*=\s*"mymemo-agent-agentcore-canary-bootstrap"/,
-		);
-		expect(bootstrapIam).toMatch(
-			/sid\s*=\s*"BootstrapDisabledRepairRule"[\s\S]*?"events:PutRule"[\s\S]*?rule\/mymemo-agent-agentcore-canary-prod-repair/,
-		);
-		expect(bootstrapIam).not.toContain('"events:DeleteRule"');
-		expect(bootstrapIam).not.toContain('"events:PutTargets"');
+		expect(bootstrapIam).not.toContain("agentcore_canary_bootstrap");
+		expect(bootstrapIam).not.toContain("agentcore-canary-bootstrap");
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_function"\s+"preflight"[\s\S]*?role\s*=\s*aws_iam_role\.preflight\.arn/,
 		);
@@ -388,6 +392,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 			join(root, "scripts", "deploy", "inspect_agentcore_canary_dormant.sh"),
 			"utf8",
 		);
+		const sharedChecks = readFileSync(
+			join(root, "scripts", "deploy", "agentcore_canary_aws_checks.sh"),
+			"utf8",
+		);
 
 		expect(workflow).toContain("workflow_dispatch:");
 		expect(workflow).not.toMatch(/\n\s+(push|workflow_run):/);
@@ -395,10 +403,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(workflow).toContain("deploy-mymemo-agentcore-canary-prod");
 		expect(
 			workflow.match(/name: Confirm manual production intent/g),
-		).toHaveLength(2);
+		).toHaveLength(1);
 		expect(
 			workflow.match(/verify_github_canary_environment\.sh/g),
-		).toHaveLength(2);
+		).toHaveLength(1);
 		expect(workflow).toContain("RDS_CA_BUNDLE_SHA256:");
 		expect(
 			workflow.match(
@@ -430,11 +438,20 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"ActiveSessionCount",
 			"campaign_nat_gateway_ids",
 			"campaign_eip_allocation_ids",
-			"describe-alarms",
-			"list-secret-version-ids",
 		]) {
 			expect(inspection).toContain(requiredCheck);
 		}
+		expect(inspection).toMatch(
+			/verify_agentcore_canary_current_secrets "\$\{region\}" "\$\{tf_output\}"/,
+		);
+		expect(inspection).toMatch(
+			/verify_agentcore_canary_alarms "\$\{region\}" "\$\{tf_output\}"/,
+		);
+		expect(sharedChecks).toContain("list-secret-version-ids");
+		expect(sharedChecks).toContain("describe-alarms");
+		expect(sharedChecks).toContain("--profile mymemo");
+		expect(inspection).toContain('aws_profile="mymemo"');
+		expect(inspection).not.toContain("AWS_PROFILE:-");
 		expect(inspection).toContain(
 			'(.Attributes.FifoQueue // "false") == "false"',
 		);
@@ -456,6 +473,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 			join(root, "scripts", "deploy", "preflight_agentcore_canary.sh"),
 			"utf8",
 		);
+		const sharedChecks = readFileSync(
+			join(root, "scripts", "deploy", "agentcore_canary_aws_checks.sh"),
+			"utf8",
+		);
 
 		expect(terraformSource()).toContain(
 			'resource "aws_lambda_function" "preflight"',
@@ -465,8 +486,12 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(preflight).toContain("runAdmitted == false");
 		expect(preflight).toContain("describe-images");
 		expect(preflight).toContain("StopRuntimeSession");
-		expect(preflight).toContain("describe-alarms");
+		expect(preflight).toContain("verify_agentcore_canary_alarms");
+		expect(preflight).toContain("verify_agentcore_canary_current_secrets");
+		expect(sharedChecks).toContain("describe-alarms");
 		expect(preflight).toContain("ApproximateNumberOfMessagesDelayed");
+		expect(preflight).toContain('aws_profile="mymemo"');
+		expect(preflight).not.toContain("AWS_PROFILE:-");
 		expect(preflight).not.toContain("invoke-agent-runtime");
 		expect(preflight).not.toContain("/runs");
 		expect(readFileSync(join(terraformDir, "README.md"), "utf8")).toContain(

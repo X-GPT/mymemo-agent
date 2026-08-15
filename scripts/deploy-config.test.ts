@@ -709,9 +709,6 @@ describe("agent deployment config", () => {
 		const combined = terraformFiles(bootstrapIamTerraformDir)
 			.map((path) => readFileSync(path, "utf8"))
 			.join("\n");
-		const releaseTrust = combined.match(
-			/data "aws_iam_policy_document" "github_actions_assume_role"([\s\S]*?)resource "aws_iam_role" "github_actions_deploy"/,
-		)?.[1];
 
 		expect(combined).toContain(
 			'default     = "mymemo-agent-github-actions-deploy"',
@@ -731,9 +728,8 @@ describe("agent deployment config", () => {
 		expect(combined).toContain(
 			"repo:${var.github_owner}/${var.github_repository}:ref:${var.github_deploy_ref}",
 		);
-		expect(releaseTrust).toContain("values   = [local.github_ref_sub]");
 		expect(combined).toContain('default     = "refs/heads/main"');
-		expect(releaseTrust).not.toContain(":environment:");
+		expect(combined).not.toContain(":environment:");
 		expect(combined).toContain("sts:AssumeRoleWithWebIdentity");
 		expect(combined).toContain("mymemo-agent/bootstrap-iam-prod.tfstate");
 		expect(combined).not.toContain("mymemo-github-actions-deploy");

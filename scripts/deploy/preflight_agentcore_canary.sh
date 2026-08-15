@@ -3,8 +3,9 @@ set -euo pipefail
 
 terraform_dir="infra/agentcore-canary"
 region="${AWS_REGION:?AWS_REGION is required}"
-aws_profile="${AWS_PROFILE:-mymemo}"
+aws_profile="mymemo"
 rollback_digest="${ROLLBACK_RUNTIME_IMAGE_DIGEST:?ROLLBACK_RUNTIME_IMAGE_DIGEST is required}"
+source "scripts/deploy/agentcore_canary_aws_checks.sh"
 
 tf_output="$(terraform -chdir="${terraform_dir}" output -json)"
 runtime_arn="$(jq -r '.agent_runtime_arn.value' <<<"${tf_output}")"
@@ -29,13 +30,8 @@ for queue in "${queue_url}" "${dlq_url}"; do
   jq -e '.Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and .Attributes.ApproximateNumberOfMessagesDelayed == "0"' <<<"${attributes}" >/dev/null
 done
 
-for secret_arn in $(jq -r '.runtime_secret_arns.value[]' <<<"${tf_output}"); do
-  aws --profile "${aws_profile}" secretsmanager list-secret-version-ids --region "${region}" --secret-id "${secret_arn}" --query 'Versions[?contains(VersionStages, `AWSCURRENT`)].VersionId' --output text | grep -q .
-done
-
-alarm_names="$(jq -r '.alarm_names.value | join(" ")' <<<"${tf_output}")"
-alarm_count="$(aws --profile "${aws_profile}" cloudwatch describe-alarms --region "${region}" --alarm-names ${alarm_names} --query 'MetricAlarms | length(@)' --output text)"
-[[ "${alarm_count}" == "$(jq '.alarm_names.value | length' <<<"${tf_output}")" ]]
+verify_agentcore_canary_current_secrets "${region}" "${tf_output}"
+verify_agentcore_canary_alarms "${region}" "${tf_output}"
 
 aws --profile "${aws_profile}" ecr describe-images --region "${region}" --repository-name mymemo/agentcore-canary-runtime --image-ids imageDigest="${rollback_digest}" --query 'imageDetails[0].imageDigest' --output text | grep -Fxq "${rollback_digest}"
 
