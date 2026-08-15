@@ -54,7 +54,6 @@ jobs:
       - name: Verify backendless provider initialization and lock file
         run: terraform -chdir=infra/agentcore-canary init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra/agentcore-canary validate
-      - run: terraform -chdir=infra/agentcore-canary providers
 
   # The agent-worker image build lives in worker-image.yml, path-filtered.
 
