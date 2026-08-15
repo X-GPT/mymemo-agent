@@ -52,6 +52,15 @@ describe("AgentCore Runtime configuration", () => {
 		}
 	});
 
+	it("rejects secret ARNs outside the commercial AWS partition", () => {
+		const env = bootstrapEnv();
+		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN =
+			"arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:agent-db-AbCdEf";
+		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
+			"CANARY_AGENT_DATABASE_URL_SECRET_ARN must be an exact Secrets Manager ARN",
+		);
+	});
+
 	it("reads current secret values into memory and requires verified database TLS", async () => {
 		const bootstrap = loadRuntimeBootstrapConfig(bootstrapEnv());
 		const values = new Map([

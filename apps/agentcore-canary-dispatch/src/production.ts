@@ -25,6 +25,7 @@ import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
 	exactSecretArn,
+	requireEnv,
 	verifiedDatabaseUrl,
 } from "./secret-config";
 
@@ -39,12 +40,6 @@ export interface CanaryDispatchPublisherConfig {
 
 export interface CanaryDispatchConfig extends CanaryDispatchPublisherConfig {
 	agentRuntimeArn: string;
-}
-
-function requireEnv(env: Env, name: string): string {
-	const value = env[name];
-	if (!value || value.trim() === "") throw new Error(`${name} is required`);
-	return value;
 }
 
 export function loadCanaryDispatchPublisherConfigFromEnv(
@@ -172,22 +167,16 @@ export function createCanaryDispatchProductionServices(
 	};
 }
 
-let productionServices:
-	| ReturnType<typeof createCanaryDispatchProductionServices>
-	| undefined;
-
 let productionServicesPromise:
 	| Promise<ReturnType<typeof createCanaryDispatchProductionServices>>
 	| undefined;
 
 async function services() {
-	if (productionServices) return productionServices;
 	productionServicesPromise ??= resolveCanaryDispatchConfigFromSecretArns(
 		process.env,
 		createAwsCurrentSecretReader(requireEnv(process.env, "AWS_REGION")),
 	).then((config) => createCanaryDispatchProductionServices(config));
-	productionServices = await productionServicesPromise;
-	return productionServices;
+	return await productionServicesPromise;
 }
 
 export async function publisherHandler(event: unknown, context: LambdaContext) {

@@ -51,7 +51,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 			expect(source).not.toMatch(new RegExp(`resource\\s+"${forbiddenType}"`));
 		}
 		expect(source).toContain('data "terraform_remote_state" "mymemo_agent"');
-		expect(source).toContain('data "terraform_remote_state" "mymemo_service"');
+		expect(source).not.toContain(
+			'data "terraform_remote_state" "mymemo_service"',
+		);
 	});
 
 	it("pins the encrypted standard queue, DLQ, consumer, and repair schedule contract", () => {
@@ -91,6 +93,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(/network_mode\s*=\s*"VPC"/);
 		expect(source).toMatch(/server_protocol\s*=\s*"HTTP"/);
 		expect(source).toMatch(/max_lifetime\s*=\s*3600/);
+		expect(source).not.toMatch(/\ncheck\s+"/);
+		expect(source).toMatch(
+			/resource\s+"aws_bedrockagentcore_agent_runtime"\s+"canary"[\s\S]*?precondition[\s\S]*?local\.exact_secret_arn_pattern/,
+		);
 		for (const name of [
 			"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
 			"CANARY_KB_DATABASE_URL_SECRET_ARN",
@@ -162,6 +168,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).not.toMatch(
 			/resource\s+"aws_iam_role_policy"\s+"campaign_launch"[\s\S]*?(rds:|secretsmanager:GetSecretValue)/,
 		);
+		expect(source).not.toContain("iam:UpdateAssumeRolePolicy");
+		expect(source).toMatch(
+			/resource\s+"aws_lambda_event_source_mapping"\s+"consumer"[\s\S]*?precondition[\s\S]*?!var\.dispatch_enabled\s*\|\|\s*var\.campaign_network_enabled/,
+		);
 	});
 
 	it("creates low-cardinality paging and validation alarms", () => {
@@ -173,15 +183,20 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"Errors",
 			"Throttles",
 			"ActiveSessionCount",
+		]) {
+			expect(alarms).toContain(`metric_name         = "${metric}"`);
+		}
+		for (const metric of [
 			"PoisonDispatch",
 			"CrossLaneExecution",
 			"CleanupResidue",
 			"CampaignDeadlineBreach",
 			"NatExpiryBreach",
 		]) {
-			expect(alarms).toContain(`metric_name`);
-			expect(alarms).toContain(metric);
+			expect(alarms).toContain(`"${metric}"`);
 		}
+		expect(alarms).toContain("metric_name         = each.value");
+		expect(alarms).toContain("account-level AgentCore Runtime session");
 		for (const forbiddenDimension of [
 			"CampaignId",
 			"ConversationId",
@@ -225,7 +240,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(workflow).toContain("classify_agentcore_canary_plan.sh");
 		expect(workflow).toContain("requireMMDSV2");
 		expect(workflow).toContain("inspect_agentcore_canary_dormant.sh");
-		expect(workflow).toContain("agent_runtime_version");
+		expect(workflow).toContain("record the live version");
+		expect(workflow).not.toContain(
+			"terraform -chdir=infra/agentcore-canary output -raw agent_runtime_version",
+		);
 
 		for (const requiredCheck of [
 			"get-queue-attributes",
@@ -245,6 +263,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 		}
 		expect(inspection).toContain("describe-nat-gateways");
 		expect(inspection).toContain("describe-addresses");
+		expect(inspection).toContain(
+			'activeRuntimeSessionsScope:"account-region-service"',
+		);
 		expect(inspection).not.toContain("invoke-function");
 		expect(inspection).not.toContain("invoke-agent-runtime");
 	});
@@ -266,5 +287,33 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(preflight).toContain("describe-alarms");
 		expect(preflight).not.toContain("invoke-agent-runtime");
 		expect(preflight).not.toContain("/runs");
+	});
+
+	it("packages the pinned RDS trust bundle for every database Lambda", () => {
+		const source = terraformSource();
+		const build = readFileSync(
+			join(root, "scripts", "deploy", "build_agentcore_canary_lambdas.sh"),
+			"utf8",
+		);
+
+		expect(source).toMatch(
+			/RDS_CA_BUNDLE_PATH\s*=\s*"\/var\/task\/rds-global-bundle\.pem"/,
+		);
+		expect(source).toMatch(
+			/NODE_EXTRA_CA_CERTS\s*=\s*"\/var\/task\/rds-global-bundle\.pem"/,
+		);
+		expect(build).toMatch(
+			/cp "\$\{ca_bundle\}" "\$\{build_dir\}\/dispatch\/rds-global-bundle\.pem"/,
+		);
+		expect(build).toMatch(
+			/cp "\$\{ca_bundle\}" "\$\{build_dir\}\/control\/rds-global-bundle\.pem"/,
+		);
+	});
+
+	it("leaves canary enablement under explicit operator control", () => {
+		const queue = readFileSync(join(terraformDir, "queue.tf"), "utf8");
+		expect(queue).toMatch(
+			/resource\s+"aws_ssm_parameter"\s+"enabled"[\s\S]*?ignore_changes\s*=\s*\[value\]/,
+		);
 	});
 });

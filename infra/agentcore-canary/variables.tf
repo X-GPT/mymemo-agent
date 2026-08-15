@@ -160,6 +160,7 @@ variable "github_repository" {
 }
 
 locals {
+  exact_secret_arn_pattern = "^arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:[A-Za-z0-9/_+=.@-]+$"
   exact_secret_arns = [
     var.agent_database_url_secret_arn,
     var.kb_database_url_secret_arn,
@@ -167,25 +168,6 @@ locals {
     var.e2b_api_key_secret_arn,
     var.redis_url_secret_arn,
   ]
-}
-
-check "exact_secret_arns" {
-  assert {
-    condition = alltrue([
-      for arn in local.exact_secret_arns : can(regex(
-        "^arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$",
-        arn,
-      ))
-    ])
-    error_message = "Every runtime secret input must be an exact Secrets Manager ARN without wildcard or JSON-key suffix."
-  }
-}
-
-check "dormant_dispatch_requires_no_campaign_network" {
-  assert {
-    condition     = !var.dispatch_enabled || var.campaign_network_enabled
-    error_message = "Dispatch cannot be enabled without the campaign-scoped network."
-  }
 }
 
 variable "tags" {

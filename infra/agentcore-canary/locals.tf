@@ -42,5 +42,7 @@ locals {
     CANARY_ENABLED_PARAMETER_NAME        = aws_ssm_parameter.enabled.name
     CANARY_AGENT_DATABASE_URL_SECRET_ARN = var.agent_database_url_secret_arn
     CANARY_DISPATCH_QUEUE_URL            = aws_sqs_queue.dispatch.url
+    RDS_CA_BUNDLE_PATH                   = "/var/task/rds-global-bundle.pem"
+    NODE_EXTRA_CA_CERTS                  = "/var/task/rds-global-bundle.pem"
   }
 }

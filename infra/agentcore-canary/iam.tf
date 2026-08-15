@@ -580,7 +580,6 @@ data "aws_iam_policy_document" "deployment" {
       "iam:DeleteRolePolicy",
       "iam:PutRolePolicy",
       "iam:TagRole",
-      "iam:UpdateAssumeRolePolicy",
     ]
     resources = ["arn:aws:iam::${var.aws_account_id}:role/${local.name_prefix}-*"]
   }

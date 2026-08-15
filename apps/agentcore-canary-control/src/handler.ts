@@ -3,8 +3,8 @@ import { createCanaryDispatchProductionPublisher } from "agentcore-canary-dispat
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
-	exactSecretArn,
-	verifiedDatabaseUrl,
+	requireEnv,
+	resolveCanaryDatabaseUrlsFromSecretArns,
 } from "agentcore-canary-dispatch/secret-config";
 import { z } from "zod";
 import {
@@ -21,12 +21,6 @@ export interface CanaryControlHandlerConfig {
 	kbDatabaseUrl: string;
 	approvedSyntheticUserId: string;
 	control: CanaryControlConfig;
-}
-
-function requireEnv(env: Env, name: string): string {
-	const value = env[name];
-	if (!value || value.trim() === "") throw new Error(`${name} is required`);
-	return value;
 }
 
 const nonEmptyString = z.string().trim().min(1);
@@ -90,25 +84,12 @@ export async function resolveCanaryControlHandlerConfigFromSecretArns(
 	env: Env,
 	readCurrentSecret: CurrentSecretReader,
 ): Promise<CanaryControlHandlerConfig> {
-	const agentDatabaseSecretArn = exactSecretArn(
-		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN,
-		"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
-	);
-	const kbDatabaseSecretArn = exactSecretArn(
-		env.CANARY_KB_DATABASE_URL_SECRET_ARN,
-		"CANARY_KB_DATABASE_URL_SECRET_ARN",
-	);
-	const [agentDatabaseUrl, kbDatabaseUrl] = await Promise.all([
-		readCurrentSecret(agentDatabaseSecretArn),
-		readCurrentSecret(kbDatabaseSecretArn),
-	]);
+	const { agentDatabaseUrl, kbDatabaseUrl } =
+		await resolveCanaryDatabaseUrlsFromSecretArns(env, readCurrentSecret);
 	return loadCanaryControlHandlerConfigFromEnv({
 		...env,
-		AGENT_DATABASE_URL: verifiedDatabaseUrl(
-			agentDatabaseUrl,
-			"AGENT_DATABASE_URL",
-		),
-		KB_DATABASE_URL: verifiedDatabaseUrl(kbDatabaseUrl, "KB_DATABASE_URL"),
+		AGENT_DATABASE_URL: agentDatabaseUrl,
+		KB_DATABASE_URL: kbDatabaseUrl,
 	});
 }
 
@@ -153,10 +134,6 @@ async function createProductionHandler(env: Env) {
 	);
 }
 
-let productionHandler:
-	| Awaited<ReturnType<typeof createProductionHandler>>
-	| undefined;
-
 let productionHandlerPromise:
 	| ReturnType<typeof createProductionHandler>
 	| undefined;
@@ -164,6 +141,5 @@ let productionHandlerPromise:
 /** Operator-only Lambda entrypoint; it is not mounted on chat-api. */
 export async function handler(event: unknown) {
 	productionHandlerPromise ??= createProductionHandler(process.env);
-	productionHandler ??= await productionHandlerPromise;
-	return await productionHandler(event);
+	return await (await productionHandlerPromise)(event);
 }

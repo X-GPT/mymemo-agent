@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
-	exactSecretArn,
-	verifiedDatabaseUrl,
+	requireEnv,
+	resolveCanaryDatabaseUrlsFromSecretArns,
 } from "agentcore-canary-dispatch/secret-config";
 import { Client, type ClientConfig } from "pg";
 
@@ -13,12 +13,6 @@ interface PreflightDependencies {
 	readCurrentSecret: CurrentSecretReader;
 	readCaBundle(path: string): Promise<string>;
 	connect(name: string, url: string, ca: string): Promise<void>;
-}
-
-function requireEnv(env: Env, name: string): string {
-	const value = env[name];
-	if (!value || value.trim() === "") throw new Error(`${name} is required`);
-	return value;
 }
 
 async function connectWithVerifiedTls(
@@ -63,26 +57,17 @@ export async function runCanaryNetworkPreflight(
 	env: Env,
 	dependencies: PreflightDependencies,
 ) {
-	const agentArn = exactSecretArn(
-		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN,
-		"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
-	);
-	const kbArn = exactSecretArn(
-		env.CANARY_KB_DATABASE_URL_SECRET_ARN,
-		"CANARY_KB_DATABASE_URL_SECRET_ARN",
-	);
 	const caPath = requireEnv(env, "RDS_CA_BUNDLE_PATH");
-	const [rawAgentUrl, rawKbUrl] = await Promise.all([
-		dependencies.readCurrentSecret(agentArn),
-		dependencies.readCurrentSecret(kbArn),
-	]);
-	const agentUrl = verifiedDatabaseUrl(rawAgentUrl, "AGENT_DATABASE_URL");
-	const kbUrl = verifiedDatabaseUrl(rawKbUrl, "KB_DATABASE_URL");
+	const { agentDatabaseUrl, kbDatabaseUrl } =
+		await resolveCanaryDatabaseUrlsFromSecretArns(
+			env,
+			dependencies.readCurrentSecret,
+		);
 	const ca = await dependencies.readCaBundle(caPath);
 
 	await Promise.all([
-		dependencies.connect("agentDatabase", agentUrl, ca),
-		dependencies.connect("kbDatabase", kbUrl, ca),
+		dependencies.connect("agentDatabase", agentDatabaseUrl, ca),
+		dependencies.connect("kbDatabase", kbDatabaseUrl, ca),
 	]);
 
 	return {

@@ -177,11 +177,17 @@ jobs:
           scripts/deploy/classify_agentcore_canary_plan.sh agentcore-canary.tfplan
       - name: Apply dormant canary infrastructure
         run: terraform -chdir=infra/agentcore-canary apply -auto-approve agentcore-canary.tfplan
-      - name: Require MMDSv2 and wait for the resolved Runtime and DEFAULT endpoint
+      - name: Enforce MMDSv2 once and verify the resolved Runtime and DEFAULT endpoint
         run: |
           runtime_id="$(terraform -chdir=infra/agentcore-canary output -raw agent_runtime_id)"
-          aws --profile mymemo bedrock-agentcore-control get-agent-runtime --region "${AWS_REGION}" --agent-runtime-id "${runtime_id}" | jq '{agentRuntimeId, agentRuntimeArtifact, roleArn, networkConfiguration, description, protocolConfiguration, lifecycleConfiguration, environmentVariables, metadataConfiguration:{requireMMDSV2:true}} | with_entries(select(.value != null))' > mmdsv2-update.json
-          aws --profile mymemo bedrock-agentcore-control update-agent-runtime --region "${AWS_REGION}" --cli-input-json file://mmdsv2-update.json
+          runtime="$(aws --profile mymemo bedrock-agentcore-control get-agent-runtime --region "${AWS_REGION}" --agent-runtime-id "${runtime_id}")"
+          # hashicorp/aws 6.x does not expose metadataConfiguration on the native
+          # Runtime resource. Patch only when needed so repeat deploys do not mint
+          # an unclassified version, then record the live version below.
+          if ! jq -e '.metadataConfiguration.requireMMDSV2 == true' <<<"${runtime}" >/dev/null; then
+            jq '{agentRuntimeId, agentRuntimeArtifact, roleArn, networkConfiguration, description, protocolConfiguration, lifecycleConfiguration, environmentVariables, metadataConfiguration:{requireMMDSV2:true}} | with_entries(select(.value != null))' <<<"${runtime}" > mmdsv2-update.json
+            aws --profile mymemo bedrock-agentcore-control update-agent-runtime --region "${AWS_REGION}" --cli-input-json file://mmdsv2-update.json
+          fi
           for attempt in $(seq 1 60); do
             status="$(aws --profile mymemo bedrock-agentcore-control get-agent-runtime --region "${AWS_REGION}" --agent-runtime-id "${runtime_id}" --query status --output text)"
             [[ "${status}" == "READY" ]] && break
@@ -196,9 +202,13 @@ jobs:
             sleep 10
           done
           [[ "${endpoint_status}" == "READY" ]]
+          runtime="$(aws --profile mymemo bedrock-agentcore-control get-agent-runtime --region "${AWS_REGION}" --agent-runtime-id "${runtime_id}")"
+          jq -e '.metadataConfiguration.requireMMDSV2 == true' <<<"${runtime}" >/dev/null
+          runtime_version="$(jq -r '.agentRuntimeVersion' <<<"${runtime}")"
+          endpoint="$(aws --profile mymemo bedrock-agentcore-control get-agent-runtime-endpoint --region "${AWS_REGION}" --agent-runtime-id "${runtime_id}" --endpoint-name DEFAULT)"
+          jq -e --arg version "${runtime_version}" '.name == "DEFAULT" and .status == "READY" and .liveVersion == $version' <<<"${endpoint}" >/dev/null
       - name: Verify and record dormant deployment
         run: |
-          terraform -chdir=infra/agentcore-canary output -raw agent_runtime_version
           scripts/deploy/inspect_agentcore_canary_dormant.sh | tee agentcore-canary-deployment-record.json
       - uses: actions/upload-artifact@v6
         with:

@@ -88,7 +88,7 @@ resource "aws_cloudwatch_metric_alarm" "consumer_duration" {
 
 resource "aws_cloudwatch_metric_alarm" "dormant_runtime_sessions" {
   alarm_name          = "${local.name_prefix}-dormant-runtime-sessions"
-  alarm_description   = "AgentCore Runtime session exists while canary dispatch is dormant"
+  alarm_description   = "An account-level AgentCore Runtime session exists in this region while canary dispatch is dormant"
   namespace           = "AWS/Bedrock-AgentCore"
   metric_name         = "ActiveSessionCount"
   dimensions          = { Service = "AgentCore.Runtime" }

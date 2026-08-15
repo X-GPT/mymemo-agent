@@ -184,21 +184,23 @@ aligned instead of casting around them.
 
 Required:
 
-- `AGENT_DATABASE_URL` — writable `mymemo_agent` DB holding Campaign, outbox, Conversation Ownership, and exact Run state
 - `AWS_REGION` — region for SSM, SQS, and AgentCore clients
+- `CANARY_AGENT_DATABASE_URL_SECRET_ARN` — exact same-account, same-region Secrets Manager ARN for the writable `mymemo_agent` URL; the Lambda resolves only `AWSCURRENT`, which must use `sslmode=verify-full`
 - `CANARY_DISPATCH_QUEUE_URL` — encrypted standard Canary dispatch queue URL
 - `CANARY_ENABLED_PARAMETER_NAME` — SSM parameter whose only enabling value is exactly `enabled`; missing, unreadable, or any other value fails closed
 - `CANARY_AGENT_RUNTIME_ARN` — exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity
+- `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS` — `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
 
 ### agentcore-canary-control
 
 Required:
 
-- `AGENT_DATABASE_URL` — writable `mymemo_agent` DB holding Campaign, outbox, Conversation Ownership, and exact Run state
 - `AWS_REGION` — region for SSM and SQS clients used by immediate publication
+- `CANARY_AGENT_DATABASE_URL_SECRET_ARN` and `CANARY_KB_DATABASE_URL_SECRET_ARN` — exact same-account, same-region Secrets Manager ARNs resolved only at `AWSCURRENT`; both database URLs must use `sslmode=verify-full`
 - `CANARY_DISPATCH_QUEUE_URL` — encrypted standard Canary dispatch queue URL
 - `CANARY_ENABLED_PARAMETER_NAME` — fail-closed SSM control parameter; the control path does not require the consumer-only `CANARY_AGENT_RUNTIME_ARN`
-- `KB_DATABASE_URL`, `CANARY_APPROVED_SYNTHETIC_USER_ID`, and `CANARY_CONTROL_CONFIG_JSON` — existing synthetic-fixture authority used by the control Lambda
+- `CANARY_APPROVED_SYNTHETIC_USER_ID` and `CANARY_CONTROL_CONFIG_JSON` — existing synthetic-fixture authority used by the control Lambda
+- `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS` — `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
 
 ### agentcore-canary-runtime
 

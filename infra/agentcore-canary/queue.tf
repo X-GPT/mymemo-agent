@@ -36,4 +36,8 @@ resource "aws_ssm_parameter" "enabled" {
   description = "Fail-closed AgentCore canary admission and dispatch control"
   type        = "String"
   value       = "disabled"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
 }

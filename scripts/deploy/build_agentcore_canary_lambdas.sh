@@ -23,6 +23,7 @@ bun build apps/agentcore-canary-control/src/lambda.ts \
   --target=node \
   --format=esm \
   --outfile="${build_dir}/control/index.mjs"
+cp "${ca_bundle}" "${build_dir}/dispatch/rds-global-bundle.pem"
 cp "${ca_bundle}" "${build_dir}/control/rds-global-bundle.pem"
 
 (

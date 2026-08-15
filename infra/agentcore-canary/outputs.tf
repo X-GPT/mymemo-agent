@@ -18,11 +18,6 @@ output "agent_runtime_arn" {
   value       = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn
 }
 
-output "agent_runtime_version" {
-  description = "Immutable Runtime version created for the deployed digest."
-  value       = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_version
-}
-
 output "default_endpoint_name" {
   description = "Service-owned endpoint automatically created and advanced with the Runtime."
   value       = "DEFAULT"

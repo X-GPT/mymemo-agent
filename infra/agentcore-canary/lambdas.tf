@@ -82,7 +82,6 @@ resource "aws_lambda_function" "preflight" {
   environment {
     variables = merge(local.lambda_common_environment, {
       CANARY_KB_DATABASE_URL_SECRET_ARN = var.kb_database_url_secret_arn
-      RDS_CA_BUNDLE_PATH                = "/var/task/rds-global-bundle.pem"
     })
   }
 
@@ -98,6 +97,13 @@ resource "aws_lambda_event_source_mapping" "consumer" {
   batch_size              = 1
   function_response_types = ["ReportBatchItemFailures"]
   enabled                 = var.dispatch_enabled
+
+  lifecycle {
+    precondition {
+      condition     = !var.dispatch_enabled || var.campaign_network_enabled
+      error_message = "Dispatch cannot be enabled without the campaign-scoped network."
+    }
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "repair" {
