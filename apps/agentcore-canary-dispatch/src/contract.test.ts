@@ -2,8 +2,10 @@ import { describe, expect, it } from "bun:test";
 import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import {
 	createAcquisitionReceipt,
+	InvalidCanaryDispatchEnvelopeError,
 	parseAcquisitionReceipt,
 	parseCanaryDispatchEnvelope,
+	sameCanaryDispatch,
 	serializeCanaryDispatchEnvelope,
 } from "./contract";
 
@@ -39,6 +41,16 @@ describe("Canary dispatch envelope", () => {
 		expect(parseCanaryDispatchEnvelope(wire)).toEqual(dispatch);
 	});
 
+	it("compares the complete dispatch identity including admission time", () => {
+		expect(sameCanaryDispatch(dispatch, { ...dispatch })).toBe(true);
+		expect(
+			sameCanaryDispatch(dispatch, {
+				...dispatch,
+				admittedAt: new Date("2026-08-14T16:00:00.001Z"),
+			}),
+		).toBe(false);
+	});
+
 	it("rejects extra content and a Runtime session that does not name the Conversation", () => {
 		expect(() =>
 			parseCanaryDispatchEnvelope(
@@ -48,6 +60,9 @@ describe("Canary dispatch envelope", () => {
 				}),
 			),
 		).toThrow("invalid AgentCore dispatch envelope");
+		expect(() => parseCanaryDispatchEnvelope("not-json")).toThrow(
+			InvalidCanaryDispatchEnvelopeError,
+		);
 		expect(() =>
 			parseCanaryDispatchEnvelope(
 				JSON.stringify({

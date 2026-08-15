@@ -85,9 +85,44 @@ describe("AgentCore acquisition boundary", () => {
 			createWorkerId: () => "boot-1/invocation-1",
 		});
 
+		await expect(boundary.acquireDispatch(dispatch)).rejects.toThrow(
+			"Canary dispatch is disabled",
+		);
 		await expect(
 			boundary.handle(serializeCanaryDispatchEnvelope(dispatch)),
 		).rejects.toThrow("Canary dispatch is disabled");
 		expect(acquired).toBe(false);
+	});
+
+	it("returns structured committed acquisitions with invocation-local provenance", async () => {
+		const workerIds = ["boot-451/invocation-1", "boot-451/invocation-2"];
+		const seenWorkerIds: string[] = [];
+		const boundary = createCanaryAcquisitionBoundary({
+			control: { isEnabled: async () => true },
+			acquire: async ({ workerId }) => {
+				seenWorkerIds.push(workerId);
+				return { disposition: "terminal", status: "done" };
+			},
+			createWorkerId: () => {
+				const workerId = workerIds.shift();
+				if (!workerId) throw new Error("test worker identity exhausted");
+				return workerId;
+			},
+			now: () => new Date("2026-08-14T16:01:00.000Z"),
+		});
+
+		const first = await boundary.acquireDispatch(dispatch);
+		const second = await boundary.acquire(
+			serializeCanaryDispatchEnvelope(dispatch),
+		);
+
+		expect(seenWorkerIds).toEqual([
+			"boot-451/invocation-1",
+			"boot-451/invocation-2",
+		]);
+		expect(first.dispatch).toEqual(dispatch);
+		expect(first.result).toEqual({ disposition: "terminal", status: "done" });
+		expect(first.receiptLine.endsWith("\n")).toBe(true);
+		expect(second.receiptLine).toBe(first.receiptLine);
 	});
 });

@@ -1,29 +1,12 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { createDatabase } from "@mymemo/agent-db/client";
-import {
-	createLiveStreamTelemetry,
-	createRedisLiveStreamRelay,
-} from "@mymemo/live-text";
-import { createArtifactPublisher } from "./artifacts/artifact-publication";
-import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
 import type { AdvisoryLockPool } from "./cleanup/advisory-lock";
 import { CleanupLoop } from "./cleanup/cleanup-loop";
-import { createE2bSandboxJanitor } from "./cleanup/e2b-janitor";
 import { createS3ArtifactObjectJanitor } from "./cleanup/s3-artifact-janitor";
 import { loadWorkerConfigFromEnv } from "./config/env";
-import { createDocumentSearch } from "./documents/client";
-import { createE2bSandboxProvisioner } from "./e2b/sandbox-provisioner";
 import { startHealthServer } from "./health";
 import { createLogger } from "./logger";
-import { buildModelClientConfig } from "./model-client";
+import { createProductionRunResources } from "./production-run-resources";
 import { PostgresRunDoorbell } from "./run-doorbell";
 import { RunLoop } from "./run-loop";
-import { resolveAndVerifyClaudeCodeExecutable } from "./sdk/claude-code-executable";
-import { createSdkRunProcessor } from "./sdk/run-processor";
-import { createStartRunQuery } from "./sdk/start-run-query";
 import { Worker } from "./worker";
 import { generateWorkerId } from "./worker-id";
 
@@ -34,77 +17,19 @@ import { generateWorkerId } from "./worker-id";
 const config = loadWorkerConfigFromEnv(Bun.env);
 const logger = createLogger(config.logLevel);
 const workerId = generateWorkerId();
-const liveStreamTelemetry = createLiveStreamTelemetry("agent-worker", logger);
-const liveStreamRelay = createRedisLiveStreamRelay({
-	url: config.redisUrl,
-	deployment: "current",
-	telemetry: liveStreamTelemetry,
-});
-// Verify the native CLI before constructing a run loop: a missing or wrong-libc
-// binary must crash boot before this process can claim work.
-const pathToClaudeCodeExecutable = resolveAndVerifyClaudeCodeExecutable();
-
 const worker = new Worker({
 	workerId,
 	maxConcurrentConversations: config.maxConcurrentConversations,
 	shutdownTimeoutMs: config.shutdownTimeoutMs,
 	logger,
 });
-const db = createDatabase(config.agentDatabaseUrl);
-const artifactPublisher = createArtifactPublisher({
-	db,
-	objectStore: createS3ArtifactObjectStore(config.artifact),
-});
-const sandboxJanitor = createE2bSandboxJanitor(config.e2bApiKey);
+const { db, processor, liveStreamRelay, liveStreamTelemetry, sandboxJanitor } =
+	createProductionRunResources({ config, logger });
 const artifactObjectJanitor = createS3ArtifactObjectJanitor(config.artifact);
-const startRunQuery = createStartRunQuery({
-	db,
-	provisioner: createE2bSandboxProvisioner({
-		apiKey: config.e2bApiKey,
-		template: config.e2bTemplate,
-		sandboxIdleMs: config.sandboxIdleMs,
-		logger,
-	}),
-	janitor: sandboxJanitor,
-	documentClient: createDocumentSearch(
-		{
-			kbDatabaseUrl: config.kbDatabaseUrl,
-			agentDatabaseUrl: config.agentDatabaseUrl,
-		},
-		logger,
-	),
-	modelClient: buildModelClientConfig(config.openrouter),
-	pathToClaudeCodeExecutable,
-	createClaudeConfigDir: async () => {
-		const path = await mkdtemp(join(tmpdir(), "mymemo-agent-claude-config-"));
-		return {
-			path,
-			dispose: async () => {
-				await rm(path, { recursive: true, force: true });
-			},
-		};
-	},
-	processEnv: Bun.env,
-	sandboxIdleMs: config.sandboxIdleMs,
-	fileLimits: config.fileLimits,
-	bashLimits: config.bashLimits,
-	documentSearchMaxResults: config.maxDocumentSearchResults,
-	documentListMaxResults: config.maxDocumentListResults,
-	documentLoad: config.documentLoad,
-	artifactPublisher,
-	ensureWorkingDirectory: async (path) => {
-		await mkdir(path, { recursive: true });
-	},
-	query,
-	logger,
-});
 const runLoop = new RunLoop({
 	db,
 	worker,
-	processor: createSdkRunProcessor({
-		startRunQuery,
-		logger,
-	}),
+	processor,
 	liveStreamRelay,
 	liveStreamTelemetry,
 	heartbeatIntervalMs: config.heartbeatIntervalMs,

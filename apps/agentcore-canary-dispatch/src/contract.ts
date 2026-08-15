@@ -56,6 +56,10 @@ const acquisitionReceiptSchema = dispatchIdentitySchema
 
 export type AcquisitionReceipt = z.infer<typeof acquisitionReceiptSchema>;
 
+export class InvalidCanaryDispatchEnvelopeError extends Error {
+	override readonly name = "InvalidCanaryDispatchEnvelopeError";
+}
+
 function isOwnershipDisposition(
 	disposition: AcquireCanaryDispatchResult["disposition"],
 ): disposition is "acquired" | "already_acquired" {
@@ -71,11 +75,11 @@ function hasOwnership(
 	return isOwnershipDisposition(result.disposition);
 }
 
-function parseJson(value: string, description: string): unknown {
+function parseJson(value: string, invalid: () => Error): unknown {
 	try {
 		return JSON.parse(value);
 	} catch {
-		throw new Error(`invalid ${description}`);
+		throw invalid();
 	}
 }
 
@@ -91,13 +95,24 @@ export function serializeCanaryDispatchEnvelope(
 export function parseCanaryDispatchEnvelope(
 	value: string,
 ): CanaryDispatchIdentity {
-	const parsed = dispatchEnvelopeSchema.safeParse(
-		parseJson(value, "AgentCore dispatch envelope"),
-	);
-	if (!parsed.success) {
-		throw new Error("invalid AgentCore dispatch envelope");
-	}
+	const invalid = () =>
+		new InvalidCanaryDispatchEnvelopeError(
+			"invalid AgentCore dispatch envelope",
+		);
+	const decoded = parseJson(value, invalid);
+	const parsed = dispatchEnvelopeSchema.safeParse(decoded);
+	if (!parsed.success) throw invalid();
 	return { ...parsed.data, admittedAt: new Date(parsed.data.admittedAt) };
+}
+
+export function sameCanaryDispatch(
+	left: CanaryDispatchIdentity,
+	right: CanaryDispatchIdentity,
+): boolean {
+	return (
+		dispatchIdentityKeys.every((key) => left[key] === right[key]) &&
+		left.admittedAt.getTime() === right.admittedAt.getTime()
+	);
 }
 
 /** Constructed by the Runtime boundary only after acquisition transaction return. */
@@ -119,7 +134,7 @@ export function createAcquisitionReceipt(
 
 export function parseAcquisitionReceipt(value: string): AcquisitionReceipt {
 	const parsed = acquisitionReceiptSchema.safeParse(
-		parseJson(value, "AgentCore Acquisition receipt"),
+		parseJson(value, () => new Error("invalid AgentCore Acquisition receipt")),
 	);
 	if (!parsed.success) {
 		throw new Error("invalid AgentCore Acquisition receipt");

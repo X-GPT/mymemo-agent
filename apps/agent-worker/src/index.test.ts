@@ -6,19 +6,30 @@ describe("agent-worker production composition", () => {
 		// The entrypoint is intentionally side-effectful, so importing it would boot
 		// external clients. Pin the composition contract in source; Task 9.7 owns
 		// the credentialed behavioral smoke against real OpenRouter and E2B.
-		const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-
-		expect(source).toContain("const startRunQuery = createStartRunQuery({");
-		expect(source).toContain(
+		const entrypoint = readFileSync(
+			new URL("./index.ts", import.meta.url),
+			"utf8",
+		);
+		const resources = readFileSync(
+			new URL("./production-run-resources.ts", import.meta.url),
+			"utf8",
+		);
+		expect(resources).toContain("const startRunQuery = createStartRunQuery({");
+		expect(resources).toContain(
 			"const artifactPublisher = createArtifactPublisher({",
 		);
-		expect(source).toContain("createS3ArtifactObjectStore(config.artifact)");
-		expect(source).toContain("artifactPublisher,");
-		expect(source).toContain("processor: createSdkRunProcessor({");
-		expect(source).toContain("createRedisLiveStreamRelay({");
-		expect(source).toContain("url: config.redisUrl");
-		expect(source).toContain("await liveStreamRelay.close()");
-		expect(source).not.toContain("liveTextTransport");
-		expect(source).not.toContain("syntheticProcessor");
+		expect(resources).toContain("createS3ArtifactObjectStore(config.artifact)");
+		expect(resources).toContain("artifactPublisher,");
+		expect(resources).toContain("processor: createSdkRunProcessor({");
+		expect(resources).toContain("createRedisLiveStreamRelay({");
+		expect(resources).toContain("url: config.redisUrl");
+		expect(entrypoint).toContain(
+			"createProductionRunResources({ config, logger })",
+		);
+		expect(entrypoint).toContain("await liveStreamRelay.close()");
+		expect(entrypoint).not.toContain("liveTextTransport");
+		expect(resources).not.toContain("liveTextTransport");
+		expect(entrypoint).not.toContain("syntheticProcessor");
+		expect(resources).not.toContain("syntheticProcessor");
 	});
 });

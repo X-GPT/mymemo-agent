@@ -1,6 +1,9 @@
 {
 	"name": "agentcore-canary-dispatch",
 	"exports": {
+		"./acquisition-boundary": "./src/acquisition-boundary.ts",
+		"./aws-adapters": "./src/aws-adapters.ts",
+		"./contract": "./src/contract.ts",
 		"./publisher": "./src/publisher.ts",
 		"./production": "./src/production.ts"
 	},
