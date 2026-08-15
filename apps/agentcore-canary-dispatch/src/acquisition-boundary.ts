@@ -28,13 +28,15 @@ export function createCanaryAcquisitionBoundary(options: {
 	createWorkerId: () => string;
 	now?: () => Date;
 }) {
-	async function acquire(
-		rawEnvelope: string,
-	): Promise<CommittedCanaryAcquisition> {
+	async function assertEnabled(): Promise<void> {
 		if (!(await options.control.isEnabled())) {
 			throw new Error("Canary dispatch is disabled");
 		}
-		const dispatch = parseCanaryDispatchEnvelope(rawEnvelope);
+	}
+
+	async function commitDispatch(
+		dispatch: CanaryDispatchIdentity,
+	): Promise<CommittedCanaryAcquisition> {
 		const workerId = options.createWorkerId();
 		// Awaiting this promise is the commit boundary. Receipt construction and
 		// emission are deliberately impossible before it resolves.
@@ -51,8 +53,23 @@ export function createCanaryAcquisitionBoundary(options: {
 		};
 	}
 
+	async function acquire(
+		rawEnvelope: string,
+	): Promise<CommittedCanaryAcquisition> {
+		await assertEnabled();
+		return await commitDispatch(parseCanaryDispatchEnvelope(rawEnvelope));
+	}
+
+	async function acquireDispatch(
+		dispatch: CanaryDispatchIdentity,
+	): Promise<CommittedCanaryAcquisition> {
+		await assertEnabled();
+		return await commitDispatch(dispatch);
+	}
+
 	return {
 		acquire,
+		acquireDispatch,
 		async handle(rawEnvelope: string): Promise<string> {
 			return (await acquire(rawEnvelope)).receiptLine;
 		},

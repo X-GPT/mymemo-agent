@@ -68,7 +68,7 @@ export async function createProductionCanaryRuntime(options: {
 	});
 	const services = createCanaryExecutionServices({
 		db: resources.db,
-		acquire: acquisition.acquire,
+		acquire: acquisition.acquireDispatch,
 		runServing,
 		logger,
 	});

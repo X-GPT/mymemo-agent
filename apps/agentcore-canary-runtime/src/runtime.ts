@@ -9,15 +9,12 @@ import {
 	parseCanaryDispatchEnvelope,
 	sameCanaryDispatch,
 } from "agentcore-canary-dispatch/contract";
-
-export type CanaryRuntimeAcquisition = CommittedCanaryAcquisition;
+import { RUNTIME_SHUTDOWN_TIMEOUT_MS } from "./constants";
 
 type AcquiredDispatch = Extract<
 	AcquireCanaryDispatchResult,
 	{ disposition: "acquired" }
 >;
-
-export type RuntimeServingResult = ServeStartedRunResult;
 
 export interface AcquiredExecutionIdentity {
 	owner: ConversationOwner;
@@ -26,7 +23,9 @@ export interface AcquiredExecutionIdentity {
 }
 
 export interface CanaryRuntimeDependencies {
-	acquire(rawEnvelope: string): Promise<CanaryRuntimeAcquisition>;
+	acquire(
+		dispatch: CanaryDispatchIdentity,
+	): Promise<CommittedCanaryAcquisition>;
 	serve(input: {
 		dispatch: CanaryDispatchIdentity;
 		acquisition: AcquiredDispatch;
@@ -35,7 +34,7 @@ export interface CanaryRuntimeDependencies {
 			type: "run_detached" | "ownership_lost";
 			reason?: "lease" | "gone";
 		}): void;
-	}): Promise<RuntimeServingResult>;
+	}): Promise<ServeStartedRunResult>;
 	heartbeat(
 		input: AcquiredExecutionIdentity & { detached: boolean },
 	): Promise<"alive" | "lost">;
@@ -47,7 +46,6 @@ export interface CanaryRuntimeDependencies {
 interface ActiveExecution {
 	dispatch: CanaryDispatchIdentity;
 	acquisition: AcquiredDispatch;
-	receiptLine: string;
 	shutdownController: AbortController;
 	detached: boolean;
 	ownershipLost: boolean;
@@ -56,7 +54,7 @@ interface ActiveExecution {
 
 interface PendingAcquisition {
 	dispatch: CanaryDispatchIdentity;
-	promise: Promise<CanaryRuntimeAcquisition>;
+	promise: Promise<CommittedCanaryAcquisition>;
 }
 
 export class RuntimeBusyError extends Error {
@@ -85,6 +83,15 @@ function executionIdentity(entry: ActiveExecution): AcquiredExecutionIdentity {
 
 function receiptInvocation(receiptLine: string): RuntimeInvocation {
 	return { body: new Blob([receiptLine]).stream() };
+}
+
+function requireSameDispatch(
+	occupied: CanaryDispatchIdentity,
+	incoming: CanaryDispatchIdentity,
+): void {
+	if (!sameCanaryDispatch(occupied, incoming)) {
+		throw new RuntimeBusyError("AgentCore Runtime is busy");
+	}
 }
 
 export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
@@ -155,26 +162,22 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 			}
 			const current = currentExecution();
 			if (current) {
-				if (!sameCanaryDispatch(current.dispatch, dispatch)) {
-					throw new RuntimeBusyError("AgentCore Runtime is busy");
-				}
-				return receiptInvocation(current.receiptLine);
+				requireSameDispatch(current.dispatch, dispatch);
+				const duplicate = await dependencies.acquire(dispatch);
+				return receiptInvocation(duplicate.receiptLine);
 			}
-			if (
-				pendingAcquisition &&
-				!sameCanaryDispatch(pendingAcquisition.dispatch, dispatch)
-			) {
-				throw new RuntimeBusyError("AgentCore Runtime is busy");
+			if (pendingAcquisition) {
+				requireSameDispatch(pendingAcquisition.dispatch, dispatch);
 			}
 
 			const pending =
 				pendingAcquisition ??
 				({
 					dispatch,
-					promise: dependencies.acquire(input.rawEnvelope),
+					promise: dependencies.acquire(dispatch),
 				} satisfies PendingAcquisition);
 			pendingAcquisition = pending;
-			let acquired: CanaryRuntimeAcquisition;
+			let acquired: CommittedCanaryAcquisition;
 			try {
 				acquired = await pending.promise;
 			} finally {
@@ -187,7 +190,6 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 			const entry: ActiveExecution = {
 				dispatch: acquired.dispatch,
 				acquisition: acquired.result,
-				receiptLine: acquired.receiptLine,
 				shutdownController: new AbortController(),
 				detached: false,
 				ownershipLost: false,
@@ -195,10 +197,8 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 			};
 			const concurrent = currentExecution();
 			if (concurrent) {
-				if (!sameCanaryDispatch(concurrent.dispatch, dispatch)) {
-					throw new RuntimeBusyError("AgentCore Runtime is busy");
-				}
-				return receiptInvocation(concurrent.receiptLine);
+				requireSameDispatch(concurrent.dispatch, dispatch);
+				return receiptInvocation(acquired.receiptLine);
 			}
 			active = entry;
 			if (shuttingDown) entry.shutdownController.abort();
@@ -221,7 +221,7 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 			return { body };
 		},
 
-		async shutdown(timeoutMs = 30_000): Promise<void> {
+		async shutdown(timeoutMs = RUNTIME_SHUTDOWN_TIMEOUT_MS): Promise<void> {
 			shuttingDown = true;
 			const drain = async (): Promise<void> => {
 				while (pendingAcquisition) {

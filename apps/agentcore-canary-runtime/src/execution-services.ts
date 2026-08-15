@@ -1,3 +1,4 @@
+import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	releaseConversationTx,
@@ -14,7 +15,9 @@ import type { CanaryRuntimeDependencies } from "./runtime";
  * Reclamation loops. */
 export function createCanaryExecutionServices(options: {
 	db: Database;
-	acquire(rawEnvelope: string): Promise<CommittedCanaryAcquisition>;
+	acquire(
+		dispatch: CanaryDispatchIdentity,
+	): Promise<CommittedCanaryAcquisition>;
 	runServing: RunServing;
 	logger: WorkerLogger;
 }): Pick<

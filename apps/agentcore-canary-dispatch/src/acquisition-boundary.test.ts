@@ -85,6 +85,9 @@ describe("AgentCore acquisition boundary", () => {
 			createWorkerId: () => "boot-1/invocation-1",
 		});
 
+		await expect(boundary.acquireDispatch(dispatch)).rejects.toThrow(
+			"Canary dispatch is disabled",
+		);
 		await expect(
 			boundary.handle(serializeCanaryDispatchEnvelope(dispatch)),
 		).rejects.toThrow("Canary dispatch is disabled");
@@ -108,9 +111,7 @@ describe("AgentCore acquisition boundary", () => {
 			now: () => new Date("2026-08-14T16:01:00.000Z"),
 		});
 
-		const first = await boundary.acquire(
-			serializeCanaryDispatchEnvelope(dispatch),
-		);
+		const first = await boundary.acquireDispatch(dispatch);
 		const second = await boundary.acquire(
 			serializeCanaryDispatchEnvelope(dispatch),
 		);

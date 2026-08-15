@@ -2,6 +2,7 @@ import {
 	loadWorkerConfigFromEnv,
 	type WorkerConfig,
 } from "agent-worker/config";
+import { RUNTIME_SHUTDOWN_TIMEOUT_MS } from "./constants";
 
 type Env = Record<string, string | undefined>;
 
@@ -32,7 +33,7 @@ export interface RuntimeBootstrapConfig {
 	rdsCaBundlePath: string;
 	port: number;
 	heartbeatIntervalMs: number;
-	shutdownTimeoutMs: 30_000;
+	shutdownTimeoutMs: typeof RUNTIME_SHUTDOWN_TIMEOUT_MS;
 	logLevel: string;
 }
 
@@ -100,7 +101,7 @@ export function loadRuntimeBootstrapConfig(env: Env): RuntimeBootstrapConfig {
 			15_000,
 			"WORKER_HEARTBEAT_INTERVAL_MS",
 		),
-		shutdownTimeoutMs: 30_000,
+		shutdownTimeoutMs: RUNTIME_SHUTDOWN_TIMEOUT_MS,
 		logLevel: env.LOG_LEVEL || "info",
 	};
 }
