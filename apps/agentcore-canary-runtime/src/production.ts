@@ -23,7 +23,10 @@ interface SecretCommandClient {
 export function createCurrentSecretReader(client: SecretCommandClient) {
 	return async (secretArn: string): Promise<string> => {
 		const value = await client.send(
-			new GetSecretValueCommand({ SecretId: secretArn }),
+			new GetSecretValueCommand({
+				SecretId: secretArn,
+				VersionStage: "AWSCURRENT",
+			}),
 		);
 		if (value.SecretString === undefined || value.SecretString === "") {
 			throw new Error("Runtime secret has no current string value");

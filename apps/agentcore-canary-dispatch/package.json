@@ -5,7 +5,8 @@
 		"./aws-adapters": "./src/aws-adapters.ts",
 		"./contract": "./src/contract.ts",
 		"./publisher": "./src/publisher.ts",
-		"./production": "./src/production.ts"
+		"./production": "./src/production.ts",
+		"./secret-config": "./src/secret-config.ts"
 	},
 	"scripts": {
 		"test": "bun test --timeout=30000",
@@ -15,6 +16,7 @@
 	},
 	"dependencies": {
 		"@aws-sdk/client-bedrock-agentcore": "^3.1110.0",
+		"@aws-sdk/client-secrets-manager": "^3.1110.0",
 		"@aws-sdk/client-sqs": "^3.1110.0",
 		"@aws-sdk/client-ssm": "^3.1110.0",
 		"@mymemo/agent-db": "workspace:*",

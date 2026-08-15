@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { SSMClient } from "@aws-sdk/client-ssm";
 import { loadRuntimeBootstrapConfig } from "./config";
-import { createProductionCanaryRuntime } from "./production";
+import {
+	createCurrentSecretReader,
+	createProductionCanaryRuntime,
+} from "./production";
 
 function bootstrapConfig() {
 	return loadRuntimeBootstrapConfig({
@@ -27,6 +30,24 @@ function bootstrapConfig() {
 }
 
 describe("production AgentCore Runtime boot", () => {
+	it("requests only the AWSCURRENT version of an exact secret", async () => {
+		let input: unknown;
+		const read = createCurrentSecretReader({
+			send: async (command) => {
+				input = command.input;
+				return { SecretString: "current-value" };
+			},
+		});
+
+		expect(await read(bootstrapConfig().secretArns.agentDatabaseUrl)).toBe(
+			"current-value",
+		);
+		expect(input).toEqual({
+			SecretId: bootstrapConfig().secretArns.agentDatabaseUrl,
+			VersionStage: "AWSCURRENT",
+		});
+	});
+
 	it("fails before becoming healthy when fresh-session secret resolution fails", async () => {
 		let reads = 0;
 		await expect(

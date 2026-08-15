@@ -21,6 +21,12 @@ import {
 	type LambdaContext,
 } from "./handlers";
 import { createCanaryDispatchPublisher } from "./publisher";
+import {
+	type CurrentSecretReader,
+	createAwsCurrentSecretReader,
+	exactSecretArn,
+	verifiedDatabaseUrl,
+} from "./secret-config";
 
 type Env = Record<string, string | undefined>;
 
@@ -59,6 +65,23 @@ export function loadCanaryDispatchConfigFromEnv(
 		...loadCanaryDispatchPublisherConfigFromEnv(env),
 		agentRuntimeArn: requireEnv(env, "CANARY_AGENT_RUNTIME_ARN"),
 	};
+}
+
+export async function resolveCanaryDispatchConfigFromSecretArns(
+	env: Env,
+	readCurrentSecret: CurrentSecretReader,
+): Promise<CanaryDispatchConfig> {
+	const secretArn = exactSecretArn(
+		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN,
+		"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
+	);
+	return loadCanaryDispatchConfigFromEnv({
+		...env,
+		AGENT_DATABASE_URL: verifiedDatabaseUrl(
+			await readCurrentSecret(secretArn),
+			"AGENT_DATABASE_URL",
+		),
+	});
 }
 
 export function createEmbeddedMetricCanaryDispatchAlarm(
@@ -153,31 +176,37 @@ let productionServices:
 	| ReturnType<typeof createCanaryDispatchProductionServices>
 	| undefined;
 
-function services() {
-	productionServices ??= createCanaryDispatchProductionServices(
-		loadCanaryDispatchConfigFromEnv(process.env),
-	);
+let productionServicesPromise:
+	| Promise<ReturnType<typeof createCanaryDispatchProductionServices>>
+	| undefined;
+
+async function services() {
+	if (productionServices) return productionServices;
+	productionServicesPromise ??= resolveCanaryDispatchConfigFromSecretArns(
+		process.env,
+		createAwsCurrentSecretReader(requireEnv(process.env, "AWS_REGION")),
+	).then((config) => createCanaryDispatchProductionServices(config));
+	productionServices = await productionServicesPromise;
 	return productionServices;
 }
 
 export async function publisherHandler(event: unknown, context: LambdaContext) {
-	return await createCanaryPublisherHandler({ publish: services().publish })(
-		event,
-		context,
-	);
+	return await createCanaryPublisherHandler({
+		publish: (await services()).publish,
+	})(event, context);
 }
 
 export async function consumerHandler(event: unknown) {
-	return await createCanaryConsumerHandler({ handle: services().consume })(
-		event,
-	);
+	return await createCanaryConsumerHandler({
+		handle: (await services()).consume,
+	})(event);
 }
 
 export async function manualReplayHandler(
 	event: unknown,
 	context: LambdaContext,
 ) {
-	const current = services();
+	const current = await services();
 	return await createManualReplayHandler({
 		replay: current.replay,
 		publish: current.publish,
@@ -186,5 +215,5 @@ export async function manualReplayHandler(
 
 /** Raw request-body boundary mounted on AgentCore's `/invocations` in #451. */
 export async function runtimeAcquisitionHandler(rawEnvelope: string) {
-	return await services().acquire(rawEnvelope);
+	return await (await services()).acquire(rawEnvelope);
 }

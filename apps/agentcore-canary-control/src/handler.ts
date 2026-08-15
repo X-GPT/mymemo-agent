@@ -1,8 +1,11 @@
 import { createDatabase } from "@mymemo/agent-db/client";
+import { createCanaryDispatchProductionPublisher } from "agentcore-canary-dispatch/production";
 import {
-	createCanaryDispatchProductionPublisher,
-	loadCanaryDispatchPublisherConfigFromEnv,
-} from "agentcore-canary-dispatch/production";
+	type CurrentSecretReader,
+	createAwsCurrentSecretReader,
+	exactSecretArn,
+	verifiedDatabaseUrl,
+} from "agentcore-canary-dispatch/secret-config";
 import { z } from "zod";
 import {
 	type CanaryControlConfig,
@@ -83,6 +86,32 @@ export function loadCanaryControlHandlerConfigFromEnv(
 	};
 }
 
+export async function resolveCanaryControlHandlerConfigFromSecretArns(
+	env: Env,
+	readCurrentSecret: CurrentSecretReader,
+): Promise<CanaryControlHandlerConfig> {
+	const agentDatabaseSecretArn = exactSecretArn(
+		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN,
+		"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
+	);
+	const kbDatabaseSecretArn = exactSecretArn(
+		env.CANARY_KB_DATABASE_URL_SECRET_ARN,
+		"CANARY_KB_DATABASE_URL_SECRET_ARN",
+	);
+	const [agentDatabaseUrl, kbDatabaseUrl] = await Promise.all([
+		readCurrentSecret(agentDatabaseSecretArn),
+		readCurrentSecret(kbDatabaseSecretArn),
+	]);
+	return loadCanaryControlHandlerConfigFromEnv({
+		...env,
+		AGENT_DATABASE_URL: verifiedDatabaseUrl(
+			agentDatabaseUrl,
+			"AGENT_DATABASE_URL",
+		),
+		KB_DATABASE_URL: verifiedDatabaseUrl(kbDatabaseUrl, "KB_DATABASE_URL"),
+	});
+}
+
 export function createCanaryControlHandler(control: {
 	start(rawRequest: unknown): Promise<unknown>;
 }) {
@@ -94,12 +123,19 @@ export function createCanaryControlHandler(control: {
 	};
 }
 
-function createProductionHandler(env: Env) {
-	const config = loadCanaryControlHandlerConfigFromEnv(env);
-	const db = createDatabase(config.agentDatabaseUrl);
-	const publish = createCanaryDispatchProductionPublisher(
-		loadCanaryDispatchPublisherConfigFromEnv(env),
+async function createProductionHandler(env: Env) {
+	const awsRegion = requireEnv(env, "AWS_REGION");
+	const config = await resolveCanaryControlHandlerConfigFromSecretArns(
+		env,
+		createAwsCurrentSecretReader(awsRegion),
 	);
+	const db = createDatabase(config.agentDatabaseUrl);
+	const publish = createCanaryDispatchProductionPublisher({
+		agentDatabaseUrl: config.agentDatabaseUrl,
+		awsRegion,
+		queueUrl: requireEnv(env, "CANARY_DISPATCH_QUEUE_URL"),
+		enabledParameterName: requireEnv(env, "CANARY_ENABLED_PARAMETER_NAME"),
+	});
 	const fixtureDb = createCanaryFixtureDb(config.kbDatabaseUrl);
 	const verifier = createCanaryFixtureVerifier(fixtureDb, {
 		approvedSyntheticUserId: config.approvedSyntheticUserId,
@@ -118,11 +154,16 @@ function createProductionHandler(env: Env) {
 }
 
 let productionHandler:
-	| ReturnType<typeof createCanaryControlHandler>
+	| Awaited<ReturnType<typeof createProductionHandler>>
+	| undefined;
+
+let productionHandlerPromise:
+	| ReturnType<typeof createProductionHandler>
 	| undefined;
 
 /** Operator-only Lambda entrypoint; it is not mounted on chat-api. */
 export async function handler(event: unknown) {
-	productionHandler ??= createProductionHandler(process.env);
+	productionHandlerPromise ??= createProductionHandler(process.env);
+	productionHandler ??= await productionHandlerPromise;
 	return await productionHandler(event);
 }
