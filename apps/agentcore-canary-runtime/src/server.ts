@@ -122,9 +122,18 @@ export function startRuntimeServer(
 	runtime: RuntimeRequestBoundary,
 	port = 8080,
 ) {
-	return Bun.serve({
+	return Bun.serve(createRuntimeServerOptions(runtime, port));
+}
+
+export function createRuntimeServerOptions(
+	runtime: RuntimeRequestBoundary,
+	port = 8080,
+) {
+	return {
 		hostname: "0.0.0.0",
 		port,
+		// Invocation streams can be silent after their receipt until the Run ends.
+		idleTimeout: 0,
 		fetch: createRuntimeRequestHandler(runtime),
-	});
+	};
 }

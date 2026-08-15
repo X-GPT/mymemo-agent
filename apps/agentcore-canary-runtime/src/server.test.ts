@@ -8,6 +8,7 @@ import { createCanaryRuntime } from "./runtime";
 import {
 	AGENTCORE_RUNTIME_SESSION_HEADER,
 	createRuntimeRequestHandler,
+	createRuntimeServerOptions,
 } from "./server";
 
 const dispatch: CanaryDispatchIdentity = {
@@ -60,6 +61,14 @@ function runtime() {
 }
 
 describe("AgentCore Runtime HTTP contract", () => {
+	it("disables Bun's idle timeout for silent in-flight invocation streams", () => {
+		const options = createRuntimeServerOptions(runtime().value, 4510);
+
+		expect(options.hostname).toBe("0.0.0.0");
+		expect(options.port).toBe(4510);
+		expect(options.idleTimeout).toBe(0);
+	});
+
 	it("serves /ping and streams the committed receipt from /invocations", async () => {
 		const fixture = runtime();
 		const handle = createRuntimeRequestHandler(fixture.value);

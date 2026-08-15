@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
 import { resolveAndVerifyClaudeCodeExecutable } from "agent-worker/claude-code-executable";
 
+const MIN_RDS_CA_BUNDLE_BYTES = 100_000;
+const ELF_MACHINE_OFFSET = 18;
+const AARCH64_ELF_MACHINE = 183;
+
 const caPath = process.env.RDS_CA_BUNDLE_PATH;
 if (!caPath) throw new Error("RDS CA bundle path missing");
 const ca = Bun.file(caPath);
-if (!(await ca.exists()) || ca.size < 100_000) {
+if (!(await ca.exists()) || ca.size < MIN_RDS_CA_BUNDLE_BYTES) {
 	throw new Error("RDS CA bundle missing");
 }
 
@@ -33,7 +37,7 @@ try {
 			if (
 				elf.length < 20 ||
 				!elf.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
-				elf.readUInt16LE(18) !== 183
+				elf.readUInt16LE(ELF_MACHINE_OFFSET) !== AARCH64_ELF_MACHINE
 			) {
 				throw new Error("resolved Claude CLI is not AArch64 ELF");
 			}
