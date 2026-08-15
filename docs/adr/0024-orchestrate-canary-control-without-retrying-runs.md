@@ -2,13 +2,16 @@
 
 Status: accepted
 
-An environment-approved GitHub workflow starts or reattaches to a Postgres
-Campaign record and an AWS Step Functions Standard execution, then may
-disconnect without affecting the campaign. Postgres owns the monotonic campaign
-lifecycle and final verdict; Step Functions durably coordinates provisioning,
-five sequential scenarios, fault injection, validation, reporting, and cleanup.
-A scheduled watchdog invokes the same idempotent cleanup when campaign
-heartbeats or deadlines lapse.
+A temporary, manually dispatched GitHub workflow whose AWS OIDC authority is
+restricted to this repository's exact `main`-branch subject starts or reattaches
+to a Postgres Campaign record and an AWS Step Functions Standard execution, then
+may disconnect without affecting the campaign. The workflow is deleted after
+the AgentCore verification campaign, so normal production retains no
+campaign-launch trigger. Postgres owns the monotonic campaign lifecycle and
+final verdict; Step Functions durably coordinates provisioning, five sequential
+scenarios, fault injection, validation, reporting, and cleanup. A scheduled
+watchdog invokes the same idempotent cleanup when campaign heartbeats or
+deadlines lapse.
 
 Each Canary scenario has deterministic Run and message identities. Control
 operations, exact admission, outbox publication, observation, validation, and

@@ -427,6 +427,24 @@ describe("dormant AgentCore canary infrastructure", () => {
 			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
 			"utf8",
 		);
+		const deploymentAdr = readFileSync(
+			join(
+				root,
+				"docs",
+				"adr",
+				"0021-deploy-the-agentcore-canary-independently-of-fargate.md",
+			),
+			"utf8",
+		);
+		const orchestrationAdr = readFileSync(
+			join(
+				root,
+				"docs",
+				"adr",
+				"0024-orchestrate-canary-control-without-retrying-runs.md",
+			),
+			"utf8",
+		);
 		const inspection = readFileSync(
 			join(root, "scripts", "deploy", "inspect_agentcore_canary_dormant.sh"),
 			"utf8",
@@ -445,6 +463,12 @@ describe("dormant AgentCore canary infrastructure", () => {
 			workflow.match(/name: Confirm manual production intent/g),
 		).toHaveLength(1);
 		expect(workflow).not.toContain("verify_github_canary_environment.sh");
+		expect(deploymentAdr).toContain("exact `main`-branch subject");
+		expect(deploymentAdr).not.toMatch(/Environment-(protected|approved)/i);
+		expect(orchestrationAdr).toMatch(
+			/The workflow is deleted after\s+the AgentCore verification campaign/,
+		);
+		expect(orchestrationAdr).not.toContain("environment-approved");
 		expect(workflow).toContain("RDS_CA_BUNDLE_SHA256:");
 		expect(
 			workflow.match(

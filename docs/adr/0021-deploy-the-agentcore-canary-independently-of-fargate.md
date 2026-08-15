@@ -31,9 +31,10 @@ an application lifecycle feature.
 
 ## Consequences
 
-- Canary deployment and campaign launch use distinct, GitHub
-  Environment-protected OIDC roles; runtime fault injection has a narrower
-  service role and accepts no operator-supplied resource identifiers.
+- Canary deployment and campaign launch use distinct GitHub OIDC roles whose
+  trust is restricted to this repository's exact `main`-branch subject; runtime
+  fault injection has a narrower service role and accepts no operator-supplied
+  resource identifiers.
 - The Runtime reads exact secret ARNs at fresh session boot and requires RDS
   certificate verification without changing Fargate's current TLS behavior.
 - Every campaign report records the image digest and resolved Runtime version.
@@ -41,7 +42,8 @@ an application lifecycle feature.
   Campaign cleanup removes Runtime sessions, NAT/EIP, synthetic durable data,
   sandboxes, artifacts, and queued work; full stack destruction is a separate
   decommission operation.
-- Runtime image promotion is manual and environment-approved. Ordinary Fargate
+- Runtime image promotion is manually dispatched, requires explicit typed
+  confirmation, and can assume its AWS role only from `main`. Ordinary Fargate
   releases do not update the dormant AgentCore Runtime.
 - Every deployment parses its Terraform plan and permits mutations only inside
   the dedicated canary-resource allowlist. Shared production infrastructure is
