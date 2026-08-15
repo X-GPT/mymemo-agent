@@ -147,18 +147,6 @@ variable "validation_alarm_action_arns" {
   default     = []
 }
 
-variable "github_owner" {
-  description = "GitHub organization that owns this repository."
-  type        = string
-  default     = "X-GPT"
-}
-
-variable "github_repository" {
-  description = "GitHub repository allowed by the exact-main-branch OIDC trust."
-  type        = string
-  default     = "mymemo-agent"
-}
-
 variable "tags" {
   description = "Tags applied only to canary-owned resources."
   type        = map(string)

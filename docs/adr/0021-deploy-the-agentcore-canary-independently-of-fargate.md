@@ -57,9 +57,9 @@ an application lifecycle feature.
   Runtime key generator and its S3 resource ARN so functional access cannot
   widen into the shared production object namespace.
 - Every campaign report records the image digest and resolved Runtime version.
-- Deployment distinguishes an empty bootstrap state, the bootstrap-only zero
-  digest sentinel, and a previously deployed digest. Backend/output read errors
-  fail the deployment instead of being converted into missing rollback
+- Deployment distinguishes an empty first-deployment state, the repository-only
+  zero-digest sentinel, and a previously deployed digest. Backend/output read
+  errors fail the deployment instead of being converted into missing rollback
   evidence.
 - The control-plane stack remains deployed but disabled between campaigns.
   Campaign cleanup removes Runtime sessions, NAT/EIP, synthetic durable data,

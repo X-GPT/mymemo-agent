@@ -7,47 +7,33 @@ VPC, database, Redis, artifact-bucket, ECS, load-balancer, or routing resources.
 
 ## Deployment authority
 
-Configure the repository's non-secret variables referenced by
-`agentcore-canary-deploy.yml`. The deployment role accepts GitHub OIDC only from
-this repository's `main` branch. Image promotion remains a manual workflow with
-an explicit typed confirmation. This dormant state installs no campaign-launch
-principal or control trigger; issue #453 owns the checked-in operator launcher
-and its narrowly scoped AWS authority. The one-time operator bootstrap script
-uses the mandatory `mymemo` profile and the same AWS-6.x canary root, locked
-state, and fail-closed plan classifier to create only the immutable ECR
-repository, persistent private subnets and security group, the GitHub-assumable
-deployment role, and the disabled repair-rule shell. The network prerequisites
-are applied first so the Runtime-create permission can be bound to their exact
-ids before the deployment policy is rendered and classified. The bootstrap
-creates no reusable principal. The deployment role cannot
-mutate itself or enable/redefine the repair schedule; it may attach only the
-publisher target and publisher-only EventBridge permission. Rerun the
-separately controlled operator bootstrap whenever those bootstrap-owned
-contracts intentionally change.
-
-Before the first workflow deployment, run this separately controlled one-time
-operator command from the reviewed `main` revision:
+Configure the repository's non-secret `AGENTCORE_CANARY_*` variables, then run
+the operator deployment from a clean checkout whose `main` exactly matches
+`origin/main`. The command uses only the mandatory `mymemo` AWS profile, verifies
+account `637423444544`, and requires an explicit production confirmation:
 
 ```bash
-scripts/deploy/bootstrap_agentcore_canary.sh bootstrap-mymemo-agentcore-canary-prod
+scripts/deploy/deploy_agentcore_canary.sh deploy-mymemo-agentcore-canary-prod
 ```
 
-It reads the repository's non-secret Terraform inputs through `gh`, verifies
-account `637423444544`, builds the Lambda packages, and applies only the
-classified bootstrap targets into the dedicated canary state. The GitHub
-workflow has no bootstrap path and cannot acquire this authority.
+Pass an existing digest as the second argument to promote or roll back without
+rebuilding. With no digest, the command builds and verifies a new Linux ARM64
+image. The first classified phase creates only the immutable ECR repository so
+the image can be pushed; the full classified plan then deploys the dormant
+boundary using the same operator session. This is one deployment path, not a
+separate bootstrap authority. Plan JSON/text, the prior digest, resolved Runtime
+version, and dormant inspection are retained under
+`dist/agentcore-canary-deployment/`.
 
-Run **Deploy dormant AgentCore canary** manually and enter
-`deploy-mymemo-agentcore-canary-prod`. Leaving `runtime_image_digest` empty
-builds, checks, and promotes a new Linux ARM64 image. Supplying an existing
-digest performs a rollback/promotion without rebuilding it. The immutable ECR
-repository retains tagged prior digests, and the deployment artifact records
-the prior digest and resolved Runtime version/`DEFAULT` endpoint.
+The dormant state creates no reusable GitHub OIDC deployment principal, campaign
+launcher, campaign task role, fault-injection role, or control trigger. Issue
+#453 owns the temporary campaign roles and launcher.
 
 Every normal plan passes through the canary classifier. It rejects deletes,
-replacements, unknown modules/resource types, IAM trust changes, and a provider
-outside the locked AWS 6.x range. Destruction is a separate, explicit
-decommission operation and is never part of this workflow.
+replacements, unknown modules/resource types, workload trust changes, and a
+provider outside the locked AWS 6.x range. It intentionally does not duplicate
+Terraform's statement-by-statement workload IAM. Destruction is a separate,
+explicit decommission operation and is never part of this command.
 
 ## Dormant invariant
 
@@ -70,10 +56,10 @@ The inspection performs no Lambda or Runtime invocation and cannot admit a Run.
 ## Non-Run network preflight
 
 Issue #452 installs the preflight capability but deliberately leaves the
-deployment dormant: its workflow does not create NAT/EIP or invoke the preflight
-Lambda. Issue #453 owns the temporary network window, two-hour expiry, preflight
-orchestration, and verified NAT/EIP cleanup after its operator command launches
-the durable Campaign from `main`.
+deployment dormant: its operator command does not create NAT/EIP or invoke the
+preflight Lambda. Issue #453 owns the temporary network window, two-hour expiry,
+preflight orchestration, and verified NAT/EIP cleanup after its operator command
+launches the durable Campaign from `main`.
 
 During that #453 campaign-network window, `campaign_network_enabled=true` while
 `dispatch_enabled=false`. The preflight task sets `ROLLBACK_RUNTIME_IMAGE_DIGEST`
@@ -89,7 +75,7 @@ loads the bundled RDS CA, and executes `SELECT 1` over certificate-verified TLS.
 The wrapper also revalidates the disabled mapping, repair rule, and SSM flag;
 the ready digest-pinned Runtime, MMDSv2, `DEFAULT` endpoint, and consumer
 invocation authority; plus empty queues, secret metadata, alarms, rollback
-image, and scoped session-cleanup authority. Issue #453 closes the window
+image. Issue #453 verifies cleanup authority and closes the window
 through its durable campaign orchestration because the normal deployment
 classifier deliberately rejects resource deletion.
 

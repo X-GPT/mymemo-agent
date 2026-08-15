@@ -18,8 +18,36 @@ function change(
 	return { address, mode: "managed", type, change: { actions, before, after } };
 }
 
+const lambdaTrust = JSON.stringify({
+	Version: "2012-10-17",
+	Statement: [
+		{
+			Effect: "Allow",
+			Action: "sts:AssumeRole",
+			Principal: { Service: "lambda.amazonaws.com" },
+		},
+	],
+});
+
+function runtimeTrust(sourceAccount: string, sourceArn: string) {
+	return JSON.stringify({
+		Version: "2012-10-17",
+		Statement: [
+			{
+				Effect: "Allow",
+				Action: "sts:AssumeRole",
+				Principal: { Service: "bedrock-agentcore.amazonaws.com" },
+				Condition: {
+					ArnLike: { "aws:SourceArn": sourceArn },
+					StringEquals: { "aws:SourceAccount": sourceAccount },
+				},
+			},
+		],
+	});
+}
+
 describe("AgentCore canary Terraform plan classification", () => {
-	it("accepts additive and in-place changes only for canary-owned resource types", () => {
+	it("accepts additive and in-place changes only for canary-owned resources", () => {
 		expect(
 			classifyAgentCoreCanaryPlan(
 				plan([
@@ -52,7 +80,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 		}
 	});
 
-	it("rejects removed-block plans that forget canary resources", () => {
+	it("rejects removal from state", () => {
 		const result = classifyAgentCoreCanaryPlan(
 			plan([
 				change("aws_lambda_function.consumer", "aws_lambda_function", [
@@ -60,33 +88,35 @@ describe("AgentCore canary Terraform plan classification", () => {
 				]),
 			]),
 		);
-
-		expect(result.safe).toBe(false);
 		expect(result.reasons).toContain(
 			"aws_lambda_function.consumer requests removal from Terraform state",
 		);
 	});
 
-	it("rejects shared-resource mutation and ordinary-stack decommission", () => {
+	it("rejects shared resources, modules, and campaign-only authority", () => {
 		for (const [address, type] of [
 			["aws_ecs_service.agent_worker", "aws_ecs_service"],
 			["aws_db_instance.agent", "aws_db_instance"],
-			["aws_lambda_function.chat_api", "aws_lambda_function"],
 			["module.shared.aws_vpc.main", "aws_vpc"],
+			["aws_iam_role.deployment", "aws_iam_role"],
+			["aws_iam_role.task", "aws_iam_role"],
+			["aws_iam_role.fault_injection", "aws_iam_role"],
+			["aws_iam_role.campaign_launch", "aws_iam_role"],
 		]) {
 			const result = classifyAgentCoreCanaryPlan(
-				plan([change(address, type, ["update"])]),
+				plan([change(address, type, ["create"])]),
 			);
-			expect(result.safe).toBe(false);
-			expect(result.reasons.join(" ")).toContain("outside canary ownership");
+			expect(result.reasons).toContain(
+				`${address} is outside canary ownership (${type})`,
+			);
 		}
 	});
 
-	it("rejects IAM trust mutation even when the role is canary-owned", () => {
+	it("rejects every workload trust mutation", () => {
 		const result = classifyAgentCoreCanaryPlan(
 			plan([
 				change(
-					"aws_iam_role.deployment",
+					"aws_iam_role.runtime",
 					"aws_iam_role",
 					["update"],
 					{ assume_role_policy: "old" },
@@ -94,21 +124,12 @@ describe("AgentCore canary Terraform plan classification", () => {
 				),
 			]),
 		);
-		expect(result.safe).toBe(false);
-		expect(result.reasons.join(" ")).toContain("IAM trust mutation");
+		expect(result.reasons).toContain(
+			"aws_iam_role.runtime requests IAM trust mutation",
+		);
 	});
 
-	it("accepts only the expected trust policy when creating a canary role", () => {
-		const lambdaTrust = JSON.stringify({
-			Version: "2012-10-17",
-			Statement: [
-				{
-					Effect: "Allow",
-					Action: "sts:AssumeRole",
-					Principal: { Service: "lambda.amazonaws.com" },
-				},
-			],
-		});
+	it("accepts only the exact Lambda and Runtime creation trusts", () => {
 		expect(
 			classifyAgentCoreCanaryPlan(
 				plan([
@@ -119,104 +140,6 @@ describe("AgentCore canary Terraform plan classification", () => {
 			),
 		).toEqual({ safe: true, reasons: [] });
 
-		const widened = classifyAgentCoreCanaryPlan(
-			plan([
-				change("aws_iam_role.preflight", "aws_iam_role", ["create"], null, {
-					assume_role_policy: JSON.stringify({
-						Version: "2012-10-17",
-						Statement: [
-							{
-								Effect: "Allow",
-								Action: "sts:AssumeRole",
-								Principal: { AWS: "*" },
-							},
-						],
-					}),
-				}),
-			]),
-		);
-		expect(widened.safe).toBe(false);
-		expect(widened.reasons).toContain(
-			"aws_iam_role.preflight has unapproved IAM trust on creation",
-		);
-
-		const statesTrust = JSON.stringify({
-			Version: "2012-10-17",
-			Statement: [
-				{
-					Effect: "Allow",
-					Action: "sts:AssumeRole",
-					Principal: { Service: "states.amazonaws.com" },
-					Condition: {
-						ArnLike: {
-							"aws:SourceArn":
-								"arn:aws:states:us-west-2:637423444544:stateMachine:mymemo-agent-agentcore-canary-prod-*",
-						},
-						StringEquals: { "aws:SourceAccount": "637423444544" },
-					},
-				},
-			],
-		});
-		expect(
-			classifyAgentCoreCanaryPlan(
-				plan([
-					change("aws_iam_role.task", "aws_iam_role", ["create"], null, {
-						assume_role_policy: statesTrust,
-					}),
-				]),
-			),
-		).toEqual({ safe: true, reasons: [] });
-
-		for (const [sourceAccount, sourceArn] of [
-			[
-				"111111111111",
-				"arn:aws:states:us-west-2:111111111111:stateMachine:mymemo-agent-agentcore-canary-prod-*",
-			],
-			[
-				"637423444544",
-				"arn:aws:states:eu-west-1:637423444544:stateMachine:mymemo-agent-agentcore-canary-prod-*",
-			],
-		] as const) {
-			const foreignStatesTrust = JSON.stringify({
-				Version: "2012-10-17",
-				Statement: [
-					{
-						Effect: "Allow",
-						Action: "sts:AssumeRole",
-						Principal: { Service: "states.amazonaws.com" },
-						Condition: {
-							ArnLike: { "aws:SourceArn": sourceArn },
-							StringEquals: { "aws:SourceAccount": sourceAccount },
-						},
-					},
-				],
-			});
-			expect(
-				classifyAgentCoreCanaryPlan(
-					plan([
-						change("aws_iam_role.task", "aws_iam_role", ["create"], null, {
-							assume_role_policy: foreignStatesTrust,
-						}),
-					]),
-				).safe,
-			).toBe(false);
-		}
-
-		const runtimeTrust = (sourceAccount: string, sourceArn: string) =>
-			JSON.stringify({
-				Version: "2012-10-17",
-				Statement: [
-					{
-						Effect: "Allow",
-						Action: "sts:AssumeRole",
-						Principal: { Service: "bedrock-agentcore.amazonaws.com" },
-						Condition: {
-							ArnLike: { "aws:SourceArn": sourceArn },
-							StringEquals: { "aws:SourceAccount": sourceAccount },
-						},
-					},
-				],
-			});
 		const exactRuntimeArn =
 			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*";
 		expect(
@@ -229,119 +152,38 @@ describe("AgentCore canary Terraform plan classification", () => {
 			),
 		).toEqual({ safe: true, reasons: [] });
 
-		for (const trust of [
-			runtimeTrust(
-				"111111111111",
-				"arn:aws:bedrock-agentcore:us-west-2:111111111111:runtime/mymemo_agentcore_canary_prod-*",
-			),
-			runtimeTrust(
-				"637423444544",
-				"arn:aws:bedrock-agentcore:eu-west-1:637423444544:runtime/mymemo_agentcore_canary_prod-*",
-			),
-			runtimeTrust(
-				"637423444544",
-				"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/*",
-			),
-		]) {
-			expect(
-				classifyAgentCoreCanaryPlan(
-					plan([
-						change("aws_iam_role.runtime", "aws_iam_role", ["create"], null, {
-							assume_role_policy: trust,
-						}),
-					]),
-				).safe,
-			).toBe(false);
-		}
-
-		const githubMainTrust = (
-			providerAccount: string,
-			subject = "repo:X-GPT/mymemo-agent:ref:refs/heads/main",
-		) =>
-			JSON.stringify({
-				Version: "2012-10-17",
-				Statement: [
-					{
-						Effect: "Allow",
-						Action: "sts:AssumeRoleWithWebIdentity",
-						Principal: {
-							Federated: `arn:aws:iam::${providerAccount}:oidc-provider/token.actions.githubusercontent.com`,
+		for (const [address, trust] of [
+			[
+				"aws_iam_role.preflight",
+				JSON.stringify({
+					Version: "2012-10-17",
+					Statement: [
+						{
+							Effect: "Allow",
+							Action: "sts:AssumeRole",
+							Principal: { AWS: "*" },
 						},
-						Condition: {
-							StringEquals: {
-								"token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-								"token.actions.githubusercontent.com:sub": subject,
-							},
-						},
-					},
-				],
-			});
-		expect(
-			classifyAgentCoreCanaryPlan(
-				plan([
-					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
-						assume_role_policy: githubMainTrust("637423444544"),
-					}),
-				]),
-			),
-		).toEqual({ safe: true, reasons: [] });
-		expect(
-			classifyAgentCoreCanaryPlan(
-				plan([
-					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
-						assume_role_policy: githubMainTrust("111111111111"),
-					}),
-				]),
-			).safe,
-		).toBe(false);
-		expect(
-			classifyAgentCoreCanaryPlan(
-				plan([
-					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
-						assume_role_policy: githubMainTrust(
-							"637423444544",
-							"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary",
-						),
-					}),
-				]),
-			).safe,
-		).toBe(false);
-	});
-
-	it("rejects widened GitHub-assumable role permissions", () => {
-		const widened = JSON.stringify({
-			Version: "2012-10-17",
-			Statement: [{ Effect: "Allow", Action: "*", Resource: "*" }],
-		});
-		const result = classifyAgentCoreCanaryPlan(
-			plan([
-				change(
-					"aws_iam_role_policy.deployment",
-					"aws_iam_role_policy",
-					["update"],
-					{ policy: "previous" },
-					{ policy: widened },
+					],
+				}),
+			],
+			["aws_iam_role.runtime", runtimeTrust("111111111111", exactRuntimeArn)],
+			[
+				"aws_iam_role.runtime",
+				runtimeTrust(
+					"637423444544",
+					"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/*",
 				),
-			]),
-		);
-
-		expect(result.safe).toBe(false);
-		expect(result.reasons).toContain(
-			"aws_iam_role_policy.deployment has unapproved GitHub role permissions",
-		);
-	});
-
-	it("rejects campaign-launch authority in the dormant state", () => {
-		for (const [address, type] of [
-			["aws_iam_role.campaign_launch", "aws_iam_role"],
-			["aws_iam_role_policy.campaign_launch", "aws_iam_role_policy"],
-		]) {
+			],
+		] as const) {
 			const result = classifyAgentCoreCanaryPlan(
-				plan([change(address, type, ["create"], null, {})]),
+				plan([
+					change(address, "aws_iam_role", ["create"], null, {
+						assume_role_policy: trust,
+					}),
+				]),
 			);
-			expect(result.safe).toBe(false);
 			expect(result.reasons).toContain(
-				`${address} is outside canary ownership (${type})`,
+				`${address} has unapproved IAM trust on creation`,
 			);
 		}
 	});

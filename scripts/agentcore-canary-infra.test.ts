@@ -158,35 +158,35 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).not.toMatch(/resource\s+"aws_security_group_rule"/);
 	});
 
-	it("separates least-privilege roles and restricts GitHub authority to main", () => {
+	it("separates workload roles and excludes reusable deployment or campaign authority", () => {
 		const source = terraformSource();
-		const planClassifier = readFileSync(
-			join(root, "scripts", "deploy", "classify_agentcore_canary_plan.ts"),
-			"utf8",
-		);
 
 		for (const role of [
-			"deployment",
-			"task",
 			"publisher",
 			"consumer",
+			"control",
 			"runtime",
-			"fault_injection",
 			"preflight",
 		]) {
 			expect(source).toContain(`resource "aws_iam_role" "${role}"`);
 		}
-		expect(source).toMatch(
-			/repo:\$\{var\.github_owner\}\/\$\{var\.github_repository\}:ref:refs\/heads\/main/,
+		for (const forbiddenRole of [
+			"deployment",
+			"task",
+			"fault_injection",
+			"campaign_launch",
+		]) {
+			expect(source).not.toContain(
+				`resource "aws_iam_role" "${forbiddenRole}"`,
+			);
+			expect(source).not.toContain(
+				`resource "aws_iam_role_policy" "${forbiddenRole}"`,
+			);
+		}
+		expect(source).not.toContain("token.actions.githubusercontent.com");
+		expect(source).not.toContain(
+			'data "aws_iam_policy_document" "states_trust"',
 		);
-		expect(source).not.toContain(":environment:");
-		expect(source).toContain(
-			'data "aws_iam_policy_document" "github_main_trust"',
-		);
-		expect(source.match(/github_main_trust\.json/g)).toHaveLength(1);
-		expect(source).not.toContain('aws_iam_role" "campaign_launch"');
-		expect(source).not.toContain('aws_iam_role_policy" "campaign_launch"');
-		expect(source).not.toContain('output "campaign_launch_role_arn"');
 		expect(source).toMatch(
 			/sid\s*=\s*"CreateFunctionLogGroups"[\s\S]*?actions\s*=\s*\["logs:CreateLogGroup"\][\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-\*"/,
 		);
@@ -209,24 +209,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/sid\s*=\s*"RuntimeTracing"[\s\S]*?"xray:GetSamplingRules"[\s\S]*?resources\s*=\s*\["\*"\]/,
 		);
 		expect(source).toMatch(
-			/sid\s*=\s*"CreateCanaryRuntimeOnly"[\s\S]*?actions\s*=\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resources\s*=\s*\["\*"\][\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy[\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\(aws_subnet\.private\)\[\*\]\.id[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?local\.runtime_security_group_ids[\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\s*=\s*\["false"\][\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?values\s*=\s*\["false"\]/,
-		);
-		expect(source).toMatch(
-			/sid\s*=\s*"ManageCanaryRuntimeOnly"[\s\S]*?bedrock-agentcore:CreateAgentRuntimeEndpoint[\s\S]*?bedrock-agentcore:TagResource[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
-		);
-		expect(source).toMatch(
-			/sid\s*=\s*"UpdateCanaryRuntimeOnly"[\s\S]*?actions\s*=\s*\["bedrock-agentcore:UpdateAgentRuntime"\][\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\(aws_subnet\.private\)\[\*\]\.id[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?local\.runtime_security_group_ids[\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\s*=\s*\["false"\][\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?values\s*=\s*\["false"\]/,
-		);
-		expect(planClassifier).toMatch(
-			/CreateCanaryRuntimeOnly:[\s\S]*?actions:\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resourcePatterns:\s*\["\*"\][\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?length:\s*3[\s\S]*?bedrock-agentcore:subnets[\s\S]*?length:\s*2[\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy[\s\S]*?Null:[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?"false"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?"false"/,
-		);
-		expect(planClassifier).toMatch(
-			/ManageCanaryRuntimeOnly:[\s\S]*?bedrock-agentcore:CreateAgentRuntimeEndpoint[\s\S]*?bedrock-agentcore:TagResource/,
-		);
-		expect(planClassifier).toMatch(
-			/UpdateCanaryRuntimeOnly:[\s\S]*?actions:\s*\["bedrock-agentcore:UpdateAgentRuntime"\][\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?length:\s*3[\s\S]*?bedrock-agentcore:subnets[\s\S]*?length:\s*2[\s\S]*?Null:[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?"false"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?"false"/,
-		);
-		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
 		expect(source).toMatch(
@@ -235,14 +217,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(/resources\s*=\s*local\.exact_secret_arns/);
 	});
 
-	it("limits artifact, event mapping, and role-management authority", () => {
+	it("limits workload artifact, event mapping, and secret authority", () => {
 		const source = terraformSource();
 		const canaryProduction = readFileSync(
 			join(root, "apps", "agentcore-canary-runtime", "src", "production.ts"),
-			"utf8",
-		);
-		const planClassifier = readFileSync(
-			join(root, "scripts", "deploy", "classify_agentcore_canary_plan.ts"),
 			"utf8",
 		);
 
@@ -258,39 +236,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(canaryProduction).toContain(
 			"artifactObjectKeyPrefix: options.bootstrap.artifactObjectKeyPrefix",
 		);
-		expect(source).toMatch(
-			/sid\s*=\s*"CreateCanaryEventMappingOnly"[\s\S]*?actions\s*=\s*\["lambda:CreateEventSourceMapping"\][\s\S]*?resources\s*=\s*\["\*"\][\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
-		);
-		expect(source).toMatch(
-			/sid\s*=\s*"UpdateCanaryEventMappingOnly"[\s\S]*?actions\s*=\s*\["lambda:UpdateEventSourceMapping"\][\s\S]*?event-source-mapping:\*[\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
-		);
-		expect(planClassifier).toMatch(
-			/CreateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:CreateEventSourceMapping"\][\s\S]*?resourcePatterns:\s*\["\*"\][\s\S]*?"lambda:FunctionArn": \[CANARY_CONSUMER_ARN\]/,
-		);
-		expect(planClassifier).toMatch(
-			/UpdateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:UpdateEventSourceMapping"\][\s\S]*?regionalArn\("lambda", "event-source-mapping:\*"\)[\s\S]*?"lambda:FunctionArn": \[CANARY_CONSUMER_ARN\]/,
-		);
-		expect(planClassifier).not.toContain("approvedGithubRolePolicy");
-		expect(planClassifier.match(/637423444544/g)).toHaveLength(1);
-		expect(planClassifier.match(/us-west-2/g)).toHaveLength(1);
-		expect(
-			planClassifier.match(/mymemo-agent-agentcore-canary-prod/g),
-		).toHaveLength(1);
-		expect(planClassifier.match(/mymemo_agentcore_canary_prod/g)).toHaveLength(
-			1,
-		);
-		expect(source).not.toContain("iam:UpdateAssumeRolePolicy");
-		expect(source).toMatch(
-			/sid\s*=\s*"DedicatedTerraformState"[\s\S]*?actions\s*=\s*\["s3:GetObject", "s3:PutObject"\][\s\S]*?agentcore-canary-prod\.tfstate"/,
-		);
-		expect(source).toMatch(
-			/sid\s*=\s*"DedicatedTerraformLock"[\s\S]*?"s3:DeleteObject"[\s\S]*?agentcore-canary-prod\.tfstate\.tflock"/,
-		);
-		expect(source).not.toContain("agentcore-canary-prod.tfstate*");
 		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(4);
-		expect(source).toMatch(
-			/data\s+"aws_iam_policy_document"\s+"states_trust"[\s\S]*?variable\s*=\s*"aws:SourceArn"[\s\S]*?stateMachine:\$\{local\.name_prefix\}-\*/,
-		);
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"runtime_trust"[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
 		);
@@ -304,68 +250,47 @@ describe("dormant AgentCore canary infrastructure", () => {
 		]) {
 			expect(source.match(new RegExp(action, "g"))).toHaveLength(2);
 		}
-		const managedRoles = source.match(
-			/sid\s*=\s*"ManageCanaryRolesOnly"([\s\S]*?)\n\s*}/,
-		)?.[1];
-		expect(managedRoles).not.toContain("-deployment");
-		expect(managedRoles).not.toContain("-campaign-launch");
 	});
 
-	it("keeps bootstrap authority separate from the deployment workflow", () => {
-		const workflow = readFileSync(
-			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
-			"utf8",
-		);
-		const bootstrapScript = readFileSync(
-			join(root, "scripts", "deploy", "bootstrap_agentcore_canary.sh"),
+	it("ships one guarded operator deployment path", () => {
+		const deployment = readFileSync(
+			join(root, "scripts", "deploy", "deploy_agentcore_canary.sh"),
 			"utf8",
 		);
 
-		expect(bootstrapScript).not.toContain("campaign_launch");
-		expect(bootstrapScript).toContain(
-			"-out=agentcore-canary-bootstrap-network.tfplan",
-		);
-		expect(bootstrapScript).toContain(
-			"classify_agentcore_canary_plan.sh agentcore-canary-bootstrap-network.tfplan",
-		);
-		expect(bootstrapScript).toContain("-target=aws_subnet.private");
-		expect(bootstrapScript).toContain("-target=aws_security_group.canary");
-		expect(bootstrapScript).toContain(
-			"-target=aws_cloudwatch_event_rule.repair",
-		);
-		expect(bootstrapScript).toContain(
-			"classify_agentcore_canary_plan.sh agentcore-canary-bootstrap.tfplan",
-		);
-		expect(bootstrapScript).toContain(
-			"terraform -chdir=infra/agentcore-canary apply",
-		);
-		expect(bootstrapScript).toContain('aws_profile="mymemo"');
-		expect(bootstrapScript).not.toContain("AWS_PROFILE:-");
-		expect(bootstrapScript).toContain("git rev-parse origin/main");
-		expect(workflow).toMatch(
-			/previous_runtime_image_digest[\s\S]*?sha256:0{64}[\s\S]*?previous_runtime_image_digest=""/,
-		);
-		expect(workflow).not.toContain("verify_github_canary_environment.sh");
-		expect(bootstrapScript).not.toContain(
-			"verify_github_canary_environment.sh",
-		);
-		expect(bootstrapScript).toMatch(
-			/gh variable get "\$1" --repo "\$\{repository\}"/,
-		);
-		expect(bootstrapScript).not.toContain("--env");
 		expect(
 			existsSync(
-				join(root, "scripts", "deploy", "verify_github_canary_environment.sh"),
+				join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
 			),
 		).toBe(false);
-		expect(workflow).not.toContain("bootstrap_canary_authority");
-		expect(workflow).not.toContain("agentcore-canary-bootstrap");
-		const bootstrapIam = readFileSync(
-			join(root, "infra", "bootstrap-iam", "main.tf"),
-			"utf8",
+		expect(
+			existsSync(
+				join(root, "scripts", "deploy", "bootstrap_agentcore_canary.sh"),
+			),
+		).toBe(false);
+		expect(deployment).toContain("deploy-mymemo-agentcore-canary-prod");
+		expect(deployment).toContain('aws_profile="mymemo"');
+		expect(deployment).not.toContain("AWS_PROFILE:-");
+		expect(deployment).toContain("git status --short");
+		expect(deployment).toContain("git rev-parse origin/main");
+		expect(deployment).toContain("sts get-caller-identity");
+		expect(deployment).toMatch(
+			/gh variable get "\$1" --repo "\$\{repository\}"/,
 		);
-		expect(bootstrapIam).not.toContain("agentcore_canary_bootstrap");
-		expect(bootstrapIam).not.toContain("agentcore-canary-bootstrap");
+		expect(deployment).toContain("-target=aws_ecr_repository.runtime");
+		expect(
+			deployment.match(/classify_agentcore_canary_plan\.sh/g),
+		).toHaveLength(2);
+		expect(deployment.match(/terraform[^\n]*apply/g)).toHaveLength(2);
+		expect(deployment).not.toContain("role-to-assume");
+		expect(deployment).not.toContain("GITHUB_TOKEN");
+		const rollbackRead = deployment.indexOf('previous_outputs="$(terraform');
+		const repositoryPlan = deployment.indexOf('repository_plan="');
+		expect(rollbackRead).toBeGreaterThan(-1);
+		expect(repositoryPlan).toBeGreaterThan(rollbackRead);
+		expect(deployment.slice(rollbackRead, repositoryPlan)).toMatch(
+			/export TF_VAR_runtime_image_digest="\$\{previous_runtime_image_digest\}"/,
+		);
 	});
 
 	it("wires Lambda, preflight, and disabled repair boundaries", () => {
@@ -391,35 +316,11 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 		expect(source).not.toContain('sid = "InvokeConnectivityPreflightOnly"');
 		expect(source).toMatch(
-			/sid\s*=\s*"ReadCanaryRepositoryOnly"[\s\S]*?resources\s*=\s*\["arn:aws:ecr:\$\{var\.aws_region\}:\$\{var\.aws_account_id\}:repository\/mymemo\/agentcore-canary-runtime"\]/,
-		);
-		expect(source).toMatch(
-			/sid\s*=\s*"ReadCanaryEnablementOnly"[\s\S]*?resources\s*=\s*\["arn:aws:ssm:\$\{var\.aws_region\}:\$\{var\.aws_account_id\}:parameter\/mymemo\/agentcore-canary\/\$\{var\.environment\}\/enabled"\]/,
-		);
-		const broadRead = source.match(
-			/sid\s*=\s*"ReadCanaryControlPlane"([\s\S]*?)\n\s*}/,
-		)?.[1];
-		expect(broadRead).not.toContain("ecr:BatchGetImage");
-		expect(broadRead).not.toContain("ecr:GetDownloadUrlForLayer");
-		expect(broadRead).not.toContain("ssm:GetParameter");
-		expect(source).toMatch(
-			/data\s+"aws_iam_policy_document"\s+"task"[\s\S]*?aws_lambda_function\.preflight\.arn/,
-		);
-		expect(source).toMatch(
 			/resource\s+"aws_lambda_event_source_mapping"\s+"consumer"[\s\S]*?precondition[\s\S]*?!var\.dispatch_enabled\s*\|\|\s*var\.campaign_network_enabled/,
 		);
 		expect(source).toMatch(
-			/sid\s*=\s*"TagCanaryNetworkOnCreate"[\s\S]*?variable\s*=\s*"ec2:CreateAction"/,
+			/resource\s+"aws_cloudwatch_event_rule"\s+"repair"[\s\S]*?state\s*=\s*var\.dispatch_enabled\s*\?\s*"ENABLED"\s*:\s*"DISABLED"/,
 		);
-		expect(source).toMatch(
-			/sid\s*=\s*"ManageCanaryRepairTargetOnly"[\s\S]*?variable\s*=\s*"events:TargetArn"[\s\S]*?-publisher/,
-		);
-		expect(source).toMatch(
-			/sid\s*=\s*"ManageCanaryRepairPermissionOnly"[\s\S]*?variable\s*=\s*"lambda:Principal"[\s\S]*?events\.amazonaws\.com/,
-		);
-		expect(source).toContain('variable = "iam:AssociatedResourceArn"');
-		expect(source).not.toContain('"events:EnableRule"');
-		expect(source).not.toContain('"events:PutRule"');
 	});
 
 	it("keeps the publisher cold-start contract free of consumer-only Runtime authority", () => {
@@ -488,9 +389,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 	});
 
-	it("ships a manual main-bound image promotion and dormant inspection", () => {
-		const workflow = readFileSync(
-			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
+	it("ships operator-run image promotion and dormant inspection", () => {
+		const deployment = readFileSync(
+			join(root, "scripts", "deploy", "deploy_agentcore_canary.sh"),
 			"utf8",
 		);
 		const inspection = readFileSync(
@@ -503,52 +404,36 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 		const inspectionChecks = `${inspection}\n${sharedChecks}`;
 
-		expect(workflow).toContain("workflow_dispatch:");
-		expect(workflow).not.toMatch(/\n\s+(push|workflow_run):/);
-		expect(workflow).not.toMatch(/\n\s+environment:/);
-		expect(workflow).toContain("deploy-mymemo-agentcore-canary-prod");
+		expect(deployment).toContain("deploy-mymemo-agentcore-canary-prod");
+		expect(deployment).toMatch(
+			/ssm get-parameter[\s\S]*?"disabled"[\s\S]*?ParameterNotFound[\s\S]*?terraform -chdir="\$\{terraform_dir\}" init/,
+		);
+		expect(deployment).toContain(
+			'enabled_parameter="/mymemo/agentcore-canary/prod/enabled"',
+		);
+		expect(deployment).toContain('ca_digest="');
 		expect(
-			workflow.match(/name: Confirm manual production intent/g),
-		).toHaveLength(1);
-		expect(workflow).toMatch(
-			/name: Confirm manual production intent[\s\S]*?CONFIRM_DEPLOY: \$\{\{ inputs\.confirm_deploy \}\}[\s\S]*?"\$\{CONFIRM_DEPLOY\}"/,
-		);
-		expect(workflow).not.toMatch(/"\$\{\{ inputs\.confirm_deploy \}\}"/);
-		expect(workflow).toMatch(
-			/name: Resolve an existing image digest for promotion or rollback[\s\S]*?RUNTIME_IMAGE_DIGEST_INPUT: \$\{\{ inputs\.runtime_image_digest \}\}[\s\S]*?runtime_image_digest="\$\{RUNTIME_IMAGE_DIGEST_INPUT\}"/,
-		);
-		expect(workflow).not.toMatch(
-			/runtime_image_digest="\$\{\{ inputs\.runtime_image_digest \}\}"/,
-		);
-		expect(workflow).not.toContain("verify_github_canary_environment.sh");
-		expect(workflow).toMatch(
-			/name: Require dormant canary flag before production mutation[\s\S]*?ssm get-parameter[\s\S]*?"disabled"[\s\S]*?ParameterNotFound[\s\S]*?uses: aws-actions\/amazon-ecr-login/,
-		);
-		expect(workflow).toContain(
-			"CANARY_ENABLED_PARAMETER_NAME: /mymemo/agentcore-canary/prod/enabled",
-		);
-		expect(workflow).toContain("RDS_CA_BUNDLE_SHA256:");
-		expect(
-			workflow.match(
+			deployment.match(
 				/e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3/g,
 			),
 		).toHaveLength(1);
-		expect(workflow).toContain("platforms: linux/arm64");
-		expect(workflow).toContain("docker pull --platform linux/arm64");
-		expect(workflow).toContain(
+		expect(deployment).toContain("--platform linux/arm64");
+		expect(deployment).toContain("docker pull --platform linux/arm64");
+		expect(deployment).toContain(
 			"agentcore-canary-runtime-image-check.sh agentcore-canary-existing:verified",
 		);
-		expect(workflow).toContain("runtime_image_digest");
-		expect(workflow).toContain("classify_agentcore_canary_plan.sh");
-		expect(workflow).toContain(
-			"terraform -chdir=infra/agentcore-canary output -json",
+		expect(deployment).toContain("runtime_image_digest");
+		expect(deployment).toContain("classify_agentcore_canary_plan.sh");
+		expect(deployment).toMatch(
+			/terraform -chdir="\$\{terraform_dir\}" output -json/,
 		);
-		expect(workflow).toContain('.runtime_image_digest.value // ""');
-		expect(workflow).not.toMatch(/terraform[^\n]*output[^\n]*\|\| true/);
-		expect(workflow).toContain("requireMMDSV2");
-		expect(workflow).toContain("inspect_agentcore_canary_dormant.sh");
-		expect(workflow).toContain("record the live version");
-		expect(workflow).not.toContain(
+		expect(deployment).toContain('.runtime_image_digest.value // ""');
+		expect(deployment).not.toMatch(/terraform[^\n]*output[^\n]*\|\| true/);
+		expect(deployment).toContain("requireMMDSV2");
+		expect(deployment).toContain("inspect_agentcore_canary_dormant.sh");
+		expect(deployment).toContain('deployment-plan.json"');
+		expect(deployment).toContain('deployment-plan.txt"');
+		expect(deployment).not.toContain(
 			"terraform -chdir=infra/agentcore-canary output -raw agent_runtime_version",
 		);
 
@@ -620,7 +505,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(inspection).not.toContain("invoke-agent-runtime");
 	});
 
-	it("ships a non-Run verified-TLS preflight with rollback and cleanup checks", () => {
+	it("ships a non-Run verified-TLS preflight with rollback checks", () => {
 		const preflight = readFileSync(
 			join(root, "scripts", "deploy", "preflight_agentcore_canary.sh"),
 			"utf8",
@@ -638,7 +523,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(preflight).toContain("lambda invoke");
 		expect(preflight).toContain("runAdmitted == false");
 		expect(preflight).toContain("describe-images");
-		expect(preflight).toContain("StopRuntimeSession");
+		expect(preflight).not.toContain("StopRuntimeSession");
 		expect(preflight).toContain("verify_agentcore_canary_alarms");
 		expect(preflight).toContain("verify_agentcore_canary_current_secrets");
 		expect(preflight).toContain("verify_agentcore_canary_disabled_dispatch");
@@ -658,7 +543,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"get-agent-runtime",
 			"get-agent-runtime-endpoint",
 			"metadataConfiguration.requireMMDSV2",
-			"simulate-principal-policy",
 			"runtime_security_configuration.value",
 			".roleArn == $expected.role_arn",
 			".environmentVariables == $expected.environment_variables",

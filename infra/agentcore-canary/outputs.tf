@@ -114,11 +114,6 @@ output "consumer_role_arn" {
   value       = aws_iam_role.consumer.arn
 }
 
-output "fault_injection_role_arn" {
-  description = "Role whose scoped cleanup authority is verified during preflight."
-  value       = aws_iam_role.fault_injection.arn
-}
-
 output "runtime_secret_arns" {
   description = "Exact secret metadata inspected without reading secret values."
   value       = local.exact_secret_arns
@@ -138,9 +133,4 @@ output "alarm_names" {
     values(aws_cloudwatch_metric_alarm.incident)[*].alarm_name,
     values(aws_cloudwatch_metric_alarm.validation)[*].alarm_name,
   )
-}
-
-output "deployment_role_arn" {
-  description = "Main-bound GitHub OIDC role for independent manual image promotion."
-  value       = aws_iam_role.deployment.arn
 }
