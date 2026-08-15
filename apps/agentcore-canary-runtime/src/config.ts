@@ -2,14 +2,12 @@ import {
 	loadWorkerConfigFromEnv,
 	type WorkerConfig,
 } from "agent-worker/config";
-import { requireEnv } from "agentcore-canary-dispatch/config-utils";
+import { type Env, requireEnv } from "agentcore-canary-dispatch/config-utils";
 import {
 	exactSecretArn,
 	verifiedDatabaseUrl,
 } from "agentcore-canary-dispatch/secret-config";
 import { RUNTIME_SHUTDOWN_TIMEOUT_MS } from "./constants";
-
-type Env = Record<string, string | undefined>;
 
 const AMBIENT_SECRET_NAMES = [
 	"AGENT_DATABASE_URL",

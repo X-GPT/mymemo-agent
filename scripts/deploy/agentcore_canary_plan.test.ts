@@ -166,6 +166,132 @@ describe("AgentCore canary Terraform plan classification", () => {
 				]),
 			),
 		).toEqual({ safe: true, reasons: [] });
+
+		for (const [sourceAccount, sourceArn] of [
+			[
+				"111111111111",
+				"arn:aws:states:us-west-2:111111111111:stateMachine:mymemo-agent-agentcore-canary-prod-*",
+			],
+			[
+				"637423444544",
+				"arn:aws:states:eu-west-1:637423444544:stateMachine:mymemo-agent-agentcore-canary-prod-*",
+			],
+		] as const) {
+			const foreignStatesTrust = JSON.stringify({
+				Version: "2012-10-17",
+				Statement: [
+					{
+						Effect: "Allow",
+						Action: "sts:AssumeRole",
+						Principal: { Service: "states.amazonaws.com" },
+						Condition: {
+							ArnLike: { "aws:SourceArn": sourceArn },
+							StringEquals: { "aws:SourceAccount": sourceAccount },
+						},
+					},
+				],
+			});
+			expect(
+				classifyAgentCoreCanaryPlan(
+					plan([
+						change("aws_iam_role.task", "aws_iam_role", ["create"], null, {
+							assume_role_policy: foreignStatesTrust,
+						}),
+					]),
+				).safe,
+			).toBe(false);
+		}
+
+		const runtimeTrust = (sourceAccount: string, sourceArn: string) =>
+			JSON.stringify({
+				Version: "2012-10-17",
+				Statement: [
+					{
+						Effect: "Allow",
+						Action: "sts:AssumeRole",
+						Principal: { Service: "bedrock-agentcore.amazonaws.com" },
+						Condition: {
+							ArnLike: { "aws:SourceArn": sourceArn },
+							StringEquals: { "aws:SourceAccount": sourceAccount },
+						},
+					},
+				],
+			});
+		const exactRuntimeArn =
+			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*";
+		expect(
+			classifyAgentCoreCanaryPlan(
+				plan([
+					change("aws_iam_role.runtime", "aws_iam_role", ["create"], null, {
+						assume_role_policy: runtimeTrust("637423444544", exactRuntimeArn),
+					}),
+				]),
+			),
+		).toEqual({ safe: true, reasons: [] });
+
+		for (const trust of [
+			runtimeTrust(
+				"111111111111",
+				"arn:aws:bedrock-agentcore:us-west-2:111111111111:runtime/mymemo_agentcore_canary_prod-*",
+			),
+			runtimeTrust(
+				"637423444544",
+				"arn:aws:bedrock-agentcore:eu-west-1:637423444544:runtime/mymemo_agentcore_canary_prod-*",
+			),
+			runtimeTrust(
+				"637423444544",
+				"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/*",
+			),
+		]) {
+			expect(
+				classifyAgentCoreCanaryPlan(
+					plan([
+						change("aws_iam_role.runtime", "aws_iam_role", ["create"], null, {
+							assume_role_policy: trust,
+						}),
+					]),
+				).safe,
+			).toBe(false);
+		}
+
+		const githubDeploymentTrust = (providerAccount: string) =>
+			JSON.stringify({
+				Version: "2012-10-17",
+				Statement: [
+					{
+						Effect: "Allow",
+						Action: "sts:AssumeRoleWithWebIdentity",
+						Principal: {
+							Federated: `arn:aws:iam::${providerAccount}:oidc-provider/token.actions.githubusercontent.com`,
+						},
+						Condition: {
+							StringEquals: {
+								"token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+								"token.actions.githubusercontent.com:sub":
+									"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary",
+							},
+						},
+					},
+				],
+			});
+		expect(
+			classifyAgentCoreCanaryPlan(
+				plan([
+					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
+						assume_role_policy: githubDeploymentTrust("637423444544"),
+					}),
+				]),
+			),
+		).toEqual({ safe: true, reasons: [] });
+		expect(
+			classifyAgentCoreCanaryPlan(
+				plan([
+					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
+						assume_role_policy: githubDeploymentTrust("111111111111"),
+					}),
+				]),
+			).safe,
+		).toBe(false);
 	});
 
 	it("rejects widened GitHub-assumable role permissions", () => {

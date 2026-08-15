@@ -1,13 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { requireEnv } from "agentcore-canary-dispatch/config-utils";
+import { type Env, requireEnv } from "agentcore-canary-dispatch/config-utils";
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
 	resolveCanaryDatabaseUrlsFromSecretArns,
 } from "agentcore-canary-dispatch/secret-config";
 import { Client, type ClientConfig } from "pg";
-
-type Env = Record<string, string | undefined>;
 
 interface PreflightDependencies {
 	readCurrentSecret: CurrentSecretReader;

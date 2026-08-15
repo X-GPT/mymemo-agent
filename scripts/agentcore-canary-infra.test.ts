@@ -164,6 +164,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
 			"utf8",
 		);
+		const bootstrap = workflow.match(
+			/\n {2}bootstrap:([\s\S]*?)\n {2}deploy:/,
+		)?.[1];
 
 		for (const role of [
 			"deployment",
@@ -209,6 +212,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"states_trust"[\s\S]*?variable\s*=\s*"aws:SourceArn"[\s\S]*?stateMachine:\$\{local\.name_prefix\}-\*/,
 		);
+		expect(source).toMatch(
+			/data\s+"aws_iam_policy_document"\s+"runtime_trust"[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
+		);
 		for (const action of [
 			"ec2:AssignPrivateIpAddresses",
 			"ec2:CreateNetworkInterface",
@@ -233,6 +239,29 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(workflow).toContain(
 			"verify_github_canary_environment.sh production-agentcore-canary production-agentcore-canary-campaign",
 		);
+		expect(
+			workflow.match(
+				/verify_github_canary_environment\.sh production-agentcore-canary production-agentcore-canary-campaign/g,
+			),
+		).toHaveLength(2);
+		expect(bootstrap).toContain("environment: production-agentcore-canary");
+		expect(bootstrap).toContain("role/mymemo-agent-agentcore-canary-bootstrap");
+		expect(bootstrap).not.toContain("role/mymemo-agent-github-actions-deploy");
+		const bootstrapIam = readFileSync(
+			join(root, "infra", "bootstrap-iam", "main.tf"),
+			"utf8",
+		);
+		expect(bootstrapIam).toMatch(
+			/data\s+"aws_iam_policy_document"\s+"agentcore_canary_bootstrap_trust"[\s\S]*?environment:production-agentcore-canary/,
+		);
+		expect(bootstrapIam).toMatch(
+			/resource\s+"aws_iam_role"\s+"agentcore_canary_bootstrap"[\s\S]*?name\s*=\s*"mymemo-agent-agentcore-canary-bootstrap"/,
+		);
+		expect(bootstrapIam).toMatch(
+			/sid\s*=\s*"BootstrapDisabledRepairRule"[\s\S]*?"events:PutRule"[\s\S]*?rule\/mymemo-agent-agentcore-canary-prod-repair/,
+		);
+		expect(bootstrapIam).not.toContain('"events:DeleteRule"');
+		expect(bootstrapIam).not.toContain('"events:PutTargets"');
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_function"\s+"preflight"[\s\S]*?role\s*=\s*aws_iam_role\.preflight\.arn/,
 		);

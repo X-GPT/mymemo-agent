@@ -682,12 +682,6 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 			return false;
 		}
 		const arnLikeRecord = arnLike as Record<string, unknown>;
-		const sourceAccount = oneString(equalsRecord["aws:SourceAccount"]) ?? "";
-		const sourceArn = oneString(arnLikeRecord["aws:SourceArn"]) ?? "";
-		const sourceArnAccount =
-			/^arn:aws:states:[a-z0-9-]+:(\d{12}):stateMachine:mymemo-agent-agentcore-canary-prod-\*$/.exec(
-				sourceArn,
-			)?.[1];
 		return (
 			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
 			oneString(trust.Action) === "sts:AssumeRole" &&
@@ -695,9 +689,10 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 			oneString(principalRecord.Service) === "states.amazonaws.com" &&
 			exactObjectKeys(conditionRecord, ["ArnLike", "StringEquals"]) &&
 			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
-			/^\d{12}$/.test(sourceAccount) &&
+			oneString(equalsRecord["aws:SourceAccount"]) === "637423444544" &&
 			exactObjectKeys(arnLikeRecord, ["aws:SourceArn"]) &&
-			sourceArnAccount === sourceAccount
+			oneString(arnLikeRecord["aws:SourceArn"]) ===
+				"arn:aws:states:us-west-2:637423444544:stateMachine:mymemo-agent-agentcore-canary-prod-*"
 		);
 	}
 
@@ -714,11 +709,10 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 				"bedrock-agentcore.amazonaws.com" &&
 			exactObjectKeys(conditionRecord, ["ArnLike", "StringEquals"]) &&
 			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
-			/^\d{12}$/.test(oneString(equalsRecord["aws:SourceAccount"]) ?? "") &&
+			oneString(equalsRecord["aws:SourceAccount"]) === "637423444544" &&
 			exactObjectKeys(arnLikeRecord, ["aws:SourceArn"]) &&
-			/^arn:aws:bedrock-agentcore:[a-z0-9-]+:\d{12}:runtime\/\*$/.test(
-				oneString(arnLikeRecord["aws:SourceArn"]) ?? "",
-			)
+			oneString(arnLikeRecord["aws:SourceArn"]) ===
+				"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*"
 		);
 	}
 
@@ -731,9 +725,8 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
 			oneString(trust.Action) === "sts:AssumeRoleWithWebIdentity" &&
 			exactObjectKeys(principalRecord, ["Federated"]) &&
-			/^arn:aws:iam::\d{12}:oidc-provider\/token\.actions\.githubusercontent\.com$/.test(
-				oneString(principalRecord.Federated) ?? "",
-			) &&
+			oneString(principalRecord.Federated) ===
+				"arn:aws:iam::637423444544:oidc-provider/token.actions.githubusercontent.com" &&
 			exactObjectKeys(conditionRecord, ["StringEquals"]) &&
 			exactObjectKeys(equalsRecord, [
 				"token.actions.githubusercontent.com:aud",

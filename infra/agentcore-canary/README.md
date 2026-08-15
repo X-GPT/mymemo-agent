@@ -13,13 +13,20 @@ reviewer. Configure the deployment Environment's non-secret variables
 referenced by `agentcore-canary-deploy.yml`. Deployment and campaign-launch
 OIDC subjects are bound to the two non-overlapping Environments so one approval
 cannot combine code-update and control-invocation authority. The one-time
-bootstrap option verifies both Environments, then creates only the immutable
-ECR repository, the two Environment-assumable canary roles, and the disabled
-repair-rule shell through the existing repository deployment role. The
+bootstrap option passes the `production-agentcore-canary` Environment approval,
+verifies both Environments, then uses a dedicated Environment-trusted bootstrap
+role to create only the immutable ECR repository, the two Environment-assumable
+canary roles, and the disabled repair-rule shell. The
 narrower deployment role cannot mutate those roles or enable/redefine the
 repair schedule; it may attach only the publisher target and publisher-only
 EventBridge permission. Rerun the approved bootstrap whenever those
 bootstrap-owned contracts intentionally change.
+
+Before the first canary bootstrap, apply `infra/bootstrap-iam` once through its
+documented administrator path to create the dedicated least-privilege bootstrap
+role. Its trust is bound to `production-agentcore-canary`; its policy cannot
+delete bootstrap-owned resources or mutate EventBridge targets, and the
+classified bootstrap plan pins the repair-rule shell to its disabled state.
 
 Run **Deploy dormant AgentCore canary** manually and enter
 `deploy-mymemo-agentcore-canary-prod`. Leaving `runtime_image_digest` empty

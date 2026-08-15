@@ -10,7 +10,11 @@ import {
 	createSqsCanaryDispatchQueue,
 	createSsmCanaryEnablementControl,
 } from "./aws-adapters";
-import { createRetryableAsyncSingleton, requireEnv } from "./config-utils";
+import {
+	createRetryableAsyncSingleton,
+	type Env,
+	requireEnv,
+} from "./config-utils";
 import {
 	type CanaryDispatchAlarm,
 	createCanaryDispatchConsumer,
@@ -28,8 +32,6 @@ import {
 	exactSecretArn,
 	verifiedDatabaseUrl,
 } from "./secret-config";
-
-type Env = Record<string, string | undefined>;
 
 export interface CanaryDispatchPublisherConfig {
 	agentDatabaseUrl: string;

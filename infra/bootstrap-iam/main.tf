@@ -245,3 +245,113 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
   role   = aws_iam_role.github_actions_deploy.id
   policy = data.aws_iam_policy_document.github_actions_deploy.json
 }
+
+data "aws_iam_policy_document" "agentcore_canary_bootstrap_trust" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    effect  = "Allow"
+
+    principals {
+      type        = "Federated"
+      identifiers = [data.aws_iam_openid_connect_provider.github.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_owner}/${var.github_repository}:environment:production-agentcore-canary"]
+    }
+  }
+}
+
+resource "aws_iam_role" "agentcore_canary_bootstrap" {
+  name               = "mymemo-agent-agentcore-canary-bootstrap"
+  assume_role_policy = data.aws_iam_policy_document.agentcore_canary_bootstrap_trust.json
+}
+
+data "aws_iam_policy_document" "agentcore_canary_bootstrap" {
+  statement {
+    sid = "DedicatedTerraformStateBucket"
+    actions = [
+      "s3:GetBucketVersioning",
+      "s3:ListBucket",
+    ]
+    resources = ["arn:aws:s3:::${var.terraform_state_bucket}"]
+  }
+
+  statement {
+    sid       = "DedicatedTerraformState"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["arn:aws:s3:::${var.terraform_state_bucket}/mymemo-agent/agentcore-canary-prod.tfstate"]
+  }
+
+  statement {
+    sid       = "DedicatedTerraformLock"
+    actions   = ["s3:DeleteObject", "s3:GetObject", "s3:PutObject"]
+    resources = ["arn:aws:s3:::${var.terraform_state_bucket}/mymemo-agent/agentcore-canary-prod.tfstate.tflock"]
+  }
+
+  statement {
+    sid       = "ReadGitHubOidcProvider"
+    actions   = ["iam:GetOpenIDConnectProvider"]
+    resources = [local.github_oidc_provider_arn]
+  }
+
+  statement {
+    sid = "BootstrapCanaryDeploymentRoles"
+    actions = [
+      "iam:CreateRole",
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListInstanceProfilesForRole",
+      "iam:ListRolePolicies",
+      "iam:ListRoleTags",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole",
+    ]
+    resources = [
+      "arn:aws:iam::${var.aws_account_id}:role/mymemo-agent-agentcore-canary-prod-campaign-launch",
+      "arn:aws:iam::${var.aws_account_id}:role/mymemo-agent-agentcore-canary-prod-deployment",
+    ]
+  }
+
+  statement {
+    sid = "BootstrapImmutableRuntimeRepository"
+    actions = [
+      "ecr:CreateRepository",
+      "ecr:DescribeRepositories",
+      "ecr:ListTagsForResource",
+      "ecr:PutImageScanningConfiguration",
+      "ecr:PutImageTagMutability",
+      "ecr:TagResource",
+      "ecr:UntagResource",
+    ]
+    resources = ["arn:aws:ecr:${var.aws_region}:${var.aws_account_id}:repository/mymemo/agentcore-canary-runtime"]
+  }
+
+  statement {
+    sid = "BootstrapDisabledRepairRule"
+    actions = [
+      "events:DescribeRule",
+      "events:ListTagsForResource",
+      "events:PutRule",
+      "events:TagResource",
+      "events:UntagResource",
+    ]
+    resources = ["arn:aws:events:${var.aws_region}:${var.aws_account_id}:rule/mymemo-agent-agentcore-canary-prod-repair"]
+  }
+}
+
+resource "aws_iam_role_policy" "agentcore_canary_bootstrap" {
+  name   = "mymemo-agent-agentcore-canary-bootstrap-policy"
+  role   = aws_iam_role.agentcore_canary_bootstrap.id
+  policy = data.aws_iam_policy_document.agentcore_canary_bootstrap.json
+}

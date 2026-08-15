@@ -182,14 +182,17 @@ aligned instead of casting around them.
 
 ### agentcore-canary-dispatch
 
-Required:
+Required by both the publisher and consumer entrypoints:
 
-- `AWS_REGION` — region for SSM, SQS, and AgentCore clients
+- `AWS_REGION` — region for SSM and SQS clients
 - `CANARY_AGENT_DATABASE_URL_SECRET_ARN` — exact same-account, same-region Secrets Manager ARN for the writable `mymemo_agent` URL; the Lambda resolves only `AWSCURRENT`, which must use `sslmode=verify-full`
 - `CANARY_DISPATCH_QUEUE_URL` — encrypted standard Canary dispatch queue URL
 - `CANARY_ENABLED_PARAMETER_NAME` — SSM parameter whose only enabling value is exactly `enabled`; missing, unreadable, or any other value fails closed
-- `CANARY_AGENT_RUNTIME_ARN` — exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS` — `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
+
+Additionally required by the consumer, manual-replay, and acquisition entrypoints:
+
+- `CANARY_AGENT_RUNTIME_ARN` — exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity. The publisher entrypoint intentionally does not receive this consumer-only authority
 
 ### agentcore-canary-control
 

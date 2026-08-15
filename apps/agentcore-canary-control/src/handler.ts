@@ -1,6 +1,7 @@
 import { createDatabase } from "@mymemo/agent-db/client";
 import {
 	createRetryableAsyncSingleton,
+	type Env,
 	requireEnv,
 } from "agentcore-canary-dispatch/config-utils";
 import { createCanaryDispatchProductionPublisher } from "agentcore-canary-dispatch/production";
@@ -16,8 +17,6 @@ import {
 	parseCanaryStartRequest,
 } from "./control";
 import { createCanaryFixtureDb, createCanaryFixtureVerifier } from "./fixture";
-
-type Env = Record<string, string | undefined>;
 
 export interface CanaryControlHandlerConfig {
 	agentDatabaseUrl: string;
