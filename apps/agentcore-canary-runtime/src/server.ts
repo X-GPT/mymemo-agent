@@ -53,8 +53,12 @@ async function readBoundedBody(request: Request): Promise<string> {
 	}
 }
 
-function jsonError(message: string, status: number): Response {
-	return Response.json({ error: message }, { status });
+function jsonError(
+	message: string,
+	status: number,
+	headers?: Record<string, string>,
+): Response {
+	return Response.json({ error: message }, { status, headers });
 }
 
 function isInvalidRequest(error: unknown): boolean {
@@ -104,13 +108,7 @@ export function createRuntimeRequestHandler(runtime: RuntimeRequestBoundary) {
 				error instanceof RuntimeBusyError ||
 				error instanceof RuntimeShuttingDownError
 			) {
-				return new Response(JSON.stringify({ error: error.message }), {
-					status: 503,
-					headers: {
-						"content-type": "application/json",
-						"retry-after": "1",
-					},
-				});
+				return jsonError(error.message, 503, { "retry-after": "1" });
 			}
 			if (isInvalidRequest(error)) {
 				return jsonError((error as Error).message, 400);

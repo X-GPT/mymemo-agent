@@ -1,6 +1,22 @@
 name: AgentCore Runtime image
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/agentcore-canary-runtime/**
+      - apps/agentcore-canary-dispatch/**
+      - apps/agent-worker/**
+      - packages/agent-db/**
+      - packages/live-text/**
+      - apps/*/package.json
+      - packages/*/package.json
+      - package.json
+      - bun.lock
+      - .dockerignore
+      - scripts/smoke/agentcore-canary-runtime-image-check.sh
+      - .github/workflows/agentcore-runtime-image.yml
   pull_request:
     paths:
       - apps/agentcore-canary-runtime/**

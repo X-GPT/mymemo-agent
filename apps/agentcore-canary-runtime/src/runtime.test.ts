@@ -107,7 +107,7 @@ describe("AgentCore canary Runtime", () => {
 		expect(runtime.health()).toEqual({ status: "Healthy" });
 	});
 
-	it("returns an exact duplicate disposition while refusing different work at capacity", async () => {
+	it("coalesces an exact duplicate while refusing different work at capacity", async () => {
 		const activeDispatch = dispatch("run-active");
 		const otherDispatch = {
 			...dispatch("run-other"),
@@ -118,33 +118,21 @@ describe("AgentCore canary Runtime", () => {
 			type: "terminal";
 			status: "done";
 		}>();
+		const acquired = acquisition(activeDispatch, {
+			disposition: "acquired",
+			owner: {
+				userId: activeDispatch.userId,
+				conversationId: activeDispatch.conversationId,
+				epoch: 8,
+			},
+			workerId: "boot-1/invocation-1",
+		});
 		let acquisitionCount = 0;
 		let serveCount = 0;
 		const runtime = createCanaryRuntime({
 			acquire: async () => {
 				acquisitionCount++;
-				return acquisition(
-					activeDispatch,
-					acquisitionCount === 1
-						? {
-								disposition: "acquired",
-								owner: {
-									userId: activeDispatch.userId,
-									conversationId: activeDispatch.conversationId,
-									epoch: 8,
-								},
-								workerId: "boot-1/invocation-1",
-							}
-						: {
-								disposition: "already_acquired",
-								owner: {
-									userId: activeDispatch.userId,
-									conversationId: activeDispatch.conversationId,
-									epoch: 8,
-								},
-								workerId: "boot-1/invocation-1",
-							},
-				);
+				return acquired;
 			},
 			serve: async () => {
 				serveCount++;
@@ -163,8 +151,8 @@ describe("AgentCore canary Runtime", () => {
 			rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
 			runtimeSessionId: activeDispatch.runtimeSessionId,
 		});
-		expect(await new Response(duplicate.body).text()).toContain(
-			'"disposition":"already_acquired"',
+		expect(await new Response(duplicate.body).text()).toBe(
+			acquired.receiptLine,
 		);
 		await expect(
 			runtime.invoke({
@@ -172,21 +160,22 @@ describe("AgentCore canary Runtime", () => {
 				runtimeSessionId: otherDispatch.runtimeSessionId,
 			}),
 		).rejects.toBeInstanceOf(RuntimeBusyError);
-		expect(acquisitionCount).toBe(2);
+		expect(acquisitionCount).toBe(1);
 		expect(serveCount).toBe(1);
 
 		serving.resolve({ type: "terminal", status: "done" });
 		await new Response(original.body).text();
 	});
 
-	it("releases an unexpected second acquisition without wedging capacity", async () => {
-		const dispatched = dispatch("run-double-acquired");
+	it("does not reacquire an exact duplicate after the active execution loses Ownership", async () => {
+		const dispatched = dispatch("run-ownership-lost-duplicate");
 		const serving = deferred<{
 			type: "terminal";
-			status: "done";
+			status: null;
 		}>();
+		const ownershipLost = deferred<void>();
 		let acquisitionCount = 0;
-		const releasedEpochs: number[] = [];
+		let releaseCount = 0;
 		const runtime = createCanaryRuntime({
 			acquire: async () => {
 				acquisitionCount++;
@@ -195,37 +184,43 @@ describe("AgentCore canary Runtime", () => {
 					owner: {
 						userId: dispatched.userId,
 						conversationId: dispatched.conversationId,
-						epoch: acquisitionCount,
+						epoch: 9,
 					},
-					workerId: `boot-1/invocation-${acquisitionCount}`,
+					workerId: "boot-1/invocation-lost",
 				});
 			},
 			serve: async () => await serving.promise,
-			heartbeat: async () => "alive",
-			release: async ({ owner }) => {
-				releasedEpochs.push(owner.epoch);
+			heartbeat: async () => {
+				ownershipLost.resolve();
+				return "lost";
 			},
-			heartbeatIntervalMs: 10,
+			release: async () => {
+				releaseCount++;
+			},
+			heartbeatIntervalMs: 1,
 		});
 
 		const original = await runtime.invoke({
 			rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
 			runtimeSessionId: dispatched.runtimeSessionId,
 		});
-		await expect(
-			runtime.invoke({
-				rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
-				runtimeSessionId: dispatched.runtimeSessionId,
-			}),
-		).rejects.toBeInstanceOf(RuntimeBusyError);
-		expect(releasedEpochs).toEqual([2]);
+		await ownershipLost.promise;
+		const duplicate = await runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(dispatched),
+			runtimeSessionId: dispatched.runtimeSessionId,
+		});
+		expect(await new Response(duplicate.body).text()).toContain(
+			'"disposition":"acquired"',
+		);
+		expect(acquisitionCount).toBe(1);
+		expect(releaseCount).toBe(0);
 
-		serving.resolve({ type: "terminal", status: "done" });
+		serving.resolve({ type: "terminal", status: null });
 		await new Response(original.body).text();
 		expect(runtime.health()).toEqual({ status: "Healthy" });
 	});
 
-	it("keeps capacity reserved when a duplicate attempt fails during the original acquisition", async () => {
+	it("coalesces an exact duplicate while the original acquisition is pending", async () => {
 		const activeDispatch = dispatch("run-acquiring");
 		const otherDispatch = {
 			...dispatch("run-waiting"),
@@ -234,13 +229,16 @@ describe("AgentCore canary Runtime", () => {
 		};
 		const firstAcquisition = deferred<ReturnType<typeof acquisition>>();
 		let acquisitionCount = 0;
+		let serveCount = 0;
 		const runtime = createCanaryRuntime({
 			acquire: async () => {
 				acquisitionCount++;
-				if (acquisitionCount === 1) return await firstAcquisition.promise;
-				throw new Error("duplicate acquisition failed");
+				return await firstAcquisition.promise;
 			},
-			serve: async () => ({ type: "terminal", status: "done" }),
+			serve: async () => {
+				serveCount++;
+				return { type: "terminal", status: "done" };
+			},
 			heartbeat: async () => "alive",
 			release: async () => {},
 			heartbeatIntervalMs: 10,
@@ -250,19 +248,17 @@ describe("AgentCore canary Runtime", () => {
 			rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
 			runtimeSessionId: activeDispatch.runtimeSessionId,
 		});
-		await expect(
-			runtime.invoke({
-				rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
-				runtimeSessionId: activeDispatch.runtimeSessionId,
-			}),
-		).rejects.toThrow("duplicate acquisition failed");
+		const duplicate = runtime.invoke({
+			rawEnvelope: serializeCanaryDispatchEnvelope(activeDispatch),
+			runtimeSessionId: activeDispatch.runtimeSessionId,
+		});
 		await expect(
 			runtime.invoke({
 				rawEnvelope: serializeCanaryDispatchEnvelope(otherDispatch),
 				runtimeSessionId: otherDispatch.runtimeSessionId,
 			}),
 		).rejects.toBeInstanceOf(RuntimeBusyError);
-		expect(acquisitionCount).toBe(2);
+		expect(acquisitionCount).toBe(1);
 
 		firstAcquisition.resolve(
 			acquisition(activeDispatch, {
@@ -275,8 +271,14 @@ describe("AgentCore canary Runtime", () => {
 				workerId: "boot-1/invocation-acquiring",
 			}),
 		);
-		const invocation = await original;
-		await new Response(invocation.body).text();
+		const [originalInvocation, duplicateInvocation] = await Promise.all([
+			original,
+			duplicate,
+		]);
+		expect(await new Response(duplicateInvocation.body).text()).toBe(
+			await new Response(originalInvocation.body).text(),
+		);
+		expect(serveCount).toBe(1);
 	});
 
 	it("stays busy after Run detachment and does not release after renewal loses Ownership", async () => {

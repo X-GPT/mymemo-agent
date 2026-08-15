@@ -47,10 +47,16 @@ export interface CanaryRuntimeDependencies {
 interface ActiveExecution {
 	dispatch: CanaryDispatchIdentity;
 	acquisition: AcquiredDispatch;
+	receiptLine: string;
 	shutdownController: AbortController;
 	detached: boolean;
 	ownershipLost: boolean;
 	done: Promise<void>;
+}
+
+interface PendingAcquisition {
+	dispatch: CanaryDispatchIdentity;
+	promise: Promise<CanaryRuntimeAcquisition>;
 }
 
 export class RuntimeBusyError extends Error {
@@ -69,11 +75,23 @@ export interface RuntimeInvocation {
 	body: ReadableStream<Uint8Array>;
 }
 
+function executionIdentity(entry: ActiveExecution): AcquiredExecutionIdentity {
+	return {
+		owner: entry.acquisition.owner,
+		workerId: entry.acquisition.workerId,
+		runId: entry.dispatch.runId,
+	};
+}
+
+function receiptInvocation(receiptLine: string): RuntimeInvocation {
+	return { body: new Blob([receiptLine]).stream() };
+}
+
 export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 	let active: ActiveExecution | undefined;
-	let pendingDispatch: CanaryDispatchIdentity | undefined;
-	const pendingAcquisitions = new Set<Promise<CanaryRuntimeAcquisition>>();
+	let pendingAcquisition: PendingAcquisition | undefined;
 	let shuttingDown = false;
+	const currentExecution = () => active;
 
 	async function execute(entry: ActiveExecution): Promise<void> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -82,9 +100,7 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 			let renewal: "alive" | "lost" = "alive";
 			try {
 				renewal = await dependencies.heartbeat({
-					owner: entry.acquisition.owner,
-					workerId: entry.acquisition.workerId,
-					runId: entry.dispatch.runId,
+					...executionIdentity(entry),
 					detached: entry.detached,
 				});
 			} catch {
@@ -109,11 +125,7 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 			});
 			if (result.type === "ownership_lost") entry.ownershipLost = true;
 			if (!entry.ownershipLost) {
-				await dependencies.release({
-					owner: entry.acquisition.owner,
-					workerId: entry.acquisition.workerId,
-					runId: entry.dispatch.runId,
-				});
+				await dependencies.release(executionIdentity(entry));
 			}
 		} finally {
 			if (timer) clearTimeout(timer);
@@ -124,7 +136,7 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 	return {
 		health(): { status: "Healthy" | "HealthyBusy" } {
 			return {
-				status: active || pendingDispatch ? "HealthyBusy" : "Healthy",
+				status: active || pendingAcquisition ? "HealthyBusy" : "Healthy",
 			};
 		},
 
@@ -141,58 +153,54 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 			if (dispatch.runtimeSessionId !== input.runtimeSessionId) {
 				throw new RuntimeSessionMismatchError("Runtime session mismatch");
 			}
-			const occupied = active?.dispatch ?? pendingDispatch;
-			if (occupied && !sameCanaryDispatch(occupied, dispatch)) {
+			const current = currentExecution();
+			if (current) {
+				if (!sameCanaryDispatch(current.dispatch, dispatch)) {
+					throw new RuntimeBusyError("AgentCore Runtime is busy");
+				}
+				return receiptInvocation(current.receiptLine);
+			}
+			if (
+				pendingAcquisition &&
+				!sameCanaryDispatch(pendingAcquisition.dispatch, dispatch)
+			) {
 				throw new RuntimeBusyError("AgentCore Runtime is busy");
 			}
-			pendingDispatch ??= dispatch;
 
-			const pending = dependencies.acquire(input.rawEnvelope);
-			pendingAcquisitions.add(pending);
+			const pending =
+				pendingAcquisition ??
+				({
+					dispatch,
+					promise: dependencies.acquire(input.rawEnvelope),
+				} satisfies PendingAcquisition);
+			pendingAcquisition = pending;
 			let acquired: CanaryRuntimeAcquisition;
 			try {
-				acquired = await pending;
+				acquired = await pending.promise;
 			} finally {
-				pendingAcquisitions.delete(pending);
-				if (pendingAcquisitions.size === 0 && !active) {
-					pendingDispatch = undefined;
-				}
+				if (pendingAcquisition === pending) pendingAcquisition = undefined;
 			}
 			if (acquired.result.disposition !== "acquired") {
-				return {
-					body: new Blob([acquired.receiptLine]).stream(),
-				};
+				return receiptInvocation(acquired.receiptLine);
 			}
 
 			const entry: ActiveExecution = {
 				dispatch: acquired.dispatch,
 				acquisition: acquired.result,
+				receiptLine: acquired.receiptLine,
 				shutdownController: new AbortController(),
 				detached: false,
 				ownershipLost: false,
 				done: Promise.resolve(),
 			};
-			if (active) {
-				if (pendingAcquisitions.size === 0) pendingDispatch = undefined;
-				if (
-					active.acquisition.owner.epoch === acquired.result.owner.epoch &&
-					active.acquisition.workerId === acquired.result.workerId
-				) {
-					return {
-						body: new Blob([acquired.receiptLine]).stream(),
-					};
+			const concurrent = currentExecution();
+			if (concurrent) {
+				if (!sameCanaryDispatch(concurrent.dispatch, dispatch)) {
+					throw new RuntimeBusyError("AgentCore Runtime is busy");
 				}
-				await dependencies.release({
-					owner: acquired.result.owner,
-					workerId: acquired.result.workerId,
-					runId: acquired.dispatch.runId,
-				});
-				throw new RuntimeBusyError(
-					"AgentCore Runtime acquired duplicate work while busy",
-				);
+				return receiptInvocation(concurrent.receiptLine);
 			}
 			active = entry;
-			pendingDispatch = undefined;
 			if (shuttingDown) entry.shutdownController.abort();
 			let streamCanceled = false;
 			const body = new ReadableStream<Uint8Array>({
@@ -216,8 +224,8 @@ export function createCanaryRuntime(dependencies: CanaryRuntimeDependencies) {
 		async shutdown(timeoutMs = 30_000): Promise<void> {
 			shuttingDown = true;
 			const drain = async (): Promise<void> => {
-				while (pendingAcquisitions.size > 0) {
-					await Promise.allSettled([...pendingAcquisitions]);
+				while (pendingAcquisition) {
+					await Promise.allSettled([pendingAcquisition.promise]);
 				}
 				active?.shutdownController.abort();
 				await active?.done;

@@ -14,22 +14,22 @@ describe("agent-worker production composition", () => {
 			new URL("./production-run-resources.ts", import.meta.url),
 			"utf8",
 		);
-		const source = `${entrypoint}\n${resources}`;
-
-		expect(source).toContain("const startRunQuery = createStartRunQuery({");
-		expect(source).toContain(
+		expect(resources).toContain("const startRunQuery = createStartRunQuery({");
+		expect(resources).toContain(
 			"const artifactPublisher = createArtifactPublisher({",
 		);
-		expect(source).toContain("createS3ArtifactObjectStore(config.artifact)");
-		expect(source).toContain("artifactPublisher,");
-		expect(source).toContain("processor: createSdkRunProcessor({");
-		expect(source).toContain("createRedisLiveStreamRelay({");
-		expect(source).toContain("url: config.redisUrl");
+		expect(resources).toContain("createS3ArtifactObjectStore(config.artifact)");
+		expect(resources).toContain("artifactPublisher,");
+		expect(resources).toContain("processor: createSdkRunProcessor({");
+		expect(resources).toContain("createRedisLiveStreamRelay({");
+		expect(resources).toContain("url: config.redisUrl");
 		expect(entrypoint).toContain(
 			"createProductionRunResources({ config, logger })",
 		);
 		expect(entrypoint).toContain("await liveStreamRelay.close()");
-		expect(source).not.toContain("liveTextTransport");
-		expect(source).not.toContain("syntheticProcessor");
+		expect(entrypoint).not.toContain("liveTextTransport");
+		expect(resources).not.toContain("liveTextTransport");
+		expect(entrypoint).not.toContain("syntheticProcessor");
+		expect(resources).not.toContain("syntheticProcessor");
 	});
 });
