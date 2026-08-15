@@ -90,6 +90,18 @@ data "aws_iam_policy_document" "runtime" {
   }
 
   statement {
+    sid       = "ConfigureCanaryRuntimeLogPolicy"
+    actions   = ["logs:PutResourcePolicy"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agentcore_canary_${var.environment}-*"]
+  }
+
+  statement {
+    sid       = "DiscoverRuntimeLogGroups"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:*"]
+  }
+
+  statement {
     sid = "WriteCanaryRuntimeLogs"
     actions = [
       "logs:CreateLogStream",
