@@ -139,6 +139,83 @@ describe("AgentCore canary Terraform plan classification", () => {
 		expect(widened.reasons).toContain(
 			"aws_iam_role.preflight has unapproved IAM trust on creation",
 		);
+
+		const statesTrust = JSON.stringify({
+			Version: "2012-10-17",
+			Statement: [
+				{
+					Effect: "Allow",
+					Action: "sts:AssumeRole",
+					Principal: { Service: "states.amazonaws.com" },
+					Condition: {
+						ArnLike: {
+							"aws:SourceArn":
+								"arn:aws:states:us-west-2:637423444544:stateMachine:mymemo-agent-agentcore-canary-prod-*",
+						},
+						StringEquals: { "aws:SourceAccount": "637423444544" },
+					},
+				},
+			],
+		});
+		expect(
+			classifyAgentCoreCanaryPlan(
+				plan([
+					change("aws_iam_role.task", "aws_iam_role", ["create"], null, {
+						assume_role_policy: statesTrust,
+					}),
+				]),
+			),
+		).toEqual({ safe: true, reasons: [] });
+	});
+
+	it("rejects widened GitHub-assumable role permissions", () => {
+		const widened = JSON.stringify({
+			Version: "2012-10-17",
+			Statement: [{ Effect: "Allow", Action: "*", Resource: "*" }],
+		});
+		const result = classifyAgentCoreCanaryPlan(
+			plan([
+				change(
+					"aws_iam_role_policy.deployment",
+					"aws_iam_role_policy",
+					["update"],
+					{ policy: "previous" },
+					{ policy: widened },
+				),
+			]),
+		);
+
+		expect(result.safe).toBe(false);
+		expect(result.reasons).toContain(
+			"aws_iam_role_policy.deployment has unapproved GitHub role permissions",
+		);
+	});
+
+	it("accepts only the exact campaign-launch permission", () => {
+		const exact = JSON.stringify({
+			Version: "2012-10-17",
+			Statement: [
+				{
+					Effect: "Allow",
+					Action: "lambda:InvokeFunction",
+					Resource:
+						"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-control",
+				},
+			],
+		});
+		expect(
+			classifyAgentCoreCanaryPlan(
+				plan([
+					change(
+						"aws_iam_role_policy.campaign_launch",
+						"aws_iam_role_policy",
+						["create"],
+						null,
+						{ policy: exact },
+					),
+				]),
+			),
+		).toEqual({ safe: true, reasons: [] });
 	});
 
 	it("requires an independently locked AWS 6.x provider satisfying >= 6.50", () => {

@@ -7,14 +7,17 @@ VPC, database, Redis, artifact-bucket, ECS, load-balancer, or routing resources.
 
 ## Deployment authority
 
-Create a GitHub Environment named `production-agentcore-canary` with at least
-one required reviewer and configure its non-secret variables referenced by
-`agentcore-canary-deploy.yml`. The OIDC subject is bound exactly to that
-Environment. The one-time bootstrap option creates only the immutable ECR
-repository plus the two Environment-assumable canary roles (deployment and
-campaign launch) through the existing repository deployment role. Those two
-roles cannot be mutated by the narrower deployment role; rerun the approved
-bootstrap whenever their inline policies intentionally change.
+Create GitHub Environments named `production-agentcore-canary` and
+`production-agentcore-canary-campaign`, each with at least one required
+reviewer. Configure the deployment Environment's non-secret variables
+referenced by `agentcore-canary-deploy.yml`. Deployment and campaign-launch
+OIDC subjects are bound to the two non-overlapping Environments so one approval
+cannot combine code-update and control-invocation authority. The one-time
+bootstrap option verifies both Environments, then creates only the immutable
+ECR repository plus the two Environment-assumable canary roles through the
+existing repository deployment role. Those two roles cannot be mutated by the
+narrower deployment role; rerun the approved bootstrap whenever their inline
+policies intentionally change.
 
 Run **Deploy dormant AgentCore canary** manually and enter
 `deploy-mymemo-agentcore-canary-prod`. Leaving `runtime_image_digest` empty

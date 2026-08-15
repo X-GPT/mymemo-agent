@@ -17,6 +17,11 @@ resource "aws_lambda_function" "publisher" {
     security_group_ids = local.lambda_security_group_ids
     subnet_ids         = values(aws_subnet.private)[*].id
   }
+
+  depends_on = [
+    aws_iam_role_policy.publisher,
+    aws_iam_role_policy.publisher_base,
+  ]
 }
 
 resource "aws_lambda_function" "consumer" {
@@ -41,6 +46,11 @@ resource "aws_lambda_function" "consumer" {
     security_group_ids = local.lambda_security_group_ids
     subnet_ids         = values(aws_subnet.private)[*].id
   }
+
+  depends_on = [
+    aws_iam_role_policy.consumer,
+    aws_iam_role_policy.consumer_base,
+  ]
 }
 
 resource "aws_lambda_function" "control" {
@@ -66,6 +76,11 @@ resource "aws_lambda_function" "control" {
     security_group_ids = local.lambda_security_group_ids
     subnet_ids         = values(aws_subnet.private)[*].id
   }
+
+  depends_on = [
+    aws_iam_role_policy.control,
+    aws_iam_role_policy.control_base,
+  ]
 }
 
 resource "aws_lambda_function" "preflight" {
@@ -89,6 +104,8 @@ resource "aws_lambda_function" "preflight" {
     security_group_ids = local.lambda_security_group_ids
     subnet_ids         = values(aws_subnet.private)[*].id
   }
+
+  depends_on = [aws_iam_role_policy.preflight]
 }
 
 resource "aws_lambda_event_source_mapping" "consumer" {

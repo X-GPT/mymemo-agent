@@ -100,6 +100,270 @@ const GITHUB_ROLE_ADDRESSES = new Set([
 	"aws_iam_role.campaign_launch",
 	"aws_iam_role.deployment",
 ]);
+const GITHUB_ROLE_POLICY_ADDRESSES = new Set([
+	"aws_iam_role_policy.campaign_launch",
+	"aws_iam_role_policy.deployment",
+]);
+
+interface PolicyRule {
+	actions: string[];
+	resourcePatterns: (string | RegExp)[];
+	condition?: {
+		operator: string;
+		key: string;
+		value: string;
+	};
+}
+
+const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
+	DedicatedTerraformState: {
+		actions: [
+			"s3:DeleteObject",
+			"s3:GetBucketVersioning",
+			"s3:GetObject",
+			"s3:ListBucket",
+			"s3:PutObject",
+		],
+		resourcePatterns: [
+			"arn:aws:s3:::mymemo-terraform-state-bucket",
+			"arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/agentcore-canary-prod.tfstate*",
+		],
+	},
+	ReadOnlySharedTerraformOutputs: {
+		actions: ["s3:GetObject"],
+		resourcePatterns: [
+			"arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/prod.tfstate",
+		],
+	},
+	ReadCanaryControlPlane: {
+		actions: [
+			"bedrock-agentcore:GetAgentRuntime",
+			"bedrock-agentcore:GetAgentRuntimeEndpoint",
+			"bedrock-agentcore:ListAgentRuntimeEndpoints",
+			"bedrock-agentcore:ListAgentRuntimeVersions",
+			"bedrock-agentcore:ListTagsForResource",
+			"cloudwatch:DescribeAlarms",
+			"cloudwatch:GetMetricStatistics",
+			"cloudwatch:ListTagsForResource",
+			"ec2:Describe*",
+			"ecr:GetAuthorizationToken",
+			"events:DescribeRule",
+			"events:ListTagsForResource",
+			"events:ListTargetsByRule",
+			"iam:GetOpenIDConnectProvider",
+			"iam:GetRole",
+			"iam:GetRolePolicy",
+			"iam:ListRolePolicies",
+			"iam:ListRoleTags",
+			"kms:DescribeKey",
+			"kms:GetKeyPolicy",
+			"kms:GetKeyRotationStatus",
+			"kms:ListAliases",
+			"kms:ListResourceTags",
+			"lambda:GetEventSourceMapping",
+			"lambda:GetFunction",
+			"lambda:GetFunctionCodeSigningConfig",
+			"lambda:GetFunctionConcurrency",
+			"lambda:GetFunctionConfiguration",
+			"lambda:GetPolicy",
+			"lambda:GetRuntimeManagementConfig",
+			"lambda:ListEventSourceMappings",
+			"lambda:ListTags",
+			"sqs:GetQueueAttributes",
+			"sqs:GetQueueUrl",
+			"sqs:ListQueueTags",
+			"ssm:DescribeParameters",
+			"ssm:ListTagsForResource",
+		],
+		resourcePatterns: ["*"],
+	},
+	ReadCanaryRepositoryOnly: {
+		actions: [
+			"ecr:BatchCheckLayerAvailability",
+			"ecr:BatchGetImage",
+			"ecr:DescribeImages",
+			"ecr:DescribeImageScanFindings",
+			"ecr:DescribeRepositories",
+			"ecr:GetDownloadUrlForLayer",
+			"ecr:ListImages",
+			"ecr:ListTagsForResource",
+		],
+		resourcePatterns: [
+			"arn:aws:ecr:us-west-2:637423444544:repository/mymemo/agentcore-canary-runtime",
+		],
+	},
+	ReadCanaryEnablementOnly: {
+		actions: ["ssm:GetParameter"],
+		resourcePatterns: [
+			"arn:aws:ssm:us-west-2:637423444544:parameter/mymemo/agentcore-canary/prod/enabled",
+		],
+	},
+	ManageCanaryRuntimeOnly: {
+		actions: [
+			"bedrock-agentcore:CreateAgentRuntime",
+			"bedrock-agentcore:TagResource",
+			"bedrock-agentcore:UpdateAgentRuntime",
+		],
+		resourcePatterns: [
+			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*",
+		],
+	},
+	ManageCanaryAlarmsOnly: {
+		actions: [
+			"cloudwatch:DeleteAlarms",
+			"cloudwatch:PutMetricAlarm",
+			"cloudwatch:TagResource",
+		],
+		resourcePatterns: [
+			"arn:aws:cloudwatch:us-west-2:637423444544:alarm:mymemo-agent-agentcore-canary-prod-*",
+		],
+	},
+	ManageCanaryRepositoryOnly: {
+		actions: [
+			"ecr:CompleteLayerUpload",
+			"ecr:CreateRepository",
+			"ecr:InitiateLayerUpload",
+			"ecr:PutImage",
+			"ecr:PutImageScanningConfiguration",
+			"ecr:PutImageTagMutability",
+			"ecr:TagResource",
+			"ecr:UploadLayerPart",
+		],
+		resourcePatterns: [
+			"arn:aws:ecr:us-west-2:637423444544:repository/mymemo/agentcore-canary-runtime",
+		],
+	},
+	ManageCanaryRepairRuleOnly: {
+		actions: [
+			"events:DisableRule",
+			"events:EnableRule",
+			"events:PutRule",
+			"events:PutTargets",
+			"events:TagResource",
+		],
+		resourcePatterns: [
+			"arn:aws:events:us-west-2:637423444544:rule/mymemo-agent-agentcore-canary-prod-repair",
+		],
+	},
+	ManageCanaryFunctionsOnly: {
+		actions: [
+			"lambda:AddPermission",
+			"lambda:CreateFunction",
+			"lambda:PutFunctionConcurrency",
+			"lambda:TagResource",
+			"lambda:UpdateFunctionCode",
+			"lambda:UpdateFunctionConfiguration",
+		],
+		resourcePatterns: [
+			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-*",
+		],
+	},
+	ManageCanaryEventMappingOnly: {
+		actions: [
+			"lambda:CreateEventSourceMapping",
+			"lambda:UpdateEventSourceMapping",
+		],
+		resourcePatterns: [
+			"arn:aws:lambda:us-west-2:637423444544:event-source-mapping:*",
+		],
+		condition: {
+			operator: "ArnLike",
+			key: "lambda:FunctionArn",
+			value:
+				"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer",
+		},
+	},
+	ManageCanaryQueuesOnly: {
+		actions: ["sqs:CreateQueue", "sqs:SetQueueAttributes", "sqs:TagQueue"],
+		resourcePatterns: [
+			"arn:aws:sqs:us-west-2:637423444544:mymemo-agent-agentcore-canary-prod-*",
+		],
+	},
+	ManageCanaryParameterOnly: {
+		actions: ["ssm:AddTagsToResource", "ssm:PutParameter"],
+		resourcePatterns: [
+			"arn:aws:ssm:us-west-2:637423444544:parameter/mymemo/agentcore-canary/prod/*",
+		],
+	},
+	PassAndInspectCanaryRolesOnly: {
+		actions: ["iam:PassRole", "iam:SimulatePrincipalPolicy"],
+		resourcePatterns: [
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-*",
+		],
+	},
+	CreateTaggedCanaryNetworkAndKey: {
+		actions: [
+			"ec2:AllocateAddress",
+			"ec2:CreateNatGateway",
+			"ec2:CreateRouteTable",
+			"ec2:CreateSecurityGroup",
+			"ec2:CreateSubnet",
+			"ec2:CreateTags",
+			"kms:CreateKey",
+		],
+		resourcePatterns: ["*"],
+		condition: {
+			operator: "StringEquals",
+			key: "aws:RequestTag/Application",
+			value: "mymemo-agentcore-canary",
+		},
+	},
+	ManageTaggedCanaryNetworkAndKey: {
+		actions: [
+			"ec2:AssociateRouteTable",
+			"ec2:AuthorizeSecurityGroupEgress",
+			"ec2:CreateRoute",
+			"ec2:ModifySubnetAttribute",
+			"ec2:ReplaceRoute",
+			"kms:EnableKeyRotation",
+			"kms:PutKeyPolicy",
+			"kms:TagResource",
+		],
+		resourcePatterns: ["*"],
+		condition: {
+			operator: "StringEquals",
+			key: "aws:ResourceTag/Application",
+			value: "mymemo-agentcore-canary",
+		},
+	},
+	ManageCanaryKeyAliasOnly: {
+		actions: ["kms:CreateAlias"],
+		resourcePatterns: [
+			"arn:aws:kms:us-west-2:637423444544:alias/mymemo-agent-agentcore-canary-prod",
+			"arn:aws:kms:us-west-2:637423444544:key/*",
+		],
+		condition: {
+			operator: "StringEquals",
+			key: "kms:RequestAlias",
+			value: "alias/mymemo-agent-agentcore-canary-prod",
+		},
+	},
+	InspectRequiredSecretMetadataOnly: {
+		actions: ["secretsmanager:ListSecretVersionIds"],
+		resourcePatterns: Array.from(
+			{ length: 5 },
+			() =>
+				/^arn:aws:secretsmanager:us-west-2:637423444544:secret:[A-Za-z0-9/_+=.@-]+$/,
+		),
+	},
+	ManageCanaryRolesOnly: {
+		actions: [
+			"iam:CreateRole",
+			"iam:DeleteRolePolicy",
+			"iam:PutRolePolicy",
+			"iam:TagRole",
+		],
+		resourcePatterns: [
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-consumer",
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-control",
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-fault-injection",
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-preflight",
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-publisher",
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-runtime",
+			"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-canary-prod-task",
+		],
+	},
+};
 
 function oneString(value: unknown): string | undefined {
 	if (typeof value === "string") return value;
@@ -111,6 +375,67 @@ function oneString(value: unknown): string | undefined {
 		return value[0];
 	}
 	return undefined;
+}
+
+function stringValues(value: unknown): string[] | undefined {
+	if (typeof value === "string") return [value];
+	if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+		return value as string[];
+	}
+	return undefined;
+}
+
+function sameStrings(value: unknown, expected: string[]): boolean {
+	const actual = stringValues(value);
+	return (
+		actual !== undefined &&
+		actual.length === expected.length &&
+		actual.slice().sort().join("\0") === expected.slice().sort().join("\0")
+	);
+}
+
+function matchesResourcePatterns(
+	value: unknown,
+	patterns: (string | RegExp)[],
+): boolean {
+	const resources = stringValues(value);
+	if (
+		!resources ||
+		resources.length !== patterns.length ||
+		new Set(resources).size !== resources.length
+	) {
+		return false;
+	}
+	const unmatched = [...resources];
+	for (const pattern of patterns) {
+		const index = unmatched.findIndex((resource) =>
+			typeof pattern === "string"
+				? resource === pattern
+				: pattern.test(resource),
+		);
+		if (index < 0) return false;
+		unmatched.splice(index, 1);
+	}
+	return unmatched.length === 0;
+}
+
+function approvedCondition(
+	value: unknown,
+	expected: PolicyRule["condition"],
+): boolean {
+	if (!expected) return value === undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const condition = value as Record<string, unknown>;
+	if (!exactObjectKeys(condition, [expected.operator])) return false;
+	const operator = condition[expected.operator];
+	if (!operator || typeof operator !== "object" || Array.isArray(operator)) {
+		return false;
+	}
+	const entries = operator as Record<string, unknown>;
+	return (
+		exactObjectKeys(entries, [expected.key]) &&
+		oneString(entries[expected.key]) === expected.value
+	);
 }
 
 function parsePolicy(value: unknown): Record<string, unknown> | undefined {
@@ -131,6 +456,78 @@ function exactObjectKeys(
 	return (
 		Object.keys(value).sort().join("\0") === expected.slice().sort().join("\0")
 	);
+}
+
+function approvedDeploymentPolicy(value: unknown): boolean {
+	const policy = parsePolicy(value);
+	if (!policy || !exactObjectKeys(policy, ["Statement", "Version"])) {
+		return false;
+	}
+	if (policy.Version !== "2012-10-17" || !Array.isArray(policy.Statement)) {
+		return false;
+	}
+	const seen = new Set<string>();
+	for (const value of policy.Statement) {
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			return false;
+		const statement = value as Record<string, unknown>;
+		const sid = oneString(statement.Sid);
+		const rule = sid ? DEPLOYMENT_POLICY_RULES[sid] : undefined;
+		if (!sid || !rule || seen.has(sid)) return false;
+		const expectedKeys = rule.condition
+			? ["Action", "Condition", "Effect", "Resource", "Sid"]
+			: ["Action", "Effect", "Resource", "Sid"];
+		if (
+			!exactObjectKeys(statement, expectedKeys) ||
+			statement.Effect !== "Allow" ||
+			!sameStrings(statement.Action, rule.actions) ||
+			!matchesResourcePatterns(statement.Resource, rule.resourcePatterns) ||
+			!approvedCondition(statement.Condition, rule.condition)
+		) {
+			return false;
+		}
+		seen.add(sid);
+	}
+	return seen.size === Object.keys(DEPLOYMENT_POLICY_RULES).length;
+}
+
+function approvedCampaignLaunchPolicy(value: unknown): boolean {
+	const policy = parsePolicy(value);
+	if (
+		!policy ||
+		!exactObjectKeys(policy, ["Statement", "Version"]) ||
+		policy.Version !== "2012-10-17" ||
+		!Array.isArray(policy.Statement) ||
+		policy.Statement.length !== 1
+	) {
+		return false;
+	}
+	const valueStatement = policy.Statement[0];
+	if (
+		!valueStatement ||
+		typeof valueStatement !== "object" ||
+		Array.isArray(valueStatement)
+	) {
+		return false;
+	}
+	const statement = valueStatement as Record<string, unknown>;
+	return (
+		exactObjectKeys(statement, ["Action", "Effect", "Resource"]) &&
+		statement.Effect === "Allow" &&
+		oneString(statement.Action) === "lambda:InvokeFunction" &&
+		oneString(statement.Resource) ===
+			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-control"
+	);
+}
+
+function approvedGithubRolePolicy(address: string, value: unknown): boolean {
+	if (address === "aws_iam_role_policy.deployment") {
+		return approvedDeploymentPolicy(value);
+	}
+	if (address === "aws_iam_role_policy.campaign_launch") {
+		return approvedCampaignLaunchPolicy(value);
+	}
+	return false;
 }
 
 function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
@@ -173,14 +570,27 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 	const equalsRecord = stringEquals as Record<string, unknown>;
 
 	if (STATES_ROLE_ADDRESSES.has(address)) {
+		const arnLike = conditionRecord.ArnLike;
+		if (!arnLike || typeof arnLike !== "object" || Array.isArray(arnLike)) {
+			return false;
+		}
+		const arnLikeRecord = arnLike as Record<string, unknown>;
+		const sourceAccount = oneString(equalsRecord["aws:SourceAccount"]) ?? "";
+		const sourceArn = oneString(arnLikeRecord["aws:SourceArn"]) ?? "";
+		const sourceArnAccount =
+			/^arn:aws:states:[a-z0-9-]+:(\d{12}):stateMachine:mymemo-agent-agentcore-canary-prod-\*$/.exec(
+				sourceArn,
+			)?.[1];
 		return (
 			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
 			oneString(trust.Action) === "sts:AssumeRole" &&
 			exactObjectKeys(principalRecord, ["Service"]) &&
 			oneString(principalRecord.Service) === "states.amazonaws.com" &&
-			exactObjectKeys(conditionRecord, ["StringEquals"]) &&
+			exactObjectKeys(conditionRecord, ["ArnLike", "StringEquals"]) &&
 			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
-			/^\d{12}$/.test(oneString(equalsRecord["aws:SourceAccount"]) ?? "")
+			/^\d{12}$/.test(sourceAccount) &&
+			exactObjectKeys(arnLikeRecord, ["aws:SourceArn"]) &&
+			sourceArnAccount === sourceAccount
 		);
 	}
 
@@ -206,6 +616,10 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 	}
 
 	if (GITHUB_ROLE_ADDRESSES.has(address)) {
+		const expectedEnvironment =
+			address === "aws_iam_role.deployment"
+				? "production-agentcore-canary"
+				: "production-agentcore-canary-campaign";
 		return (
 			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
 			oneString(trust.Action) === "sts:AssumeRoleWithWebIdentity" &&
@@ -221,7 +635,7 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 			oneString(equalsRecord["token.actions.githubusercontent.com:aud"]) ===
 				"sts.amazonaws.com" &&
 			oneString(equalsRecord["token.actions.githubusercontent.com:sub"]) ===
-				"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary"
+				`repo:X-GPT/mymemo-agent:environment:${expectedEnvironment}`
 		);
 	}
 
@@ -270,6 +684,17 @@ export function classifyAgentCoreCanaryPlan(
 				resource.change?.after?.assume_role_policy
 		) {
 			reasons.push(`${address} requests IAM trust mutation`);
+		}
+		if (
+			type === "aws_iam_role_policy" &&
+			GITHUB_ROLE_POLICY_ADDRESSES.has(resourceBaseAddress(address)) &&
+			(actions.includes("create") || actions.includes("update")) &&
+			!approvedGithubRolePolicy(
+				resourceBaseAddress(address),
+				resource.change?.after?.policy,
+			)
+		) {
+			reasons.push(`${address} has unapproved GitHub role permissions`);
 		}
 	}
 	return { safe: reasons.length === 0, reasons };

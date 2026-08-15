@@ -50,10 +50,16 @@ data "aws_iam_policy_document" "states_trust" {
       variable = "aws:SourceAccount"
       values   = [var.aws_account_id]
     }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:states:${var.aws_region}:${var.aws_account_id}:stateMachine:${local.name_prefix}-*"]
+    }
   }
 }
 
-data "aws_iam_policy_document" "github_environment_trust" {
+data "aws_iam_policy_document" "github_deployment_trust" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -72,6 +78,29 @@ data "aws_iam_policy_document" "github_environment_trust" {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
       values   = ["repo:${var.github_owner}/${var.github_repository}:environment:production-agentcore-canary"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "github_campaign_launch_trust" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [data.aws_iam_openid_connect_provider.github.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_owner}/${var.github_repository}:environment:production-agentcore-canary-campaign"]
     }
   }
 }
@@ -190,9 +219,12 @@ data "aws_iam_policy_document" "lambda_base" {
   statement {
     sid = "VpcAttachment"
     actions = [
+      "ec2:AssignPrivateIpAddresses",
       "ec2:CreateNetworkInterface",
       "ec2:DeleteNetworkInterface",
       "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:UnassignPrivateIpAddresses",
     ]
     resources = ["*"]
   }
@@ -242,9 +274,12 @@ data "aws_iam_policy_document" "preflight" {
   statement {
     sid = "VpcAttachment"
     actions = [
+      "ec2:AssignPrivateIpAddresses",
       "ec2:CreateNetworkInterface",
       "ec2:DeleteNetworkInterface",
       "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:UnassignPrivateIpAddresses",
     ]
     resources = ["*"]
   }
@@ -359,8 +394,19 @@ resource "aws_iam_role_policy" "consumer" {
 
 data "aws_iam_policy_document" "control" {
   statement {
-    actions   = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"]
+    actions   = ["secretsmanager:DescribeSecret"]
     resources = [var.kb_database_url_secret_arn]
+  }
+
+  statement {
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [var.kb_database_url_secret_arn]
+
+    condition {
+      test     = "ForAnyValue:StringEquals"
+      variable = "secretsmanager:VersionStage"
+      values   = ["AWSCURRENT"]
+    }
   }
 
   statement {
@@ -382,7 +428,7 @@ resource "aws_iam_role_policy" "control" {
 
 resource "aws_iam_role" "deployment" {
   name               = "${local.name_prefix}-deployment"
-  assume_role_policy = data.aws_iam_policy_document.github_environment_trust.json
+  assume_role_policy = data.aws_iam_policy_document.github_deployment_trust.json
 }
 
 data "aws_iam_policy_document" "deployment" {
@@ -668,7 +714,7 @@ resource "aws_iam_role_policy" "deployment" {
 
 resource "aws_iam_role" "campaign_launch" {
   name               = "${local.name_prefix}-campaign-launch"
-  assume_role_policy = data.aws_iam_policy_document.github_environment_trust.json
+  assume_role_policy = data.aws_iam_policy_document.github_campaign_launch_trust.json
 }
 
 resource "aws_iam_role" "task" {

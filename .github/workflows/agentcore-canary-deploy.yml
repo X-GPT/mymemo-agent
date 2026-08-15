@@ -70,7 +70,7 @@ jobs:
       - name: Verify protected GitHub Environment has required reviewers
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/deploy/verify_github_canary_environment.sh
+        run: scripts/deploy/verify_github_canary_environment.sh production-agentcore-canary production-agentcore-canary-campaign
       # This one-time, Environment-approved bootstrap must use the existing
       # repository deployment role to create the narrower canary role and ECR
       # repository. The reviewer check above runs before OIDC credentials, and

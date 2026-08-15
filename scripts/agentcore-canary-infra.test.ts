@@ -178,6 +178,15 @@ describe("dormant AgentCore canary infrastructure", () => {
 			expect(source).toContain(`resource "aws_iam_role" "${role}"`);
 		}
 		expect(source).toContain("environment:production-agentcore-canary");
+		expect(source).toContain(
+			"environment:production-agentcore-canary-campaign",
+		);
+		expect(source).toContain(
+			'data "aws_iam_policy_document" "github_deployment_trust"',
+		);
+		expect(source).toContain(
+			'data "aws_iam_policy_document" "github_campaign_launch_trust"',
+		);
 		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
@@ -189,7 +198,20 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/resource\s+"aws_iam_role_policy"\s+"campaign_launch"[\s\S]*?(rds:|secretsmanager:GetSecretValue)/,
 		);
 		expect(source).not.toContain("iam:UpdateAssumeRolePolicy");
-		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(3);
+		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(4);
+		expect(source).toMatch(
+			/data\s+"aws_iam_policy_document"\s+"states_trust"[\s\S]*?variable\s*=\s*"aws:SourceArn"[\s\S]*?stateMachine:\$\{local\.name_prefix\}-\*/,
+		);
+		for (const action of [
+			"ec2:AssignPrivateIpAddresses",
+			"ec2:CreateNetworkInterface",
+			"ec2:DeleteNetworkInterface",
+			"ec2:DescribeNetworkInterfaces",
+			"ec2:DescribeSubnets",
+			"ec2:UnassignPrivateIpAddresses",
+		]) {
+			expect(source.match(new RegExp(action, "g"))).toHaveLength(2);
+		}
 		const managedRoles = source.match(
 			/sid\s*=\s*"ManageCanaryRolesOnly"([\s\S]*?)\n\s*}/,
 		)?.[1];
@@ -197,9 +219,24 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(managedRoles).not.toContain("-campaign-launch");
 		expect(workflow).toContain("-target=aws_iam_role.campaign_launch");
 		expect(workflow).toContain("-target=aws_iam_role_policy.campaign_launch");
+		expect(workflow).toContain(
+			"verify_github_canary_environment.sh production-agentcore-canary production-agentcore-canary-campaign",
+		);
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_function"\s+"preflight"[\s\S]*?role\s*=\s*aws_iam_role\.preflight\.arn/,
 		);
+		const lambdas = readFileSync(join(terraformDir, "lambdas.tf"), "utf8");
+		for (const policy of [
+			"publisher",
+			"publisher_base",
+			"consumer",
+			"consumer_base",
+			"control",
+			"control_base",
+			"preflight",
+		]) {
+			expect(lambdas).toContain(`aws_iam_role_policy.${policy}`);
+		}
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"preflight"[\s\S]*?resources\s*=\s*\[var\.agent_database_url_secret_arn, var\.kb_database_url_secret_arn\]/,
 		);
