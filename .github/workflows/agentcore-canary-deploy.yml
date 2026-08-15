@@ -18,6 +18,7 @@ concurrency:
 env:
   AWS_REGION: us-west-2
   AWS_ACCOUNT_ID: "637423444544"
+  CANARY_ENABLED_PARAMETER_NAME: /mymemo/agentcore-canary/prod/enabled
   RDS_CA_BUNDLE_SHA256: e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3
   TF_INPUT: false
   TF_IN_AUTOMATION: true
@@ -73,6 +74,21 @@ jobs:
           aws configure set aws_access_key_id "${AWS_ACCESS_KEY_ID}" --profile mymemo
           aws configure set aws_secret_access_key "${AWS_SECRET_ACCESS_KEY}" --profile mymemo
           aws configure set aws_session_token "${AWS_SESSION_TOKEN}" --profile mymemo
+      - name: Require dormant canary flag before production mutation
+        run: |
+          parameter_error="$(mktemp)"
+          trap 'rm -f "${parameter_error}"' EXIT
+          if parameter_value="$(aws --profile mymemo ssm get-parameter --region "${AWS_REGION}" --name "${CANARY_ENABLED_PARAMETER_NAME}" --query Parameter.Value --output text 2>"${parameter_error}")"; then
+            if [[ "${parameter_value}" != "disabled" ]]; then
+              echo "${CANARY_ENABLED_PARAMETER_NAME} must be disabled before dormant deployment" >&2
+              exit 1
+            fi
+          elif grep -Fq "ParameterNotFound" "${parameter_error}"; then
+            echo "${CANARY_ENABLED_PARAMETER_NAME} does not exist yet; allowing first creation"
+          else
+            cat "${parameter_error}" >&2
+            exit 1
+          fi
       - uses: aws-actions/amazon-ecr-login@v2
       - run: bun install --frozen-lockfile
       - name: Build and verify Linux ARM64 Runtime image

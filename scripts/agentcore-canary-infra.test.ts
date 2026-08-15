@@ -507,6 +507,12 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/runtime_image_digest="\$\{\{ inputs\.runtime_image_digest \}\}"/,
 		);
 		expect(workflow).not.toContain("verify_github_canary_environment.sh");
+		expect(workflow).toMatch(
+			/name: Require dormant canary flag before production mutation[\s\S]*?ssm get-parameter[\s\S]*?"disabled"[\s\S]*?ParameterNotFound[\s\S]*?uses: aws-actions\/amazon-ecr-login/,
+		);
+		expect(workflow).toContain(
+			"CANARY_ENABLED_PARAMETER_NAME: /mymemo/agentcore-canary/prod/enabled",
+		);
 		expect(workflow).toContain("RDS_CA_BUNDLE_SHA256:");
 		expect(
 			workflow.match(
@@ -571,6 +577,12 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(inspection).toContain(
 			'activeRuntimeSessionsScope:"account-region-service"',
 		);
+		expect(inspection).toContain(".Datapoints as $datapoints");
+		expect(inspection).toContain("($datapoints | length) > 0");
+		expect(inspection).toContain("fromdateiso8601");
+		expect(inspection).toMatch(/\[\[ "\$\{attempt\}" == "12" \]\]/);
+		expect(inspection).toContain("sleep 10");
+		expect(inspection).not.toContain("max // 0");
 		expect(inspection).not.toContain("invoke-function");
 		expect(inspection).not.toContain("invoke-agent-runtime");
 	});

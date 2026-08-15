@@ -34,13 +34,24 @@ verify_agentcore_canary_consumer_runtime_authority "${region}" "${tf_output}"
 verify_agentcore_canary_current_secrets "${region}" "${tf_output}"
 verify_agentcore_canary_alarms "${region}" "${tf_output}"
 
-end_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-start_time="$(date -u -v-10M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
 # AWS publishes ActiveSessionCount once per account/region/service and exposes no
 # Runtime dimension. Zero is therefore a stronger account-wide dormancy proof;
 # a future second Runtime will make this check fail closed rather than hide work.
-active_sessions="$(aws --profile "${aws_profile}" cloudwatch get-metric-statistics --region "${region}" --namespace AWS/Bedrock-AgentCore --metric-name ActiveSessionCount --dimensions Name=Service,Value=AgentCore.Runtime --statistics Maximum --period 60 --start-time "${start_time}" --end-time "${end_time}")"
-jq -e '([.Datapoints[].Maximum] | max // 0) == 0' <<<"${active_sessions}" >/dev/null
+active_sessions=""
+for attempt in $(seq 1 12); do
+  end_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  start_time="$(date -u -v-10M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+  active_sessions="$(aws --profile "${aws_profile}" cloudwatch get-metric-statistics --region "${region}" --namespace AWS/Bedrock-AgentCore --metric-name ActiveSessionCount --dimensions Name=Service,Value=AgentCore.Runtime --statistics Maximum --period 60 --start-time "${start_time}" --end-time "${end_time}")"
+  if jq -e --arg endTime "${end_time}" '.Datapoints as $datapoints | ($datapoints | length) > 0 and ($datapoints | map(.Timestamp | sub("\\+00:00$"; "Z") | fromdateiso8601) | max) >= (($endTime | fromdateiso8601) - 180)' <<<"${active_sessions}" >/dev/null; then
+    break
+  fi
+  if [[ "${attempt}" == "12" ]]; then
+    echo "ActiveSessionCount has no datapoint from the last three minutes" >&2
+    exit 1
+  fi
+  sleep 10
+done
+jq -e '([.Datapoints[].Maximum] | max) == 0' <<<"${active_sessions}" >/dev/null
 
 rollback_digest="${ROLLBACK_RUNTIME_IMAGE_DIGEST:-}"
 if [[ -n "${rollback_digest}" && "${rollback_digest}" != "${expected_digest}" ]]; then
