@@ -54,6 +54,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).not.toContain(
 			'data "terraform_remote_state" "mymemo_service"',
 		);
+		expect(source).not.toContain("mymemo/staging.tfstate");
 	});
 
 	it("pins the encrypted standard queue, DLQ, consumer, and repair schedule contract", () => {
@@ -165,6 +166,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
 		expect(source).toContain("resources = local.exact_secret_arns");
+		expect(source).toMatch(
+			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?actions\s*=\s*\["s3:AbortMultipartUpload", "s3:PutObject"\]/,
+		);
 		expect(source).not.toMatch(
 			/resource\s+"aws_iam_role_policy"\s+"campaign_launch"[\s\S]*?(rds:|secretsmanager:GetSecretValue)/,
 		);
@@ -184,7 +188,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"Throttles",
 			"ActiveSessionCount",
 		]) {
-			expect(alarms).toContain(`metric_name         = "${metric}"`);
+			expect(alarms).toMatch(new RegExp(`metric_name\\s*=\\s*"${metric}"`));
 		}
 		for (const metric of [
 			"PoisonDispatch",
@@ -195,7 +199,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		]) {
 			expect(alarms).toContain(`"${metric}"`);
 		}
-		expect(alarms).toContain("metric_name         = each.value");
+		expect(alarms).toMatch(/metric_name\s*=\s*each\.value/);
 		expect(alarms).toContain("account-level AgentCore Runtime session");
 		for (const forbiddenDimension of [
 			"CampaignId",
@@ -261,6 +265,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		]) {
 			expect(inspection).toContain(requiredCheck);
 		}
+		expect(inspection).toContain(
+			'(.Attributes.FifoQueue // "false") == "false"',
+		);
+		expect(inspection).not.toContain("!= *.fifo");
 		expect(inspection).toContain("describe-nat-gateways");
 		expect(inspection).toContain("describe-addresses");
 		expect(inspection).toContain(

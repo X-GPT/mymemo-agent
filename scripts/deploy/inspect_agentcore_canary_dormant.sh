@@ -25,9 +25,8 @@ eip_count="$(aws --profile "${aws_profile}" ec2 describe-addresses --region "${r
 
 queue_attributes="$(aws --profile "${aws_profile}" sqs get-queue-attributes --region "${region}" --queue-url "${queue_url}" --attribute-names All)"
 dlq_attributes="$(aws --profile "${aws_profile}" sqs get-queue-attributes --region "${region}" --queue-url "${dlq_url}" --attribute-names All)"
-jq -e '.Attributes.VisibilityTimeout == "300" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and (.Attributes.RedrivePolicy | fromjson | .maxReceiveCount == 3)' <<<"${queue_attributes}" >/dev/null
-jq -e '.Attributes.VisibilityTimeout == "300" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0"' <<<"${dlq_attributes}" >/dev/null
-[[ "${queue_url}" != *.fifo ]]
+jq -e '(.Attributes.FifoQueue // "false") == "false" and .Attributes.VisibilityTimeout == "300" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and (.Attributes.RedrivePolicy | fromjson | .maxReceiveCount == 3)' <<<"${queue_attributes}" >/dev/null
+jq -e '(.Attributes.FifoQueue // "false") == "false" and .Attributes.VisibilityTimeout == "300" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0"' <<<"${dlq_attributes}" >/dev/null
 
 mapping="$(aws --profile "${aws_profile}" lambda get-event-source-mapping --region "${region}" --uuid "${mapping_uuid}")"
 jq -e '.BatchSize == 1 and .State == "Disabled" and (.FunctionResponseTypes | index("ReportBatchItemFailures")) != null' <<<"${mapping}" >/dev/null

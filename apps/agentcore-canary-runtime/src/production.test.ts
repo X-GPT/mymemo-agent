@@ -1,10 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { SSMClient } from "@aws-sdk/client-ssm";
+import { createCurrentSecretReader } from "agentcore-canary-dispatch/secret-config";
 import { loadRuntimeBootstrapConfig } from "./config";
-import {
-	createCurrentSecretReader,
-	createProductionCanaryRuntime,
-} from "./production";
+import { createProductionCanaryRuntime } from "./production";
 
 function bootstrapConfig() {
 	return loadRuntimeBootstrapConfig({

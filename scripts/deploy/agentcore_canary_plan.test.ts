@@ -86,15 +86,18 @@ describe("AgentCore canary Terraform plan classification", () => {
 	it("requires an independently locked AWS 6.x provider satisfying >= 6.50", () => {
 		expect(
 			verifyAgentCoreProviderLock(`
+provider "registry.terraform.io/hashicorp/random" {
+  version = "3.7.2"
+}
 provider "registry.terraform.io/hashicorp/aws" {
   version     = "6.60.0"
   constraints = ">= 6.50.0, < 7.0.0"
 }`),
 		).toEqual({ safe: true, reasons: [] });
 		for (const lock of [
-			'version = "5.100.0"\nconstraints = "~> 5.0"',
-			'version = "7.0.0"\nconstraints = ">= 6.50.0"',
-			'version = "6.60.0"\nconstraints = ">= 6.50.0"',
+			'provider "registry.terraform.io/hashicorp/aws" {\n  version = "5.100.0"\n  constraints = "~> 5.0"\n}',
+			'provider "registry.terraform.io/hashicorp/aws" {\n  version = "7.0.0"\n  constraints = ">= 6.50.0"\n}',
+			'provider "registry.terraform.io/hashicorp/aws" {\n  version = "6.60.0"\n  constraints = ">= 6.50.0"\n}',
 		]) {
 			expect(verifyAgentCoreProviderLock(lock).safe).toBe(false);
 		}

@@ -2,6 +2,15 @@ locals {
   name_prefix = "mymemo-agent-agentcore-canary-${var.environment}"
   vpc_id      = data.terraform_remote_state.mymemo_agent.outputs.shared_infra.vpc_id
 
+  exact_secret_arn_pattern = "^arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:[A-Za-z0-9/_+=.@-]+$"
+  exact_secret_arns = [
+    var.agent_database_url_secret_arn,
+    var.kb_database_url_secret_arn,
+    var.openrouter_api_key_secret_arn,
+    var.e2b_api_key_secret_arn,
+    var.redis_url_secret_arn,
+  ]
+
   lambda_security_group_ids = [
     aws_security_group.canary.id,
     data.terraform_remote_state.mymemo_agent.outputs.service_security_group_id,

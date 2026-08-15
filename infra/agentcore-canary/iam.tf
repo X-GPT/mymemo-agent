@@ -120,7 +120,7 @@ data "aws_iam_policy_document" "runtime" {
 
   statement {
     sid       = "WriteSyntheticArtifactsOnly"
-    actions   = ["s3:AbortMultipartUpload", "s3:DeleteObject", "s3:PutObject"]
+    actions   = ["s3:AbortMultipartUpload", "s3:PutObject"]
     resources = ["arn:aws:s3:::${var.artifact_bucket_name}/conversations/*"]
   }
 
@@ -181,7 +181,7 @@ resource "aws_iam_role" "control" {
   assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
 }
 
-data "aws_iam_policy_document" "lambda_vpc_logs" {
+data "aws_iam_policy_document" "lambda_base" {
   statement {
     sid = "VpcAttachment"
     actions = [
@@ -224,19 +224,19 @@ data "aws_iam_policy_document" "lambda_vpc_logs" {
 resource "aws_iam_role_policy" "publisher_base" {
   name   = "${local.name_prefix}-publisher-base"
   role   = aws_iam_role.publisher.id
-  policy = data.aws_iam_policy_document.lambda_vpc_logs.json
+  policy = data.aws_iam_policy_document.lambda_base.json
 }
 
 resource "aws_iam_role_policy" "consumer_base" {
   name   = "${local.name_prefix}-consumer-base"
   role   = aws_iam_role.consumer.id
-  policy = data.aws_iam_policy_document.lambda_vpc_logs.json
+  policy = data.aws_iam_policy_document.lambda_base.json
 }
 
 resource "aws_iam_role_policy" "control_base" {
   name   = "${local.name_prefix}-control-base"
   role   = aws_iam_role.control.id
-  policy = data.aws_iam_policy_document.lambda_vpc_logs.json
+  policy = data.aws_iam_policy_document.lambda_base.json
 }
 
 data "aws_iam_policy_document" "publisher" {
@@ -339,12 +339,9 @@ data "aws_iam_policy_document" "deployment" {
   }
 
   statement {
-    sid     = "ReadOnlySharedTerraformOutputs"
-    actions = ["s3:GetObject"]
-    resources = [
-      "arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/prod.tfstate",
-      "arn:aws:s3:::mymemo-terraform-state-bucket/mymemo/staging.tfstate",
-    ]
+    sid       = "ReadOnlySharedTerraformOutputs"
+    actions   = ["s3:GetObject"]
+    resources = ["arn:aws:s3:::mymemo-terraform-state-bucket/mymemo-agent/prod.tfstate"]
   }
 
   statement {

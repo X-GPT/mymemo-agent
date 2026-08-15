@@ -1,8 +1,8 @@
 # Dormant production AgentCore canary
 
 This state is intentionally independent from the ordinary MyMemo production
-and Fargate states. It owns only the AgentCore canary boundary. The two remote
-states in `shared.tf` are read-only inputs; this state must never import shared
+and Fargate states. It owns only the AgentCore canary boundary. The remote state
+in `shared.tf` is a read-only input; this state must never import shared
 VPC, database, Redis, artifact-bucket, ECS, load-balancer, or routing resources.
 
 ## Deployment authority

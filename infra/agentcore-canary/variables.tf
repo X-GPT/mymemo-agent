@@ -159,17 +159,6 @@ variable "github_repository" {
   default     = "mymemo-agent"
 }
 
-locals {
-  exact_secret_arn_pattern = "^arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:[A-Za-z0-9/_+=.@-]+$"
-  exact_secret_arns = [
-    var.agent_database_url_secret_arn,
-    var.kb_database_url_secret_arn,
-    var.openrouter_api_key_secret_arn,
-    var.e2b_api_key_secret_arn,
-    var.redis_url_secret_arn,
-  ]
-}
-
 variable "tags" {
   description = "Tags applied only to canary-owned resources."
   type        = map(string)

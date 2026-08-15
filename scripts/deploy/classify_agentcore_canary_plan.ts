@@ -46,6 +46,9 @@ const CANARY_OWNED_RESOURCE_TYPES = new Set([
 	"aws_subnet",
 ]);
 
+// This explicit list is an independent, fail-closed safety boundary. Do not
+// derive it from the Terraform under classification: every new owned resource
+// must be reviewed and added here deliberately.
 const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_bedrockagentcore_agent_runtime.canary",
 	"aws_cloudwatch_event_rule.repair",
@@ -141,10 +144,15 @@ export function verifyAgentCoreProviderLock(
 	lockfile: string,
 ): PlanClassification {
 	const reasons: string[] = [];
-	const version = lockfile
-		.match(/version\s*=\s*"(\d+)\.(\d+)\.(\d+)"/)
+	const awsProviderBlock = lockfile.match(
+		/provider "registry\.terraform\.io\/hashicorp\/aws" \{([\s\S]*?)\n\}/,
+	)?.[1];
+	const version = awsProviderBlock
+		?.match(/version\s*=\s*"(\d+)\.(\d+)\.(\d+)"/)
 		?.slice(1);
-	const constraints = lockfile.match(/constraints\s*=\s*"([^"]+)"/)?.[1];
+	const constraints = awsProviderBlock?.match(
+		/constraints\s*=\s*"([^"]+)"/,
+	)?.[1];
 	if (!version) {
 		reasons.push("AWS provider lock version is missing");
 	} else {

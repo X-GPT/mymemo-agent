@@ -14,8 +14,6 @@ import {
 import { createCanaryExecutionServices } from "./execution-services";
 import { createCanaryRuntime } from "./runtime";
 
-export { createCurrentSecretReader } from "agentcore-canary-dispatch/secret-config";
-
 export async function createProductionCanaryRuntime(options: {
 	bootstrap: RuntimeBootstrapConfig;
 	bootId: string;
