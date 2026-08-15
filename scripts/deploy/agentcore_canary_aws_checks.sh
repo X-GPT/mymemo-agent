@@ -70,15 +70,31 @@ verify_agentcore_canary_runtime_configuration() {
   local terraform_output="$2"
   local expected_digest="$3"
   local runtime_id
+  local expected_security_configuration
   local runtime
   local runtime_version
   local endpoint
 
   runtime_id="$(jq -r '.agent_runtime_id.value' <<<"${terraform_output}")"
+  expected_security_configuration="$(jq -c '.runtime_security_configuration.value' <<<"${terraform_output}")"
   runtime="$(aws --profile mymemo bedrock-agentcore-control get-agent-runtime \
     --region "${region}" \
     --agent-runtime-id "${runtime_id}")"
-  jq -e --arg digest "${expected_digest}" '.status == "READY" and .metadataConfiguration.requireMMDSV2 == true and .networkConfiguration.networkMode == "VPC" and .protocolConfiguration.serverProtocol == "HTTP" and (.agentRuntimeArtifact.containerConfiguration.containerUri | endswith("@" + $digest)) and .lifecycleConfiguration.maxLifetime == 3600' <<<"${runtime}" >/dev/null
+  jq -e \
+    --arg digest "${expected_digest}" \
+    --argjson expected "${expected_security_configuration}" \
+    '.status == "READY"
+      and .roleArn == $expected.role_arn
+      and .environmentVariables == $expected.environment_variables
+      and .metadataConfiguration.requireMMDSV2 == true
+      and .networkConfiguration.networkMode == "VPC"
+      and (.networkConfiguration.networkModeConfig.subnets | sort) == $expected.subnet_ids
+      and (.networkConfiguration.networkModeConfig.securityGroups | sort) == $expected.security_group_ids
+      and .protocolConfiguration.serverProtocol == "HTTP"
+      and (.agentRuntimeArtifact.containerConfiguration.containerUri | endswith("@" + $digest))
+      and .lifecycleConfiguration.idleRuntimeSessionTimeout == $expected.idle_runtime_session_timeout
+      and .lifecycleConfiguration.maxLifetime == 3600' \
+    <<<"${runtime}" >/dev/null
   runtime_version="$(jq -r '.agentRuntimeVersion' <<<"${runtime}")"
   endpoint="$(aws --profile mymemo bedrock-agentcore-control get-agent-runtime-endpoint \
     --region "${region}" \

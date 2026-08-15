@@ -209,6 +209,9 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
+		expect(source).toMatch(
+			/output\s+"runtime_security_configuration"[\s\S]*?role_arn\s*=\s*aws_iam_role\.runtime\.arn[\s\S]*?environment_variables\s*=\s*local\.runtime_environment[\s\S]*?subnet_ids\s*=\s*sort\(values\(aws_subnet\.private\)\[\*\]\.id\)[\s\S]*?security_group_ids\s*=\s*sort\(local\.runtime_security_group_ids\)[\s\S]*?idle_runtime_session_timeout\s*=\s*900/,
+		);
 		expect(source).toMatch(/resources\s*=\s*local\.exact_secret_arns/);
 		expect(source).toMatch(
 			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?actions\s*=\s*\["s3:AbortMultipartUpload", "s3:PutObject"\]/,
@@ -548,6 +551,12 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"get-agent-runtime-endpoint",
 			"metadataConfiguration.requireMMDSV2",
 			"simulate-principal-policy",
+			"runtime_security_configuration.value",
+			".roleArn == $expected.role_arn",
+			".environmentVariables == $expected.environment_variables",
+			"networkModeConfig.subnets | sort",
+			"networkModeConfig.securityGroups | sort",
+			"idleRuntimeSessionTimeout == $expected.idle_runtime_session_timeout",
 		]) {
 			expect(sharedChecks).toContain(liveCheck);
 		}

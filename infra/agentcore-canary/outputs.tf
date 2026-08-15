@@ -18,6 +18,17 @@ output "agent_runtime_arn" {
   value       = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn
 }
 
+output "runtime_security_configuration" {
+  description = "Exact non-secret Runtime security configuration verified against the live service."
+  value = {
+    role_arn                     = aws_iam_role.runtime.arn
+    environment_variables        = local.runtime_environment
+    subnet_ids                   = sort(values(aws_subnet.private)[*].id)
+    security_group_ids           = sort(local.runtime_security_group_ids)
+    idle_runtime_session_timeout = 900
+  }
+}
+
 output "default_endpoint_name" {
   description = "Service-owned endpoint automatically created and advanced with the Runtime."
   value       = "DEFAULT"
