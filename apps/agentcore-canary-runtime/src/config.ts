@@ -31,6 +31,7 @@ export interface RuntimeBootstrapConfig {
 	openrouterDefaultModel: string;
 	e2bTemplate: string;
 	artifactBucket: string;
+	artifactObjectKeyPrefix: string;
 	rdsCaBundlePath: string;
 	port: number;
 	heartbeatIntervalMs: number;
@@ -85,6 +86,10 @@ export function loadRuntimeBootstrapConfig(env: Env): RuntimeBootstrapConfig {
 		openrouterDefaultModel: requireEnv(env, "OPENROUTER_DEFAULT_MODEL"),
 		e2bTemplate: requireEnv(env, "WORKER_E2B_TEMPLATE"),
 		artifactBucket: requireEnv(env, "ARTIFACT_BUCKET"),
+		artifactObjectKeyPrefix: requireEnv(
+			env,
+			"CANARY_ARTIFACT_OBJECT_KEY_PREFIX",
+		),
 		rdsCaBundlePath,
 		port: positiveInt(env.PORT, 8080, "PORT"),
 		heartbeatIntervalMs: positiveInt(

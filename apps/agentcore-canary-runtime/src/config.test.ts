@@ -22,6 +22,7 @@ function bootstrapEnv(): Record<string, string | undefined> {
 		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 		ARTIFACT_BUCKET: "private-artifacts",
+		CANARY_ARTIFACT_OBJECT_KEY_PREFIX: "objects/agentcore-canary",
 		RDS_CA_BUNDLE_PATH: "/etc/ssl/certs/rds-global-bundle.pem",
 		NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/rds-global-bundle.pem",
 	};
@@ -34,6 +35,7 @@ describe("AgentCore Runtime configuration", () => {
 		expect(config.port).toBe(8080);
 		expect(config.heartbeatIntervalMs).toBe(15_000);
 		expect(config.shutdownTimeoutMs).toBe(30_000);
+		expect(config.artifactObjectKeyPrefix).toBe("objects/agentcore-canary");
 		expect(Object.values(config.secretArns)).toHaveLength(5);
 		expect(config.rdsCaBundlePath).toBe("/etc/ssl/certs/rds-global-bundle.pem");
 	});

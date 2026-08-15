@@ -146,6 +146,7 @@ function buildArtifactHarness(
 	workspace: FakeWorkspace,
 	upload?: ArtifactObjectStore["upload"],
 	logger: WorkerLogger = silentLogger,
+	objectKeyPrefix?: string,
 ) {
 	const uploaded = new Map<string, Uint8Array>();
 	const queries = new Map<string, SupervisedQuery>();
@@ -160,7 +161,9 @@ function buildArtifactHarness(
 	const publisher = createArtifactPublisher({
 		db: tdb.db,
 		objectStore,
-		createObjectKey: () => `objects/key-${nextObject++}`,
+		...(objectKeyPrefix
+			? { objectKeyPrefix }
+			: { createObjectKey: () => `objects/key-${nextObject++}` }),
 		createArtifactId: () => `artifact-${nextArtifact++}`,
 	});
 	const worker = new Worker({
@@ -255,6 +258,29 @@ function blockingUpload() {
 }
 
 describe("Downloadable artifact publication through the Run loop", () => {
+	it("places generated object keys under the configured runtime prefix", async () => {
+		await insertConversation();
+		const workspace = new FakeWorkspace();
+		const harness = buildArtifactHarness(
+			workspace,
+			undefined,
+			silentLogger,
+			"objects/agentcore-canary",
+		);
+
+		await harness.run(
+			"run-1",
+			successfulQuery(() => {
+				workspace.write("report.txt", encoder.encode("canary"), "1");
+			}),
+		);
+
+		expect([...harness.uploaded.keys()]).toHaveLength(1);
+		expect([...harness.uploaded.keys()][0]).toMatch(
+			/^objects\/agentcore-canary\/[0-9a-f-]+$/,
+		);
+	});
+
 	it("publishes text and binary files before run_done becomes visible", async () => {
 		const workspace = new FakeWorkspace();
 		const uploaded = new Map<string, Uint8Array>();

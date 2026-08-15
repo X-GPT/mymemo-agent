@@ -28,6 +28,7 @@ export function createProductionRunResources(options: {
 	logger: WorkerLogger;
 	processEnv?: Record<string, string | undefined>;
 	telemetryService?: LiveStreamService;
+	artifactObjectKeyPrefix?: string;
 }) {
 	const { config, logger } = options;
 	const liveStreamTelemetry = createLiveStreamTelemetry(
@@ -46,6 +47,7 @@ export function createProductionRunResources(options: {
 	const artifactPublisher = createArtifactPublisher({
 		db,
 		objectStore: createS3ArtifactObjectStore(config.artifact),
+		objectKeyPrefix: options.artifactObjectKeyPrefix,
 	});
 	const sandboxJanitor = createE2bSandboxJanitor(config.e2bApiKey);
 	const startRunQuery = createStartRunQuery({

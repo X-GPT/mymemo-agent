@@ -137,10 +137,20 @@ jobs:
       - name: Plan and reject destructive or shared-resource changes
         run: |
           terraform -chdir=infra/agentcore-canary init
-          previous_runtime_image_digest="$(terraform -chdir=infra/agentcore-canary output -raw runtime_image_digest 2>/dev/null || true)"
-          if [[ "${previous_runtime_image_digest}" == "sha256:0000000000000000000000000000000000000000000000000000000000000000" ]]; then
-            previous_runtime_image_digest=""
-          fi
+          previous_outputs="$(terraform -chdir=infra/agentcore-canary output -json)"
+          previous_runtime_image_digest="$(jq -r '.runtime_image_digest.value // ""' <<<"${previous_outputs}")"
+          case "${previous_runtime_image_digest}" in
+            ""|sha256:0000000000000000000000000000000000000000000000000000000000000000)
+              previous_runtime_image_digest=""
+              ;;
+            sha256:[0-9a-f][0-9a-f]*)
+              [[ "${previous_runtime_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+              ;;
+            *)
+              echo "Terraform state contains an invalid rollback digest" >&2
+              exit 1
+              ;;
+          esac
           echo "ROLLBACK_RUNTIME_IMAGE_DIGEST=${previous_runtime_image_digest}" >> "${GITHUB_ENV}"
           terraform -chdir=infra/agentcore-canary fmt -check
           terraform -chdir=infra/agentcore-canary validate

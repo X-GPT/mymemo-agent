@@ -39,6 +39,11 @@ output "dispatch_queue_url" {
   value       = aws_sqs_queue.dispatch.url
 }
 
+output "dispatch_queue_arn" {
+  description = "Exact queue ARN expected by the consumer event-source mapping."
+  value       = aws_sqs_queue.dispatch.arn
+}
+
 output "dead_letter_queue_url" {
   description = "Dormant encrypted canary DLQ URL."
   value       = aws_sqs_queue.dead_letter.url
@@ -49,9 +54,24 @@ output "consumer_event_source_mapping_uuid" {
   value       = aws_lambda_event_source_mapping.consumer.uuid
 }
 
+output "consumer_function_arn" {
+  description = "Exact consumer Lambda ARN expected by the event-source mapping."
+  value       = aws_lambda_function.consumer.arn
+}
+
 output "repair_rule_name" {
   description = "Disabled one-minute repair schedule."
   value       = aws_cloudwatch_event_rule.repair.name
+}
+
+output "repair_rule_arn" {
+  description = "Exact repair rule ARN expected by the publisher permission."
+  value       = aws_cloudwatch_event_rule.repair.arn
+}
+
+output "publisher_function_arn" {
+  description = "Exact publisher Lambda ARN expected by the repair target."
+  value       = aws_lambda_function.publisher.arn
 }
 
 output "enabled_parameter_name" {

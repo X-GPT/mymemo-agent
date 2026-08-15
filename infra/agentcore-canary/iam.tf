@@ -127,7 +127,7 @@ data "aws_iam_policy_document" "runtime" {
   statement {
     sid       = "WriteSyntheticArtifactsOnly"
     actions   = ["s3:AbortMultipartUpload", "s3:PutObject"]
-    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/objects/*"]
+    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/${local.canary_artifact_object_key_prefix}/*"]
   }
 
   statement {

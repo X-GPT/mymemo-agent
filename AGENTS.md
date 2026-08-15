@@ -215,6 +215,7 @@ not require `CANARY_APPROVED_SYNTHETIC_USER_ID` or
 Required non-secret bootstrap values:
 
 - `AWS_REGION`, `CANARY_ENABLED_PARAMETER_NAME`, `OPENROUTER_BASE_URL`, `OPENROUTER_DEFAULT_MODEL`, `WORKER_E2B_TEMPLATE`, and `ARTIFACT_BUCKET` — the same execution and fail-closed control settings used by dispatch and the trusted worker
+- `CANARY_ARTIFACT_OBJECT_KEY_PREFIX` — deployment-owned `objects/agentcore-canary` namespace; the same Terraform local scopes both generated keys and Runtime upload IAM
 - `CANARY_AGENT_DATABASE_URL_SECRET_ARN`, `CANARY_KB_DATABASE_URL_SECRET_ARN`, `CANARY_OPENROUTER_API_KEY_SECRET_ARN`, `CANARY_E2B_API_KEY_SECRET_ARN`, and `CANARY_REDIS_URL_SECRET_ARN` — exact Secrets Manager ARNs. The corresponding secret values must not be present in the Runtime environment; both database URLs are required to use `sslmode=verify-full`
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS` — the same absolute path to the digest-pinned RDS trust bundle baked into the image
 

@@ -228,15 +228,8 @@ describe("dormant AgentCore canary infrastructure", () => {
 
 	it("limits artifact, event mapping, and role-management authority", () => {
 		const source = terraformSource();
-		const artifactPublication = readFileSync(
-			join(
-				root,
-				"apps",
-				"agent-worker",
-				"src",
-				"artifacts",
-				"artifact-publication.ts",
-			),
+		const canaryProduction = readFileSync(
+			join(root, "apps", "agentcore-canary-runtime", "src", "production.ts"),
 			"utf8",
 		);
 		const planClassifier = readFileSync(
@@ -248,10 +241,13 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?actions\s*=\s*\["s3:AbortMultipartUpload", "s3:PutObject"\]/,
 		);
 		expect(source).toMatch(
-			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{var\.artifact_bucket_name\}\/objects\/\*"\]/,
+			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{var\.artifact_bucket_name\}\/\$\{local\.canary_artifact_object_key_prefix\}\/\*"\]/,
 		);
-		expect(artifactPublication).toMatch(
-			/deps\.createObjectKey\s*\?\?\s*\(\(\)\s*=>\s*`objects\/\$\{crypto\.randomUUID\(\)\}`\)/,
+		expect(source).toMatch(
+			/canary_artifact_object_key_prefix\s*=\s*"objects\/agentcore-canary"[\s\S]*?CANARY_ARTIFACT_OBJECT_KEY_PREFIX\s*=\s*local\.canary_artifact_object_key_prefix/,
+		);
+		expect(canaryProduction).toContain(
+			"artifactObjectKeyPrefix: options.bootstrap.artifactObjectKeyPrefix",
 		);
 		expect(source).toMatch(
 			/sid\s*=\s*"CreateCanaryEventMappingOnly"[\s\S]*?actions\s*=\s*\["lambda:CreateEventSourceMapping"\][\s\S]*?resources\s*=\s*\["\*"\][\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
@@ -526,6 +522,11 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 		expect(workflow).toContain("runtime_image_digest");
 		expect(workflow).toContain("classify_agentcore_canary_plan.sh");
+		expect(workflow).toContain(
+			"terraform -chdir=infra/agentcore-canary output -json",
+		);
+		expect(workflow).toContain('.runtime_image_digest.value // ""');
+		expect(workflow).not.toMatch(/terraform[^\n]*output[^\n]*\|\| true/);
 		expect(workflow).toContain("requireMMDSV2");
 		expect(workflow).toContain("inspect_agentcore_canary_dormant.sh");
 		expect(workflow).toContain("record the live version");
@@ -536,6 +537,8 @@ describe("dormant AgentCore canary infrastructure", () => {
 		for (const requiredCheck of [
 			"get-queue-attributes",
 			"get-event-source-mapping",
+			"list-targets-by-rule",
+			"get-policy",
 			"describe-rule",
 			"get-parameter",
 			"get-agent-runtime",
@@ -562,6 +565,18 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 		expect(sharedChecks).toContain("list-secret-version-ids");
 		expect(sharedChecks).toContain("describe-alarms");
+		for (const expectedOutput of [
+			"dispatch_queue_arn.value",
+			"consumer_function_arn.value",
+			"repair_rule_arn.value",
+			"publisher_function_arn.value",
+		]) {
+			expect(sharedChecks).toContain(expectedOutput);
+		}
+		expect(sharedChecks).toContain(".EventSourceArn == $queueArn");
+		expect(sharedChecks).toContain(".FunctionArn == $functionArn");
+		expect(sharedChecks).toContain('Sid == "AllowEventBridgeRepair"');
+		expect(sharedChecks).toContain('"AWS:SourceArn": $ruleArn');
 		expect(sharedChecks).toContain("--profile mymemo");
 		expect(inspection).toContain('aws_profile="mymemo"');
 		expect(inspection).not.toContain("AWS_PROFILE:-");

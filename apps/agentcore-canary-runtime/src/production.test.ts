@@ -21,6 +21,7 @@ function bootstrapConfig() {
 		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 		ARTIFACT_BUCKET: "private-artifacts",
+		CANARY_ARTIFACT_OBJECT_KEY_PREFIX: "objects/agentcore-canary",
 		RDS_CA_BUNDLE_PATH: "/etc/ssl/certs/rds-global-bundle.pem",
 		NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/rds-global-bundle.pem",
 	});

@@ -56,9 +56,14 @@ to `false`. Post-deploy inspection requires:
 
 - no NAT Gateway or EIP;
 - disabled minute repair rule, disabled SQS mapping, and a disabled SSM flag;
+- exact queue-to-consumer and repair-rule-to-publisher target/permission wiring;
 - empty queue/DLQ and zero active Runtime sessions;
 - ready digest-pinned Runtime and `DEFAULT` endpoint with MMDSv2;
 - exact AWSCURRENT secret metadata, scoped invocation IAM, and all alarms.
+
+The Runtime and its execution role share the Terraform-owned
+`objects/agentcore-canary/` object-key prefix. Canary publication therefore
+cannot overwrite ordinary production artifacts in the shared bucket.
 
 The inspection performs no Lambda or Runtime invocation and cannot admit a Run.
 

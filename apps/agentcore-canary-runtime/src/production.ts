@@ -31,6 +31,7 @@ export async function createProductionCanaryRuntime(options: {
 		logger,
 		processEnv: options.processEnv,
 		telemetryService: "agentcore-canary-runtime",
+		artifactObjectKeyPrefix: options.bootstrap.artifactObjectKeyPrefix,
 	});
 	const control = createSsmCanaryEnablementControl({
 		client: options.ssmClient,

@@ -37,31 +37,78 @@ verify_agentcore_canary_disabled_dispatch() {
   local terraform_output="$2"
   local mapping_uuid
   local repair_rule
+  local repair_rule_arn
+  local dispatch_queue_arn
+  local expected_consumer_function_arn
+  local expected_publisher_function_arn
   local enabled_parameter
   local mapping
-  local consumer_function
   local consumer_configuration
   local rule
+  local targets
+  local publisher_policy
 
   mapping_uuid="$(jq -r '.consumer_event_source_mapping_uuid.value' <<<"${terraform_output}")"
   repair_rule="$(jq -r '.repair_rule_name.value' <<<"${terraform_output}")"
+  repair_rule_arn="$(jq -r '.repair_rule_arn.value' <<<"${terraform_output}")"
+  dispatch_queue_arn="$(jq -r '.dispatch_queue_arn.value' <<<"${terraform_output}")"
+  expected_consumer_function_arn="$(jq -r '.consumer_function_arn.value' <<<"${terraform_output}")"
+  expected_publisher_function_arn="$(jq -r '.publisher_function_arn.value' <<<"${terraform_output}")"
   enabled_parameter="$(jq -r '.enabled_parameter_name.value' <<<"${terraform_output}")"
 
   mapping="$(aws --profile mymemo lambda get-event-source-mapping \
     --region "${region}" \
     --uuid "${mapping_uuid}")"
-  jq -e '.BatchSize == 1 and .State == "Disabled" and (.FunctionResponseTypes | index("ReportBatchItemFailures")) != null' <<<"${mapping}" >/dev/null
-  consumer_function="$(jq -r '.FunctionArn | split(":")[-1]' <<<"${mapping}")"
+  jq -e \
+    --arg queueArn "${dispatch_queue_arn}" \
+    --arg functionArn "${expected_consumer_function_arn}" \
+    '.BatchSize == 1
+      and .State == "Disabled"
+      and .EventSourceArn == $queueArn
+      and .FunctionArn == $functionArn
+      and (.FunctionResponseTypes | index("ReportBatchItemFailures")) != null' \
+    <<<"${mapping}" >/dev/null
   consumer_configuration="$(aws --profile mymemo lambda get-function-configuration \
     --region "${region}" \
-    --function-name "${consumer_function}")"
-  jq -e '.Timeout == 120' <<<"${consumer_configuration}" >/dev/null
-  [[ "$(aws --profile mymemo lambda get-function-concurrency --region "${region}" --function-name "${consumer_function}" --query ReservedConcurrentExecutions --output text)" == "1" ]]
+    --function-name "${expected_consumer_function_arn}")"
+  jq -e \
+    --arg functionArn "${expected_consumer_function_arn}" \
+    '.FunctionArn == $functionArn and .Timeout == 120' \
+    <<<"${consumer_configuration}" >/dev/null
+  [[ "$(aws --profile mymemo lambda get-function-concurrency --region "${region}" --function-name "${expected_consumer_function_arn}" --query ReservedConcurrentExecutions --output text)" == "1" ]]
 
   rule="$(aws --profile mymemo events describe-rule \
     --region "${region}" \
     --name "${repair_rule}")"
-  jq -e '.State == "DISABLED" and .ScheduleExpression == "rate(1 minute)"' <<<"${rule}" >/dev/null
+  jq -e \
+    --arg ruleArn "${repair_rule_arn}" \
+    '.Arn == $ruleArn and .State == "DISABLED" and .ScheduleExpression == "rate(1 minute)"' \
+    <<<"${rule}" >/dev/null
+  targets="$(aws --profile mymemo events list-targets-by-rule \
+    --region "${region}" \
+    --rule "${repair_rule}")"
+  jq -e --arg publisherArn "${expected_publisher_function_arn}" \
+    '.Targets == [{Arn: $publisherArn, Id: "shared-publisher"}]' \
+    <<<"${targets}" >/dev/null
+  publisher_policy="$(aws --profile mymemo lambda get-policy \
+    --region "${region}" \
+    --function-name "${expected_publisher_function_arn}")"
+  jq -e \
+    --arg publisherArn "${expected_publisher_function_arn}" \
+    --arg ruleArn "${repair_rule_arn}" \
+    '.Policy
+      | fromjson
+      | [.Statement[] | select(.Sid == "AllowEventBridgeRepair")] as $statements
+      | ($statements | length) == 1
+        and $statements[0] == {
+          Sid: "AllowEventBridgeRepair",
+          Effect: "Allow",
+          Principal: {Service: "events.amazonaws.com"},
+          Action: "lambda:InvokeFunction",
+          Resource: $publisherArn,
+          Condition: {ArnLike: {"AWS:SourceArn": $ruleArn}}
+        }' \
+    <<<"${publisher_policy}" >/dev/null
   [[ "$(aws --profile mymemo ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "disabled" ]]
 }
 
