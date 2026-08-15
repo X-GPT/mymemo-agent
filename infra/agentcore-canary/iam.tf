@@ -512,9 +512,51 @@ data "aws_iam_policy_document" "deployment" {
   }
 
   statement {
+    sid       = "CreateCanaryRuntimeOnly"
+    actions   = ["bedrock-agentcore:CreateAgentRuntime"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Application"
+      values   = ["mymemo-agentcore-canary"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Environment"
+      values   = ["prod"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/ManagedBy"
+      values   = ["terraform"]
+    }
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "aws:TagKeys"
+      values   = ["Application", "Environment", "ManagedBy"]
+    }
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "bedrock-agentcore:subnets"
+      values   = values(aws_subnet.private)[*].id
+    }
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "bedrock-agentcore:securityGroups"
+      values   = local.runtime_security_group_ids
+    }
+  }
+
+  statement {
     sid = "ManageCanaryRuntimeOnly"
     actions = [
-      "bedrock-agentcore:CreateAgentRuntime",
+      "bedrock-agentcore:CreateAgentRuntimeEndpoint",
       "bedrock-agentcore:TagResource",
       "bedrock-agentcore:UpdateAgentRuntime",
     ]

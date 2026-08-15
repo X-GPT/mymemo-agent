@@ -102,7 +102,7 @@ const GITHUB_ROLE_POLICY_ADDRESSES = new Set([
 interface PolicyRule {
 	actions: string[];
 	resourcePatterns: (string | RegExp)[];
-	conditions?: Record<string, Record<string, string[]>>;
+	conditions?: Record<string, Record<string, (string | RegExp)[]>>;
 }
 
 const LAMBDA_PASS_ROLE_SUFFIXES = {
@@ -222,9 +222,31 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 			"arn:aws:ssm:us-west-2:637423444544:parameter/mymemo/agentcore-canary/prod/enabled",
 		],
 	},
+	CreateCanaryRuntimeOnly: {
+		actions: ["bedrock-agentcore:CreateAgentRuntime"],
+		resourcePatterns: ["*"],
+		conditions: {
+			"ForAllValues:StringEquals": {
+				"aws:TagKeys": ["Application", "Environment", "ManagedBy"],
+				"bedrock-agentcore:securityGroups": Array.from(
+					{ length: 3 },
+					() => /^sg-[0-9a-f]+$/,
+				),
+				"bedrock-agentcore:subnets": Array.from(
+					{ length: 2 },
+					() => /^subnet-[0-9a-f]+$/,
+				),
+			},
+			StringEquals: {
+				"aws:RequestTag/Application": ["mymemo-agentcore-canary"],
+				"aws:RequestTag/Environment": ["prod"],
+				"aws:RequestTag/ManagedBy": ["terraform"],
+			},
+		},
+	},
 	ManageCanaryRuntimeOnly: {
 		actions: [
-			"bedrock-agentcore:CreateAgentRuntime",
+			"bedrock-agentcore:CreateAgentRuntimeEndpoint",
 			"bedrock-agentcore:TagResource",
 			"bedrock-agentcore:UpdateAgentRuntime",
 		],
@@ -517,7 +539,7 @@ function approvedConditions(
 		const entries = operator as Record<string, unknown>;
 		if (!exactObjectKeys(entries, Object.keys(expectedEntries))) return false;
 		for (const [key, expectedValues] of Object.entries(expectedEntries)) {
-			if (!sameStrings(entries[key], expectedValues)) return false;
+			if (!matchesResourcePatterns(entries[key], expectedValues)) return false;
 		}
 	}
 	return true;

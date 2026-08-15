@@ -15,8 +15,11 @@ principal or control trigger; issue #453 owns the checked-in operator launcher
 and its narrowly scoped AWS authority. The one-time operator bootstrap script
 uses the mandatory `mymemo` profile and the same AWS-6.x canary root, locked
 state, and fail-closed plan classifier to create only the immutable ECR
-repository, the GitHub-assumable deployment role, and the disabled repair-rule
-shell. It creates no reusable bootstrap principal. The deployment role cannot
+repository, persistent private subnets and security group, the GitHub-assumable
+deployment role, and the disabled repair-rule shell. The network prerequisites
+are applied first so the Runtime-create permission can be bound to their exact
+ids before the deployment policy is rendered and classified. The bootstrap
+creates no reusable principal. The deployment role cannot
 mutate itself or enable/redefine the repair schedule; it may attach only the
 publisher target and publisher-only EventBridge permission. Rerun the
 separately controlled operator bootstrap whenever those bootstrap-owned

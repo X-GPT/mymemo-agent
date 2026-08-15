@@ -79,6 +79,18 @@ scripts/deploy/build_agentcore_canary_lambdas.sh \
 
 terraform -chdir=infra/agentcore-canary init
 terraform -chdir=infra/agentcore-canary plan \
+  -target=aws_subnet.private \
+  -target=aws_security_group.canary \
+  -out=agentcore-canary-bootstrap-network.tfplan
+scripts/deploy/classify_agentcore_canary_plan.sh agentcore-canary-bootstrap-network.tfplan
+terraform -chdir=infra/agentcore-canary apply \
+  -auto-approve \
+  agentcore-canary-bootstrap-network.tfplan
+
+# The Runtime-create policy is bounded to the concrete canary subnet and
+# security-group ids. Resolve those persistent prerequisites in state before
+# rendering and classifying the GitHub-assumable deployment policy.
+terraform -chdir=infra/agentcore-canary plan \
   -target=aws_ecr_repository.runtime \
   -target=aws_iam_role.deployment \
   -target=aws_iam_role_policy.deployment \

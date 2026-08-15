@@ -219,6 +219,18 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/sid\s*=\s*"WritePreflightLogs"[\s\S]*?"logs:CreateLogStream"[\s\S]*?"logs:PutLogEvents"[\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-preflight:\*"/,
 		);
 		expect(source).toMatch(
+			/sid\s*=\s*"CreateCanaryRuntimeOnly"[\s\S]*?actions\s*=\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resources\s*=\s*\["\*"\][\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy[\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\(aws_subnet\.private\)\[\*\]\.id[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?local\.runtime_security_group_ids/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"ManageCanaryRuntimeOnly"[\s\S]*?bedrock-agentcore:CreateAgentRuntimeEndpoint[\s\S]*?bedrock-agentcore:TagResource[\s\S]*?bedrock-agentcore:UpdateAgentRuntime[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
+		);
+		expect(planClassifier).toMatch(
+			/CreateCanaryRuntimeOnly:[\s\S]*?actions:\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resourcePatterns:\s*\["\*"\][\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?length:\s*3[\s\S]*?bedrock-agentcore:subnets[\s\S]*?length:\s*2[\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy/,
+		);
+		expect(planClassifier).toMatch(
+			/ManageCanaryRuntimeOnly:[\s\S]*?bedrock-agentcore:CreateAgentRuntimeEndpoint[\s\S]*?bedrock-agentcore:TagResource[\s\S]*?bedrock-agentcore:UpdateAgentRuntime/,
+		);
+		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
 		expect(source).toMatch(
@@ -277,6 +289,14 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(managedRoles).not.toContain("-deployment");
 		expect(managedRoles).not.toContain("-campaign-launch");
 		expect(bootstrapScript).not.toContain("campaign_launch");
+		expect(bootstrapScript).toContain(
+			"-out=agentcore-canary-bootstrap-network.tfplan",
+		);
+		expect(bootstrapScript).toContain(
+			"classify_agentcore_canary_plan.sh agentcore-canary-bootstrap-network.tfplan",
+		);
+		expect(bootstrapScript).toContain("-target=aws_subnet.private");
+		expect(bootstrapScript).toContain("-target=aws_security_group.canary");
 		expect(bootstrapScript).toContain(
 			"-target=aws_cloudwatch_event_rule.repair",
 		);
