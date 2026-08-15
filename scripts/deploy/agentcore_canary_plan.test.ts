@@ -276,20 +276,15 @@ describe("AgentCore canary Terraform plan classification", () => {
 					},
 				],
 			});
-		for (const address of [
-			"aws_iam_role.deployment",
-			"aws_iam_role.campaign_launch",
-		]) {
-			expect(
-				classifyAgentCoreCanaryPlan(
-					plan([
-						change(address, "aws_iam_role", ["create"], null, {
-							assume_role_policy: githubMainTrust("637423444544"),
-						}),
-					]),
-				),
-			).toEqual({ safe: true, reasons: [] });
-		}
+		expect(
+			classifyAgentCoreCanaryPlan(
+				plan([
+					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
+						assume_role_policy: githubMainTrust("637423444544"),
+					}),
+				]),
+			),
+		).toEqual({ safe: true, reasons: [] });
 		expect(
 			classifyAgentCoreCanaryPlan(
 				plan([
@@ -302,18 +297,12 @@ describe("AgentCore canary Terraform plan classification", () => {
 		expect(
 			classifyAgentCoreCanaryPlan(
 				plan([
-					change(
-						"aws_iam_role.campaign_launch",
-						"aws_iam_role",
-						["create"],
-						null,
-						{
-							assume_role_policy: githubMainTrust(
-								"637423444544",
-								"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary",
-							),
-						},
-					),
+					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
+						assume_role_policy: githubMainTrust(
+							"637423444544",
+							"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary",
+						),
+					}),
 				]),
 			).safe,
 		).toBe(false);
@@ -342,31 +331,19 @@ describe("AgentCore canary Terraform plan classification", () => {
 		);
 	});
 
-	it("accepts only the exact campaign-launch permission", () => {
-		const exact = JSON.stringify({
-			Version: "2012-10-17",
-			Statement: [
-				{
-					Effect: "Allow",
-					Action: "lambda:InvokeFunction",
-					Resource:
-						"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-control",
-				},
-			],
-		});
-		expect(
-			classifyAgentCoreCanaryPlan(
-				plan([
-					change(
-						"aws_iam_role_policy.campaign_launch",
-						"aws_iam_role_policy",
-						["create"],
-						null,
-						{ policy: exact },
-					),
-				]),
-			),
-		).toEqual({ safe: true, reasons: [] });
+	it("rejects campaign-launch authority in the dormant state", () => {
+		for (const [address, type] of [
+			["aws_iam_role.campaign_launch", "aws_iam_role"],
+			["aws_iam_role_policy.campaign_launch", "aws_iam_role_policy"],
+		]) {
+			const result = classifyAgentCoreCanaryPlan(
+				plan([change(address, type, ["create"], null, {})]),
+			);
+			expect(result.safe).toBe(false);
+			expect(result.reasons).toContain(
+				`${address} is outside canary ownership (${type})`,
+			);
+		}
 	});
 
 	it("requires an independently locked AWS 6.x provider satisfying >= 6.50", () => {

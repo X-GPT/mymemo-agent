@@ -186,7 +186,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 
 		for (const role of [
 			"deployment",
-			"campaign_launch",
 			"task",
 			"publisher",
 			"consumer",
@@ -203,7 +202,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toContain(
 			'data "aws_iam_policy_document" "github_main_trust"',
 		);
-		expect(source.match(/github_main_trust\.json/g)).toHaveLength(2);
+		expect(source.match(/github_main_trust\.json/g)).toHaveLength(1);
+		expect(source).not.toContain('aws_iam_role" "campaign_launch"');
+		expect(source).not.toContain('aws_iam_role_policy" "campaign_launch"');
+		expect(source).not.toContain('output "campaign_launch_role_arn"');
 		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
@@ -231,9 +233,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 		expect(planClassifier).toMatch(
 			/UpdateCanaryEventMappingOnly:[\s\S]*?actions:\s*\["lambda:UpdateEventSourceMapping"\][\s\S]*?event-source-mapping:\*[\s\S]*?lambda:FunctionArn[\s\S]*?-consumer/,
-		);
-		expect(source).not.toMatch(
-			/resource\s+"aws_iam_role_policy"\s+"campaign_launch"[\s\S]*?(rds:|secretsmanager:GetSecretValue)/,
 		);
 		expect(source).not.toContain("iam:UpdateAssumeRolePolicy");
 		expect(source).toMatch(
@@ -265,10 +264,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		)?.[1];
 		expect(managedRoles).not.toContain("-deployment");
 		expect(managedRoles).not.toContain("-campaign-launch");
-		expect(bootstrapScript).toContain("-target=aws_iam_role.campaign_launch");
-		expect(bootstrapScript).toContain(
-			"-target=aws_iam_role_policy.campaign_launch",
-		);
+		expect(bootstrapScript).not.toContain("campaign_launch");
 		expect(bootstrapScript).toContain(
 			"-target=aws_cloudwatch_event_rule.repair",
 		);
@@ -466,7 +462,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(deploymentAdr).toContain("exact `main`-branch subject");
 		expect(deploymentAdr).not.toMatch(/Environment-(protected|approved)/i);
 		expect(orchestrationAdr).toMatch(
-			/The workflow is deleted after\s+the AgentCore verification campaign/,
+			/A checked-in operator command runs only from a clean, current `main` revision/,
+		);
+		expect(orchestrationAdr).not.toContain(
+			"A temporary, manually dispatched GitHub workflow",
 		);
 		expect(orchestrationAdr).not.toContain("environment-approved");
 		expect(workflow).toContain("RDS_CA_BUNDLE_SHA256:");
@@ -592,9 +591,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(preflight).not.toContain("/runs");
 		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");
 		expect(readme).toContain("Issue #453 owns the temporary network window");
-		expect(readme).toMatch(
-			/That workflow is deleted\s+after the campaign, leaving no normal-production control-path trigger\./,
-		);
+		expect(readme).toContain("through its durable campaign orchestration");
 	});
 
 	it("packages the pinned RDS trust bundle for every database Lambda", () => {

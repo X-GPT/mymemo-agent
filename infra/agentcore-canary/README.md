@@ -8,18 +8,17 @@ VPC, database, Redis, artifact-bucket, ECS, load-balancer, or routing resources.
 ## Deployment authority
 
 Configure the repository's non-secret variables referenced by
-`agentcore-canary-deploy.yml`. The permission-separated deployment and
-campaign-launch roles accept GitHub OIDC only from this repository's `main`
-branch. Image promotion remains a manual workflow with an explicit typed
-confirmation. The campaign-launch role is reserved for the temporary #453
-verification workflow; that workflow is removed after the campaign, and normal
-production has no control-path trigger. The one-time operator bootstrap script
+`agentcore-canary-deploy.yml`. The deployment role accepts GitHub OIDC only from
+this repository's `main` branch. Image promotion remains a manual workflow with
+an explicit typed confirmation. This dormant state installs no campaign-launch
+principal or control trigger; issue #453 owns the checked-in operator launcher
+and its narrowly scoped AWS authority. The one-time operator bootstrap script
 uses the mandatory `mymemo` profile and the same AWS-6.x canary root, locked
 state, and fail-closed plan classifier to create only the immutable ECR
-repository, the two GitHub-assumable canary roles, and the disabled repair-rule
-shell. It creates no reusable bootstrap principal. The narrower deployment role
-cannot mutate those roles or enable/redefine the repair schedule; it may attach
-only the publisher target and publisher-only EventBridge permission. Rerun the
+repository, the GitHub-assumable deployment role, and the disabled repair-rule
+shell. It creates no reusable bootstrap principal. The deployment role cannot
+mutate itself or enable/redefine the repair schedule; it may attach only the
+publisher target and publisher-only EventBridge permission. Rerun the
 separately controlled operator bootstrap whenever those bootstrap-owned
 contracts intentionally change.
 
@@ -30,9 +29,9 @@ operator command from the reviewed `main` revision:
 scripts/deploy/bootstrap_agentcore_canary.sh bootstrap-mymemo-agentcore-canary-prod
 ```
 
-It reads the protected Environment's non-secret Terraform inputs through `gh`,
-verifies account `637423444544`, builds the Lambda packages, and applies only
-the classified bootstrap targets into the dedicated canary state. The GitHub
+It reads the repository's non-secret Terraform inputs through `gh`, verifies
+account `637423444544`, builds the Lambda packages, and applies only the
+classified bootstrap targets into the dedicated canary state. The GitHub
 workflow has no bootstrap path and cannot acquire this authority.
 
 Run **Deploy dormant AgentCore canary** manually and enter
@@ -65,8 +64,8 @@ The inspection performs no Lambda or Runtime invocation and cannot admit a Run.
 Issue #452 installs the preflight capability but deliberately leaves the
 deployment dormant: its workflow does not create NAT/EIP or invoke the preflight
 Lambda. Issue #453 owns the temporary network window, two-hour expiry, preflight
-orchestration, and verified NAT/EIP cleanup through its manual workflow from
-`main`.
+orchestration, and verified NAT/EIP cleanup after its operator command launches
+the durable Campaign from `main`.
 
 During that #453 campaign-network window, `campaign_network_enabled=true` while
 `dispatch_enabled=false`. The preflight task sets `ROLLBACK_RUNTIME_IMAGE_DIGEST`
@@ -83,9 +82,8 @@ The wrapper also revalidates the disabled mapping, repair rule, and SSM flag;
 the ready digest-pinned Runtime, MMDSv2, `DEFAULT` endpoint, and consumer
 invocation authority; plus empty queues, secret metadata, alarms, rollback
 image, and scoped session-cleanup authority. Issue #453 closes the window
-through its temporary campaign workflow because the normal deployment
-classifier deliberately rejects resource deletion. That workflow is deleted
-after the campaign, leaving no normal-production control-path trigger.
+through its durable campaign orchestration because the normal deployment
+classifier deliberately rejects resource deletion.
 
 `PoisonDispatch` and `DisabledDelivery` are emitted both dimensionlessly for
 the #452 alarms and with the bounded `reason` dimension for diagnosis. The

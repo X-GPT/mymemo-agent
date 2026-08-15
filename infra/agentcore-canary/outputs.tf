@@ -121,11 +121,6 @@ output "alarm_names" {
 }
 
 output "deployment_role_arn" {
-  description = "Environment-bound role for independent manual image promotion."
+  description = "Main-bound GitHub OIDC role for independent manual image promotion."
   value       = aws_iam_role.deployment.arn
-}
-
-output "campaign_launch_role_arn" {
-  description = "Environment-bound role that may invoke control but cannot mutate infrastructure or databases."
-  value       = aws_iam_role.campaign_launch.arn
 }

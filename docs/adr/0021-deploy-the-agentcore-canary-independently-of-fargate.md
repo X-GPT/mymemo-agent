@@ -31,10 +31,11 @@ an application lifecycle feature.
 
 ## Consequences
 
-- Canary deployment and campaign launch use distinct GitHub OIDC roles whose
-  trust is restricted to this repository's exact `main`-branch subject; runtime
-  fault injection has a narrower service role and accepts no operator-supplied
-  resource identifiers.
+- Canary deployment uses a GitHub OIDC role whose trust is restricted to this
+  repository's exact `main`-branch subject. Dormant deployment installs no
+  campaign-launch principal; the campaign-orchestration slice owns that
+  temporary operator boundary. Runtime fault injection has a narrower service
+  role and accepts no operator-supplied resource identifiers.
 - The Runtime reads exact secret ARNs at fresh session boot and requires RDS
   certificate verification without changing Fargate's current TLS behavior.
 - Every campaign report records the image digest and resolved Runtime version.

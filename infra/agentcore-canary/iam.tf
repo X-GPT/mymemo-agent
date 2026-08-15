@@ -757,9 +757,9 @@ data "aws_iam_policy_document" "deployment" {
     resources = local.exact_secret_arns
   }
 
-  # The Environment-assumable deployment and campaign-launch roles are owned by
-  # the separately approved bootstrap. This role cannot mutate either itself or
-  # the second GitHub-assumable principal into direct secret-reading authority.
+  # The GitHub-assumable deployment role is owned by the separately controlled
+  # bootstrap. This role cannot mutate itself into direct secret-reading
+  # authority.
   statement {
     sid = "ManageCanaryRolesOnly"
     actions = [
@@ -786,11 +786,6 @@ resource "aws_iam_role_policy" "deployment" {
   policy = data.aws_iam_policy_document.deployment.json
 }
 
-resource "aws_iam_role" "campaign_launch" {
-  name               = "${local.name_prefix}-campaign-launch"
-  assume_role_policy = data.aws_iam_policy_document.github_main_trust.json
-}
-
 resource "aws_iam_role" "task" {
   name               = "${local.name_prefix}-task"
   assume_role_policy = data.aws_iam_policy_document.states_trust.json
@@ -799,19 +794,6 @@ resource "aws_iam_role" "task" {
 resource "aws_iam_role" "fault_injection" {
   name               = "${local.name_prefix}-fault-injection"
   assume_role_policy = data.aws_iam_policy_document.states_trust.json
-}
-
-data "aws_iam_policy_document" "campaign_launch" {
-  statement {
-    actions   = ["lambda:InvokeFunction"]
-    resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:${local.name_prefix}-control"]
-  }
-}
-
-resource "aws_iam_role_policy" "campaign_launch" {
-  name   = "${local.name_prefix}-campaign-launch"
-  role   = aws_iam_role.campaign_launch.id
-  policy = data.aws_iam_policy_document.campaign_launch.json
 }
 
 data "aws_iam_policy_document" "task" {

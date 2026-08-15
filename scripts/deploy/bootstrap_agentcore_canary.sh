@@ -80,8 +80,6 @@ scripts/deploy/build_agentcore_canary_lambdas.sh \
 terraform -chdir=infra/agentcore-canary init
 terraform -chdir=infra/agentcore-canary plan \
   -target=aws_ecr_repository.runtime \
-  -target=aws_iam_role.campaign_launch \
-  -target=aws_iam_role_policy.campaign_launch \
   -target=aws_iam_role.deployment \
   -target=aws_iam_role_policy.deployment \
   -target=aws_cloudwatch_event_rule.repair \

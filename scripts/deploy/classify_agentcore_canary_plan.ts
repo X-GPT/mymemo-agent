@@ -38,7 +38,6 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_cloudwatch_metric_alarm.validation",
 	"aws_ecr_repository.runtime",
 	"aws_eip.campaign",
-	"aws_iam_role.campaign_launch",
 	"aws_iam_role.consumer",
 	"aws_iam_role.control",
 	"aws_iam_role.deployment",
@@ -47,7 +46,6 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_iam_role.publisher",
 	"aws_iam_role.runtime",
 	"aws_iam_role.task",
-	"aws_iam_role_policy.campaign_launch",
 	"aws_iam_role_policy.consumer",
 	"aws_iam_role_policy.consumer_base",
 	"aws_iam_role_policy.control",
@@ -96,12 +94,8 @@ const STATES_ROLE_ADDRESSES = new Set([
 	"aws_iam_role.fault_injection",
 	"aws_iam_role.task",
 ]);
-const GITHUB_ROLE_ADDRESSES = new Set([
-	"aws_iam_role.campaign_launch",
-	"aws_iam_role.deployment",
-]);
+const GITHUB_ROLE_ADDRESSES = new Set(["aws_iam_role.deployment"]);
 const GITHUB_ROLE_POLICY_ADDRESSES = new Set([
-	"aws_iam_role_policy.campaign_launch",
 	"aws_iam_role_policy.deployment",
 ]);
 
@@ -582,41 +576,9 @@ function approvedDeploymentPolicy(value: unknown): boolean {
 	return seen.size === Object.keys(DEPLOYMENT_POLICY_RULES).length;
 }
 
-function approvedCampaignLaunchPolicy(value: unknown): boolean {
-	const policy = parsePolicy(value);
-	if (
-		!policy ||
-		!exactObjectKeys(policy, ["Statement", "Version"]) ||
-		policy.Version !== "2012-10-17" ||
-		!Array.isArray(policy.Statement) ||
-		policy.Statement.length !== 1
-	) {
-		return false;
-	}
-	const valueStatement = policy.Statement[0];
-	if (
-		!valueStatement ||
-		typeof valueStatement !== "object" ||
-		Array.isArray(valueStatement)
-	) {
-		return false;
-	}
-	const statement = valueStatement as Record<string, unknown>;
-	return (
-		exactObjectKeys(statement, ["Action", "Effect", "Resource"]) &&
-		statement.Effect === "Allow" &&
-		oneString(statement.Action) === "lambda:InvokeFunction" &&
-		oneString(statement.Resource) ===
-			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-control"
-	);
-}
-
 function approvedGithubRolePolicy(address: string, value: unknown): boolean {
 	if (address === "aws_iam_role_policy.deployment") {
 		return approvedDeploymentPolicy(value);
-	}
-	if (address === "aws_iam_role_policy.campaign_launch") {
-		return approvedCampaignLaunchPolicy(value);
 	}
 	return false;
 }
