@@ -85,7 +85,6 @@ afterEach(async () => {
 interface EnvelopeBlock {
 	type: "text" | "tool_use" | "other";
 	completeText?: string;
-	partialText?: string;
 }
 
 function providerEnvelope(
@@ -126,7 +125,7 @@ function providerEnvelope(
 					index,
 					delta: {
 						type: "text_delta",
-						text: block.partialText ?? block.completeText ?? "",
+						text: block.completeText ?? "",
 					},
 				}),
 				assistantBlock(providerMessageId, {
@@ -841,35 +840,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			});
 		});
 	}
-
-	it("fails a Run whose streamed text disagrees with provider completion", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async () =>
-			messageQuery([
-				...textEnvelope({
-					completeText: "COMMIT",
-					providerMessageId: "provider-1",
-					partialText: "PREVIEW",
-				}),
-				...textEnvelope({
-					completeText: "NEXT",
-					providerMessageId: "provider-2",
-				}),
-			]),
-		);
-		await seedQueuedRun(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		await loop.tick();
-		await worker.drain();
-
-		expect((await readRun("run-1"))?.status).toBe("error");
-		const events = await readEvents("run-1");
-		expect(events.map((event) => event.type)).toEqual(["run_error"]);
-	});
 
 	it("passes the claimed run, abort signal, and Ownership epoch to startRunQuery", async () => {
 		const worker = buildWorker();

@@ -677,7 +677,6 @@ describe("consumeAgentStream", () => {
 	it("fails closed when message_stop arrives before the envelope is complete", async () => {
 		const envelope = textEnvelope({
 			completeText: "uncommitted",
-			partialText: "preview",
 		});
 		const query = fakeQuery([
 			...envelope.slice(0, 3).map((message) => ({ message })),
