@@ -30,9 +30,7 @@ if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
   exit 1
 fi
 
-scripts/deploy/verify_github_canary_environment.sh \
-  production-agentcore-canary \
-  production-agentcore-canary-campaign
+scripts/deploy/verify_github_canary_environment.sh production-agentcore-canary
 
 caller_account="$(aws --profile "${aws_profile}" sts get-caller-identity --query Account --output text)"
 if [[ "${caller_account}" != "${account_id}" ]]; then

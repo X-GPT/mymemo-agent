@@ -701,10 +701,6 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 	}
 
 	if (GITHUB_ROLE_ADDRESSES.has(address)) {
-		const expectedEnvironment =
-			address === "aws_iam_role.deployment"
-				? "production-agentcore-canary"
-				: "production-agentcore-canary-campaign";
 		return (
 			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
 			oneString(trust.Action) === "sts:AssumeRoleWithWebIdentity" &&
@@ -719,7 +715,7 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 			oneString(equalsRecord["token.actions.githubusercontent.com:aud"]) ===
 				"sts.amazonaws.com" &&
 			oneString(equalsRecord["token.actions.githubusercontent.com:sub"]) ===
-				`repo:X-GPT/mymemo-agent:environment:${expectedEnvironment}`
+				"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary"
 		);
 	}
 

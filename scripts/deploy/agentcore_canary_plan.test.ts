@@ -254,7 +254,10 @@ describe("AgentCore canary Terraform plan classification", () => {
 			).toBe(false);
 		}
 
-		const githubDeploymentTrust = (providerAccount: string) =>
+		const githubOperatorTrust = (
+			providerAccount: string,
+			environment = "production-agentcore-canary",
+		) =>
 			JSON.stringify({
 				Version: "2012-10-17",
 				Statement: [
@@ -267,28 +270,50 @@ describe("AgentCore canary Terraform plan classification", () => {
 						Condition: {
 							StringEquals: {
 								"token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-								"token.actions.githubusercontent.com:sub":
-									"repo:X-GPT/mymemo-agent:environment:production-agentcore-canary",
+								"token.actions.githubusercontent.com:sub": `repo:X-GPT/mymemo-agent:environment:${environment}`,
 							},
 						},
 					},
 				],
 			});
+		for (const address of [
+			"aws_iam_role.deployment",
+			"aws_iam_role.campaign_launch",
+		]) {
+			expect(
+				classifyAgentCoreCanaryPlan(
+					plan([
+						change(address, "aws_iam_role", ["create"], null, {
+							assume_role_policy: githubOperatorTrust("637423444544"),
+						}),
+					]),
+				),
+			).toEqual({ safe: true, reasons: [] });
+		}
 		expect(
 			classifyAgentCoreCanaryPlan(
 				plan([
 					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
-						assume_role_policy: githubDeploymentTrust("637423444544"),
+						assume_role_policy: githubOperatorTrust("111111111111"),
 					}),
 				]),
-			),
-		).toEqual({ safe: true, reasons: [] });
+			).safe,
+		).toBe(false);
 		expect(
 			classifyAgentCoreCanaryPlan(
 				plan([
-					change("aws_iam_role.deployment", "aws_iam_role", ["create"], null, {
-						assume_role_policy: githubDeploymentTrust("111111111111"),
-					}),
+					change(
+						"aws_iam_role.campaign_launch",
+						"aws_iam_role",
+						["create"],
+						null,
+						{
+							assume_role_policy: githubOperatorTrust(
+								"637423444544",
+								"production-agentcore-canary-campaign",
+							),
+						},
+					),
 				]),
 			).safe,
 		).toBe(false);

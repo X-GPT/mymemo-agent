@@ -197,15 +197,11 @@ describe("dormant AgentCore canary infrastructure", () => {
 			expect(source).toContain(`resource "aws_iam_role" "${role}"`);
 		}
 		expect(source).toContain("environment:production-agentcore-canary");
+		expect(source).not.toContain("production-agentcore-canary-campaign");
 		expect(source).toContain(
-			"environment:production-agentcore-canary-campaign",
+			'data "aws_iam_policy_document" "github_operator_trust"',
 		);
-		expect(source).toContain(
-			'data "aws_iam_policy_document" "github_deployment_trust"',
-		);
-		expect(source).toContain(
-			'data "aws_iam_policy_document" "github_campaign_launch_trust"',
-		);
+		expect(source.match(/github_operator_trust\.json/g)).toHaveLength(2);
 		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
@@ -287,13 +283,19 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/previous_runtime_image_digest[\s\S]*?sha256:0{64}[\s\S]*?previous_runtime_image_digest=""/,
 		);
 		expect(workflow).toContain(
-			"verify_github_canary_environment.sh production-agentcore-canary production-agentcore-canary-campaign",
+			"verify_github_canary_environment.sh production-agentcore-canary",
 		);
 		expect(
 			workflow.match(
-				/verify_github_canary_environment\.sh production-agentcore-canary production-agentcore-canary-campaign/g,
+				/verify_github_canary_environment\.sh production-agentcore-canary/g,
 			),
 		).toHaveLength(1);
+		expect(bootstrapScript).toContain(
+			"verify_github_canary_environment.sh production-agentcore-canary",
+		);
+		expect(bootstrapScript).not.toContain(
+			"production-agentcore-canary-campaign",
+		);
 		expect(workflow).not.toContain("bootstrap_canary_authority");
 		expect(workflow).not.toContain("agentcore-canary-bootstrap");
 		const bootstrapIam = readFileSync(
@@ -565,8 +567,12 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(preflight).not.toContain("AWS_PROFILE:-");
 		expect(preflight).not.toContain("invoke-agent-runtime");
 		expect(preflight).not.toContain("/runs");
-		expect(readFileSync(join(terraformDir, "README.md"), "utf8")).toContain(
-			"Issue #453 owns the separately approved network window",
+		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");
+		expect(readme).toContain(
+			"Issue #453 owns the temporary operator-approved network window",
+		);
+		expect(readme).toMatch(
+			/That workflow is deleted\s+after the campaign, leaving no normal-production control-path trigger\./,
 		);
 	});
 
