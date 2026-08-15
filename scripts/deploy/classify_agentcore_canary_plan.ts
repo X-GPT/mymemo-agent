@@ -242,17 +242,42 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 				"aws:RequestTag/Environment": ["prod"],
 				"aws:RequestTag/ManagedBy": ["terraform"],
 			},
+			Null: {
+				"bedrock-agentcore:securityGroups": ["false"],
+				"bedrock-agentcore:subnets": ["false"],
+			},
 		},
 	},
 	ManageCanaryRuntimeOnly: {
 		actions: [
 			"bedrock-agentcore:CreateAgentRuntimeEndpoint",
 			"bedrock-agentcore:TagResource",
-			"bedrock-agentcore:UpdateAgentRuntime",
 		],
 		resourcePatterns: [
 			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*",
 		],
+	},
+	UpdateCanaryRuntimeOnly: {
+		actions: ["bedrock-agentcore:UpdateAgentRuntime"],
+		resourcePatterns: [
+			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*",
+		],
+		conditions: {
+			"ForAllValues:StringEquals": {
+				"bedrock-agentcore:securityGroups": Array.from(
+					{ length: 3 },
+					() => /^sg-[0-9a-f]+$/,
+				),
+				"bedrock-agentcore:subnets": Array.from(
+					{ length: 2 },
+					() => /^subnet-[0-9a-f]+$/,
+				),
+			},
+			Null: {
+				"bedrock-agentcore:securityGroups": ["false"],
+				"bedrock-agentcore:subnets": ["false"],
+			},
+		},
 	},
 	ManageCanaryAlarmsOnly: {
 		actions: [
@@ -469,7 +494,7 @@ const DEPLOYMENT_POLICY_RULES: Record<string, PolicyRule> = {
 	},
 };
 
-function oneString(value: unknown): string | undefined {
+function singleStringValue(value: unknown): string | undefined {
 	if (typeof value === "string") return value;
 	if (
 		Array.isArray(value) &&
@@ -578,7 +603,7 @@ function approvedDeploymentPolicy(value: unknown): boolean {
 		if (!value || typeof value !== "object" || Array.isArray(value))
 			return false;
 		const statement = value as Record<string, unknown>;
-		const sid = oneString(statement.Sid);
+		const sid = singleStringValue(statement.Sid);
 		const rule = sid ? DEPLOYMENT_POLICY_RULES[sid] : undefined;
 		if (!sid || !rule || seen.has(sid)) return false;
 		const expectedKeys = rule.conditions
@@ -624,9 +649,9 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 	if (LAMBDA_ROLE_ADDRESSES.has(address)) {
 		return (
 			exactObjectKeys(trust, ["Action", "Effect", "Principal"]) &&
-			oneString(trust.Action) === "sts:AssumeRole" &&
+			singleStringValue(trust.Action) === "sts:AssumeRole" &&
 			exactObjectKeys(principalRecord, ["Service"]) &&
-			oneString(principalRecord.Service) === "lambda.amazonaws.com"
+			singleStringValue(principalRecord.Service) === "lambda.amazonaws.com"
 		);
 	}
 
@@ -652,14 +677,14 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 		const arnLikeRecord = arnLike as Record<string, unknown>;
 		return (
 			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
-			oneString(trust.Action) === "sts:AssumeRole" &&
+			singleStringValue(trust.Action) === "sts:AssumeRole" &&
 			exactObjectKeys(principalRecord, ["Service"]) &&
-			oneString(principalRecord.Service) === "states.amazonaws.com" &&
+			singleStringValue(principalRecord.Service) === "states.amazonaws.com" &&
 			exactObjectKeys(conditionRecord, ["ArnLike", "StringEquals"]) &&
 			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
-			oneString(equalsRecord["aws:SourceAccount"]) === "637423444544" &&
+			singleStringValue(equalsRecord["aws:SourceAccount"]) === "637423444544" &&
 			exactObjectKeys(arnLikeRecord, ["aws:SourceArn"]) &&
-			oneString(arnLikeRecord["aws:SourceArn"]) ===
+			singleStringValue(arnLikeRecord["aws:SourceArn"]) ===
 				"arn:aws:states:us-west-2:637423444544:stateMachine:mymemo-agent-agentcore-canary-prod-*"
 		);
 	}
@@ -671,15 +696,15 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 		const arnLikeRecord = arnLike as Record<string, unknown>;
 		return (
 			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
-			oneString(trust.Action) === "sts:AssumeRole" &&
+			singleStringValue(trust.Action) === "sts:AssumeRole" &&
 			exactObjectKeys(principalRecord, ["Service"]) &&
-			oneString(principalRecord.Service) ===
+			singleStringValue(principalRecord.Service) ===
 				"bedrock-agentcore.amazonaws.com" &&
 			exactObjectKeys(conditionRecord, ["ArnLike", "StringEquals"]) &&
 			exactObjectKeys(equalsRecord, ["aws:SourceAccount"]) &&
-			oneString(equalsRecord["aws:SourceAccount"]) === "637423444544" &&
+			singleStringValue(equalsRecord["aws:SourceAccount"]) === "637423444544" &&
 			exactObjectKeys(arnLikeRecord, ["aws:SourceArn"]) &&
-			oneString(arnLikeRecord["aws:SourceArn"]) ===
+			singleStringValue(arnLikeRecord["aws:SourceArn"]) ===
 				"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*"
 		);
 	}
@@ -687,19 +712,21 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 	if (GITHUB_ROLE_ADDRESSES.has(address)) {
 		return (
 			exactObjectKeys(trust, ["Action", "Condition", "Effect", "Principal"]) &&
-			oneString(trust.Action) === "sts:AssumeRoleWithWebIdentity" &&
+			singleStringValue(trust.Action) === "sts:AssumeRoleWithWebIdentity" &&
 			exactObjectKeys(principalRecord, ["Federated"]) &&
-			oneString(principalRecord.Federated) ===
+			singleStringValue(principalRecord.Federated) ===
 				"arn:aws:iam::637423444544:oidc-provider/token.actions.githubusercontent.com" &&
 			exactObjectKeys(conditionRecord, ["StringEquals"]) &&
 			exactObjectKeys(equalsRecord, [
 				"token.actions.githubusercontent.com:aud",
 				"token.actions.githubusercontent.com:sub",
 			]) &&
-			oneString(equalsRecord["token.actions.githubusercontent.com:aud"]) ===
-				"sts.amazonaws.com" &&
-			oneString(equalsRecord["token.actions.githubusercontent.com:sub"]) ===
-				"repo:X-GPT/mymemo-agent:ref:refs/heads/main"
+			singleStringValue(
+				equalsRecord["token.actions.githubusercontent.com:aud"],
+			) === "sts.amazonaws.com" &&
+			singleStringValue(
+				equalsRecord["token.actions.githubusercontent.com:sub"],
+			) === "repo:X-GPT/mymemo-agent:ref:refs/heads/main"
 		);
 	}
 

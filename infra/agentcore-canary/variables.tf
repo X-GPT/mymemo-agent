@@ -154,7 +154,7 @@ variable "github_owner" {
 }
 
 variable "github_repository" {
-  description = "GitHub repository allowed through the protected canary Environment."
+  description = "GitHub repository allowed by the exact-main-branch OIDC trust."
   type        = string
   default     = "mymemo-agent"
 }

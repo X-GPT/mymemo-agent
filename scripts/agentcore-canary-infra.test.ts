@@ -160,25 +160,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 
 	it("separates least-privilege roles and restricts GitHub authority to main", () => {
 		const source = terraformSource();
-		const workflow = readFileSync(
-			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
-			"utf8",
-		);
-		const bootstrapScript = readFileSync(
-			join(root, "scripts", "deploy", "bootstrap_agentcore_canary.sh"),
-			"utf8",
-		);
-		const artifactPublication = readFileSync(
-			join(
-				root,
-				"apps",
-				"agent-worker",
-				"src",
-				"artifacts",
-				"artifact-publication.ts",
-			),
-			"utf8",
-		);
 		const planClassifier = readFileSync(
 			join(root, "scripts", "deploy", "classify_agentcore_canary_plan.ts"),
 			"utf8",
@@ -219,16 +200,22 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/sid\s*=\s*"WritePreflightLogs"[\s\S]*?"logs:CreateLogStream"[\s\S]*?"logs:PutLogEvents"[\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-preflight:\*"/,
 		);
 		expect(source).toMatch(
-			/sid\s*=\s*"CreateCanaryRuntimeOnly"[\s\S]*?actions\s*=\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resources\s*=\s*\["\*"\][\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy[\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\(aws_subnet\.private\)\[\*\]\.id[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?local\.runtime_security_group_ids/,
+			/sid\s*=\s*"CreateCanaryRuntimeOnly"[\s\S]*?actions\s*=\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resources\s*=\s*\["\*"\][\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy[\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\(aws_subnet\.private\)\[\*\]\.id[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?local\.runtime_security_group_ids[\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\s*=\s*\["false"\][\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?values\s*=\s*\["false"\]/,
 		);
 		expect(source).toMatch(
-			/sid\s*=\s*"ManageCanaryRuntimeOnly"[\s\S]*?bedrock-agentcore:CreateAgentRuntimeEndpoint[\s\S]*?bedrock-agentcore:TagResource[\s\S]*?bedrock-agentcore:UpdateAgentRuntime[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
+			/sid\s*=\s*"ManageCanaryRuntimeOnly"[\s\S]*?bedrock-agentcore:CreateAgentRuntimeEndpoint[\s\S]*?bedrock-agentcore:TagResource[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
+		);
+		expect(source).toMatch(
+			/sid\s*=\s*"UpdateCanaryRuntimeOnly"[\s\S]*?actions\s*=\s*\["bedrock-agentcore:UpdateAgentRuntime"\][\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\(aws_subnet\.private\)\[\*\]\.id[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?local\.runtime_security_group_ids[\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?values\s*=\s*\["false"\][\s\S]*?test\s*=\s*"Null"[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?values\s*=\s*\["false"\]/,
 		);
 		expect(planClassifier).toMatch(
-			/CreateCanaryRuntimeOnly:[\s\S]*?actions:\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resourcePatterns:\s*\["\*"\][\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?length:\s*3[\s\S]*?bedrock-agentcore:subnets[\s\S]*?length:\s*2[\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy/,
+			/CreateCanaryRuntimeOnly:[\s\S]*?actions:\s*\["bedrock-agentcore:CreateAgentRuntime"\][\s\S]*?resourcePatterns:\s*\["\*"\][\s\S]*?aws:TagKeys[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?length:\s*3[\s\S]*?bedrock-agentcore:subnets[\s\S]*?length:\s*2[\s\S]*?aws:RequestTag\/Application[\s\S]*?aws:RequestTag\/Environment[\s\S]*?aws:RequestTag\/ManagedBy[\s\S]*?Null:[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?"false"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?"false"/,
 		);
 		expect(planClassifier).toMatch(
-			/ManageCanaryRuntimeOnly:[\s\S]*?bedrock-agentcore:CreateAgentRuntimeEndpoint[\s\S]*?bedrock-agentcore:TagResource[\s\S]*?bedrock-agentcore:UpdateAgentRuntime/,
+			/ManageCanaryRuntimeOnly:[\s\S]*?bedrock-agentcore:CreateAgentRuntimeEndpoint[\s\S]*?bedrock-agentcore:TagResource/,
+		);
+		expect(planClassifier).toMatch(
+			/UpdateCanaryRuntimeOnly:[\s\S]*?actions:\s*\["bedrock-agentcore:UpdateAgentRuntime"\][\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?length:\s*3[\s\S]*?bedrock-agentcore:subnets[\s\S]*?length:\s*2[\s\S]*?Null:[\s\S]*?bedrock-agentcore:securityGroups[\s\S]*?"false"[\s\S]*?bedrock-agentcore:subnets[\s\S]*?"false"/,
 		);
 		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
@@ -237,6 +224,26 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/output\s+"runtime_security_configuration"[\s\S]*?role_arn\s*=\s*aws_iam_role\.runtime\.arn[\s\S]*?environment_variables\s*=\s*local\.runtime_environment[\s\S]*?subnet_ids\s*=\s*sort\(values\(aws_subnet\.private\)\[\*\]\.id\)[\s\S]*?security_group_ids\s*=\s*sort\(local\.runtime_security_group_ids\)[\s\S]*?idle_runtime_session_timeout\s*=\s*900/,
 		);
 		expect(source).toMatch(/resources\s*=\s*local\.exact_secret_arns/);
+	});
+
+	it("limits artifact, event mapping, and role-management authority", () => {
+		const source = terraformSource();
+		const artifactPublication = readFileSync(
+			join(
+				root,
+				"apps",
+				"agent-worker",
+				"src",
+				"artifacts",
+				"artifact-publication.ts",
+			),
+			"utf8",
+		);
+		const planClassifier = readFileSync(
+			join(root, "scripts", "deploy", "classify_agentcore_canary_plan.ts"),
+			"utf8",
+		);
+
 		expect(source).toMatch(
 			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?actions\s*=\s*\["s3:AbortMultipartUpload", "s3:PutObject"\]/,
 		);
@@ -288,6 +295,18 @@ describe("dormant AgentCore canary infrastructure", () => {
 		)?.[1];
 		expect(managedRoles).not.toContain("-deployment");
 		expect(managedRoles).not.toContain("-campaign-launch");
+	});
+
+	it("keeps bootstrap authority separate from the deployment workflow", () => {
+		const workflow = readFileSync(
+			join(root, ".github", "workflows", "agentcore-canary-deploy.yml"),
+			"utf8",
+		);
+		const bootstrapScript = readFileSync(
+			join(root, "scripts", "deploy", "bootstrap_agentcore_canary.sh"),
+			"utf8",
+		);
+
 		expect(bootstrapScript).not.toContain("campaign_launch");
 		expect(bootstrapScript).toContain(
 			"-out=agentcore-canary-bootstrap-network.tfplan",
@@ -333,6 +352,11 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 		expect(bootstrapIam).not.toContain("agentcore_canary_bootstrap");
 		expect(bootstrapIam).not.toContain("agentcore-canary-bootstrap");
+	});
+
+	it("wires Lambda, preflight, and disabled repair boundaries", () => {
+		const source = terraformSource();
+
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_function"\s+"preflight"[\s\S]*?role\s*=\s*aws_iam_role\.preflight\.arn/,
 		);

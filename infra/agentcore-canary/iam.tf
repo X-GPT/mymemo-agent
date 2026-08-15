@@ -551,6 +551,18 @@ data "aws_iam_policy_document" "deployment" {
       variable = "bedrock-agentcore:securityGroups"
       values   = local.runtime_security_group_ids
     }
+
+    condition {
+      test     = "Null"
+      variable = "bedrock-agentcore:subnets"
+      values   = ["false"]
+    }
+
+    condition {
+      test     = "Null"
+      variable = "bedrock-agentcore:securityGroups"
+      values   = ["false"]
+    }
   }
 
   statement {
@@ -558,9 +570,38 @@ data "aws_iam_policy_document" "deployment" {
     actions = [
       "bedrock-agentcore:CreateAgentRuntimeEndpoint",
       "bedrock-agentcore:TagResource",
-      "bedrock-agentcore:UpdateAgentRuntime",
     ]
     resources = ["arn:aws:bedrock-agentcore:${var.aws_region}:${var.aws_account_id}:runtime/mymemo_agentcore_canary_prod-*"]
+  }
+
+  statement {
+    sid       = "UpdateCanaryRuntimeOnly"
+    actions   = ["bedrock-agentcore:UpdateAgentRuntime"]
+    resources = ["arn:aws:bedrock-agentcore:${var.aws_region}:${var.aws_account_id}:runtime/mymemo_agentcore_canary_prod-*"]
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "bedrock-agentcore:subnets"
+      values   = values(aws_subnet.private)[*].id
+    }
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "bedrock-agentcore:securityGroups"
+      values   = local.runtime_security_group_ids
+    }
+
+    condition {
+      test     = "Null"
+      variable = "bedrock-agentcore:subnets"
+      values   = ["false"]
+    }
+
+    condition {
+      test     = "Null"
+      variable = "bedrock-agentcore:securityGroups"
+      values   = ["false"]
+    }
   }
 
   statement {
