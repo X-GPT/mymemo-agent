@@ -127,7 +127,7 @@ variable "live_redis_engine_version" {
 }
 
 variable "alarm_action_arns" {
-  description = "Optional SNS topic ARNs notified by Live Stream relay CloudWatch alarms."
+  description = "Optional SNS topic ARNs notified by this stack's CloudWatch alarms."
   type        = list(string)
   default     = []
 }
