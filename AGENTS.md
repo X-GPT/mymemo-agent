@@ -182,29 +182,40 @@ aligned instead of casting around them.
 
 ### agentcore-canary-dispatch
 
-Required:
+Required by both the publisher and consumer entrypoints:
 
-- `AGENT_DATABASE_URL` — writable `mymemo_agent` DB holding Campaign, outbox, Conversation Ownership, and exact Run state
-- `AWS_REGION` — region for SSM, SQS, and AgentCore clients
+- `AWS_REGION` — region for SSM and SQS clients
+- `CANARY_AGENT_DATABASE_URL_SECRET_ARN` — exact same-account, same-region Secrets Manager ARN for the writable `mymemo_agent` URL; the Lambda resolves only `AWSCURRENT`, which must use `sslmode=verify-full`
 - `CANARY_DISPATCH_QUEUE_URL` — encrypted standard Canary dispatch queue URL
 - `CANARY_ENABLED_PARAMETER_NAME` — SSM parameter whose only enabling value is exactly `enabled`; missing, unreadable, or any other value fails closed
-- `CANARY_AGENT_RUNTIME_ARN` — exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity
+- `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS` — `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
+
+Additionally required by the consumer, manual-replay, and acquisition entrypoints:
+
+- `CANARY_AGENT_RUNTIME_ARN` — exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity. The publisher entrypoint intentionally does not receive this consumer-only authority
 
 ### agentcore-canary-control
 
 Required:
 
-- `AGENT_DATABASE_URL` — writable `mymemo_agent` DB holding Campaign, outbox, Conversation Ownership, and exact Run state
 - `AWS_REGION` — region for SSM and SQS clients used by immediate publication
+- `CANARY_AGENT_DATABASE_URL_SECRET_ARN` and `CANARY_KB_DATABASE_URL_SECRET_ARN` — exact same-account, same-region Secrets Manager ARNs resolved only at `AWSCURRENT`; both database URLs must use `sslmode=verify-full`
 - `CANARY_DISPATCH_QUEUE_URL` — encrypted standard Canary dispatch queue URL
 - `CANARY_ENABLED_PARAMETER_NAME` — fail-closed SSM control parameter; the control path does not require the consumer-only `CANARY_AGENT_RUNTIME_ARN`
-- `KB_DATABASE_URL`, `CANARY_APPROVED_SYNTHETIC_USER_ID`, and `CANARY_CONTROL_CONFIG_JSON` — existing synthetic-fixture authority used by the control Lambda
+- `CANARY_APPROVED_SYNTHETIC_USER_ID` and `CANARY_CONTROL_CONFIG_JSON` — existing synthetic-fixture authority used by the control Lambda
+- `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS` — `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
+
+The separately deployed `preflightHandler` from this package uses only
+`AWS_REGION`, the two database-secret ARNs, and the packaged RDS CA path. It does
+not require `CANARY_APPROVED_SYNTHETIC_USER_ID` or
+`CANARY_CONTROL_CONFIG_JSON` and has no control/Run-admission dependency.
 
 ### agentcore-canary-runtime
 
 Required non-secret bootstrap values:
 
 - `AWS_REGION`, `CANARY_ENABLED_PARAMETER_NAME`, `OPENROUTER_BASE_URL`, `OPENROUTER_DEFAULT_MODEL`, `WORKER_E2B_TEMPLATE`, and `ARTIFACT_BUCKET` — the same execution and fail-closed control settings used by dispatch and the trusted worker
+- `CANARY_ARTIFACT_OBJECT_KEY_PREFIX` — deployment-owned `objects/agentcore-canary` namespace; the same Terraform local scopes both generated keys and Runtime upload IAM
 - `CANARY_AGENT_DATABASE_URL_SECRET_ARN`, `CANARY_KB_DATABASE_URL_SECRET_ARN`, `CANARY_OPENROUTER_API_KEY_SECRET_ARN`, `CANARY_E2B_API_KEY_SECRET_ARN`, and `CANARY_REDIS_URL_SECRET_ARN` — exact Secrets Manager ARNs. The corresponding secret values must not be present in the Runtime environment; both database URLs are required to use `sslmode=verify-full`
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS` — the same absolute path to the digest-pinned RDS trust bundle baked into the image
 

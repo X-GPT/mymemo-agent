@@ -22,6 +22,7 @@ function bootstrapEnv(): Record<string, string | undefined> {
 		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 		ARTIFACT_BUCKET: "private-artifacts",
+		CANARY_ARTIFACT_OBJECT_KEY_PREFIX: "objects/agentcore-canary",
 		RDS_CA_BUNDLE_PATH: "/etc/ssl/certs/rds-global-bundle.pem",
 		NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/rds-global-bundle.pem",
 	};
@@ -34,6 +35,7 @@ describe("AgentCore Runtime configuration", () => {
 		expect(config.port).toBe(8080);
 		expect(config.heartbeatIntervalMs).toBe(15_000);
 		expect(config.shutdownTimeoutMs).toBe(30_000);
+		expect(config.artifactObjectKeyPrefix).toBe("objects/agentcore-canary");
 		expect(Object.values(config.secretArns)).toHaveLength(5);
 		expect(config.rdsCaBundlePath).toBe("/etc/ssl/certs/rds-global-bundle.pem");
 	});
@@ -50,6 +52,23 @@ describe("AgentCore Runtime configuration", () => {
 			env[secretName] = "must-not-be-ambient";
 			expect(() => loadRuntimeBootstrapConfig(env)).toThrow(secretName);
 		}
+	});
+
+	it("distinguishes a missing secret ARN from a malformed one", () => {
+		const env = bootstrapEnv();
+		delete env.CANARY_REDIS_URL_SECRET_ARN;
+		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
+			"CANARY_REDIS_URL_SECRET_ARN is required",
+		);
+	});
+
+	it("rejects secret ARNs outside the commercial AWS partition", () => {
+		const env = bootstrapEnv();
+		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN =
+			"arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:agent-db-AbCdEf";
+		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
+			"CANARY_AGENT_DATABASE_URL_SECRET_ARN must be an exact Secrets Manager ARN",
+		);
 	});
 
 	it("reads current secret values into memory and requires verified database TLS", async () => {

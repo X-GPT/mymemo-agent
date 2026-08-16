@@ -72,6 +72,7 @@ export interface ArtifactPublisher {
 export interface ArtifactPublisherDependencies {
 	db: Database;
 	objectStore: ArtifactObjectStore;
+	objectKeyPrefix?: string;
 	createObjectKey?: () => string;
 	createArtifactId?: () => string;
 }
@@ -85,7 +86,8 @@ export function createArtifactPublisher(
 	deps: ArtifactPublisherDependencies,
 ): ArtifactPublisher {
 	const createObjectKey =
-		deps.createObjectKey ?? (() => `objects/${crypto.randomUUID()}`);
+		deps.createObjectKey ??
+		(() => `${deps.objectKeyPrefix ?? "objects"}/${crypto.randomUUID()}`);
 	const createArtifactId = deps.createArtifactId ?? (() => crypto.randomUUID());
 	return {
 		async begin({ run, workspace, signal }) {

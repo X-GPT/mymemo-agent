@@ -11,6 +11,11 @@ import {
 	createSsmCanaryEnablementControl,
 } from "./aws-adapters";
 import {
+	createRetryableAsyncSingleton,
+	type Env,
+	requireEnv,
+} from "./config-utils";
+import {
 	type CanaryDispatchAlarm,
 	createCanaryDispatchConsumer,
 } from "./consumer";
@@ -21,8 +26,12 @@ import {
 	type LambdaContext,
 } from "./handlers";
 import { createCanaryDispatchPublisher } from "./publisher";
-
-type Env = Record<string, string | undefined>;
+import {
+	type CurrentSecretReader,
+	createAwsCurrentSecretReader,
+	exactSecretArn,
+	verifiedDatabaseUrl,
+} from "./secret-config";
 
 export interface CanaryDispatchPublisherConfig {
 	agentDatabaseUrl: string;
@@ -33,12 +42,6 @@ export interface CanaryDispatchPublisherConfig {
 
 export interface CanaryDispatchConfig extends CanaryDispatchPublisherConfig {
 	agentRuntimeArn: string;
-}
-
-function requireEnv(env: Env, name: string): string {
-	const value = env[name];
-	if (!value || value.trim() === "") throw new Error(`${name} is required`);
-	return value;
 }
 
 export function loadCanaryDispatchPublisherConfigFromEnv(
@@ -61,6 +64,36 @@ export function loadCanaryDispatchConfigFromEnv(
 	};
 }
 
+export async function resolveCanaryDispatchConfigFromSecretArns(
+	env: Env,
+	readCurrentSecret: CurrentSecretReader,
+): Promise<CanaryDispatchConfig> {
+	return {
+		...(await resolveCanaryDispatchPublisherConfigFromSecretArns(
+			env,
+			readCurrentSecret,
+		)),
+		agentRuntimeArn: requireEnv(env, "CANARY_AGENT_RUNTIME_ARN"),
+	};
+}
+
+export async function resolveCanaryDispatchPublisherConfigFromSecretArns(
+	env: Env,
+	readCurrentSecret: CurrentSecretReader,
+): Promise<CanaryDispatchPublisherConfig> {
+	const secretArn = exactSecretArn(
+		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN,
+		"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
+	);
+	return loadCanaryDispatchPublisherConfigFromEnv({
+		...env,
+		AGENT_DATABASE_URL: verifiedDatabaseUrl(
+			await readCurrentSecret(secretArn),
+			"AGENT_DATABASE_URL",
+		),
+	});
+}
+
 export function createEmbeddedMetricCanaryDispatchAlarm(
 	log: (record: string) => void = console.error,
 ): CanaryDispatchAlarm {
@@ -77,7 +110,7 @@ export function createEmbeddedMetricCanaryDispatchAlarm(
 						CloudWatchMetrics: [
 							{
 								Namespace: "MyMemo/AgentCoreCanary",
-								Dimensions: [["reason"]],
+								Dimensions: [[], ["reason"]],
 								Metrics: [{ Name: metricName, Unit: "Count" }],
 							},
 						],
@@ -149,35 +182,39 @@ export function createCanaryDispatchProductionServices(
 	};
 }
 
-let productionServices:
-	| ReturnType<typeof createCanaryDispatchProductionServices>
-	| undefined;
-
-function services() {
-	productionServices ??= createCanaryDispatchProductionServices(
-		loadCanaryDispatchConfigFromEnv(process.env),
+const services = createRetryableAsyncSingleton(async () => {
+	const config = await resolveCanaryDispatchConfigFromSecretArns(
+		process.env,
+		createAwsCurrentSecretReader(requireEnv(process.env, "AWS_REGION")),
 	);
-	return productionServices;
-}
+	return createCanaryDispatchProductionServices(config);
+});
+
+const publisher = createRetryableAsyncSingleton(async () => {
+	const config = await resolveCanaryDispatchPublisherConfigFromSecretArns(
+		process.env,
+		createAwsCurrentSecretReader(requireEnv(process.env, "AWS_REGION")),
+	);
+	return createCanaryDispatchProductionPublisher(config);
+});
 
 export async function publisherHandler(event: unknown, context: LambdaContext) {
-	return await createCanaryPublisherHandler({ publish: services().publish })(
-		event,
-		context,
-	);
+	return await createCanaryPublisherHandler({
+		publish: await publisher(),
+	})(event, context);
 }
 
 export async function consumerHandler(event: unknown) {
-	return await createCanaryConsumerHandler({ handle: services().consume })(
-		event,
-	);
+	return await createCanaryConsumerHandler({
+		handle: (await services()).consume,
+	})(event);
 }
 
 export async function manualReplayHandler(
 	event: unknown,
 	context: LambdaContext,
 ) {
-	const current = services();
+	const current = await services();
 	return await createManualReplayHandler({
 		replay: current.replay,
 		publish: current.publish,
@@ -186,5 +223,5 @@ export async function manualReplayHandler(
 
 /** Raw request-body boundary mounted on AgentCore's `/invocations` in #451. */
 export async function runtimeAcquisitionHandler(rawEnvelope: string) {
-	return await services().acquire(rawEnvelope);
+	return await (await services()).acquire(rawEnvelope);
 }

@@ -1,13 +1,11 @@
-import {
-	GetSecretValueCommand,
-	SecretsManagerClient,
-} from "@aws-sdk/client-secrets-manager";
+import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { SSMClient } from "@aws-sdk/client-ssm";
 import { createLogger, toMessage } from "agent-worker/logger";
 import { createProductionRunResources } from "agent-worker/production-run-resources";
 import { createRunServing } from "agent-worker/run-serving";
 import { createDatabaseCanaryAcquisitionBoundary } from "agentcore-canary-dispatch/acquisition-boundary";
 import { createSsmCanaryEnablementControl } from "agentcore-canary-dispatch/aws-adapters";
+import { createCurrentSecretReader } from "agentcore-canary-dispatch/secret-config";
 import {
 	loadRuntimeBootstrapConfig,
 	type RuntimeBootstrapConfig,
@@ -15,22 +13,6 @@ import {
 } from "./config";
 import { createCanaryExecutionServices } from "./execution-services";
 import { createCanaryRuntime } from "./runtime";
-
-interface SecretCommandClient {
-	send(command: GetSecretValueCommand): Promise<{ SecretString?: string }>;
-}
-
-export function createCurrentSecretReader(client: SecretCommandClient) {
-	return async (secretArn: string): Promise<string> => {
-		const value = await client.send(
-			new GetSecretValueCommand({ SecretId: secretArn }),
-		);
-		if (value.SecretString === undefined || value.SecretString === "") {
-			throw new Error("Runtime secret has no current string value");
-		}
-		return value.SecretString;
-	};
-}
 
 export async function createProductionCanaryRuntime(options: {
 	bootstrap: RuntimeBootstrapConfig;
@@ -49,6 +31,7 @@ export async function createProductionCanaryRuntime(options: {
 		logger,
 		processEnv: options.processEnv,
 		telemetryService: "agentcore-canary-runtime",
+		artifactObjectKeyPrefix: options.bootstrap.artifactObjectKeyPrefix,
 	});
 	const control = createSsmCanaryEnablementControl({
 		client: options.ssmClient,
