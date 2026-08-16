@@ -1,6 +1,6 @@
 # Chat API behavior
 
-Use this guide when changing routes, validation, Run admission, history, Live Stream attachment, or artifact delivery. The agent surface is mounted under `/v1` in `apps/chat-api/src/routes/v1.ts`.
+Use this guide when changing routes, validation, Run admission, history, Live Stream attachment, or artifact delivery. The AG-UI agent surface is mounted under `/v1` in `apps/chat-api/src/routes/v1.ts`.
 
 A Conversation is the durable container, a Run serves one submitted message, and Downloadable artifacts are the Conversation's current published files.
 

@@ -84,7 +84,7 @@ Optional:
 | `WORKER_BASH_MAX_OUTPUT_BYTES` | `65536` | Per-stream Bash output cap |
 | `WORKER_DOCUMENT_LIST_MAX_RESULTS` | `20` | Document inventory page cap before the hard backstop of 100 |
 | `WORKER_DOCUMENT_SEARCH_MAX_RESULTS` | `8` | Passage-search result cap before the query-client backstop |
-| `WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS` | `10` | Document ids per load call |
+| `WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS` | `10` | Searchable document ids per Load invocation |
 | `WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES` | `262144` | Materialized bytes per Searchable document |
 | `WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES` | `1048576` | Materialized bytes per load call |
 | `WORKER_HEARTBEAT_INTERVAL_MS` | `15000` | Ownership renewal and interruption-observation interval |

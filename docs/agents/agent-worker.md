@@ -42,7 +42,7 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 
 `src/index.ts` resolves and verifies the SDK CLI before claiming work, creates the per-Conversation Fargate query directory, and wires the real SDK processor. When a Run ends with an `error` Outcome, persist only a generic client-facing message and keep internal details in trusted-worker logs.
 
-## Documents and artifacts
+## Searchable documents and Downloadable artifacts
 
 The scoped Searchable document client exposes `ListDocuments`, `SearchDocuments`, and `LoadDocuments`. Loading writes scope-checked, byte-capped Searchable document content into `.mymemo/docs/` and returns only `{ documentId, title, path, truncated }`; Searchable document bodies must not enter Run events. See [ADR-0004](../adr/0004-documents-as-files-conversation-cache.md).
 
