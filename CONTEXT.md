@@ -78,6 +78,12 @@ An at-least-once request for AgentCore to acquire one exact Run from an
 AgentCore-canary Conversation. Repeated delivery never creates another Run.
 _Avoid_: Run retry, job, invocation attempt
 
+**Dispatch publication**:
+The committed record that one AgentCore dispatch envelope reached the queue.
+It states nothing about whether the Run was acquired or executed; Run state
+answers that.
+_Avoid_: delivery, dispatch sent, Run started
+
 **Durable acquisition**:
 The committed transition in which one AgentCore invocation obtains live
 Conversation Ownership and starts its exact dispatched Run. Runtime entry or
