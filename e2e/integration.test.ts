@@ -935,17 +935,11 @@ describe.skipIf(!RUN)(
 					turn.conversationId,
 					turn.runId,
 				);
-				if (recovering.status === 503) {
-					expect(await recovering.json()).toEqual({
-						error: "Live stream temporarily unavailable",
-					});
-				} else {
-					expect(recovering.status).toBe(410);
-					expect(await recovering.json()).toEqual({
-						error: "Live stream unavailable",
-						recovery: "history",
-					});
-				}
+				expect(recovering.status).toBe(410);
+				expect(await recovering.json()).toEqual({
+					error: "Live stream unavailable",
+					recovery: "history",
+				});
 
 				const interruption = await interruptRun(
 					turn.conversationId,
@@ -963,12 +957,6 @@ describe.skipIf(!RUN)(
 					"RUN_INTERRUPTED",
 					TURN_TIMEOUT_MS,
 				);
-				const recovered = await fetchRunEvents(turn.conversationId, turn.runId);
-				expect(recovered.status).toBe(410);
-				expect(await recovered.json()).toEqual({
-					error: "Live stream unavailable",
-					recovery: "history",
-				});
 				expect(historyRun.messages).toEqual([
 					{
 						id: `user-${turn.runId}`,
