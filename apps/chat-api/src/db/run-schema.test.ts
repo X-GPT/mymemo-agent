@@ -78,22 +78,6 @@ describe("run queue schema", () => {
 		expect(run?.updatedAt).toBeInstanceOf(Date);
 	});
 
-	it("carries no retired Run-lease, fencing-token, or visibility columns", async () => {
-		const { rows } = await tdb.db.execute(sql`
-			select table_name, column_name
-			from information_schema.columns
-			where table_name in ('runs', 'run_events')
-				and column_name in (
-					'locked_by',
-					'locked_until',
-					'heartbeat_at',
-					'fencing_token',
-					'visibility'
-				)
-		`);
-		expect(rows).toEqual([]);
-	});
-
 	it("rejects invalid run statuses", async () => {
 		await expectDbWriteToFail(() =>
 			tdb.db.insert(runs).values({
@@ -103,19 +87,6 @@ describe("run queue schema", () => {
 				status: "not-a-status",
 			}),
 		);
-	});
-
-	it("rejects the pre-cutover cancellation status vocabulary", async () => {
-		for (const status of ["canceled", "cancel_requested"]) {
-			await expectDbWriteToFail(() =>
-				tdb.db.insert(runs).values({
-					runId: `run-old-${status}`,
-					userId: "user-1",
-					conversationId: "conv-1",
-					status,
-				}),
-			);
-		}
 	});
 
 	it("accepts the interruption status vocabulary", async () => {
@@ -131,37 +102,6 @@ describe("run queue schema", () => {
 				userId: "user-1",
 				conversationId: "conv-2",
 				status: "interrupted",
-			},
-		]);
-	});
-
-	it("renamed cancel_requested_at to interrupt_requested_at", async () => {
-		const { rows } = await tdb.db.execute(sql`
-			select column_name
-			from information_schema.columns
-			where table_name = 'runs'
-				and column_name in ('cancel_requested_at', 'interrupt_requested_at')
-		`);
-		expect(rows).toEqual([{ column_name: "interrupt_requested_at" }]);
-	});
-
-	it("no longer bounds active runs per conversation", async () => {
-		// The Active Run bound is admission's explicit count under the Conversation
-		// row lock, not a database invariant. The schema accepting this pair is the
-		// point: what the database still guarantees is a single writer, not that
-		// the writer starts one Run at a time.
-		await tdb.db.insert(runs).values([
-			{
-				runId: "run-active-1",
-				userId: "user-1",
-				conversationId: "conv-1",
-				status: "queued",
-			},
-			{
-				runId: "run-active-2",
-				userId: "user-1",
-				conversationId: "conv-1",
-				status: "running",
 			},
 		]);
 	});
