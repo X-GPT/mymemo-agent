@@ -18,18 +18,35 @@ verify_agentcore_canary_current_secrets() {
 verify_agentcore_canary_alarms() {
   local region="$1"
   local terraform_output="$2"
+  local expected_alarms
   local alarm_names
-  local alarm_count
-  local expected_alarm_count
+  local live_alarms
 
-  alarm_names="$(jq -r '.alarm_names.value | join(" ")' <<<"${terraform_output}")"
-  alarm_count="$(aws --profile mymemo cloudwatch describe-alarms \
+  expected_alarms="$(jq -c '.alarm_configurations.value' <<<"${terraform_output}")"
+  alarm_names="$(jq -r 'keys | join(" ")' <<<"${expected_alarms}")"
+  live_alarms="$(aws --profile mymemo cloudwatch describe-alarms \
     --region "${region}" \
-    --alarm-names ${alarm_names} \
-    --query 'MetricAlarms | length(@)' \
-    --output text)"
-  expected_alarm_count="$(jq '.alarm_names.value | length' <<<"${terraform_output}")"
-  [[ "${alarm_count}" == "${expected_alarm_count}" ]]
+    --alarm-names ${alarm_names})"
+  jq -e --argjson expected "${expected_alarms}" '
+    .MetricAlarms
+    | map({
+        key: .AlarmName,
+        value: {
+          namespace: .Namespace,
+          metric_name: .MetricName,
+          dimensions: ((.Dimensions // []) | map({ key: .Name, value: .Value }) | from_entries),
+          statistic: .Statistic,
+          period: .Period,
+          evaluation_periods: .EvaluationPeriods,
+          comparison_operator: .ComparisonOperator,
+          threshold: .Threshold,
+          treat_missing_data: .TreatMissingData,
+          actions_enabled: .ActionsEnabled,
+          alarm_actions: ((.AlarmActions // []) | sort)
+        }
+      })
+    | from_entries == $expected
+  ' <<<"${live_alarms}" >/dev/null
 }
 
 verify_agentcore_canary_disabled_dispatch() {

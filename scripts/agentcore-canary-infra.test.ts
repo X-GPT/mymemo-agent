@@ -203,7 +203,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/sid\s*=\s*"ManageCanaryRuntimeLogGroup"[\s\S]*?"logs:CreateLogGroup"[\s\S]*?"logs:DescribeLogStreams"[\s\S]*?log-group:\/aws\/bedrock-agentcore\/runtimes\/mymemo_agentcore_canary_\$\{var\.environment\}-\*"/,
 		);
 		expect(source).toMatch(
-			/sid\s*=\s*"ConfigureCanaryRuntimeLogPolicy"[\s\S]*?actions\s*=\s*\["logs:PutResourcePolicy"\][\s\S]*?log-group:\/aws\/bedrock-agentcore\/runtimes\/mymemo_agentcore_canary_\$\{var\.environment\}-\*"/,
+			/sid\s*=\s*"ConfigureCanaryRuntimeLogPolicy"[\s\S]*?actions\s*=\s*\["logs:PutResourcePolicy"\][\s\S]*?arn:aws:logs:\$\{var\.aws_region\}:\$\{var\.aws_account_id\}:log-group:\*"/,
 		);
 		expect(source).toMatch(
 			/sid\s*=\s*"DiscoverRuntimeLogGroups"[\s\S]*?actions\s*=\s*\["logs:DescribeLogGroups"\][\s\S]*?arn:aws:logs:\$\{var\.aws_region\}:\$\{var\.aws_account_id\}:log-group:\*"/,
@@ -214,6 +214,13 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(
 			/sid\s*=\s*"RuntimeTracing"[\s\S]*?"xray:GetSamplingRules"[\s\S]*?resources\s*=\s*\["\*"\]/,
 		);
+		for (const policy of ["publisher", "control"]) {
+			expect(source).toMatch(
+				new RegExp(
+					`data "aws_iam_policy_document" "${policy}"[\\s\\S]*?actions\\s*=\\s*\\["kms:Decrypt", "kms:GenerateDataKey"\\][\\s\\S]*?resources\\s*=\\s*\\[aws_kms_key\\.canary\\.arn\\]`,
+				),
+			);
+		}
 		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.canary\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);

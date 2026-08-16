@@ -20,6 +20,53 @@ const terraformOutput = JSON.stringify({
 	enabled_parameter_name: { value: "/canary/enabled" },
 });
 
+interface AlarmConfiguration {
+	namespace: string;
+	metric_name: string;
+	dimensions: Record<string, string>;
+	statistic: string;
+	period: number;
+	evaluation_periods: number;
+	comparison_operator: string;
+	threshold: number;
+	treat_missing_data: string;
+	actions_enabled: boolean;
+	alarm_actions: string[];
+}
+
+const alarmConfigurations: Record<string, AlarmConfiguration> = {
+	"canary-dispatch-age": {
+		namespace: "AWS/SQS",
+		metric_name: "ApproximateAgeOfOldestMessage",
+		dimensions: { QueueName: "canary-dispatch" },
+		statistic: "Maximum",
+		period: 60,
+		evaluation_periods: 1,
+		comparison_operator: "GreaterThanOrEqualToThreshold",
+		threshold: 300,
+		treat_missing_data: "notBreaching",
+		actions_enabled: true,
+		alarm_actions: ["arn:aws:sns:us-west-2:637423444544:canary-incident"],
+	},
+	"canary-expected-reclamation": {
+		namespace: "MyMemo/AgentCoreCanary",
+		metric_name: "ExpectedReclamation",
+		dimensions: {},
+		statistic: "Sum",
+		period: 60,
+		evaluation_periods: 1,
+		comparison_operator: "GreaterThanOrEqualToThreshold",
+		threshold: 1,
+		treat_missing_data: "notBreaching",
+		actions_enabled: true,
+		alarm_actions: ["arn:aws:sns:us-west-2:637423444544:canary-validation"],
+	},
+};
+
+const alarmTerraformOutput = JSON.stringify({
+	alarm_configurations: { value: alarmConfigurations },
+});
+
 interface LiveWiring {
 	mapping: Record<string, unknown>;
 	consumer: Record<string, unknown>;
@@ -96,6 +143,49 @@ verify_agentcore_canary_disabled_dispatch us-west-2 "$TF_OUTPUT"
 	});
 }
 
+function verifyAlarms(configurations: Record<string, AlarmConfiguration>) {
+	const alarms = Object.entries(configurations).map(
+		([AlarmName, configuration]) => ({
+			AlarmName,
+			Namespace: configuration.namespace,
+			MetricName: configuration.metric_name,
+			Dimensions: Object.entries(configuration.dimensions).map(
+				([Name, Value]) => ({
+					Name,
+					Value,
+				}),
+			),
+			Statistic: configuration.statistic,
+			Period: configuration.period,
+			EvaluationPeriods: configuration.evaluation_periods,
+			ComparisonOperator: configuration.comparison_operator,
+			Threshold: configuration.threshold,
+			TreatMissingData: configuration.treat_missing_data,
+			ActionsEnabled: configuration.actions_enabled,
+			AlarmActions: [...configuration.alarm_actions].reverse(),
+		}),
+	);
+	const script = `
+set -euo pipefail
+source "${checksPath}"
+aws() {
+  case "$*" in
+    *"cloudwatch describe-alarms"*) printf '%s\\n' "$ALARMS" ;;
+    *) exit 97 ;;
+  esac
+}
+verify_agentcore_canary_alarms us-west-2 "$TF_OUTPUT"
+`;
+	return spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			TF_OUTPUT: alarmTerraformOutput,
+			ALARMS: JSON.stringify({ MetricAlarms: alarms }),
+		},
+	});
+}
+
 describe("AgentCore live disabled-dispatch wiring", () => {
 	it("accepts the complete Terraform-owned repair and consumer graph", () => {
 		const result = verify(expectedWiring());
@@ -136,5 +226,23 @@ describe("AgentCore live disabled-dispatch wiring", () => {
 		const wiring = expectedWiring();
 		mutate(wiring);
 		expect(verify(wiring).status).not.toBe(0);
+	});
+});
+
+describe("AgentCore live alarm configuration", () => {
+	it("accepts the complete Terraform-owned alarm invariant", () => {
+		const result = verifyAlarms(alarmConfigurations);
+		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it.each([
+		["metric namespace", "canary-dispatch-age", "namespace", "AWS/Lambda"],
+		["metric dimension", "canary-dispatch-age", "dimensions", {}],
+		["alarm threshold", "canary-dispatch-age", "threshold", 299],
+		["alarm action", "canary-expected-reclamation", "alarm_actions", []],
+	] as const)("rejects a mismatched %s", (_name, alarmName, field, value) => {
+		const configurations = structuredClone(alarmConfigurations);
+		Object.assign(configurations[alarmName], { [field]: value });
+		expect(verifyAlarms(configurations).status).not.toBe(0);
 	});
 });

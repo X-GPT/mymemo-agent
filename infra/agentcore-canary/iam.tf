@@ -92,7 +92,7 @@ data "aws_iam_policy_document" "runtime" {
   statement {
     sid       = "ConfigureCanaryRuntimeLogPolicy"
     actions   = ["logs:PutResourcePolicy"]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agentcore_canary_${var.environment}-*"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:*"]
   }
 
   statement {
@@ -306,7 +306,7 @@ data "aws_iam_policy_document" "publisher" {
   }
 
   statement {
-    actions   = ["kms:GenerateDataKey"]
+    actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
     resources = [aws_kms_key.canary.arn]
   }
 }
@@ -377,7 +377,7 @@ data "aws_iam_policy_document" "control" {
   }
 
   statement {
-    actions   = ["kms:GenerateDataKey"]
+    actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
     resources = [aws_kms_key.canary.arn]
   }
 }

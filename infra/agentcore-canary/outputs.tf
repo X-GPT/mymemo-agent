@@ -134,3 +134,8 @@ output "alarm_names" {
     values(aws_cloudwatch_metric_alarm.validation)[*].alarm_name,
   )
 }
+
+output "alarm_configurations" {
+  description = "Complete low-cardinality alarm configurations verified against the live service."
+  value       = local.alarm_configurations
+}

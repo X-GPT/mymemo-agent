@@ -148,3 +148,34 @@ resource "aws_cloudwatch_metric_alarm" "validation" {
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.validation_alarm_action_arns
 }
+
+locals {
+  canary_alarms = concat(
+    [
+      aws_cloudwatch_metric_alarm.dispatch_age,
+      aws_cloudwatch_metric_alarm.dead_letter_work,
+      aws_cloudwatch_metric_alarm.consumer_duration,
+      aws_cloudwatch_metric_alarm.dormant_runtime_sessions,
+    ],
+    values(aws_cloudwatch_metric_alarm.lambda_errors),
+    values(aws_cloudwatch_metric_alarm.lambda_throttles),
+    values(aws_cloudwatch_metric_alarm.incident),
+    values(aws_cloudwatch_metric_alarm.validation),
+  )
+
+  alarm_configurations = {
+    for alarm in local.canary_alarms : alarm.alarm_name => {
+      namespace           = alarm.namespace
+      metric_name         = alarm.metric_name
+      dimensions          = alarm.dimensions
+      statistic           = alarm.statistic
+      period              = alarm.period
+      evaluation_periods  = alarm.evaluation_periods
+      comparison_operator = alarm.comparison_operator
+      threshold           = alarm.threshold
+      treat_missing_data  = alarm.treat_missing_data
+      actions_enabled     = alarm.actions_enabled
+      alarm_actions       = sort(tolist(alarm.alarm_actions))
+    }
+  }
+}
