@@ -1,4 +1,4 @@
-import { expireCanaryAuditRecordsTx } from "@mymemo/agent-db/canary-control";
+import { expireCanaryAuditRecordsTx } from "@mymemo/agent-db/canary-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	artifactObjects,

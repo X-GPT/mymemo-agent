@@ -8,7 +8,6 @@ import {
 	setDefaultTimeout,
 } from "bun:test";
 import { eq, inArray, ne } from "drizzle-orm";
-import { startCanaryCampaignTx } from "./canary-control";
 import {
 	acquireCanaryDispatchTx,
 	type CanaryDispatchIdentity,
@@ -16,7 +15,6 @@ import {
 } from "./canary-dispatch";
 import { createDatabase, type Database } from "./client";
 import { claimConversationTx } from "./conversation-ownership";
-import { markFargateLaneAwareDeploymentReady } from "./execution-lane-deployment";
 import { requestRunInterruptionTx, transitionRunTerminalTx } from "./run-store";
 import {
 	canaryCampaigns,
@@ -29,7 +27,7 @@ const DB_URL = process.env.AGENT_DATABASE_URL ?? "";
 const RUN = DB_URL !== "";
 if (RUN) setDefaultTimeout(30_000);
 
-const TEST_ID = `canary-control-${crypto.randomUUID()}`;
+const TEST_ID = `canary-dispatch-${crypto.randomUUID()}`;
 const CAMPAIGN_IDS = [`${TEST_ID}-a`, `${TEST_ID}-b`] as const;
 let db: Database;
 
@@ -63,6 +61,52 @@ async function deleteOwnRows(): Promise<void> {
 		.where(inArray(canaryCampaigns.campaignId, CAMPAIGN_IDS));
 }
 
+async function seedCanaryDispatch(
+	exact: ReturnType<typeof input>,
+): Promise<void> {
+	const admittedAt = new Date();
+	await db.transaction(async (tx) => {
+		await tx.insert(canaryCampaigns).values({
+			campaignId: exact.campaignId,
+			idempotencyKey: exact.idempotencyKey,
+			campaignVersion: exact.campaignVersion,
+			fixtureVersion: exact.fixtureVersion,
+			fixtureChecksum: exact.fixtureChecksum,
+			inputChecksum: "fixture-input-checksum",
+			model: exact.model,
+			scenarioId: exact.scenarioId,
+			userId: exact.userId,
+			conversationId: exact.conversationId,
+			runId: exact.runId,
+			messageId: exact.messageId,
+		});
+		await tx.insert(conversations).values({
+			userId: exact.userId,
+			conversationId: exact.conversationId,
+			scope: "collection",
+			collectionId: exact.collectionId,
+			executionLane: "agentcore_canary",
+		});
+		await tx.insert(runs).values({
+			runId: exact.runId,
+			userId: exact.userId,
+			conversationId: exact.conversationId,
+			status: "queued",
+		});
+		await tx.insert(canaryDispatchOutbox).values({
+			dispatchId: exact.dispatchId,
+			campaignId: exact.campaignId,
+			scenarioId: exact.scenarioId,
+			userId: exact.userId,
+			conversationId: exact.conversationId,
+			runId: exact.runId,
+			executionLane: "agentcore_canary",
+			admittedAt,
+			expiresAt: new Date(admittedAt.getTime() + 30 * 24 * 60 * 60 * 1_000),
+		});
+	});
+}
+
 async function loadDispatch(
 	exact: ReturnType<typeof input>,
 ): Promise<CanaryDispatchIdentity> {
@@ -86,7 +130,7 @@ async function loadDispatch(
 }
 
 describe.skipIf(!RUN)(
-	"Canary Campaign exclusivity against real Postgres",
+	"Canary dispatch concurrency against real Postgres",
 	() => {
 		beforeAll(async () => {
 			db = createDatabase(DB_URL);
@@ -101,7 +145,6 @@ describe.skipIf(!RUN)(
 					`AGENT_DATABASE_URL already holds active Canary Campaign ${foreignActive.campaignId}; use a scratch integration database`,
 				);
 			}
-			await markFargateLaneAwareDeploymentReady(db);
 		});
 
 		beforeEach(deleteOwnRows);
@@ -111,63 +154,8 @@ describe.skipIf(!RUN)(
 			await db.$client.end();
 		});
 
-		it("commits exactly one of two concurrently started keys", async () => {
-			const outcomes = await Promise.all([
-				startCanaryCampaignTx(db, input(0)),
-				startCanaryCampaignTx(db, input(1)),
-			]);
-
-			expect(outcomes.map(({ outcome }) => outcome).sort()).toEqual([
-				"active_campaign",
-				"created",
-			]);
-			expect(
-				await db
-					.select({ campaignId: canaryCampaigns.campaignId })
-					.from(canaryCampaigns)
-					.where(inArray(canaryCampaigns.campaignId, CAMPAIGN_IDS)),
-			).toHaveLength(1);
-			expect(
-				await db
-					.select()
-					.from(canaryDispatchOutbox)
-					.where(inArray(canaryDispatchOutbox.campaignId, CAMPAIGN_IDS)),
-			).toHaveLength(1);
-			expect(
-				await db.select().from(runs).where(eq(runs.userId, TEST_ID)),
-			).toHaveLength(1);
-		});
-
-		it("reattaches concurrent exact retries to one Campaign, Run, and dispatch", async () => {
-			const exact = input(0);
-			const outcomes = await Promise.all([
-				startCanaryCampaignTx(db, exact),
-				startCanaryCampaignTx(db, exact),
-			]);
-
-			expect(outcomes.map(({ outcome }) => outcome).sort()).toEqual([
-				"created",
-				"existing",
-			]);
-			expect(
-				await db
-					.select()
-					.from(canaryCampaigns)
-					.where(eq(canaryCampaigns.campaignId, exact.campaignId)),
-			).toHaveLength(1);
-			expect(
-				await db
-					.select()
-					.from(canaryDispatchOutbox)
-					.where(eq(canaryDispatchOutbox.campaignId, exact.campaignId)),
-			).toHaveLength(1);
-			expect(
-				await db.select().from(runs).where(eq(runs.runId, exact.runId)),
-			).toHaveLength(1);
-		});
-
 		it("lets only one concurrent publisher lease an exact dispatch", async () => {
-			await startCanaryCampaignTx(db, input(0));
+			await seedCanaryDispatch(input(0));
 			const now = new Date();
 			const claims = await Promise.all([
 				claimCanaryDispatchesTx(db, { publisherId: "publisher-a", now }),
@@ -180,7 +168,7 @@ describe.skipIf(!RUN)(
 
 		it("keeps generic Fargate Claim disjoint from exact AgentCore acquisition", async () => {
 			const exact = input(0);
-			await startCanaryCampaignTx(db, exact);
+			await seedCanaryDispatch(exact);
 			const dispatch = await loadDispatch(exact);
 
 			const [generic, acquired] = await Promise.all([
@@ -197,7 +185,7 @@ describe.skipIf(!RUN)(
 
 		it("serializes duplicate Runtime invocations to acquired then already_acquired", async () => {
 			const exact = input(0);
-			await startCanaryCampaignTx(db, exact);
+			await seedCanaryDispatch(exact);
 			const dispatch = await loadDispatch(exact);
 
 			const results = await Promise.all([
@@ -219,7 +207,7 @@ describe.skipIf(!RUN)(
 
 		it("never reacquires expired running Ownership before Reclamation", async () => {
 			const exact = input(0);
-			await startCanaryCampaignTx(db, exact);
+			await seedCanaryDispatch(exact);
 			const dispatch = await loadDispatch(exact);
 			const acquiredAt = new Date();
 			await acquireCanaryDispatchTx(db, {
@@ -239,7 +227,7 @@ describe.skipIf(!RUN)(
 
 		it("serializes queued interruption against exact acquisition without a second execution", async () => {
 			const exact = input(0);
-			await startCanaryCampaignTx(db, exact);
+			await seedCanaryDispatch(exact);
 			const dispatch = await loadDispatch(exact);
 
 			const [acquisition, interruption] = await Promise.all([
@@ -272,7 +260,7 @@ describe.skipIf(!RUN)(
 
 		it("serializes a terminal commit against a duplicate exact acquisition", async () => {
 			const exact = input(0);
-			await startCanaryCampaignTx(db, exact);
+			await seedCanaryDispatch(exact);
 			const dispatch = await loadDispatch(exact);
 			const first = await acquireCanaryDispatchTx(db, {
 				dispatch,
@@ -306,7 +294,7 @@ describe.skipIf(!RUN)(
 
 		it("rejects a lane-mismatched dispatch while Fargate can Claim the queued Run", async () => {
 			const exact = input(0);
-			await startCanaryCampaignTx(db, exact);
+			await seedCanaryDispatch(exact);
 			const dispatch = await loadDispatch(exact);
 			await db
 				.update(conversations)

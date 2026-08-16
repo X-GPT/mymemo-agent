@@ -75,7 +75,7 @@ output "publisher_function_arn" {
 }
 
 output "enabled_parameter_name" {
-  description = "Fail-closed canary control parameter."
+  description = "Fail-closed canary dispatch parameter."
   value       = aws_ssm_parameter.enabled.name
 }
 
@@ -89,26 +89,6 @@ output "canary_security_group_id" {
   value       = aws_security_group.canary.id
 }
 
-output "campaign_nat_gateway_ids" {
-  description = "Empty while dormant; one ID only during an approved campaign."
-  value       = aws_nat_gateway.campaign[*].id
-}
-
-output "campaign_eip_allocation_ids" {
-  description = "Empty while dormant; one allocation only during an approved campaign."
-  value       = aws_eip.campaign[*].allocation_id
-}
-
-output "control_function_name" {
-  description = "Operator-only canary control Lambda."
-  value       = aws_lambda_function.control.function_name
-}
-
-output "preflight_function_name" {
-  description = "Connectivity-only Lambda that cannot admit a Run."
-  value       = aws_lambda_function.preflight.function_name
-}
-
 output "consumer_role_arn" {
   description = "Role whose invocation policy is verified against both Runtime and DEFAULT endpoint resources."
   value       = aws_iam_role.consumer.arn
@@ -120,18 +100,16 @@ output "runtime_secret_arns" {
 }
 
 output "alarm_names" {
-  description = "Low-cardinality safety and validation alarms required by preflight."
+  description = "Low-cardinality dispatch safety alarms."
   value = concat(
     [
       aws_cloudwatch_metric_alarm.dispatch_age.alarm_name,
       aws_cloudwatch_metric_alarm.dead_letter_work.alarm_name,
       aws_cloudwatch_metric_alarm.consumer_duration.alarm_name,
-      aws_cloudwatch_metric_alarm.dormant_runtime_sessions.alarm_name,
     ],
     values(aws_cloudwatch_metric_alarm.lambda_errors)[*].alarm_name,
     values(aws_cloudwatch_metric_alarm.lambda_throttles)[*].alarm_name,
     values(aws_cloudwatch_metric_alarm.incident)[*].alarm_name,
-    values(aws_cloudwatch_metric_alarm.validation)[*].alarm_name,
   )
 }
 

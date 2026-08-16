@@ -104,5 +104,5 @@ jobs:
       # The AgentCore publisher/acquisition races share the same real-Postgres
       # gate. It refuses to start against a database holding an active Canary
       # Campaign, so it runs before the AG-UI lane seeds one.
-      - run: bun test packages/agent-db/src/canary-control.postgres.test.ts
+      - run: bun test packages/agent-db/src/canary-dispatch.postgres.test.ts
       - run: bun test e2e/integration.test.ts

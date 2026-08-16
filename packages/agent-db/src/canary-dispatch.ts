@@ -319,6 +319,42 @@ export async function markOverdueCanaryDispatchesTx(
 	});
 }
 
+/** Remove completed Campaign/outbox audit only after its completion deadline. */
+export async function expireCanaryAuditRecordsTx(
+	db: Database,
+	input: { now?: Date } = {},
+): Promise<{ campaignsDeleted: number; dispatchesDeleted: number }> {
+	const now = input.now ?? new Date();
+	return await db.transaction(async (tx) => {
+		const expired = await tx
+			.select({ campaignId: canaryCampaigns.campaignId })
+			.from(canaryCampaigns)
+			.where(
+				and(
+					eq(canaryCampaigns.lifecycle, "complete"),
+					lte(canaryCampaigns.expiresAt, now),
+				),
+			)
+			.for("update");
+		const campaignIds = expired.map(({ campaignId }) => campaignId);
+		if (campaignIds.length === 0) {
+			return { campaignsDeleted: 0, dispatchesDeleted: 0 };
+		}
+		const dispatches = await tx
+			.delete(canaryDispatchOutbox)
+			.where(inArray(canaryDispatchOutbox.campaignId, campaignIds))
+			.returning({ dispatchId: canaryDispatchOutbox.dispatchId });
+		const campaigns = await tx
+			.delete(canaryCampaigns)
+			.where(inArray(canaryCampaigns.campaignId, campaignIds))
+			.returning({ campaignId: canaryCampaigns.campaignId });
+		return {
+			campaignsDeleted: campaigns.length,
+			dispatchesDeleted: dispatches.length,
+		};
+	});
+}
+
 /**
  * Acquire one exact AgentCore dispatch. The Campaign is locked first to match
  * Canary admission, then the Conversation before its Run to preserve the
