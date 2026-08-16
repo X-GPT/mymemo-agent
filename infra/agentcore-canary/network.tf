@@ -36,7 +36,7 @@ resource "aws_security_group" "canary" {
   vpc_id      = local.vpc_id
 
   egress {
-    description = "Campaign-only egress through the bounded NAT Gateway"
+    description = "Outbound egress in the retained private no-route network"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
