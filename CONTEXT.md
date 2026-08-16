@@ -40,42 +40,17 @@ The set of documents a conversation may access — `general`, `collection`, or
 `document`. Resolved once at conversation creation, then only ever re-read.
 _Avoid_: permissions, access level
 
-**Execution lane**:
-The immutable classification of a Conversation that determines which runtime
-may claim and execute its Runs. A Conversation never mixes runtimes.
-_Avoid_: Run target, worker preference, routing hint
-
-**AgentCore canary**:
-An operator-triggered, traffic-free production exercise that runs only
-synthetic Conversations on the AgentCore execution lane while Fargate remains
-the user-traffic runtime.
-_Avoid_: rollout, shadow traffic, production migration
-
-**Canary campaign**:
-One bounded, on-demand AgentCore canary exercise over a fresh synthetic
-Conversation, ending in a recorded Canary verdict and explicit cleanup.
-_Avoid_: scheduled probe, continuous canary, rollout stage
-
-**Canary scenario**:
-One versioned behavior probe within a Canary campaign, represented by one exact
-Run whose identity is stable across control-plane retries.
-_Avoid_: Run retry, test attempt, workflow step
-
-**Canary verdict**:
-The outcome of a Canary campaign: `pass_for_rollout_review`, `fail`, or
-`inconclusive`. An observed requirement violation is a failure; inconclusive
-means the required behavior could not be observed. A verdict informs a separate
-rollout decision and never changes user routing itself.
-_Avoid_: rollout approval, deployment status, Run Outcome
-
-**Canary fixture**:
-The versioned synthetic identity, collection, documents, and expected outputs
-used by every Canary campaign. It contains no real-user data.
-_Avoid_: test user, production sample, general Scope
+**Execution runtime**:
+The immutable choice, made once at Conversation creation, of which trusted
+runtime executes a Conversation's Runs: `fargate` or `agentcore`. A
+Conversation never mixes runtimes; reassignment exists only as a documented
+operator break-glass step.
+_Avoid_: execution lane, Run target, worker preference, routing hint
 
 **AgentCore dispatch**:
-An at-least-once request for AgentCore to acquire one exact Run from an
-AgentCore-canary Conversation. Repeated delivery never creates another Run.
+An at-least-once request for AgentCore to acquire one exact Run from a
+Conversation whose execution runtime is `agentcore`. Repeated delivery never
+creates another Run.
 _Avoid_: Run retry, job, invocation attempt
 
 **Dispatch publication**:
@@ -103,21 +78,9 @@ _Avoid_: AG-UI event, HTTP success, log line
 
 **Runtime session**:
 The AgentCore compute-lifecycle identity used to reconnect or stop the compute
-serving a synthetic Conversation. It is not the Claude Agent session and does
-not own Run ordering or continuity.
+serving a Conversation. It is not the Claude Agent session and does not own
+Run ordering or continuity.
 _Avoid_: Agent session, Conversation, worker id
-
-**Campaign record**:
-The durable control record for one Canary campaign, including its identity,
-version, synthetic Conversation, lifecycle status, Canary verdict, and evidence
-location.
-_Avoid_: Step Functions execution, workflow run, Run
-
-**Canary report**:
-The signed, bounded evidence artifact derived from a Canary campaign, recording
-every gate, observation, cleanup result, cost estimate, and Canary verdict
-without user content or secret values.
-_Avoid_: log bundle, rollout approval, Conversation history
 
 **Run**:
 One backend execution attempt serving a user message. A Conversation's Runs are
@@ -137,6 +100,13 @@ Agent session, and Workspace available for later Runs, and its Conversation's
 other active Runs unaffected. Once accepted before another Outcome, interruption
 wins the Run's Outcome and prevents Downloadable artifact publication.
 _Avoid_: cancellation, Conversation termination, HITL interrupt
+
+**Conversation Ownership**:
+The exclusive execution authority over one Conversation, taken by Claim, held
+under an Ownership lease and epoch, and recovered by Reclamation. It is the
+single authority every execution write is fenced on, whichever runtime holds
+it.
+_Avoid_: lock, worker assignment, run ownership
 
 **Claim**:
 Taking exclusive execution ownership of a Conversation in order to serve, one at
@@ -331,8 +301,9 @@ An SDK initialization id and subagent-only mirrors do not count, and a
 _Avoid_: SDK result id, initialization id, transcript contents
 
 **Split runtime**:
-The target architecture: the agent loop runs in trusted Fargate workers
-while untrusted filesystem and shell execution stays in E2B.
+The target architecture: the agent loop runs in a trusted runtime — the
+Fargate worker or the AgentCore Runtime — while untrusted filesystem and shell
+execution stays in E2B.
 
 **Prototype path**:
 The superseded daemon-based architecture — agent loop inside the sandbox,

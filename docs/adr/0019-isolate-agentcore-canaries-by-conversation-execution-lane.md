@@ -1,6 +1,13 @@
 # Isolate AgentCore canaries by Conversation execution lane
 
-Status: accepted
+Status: superseded by
+[ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md)
+(2026-08-16)
+
+Superseded outright: the execution lane's subject — isolating an
+operator-created canary from user traffic — ceases to exist with the canary
+control plane. The per-Conversation immutability rationale survives as
+ADR-0025's execution runtime, selected by gate at Conversation creation.
 
 MyMemo will introduce an immutable execution lane on each Conversation, with
 all existing and public creation paths defaulting to Fargate and only the

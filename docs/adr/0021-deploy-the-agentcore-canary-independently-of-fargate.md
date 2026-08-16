@@ -1,6 +1,14 @@
 # Deploy the AgentCore canary independently of Fargate
 
-Status: accepted
+Status: superseded by
+[ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md)
+(2026-08-16)
+
+The canary deployment posture — dormancy, campaign NAT windows, operator typed
+confirmation, the plan-mutation allowlist — retires with the canary. The
+surviving production posture (digest-pinned ARM64 Runtime image, exact secret
+ARNs at fresh session boot, verified RDS TLS, per-workload least-privilege
+roles) is restated in ADR-0025's consequences.
 
 The production AgentCore canary will have a dedicated locked Terraform state,
 immutable ARM64 image repository, request-oriented Runtime entrypoint, and

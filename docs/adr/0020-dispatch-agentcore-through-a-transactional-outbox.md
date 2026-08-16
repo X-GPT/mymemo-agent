@@ -2,6 +2,20 @@
 
 Status: accepted
 
+Amended (2026-08-16) by the incremental production rollout
+([ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md),
+[ADR-0026](./0026-publish-agentcore-dispatch-through-one-advisory-locked-loop.md)):
+the outbox applies to any Conversation whose execution runtime is `agentcore`,
+not only canary Conversations; the lane-mismatch poison branch is removed with
+the execution lane; the immediate-publish-plus-scheduled-repair consequence
+below is replaced by ADR-0026's single advisory-locked publisher loop; the
+production envelope is version 2 and drops the campaign, scenario, and lane
+fields — the exact Run identity is the dispatch identity; and the consumer
+pre-checks Run status in Postgres before invoking, so duplicate deliveries do
+not cost a Runtime invocation. The at-least-once contract, the
+typed-disposition acknowledgement matrix, and the post-commit Acquisition
+receipt are unchanged.
+
 Admission of a Run on an AgentCore-canary Conversation will atomically create
 an outbox record, which is published at least once to an encrypted standard SQS
 queue. The consumer invokes AgentCore for that exact Conversation and Run, but
