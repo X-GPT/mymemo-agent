@@ -8,31 +8,7 @@ This repository uses Bun workspaces. Run `bun install` at the repository root.
 
 There is no repository-wide `build` or `typecheck` script. Do not treat Biome's `check` command as a TypeScript typecheck.
 
-### Repository root
-
-| Command | Purpose |
-| --- | --- |
-| `bun run test` | Run the root deployment/smoke tests followed by every workspace test suite |
-| `bun run smoke:local` | Run the full local Conversation smoke suite against `localhost:3000` |
-| `bun run terraform:fmt` | Format every Terraform root |
-| `bun run terraform:validate` | Validate every initialized Terraform root |
-
-### Workspace commands
-
-Run these from the named workspace directory.
-
-| Workspace | Commands |
-| --- | --- |
-| `apps/chat-api` | `bun run dev`, `bun run test`, `bun run check`, `bun run lint`, `bun run format`, `bun run db:migrate` |
-| `apps/agent-worker` | `bun run dev`, `bun run test`, `bun run check`, `bun run template:build`, `bun run template:verify` |
-| `apps/agentcore-canary-dispatch` | `bun run test`, `bun run check` |
-| `apps/agentcore-canary-runtime` | `bun run test`, `bun run check` |
-| `packages/agent-db` | `bun run test`, `bun run check`, `bun run db:generate` |
-| `packages/live-text` | `bun run test`, `bun run check` |
-
-`check`, `lint`, and `format` use write mode and may modify files. Inspect their diff after running them.
-
-To build the chat-api container, run `docker build -f apps/chat-api/Dockerfile -t chat-api .` from the repository root. The Dockerfile requires the monorepo as its build context. This repository does not contain a Docker Compose file.
+From `apps/chat-api`, use `bun run dev` for the hot-reload development server, `bun run lint` for lint fixes, and `bun run format` for formatting.
 
 ## Code style
 

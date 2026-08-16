@@ -14,8 +14,8 @@ The package exposes concurrency-critical operations including `startClaimedRunTx
 
 - `src/conversation-ownership.ts`: live Ownership predicates, fence-first locking, Claim plus snapshot, lease renewal, and unconditional release
 - `src/run-store.ts`: fenced Run start, event append, terminalization, interruption, Live Stream marker writes, executing-Run observation, expiration, and Reclamation
-- `src/runtime-store.ts`: fenced sandbox and taint mutations, in-transaction Agent-session pointer updates, Reclamation tainting, and the deliberately unfenced orphan-sandbox ledger
-- `src/session-store.ts`: worker-fenced Agent-session append/delete operations, deliberately unfenced transcript reads, and administrative Conversation transcript deletion
+- `src/runtime-store.ts`: fenced sandbox and taint mutations, in-transaction Agent session pointer updates, Reclamation tainting, and the deliberately unfenced orphan-sandbox ledger
+- `src/session-store.ts`: worker-fenced Agent session append/delete operations, deliberately unfenced transcript reads, and administrative Conversation transcript deletion
 - `src/artifact-store.ts`: pre-upload object ledger and fence-first atomic artifact-pointer/current-metadata/`run_done` commit
 - `src/testing.ts`: PGlite harness and shared seed helpers
 

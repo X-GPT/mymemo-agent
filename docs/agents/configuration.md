@@ -85,7 +85,7 @@ Optional:
 | `WORKER_DOCUMENT_LIST_MAX_RESULTS` | `20` | Document inventory page cap before the hard backstop of 100 |
 | `WORKER_DOCUMENT_SEARCH_MAX_RESULTS` | `8` | Passage-search result cap before the query-client backstop |
 | `WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS` | `10` | Document ids per load call |
-| `WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES` | `262144` | Materialized bytes per document |
+| `WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES` | `262144` | Materialized bytes per Searchable document |
 | `WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES` | `1048576` | Materialized bytes per load call |
 | `WORKER_HEARTBEAT_INTERVAL_MS` | `15000` | Ownership renewal and interruption-observation interval |
 | `WORKER_SHUTDOWN_TIMEOUT_MS` | `30000` | Grace for aborting active work, terminalizing it, and releasing the Conversation before forced exit |
