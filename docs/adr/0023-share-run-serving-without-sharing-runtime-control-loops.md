@@ -2,6 +2,15 @@
 
 Status: accepted
 
+Amended (2026-08-16) by
+[ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md):
+the execution lane becomes the execution runtime and the canary qualifiers
+drop — the one-execution-per-process registry is the production AgentCore
+posture, because one session process serves one Conversation, and the
+ten-minute queued backstop is the `agentcore` timeout. During coexistence
+Fargate remains the single global Reclamation runner; re-homing it is out of
+scope until Fargate retirement is decided.
+
 Fargate and AgentCore will share one `serveStartedRun` behavior for lease
 renewal, interruption observation, Live Stream production, SDK and Tool work,
 terminalization, and abort reconciliation. Fargate keeps its global queue

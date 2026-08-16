@@ -1,6 +1,13 @@
 # Orchestrate canary control without retrying Runs
 
-Status: accepted
+Status: superseded by
+[ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md)
+(2026-08-16)
+
+The Campaign, Step Functions orchestration, watchdog, and scenario suite are
+removed unbuilt; post-deploy verification is an ordinary synthetic Conversation
+through the real surface. Run-at-most-once was already the canonical Run
+vocabulary and is unaffected.
 
 A checked-in operator command runs only from a clean, current `main` revision
 with the mandatory `mymemo` profile. It verifies the AWS account and region,

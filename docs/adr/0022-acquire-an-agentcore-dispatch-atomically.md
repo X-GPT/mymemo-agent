@@ -2,6 +2,15 @@
 
 Status: accepted
 
+Amended (2026-08-16) by
+[ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md):
+the execution-lane validation is removed with the lane itself, and the
+transaction additionally asserts the dispatched Run is the Conversation's
+oldest Active Run, making explicit the depth-one admission bound this contract
+has always relied on. Everything else — the lock order, epoch and lease
+establishment, `queued` to `running` in one transaction, and the disposition
+matrix — is unchanged.
+
 An AgentCore invocation will acquire its exact dispatched Run in one
 transaction that locks the Conversation before the Run, validates its immutable
 AgentCore execution lane, establishes a new Conversation Ownership epoch and
