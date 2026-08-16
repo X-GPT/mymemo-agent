@@ -15,7 +15,6 @@
 		"./execution-lane-deployment": "./src/execution-lane-deployment.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",
-		"./queue-metrics": "./src/queue-metrics.ts",
 		"./runtime-store": "./src/runtime-store.ts",
 		"./session-store": "./src/session-store.ts",
 		"./testing": "./src/testing.ts",

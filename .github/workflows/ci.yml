@@ -84,4 +84,8 @@ jobs:
       # Ahead of the AG-UI lane: the Claim is global, so this suite wants a
       # database no other suite has left claimable Conversations in.
       - run: bun test packages/agent-db/src/conversation-ownership.postgres.test.ts
+      # The AgentCore publisher/acquisition races share the same real-Postgres
+      # gate. It refuses to start against a database holding an active Canary
+      # Campaign, so it runs before the AG-UI lane seeds one.
+      - run: bun test packages/agent-db/src/canary-control.postgres.test.ts
       - run: bun test e2e/integration.test.ts

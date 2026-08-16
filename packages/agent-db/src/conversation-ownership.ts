@@ -110,9 +110,9 @@ export interface ClaimedConversation extends ConversationOwner {
  * therefore bounds claim cost as well as drain length, and every idle worker
  * pays it on every tick.
  *
- * The scaler's demand metric (`queue-metrics.ts`) counts lapsed leases so it can
- * start a worker to perform Reclamation. After Reclamation clears the Ownership
- * columns, the Conversation becomes eligible for this Claim predicate.
+ * A lapsed lease leaves a Conversation claimable only after Reclamation clears
+ * the Ownership columns, so any future demand metric must count lapsed leases to
+ * know a worker is needed to perform it.
  */
 export async function claimConversationTx(
 	db: Database,
