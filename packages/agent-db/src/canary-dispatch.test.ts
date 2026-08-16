@@ -8,10 +8,6 @@ import {
 } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import {
-	computeCanaryCampaignInputChecksum,
-	type StartCanaryCampaignInput,
-} from "./canary-control";
-import {
 	acquireCanaryDispatchTx,
 	claimCanaryDispatchesTx,
 	confirmCanaryDispatchPublishedTx,
@@ -45,7 +41,7 @@ const campaign = {
 	messageId: "0198b5a2-2c70-7855-b090-acdeab984502",
 	dispatchId: "0198b5a2-3c70-79d1-8d0c-acdeab984503",
 	prompt: "Use the configured synthetic fixture.",
-} satisfies StartCanaryCampaignInput;
+} as const;
 
 const admittedAt = new Date("2026-08-14T16:00:00.000Z");
 
@@ -83,7 +79,7 @@ beforeEach(async () => {
 		campaignVersion: campaign.campaignVersion,
 		fixtureVersion: campaign.fixtureVersion,
 		fixtureChecksum: campaign.fixtureChecksum,
-		inputChecksum: computeCanaryCampaignInputChecksum(campaign),
+		inputChecksum: "fixture-input-checksum",
 		model: campaign.model,
 		scenarioId: campaign.scenarioId,
 		userId: campaign.userId,

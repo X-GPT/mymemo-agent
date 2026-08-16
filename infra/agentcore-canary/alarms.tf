@@ -1,6 +1,6 @@
 resource "aws_cloudwatch_metric_alarm" "dispatch_age" {
   alarm_name          = "${local.name_prefix}-dispatch-age"
-  alarm_description   = "Canary dispatch has remained pending beyond the five-minute control deadline"
+  alarm_description   = "Canary dispatch has remained pending beyond five minutes"
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateAgeOfOldestMessage"
   dimensions          = { QueueName = aws_sqs_queue.dispatch.name }
@@ -30,8 +30,6 @@ resource "aws_cloudwatch_metric_alarm" "dead_letter_work" {
 
 locals {
   alarmed_lambda_functions = {
-    control   = aws_lambda_function.control.function_name
-    preflight = aws_lambda_function.preflight.function_name
     publisher = aws_lambda_function.publisher.function_name
     consumer  = aws_lambda_function.consumer.function_name
   }
@@ -86,42 +84,18 @@ resource "aws_cloudwatch_metric_alarm" "consumer_duration" {
   alarm_actions       = var.incident_alarm_action_arns
 }
 
-resource "aws_cloudwatch_metric_alarm" "dormant_runtime_sessions" {
-  alarm_name          = "${local.name_prefix}-dormant-runtime-sessions"
-  alarm_description   = "An account-level AgentCore Runtime session exists in this region while canary dispatch is dormant"
-  namespace           = "AWS/Bedrock-AgentCore"
-  metric_name         = "ActiveSessionCount"
-  dimensions          = { Service = "AgentCore.Runtime" }
-  statistic           = "Maximum"
-  period              = 60
-  evaluation_periods  = 1
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  threshold           = 1
-  treat_missing_data  = "notBreaching"
-  actions_enabled     = !var.dispatch_enabled
-  alarm_actions       = var.incident_alarm_action_arns
-}
-
 locals {
-  incident_metric_alarms = toset([
+  dispatch_incident_metric_alarms = toset([
     "PoisonDispatch",
-    "CrossLaneExecution",
-    "CleanupResidue",
-    "CampaignDeadlineBreach",
-    "NatExpiryBreach",
     "DisabledDelivery",
-  ])
-  validation_metric_alarms = toset([
-    "ExpectedReclamation",
-    "ExpectedWorkspaceTaint",
   ])
 }
 
 resource "aws_cloudwatch_metric_alarm" "incident" {
-  for_each = local.incident_metric_alarms
+  for_each = local.dispatch_incident_metric_alarms
 
   alarm_name          = "${local.name_prefix}-${lower(each.value)}"
-  alarm_description   = "AgentCore canary safety signal ${each.value}"
+  alarm_description   = "AgentCore canary dispatch safety signal ${each.value}"
   namespace           = "MyMemo/AgentCoreCanary"
   metric_name         = each.value
   statistic           = "Sum"
@@ -131,22 +105,6 @@ resource "aws_cloudwatch_metric_alarm" "incident" {
   threshold           = 1
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.incident_alarm_action_arns
-}
-
-resource "aws_cloudwatch_metric_alarm" "validation" {
-  for_each = local.validation_metric_alarms
-
-  alarm_name          = "${local.name_prefix}-${lower(each.value)}"
-  alarm_description   = "AgentCore canary expected validation signal ${each.value}"
-  namespace           = "MyMemo/AgentCoreCanary"
-  metric_name         = each.value
-  statistic           = "Sum"
-  period              = 60
-  evaluation_periods  = 1
-  comparison_operator = "GreaterThanOrEqualToThreshold"
-  threshold           = 1
-  treat_missing_data  = "notBreaching"
-  alarm_actions       = var.validation_alarm_action_arns
 }
 
 locals {
@@ -155,12 +113,10 @@ locals {
       aws_cloudwatch_metric_alarm.dispatch_age,
       aws_cloudwatch_metric_alarm.dead_letter_work,
       aws_cloudwatch_metric_alarm.consumer_duration,
-      aws_cloudwatch_metric_alarm.dormant_runtime_sessions,
     ],
     values(aws_cloudwatch_metric_alarm.lambda_errors),
     values(aws_cloudwatch_metric_alarm.lambda_throttles),
     values(aws_cloudwatch_metric_alarm.incident),
-    values(aws_cloudwatch_metric_alarm.validation),
   )
 
   alarm_configurations = {
@@ -175,7 +131,7 @@ locals {
       threshold           = alarm.threshold
       treat_missing_data  = alarm.treat_missing_data
       actions_enabled     = alarm.actions_enabled
-      alarm_actions       = sort(tolist(alarm.alarm_actions))
+      alarm_actions       = sort(tolist(coalesce(alarm.alarm_actions, toset([]))))
     }
   }
 }

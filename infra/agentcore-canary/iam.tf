@@ -157,16 +157,6 @@ resource "aws_iam_role" "consumer" {
   assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
 }
 
-resource "aws_iam_role" "control" {
-  name               = "${local.name_prefix}-control"
-  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
-}
-
-resource "aws_iam_role" "preflight" {
-  name               = "${local.name_prefix}-preflight"
-  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
-}
-
 data "aws_iam_policy_document" "lambda_base" {
   statement {
     sid = "VpcAttachment"
@@ -227,60 +217,6 @@ data "aws_iam_policy_document" "lambda_base" {
   }
 }
 
-data "aws_iam_policy_document" "preflight" {
-  statement {
-    sid = "VpcAttachment"
-    actions = [
-      "ec2:AssignPrivateIpAddresses",
-      "ec2:CreateNetworkInterface",
-      "ec2:DeleteNetworkInterface",
-      "ec2:DescribeNetworkInterfaces",
-      "ec2:DescribeSubnets",
-      "ec2:UnassignPrivateIpAddresses",
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid       = "CreatePreflightLogGroup"
-    actions   = ["logs:CreateLogGroup"]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.name_prefix}-preflight"]
-  }
-
-  statement {
-    sid = "WritePreflightLogs"
-    actions = [
-      "logs:CreateLogStream",
-      "logs:PutLogEvents",
-    ]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.name_prefix}-preflight:*"]
-  }
-
-  statement {
-    sid       = "DescribePreflightDatabaseUrls"
-    actions   = ["secretsmanager:DescribeSecret"]
-    resources = [var.agent_database_url_secret_arn, var.kb_database_url_secret_arn]
-  }
-
-  statement {
-    sid       = "ReadCurrentPreflightDatabaseUrls"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [var.agent_database_url_secret_arn, var.kb_database_url_secret_arn]
-
-    condition {
-      test     = "ForAnyValue:StringEquals"
-      variable = "secretsmanager:VersionStage"
-      values   = ["AWSCURRENT"]
-    }
-  }
-}
-
-resource "aws_iam_role_policy" "preflight" {
-  name   = "${local.name_prefix}-preflight"
-  role   = aws_iam_role.preflight.id
-  policy = data.aws_iam_policy_document.preflight.json
-}
-
 resource "aws_iam_role_policy" "publisher_base" {
   name   = "${local.name_prefix}-publisher-base"
   role   = aws_iam_role.publisher.id
@@ -290,12 +226,6 @@ resource "aws_iam_role_policy" "publisher_base" {
 resource "aws_iam_role_policy" "consumer_base" {
   name   = "${local.name_prefix}-consumer-base"
   role   = aws_iam_role.consumer.id
-  policy = data.aws_iam_policy_document.lambda_base.json
-}
-
-resource "aws_iam_role_policy" "control_base" {
-  name   = "${local.name_prefix}-control-base"
-  role   = aws_iam_role.control.id
   policy = data.aws_iam_policy_document.lambda_base.json
 }
 
@@ -352,38 +282,4 @@ resource "aws_iam_role_policy" "consumer" {
   name   = "${local.name_prefix}-consumer"
   role   = aws_iam_role.consumer.id
   policy = data.aws_iam_policy_document.consumer.json
-}
-
-data "aws_iam_policy_document" "control" {
-  statement {
-    actions   = ["secretsmanager:DescribeSecret"]
-    resources = [var.kb_database_url_secret_arn]
-  }
-
-  statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [var.kb_database_url_secret_arn]
-
-    condition {
-      test     = "ForAnyValue:StringEquals"
-      variable = "secretsmanager:VersionStage"
-      values   = ["AWSCURRENT"]
-    }
-  }
-
-  statement {
-    actions   = ["sqs:GetQueueAttributes", "sqs:SendMessage"]
-    resources = [aws_sqs_queue.dispatch.arn]
-  }
-
-  statement {
-    actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
-    resources = [aws_kms_key.canary.arn]
-  }
-}
-
-resource "aws_iam_role_policy" "control" {
-  name   = "${local.name_prefix}-control"
-  role   = aws_iam_role.control.id
-  policy = data.aws_iam_policy_document.control.json
 }

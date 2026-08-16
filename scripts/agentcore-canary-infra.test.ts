@@ -18,7 +18,7 @@ function terraformSource(): string {
 		.join("\n");
 }
 
-describe("dormant AgentCore canary infrastructure", () => {
+describe("AgentCore canary dispatch infrastructure", () => {
 	it("uses an isolated locked state and independently pinned native AWS provider", () => {
 		const versionsPath = join(terraformDir, "versions.tf");
 		expect(existsSync(versionsPath)).toBe(true);
@@ -132,24 +132,16 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(lambdaEnvironment).not.toMatch(/\bAWS_REGION\s*=/);
 	});
 
-	it("keeps private networking while making NAT and EIP campaign-scoped", () => {
+	it("keeps private networking without campaign-scoped NAT or EIP", () => {
 		const source = terraformSource();
 
 		expect(source).toContain('resource "aws_subnet" "private"');
 		expect(source).toMatch(/map_public_ip_on_launch\s*=\s*false/);
 		expect(source).toContain('resource "aws_security_group" "canary"');
-		expect(source).toMatch(
-			/resource\s+"aws_eip"\s+"campaign"[\s\S]*?count\s*=\s*var\.campaign_network_enabled\s*\?\s*1\s*:\s*0/,
-		);
-		expect(source).toMatch(
-			/resource\s+"aws_nat_gateway"\s+"campaign"[\s\S]*?count\s*=\s*var\.campaign_network_enabled\s*\?\s*1\s*:\s*0/,
-		);
-		expect(source).toMatch(
-			/resource\s+"aws_nat_gateway"\s+"campaign"[\s\S]*?precondition[\s\S]*?outputs\.assign_public_ip/,
-		);
-		expect(source).toMatch(
-			/variable\s+"campaign_network_enabled"[\s\S]*?default\s*=\s*false/,
-		);
+		expect(source).not.toContain('resource "aws_eip" "campaign"');
+		expect(source).not.toContain('resource "aws_nat_gateway" "campaign"');
+		expect(source).not.toContain('resource "aws_route" "campaign_egress"');
+		expect(source).not.toContain('variable "campaign_network_enabled"');
 		expect(source).toContain('data "aws_security_group" "live_redis_clients"');
 		expect(source).toContain("service_security_group_id");
 		expect(source).toContain(
@@ -161,16 +153,12 @@ describe("dormant AgentCore canary infrastructure", () => {
 	it("separates workload roles and excludes reusable deployment or campaign authority", () => {
 		const source = terraformSource();
 
-		for (const role of [
-			"publisher",
-			"consumer",
-			"control",
-			"runtime",
-			"preflight",
-		]) {
+		for (const role of ["publisher", "consumer", "runtime"]) {
 			expect(source).toContain(`resource "aws_iam_role" "${role}"`);
 		}
 		for (const forbiddenRole of [
+			"control",
+			"preflight",
 			"deployment",
 			"task",
 			"fault_injection",
@@ -194,12 +182,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/sid\s*=\s*"WriteFunctionLogs"[\s\S]*?"logs:CreateLogStream"[\s\S]*?"logs:PutLogEvents"[\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-\*:\*"/,
 		);
 		expect(source).toMatch(
-			/sid\s*=\s*"CreatePreflightLogGroup"[\s\S]*?actions\s*=\s*\["logs:CreateLogGroup"\][\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-preflight"/,
-		);
-		expect(source).toMatch(
-			/sid\s*=\s*"WritePreflightLogs"[\s\S]*?"logs:CreateLogStream"[\s\S]*?"logs:PutLogEvents"[\s\S]*?log-group:\/aws\/lambda\/\$\{local\.name_prefix\}-preflight:\*"/,
-		);
-		expect(source).toMatch(
 			/sid\s*=\s*"ManageCanaryRuntimeLogGroup"[\s\S]*?"logs:CreateLogGroup"[\s\S]*?"logs:DescribeLogStreams"[\s\S]*?log-group:\/aws\/bedrock-agentcore\/runtimes\/mymemo_agentcore_canary_\$\{var\.environment\}-\*"/,
 		);
 		expect(source).toMatch(
@@ -214,7 +196,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(source).toMatch(
 			/sid\s*=\s*"RuntimeTracing"[\s\S]*?"xray:GetSamplingRules"[\s\S]*?resources\s*=\s*\["\*"\]/,
 		);
-		for (const policy of ["publisher", "control"]) {
+		for (const policy of ["publisher"]) {
 			expect(source).toMatch(
 				new RegExp(
 					`data "aws_iam_policy_document" "${policy}"[\\s\\S]*?actions\\s*=\\s*\\["kms:Decrypt", "kms:GenerateDataKey"\\][\\s\\S]*?resources\\s*=\\s*\\[aws_kms_key\\.canary\\.arn\\]`,
@@ -249,7 +231,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(canaryProduction).toContain(
 			"artifactObjectKeyPrefix: options.bootstrap.artifactObjectKeyPrefix",
 		);
-		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(4);
+		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(2);
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"runtime_trust"[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
 		);
@@ -261,7 +243,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"ec2:DescribeSubnets",
 			"ec2:UnassignPrivateIpAddresses",
 		]) {
-			expect(source.match(new RegExp(action, "g"))).toHaveLength(2);
+			expect(source.match(new RegExp(action, "g"))).toHaveLength(1);
 		}
 	});
 
@@ -306,31 +288,24 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 	});
 
-	it("wires Lambda, preflight, and disabled repair boundaries", () => {
+	it("wires only the dispatch Lambdas and disabled repair boundary", () => {
 		const source = terraformSource();
 
-		expect(source).toMatch(
-			/resource\s+"aws_lambda_function"\s+"preflight"[\s\S]*?role\s*=\s*aws_iam_role\.preflight\.arn/,
-		);
+		expect(source).not.toContain('resource "aws_lambda_function" "control"');
+		expect(source).not.toContain('resource "aws_lambda_function" "preflight"');
 		const lambdas = readFileSync(join(terraformDir, "lambdas.tf"), "utf8");
 		for (const policy of [
 			"publisher",
 			"publisher_base",
 			"consumer",
 			"consumer_base",
-			"control",
-			"control_base",
-			"preflight",
 		]) {
 			expect(lambdas).toContain(`aws_iam_role_policy.${policy}`);
 		}
-		expect(source).toMatch(
-			/data\s+"aws_iam_policy_document"\s+"preflight"[\s\S]*?resources\s*=\s*\[var\.agent_database_url_secret_arn, var\.kb_database_url_secret_arn\]/,
-		);
-		expect(source).not.toContain('sid = "InvokeConnectivityPreflightOnly"');
-		expect(source).toMatch(
-			/resource\s+"aws_lambda_event_source_mapping"\s+"consumer"[\s\S]*?precondition[\s\S]*?!var\.dispatch_enabled\s*\|\|\s*var\.campaign_network_enabled/,
-		);
+		expect(lambdas).not.toContain("aws_iam_role_policy.control");
+		expect(lambdas).not.toContain("aws_iam_role_policy.preflight");
+		expect(source).not.toContain('data "aws_iam_policy_document" "preflight"');
+		expect(source).not.toContain("campaign_network_enabled");
 		expect(source).toMatch(
 			/resource\s+"aws_cloudwatch_event_rule"\s+"repair"[\s\S]*?state\s*=\s*var\.dispatch_enabled\s*\?\s*"ENABLED"\s*:\s*"DISABLED"/,
 		);
@@ -342,7 +317,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 			/resource\s+"aws_lambda_function"\s+"publisher"([\s\S]*?)resource\s+"aws_lambda_function"\s+"consumer"/,
 		)?.[1];
 		const consumer = lambdas.match(
-			/resource\s+"aws_lambda_function"\s+"consumer"([\s\S]*?)resource\s+"aws_lambda_function"\s+"control"/,
+			/resource\s+"aws_lambda_function"\s+"consumer"([\s\S]*?)resource\s+"aws_lambda_event_source_mapping"/,
 		)?.[1];
 		const production = readFileSync(
 			join(root, "apps", "agentcore-canary-dispatch", "src", "production.ts"),
@@ -359,7 +334,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		);
 	});
 
-	it("creates low-cardinality paging and validation alarms", () => {
+	it("creates low-cardinality dispatch safety alarms only", () => {
 		const alarms = readFileSync(join(terraformDir, "alarms.tf"), "utf8");
 
 		for (const metric of [
@@ -367,21 +342,20 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"ApproximateNumberOfMessagesVisible",
 			"Errors",
 			"Throttles",
-			"ActiveSessionCount",
+			"PoisonDispatch",
+			"DisabledDelivery",
 		]) {
-			expect(alarms).toMatch(new RegExp(`metric_name\\s*=\\s*"${metric}"`));
+			expect(alarms).toContain(`"${metric}"`);
 		}
 		for (const metric of [
-			"PoisonDispatch",
+			"ActiveSessionCount",
 			"CrossLaneExecution",
 			"CleanupResidue",
 			"CampaignDeadlineBreach",
 			"NatExpiryBreach",
 		]) {
-			expect(alarms).toContain(`"${metric}"`);
+			expect(alarms).not.toContain(`"${metric}"`);
 		}
-		expect(alarms).toMatch(/metric_name\s*=\s*each\.value/);
-		expect(alarms).toContain("account-level AgentCore Runtime session");
 		for (const forbiddenDimension of [
 			"CampaignId",
 			"ConversationId",
@@ -397,8 +371,10 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(alarms).toMatch(
 			/alarm_actions\s*=\s*var\.incident_alarm_action_arns/,
 		);
-		expect(alarms).toMatch(
-			/alarm_actions\s*=\s*var\.validation_alarm_action_arns/,
+		expect(alarms).not.toContain("validation_alarm_action_arns");
+		expect(alarms).toContain("values(aws_cloudwatch_metric_alarm.incident)");
+		expect(alarms).toContain(
+			"sort(tolist(coalesce(alarm.alarm_actions, toset([]))))",
 		);
 	});
 
@@ -460,9 +436,6 @@ describe("dormant AgentCore canary infrastructure", () => {
 			"get-agent-runtime",
 			"get-agent-runtime-endpoint",
 			"metadataConfiguration.requireMMDSV2",
-			"ActiveSessionCount",
-			"campaign_nat_gateway_ids",
-			"campaign_eip_allocation_ids",
 		]) {
 			expect(inspectionChecks).toContain(requiredCheck);
 		}
@@ -503,73 +476,42 @@ describe("dormant AgentCore canary infrastructure", () => {
 			inspection.match(/ApproximateNumberOfMessagesDelayed/g),
 		).toHaveLength(2);
 		expect(inspection).not.toContain("!= *.fifo");
-		expect(inspection).toContain("describe-nat-gateways");
-		expect(inspection).toContain("describe-addresses");
-		expect(inspection).toContain(
-			'activeRuntimeSessionsScope:"account-region-service"',
-		);
-		expect(inspection).toContain(".Datapoints as $datapoints");
-		expect(inspection).toContain("($datapoints | length) > 0");
-		expect(inspection).toContain("fromdateiso8601");
-		expect(inspection).toMatch(/\[\[ "\$\{attempt\}" == "12" \]\]/);
-		expect(inspection).toContain("sleep 10");
-		expect(inspection).not.toContain("max // 0");
+		expect(inspection).not.toContain("describe-nat-gateways");
+		expect(inspection).not.toContain("describe-addresses");
+		expect(inspection).not.toContain("ActiveSessionCount");
 		expect(inspection).not.toContain("invoke-function");
 		expect(inspection).not.toContain("invoke-agent-runtime");
 	});
 
-	it("ships a non-Run verified-TLS preflight with rollback checks", () => {
-		const preflight = readFileSync(
-			join(root, "scripts", "deploy", "preflight_agentcore_canary.sh"),
+	it("removes the operator-only control and preflight surfaces", () => {
+		const source = terraformSource();
+		const deployment = readFileSync(
+			join(root, "scripts", "deploy", "deploy_agentcore_canary.sh"),
 			"utf8",
 		);
-		const sharedChecks = readFileSync(
-			join(root, "scripts", "deploy", "agentcore_canary_aws_checks.sh"),
+		const build = readFileSync(
+			join(root, "scripts", "deploy", "build_agentcore_canary_lambdas.sh"),
 			"utf8",
 		);
 
-		expect(terraformSource()).toContain(
-			'resource "aws_lambda_function" "preflight"',
-		);
-		expect(preflight).toContain("preflight_function_name");
-		expect(preflight).toContain(".runtime_image_digest.value");
-		expect(preflight).toContain("lambda invoke");
-		expect(preflight).toContain("runAdmitted == false");
-		expect(preflight).toContain("describe-images");
-		expect(preflight).not.toContain("StopRuntimeSession");
-		expect(preflight).toContain("verify_agentcore_canary_alarms");
-		expect(preflight).toContain("verify_agentcore_canary_current_secrets");
-		expect(preflight).toContain("verify_agentcore_canary_disabled_dispatch");
-		expect(preflight).toContain(
-			"verify_agentcore_canary_runtime_configuration",
-		);
-		expect(preflight).toContain(
-			"verify_agentcore_canary_consumer_runtime_authority",
-		);
-		expect(preflight).toContain("configurationVerified:true");
-		expect(preflight).toContain("dispatchEnabled:false");
-		expect(sharedChecks).toContain("describe-alarms");
-		for (const liveCheck of [
-			"get-event-source-mapping",
-			"describe-rule",
-			"get-parameter",
-			"get-agent-runtime",
-			"get-agent-runtime-endpoint",
-			"metadataConfiguration.requireMMDSV2",
-			"runtime_security_configuration.value",
-			".roleArn == $expected.role_arn",
-			".environmentVariables == $expected.environment_variables",
-			"networkModeConfig.subnets | sort",
-			"networkModeConfig.securityGroups | sort",
-			"idleRuntimeSessionTimeout == $expected.idle_runtime_session_timeout",
+		expect(
+			existsSync(
+				join(root, "scripts", "deploy", "preflight_agentcore_canary.sh"),
+			),
+		).toBe(false);
+		for (const removed of [
+			'aws_lambda_function" "control',
+			'aws_lambda_function" "preflight',
+			'aws_iam_role" "control',
+			'aws_iam_role" "preflight',
+			"control_lambda_package",
+			"CANARY_CONTROL_CONFIG_JSON",
+			"CANARY_APPROVED_SYNTHETIC_USER_ID",
 		]) {
-			expect(sharedChecks).toContain(liveCheck);
+			expect(source).not.toContain(removed);
+			expect(deployment).not.toContain(removed);
+			expect(build).not.toContain(removed);
 		}
-		expect(preflight).toContain("ApproximateNumberOfMessagesDelayed");
-		expect(preflight).toContain('aws_profile="mymemo"');
-		expect(preflight).not.toContain("AWS_PROFILE:-");
-		expect(preflight).not.toContain("invoke-agent-runtime");
-		expect(preflight).not.toContain("/runs");
 	});
 
 	it("packages the pinned RDS trust bundle for every database Lambda", () => {
@@ -588,9 +530,7 @@ describe("dormant AgentCore canary infrastructure", () => {
 		expect(build).toMatch(
 			/cp "\$\{ca_bundle\}" "\$\{build_dir\}\/dispatch\/rds-global-bundle\.pem"/,
 		);
-		expect(build).toMatch(
-			/cp "\$\{ca_bundle\}" "\$\{build_dir\}\/control\/rds-global-bundle\.pem"/,
-		);
+		expect(build).not.toContain("/control/");
 	});
 
 	it("leaves canary enablement under explicit operator control", () => {

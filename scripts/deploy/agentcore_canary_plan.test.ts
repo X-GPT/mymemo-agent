@@ -64,7 +64,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 		).toEqual({ safe: true, reasons: [] });
 	});
 
-	it("rejects every deletion or replacement", () => {
+	it("rejects deletion or replacement of retained resources", () => {
 		for (const actions of [
 			["delete"],
 			["delete", "create"],
@@ -72,11 +72,64 @@ describe("AgentCore canary Terraform plan classification", () => {
 		]) {
 			const result = classifyAgentCoreCanaryPlan(
 				plan([
-					change("aws_nat_gateway.campaign[0]", "aws_nat_gateway", actions),
+					change(
+						"aws_lambda_function.consumer",
+						"aws_lambda_function",
+						actions,
+					),
 				]),
 			);
 			expect(result.safe).toBe(false);
 			expect(result.reasons.join(" ")).toContain("deletion or replacement");
+		}
+	});
+
+	it("allows deletion only for the exact retired control-plane resources", () => {
+		for (const [address, type] of [
+			["aws_lambda_function.control", "aws_lambda_function"],
+			["aws_lambda_function.preflight", "aws_lambda_function"],
+			["aws_iam_role.control", "aws_iam_role"],
+			["aws_iam_role.preflight", "aws_iam_role"],
+			["aws_iam_role_policy.control", "aws_iam_role_policy"],
+			["aws_iam_role_policy.control_base", "aws_iam_role_policy"],
+			["aws_iam_role_policy.preflight", "aws_iam_role_policy"],
+			["aws_eip.campaign[0]", "aws_eip"],
+			["aws_nat_gateway.campaign[0]", "aws_nat_gateway"],
+			['aws_route.campaign_egress["private-a"]', "aws_route"],
+			[
+				"aws_cloudwatch_metric_alarm.dormant_runtime_sessions",
+				"aws_cloudwatch_metric_alarm",
+			],
+			[
+				'aws_cloudwatch_metric_alarm.lambda_errors["control"]',
+				"aws_cloudwatch_metric_alarm",
+			],
+			[
+				'aws_cloudwatch_metric_alarm.lambda_throttles["preflight"]',
+				"aws_cloudwatch_metric_alarm",
+			],
+			[
+				'aws_cloudwatch_metric_alarm.incident["CampaignDeadlineBreach"]',
+				"aws_cloudwatch_metric_alarm",
+			],
+			[
+				'aws_cloudwatch_metric_alarm.validation["Acquired"]',
+				"aws_cloudwatch_metric_alarm",
+			],
+		] as const) {
+			expect(
+				classifyAgentCoreCanaryPlan(plan([change(address, type, ["delete"])])),
+			).toEqual({ safe: true, reasons: [] });
+		}
+
+		for (const actions of [["create"], ["update"], ["delete", "create"]]) {
+			const result = classifyAgentCoreCanaryPlan(
+				plan([
+					change("aws_lambda_function.control", "aws_lambda_function", actions),
+				]),
+			);
+			expect(result.safe).toBe(false);
+			expect(result.reasons.join(" ")).toContain("retired control-plane");
 		}
 	});
 
@@ -133,7 +186,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 		expect(
 			classifyAgentCoreCanaryPlan(
 				plan([
-					change("aws_iam_role.preflight", "aws_iam_role", ["create"], null, {
+					change("aws_iam_role.publisher", "aws_iam_role", ["create"], null, {
 						assume_role_policy: lambdaTrust,
 					}),
 				]),
@@ -154,7 +207,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 
 		for (const [address, trust] of [
 			[
-				"aws_iam_role.preflight",
+				"aws_iam_role.publisher",
 				JSON.stringify({
 					Version: "2012-10-17",
 					Statement: [

@@ -35,23 +35,15 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_cloudwatch_metric_alarm.consumer_duration",
 	"aws_cloudwatch_metric_alarm.dead_letter_work",
 	"aws_cloudwatch_metric_alarm.dispatch_age",
-	"aws_cloudwatch_metric_alarm.dormant_runtime_sessions",
 	"aws_cloudwatch_metric_alarm.incident",
 	"aws_cloudwatch_metric_alarm.lambda_errors",
 	"aws_cloudwatch_metric_alarm.lambda_throttles",
-	"aws_cloudwatch_metric_alarm.validation",
 	"aws_ecr_repository.runtime",
-	"aws_eip.campaign",
 	"aws_iam_role.consumer",
-	"aws_iam_role.control",
-	"aws_iam_role.preflight",
 	"aws_iam_role.publisher",
 	"aws_iam_role.runtime",
 	"aws_iam_role_policy.consumer",
 	"aws_iam_role_policy.consumer_base",
-	"aws_iam_role_policy.control",
-	"aws_iam_role_policy.control_base",
-	"aws_iam_role_policy.preflight",
 	"aws_iam_role_policy.publisher",
 	"aws_iam_role_policy.publisher_base",
 	"aws_iam_role_policy.runtime",
@@ -59,12 +51,8 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_kms_key.canary",
 	"aws_lambda_event_source_mapping.consumer",
 	"aws_lambda_function.consumer",
-	"aws_lambda_function.control",
-	"aws_lambda_function.preflight",
 	"aws_lambda_function.publisher",
 	"aws_lambda_permission.repair",
-	"aws_nat_gateway.campaign",
-	"aws_route.campaign_egress",
 	"aws_route_table.private",
 	"aws_route_table_association.private",
 	"aws_security_group.canary",
@@ -74,13 +62,40 @@ const CANARY_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_subnet.private",
 ]);
 
+const RETIRED_CONTROL_PLANE_RESOURCE_ADDRESSES = new Set([
+	"aws_cloudwatch_metric_alarm.dormant_runtime_sessions",
+	"aws_cloudwatch_metric_alarm.validation",
+	"aws_eip.campaign",
+	"aws_iam_role.control",
+	"aws_iam_role.preflight",
+	"aws_iam_role_policy.control",
+	"aws_iam_role_policy.control_base",
+	"aws_iam_role_policy.preflight",
+	"aws_lambda_function.control",
+	"aws_lambda_function.preflight",
+	"aws_nat_gateway.campaign",
+	"aws_route.campaign_egress",
+]);
+
+const RETIRED_CONTROL_PLANE_RESOURCE_INSTANCES = new Set([
+	'aws_cloudwatch_metric_alarm.incident["CampaignDeadlineBreach"]',
+	'aws_cloudwatch_metric_alarm.incident["CleanupResidue"]',
+	'aws_cloudwatch_metric_alarm.incident["CrossLaneExecution"]',
+	'aws_cloudwatch_metric_alarm.incident["NatExpiryBreach"]',
+	'aws_cloudwatch_metric_alarm.lambda_errors["control"]',
+	'aws_cloudwatch_metric_alarm.lambda_errors["preflight"]',
+	'aws_cloudwatch_metric_alarm.lambda_throttles["control"]',
+	'aws_cloudwatch_metric_alarm.lambda_throttles["preflight"]',
+]);
+
 const CANARY_OWNED_RESOURCE_TYPES = new Set(
-	[...CANARY_OWNED_RESOURCE_ADDRESSES].map((address) => address.split(".")[0]),
+	[
+		...CANARY_OWNED_RESOURCE_ADDRESSES,
+		...RETIRED_CONTROL_PLANE_RESOURCE_ADDRESSES,
+	].map((address) => address.split(".")[0]),
 );
 const LAMBDA_ROLE_ADDRESSES = new Set([
 	"aws_iam_role.consumer",
-	"aws_iam_role.control",
-	"aws_iam_role.preflight",
 	"aws_iam_role.publisher",
 ]);
 
@@ -206,15 +221,26 @@ export function classifyAgentCoreCanaryPlan(
 		const address = resource.address ?? "<unknown>";
 		const type = resource.type ?? "<unknown>";
 		const baseAddress = resourceBaseAddress(address);
+		const isRetiredControlPlaneResource =
+			RETIRED_CONTROL_PLANE_RESOURCE_ADDRESSES.has(baseAddress) ||
+			RETIRED_CONTROL_PLANE_RESOURCE_INSTANCES.has(address);
 		if (
 			resource.mode !== "managed" ||
 			address.startsWith("module.") ||
 			!CANARY_OWNED_RESOURCE_TYPES.has(type) ||
-			!CANARY_OWNED_RESOURCE_ADDRESSES.has(baseAddress)
+			(!CANARY_OWNED_RESOURCE_ADDRESSES.has(baseAddress) &&
+				!isRetiredControlPlaneResource)
 		) {
 			reasons.push(`${address} is outside canary ownership (${type})`);
 		}
-		if (actions.includes("delete")) {
+		if (
+			isRetiredControlPlaneResource &&
+			(actions.length !== 1 || actions[0] !== "delete")
+		) {
+			reasons.push(
+				`${address} is retired control-plane infrastructure and may only be deleted`,
+			);
+		} else if (!isRetiredControlPlaneResource && actions.includes("delete")) {
 			reasons.push(`${address} requests deletion or replacement`);
 		}
 		if (actions.includes("forget")) {

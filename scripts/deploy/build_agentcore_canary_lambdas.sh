@@ -14,25 +14,15 @@ output_dir="$(cd "${output_dir}" && pwd)"
 build_dir="$(mktemp -d /tmp/mymemo-agentcore-lambdas.XXXXXX)"
 trap 'rm -rf "${build_dir}"' EXIT
 
-mkdir -p "${build_dir}/dispatch" "${build_dir}/control"
+mkdir -p "${build_dir}/dispatch"
 bun build apps/agentcore-canary-dispatch/src/production.ts \
   --target=node \
   --format=esm \
   --outfile="${build_dir}/dispatch/index.mjs"
-bun build apps/agentcore-canary-control/src/lambda.ts \
-  --target=node \
-  --format=esm \
-  --outfile="${build_dir}/control/index.mjs"
 cp "${ca_bundle}" "${build_dir}/dispatch/rds-global-bundle.pem"
-cp "${ca_bundle}" "${build_dir}/control/rds-global-bundle.pem"
 
 (
   cd "${build_dir}/dispatch"
   zip -q -X -r "${output_dir}/dispatch.zip" .
 )
-(
-  cd "${build_dir}/control"
-  zip -q -X -r "${output_dir}/control.zip" .
-)
-
-shasum -a 256 "${output_dir}/dispatch.zip" "${output_dir}/control.zip"
+shasum -a 256 "${output_dir}/dispatch.zip"

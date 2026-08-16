@@ -1,7 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
-import { startCanaryCampaignTx } from "@mymemo/agent-db/canary-control";
-import { markFargateLaneAwareDeploymentReady } from "@mymemo/agent-db/execution-lane-deployment";
 import {
 	createInMemoryLiveStreamRelay,
 	createLiveStreamTelemetry,
@@ -824,27 +822,44 @@ describe("DELETE /v1/conversations/:id", () => {
 	it("deletes an AgentCore-canary Conversation through HTTP without deleting its audit", async () => {
 		const tdb = await createTestDatabase();
 		try {
-			await markFargateLaneAwareDeploymentReady(tdb.db);
-			await startCanaryCampaignTx(tdb.db, {
+			await tdb.db.insert(canaryCampaigns).values({
 				campaignId: "campaign-delete",
 				idempotencyKey: "key-delete",
 				campaignVersion: "v1",
 				fixtureVersion: "fixture-v1",
 				fixtureChecksum: "fixture-checksum",
+				inputChecksum: "fixture-input-checksum",
 				model: "model",
 				scenarioId: "scenario",
 				userId: "member-1",
 				conversationId: "canary-delete",
-				collectionId: "canary-collection",
 				runId: "canary-delete-run",
 				messageId: "canary-delete-message",
-				dispatchId: "canary-delete-dispatch",
-				prompt: "configured synthetic prompt",
 			});
-			await tdb.db
-				.update(runs)
-				.set({ status: "done", terminalAt: new Date() })
-				.where(eq(runs.runId, "canary-delete-run"));
+			await tdb.db.insert(conversations).values({
+				userId: "member-1",
+				conversationId: "canary-delete",
+				scope: "collection",
+				collectionId: "canary-collection",
+				executionLane: "agentcore_canary",
+			});
+			await tdb.db.insert(runs).values({
+				runId: "canary-delete-run",
+				userId: "member-1",
+				conversationId: "canary-delete",
+				status: "done",
+				terminalAt: new Date(),
+			});
+			await tdb.db.insert(canaryDispatchOutbox).values({
+				dispatchId: "canary-delete-dispatch",
+				campaignId: "campaign-delete",
+				scenarioId: "scenario",
+				userId: "member-1",
+				conversationId: "canary-delete",
+				runId: "canary-delete-run",
+				executionLane: "agentcore_canary",
+				expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
+			});
 			const app = buildApp(
 				new PostgresConversationStore(tdb.db),
 				gateThatFailsIfConsulted(),

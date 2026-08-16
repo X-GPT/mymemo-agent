@@ -5,7 +5,6 @@
 
 export * from "./artifact-store";
 export * from "./canary";
-export * from "./canary-control";
 export * from "./canary-dispatch";
 export * from "./client";
 export * from "./conversation-ownership";

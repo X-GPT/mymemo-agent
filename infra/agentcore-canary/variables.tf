@@ -46,12 +46,6 @@ variable "private_subnet_cidrs" {
   }
 }
 
-variable "campaign_network_enabled" {
-  description = "Creates the campaign-scoped NAT Gateway and EIP. Must remain false for dormant deployment."
-  type        = bool
-  default     = false
-}
-
 variable "dispatch_enabled" {
   description = "Enables the SQS consumer and minute repair schedule. Must remain false for dormant deployment."
   type        = bool
@@ -70,11 +64,6 @@ variable "runtime_image_digest" {
 
 variable "dispatch_lambda_package" {
   description = "Path to the verified dispatch Lambda deployment package."
-  type        = string
-}
-
-variable "control_lambda_package" {
-  description = "Path to the verified control Lambda deployment package."
   type        = string
 }
 
@@ -125,24 +114,8 @@ variable "worker_e2b_template" {
   default     = "mymemo-agent-sandbox"
 }
 
-variable "canary_control_config_json" {
-  description = "Versioned non-secret synthetic fixture and scenario authority for the control Lambda."
-  type        = string
-}
-
-variable "canary_approved_synthetic_user_id" {
-  description = "Deployment-owned non-human identity accepted by the control Lambda."
-  type        = string
-}
-
 variable "incident_alarm_action_arns" {
   description = "Production incident destinations for Canary safety alarms."
-  type        = list(string)
-  default     = []
-}
-
-variable "validation_alarm_action_arns" {
-  description = "Non-paging destinations for expected Canary validation alarms."
   type        = list(string)
   default     = []
 }
