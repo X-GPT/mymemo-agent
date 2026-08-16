@@ -6,7 +6,6 @@
 		".": "./src/index.ts",
 		"./schema": "./src/schema.ts",
 		"./artifact-store": "./src/artifact-store.ts",
-		"./canary": "./src/canary.ts",
 		"./canary-dispatch": "./src/canary-dispatch.ts",
 		"./client": "./src/client.ts",
 		"./conversation-ownership": "./src/conversation-ownership.ts",

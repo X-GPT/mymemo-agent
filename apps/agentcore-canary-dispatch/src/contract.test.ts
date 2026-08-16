@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import {
 	createAcquisitionReceipt,
 	InvalidCanaryDispatchEnvelopeError,
@@ -9,36 +9,39 @@ import {
 	serializeCanaryDispatchEnvelope,
 } from "./contract";
 
-const dispatch: CanaryDispatchIdentity = {
-	schemaVersion: 1,
-	dispatchId: "dispatch-450",
-	campaignId: "campaign-450",
-	scenarioId: "baseline-v1",
+const dispatch: AgentCoreDispatchIdentity = {
+	schemaVersion: 2,
 	userId: "canary-service-user",
 	conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
 	runId: "run-450",
 	runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
-	expectedExecutionLane: "agentcore_canary",
 	admittedAt: new Date("2026-08-14T16:00:00.000Z"),
 };
 
 describe("Canary dispatch envelope", () => {
-	it("round-trips only the agreed versioned identifiers, lane, and admission timestamp", () => {
+	it("round-trips only the strict version-2 Run identity and admission timestamp", () => {
 		const wire = serializeCanaryDispatchEnvelope(dispatch);
 
 		expect(JSON.parse(wire)).toEqual({
-			schemaVersion: 1,
-			dispatchId: "dispatch-450",
-			campaignId: "campaign-450",
-			scenarioId: "baseline-v1",
+			schemaVersion: 2,
 			userId: "canary-service-user",
 			conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
 			runId: "run-450",
 			runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
-			expectedExecutionLane: "agentcore_canary",
 			admittedAt: "2026-08-14T16:00:00.000Z",
 		});
 		expect(parseCanaryDispatchEnvelope(wire)).toEqual(dispatch);
+	});
+
+	it("omits runtime-only properties before writing the content-free envelope", () => {
+		const runtimeDispatch = {
+			...dispatch,
+			prompt: "must never enter SQS",
+		};
+
+		expect(
+			JSON.parse(serializeCanaryDispatchEnvelope(runtimeDispatch)),
+		).not.toHaveProperty("prompt");
 	});
 
 	it("compares the complete dispatch identity including admission time", () => {
@@ -51,7 +54,15 @@ describe("Canary dispatch envelope", () => {
 		).toBe(false);
 	});
 
-	it("rejects extra content and a Runtime session that does not name the Conversation", () => {
+	it("rejects version 1, extra content, and a Runtime session that does not name the Conversation", () => {
+		expect(() =>
+			parseCanaryDispatchEnvelope(
+				JSON.stringify({
+					...JSON.parse(serializeCanaryDispatchEnvelope(dispatch)),
+					schemaVersion: 1,
+				}),
+			),
+		).toThrow("invalid AgentCore dispatch envelope");
 		expect(() =>
 			parseCanaryDispatchEnvelope(
 				JSON.stringify({
@@ -91,15 +102,11 @@ describe("Acquisition receipt", () => {
 		);
 
 		expect(parseAcquisitionReceipt(JSON.stringify(receipt))).toEqual({
-			schemaVersion: 1,
-			dispatchId: dispatch.dispatchId,
-			campaignId: dispatch.campaignId,
-			scenarioId: dispatch.scenarioId,
+			schemaVersion: 2,
 			userId: dispatch.userId,
 			conversationId: dispatch.conversationId,
 			runId: dispatch.runId,
 			runtimeSessionId: dispatch.runtimeSessionId,
-			expectedExecutionLane: "agentcore_canary",
 			disposition: "acquired",
 			ownershipEpoch: 7,
 			workerId: "boot-1/invocation-9",

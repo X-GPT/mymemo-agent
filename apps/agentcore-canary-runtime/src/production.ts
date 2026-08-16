@@ -61,7 +61,6 @@ export async function createProductionCanaryRuntime(options: {
 		onExecutionError(error, dispatch) {
 			logger.error({
 				message: "AgentCore one-shot execution abandoned",
-				dispatchId: dispatch.dispatchId,
 				conversationId: dispatch.conversationId,
 				runId: dispatch.runId,
 				error: toMessage(error),

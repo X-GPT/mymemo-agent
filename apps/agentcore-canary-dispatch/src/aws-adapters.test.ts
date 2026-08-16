@@ -1,21 +1,17 @@
 import { describe, expect, it } from "bun:test";
-import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import {
 	createBedrockAgentCoreRuntimeInvoker,
 	createSqsCanaryDispatchQueue,
 	createSsmCanaryEnablementControl,
 } from "./aws-adapters";
 
-const dispatch: CanaryDispatchIdentity = {
-	schemaVersion: 1,
-	dispatchId: "dispatch-450",
-	campaignId: "campaign-450",
-	scenarioId: "baseline-v1",
+const dispatch: AgentCoreDispatchIdentity = {
+	schemaVersion: 2,
 	userId: "canary-service-user",
 	conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
 	runId: "run-450",
 	runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
-	expectedExecutionLane: "agentcore_canary",
 	admittedAt: new Date("2026-08-14T16:00:00.000Z"),
 };
 
@@ -71,7 +67,6 @@ describe("AgentCore Runtime invoker", () => {
 							new TextDecoder().decode(command.input.payload as Uint8Array),
 						),
 					).toMatchObject({
-						dispatchId: dispatch.dispatchId,
 						runId: dispatch.runId,
 					});
 					return { response };
@@ -125,15 +120,11 @@ describe("SQS Canary dispatch queue", () => {
 		await queue.send(dispatch);
 
 		expect(JSON.parse(body ?? "")).toEqual({
-			schemaVersion: 1,
-			dispatchId: dispatch.dispatchId,
-			campaignId: dispatch.campaignId,
-			scenarioId: dispatch.scenarioId,
+			schemaVersion: 2,
 			userId: dispatch.userId,
 			conversationId: dispatch.conversationId,
 			runId: dispatch.runId,
 			runtimeSessionId: dispatch.runtimeSessionId,
-			expectedExecutionLane: "agentcore_canary",
 			admittedAt: "2026-08-14T16:00:00.000Z",
 		});
 	});

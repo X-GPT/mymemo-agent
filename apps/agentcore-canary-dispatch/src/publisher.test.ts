@@ -1,17 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import { createCanaryDispatchPublisher } from "./publisher";
 
-const dispatch: CanaryDispatchIdentity = {
-	schemaVersion: 1,
-	dispatchId: "dispatch-450",
-	campaignId: "campaign-450",
-	scenarioId: "baseline-v1",
+const dispatch: AgentCoreDispatchIdentity = {
+	schemaVersion: 2,
 	userId: "canary-service-user",
 	conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
 	runId: "run-450",
 	runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
-	expectedExecutionLane: "agentcore_canary",
 	admittedAt: new Date("2026-08-14T16:00:00.000Z"),
 };
 
@@ -27,10 +23,6 @@ describe("Canary dispatch publisher", () => {
 				},
 			},
 			store: {
-				markOverdue: async () => {
-					calls.push("overdue");
-					return { campaignIds: ["overdue-campaign"] };
-				},
 				claim: async () => {
 					calls.push("claim");
 					return [dispatch];
@@ -49,11 +41,10 @@ describe("Canary dispatch publisher", () => {
 
 		await expect(publisher.publishPending()).resolves.toEqual({
 			status: "disabled",
-			overdueCampaignIds: ["overdue-campaign"],
-			publishedDispatchIds: [],
-			ambiguousDispatchIds: [],
+			publishedRunIds: [],
+			ambiguousRunIds: [],
 		});
-		expect(calls).toEqual(["overdue", "control"]);
+		expect(calls).toEqual(["control"]);
 	});
 
 	it("confirms a successful SQS send only after the leased claim returns", async () => {
@@ -62,9 +53,8 @@ describe("Canary dispatch publisher", () => {
 			publisherId: "publisher-1",
 			control: { isEnabled: async () => true },
 			store: {
-				markOverdue: async () => ({ campaignIds: [] }),
-				claim: async ({ dispatchId, limit }) => {
-					calls.push(`claim-committed:${dispatchId}:${limit}`);
+				claim: async ({ runId, limit }) => {
+					calls.push(`claim-committed:${runId}:${limit}`);
 					return [dispatch];
 				},
 				confirm: async () => {
@@ -80,15 +70,14 @@ describe("Canary dispatch publisher", () => {
 		});
 
 		await expect(
-			publisher.publishPending({ dispatchId: dispatch.dispatchId }),
+			publisher.publishPending({ runId: dispatch.runId }),
 		).resolves.toEqual({
 			status: "enabled",
-			overdueCampaignIds: [],
-			publishedDispatchIds: [dispatch.dispatchId],
-			ambiguousDispatchIds: [],
+			publishedRunIds: [dispatch.runId],
+			ambiguousRunIds: [],
 		});
 		expect(calls).toEqual([
-			`claim-committed:${dispatch.dispatchId}:10`,
+			`claim-committed:${dispatch.runId}:10`,
 			"send",
 			"confirm",
 		]);
@@ -100,7 +89,6 @@ describe("Canary dispatch publisher", () => {
 			publisherId: "publisher-1",
 			control: { isEnabled: async () => true },
 			store: {
-				markOverdue: async () => ({ campaignIds: [] }),
 				claim: async () => [dispatch],
 				confirm: async () => {
 					confirmed = true;
@@ -115,8 +103,8 @@ describe("Canary dispatch publisher", () => {
 		});
 
 		await expect(publisher.publishPending()).resolves.toMatchObject({
-			publishedDispatchIds: [],
-			ambiguousDispatchIds: [dispatch.dispatchId],
+			publishedRunIds: [],
+			ambiguousRunIds: [dispatch.runId],
 		});
 		expect(confirmed).toBe(false);
 	});

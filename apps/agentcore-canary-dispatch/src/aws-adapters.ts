@@ -8,9 +8,8 @@ import {
 	type GetParameterCommandOutput,
 } from "@aws-sdk/client-ssm";
 import {
-	claimCanaryDispatchesTx,
-	confirmCanaryDispatchPublishedTx,
-	markOverdueCanaryDispatchesTx,
+	claimAgentCoreDispatchesTx,
+	confirmAgentCoreDispatchPublishedTx,
 } from "@mymemo/agent-db/canary-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import type { AgentCoreRuntimeInvoker } from "./consumer";
@@ -76,18 +75,16 @@ export function createDatabaseCanaryDispatchPublisherStore(options: {
 }): CanaryDispatchPublisherStore {
 	const now = options.now ?? (() => new Date());
 	return {
-		markOverdue: async () =>
-			await markOverdueCanaryDispatchesTx(options.db, { now: now() }),
-		claim: async ({ publisherId, dispatchId, limit }) =>
-			await claimCanaryDispatchesTx(options.db, {
+		claim: async ({ publisherId, runId, limit }) =>
+			await claimAgentCoreDispatchesTx(options.db, {
 				publisherId,
-				dispatchId,
+				runId,
 				limit,
 				now: now(),
 			}),
-		confirm: async ({ dispatchId, publisherId }) =>
-			await confirmCanaryDispatchPublishedTx(options.db, {
-				dispatchId,
+		confirm: async ({ runId, publisherId }) =>
+			await confirmAgentCoreDispatchPublishedTx(options.db, {
+				runId,
 				publisherId,
 				now: now(),
 			}),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type {
-	AcquireCanaryDispatchResult,
-	CanaryDispatchIdentity,
+	AcquireAgentCoreDispatchResult,
+	AgentCoreDispatchIdentity,
 } from "@mymemo/agent-db/canary-dispatch";
 import {
 	createAcquisitionReceipt,
@@ -21,24 +21,20 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
-function dispatch(runId = "run-451"): CanaryDispatchIdentity {
+function dispatch(runId = "run-451"): AgentCoreDispatchIdentity {
 	return {
-		schemaVersion: 1,
-		dispatchId: `dispatch-${runId}`,
-		campaignId: "campaign-451",
-		scenarioId: "baseline-v1",
+		schemaVersion: 2,
 		userId: "canary-service-user",
 		conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045101",
 		runId,
 		runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045101",
-		expectedExecutionLane: "agentcore_canary",
 		admittedAt: new Date("2026-08-14T18:00:00.000Z"),
 	};
 }
 
 function acquisition(
-	dispatched: CanaryDispatchIdentity,
-	result: AcquireCanaryDispatchResult,
+	dispatched: AgentCoreDispatchIdentity,
+	result: AcquireAgentCoreDispatchResult,
 ) {
 	return {
 		dispatch: dispatched,

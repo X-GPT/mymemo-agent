@@ -1,4 +1,4 @@
-import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import {
 	parseCanaryDispatchEnvelope,
 	receiptCorrelatesDispatch,
@@ -12,7 +12,9 @@ export interface AgentCoreRuntimeInvocation {
 }
 
 export interface AgentCoreRuntimeInvoker {
-	invoke(dispatch: CanaryDispatchIdentity): Promise<AgentCoreRuntimeInvocation>;
+	invoke(
+		dispatch: AgentCoreDispatchIdentity,
+	): Promise<AgentCoreRuntimeInvocation>;
 }
 
 export interface CanaryDispatchAlarm {
@@ -23,7 +25,7 @@ export interface CanaryDispatchAlarm {
 			| "invalid_dispatch"
 			| "receipt_mismatch";
 		messageId: string;
-		dispatchId?: string;
+		runId?: string;
 	}): Promise<void>;
 }
 
@@ -52,7 +54,7 @@ export function createCanaryDispatchConsumer(options: {
 			return "retry";
 		}
 
-		let dispatch: CanaryDispatchIdentity;
+		let dispatch: AgentCoreDispatchIdentity;
 		try {
 			dispatch = parseCanaryDispatchEnvelope(record.body);
 		} catch {
@@ -71,7 +73,7 @@ export function createCanaryDispatchConsumer(options: {
 				await options.alarm.raise({
 					reason: "receipt_mismatch",
 					messageId: record.messageId,
-					dispatchId: dispatch.dispatchId,
+					runId: dispatch.runId,
 				});
 				return "retry";
 			}
@@ -87,7 +89,7 @@ export function createCanaryDispatchConsumer(options: {
 					await options.alarm.raise({
 						reason: "invalid_dispatch",
 						messageId: record.messageId,
-						dispatchId: dispatch.dispatchId,
+						runId: dispatch.runId,
 					});
 					return "ack";
 				default: {

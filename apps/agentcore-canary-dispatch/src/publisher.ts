@@ -1,4 +1,4 @@
-import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import { CANARY_QUEUE_INVARIANTS } from "./invariants";
 
 export interface CanaryEnablementControl {
@@ -6,24 +6,22 @@ export interface CanaryEnablementControl {
 }
 
 export interface CanaryDispatchPublisherStore {
-	markOverdue(): Promise<{ campaignIds: string[] }>;
 	claim(input: {
 		publisherId: string;
-		dispatchId?: string;
+		runId?: string;
 		limit: number;
-	}): Promise<CanaryDispatchIdentity[]>;
-	confirm(input: { dispatchId: string; publisherId: string }): Promise<boolean>;
+	}): Promise<AgentCoreDispatchIdentity[]>;
+	confirm(input: { runId: string; publisherId: string }): Promise<boolean>;
 }
 
 export interface CanaryDispatchQueue {
-	send(dispatch: CanaryDispatchIdentity): Promise<void>;
+	send(dispatch: AgentCoreDispatchIdentity): Promise<void>;
 }
 
 export interface CanaryPublishResult {
 	status: "enabled" | "disabled";
-	overdueCampaignIds: string[];
-	publishedDispatchIds: string[];
-	ambiguousDispatchIds: string[];
+	publishedRunIds: string[];
+	ambiguousRunIds: string[];
 }
 
 export type CanaryImmediatePublishResult =
@@ -39,30 +37,25 @@ export function createCanaryDispatchPublisher(options: {
 }) {
 	return {
 		async publishPending(
-			input: { dispatchId?: string } = {},
+			input: { runId?: string } = {},
 		): Promise<CanaryPublishResult> {
-			// Timeout marking is lifecycle maintenance, not delivery. It must continue
-			// while the gate blocks every claim and SQS send below.
-			const overdue = await options.store.markOverdue();
 			if (!(await options.control.isEnabled())) {
 				return {
 					status: "disabled",
-					overdueCampaignIds: overdue.campaignIds,
-					publishedDispatchIds: [],
-					ambiguousDispatchIds: [],
+					publishedRunIds: [],
+					ambiguousRunIds: [],
 				};
 			}
 
 			const claimed = await options.store.claim({
 				publisherId: options.publisherId,
-				dispatchId: input.dispatchId,
+				runId: input.runId,
 				limit: CANARY_QUEUE_INVARIANTS.publisherBatchSize,
 			});
 			const result: CanaryPublishResult = {
 				status: "enabled",
-				overdueCampaignIds: overdue.campaignIds,
-				publishedDispatchIds: [],
-				ambiguousDispatchIds: [],
+				publishedRunIds: [],
+				ambiguousRunIds: [],
 			};
 			for (const dispatch of claimed) {
 				if (!(await options.control.isEnabled())) {
@@ -71,18 +64,18 @@ export function createCanaryDispatchPublisher(options: {
 				try {
 					await options.queue.send(dispatch);
 					const confirmed = await options.store.confirm({
-						dispatchId: dispatch.dispatchId,
+						runId: dispatch.runId,
 						publisherId: options.publisherId,
 					});
 					if (confirmed) {
-						result.publishedDispatchIds.push(dispatch.dispatchId);
+						result.publishedRunIds.push(dispatch.runId);
 					} else {
-						result.ambiguousDispatchIds.push(dispatch.dispatchId);
+						result.ambiguousRunIds.push(dispatch.runId);
 					}
 				} catch {
 					// No database write follows an ambiguous send. Its existing lease is
 					// the retry delay; expiry makes the exact envelope eligible again.
-					result.ambiguousDispatchIds.push(dispatch.dispatchId);
+					result.ambiguousRunIds.push(dispatch.runId);
 				}
 			}
 			return result;

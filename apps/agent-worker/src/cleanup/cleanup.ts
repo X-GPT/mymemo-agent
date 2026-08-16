@@ -1,4 +1,3 @@
-import { expireCanaryAuditRecordsTx } from "@mymemo/agent-db/canary-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	artifactObjects,
@@ -47,8 +46,6 @@ export interface ArtifactObjectJanitor {
 
 /** Per-pass tallies, returned for structured logging and asserted by tests. */
 export interface CleanupSummary {
-	canaryCampaignsExpired: number;
-	canaryDispatchesExpired: number;
 	orphanSandboxesKilled: number;
 	orphanSandboxesFailed: number;
 	orphanSandboxesSkippedReferenced: number;
@@ -71,8 +68,6 @@ export interface CleanupPassOptions {
 
 function zeroSummary(): CleanupSummary {
 	return {
-		canaryCampaignsExpired: 0,
-		canaryDispatchesExpired: 0,
 		orphanSandboxesKilled: 0,
 		orphanSandboxesFailed: 0,
 		orphanSandboxesSkippedReferenced: 0,
@@ -92,13 +87,6 @@ export async function runCleanupPass(
 	options: CleanupPassOptions,
 ): Promise<CleanupSummary> {
 	const summary = zeroSummary();
-	await runSweep(options.logger, "canary-audit", async () => {
-		const expired = await expireCanaryAuditRecordsTx(options.db, {
-			now: options.now,
-		});
-		summary.canaryCampaignsExpired = expired.campaignsDeleted;
-		summary.canaryDispatchesExpired = expired.dispatchesDeleted;
-	});
 	await runSweep(options.logger, "orphan-sandboxes", async () => {
 		Object.assign(summary, await sweepOrphanSandboxes(options));
 	});

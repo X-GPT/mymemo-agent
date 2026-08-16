@@ -14,7 +14,6 @@ import {
 	timestamp,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { CANARY_CAMPAIGN_LIFECYCLES, CANARY_VERDICTS } from "./canary";
 import {
 	CONVERSATION_EXECUTION_LANES,
 	FARGATE_EXECUTION_LANE,
@@ -211,98 +210,21 @@ export const executionLaneDeployments = pgTable(
 );
 
 /**
- * Durable control record for one operator-triggered AgentCore canary campaign.
- * Conversation and Run identifiers are copied as audit facts, deliberately
- * without foreign keys: synthetic data is deleted after evidence extraction,
- * while this bounded, content-free control record remains for 30 days after
- * Campaign completion.
- */
-export const canaryCampaigns = pgTable(
-	"canary_campaigns",
-	{
-		campaignId: text("campaign_id").primaryKey(),
-		idempotencyKey: text("idempotency_key").notNull(),
-		campaignVersion: text("campaign_version").notNull(),
-		fixtureVersion: text("fixture_version").notNull(),
-		fixtureChecksum: text("fixture_checksum").notNull(),
-		inputChecksum: text("input_checksum").notNull(),
-		model: text("model").notNull(),
-		scenarioId: text("scenario_id").notNull(),
-		userId: text("user_id").notNull(),
-		conversationId: text("conversation_id").notNull(),
-		runId: text("run_id").notNull(),
-		messageId: text("message_id").notNull(),
-		lifecycle: text("lifecycle", {
-			enum: CANARY_CAMPAIGN_LIFECYCLES,
-		})
-			.notNull()
-			.default("preparing"),
-		verdict: text("verdict", { enum: CANARY_VERDICTS }),
-		/** Early bounded result that requests cleanup before a final report exists. */
-		provisionalVerdict: text("provisional_verdict", {
-			enum: CANARY_VERDICTS,
-		}),
-		cleanupRequestedAt: timestamp("cleanup_requested_at", {
-			withTimezone: true,
-		}),
-		createdAt: timestamp("created_at", { withTimezone: true })
-			.notNull()
-			.defaultNow(),
-		updatedAt: timestamp("updated_at", { withTimezone: true })
-			.notNull()
-			.defaultNow(),
-		expiresAt: timestamp("expires_at", { withTimezone: true })
-			.notNull()
-			.default(sql`now() + interval '30 days'`),
-	},
-	(t) => [
-		uniqueIndex("canary_campaigns_idempotency_key_idx").on(t.idempotencyKey),
-		uniqueIndex("canary_campaigns_one_active_idx")
-			.on(sql`(true)`)
-			.where(sql`${t.lifecycle} <> 'complete'`),
-		check(
-			"canary_campaigns_lifecycle_check",
-			sql`${t.lifecycle} in ('preparing', 'provisioning', 'running', 'cleaning', 'complete')`,
-		),
-		check(
-			"canary_campaigns_verdict_check",
-			sql`${t.verdict} is null or ${t.verdict} in ('pass_for_rollout_review', 'fail', 'inconclusive')`,
-		),
-		check(
-			"canary_campaigns_provisional_verdict_check",
-			sql`${t.provisionalVerdict} is null or ${t.provisionalVerdict} in ('pass_for_rollout_review', 'fail', 'inconclusive')`,
-		),
-		check(
-			"canary_campaigns_complete_verdict_check",
-			sql`(${t.lifecycle} = 'complete') = (${t.verdict} is not null)`,
-		),
-		index("canary_campaigns_expiry_idx").on(t.expiresAt),
-	],
-);
-
-/**
- * Non-cascading transactional outbox for AgentCore dispatch. It stores only
- * identifiers, lane, and timestamps; no prompt, model content, document
+ * Non-cascading transactional outbox for AgentCore dispatch. A Run id is the
+ * dispatch identity, so the primary key enforces at most one dispatch per Run.
+ * It stores only identifiers and timestamps; no prompt, model content, document
  * details, artifact data, or credentials can enter the queue boundary through
  * this record. Publication uses an expiring database lease; a confirmed send
  * advances `published_at`, while an ambiguous send becomes eligible again only
  * after `publish_claim_until`. Manual replay is audited on the same immutable
  * dispatch identity.
  */
-export const canaryDispatchOutbox = pgTable(
-	"canary_dispatch_outbox",
+export const agentCoreDispatchOutbox = pgTable(
+	"agentcore_dispatch_outbox",
 	{
-		dispatchId: text("dispatch_id").primaryKey(),
-		campaignId: text("campaign_id")
-			.notNull()
-			.references(() => canaryCampaigns.campaignId),
-		scenarioId: text("scenario_id").notNull(),
+		runId: text("run_id").primaryKey(),
 		userId: text("user_id").notNull(),
 		conversationId: text("conversation_id").notNull(),
-		runId: text("run_id").notNull(),
-		executionLane: text("execution_lane", {
-			enum: CONVERSATION_EXECUTION_LANES,
-		}).notNull(),
 		admittedAt: timestamp("admitted_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -316,23 +238,14 @@ export const canaryDispatchOutbox = pgTable(
 			withTimezone: true,
 		}),
 		replayRequestedBy: text("replay_requested_by"),
-		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 	},
 	(t) => [
-		uniqueIndex("canary_dispatch_outbox_run_idx").on(t.runId),
-		uniqueIndex("canary_dispatch_outbox_campaign_scenario_idx").on(
-			t.campaignId,
-			t.scenarioId,
-		),
-		check(
-			"canary_dispatch_outbox_lane_check",
-			sql`${t.executionLane} = 'agentcore_canary'`,
-		),
-		index("canary_dispatch_outbox_pending_idx")
+		index("agentcore_dispatch_outbox_pending_idx")
 			.on(t.admittedAt)
 			.where(sql`${t.publishedAt} is null`),
-		index("canary_dispatch_outbox_publish_claim_idx").on(t.publishClaimUntil),
-		index("canary_dispatch_outbox_expiry_idx").on(t.expiresAt),
+		index("agentcore_dispatch_outbox_publish_claim_idx").on(
+			t.publishClaimUntil,
+		),
 	],
 );
 

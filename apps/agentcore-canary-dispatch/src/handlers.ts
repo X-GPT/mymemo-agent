@@ -15,7 +15,7 @@ const sqsEventSchema = z.object({
 		.length(CANARY_QUEUE_INVARIANTS.consumerBatchSize),
 });
 const manualReplaySchema = z.strictObject({
-	dispatchId: boundedIdentifier,
+	runId: boundedIdentifier,
 	requestedBy: boundedIdentifier,
 });
 
@@ -48,11 +48,8 @@ export function createCanaryConsumerHandler(consumer: {
 }
 
 export function createManualReplayHandler(options: {
-	replay(input: { dispatchId: string; requestedBy: string }): Promise<boolean>;
-	publish(
-		publisherId: string,
-		dispatchId?: string,
-	): Promise<CanaryPublishResult>;
+	replay(input: { runId: string; requestedBy: string }): Promise<boolean>;
+	publish(publisherId: string, runId?: string): Promise<CanaryPublishResult>;
 }) {
 	return async (event: unknown, context: LambdaContext) => {
 		const parsed = manualReplaySchema.safeParse(event);
@@ -62,11 +59,11 @@ export function createManualReplayHandler(options: {
 			throw new Error("Canary dispatch is not eligible for replay");
 		const publication = await options.publish(
 			`manual-replay/${requireRequestId(context)}`,
-			parsed.data.dispatchId,
+			parsed.data.runId,
 		);
 		const replayed =
-			publication.publishedDispatchIds.includes(parsed.data.dispatchId) ||
-			publication.ambiguousDispatchIds.includes(parsed.data.dispatchId);
+			publication.publishedRunIds.includes(parsed.data.runId) ||
+			publication.ambiguousRunIds.includes(parsed.data.runId);
 		return { replayed, deferred: !replayed, publication };
 	};
 }

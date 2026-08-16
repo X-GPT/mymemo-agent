@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import {
 	createAcquisitionReceipt,
 	serializeCanaryDispatchEnvelope,
@@ -11,16 +11,12 @@ import {
 	createRuntimeServerOptions,
 } from "./server";
 
-const dispatch: CanaryDispatchIdentity = {
-	schemaVersion: 1,
-	dispatchId: "dispatch-http-451",
-	campaignId: "campaign-451",
-	scenarioId: "baseline-v1",
+const dispatch: AgentCoreDispatchIdentity = {
+	schemaVersion: 2,
 	userId: "canary-service-user",
 	conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045111",
 	runId: "run-http-451",
 	runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045111",
-	expectedExecutionLane: "agentcore_canary",
 	admittedAt: new Date("2026-08-14T19:00:00.000Z"),
 };
 

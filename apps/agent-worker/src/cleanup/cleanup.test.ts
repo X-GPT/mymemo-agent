@@ -10,8 +10,6 @@ import {
 import {
 	agentSessions,
 	artifactObjects,
-	canaryCampaigns,
-	canaryDispatchOutbox,
 	conversationArtifacts,
 	conversationRuntime,
 	conversations,
@@ -73,8 +71,6 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-	await tdb.db.delete(canaryDispatchOutbox);
-	await tdb.db.delete(canaryCampaigns);
 	await tdb.db.delete(artifactObjects);
 	await tdb.db.delete(orphanSandboxes);
 	await tdb.db.delete(runs);
@@ -93,87 +89,6 @@ function pass(overrides?: Partial<CleanupPassOptions>) {
 		...overrides,
 	});
 }
-
-describe("Canary audit cleanup", () => {
-	it("expires completed Campaign audit at its deadline and retains every ineligible record", async () => {
-		const now = new Date("2026-08-14T00:00:00.000Z");
-		await tdb.db.insert(canaryCampaigns).values([
-			{
-				campaignId: "campaign-expired",
-				idempotencyKey: "key-expired",
-				campaignVersion: "v1",
-				fixtureVersion: "fixture-v1",
-				fixtureChecksum: "fixture-checksum",
-				inputChecksum: "input-checksum-expired",
-				model: "model",
-				scenarioId: "scenario",
-				userId: "canary-user",
-				conversationId: "conversation-expired",
-				runId: "run-expired",
-				messageId: "message-expired",
-				lifecycle: "complete",
-				verdict: "inconclusive",
-				expiresAt: new Date("2026-08-13T23:59:59.000Z"),
-			},
-			{
-				campaignId: "campaign-retained",
-				idempotencyKey: "key-retained",
-				campaignVersion: "v1",
-				fixtureVersion: "fixture-v1",
-				fixtureChecksum: "fixture-checksum",
-				inputChecksum: "input-checksum-retained",
-				model: "model",
-				scenarioId: "scenario",
-				userId: "canary-user",
-				conversationId: "conversation-retained",
-				runId: "run-retained",
-				messageId: "message-retained",
-				lifecycle: "complete",
-				verdict: "inconclusive",
-				expiresAt: new Date("2026-08-14T00:00:01.000Z"),
-			},
-		]);
-		await tdb.db.insert(canaryDispatchOutbox).values([
-			{
-				dispatchId: "dispatch-expired",
-				campaignId: "campaign-expired",
-				scenarioId: "scenario",
-				userId: "canary-user",
-				conversationId: "conversation-expired",
-				runId: "run-expired",
-				executionLane: "agentcore_canary",
-				expiresAt: new Date("2026-08-13T23:59:59.000Z"),
-			},
-			{
-				dispatchId: "dispatch-retained",
-				campaignId: "campaign-retained",
-				scenarioId: "scenario",
-				userId: "canary-user",
-				conversationId: "conversation-retained",
-				runId: "run-retained",
-				executionLane: "agentcore_canary",
-				expiresAt: new Date("2026-08-14T00:00:01.000Z"),
-			},
-		]);
-
-		const summary = await pass({ now });
-
-		expect(
-			(await tdb.db.select().from(canaryCampaigns)).map(
-				(row) => row.campaignId,
-			),
-		).toEqual(["campaign-retained"]);
-		expect(
-			(await tdb.db.select().from(canaryDispatchOutbox)).map(
-				(row) => row.dispatchId,
-			),
-		).toEqual(["dispatch-retained"]);
-		expect(summary).toMatchObject({
-			canaryCampaignsExpired: 1,
-			canaryDispatchesExpired: 1,
-		});
-	});
-});
 
 describe("Downloadable artifact object cleanup", () => {
 	it("deletes an abandoned pending object and removes its ledger row", async () => {
@@ -537,32 +452,7 @@ describe("orphan sandbox cleanup", () => {
 });
 
 describe("deleted-conversation cleanup", () => {
-	it("cleans retained AgentCore-canary resources without deleting its unexpired audit", async () => {
-		await tdb.db.insert(canaryCampaigns).values({
-			campaignId: "campaign-deleted-conversation",
-			idempotencyKey: "key-deleted-conversation",
-			campaignVersion: "v1",
-			fixtureVersion: "fixture-v1",
-			fixtureChecksum: "fixture-checksum",
-			inputChecksum: "input-checksum",
-			model: "model",
-			scenarioId: "scenario",
-			userId: "canary-user",
-			conversationId: "canary-conversation-gone",
-			runId: "canary-run-gone",
-			messageId: "canary-message-gone",
-			expiresAt: new Date("2026-08-15T00:00:00.000Z"),
-		});
-		await tdb.db.insert(canaryDispatchOutbox).values({
-			dispatchId: "canary-dispatch-gone",
-			campaignId: "campaign-deleted-conversation",
-			scenarioId: "scenario",
-			userId: "canary-user",
-			conversationId: "canary-conversation-gone",
-			runId: "canary-run-gone",
-			executionLane: "agentcore_canary",
-			expiresAt: new Date("2026-08-15T00:00:00.000Z"),
-		});
+	it("cleans retained Runtime resources for a deleted AgentCore Conversation", async () => {
 		await insertRuntime({
 			userId: "canary-user",
 			conversationId: "canary-conversation-gone",
@@ -600,9 +490,6 @@ describe("deleted-conversation cleanup", () => {
 		).toBeNull();
 		expect(artifactJanitor.deleted).toEqual(["objects/canary-deleted"]);
 		expect(await orphanIds()).toEqual(["sbx-canary-gone"]);
-		expect(await tdb.db.select().from(canaryCampaigns)).toHaveLength(1);
-		expect(await tdb.db.select().from(canaryDispatchOutbox)).toHaveLength(1);
-
 		janitor.killFailIds.clear();
 		await pass({ now: new Date("2026-08-14T00:00:01.000Z") });
 		expect(janitor.killed).toEqual(["sbx-canary-gone"]);
