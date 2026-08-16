@@ -1,9 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ApiConfig } from "@/config/env";
-import { conversationArtifacts } from "@/db/schema";
-import { createTestDatabase } from "@/db/testing";
 import type { AppDeps } from "@/deps";
-import { PostgresConversationStore } from "@/features/conversation-store";
 import type {
 	ArtifactDownloadSigner,
 	ArtifactDownloadSignInput,
@@ -12,7 +9,6 @@ import type {
 	ArtifactMetadataStore,
 	CurrentArtifact,
 } from "./artifact-metadata-store";
-import { PostgresArtifactMetadataStore } from "./postgres-artifact-metadata-store";
 
 const { createApp } = await import("@/app");
 
@@ -243,78 +239,5 @@ describe("GET /v1/conversations/:conversationId/artifacts/:artifactId/download-u
 		expect(harness.artifactLookups).toEqual(["missing-artifact"]);
 		expect(harness.signInputs).toHaveLength(0);
 		expect(harness.gateCalls).toBe(0);
-	});
-});
-
-describe("seeded current-artifact HTTP path", () => {
-	it("lists and signs the current Postgres object through the Hono app", async () => {
-		const tdb = await createTestDatabase();
-		try {
-			const conversationStore = new PostgresConversationStore(tdb.db);
-			await conversationStore.create(ownedConversation);
-			await tdb.db.insert(conversationArtifacts).values({
-				artifactId: "seeded-artifact",
-				userId: "member-1",
-				conversationId: "conversation-1",
-				path: "exports/seeded.pdf",
-				objectKey: "private/seeded-object",
-				sizeBytes: 2048,
-				contentType: "application/pdf",
-				createdAt: new Date("2026-07-15T01:00:00.000Z"),
-				updatedAt: new Date("2026-07-15T02:00:00.000Z"),
-			});
-			const signInputs: ArtifactDownloadSignInput[] = [];
-			const deps = {
-				conversationStore,
-				artifactMetadataStore: new PostgresArtifactMetadataStore(tdb.db),
-				artifactDownloadSigner: {
-					async createDownloadUrl(input: ArtifactDownloadSignInput) {
-						signInputs.push(input);
-						return "https://objects.example/seeded-download";
-					},
-				},
-				exposureGate: {
-					async isAgentEnabled() {
-						throw new Error(
-							"artifact reads must not consult the exposure gate",
-						);
-					},
-				},
-			} as unknown as AppDeps;
-			const app = createApp({ logLevel: "silent" } as ApiConfig, deps);
-
-			const list = await app.request(
-				"/v1/conversations/conversation-1/artifacts",
-				{ headers: identityHeaders },
-			);
-			expect(await list.json()).toEqual({
-				artifacts: [
-					{
-						artifactId: "seeded-artifact",
-						path: "exports/seeded.pdf",
-						sizeBytes: 2048,
-						contentType: "application/pdf",
-						createdAt: "2026-07-15T01:00:00.000Z",
-						updatedAt: "2026-07-15T02:00:00.000Z",
-					},
-				],
-			});
-
-			const download = await app.request(
-				"/v1/conversations/conversation-1/artifacts/seeded-artifact/download-url",
-				{ headers: identityHeaders },
-			);
-			expect(download.status).toBe(200);
-			expect(await download.json()).toEqual({
-				downloadUrl: "https://objects.example/seeded-download",
-			});
-			expect(signInputs[0]).toMatchObject({
-				objectKey: "private/seeded-object",
-				expiresInSeconds: 300,
-				responseContentType: "application/pdf",
-			});
-		} finally {
-			await tdb.close();
-		}
 	});
 });

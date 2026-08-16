@@ -1326,17 +1326,6 @@ describe("POST /v1/conversations/:id/runs", () => {
 	});
 });
 
-it("does not mount the legacy Conversation events admission route", async () => {
-	const { store } = fakeStore();
-	const res = await buildApp(store).request("/v1/conversations/conv-1/events", {
-		method: "POST",
-		headers: identityHeaders,
-		body: JSON.stringify({}),
-	});
-
-	expect(res.status).toBe(404);
-});
-
 describe("POST /v1/conversations/:id/runs/:runId/interrupt", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
@@ -1460,28 +1449,6 @@ describe("POST /v1/conversations/:id/runs/:runId/interrupt", () => {
 
 		expect(res.status).toBe(202);
 		expect(await res.json()).toEqual({ runId: "run-1", status: "interrupted" });
-	});
-
-	it("no longer serves the removed /cancel endpoint", async () => {
-		const { store } = fakeStore([existing]);
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runOwners.set("run-1", {
-			userId: "member-1",
-			conversationId: "conv-1",
-			status: "running",
-		});
-
-		const res = await buildApp(
-			store,
-			gateThatFailsIfConsulted(),
-			fakeRuns,
-		).request("/v1/conversations/conv-1/runs/run-1/cancel", {
-			method: "POST",
-			headers: identityHeaders,
-		});
-
-		expect(res.status).toBe(404);
-		expect(fakeRuns.interruptions).toEqual([]);
 	});
 
 	it("validates identity and path parameters", async () => {

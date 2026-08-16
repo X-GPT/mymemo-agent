@@ -12,7 +12,6 @@ export * from "./conversation-ownership";
 export * from "./execution-lane";
 export * from "./execution-lane-deployment";
 export * from "./migrations";
-export * from "./queue-metrics";
 export * from "./run-events";
 export * from "./run-store";
 export * from "./runtime-store";
