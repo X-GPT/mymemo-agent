@@ -206,6 +206,8 @@ resource "aws_cloudwatch_metric_alarm" "chat_api_unhealthy" {
   evaluation_periods  = 3
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
 
   dimensions = {
     LoadBalancer = aws_lb.agent.arn_suffix
@@ -223,6 +225,8 @@ resource "aws_cloudwatch_metric_alarm" "chat_api_cpu_high" {
   evaluation_periods  = 5
   threshold           = 80
   comparison_operator = "GreaterThanThreshold"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
 
   dimensions = {
     ClusterName = local.shared_ecs_cluster_name
@@ -240,6 +244,8 @@ resource "aws_cloudwatch_metric_alarm" "agent_worker_cpu_high" {
   evaluation_periods  = 5
   threshold           = 80
   comparison_operator = "GreaterThanThreshold"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
 
   dimensions = {
     ClusterName = local.shared_ecs_cluster_name
