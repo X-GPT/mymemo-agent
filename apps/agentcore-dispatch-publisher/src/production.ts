@@ -8,13 +8,13 @@ import {
 	createSsmCanaryEnablementControl,
 } from "agentcore-canary-dispatch/aws-adapters";
 import { createCanaryDispatchPublisher } from "agentcore-canary-dispatch/publisher";
-import type { AgentCoreDispatchPublisherConfig } from "../config/env";
+import type { AgentCoreDispatchPublisherConfig } from "./config";
 import type {
 	AgentCoreDispatchPendingStore,
 	AgentCoreDispatchPublisher,
 } from "./publisher-loop";
 
-/** Bind the dedicated publisher process to its SSM, SQS, and database ports. */
+/** Bind the process to its SSM, SQS, and Postgres adapters. */
 export function createProductionAgentCoreDispatchPublisher(options: {
 	db: Database;
 	publisherId: string;

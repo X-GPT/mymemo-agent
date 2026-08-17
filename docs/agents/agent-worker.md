@@ -42,9 +42,9 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 
 `src/index.ts` resolves and verifies the SDK CLI before claiming work, creates the per-Conversation Fargate query directory, and wires the real SDK processor. When a Run ends with an `error` Outcome, persist only a generic client-facing message and keep internal details in trusted-worker logs.
 
-## Dedicated AgentCore dispatch publisher
+## Related AgentCore dispatch publisher
 
-`src/agentcore-dispatch/main.ts` is a separate process entrypoint for the one publisher ECS task from ADR-0026. The Conversation-serving `src/index.ts` does not start it and does not read its SQS or SSM configuration. The publisher task checks the fail-closed SSM gate, claims a bounded outbox batch, sends strict envelopes to SQS, and confirms successful sends. Its tick-scoped session advisory lock only excludes the old/new task overlap during a rolling deployment.
+`apps/agentcore-dispatch-publisher/src/main.ts` is the dedicated app entrypoint for the one publisher ECS task from ADR-0026. The Conversation-serving `apps/agent-worker/src/index.ts` does not start it and does not read its SQS or SSM configuration. The publisher task checks the fail-closed SSM gate, claims a bounded outbox batch, sends strict envelopes to SQS, and confirms successful sends. Its tick-scoped session advisory lock only excludes the old/new task overlap during a rolling deployment.
 
 `SIGINT` or `SIGTERM` aborts the sleep after a tick; shutdown waits for an active tick to release its database connection and then closes the pool. The loop emits CloudWatch embedded metrics for lost locks, errors, and the oldest unpublished admission age. It does not publish from Run admission and does not delete outbox audit rows.
 

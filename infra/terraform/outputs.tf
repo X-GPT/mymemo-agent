@@ -8,6 +8,11 @@ output "agent_worker_service_name" {
   value       = aws_ecs_service.agent_worker.name
 }
 
+output "agentcore_dispatch_publisher_service_name" {
+  description = "ECS service name for the AgentCore dispatch publisher."
+  value       = aws_ecs_service.agentcore_dispatch_publisher.name
+}
+
 output "agent_migration_task_definition_arn" {
   description = "Task definition ARN for the agent DB migration one-shot."
   value       = aws_ecs_task_definition.agent_migration.arn
@@ -21,6 +26,11 @@ output "chat_api_task_definition_arn" {
 output "agent_worker_task_definition_arn" {
   description = "Task definition ARN for the agent-worker release built by Terraform."
   value       = aws_ecs_task_definition.agent_worker.arn
+}
+
+output "agentcore_dispatch_publisher_task_definition_arn" {
+  description = "Task definition ARN for the AgentCore dispatch publisher release built by Terraform."
+  value       = aws_ecs_task_definition.agentcore_dispatch_publisher.arn
 }
 
 output "agent_database_endpoint" {

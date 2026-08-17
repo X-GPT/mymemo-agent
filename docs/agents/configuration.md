@@ -67,7 +67,7 @@ The dedicated publisher ECS task requires only:
 - `CANARY_DISPATCH_QUEUE_URL`: encrypted standard AgentCore dispatch queue URL. This transitional name is retired by the production configuration ticket.
 - `CANARY_ENABLED_PARAMETER_NAME`: fail-closed SSM dispatch gate whose only enabling value is exactly `enabled`. This transitional name is retired by the production configuration ticket.
 
-`WORKER_AGENTCORE_DISPATCH_INTERVAL_MS` optionally changes the two-second tick interval. `LOG_LEVEL`, `DB_PASSWORD`, and `DB_SSL` have the same behavior as the worker. The publisher does not receive KB, model, E2B, artifact, or Redis authority.
+`AGENTCORE_DISPATCH_PUBLISHER_INTERVAL_MS` optionally changes the two-second tick interval. `LOG_LEVEL`, `DB_PASSWORD`, and `DB_SSL` have the same behavior as the worker. The publisher has its own image, ECS service, task role, execution role, and outbound-only security group. It does not receive KB, model, E2B, artifact, or Redis authority.
 
 ## Agent worker
 

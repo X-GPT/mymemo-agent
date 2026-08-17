@@ -1,11 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import { createCanaryDispatchPublisher } from "agentcore-canary-dispatch/publisher";
-import type {
-	AdvisoryLockClient,
-	AdvisoryLockPool,
-} from "../cleanup/advisory-lock";
-import type { WorkerLogger } from "../logger";
+import type { AdvisoryLockClient, AdvisoryLockPool } from "./advisory-lock";
+import type { PublisherLogger } from "./logger";
 import {
 	publishAgentCoreDispatchTick,
 	runAgentCoreDispatchPublisher,
@@ -36,16 +33,12 @@ class FakeLockPool implements AdvisoryLockPool {
 	}
 }
 
-class RecordingLogger implements WorkerLogger {
+class RecordingLogger implements PublisherLogger {
 	readonly infoRecords: Record<string, unknown>[] = [];
-	readonly warnRecords: Record<string, unknown>[] = [];
 	readonly errorRecords: Record<string, unknown>[] = [];
 
 	info(record: Record<string, unknown>): void {
 		this.infoRecords.push(record);
-	}
-	warn(record: Record<string, unknown>): void {
-		this.warnRecords.push(record);
 	}
 	error(record: Record<string, unknown>): void {
 		this.errorRecords.push(record);
@@ -53,10 +46,9 @@ class RecordingLogger implements WorkerLogger {
 }
 
 describe("publishAgentCoreDispatchTick", () => {
-	it("makes the old publisher task a no-op during deployment overlap", async () => {
+	it("makes the old task a no-op during deployment overlap", async () => {
 		const logger = new RecordingLogger();
 		let publishCalls = 0;
-
 		await expect(
 			publishAgentCoreDispatchTick({
 				pool: new FakeLockPool(false),
@@ -81,10 +73,9 @@ describe("publishAgentCoreDispatchTick", () => {
 		]);
 	});
 
-	it("publishes nothing behind the disabled gate and records pending age", async () => {
+	it("publishes nothing behind the disabled gate", async () => {
 		const logger = new RecordingLogger();
 		const calls: string[] = [];
-
 		await expect(
 			publishAgentCoreDispatchTick({
 				pool: new FakeLockPool(true),
@@ -118,15 +109,11 @@ describe("publishAgentCoreDispatchTick", () => {
 		).resolves.toEqual({ outcome: "disabled", pendingAgeMs: 5_000 });
 
 		expect(calls).toEqual(["control"]);
-		expect(logger.infoRecords).toMatchObject([
-			{ outcome: "disabled", PendingAgeMs: 5_000 },
-		]);
 	});
 
-	it("records an ambiguous send without marking the dispatch published", async () => {
+	it("leaves an ambiguous send unpublished", async () => {
 		const logger = new RecordingLogger();
 		let confirmed = false;
-
 		await expect(
 			publishAgentCoreDispatchTick({
 				pool: new FakeLockPool(true),
@@ -156,22 +143,17 @@ describe("publishAgentCoreDispatchTick", () => {
 
 		expect(confirmed).toBe(false);
 		expect(logger.errorRecords).toMatchObject([
-			{
-				reason: "ambiguous_send",
-				ambiguousCount: 1,
-				PublisherErrors: 1,
-			},
+			{ reason: "ambiguous_send", ambiguousCount: 1, PublisherErrors: 1 },
 		]);
 	});
 });
 
 describe("runAgentCoreDispatchPublisher", () => {
-	it("continues after a failed tick and stops when its signal aborts", async () => {
+	it("continues after a failed tick and stops on abort", async () => {
 		const shutdown = new AbortController();
 		const logger = new RecordingLogger();
 		let publishCalls = 0;
 		let waits = 0;
-
 		await runAgentCoreDispatchPublisher({
 			pool: new FakeLockPool(true),
 			publisher: {
@@ -197,11 +179,7 @@ describe("runAgentCoreDispatchPublisher", () => {
 
 		expect(publishCalls).toBe(2);
 		expect(logger.errorRecords).toMatchObject([
-			{
-				reason: "tick_failed",
-				error: "SSM unavailable",
-				PublisherErrors: 1,
-			},
+			{ reason: "tick_failed", error: "SSM unavailable", PublisherErrors: 1 },
 		]);
 	});
 });

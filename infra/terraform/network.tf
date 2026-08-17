@@ -34,6 +34,20 @@ resource "aws_security_group" "services" {
   }
 }
 
+resource "aws_security_group" "agentcore_dispatch_publisher" {
+  name        = "${local.common_name}-agentcore-dispatch-publisher"
+  description = "Outbound-only AgentCore dispatch publisher"
+  vpc_id      = local.shared_vpc_id
+
+  egress {
+    description = "Postgres, SSM, SQS, KMS, ECR, and CloudWatch Logs"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
 resource "aws_security_group_rule" "chat_api_from_alb" {
   type                     = "ingress"
   description              = "Agent ALB to chat-api"

@@ -27,9 +27,6 @@ LABEL com.mymemo.agent-worker.execution-runtime-aware="true"
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agent-worker/src apps/agent-worker/src
 COPY apps/agent-worker/package.json apps/agent-worker/tsconfig.json apps/agent-worker/
-# The image also serves the dedicated AgentCore publisher task. Keep the shared
-# dispatch workspace source behind its production symlink.
-COPY apps/agentcore-canary-dispatch apps/agentcore-canary-dispatch
 # The shared writable-DB data layer (schema, client, run-store helpers). Its src
 # must be present so the worker's `@mymemo/agent-db` imports resolve through the
 # workspace symlink in node_modules.
@@ -45,4 +42,4 @@ RUN mkdir -p /workspace/conversations \
 WORKDIR /usr/src/app/apps/agent-worker
 USER bun
 EXPOSE 8080/tcp
-CMD [ "bun", "run", "src/index.ts" ]
+ENTRYPOINT [ "bun", "run", "src/index.ts" ]

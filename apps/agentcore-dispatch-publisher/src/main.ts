@@ -1,7 +1,7 @@
 import { createDatabase } from "@mymemo/agent-db/client";
-import type { AdvisoryLockPool } from "../cleanup/advisory-lock";
-import { loadAgentCoreDispatchPublisherConfigFromEnv } from "../config/env";
-import { createLogger } from "../logger";
+import type { AdvisoryLockPool } from "./advisory-lock";
+import { loadAgentCoreDispatchPublisherConfigFromEnv } from "./config";
+import { createLogger } from "./logger";
 import { createProductionAgentCoreDispatchPublisher } from "./production";
 import { runAgentCoreDispatchPublisher } from "./publisher-loop";
 

@@ -9,7 +9,7 @@ load_deploy_config
 usage() {
   cat >&2 <<'USAGE'
 Usage:
-  scripts/deploy/build_and_push_agent_image.sh <chat-api|agent-worker>
+  scripts/deploy/build_and_push_agent_image.sh <chat-api|agent-worker|agentcore-dispatch-publisher>
 
 Required env:
   AWS_REGION
@@ -32,6 +32,10 @@ case "$service" in
     dockerfile="apps/agent-worker/Dockerfile"
     output_name="agent_worker_ecr_repository_url"
     ;;
+  agentcore-dispatch-publisher)
+    dockerfile="apps/agentcore-dispatch-publisher/Dockerfile"
+    output_name="agentcore_dispatch_publisher_ecr_repository_url"
+    ;;
   *)
     usage
     exit 2
@@ -51,6 +55,8 @@ aws ecr get-login-password --region "$AWS_REGION" \
 docker build --platform linux/amd64 -f "$dockerfile" -t "$image" .
 if [[ "$service" == "agent-worker" ]]; then
   "$script_dir/../smoke/agent-worker-image-check.sh" "$image"
+elif [[ "$service" == "agentcore-dispatch-publisher" ]]; then
+  "$script_dir/../smoke/agentcore-dispatch-publisher-image-check.sh" "$image"
 fi
 docker push "$image"
 

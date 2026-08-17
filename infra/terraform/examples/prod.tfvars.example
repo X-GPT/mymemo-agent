@@ -21,11 +21,13 @@ kb_database_security_group_id = "sg-REPLACE_WITH_KB_DATABASE_SG"
 # path, so public IP assignment is an inherited network constraint.
 assign_public_ip = true
 
-chat_api_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-chat-api:REPLACE_WITH_GIT_SHA"
-agent_worker_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-worker:REPLACE_WITH_GIT_SHA"
+chat_api_image                         = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-chat-api:REPLACE_WITH_GIT_SHA"
+agent_worker_image                     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-worker:REPLACE_WITH_GIT_SHA"
+agentcore_dispatch_publisher_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agentcore-dispatch-publisher:REPLACE_WITH_GIT_SHA"
 
-chat_api_desired_count     = 1
-agent_worker_desired_count = 1
+chat_api_desired_count                        = 1
+agent_worker_desired_count                    = 1
+agentcore_dispatch_publisher_desired_count    = 1
 
 e2b_template                        = "sandbox-template-prod"
 worker_e2b_template                 = "mymemo-agent-sandbox"

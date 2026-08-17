@@ -4,9 +4,26 @@ locals {
   service_security_group_name = "${local.common_name}-services"
   alb_security_group_name     = "${local.common_name}-alb"
 
-  chat_api_name     = "${local.common_name}-chat-api"
-  agent_worker_name = "${local.common_name}-worker"
-  alb_name          = "${local.common_name}-alb"
+  chat_api_name                     = "${local.common_name}-chat-api"
+  agent_worker_name                 = "${local.common_name}-worker"
+  agentcore_dispatch_publisher_name = "${local.common_name}-agentcore-dispatch-publisher"
+  alb_name                          = "${local.common_name}-alb"
+
+  agentcore_dispatch_queue_name = coalesce(
+    var.agentcore_dispatch_queue_name,
+    "mymemo-agent-agentcore-canary-${var.environment}-dispatch",
+  )
+  agentcore_dispatch_enabled_parameter_name = coalesce(
+    var.agentcore_dispatch_enabled_parameter_name,
+    "/mymemo/agentcore-canary/${var.environment}/enabled",
+  )
+  agentcore_dispatch_queue_kms_alias_name = coalesce(
+    var.agentcore_dispatch_queue_kms_alias_name,
+    "alias/mymemo-agent-agentcore-canary-${var.environment}",
+  )
+  agentcore_dispatch_queue_url             = "https://sqs.${var.aws_region}.amazonaws.com/${data.aws_caller_identity.current.account_id}/${local.agentcore_dispatch_queue_name}"
+  agentcore_dispatch_queue_arn             = "arn:${data.aws_partition.current.partition}:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.agentcore_dispatch_queue_name}"
+  agentcore_dispatch_enabled_parameter_arn = "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.agentcore_dispatch_enabled_parameter_name}"
 
   shared_service_outputs = data.terraform_remote_state.mymemo_service.outputs
 
@@ -95,4 +112,15 @@ locals {
     { name = "OPENROUTER_API_KEY", valueFrom = local.openrouter_api_key_secret_arn },
     { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
   ], local.live_redis_url_secret, local.agent_db_password_secret)
+
+  agentcore_dispatch_publisher_environment = concat([
+    { name = "AWS_REGION", value = var.aws_region },
+    { name = "CANARY_DISPATCH_QUEUE_URL", value = local.agentcore_dispatch_queue_url },
+    { name = "CANARY_ENABLED_PARAMETER_NAME", value = local.agentcore_dispatch_enabled_parameter_name },
+    { name = "AGENTCORE_DISPATCH_PUBLISHER_INTERVAL_MS", value = tostring(var.agentcore_dispatch_publisher_interval_ms) },
+    { name = "LOG_LEVEL", value = var.log_level },
+    { name = "DB_SSL", value = var.db_ssl },
+  ], local.agent_database_url_environment)
+
+  agentcore_dispatch_publisher_secrets = local.agent_db_password_secret
 }

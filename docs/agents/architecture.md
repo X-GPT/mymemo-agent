@@ -8,7 +8,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | --- | --- |
 | `apps/chat-api` | Creates and manages Conversations, admits Runs idempotently, attaches clients to Live Streams, projects permanent history, and lists or signs current Downloadable artifacts. |
 | `apps/agent-worker` | Trusted Fargate execution runtime. Claims Conversations, serves their Runs in submission order, calls the Claude Agent SDK through OpenRouter, accesses scoped Searchable documents, delegates untrusted file and shell work to E2B, and publishes artifacts. |
-| `apps/agent-worker/src/agentcore-dispatch/main.ts` | Dedicated AgentCore Dispatch publication process. Runs as one ECS task, separate from Conversation-serving workers. |
+| `apps/agentcore-dispatch-publisher` | Dedicated AgentCore Dispatch publication app. Runs as one ECS task, separate from Conversation-serving workers. |
 | `apps/agentcore-canary-dispatch` | Production-shaped AgentCore dispatch boundary: transactional outbox publication, strict content-free SQS envelopes, exact acquisition, manual replay, and partial-batch acknowledgement. Its boundary ends after the exact Run reaches `running`. |
 | `apps/agentcore-canary-runtime` | Linux ARM64 AgentCore Runtime exposing `/ping` and `/invocations`. It serves one acquired canary Run and delegates the already-running Run to shared Run-serving behavior. It does not run Fargate Claim, drain, expiration, Reclamation, or cleanup loops. |
 | `packages/agent-db` | Shared writable `mymemo_agent` data layer: schema, migrations, Run and Conversation Ownership transactions, runtime pointers, session transcripts, artifact metadata, and PGlite test support. |
@@ -44,7 +44,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/chat-api/src/features/conversation-runtime-store/` | Thin re-export of shared fenced Workspace, taint, and Agent session runtime persistence |
 | `apps/chat-api/src/db/` | Thin bindings to `@mymemo/agent-db` and the shared migration runner |
 | `apps/agent-worker/src/run-loop.ts` | Fargate-only Claim, ordering, expiration, Reclamation, and release control plane |
-| `apps/agent-worker/src/agentcore-dispatch/` | Dedicated AgentCore Dispatch publication entrypoint, loop, and production adapters |
+| `apps/agentcore-dispatch-publisher/src/` | Dedicated AgentCore Dispatch publication entrypoint, loop, and production adapters |
 | `apps/agent-worker/src/run-serving.ts` | Shared serving behavior for an already-running Run |
 | `apps/agent-worker/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |
 | `apps/agent-worker/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |

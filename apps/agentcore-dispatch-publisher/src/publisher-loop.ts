@@ -1,12 +1,9 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CanaryPublishResult } from "agentcore-canary-dispatch/publisher";
-import {
-	type AdvisoryLockPool,
-	tryWithAdvisoryLock,
-} from "../cleanup/advisory-lock";
-import { toMessage, type WorkerLogger } from "../logger";
+import { type AdvisoryLockPool, tryWithAdvisoryLock } from "./advisory-lock";
+import { type PublisherLogger, toMessage } from "./logger";
 
-export const AGENTCORE_DISPATCH_PUBLISHER_ADVISORY_LOCK_KEY = 8_242_869_154_306_403;
+export const PUBLISHER_ADVISORY_LOCK_KEY = 8_242_869_154_306_403;
 
 export interface AgentCoreDispatchPublisher {
 	publishPending(): Promise<CanaryPublishResult>;
@@ -16,26 +13,25 @@ export interface AgentCoreDispatchPendingStore {
 	oldestUnpublishedAdmittedAt(): Promise<Date | null>;
 }
 
-interface AgentCoreDispatchPublisherTickOptions {
+interface PublisherTickOptions {
 	pool: AdvisoryLockPool;
 	publisher: AgentCoreDispatchPublisher;
 	pendingStore: AgentCoreDispatchPendingStore;
 	now?: () => Date;
-	logger: WorkerLogger;
+	logger: PublisherLogger;
 }
 
-interface AgentCoreDispatchPublisherOptions
-	extends AgentCoreDispatchPublisherTickOptions {
+interface PublisherLoopOptions extends PublisherTickOptions {
 	intervalMs: number;
 	signal: AbortSignal;
 	wait?: (intervalMs: number, signal: AbortSignal) => Promise<void>;
 }
 
-export type AgentCoreDispatchPublisherTickResult =
+export type PublisherTickResult =
 	| { outcome: "published" | "disabled" | "error"; pendingAgeMs: number }
 	| { outcome: "lost_lock" };
 
-function recordLostLock(logger: WorkerLogger): void {
+function recordLostLock(logger: PublisherLogger): void {
 	logger.info({
 		message: "AgentCore dispatch publisher metric",
 		outcome: "lost_lock",
@@ -54,7 +50,7 @@ function recordLostLock(logger: WorkerLogger): void {
 }
 
 function recordPendingAge(
-	logger: WorkerLogger,
+	logger: PublisherLogger,
 	outcome: "published" | "disabled",
 	pendingAgeMs: number,
 ): void {
@@ -76,7 +72,7 @@ function recordPendingAge(
 }
 
 function recordPublisherError(
-	logger: WorkerLogger,
+	logger: PublisherLogger,
 	pendingAgeMs: number,
 	reason: "ambiguous_send" | "tick_failed",
 	details: Record<string, unknown>,
@@ -104,15 +100,15 @@ function recordPublisherError(
 	});
 }
 
-/** Publish one bounded batch while this task owns the deployment-overlap lock. */
+/** Publish one batch while this task owns the deployment-overlap lock. */
 export async function publishAgentCoreDispatchTick(
-	options: AgentCoreDispatchPublisherTickOptions,
-): Promise<AgentCoreDispatchPublisherTickResult> {
+	options: PublisherTickOptions,
+): Promise<PublisherTickResult> {
 	const now = options.now ?? (() => new Date());
 	let pendingAgeMs = 0;
 	const locked = await tryWithAdvisoryLock(
 		options.pool,
-		AGENTCORE_DISPATCH_PUBLISHER_ADVISORY_LOCK_KEY,
+		PUBLISHER_ADVISORY_LOCK_KEY,
 		async () => {
 			const oldest = await options.pendingStore.oldestUnpublishedAdmittedAt();
 			pendingAgeMs = oldest
@@ -150,9 +146,9 @@ async function waitForNextTick(
 	}
 }
 
-/** Run the dedicated publisher task until its shutdown signal aborts. */
+/** Run until ECS sends SIGTERM or SIGINT. */
 export async function runAgentCoreDispatchPublisher(
-	options: AgentCoreDispatchPublisherOptions,
+	options: PublisherLoopOptions,
 ): Promise<void> {
 	const wait = options.wait ?? waitForNextTick;
 	while (!options.signal.aborted) {

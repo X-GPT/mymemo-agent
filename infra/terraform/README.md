@@ -24,17 +24,20 @@ the direct remote-state output is absent and the fallback input is present.
 
 ## Agent-Owned Resources
 
-- ECR repositories for `mymemo-agent-chat-api` and `mymemo-agent-worker` in the
-  separate `infra/ecr` Terraform root
+- ECR repositories for `mymemo-agent-chat-api`, `mymemo-agent-worker`, and
+  `mymemo-agentcore-dispatch-publisher` in the separate `infra/ecr` Terraform
+  root
 - dedicated RDS Postgres instance for writable agent state
 - EC2 Instance Connect Endpoint and private EC2 bridge for operator access to
   the agent and KB databases
 - single-node ElastiCache Redis replication group for temporary per-Run Live
   Streams
 - private S3 bucket for durable Downloadable artifact objects
-- ECS Fargate task definitions and services for chat-api and agent-worker
+- ECS Fargate task definitions and services for chat-api, agent-worker, and the
+  singleton AgentCore dispatch publisher
 - agent DB migration task definition
-- service security group inside the shared VPC
+- service security groups inside the shared VPC, including an outbound-only
+  publisher group that can reach the agent database but not the KB database
 - internal agent-owned ALB, ALB security group, listeners, and chat-api target group
 - IAM execution/task roles for the agent tasks
 - CloudWatch log groups and baseline alarms
@@ -89,6 +92,12 @@ validates that variable when `SANDBOX_PROVIDER=e2b`. The final split-runtime
 boundary should remove that from chat-api once sandbox creation moves fully to
 `agent-worker`.
 
+The AgentCore dispatch publisher receives only `AGENT_DATABASE_URL`, the RDS
+password secret, its SQS queue URL, and its fail-closed SSM gate name. Its task
+role can read that parameter and publish to the exact encrypted queue. Its
+separate execution role can read only the RDS password secret; it receives no
+KB, OpenRouter, E2B, artifact, or Redis credentials.
+
 ## Redis Live Stream Infrastructure
 
 The Redis cache is an ephemeral pub/sub relay for AG-UI Live Streams, not a
@@ -135,8 +144,8 @@ Terraform-owned production inputs live in checked-in
 `infra/terraform/prod.tfvars`. The GitHub Actions workflow sources
 `infra/deploy/prod.env` for CI/deploy settings such as AWS region, AWS account,
 and smoke-test inputs, then generates `infra/terraform/generated.auto.tfvars`
-with release-specific Terraform values: AWS region and immutable image URIs. The
-plan step uses both:
+with release-specific Terraform values: AWS region and the three immutable image
+URIs. The plan step uses both:
 
 ```sh
 terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars
@@ -149,9 +158,9 @@ ECS service `task_definition` changes are intentionally ignored by Terraform.
 `terraform apply` registers the new task definitions and updates infrastructure,
 but it does not roll existing running services onto the new image. For the first
 deploy only, the workflow detects that the ECS services are absent and applies a
-bootstrap plan with both service desired counts forced to `0`; that creates the
-RDS instance, task definitions, ALB, and ECS service shells without starting app
-containers. It then runs the agent database migration task, applies the normal
+bootstrap plan with all three service desired counts forced to `0`; that creates
+the RDS instance, task definitions, ALB, and ECS service shells without starting
+app containers. It then runs the agent database migration task, applies the normal
 desired counts from `prod.tfvars`, and calls `roll_ecs_services.sh` to wait for
 stability. Later deploys apply the new task definitions first, run migrations,
 then roll the existing services. This keeps schema-dependent images from

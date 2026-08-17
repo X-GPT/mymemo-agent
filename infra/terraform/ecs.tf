@@ -82,6 +82,35 @@ resource "aws_ecs_task_definition" "agent_worker" {
   ])
 }
 
+resource "aws_ecs_task_definition" "agentcore_dispatch_publisher" {
+  family                   = local.agentcore_dispatch_publisher_name
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.agentcore_dispatch_publisher_cpu
+  memory                   = var.agentcore_dispatch_publisher_memory
+  execution_role_arn       = aws_iam_role.agentcore_dispatch_publisher_execution.arn
+  task_role_arn            = aws_iam_role.agentcore_dispatch_publisher_task.arn
+
+  container_definitions = jsonencode([
+    {
+      name        = "agentcore-dispatch-publisher"
+      image       = var.agentcore_dispatch_publisher_image
+      essential   = true
+      stopTimeout = 30
+      environment = local.agentcore_dispatch_publisher_environment
+      secrets     = local.agentcore_dispatch_publisher_secrets
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.agentcore_dispatch_publisher.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "agentcore-dispatch-publisher"
+        }
+      }
+    }
+  ])
+}
+
 resource "aws_ecs_task_definition" "agent_migration" {
   family                   = "${local.common_name}-migration"
   requires_compatibilities = ["FARGATE"]
@@ -148,6 +177,24 @@ resource "aws_ecs_service" "agent_worker" {
   network_configuration {
     subnets          = local.shared_ecs_subnet_ids
     security_groups  = [aws_security_group.services.id, aws_security_group.live_redis_clients.id]
+    assign_public_ip = var.assign_public_ip
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+}
+
+resource "aws_ecs_service" "agentcore_dispatch_publisher" {
+  name            = local.agentcore_dispatch_publisher_name
+  cluster         = local.shared_ecs_cluster_arn
+  task_definition = aws_ecs_task_definition.agentcore_dispatch_publisher.arn
+  desired_count   = var.agentcore_dispatch_publisher_desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = local.shared_ecs_subnet_ids
+    security_groups  = [aws_security_group.agentcore_dispatch_publisher.id]
     assign_public_ip = var.assign_public_ip
   }
 
