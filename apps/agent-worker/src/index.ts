@@ -1,7 +1,11 @@
+import { createProductionAgentCoreDispatchPublisherLoop } from "./agentcore-dispatch/production";
 import type { AdvisoryLockPool } from "./cleanup/advisory-lock";
 import { CleanupLoop } from "./cleanup/cleanup-loop";
 import { createS3ArtifactObjectJanitor } from "./cleanup/s3-artifact-janitor";
-import { loadWorkerConfigFromEnv } from "./config/env";
+import {
+	loadAgentCoreDispatchPublisherConfigFromEnv,
+	loadWorkerConfigFromEnv,
+} from "./config/env";
 import { startHealthServer } from "./health";
 import { createLogger } from "./logger";
 import { createProductionRunResources } from "./production-run-resources";
@@ -15,6 +19,9 @@ import { generateWorkerId } from "./worker-id";
 // Postgres-backed Claim/renew/terminalize loop, the real Claude Agent SDK
 // processor over E2B, and graceful shutdown.
 const config = loadWorkerConfigFromEnv(Bun.env);
+const agentCoreDispatchConfig = loadAgentCoreDispatchPublisherConfigFromEnv(
+	Bun.env,
+);
 const logger = createLogger(config.logLevel);
 const workerId = generateWorkerId();
 const worker = new Worker({
@@ -54,10 +61,20 @@ const cleanupLoop = new CleanupLoop({
 	intervalMs: config.cleanup.intervalMs,
 	logger,
 });
+const agentCoreDispatchPublisherLoop =
+	createProductionAgentCoreDispatchPublisherLoop({
+		db,
+		pool: db.$client as unknown as AdvisoryLockPool,
+		workerId,
+		awsRegion: config.artifact.region,
+		config: agentCoreDispatchConfig,
+		logger,
+	});
 const server = startHealthServer(worker, config.port, logger);
 
 runLoop.start();
 cleanupLoop.start();
+agentCoreDispatchPublisherLoop.start();
 
 logger.info({
 	message: "agent-worker started",
@@ -72,7 +89,7 @@ async function handleShutdownSignal(signal: NodeJS.Signals): Promise<void> {
 	shuttingDown = true;
 	logger.info({ message: "Received shutdown signal", signal, workerId });
 	cleanupLoop.stop();
-	await runLoop.stop();
+	await Promise.all([runLoop.stop(), agentCoreDispatchPublisherLoop.stop()]);
 	await liveStreamRelay.close().catch(() => {});
 	server.stop();
 	logger.info({ message: "agent-worker stopped", workerId });

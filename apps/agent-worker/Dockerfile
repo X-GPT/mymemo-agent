@@ -27,6 +27,9 @@ LABEL com.mymemo.agent-worker.execution-runtime-aware="true"
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agent-worker/src apps/agent-worker/src
 COPY apps/agent-worker/package.json apps/agent-worker/tsconfig.json apps/agent-worker/
+# The worker hosts the shared AgentCore outbox publisher and its strict SQS/SSM
+# adapters; keep the dispatch workspace source behind its production symlink.
+COPY apps/agentcore-canary-dispatch apps/agentcore-canary-dispatch
 # The shared writable-DB data layer (schema, client, run-store helpers). Its src
 # must be present so the worker's `@mymemo/agent-db` imports resolve through the
 # workspace symlink in node_modules.

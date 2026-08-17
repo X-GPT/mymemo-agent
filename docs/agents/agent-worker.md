@@ -42,6 +42,12 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 
 `src/index.ts` resolves and verifies the SDK CLI before claiming work, creates the per-Conversation Fargate query directory, and wires the real SDK processor. When a Run ends with an `error` Outcome, persist only a generic client-facing message and keep internal details in trusted-worker logs.
 
+## AgentCore dispatch publication
+
+`src/agentcore-dispatch/publisher-loop.ts` owns the worker-embedded publisher from ADR-0026. Every worker replica ticks on the configured interval, but one tick-scoped session advisory lock admits only one publisher. The holder checks the fail-closed SSM gate, claims a bounded outbox batch, sends strict envelopes to SQS, and confirms successful sends before releasing the lock. A losing replica records `lost_lock`; failures stay isolated to the loop; shutdown waits for an in-flight tick to release its database connection.
+
+The loop emits CloudWatch embedded metrics for lost locks, errors, and the oldest unpublished admission age. It does not publish from Run admission and does not delete outbox audit rows.
+
 ## Searchable documents and Downloadable artifacts
 
 The scoped Searchable document client exposes `ListDocuments`, `SearchDocuments`, and `LoadDocuments`. Loading writes scope-checked, byte-capped Searchable document content into `.mymemo/docs/` and returns only `{ documentId, title, path, truncated }`; Searchable document bodies must not enter Run events. See [ADR-0004](../adr/0004-documents-as-files-conversation-cache.md).

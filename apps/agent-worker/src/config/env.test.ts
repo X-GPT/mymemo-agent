@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { loadWorkerConfigFromEnv } from "./env";
+import {
+	loadAgentCoreDispatchPublisherConfigFromEnv,
+	loadWorkerConfigFromEnv,
+} from "./env";
 
 /**
  * Worker env ownership (MYM-47 / MYM-45 boundary). `agent-worker` owns the
@@ -18,6 +21,9 @@ function baseEnv(): Record<string, string | undefined> {
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 		ARTIFACT_BUCKET: "private-artifacts",
 		AWS_REGION: "us-west-2",
+		CANARY_DISPATCH_QUEUE_URL:
+			"https://sqs.us-west-2.amazonaws.com/123/agentcore-dispatch",
+		CANARY_ENABLED_PARAMETER_NAME: "/mymemo/agentcore-dispatch/enabled",
 		DB_SSL: "disable",
 	};
 }
@@ -181,6 +187,47 @@ describe("loadWorkerConfigFromEnv — cleanup loop", () => {
 			/WORKER_CLEANUP_INTERVAL_MS/,
 		);
 	});
+});
+
+describe("loadWorkerConfigFromEnv — AgentCore dispatch publisher", () => {
+	it("loads queue and gate authority with a two-second tick", () => {
+		expect(loadAgentCoreDispatchPublisherConfigFromEnv(baseEnv())).toEqual({
+			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/agentcore-dispatch",
+			enabledParameterName: "/mymemo/agentcore-dispatch/enabled",
+			intervalMs: 2_000,
+		});
+	});
+
+	it("honors the configured tick interval", () => {
+		const env = baseEnv();
+		env.WORKER_AGENTCORE_DISPATCH_INTERVAL_MS = "1500";
+
+		expect(loadAgentCoreDispatchPublisherConfigFromEnv(env).intervalMs).toBe(
+			1_500,
+		);
+	});
+
+	it("rejects a non-positive tick interval", () => {
+		const env = baseEnv();
+		env.WORKER_AGENTCORE_DISPATCH_INTERVAL_MS = "0";
+
+		expect(() => loadAgentCoreDispatchPublisherConfigFromEnv(env)).toThrow(
+			/WORKER_AGENTCORE_DISPATCH_INTERVAL_MS/,
+		);
+	});
+
+	for (const key of [
+		"CANARY_DISPATCH_QUEUE_URL",
+		"CANARY_ENABLED_PARAMETER_NAME",
+	]) {
+		it(`refuses to start the publisher without ${key}`, () => {
+			const env = baseEnv();
+			delete env[key];
+			expect(() => loadAgentCoreDispatchPublisherConfigFromEnv(env)).toThrow(
+				new RegExp(key),
+			);
+		});
+	}
 });
 
 describe("loadWorkerConfigFromEnv — LoadDocuments caps", () => {

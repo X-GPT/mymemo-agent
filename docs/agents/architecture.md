@@ -43,6 +43,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/chat-api/src/features/conversation-runtime-store/` | Thin re-export of shared fenced Workspace, taint, and Agent session runtime persistence |
 | `apps/chat-api/src/db/` | Thin bindings to `@mymemo/agent-db` and the shared migration runner |
 | `apps/agent-worker/src/run-loop.ts` | Fargate-only Claim, ordering, expiration, Reclamation, and release control plane |
+| `apps/agent-worker/src/agentcore-dispatch/publisher-loop.ts` | Tick-scoped advisory-locked AgentCore outbox publication |
 | `apps/agent-worker/src/run-serving.ts` | Shared serving behavior for an already-running Run |
 | `apps/agent-worker/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |
 | `apps/agent-worker/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |

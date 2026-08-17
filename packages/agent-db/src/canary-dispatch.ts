@@ -72,6 +72,19 @@ export async function recordAgentCoreDispatchInTx(
 	});
 }
 
+/** Oldest still-unpublished admission, used for the publisher pending-age metric. */
+export async function loadOldestUnpublishedAgentCoreDispatchAdmittedAt(
+	db: Database,
+): Promise<Date | null> {
+	const [oldest] = await db
+		.select({ admittedAt: agentCoreDispatchOutbox.admittedAt })
+		.from(agentCoreDispatchOutbox)
+		.where(isNull(agentCoreDispatchOutbox.publishedAt))
+		.orderBy(agentCoreDispatchOutbox.admittedAt, agentCoreDispatchOutbox.runId)
+		.limit(1);
+	return oldest?.admittedAt ?? null;
+}
+
 /**
  * Claim a bounded batch of publishable outbox rows. The row locks and lease
  * update commit before the caller performs any SQS I/O; an unconfirmed send

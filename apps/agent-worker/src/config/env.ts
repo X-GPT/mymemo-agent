@@ -8,6 +8,13 @@ import type { FileToolLimits } from "../file-tools/file-tools";
 /** Subset of the process environment the worker reads. */
 type Env = Record<string, string | undefined>;
 
+/** SQS/SSM authority owned only by the Fargate worker publisher process. */
+export interface AgentCoreDispatchPublisherConfig {
+	queueUrl: string;
+	enabledParameterName: string;
+	intervalMs: number;
+}
+
 /**
  * Assert a config invariant, throwing an Error whose message survives
  * production builds. Deliberately NOT tiny-invariant: that strips the message
@@ -109,6 +116,7 @@ const DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES = 1_048_576;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
+const DEFAULT_AGENTCORE_DISPATCH_INTERVAL_MS = 2_000;
 const DEFAULT_PORT = 8080;
 
 /**
@@ -153,6 +161,29 @@ function positiveIntOr(
 		`${name} must be a positive integer (got: ${raw})`,
 	);
 	return n;
+}
+
+/** Parse the publisher-only authority that AgentCore Runtime must never receive. */
+export function loadAgentCoreDispatchPublisherConfigFromEnv(
+	env: Env,
+): AgentCoreDispatchPublisherConfig {
+	assert(
+		env.CANARY_DISPATCH_QUEUE_URL,
+		"CANARY_DISPATCH_QUEUE_URL is required",
+	);
+	assert(
+		env.CANARY_ENABLED_PARAMETER_NAME,
+		"CANARY_ENABLED_PARAMETER_NAME is required",
+	);
+	return {
+		queueUrl: env.CANARY_DISPATCH_QUEUE_URL,
+		enabledParameterName: env.CANARY_ENABLED_PARAMETER_NAME,
+		intervalMs: positiveIntOr(
+			env.WORKER_AGENTCORE_DISPATCH_INTERVAL_MS,
+			DEFAULT_AGENTCORE_DISPATCH_INTERVAL_MS,
+			"WORKER_AGENTCORE_DISPATCH_INTERVAL_MS",
+		),
+	};
 }
 
 /** Parse + validate the environment into a typed worker config. Pure. */
