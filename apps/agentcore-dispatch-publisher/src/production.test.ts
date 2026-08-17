@@ -20,7 +20,7 @@ describe("drainPendingAgentCoreDispatches", () => {
 
 		await drainPendingAgentCoreDispatches({
 			signal: new AbortController().signal,
-			loadOldestAdmittedAt: async () => null,
+			loadPendingAgeMs: async () => 0,
 			publishBatch: async () => batches[publishCalls++] ?? published(0),
 			recordPublication() {},
 		});
@@ -33,7 +33,7 @@ describe("drainPendingAgentCoreDispatches", () => {
 
 		await drainPendingAgentCoreDispatches({
 			signal: new AbortController().signal,
-			loadOldestAdmittedAt: async () => null,
+			loadPendingAgeMs: async () => 0,
 			publishBatch: async () => {
 				publishCalls += 1;
 				return {
@@ -53,7 +53,7 @@ describe("drainPendingAgentCoreDispatches", () => {
 
 		await drainPendingAgentCoreDispatches({
 			signal: shutdown.signal,
-			loadOldestAdmittedAt: async () => null,
+			loadPendingAgeMs: async () => 0,
 			publishBatch: async () => {
 				publishCalls += 1;
 				shutdown.abort();
@@ -71,9 +71,9 @@ describe("drainPendingAgentCoreDispatches", () => {
 
 		await drainPendingAgentCoreDispatches({
 			signal: shutdown.signal,
-			loadOldestAdmittedAt: async () => {
+			loadPendingAgeMs: async () => {
 				shutdown.abort();
-				return null;
+				return 0;
 			},
 			publishBatch: async () => {
 				publishCalls += 1;
@@ -91,8 +91,7 @@ describe("drainPendingAgentCoreDispatches", () => {
 		try {
 			await drainPendingAgentCoreDispatches({
 				signal: new AbortController().signal,
-				now: () => Date.parse("2026-08-17T20:00:05.000Z"),
-				loadOldestAdmittedAt: async () => new Date("2026-08-17T20:00:00.000Z"),
+				loadPendingAgeMs: async () => 5_000,
 				publishBatch: async () => {
 					throw failure;
 				},

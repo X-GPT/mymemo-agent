@@ -44,6 +44,7 @@ describe("publishAgentCoreDispatchTick", () => {
 				pool: new FakeLockPool(false),
 				publisher: {
 					isEnabled: async () => true,
+					loadPendingAgeMs: async () => 0,
 					async publishPending() {
 						publishCalls += 1;
 					},
@@ -58,9 +59,10 @@ describe("publishAgentCoreDispatchTick", () => {
 		]);
 	});
 
-	it("checks the fail-closed gate before opening a lock connection", async () => {
+	it("records pending age without opening a lock when the gate is disabled", async () => {
 		let connectCalls = 0;
 		let publishCalls = 0;
+		const logger = new RecordingLogger();
 		await expect(
 			publishAgentCoreDispatchTick({
 				pool: {
@@ -71,16 +73,20 @@ describe("publishAgentCoreDispatchTick", () => {
 				},
 				publisher: {
 					isEnabled: async () => false,
+					loadPendingAgeMs: async () => 5_000,
 					publishPending: async () => {
 						publishCalls += 1;
 					},
 				},
-				logger: new RecordingLogger(),
+				logger,
 			}),
 		).resolves.toBeUndefined();
 
 		expect(connectCalls).toBe(0);
 		expect(publishCalls).toBe(0);
+		expect(logger.infoRecords).toMatchObject([
+			{ outcome: "disabled", PendingAgeMs: 5_000 },
+		]);
 	});
 
 	it("publishes once while holding the lock", async () => {
@@ -90,6 +96,7 @@ describe("publishAgentCoreDispatchTick", () => {
 				pool: new FakeLockPool(true),
 				publisher: {
 					isEnabled: async () => true,
+					loadPendingAgeMs: async () => 0,
 					async publishPending() {
 						publishCalls += 1;
 					},
@@ -112,6 +119,7 @@ describe("runAgentCoreDispatchPublisher", () => {
 			pool: new FakeLockPool(true),
 			publisher: {
 				isEnabled: async () => true,
+				loadPendingAgeMs: async () => 0,
 				publishPending: async () => {
 					publishCalls += 1;
 					if (publishCalls === 1) throw new Error("SSM unavailable");
@@ -139,6 +147,7 @@ describe("runAgentCoreDispatchPublisher", () => {
 			pool: new FakeLockPool(true),
 			publisher: {
 				isEnabled: async () => true,
+				loadPendingAgeMs: async () => 5_000,
 				publishPending: async () => {
 					throw new PublisherTickFailure(new Error("SSM unavailable"), 5_000);
 				},

@@ -20,24 +20,21 @@ import { PublisherTickFailure } from "./publisher-tick-failure";
 
 interface DrainPendingOptions {
 	signal: AbortSignal;
-	loadOldestAdmittedAt(): Promise<Date | null>;
+	loadPendingAgeMs(): Promise<number>;
 	publishBatch(): Promise<AgentCoreDispatchPublishResult>;
 	recordPublication(
 		result: AgentCoreDispatchPublishResult,
 		pendingAgeMs: number,
 	): void;
-	now?: () => number;
 }
 
 /** Drain bounded batches without extending a tick after shutdown or uncertainty. */
 export async function drainPendingAgentCoreDispatches(
 	options: DrainPendingOptions,
 ): Promise<void> {
-	const now = options.now ?? Date.now;
 	while (!options.signal.aborted) {
-		const oldest = await options.loadOldestAdmittedAt();
+		const pendingAgeMs = await options.loadPendingAgeMs();
 		if (options.signal.aborted) return;
-		const pendingAgeMs = oldest ? Math.max(0, now() - oldest.getTime()) : 0;
 		try {
 			const result = await options.publishBatch();
 			options.recordPublication(result, pendingAgeMs);
@@ -78,14 +75,20 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 			queueUrl: options.config.queueUrl,
 		}),
 	});
+	const loadPendingAgeMs = async (): Promise<number> => {
+		const oldest = await loadOldestUnpublishedAgentCoreDispatchAdmittedAt(
+			options.db,
+		);
+		return oldest ? Math.max(0, Date.now() - oldest.getTime()) : 0;
+	};
 
 	return {
 		isEnabled: () => control.isEnabled(),
+		loadPendingAgeMs,
 		async publishPending(): Promise<void> {
 			await drainPendingAgentCoreDispatches({
 				signal: options.signal,
-				loadOldestAdmittedAt: () =>
-					loadOldestUnpublishedAgentCoreDispatchAdmittedAt(options.db),
+				loadPendingAgeMs,
 				publishBatch: () => publisher.publishPending(),
 				recordPublication: (result, pendingAgeMs) =>
 					recordPublisherPublication(options.logger, result, pendingAgeMs),

@@ -38,6 +38,7 @@ function runTick(options: {
 		pool: options.pool ?? pool,
 		publisher: {
 			isEnabled: async () => true,
+			loadPendingAgeMs: async () => 0,
 			publishPending: options.publishPending,
 		},
 		logger: silentLogger,
