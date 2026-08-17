@@ -9,20 +9,17 @@ import {
 } from "agentcore-canary-dispatch/aws-adapters";
 import { createCanaryDispatchPublisher } from "agentcore-canary-dispatch/publisher";
 import type { AgentCoreDispatchPublisherConfig } from "./config";
-import type {
-	AgentCoreDispatchPendingStore,
-	AgentCoreDispatchPublisher,
-} from "./publisher-loop";
+import type { PublisherLogger } from "./logger";
+import type { AgentCoreDispatchPublisher } from "./publisher-loop";
+import { recordPublisherPublication } from "./publisher-metrics";
 
 /** Bind the process to its SSM, SQS, and Postgres adapters. */
 export function createProductionAgentCoreDispatchPublisher(options: {
 	db: Database;
 	publisherId: string;
 	config: AgentCoreDispatchPublisherConfig;
-}): {
-	publisher: AgentCoreDispatchPublisher;
-	pendingStore: AgentCoreDispatchPendingStore;
-} {
+	logger: PublisherLogger;
+}): AgentCoreDispatchPublisher {
 	const control = createSsmCanaryEnablementControl({
 		client: new SSMClient({ region: options.config.awsRegion }),
 		parameterName: options.config.enabledParameterName,
@@ -38,10 +35,15 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 	});
 
 	return {
-		publisher,
-		pendingStore: {
-			oldestUnpublishedAdmittedAt: async () =>
-				await loadOldestUnpublishedAgentCoreDispatchAdmittedAt(options.db),
+		async publishPending(): Promise<void> {
+			const oldest = await loadOldestUnpublishedAgentCoreDispatchAdmittedAt(
+				options.db,
+			);
+			const pendingAgeMs = oldest
+				? Math.max(0, Date.now() - oldest.getTime())
+				: 0;
+			const result = await publisher.publishPending();
+			recordPublisherPublication(options.logger, result, pendingAgeMs);
 		},
 	};
 }

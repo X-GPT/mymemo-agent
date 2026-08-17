@@ -30,10 +30,14 @@ describe("AgentCore dispatch publisher deployment", () => {
 		expect(workerPackage).not.toContain("@aws-sdk/client-sqs");
 		expect(workerPackage).not.toContain("@aws-sdk/client-ssm");
 		expect(workerDockerfile).not.toContain("apps/agentcore-canary-dispatch");
-		expect(publisherLoop).toContain(
-			"export interface AgentCoreDispatchPublishResult",
+		expect(workerDockerfile).toContain(
+			"The worker runs `src/index.ts` directly",
 		);
 		expect(publisherLoop).not.toContain("CanaryPublishResult");
+		expect(publisherLoop).not.toContain("AgentCoreDispatchPublishResult");
+		expect(publisherLoop).not.toContain("AgentCoreDispatchPendingStore");
+		expect(publisherLoop).not.toContain("PublisherTickResult");
+		expect(publisherLoop).not.toContain("CloudWatchMetrics");
 	});
 
 	it("builds and publishes an independent image", () => {
@@ -41,6 +45,11 @@ describe("AgentCore dispatch publisher deployment", () => {
 		const ecrOutputs = read("infra", "ecr", "outputs.tf");
 		const build = read("scripts", "deploy", "build_and_push_agent_image.sh");
 		const release = read(".github", "workflows", "release-deploy.yml");
+		const imageWorkflow = read(
+			".github",
+			"workflows",
+			"agentcore-dispatch-publisher-image.yml",
+		);
 		const dockerfile = read(
 			"apps",
 			"agentcore-dispatch-publisher",
@@ -67,6 +76,11 @@ describe("AgentCore dispatch publisher deployment", () => {
 		expect(dockerfile).toContain(
 			"bun install --frozen-lockfile --production --filter agentcore-dispatch-publisher",
 		);
+		expect(imageWorkflow).toMatch(
+			/group: agentcore-dispatch-publisher-image-\$\{\{ github\.ref \}\}/,
+		);
+		expect(imageWorkflow).toContain("cancel-in-progress: true");
+		expect(imageWorkflow).not.toMatch(/\n {2}push:/);
 	});
 
 	it("runs one publisher task with only database and dispatch authority", () => {

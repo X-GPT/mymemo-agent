@@ -20,14 +20,6 @@ if (shouldRun) setDefaultTimeout(30_000);
 const silentLogger: PublisherLogger = { info() {}, error() {} };
 let pool: Pool;
 
-function publication() {
-	return {
-		status: "enabled" as const,
-		publishedRunIds: ["run-481"],
-		ambiguousRunIds: [],
-	};
-}
-
 function deferred() {
 	let resolve!: () => void;
 	return {
@@ -40,12 +32,11 @@ function deferred() {
 
 function runTick(options: {
 	pool?: AdvisoryLockPool;
-	publishPending(): Promise<ReturnType<typeof publication>>;
+	publishPending(): Promise<void>;
 }) {
 	return publishAgentCoreDispatchTick({
 		pool: options.pool ?? pool,
 		publisher: { publishPending: options.publishPending },
-		pendingStore: { oldestUnpublishedAdmittedAt: async () => null },
 		logger: silentLogger,
 	});
 }
@@ -80,7 +71,6 @@ describe.skipIf(!shouldRun)("publisher lock against real Postgres", () => {
 				firstCalls += 1;
 				entered.resolve();
 				await finish.promise;
-				return publication();
 			},
 		});
 
@@ -89,17 +79,13 @@ describe.skipIf(!shouldRun)("publisher lock against real Postgres", () => {
 			runTick({
 				publishPending: async () => {
 					secondCalls += 1;
-					return publication();
 				},
 			}),
-		).resolves.toEqual({ outcome: "lost_lock" });
+		).resolves.toBeUndefined();
 		expect([firstCalls, secondCalls]).toEqual([1, 0]);
 
 		finish.resolve();
-		await expect(firstTick).resolves.toEqual({
-			outcome: "published",
-			pendingAgeMs: 0,
-		});
+		await expect(firstTick).resolves.toBeUndefined();
 	});
 
 	it("releases the lock when its database backend terminates", async () => {
@@ -111,7 +97,6 @@ describe.skipIf(!shouldRun)("publisher lock against real Postgres", () => {
 			publishPending: async () => {
 				entered.resolve();
 				await finish.promise;
-				return publication();
 			},
 		});
 
@@ -129,7 +114,7 @@ describe.skipIf(!shouldRun)("publisher lock against real Postgres", () => {
 		finish.resolve();
 		await expect(killedTick).rejects.toBeDefined();
 		await expect(
-			runTick({ publishPending: async () => publication() }),
-		).resolves.toEqual({ outcome: "published", pendingAgeMs: 0 });
+			runTick({ publishPending: async () => {} }),
+		).resolves.toBeUndefined();
 	});
 });

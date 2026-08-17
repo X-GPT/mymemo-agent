@@ -1,21 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
-import { createCanaryDispatchPublisher } from "agentcore-canary-dispatch/publisher";
 import type { AdvisoryLockClient, AdvisoryLockPool } from "./advisory-lock";
 import type { PublisherLogger } from "./logger";
 import {
 	publishAgentCoreDispatchTick,
 	runAgentCoreDispatchPublisher,
 } from "./publisher-loop";
-
-const dispatch: AgentCoreDispatchIdentity = {
-	schemaVersion: 2,
-	userId: "user-481",
-	conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
-	runId: "run-481",
-	runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
-	admittedAt: new Date("2026-08-17T12:00:00.000Z"),
-};
 
 class FakeLockPool implements AdvisoryLockPool {
 	constructor(private readonly locked: boolean) {}
@@ -55,17 +44,11 @@ describe("publishAgentCoreDispatchTick", () => {
 				publisher: {
 					async publishPending() {
 						publishCalls += 1;
-						return {
-							status: "enabled",
-							publishedRunIds: [],
-							ambiguousRunIds: [],
-						};
 					},
 				},
-				pendingStore: { oldestUnpublishedAdmittedAt: async () => null },
 				logger,
 			}),
-		).resolves.toEqual({ outcome: "lost_lock" });
+		).resolves.toBeUndefined();
 
 		expect(publishCalls).toBe(0);
 		expect(logger.infoRecords).toMatchObject([
@@ -73,78 +56,21 @@ describe("publishAgentCoreDispatchTick", () => {
 		]);
 	});
 
-	it("publishes nothing behind the disabled gate", async () => {
-		const logger = new RecordingLogger();
-		const calls: string[] = [];
+	it("publishes once while holding the lock", async () => {
+		let publishCalls = 0;
 		await expect(
 			publishAgentCoreDispatchTick({
 				pool: new FakeLockPool(true),
-				publisher: createCanaryDispatchPublisher({
-					publisherId: "publisher-1",
-					control: {
-						isEnabled: async () => {
-							calls.push("control");
-							return false;
-						},
+				publisher: {
+					async publishPending() {
+						publishCalls += 1;
 					},
-					store: {
-						claim: async () => {
-							calls.push("claim");
-							return [];
-						},
-						confirm: async () => true,
-					},
-					queue: {
-						send: async () => {
-							calls.push("send");
-						},
-					},
-				}),
-				pendingStore: {
-					oldestUnpublishedAdmittedAt: async () => dispatch.admittedAt,
 				},
-				now: () => new Date("2026-08-17T12:00:05.000Z"),
-				logger,
+				logger: new RecordingLogger(),
 			}),
-		).resolves.toEqual({ outcome: "disabled", pendingAgeMs: 5_000 });
+		).resolves.toBeUndefined();
 
-		expect(calls).toEqual(["control"]);
-	});
-
-	it("leaves an ambiguous send unpublished", async () => {
-		const logger = new RecordingLogger();
-		let confirmed = false;
-		await expect(
-			publishAgentCoreDispatchTick({
-				pool: new FakeLockPool(true),
-				publisher: createCanaryDispatchPublisher({
-					publisherId: "publisher-1",
-					control: { isEnabled: async () => true },
-					store: {
-						claim: async () => [dispatch],
-						confirm: async () => {
-							confirmed = true;
-							return true;
-						},
-					},
-					queue: {
-						send: async () => {
-							throw new Error("connection closed after send");
-						},
-					},
-				}),
-				pendingStore: {
-					oldestUnpublishedAdmittedAt: async () => dispatch.admittedAt,
-				},
-				now: () => new Date("2026-08-17T12:00:05.000Z"),
-				logger,
-			}),
-		).resolves.toEqual({ outcome: "error", pendingAgeMs: 5_000 });
-
-		expect(confirmed).toBe(false);
-		expect(logger.errorRecords).toMatchObject([
-			{ reason: "ambiguous_send", ambiguousCount: 1, PublisherErrors: 1 },
-		]);
+		expect(publishCalls).toBe(1);
 	});
 });
 
@@ -160,14 +86,8 @@ describe("runAgentCoreDispatchPublisher", () => {
 				publishPending: async () => {
 					publishCalls += 1;
 					if (publishCalls === 1) throw new Error("SSM unavailable");
-					return {
-						status: "enabled",
-						publishedRunIds: [],
-						ambiguousRunIds: [],
-					};
 				},
 			},
-			pendingStore: { oldestUnpublishedAdmittedAt: async () => null },
 			intervalMs: 2_000,
 			signal: shutdown.signal,
 			wait: async () => {

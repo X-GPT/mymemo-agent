@@ -13,8 +13,8 @@ COPY packages packages
 RUN find apps packages -type f ! -name package.json -delete \
  && find apps packages -type d -empty -delete
 
-# Install production dependencies only. The image runs its TypeScript entrypoint
-# directly (no build step), so it needs no dev dependencies. Tests are NOT run here —
+# Install production dependencies only. The worker runs `src/index.ts` directly
+# (no build step), so it needs no dev dependencies. Tests are NOT run here —
 # CI (.github/workflows/ci.yml) is the test gate; the image just builds the
 # runtime artifact.
 FROM base AS install

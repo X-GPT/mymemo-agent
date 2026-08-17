@@ -10,16 +10,12 @@ on:
       - package.json
       - bun.lock
       - .github/workflows/agentcore-dispatch-publisher-image.yml
-  push:
-    branches: [main]
-    paths:
-      - apps/agentcore-dispatch-publisher/**
-      - apps/agentcore-canary-dispatch/**
-      - packages/agent-db/**
-      - scripts/smoke/agentcore-dispatch-publisher-image-check.sh
-      - package.json
-      - bun.lock
-      - .github/workflows/agentcore-dispatch-publisher-image.yml
+
+# Release deploy builds and verifies the image on main, so this check only
+# needs to keep the latest run for each pull request.
+concurrency:
+  group: agentcore-dispatch-publisher-image-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   image:

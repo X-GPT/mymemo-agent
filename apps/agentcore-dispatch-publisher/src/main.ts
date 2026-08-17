@@ -14,10 +14,11 @@ const logger = createLogger(config.logLevel);
 const publisherId = `publisher/${crypto.randomUUID()}`;
 const db = createDatabase(config.agentDatabaseUrl);
 const pool = db.$client as unknown as PublisherPool;
-const { publisher, pendingStore } = createProductionAgentCoreDispatchPublisher({
+const publisher = createProductionAgentCoreDispatchPublisher({
 	db,
 	publisherId,
 	config,
+	logger,
 });
 
 const shutdown = new AbortController();
@@ -30,7 +31,6 @@ try {
 	await runAgentCoreDispatchPublisher({
 		pool,
 		publisher,
-		pendingStore,
 		intervalMs: config.intervalMs,
 		signal: shutdown.signal,
 		logger,
