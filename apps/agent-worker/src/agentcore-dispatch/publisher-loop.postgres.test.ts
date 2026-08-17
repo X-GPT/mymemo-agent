@@ -9,7 +9,7 @@ import {
 import { Pool, type PoolClient } from "pg";
 import type { AdvisoryLockPool } from "../cleanup/advisory-lock";
 import type { WorkerLogger } from "../logger";
-import { AgentCoreDispatchPublisherLoop } from "./publisher-loop";
+import { publishAgentCoreDispatchTick } from "./publisher-loop";
 
 const DB_URL = process.env.AGENT_DATABASE_URL ?? "";
 const shouldRunPostgresTests =
@@ -38,15 +38,14 @@ function deferred() {
 	};
 }
 
-function loopWith(options: {
+function runTickWith(options: {
 	pool?: AdvisoryLockPool;
 	publishPending(): Promise<ReturnType<typeof enabledPublication>>;
 }) {
-	return new AgentCoreDispatchPublisherLoop({
+	return publishAgentCoreDispatchTick({
 		pool: options.pool ?? pool,
 		publisher: { publishPending: options.publishPending },
 		pendingStore: { oldestUnpublishedAdmittedAt: async () => null },
-		intervalMs: 2_000,
 		logger: silentLogger,
 	});
 }
@@ -78,7 +77,7 @@ describe.skipIf(!shouldRunPostgresTests)(
 			const finish = deferred();
 			let firstCalls = 0;
 			let secondCalls = 0;
-			const first = loopWith({
+			const firstTick = runTickWith({
 				publishPending: async () => {
 					firstCalls += 1;
 					entered.resolve();
@@ -86,16 +85,16 @@ describe.skipIf(!shouldRunPostgresTests)(
 					return enabledPublication();
 				},
 			});
-			const second = loopWith({
-				publishPending: async () => {
-					secondCalls += 1;
-					return enabledPublication();
-				},
-			});
+			const secondTick = () =>
+				runTickWith({
+					publishPending: async () => {
+						secondCalls += 1;
+						return enabledPublication();
+					},
+				});
 
-			const firstTick = first.runOnce();
 			await entered.promise;
-			await expect(second.runOnce()).resolves.toEqual({
+			await expect(secondTick()).resolves.toEqual({
 				outcome: "lost_lock",
 			});
 			expect([firstCalls, secondCalls]).toEqual([1, 0]);
@@ -111,7 +110,7 @@ describe.skipIf(!shouldRunPostgresTests)(
 			const capturedPool = new CapturingPool(pool);
 			const entered = deferred();
 			const finish = deferred();
-			const killedHolder = loopWith({
+			const killedTick = runTickWith({
 				pool: capturedPool,
 				publishPending: async () => {
 					entered.resolve();
@@ -120,31 +119,33 @@ describe.skipIf(!shouldRunPostgresTests)(
 				},
 			});
 			let successorCalls = 0;
-			const successor = loopWith({
-				publishPending: async () => {
-					successorCalls += 1;
-					return enabledPublication();
-				},
-			});
+			const successorTick = () =>
+				runTickWith({
+					publishPending: async () => {
+						successorCalls += 1;
+						return enabledPublication();
+					},
+				});
 
-			const killedTick = killedHolder.runOnce();
 			await entered.promise;
 			const backend = await capturedPool.client?.query<{ pid: number }>(
 				"select pg_backend_pid() as pid",
 			);
 			const processId = backend?.rows[0]?.pid;
 			if (!processId) throw new Error("publisher backend id was not captured");
-			capturedPool.client?.once("error", () => {});
+			const connectionFailed = new Promise<void>((resolve) => {
+				capturedPool.client?.once("error", () => resolve());
+			});
 			await pool.query("select pg_terminate_backend($1)", [processId]);
+			await connectionFailed;
 
-			await expect(successor.runOnce()).resolves.toEqual({
+			finish.resolve();
+			await expect(killedTick).rejects.toBeDefined();
+			await expect(successorTick()).resolves.toEqual({
 				outcome: "published",
 				pendingAgeMs: 0,
 			});
 			expect(successorCalls).toBe(1);
-
-			finish.resolve();
-			await expect(killedTick).resolves.toMatchObject({ outcome: "error" });
 		});
 	},
 );

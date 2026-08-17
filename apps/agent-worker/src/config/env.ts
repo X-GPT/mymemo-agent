@@ -10,9 +10,12 @@ type Env = Record<string, string | undefined>;
 
 /** SQS/SSM authority owned only by the Fargate worker publisher process. */
 export interface AgentCoreDispatchPublisherConfig {
+	agentDatabaseUrl: string;
+	awsRegion: string;
 	queueUrl: string;
 	enabledParameterName: string;
 	intervalMs: number;
+	logLevel: string;
 }
 
 /**
@@ -167,6 +170,8 @@ function positiveIntOr(
 export function loadAgentCoreDispatchPublisherConfigFromEnv(
 	env: Env,
 ): AgentCoreDispatchPublisherConfig {
+	assert(env.AGENT_DATABASE_URL, "AGENT_DATABASE_URL is required");
+	assert(env.AWS_REGION, "AWS_REGION is required");
 	assert(
 		env.CANARY_DISPATCH_QUEUE_URL,
 		"CANARY_DISPATCH_QUEUE_URL is required",
@@ -176,6 +181,11 @@ export function loadAgentCoreDispatchPublisherConfigFromEnv(
 		"CANARY_ENABLED_PARAMETER_NAME is required",
 	);
 	return {
+		agentDatabaseUrl: withSsl(
+			withPassword(env.AGENT_DATABASE_URL, env.DB_PASSWORD),
+			env.DB_SSL !== "disable",
+		),
+		awsRegion: env.AWS_REGION,
 		queueUrl: env.CANARY_DISPATCH_QUEUE_URL,
 		enabledParameterName: env.CANARY_ENABLED_PARAMETER_NAME,
 		intervalMs: positiveIntOr(
@@ -183,6 +193,7 @@ export function loadAgentCoreDispatchPublisherConfigFromEnv(
 			DEFAULT_AGENTCORE_DISPATCH_INTERVAL_MS,
 			"WORKER_AGENTCORE_DISPATCH_INTERVAL_MS",
 		),
+		logLevel: env.LOG_LEVEL ?? "info",
 	};
 }
 

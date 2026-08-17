@@ -58,6 +58,17 @@ chat-api has no AgentCore dispatch queue or SSM parameter configuration. Admissi
 - `DB_SSL` (default on; `disable` only for local non-TLS Postgres)
 - `LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS` (default off): when exactly `true`, allow unauthenticated `redis://` only for `localhost`, `127.0.0.1`, or `[::1]` in integration tests
 
+## AgentCore dispatch publisher
+
+The dedicated publisher ECS task requires only:
+
+- `AGENT_DATABASE_URL`: writable `mymemo_agent` database
+- `AWS_REGION`: region for SSM and SQS
+- `CANARY_DISPATCH_QUEUE_URL`: encrypted standard AgentCore dispatch queue URL. This transitional name is retired by the production configuration ticket.
+- `CANARY_ENABLED_PARAMETER_NAME`: fail-closed SSM dispatch gate whose only enabling value is exactly `enabled`. This transitional name is retired by the production configuration ticket.
+
+`WORKER_AGENTCORE_DISPATCH_INTERVAL_MS` optionally changes the two-second tick interval. `LOG_LEVEL`, `DB_PASSWORD`, and `DB_SSL` have the same behavior as the worker. The publisher does not receive KB, model, E2B, artifact, or Redis authority.
+
 ## Agent worker
 
 The worker owns the writable agent database, read-only KB, OpenRouter, E2B, artifact upload, and Live Stream credentials. `apps/agent-worker/src/sandbox-env.ts` must continue to pass only the Run binding into E2B.
@@ -72,8 +83,6 @@ Required:
 - `ARTIFACT_BUCKET`: private artifact bucket; the worker receives upload access only
 - `AWS_REGION`: artifact S3 region
 - `REDIS_URL`: authenticated `rediss://` URL. Never log it or pass it into E2B.
-- `CANARY_DISPATCH_QUEUE_URL`: encrypted standard AgentCore dispatch queue URL used only by the worker publisher. This transitional name is retired by the production configuration ticket.
-- `CANARY_ENABLED_PARAMETER_NAME`: fail-closed SSM dispatch gate whose only enabling value is exactly `enabled`. This transitional name is retired by the production configuration ticket.
 
 Optional:
 
@@ -94,7 +103,6 @@ Optional:
 | `WORKER_HEARTBEAT_INTERVAL_MS` | `15000` | Ownership renewal and interruption-observation interval |
 | `WORKER_SHUTDOWN_TIMEOUT_MS` | `30000` | Grace for aborting active work, terminalizing it, and releasing the Conversation before forced exit |
 | `WORKER_CLEANUP_INTERVAL_MS` | `300000` | Advisory-lock-protected orphan and deleted-Conversation cleanup interval |
-| `WORKER_AGENTCORE_DISPATCH_INTERVAL_MS` | `2000` | Advisory-lock-protected AgentCore outbox publication interval |
 | `PORT` | `8080` | `/health` port |
 | `LOG_LEVEL` | `info` | Log level |
 

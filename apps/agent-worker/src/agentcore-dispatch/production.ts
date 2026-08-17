@@ -8,42 +8,40 @@ import {
 	createSsmCanaryEnablementControl,
 } from "agentcore-canary-dispatch/aws-adapters";
 import { createCanaryDispatchPublisher } from "agentcore-canary-dispatch/publisher";
-import type { AdvisoryLockPool } from "../cleanup/advisory-lock";
 import type { AgentCoreDispatchPublisherConfig } from "../config/env";
-import type { WorkerLogger } from "../logger";
-import { AgentCoreDispatchPublisherLoop } from "./publisher-loop";
+import type {
+	AgentCoreDispatchPendingStore,
+	AgentCoreDispatchPublisher,
+} from "./publisher-loop";
 
-/** Bind the worker's production authorities to the tested publisher loop. */
-export function createProductionAgentCoreDispatchPublisherLoop(options: {
+/** Bind the dedicated publisher process to its SSM, SQS, and database ports. */
+export function createProductionAgentCoreDispatchPublisher(options: {
 	db: Database;
-	pool: AdvisoryLockPool;
-	workerId: string;
-	awsRegion: string;
+	publisherId: string;
 	config: AgentCoreDispatchPublisherConfig;
-	logger: WorkerLogger;
-}): AgentCoreDispatchPublisherLoop {
+}): {
+	publisher: AgentCoreDispatchPublisher;
+	pendingStore: AgentCoreDispatchPendingStore;
+} {
 	const control = createSsmCanaryEnablementControl({
-		client: new SSMClient({ region: options.awsRegion }),
+		client: new SSMClient({ region: options.config.awsRegion }),
 		parameterName: options.config.enabledParameterName,
 	});
 	const publisher = createCanaryDispatchPublisher({
-		publisherId: `worker/${options.workerId}`,
+		publisherId: options.publisherId,
 		control,
 		store: createDatabaseCanaryDispatchPublisherStore({ db: options.db }),
 		queue: createSqsCanaryDispatchQueue({
-			client: new SQSClient({ region: options.awsRegion }),
+			client: new SQSClient({ region: options.config.awsRegion }),
 			queueUrl: options.config.queueUrl,
 		}),
 	});
 
-	return new AgentCoreDispatchPublisherLoop({
-		pool: options.pool,
+	return {
 		publisher,
 		pendingStore: {
 			oldestUnpublishedAdmittedAt: async () =>
 				await loadOldestUnpublishedAgentCoreDispatchAdmittedAt(options.db),
 		},
-		intervalMs: options.config.intervalMs,
-		logger: options.logger,
-	});
+	};
 }

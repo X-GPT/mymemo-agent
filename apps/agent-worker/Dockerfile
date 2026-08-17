@@ -13,8 +13,8 @@ COPY packages packages
 RUN find apps packages -type f ! -name package.json -delete \
  && find apps packages -type d -empty -delete
 
-# Install production dependencies only. The worker runs `src/index.ts` directly
-# (no build step), so it needs no dev dependencies. Tests are NOT run here —
+# Install production dependencies only. The image runs its TypeScript entrypoint
+# directly (no build step), so it needs no dev dependencies. Tests are NOT run here —
 # CI (.github/workflows/ci.yml) is the test gate; the image just builds the
 # runtime artifact.
 FROM base AS install
@@ -27,8 +27,8 @@ LABEL com.mymemo.agent-worker.execution-runtime-aware="true"
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agent-worker/src apps/agent-worker/src
 COPY apps/agent-worker/package.json apps/agent-worker/tsconfig.json apps/agent-worker/
-# The worker hosts the shared AgentCore outbox publisher and its strict SQS/SSM
-# adapters; keep the dispatch workspace source behind its production symlink.
+# The image also serves the dedicated AgentCore publisher task. Keep the shared
+# dispatch workspace source behind its production symlink.
 COPY apps/agentcore-canary-dispatch apps/agentcore-canary-dispatch
 # The shared writable-DB data layer (schema, client, run-store helpers). Its src
 # must be present so the worker's `@mymemo/agent-db` imports resolve through the
@@ -45,4 +45,4 @@ RUN mkdir -p /workspace/conversations \
 WORKDIR /usr/src/app/apps/agent-worker
 USER bun
 EXPOSE 8080/tcp
-ENTRYPOINT [ "bun", "run", "src/index.ts" ]
+CMD [ "bun", "run", "src/index.ts" ]

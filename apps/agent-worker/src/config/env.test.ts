@@ -190,12 +190,35 @@ describe("loadWorkerConfigFromEnv — cleanup loop", () => {
 });
 
 describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
-	it("loads queue and gate authority with a two-second tick", () => {
+	it("loads only the dedicated publisher process authority", () => {
 		expect(loadAgentCoreDispatchPublisherConfigFromEnv(baseEnv())).toEqual({
+			agentDatabaseUrl: "postgresql://u:p@localhost:5432/mymemo_agent",
+			awsRegion: "us-west-2",
 			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/agentcore-dispatch",
 			enabledParameterName: "/mymemo/agentcore-dispatch/enabled",
 			intervalMs: 2_000,
+			logLevel: "info",
 		});
+	});
+
+	it("does not require the Run-serving worker's KB, model, E2B, artifact, or Redis authority", () => {
+		const env = baseEnv();
+		for (const key of [
+			"KB_DATABASE_URL",
+			"OPENROUTER_API_KEY",
+			"OPENROUTER_BASE_URL",
+			"OPENROUTER_DEFAULT_MODEL",
+			"E2B_API_KEY",
+			"WORKER_E2B_TEMPLATE",
+			"ARTIFACT_BUCKET",
+			"REDIS_URL",
+		]) {
+			delete env[key];
+		}
+
+		expect(() =>
+			loadAgentCoreDispatchPublisherConfigFromEnv(env),
+		).not.toThrow();
 	});
 
 	it("honors the configured tick interval", () => {
@@ -217,6 +240,8 @@ describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
 	});
 
 	for (const key of [
+		"AGENT_DATABASE_URL",
+		"AWS_REGION",
 		"CANARY_DISPATCH_QUEUE_URL",
 		"CANARY_ENABLED_PARAMETER_NAME",
 	]) {
