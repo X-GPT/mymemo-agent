@@ -8,7 +8,7 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 ### Create a Conversation
 
-`POST /v1/conversations` accepts the strict `CreateConversationBody` (`.strict()`) with optional `collectionId` and `summaryId`. It resolves the Scope once and freezes it on the Conversation.
+`POST /v1/conversations` accepts the strict `CreateConversationBody` (`.strict()`) with optional `collectionId` and `summaryId`. It resolves the Scope once and freezes it on the Conversation. After the exposure gate allows, the runtime gate is evaluated once on trusted identity and the result is frozen as the Conversation's execution runtime; later surfaces never re-evaluate it.
 
 `InternalIdentity` comes from `X-Member-Code` and `X-Partner-Code`; `X-Team-Code`, `X-Member-Name`, and `X-Partner-Name` are optional. `memberCode` becomes the owner (`user_id`). The server generates the Conversation UUID.
 
@@ -24,7 +24,7 @@ All operations are owner-scoped. Missing and foreign Conversations both return `
 
 `POST /v1/conversations/:conversationId/runs` strictly validates one standard `RunAgentInput` and requires `threadId` to equal the owned Conversation id. Reject client Tools, state, and forwarded authority.
 
-`admitAgUiRun` is the only admission path. It atomically writes the client-supplied `runId`, the final plain-text User message, and `run_started` under the Conversation lifecycle lock. Exact retries reattach to the same logical Run; mismatched reuse returns `409`. Admission commits before Redis access. Backpressure uses the explicit Active Run count under the same Conversation row lock.
+`admitAgUiRun` is the only admission path. It atomically writes the client-supplied `runId`, the final plain-text User message, and `run_started` under the Conversation lifecycle lock. The transaction reads the frozen execution runtime from that locked row and, for `agentcore`, also inserts the Run-keyed dispatch outbox row. Exact retries reattach to the same logical Run without another dispatch; mismatched reuse returns `409`. Admission commits before Redis access. Backpressure uses the explicit Active Run count under the same Conversation row lock.
 
 Do not reintroduce the removed `runs_one_active_per_conversation` partial unique index as an implicit backpressure mechanism.
 

@@ -66,6 +66,7 @@ export class PostgresConversationStore implements ConversationStore {
 			.values({
 				userId: record.userId,
 				conversationId: record.conversationId,
+				executionRuntime: record.executionRuntime,
 				scope: record.scope,
 				collectionId: record.collectionId,
 				summaryId: record.summaryId,

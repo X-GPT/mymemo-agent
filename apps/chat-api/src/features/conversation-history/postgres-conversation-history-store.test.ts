@@ -917,6 +917,7 @@ describe("PostgresConversationHistoryStore", () => {
 		await conversationStore.create({
 			userId: "member-1",
 			conversationId: "conversation-1",
+			executionRuntime: "fargate",
 			scope: "general",
 			collectionId: null,
 			summaryId: null,
