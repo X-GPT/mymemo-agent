@@ -8,13 +8,13 @@ fi
 
 image="$1"
 
-lane_aware="$(
+runtime_aware="$(
   docker image inspect \
-    --format '{{ index .Config.Labels "com.mymemo.agent-worker.execution-lane-aware" }}' \
+    --format '{{ index .Config.Labels "com.mymemo.agent-worker.execution-runtime-aware" }}' \
     "$image"
 )"
-if [[ "$lane_aware" != "true" ]]; then
-  echo "Agent-worker image is missing its execution-lane-aware capability label" >&2
+if [[ "$runtime_aware" != "true" ]]; then
+  echo "Agent-worker image is missing its execution-runtime-aware capability label" >&2
   exit 1
 fi
 

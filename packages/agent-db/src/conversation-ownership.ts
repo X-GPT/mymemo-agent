@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
-import { FARGATE_EXECUTION_LANE } from "./execution-lane";
+import { FARGATE_EXECUTION_RUNTIME } from "./execution-runtime";
 import { conversations, runs } from "./schema";
 
 /**
@@ -132,7 +132,7 @@ export async function claimConversationTx(
 					  from ${conversations} c
 					  join ${runs} r using (user_id, conversation_id)
 					 where r.status = 'queued'
-					   and c.execution_lane = ${FARGATE_EXECUTION_LANE}
+					   and c.execution_runtime = ${FARGATE_EXECUTION_RUNTIME}
 					   and c.owner_until is null
 					 order by r.created_at
 					   for update of c skip locked

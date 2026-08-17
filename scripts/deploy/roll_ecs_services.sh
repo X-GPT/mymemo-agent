@@ -6,9 +6,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/lib/load_config.sh"
 load_deploy_config
 
-lane_awareness_label="com.mymemo.agent-worker.execution-lane-aware"
+runtime_awareness_label="com.mymemo.agent-worker.execution-runtime-aware"
 
-read_agent_worker_lane_awareness() {
+read_agent_worker_runtime_awareness() {
   local image="$1"
   local registry image_path repository_name image_id manifest config_digest download_url
 
@@ -60,7 +60,7 @@ read_agent_worker_lane_awareness() {
   )"
   bun -e 'const response = await fetch(process.argv[1]); if (!response.ok) throw new Error(`image config download failed: ${response.status}`); const imageConfig = await response.json(); console.log(imageConfig.config?.Labels?.[process.argv[2]] === "true" ? "true" : "false");' \
     "$download_url" \
-    "$lane_awareness_label"
+    "$runtime_awareness_label"
 }
 
 ecs_cluster_arn="$(
@@ -89,11 +89,11 @@ candidate_image="$(
     --query 'taskDefinition.containerDefinitions[?name==`agent-worker`] | [0].image' \
     --output text
 )"
-candidate_lane_aware="$(read_agent_worker_lane_awareness "$candidate_image")"
+candidate_runtime_aware="$(read_agent_worker_runtime_awareness "$candidate_image")"
 
-"$script_dir/run_execution_lane_deployment_assertion.sh" \
+"$script_dir/run_execution_runtime_deployment_assertion.sh" \
   prepare-fargate-deployment \
-  "$candidate_lane_aware"
+  "$candidate_runtime_aware"
 
 aws ecs update-service \
   --cluster "$ecs_cluster_arn" \
@@ -146,7 +146,7 @@ fi
 active_task_arns="$running_task_arns $stopping_task_arns"
 
 if [[ "$service_task_definition" != "$expected_task_definition" ]]; then
-  echo "Fargate deployment is not fully execution-lane-aware: service uses $service_task_definition, expected $expected_task_definition" >&2
+  echo "Fargate deployment is not fully execution-runtime-aware: service uses $service_task_definition, expected $expected_task_definition" >&2
   exit 1
 fi
 
@@ -162,13 +162,13 @@ if [[ -n "${active_task_arns// /}" ]]; then
   )"
   for task_definition in $active_task_definitions; do
     if [[ "$task_definition" != "$expected_task_definition" ]]; then
-      echo "Fargate deployment is not fully execution-lane-aware: active task uses $task_definition, expected $expected_task_definition" >&2
+      echo "Fargate deployment is not fully execution-runtime-aware: active task uses $task_definition, expected $expected_task_definition" >&2
       exit 1
     fi
   done
 fi
 
-if [[ "$candidate_lane_aware" == "true" ]]; then
-  "$script_dir/run_execution_lane_deployment_assertion.sh" \
-    mark-fargate-lane-aware
+if [[ "$candidate_runtime_aware" == "true" ]]; then
+  "$script_dir/run_execution_runtime_deployment_assertion.sh" \
+    mark-fargate-runtime-aware
 fi

@@ -51,6 +51,41 @@ async function expectDbWriteToFail(write: () => PromiseLike<unknown>) {
 }
 
 describe("run queue schema", () => {
+	it("uses execution-runtime vocabulary for Conversations and deployment readiness", async () => {
+		const { rows: columns } = await tdb.db.execute(sql`
+			select table_name, column_name
+			from information_schema.columns
+			where table_schema = 'public'
+				and table_name in ('conversations', 'execution_runtime_deployments')
+				and column_name in ('execution_runtime', 'runtime_aware')
+			order by table_name, column_name
+		`);
+		expect(columns).toEqual([
+			{ table_name: "conversations", column_name: "execution_runtime" },
+			{
+				table_name: "execution_runtime_deployments",
+				column_name: "execution_runtime",
+			},
+			{
+				table_name: "execution_runtime_deployments",
+				column_name: "runtime_aware",
+			},
+		]);
+		const { rows: retiredTables } = await tdb.db.execute(sql`
+			select tablename
+			from pg_tables
+			where schemaname = 'public' and tablename = 'execution_lane_deployments'
+		`);
+		expect(retiredTables).toEqual([]);
+		await expectDbWriteToFail(() =>
+			tdb.db.execute(sql`
+				update ${conversations}
+				set execution_runtime = 'agentcore_canary'
+				where conversation_id = 'conv-1'
+			`),
+		);
+	});
+
 	it("creates runs with queue defaults", async () => {
 		const [run] = await tdb.db
 			.insert(runs)
@@ -236,8 +271,8 @@ describe("run queue schema", () => {
 			"notify_run_doorbell",
 		]);
 		const functionDefinition = String(functions[0]?.def);
-		expect(functionDefinition).toContain("execution_lane");
-		expect(functionDefinition).toContain("execution_lane = 'fargate'");
+		expect(functionDefinition).toContain("execution_runtime");
+		expect(functionDefinition).toContain("execution_runtime = 'fargate'");
 	});
 
 	it("installs a trigger that notifies listeners when run events are inserted", async () => {

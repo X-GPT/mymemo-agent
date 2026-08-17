@@ -15,9 +15,9 @@ import {
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
 import {
-	CONVERSATION_EXECUTION_LANES,
-	FARGATE_EXECUTION_LANE,
-} from "./execution-lane";
+	CONVERSATION_EXECUTION_RUNTIMES,
+	FARGATE_EXECUTION_RUNTIME,
+} from "./execution-runtime";
 
 /**
  * Drizzle schema for the writable agent database (`mymemo_agent`), distinct from
@@ -113,11 +113,11 @@ export const conversations = pgTable(
 		/** 'general' | 'collection' | 'document' — frozen at creation. */
 		scope: text("scope").notNull(),
 		/** Immutable runtime classification; public creation always takes default. */
-		executionLane: text("execution_lane", {
-			enum: CONVERSATION_EXECUTION_LANES,
+		executionRuntime: text("execution_runtime", {
+			enum: CONVERSATION_EXECUTION_RUNTIMES,
 		})
 			.notNull()
-			.default(FARGATE_EXECUTION_LANE),
+			.default(FARGATE_EXECUTION_RUNTIME),
 		/** Non-null only for collection scope. */
 		collectionId: text("collection_id"),
 		/** Non-null only for document scope. */
@@ -163,8 +163,8 @@ export const conversations = pgTable(
 			sql`${t.scope} in ('general', 'collection', 'document')`,
 		),
 		check(
-			"conversations_execution_lane_check",
-			sql`${t.executionLane} in ('fargate', 'agentcore_canary')`,
+			"conversations_execution_runtime_check",
+			sql`${t.executionRuntime} in ('fargate', 'agentcore')`,
 		),
 		index("conversations_regular_activity_idx")
 			.on(t.userId, t.lastActivityAt, t.conversationId)
@@ -185,26 +185,26 @@ export const conversations = pgTable(
 /**
  * Durable rollout fence for the later operator-only AgentCore creation path.
  * Absence is fail-closed. The Fargate rollout marks this row ready only after
- * every running task uses the lane-aware task definition; preparing a safe
- * lane-unaware rollback clears it before the service can be rolled back.
+ * every running task uses the runtime-aware task definition; preparing a safe
+ * runtime-unaware rollback clears it before the service can be rolled back.
  */
-export const executionLaneDeployments = pgTable(
-	"execution_lane_deployments",
+export const executionRuntimeDeployments = pgTable(
+	"execution_runtime_deployments",
 	{
-		executionLane: text("execution_lane", {
-			enum: [FARGATE_EXECUTION_LANE],
+		executionRuntime: text("execution_runtime", {
+			enum: [FARGATE_EXECUTION_RUNTIME],
 		})
 			.primaryKey()
-			.default(FARGATE_EXECUTION_LANE),
-		laneAware: boolean("lane_aware").notNull().default(false),
+			.default(FARGATE_EXECUTION_RUNTIME),
+		runtimeAware: boolean("runtime_aware").notNull().default(false),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
 	},
 	(t) => [
 		check(
-			"execution_lane_deployments_lane_check",
-			sql`${t.executionLane} = 'fargate'`,
+			"execution_runtime_deployments_runtime_check",
+			sql`${t.executionRuntime} = 'fargate'`,
 		),
 	],
 );

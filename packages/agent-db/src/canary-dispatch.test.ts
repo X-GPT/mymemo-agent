@@ -59,7 +59,7 @@ async function insertConversation(): Promise<void> {
 		userId: exact.userId,
 		conversationId: exact.conversationId,
 		scope: "general",
-		executionLane: "agentcore_canary",
+		executionRuntime: "agentcore",
 	});
 }
 
@@ -282,11 +282,11 @@ describe("acquireAgentCoreDispatchTx", () => {
 		}
 	});
 
-	it("does not consult the superseded execution lane", async () => {
+	it("does not consult the Conversation execution runtime", async () => {
 		await admitRunWithDispatch();
 		await tdb.db
 			.update(conversations)
-			.set({ executionLane: "fargate" })
+			.set({ executionRuntime: "fargate" })
 			.where(eq(conversations.conversationId, exact.conversationId));
 
 		await expect(

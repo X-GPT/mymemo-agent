@@ -5,10 +5,10 @@ import {
 	liveConversationOwnershipExists,
 } from "./conversation-ownership";
 import {
-	AGENTCORE_CANARY_EXECUTION_LANE,
-	FARGATE_EXECUTION_LANE,
-	requireConversationExecutionLane,
-} from "./execution-lane";
+	AGENTCORE_EXECUTION_RUNTIME,
+	FARGATE_EXECUTION_RUNTIME,
+	requireConversationExecutionRuntime,
+} from "./execution-runtime";
 import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
 	InvalidRunEventError,
@@ -119,10 +119,10 @@ const ACTIVE_RUN_DEPTH_BOUND = 1;
  * `updated_at` to start a new window for legitimately waiting work. The
  * Fargate window deliberately matches today's 60-second Ownership lease,
  * but remains a distinct policy so lease tuning cannot silently retune queue
- * expiration. AgentCore-canary work gets ten minutes for dispatch and cold
+ * expiration. AgentCore work gets ten minutes for dispatch and cold
  * start. */
 const FARGATE_UNOWNED_QUEUE_TIMEOUT_MS = 60_000;
-const AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS = 10 * 60_000;
+const AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS = 10 * 60_000;
 
 /** An owned Run id was reused with different normalized admitted input. */
 export class RunInputMismatchError extends Error {
@@ -1205,18 +1205,18 @@ export async function expireUnownedQueuedRunsTx(
 		const result = await tx.execute<{
 			user_id: string;
 			conversation_id: string;
-			execution_lane: string;
+			execution_runtime: string;
 		}>(sql`
-			select c.user_id, c.conversation_id, c.execution_lane
+			select c.user_id, c.conversation_id, c.execution_runtime
 			  from ${runs} r
 			  join ${conversations} c using (user_id, conversation_id)
 			 where r.status = 'queued'
 			   and greatest(r.created_at, r.updated_at) <= now() -
-			     case c.execution_lane
-			       when ${FARGATE_EXECUTION_LANE}
+			     case c.execution_runtime
+			       when ${FARGATE_EXECUTION_RUNTIME}
 			         then interval '${sql.raw(String(FARGATE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
-			       when ${AGENTCORE_CANARY_EXECUTION_LANE}
-			         then interval '${sql.raw(String(AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
+			       when ${AGENTCORE_EXECUTION_RUNTIME}
+			         then interval '${sql.raw(String(AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
 			     end
 			   and c.owner_until is null
 			 order by r.created_at
@@ -1228,16 +1228,16 @@ export async function expireUnownedQueuedRunsTx(
 			? {
 					userId: candidateRow.user_id,
 					conversationId: candidateRow.conversation_id,
-					executionLane: requireConversationExecutionLane(
-						candidateRow.execution_lane,
+					executionRuntime: requireConversationExecutionRuntime(
+						candidateRow.execution_runtime,
 					),
 				}
 			: null;
 		if (!candidate) return null;
 		const timeoutMs =
-			candidate.executionLane === FARGATE_EXECUTION_LANE
+			candidate.executionRuntime === FARGATE_EXECUTION_RUNTIME
 				? FARGATE_UNOWNED_QUEUE_TIMEOUT_MS
-				: AGENTCORE_CANARY_UNOWNED_QUEUE_TIMEOUT_MS;
+				: AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS;
 
 		const queuedRunsToExpire = await tx
 			.select({

@@ -1737,10 +1737,10 @@ describe("markLiveStreamFailedTx", () => {
 });
 
 describe("Run liveness sweep transactions", () => {
-	it("uses the ten-minute queued backstop for AgentCore-canary Conversations", async () => {
+	it("uses the ten-minute queued backstop for AgentCore Conversations", async () => {
 		await tdb.db
 			.update(conversations)
-			.set({ executionLane: "agentcore_canary" })
+			.set({ executionRuntime: "agentcore" })
 			.where(eq(conversations.conversationId, "conv-1"));
 		await queueRun("run-agentcore-queued", "conv-1");
 		await ageRunsPastQueueTimeout("run-agentcore-queued");
@@ -1761,11 +1761,11 @@ describe("Run liveness sweep transactions", () => {
 		).toEqual(["error"]);
 	});
 
-	it("reclaims expired AgentCore-canary Ownership through the shared fence", async () => {
+	it("reclaims expired AgentCore Ownership through the shared fence", async () => {
 		await tdb.db
 			.update(conversations)
 			.set({
-				executionLane: "agentcore_canary",
+				executionRuntime: "agentcore",
 				ownerWorkerId: "dead-agentcore-invocation",
 				ownerUntil: sql`now() - interval '1 second'`,
 				epoch: 1,
