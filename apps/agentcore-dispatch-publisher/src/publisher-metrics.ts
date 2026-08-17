@@ -3,23 +3,25 @@ import { toMessage } from "./logger";
 
 const namespace = "MyMemo/AgentCoreDispatch";
 
-function embeddedMetrics(
+function publisherMetricEnvelope(
 	metrics: Array<{ Name: string; Unit: "Count" | "Milliseconds" }>,
 ) {
 	return {
-		Timestamp: Date.now(),
-		CloudWatchMetrics: [
-			{ Namespace: namespace, Dimensions: [[]], Metrics: metrics },
-		],
+		message: "AgentCore dispatch publisher metric",
+		_aws: {
+			Timestamp: Date.now(),
+			CloudWatchMetrics: [
+				{ Namespace: namespace, Dimensions: [[]], Metrics: metrics },
+			],
+		},
 	};
 }
 
 export function recordPublisherLostLock(logger: PublisherLogger): void {
 	logger.info({
-		message: "AgentCore dispatch publisher metric",
+		...publisherMetricEnvelope([{ Name: "PublisherLostLock", Unit: "Count" }]),
 		outcome: "lost_lock",
 		PublisherLostLock: 1,
-		_aws: embeddedMetrics([{ Name: "PublisherLostLock", Unit: "Count" }]),
 	});
 }
 
@@ -28,16 +30,15 @@ export function recordPublisherTickFailure(
 	error: unknown,
 ): void {
 	logger.error({
-		message: "AgentCore dispatch publisher metric",
+		...publisherMetricEnvelope([
+			{ Name: "PublisherErrors", Unit: "Count" },
+			{ Name: "PendingAgeMs", Unit: "Milliseconds" },
+		]),
 		outcome: "error",
 		reason: "tick_failed",
 		error: toMessage(error),
 		PendingAgeMs: 0,
 		PublisherErrors: 1,
-		_aws: embeddedMetrics([
-			{ Name: "PublisherErrors", Unit: "Count" },
-			{ Name: "PendingAgeMs", Unit: "Milliseconds" },
-		]),
 	});
 }
 
@@ -51,24 +52,24 @@ export function recordPublisherPublication(
 ): void {
 	if (result.ambiguousRunIds.length > 0) {
 		logger.error({
-			message: "AgentCore dispatch publisher metric",
+			...publisherMetricEnvelope([
+				{ Name: "PublisherErrors", Unit: "Count" },
+				{ Name: "PendingAgeMs", Unit: "Milliseconds" },
+			]),
 			outcome: "error",
 			reason: "ambiguous_send",
 			ambiguousCount: result.ambiguousRunIds.length,
 			PendingAgeMs: pendingAgeMs,
 			PublisherErrors: 1,
-			_aws: embeddedMetrics([
-				{ Name: "PublisherErrors", Unit: "Count" },
-				{ Name: "PendingAgeMs", Unit: "Milliseconds" },
-			]),
 		});
 		return;
 	}
 
 	logger.info({
-		message: "AgentCore dispatch publisher metric",
+		...publisherMetricEnvelope([
+			{ Name: "PendingAgeMs", Unit: "Milliseconds" },
+		]),
 		outcome: result.status === "disabled" ? "disabled" : "published",
 		PendingAgeMs: pendingAgeMs,
-		_aws: embeddedMetrics([{ Name: "PendingAgeMs", Unit: "Milliseconds" }]),
 	});
 }

@@ -106,13 +106,24 @@ describe.skipIf(!shouldRun)("publisher lock against real Postgres", () => {
 		);
 		const processId = backend?.rows[0]?.pid;
 		if (!processId) throw new Error("publisher backend id was not captured");
+		const client = capturedPool.client;
+		if (!client) throw new Error("publisher client was not captured");
+		let resolveConnectionFailed!: () => void;
 		const connectionFailed = new Promise<void>((resolve) => {
-			capturedPool.client?.once("error", () => resolve());
+			resolveConnectionFailed = resolve;
 		});
-		await pool.query("select pg_terminate_backend($1)", [processId]);
-		await connectionFailed;
-		finish.resolve();
-		await expect(killedTick).rejects.toBeDefined();
+		const handleClientError = () => resolveConnectionFailed();
+		client.on("error", handleClientError);
+		try {
+			await pool.query("select pg_terminate_backend($1)", [processId]);
+			await connectionFailed;
+			finish.resolve();
+			await expect(killedTick).rejects.toBeDefined();
+		} finally {
+			finish.resolve();
+			await killedTick.catch(() => {});
+			client.off("error", handleClientError);
+		}
 		await expect(
 			runTick({ publishPending: async () => {} }),
 		).resolves.toBeUndefined();

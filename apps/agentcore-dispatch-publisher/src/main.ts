@@ -14,14 +14,15 @@ const logger = createLogger(config.logLevel);
 const publisherId = `publisher/${crypto.randomUUID()}`;
 const db = createDatabase(config.agentDatabaseUrl);
 const pool = db.$client as unknown as PublisherPool;
+const shutdown = new AbortController();
 const publisher = createProductionAgentCoreDispatchPublisher({
 	db,
 	publisherId,
 	config,
 	logger,
+	signal: shutdown.signal,
 });
 
-const shutdown = new AbortController();
 const signals = ["SIGTERM", "SIGINT"] as const;
 const abort = () => shutdown.abort();
 for (const signal of signals) process.on(signal, abort);
