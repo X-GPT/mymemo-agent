@@ -1,7 +1,7 @@
 import type {
 	AcquireAgentCoreDispatchResult,
 	AgentCoreDispatchIdentity,
-} from "@mymemo/agent-db/canary-dispatch";
+} from "@mymemo/agent-db/agentcore-dispatch";
 import { z } from "zod";
 
 const nonEmptyString = z.string().trim().min(1);

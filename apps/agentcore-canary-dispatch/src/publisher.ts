@@ -1,4 +1,4 @@
-import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/agentcore-dispatch";
 import { CANARY_QUEUE_INVARIANTS } from "./invariants";
 
 export interface CanaryEnablementControl {

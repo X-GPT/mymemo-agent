@@ -1,4 +1,4 @@
-import { MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE } from "@mymemo/agent-db/canary-dispatch";
+import { MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE } from "@mymemo/agent-db/agentcore-dispatch";
 
 /** Deployment inputs shared with the dormant infrastructure slice (#452). */
 export const CANARY_QUEUE_INVARIANTS = {

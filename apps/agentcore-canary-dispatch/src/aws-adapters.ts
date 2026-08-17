@@ -10,7 +10,7 @@ import {
 import {
 	claimAgentCoreDispatchesTx,
 	confirmAgentCoreDispatchPublishedTx,
-} from "@mymemo/agent-db/canary-dispatch";
+} from "@mymemo/agent-db/agentcore-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import type { AgentCoreRuntimeInvoker } from "./consumer";
 import { serializeCanaryDispatchEnvelope } from "./contract";

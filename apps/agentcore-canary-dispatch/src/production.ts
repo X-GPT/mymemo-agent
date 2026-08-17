@@ -1,7 +1,7 @@
 import { BedrockAgentCoreClient } from "@aws-sdk/client-bedrock-agentcore";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { SSMClient } from "@aws-sdk/client-ssm";
-import { requestAgentCoreDispatchReplayTx } from "@mymemo/agent-db/canary-dispatch";
+import { requestAgentCoreDispatchReplayTx } from "@mymemo/agent-db/agentcore-dispatch";
 import { createDatabase } from "@mymemo/agent-db/client";
 import { createDatabaseCanaryAcquisitionBoundary } from "./acquisition-boundary";
 import {

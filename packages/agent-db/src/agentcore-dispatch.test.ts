@@ -14,7 +14,7 @@ import {
 	loadOldestUnpublishedAgentCoreDispatchAdmittedAt,
 	recordAgentCoreDispatchInTx,
 	requestAgentCoreDispatchReplayTx,
-} from "./canary-dispatch";
+} from "./agentcore-dispatch";
 import { admitQueuedRunInTx } from "./run-store";
 import {
 	agentCoreDispatchOutbox,

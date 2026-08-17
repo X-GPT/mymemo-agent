@@ -24,7 +24,7 @@ import {
 	runs,
 } from "./schema";
 
-const DISPATCH_PUBLISH_LEASE_MS = 3 * 60_000;
+const AGENTCORE_DISPATCH_PUBLISH_LEASE_MS = 3 * 60_000;
 export const MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE = 10;
 
 export interface AgentCoreDispatchIdentity {
@@ -143,7 +143,9 @@ export async function claimAgentCoreDispatchesTx(
 			.update(agentCoreDispatchOutbox)
 			.set({
 				publishClaimedBy: input.publisherId,
-				publishClaimUntil: new Date(now.getTime() + DISPATCH_PUBLISH_LEASE_MS),
+				publishClaimUntil: new Date(
+					now.getTime() + AGENTCORE_DISPATCH_PUBLISH_LEASE_MS,
+				),
 				publishAttempts: sql`${agentCoreDispatchOutbox.publishAttempts} + 1`,
 			})
 			.where(

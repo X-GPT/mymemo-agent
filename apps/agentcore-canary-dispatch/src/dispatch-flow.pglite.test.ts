@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	claimAgentCoreDispatchesTx,
 	recordAgentCoreDispatchInTx,
-} from "@mymemo/agent-db/canary-dispatch";
+} from "@mymemo/agent-db/agentcore-dispatch";
 import { admitQueuedRunInTx } from "@mymemo/agent-db/run-store";
 import { conversations, runs } from "@mymemo/agent-db/schema";
 import { createTestDatabase } from "@mymemo/agent-db/testing";

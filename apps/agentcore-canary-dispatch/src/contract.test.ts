@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/agentcore-dispatch";
 import {
 	createAcquisitionReceipt,
 	InvalidCanaryDispatchEnvelopeError,

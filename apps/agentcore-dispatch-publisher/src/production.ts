@@ -1,6 +1,6 @@
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { SSMClient } from "@aws-sdk/client-ssm";
-import { loadOldestUnpublishedAgentCoreDispatchAdmittedAt } from "@mymemo/agent-db/canary-dispatch";
+import { loadOldestUnpublishedAgentCoreDispatchAdmittedAt } from "@mymemo/agent-db/agentcore-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	createDatabaseCanaryDispatchPublisherStore,

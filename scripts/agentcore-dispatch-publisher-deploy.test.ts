@@ -10,6 +10,7 @@ describe("AgentCore dispatch publisher deployment", () => {
 		const appDir = join(root, "apps", "agentcore-dispatch-publisher");
 		const workerPackage = read("apps", "agent-worker", "package.json");
 		const workerDockerfile = read("apps", "agent-worker", "Dockerfile");
+		const agentDbPackage = read("packages", "agent-db", "package.json");
 		const publisherLoop = read(
 			"apps",
 			"agentcore-dispatch-publisher",
@@ -38,6 +39,20 @@ describe("AgentCore dispatch publisher deployment", () => {
 		expect(publisherLoop).not.toContain("AgentCoreDispatchPendingStore");
 		expect(publisherLoop).not.toContain("PublisherTickResult");
 		expect(publisherLoop).not.toContain("CloudWatchMetrics");
+		expect(
+			existsSync(
+				join(root, "packages", "agent-db", "src", "agentcore-dispatch.ts"),
+			),
+		).toBe(true);
+		expect(
+			existsSync(
+				join(root, "packages", "agent-db", "src", "canary-dispatch.ts"),
+			),
+		).toBe(false);
+		expect(agentDbPackage).toContain(
+			'"./agentcore-dispatch": "./src/agentcore-dispatch.ts"',
+		);
+		expect(agentDbPackage).not.toContain('"./canary-dispatch"');
 	});
 
 	it("builds and publishes an independent image", () => {

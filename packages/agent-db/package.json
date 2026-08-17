@@ -5,9 +5,8 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./schema": "./src/schema.ts",
-		"./agentcore-dispatch": "./src/canary-dispatch.ts",
+		"./agentcore-dispatch": "./src/agentcore-dispatch.ts",
 		"./artifact-store": "./src/artifact-store.ts",
-		"./canary-dispatch": "./src/canary-dispatch.ts",
 		"./client": "./src/client.ts",
 		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./execution-runtime": "./src/execution-runtime.ts",
