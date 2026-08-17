@@ -15,7 +15,9 @@ New agent work is gated by the server-side Statsig gate `mymemo_agent_split_runt
 
 `createExposureGate(config)` selects the fail-closed `StatsigExposureGate` or the explicitly configured always-allow `BreakGlassExposureGate`.
 
-Reconnect, interruption, history, artifact access, and Conversation management for existing owned resources do not consult the new-work gate.
+After exposure allows Conversation creation, the separate Statsig gate `mymemo_agent_agentcore_runtime_enabled` selects the immutable execution runtime. Only ON selects `agentcore`; OFF, initialization or evaluation errors, and operator break-glass select `fargate`. Run admission and every other later surface read the persisted selection and never consult this gate. chat-api records AgentCore dispatch only in Postgres and holds no SQS or SSM authority.
+
+Reconnect, interruption, history, artifact access, and Conversation management for existing owned resources do not consult either gate.
 
 ## Runtime trust boundary
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
+import type { ConversationExecutionRuntime } from "@mymemo/agent-db/execution-runtime";
 import {
 	createInMemoryLiveStreamRelay,
 	createLiveStreamTelemetry,
@@ -25,6 +26,12 @@ import {
 	type RunRecord,
 	type RunStore,
 } from "@/features/run-store";
+import {
+	BreakGlassRuntimeGate,
+	type RuntimeGate,
+	type StatsigClientLike as RuntimeStatsigClientLike,
+	StatsigRuntimeGate,
+} from "@/features/runtime-gate";
 import type { InternalIdentity } from "./conversations.schema";
 
 const { createApp } = await import("@/app");
@@ -89,17 +96,30 @@ function gateThatFailsIfConsulted(): ExposureGate {
 	};
 }
 
+function recordingRuntimeGate(executionRuntime: ConversationExecutionRuntime) {
+	const seen: InternalIdentity[] = [];
+	const gate: RuntimeGate = {
+		async selectRuntime(identity) {
+			seen.push(identity);
+			return executionRuntime;
+		},
+	};
+	return { gate, seen };
+}
+
 function buildApp(
 	conversationStore: ConversationStore,
 	exposureGate: ExposureGate = recordingGate(true).gate,
 	fakeRuns = fakeRunStore(),
 	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 	liveStreamTelemetry: LiveStreamTelemetry = silentLiveStreamTelemetry,
+	runtimeGate: RuntimeGate = recordingRuntimeGate("fargate").gate,
 ) {
 	const deps = {
 		config: {},
 		conversationStore,
 		exposureGate,
+		runtimeGate,
 		runStore: fakeRuns.runStore,
 		liveStreamRelay,
 		liveStreamTelemetry,
@@ -194,6 +214,74 @@ function fakeRunStore() {
 		runStore,
 		runOwners,
 		interruptions,
+	};
+}
+
+function transactionalAdmissionFake(
+	conversationStore: ConversationStore,
+	failure?: "run" | "dispatch",
+) {
+	const admittedRuns = new Map<string, RunRecord>();
+	const dispatchRunIds = new Set<string>();
+	const runStore: RunStore = {
+		async getRun({ userId, conversationId, runId }) {
+			const run = admittedRuns.get(runId);
+			return run?.userId === userId && run.conversationId === conversationId
+				? run
+				: null;
+		},
+		async admitRun(input) {
+			const existing = admittedRuns.get(input.runId);
+			if (existing) return { outcome: "existing", run: existing };
+			if (failure === "run") throw new Error("Run admission failed");
+			const conversation = await conversationStore.get(input.conversation);
+			if (!conversation) throw new Error("Conversation not found");
+
+			const run = runRecord({
+				runId: input.runId,
+				userId: input.conversation.userId,
+				conversationId: input.conversation.conversationId,
+				status: "done",
+			});
+			const recordsDispatch = conversation.executionRuntime === "agentcore";
+			if (recordsDispatch && failure === "dispatch") {
+				throw new Error("dispatch recording failed");
+			}
+
+			admittedRuns.set(input.runId, run);
+			if (recordsDispatch) dispatchRunIds.add(input.runId);
+			return { outcome: "created", run };
+		},
+		async requestInterruption() {
+			return { outcome: "not_found" };
+		},
+	};
+	return {
+		runStore,
+		get runIds() {
+			return [...admittedRuns.keys()];
+		},
+		get dispatchRunIds() {
+			return [...dispatchRunIds];
+		},
+	};
+}
+
+function persistedConversation(
+	executionRuntime: ConversationExecutionRuntime,
+): ConversationRecord {
+	const createdAt = new Date("2026-01-01T00:00:00.000Z");
+	return {
+		userId: "member-1",
+		conversationId: "conv-1",
+		executionRuntime,
+		scope: "general",
+		collectionId: null,
+		summaryId: null,
+		title: null,
+		createdAt,
+		lastActivityAt: createdAt,
+		archivedAt: null,
 	};
 }
 
@@ -570,6 +658,7 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-lifecycle",
+				executionRuntime: "fargate",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -652,6 +741,7 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-archive-race",
+				executionRuntime: "fargate",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -659,6 +749,7 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-unarchive-race",
+				executionRuntime: "fargate",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -751,6 +842,7 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "other-member",
 				conversationId: "foreign-conversation",
+				executionRuntime: "fargate",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -868,6 +960,7 @@ describe("DELETE /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-delete",
+				executionRuntime: "fargate",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -937,6 +1030,7 @@ describe("DELETE /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-delete-race",
+				executionRuntime: "fargate",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -986,6 +1080,7 @@ describe("POST /v1/conversations/:id/runs", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
+		executionRuntime: "fargate",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
@@ -1311,10 +1406,81 @@ describe("POST /v1/conversations/:id/runs", () => {
 	});
 });
 
+describe("Run dispatch admission through HTTP", () => {
+	it("records one AgentCore dispatch and reattaches an exact retry", async () => {
+		const { store } = fakeStore([persistedConversation("agentcore")]);
+		const admission = transactionalAdmissionFake(store);
+		const exposure = recordingGate(true);
+		const app = buildApp(store, exposure.gate, {
+			...fakeRunStore(),
+			runStore: admission.runStore,
+		});
+
+		const first = await app.request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+		const retry = await app.request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+
+		expect(first.status).toBe(410);
+		expect(retry.status).toBe(410);
+		expect(admission.runIds).toEqual(["client-run-1"]);
+		expect(admission.dispatchRunIds).toEqual(["client-run-1"]);
+		expect(exposure.seen).toHaveLength(1);
+	});
+
+	it("admits a Fargate Run without a dispatch", async () => {
+		const { store } = fakeStore([persistedConversation("fargate")]);
+		const admission = transactionalAdmissionFake(store);
+		const app = buildApp(store, recordingGate(true).gate, {
+			...fakeRunStore(),
+			runStore: admission.runStore,
+		});
+
+		const response = await app.request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+
+		expect(response.status).toBe(410);
+		expect(admission.runIds).toEqual(["client-run-1"]);
+		expect(admission.dispatchRunIds).toEqual([]);
+	});
+
+	it.each([
+		"run",
+		"dispatch",
+	] as const)("leaves neither an AgentCore Run nor dispatch when %s recording fails", async (failure) => {
+		const { store } = fakeStore([persistedConversation("agentcore")]);
+		const admission = transactionalAdmissionFake(store, failure);
+		const app = buildApp(store, recordingGate(true).gate, {
+			...fakeRunStore(),
+			runStore: admission.runStore,
+		});
+
+		const response = await app.request("/v1/conversations/conv-1/runs", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(agUiRunInput()),
+		});
+
+		expect(response.status).toBe(500);
+		expect(admission.runIds).toEqual([]);
+		expect(admission.dispatchRunIds).toEqual([]);
+	});
+});
+
 describe("POST /v1/conversations/:id/runs/:runId/interrupt", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
+		executionRuntime: "fargate",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
@@ -1458,6 +1624,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
+		executionRuntime: "fargate",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
@@ -1962,5 +2129,131 @@ describe("exposure gate (MYM-46)", () => {
 		});
 		expect(res.status).toBe(401);
 		expect(seen).toHaveLength(0);
+	});
+});
+
+describe("Conversation execution runtime gate", () => {
+	it.each([
+		["gate on", recordingRuntimeGate("agentcore").gate, "agentcore"],
+		["gate off", recordingRuntimeGate("fargate").gate, "fargate"],
+		[
+			"Statsig error",
+			new StatsigRuntimeGate({
+				initialize: async () => {
+					throw new Error("Statsig unavailable");
+				},
+				checkGate: () => true,
+			} satisfies RuntimeStatsigClientLike),
+			"fargate",
+		],
+		["break-glass", new BreakGlassRuntimeGate(), "fargate"],
+	] as const)("stamps %s selection exactly once at Conversation creation", async (_condition, runtimeGate, expectedRuntime) => {
+		const { store, created } = fakeStore();
+		const res = await buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRunStore(),
+			createInMemoryLiveStreamRelay(),
+			silentLiveStreamTelemetry,
+			runtimeGate,
+		).request("/v1/conversations", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify({}),
+		});
+
+		expect(res.status).toBe(201);
+		expect(created).toHaveLength(1);
+		expect(created[0]?.executionRuntime).toBe(expectedRuntime);
+	});
+
+	it("evaluates runtime selection after exposure allows", async () => {
+		const order: string[] = [];
+		const { store } = fakeStore();
+		const exposureGate: ExposureGate = {
+			async isAgentEnabled() {
+				order.push("exposure");
+				return true;
+			},
+		};
+		const runtimeGate: RuntimeGate = {
+			async selectRuntime() {
+				order.push("runtime");
+				return "agentcore";
+			},
+		};
+
+		const res = await buildApp(
+			store,
+			exposureGate,
+			fakeRunStore(),
+			createInMemoryLiveStreamRelay(),
+			silentLiveStreamTelemetry,
+			runtimeGate,
+		).request("/v1/conversations", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify({}),
+		});
+
+		expect(res.status).toBe(201);
+		expect(order).toEqual(["exposure", "runtime"]);
+	});
+
+	it("never re-evaluates the frozen runtime during later Run admission", async () => {
+		const { store } = fakeStore();
+		let runtimeGateCalls = 0;
+		const runtimeGate: RuntimeGate = {
+			async selectRuntime() {
+				runtimeGateCalls++;
+				if (runtimeGateCalls > 1) {
+					throw new Error(
+						"runtime gate must only run at Conversation creation",
+					);
+				}
+				return "agentcore";
+			},
+		};
+		const fakeRuns = fakeRunStore();
+		fakeRuns.runStore.admitRun = async (input) => {
+			return {
+				outcome: "created",
+				run: runRecord({
+					runId: input.runId,
+					userId: input.conversation.userId,
+					conversationId: input.conversation.conversationId,
+					status: "done",
+				}),
+			};
+		};
+		const app = buildApp(
+			store,
+			recordingGate(true).gate,
+			fakeRuns,
+			createInMemoryLiveStreamRelay(),
+			silentLiveStreamTelemetry,
+			runtimeGate,
+		);
+
+		const created = await app.request("/v1/conversations", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify({}),
+		});
+		const { conversationId } = (await created.json()) as {
+			conversationId: string;
+		};
+		const admitted = await app.request(
+			`/v1/conversations/${conversationId}/runs`,
+			{
+				method: "POST",
+				headers: identityHeaders,
+				body: JSON.stringify(agUiRunInput({ threadId: conversationId })),
+			},
+		);
+
+		expect(created.status).toBe(201);
+		expect(admitted.status).toBe(410);
+		expect(runtimeGateCalls).toBe(1);
 	});
 });

@@ -1,3 +1,5 @@
+import { recordAgentCoreDispatchInTx } from "@mymemo/agent-db/agentcore-dispatch";
+import { AGENTCORE_EXECUTION_RUNTIME } from "@mymemo/agent-db/execution-runtime";
 import {
 	ActiveRunConflictError,
 	admitQueuedRunInTx,
@@ -136,6 +138,13 @@ export async function admitRunTx(
 				summaryId: conversation.summaryId,
 			});
 			if (admission.outcome === "created") {
+				if (conversation.executionRuntime === AGENTCORE_EXECUTION_RUNTIME) {
+					await recordAgentCoreDispatchInTx(tx, {
+						userId: conversation.userId,
+						conversationId: conversation.conversationId,
+						runId: admission.run.runId,
+					});
+				}
 				await tx
 					.update(conversations)
 					.set({

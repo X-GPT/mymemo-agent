@@ -5,6 +5,7 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./schema": "./src/schema.ts",
+		"./agentcore-dispatch": "./src/canary-dispatch.ts",
 		"./artifact-store": "./src/artifact-store.ts",
 		"./canary-dispatch": "./src/canary-dispatch.ts",
 		"./client": "./src/client.ts",

@@ -112,7 +112,7 @@ export const conversations = pgTable(
 		conversationId: text("conversation_id").notNull(),
 		/** 'general' | 'collection' | 'document' — frozen at creation. */
 		scope: text("scope").notNull(),
-		/** Immutable runtime classification; public creation always takes default. */
+		/** Immutable runtime classification, selected once at Conversation creation. */
 		executionRuntime: text("execution_runtime", {
 			enum: CONVERSATION_EXECUTION_RUNTIMES,
 		})

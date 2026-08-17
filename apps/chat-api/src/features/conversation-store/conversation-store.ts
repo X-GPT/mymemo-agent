@@ -1,10 +1,12 @@
+import type { ConversationExecutionRuntime } from "@mymemo/agent-db/execution-runtime";
 import type { ChatMessagesScope } from "@/config/env";
 
 /**
  * Durable conversation registry. A conversation record is the source of truth
- * for a conversation's immutable document scope — created once and never
- * re-scoped, so a turn re-derives the same signed scope every time instead of
- * trusting per-request ids. It lives in chat-api's writable `mymemo_agent` DB,
+ * for a conversation's immutable document scope and execution runtime — both
+ * are created once and never changed, so a turn re-derives the same signed
+ * scope every time instead of trusting per-request ids. It lives in chat-api's
+ * writable `mymemo_agent` DB,
  * keyed by `{userId, conversationId}` like the sandbox lease, but is kept in a
  * separate table on purpose: the lease is a disposable optimization the reaper
  * may delete, whereas scope is a correctness/security boundary that must
@@ -25,11 +27,12 @@ export interface ConversationRef {
 }
 
 /** Input used to create a Conversation before database-owned lifecycle metadata
- * has been established. `collectionId`/`summaryId` are non-null only for the
- * matching frozen Scope. */
+ * has been established. The execution runtime and Scope are frozen here;
+ * `collectionId`/`summaryId` are non-null only for the matching Scope. */
 export interface ConversationCreateInput {
 	userId: string;
 	conversationId: string;
+	executionRuntime: ConversationExecutionRuntime;
 	scope: ConversationScope;
 	collectionId: string | null;
 	summaryId: string | null;

@@ -16,6 +16,7 @@ import { PostgresConversationStore } from "./postgres-conversation-store";
 const collectionConversation: ConversationCreateInput = {
 	userId: "user-1",
 	conversationId: "conv-1",
+	executionRuntime: "fargate",
 	scope: "collection",
 	collectionId: "col-1",
 	summaryId: null,
@@ -69,10 +70,26 @@ describe("PostgresConversationStore", () => {
 		expect(row?.executionRuntime).toBe("fargate");
 	});
 
+	it("persists the selected AgentCore runtime without exposing an update path", async () => {
+		await store.create({
+			...collectionConversation,
+			conversationId: "agentcore-conversation",
+			executionRuntime: "agentcore",
+		});
+
+		await expect(
+			store.get({
+				userId: "user-1",
+				conversationId: "agentcore-conversation",
+			}),
+		).resolves.toMatchObject({ executionRuntime: "agentcore" });
+	});
+
 	it("round-trips general and document scopes with null id columns", async () => {
 		await store.create({
 			userId: "u",
 			conversationId: "general",
+			executionRuntime: "fargate",
 			scope: "general",
 			collectionId: null,
 			summaryId: null,
@@ -80,6 +97,7 @@ describe("PostgresConversationStore", () => {
 		await store.create({
 			userId: "u",
 			conversationId: "doc",
+			executionRuntime: "fargate",
 			scope: "document",
 			collectionId: null,
 			summaryId: "sum-9",

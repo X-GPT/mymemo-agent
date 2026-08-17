@@ -19,7 +19,7 @@ The package exposes concurrency-critical operations including `startClaimedRunTx
 - `src/artifact-store.ts`: pre-upload object ledger and fence-first atomic artifact-pointer/current-metadata/`run_done` commit
 - `src/testing.ts`: PGlite harness and shared seed helpers
 
-chat-api's `PostgresRunStore` composes shared admission inside the Conversation lifecycle lock. Run-store operations compose runtime pointer publication into qualifying terminal transactions through the same live Ownership fence.
+chat-api's `PostgresRunStore` composes shared admission inside the Conversation lifecycle lock. For an `agentcore` Conversation, the new Run, its `run_started` event, and its Run-keyed dispatch outbox row share that transaction; exact retries insert nothing. Run-store operations compose runtime pointer publication into qualifying terminal transactions through the same live Ownership fence.
 
 ## Concurrency tests
 

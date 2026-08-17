@@ -42,7 +42,7 @@ Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one ex
 Required:
 
 - `AGENT_DATABASE_URL`: writable `mymemo_agent` database. It is deliberately not named `DATABASE_URL`, which denotes the read-only KB credential elsewhere. It is separate from the worker's read-only `mymemo_kb` credential. The process fails at startup when it is absent. `bun run db:migrate` in `apps/chat-api` applies migrations owned by `packages/agent-db` through its exported `MIGRATIONS_DIR`.
-- `STATSIG_SERVER_SECRET`: production exposure-gate secret; required unless `AGENT_EXPOSURE_BREAK_GLASS=true`
+- `STATSIG_SERVER_SECRET`: production exposure- and runtime-gate secret; required unless `AGENT_EXPOSURE_BREAK_GLASS=true`
 - `ARTIFACT_BUCKET`: private artifact bucket; chat-api receives read-only object access
 - `AWS_REGION`: artifact S3 region
 - `REDIS_URL`: authenticated `rediss://` URL. Missing, malformed, unauthenticated, or non-TLS values fail startup. Never log it.
@@ -51,7 +51,9 @@ Optional:
 
 - `LOG_LEVEL` (default `info`)
 - `PORT` (default `3000`)
-- `AGENT_EXPOSURE_BREAK_GLASS` (default off): when exactly `true`, allow new work without Statsig; keep it off by default in production
+- `AGENT_EXPOSURE_BREAK_GLASS` (default off): when exactly `true`, allow new work without Statsig and select `fargate` for every new Conversation; keep it off by default in production
+
+chat-api has no AgentCore dispatch queue or SSM parameter configuration. Admission ends after the transactional Postgres outbox write; publisher and consumer processes own queue delivery and the dispatch kill switch.
 - `DB_PASSWORD`: splice into a passwordless `AGENT_DATABASE_URL`
 - `DB_SSL` (default on; `disable` only for local non-TLS Postgres)
 - `LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS` (default off): when exactly `true`, allow unauthenticated `redis://` only for `localhost`, `127.0.0.1`, or `[::1]` in integration tests

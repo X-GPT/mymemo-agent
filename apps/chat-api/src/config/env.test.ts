@@ -92,6 +92,17 @@ describe("loadApiConfigFromEnv — worker-secret boundary", () => {
 			"kbDatabaseUrl",
 		);
 	});
+
+	it("ignores AgentCore queue and SSM dispatch configuration", () => {
+		const env = baseEnv();
+		env.AGENTCORE_DISPATCH_QUEUE_URL =
+			"https://sqs.us-west-2.amazonaws.com/123/dispatch";
+		env.AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = "/mymemo/dispatch/enabled";
+
+		const serialized = JSON.stringify(loadApiConfigFromEnv(env));
+		expect(serialized).not.toContain("sqs.us-west-2.amazonaws.com");
+		expect(serialized).not.toContain("/mymemo/dispatch/enabled");
+	});
 });
 
 describe("loadApiConfigFromEnv — Statsig exposure config", () => {

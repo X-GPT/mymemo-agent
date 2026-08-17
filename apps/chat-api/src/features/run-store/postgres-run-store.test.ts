@@ -1,7 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { loadRunStartedTx } from "@mymemo/agent-db/run-store";
 import { eq } from "drizzle-orm";
-import { conversations, runEvents, runs } from "@/db/schema";
+import {
+	agentCoreDispatchOutbox,
+	conversations,
+	runEvents,
+	runs,
+} from "@/db/schema";
 import { createTestDatabase, type TestDb } from "@/db/testing";
 import {
 	type ConversationRecord,
@@ -19,6 +24,7 @@ const initialActivity = new Date("2026-01-01T00:00:00.000Z");
 const conversation: ConversationRecord = {
 	userId: "user-1",
 	conversationId: "conv-1",
+	executionRuntime: "fargate",
 	scope: "collection",
 	collectionId: "col-1",
 	summaryId: null,
@@ -55,6 +61,7 @@ describe("PostgresRunStore", () => {
 	afterAll(() => tdb.close());
 
 	afterEach(async () => {
+		await tdb.db.delete(agentCoreDispatchOutbox);
 		await tdb.db.delete(runs); // cascades run_events
 		await tdb.db
 			.insert(conversations)
@@ -62,6 +69,7 @@ describe("PostgresRunStore", () => {
 			.onConflictDoUpdate({
 				target: [conversations.userId, conversations.conversationId],
 				set: {
+					executionRuntime: "fargate",
 					title: null,
 					lastActivityAt: initialActivity,
 					archivedAt: null,
@@ -106,6 +114,99 @@ describe("PostgresRunStore", () => {
 			collectionId: "col-1",
 			summaryId: null,
 		});
+	});
+
+	it("records one dispatch with a newly admitted AgentCore Run", async () => {
+		await tdb.db
+			.update(conversations)
+			.set({ executionRuntime: "agentcore" })
+			.where(eq(conversations.conversationId, "conv-1"));
+
+		await expect(
+			store.admitRun(runInput("run-agentcore", "hello AgentCore")),
+		).resolves.toMatchObject({ outcome: "created" });
+
+		expect(await tdb.db.select().from(runs)).toMatchObject([
+			{ runId: "run-agentcore", status: "queued" },
+		]);
+		expect(await tdb.db.select().from(agentCoreDispatchOutbox)).toMatchObject([
+			{
+				runId: "run-agentcore",
+				userId: "user-1",
+				conversationId: "conv-1",
+			},
+		]);
+	});
+
+	it("reattaches an exact AgentCore retry without a second dispatch", async () => {
+		await tdb.db
+			.update(conversations)
+			.set({ executionRuntime: "agentcore" })
+			.where(eq(conversations.conversationId, "conv-1"));
+		const input = runInput("run-agentcore-retry", "retry-safe work");
+
+		await expect(store.admitRun(input)).resolves.toMatchObject({
+			outcome: "created",
+		});
+		await expect(store.admitRun(input)).resolves.toMatchObject({
+			outcome: "existing",
+		});
+
+		expect(await tdb.db.select().from(agentCoreDispatchOutbox)).toHaveLength(1);
+	});
+
+	it("does not record a dispatch for a Fargate Run", async () => {
+		await expect(
+			store.admitRun(runInput("run-fargate", "stay on Fargate")),
+		).resolves.toMatchObject({ outcome: "created" });
+
+		expect(await tdb.db.select().from(agentCoreDispatchOutbox)).toEqual([]);
+	});
+
+	it("rolls back an AgentCore Run when dispatch recording fails", async () => {
+		await tdb.db
+			.update(conversations)
+			.set({ executionRuntime: "agentcore" })
+			.where(eq(conversations.conversationId, "conv-1"));
+		await tdb.db.insert(agentCoreDispatchOutbox).values({
+			runId: "run-dispatch-conflict",
+			userId: "preexisting-user",
+			conversationId: "preexisting-conversation",
+		});
+
+		await expect(
+			store.admitRun(
+				runInput("run-dispatch-conflict", "must roll back with dispatch"),
+			),
+		).rejects.toThrow();
+
+		expect(await tdb.db.select().from(runs)).toEqual([]);
+		expect(await tdb.db.select().from(runEvents)).toEqual([]);
+		expect(await tdb.db.select().from(agentCoreDispatchOutbox)).toMatchObject([
+			{
+				runId: "run-dispatch-conflict",
+				userId: "preexisting-user",
+			},
+		]);
+	});
+
+	it("does not record a dispatch when AgentCore Run admission rolls back", async () => {
+		await tdb.db
+			.update(conversations)
+			.set({ executionRuntime: "agentcore" })
+			.where(eq(conversations.conversationId, "conv-1"));
+		await store.admitRun(runInput("run-active", "first"));
+
+		await expect(
+			store.admitRun(runInput("run-rejected", "must not dispatch")),
+		).rejects.toBeInstanceOf(ActiveRunExistsError);
+
+		expect(
+			await tdb.db
+				.select()
+				.from(agentCoreDispatchOutbox)
+				.where(eq(agentCoreDispatchOutbox.runId, "run-rejected")),
+		).toEqual([]);
 	});
 
 	it("idempotently admits one canonical AG-UI Run input", async () => {
