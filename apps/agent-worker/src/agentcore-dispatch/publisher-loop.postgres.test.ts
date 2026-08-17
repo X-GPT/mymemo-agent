@@ -12,10 +12,10 @@ import type { WorkerLogger } from "../logger";
 import { AgentCoreDispatchPublisherLoop } from "./publisher-loop";
 
 const DB_URL = process.env.AGENT_DATABASE_URL ?? "";
-const RUN =
+const shouldRunPostgresTests =
 	DB_URL !== "" &&
 	process.env.RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS === "true";
-if (RUN) setDefaultTimeout(30_000);
+if (shouldRunPostgresTests) setDefaultTimeout(30_000);
 
 const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 let pool: Pool;
@@ -62,7 +62,7 @@ class CapturingPool implements AdvisoryLockPool {
 	}
 }
 
-describe.skipIf(!RUN)(
+describe.skipIf(!shouldRunPostgresTests)(
 	"AgentCore dispatch publisher lock against real Postgres",
 	() => {
 		beforeAll(() => {

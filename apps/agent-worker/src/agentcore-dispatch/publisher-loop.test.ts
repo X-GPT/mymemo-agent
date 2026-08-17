@@ -17,25 +17,15 @@ const dispatch: AgentCoreDispatchIdentity = {
 	admittedAt: new Date("2026-08-17T12:00:00.000Z"),
 };
 
-class LostLockPool implements AdvisoryLockPool {
-	async connect(): Promise<AdvisoryLockClient> {
-		return {
-			async query(text: string) {
-				return text.includes("pg_try_advisory_lock")
-					? { rows: [{ locked: false }] }
-					: { rows: [] };
-			},
-			release() {},
-		};
-	}
-}
+class FakeLockPool implements AdvisoryLockPool {
+	constructor(private readonly locked: boolean) {}
 
-class GrantedLockPool implements AdvisoryLockPool {
 	async connect(): Promise<AdvisoryLockClient> {
+		const locked = this.locked;
 		return {
 			async query(text: string) {
 				return text.includes("pg_try_advisory_lock")
-					? { rows: [{ locked: true }] }
+					? { rows: [{ locked }] }
 					: { rows: [] };
 			},
 			release() {},
@@ -84,7 +74,7 @@ describe("AgentCoreDispatchPublisherLoop.runOnce", () => {
 		const logger = new RecordingLogger();
 		let publishCalls = 0;
 		const loop = new AgentCoreDispatchPublisherLoop({
-			pool: new LostLockPool(),
+			pool: new FakeLockPool(false),
 			publisher: {
 				async publishPending() {
 					publishCalls += 1;
@@ -125,7 +115,7 @@ describe("AgentCoreDispatchPublisherLoop.runOnce", () => {
 		const logger = new RecordingLogger();
 		const calls: string[] = [];
 		const loop = new AgentCoreDispatchPublisherLoop({
-			pool: new GrantedLockPool(),
+			pool: new FakeLockPool(true),
 			publisher: createCanaryDispatchPublisher({
 				publisherId: "worker-1",
 				control: {
@@ -185,7 +175,7 @@ describe("AgentCoreDispatchPublisherLoop.runOnce", () => {
 		const logger = new RecordingLogger();
 		let confirmed = false;
 		const loop = new AgentCoreDispatchPublisherLoop({
-			pool: new GrantedLockPool(),
+			pool: new FakeLockPool(true),
 			publisher: createCanaryDispatchPublisher({
 				publisherId: "worker-1",
 				control: { isEnabled: async () => true },
@@ -242,7 +232,7 @@ describe("AgentCoreDispatchPublisherLoop.runOnce", () => {
 		const logger = new RecordingLogger();
 		let attempts = 0;
 		const loop = new AgentCoreDispatchPublisherLoop({
-			pool: new GrantedLockPool(),
+			pool: new FakeLockPool(true),
 			publisher: {
 				publishPending: async () => {
 					attempts += 1;
@@ -284,6 +274,59 @@ describe("AgentCoreDispatchPublisherLoop.runOnce", () => {
 });
 
 describe("AgentCoreDispatchPublisherLoop lifecycle", () => {
+	it("does not add a full interval after a slow tick", async () => {
+		let publishCalls = 0;
+		let firstTickStarted!: () => void;
+		const firstStarted = new Promise<void>((resolve) => {
+			firstTickStarted = resolve;
+		});
+		let finishFirstTick!: () => void;
+		const firstPublication = new Promise<void>((resolve) => {
+			finishFirstTick = resolve;
+		});
+		let secondTickStarted!: () => void;
+		const secondStarted = new Promise<void>((resolve) => {
+			secondTickStarted = resolve;
+		});
+		const loop = new AgentCoreDispatchPublisherLoop({
+			pool: new FakeLockPool(true),
+			publisher: {
+				publishPending: async () => {
+					publishCalls += 1;
+					if (publishCalls === 1) {
+						firstTickStarted();
+						await firstPublication;
+					} else {
+						secondTickStarted();
+					}
+					return {
+						status: "enabled",
+						publishedRunIds: [],
+						ambiguousRunIds: [],
+					};
+				},
+			},
+			pendingStore: { oldestUnpublishedAdmittedAt: async () => null },
+			intervalMs: 100,
+			logger: new RecordingLogger(),
+		});
+
+		loop.start();
+		await firstStarted;
+		await new Promise((resolve) => setTimeout(resolve, 110));
+		finishFirstTick();
+		await Promise.race([
+			secondStarted,
+			new Promise((_, reject) =>
+				setTimeout(
+					() => reject(new Error("second tick missed the fixed cadence")),
+					50,
+				),
+			),
+		]);
+		await loop.stop();
+	});
+
 	it("ticks within the configured interval and drains its lock on stop", async () => {
 		const pool = new TrackingGrantedLockPool();
 		let tickStarted!: () => void;

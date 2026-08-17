@@ -189,7 +189,7 @@ describe("loadWorkerConfigFromEnv — cleanup loop", () => {
 	});
 });
 
-describe("loadWorkerConfigFromEnv — AgentCore dispatch publisher", () => {
+describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
 	it("loads queue and gate authority with a two-second tick", () => {
 		expect(loadAgentCoreDispatchPublisherConfigFromEnv(baseEnv())).toEqual({
 			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/agentcore-dispatch",

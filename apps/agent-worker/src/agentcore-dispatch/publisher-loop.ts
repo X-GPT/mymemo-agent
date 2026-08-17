@@ -68,44 +68,17 @@ function recordPendingAge(
 	});
 }
 
-function recordAmbiguousError(
+function recordPublisherError(
 	logger: WorkerLogger,
 	pendingAgeMs: number,
-	ambiguousCount: number,
+	reason: "ambiguous_send" | "tick_failed",
+	details: Record<string, unknown>,
 ): void {
 	logger.error({
 		message: "AgentCore dispatch publisher metric",
 		outcome: "error",
-		reason: "ambiguous_send",
-		ambiguousCount,
-		PendingAgeMs: pendingAgeMs,
-		PublisherErrors: 1,
-		_aws: {
-			Timestamp: Date.now(),
-			CloudWatchMetrics: [
-				{
-					Namespace: "MyMemo/AgentCoreDispatch",
-					Dimensions: [[]],
-					Metrics: [
-						{ Name: "PublisherErrors", Unit: "Count" },
-						{ Name: "PendingAgeMs", Unit: "Milliseconds" },
-					],
-				},
-			],
-		},
-	});
-}
-
-function recordTickFailure(
-	logger: WorkerLogger,
-	pendingAgeMs: number,
-	error: unknown,
-): void {
-	logger.error({
-		message: "AgentCore dispatch publisher metric",
-		outcome: "error",
-		reason: "tick_failed",
-		error: toMessage(error),
+		reason,
+		...details,
 		PendingAgeMs: pendingAgeMs,
 		PublisherErrors: 1,
 		_aws: {
@@ -154,10 +127,11 @@ export class AgentCoreDispatchPublisherLoop {
 				return { outcome: "lost_lock" };
 			}
 			if (locked.result.ambiguousRunIds.length > 0) {
-				recordAmbiguousError(
+				recordPublisherError(
 					this.options.logger,
 					pendingAgeMs,
-					locked.result.ambiguousRunIds.length,
+					"ambiguous_send",
+					{ ambiguousCount: locked.result.ambiguousRunIds.length },
 				);
 				return { outcome: "error", pendingAgeMs };
 			}
@@ -166,7 +140,9 @@ export class AgentCoreDispatchPublisherLoop {
 			recordPendingAge(this.options.logger, outcome, pendingAgeMs);
 			return { outcome, pendingAgeMs };
 		} catch (error) {
-			recordTickFailure(this.options.logger, pendingAgeMs, error);
+			recordPublisherError(this.options.logger, pendingAgeMs, "tick_failed", {
+				error: toMessage(error),
+			});
 			return { outcome: "error", pendingAgeMs };
 		}
 	}
@@ -188,20 +164,27 @@ export class AgentCoreDispatchPublisherLoop {
 		await this.inFlight;
 	}
 
-	private scheduleNext(): void {
-		this.timer = setTimeout(() => void this.tick(), this.options.intervalMs);
+	private scheduleNext(delayMs = this.options.intervalMs): void {
+		this.timer = setTimeout(() => void this.tick(), delayMs);
 	}
 
 	private async tick(): Promise<void> {
 		if (!this.running) return;
 		this.timer = undefined;
+		const startedAt = performance.now();
 		const inFlight = this.runOnce();
 		this.inFlight = inFlight;
 		try {
 			await inFlight;
 		} finally {
 			if (this.inFlight === inFlight) this.inFlight = undefined;
-			if (this.running) this.scheduleNext();
+			if (this.running) {
+				const remainingMs = Math.max(
+					0,
+					this.options.intervalMs - (performance.now() - startedAt),
+				);
+				this.scheduleNext(remainingMs);
+			}
 		}
 	}
 }
