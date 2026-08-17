@@ -16,6 +16,7 @@ import type { AgentCoreDispatchPublisherConfig } from "./config";
 import type { PublisherLogger } from "./logger";
 import type { AgentCoreDispatchPublisher } from "./publisher-loop";
 import { recordPublisherPublication } from "./publisher-metrics";
+import { PublisherTickFailure } from "./publisher-tick-failure";
 
 interface DrainPendingOptions {
 	signal: AbortSignal;
@@ -25,26 +26,31 @@ interface DrainPendingOptions {
 		result: AgentCoreDispatchPublishResult,
 		pendingAgeMs: number,
 	): void;
+	now?: () => number;
 }
 
 /** Drain bounded batches without extending a tick after shutdown or uncertainty. */
 export async function drainPendingAgentCoreDispatches(
 	options: DrainPendingOptions,
 ): Promise<void> {
+	const now = options.now ?? Date.now;
 	while (!options.signal.aborted) {
 		const oldest = await options.loadOldestAdmittedAt();
-		const pendingAgeMs = oldest
-			? Math.max(0, Date.now() - oldest.getTime())
-			: 0;
-		const result = await options.publishBatch();
-		options.recordPublication(result, pendingAgeMs);
+		const pendingAgeMs = oldest ? Math.max(0, now() - oldest.getTime()) : 0;
+		try {
+			const result = await options.publishBatch();
+			options.recordPublication(result, pendingAgeMs);
 
-		if (
-			result.status === "disabled" ||
-			result.ambiguousRunIds.length > 0 ||
-			result.publishedRunIds.length < MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE
-		) {
-			return;
+			if (
+				result.status === "disabled" ||
+				result.ambiguousRunIds.length > 0 ||
+				result.publishedRunIds.length <
+					MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE
+			) {
+				return;
+			}
+		} catch (error) {
+			throw new PublisherTickFailure(error, pendingAgeMs);
 		}
 	}
 }

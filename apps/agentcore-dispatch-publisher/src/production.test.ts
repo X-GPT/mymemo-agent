@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { drainPendingAgentCoreDispatches } from "./production";
+import { PublisherTickFailure } from "./publisher-tick-failure";
 
 function published(count: number) {
 	return {
@@ -62,5 +63,26 @@ describe("drainPendingAgentCoreDispatches", () => {
 		});
 
 		expect(publishCalls).toBe(1);
+	});
+
+	it("preserves the sampled pending age when publication fails", async () => {
+		const failure = new Error("SSM unavailable");
+		let caught: unknown;
+		try {
+			await drainPendingAgentCoreDispatches({
+				signal: new AbortController().signal,
+				now: () => Date.parse("2026-08-17T20:00:05.000Z"),
+				loadOldestAdmittedAt: async () => new Date("2026-08-17T20:00:00.000Z"),
+				publishBatch: async () => {
+					throw failure;
+				},
+				recordPublication() {},
+			});
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(PublisherTickFailure);
+		expect(caught).toMatchObject({ failure, pendingAgeMs: 5_000 });
 	});
 });

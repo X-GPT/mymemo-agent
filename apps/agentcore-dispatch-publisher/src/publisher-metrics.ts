@@ -28,16 +28,20 @@ export function recordPublisherLostLock(logger: PublisherLogger): void {
 export function recordPublisherTickFailure(
 	logger: PublisherLogger,
 	error: unknown,
+	pendingAgeMs?: number,
 ): void {
+	const metrics: Array<{ Name: string; Unit: "Count" | "Milliseconds" }> = [
+		{ Name: "PublisherErrors", Unit: "Count" },
+	];
+	if (pendingAgeMs !== undefined) {
+		metrics.push({ Name: "PendingAgeMs", Unit: "Milliseconds" });
+	}
 	logger.error({
-		...publisherMetricEnvelope([
-			{ Name: "PublisherErrors", Unit: "Count" },
-			{ Name: "PendingAgeMs", Unit: "Milliseconds" },
-		]),
+		...publisherMetricEnvelope(metrics),
 		outcome: "error",
 		reason: "tick_failed",
 		error: toMessage(error),
-		PendingAgeMs: 0,
+		...(pendingAgeMs === undefined ? {} : { PendingAgeMs: pendingAgeMs }),
 		PublisherErrors: 1,
 	});
 }

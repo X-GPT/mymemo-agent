@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import type { PublisherLogger } from "./logger";
-import { recordPublisherPublication } from "./publisher-metrics";
+import {
+	recordPublisherPublication,
+	recordPublisherTickFailure,
+} from "./publisher-metrics";
 
 class RecordingLogger implements PublisherLogger {
 	readonly infoRecords: Record<string, unknown>[] = [];
@@ -44,5 +47,33 @@ describe("recordPublisherPublication", () => {
 				PublisherErrors: 1,
 			},
 		]);
+	});
+});
+
+describe("recordPublisherTickFailure", () => {
+	it("retains a pending age sampled before the failure", () => {
+		const logger = new RecordingLogger();
+		recordPublisherTickFailure(logger, new Error("SSM unavailable"), 5_000);
+
+		expect(logger.errorRecords).toMatchObject([
+			{
+				reason: "tick_failed",
+				error: "SSM unavailable",
+				PendingAgeMs: 5_000,
+				PublisherErrors: 1,
+			},
+		]);
+	});
+
+	it("omits pending age when sampling itself failed", () => {
+		const logger = new RecordingLogger();
+		recordPublisherTickFailure(logger, new Error("database unavailable"));
+
+		expect(logger.errorRecords[0]).not.toHaveProperty("PendingAgeMs");
+		expect(logger.errorRecords[0]?._aws).toMatchObject({
+			CloudWatchMetrics: [
+				{ Metrics: [{ Name: "PublisherErrors", Unit: "Count" }] },
+			],
+		});
 	});
 });

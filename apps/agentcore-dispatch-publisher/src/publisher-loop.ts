@@ -5,6 +5,7 @@ import {
 	recordPublisherLostLock,
 	recordPublisherTickFailure,
 } from "./publisher-metrics";
+import { PublisherTickFailure } from "./publisher-tick-failure";
 
 export const PUBLISHER_ADVISORY_LOCK_KEY = 8_242_869_154_306_403;
 
@@ -56,7 +57,11 @@ export async function runAgentCoreDispatchPublisher(
 		try {
 			await publishAgentCoreDispatchTick(options);
 		} catch (error) {
-			recordPublisherTickFailure(options.logger, error);
+			recordPublisherTickFailure(
+				options.logger,
+				error instanceof PublisherTickFailure ? error.failure : error,
+				error instanceof PublisherTickFailure ? error.pendingAgeMs : undefined,
+			);
 		}
 		if (!options.signal.aborted) {
 			await wait(options.intervalMs, options.signal);

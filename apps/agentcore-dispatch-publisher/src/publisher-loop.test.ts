@@ -5,6 +5,7 @@ import {
 	publishAgentCoreDispatchTick,
 	runAgentCoreDispatchPublisher,
 } from "./publisher-loop";
+import { PublisherTickFailure } from "./publisher-tick-failure";
 
 class FakeLockPool implements AdvisoryLockPool {
 	constructor(private readonly locked: boolean) {}
@@ -100,6 +101,32 @@ describe("runAgentCoreDispatchPublisher", () => {
 		expect(publishCalls).toBe(2);
 		expect(logger.errorRecords).toMatchObject([
 			{ reason: "tick_failed", error: "SSM unavailable", PublisherErrors: 1 },
+		]);
+	});
+
+	it("records the sampled pending age from a failed publication", async () => {
+		const shutdown = new AbortController();
+		const logger = new RecordingLogger();
+		await runAgentCoreDispatchPublisher({
+			pool: new FakeLockPool(true),
+			publisher: {
+				publishPending: async () => {
+					throw new PublisherTickFailure(new Error("SSM unavailable"), 5_000);
+				},
+			},
+			intervalMs: 2_000,
+			signal: shutdown.signal,
+			wait: async () => shutdown.abort(),
+			logger,
+		});
+
+		expect(logger.errorRecords).toMatchObject([
+			{
+				reason: "tick_failed",
+				error: "SSM unavailable",
+				PendingAgeMs: 5_000,
+				PublisherErrors: 1,
+			},
 		]);
 	});
 });
