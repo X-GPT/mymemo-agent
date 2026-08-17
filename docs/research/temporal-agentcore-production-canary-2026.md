@@ -83,12 +83,12 @@ unavailability. It is not warranted for this canary.
 Temporal also cannot replace these MyMemo domain invariants merely by wrapping them in a
 Workflow:
 
-- immutable Conversation execution-lane isolation;
+- immutable Conversation execution-runtime isolation;
 - the exact acquisition transaction that locks Conversation before Run;
 - the live Ownership epoch and lease used to fence every write;
 - Run-at-most-once semantics across ambiguous delivery;
 - durable interruption and Outcome precedence;
-- lane-agnostic Reclamation of expired Ownership;
+- runtime-agnostic Reclamation of expired Ownership;
 - Agent-session, Workspace, Live Stream, transcript, and artifact rules.
 
 These invariants govern database state shared with the unchanged Fargate runtime. Temporal
@@ -225,7 +225,7 @@ If Temporal were adopted **only as the campaign orchestrator**, the impact would
 
 | Artifact | Impact |
 | --- | --- |
-| [#447 execution lanes](https://github.com/X-GPT/mymemo-agent/issues/447) | Unchanged. |
+| [#447](https://github.com/X-GPT/mymemo-agent/issues/447) | Unchanged. |
 | [#448 shared Run serving](https://github.com/X-GPT/mymemo-agent/issues/448) | Unchanged. |
 | [#449 Campaign/admission/outbox](https://github.com/X-GPT/mymemo-agent/issues/449) | Campaign and atomic admission/outbox remain. Add a stable Temporal Workflow ID/run reference beside or instead of the Step Functions execution ARN. |
 | [#450 dispatch/acquisition](https://github.com/X-GPT/mymemo-agent/issues/450) | Unchanged if SQS stays. If Task Queues replace SQS, rewrite publisher, envelope/receipt transport, poison handling, DLQ expectations, Lambda acknowledgement, visibility timeout, and repair semantics; exact acquisition remains. |
