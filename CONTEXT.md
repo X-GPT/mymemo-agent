@@ -45,7 +45,7 @@ The immutable choice, made once at Conversation creation, of which trusted
 runtime executes a Conversation's Runs: `fargate` or `agentcore`. A
 Conversation never mixes runtimes; reassignment exists only as a documented
 operator break-glass step.
-_Avoid_: execution lane, Run target, worker preference, routing hint
+_Avoid_: Run target, worker preference, routing hint
 
 **AgentCore dispatch**:
 An at-least-once request for AgentCore to acquire one exact Run from a

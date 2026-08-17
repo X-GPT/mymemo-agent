@@ -7,24 +7,24 @@ source "$script_dir/lib/load_config.sh"
 load_deploy_config
 
 action="${1:-}"
-candidate_lane_aware="${2:-false}"
+candidate_runtime_aware="${2:-false}"
 case "$action" in
   prepare-fargate-deployment)
-    if [[ "$candidate_lane_aware" != "true" && "$candidate_lane_aware" != "false" ]]; then
-      echo "Candidate lane-awareness must be exactly true or false" >&2
+    if [[ "$candidate_runtime_aware" != "true" && "$candidate_runtime_aware" != "false" ]]; then
+      echo "Candidate runtime-awareness must be exactly true or false" >&2
       exit 1
     fi
     ;;
-  mark-fargate-lane-aware)
-    candidate_lane_aware="true"
+  mark-fargate-runtime-aware)
+    candidate_runtime_aware="true"
     ;;
   *)
-    echo "Usage: $0 prepare-fargate-deployment <true|false> | mark-fargate-lane-aware" >&2
+    echo "Usage: $0 prepare-fargate-deployment <true|false> | mark-fargate-runtime-aware" >&2
     exit 1
     ;;
 esac
 
-task_definition="${EXECUTION_LANE_ASSERTION_TASK_DEFINITION_ARN:-$(
+task_definition="${EXECUTION_RUNTIME_ASSERTION_TASK_DEFINITION_ARN:-$(
   terraform -chdir=infra/terraform output -raw agent_migration_task_definition_arn
 )}"
 ecs_cluster_arn="$(
@@ -47,18 +47,18 @@ if [[ "$terraform_assign_public_ip" == "true" ]]; then
 fi
 
 overrides="$(bun -e '
-  const [action, candidateLaneAware] = process.argv.slice(1);
+  const [action, candidateRuntimeAware] = process.argv.slice(1);
   console.log(JSON.stringify({
     containerOverrides: [{
       name: "agent-migration",
-      command: ["db:execution-lane-deployment"],
+      command: ["db:execution-runtime-deployment"],
       environment: [
-        { name: "EXECUTION_LANE_DEPLOYMENT_ACTION", value: action },
-        { name: "CANDIDATE_FARGATE_LANE_AWARE", value: candidateLaneAware },
+        { name: "EXECUTION_RUNTIME_DEPLOYMENT_ACTION", value: action },
+        { name: "CANDIDATE_FARGATE_RUNTIME_AWARE", value: candidateRuntimeAware },
       ],
     }],
   }));
-' "$action" "$candidate_lane_aware")"
+' "$action" "$candidate_runtime_aware")"
 
 task_arn="$(
   aws ecs run-task \
@@ -72,7 +72,7 @@ task_arn="$(
 )"
 
 if [[ -z "$task_arn" || "$task_arn" == "None" ]]; then
-  echo "Failed to start execution-lane deployment assertion task" >&2
+  echo "Failed to start execution-runtime deployment assertion task" >&2
   exit 1
 fi
 
@@ -96,6 +96,6 @@ stopped_reason="$(
 )"
 
 if [[ "$exit_code" != "0" ]]; then
-  echo "Execution-lane deployment assertion failed with exit code $exit_code: $stopped_reason" >&2
+  echo "Execution-runtime deployment assertion failed with exit code $exit_code: $stopped_reason" >&2
   exit 1
 fi

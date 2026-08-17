@@ -1,4 +1,4 @@
-import { requireConversationExecutionLane } from "@mymemo/agent-db/execution-lane";
+import { requireConversationExecutionRuntime } from "@mymemo/agent-db/execution-runtime";
 import {
 	and,
 	desc,
@@ -30,7 +30,7 @@ type ConversationRow = typeof conversations.$inferSelect;
 type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 function toConversationRecord(row: ConversationRow): ConversationRecord {
-	requireConversationExecutionLane(row.executionLane);
+	requireConversationExecutionRuntime(row.executionRuntime);
 	return { ...row, scope: row.scope as ConversationScope };
 }
 

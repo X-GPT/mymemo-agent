@@ -23,7 +23,7 @@ RUN cd /temp/prod && bun install --frozen-lockfile --production
 
 # Final release image.
 FROM base AS release
-LABEL com.mymemo.agent-worker.execution-lane-aware="true"
+LABEL com.mymemo.agent-worker.execution-runtime-aware="true"
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agent-worker/src apps/agent-worker/src
 COPY apps/agent-worker/package.json apps/agent-worker/tsconfig.json apps/agent-worker/

@@ -111,7 +111,7 @@ describe("claimConversationTx", () => {
 	it("claims only Fargate Conversations", async () => {
 		await tdb.db
 			.update(conversations)
-			.set({ executionLane: "agentcore_canary" })
+			.set({ executionRuntime: "agentcore" })
 			.where(eq(conversations.conversationId, "conv-1"));
 		await seedRun({
 			runId: "run-agentcore",

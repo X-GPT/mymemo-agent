@@ -340,12 +340,12 @@ describe("POST /v1/conversations", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("does not let public callers select an execution lane", async () => {
+	it("does not let public callers select an execution runtime", async () => {
 		const { store, created } = fakeStore();
 		const res = await buildApp(store).request("/v1/conversations", {
 			method: "POST",
 			headers: identityHeaders,
-			body: JSON.stringify({ executionLane: "agentcore_canary" }),
+			body: JSON.stringify({ executionRuntime: "agentcore" }),
 		});
 
 		expect(res.status).toBe(400);
@@ -822,7 +822,7 @@ describe("DELETE /v1/conversations/:id", () => {
 				conversationId: "canary-delete",
 				scope: "collection",
 				collectionId: "canary-collection",
-				executionLane: "agentcore_canary",
+				executionRuntime: "agentcore",
 			});
 			await tdb.db.insert(runs).values({
 				runId: "canary-delete-run",

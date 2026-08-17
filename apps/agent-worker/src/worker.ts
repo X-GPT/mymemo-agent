@@ -1,4 +1,4 @@
-import { FARGATE_EXECUTION_LANE } from "@mymemo/agent-db/execution-lane";
+import { FARGATE_EXECUTION_RUNTIME } from "@mymemo/agent-db/execution-runtime";
 import type { WorkerLogger } from "./logger";
 
 export interface WorkerOptions {
@@ -10,7 +10,7 @@ export interface WorkerOptions {
 
 export interface HealthSnapshot {
 	status: "ok";
-	executionLane: typeof FARGATE_EXECUTION_LANE;
+	executionRuntime: typeof FARGATE_EXECUTION_RUNTIME;
 	workerId: string;
 	activeConversations: number;
 	maxConcurrentConversations: number;
@@ -135,7 +135,7 @@ export class Worker {
 	healthSnapshot(): HealthSnapshot {
 		return {
 			status: "ok",
-			executionLane: FARGATE_EXECUTION_LANE,
+			executionRuntime: FARGATE_EXECUTION_RUNTIME,
 			workerId: this.workerId,
 			activeConversations: this.active.size,
 			maxConcurrentConversations: this.maxConcurrentConversations,

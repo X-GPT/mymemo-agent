@@ -49,7 +49,7 @@ async function seedDispatch(
 			userId: exact.userId,
 			conversationId: exact.conversationId,
 			scope: "general",
-			executionLane: "agentcore_canary",
+			executionRuntime: "agentcore",
 		});
 		await tx.insert(runs).values({
 			runId: exact.runId,

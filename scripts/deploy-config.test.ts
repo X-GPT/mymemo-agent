@@ -560,12 +560,12 @@ describe("agent deployment config", () => {
 			join(root, "scripts", "deploy", "roll_ecs_services.sh"),
 			"utf8",
 		);
-		const laneAssertionScript = readFileSync(
+		const runtimeAssertionScript = readFileSync(
 			join(
 				root,
 				"scripts",
 				"deploy",
-				"run_execution_lane_deployment_assertion.sh",
+				"run_execution_runtime_deployment_assertion.sh",
 			),
 			"utf8",
 		);
@@ -585,49 +585,49 @@ describe("agent deployment config", () => {
 		expect(rolloutScript).toContain(
 			'--task-definition "$agent_worker_task_definition"',
 		);
-		expect(ecsConfig).not.toContain("body.executionLane !== 'fargate'");
+		expect(ecsConfig).not.toContain("body.executionRuntime !== 'fargate'");
 		expect(workerDockerfile).toContain(
-			'LABEL com.mymemo.agent-worker.execution-lane-aware="true"',
+			'LABEL com.mymemo.agent-worker.execution-runtime-aware="true"',
 		);
 		expect(readFileSync(join(terraformDir, "locals.tf"), "utf8")).not.toContain(
-			"MYMEMO_FARGATE_EXECUTION_LANE_AWARE",
+			"MYMEMO_FARGATE_EXECUTION_RUNTIME_AWARE",
 		);
-		expect(rolloutScript).toContain("read_agent_worker_lane_awareness");
+		expect(rolloutScript).toContain("read_agent_worker_runtime_awareness");
 		expect(rolloutScript).toContain("aws ecr batch-get-image");
 		expect(rolloutScript).toContain("aws ecr get-download-url-for-layer");
 		expect(rolloutScript).toContain(
-			"com.mymemo.agent-worker.execution-lane-aware",
+			"com.mymemo.agent-worker.execution-runtime-aware",
 		);
 		expect(rolloutScript).toContain(
 			'expected_task_definition="$agent_worker_task_definition"',
 		);
 		expect(rolloutScript).toContain(
-			"Fargate deployment is not fully execution-lane-aware",
+			"Fargate deployment is not fully execution-runtime-aware",
 		);
 		expect(rolloutScript).toContain(
-			"run_execution_lane_deployment_assertion.sh",
+			"run_execution_runtime_deployment_assertion.sh",
 		);
 		expect(rolloutScript).toContain("prepare-fargate-deployment");
-		expect(rolloutScript).toContain("mark-fargate-lane-aware");
+		expect(rolloutScript).toContain("mark-fargate-runtime-aware");
 		expect(rolloutScript.indexOf("prepare-fargate-deployment")).toBeLessThan(
 			rolloutScript.indexOf("aws ecs update-service"),
 		);
-		expect(rolloutScript.indexOf("mark-fargate-lane-aware")).toBeGreaterThan(
+		expect(rolloutScript.indexOf("mark-fargate-runtime-aware")).toBeGreaterThan(
 			rolloutScript.indexOf("for task_definition in"),
 		);
 		expect(rolloutScript).toContain("AGENT_WORKER_TASK_DEFINITION_ARN");
-		expect(laneAssertionScript).toContain(
-			"EXECUTION_LANE_ASSERTION_TASK_DEFINITION_ARN",
+		expect(runtimeAssertionScript).toContain(
+			"EXECUTION_RUNTIME_ASSERTION_TASK_DEFINITION_ARN",
 		);
 		expect(rolloutScript).toContain("--desired-status STOPPED");
 		expect(rolloutScript).toContain(
 			"tasks[?lastStatus != `STOPPED`].taskDefinitionArn",
 		);
-		expect(laneAssertionScript).toContain(
-			'command: ["db:execution-lane-deployment"]',
+		expect(runtimeAssertionScript).toContain(
+			'command: ["db:execution-runtime-deployment"]',
 		);
-		expect(laneAssertionScript).toContain(
-			'CANDIDATE_FARGATE_LANE_AWARE", value: candidateLaneAware',
+		expect(runtimeAssertionScript).toContain(
+			'CANDIDATE_FARGATE_RUNTIME_AWARE", value: candidateRuntimeAware',
 		);
 	});
 
@@ -964,7 +964,7 @@ describe("agent deployment config", () => {
 			"prod_smoke.sh",
 			"roll_ecs_services.sh",
 			"run_agent_migration.sh",
-			"run_execution_lane_deployment_assertion.sh",
+			"run_execution_runtime_deployment_assertion.sh",
 		]) {
 			const content = readFileSync(
 				join(root, "scripts", "deploy", script),

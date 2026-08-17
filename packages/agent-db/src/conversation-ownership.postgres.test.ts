@@ -356,11 +356,11 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 	});
 
 	describe("concurrent reclaimers", () => {
-		it("split lapsed Conversations across both lanes without double-terminalizing their Runs", async () => {
+		it("split lapsed Conversations across both runtimes without double-terminalizing their Runs", async () => {
 			await seedConversations("conv-a", "conv-b");
 			await db
 				.update(conversations)
-				.set({ executionLane: "agentcore_canary" })
+				.set({ executionRuntime: "agentcore" })
 				.where(conversationKey("conv-a"));
 			await seedRun({ runId: "a", conversationId: "conv-a", order: 0 });
 			await seedRun({ runId: "b", conversationId: "conv-b", order: 1 });
@@ -477,11 +477,11 @@ describe.skipIf(!RUN)("the Claim protocol against real Postgres", () => {
 	});
 
 	describe("concurrent claimants", () => {
-		it("keeps a Fargate Claim isolated from concurrent AgentCore-canary acquisition", async () => {
+		it("keeps a Fargate Claim isolated from concurrent AgentCore acquisition", async () => {
 			await seedConversations("conv-agentcore", "conv-fargate");
 			await db
 				.update(conversations)
-				.set({ executionLane: "agentcore_canary" })
+				.set({ executionRuntime: "agentcore" })
 				.where(conversationKey("conv-agentcore"));
 			await seedRun({
 				runId: "agentcore",
