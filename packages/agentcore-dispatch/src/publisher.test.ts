@@ -52,6 +52,44 @@ describe("AgentCore dispatch publisher", () => {
 		expect(calls).toEqual(["control"]);
 	});
 
+	it("does not claim when shutdown arrives during the initial gate read", async () => {
+		const shutdown = new AbortController();
+		const calls: string[] = [];
+		const publisher = createAgentCoreDispatchPublisher({
+			publisherId: "publisher-1",
+			signal: shutdown.signal,
+			control: {
+				isEnabled: async () => {
+					calls.push("control");
+					shutdown.abort();
+					return true;
+				},
+			},
+			store: {
+				claim: async () => {
+					calls.push("claim");
+					return [dispatch];
+				},
+				confirm: async () => {
+					calls.push("confirm");
+					return true;
+				},
+			},
+			queue: {
+				send: async () => {
+					calls.push("send");
+				},
+			},
+		});
+
+		await expect(publisher.publishPending()).resolves.toEqual({
+			status: "enabled",
+			publishedRunIds: [],
+			ambiguousRunIds: [],
+		});
+		expect(calls).toEqual(["control"]);
+	});
+
 	it("confirms a successful send only after the leased claim returns", async () => {
 		const calls: string[] = [];
 		const publisher = createAgentCoreDispatchPublisher({

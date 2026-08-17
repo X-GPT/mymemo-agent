@@ -8,7 +8,7 @@ function baseEnv(): Record<string, string | undefined> {
 		DB_SSL: "disable",
 		AWS_REGION: "us-west-2",
 		CANARY_DISPATCH_QUEUE_URL:
-			"https://sqs.us-west-2.amazonaws.com/123/agentcore-dispatch",
+			"https://sqs.us-west-2.amazonaws.com/123456789012/agentcore-dispatch",
 		CANARY_ENABLED_PARAMETER_NAME: "/mymemo/agentcore-dispatch/enabled",
 		LOG_LEVEL: "info",
 	};
@@ -20,7 +20,8 @@ describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
 			agentDatabaseUrl:
 				"postgresql://publisher:secret@localhost:5432/mymemo_agent",
 			awsRegion: "us-west-2",
-			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/agentcore-dispatch",
+			queueUrl:
+				"https://sqs.us-west-2.amazonaws.com/123456789012/agentcore-dispatch",
 			enabledParameterName: "/mymemo/agentcore-dispatch/enabled",
 			intervalMs: 2_000,
 			logLevel: "info",
@@ -54,10 +55,22 @@ describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
 		["AGENT_DATABASE_URL", "https://publisher@example.com/mymemo_agent"],
 		["AWS_REGION", "us west 2"],
 		["AWS_REGION", " us-west-2"],
-		["CANARY_DISPATCH_QUEUE_URL", "https://example.com/123/dispatch"],
+		["CANARY_DISPATCH_QUEUE_URL", "https://example.com/123456789012/dispatch"],
 		[
 			"CANARY_DISPATCH_QUEUE_URL",
-			"https://sqs.us-east-1.amazonaws.com/123/dispatch",
+			"https://sqs.us-east-1.amazonaws.com/123456789012/dispatch",
+		],
+		[
+			"CANARY_DISPATCH_QUEUE_URL",
+			"https://sqs.us-west-2.amazonaws.com/not-an-account/dispatch",
+		],
+		[
+			"CANARY_DISPATCH_QUEUE_URL",
+			"https://sqs.us-west-2.amazonaws.com/123456789012/dispatch/extra",
+		],
+		[
+			"CANARY_DISPATCH_QUEUE_URL",
+			"https://sqs.us-west-2.amazonaws.com/123456789012/dispatch.fifo",
 		],
 		["CANARY_ENABLED_PARAMETER_NAME", "/mymemo/dispatch enabled"],
 		["CANARY_ENABLED_PARAMETER_NAME", " /mymemo/dispatch/enabled"],

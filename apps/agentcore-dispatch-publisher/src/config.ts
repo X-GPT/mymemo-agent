@@ -55,6 +55,7 @@ function validateQueueUrl(value: string, region: string): string {
 		const hostname = region.startsWith("cn-")
 			? `sqs.${region}.amazonaws.com.cn`
 			: `sqs.${region}.amazonaws.com`;
+		const path = /^\/(\d{12})\/([A-Za-z0-9_-]{1,80})$/.exec(url.pathname);
 		assert(
 			url.protocol === "https:" &&
 				url.hostname === hostname &&
@@ -63,7 +64,7 @@ function validateQueueUrl(value: string, region: string): string {
 				url.password === "" &&
 				url.search === "" &&
 				url.hash === "" &&
-				url.pathname.split("/").filter(Boolean).length >= 2,
+				path !== null,
 			"invalid",
 		);
 		return value;

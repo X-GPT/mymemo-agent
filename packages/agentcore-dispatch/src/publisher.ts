@@ -45,6 +45,13 @@ export function createAgentCoreDispatchPublisher(options: {
 					ambiguousRunIds: [],
 				};
 			}
+			if (options.signal?.aborted) {
+				return {
+					status: "enabled",
+					publishedRunIds: [],
+					ambiguousRunIds: [],
+				};
+			}
 
 			const claimed = await options.store.claim({
 				publisherId: options.publisherId,

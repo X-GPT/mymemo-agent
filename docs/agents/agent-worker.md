@@ -44,9 +44,9 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 
 ## Related AgentCore dispatch publisher
 
-`apps/agentcore-dispatch-publisher/src/main.ts` is the dedicated app entrypoint for the one publisher ECS task from ADR-0026. The Conversation-serving `apps/agent-worker/src/index.ts` does not start it and does not read its SQS or SSM configuration. The publisher task checks the fail-closed SSM gate, claims a bounded outbox batch, sends strict envelopes to SQS, and confirms successful sends. Its tick-scoped session advisory lock only excludes the old/new task overlap during a rolling deployment.
+`apps/agentcore-dispatch-publisher/src/main.ts` is the dedicated app entrypoint for the one publisher ECS task from ADR-0027. The Conversation-serving `apps/agent-worker/src/index.ts` does not start it and does not read its SQS or SSM configuration. The publisher task checks the fail-closed SSM gate, claims a bounded outbox batch, sends strict envelopes to SQS, and confirms successful sends. Its tick-scoped session advisory lock only excludes the old/new task overlap during a rolling deployment.
 
-`SIGINT` or `SIGTERM` aborts the sleep after a tick; shutdown waits for an active tick to release its database connection and then closes the pool. The loop emits CloudWatch embedded metrics for lost locks, errors, and the oldest unpublished admission age. It does not publish from Run admission and does not delete outbox audit rows.
+`SIGINT` or `SIGTERM` aborts the sleep after a tick; shutdown waits for an active tick to release its database connection and then closes the pool. The loop emits CloudWatch embedded metrics for normal `lock_not_acquired` contention, errors, and the oldest unpublished admission age. It does not publish from Run admission and does not delete outbox audit rows.
 
 ## Searchable documents and Downloadable artifacts
 
