@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { PublisherLogger } from "./logger";
 import {
+	recordPublisherLockNotAcquired,
 	recordPublisherPublication,
 	recordPublisherTickFailure,
 } from "./publisher-metrics";
@@ -16,6 +17,27 @@ class RecordingLogger implements PublisherLogger {
 		this.errorRecords.push(record);
 	}
 }
+
+describe("recordPublisherLockNotAcquired", () => {
+	it("records deployment overlap as informational contention", () => {
+		const logger = new RecordingLogger();
+		recordPublisherLockNotAcquired(logger);
+
+		expect(logger.infoRecords).toMatchObject([
+			{
+				outcome: "lock_not_acquired",
+				PublisherLockNotAcquired: 1,
+			},
+		]);
+		expect(logger.infoRecords[0]?._aws).toMatchObject({
+			CloudWatchMetrics: [
+				{
+					Metrics: [{ Name: "PublisherLockNotAcquired", Unit: "Count" }],
+				},
+			],
+		});
+	});
+});
 
 describe("recordPublisherPublication", () => {
 	it("records disabled ticks and pending age", () => {

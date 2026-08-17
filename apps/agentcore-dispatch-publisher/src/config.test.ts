@@ -49,6 +49,28 @@ describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
 		);
 	});
 
+	for (const [key, value] of [
+		["AGENT_DATABASE_URL", "not-a-database-url"],
+		["AGENT_DATABASE_URL", "https://publisher@example.com/mymemo_agent"],
+		["AWS_REGION", "us west 2"],
+		["AWS_REGION", " us-west-2"],
+		["CANARY_DISPATCH_QUEUE_URL", "https://example.com/123/dispatch"],
+		[
+			"CANARY_DISPATCH_QUEUE_URL",
+			"https://sqs.us-east-1.amazonaws.com/123/dispatch",
+		],
+		["CANARY_ENABLED_PARAMETER_NAME", "/mymemo/dispatch enabled"],
+		["CANARY_ENABLED_PARAMETER_NAME", " /mymemo/dispatch/enabled"],
+	] as const) {
+		it(`refuses malformed ${key}: ${value}`, () => {
+			const env = baseEnv();
+			env[key] = value;
+			expect(() => loadAgentCoreDispatchPublisherConfigFromEnv(env)).toThrow(
+				new RegExp(key),
+			);
+		});
+	}
+
 	for (const key of [
 		"AGENT_DATABASE_URL",
 		"AWS_REGION",

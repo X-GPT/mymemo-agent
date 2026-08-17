@@ -65,6 +65,26 @@ describe("drainPendingAgentCoreDispatches", () => {
 		expect(publishCalls).toBe(1);
 	});
 
+	it("does not begin a batch when shutdown arrives during age sampling", async () => {
+		const shutdown = new AbortController();
+		let publishCalls = 0;
+
+		await drainPendingAgentCoreDispatches({
+			signal: shutdown.signal,
+			loadOldestAdmittedAt: async () => {
+				shutdown.abort();
+				return null;
+			},
+			publishBatch: async () => {
+				publishCalls += 1;
+				return published(10);
+			},
+			recordPublication() {},
+		});
+
+		expect(publishCalls).toBe(0);
+	});
+
 	it("preserves the sampled pending age when publication fails", async () => {
 		const failure = new Error("SSM unavailable");
 		let caught: unknown;

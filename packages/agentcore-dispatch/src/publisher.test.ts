@@ -11,6 +11,11 @@ const dispatch: AgentCoreDispatchIdentity = {
 	admittedAt: new Date("2026-08-14T16:00:00.000Z"),
 };
 
+const secondDispatch: AgentCoreDispatchIdentity = {
+	...dispatch,
+	runId: "run-451",
+};
+
 describe("AgentCore dispatch publisher", () => {
 	it("fails closed before claiming or sending when dispatch is disabled", async () => {
 		const calls: string[] = [];
@@ -107,5 +112,45 @@ describe("AgentCore dispatch publisher", () => {
 			ambiguousRunIds: [dispatch.runId],
 		});
 		expect(confirmed).toBe(false);
+	});
+
+	it("settles the active unit but starts no next unit after shutdown", async () => {
+		const shutdown = new AbortController();
+		const calls: string[] = [];
+		const publisher = createAgentCoreDispatchPublisher({
+			publisherId: "publisher-1",
+			signal: shutdown.signal,
+			control: {
+				isEnabled: async () => {
+					calls.push("control");
+					return true;
+				},
+			},
+			store: {
+				claim: async () => [dispatch, secondDispatch],
+				confirm: async ({ runId }) => {
+					calls.push(`confirm:${runId}`);
+					return true;
+				},
+			},
+			queue: {
+				send: async ({ runId }) => {
+					calls.push(`send:${runId}`);
+					shutdown.abort();
+				},
+			},
+		});
+
+		await expect(publisher.publishPending()).resolves.toEqual({
+			status: "enabled",
+			publishedRunIds: [dispatch.runId],
+			ambiguousRunIds: [],
+		});
+		expect(calls).toEqual([
+			"control",
+			"control",
+			`send:${dispatch.runId}`,
+			`confirm:${dispatch.runId}`,
+		]);
 	});
 });

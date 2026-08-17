@@ -43,6 +43,7 @@ describe("publishAgentCoreDispatchTick", () => {
 			publishAgentCoreDispatchTick({
 				pool: new FakeLockPool(false),
 				publisher: {
+					isEnabled: async () => true,
 					async publishPending() {
 						publishCalls += 1;
 					},
@@ -53,8 +54,33 @@ describe("publishAgentCoreDispatchTick", () => {
 
 		expect(publishCalls).toBe(0);
 		expect(logger.infoRecords).toMatchObject([
-			{ outcome: "lost_lock", PublisherLostLock: 1 },
+			{ outcome: "lock_not_acquired", PublisherLockNotAcquired: 1 },
 		]);
+	});
+
+	it("checks the fail-closed gate before opening a lock connection", async () => {
+		let connectCalls = 0;
+		let publishCalls = 0;
+		await expect(
+			publishAgentCoreDispatchTick({
+				pool: {
+					async connect() {
+						connectCalls += 1;
+						throw new Error("lock must not be attempted");
+					},
+				},
+				publisher: {
+					isEnabled: async () => false,
+					publishPending: async () => {
+						publishCalls += 1;
+					},
+				},
+				logger: new RecordingLogger(),
+			}),
+		).resolves.toBeUndefined();
+
+		expect(connectCalls).toBe(0);
+		expect(publishCalls).toBe(0);
 	});
 
 	it("publishes once while holding the lock", async () => {
@@ -63,6 +89,7 @@ describe("publishAgentCoreDispatchTick", () => {
 			publishAgentCoreDispatchTick({
 				pool: new FakeLockPool(true),
 				publisher: {
+					isEnabled: async () => true,
 					async publishPending() {
 						publishCalls += 1;
 					},
@@ -84,6 +111,7 @@ describe("runAgentCoreDispatchPublisher", () => {
 		await runAgentCoreDispatchPublisher({
 			pool: new FakeLockPool(true),
 			publisher: {
+				isEnabled: async () => true,
 				publishPending: async () => {
 					publishCalls += 1;
 					if (publishCalls === 1) throw new Error("SSM unavailable");
@@ -110,6 +138,7 @@ describe("runAgentCoreDispatchPublisher", () => {
 		await runAgentCoreDispatchPublisher({
 			pool: new FakeLockPool(true),
 			publisher: {
+				isEnabled: async () => true,
 				publishPending: async () => {
 					throw new PublisherTickFailure(new Error("SSM unavailable"), 5_000);
 				},

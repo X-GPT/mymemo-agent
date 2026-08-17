@@ -96,10 +96,7 @@ data "aws_iam_policy_document" "agentcore_dispatch_publisher" {
   }
 
   statement {
-    actions = [
-      "sqs:GetQueueAttributes",
-      "sqs:SendMessage",
-    ]
+    actions   = ["sqs:SendMessage"]
     resources = [local.agentcore_dispatch_queue_arn]
   }
 

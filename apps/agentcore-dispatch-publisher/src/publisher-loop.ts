@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type AdvisoryLockPool, tryWithAdvisoryLock } from "./advisory-lock";
 import type { PublisherLogger } from "./logger";
 import {
-	recordPublisherLostLock,
+	recordPublisherLockNotAcquired,
 	recordPublisherTickFailure,
 } from "./publisher-metrics";
 import { PublisherTickFailure } from "./publisher-tick-failure";
@@ -10,6 +10,7 @@ import { PublisherTickFailure } from "./publisher-tick-failure";
 export const PUBLISHER_ADVISORY_LOCK_KEY = 8_242_869_154_306_403;
 
 export interface AgentCoreDispatchPublisher {
+	isEnabled(): Promise<boolean>;
 	publishPending(): Promise<void>;
 }
 
@@ -17,6 +18,7 @@ interface PublisherTickOptions {
 	pool: AdvisoryLockPool;
 	publisher: AgentCoreDispatchPublisher;
 	logger: PublisherLogger;
+	signal?: AbortSignal;
 }
 
 interface PublisherLoopOptions extends PublisherTickOptions {
@@ -29,12 +31,14 @@ interface PublisherLoopOptions extends PublisherTickOptions {
 export async function publishAgentCoreDispatchTick(
 	options: PublisherTickOptions,
 ): Promise<void> {
+	if (options.signal?.aborted || !(await options.publisher.isEnabled())) return;
+	if (options.signal?.aborted) return;
 	const locked = await tryWithAdvisoryLock(
 		options.pool,
 		PUBLISHER_ADVISORY_LOCK_KEY,
 		() => options.publisher.publishPending(),
 	);
-	if (!locked.ran) recordPublisherLostLock(options.logger);
+	if (!locked.ran) recordPublisherLockNotAcquired(options.logger);
 }
 
 async function waitForNextTick(

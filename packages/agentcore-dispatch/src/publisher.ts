@@ -32,6 +32,7 @@ export function createAgentCoreDispatchPublisher(options: {
 	control: AgentCoreDispatchEnablementControl;
 	store: AgentCoreDispatchPublisherStore;
 	queue: AgentCoreDispatchQueue;
+	signal?: AbortSignal;
 }) {
 	return {
 		async publishPending(
@@ -56,9 +57,11 @@ export function createAgentCoreDispatchPublisher(options: {
 				ambiguousRunIds: [],
 			};
 			for (const dispatch of claimed) {
+				if (options.signal?.aborted) return result;
 				if (!(await options.control.isEnabled())) {
 					return { ...result, status: "disabled" };
 				}
+				if (options.signal?.aborted) return result;
 				try {
 					await options.queue.send(dispatch);
 					const confirmed = await options.store.confirm({

@@ -36,7 +36,10 @@ function runTick(options: {
 }) {
 	return publishAgentCoreDispatchTick({
 		pool: options.pool ?? pool,
-		publisher: { publishPending: options.publishPending },
+		publisher: {
+			isEnabled: async () => true,
+			publishPending: options.publishPending,
+		},
 		logger: silentLogger,
 	});
 }

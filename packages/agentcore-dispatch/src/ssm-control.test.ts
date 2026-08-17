@@ -9,11 +9,13 @@ describe("SSM AgentCore dispatch enablement control", () => {
 			const control = createSsmAgentCoreDispatchEnablementControl({
 				parameterName: "/mymemo/agentcore-dispatch/enabled",
 				client: {
-					send: async (command) => {
+					send: async (command, request) => {
 						expect(command.input).toEqual({
 							Name: "/mymemo/agentcore-dispatch/enabled",
 							WithDecryption: false,
 						});
+						expect(request.abortSignal).toBeInstanceOf(AbortSignal);
+						expect(request.abortSignal.aborted).toBe(false);
 						return { Parameter: { Value: value } };
 					},
 				},

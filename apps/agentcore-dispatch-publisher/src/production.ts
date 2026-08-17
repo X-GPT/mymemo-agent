@@ -36,6 +36,7 @@ export async function drainPendingAgentCoreDispatches(
 	const now = options.now ?? Date.now;
 	while (!options.signal.aborted) {
 		const oldest = await options.loadOldestAdmittedAt();
+		if (options.signal.aborted) return;
 		const pendingAgeMs = oldest ? Math.max(0, now() - oldest.getTime()) : 0;
 		try {
 			const result = await options.publishBatch();
@@ -69,6 +70,7 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 	});
 	const publisher = createAgentCoreDispatchPublisher({
 		publisherId: options.publisherId,
+		signal: options.signal,
 		control,
 		store: createDatabaseAgentCoreDispatchPublisherStore({ db: options.db }),
 		queue: createSqsAgentCoreDispatchQueue({
@@ -78,6 +80,7 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 	});
 
 	return {
+		isEnabled: () => control.isEnabled(),
 		async publishPending(): Promise<void> {
 			await drainPendingAgentCoreDispatches({
 				signal: options.signal,

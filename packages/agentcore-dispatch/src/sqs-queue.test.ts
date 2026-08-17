@@ -17,10 +17,12 @@ describe("SQS AgentCore dispatch queue", () => {
 		const queue = createSqsAgentCoreDispatchQueue({
 			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/dispatch",
 			client: {
-				send: async (command) => {
+				send: async (command, request) => {
 					expect(command.input.QueueUrl).toBe(
 						"https://sqs.us-west-2.amazonaws.com/123/dispatch",
 					);
+					expect(request.abortSignal).toBeInstanceOf(AbortSignal);
+					expect(request.abortSignal.aborted).toBe(false);
 					body = command.input.MessageBody;
 					return { MessageId: "sqs-message-1" };
 				},

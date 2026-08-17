@@ -6,9 +6,12 @@ on:
       - apps/agentcore-dispatch-publisher/**
       - packages/agent-db/**
       - packages/agentcore-dispatch/**
+      - apps/*/package.json
+      - packages/*/package.json
       - scripts/smoke/agentcore-dispatch-publisher-image-check.sh
       - package.json
       - bun.lock
+      - .dockerignore
       - .github/workflows/agentcore-dispatch-publisher-image.yml
 
 # Release deploy builds and verifies the image on main, so this check only

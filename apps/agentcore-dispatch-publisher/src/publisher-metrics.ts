@@ -17,11 +17,13 @@ function publisherMetricEnvelope(
 	};
 }
 
-export function recordPublisherLostLock(logger: PublisherLogger): void {
+export function recordPublisherLockNotAcquired(logger: PublisherLogger): void {
 	logger.info({
-		...publisherMetricEnvelope([{ Name: "PublisherLostLock", Unit: "Count" }]),
-		outcome: "lost_lock",
-		PublisherLostLock: 1,
+		...publisherMetricEnvelope([
+			{ Name: "PublisherLockNotAcquired", Unit: "Count" },
+		]),
+		outcome: "lock_not_acquired",
+		PublisherLockNotAcquired: 1,
 	});
 }
 
