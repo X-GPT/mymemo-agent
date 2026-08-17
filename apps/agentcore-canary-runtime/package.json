@@ -10,6 +10,7 @@
 		"@aws-sdk/client-secrets-manager": "^3.1110.0",
 		"@aws-sdk/client-ssm": "^3.1110.0",
 		"@mymemo/agent-db": "workspace:*",
+		"@mymemo/agentcore-dispatch": "workspace:*",
 		"agent-worker": "workspace:*",
 		"agentcore-canary-dispatch": "workspace:*",
 		"pg": "^8.22.0"

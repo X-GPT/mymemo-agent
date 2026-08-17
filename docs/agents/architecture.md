@@ -12,6 +12,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | `apps/agentcore-canary-dispatch` | Production-shaped AgentCore dispatch boundary: transactional outbox publication, strict content-free SQS envelopes, exact acquisition, manual replay, and partial-batch acknowledgement. Its boundary ends after the exact Run reaches `running`. |
 | `apps/agentcore-canary-runtime` | Linux ARM64 AgentCore Runtime exposing `/ping` and `/invocations`. It serves one acquired canary Run and delegates the already-running Run to shared Run-serving behavior. It does not run Fargate Claim, drain, expiration, Reclamation, or cleanup loops. |
 | `packages/agent-db` | Shared writable `mymemo_agent` data layer: schema, migrations, Run and Conversation Ownership transactions, runtime pointers, session transcripts, artifact metadata, and PGlite test support. |
+| `packages/agentcore-dispatch` | Production-neutral AgentCore Dispatch publication behavior, strict envelope serialization, and separately importable SQS and SSM adapters. |
 | `packages/live-text` | Redis configuration, event validation, and producer-buffered in-memory/Redis Live Stream relay implementations. |
 
 The removed `gateway`, `sandbox-daemon`, `mymemo-docs`, and `@mymemo/llm-token` services belong to the superseded prototype path and are not fallbacks. See [ADR-0002](../adr/0002-hard-swap-no-coexistence-flag.md).
@@ -48,6 +49,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/agent-worker/src/run-serving.ts` | Shared serving behavior for an already-running Run |
 | `apps/agent-worker/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |
 | `apps/agent-worker/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |
+| `packages/agentcore-dispatch/src/` | Shared AgentCore Dispatch publisher policy, envelope serialization, and isolated SQS/SSM adapters |
 | `packages/agent-db/src/conversation-ownership.ts` | Claim protocol and live Ownership fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |
 | `packages/agent-db/src/runtime-store.ts` | Fenced sandbox, taint, and Agent session pointers plus orphan ledger |

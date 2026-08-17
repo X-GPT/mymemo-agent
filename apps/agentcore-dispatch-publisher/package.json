@@ -11,7 +11,7 @@
 		"@aws-sdk/client-sqs": "^3.1110.0",
 		"@aws-sdk/client-ssm": "^3.1110.0",
 		"@mymemo/agent-db": "workspace:*",
-		"agentcore-canary-dispatch": "workspace:*",
+		"@mymemo/agentcore-dispatch": "workspace:*",
 		"drizzle-orm": "^0.45.2",
 		"pg": "^8.22.0",
 		"pino": "^9.14.0"

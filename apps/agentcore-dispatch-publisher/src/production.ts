@@ -5,28 +5,26 @@ import {
 	MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE,
 } from "@mymemo/agent-db/agentcore-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
+import { createDatabaseAgentCoreDispatchPublisherStore } from "@mymemo/agentcore-dispatch/database-store";
 import {
-	createDatabaseCanaryDispatchPublisherStore,
-	createSqsCanaryDispatchQueue,
-	createSsmCanaryEnablementControl,
-} from "agentcore-canary-dispatch/aws-adapters";
-import { createCanaryDispatchPublisher } from "agentcore-canary-dispatch/publisher";
+	type AgentCoreDispatchPublishResult,
+	createAgentCoreDispatchPublisher,
+} from "@mymemo/agentcore-dispatch/publisher";
+import { createSqsAgentCoreDispatchQueue } from "@mymemo/agentcore-dispatch/sqs-queue";
+import { createSsmAgentCoreDispatchEnablementControl } from "@mymemo/agentcore-dispatch/ssm-control";
 import type { AgentCoreDispatchPublisherConfig } from "./config";
 import type { PublisherLogger } from "./logger";
 import type { AgentCoreDispatchPublisher } from "./publisher-loop";
 import { recordPublisherPublication } from "./publisher-metrics";
 
-interface PublishBatchResult {
-	status: "enabled" | "disabled";
-	publishedRunIds: readonly string[];
-	ambiguousRunIds: readonly string[];
-}
-
 interface DrainPendingOptions {
 	signal: AbortSignal;
 	loadOldestAdmittedAt(): Promise<Date | null>;
-	publishBatch(): Promise<PublishBatchResult>;
-	recordPublication(result: PublishBatchResult, pendingAgeMs: number): void;
+	publishBatch(): Promise<AgentCoreDispatchPublishResult>;
+	recordPublication(
+		result: AgentCoreDispatchPublishResult,
+		pendingAgeMs: number,
+	): void;
 }
 
 /** Drain bounded batches without extending a tick after shutdown or uncertainty. */
@@ -59,15 +57,15 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 	logger: PublisherLogger;
 	signal: AbortSignal;
 }): AgentCoreDispatchPublisher {
-	const control = createSsmCanaryEnablementControl({
+	const control = createSsmAgentCoreDispatchEnablementControl({
 		client: new SSMClient({ region: options.config.awsRegion }),
 		parameterName: options.config.enabledParameterName,
 	});
-	const publisher = createCanaryDispatchPublisher({
+	const publisher = createAgentCoreDispatchPublisher({
 		publisherId: options.publisherId,
 		control,
-		store: createDatabaseCanaryDispatchPublisherStore({ db: options.db }),
-		queue: createSqsCanaryDispatchQueue({
+		store: createDatabaseAgentCoreDispatchPublisherStore({ db: options.db }),
+		queue: createSqsAgentCoreDispatchQueue({
 			client: new SQSClient({ region: options.config.awsRegion }),
 			queueUrl: options.config.queueUrl,
 		}),

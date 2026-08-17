@@ -73,6 +73,7 @@ describe("AgentCore Runtime image contract", () => {
 		for (const forbidden of [
 			"/apps/agent-worker/src/run-loop.ts",
 			"/apps/agent-worker/src/cleanup-loop.ts",
+			"/packages/agentcore-dispatch/src/sqs-queue.ts",
 		]) {
 			expect([...graph].some((file) => file.endsWith(forbidden))).toBe(false);
 		}

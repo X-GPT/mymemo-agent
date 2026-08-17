@@ -1,10 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/agentcore-dispatch";
-import {
-	createBedrockAgentCoreRuntimeInvoker,
-	createSqsCanaryDispatchQueue,
-	createSsmCanaryEnablementControl,
-} from "./aws-adapters";
+import { createBedrockAgentCoreRuntimeInvoker } from "./aws-adapters";
 
 const dispatch: AgentCoreDispatchIdentity = {
 	schemaVersion: 2,
@@ -14,30 +10,6 @@ const dispatch: AgentCoreDispatchIdentity = {
 	runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
 	admittedAt: new Date("2026-08-14T16:00:00.000Z"),
 };
-
-describe("SSM Canary enablement control", () => {
-	it("enables dispatch only for the exact deployment-owned enabled value", async () => {
-		const values = ["enabled", "true", "ENABLED", undefined];
-		const observed: boolean[] = [];
-		for (const value of values) {
-			const control = createSsmCanaryEnablementControl({
-				parameterName: "/mymemo/agentcore-canary/enabled",
-				client: {
-					send: async (command) => {
-						expect(command.input).toEqual({
-							Name: "/mymemo/agentcore-canary/enabled",
-							WithDecryption: false,
-						});
-						return { Parameter: { Value: value } };
-					},
-				},
-			});
-			observed.push(await control.isEnabled());
-		}
-
-		expect(observed).toEqual([true, false, false, false]);
-	});
-});
 
 describe("AgentCore Runtime invoker", () => {
 	it("binds the exact Conversation Runtime session and exposes a closable receipt stream", async () => {
@@ -98,34 +70,5 @@ describe("AgentCore Runtime invoker", () => {
 		const invocation = await invoker.invoke(dispatch);
 		await invocation.close();
 		expect(cancelled).toBe(true);
-	});
-});
-
-describe("SQS Canary dispatch queue", () => {
-	it("sends the strict content-free envelope to the configured standard queue", async () => {
-		let body: string | undefined;
-		const queue = createSqsCanaryDispatchQueue({
-			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/canary",
-			client: {
-				send: async (command) => {
-					expect(command.input.QueueUrl).toBe(
-						"https://sqs.us-west-2.amazonaws.com/123/canary",
-					);
-					body = command.input.MessageBody;
-					return { MessageId: "sqs-message-1" };
-				},
-			},
-		});
-
-		await queue.send(dispatch);
-
-		expect(JSON.parse(body ?? "")).toEqual({
-			schemaVersion: 2,
-			userId: dispatch.userId,
-			conversationId: dispatch.conversationId,
-			runId: dispatch.runId,
-			runtimeSessionId: dispatch.runtimeSessionId,
-			admittedAt: "2026-08-14T16:00:00.000Z",
-		});
 	});
 });

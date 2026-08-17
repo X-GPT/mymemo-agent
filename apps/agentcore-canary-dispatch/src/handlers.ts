@@ -1,7 +1,7 @@
+import type { AgentCoreDispatchPublishResult } from "@mymemo/agentcore-dispatch/publisher";
 import { z } from "zod";
 import type { CanarySqsBatchResponse, CanarySqsEvent } from "./consumer";
 import { CANARY_QUEUE_INVARIANTS } from "./invariants";
-import type { CanaryPublishResult } from "./publisher";
 
 const boundedIdentifier = z.string().trim().min(1).max(500);
 const sqsEventSchema = z.object({
@@ -31,7 +31,7 @@ function requireRequestId(context: LambdaContext): string {
 }
 
 export function createCanaryPublisherHandler(options: {
-	publish(publisherId: string): Promise<CanaryPublishResult>;
+	publish(publisherId: string): Promise<AgentCoreDispatchPublishResult>;
 }) {
 	return async (_event: unknown, context: LambdaContext) =>
 		await options.publish(`lambda/${requireRequestId(context)}`);
@@ -49,7 +49,10 @@ export function createCanaryConsumerHandler(consumer: {
 
 export function createManualReplayHandler(options: {
 	replay(input: { runId: string; requestedBy: string }): Promise<boolean>;
-	publish(publisherId: string, runId?: string): Promise<CanaryPublishResult>;
+	publish(
+		publisherId: string,
+		runId?: string,
+	): Promise<AgentCoreDispatchPublishResult>;
 }) {
 	return async (event: unknown, context: LambdaContext) => {
 		const parsed = manualReplaySchema.safeParse(event);

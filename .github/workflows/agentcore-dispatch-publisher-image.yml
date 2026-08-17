@@ -4,8 +4,8 @@ on:
   pull_request:
     paths:
       - apps/agentcore-dispatch-publisher/**
-      - apps/agentcore-canary-dispatch/**
       - packages/agent-db/**
+      - packages/agentcore-dispatch/**
       - scripts/smoke/agentcore-dispatch-publisher-image-check.sh
       - package.json
       - bun.lock

@@ -1,9 +1,9 @@
 import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/agentcore-dispatch";
+import type { AgentCoreDispatchEnablementControl } from "@mymemo/agentcore-dispatch/publisher";
 import {
 	parseCanaryDispatchEnvelope,
 	receiptCorrelatesDispatch,
 } from "./contract";
-import type { CanaryEnablementControl } from "./publisher";
 import { readAcquisitionReceipt } from "./receipt-stream";
 
 export interface AgentCoreRuntimeInvocation {
@@ -38,7 +38,7 @@ export interface CanarySqsBatchResponse {
 }
 
 export function createCanaryDispatchConsumer(options: {
-	control: CanaryEnablementControl;
+	control: AgentCoreDispatchEnablementControl;
 	runtime: AgentCoreRuntimeInvoker;
 	alarm: CanaryDispatchAlarm;
 }) {

@@ -1,20 +1,20 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/agentcore-dispatch";
-import { createCanaryDispatchPublisher } from "./publisher";
+import { createAgentCoreDispatchPublisher } from "./publisher";
 
 const dispatch: AgentCoreDispatchIdentity = {
 	schemaVersion: 2,
-	userId: "canary-service-user",
+	userId: "service-user",
 	conversationId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
 	runId: "run-450",
 	runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
 	admittedAt: new Date("2026-08-14T16:00:00.000Z"),
 };
 
-describe("Canary dispatch publisher", () => {
-	it("fails closed before claiming or sending when the SSM control is disabled", async () => {
+describe("AgentCore dispatch publisher", () => {
+	it("fails closed before claiming or sending when dispatch is disabled", async () => {
 		const calls: string[] = [];
-		const publisher = createCanaryDispatchPublisher({
+		const publisher = createAgentCoreDispatchPublisher({
 			publisherId: "publisher-1",
 			control: {
 				isEnabled: async () => {
@@ -47,9 +47,9 @@ describe("Canary dispatch publisher", () => {
 		expect(calls).toEqual(["control"]);
 	});
 
-	it("confirms a successful SQS send only after the leased claim returns", async () => {
+	it("confirms a successful send only after the leased claim returns", async () => {
 		const calls: string[] = [];
-		const publisher = createCanaryDispatchPublisher({
+		const publisher = createAgentCoreDispatchPublisher({
 			publisherId: "publisher-1",
 			control: { isEnabled: async () => true },
 			store: {
@@ -83,9 +83,9 @@ describe("Canary dispatch publisher", () => {
 		]);
 	});
 
-	it("leaves an ambiguous SQS send leased for later exact replay", async () => {
+	it("leaves an ambiguous send leased for later exact replay", async () => {
 		let confirmed = false;
-		const publisher = createCanaryDispatchPublisher({
+		const publisher = createAgentCoreDispatchPublisher({
 			publisherId: "publisher-1",
 			control: { isEnabled: async () => true },
 			store: {

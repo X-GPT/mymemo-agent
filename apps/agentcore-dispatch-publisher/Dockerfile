@@ -16,8 +16,8 @@ RUN cd /temp/prod \
 FROM base AS release
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agentcore-dispatch-publisher apps/agentcore-dispatch-publisher
-COPY apps/agentcore-canary-dispatch apps/agentcore-canary-dispatch
 COPY packages/agent-db packages/agent-db
+COPY packages/agentcore-dispatch packages/agentcore-dispatch
 COPY package.json ./
 
 WORKDIR /usr/src/app/apps/agentcore-dispatch-publisher
