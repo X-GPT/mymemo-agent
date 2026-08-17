@@ -1,6 +1,8 @@
 # Select the execution runtime at Conversation creation
 
 Status: accepted (2026-08-16). Supersedes ADR-0019, ADR-0021, and ADR-0024.
+Amended (2026-08-17) by
+[ADR-0027](./0027-deploy-the-agentcore-dispatch-publisher-as-a-dedicated-service.md).
 
 Every Conversation carries an immutable execution runtime — `fargate` or
 `agentcore` — selected exactly once at creation by a server-side Statsig gate
@@ -27,16 +29,17 @@ ADR-0020 records.
 
 This decision covers coexistence, not replacement. Fargate remains the default
 runtime and the single global expiration and Reclamation runner; retiring
-Fargate — re-homing Reclamation, the pull loop, and the publisher's
-post-Fargate home — is explicitly out of scope and undecided. The fail-closed
-SSM dispatch parameter survives, renamed, as the dispatch-layer kill switch:
-the gate stops new `agentcore` Conversations, while the parameter stops
-delivery for existing ones, whose queued Runs then error at the queued backstop
-timeout. Runtime immutability has one documented break-glass exception: with
-dispatch disabled, zero Active Runs, and no pending dispatch rows, an operator
-runbook step may reassign stranded `agentcore` Conversations to `fargate` —
-safe because every durable resource (transcript, Workspace, artifacts) is
-runtime-agnostic by construction.
+Fargate — re-homing Reclamation and the pull loop — is explicitly out of scope
+and undecided. The Dispatch publisher is independently homed by ADR-0027, so
+Fargate retirement does not move it. The fail-closed SSM dispatch parameter
+survives, renamed, as the dispatch-layer kill switch: the gate stops new
+`agentcore` Conversations, while the parameter stops delivery for existing
+ones, whose queued Runs then error at the queued backstop timeout. Runtime
+immutability has one documented break-glass exception: with dispatch disabled,
+zero Active Runs, and no pending dispatch rows, an operator runbook step may
+reassign stranded `agentcore` Conversations to `fargate` — safe because every
+durable resource (transcript, Workspace, artifacts) is runtime-agnostic by
+construction.
 
 ## Considered options
 
@@ -72,10 +75,13 @@ runtime-agnostic by construction.
 - Re-homed from ADR-0021 as production posture: the digest-pinned ARM64
   request-oriented Runtime image, exact secret ARNs resolved at fresh session
   boot with verified RDS TLS, and per-workload least-privilege roles for
-  Runtime, publisher, and consumer. The Runtime writes Downloadable artifacts
-  in the standard production namespace with worker-equivalent upload access;
-  the canary prefix dies, because both runtimes serve the same Conversations
-  and their artifact keys must be indistinguishable to chat-api's signer.
+  Runtime, Dispatch publisher, and consumer. ADR-0027 realizes the publisher's
+  process, dependency, and AWS-capability boundary as a dedicated service while
+  deliberately retaining the shared writable database trust and coordinated
+  release train. The Runtime writes Downloadable artifacts in the standard
+  production namespace with worker-equivalent upload access; the canary prefix
+  dies, because both runtimes serve the same Conversations and their artifact
+  keys must be indistinguishable to chat-api's signer.
 - The canary-only surfaces are deleted: the control Lambda and preflight, the
   Campaign table, the campaign columns and constraints on the outbox, the
   `agentcore_canary` value, and the campaign-semantic alarms. Canary
@@ -85,7 +91,8 @@ runtime-agnostic by construction.
 - The dispatch contract amendments — envelope version 2, dropped campaign,
   scenario, and lane fields, run identity as dispatch identity, and the
   consumer's pre-invocation Run-status check — are recorded on ADR-0020. The
-  publisher's behavioral contract is ADR-0026.
+  publisher's behavioral contract is ADR-0026 and its deployment boundary is
+  ADR-0027.
 - Cutover is a coordinated rename rather than expand-contract, defensible only
   while there is no real user traffic. The runbook asserts its preconditions
   instead of assuming them: zero `agentcore_canary` Conversations, zero

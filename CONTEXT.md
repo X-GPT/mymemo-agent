@@ -59,6 +59,12 @@ It states nothing about whether the Run was acquired or executed; Run state
 answers that.
 _Avoid_: delivery, dispatch sent, Run started
 
+**Dispatch publisher**:
+The trusted control-plane actor that turns pending AgentCore dispatch outbox
+records into queue envelopes. It never acquires Conversation Ownership or
+executes Runs.
+_Avoid_: dispatch worker, Run executor, execution runtime
+
 **Durable acquisition**:
 The committed transition in which one AgentCore invocation obtains live
 Conversation Ownership and starts its exact dispatched Run. Runtime entry or

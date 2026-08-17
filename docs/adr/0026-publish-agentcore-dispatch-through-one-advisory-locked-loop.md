@@ -2,6 +2,10 @@
 
 Status: accepted (2026-08-16). Amends ADR-0020's publisher consequences.
 
+Amended (2026-08-17) by
+[ADR-0027](./0027-deploy-the-agentcore-dispatch-publisher-as-a-dedicated-service.md),
+which supersedes only this ADR's initial compute-home consequence.
+
 One publisher: a continuously running loop, single-flighted by a session-scoped
 Postgres advisory lock taken and released around each tick. Each tick selects
 unpublished outbox rows, sends them to the queue, and marks them published.
@@ -44,12 +48,13 @@ re-insertion, to shrink a table that stays at pending size anyway.
 
 ## Consequences
 
-- The compute home is constrained only to a long-lived process. The
-  agent-worker process, which outlives the rollout and already runs
-  advisory-locked maintenance loops, is the natural first home; moving the
-  loop later does not change this contract.
+- This decision originally selected agent-worker as the natural first home
+  because it is long-lived and already runs advisory-locked maintenance loops.
+  ADR-0027 supersedes that placement with a dedicated service; the publisher
+  loop and every behavioral guarantee above remain unchanged.
 - The EventBridge repair rule and the control-Lambda immediate publish retire
   with the canary.
-- The loop emits its lost-lock outcome and a pending-age metric; publisher
+- The loop emits an informational lock-not-acquired outcome, publisher errors,
+  and pending age. Pending age is the primary paging symptom; publisher
   observability replaces the Campaign's overdue marking as the way stuck
   dispatch is seen.
