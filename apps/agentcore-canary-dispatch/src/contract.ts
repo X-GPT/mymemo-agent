@@ -1,21 +1,17 @@
 import type {
-	AcquireCanaryDispatchResult,
-	CanaryDispatchIdentity,
+	AcquireAgentCoreDispatchResult,
+	AgentCoreDispatchIdentity,
 } from "@mymemo/agent-db/canary-dispatch";
 import { z } from "zod";
 
 const nonEmptyString = z.string().trim().min(1);
 
 const dispatchIdentityShape = {
-	schemaVersion: z.literal(1),
-	dispatchId: nonEmptyString,
-	campaignId: nonEmptyString,
-	scenarioId: nonEmptyString,
+	schemaVersion: z.literal(2),
 	userId: nonEmptyString,
 	conversationId: nonEmptyString,
 	runId: nonEmptyString,
 	runtimeSessionId: nonEmptyString,
-	expectedExecutionLane: z.literal("agentcore_canary"),
 } as const;
 const dispatchIdentityKeys = Object.keys(
 	dispatchIdentityShape,
@@ -61,15 +57,15 @@ export class InvalidCanaryDispatchEnvelopeError extends Error {
 }
 
 function isOwnershipDisposition(
-	disposition: AcquireCanaryDispatchResult["disposition"],
+	disposition: AcquireAgentCoreDispatchResult["disposition"],
 ): disposition is "acquired" | "already_acquired" {
 	return disposition === "acquired" || disposition === "already_acquired";
 }
 
 function hasOwnership(
-	result: AcquireCanaryDispatchResult,
+	result: AcquireAgentCoreDispatchResult,
 ): result is Extract<
-	AcquireCanaryDispatchResult,
+	AcquireAgentCoreDispatchResult,
 	{ disposition: "acquired" | "already_acquired" }
 > {
 	return isOwnershipDisposition(result.disposition);
@@ -84,17 +80,21 @@ function parseJson(value: string, invalid: () => Error): unknown {
 }
 
 export function serializeCanaryDispatchEnvelope(
-	dispatch: CanaryDispatchIdentity,
+	dispatch: AgentCoreDispatchIdentity,
 ): string {
 	return JSON.stringify({
-		...dispatch,
+		schemaVersion: dispatch.schemaVersion,
+		userId: dispatch.userId,
+		conversationId: dispatch.conversationId,
+		runId: dispatch.runId,
+		runtimeSessionId: dispatch.runtimeSessionId,
 		admittedAt: dispatch.admittedAt.toISOString(),
 	});
 }
 
 export function parseCanaryDispatchEnvelope(
 	value: string,
-): CanaryDispatchIdentity {
+): AgentCoreDispatchIdentity {
 	const invalid = () =>
 		new InvalidCanaryDispatchEnvelopeError(
 			"invalid AgentCore dispatch envelope",
@@ -106,8 +106,8 @@ export function parseCanaryDispatchEnvelope(
 }
 
 export function sameCanaryDispatch(
-	left: CanaryDispatchIdentity,
-	right: CanaryDispatchIdentity,
+	left: AgentCoreDispatchIdentity,
+	right: AgentCoreDispatchIdentity,
 ): boolean {
 	return (
 		dispatchIdentityKeys.every((key) => left[key] === right[key]) &&
@@ -117,8 +117,8 @@ export function sameCanaryDispatch(
 
 /** Constructed by the Runtime boundary only after acquisition transaction return. */
 export function createAcquisitionReceipt(
-	dispatch: CanaryDispatchIdentity,
-	result: AcquireCanaryDispatchResult,
+	dispatch: AgentCoreDispatchIdentity,
+	result: AcquireAgentCoreDispatchResult,
 	committedAt = new Date(),
 ): AcquisitionReceipt {
 	const owns = hasOwnership(result);
@@ -144,7 +144,7 @@ export function parseAcquisitionReceipt(value: string): AcquisitionReceipt {
 
 export function receiptCorrelatesDispatch(
 	receipt: AcquisitionReceipt,
-	dispatch: CanaryDispatchIdentity,
+	dispatch: AgentCoreDispatchIdentity,
 ): boolean {
 	return dispatchIdentityKeys.every((key) => receipt[key] === dispatch[key]);
 }

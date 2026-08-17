@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
-	type AcquireCanaryDispatchResult,
-	acquireCanaryDispatchTx,
-	type CanaryDispatchIdentity,
+	type AcquireAgentCoreDispatchResult,
+	type AgentCoreDispatchIdentity,
+	acquireAgentCoreDispatchTx,
 } from "@mymemo/agent-db/canary-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import {
@@ -12,13 +12,13 @@ import {
 import type { CanaryEnablementControl } from "./publisher";
 
 export type CanaryDispatchAcquirer = (input: {
-	dispatch: CanaryDispatchIdentity;
+	dispatch: AgentCoreDispatchIdentity;
 	workerId: string;
-}) => Promise<AcquireCanaryDispatchResult>;
+}) => Promise<AcquireAgentCoreDispatchResult>;
 
 export interface CommittedCanaryAcquisition {
-	dispatch: CanaryDispatchIdentity;
-	result: AcquireCanaryDispatchResult;
+	dispatch: AgentCoreDispatchIdentity;
+	result: AcquireAgentCoreDispatchResult;
 	receiptLine: string;
 }
 
@@ -35,7 +35,7 @@ export function createCanaryAcquisitionBoundary(options: {
 	}
 
 	async function commitDispatch(
-		dispatch: CanaryDispatchIdentity,
+		dispatch: AgentCoreDispatchIdentity,
 	): Promise<CommittedCanaryAcquisition> {
 		const workerId = options.createWorkerId();
 		// Awaiting this promise is the commit boundary. Receipt construction and
@@ -61,7 +61,7 @@ export function createCanaryAcquisitionBoundary(options: {
 	}
 
 	async function acquireDispatch(
-		dispatch: CanaryDispatchIdentity,
+		dispatch: AgentCoreDispatchIdentity,
 	): Promise<CommittedCanaryAcquisition> {
 		await assertEnabled();
 		return await commitDispatch(dispatch);
@@ -84,7 +84,8 @@ export function createDatabaseCanaryAcquisitionBoundary(options: {
 }) {
 	return createCanaryAcquisitionBoundary({
 		control: options.control,
-		acquire: async (input) => await acquireCanaryDispatchTx(options.db, input),
+		acquire: async (input) =>
+			await acquireAgentCoreDispatchTx(options.db, input),
 		createWorkerId: () => `${options.bootId}/${randomUUID()}`,
 		now: options.now,
 	});

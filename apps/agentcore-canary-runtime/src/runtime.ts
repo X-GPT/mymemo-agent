@@ -1,6 +1,6 @@
 import type {
-	AcquireCanaryDispatchResult,
-	CanaryDispatchIdentity,
+	AcquireAgentCoreDispatchResult,
+	AgentCoreDispatchIdentity,
 } from "@mymemo/agent-db/canary-dispatch";
 import type { ConversationOwner } from "@mymemo/agent-db/conversation-ownership";
 import type { ServeStartedRunResult } from "agent-worker/run-serving";
@@ -12,7 +12,7 @@ import {
 import { RUNTIME_SHUTDOWN_TIMEOUT_MS } from "./constants";
 
 type AcquiredDispatch = Extract<
-	AcquireCanaryDispatchResult,
+	AcquireAgentCoreDispatchResult,
 	{ disposition: "acquired" }
 >;
 
@@ -24,10 +24,10 @@ export interface AcquiredExecutionIdentity {
 
 export interface CanaryRuntimeDependencies {
 	acquire(
-		dispatch: CanaryDispatchIdentity,
+		dispatch: AgentCoreDispatchIdentity,
 	): Promise<CommittedCanaryAcquisition>;
 	serve(input: {
-		dispatch: CanaryDispatchIdentity;
+		dispatch: AgentCoreDispatchIdentity;
 		acquisition: AcquiredDispatch;
 		shutdownSignal: AbortSignal;
 		onDetached(event: {
@@ -39,12 +39,12 @@ export interface CanaryRuntimeDependencies {
 		input: AcquiredExecutionIdentity & { detached: boolean },
 	): Promise<"alive" | "lost">;
 	release(input: AcquiredExecutionIdentity): Promise<void>;
-	onExecutionError?(error: unknown, dispatch: CanaryDispatchIdentity): void;
+	onExecutionError?(error: unknown, dispatch: AgentCoreDispatchIdentity): void;
 	heartbeatIntervalMs: number;
 }
 
 interface ActiveExecution {
-	dispatch: CanaryDispatchIdentity;
+	dispatch: AgentCoreDispatchIdentity;
 	acquisition: AcquiredDispatch;
 	shutdownController: AbortController;
 	detached: boolean;
@@ -53,7 +53,7 @@ interface ActiveExecution {
 }
 
 interface PendingAcquisition {
-	dispatch: CanaryDispatchIdentity;
+	dispatch: AgentCoreDispatchIdentity;
 	promise: Promise<CommittedCanaryAcquisition>;
 }
 
@@ -86,8 +86,8 @@ function receiptInvocation(receiptLine: string): RuntimeInvocation {
 }
 
 function requireSameDispatch(
-	occupied: CanaryDispatchIdentity,
-	incoming: CanaryDispatchIdentity,
+	occupied: AgentCoreDispatchIdentity,
+	incoming: AgentCoreDispatchIdentity,
 ): void {
 	if (!sameCanaryDispatch(occupied, incoming)) {
 		throw new RuntimeBusyError("AgentCore Runtime is busy");

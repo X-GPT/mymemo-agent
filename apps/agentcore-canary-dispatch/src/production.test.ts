@@ -120,13 +120,13 @@ describe("Canary dispatch production configuration", () => {
 		await alarm.raise({
 			reason: "invalid_dispatch",
 			messageId: "sqs-message-1",
-			dispatchId: "dispatch-450",
+			runId: "run-450",
 		});
 
 		expect(JSON.parse(records[0] ?? "")).toMatchObject({
 			reason: "invalid_dispatch",
 			messageId: "sqs-message-1",
-			dispatchId: "dispatch-450",
+			runId: "run-450",
 			PoisonDispatch: 1,
 			_aws: {
 				CloudWatchMetrics: [

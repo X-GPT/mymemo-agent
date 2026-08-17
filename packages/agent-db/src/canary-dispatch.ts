@@ -6,74 +6,37 @@ import {
 	isNotNull,
 	isNull,
 	lte,
-	ne,
 	or,
-	type SQLWrapper,
 	sql,
 } from "drizzle-orm";
-import type { Database } from "./client";
+import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
 	conversationOwnershipClock,
 	conversationOwnershipLeaseDeadline,
 	liveConversationOwnershipState,
 } from "./conversation-ownership";
-import { AGENTCORE_CANARY_EXECUTION_LANE } from "./execution-lane";
 import { isTerminalRunStatus, type TerminalRunStatus } from "./run-store";
 import {
-	canaryCampaigns,
-	canaryDispatchOutbox,
+	ACTIVE_RUN_STATUSES,
+	agentCoreDispatchOutbox,
 	conversations,
 	runs,
 } from "./schema";
 
 const DISPATCH_PUBLISH_LEASE_MS = 3 * 60_000;
-const DISPATCH_PENDING_DEADLINE_MS = 5 * 60_000;
-const ACTIVE_CANARY_CAMPAIGN_LIFECYCLES = [
-	"preparing",
-	"provisioning",
-	"running",
-] as const;
-export const MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE = 10;
+export const MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE = 10;
 
-function activeCanaryCampaignCondition() {
-	return inArray(canaryCampaigns.lifecycle, [
-		...ACTIVE_CANARY_CAMPAIGN_LIFECYCLES,
-	]);
-}
-
-function dispatchPendingDeadline(now: Date): Date {
-	return new Date(now.getTime() - DISPATCH_PENDING_DEADLINE_MS);
-}
-
-function queuedExactRunExists(input: {
-	runId: SQLWrapper;
-	userId: SQLWrapper;
-	conversationId: SQLWrapper;
-}) {
-	return sql`exists (
-		select 1 from ${runs} exact_run
-		where exact_run.run_id = ${input.runId}
-		  and exact_run.user_id = ${input.userId}
-		  and exact_run.conversation_id = ${input.conversationId}
-		  and exact_run.status = 'queued'
-	)`;
-}
-
-export interface CanaryDispatchIdentity {
-	schemaVersion: 1;
-	dispatchId: string;
-	campaignId: string;
-	scenarioId: string;
+export interface AgentCoreDispatchIdentity {
+	schemaVersion: 2;
 	userId: string;
 	conversationId: string;
 	runId: string;
 	runtimeSessionId: string;
-	expectedExecutionLane: typeof AGENTCORE_CANARY_EXECUTION_LANE;
 	admittedAt: Date;
 }
 
-export type AcquireCanaryDispatchResult =
+export type AcquireAgentCoreDispatchResult =
 	| {
 			disposition: "acquired";
 			owner: ConversationOwner;
@@ -89,113 +52,113 @@ export type AcquireCanaryDispatchResult =
 	| { disposition: "invalid_dispatch" };
 
 /**
+ * Add the Run-keyed dispatch record inside the caller's admission transaction.
+ * The Run id primary key is the at-most-one-dispatch authority.
+ */
+export async function recordAgentCoreDispatchInTx(
+	tx: DbTx,
+	input: {
+		userId: string;
+		conversationId: string;
+		runId: string;
+		admittedAt?: Date;
+	},
+): Promise<void> {
+	await tx.insert(agentCoreDispatchOutbox).values({
+		userId: input.userId,
+		conversationId: input.conversationId,
+		runId: input.runId,
+		admittedAt: input.admittedAt,
+	});
+}
+
+/**
  * Claim a bounded batch of publishable outbox rows. The row locks and lease
  * update commit before the caller performs any SQS I/O; an unconfirmed send
- * deliberately leaves its lease to expire so the same dispatch can be replayed.
+ * deliberately leaves its lease to expire so the same Run can be replayed.
  */
-export async function claimCanaryDispatchesTx(
+export async function claimAgentCoreDispatchesTx(
 	db: Database,
 	input: {
 		publisherId: string;
-		dispatchId?: string;
+		runId?: string;
 		now?: Date;
 		limit?: number;
 	},
-): Promise<CanaryDispatchIdentity[]> {
+): Promise<AgentCoreDispatchIdentity[]> {
 	const now = input.now ?? new Date();
-	const pendingDeadline = dispatchPendingDeadline(now);
 	const limit = Math.max(
 		0,
 		Math.min(
-			input.limit ?? MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE,
-			MAX_CANARY_DISPATCH_PUBLISH_BATCH_SIZE,
+			input.limit ?? MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE,
+			MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE,
 		),
 	);
 	if (limit === 0) return [];
 
 	return await db.transaction(async (tx) => {
-		// Campaign lifecycle always precedes its outbox in the Canary lock order.
-		// The shared lock prevents completion/cleanup from racing a publish claim.
-		const activeCampaigns = await tx
-			.select({ campaignId: canaryCampaigns.campaignId })
-			.from(canaryCampaigns)
-			.where(activeCanaryCampaignCondition())
-			.for("share");
-		const activeCampaignIds = activeCampaigns.map(
-			({ campaignId }) => campaignId,
-		);
-		if (activeCampaignIds.length === 0) return [];
-
 		const candidates = await tx
 			.select()
-			.from(canaryDispatchOutbox)
+			.from(agentCoreDispatchOutbox)
 			.where(
 				and(
-					inArray(canaryDispatchOutbox.campaignId, activeCampaignIds),
-					input.dispatchId
-						? eq(canaryDispatchOutbox.dispatchId, input.dispatchId)
+					input.runId
+						? eq(agentCoreDispatchOutbox.runId, input.runId)
 						: undefined,
-					gt(canaryDispatchOutbox.admittedAt, pendingDeadline),
-					gt(canaryDispatchOutbox.expiresAt, now),
 					or(
-						isNull(canaryDispatchOutbox.publishClaimUntil),
-						lte(canaryDispatchOutbox.publishClaimUntil, now),
+						isNull(agentCoreDispatchOutbox.publishClaimUntil),
+						lte(agentCoreDispatchOutbox.publishClaimUntil, now),
 					),
 					or(
-						isNull(canaryDispatchOutbox.publishedAt),
+						isNull(agentCoreDispatchOutbox.publishedAt),
 						and(
-							isNotNull(canaryDispatchOutbox.replayRequestedAt),
-							sql`${canaryDispatchOutbox.replayRequestedAt} > ${canaryDispatchOutbox.publishedAt}`,
+							isNotNull(agentCoreDispatchOutbox.replayRequestedAt),
+							sql`${agentCoreDispatchOutbox.replayRequestedAt} > ${agentCoreDispatchOutbox.publishedAt}`,
 						),
 					),
 				),
 			)
-			.orderBy(canaryDispatchOutbox.admittedAt, canaryDispatchOutbox.dispatchId)
+			.orderBy(
+				agentCoreDispatchOutbox.admittedAt,
+				agentCoreDispatchOutbox.runId,
+			)
 			.limit(limit)
 			.for("update", { skipLocked: true });
 		if (candidates.length === 0) return [];
 
 		await tx
-			.update(canaryDispatchOutbox)
+			.update(agentCoreDispatchOutbox)
 			.set({
 				publishClaimedBy: input.publisherId,
 				publishClaimUntil: new Date(now.getTime() + DISPATCH_PUBLISH_LEASE_MS),
-				publishAttempts: sql`${canaryDispatchOutbox.publishAttempts} + 1`,
+				publishAttempts: sql`${agentCoreDispatchOutbox.publishAttempts} + 1`,
 			})
 			.where(
 				inArray(
-					canaryDispatchOutbox.dispatchId,
-					candidates.map(({ dispatchId }) => dispatchId),
+					agentCoreDispatchOutbox.runId,
+					candidates.map(({ runId }) => runId),
 				),
 			);
 
 		return candidates.map((row) => ({
-			schemaVersion: 1,
-			dispatchId: row.dispatchId,
-			campaignId: row.campaignId,
-			scenarioId: row.scenarioId,
+			schemaVersion: 2,
 			userId: row.userId,
 			conversationId: row.conversationId,
 			runId: row.runId,
 			runtimeSessionId: row.conversationId,
-			expectedExecutionLane: AGENTCORE_CANARY_EXECUTION_LANE,
 			admittedAt: row.admittedAt,
 		}));
 	});
 }
 
 /** Confirm one SQS send only while this publisher still owns the outbox lease. */
-export async function confirmCanaryDispatchPublishedTx(
+export async function confirmAgentCoreDispatchPublishedTx(
 	db: Database,
-	input: {
-		dispatchId: string;
-		publisherId: string;
-		now?: Date;
-	},
+	input: { runId: string; publisherId: string; now?: Date },
 ): Promise<boolean> {
 	const now = input.now ?? new Date();
 	const confirmed = await db
-		.update(canaryDispatchOutbox)
+		.update(agentCoreDispatchOutbox)
 		.set({
 			publishedAt: now,
 			publishClaimedBy: null,
@@ -203,193 +166,54 @@ export async function confirmCanaryDispatchPublishedTx(
 		})
 		.where(
 			and(
-				eq(canaryDispatchOutbox.dispatchId, input.dispatchId),
-				eq(canaryDispatchOutbox.publishClaimedBy, input.publisherId),
-				gt(canaryDispatchOutbox.publishClaimUntil, now),
+				eq(agentCoreDispatchOutbox.runId, input.runId),
+				eq(agentCoreDispatchOutbox.publishClaimedBy, input.publisherId),
+				gt(agentCoreDispatchOutbox.publishClaimUntil, now),
 			),
 		)
-		.returning({ dispatchId: canaryDispatchOutbox.dispatchId });
+		.returning({ runId: agentCoreDispatchOutbox.runId });
 	return confirmed.length > 0;
 }
 
-/** Audit an eligible operator replay request without disturbing a live lease. */
-export async function requestCanaryDispatchReplayTx(
+/** Audit an operator replay request without disturbing a live publish lease. */
+export async function requestAgentCoreDispatchReplayTx(
 	db: Database,
-	input: { dispatchId: string; requestedBy: string; now?: Date },
+	input: { runId: string; requestedBy: string; now?: Date },
 ): Promise<boolean> {
 	if (input.requestedBy.trim() === "") {
 		throw new Error("manual replay requires an operator identity");
 	}
-	const now = input.now ?? new Date();
-	const pendingDeadline = dispatchPendingDeadline(now);
-	const activeCampaignIds = db
-		.select({ campaignId: canaryCampaigns.campaignId })
-		.from(canaryCampaigns)
-		.where(activeCanaryCampaignCondition());
 	const replay = await db
-		.update(canaryDispatchOutbox)
+		.update(agentCoreDispatchOutbox)
 		.set({
-			replayRequestedAt: now,
+			replayRequestedAt: input.now ?? new Date(),
 			replayRequestedBy: input.requestedBy,
 		})
-		.where(
-			and(
-				eq(canaryDispatchOutbox.dispatchId, input.dispatchId),
-				gt(canaryDispatchOutbox.admittedAt, pendingDeadline),
-				gt(canaryDispatchOutbox.expiresAt, now),
-				inArray(canaryDispatchOutbox.campaignId, activeCampaignIds),
-			),
-		)
-		.returning({ dispatchId: canaryDispatchOutbox.dispatchId });
+		.where(eq(agentCoreDispatchOutbox.runId, input.runId))
+		.returning({ runId: agentCoreDispatchOutbox.runId });
 	return replay.length > 0;
 }
 
 /**
- * Turn a dispatch whose exact Run was not acquired within five minutes into an
- * inconclusive Campaign cleanup request. The final verdict is still written
- * only after cleanup/reporting completes.
+ * Acquire one exact AgentCore dispatch. The Conversation is locked before its
+ * Run to preserve the global Ownership lock order. Ownership establishment and
+ * queued-to-running transition share this commit. A queued dispatch must name
+ * the Conversation's oldest Active Run, making the depth-one admission
+ * assumption an explicit acquisition invariant.
  */
-export async function markOverdueCanaryDispatchesTx(
-	db: Database,
-	input: { now?: Date } = {},
-): Promise<{ campaignIds: string[] }> {
-	const now = input.now ?? new Date();
-	const pendingDeadline = dispatchPendingDeadline(now);
-	return await db.transaction(async (tx) => {
-		// Match every other Campaign/outbox mutation: Campaign first, then outbox.
-		// This also prevents two repair invocations from marking the same Campaign.
-		const campaigns = await tx
-			.select({ campaignId: canaryCampaigns.campaignId })
-			.from(canaryCampaigns)
-			.where(
-				and(
-					activeCanaryCampaignCondition(),
-					sql`exists (
-						select 1 from ${canaryDispatchOutbox}
-						where ${canaryDispatchOutbox.campaignId} = ${canaryCampaigns.campaignId}
-						  and ${canaryDispatchOutbox.admittedAt} <= ${pendingDeadline}
-						  and ${queuedExactRunExists({
-								runId: canaryDispatchOutbox.runId,
-								userId: canaryDispatchOutbox.userId,
-								conversationId: canaryDispatchOutbox.conversationId,
-							})}
-					)`,
-				),
-			)
-			.for("update", { skipLocked: true });
-		const candidateCampaignIds = campaigns.map(({ campaignId }) => campaignId);
-		if (candidateCampaignIds.length === 0) return { campaignIds: [] };
-
-		const overdue = await tx
-			.select({ dispatchId: canaryDispatchOutbox.dispatchId })
-			.from(canaryDispatchOutbox)
-			.where(
-				and(
-					inArray(canaryDispatchOutbox.campaignId, candidateCampaignIds),
-					lte(canaryDispatchOutbox.admittedAt, pendingDeadline),
-					queuedExactRunExists({
-						runId: canaryDispatchOutbox.runId,
-						userId: canaryDispatchOutbox.userId,
-						conversationId: canaryDispatchOutbox.conversationId,
-					}),
-				),
-			)
-			.for("update");
-		if (overdue.length === 0) return { campaignIds: [] };
-
-		const marked = await tx
-			.update(canaryCampaigns)
-			.set({
-				lifecycle: "cleaning",
-				provisionalVerdict: "inconclusive",
-				cleanupRequestedAt: now,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					inArray(canaryCampaigns.campaignId, candidateCampaignIds),
-					ne(canaryCampaigns.lifecycle, "cleaning"),
-					ne(canaryCampaigns.lifecycle, "complete"),
-				),
-			)
-			.returning({ campaignId: canaryCampaigns.campaignId });
-		return {
-			campaignIds: marked.map(({ campaignId }) => campaignId).sort(),
-		};
-	});
-}
-
-/** Remove completed Campaign/outbox audit only after its completion deadline. */
-export async function expireCanaryAuditRecordsTx(
-	db: Database,
-	input: { now?: Date } = {},
-): Promise<{ campaignsDeleted: number; dispatchesDeleted: number }> {
-	const now = input.now ?? new Date();
-	return await db.transaction(async (tx) => {
-		const expired = await tx
-			.select({ campaignId: canaryCampaigns.campaignId })
-			.from(canaryCampaigns)
-			.where(
-				and(
-					eq(canaryCampaigns.lifecycle, "complete"),
-					lte(canaryCampaigns.expiresAt, now),
-				),
-			)
-			.for("update");
-		const campaignIds = expired.map(({ campaignId }) => campaignId);
-		if (campaignIds.length === 0) {
-			return { campaignsDeleted: 0, dispatchesDeleted: 0 };
-		}
-		const dispatches = await tx
-			.delete(canaryDispatchOutbox)
-			.where(inArray(canaryDispatchOutbox.campaignId, campaignIds))
-			.returning({ dispatchId: canaryDispatchOutbox.dispatchId });
-		const campaigns = await tx
-			.delete(canaryCampaigns)
-			.where(inArray(canaryCampaigns.campaignId, campaignIds))
-			.returning({ campaignId: canaryCampaigns.campaignId });
-		return {
-			campaignsDeleted: campaigns.length,
-			dispatchesDeleted: dispatches.length,
-		};
-	});
-}
-
-/**
- * Acquire one exact AgentCore dispatch. The Campaign is locked first to match
- * Canary admission, then the Conversation before its Run to preserve the
- * global ownership lock order. Ownership and queued-to-running transition
- * share this commit, so neither fact can exist without the other.
- */
-export async function acquireCanaryDispatchTx(
+export async function acquireAgentCoreDispatchTx(
 	db: Database,
 	input: {
-		dispatch: CanaryDispatchIdentity;
+		dispatch: AgentCoreDispatchIdentity;
 		workerId: string;
 		now?: Date;
 	},
-): Promise<AcquireCanaryDispatchResult> {
+): Promise<AcquireAgentCoreDispatchResult> {
 	return await db.transaction(async (tx) => {
-		const [campaign] = await tx
-			.select()
-			.from(canaryCampaigns)
-			.where(eq(canaryCampaigns.campaignId, input.dispatch.campaignId))
-			.for("update");
-		if (
-			!campaign ||
-			campaign.scenarioId !== input.dispatch.scenarioId ||
-			campaign.userId !== input.dispatch.userId ||
-			campaign.conversationId !== input.dispatch.conversationId ||
-			campaign.runId !== input.dispatch.runId
-		) {
-			return { disposition: "invalid_dispatch" };
-		}
-
 		const [conversation] = await tx
 			.select({
 				userId: conversations.userId,
 				conversationId: conversations.conversationId,
-				executionLane: conversations.executionLane,
 				epoch: conversations.epoch,
 				ownerWorkerId: conversations.ownerWorkerId,
 				ownerUntil: conversations.ownerUntil,
@@ -405,7 +229,6 @@ export async function acquireCanaryDispatchTx(
 			.for("update");
 		if (
 			!conversation ||
-			conversation.executionLane !== AGENTCORE_CANARY_EXECUTION_LANE ||
 			input.dispatch.runtimeSessionId !== input.dispatch.conversationId
 		) {
 			return { disposition: "invalid_dispatch" };
@@ -424,18 +247,14 @@ export async function acquireCanaryDispatchTx(
 			.for("update");
 		const [outbox] = await tx
 			.select()
-			.from(canaryDispatchOutbox)
-			.where(eq(canaryDispatchOutbox.dispatchId, input.dispatch.dispatchId))
+			.from(agentCoreDispatchOutbox)
+			.where(eq(agentCoreDispatchOutbox.runId, input.dispatch.runId))
 			.limit(1);
 		if (
 			!run ||
 			!outbox ||
-			outbox.campaignId !== input.dispatch.campaignId ||
-			outbox.scenarioId !== input.dispatch.scenarioId ||
 			outbox.userId !== input.dispatch.userId ||
 			outbox.conversationId !== input.dispatch.conversationId ||
-			outbox.runId !== input.dispatch.runId ||
-			outbox.executionLane !== input.dispatch.expectedExecutionLane ||
 			outbox.admittedAt.getTime() !== input.dispatch.admittedAt.getTime()
 		) {
 			return { disposition: "invalid_dispatch" };
@@ -458,19 +277,33 @@ export async function acquireCanaryDispatchTx(
 		if (
 			run.status === "running" ||
 			run.status === "interrupt_requested" ||
-			(run.status === "queued" && conversation.ownerUntil !== null)
+			(run.status === "queued" &&
+				(conversation.ownerWorkerId !== null ||
+					conversation.ownerUntil !== null))
 		) {
 			return { disposition: "temporarily_unavailable" };
 		}
 		if (isTerminalRunStatus(run.status)) {
 			return { disposition: "terminal", status: run.status };
 		}
-		if (
-			campaign.lifecycle === "cleaning" ||
-			campaign.lifecycle === "complete"
-		) {
+
+		const [oldestActive] = await tx
+			.select({ runId: runs.runId })
+			.from(runs)
+			.where(
+				and(
+					eq(runs.userId, input.dispatch.userId),
+					eq(runs.conversationId, input.dispatch.conversationId),
+					inArray(runs.status, ACTIVE_RUN_STATUSES),
+				),
+			)
+			.orderBy(runs.createdAt, runs.runId)
+			.limit(1)
+			.for("update");
+		if (oldestActive?.runId !== input.dispatch.runId) {
 			return { disposition: "invalid_dispatch" };
 		}
+
 		const epoch = conversation.epoch + 1;
 		await tx
 			.update(conversations)

@@ -1,7 +1,7 @@
 import { BedrockAgentCoreClient } from "@aws-sdk/client-bedrock-agentcore";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { SSMClient } from "@aws-sdk/client-ssm";
-import { requestCanaryDispatchReplayTx } from "@mymemo/agent-db/canary-dispatch";
+import { requestAgentCoreDispatchReplayTx } from "@mymemo/agent-db/canary-dispatch";
 import { createDatabase } from "@mymemo/agent-db/client";
 import { createDatabaseCanaryAcquisitionBoundary } from "./acquisition-boundary";
 import {
@@ -139,13 +139,13 @@ function createProductionPublisherResources(
 	return {
 		db,
 		control,
-		publish: async (publisherId: string, dispatchId?: string) =>
+		publish: async (publisherId: string, runId?: string) =>
 			await createCanaryDispatchPublisher({
 				publisherId,
 				control,
 				store,
 				queue,
-			}).publishPending({ dispatchId }),
+			}).publishPending({ runId }),
 	};
 }
 
@@ -177,8 +177,8 @@ export function createCanaryDispatchProductionServices(
 		publish,
 		consume: consumer.handle,
 		acquire: acquisition.handle,
-		replay: async (input: { dispatchId: string; requestedBy: string }) =>
-			await requestCanaryDispatchReplayTx(db, input),
+		replay: async (input: { runId: string; requestedBy: string }) =>
+			await requestAgentCoreDispatchReplayTx(db, input),
 	};
 }
 

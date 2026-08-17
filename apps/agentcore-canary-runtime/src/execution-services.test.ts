@@ -74,21 +74,13 @@ async function startOwnedRun(input: {
 	return owner;
 }
 
-function dispatchFor(input: {
-	conversationId: string;
-	runId: string;
-	dispatchId: string;
-}) {
+function dispatchFor(input: { conversationId: string; runId: string }) {
 	return {
-		schemaVersion: 1 as const,
-		dispatchId: input.dispatchId,
-		campaignId: "campaign-451",
-		scenarioId: "baseline-v1",
+		schemaVersion: 2 as const,
 		userId: "canary-service-user",
 		conversationId: input.conversationId,
 		runId: input.runId,
 		runtimeSessionId: input.conversationId,
-		expectedExecutionLane: "agentcore_canary" as const,
 		admittedAt: new Date("2026-08-14T20:00:00.000Z"),
 	};
 }
@@ -138,15 +130,11 @@ describe("AgentCore one-shot execution services", () => {
 		await expect(
 			services.serve({
 				dispatch: {
-					schemaVersion: 1,
-					dispatchId: "dispatch-runtime-451",
-					campaignId: "campaign-451",
-					scenarioId: "baseline-v1",
+					schemaVersion: 2,
 					userId: owner.userId,
 					conversationId: owner.conversationId,
 					runId: "run-runtime-451",
 					runtimeSessionId: owner.conversationId,
-					expectedExecutionLane: "agentcore_canary",
 					admittedAt: new Date("2026-08-14T20:00:00.000Z"),
 				},
 				acquisition,
@@ -176,7 +164,6 @@ describe("AgentCore one-shot execution services", () => {
 		const dispatch = dispatchFor({
 			conversationId,
 			runId,
-			dispatchId: "dispatch-runtime-interruption-451",
 		});
 		const result = { disposition: "acquired", owner, workerId } as const;
 		const receiptLine = `${JSON.stringify(
@@ -269,7 +256,6 @@ describe("AgentCore one-shot execution services", () => {
 					dispatch: dispatchFor({
 						conversationId,
 						runId,
-						dispatchId: "dispatch-runtime-live-451",
 					}),
 					acquisition: { disposition: "acquired", owner, workerId },
 					shutdownSignal: new AbortController().signal,
@@ -321,7 +307,6 @@ describe("AgentCore one-shot execution services", () => {
 				dispatch: dispatchFor({
 					conversationId,
 					runId,
-					dispatchId: "dispatch-runtime-relay-failure-451",
 				}),
 				acquisition: { disposition: "acquired", owner, workerId },
 				shutdownSignal: new AbortController().signal,

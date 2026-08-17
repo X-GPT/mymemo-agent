@@ -8,9 +8,8 @@ import type { CanaryPublishResult } from "./publisher";
 
 const enabledPublication: CanaryPublishResult = {
 	status: "enabled",
-	overdueCampaignIds: [],
-	publishedDispatchIds: ["dispatch-450"],
-	ambiguousDispatchIds: [],
+	publishedRunIds: ["run-450"],
+	ambiguousRunIds: [],
 };
 
 describe("Canary dispatch Lambda handlers", () => {
@@ -75,18 +74,18 @@ describe("Canary dispatch Lambda handlers", () => {
 		const calls: string[] = [];
 		const handler = createManualReplayHandler({
 			replay: async (input) => {
-				calls.push(`replay:${input.dispatchId}:${input.requestedBy}`);
+				calls.push(`replay:${input.runId}:${input.requestedBy}`);
 				return true;
 			},
-			publish: async (publisherId, dispatchId) => {
-				calls.push(`publish:${publisherId}:${dispatchId}`);
+			publish: async (publisherId, runId) => {
+				calls.push(`publish:${publisherId}:${runId}`);
 				return enabledPublication;
 			},
 		});
 
 		await expect(
 			handler(
-				{ dispatchId: "dispatch-450", requestedBy: "operator@example.com" },
+				{ runId: "run-450", requestedBy: "operator@example.com" },
 				{ awsRequestId: "manual-request-1" },
 			),
 		).resolves.toEqual({
@@ -95,8 +94,8 @@ describe("Canary dispatch Lambda handlers", () => {
 			publication: enabledPublication,
 		});
 		expect(calls).toEqual([
-			"replay:dispatch-450:operator@example.com",
-			"publish:manual-replay/manual-request-1:dispatch-450",
+			"replay:run-450:operator@example.com",
+			"publish:manual-replay/manual-request-1:run-450",
 		]);
 	});
 
@@ -105,19 +104,19 @@ describe("Canary dispatch Lambda handlers", () => {
 			replay: async () => true,
 			publish: async () => ({
 				...enabledPublication,
-				publishedDispatchIds: [],
+				publishedRunIds: [],
 			}),
 		});
 
 		await expect(
 			handler(
-				{ dispatchId: "dispatch-450", requestedBy: "operator@example.com" },
+				{ runId: "run-450", requestedBy: "operator@example.com" },
 				{ awsRequestId: "manual-request-1" },
 			),
 		).resolves.toEqual({
 			replayed: false,
 			deferred: true,
-			publication: { ...enabledPublication, publishedDispatchIds: [] },
+			publication: { ...enabledPublication, publishedRunIds: [] },
 		});
 	});
 
@@ -129,7 +128,7 @@ describe("Canary dispatch Lambda handlers", () => {
 
 		await expect(
 			handler(
-				{ dispatchId: "dispatch-450", requestedBy: "operator@example.com" },
+				{ runId: "run-450", requestedBy: "operator@example.com" },
 				{ awsRequestId: "manual-request-1" },
 			),
 		).rejects.toThrow("Canary dispatch is not eligible for replay");

@@ -11,12 +11,7 @@ import {
 } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
-import {
-	canaryCampaigns,
-	canaryDispatchOutbox,
-	conversations,
-	runs,
-} from "@/db/schema";
+import { agentCoreDispatchOutbox, conversations, runs } from "@/db/schema";
 import { createTestDatabase } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import type {
@@ -819,23 +814,9 @@ describe("PATCH /v1/conversations/:id", () => {
 });
 
 describe("DELETE /v1/conversations/:id", () => {
-	it("deletes an AgentCore-canary Conversation through HTTP without deleting its audit", async () => {
+	it("deletes an AgentCore Conversation through HTTP without deleting its dispatch audit", async () => {
 		const tdb = await createTestDatabase();
 		try {
-			await tdb.db.insert(canaryCampaigns).values({
-				campaignId: "campaign-delete",
-				idempotencyKey: "key-delete",
-				campaignVersion: "v1",
-				fixtureVersion: "fixture-v1",
-				fixtureChecksum: "fixture-checksum",
-				inputChecksum: "fixture-input-checksum",
-				model: "model",
-				scenarioId: "scenario",
-				userId: "member-1",
-				conversationId: "canary-delete",
-				runId: "canary-delete-run",
-				messageId: "canary-delete-message",
-			});
 			await tdb.db.insert(conversations).values({
 				userId: "member-1",
 				conversationId: "canary-delete",
@@ -850,15 +831,10 @@ describe("DELETE /v1/conversations/:id", () => {
 				status: "done",
 				terminalAt: new Date(),
 			});
-			await tdb.db.insert(canaryDispatchOutbox).values({
-				dispatchId: "canary-delete-dispatch",
-				campaignId: "campaign-delete",
-				scenarioId: "scenario",
+			await tdb.db.insert(agentCoreDispatchOutbox).values({
 				userId: "member-1",
 				conversationId: "canary-delete",
 				runId: "canary-delete-run",
-				executionLane: "agentcore_canary",
-				expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
 			});
 			const app = buildApp(
 				new PostgresConversationStore(tdb.db),
@@ -872,20 +848,14 @@ describe("DELETE /v1/conversations/:id", () => {
 
 			expect(deleted.status).toBe(204);
 			expect(await tdb.db.select().from(runs)).toEqual([]);
-			expect(await tdb.db.select().from(canaryCampaigns)).toMatchObject([
-				{
-					campaignId: "campaign-delete",
-					conversationId: "canary-delete",
-					runId: "canary-delete-run",
-				},
-			]);
-			expect(await tdb.db.select().from(canaryDispatchOutbox)).toMatchObject([
-				{
-					dispatchId: "canary-delete-dispatch",
-					conversationId: "canary-delete",
-					runId: "canary-delete-run",
-				},
-			]);
+			expect(await tdb.db.select().from(agentCoreDispatchOutbox)).toMatchObject(
+				[
+					{
+						conversationId: "canary-delete",
+						runId: "canary-delete-run",
+					},
+				],
+			);
 		} finally {
 			await tdb.close();
 		}

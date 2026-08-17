@@ -1,4 +1,4 @@
-import type { CanaryDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	releaseConversationTx,
@@ -16,7 +16,7 @@ import type { CanaryRuntimeDependencies } from "./runtime";
 export function createCanaryExecutionServices(options: {
 	db: Database;
 	acquire(
-		dispatch: CanaryDispatchIdentity,
+		dispatch: AgentCoreDispatchIdentity,
 	): Promise<CommittedCanaryAcquisition>;
 	runServing: RunServing;
 	logger: WorkerLogger;
