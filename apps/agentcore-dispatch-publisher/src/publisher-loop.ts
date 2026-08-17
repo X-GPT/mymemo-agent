@@ -1,12 +1,17 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { CanaryPublishResult } from "agentcore-canary-dispatch/publisher";
 import { type AdvisoryLockPool, tryWithAdvisoryLock } from "./advisory-lock";
 import { type PublisherLogger, toMessage } from "./logger";
 
 export const PUBLISHER_ADVISORY_LOCK_KEY = 8_242_869_154_306_403;
 
+export interface AgentCoreDispatchPublishResult {
+	status: "enabled" | "disabled";
+	publishedRunIds: string[];
+	ambiguousRunIds: string[];
+}
+
 export interface AgentCoreDispatchPublisher {
-	publishPending(): Promise<CanaryPublishResult>;
+	publishPending(): Promise<AgentCoreDispatchPublishResult>;
 }
 
 export interface AgentCoreDispatchPendingStore {
