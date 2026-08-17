@@ -218,7 +218,7 @@ function fakeRunStore() {
 }
 
 function transactionalAdmissionFake(
-	executionRuntime: ConversationExecutionRuntime,
+	conversationStore: ConversationStore,
 	failure?: "run" | "dispatch",
 ) {
 	const admittedRuns = new Map<string, RunRecord>();
@@ -234,6 +234,8 @@ function transactionalAdmissionFake(
 			const existing = admittedRuns.get(input.runId);
 			if (existing) return { outcome: "existing", run: existing };
 			if (failure === "run") throw new Error("Run admission failed");
+			const conversation = await conversationStore.get(input.conversation);
+			if (!conversation) throw new Error("Conversation not found");
 
 			const run = runRecord({
 				runId: input.runId,
@@ -241,7 +243,7 @@ function transactionalAdmissionFake(
 				conversationId: input.conversation.conversationId,
 				status: "done",
 			});
-			const recordsDispatch = executionRuntime === "agentcore";
+			const recordsDispatch = conversation.executionRuntime === "agentcore";
 			if (recordsDispatch && failure === "dispatch") {
 				throw new Error("dispatch recording failed");
 			}
@@ -1407,7 +1409,7 @@ describe("POST /v1/conversations/:id/runs", () => {
 describe("Run dispatch admission through HTTP", () => {
 	it("records one AgentCore dispatch and reattaches an exact retry", async () => {
 		const { store } = fakeStore([persistedConversation("agentcore")]);
-		const admission = transactionalAdmissionFake("agentcore");
+		const admission = transactionalAdmissionFake(store);
 		const exposure = recordingGate(true);
 		const app = buildApp(store, exposure.gate, {
 			...fakeRunStore(),
@@ -1434,7 +1436,7 @@ describe("Run dispatch admission through HTTP", () => {
 
 	it("admits a Fargate Run without a dispatch", async () => {
 		const { store } = fakeStore([persistedConversation("fargate")]);
-		const admission = transactionalAdmissionFake("fargate");
+		const admission = transactionalAdmissionFake(store);
 		const app = buildApp(store, recordingGate(true).gate, {
 			...fakeRunStore(),
 			runStore: admission.runStore,
@@ -1456,7 +1458,7 @@ describe("Run dispatch admission through HTTP", () => {
 		"dispatch",
 	] as const)("leaves neither an AgentCore Run nor dispatch when %s recording fails", async (failure) => {
 		const { store } = fakeStore([persistedConversation("agentcore")]);
-		const admission = transactionalAdmissionFake("agentcore", failure);
+		const admission = transactionalAdmissionFake(store, failure);
 		const app = buildApp(store, recordingGate(true).gate, {
 			...fakeRunStore(),
 			runStore: admission.runStore,
