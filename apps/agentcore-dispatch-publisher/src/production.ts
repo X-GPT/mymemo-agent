@@ -65,15 +65,12 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 		client: new SSMClient({ region: options.config.awsRegion }),
 		parameterName: options.config.enabledParameterName,
 	});
-	const publisher = createAgentCoreDispatchPublisher({
-		publisherId: options.publisherId,
-		signal: options.signal,
-		control,
-		store: createDatabaseAgentCoreDispatchPublisherStore({ db: options.db }),
-		queue: createSqsAgentCoreDispatchQueue({
-			client: new SQSClient({ region: options.config.awsRegion }),
-			queueUrl: options.config.queueUrl,
-		}),
+	const store = createDatabaseAgentCoreDispatchPublisherStore({
+		db: options.db,
+	});
+	const queue = createSqsAgentCoreDispatchQueue({
+		client: new SQSClient({ region: options.config.awsRegion }),
+		queueUrl: options.config.queueUrl,
 	});
 	const loadPendingAgeMs = async (): Promise<number> => {
 		const oldest = await loadOldestUnpublishedAgentCoreDispatchAdmittedAt(
@@ -85,9 +82,17 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 	return {
 		isEnabled: () => control.isEnabled(),
 		loadPendingAgeMs,
-		async publishPending(): Promise<void> {
+		async publishPending(lockSignal): Promise<void> {
+			const signal = AbortSignal.any([options.signal, lockSignal]);
+			const publisher = createAgentCoreDispatchPublisher({
+				publisherId: options.publisherId,
+				signal,
+				control,
+				store,
+				queue,
+			});
 			await drainPendingAgentCoreDispatches({
-				signal: options.signal,
+				signal,
 				loadPendingAgeMs,
 				publishBatch: () => publisher.publishPending(),
 				recordPublication: (result, pendingAgeMs) =>

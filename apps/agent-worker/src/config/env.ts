@@ -1,3 +1,4 @@
+import { resolveDatabaseUrl } from "@mymemo/agent-db/database-url";
 import { resolveLiveStreamRedisUrl } from "@mymemo/live-text";
 import {
 	type BashToolLimits,
@@ -111,35 +112,6 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 300_000; // 5 minutes
 const DEFAULT_PORT = 8080;
 
-/**
- * Append `sslmode=no-verify` unless TLS is disabled or the URL already sets it.
- * We want the connection encrypted but not CA-verified: RDS presents the Amazon
- * RDS CA, which is not in Node's default trust store. node-postgres's
- * pg-connection-string aliases `sslmode=require` to `verify-full` (strict
- * CA-chain verification), so `require` fails with SELF_SIGNED_CERT_IN_CHAIN;
- * `no-verify` maps to `rejectUnauthorized: false`. Do not change back to
- * `require` without also shipping the RDS CA bundle (e.g. NODE_EXTRA_CA_CERTS).
- */
-function withSsl(url: string, enabled: boolean): string {
-	if (!enabled || /[?&]sslmode=/.test(url)) return url;
-	return `${url}${url.includes("?") ? "&" : "?"}sslmode=no-verify`;
-}
-
-/**
- * If the URL is passwordless (the platform-injected form) and a password is
- * provided, splice it in. Kept local to the worker rather than imported from
- * chat-api: the worker must not depend on chat-api internals.
- */
-function withPassword(url: string, password: string | undefined): string {
-	if (!password) return url;
-	const m = /^([a-z]+:\/\/)([^@/]+)@(.*)$/i.exec(url);
-	if (!m) return url;
-	const [, scheme, userinfo, rest] = m;
-	if (!scheme || !userinfo || rest === undefined) return url;
-	if (userinfo.includes(":")) return url; // already has a password
-	return `${scheme}${userinfo}:${encodeURIComponent(password)}@${rest}`;
-}
-
 /** Parse a positive-integer env override, or fall back to the default. */
 function positiveIntOr(
 	raw: string | undefined,
@@ -171,7 +143,6 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
 	});
 
-	const sslEnabled = env.DB_SSL !== "disable";
 	const bashMaxOutputBytes = positiveIntOr(
 		env.WORKER_BASH_MAX_OUTPUT_BYTES,
 		DEFAULT_BASH_TOOL_LIMITS.maxStdoutBytes,
@@ -181,11 +152,16 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 	return {
 		// DB_PASSWORD is the writable agent role's password in the platform's
 		// passwordless-URL form; the KB carries its own credential inline.
-		agentDatabaseUrl: withSsl(
-			withPassword(env.AGENT_DATABASE_URL, env.DB_PASSWORD),
-			sslEnabled,
+		agentDatabaseUrl: resolveDatabaseUrl(
+			env.AGENT_DATABASE_URL,
+			env.DB_PASSWORD,
+			env.DB_SSL,
 		),
-		kbDatabaseUrl: withSsl(env.KB_DATABASE_URL, sslEnabled),
+		kbDatabaseUrl: resolveDatabaseUrl(
+			env.KB_DATABASE_URL,
+			undefined,
+			env.DB_SSL,
+		),
 		openrouter: {
 			apiKey: env.OPENROUTER_API_KEY,
 			// Trailing slash stripped so `${base}/v1/messages` never doubles up.

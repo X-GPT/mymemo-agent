@@ -1,3 +1,5 @@
+import { resolveDatabaseUrl } from "@mymemo/agent-db/database-url";
+
 type Env = Record<string, string | undefined>;
 
 export interface AgentCoreDispatchPublisherConfig {
@@ -83,22 +85,6 @@ function validateParameterName(value: string): string {
 	return value;
 }
 
-function withPassword(url: string, password: string | undefined): string {
-	if (!password) return url;
-	const match = /^([a-z]+:\/\/)([^@/]+)@(.*)$/i.exec(url);
-	if (!match) return url;
-	const [, scheme, userinfo, rest] = match;
-	if (!scheme || !userinfo || rest === undefined || userinfo.includes(":")) {
-		return url;
-	}
-	return `${scheme}${userinfo}:${encodeURIComponent(password)}@${rest}`;
-}
-
-function withSsl(url: string, enabled: boolean): string {
-	if (!enabled || /[?&]sslmode=/.test(url)) return url;
-	return `${url}${url.includes("?") ? "&" : "?"}sslmode=no-verify`;
-}
-
 function positiveIntOr(
 	raw: string | undefined,
 	fallback: number,
@@ -127,10 +113,7 @@ export function loadAgentCoreDispatchPublisherConfigFromEnv(
 		required(env, "CANARY_ENABLED_PARAMETER_NAME"),
 	);
 	const agentDatabaseUrl = validateDatabaseUrl(
-		withSsl(
-			withPassword(rawDatabaseUrl, env.DB_PASSWORD),
-			env.DB_SSL !== "disable",
-		),
+		resolveDatabaseUrl(rawDatabaseUrl, env.DB_PASSWORD, env.DB_SSL),
 	);
 
 	return {

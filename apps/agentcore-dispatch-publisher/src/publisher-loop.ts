@@ -13,7 +13,7 @@ export const PUBLISHER_ADVISORY_LOCK_KEY = 8_242_869_154_306_403;
 export interface AgentCoreDispatchPublisher {
 	isEnabled(): Promise<boolean>;
 	loadPendingAgeMs(): Promise<number>;
-	publishPending(): Promise<void>;
+	publishPending(lockSignal: AbortSignal): Promise<void>;
 }
 
 interface PublisherTickOptions {
@@ -49,7 +49,7 @@ export async function publishAgentCoreDispatchTick(
 	const locked = await tryWithAdvisoryLock(
 		options.pool,
 		PUBLISHER_ADVISORY_LOCK_KEY,
-		() => options.publisher.publishPending(),
+		(lockSignal) => options.publisher.publishPending(lockSignal),
 	);
 	if (!locked.ran) recordPublisherLockNotAcquired(options.logger);
 }

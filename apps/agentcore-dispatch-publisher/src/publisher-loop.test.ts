@@ -18,8 +18,37 @@ class FakeLockPool implements AdvisoryLockPool {
 					? { rows: [{ locked }] }
 					: { rows: [] };
 			},
+			on() {},
+			off() {},
 			release() {},
 		};
+	}
+}
+
+class ControllableLockPool implements AdvisoryLockPool {
+	private errorListener: ((error: Error) => void) | undefined;
+	readonly releasedWith: Array<Error | boolean | undefined> = [];
+
+	async connect(): Promise<AdvisoryLockClient> {
+		return {
+			query: async (text: string) =>
+				text.includes("pg_try_advisory_lock")
+					? { rows: [{ locked: true }] }
+					: { rows: [] },
+			on: (_event, listener) => {
+				this.errorListener = listener;
+			},
+			off: (_event, listener) => {
+				if (this.errorListener === listener) this.errorListener = undefined;
+			},
+			release: (error) => {
+				this.releasedWith.push(error);
+			},
+		};
+	}
+
+	fail(error: Error): void {
+		this.errorListener?.(error);
 	}
 }
 
@@ -110,6 +139,45 @@ describe("publishAgentCoreDispatchTick", () => {
 });
 
 describe("runAgentCoreDispatchPublisher", () => {
+	it("records a lock-session failure and continues on a fresh connection", async () => {
+		const shutdown = new AbortController();
+		const logger = new RecordingLogger();
+		const pool = new ControllableLockPool();
+		const connectionFailure = new Error("lock connection terminated");
+		let publishCalls = 0;
+
+		await runAgentCoreDispatchPublisher({
+			pool,
+			publisher: {
+				isEnabled: async () => true,
+				loadPendingAgeMs: async () => 0,
+				publishPending: async (lockSignal) => {
+					publishCalls += 1;
+					if (publishCalls === 1) {
+						pool.fail(connectionFailure);
+						expect(lockSignal.aborted).toBe(true);
+					}
+				},
+			},
+			intervalMs: 2_000,
+			signal: shutdown.signal,
+			wait: async () => {
+				if (publishCalls === 2) shutdown.abort();
+			},
+			logger,
+		});
+
+		expect(publishCalls).toBe(2);
+		expect(pool.releasedWith).toEqual([connectionFailure, undefined]);
+		expect(logger.errorRecords).toMatchObject([
+			{
+				reason: "tick_failed",
+				error: "lock connection terminated",
+				PublisherErrors: 1,
+			},
+		]);
+	});
+
 	it("continues after a failed tick and stops on abort", async () => {
 		const shutdown = new AbortController();
 		const logger = new RecordingLogger();

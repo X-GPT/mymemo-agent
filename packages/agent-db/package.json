@@ -8,6 +8,7 @@
 		"./agentcore-dispatch": "./src/agentcore-dispatch.ts",
 		"./artifact-store": "./src/artifact-store.ts",
 		"./client": "./src/client.ts",
+		"./database-url": "./src/database-url.ts",
 		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./execution-runtime": "./src/execution-runtime.ts",
 		"./execution-runtime-deployment": "./src/execution-runtime-deployment.ts",

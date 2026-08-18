@@ -32,7 +32,7 @@ function deferred() {
 
 function runTick(options: {
 	pool?: AdvisoryLockPool;
-	publishPending(): Promise<void>;
+	publishPending(lockSignal: AbortSignal): Promise<void>;
 }) {
 	return publishAgentCoreDispatchTick({
 		pool: options.pool ?? pool,
@@ -95,11 +95,15 @@ describe.skipIf(!shouldRun)("publisher lock against real Postgres", () => {
 	it("releases the lock when its database backend terminates", async () => {
 		const capturedPool = new CapturingPool(pool);
 		const entered = deferred();
+		const lockSessionLost = deferred();
 		const finish = deferred();
 		const killedTick = runTick({
 			pool: capturedPool,
-			publishPending: async () => {
+			publishPending: async (lockSignal) => {
 				entered.resolve();
+				lockSignal.addEventListener("abort", lockSessionLost.resolve, {
+					once: true,
+				});
 				await finish.promise;
 			},
 		});
@@ -112,21 +116,14 @@ describe.skipIf(!shouldRun)("publisher lock against real Postgres", () => {
 		if (!processId) throw new Error("publisher backend id was not captured");
 		const client = capturedPool.client;
 		if (!client) throw new Error("publisher client was not captured");
-		let resolveConnectionFailed!: () => void;
-		const connectionFailed = new Promise<void>((resolve) => {
-			resolveConnectionFailed = resolve;
-		});
-		const handleClientError = () => resolveConnectionFailed();
-		client.on("error", handleClientError);
 		try {
 			await pool.query("select pg_terminate_backend($1)", [processId]);
-			await connectionFailed;
+			await lockSessionLost.promise;
 			finish.resolve();
 			await expect(killedTick).rejects.toBeDefined();
 		} finally {
 			finish.resolve();
 			await killedTick.catch(() => {});
-			client.off("error", handleClientError);
 		}
 		await expect(
 			runTick({ publishPending: async () => {} }),
