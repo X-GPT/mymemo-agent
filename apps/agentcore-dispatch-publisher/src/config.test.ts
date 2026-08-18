@@ -50,6 +50,22 @@ describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
 		);
 	});
 
+	it("accepts the largest interval supported by Bun timers", () => {
+		const env = baseEnv();
+		env.AGENTCORE_DISPATCH_PUBLISHER_INTERVAL_MS = "2147483647";
+		expect(loadAgentCoreDispatchPublisherConfigFromEnv(env).intervalMs).toBe(
+			2_147_483_647,
+		);
+	});
+
+	it("rejects a tick interval that overflows Bun timers", () => {
+		const env = baseEnv();
+		env.AGENTCORE_DISPATCH_PUBLISHER_INTERVAL_MS = "2147483648";
+		expect(() => loadAgentCoreDispatchPublisherConfigFromEnv(env)).toThrow(
+			/AGENTCORE_DISPATCH_PUBLISHER_INTERVAL_MS.*2147483647/,
+		);
+	});
+
 	for (const [key, value] of [
 		["AGENT_DATABASE_URL", "not-a-database-url"],
 		["AGENT_DATABASE_URL", "https://publisher@example.com/mymemo_agent"],

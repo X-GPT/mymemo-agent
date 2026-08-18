@@ -12,6 +12,7 @@ export interface AgentCoreDispatchPublisherConfig {
 }
 
 const DEFAULT_INTERVAL_MS = 2_000;
+const MAX_TIMER_INTERVAL_MS = 2_147_483_647;
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -93,8 +94,8 @@ function positiveIntOr(
 	if (raw === undefined) return fallback;
 	const value = Number(raw);
 	assert(
-		Number.isInteger(value) && value > 0,
-		`${name} must be a positive integer (got: ${raw})`,
+		Number.isInteger(value) && value > 0 && value <= MAX_TIMER_INTERVAL_MS,
+		`${name} must be a positive integer no greater than ${MAX_TIMER_INTERVAL_MS} (got: ${raw})`,
 	);
 	return value;
 }

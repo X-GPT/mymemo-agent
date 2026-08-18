@@ -135,8 +135,8 @@ variable "agentcore_dispatch_publisher_interval_ms" {
   default     = 2000
 
   validation {
-    condition     = var.agentcore_dispatch_publisher_interval_ms > 0
-    error_message = "agentcore_dispatch_publisher_interval_ms must be positive."
+    condition     = var.agentcore_dispatch_publisher_interval_ms > 0 && var.agentcore_dispatch_publisher_interval_ms <= 2147483647
+    error_message = "agentcore_dispatch_publisher_interval_ms must be positive and no greater than 2147483647."
   }
 }
 
