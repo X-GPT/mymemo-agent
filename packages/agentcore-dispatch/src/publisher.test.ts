@@ -57,7 +57,7 @@ describe("AgentCore dispatch publisher", () => {
 		const calls: string[] = [];
 		const publisher = createAgentCoreDispatchPublisher({
 			publisherId: "publisher-1",
-			signal: shutdown.signal,
+			shutdownSignal: shutdown.signal,
 			control: {
 				isEnabled: async () => {
 					calls.push("control");
@@ -157,7 +157,7 @@ describe("AgentCore dispatch publisher", () => {
 		const calls: string[] = [];
 		const publisher = createAgentCoreDispatchPublisher({
 			publisherId: "publisher-1",
-			signal: shutdown.signal,
+			shutdownSignal: shutdown.signal,
 			control: {
 				isEnabled: async () => {
 					calls.push("control");
@@ -190,5 +190,40 @@ describe("AgentCore dispatch publisher", () => {
 			`send:${dispatch.runId}`,
 			`confirm:${dispatch.runId}`,
 		]);
+	});
+
+	it("does not confirm when the advisory-lock session is lost during send", async () => {
+		const lockSession = new AbortController();
+		const calls: string[] = [];
+		const publisher = createAgentCoreDispatchPublisher({
+			publisherId: "publisher-1",
+			lockSignal: lockSession.signal,
+			control: {
+				isEnabled: async () => {
+					calls.push("control");
+					return true;
+				},
+			},
+			store: {
+				claim: async () => [dispatch, secondDispatch],
+				confirm: async ({ runId }) => {
+					calls.push(`confirm:${runId}`);
+					return true;
+				},
+			},
+			queue: {
+				send: async ({ runId }) => {
+					calls.push(`send:${runId}`);
+					lockSession.abort(new Error("lock connection terminated"));
+				},
+			},
+		});
+
+		await expect(publisher.publishPending()).resolves.toEqual({
+			status: "enabled",
+			publishedRunIds: [],
+			ambiguousRunIds: [dispatch.runId],
+		});
+		expect(calls).toEqual(["control", "control", `send:${dispatch.runId}`]);
 	});
 });

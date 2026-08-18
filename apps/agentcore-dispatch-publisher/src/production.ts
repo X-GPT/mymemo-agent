@@ -86,7 +86,8 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 			const signal = AbortSignal.any([options.signal, lockSignal]);
 			const publisher = createAgentCoreDispatchPublisher({
 				publisherId: options.publisherId,
-				signal,
+				shutdownSignal: options.signal,
+				lockSignal,
 				control,
 				store,
 				queue,

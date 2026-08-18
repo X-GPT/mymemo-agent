@@ -32,8 +32,13 @@ export function createAgentCoreDispatchPublisher(options: {
 	control: AgentCoreDispatchEnablementControl;
 	store: AgentCoreDispatchPublisherStore;
 	queue: AgentCoreDispatchQueue;
-	signal?: AbortSignal;
+	shutdownSignal?: AbortSignal;
+	lockSignal?: AbortSignal;
 }) {
+	const shouldStop = () =>
+		options.shutdownSignal?.aborted === true ||
+		options.lockSignal?.aborted === true;
+
 	return {
 		async publishPending(
 			input: { runId?: string } = {},
@@ -45,7 +50,7 @@ export function createAgentCoreDispatchPublisher(options: {
 					ambiguousRunIds: [],
 				};
 			}
-			if (options.signal?.aborted) {
+			if (shouldStop()) {
 				return {
 					status: "enabled",
 					publishedRunIds: [],
@@ -64,13 +69,17 @@ export function createAgentCoreDispatchPublisher(options: {
 				ambiguousRunIds: [],
 			};
 			for (const dispatch of claimed) {
-				if (options.signal?.aborted) return result;
+				if (shouldStop()) return result;
 				if (!(await options.control.isEnabled())) {
 					return { ...result, status: "disabled" };
 				}
-				if (options.signal?.aborted) return result;
+				if (shouldStop()) return result;
 				try {
 					await options.queue.send(dispatch);
+					if (options.lockSignal?.aborted) {
+						result.ambiguousRunIds.push(dispatch.runId);
+						return result;
+					}
 					const confirmed = await options.store.confirm({
 						runId: dispatch.runId,
 						publisherId: options.publisherId,

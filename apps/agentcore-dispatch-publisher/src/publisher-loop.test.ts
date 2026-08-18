@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import type { AdvisoryLockClient, AdvisoryLockPool } from "./advisory-lock";
+import {
+	type AdvisoryLockClient,
+	type AdvisoryLockPool,
+	tryWithAdvisoryLock,
+} from "./advisory-lock";
 import type { PublisherLogger } from "./logger";
 import {
 	publishAgentCoreDispatchTick,
@@ -135,6 +139,43 @@ describe("publishAgentCoreDispatchTick", () => {
 		).resolves.toBeUndefined();
 
 		expect(publishCalls).toBe(1);
+	});
+});
+
+describe("tryWithAdvisoryLock", () => {
+	it("unlocks the session before returning it after callback failure", async () => {
+		const queries: string[] = [];
+		const releasedWith: Array<Error | boolean | undefined> = [];
+		const callbackFailure = new Error("publish failed");
+		const pool: AdvisoryLockPool = {
+			async connect() {
+				return {
+					async query(text) {
+						queries.push(text);
+						return text.includes("pg_try_advisory_lock")
+							? { rows: [{ locked: true }] }
+							: { rows: [] };
+					},
+					on() {},
+					off() {},
+					release(error) {
+						releasedWith.push(error);
+					},
+				};
+			},
+		};
+
+		await expect(
+			tryWithAdvisoryLock(pool, 42, async () => {
+				throw callbackFailure;
+			}),
+		).rejects.toBe(callbackFailure);
+
+		expect(queries).toEqual([
+			"select pg_try_advisory_lock($1) as locked",
+			"select pg_advisory_unlock($1)",
+		]);
+		expect(releasedWith).toEqual([undefined]);
 	});
 });
 

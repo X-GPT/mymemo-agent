@@ -41,23 +41,34 @@ export async function tryWithAdvisoryLock<T>(
 		if (clientError) throw clientError;
 		if (acquired.rows[0]?.locked !== true) return { ran: false };
 
-		let result: T;
+		let callbackOutcome:
+			| { succeeded: true; result: T }
+			| { succeeded: false; error: unknown };
 		try {
-			result = await callback(lockSession.signal);
+			callbackOutcome = {
+				succeeded: true,
+				result: await callback(lockSession.signal),
+			};
 		} catch (error) {
-			if (clientError) throw clientError;
-			throw error;
+			callbackOutcome = { succeeded: false, error };
 		}
-		if (clientError) throw clientError;
 
-		try {
-			await client.query("select pg_advisory_unlock($1)", [key]);
-		} catch (error) {
-			queryError = error instanceof Error ? error : true;
-			throw error;
+		let unlockFailed = false;
+		let unlockError: unknown;
+		if (!clientError) {
+			try {
+				await client.query("select pg_advisory_unlock($1)", [key]);
+			} catch (error) {
+				queryError = error instanceof Error ? error : true;
+				unlockFailed = true;
+				unlockError = error;
+			}
 		}
+
 		if (clientError) throw clientError;
-		return { ran: true, result };
+		if (unlockFailed) throw unlockError;
+		if (!callbackOutcome.succeeded) throw callbackOutcome.error;
+		return { ran: true, result: callbackOutcome.result };
 	} finally {
 		try {
 			client.release(clientError ?? queryError);
