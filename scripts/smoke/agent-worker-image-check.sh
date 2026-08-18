@@ -26,4 +26,4 @@ docker run --rm \
   --network none \
   --entrypoint bun \
   "$image" \
-  --eval 'import { resolveAndVerifyClaudeCodeExecutable } from "./src/sdk/claude-code-executable.ts"; const executable = resolveAndVerifyClaudeCodeExecutable(); console.log(`agent-worker image check passed: ${executable}`);'
+  --eval 'import { existsSync } from "node:fs"; import { resolveAndVerifyClaudeCodeExecutable } from "./src/sdk/claude-code-executable.ts"; for (const path of ["/usr/src/app/node_modules/@aws-sdk/client-sqs", "/usr/src/app/node_modules/@aws-sdk/client-ssm", "/usr/src/app/node_modules/@mymemo/agentcore-dispatch", "/usr/src/app/node_modules/agentcore-dispatch-publisher"]) { if (existsSync(path)) throw new Error(`publisher-only dependency shipped: ${path}`); } const executable = resolveAndVerifyClaudeCodeExecutable(); console.log(`agent-worker image check passed: ${executable}`);'

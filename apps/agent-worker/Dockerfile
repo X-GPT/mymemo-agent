@@ -16,10 +16,12 @@ RUN find apps packages -type f ! -name package.json -delete \
 # Install production dependencies only. The worker runs `src/index.ts` directly
 # (no build step), so it needs no dev dependencies. Tests are NOT run here —
 # CI (.github/workflows/ci.yml) is the test gate; the image just builds the
-# runtime artifact.
+# runtime artifact. Filter the install to the worker's transitive workspace
+# graph so publisher-only dependencies never enter this image.
 FROM base AS install
 COPY --from=manifests /usr/src/app /temp/prod
-RUN cd /temp/prod && bun install --frozen-lockfile --production
+RUN cd /temp/prod \
+ && bun install --frozen-lockfile --production --filter agent-worker
 
 # Final release image.
 FROM base AS release
