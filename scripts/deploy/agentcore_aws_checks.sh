@@ -1,5 +1,65 @@
 #!/usr/bin/env bash
 
+agentcore_queue_empty_evidence() {
+  local region="$1"
+  local queue_name="$2"
+  local queue_url
+  local attributes
+
+  if ! queue_url="$(aws --profile mymemo sqs get-queue-url \
+    --region "${region}" \
+    --queue-name "${queue_name}" \
+    --query QueueUrl \
+    --output text 2>&1)"; then
+    if grep -Fq "AWS.SimpleQueueService.NonExistentQueue" <<<"${queue_url}"; then
+      jq -cn --arg queueName "${queue_name}" \
+        '{queueName:$queueName,exists:false}'
+      return
+    fi
+    printf '%s\n' "${queue_url}" >&2
+    return 1
+  fi
+
+  attributes="$(aws --profile mymemo sqs get-queue-attributes \
+    --region "${region}" \
+    --queue-url "${queue_url}" \
+    --attribute-names \
+      ApproximateNumberOfMessages \
+      ApproximateNumberOfMessagesNotVisible \
+      ApproximateNumberOfMessagesDelayed)"
+  if ! jq -e '
+    .Attributes.ApproximateNumberOfMessages == "0"
+      and .Attributes.ApproximateNumberOfMessagesNotVisible == "0"
+      and .Attributes.ApproximateNumberOfMessagesDelayed == "0"
+  ' <<<"${attributes}" >/dev/null; then
+    echo "Legacy AgentCore queue ${queue_name} must be empty before production replacement." >&2
+    return 1
+  fi
+
+  jq -c \
+    --arg queueName "${queue_name}" \
+    --arg queueUrl "${queue_url}" \
+    '{queueName:$queueName,queueUrl:$queueUrl,exists:true,attributes:.Attributes}' \
+    <<<"${attributes}"
+}
+
+assert_agentcore_legacy_queues_empty() {
+  local region="$1"
+  local dispatch
+  local dead_letter
+
+  dispatch="$(agentcore_queue_empty_evidence \
+    "${region}" \
+    "mymemo-agent-agentcore-canary-prod-dispatch")" || return
+  dead_letter="$(agentcore_queue_empty_evidence \
+    "${region}" \
+    "mymemo-agent-agentcore-canary-prod-dlq")" || return
+  jq -cn \
+    --argjson dispatch "${dispatch}" \
+    --argjson deadLetter "${dead_letter}" \
+    '{dispatch:$dispatch,deadLetter:$deadLetter}'
+}
+
 verify_agentcore_current_secrets() {
   local region="$1"
   local terraform_output="$2"

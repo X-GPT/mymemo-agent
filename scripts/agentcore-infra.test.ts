@@ -287,6 +287,10 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(deployment).toContain("AGENTCORE_ALARM_ACTION_ARNS_JSON");
 		expect(deployment).not.toContain("AGENTCORE_CANARY_");
 		expect(deployment).toContain("classify_agentcore_plan.sh");
+		expect(deployment).toContain("assert_agentcore_legacy_queues_empty");
+		expect(deployment).toContain("legacy-queue-precondition.json");
+		expect(deployment).not.toContain("before dormant deployment");
+		expect(deployment).toContain("before idle production deployment");
 		expect(deployment).toContain(
 			"TF_VAR_retain_legacy_runtime_repository=true",
 		);
@@ -304,10 +308,18 @@ describe("production AgentCore dispatch infrastructure", () => {
 		const deploymentApply = deployment.indexOf(
 			`terraform -chdir="${shellTerraformDir}" apply "${shellDeploymentPlan}"`,
 		);
+		const legacyQueuePrecondition = deployment.indexOf(
+			"assert_agentcore_legacy_queues_empty",
+		);
+		const deploymentPlan = deployment.indexOf(
+			`terraform -chdir="${shellTerraformDir}" plan -out="${shellDeploymentPlan}"`,
+		);
 		const cleanupPlan = deployment.indexOf("legacy-repository-cleanup.tfplan");
 		expect(repositoryApply).toBeGreaterThan(-1);
 		expect(rollbackCopy).toBeGreaterThan(repositoryApply);
 		expect(deploymentApply).toBeGreaterThan(rollbackCopy);
+		expect(legacyQueuePrecondition).toBeGreaterThan(rollbackCopy);
+		expect(deploymentPlan).toBeGreaterThan(legacyQueuePrecondition);
 		expect(cleanupPlan).toBeGreaterThan(deploymentApply);
 		expect(deployment).toContain("inspect_agentcore.sh");
 		expect(deployment).toContain('idle-inspection.json"');

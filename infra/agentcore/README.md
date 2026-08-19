@@ -78,12 +78,14 @@ scripts/deploy/deploy_agentcore.sh deploy-mymemo-agentcore-prod
 An existing Runtime digest may be passed as the second argument for promotion or
 rollback. The command uses only the mandatory `mymemo` AWS profile, verifies
 account `637423444544`, requires the SSM control to be disabled, builds the
-verified consumer package, and classifies every Terraform plan. During the
-one-time production rename it keeps both repositories Terraform-managed,
+verified consumer package, proves both legacy queues have zero visible,
+in-flight, and delayed messages, and classifies every Terraform plan. During
+the one-time production rename it keeps both repositories Terraform-managed,
 copies and verifies the deployed digest in the production repository, updates
 the Runtime to a verified production-repository image, and only then removes
-the legacy repository. Plan JSON/text, rollback evidence, Runtime version, and
-the idle production inspection are retained under `dist/agentcore-deployment/`.
+the legacy repository. Plan JSON/text, queue and rollback evidence, Runtime
+version, and the idle production inspection are retained under
+`dist/agentcore-deployment/`.
 
 The coordinated production order is:
 

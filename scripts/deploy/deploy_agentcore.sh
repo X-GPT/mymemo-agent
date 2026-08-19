@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "${repo_root}"
+source "scripts/deploy/agentcore_aws_checks.sh"
 
 aws_profile="mymemo"
 region="us-west-2"
@@ -55,15 +56,22 @@ fi
 parameter_error="$(mktemp /tmp/mymemo-agentcore-parameter.XXXXXX)"
 ca_bundle="$(mktemp /tmp/mymemo-agentcore-ca.XXXXXX)"
 trap 'rm -f "${parameter_error}" "${ca_bundle}"' EXIT
-if parameter_value="$(aws --profile "${aws_profile}" ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text 2>"${parameter_error}")"; then
-  if [[ "${parameter_value}" != "disabled" ]]; then
-    echo "${enabled_parameter} must be disabled before dormant deployment" >&2
-    exit 1
+
+assert_dispatch_disabled() {
+  local parameter_value
+
+  if parameter_value="$(aws --profile "${aws_profile}" ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text 2>"${parameter_error}")"; then
+    if [[ "${parameter_value}" != "disabled" ]]; then
+      echo "${enabled_parameter} must be disabled before idle production deployment" >&2
+      return 1
+    fi
+  elif ! grep -Fq "ParameterNotFound" "${parameter_error}"; then
+    cat "${parameter_error}" >&2
+    return 1
   fi
-elif ! grep -Fq "ParameterNotFound" "${parameter_error}"; then
-  cat "${parameter_error}" >&2
-  exit 1
-fi
+}
+
+assert_dispatch_disabled
 
 github_variable() {
   gh variable get "$1" --repo "${repository}"
@@ -224,6 +232,10 @@ else
 fi
 export TF_VAR_runtime_image_digest="${runtime_image_digest}"
 export EXPECTED_RUNTIME_IMAGE_DIGEST="${runtime_image_digest}"
+
+assert_dispatch_disabled
+assert_agentcore_legacy_queues_empty "${region}" |
+  tee "${record_dir}/legacy-queue-precondition.json" >/dev/null
 
 deployment_plan="${record_dir}/deployment.tfplan"
 terraform -chdir="${terraform_dir}" plan -out="${deployment_plan}"
