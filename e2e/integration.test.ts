@@ -1156,21 +1156,9 @@ describe.skipIf(!RUN)(
 			async () => {
 				await stopEventWriter();
 				if (!redis) throw new Error("Redis test server is not running");
-				const pause = Bun.spawn(
-					[
-						"redis-cli",
-						"-h",
-						"127.0.0.1",
-						"-p",
-						String(redis.port),
-						"CLIENT",
-						"PAUSE",
-						"1500",
-						"ALL",
-					],
-					{ stdout: "ignore", stderr: "ignore" },
+				expect(await redis.command(["CLIENT", "PAUSE", "1500", "ALL"])).toBe(
+					"OK",
 				);
-				expect(await pause.exited).toBe(0);
 				const turn = await admitIntegrationRun(
 					"Synthetic text-only pre-creation Redis outage",
 				);

@@ -298,12 +298,17 @@ describe("agent deployment config", () => {
 			'["redis-server", "--save", "", "--appendonly", "no"]',
 		);
 		expect(composeConfig).not.toMatch(/redis-data|redisdata/);
-		expect(ciWorkflow).toContain("redis-server");
+		expect(ciWorkflow.match(/^ {6}redis:$/gm)).toHaveLength(2);
+		expect(ciWorkflow.match(/^ {8}image: redis:7-alpine$/gm)).toHaveLength(2);
+		expect(ciWorkflow.match(/^ {6}TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:6379$/gm)).toHaveLength(2);
+		expect(ciWorkflow).not.toMatch(/apt-get[^\n]*redis-server/);
+		expect(ciWorkflow).not.toContain("apt-get");
 		expect(ciWorkflow).toContain("bun run test");
 		expect(redisRelayContractTest).toContain(
 			'from "@mymemo/test-support/redis-test-server"',
 		);
 		expect(redisTestServer).toContain('"redis-server"');
+		expect(redisTestServer).toContain("TEST_REDIS_URL");
 	});
 
 	it("documents the Downloadable artifact operator and downstream contracts", () => {
