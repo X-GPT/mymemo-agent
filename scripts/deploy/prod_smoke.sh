@@ -13,4 +13,5 @@ if [[ "$AGENT_SMOKE_BASE_URL" == REPLACE_ME* ]]; then
   exit 1
 fi
 
+export AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME=agentcore
 bun run scripts/smoke/agent-conversation-smoke.ts

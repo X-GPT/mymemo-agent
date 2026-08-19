@@ -1,11 +1,22 @@
 #!/usr/bin/env bun
 
+// Deployed operator use: run this client through scripts/deploy/prod_smoke.sh
+// only after AgentCore Dispatch is enabled and the synthetic identity is
+// targeted in both Statsig gates. The wrapper pins the expected execution
+// runtime to agentcore. A pass proves that the public creation response selected
+// agentcore before the client admits Runs, then proves done Outcomes, durable
+// history, and Downloadable-artifact listing/download. It licenses the staged
+// runtime-gate rollout in docs/runbooks/agentcore-rollout.md; it does not license
+// skipping that rollout's telemetry checks. The local smoke:local entrypoint
+// instead pins the expected runtime to fargate for break-glass compose.
+
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
 	parseRawAgUiSse as parseSSE,
 	type RawAgUiSseFrame,
 } from "@mymemo/test-support/ag-ui-sse";
+import type { ConversationExecutionRuntime } from "../../packages/agent-db/src/execution-runtime";
 import type { PublicToolName } from "../../packages/agent-db/src/run-events";
 import {
 	type ClientContractMessage,
@@ -113,7 +124,13 @@ if (expectGateClosed) {
 	process.exit(0);
 }
 
-const conversationId = await requireCreatedConversation(create);
+const expectedExecutionRuntime = parseExpectedExecutionRuntime(
+	Bun.env.AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME,
+);
+const conversationId = await requireCreatedConversation(
+	create,
+	expectedExecutionRuntime,
+);
 
 const sessionMarker = `agent-session-${randomUUID()}`;
 const firstTurn = await sendTurn(
@@ -202,6 +219,7 @@ let fullSuiteEvidence = "";
 if (suite === "full") {
 	const interruptConversationId = await requireCreatedConversation(
 		await requestConversationCreate(),
+		expectedExecutionRuntime,
 	);
 	const interruptedTurn = await verifyRunningRunInterruption(
 		interruptConversationId,
@@ -210,6 +228,7 @@ if (suite === "full") {
 
 	const searchableDocumentConversationId = await requireCreatedConversation(
 		await requestConversationCreate(),
+		expectedExecutionRuntime,
 	);
 	const searchableDocumentTurns = await verifySearchableDocumentTools(
 		searchableDocumentConversationId,
@@ -230,19 +249,28 @@ function requestConversationCreate(): Promise<Response> {
 	});
 }
 
-async function requireCreatedConversation(response: Response): Promise<string> {
+async function requireCreatedConversation(
+	response: Response,
+	expectedRuntime: ConversationExecutionRuntime,
+): Promise<string> {
 	if (response.status !== 201) {
 		throw new Error(
 			`expected conversation create 201, got ${response.status}: ${await response.text()}`,
 		);
 	}
 
-	const { conversationId } = (await response.json()) as {
+	const { conversationId, executionRuntime } = (await response.json()) as {
 		conversationId?: string;
+		executionRuntime?: unknown;
 	};
 	if (!conversationId) {
 		throw new Error(
 			"conversation create response did not include conversationId",
+		);
+	}
+	if (executionRuntime !== expectedRuntime) {
+		throw new Error(
+			`conversation create selected ${String(executionRuntime)}, expected ${expectedRuntime}`,
 		);
 	}
 	return conversationId;
@@ -987,4 +1015,13 @@ function parseSuite(value: string | undefined): SmokeSuite {
 	if (value === undefined || value === "core") return "core";
 	if (value === "full") return "full";
 	throw new Error("AGENT_SMOKE_SUITE must be core or full");
+}
+
+function parseExpectedExecutionRuntime(
+	value: string | undefined,
+): ConversationExecutionRuntime {
+	if (value === "fargate" || value === "agentcore") return value;
+	throw new Error(
+		"AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME must be fargate or agentcore",
+	);
 }

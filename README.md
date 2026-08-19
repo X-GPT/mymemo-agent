@@ -153,9 +153,11 @@ bun run smoke:local
 
 For production, run `scripts/deploy/prod_smoke.sh` from inside the VPC with
 `AGENT_SMOKE_BASE_URL` configured and the checked-in `codex-smoke` identity
-allowlisted in Statsig. OpenRouter and E2B credentials stay in the deployed
-worker; the smoke caller receives none of them. To check only the default-closed
-gate, set `AGENT_SMOKE_EXPECT_GATE_CLOSED=true`.
+targeted in both the exposure and AgentCore runtime Statsig gates. The wrapper
+requires the public creation response to report `agentcore` before admitting a
+Run. OpenRouter and E2B credentials stay in the deployed worker; the smoke caller
+receives none of them. To check only the default-closed gate, set
+`AGENT_SMOKE_EXPECT_GATE_CLOSED=true`.
 
 `AGENT_SMOKE_SUITE` defaults to `core`; `full` is the local superset used by
 `smoke:local`. See [the two-target smoke verification guide](./docs/verification/e2e-smoke.md)
