@@ -456,6 +456,28 @@ describe("agent deployment config", () => {
 		expect(prodTfvars).not.toContain("_SECRET_ARN");
 	});
 
+	it("keeps the Dispatch publisher dormant until shared infrastructure exists", () => {
+		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
+		const sharedState = readFileSync(
+			join(terraformDir, "shared_state.tf"),
+			"utf8",
+		);
+
+		expect(prodTfvars).toContain(
+			"agentcore_dispatch_publisher_desired_count = 0",
+		);
+		expect(sharedState).toContain(
+			"count = var.agentcore_dispatch_publisher_desired_count == 1 ? 1 : 0",
+		);
+		expect(iamConfig).toContain('dynamic "statement"');
+		expect(iamConfig).toContain(
+			"for_each = var.agentcore_dispatch_publisher_desired_count == 1 ? [1] : []",
+		);
+		expect(iamConfig).toContain(
+			"data.aws_kms_alias.agentcore_dispatch_queue[0].target_key_arn",
+		);
+	});
+
 	it("checked-in prod deploy env is limited to CI and smoke inputs", () => {
 		for (const required of [
 			"AWS_REGION=us-west-2",
