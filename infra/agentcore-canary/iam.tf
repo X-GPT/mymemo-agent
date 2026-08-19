@@ -77,7 +77,7 @@ data "aws_iam_policy_document" "runtime" {
   statement {
     sid       = "WriteSyntheticArtifactsOnly"
     actions   = ["s3:AbortMultipartUpload", "s3:PutObject"]
-    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/${local.canary_artifact_object_key_prefix}/*"]
+    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/objects/*"]
   }
 
   statement {
@@ -129,7 +129,7 @@ data "aws_iam_policy_document" "runtime" {
     condition {
       test     = "StringEquals"
       variable = "cloudwatch:namespace"
-      values   = ["MyMemo/AgentCoreCanary"]
+      values   = ["MyMemo/AgentCoreDispatch"]
     }
   }
 
@@ -273,7 +273,7 @@ data "aws_iam_policy_document" "consumer" {
     condition {
       test     = "StringEquals"
       variable = "cloudwatch:namespace"
-      values   = ["MyMemo/AgentCoreCanary"]
+      values   = ["MyMemo/AgentCoreDispatch"]
     }
   }
 }

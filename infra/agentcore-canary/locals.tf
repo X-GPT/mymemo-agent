@@ -2,8 +2,6 @@ locals {
   name_prefix = "mymemo-agent-agentcore-canary-${var.environment}"
   vpc_id      = data.terraform_remote_state.mymemo_agent.outputs.shared_infra.vpc_id
 
-  canary_artifact_object_key_prefix = "objects/agentcore-canary"
-
   exact_secret_arn_pattern = "^arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:[A-Za-z0-9/_+=.@-]+$"
   exact_secret_arns = [
     var.agent_database_url_secret_arn,

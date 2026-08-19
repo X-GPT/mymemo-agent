@@ -96,7 +96,7 @@ resource "aws_cloudwatch_metric_alarm" "incident" {
 
   alarm_name          = "${local.name_prefix}-${lower(each.value)}"
   alarm_description   = "AgentCore canary dispatch safety signal ${each.value}"
-  namespace           = "MyMemo/AgentCoreCanary"
+  namespace           = "MyMemo/AgentCoreDispatch"
   metric_name         = each.value
   statistic           = "Sum"
   period              = 60

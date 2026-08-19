@@ -61,15 +61,16 @@ describe("AgentCore canary dispatch infrastructure", () => {
 		const source = terraformSource();
 
 		expect(source).toMatch(
-			/resource\s+"aws_sqs_queue"\s+"dispatch"[\s\S]*?message_retention_seconds\s*=\s*86400[\s\S]*?visibility_timeout_seconds\s*=\s*300[\s\S]*?kms_master_key_id\s*=\s*aws_kms_key\.canary\.arn/,
+			/resource\s+"aws_sqs_queue"\s+"dispatch"[\s\S]*?message_retention_seconds\s*=\s*86400[\s\S]*?visibility_timeout_seconds\s*=\s*180[\s\S]*?kms_master_key_id\s*=\s*aws_kms_key\.canary\.arn/,
 		);
 		expect(source).toMatch(
 			/resource\s+"aws_sqs_queue"\s+"dead_letter"[\s\S]*?message_retention_seconds\s*=\s*86400[\s\S]*?kms_master_key_id\s*=\s*aws_kms_key\.canary\.arn/,
 		);
-		expect(source).toMatch(/maxReceiveCount\s*=\s*3/);
+		expect(source).toMatch(/maxReceiveCount\s*=\s*5/);
 		expect(source).toMatch(
-			/resource\s+"aws_lambda_function"\s+"consumer"[\s\S]*?timeout\s*=\s*120[\s\S]*?reserved_concurrent_executions\s*=\s*1/,
+			/resource\s+"aws_lambda_function"\s+"consumer"[\s\S]*?timeout\s*=\s*120/,
 		);
+		expect(source).not.toContain("reserved_concurrent_executions");
 		expect(source).toMatch(
 			/resource\s+"aws_lambda_event_source_mapping"\s+"consumer"[\s\S]*?batch_size\s*=\s*1[\s\S]*?function_response_types\s*=\s*\["ReportBatchItemFailures"\][\s\S]*?enabled\s*=\s*var\.dispatch_enabled/,
 		);
@@ -223,8 +224,9 @@ describe("AgentCore canary dispatch infrastructure", () => {
 			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?actions\s*=\s*\["s3:AbortMultipartUpload", "s3:PutObject"\]/,
 		);
 		expect(source).toMatch(
-			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{var\.artifact_bucket_name\}\/\$\{local\.canary_artifact_object_key_prefix\}\/\*"\]/,
+			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{var\.artifact_bucket_name\}\/objects\/\*"\]/,
 		);
+		expect(source).not.toContain("canary_artifact_object_key_prefix");
 		expect(canaryProduction).not.toContain("artifactObjectKeyPrefix");
 		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(2);
 		expect(source).toMatch(
@@ -331,6 +333,7 @@ describe("AgentCore canary dispatch infrastructure", () => {
 
 	it("creates low-cardinality dispatch safety alarms only", () => {
 		const alarms = readFileSync(join(terraformDir, "alarms.tf"), "utf8");
+		const iam = readFileSync(join(terraformDir, "iam.tf"), "utf8");
 
 		for (const metric of [
 			"ApproximateAgeOfOldestMessage",
@@ -367,6 +370,14 @@ describe("AgentCore canary dispatch infrastructure", () => {
 			/alarm_actions\s*=\s*var\.incident_alarm_action_arns/,
 		);
 		expect(alarms).not.toContain("validation_alarm_action_arns");
+		expect(alarms).toContain(
+			'namespace           = "MyMemo/AgentCoreDispatch"',
+		);
+		expect(alarms).not.toContain("MyMemo/AgentCoreCanary");
+		expect(
+			iam.match(/values\s*=\s*\["MyMemo\/AgentCoreDispatch"\]/g),
+		).toHaveLength(2);
+		expect(iam).not.toContain("MyMemo/AgentCoreCanary");
 		expect(alarms).toContain("values(aws_cloudwatch_metric_alarm.incident)");
 		expect(alarms).toContain(
 			"sort(tolist(coalesce(alarm.alarm_actions, toset([]))))",

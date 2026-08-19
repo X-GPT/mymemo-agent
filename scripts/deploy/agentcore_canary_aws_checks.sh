@@ -61,6 +61,7 @@ verify_agentcore_canary_disabled_dispatch() {
   local enabled_parameter
   local mapping
   local consumer_configuration
+  local consumer_concurrency
   local rule
   local targets
   local publisher_policy
@@ -92,7 +93,11 @@ verify_agentcore_canary_disabled_dispatch() {
     --arg functionArn "${expected_consumer_function_arn}" \
     '.FunctionArn == $functionArn and .Timeout == 120' \
     <<<"${consumer_configuration}" >/dev/null
-  [[ "$(aws --profile mymemo lambda get-function-concurrency --region "${region}" --function-name "${expected_consumer_function_arn}" --query ReservedConcurrentExecutions --output text)" == "1" ]]
+  consumer_concurrency="$(aws --profile mymemo lambda get-function-concurrency \
+    --region "${region}" \
+    --function-name "${expected_consumer_function_arn}")"
+  jq -e '(.ReservedConcurrentExecutions // null) == null' \
+    <<<"${consumer_concurrency}" >/dev/null
 
   rule="$(aws --profile mymemo events describe-rule \
     --region "${region}" \
