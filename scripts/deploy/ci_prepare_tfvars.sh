@@ -52,10 +52,10 @@ fi
 mkdir -p "$(dirname "$out")"
 
 cat >"$out" <<TFVARS
-aws_region                            = "${AWS_REGION}"
-chat_api_image                        = "${chat_api_image}"
-agent_worker_image                    = "${agent_worker_image}"
-agentcore_dispatch_publisher_image    = "${agentcore_dispatch_publisher_image}"
+aws_region                         = "${AWS_REGION}"
+chat_api_image                     = "${chat_api_image}"
+agent_worker_image                 = "${agent_worker_image}"
+agentcore_dispatch_publisher_image = "${agentcore_dispatch_publisher_image}"
 TFVARS
 
 echo "Wrote $out"
