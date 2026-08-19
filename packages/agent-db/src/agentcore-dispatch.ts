@@ -102,7 +102,10 @@ export async function loadAgentCoreDispatchRunStatus(
 	>,
 ): Promise<RunStatus | null> {
 	const [run] = await db
-		.select({ status: runs.status })
+		.select({
+			status: runs.status,
+			admittedAt: agentCoreDispatchOutbox.admittedAt,
+		})
 		.from(runs)
 		.innerJoin(
 			agentCoreDispatchOutbox,
@@ -115,11 +118,15 @@ export async function loadAgentCoreDispatchRunStatus(
 				eq(runs.conversationId, dispatch.conversationId),
 				eq(agentCoreDispatchOutbox.userId, dispatch.userId),
 				eq(agentCoreDispatchOutbox.conversationId, dispatch.conversationId),
-				eq(agentCoreDispatchOutbox.admittedAt, dispatch.admittedAt),
 			),
 		)
 		.limit(1);
-	return (run?.status as RunStatus | undefined) ?? null;
+	// PostgreSQL may retain microseconds that JavaScript Date cannot represent,
+	// so correlate after both values have crossed the same precision boundary.
+	if (!run || run.admittedAt.getTime() !== dispatch.admittedAt.getTime()) {
+		return null;
+	}
+	return run.status as RunStatus;
 }
 
 /**

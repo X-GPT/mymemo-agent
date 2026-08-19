@@ -6,7 +6,7 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
 	acquireAgentCoreDispatchTx,
 	claimAgentCoreDispatchesTx,
@@ -109,6 +109,43 @@ describe("Run-keyed AgentCore dispatch outbox", () => {
 				admittedAt: new Date(admittedAt.getTime() + 1),
 			}),
 		).resolves.toBeNull();
+	});
+
+	it("matches an outbox timestamp after it crosses JavaScript Date precision", async () => {
+		await insertConversation();
+		await tdb.db.transaction(async (tx) => {
+			const admission = await admitQueuedRunInTx(tx, {
+				runId: exact.runId,
+				userId: exact.userId,
+				conversationId: exact.conversationId,
+				messageId: exact.messageId,
+				text: "Run the admitted AgentCore turn.",
+				scope: "general",
+				collectionId: null,
+				summaryId: null,
+			});
+			if (admission.outcome !== "created") {
+				throw new Error("test Run was not newly admitted");
+			}
+			await recordAgentCoreDispatchInTx(tx, exact);
+		});
+		await tdb.db.execute(sql`
+			update ${agentCoreDispatchOutbox}
+			set admitted_at = date_trunc('milliseconds', admitted_at) + interval '0.123 milliseconds'
+			where run_id = ${exact.runId}
+		`);
+		const [claimed] = await claimAgentCoreDispatchesTx(tdb.db, {
+			publisherId: "publisher-precision",
+		});
+		if (!claimed) throw new Error("test dispatch was not claimed");
+		await tdb.db
+			.update(runs)
+			.set({ status: "done" })
+			.where(eq(runs.runId, exact.runId));
+
+		await expect(loadAgentCoreDispatchRunStatus(tdb.db, claimed)).resolves.toBe(
+			"done",
+		);
 	});
 
 	it("commits admission and one dispatch record together", async () => {
