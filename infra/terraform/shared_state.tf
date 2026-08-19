@@ -31,5 +31,7 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 data "aws_kms_alias" "agentcore_dispatch_queue" {
+  count = var.agentcore_dispatch_publisher_desired_count == 1 ? 1 : 0
+
   name = local.agentcore_dispatch_queue_kms_alias_name
 }
