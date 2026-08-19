@@ -27,6 +27,11 @@ locals {
     }
   }
 
+  shared_public_subnet_ids_by_az = {
+    for subnet_id, subnet in data.aws_subnet.shared_egress :
+    subnet.availability_zone => subnet_id...
+  }
+
   runtime_environment = {
     AWS_REGION                                = var.aws_region
     AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = aws_ssm_parameter.dispatch_enabled.name

@@ -9,7 +9,7 @@ resource "aws_cloudwatch_metric_alarm" "pending_publication_age" {
   evaluation_periods  = 1
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 60000
-  treat_missing_data  = "notBreaching"
+  treat_missing_data  = "breaching"
   alarm_actions       = var.alarm_action_arns
 }
 

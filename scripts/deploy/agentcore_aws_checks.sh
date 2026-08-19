@@ -50,6 +50,55 @@ verify_agentcore_alarms() {
   ' <<<"${live_alarms}" >/dev/null
 }
 
+verify_agentcore_egress() {
+  local region="$1"
+  local terraform_output="$2"
+  local configuration
+  local private_subnet_id
+  local public_subnet_id
+  local route_table_id
+  local nat_gateway_id
+  local route_table
+  local nat_gateway
+
+  while IFS= read -r configuration; do
+    private_subnet_id="$(jq -r '.private_subnet_id' <<<"${configuration}")"
+    public_subnet_id="$(jq -r '.public_subnet_id' <<<"${configuration}")"
+    route_table_id="$(jq -r '.route_table_id' <<<"${configuration}")"
+    nat_gateway_id="$(jq -r '.nat_gateway_id' <<<"${configuration}")"
+
+    route_table="$(aws --profile mymemo ec2 describe-route-tables \
+      --region "${region}" \
+      --route-table-ids "${route_table_id}")"
+    jq -e \
+      --arg routeTableId "${route_table_id}" \
+      --arg privateSubnetId "${private_subnet_id}" \
+      --arg natGatewayId "${nat_gateway_id}" \
+      '.RouteTables
+        | length == 1
+          and .[0].RouteTableId == $routeTableId
+          and any(.[0].Associations[]?; .SubnetId == $privateSubnetId)
+          and any(.[0].Routes[]?;
+            .DestinationCidrBlock == "0.0.0.0/0"
+            and .NatGatewayId == $natGatewayId
+            and .State == "active")' \
+      <<<"${route_table}" >/dev/null
+
+    nat_gateway="$(aws --profile mymemo ec2 describe-nat-gateways \
+      --region "${region}" \
+      --nat-gateway-ids "${nat_gateway_id}")"
+    jq -e \
+      --arg natGatewayId "${nat_gateway_id}" \
+      --arg publicSubnetId "${public_subnet_id}" \
+      '.NatGateways
+        | length == 1
+          and .[0].NatGatewayId == $natGatewayId
+          and .[0].SubnetId == $publicSubnetId
+          and .[0].State == "available"' \
+      <<<"${nat_gateway}" >/dev/null
+  done < <(jq -c '.egress_configurations.value | to_entries[].value' <<<"${terraform_output}")
+}
+
 verify_agentcore_idle_dispatch() {
   local region="$1"
   local terraform_output="$2"

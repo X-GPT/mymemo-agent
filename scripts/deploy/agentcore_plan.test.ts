@@ -65,6 +65,13 @@ describe("production AgentCore Terraform plan classification", () => {
 					change("aws_lambda_function.consumer", "aws_lambda_function", [
 						"update",
 					]),
+					change('aws_eip.egress["us-west-2a"]', "aws_eip", ["create"]),
+					change('aws_nat_gateway.egress["us-west-2a"]', "aws_nat_gateway", [
+						"create",
+					]),
+					change('aws_route.private_egress["us-west-2a"]', "aws_route", [
+						"create",
+					]),
 				]),
 			),
 		).toEqual({ safe: true, reasons: [] });

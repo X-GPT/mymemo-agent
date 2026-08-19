@@ -43,7 +43,7 @@ const alarmConfigurations: Record<string, AlarmConfiguration> = {
 		datapoints_to_alarm: 1,
 		comparison_operator: "GreaterThanOrEqualToThreshold",
 		threshold: 60000,
-		treat_missing_data: "notBreaching",
+		treat_missing_data: "breaching",
 		actions_enabled: true,
 		alarm_actions: ["arn:aws:sns:us-west-2:637423444544:production-alerts"],
 	},
@@ -153,6 +153,74 @@ verify_agentcore_alarms us-west-2 "$TF_OUTPUT"
 	});
 }
 
+function verifyEgress(options: {
+	routeState?: string;
+	routeNatGatewayId?: string;
+	natState?: string;
+	natSubnetId?: string;
+}) {
+	const privateSubnetId = "subnet-private-a";
+	const publicSubnetId = "subnet-public-a";
+	const routeTableId = "rtb-private-a";
+	const natGatewayId = "nat-a";
+	const routeTable = {
+		RouteTables: [
+			{
+				RouteTableId: routeTableId,
+				Associations: [{ SubnetId: privateSubnetId }],
+				Routes: [
+					{
+						DestinationCidrBlock: "0.0.0.0/0",
+						NatGatewayId: options.routeNatGatewayId ?? natGatewayId,
+						State: options.routeState ?? "active",
+					},
+				],
+			},
+		],
+	};
+	const natGateway = {
+		NatGateways: [
+			{
+				NatGatewayId: natGatewayId,
+				State: options.natState ?? "available",
+				SubnetId: options.natSubnetId ?? publicSubnetId,
+			},
+		],
+	};
+	const script = `
+set -euo pipefail
+source "${checksPath}"
+aws() {
+  case "$*" in
+    *"ec2 describe-route-tables"*) printf '%s\\n' "$ROUTE_TABLE" ;;
+    *"ec2 describe-nat-gateways"*) printf '%s\\n' "$NAT_GATEWAY" ;;
+    *) exit 97 ;;
+  esac
+}
+verify_agentcore_egress us-west-2 "$TF_OUTPUT"
+`;
+	return spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			TF_OUTPUT: JSON.stringify({
+				egress_configurations: {
+					value: {
+						"us-west-2a": {
+							private_subnet_id: privateSubnetId,
+							public_subnet_id: publicSubnetId,
+							route_table_id: routeTableId,
+							nat_gateway_id: natGatewayId,
+						},
+					},
+				},
+			}),
+			ROUTE_TABLE: JSON.stringify(routeTable),
+			NAT_GATEWAY: JSON.stringify(natGateway),
+		},
+	});
+}
+
 describe("production AgentCore idle dispatch wiring", () => {
 	it("accepts the enabled consumer and fail-closed SSM graph", () => {
 		const result = verify(expectedWiring());
@@ -214,5 +282,21 @@ describe("production AgentCore alarm configuration", () => {
 		const configurations = structuredClone(alarmConfigurations);
 		Object.assign(configurations[alarmName], { [field]: value });
 		expect(verifyAlarms(configurations).status).not.toBe(0);
+	});
+});
+
+describe("production AgentCore egress configuration", () => {
+	it("accepts an active private route through an available NAT", () => {
+		const result = verifyEgress({});
+		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it.each([
+		["inactive route", { routeState: "blackhole" }],
+		["foreign route target", { routeNatGatewayId: "nat-foreign" }],
+		["unavailable NAT", { natState: "failed" }],
+		["foreign public subnet", { natSubnetId: "subnet-foreign" }],
+	] as const)("rejects %s", (_name, options) => {
+		expect(verifyEgress(options).status).not.toBe(0);
 	});
 });

@@ -129,6 +129,25 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(source).not.toContain("reserved_concurrent_executions");
 	});
 
+	it("provides a zonal NAT egress path for every private Runtime subnet", () => {
+		const network = readFileSync(join(terraformDir, "network.tf"), "utf8");
+		const outputs = readFileSync(join(terraformDir, "outputs.tf"), "utf8");
+
+		expect(network).toMatch(
+			/resource\s+"aws_eip"\s+"egress"[\s\S]*?for_each\s*=\s*local\.private_subnets[\s\S]*?domain\s*=\s*"vpc"/,
+		);
+		expect(network).toMatch(
+			/resource\s+"aws_nat_gateway"\s+"egress"[\s\S]*?for_each\s*=\s*local\.private_subnets[\s\S]*?subnet_id\s*=\s*one\(local\.shared_public_subnet_ids_by_az\[each\.key\]\)/,
+		);
+		expect(network).toMatch(
+			/resource\s+"aws_route"\s+"private_egress"[\s\S]*?for_each\s*=\s*local\.private_subnets[\s\S]*?destination_cidr_block\s*=\s*"0\.0\.0\.0\/0"[\s\S]*?nat_gateway_id\s*=\s*aws_nat_gateway\.egress\[each\.key\]\.id/,
+		);
+		expect(network).toContain(
+			"data.terraform_remote_state.mymemo_agent.outputs.assign_public_ip",
+		);
+		expect(outputs).toContain('output "egress_configurations"');
+	});
+
 	it("deploys production-named Runtime resources with secret-ARN-only configuration", () => {
 		const source = terraformSource();
 		const runtime = readFileSync(join(terraformDir, "runtime.tf"), "utf8");
@@ -225,6 +244,9 @@ describe("production AgentCore dispatch infrastructure", () => {
 		).toHaveLength(4);
 		expect(alarms).toMatch(
 			/resource\s+"aws_cloudwatch_metric_alarm"\s+"publisher_errors"[\s\S]*?evaluation_periods\s*=\s*5[\s\S]*?datapoints_to_alarm\s*=\s*3/,
+		);
+		expect(alarms).toMatch(
+			/resource\s+"aws_cloudwatch_metric_alarm"\s+"pending_publication_age"[\s\S]*?treat_missing_data\s*=\s*"breaching"/,
 		);
 	});
 

@@ -17,6 +17,7 @@ dlq_attributes="$(aws --profile "${aws_profile}" sqs get-queue-attributes --regi
 jq -e '(.Attributes.FifoQueue // "false") == "false" and .Attributes.VisibilityTimeout == "180" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and .Attributes.ApproximateNumberOfMessagesDelayed == "0" and (.Attributes.RedrivePolicy | fromjson | .maxReceiveCount == 5)' <<<"${queue_attributes}" >/dev/null
 jq -e '(.Attributes.FifoQueue // "false") == "false" and .Attributes.VisibilityTimeout == "300" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and .Attributes.ApproximateNumberOfMessagesDelayed == "0"' <<<"${dlq_attributes}" >/dev/null
 
+verify_agentcore_egress "${region}" "${tf_output}"
 verify_agentcore_idle_dispatch "${region}" "${tf_output}"
 runtime_configuration="$(verify_agentcore_runtime_configuration "${region}" "${tf_output}" "${expected_digest}")"
 runtime="$(jq -c '.runtime' <<<"${runtime_configuration}")"

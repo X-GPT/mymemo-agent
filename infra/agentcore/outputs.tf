@@ -69,6 +69,18 @@ output "private_subnet_ids" {
   value       = values(aws_subnet.private)[*].id
 }
 
+output "egress_configurations" {
+  description = "Exact zonal NAT routes verified after deployment."
+  value = {
+    for availability_zone in keys(local.private_subnets) : availability_zone => {
+      private_subnet_id = aws_subnet.private[availability_zone].id
+      public_subnet_id  = aws_nat_gateway.egress[availability_zone].subnet_id
+      route_table_id    = aws_route_table.private[availability_zone].id
+      nat_gateway_id    = aws_nat_gateway.egress[availability_zone].id
+    }
+  }
+}
+
 output "runtime_security_group_id" {
   description = "Persistent outbound-only AgentCore Runtime security group."
   value       = aws_security_group.runtime.id

@@ -6,7 +6,7 @@ This Terraform root owns the shared production AgentCore execution boundary:
 - the batch-size-one consumer Lambda and enabled SQS event-source mapping;
 - the fail-closed `/mymemo/agentcore-dispatch/prod/enabled` SSM parameter;
 - the digest-pinned ARM64 AgentCore Runtime and immutable Runtime ECR repository;
-- the Runtime/consumer network and IAM resources; and
+- the Runtime/consumer private network, zonal NAT egress, and IAM resources; and
 - the four production Dispatch paging alarms.
 
 The state remains independent from the ordinary MyMemo production and Fargate
@@ -39,6 +39,12 @@ consumer has no reserved-concurrency cap; queue batch size remains one, partial
 batch responses stay enabled, and the queue values match the shared production
 invariants in `apps/agentcore-canary-dispatch/src/invariants.ts`.
 
+Each private Runtime subnet has a same-AZ NAT Gateway in the existing shared
+public subnet layout and an explicit `0.0.0.0/0` route. This supplies the AWS API
+and internet egress required by the consumer, OpenRouter, and E2B. The guarded
+post-deploy inspection verifies every private route is active and targets an
+available NAT Gateway in the expected public subnet.
+
 The SQS mapping is enabled in the deployed stack while the SSM parameter begins
 `disabled` and ignores value drift. That leaves the consumer and Runtime ready
 but fail-closed until an operator enables Dispatch. The SSM value is an
@@ -50,7 +56,8 @@ Every alarm routes to the required `alarm_action_arns` production SNS
 destination:
 
 - `PendingAgeMs` at one minute is the primary paging symptom for stuck
-  publication;
+  publication; the publisher emits it on every lock-owning tick, including zero
+  when no work is pending, so missing data pages when that heartbeat disappears;
 - `PublisherErrors` pages only after errors occur in three of five minutes;
 - `PoisonDispatch` pages on invalid work rejected by the consumer; and
 - visible DLQ depth pages at one message.
