@@ -24,6 +24,12 @@ export interface PlanClassification {
 const CLASSIFIER_ACCOUNT_ID = "637423444544";
 const CLASSIFIER_REGION = "us-west-2";
 const PRODUCTION_RUNTIME_ARN_PATTERN = `arn:aws:bedrock-agentcore:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:runtime/mymemo_agentcore_prod-*`;
+const LEGACY_RUNTIME_REPOSITORY_ADDRESS = "aws_ecr_repository.legacy_runtime";
+const LEGACY_RUNTIME_REPOSITORY_NAME = "mymemo/agentcore-canary-runtime";
+const LEGACY_DISPATCH_QUEUE_ARN = `arn:aws:sqs:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:mymemo-agent-agentcore-canary-prod-dispatch`;
+const PRODUCTION_DISPATCH_QUEUE_ARN = `arn:aws:sqs:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:mymemo-agent-agentcore-prod-dispatch`;
+const LEGACY_CONSUMER_ARN = `arn:aws:lambda:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:function:mymemo-agent-agentcore-canary-prod-consumer`;
+const PRODUCTION_CONSUMER_ARN = `arn:aws:lambda:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:function:mymemo-agent-agentcore-prod-consumer`;
 
 // This is the independent production deployment boundary. It deliberately
 // names owned resources and destructive operations without duplicating
@@ -34,7 +40,7 @@ const PRODUCTION_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_cloudwatch_metric_alarm.pending_publication_age",
 	"aws_cloudwatch_metric_alarm.poison_dispatch",
 	"aws_cloudwatch_metric_alarm.publisher_errors",
-	"aws_ecr_repository.runtime",
+	"aws_ecr_repository.production_runtime",
 	"aws_iam_role.consumer",
 	"aws_iam_role.runtime",
 	"aws_iam_role_policy.consumer",
@@ -113,14 +119,6 @@ const APPROVED_PRODUCTION_RENAMES = new Map<
 			field: "agent_runtime_name",
 			before: "mymemo_agentcore_canary_prod",
 			after: "mymemo_agentcore_prod",
-		},
-	],
-	[
-		"aws_ecr_repository.runtime",
-		{
-			field: "name",
-			before: "mymemo/agentcore-canary-runtime",
-			after: "mymemo/agentcore-runtime",
 		},
 	],
 	...[
@@ -314,6 +312,53 @@ function isApprovedProductionRename(resource: PlanChange): boolean {
 	);
 }
 
+function isApprovedEventSourceMappingReplacement(
+	resource: PlanChange,
+): boolean {
+	const actions = resource.change?.actions ?? [];
+	return (
+		resourceBaseAddress(resource.address ?? "") ===
+			"aws_lambda_event_source_mapping.consumer" &&
+		actions.includes("create") &&
+		actions.includes("delete") &&
+		resource.change?.before?.event_source_arn === LEGACY_DISPATCH_QUEUE_ARN &&
+		resource.change?.after?.event_source_arn ===
+			PRODUCTION_DISPATCH_QUEUE_ARN &&
+		resource.change?.before?.function_name === LEGACY_CONSUMER_ARN &&
+		resource.change?.after?.function_name === PRODUCTION_CONSUMER_ARN
+	);
+}
+
+function isApprovedLegacyRepositoryTransition(resource: PlanChange): boolean {
+	const actions = resource.change?.actions ?? [];
+	const before = resource.change?.before;
+	const after = resource.change?.after;
+	if (
+		resourceBaseAddress(resource.address ?? "") !==
+			LEGACY_RUNTIME_REPOSITORY_ADDRESS ||
+		before?.name !== LEGACY_RUNTIME_REPOSITORY_NAME
+	) {
+		return false;
+	}
+	if (actions.length === 1 && actions[0] === "delete") {
+		return before.force_delete === true && after === null;
+	}
+	return (
+		actions.length === 1 &&
+		actions[0] === "update" &&
+		before.force_delete === false &&
+		after?.name === LEGACY_RUNTIME_REPOSITORY_NAME &&
+		after.force_delete === true
+	);
+}
+
+function isApprovedProductionReplacement(resource: PlanChange): boolean {
+	return (
+		isApprovedProductionRename(resource) ||
+		isApprovedEventSourceMappingReplacement(resource)
+	);
+}
+
 export function classifyAgentCorePlan(plan: TerraformPlan): PlanClassification {
 	const reasons: string[] = [];
 	for (const resource of plan.resource_changes ?? []) {
@@ -327,18 +372,27 @@ export function classifyAgentCorePlan(plan: TerraformPlan): PlanClassification {
 		const isRetiredResource =
 			RETIRED_RESOURCE_ADDRESSES.has(baseAddress) ||
 			RETIRED_RESOURCE_INSTANCES.has(address);
+		const isLegacyRepository =
+			baseAddress === LEGACY_RUNTIME_REPOSITORY_ADDRESS;
 		if (
 			resource.mode !== "managed" ||
 			address.startsWith("module.") ||
 			!PRODUCTION_OWNED_RESOURCE_TYPES.has(type) ||
 			(!PRODUCTION_OWNED_RESOURCE_ADDRESSES.has(baseAddress) &&
-				!isRetiredResource)
+				!isRetiredResource &&
+				!isLegacyRepository)
 		) {
 			reasons.push(
 				`${address} is outside production AgentCore ownership (${type})`,
 			);
 		}
-		if (
+		if (isLegacyRepository) {
+			if (!isApprovedLegacyRepositoryTransition(resource)) {
+				reasons.push(
+					`${address} requests an unapproved legacy repository transition`,
+				);
+			}
+		} else if (
 			isRetiredResource &&
 			(actions.length !== 1 || actions[0] !== "delete")
 		) {
@@ -348,7 +402,7 @@ export function classifyAgentCorePlan(plan: TerraformPlan): PlanClassification {
 		} else if (
 			!isRetiredResource &&
 			actions.includes("delete") &&
-			!isApprovedProductionRename(resource)
+			!isApprovedProductionReplacement(resource)
 		) {
 			reasons.push(`${address} requests unapproved deletion or replacement`);
 		}

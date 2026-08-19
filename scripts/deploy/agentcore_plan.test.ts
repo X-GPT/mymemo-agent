@@ -74,13 +74,6 @@ describe("production AgentCore Terraform plan classification", () => {
 				"mymemo_agentcore_prod",
 			],
 			[
-				"aws_ecr_repository.runtime",
-				"aws_ecr_repository",
-				"name",
-				"mymemo/agentcore-canary-runtime",
-				"mymemo/agentcore-runtime",
-			],
-			[
 				"aws_lambda_function.consumer",
 				"aws_lambda_function",
 				"function_name",
@@ -125,6 +118,82 @@ describe("production AgentCore Terraform plan classification", () => {
 		expect(rejected.reasons.join(" ")).toContain(
 			"unapproved deletion or replacement",
 		);
+	});
+
+	it("approves the exact event-source mapping replacement forced by the queue rename", () => {
+		const oldQueueArn =
+			"arn:aws:sqs:us-west-2:637423444544:mymemo-agent-agentcore-canary-prod-dispatch";
+		const productionQueueArn =
+			"arn:aws:sqs:us-west-2:637423444544:mymemo-agent-agentcore-prod-dispatch";
+		const oldConsumerArn =
+			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer";
+		const productionConsumerArn =
+			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-prod-consumer";
+		const mappingReplacement = change(
+			"aws_lambda_event_source_mapping.consumer",
+			"aws_lambda_event_source_mapping",
+			["delete", "create"],
+			{ event_source_arn: oldQueueArn, function_name: oldConsumerArn },
+			{
+				event_source_arn: productionQueueArn,
+				function_name: productionConsumerArn,
+			},
+		);
+		const queueReplacement = change(
+			"aws_sqs_queue.dispatch",
+			"aws_sqs_queue",
+			["delete", "create"],
+			{ name: "mymemo-agent-agentcore-canary-prod-dispatch" },
+			{ name: "mymemo-agent-agentcore-prod-dispatch" },
+		);
+
+		expect(
+			classifyAgentCorePlan(plan([queueReplacement, mappingReplacement])),
+		).toEqual({ safe: true, reasons: [] });
+
+		const wrongMapping = structuredClone(mappingReplacement);
+		wrongMapping.change.after.function_name = oldConsumerArn;
+		expect(classifyAgentCorePlan(plan([wrongMapping])).safe).toBe(false);
+	});
+
+	it("keeps the legacy Runtime repository managed until its copied digest is safe to delete", () => {
+		for (const repositoryChange of [
+			change(
+				"aws_ecr_repository.production_runtime",
+				"aws_ecr_repository",
+				["create"],
+				null,
+				{ name: "mymemo/agentcore-runtime", force_delete: false },
+			),
+			change(
+				"aws_ecr_repository.legacy_runtime[0]",
+				"aws_ecr_repository",
+				["update"],
+				{ name: "mymemo/agentcore-canary-runtime", force_delete: false },
+				{ name: "mymemo/agentcore-canary-runtime", force_delete: true },
+			),
+			change(
+				"aws_ecr_repository.legacy_runtime[0]",
+				"aws_ecr_repository",
+				["delete"],
+				{ name: "mymemo/agentcore-canary-runtime", force_delete: true },
+				null,
+			),
+		]) {
+			expect(classifyAgentCorePlan(plan([repositoryChange]))).toEqual({
+				safe: true,
+				reasons: [],
+			});
+		}
+
+		const wrongLegacyDelete = change(
+			"aws_ecr_repository.legacy_runtime[0]",
+			"aws_ecr_repository",
+			["delete"],
+			{ name: "unrelated", force_delete: true },
+			null,
+		);
+		expect(classifyAgentCorePlan(plan([wrongLegacyDelete])).safe).toBe(false);
 	});
 
 	it("allows deletion only for exact retired publisher and canary resources", () => {

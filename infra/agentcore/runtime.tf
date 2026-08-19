@@ -1,7 +1,7 @@
-resource "aws_ecr_repository" "runtime" {
-  name                 = var.runtime_repository_name
+resource "aws_ecr_repository" "production_runtime" {
+  name                 = "mymemo/agentcore-runtime"
   image_tag_mutability = "IMMUTABLE"
-  force_delete         = var.runtime_repository_force_delete
+  force_delete         = false
 
   image_scanning_configuration {
     scan_on_push = true
@@ -10,9 +10,24 @@ resource "aws_ecr_repository" "runtime" {
   encryption_configuration {
     encryption_type = "AES256"
   }
+}
 
-  lifecycle {
-    create_before_destroy = true
+# The existing repository remains Terraform-managed during the one-time image
+# copy. It is removed only after the production Runtime is healthy on the copied
+# or newly built digest.
+resource "aws_ecr_repository" "legacy_runtime" {
+  count = var.retain_legacy_runtime_repository ? 1 : 0
+
+  name                 = "mymemo/agentcore-canary-runtime"
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
   }
 }
 
@@ -24,7 +39,7 @@ resource "aws_bedrockagentcore_agent_runtime" "runtime" {
 
   agent_runtime_artifact {
     container_configuration {
-      container_uri = "${aws_ecr_repository.runtime.repository_url}@${var.runtime_image_digest}"
+      container_uri = "${aws_ecr_repository.production_runtime.repository_url}@${var.runtime_image_digest}"
     }
   }
 

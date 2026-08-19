@@ -19,6 +19,10 @@ if [[ "${confirmation}" != "deploy-mymemo-agentcore-prod" || $# -gt 2 ]]; then
   echo "Usage: $0 deploy-mymemo-agentcore-prod [sha256:<existing-digest>]" >&2
   exit 1
 fi
+if [[ -n "${requested_digest}" && ! "${requested_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "Existing Runtime image must be an exact sha256 digest." >&2
+  exit 1
+fi
 
 for command in aws bun curl docker gh git jq terraform; do
   if ! command -v "${command}" >/dev/null; then
@@ -65,6 +69,34 @@ github_variable() {
   gh variable get "$1" --repo "${repository}"
 }
 
+copy_agentcore_runtime_digest() {
+  local digest="$1"
+  local migration_tag="migration-${digest#sha256:}"
+  local legacy_repository_uri="${account_id}.dkr.ecr.${region}.amazonaws.com/mymemo/agentcore-canary-runtime"
+  local copied_digest
+
+  if aws --profile "${aws_profile}" ecr describe-images \
+    --region "${region}" \
+    --repository-name mymemo/agentcore-runtime \
+    --image-ids imageDigest="${digest}" >/dev/null 2>&1; then
+    return
+  fi
+
+  docker pull --platform linux/arm64 "${legacy_repository_uri}@${digest}"
+  docker tag "${legacy_repository_uri}@${digest}" "${repository_uri}:${migration_tag}"
+  docker push "${repository_uri}:${migration_tag}"
+  copied_digest="$(aws --profile "${aws_profile}" ecr describe-images \
+    --region "${region}" \
+    --repository-name mymemo/agentcore-runtime \
+    --image-ids imageTag="${migration_tag}" \
+    --query 'imageDetails[0].imageDigest' \
+    --output text)"
+  if [[ "${copied_digest}" != "${digest}" ]]; then
+    echo "Copied Runtime image digest does not match ${digest}." >&2
+    exit 1
+  fi
+}
+
 export AWS_PROFILE="${aws_profile}"
 export AWS_REGION="${region}"
 export TF_INPUT=false
@@ -81,8 +113,7 @@ export TF_VAR_redis_url_secret_arn="$(github_variable AGENTCORE_REDIS_URL_SECRET
 export TF_VAR_artifact_bucket_name="mymemo-agent-prod-artifacts"
 export TF_VAR_openrouter_default_model="$(github_variable AGENTCORE_OPENROUTER_DEFAULT_MODEL)"
 export TF_VAR_alarm_action_arns="$(github_variable AGENTCORE_ALARM_ACTION_ARNS_JSON)"
-export TF_VAR_runtime_repository_name="mymemo/agentcore-runtime"
-export TF_VAR_runtime_repository_force_delete=false
+export TF_VAR_retain_legacy_runtime_repository=false
 
 deployment_id="${commit_sha:0:12}-$(date -u +%Y%m%dT%H%M%SZ)"
 record_dir="${repo_root}/dist/agentcore-deployment/${deployment_id}"
@@ -134,29 +165,22 @@ case "${previous_runtime_image_digest}" in
 esac
 export ROLLBACK_RUNTIME_IMAGE_DIGEST="${previous_runtime_image_digest}"
 
-# The old repository is non-empty and was created with force_delete=false.
-# Update that flag in place before the exact canary-to-production replacement;
-# create_before_destroy then creates the production repository before retiring it.
-if [[ "${previous_runtime_repository_url}" == */mymemo/agentcore-canary-runtime ]]; then
-  export TF_VAR_runtime_repository_name="mymemo/agentcore-canary-runtime"
-  export TF_VAR_runtime_repository_force_delete=true
-  legacy_repository_plan="${record_dir}/legacy-repository-retirement.tfplan"
-  terraform -chdir="${terraform_dir}" plan \
-    -target=aws_ecr_repository.runtime \
-    -out="${legacy_repository_plan}"
-  scripts/deploy/classify_agentcore_plan.sh "${legacy_repository_plan}"
-  terraform -chdir="${terraform_dir}" apply "${legacy_repository_plan}"
+legacy_repository_migration=false
+if [[ "${previous_runtime_repository_url}" == */mymemo/agentcore-canary-runtime ]] ||
+  terraform -chdir="${terraform_dir}" state list 2>/dev/null |
+    grep -Eq '^aws_ecr_repository\.(runtime|legacy_runtime\[0\])$'; then
+  legacy_repository_migration=true
+  export TF_VAR_retain_legacy_runtime_repository=true
 fi
-export TF_VAR_runtime_repository_name="mymemo/agentcore-runtime"
-export TF_VAR_runtime_repository_force_delete=false
 
-# The immutable repository must exist before the selected image can be pushed.
-# This is the first phase of the same operator deployment, under the same plan
-# classifier and credentials; it is not a separate bootstrap authority.
+# Create the production repository while retaining the Terraform-managed legacy
+# repository. The old deployed digest is copied only after both coexist.
 repository_plan="${record_dir}/repository.tfplan"
-terraform -chdir="${terraform_dir}" plan \
-  -target=aws_ecr_repository.runtime \
-  -out="${repository_plan}"
+repository_targets=(-target=aws_ecr_repository.production_runtime)
+if [[ "${legacy_repository_migration}" == true ]]; then
+  repository_targets+=('-target=aws_ecr_repository.legacy_runtime[0]')
+fi
+terraform -chdir="${terraform_dir}" plan "${repository_targets[@]}" -out="${repository_plan}"
 scripts/deploy/classify_agentcore_plan.sh "${repository_plan}"
 terraform -chdir="${terraform_dir}" show -json "${repository_plan}" >"${record_dir}/repository-plan.json"
 terraform -chdir="${terraform_dir}" apply "${repository_plan}"
@@ -164,6 +188,15 @@ terraform -chdir="${terraform_dir}" apply "${repository_plan}"
 repository_uri="$(terraform -chdir="${terraform_dir}" output -raw runtime_repository_url)"
 aws --profile "${aws_profile}" ecr get-login-password --region "${region}" |
   docker login --username AWS --password-stdin "${account_id}.dkr.ecr.${region}.amazonaws.com"
+
+if [[ "${legacy_repository_migration}" == true ]]; then
+  if [[ -n "${previous_runtime_image_digest}" ]]; then
+    copy_agentcore_runtime_digest "${previous_runtime_image_digest}"
+  fi
+  if [[ -n "${requested_digest}" && "${requested_digest}" != "${previous_runtime_image_digest}" ]]; then
+    copy_agentcore_runtime_digest "${requested_digest}"
+  fi
+fi
 
 if [[ -z "${requested_digest}" ]]; then
   docker buildx build \
@@ -180,10 +213,6 @@ if [[ -z "${requested_digest}" ]]; then
   aws --profile "${aws_profile}" ecr wait image-scan-complete --region "${region}" --repository-name mymemo/agentcore-runtime --image-id imageDigest="${runtime_image_digest}"
 else
   runtime_image_digest="${requested_digest}"
-  if [[ ! "${runtime_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    echo "Existing Runtime image must be an exact sha256 digest." >&2
-    exit 1
-  fi
   aws --profile "${aws_profile}" ecr describe-images --region "${region}" --repository-name mymemo/agentcore-runtime --image-ids imageDigest="${runtime_image_digest}" --query 'imageDetails[0].imageDigest' --output text | grep -Fxq "${runtime_image_digest}"
   docker pull --platform linux/arm64 "${repository_uri}@${runtime_image_digest}"
   docker tag "${repository_uri}@${runtime_image_digest}" agentcore-existing:verified
@@ -234,6 +263,16 @@ jq -e '.metadataConfiguration.requireMMDSV2 == true' <<<"${runtime}" >/dev/null
 runtime_version="$(jq -r '.agentRuntimeVersion' <<<"${runtime}")"
 endpoint="$(aws --profile "${aws_profile}" bedrock-agentcore-control get-agent-runtime-endpoint --region "${region}" --agent-runtime-id "${runtime_id}" --endpoint-name DEFAULT)"
 jq -e --arg version "${runtime_version}" '.name == "DEFAULT" and .status == "READY" and .liveVersion == $version' <<<"${endpoint}" >/dev/null
+
+if [[ "${legacy_repository_migration}" == true ]]; then
+  export TF_VAR_retain_legacy_runtime_repository=false
+  legacy_cleanup_plan="${record_dir}/legacy-repository-cleanup.tfplan"
+  terraform -chdir="${terraform_dir}" plan -out="${legacy_cleanup_plan}"
+  scripts/deploy/classify_agentcore_plan.sh "${legacy_cleanup_plan}"
+  terraform -chdir="${terraform_dir}" show -json "${legacy_cleanup_plan}" >"${record_dir}/legacy-repository-cleanup-plan.json"
+  terraform -chdir="${terraform_dir}" show -no-color "${legacy_cleanup_plan}" >"${record_dir}/legacy-repository-cleanup-plan.txt"
+  terraform -chdir="${terraform_dir}" apply "${legacy_cleanup_plan}"
+fi
 
 scripts/deploy/inspect_agentcore.sh | tee "${record_dir}/idle-inspection.json"
 jq -n \

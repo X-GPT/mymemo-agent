@@ -56,22 +56,8 @@ variable "runtime_image_digest" {
   }
 }
 
-variable "runtime_repository_name" {
-  description = "Production Runtime ECR repository name. The legacy name is accepted only for the guarded one-time rename phase."
-  type        = string
-  default     = "mymemo/agentcore-runtime"
-
-  validation {
-    condition = contains([
-      "mymemo/agentcore-canary-runtime",
-      "mymemo/agentcore-runtime",
-    ], var.runtime_repository_name)
-    error_message = "runtime_repository_name must be the production name or its one-time legacy migration source."
-  }
-}
-
-variable "runtime_repository_force_delete" {
-  description = "One-time guarded switch used to retire the non-empty legacy Runtime repository after the production image is promoted."
+variable "retain_legacy_runtime_repository" {
+  description = "Keeps the Terraform-managed legacy Runtime repository present only while its deployed image is copied and the production Runtime is verified."
   type        = bool
   default     = false
 }

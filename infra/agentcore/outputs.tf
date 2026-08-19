@@ -1,6 +1,6 @@
 output "runtime_repository_url" {
   description = "Immutable ECR repository used by the production AgentCore Runtime."
-  value       = aws_ecr_repository.runtime.repository_url
+  value       = aws_ecr_repository.production_runtime.repository_url
 }
 
 output "runtime_image_digest" {

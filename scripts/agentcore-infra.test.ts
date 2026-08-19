@@ -143,12 +143,19 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(source).toContain(
 			`name_prefix = "mymemo-agent-agentcore-${terraformEnvironment}"`,
 		);
-		expect(runtime).toContain(
-			"name                 = var.runtime_repository_name",
+		expect(runtime).toMatch(
+			/resource\s+"aws_ecr_repository"\s+"production_runtime"[\s\S]*?name\s*=\s*"mymemo\/agentcore-runtime"/,
 		);
-		expect(variables).toContain('default     = "mymemo/agentcore-runtime"');
+		expect(runtime).toMatch(
+			/resource\s+"aws_ecr_repository"\s+"legacy_runtime"[\s\S]*?count\s*=\s*var\.retain_legacy_runtime_repository\s*\?\s*1\s*:\s*0[\s\S]*?name\s*=\s*"mymemo\/agentcore-canary-runtime"[\s\S]*?force_delete\s*=\s*true/,
+		);
+		expect(variables).toContain('variable "retain_legacy_runtime_repository"');
+		expect(variables).not.toContain('variable "runtime_repository_name"');
+		expect(variables).not.toContain(
+			'variable "runtime_repository_force_delete"',
+		);
 		expect(source).toMatch(
-			/container_uri\s*=\s*"\$\{aws_ecr_repository\.runtime\.repository_url\}@\$\{var\.runtime_image_digest\}"/,
+			/container_uri\s*=\s*"\$\{aws_ecr_repository\.production_runtime\.repository_url\}@\$\{var\.runtime_image_digest\}"/,
 		);
 		expect(source).toMatch(/network_mode\s*=\s*"VPC"/);
 		expect(source).toMatch(/server_protocol\s*=\s*"HTTP"/);
@@ -222,8 +229,12 @@ describe("production AgentCore dispatch infrastructure", () => {
 	});
 
 	it("ships one guarded production deployment and live inspection path", () => {
+		const shellDeploymentPlan = "$" + "{deployment_plan}";
 		const shellOutputDir = "$" + "{output_dir}";
+		const shellPreviousDigest = "$" + "{previous_runtime_image_digest}";
 		const shellRepoRoot = "$" + "{repo_root}";
+		const shellRepositoryPlan = "$" + "{repository_plan}";
+		const shellTerraformDir = "$" + "{terraform_dir}";
 		const deployment = readFileSync(
 			join(root, "scripts", "deploy", "deploy_agentcore.sh"),
 			"utf8",
@@ -240,10 +251,6 @@ describe("production AgentCore dispatch infrastructure", () => {
 			join(root, "scripts", "deploy", "agentcore_aws_checks.sh"),
 			"utf8",
 		);
-		const build = readFileSync(
-			join(root, "scripts", "deploy", "build_agentcore_consumer.sh"),
-			"utf8",
-		);
 
 		expect(deployment).toContain("deploy-mymemo-agentcore-prod");
 		expect(deployment).toContain(
@@ -258,8 +265,28 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(deployment).toContain("AGENTCORE_ALARM_ACTION_ARNS_JSON");
 		expect(deployment).not.toContain("AGENTCORE_CANARY_");
 		expect(deployment).toContain("classify_agentcore_plan.sh");
-		expect(deployment).toContain("legacy-repository-retirement.tfplan");
-		expect(deployment).toContain("TF_VAR_runtime_repository_force_delete=true");
+		expect(deployment).toContain(
+			"TF_VAR_retain_legacy_runtime_repository=true",
+		);
+		expect(deployment).toContain("copy_agentcore_runtime_digest");
+		expect(deployment).toContain("legacy-repository-cleanup.tfplan");
+		expect(deployment).toContain(
+			"TF_VAR_retain_legacy_runtime_repository=false",
+		);
+		const repositoryApply = deployment.indexOf(
+			`terraform -chdir="${shellTerraformDir}" apply "${shellRepositoryPlan}"`,
+		);
+		const rollbackCopy = deployment.indexOf(
+			`copy_agentcore_runtime_digest "${shellPreviousDigest}"`,
+		);
+		const deploymentApply = deployment.indexOf(
+			`terraform -chdir="${shellTerraformDir}" apply "${shellDeploymentPlan}"`,
+		);
+		const cleanupPlan = deployment.indexOf("legacy-repository-cleanup.tfplan");
+		expect(repositoryApply).toBeGreaterThan(-1);
+		expect(rollbackCopy).toBeGreaterThan(repositoryApply);
+		expect(deploymentApply).toBeGreaterThan(rollbackCopy);
+		expect(cleanupPlan).toBeGreaterThan(deploymentApply);
 		expect(deployment).toContain("inspect_agentcore.sh");
 		expect(deployment).toContain('idle-inspection.json"');
 		expect(inspection).toContain('VisibilityTimeout == "180"');
@@ -268,7 +295,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(checks).not.toContain("events describe-rule");
 		expect(checks).not.toContain("lambda get-policy");
 		expect(checks).toContain("(.ReservedConcurrentExecutions // null) == null");
-		expect(build).toMatch(
+		expect(consumerBuild).toMatch(
 			/cp "\$\{ca_bundle\}" "\$\{build_dir\}\/dispatch\/rds-global-bundle\.pem"/,
 		);
 	});
@@ -286,6 +313,9 @@ describe("production AgentCore dispatch infrastructure", () => {
 		}
 		expect(readme).toContain("owned by `infra/terraform`");
 		expect(readme).toContain("desired count one");
+		expect(readme).toContain(
+			"copies and verifies the deployed digest in the production repository",
+		);
 		expect(readme).toContain("`PendingAgeMs`");
 		expect(readme).toContain("`PublisherErrors`");
 		expect(readme).toContain("`PublisherLockNotAcquired`");
@@ -298,6 +328,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		const moves = readFileSync(join(terraformDir, "moved.tf"), "utf8");
 
 		for (const oldAddress of [
+			"aws_ecr_repository.runtime",
 			"aws_bedrockagentcore_agent_runtime.canary",
 			"aws_kms_alias.canary",
 			"aws_kms_key.canary",
@@ -306,6 +337,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		]) {
 			expect(moves).toContain(`from = ${oldAddress}`);
 		}
+		expect(moves).toContain("to   = aws_ecr_repository.legacy_runtime[0]");
 		expect(source).not.toMatch(/resource\s+"[^"]+"\s+"canary"/);
 		expect(source).not.toContain(
 			`mymemo_agentcore_canary_${terraformEnvironment}`,
