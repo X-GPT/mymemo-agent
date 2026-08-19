@@ -1,6 +1,66 @@
 #!/usr/bin/env bash
 
-verify_agentcore_canary_current_secrets() {
+agentcore_queue_empty_evidence() {
+  local region="$1"
+  local queue_name="$2"
+  local queue_url
+  local attributes
+
+  if ! queue_url="$(aws --profile mymemo sqs get-queue-url \
+    --region "${region}" \
+    --queue-name "${queue_name}" \
+    --query QueueUrl \
+    --output text 2>&1)"; then
+    if grep -Fq "AWS.SimpleQueueService.NonExistentQueue" <<<"${queue_url}"; then
+      jq -cn --arg queueName "${queue_name}" \
+        '{queueName:$queueName,exists:false}'
+      return
+    fi
+    printf '%s\n' "${queue_url}" >&2
+    return 1
+  fi
+
+  attributes="$(aws --profile mymemo sqs get-queue-attributes \
+    --region "${region}" \
+    --queue-url "${queue_url}" \
+    --attribute-names \
+      ApproximateNumberOfMessages \
+      ApproximateNumberOfMessagesNotVisible \
+      ApproximateNumberOfMessagesDelayed)"
+  if ! jq -e '
+    .Attributes.ApproximateNumberOfMessages == "0"
+      and .Attributes.ApproximateNumberOfMessagesNotVisible == "0"
+      and .Attributes.ApproximateNumberOfMessagesDelayed == "0"
+  ' <<<"${attributes}" >/dev/null; then
+    echo "Legacy AgentCore queue ${queue_name} must be empty before production replacement." >&2
+    return 1
+  fi
+
+  jq -c \
+    --arg queueName "${queue_name}" \
+    --arg queueUrl "${queue_url}" \
+    '{queueName:$queueName,queueUrl:$queueUrl,exists:true,attributes:.Attributes}' \
+    <<<"${attributes}"
+}
+
+assert_agentcore_legacy_queues_empty() {
+  local region="$1"
+  local dispatch
+  local dead_letter
+
+  dispatch="$(agentcore_queue_empty_evidence \
+    "${region}" \
+    "mymemo-agent-agentcore-canary-prod-dispatch")" || return
+  dead_letter="$(agentcore_queue_empty_evidence \
+    "${region}" \
+    "mymemo-agent-agentcore-canary-prod-dlq")" || return
+  jq -cn \
+    --argjson dispatch "${dispatch}" \
+    --argjson deadLetter "${dead_letter}" \
+    '{dispatch:$dispatch,deadLetter:$deadLetter}'
+}
+
+verify_agentcore_current_secrets() {
   local region="$1"
   local terraform_output="$2"
   local secret_arn
@@ -15,7 +75,7 @@ verify_agentcore_canary_current_secrets() {
   done < <(jq -r '.runtime_secret_arns.value[]' <<<"${terraform_output}")
 }
 
-verify_agentcore_canary_alarms() {
+verify_agentcore_alarms() {
   local region="$1"
   local terraform_output="$2"
   local expected_alarms
@@ -38,6 +98,7 @@ verify_agentcore_canary_alarms() {
           statistic: .Statistic,
           period: .Period,
           evaluation_periods: .EvaluationPeriods,
+          datapoints_to_alarm: .DatapointsToAlarm,
           comparison_operator: .ComparisonOperator,
           threshold: .Threshold,
           treat_missing_data: .TreatMissingData,
@@ -49,30 +110,70 @@ verify_agentcore_canary_alarms() {
   ' <<<"${live_alarms}" >/dev/null
 }
 
-verify_agentcore_canary_disabled_dispatch() {
+verify_agentcore_egress() {
+  local region="$1"
+  local terraform_output="$2"
+  local configuration
+  local private_subnet_id
+  local public_subnet_id
+  local route_table_id
+  local nat_gateway_id
+  local route_table
+  local nat_gateway
+
+  while IFS= read -r configuration; do
+    private_subnet_id="$(jq -r '.private_subnet_id' <<<"${configuration}")"
+    public_subnet_id="$(jq -r '.public_subnet_id' <<<"${configuration}")"
+    route_table_id="$(jq -r '.route_table_id' <<<"${configuration}")"
+    nat_gateway_id="$(jq -r '.nat_gateway_id' <<<"${configuration}")"
+
+    route_table="$(aws --profile mymemo ec2 describe-route-tables \
+      --region "${region}" \
+      --route-table-ids "${route_table_id}")"
+    jq -e \
+      --arg routeTableId "${route_table_id}" \
+      --arg privateSubnetId "${private_subnet_id}" \
+      --arg natGatewayId "${nat_gateway_id}" \
+      '.RouteTables
+        | length == 1
+          and .[0].RouteTableId == $routeTableId
+          and any(.[0].Associations[]?; .SubnetId == $privateSubnetId)
+          and any(.[0].Routes[]?;
+            .DestinationCidrBlock == "0.0.0.0/0"
+            and .NatGatewayId == $natGatewayId
+            and .State == "active")' \
+      <<<"${route_table}" >/dev/null
+
+    nat_gateway="$(aws --profile mymemo ec2 describe-nat-gateways \
+      --region "${region}" \
+      --nat-gateway-ids "${nat_gateway_id}")"
+    jq -e \
+      --arg natGatewayId "${nat_gateway_id}" \
+      --arg publicSubnetId "${public_subnet_id}" \
+      '.NatGateways
+        | length == 1
+          and .[0].NatGatewayId == $natGatewayId
+          and .[0].SubnetId == $publicSubnetId
+          and .[0].State == "available"' \
+      <<<"${nat_gateway}" >/dev/null
+  done < <(jq -c '.egress_configurations.value | to_entries[].value' <<<"${terraform_output}")
+}
+
+verify_agentcore_idle_dispatch() {
   local region="$1"
   local terraform_output="$2"
   local mapping_uuid
-  local repair_rule
-  local repair_rule_arn
   local dispatch_queue_arn
   local expected_consumer_function_arn
-  local expected_publisher_function_arn
   local enabled_parameter
   local mapping
   local consumer_configuration
   local consumer_concurrency
-  local rule
-  local targets
-  local publisher_policy
 
   mapping_uuid="$(jq -r '.consumer_event_source_mapping_uuid.value' <<<"${terraform_output}")"
-  repair_rule="$(jq -r '.repair_rule_name.value' <<<"${terraform_output}")"
-  repair_rule_arn="$(jq -r '.repair_rule_arn.value' <<<"${terraform_output}")"
   dispatch_queue_arn="$(jq -r '.dispatch_queue_arn.value' <<<"${terraform_output}")"
   expected_consumer_function_arn="$(jq -r '.consumer_function_arn.value' <<<"${terraform_output}")"
-  expected_publisher_function_arn="$(jq -r '.publisher_function_arn.value' <<<"${terraform_output}")"
-  enabled_parameter="$(jq -r '.enabled_parameter_name.value' <<<"${terraform_output}")"
+  enabled_parameter="$(jq -r '.dispatch_enabled_parameter_name.value' <<<"${terraform_output}")"
 
   mapping="$(aws --profile mymemo lambda get-event-source-mapping \
     --region "${region}" \
@@ -81,7 +182,7 @@ verify_agentcore_canary_disabled_dispatch() {
     --arg queueArn "${dispatch_queue_arn}" \
     --arg functionArn "${expected_consumer_function_arn}" \
     '.BatchSize == 1
-      and .State == "Disabled"
+      and .State == "Enabled"
       and .EventSourceArn == $queueArn
       and .FunctionArn == $functionArn
       and (.FunctionResponseTypes | index("ReportBatchItemFailures")) != null' \
@@ -98,43 +199,10 @@ verify_agentcore_canary_disabled_dispatch() {
     --function-name "${expected_consumer_function_arn}")"
   jq -e '(.ReservedConcurrentExecutions // null) == null' \
     <<<"${consumer_concurrency}" >/dev/null
-
-  rule="$(aws --profile mymemo events describe-rule \
-    --region "${region}" \
-    --name "${repair_rule}")"
-  jq -e \
-    --arg ruleArn "${repair_rule_arn}" \
-    '.Arn == $ruleArn and .State == "DISABLED" and .ScheduleExpression == "rate(1 minute)"' \
-    <<<"${rule}" >/dev/null
-  targets="$(aws --profile mymemo events list-targets-by-rule \
-    --region "${region}" \
-    --rule "${repair_rule}")"
-  jq -e --arg publisherArn "${expected_publisher_function_arn}" \
-    '.Targets == [{Arn: $publisherArn, Id: "shared-publisher"}]' \
-    <<<"${targets}" >/dev/null
-  publisher_policy="$(aws --profile mymemo lambda get-policy \
-    --region "${region}" \
-    --function-name "${expected_publisher_function_arn}")"
-  jq -e \
-    --arg publisherArn "${expected_publisher_function_arn}" \
-    --arg ruleArn "${repair_rule_arn}" \
-    '.Policy
-      | fromjson
-      | [.Statement[] | select(.Sid == "AllowEventBridgeRepair")] as $statements
-      | ($statements | length) == 1
-        and $statements[0] == {
-          Sid: "AllowEventBridgeRepair",
-          Effect: "Allow",
-          Principal: {Service: "events.amazonaws.com"},
-          Action: "lambda:InvokeFunction",
-          Resource: $publisherArn,
-          Condition: {ArnLike: {"AWS:SourceArn": $ruleArn}}
-        }' \
-    <<<"${publisher_policy}" >/dev/null
   [[ "$(aws --profile mymemo ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "disabled" ]]
 }
 
-verify_agentcore_canary_runtime_configuration() {
+verify_agentcore_runtime_configuration() {
   local region="$1"
   local terraform_output="$2"
   local expected_digest="$3"
@@ -175,7 +243,7 @@ verify_agentcore_canary_runtime_configuration() {
     '{runtime:($runtime | fromjson), endpoint:($endpoint | fromjson)}'
 }
 
-verify_agentcore_canary_consumer_runtime_authority() {
+verify_agentcore_consumer_runtime_authority() {
   local region="$1"
   local terraform_output="$2"
   local runtime_arn

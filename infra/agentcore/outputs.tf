@@ -1,6 +1,6 @@
 output "runtime_repository_url" {
-  description = "Immutable ECR repository used only by the AgentCore canary Runtime."
-  value       = aws_ecr_repository.runtime.repository_url
+  description = "Immutable ECR repository used by the production AgentCore Runtime."
+  value       = aws_ecr_repository.production_runtime.repository_url
 }
 
 output "runtime_image_digest" {
@@ -10,12 +10,12 @@ output "runtime_image_digest" {
 
 output "agent_runtime_id" {
   description = "Resolved native AgentCore Runtime identifier."
-  value       = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_id
+  value       = aws_bedrockagentcore_agent_runtime.runtime.agent_runtime_id
 }
 
 output "agent_runtime_arn" {
   description = "Resolved native AgentCore Runtime ARN."
-  value       = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn
+  value       = aws_bedrockagentcore_agent_runtime.runtime.agent_runtime_arn
 }
 
 output "runtime_security_configuration" {
@@ -35,7 +35,7 @@ output "default_endpoint_name" {
 }
 
 output "dispatch_queue_url" {
-  description = "Dormant encrypted standard canary queue URL."
+  description = "Encrypted production AgentCore dispatch queue URL."
   value       = aws_sqs_queue.dispatch.url
 }
 
@@ -45,12 +45,12 @@ output "dispatch_queue_arn" {
 }
 
 output "dead_letter_queue_url" {
-  description = "Dormant encrypted canary DLQ URL."
+  description = "Encrypted production AgentCore dispatch DLQ URL."
   value       = aws_sqs_queue.dead_letter.url
 }
 
 output "consumer_event_source_mapping_uuid" {
-  description = "Disabled batch-size-one consumer mapping."
+  description = "Enabled batch-size-one production consumer mapping."
   value       = aws_lambda_event_source_mapping.consumer.uuid
 }
 
@@ -59,34 +59,31 @@ output "consumer_function_arn" {
   value       = aws_lambda_function.consumer.arn
 }
 
-output "repair_rule_name" {
-  description = "Disabled one-minute repair schedule."
-  value       = aws_cloudwatch_event_rule.repair.name
-}
-
-output "repair_rule_arn" {
-  description = "Exact repair rule ARN expected by the publisher permission."
-  value       = aws_cloudwatch_event_rule.repair.arn
-}
-
-output "publisher_function_arn" {
-  description = "Exact publisher Lambda ARN expected by the repair target."
-  value       = aws_lambda_function.publisher.arn
-}
-
-output "enabled_parameter_name" {
-  description = "Fail-closed canary dispatch parameter."
-  value       = aws_ssm_parameter.enabled.name
+output "dispatch_enabled_parameter_name" {
+  description = "Fail-closed production AgentCore dispatch parameter."
+  value       = aws_ssm_parameter.dispatch_enabled.name
 }
 
 output "private_subnet_ids" {
-  description = "Persistent private canary subnets."
+  description = "Persistent private AgentCore subnets."
   value       = values(aws_subnet.private)[*].id
 }
 
-output "canary_security_group_id" {
-  description = "Persistent outbound-only canary security group."
-  value       = aws_security_group.canary.id
+output "egress_configurations" {
+  description = "Exact zonal NAT routes verified after deployment."
+  value = {
+    for availability_zone in keys(local.private_subnets) : availability_zone => {
+      private_subnet_id = aws_subnet.private[availability_zone].id
+      public_subnet_id  = aws_nat_gateway.egress[availability_zone].subnet_id
+      route_table_id    = aws_route_table.private[availability_zone].id
+      nat_gateway_id    = aws_nat_gateway.egress[availability_zone].id
+    }
+  }
+}
+
+output "runtime_security_group_id" {
+  description = "Persistent outbound-only AgentCore Runtime security group."
+  value       = aws_security_group.runtime.id
 }
 
 output "consumer_role_arn" {
@@ -100,20 +97,11 @@ output "runtime_secret_arns" {
 }
 
 output "alarm_names" {
-  description = "Low-cardinality dispatch safety alarms."
-  value = concat(
-    [
-      aws_cloudwatch_metric_alarm.dispatch_age.alarm_name,
-      aws_cloudwatch_metric_alarm.dead_letter_work.alarm_name,
-      aws_cloudwatch_metric_alarm.consumer_duration.alarm_name,
-    ],
-    values(aws_cloudwatch_metric_alarm.lambda_errors)[*].alarm_name,
-    values(aws_cloudwatch_metric_alarm.lambda_throttles)[*].alarm_name,
-    values(aws_cloudwatch_metric_alarm.incident)[*].alarm_name,
-  )
+  description = "Production AgentCore Dispatch paging alarms."
+  value       = local.dispatch_alarms[*].alarm_name
 }
 
 output "alarm_configurations" {
-  description = "Complete low-cardinality alarm configurations verified against the live service."
+  description = "Complete production Dispatch alarm configurations verified against the live service."
   value       = local.alarm_configurations
 }

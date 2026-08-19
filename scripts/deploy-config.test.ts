@@ -461,15 +461,22 @@ describe("agent deployment config", () => {
 		expect(prodTfvars).not.toContain("_SECRET_ARN");
 	});
 
-	it("keeps the Dispatch publisher dormant until shared infrastructure exists", () => {
+	it("runs the dedicated Dispatch publisher against the production shared stack", () => {
 		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
+		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
 		const sharedState = readFileSync(
 			join(terraformDir, "shared_state.tf"),
 			"utf8",
 		);
 
 		expect(prodTfvars).toContain(
-			"agentcore_dispatch_publisher_desired_count = 0",
+			"agentcore_dispatch_publisher_desired_count = 1",
+		);
+		expect(locals).toMatch(
+			/"mymemo-agent-agentcore-\$\{var\.environment\}-dispatch"/,
+		);
+		expect(locals).toMatch(
+			/"alias\/mymemo-agent-agentcore-\$\{var\.environment\}"/,
 		);
 		expect(sharedState).toContain(
 			"count = var.agentcore_dispatch_publisher_desired_count == 1 ? 1 : 0",

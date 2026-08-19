@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-output_dir="${1:-dist/agentcore-canary-lambdas}"
+output_dir="${1:-dist/agentcore-consumer}"
 ca_bundle="${2:-}"
 
 if [[ -z "${ca_bundle}" || ! -f "${ca_bundle}" ]]; then
-  echo "Usage: build_agentcore_canary_lambdas.sh <output-dir> <verified-rds-ca-bundle>" >&2
+  echo "Usage: build_agentcore_consumer.sh <output-dir> <verified-rds-ca-bundle>" >&2
   exit 2
 fi
 
@@ -23,6 +23,6 @@ cp "${ca_bundle}" "${build_dir}/dispatch/rds-global-bundle.pem"
 
 (
   cd "${build_dir}/dispatch"
-  zip -q -X -r "${output_dir}/dispatch.zip" .
+  zip -q -X -r "${output_dir}/consumer.zip" .
 )
-shasum -a 256 "${output_dir}/dispatch.zip"
+shasum -a 256 "${output_dir}/consumer.zip"

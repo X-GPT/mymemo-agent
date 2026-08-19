@@ -4,7 +4,7 @@ variable "aws_region" {
 }
 
 variable "aws_account_id" {
-  description = "AWS account that owns the canary and referenced production resources."
+  description = "AWS account that owns the production AgentCore and referenced MyMemo resources."
   type        = string
 
   validation {
@@ -14,18 +14,18 @@ variable "aws_account_id" {
 }
 
 variable "environment" {
-  description = "Deployment environment. The canary is production-only."
+  description = "Deployment environment. This independent AgentCore stack is production-only."
   type        = string
   default     = "prod"
 
   validation {
     condition     = var.environment == "prod"
-    error_message = "The AgentCore canary may only be deployed as prod."
+    error_message = "The AgentCore production stack may only be deployed as prod."
   }
 }
 
 variable "availability_zones" {
-  description = "Two availability zones for persistent private canary subnets."
+  description = "Two availability zones for persistent private AgentCore subnets."
   type        = list(string)
   default     = ["us-west-2a", "us-west-2b"]
 
@@ -36,7 +36,7 @@ variable "availability_zones" {
 }
 
 variable "private_subnet_cidrs" {
-  description = "Two non-overlapping CIDRs reserved for the persistent canary private subnets."
+  description = "Two non-overlapping CIDRs reserved for the persistent AgentCore private subnets."
   type        = list(string)
   default     = ["172.31.80.0/24", "172.31.81.0/24"]
 
@@ -44,12 +44,6 @@ variable "private_subnet_cidrs" {
     condition     = length(var.private_subnet_cidrs) == 2 && length(distinct(var.private_subnet_cidrs)) == 2
     error_message = "Exactly two distinct private subnet CIDRs are required."
   }
-}
-
-variable "dispatch_enabled" {
-  description = "Enables the SQS consumer and minute repair schedule. Must remain false for dormant deployment."
-  type        = bool
-  default     = false
 }
 
 variable "runtime_image_digest" {
@@ -62,8 +56,14 @@ variable "runtime_image_digest" {
   }
 }
 
-variable "dispatch_lambda_package" {
-  description = "Path to the verified dispatch Lambda deployment package."
+variable "retain_legacy_runtime_repository" {
+  description = "Keeps the Terraform-managed legacy Runtime repository present only while its deployed image is copied and the production Runtime is verified."
+  type        = bool
+  default     = false
+}
+
+variable "consumer_lambda_package" {
+  description = "Path to the verified AgentCore dispatch consumer Lambda deployment package."
   type        = string
 }
 
@@ -104,27 +104,33 @@ variable "openrouter_base_url" {
 }
 
 variable "openrouter_default_model" {
-  description = "Non-secret model identifier used by the canary Runtime."
+  description = "Non-secret model identifier used by the production Runtime."
   type        = string
 }
 
 variable "worker_e2b_template" {
-  description = "Pinned E2B sandbox template used by the canary Runtime."
+  description = "Pinned E2B sandbox template used by the production Runtime."
   type        = string
   default     = "mymemo-agent-sandbox"
 }
 
-variable "incident_alarm_action_arns" {
-  description = "Production incident destinations for Canary safety alarms."
+variable "alarm_action_arns" {
+  description = "Production SNS destinations for every AgentCore Dispatch paging alarm."
   type        = list(string)
-  default     = []
+
+  validation {
+    condition = length(var.alarm_action_arns) > 0 && alltrue([
+      for arn in var.alarm_action_arns : can(regex("^arn:aws:sns:${var.aws_region}:${var.aws_account_id}:[A-Za-z0-9_-]+$", arn))
+    ])
+    error_message = "alarm_action_arns must contain at least one same-account, same-region SNS topic ARN."
+  }
 }
 
 variable "tags" {
-  description = "Tags applied only to canary-owned resources."
+  description = "Tags applied only to production AgentCore-owned resources."
   type        = map(string)
   default = {
-    Application = "mymemo-agentcore-canary"
+    Application = "mymemo-agentcore"
     Environment = "prod"
     ManagedBy   = "terraform"
   }

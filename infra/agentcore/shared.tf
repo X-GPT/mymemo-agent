@@ -18,3 +18,9 @@ data "aws_security_group" "live_redis_clients" {
     values = ["mymemo-agent-${var.environment}-live-redis-clients"]
   }
 }
+
+data "aws_subnet" "shared_egress" {
+  for_each = toset(data.terraform_remote_state.mymemo_agent.outputs.shared_infra.ecs_subnet_ids)
+
+  id = each.value
+}
