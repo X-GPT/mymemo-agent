@@ -98,7 +98,7 @@ verify_agentcore_alarms() {
           statistic: .Statistic,
           period: .Period,
           evaluation_periods: .EvaluationPeriods,
-          datapoints_to_alarm: .DatapointsToAlarm,
+          datapoints_to_alarm: (.DatapointsToAlarm // 0),
           comparison_operator: .ComparisonOperator,
           threshold: .Threshold,
           treat_missing_data: .TreatMissingData,
@@ -261,5 +261,15 @@ verify_agentcore_consumer_runtime_authority() {
     --policy-source-arn "${consumer_role_arn}" \
     --action-names bedrock-agentcore:InvokeAgentRuntime \
     --resource-arns "${runtime_arn}" "${endpoint_arn}")"
-  jq -e '[.EvaluationResults[].EvalDecision] | length == 2 and all(. == "allowed")' <<<"${simulation}" >/dev/null
+  jq -e \
+    --arg runtimeArn "${runtime_arn}" \
+    --arg endpointArn "${endpoint_arn}" \
+    '(.EvaluationResults | length == 1)
+      and (.EvaluationResults[0].EvalDecision == "allowed")
+      and ([.EvaluationResults[0].ResourceSpecificResults[]
+        | select(.EvalResourceName == $runtimeArn or .EvalResourceName == $endpointArn)] as $resources
+        | ($resources | length == 2)
+          and ($resources | map(.EvalResourceName) | unique | length == 2)
+          and ($resources | all(.EvalResourceDecision == "allowed")))' \
+    <<<"${simulation}" >/dev/null
 }

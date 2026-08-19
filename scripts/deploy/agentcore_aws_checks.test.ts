@@ -7,6 +7,11 @@ const queueArn =
 	"arn:aws:sqs:us-west-2:637423444544:mymemo-agent-agentcore-prod-dispatch";
 const consumerArn =
 	"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-prod-consumer";
+const runtimeArn =
+	"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_prod-runtime";
+const endpointArn = `${runtimeArn}/runtime-endpoint/DEFAULT`;
+const consumerRoleArn =
+	"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-prod-consumer";
 
 const terraformOutput = JSON.stringify({
 	consumer_event_source_mapping_uuid: { value: "mapping-1" },
@@ -40,7 +45,7 @@ const alarmConfigurations: Record<string, AlarmConfiguration> = {
 		statistic: "Maximum",
 		period: 60,
 		evaluation_periods: 1,
-		datapoints_to_alarm: 1,
+		datapoints_to_alarm: 0,
 		comparison_operator: "GreaterThanOrEqualToThreshold",
 		threshold: 60000,
 		treat_missing_data: "breaching",
@@ -120,6 +125,31 @@ verify_agentcore_idle_dispatch us-west-2 "$TF_OUTPUT"
 	});
 }
 
+function verifyConsumerRuntimeAuthority(simulation: Record<string, unknown>) {
+	const script = `
+set -euo pipefail
+source "${checksPath}"
+aws() {
+  case "$*" in
+    *"iam simulate-principal-policy"*) printf '%s\n' "$SIMULATION" ;;
+    *) exit 97 ;;
+  esac
+}
+verify_agentcore_consumer_runtime_authority us-west-2 "$TF_OUTPUT"
+`;
+	return spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			TF_OUTPUT: JSON.stringify({
+				agent_runtime_arn: { value: runtimeArn },
+				consumer_role_arn: { value: consumerRoleArn },
+			}),
+			SIMULATION: JSON.stringify(simulation),
+		},
+	});
+}
+
 function verifyAlarms(liveConfigurations: Record<string, AlarmConfiguration>) {
 	const alarms = Object.entries(liveConfigurations).map(
 		([AlarmName, configuration]) => ({
@@ -132,7 +162,9 @@ function verifyAlarms(liveConfigurations: Record<string, AlarmConfiguration>) {
 			Statistic: configuration.statistic,
 			Period: configuration.period,
 			EvaluationPeriods: configuration.evaluation_periods,
-			DatapointsToAlarm: configuration.datapoints_to_alarm,
+			...(configuration.datapoints_to_alarm > 0
+				? { DatapointsToAlarm: configuration.datapoints_to_alarm }
+				: {}),
 			ComparisonOperator: configuration.comparison_operator,
 			Threshold: configuration.threshold,
 			TreatMissingData: configuration.treat_missing_data,
@@ -317,8 +349,43 @@ describe("production AgentCore idle dispatch wiring", () => {
 	});
 });
 
+describe("production AgentCore consumer Runtime authority", () => {
+	function allowedSimulation() {
+		return {
+			EvaluationResults: [
+				{
+					EvalActionName: "bedrock-agentcore:InvokeAgentRuntime",
+					EvalDecision: "allowed",
+					ResourceSpecificResults: [
+						{
+							EvalResourceName: runtimeArn,
+							EvalResourceDecision: "allowed",
+						},
+						{
+							EvalResourceName: endpointArn,
+							EvalResourceDecision: "allowed",
+						},
+					],
+				},
+			],
+		};
+	}
+
+	it("accepts the IAM simulator's resource-specific allow results", () => {
+		const result = verifyConsumerRuntimeAuthority(allowedSimulation());
+		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it("rejects a denied Runtime resource", () => {
+		const simulation = allowedSimulation();
+		simulation.EvaluationResults[0].ResourceSpecificResults[0].EvalResourceDecision =
+			"implicitDeny";
+		expect(verifyConsumerRuntimeAuthority(simulation).status).not.toBe(0);
+	});
+});
+
 describe("production AgentCore alarm configuration", () => {
-	it("accepts the complete Terraform-owned paging invariant", () => {
+	it("accepts the complete Terraform-owned paging invariant, including an omitted AWS datapoints default", () => {
 		const result = verifyAlarms(alarmConfigurations);
 		expect(result.status, result.stderr).toBe(0);
 	});
