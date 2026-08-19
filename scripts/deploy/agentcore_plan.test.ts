@@ -14,8 +14,14 @@ function change(
 	actions: string[],
 	before: unknown = null,
 	after: unknown = {},
+	afterUnknown: unknown = {},
 ) {
-	return { address, mode: "managed", type, change: { actions, before, after } };
+	return {
+		address,
+		mode: "managed",
+		type,
+		change: { actions, before, after, after_unknown: afterUnknown },
+	};
 }
 
 const lambdaTrust = JSON.stringify({
@@ -123,21 +129,15 @@ describe("production AgentCore Terraform plan classification", () => {
 	it("approves the exact event-source mapping replacement forced by the queue rename", () => {
 		const oldQueueArn =
 			"arn:aws:sqs:us-west-2:637423444544:mymemo-agent-agentcore-canary-prod-dispatch";
-		const productionQueueArn =
-			"arn:aws:sqs:us-west-2:637423444544:mymemo-agent-agentcore-prod-dispatch";
 		const oldConsumerArn =
 			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer";
-		const productionConsumerArn =
-			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-prod-consumer";
 		const mappingReplacement = change(
 			"aws_lambda_event_source_mapping.consumer",
 			"aws_lambda_event_source_mapping",
 			["delete", "create"],
 			{ event_source_arn: oldQueueArn, function_name: oldConsumerArn },
-			{
-				event_source_arn: productionQueueArn,
-				function_name: productionConsumerArn,
-			},
+			{ event_source_arn: null, function_name: null },
+			{ event_source_arn: true, function_name: true },
 		);
 		const queueReplacement = change(
 			"aws_sqs_queue.dispatch",
@@ -146,14 +146,28 @@ describe("production AgentCore Terraform plan classification", () => {
 			{ name: "mymemo-agent-agentcore-canary-prod-dispatch" },
 			{ name: "mymemo-agent-agentcore-prod-dispatch" },
 		);
+		const consumerReplacement = change(
+			"aws_lambda_function.consumer",
+			"aws_lambda_function",
+			["delete", "create"],
+			{ function_name: "mymemo-agent-agentcore-canary-prod-consumer" },
+			{ function_name: "mymemo-agent-agentcore-prod-consumer" },
+		);
 
 		expect(
-			classifyAgentCorePlan(plan([queueReplacement, mappingReplacement])),
+			classifyAgentCorePlan(
+				plan([queueReplacement, consumerReplacement, mappingReplacement]),
+			),
 		).toEqual({ safe: true, reasons: [] });
 
 		const wrongMapping = structuredClone(mappingReplacement);
-		wrongMapping.change.after.function_name = oldConsumerArn;
-		expect(classifyAgentCorePlan(plan([wrongMapping])).safe).toBe(false);
+		wrongMapping.change.after_unknown.function_name = false;
+		expect(
+			classifyAgentCorePlan(
+				plan([queueReplacement, consumerReplacement, wrongMapping]),
+			).safe,
+		).toBe(false);
+		expect(classifyAgentCorePlan(plan([mappingReplacement])).safe).toBe(false);
 	});
 
 	it("keeps the legacy Runtime repository managed until its copied digest is safe to delete", () => {

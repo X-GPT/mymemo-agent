@@ -9,6 +9,7 @@ interface PlanChange {
 		actions?: string[];
 		before?: Record<string, unknown> | null;
 		after?: Record<string, unknown> | null;
+		after_unknown?: Record<string, unknown>;
 	};
 }
 
@@ -314,18 +315,37 @@ function isApprovedProductionRename(resource: PlanChange): boolean {
 
 function isApprovedEventSourceMappingReplacement(
 	resource: PlanChange,
+	resourceChanges: PlanChange[],
 ): boolean {
 	const actions = resource.change?.actions ?? [];
+	const afterValueIsExactOrComputed = (field: string, expected: string) => {
+		const after = resource.change?.after?.[field];
+		return (
+			after === expected ||
+			((after === null || after === undefined) &&
+				resource.change?.after_unknown?.[field] === true)
+		);
+	};
+	const hasCompanionRename = (address: string) =>
+		resourceChanges.some(
+			(candidate) =>
+				resourceBaseAddress(candidate.address ?? "") === address &&
+				isApprovedProductionRename(candidate),
+		);
 	return (
 		resourceBaseAddress(resource.address ?? "") ===
 			"aws_lambda_event_source_mapping.consumer" &&
 		actions.includes("create") &&
 		actions.includes("delete") &&
 		resource.change?.before?.event_source_arn === LEGACY_DISPATCH_QUEUE_ARN &&
-		resource.change?.after?.event_source_arn ===
-			PRODUCTION_DISPATCH_QUEUE_ARN &&
 		resource.change?.before?.function_name === LEGACY_CONSUMER_ARN &&
-		resource.change?.after?.function_name === PRODUCTION_CONSUMER_ARN
+		afterValueIsExactOrComputed(
+			"event_source_arn",
+			PRODUCTION_DISPATCH_QUEUE_ARN,
+		) &&
+		afterValueIsExactOrComputed("function_name", PRODUCTION_CONSUMER_ARN) &&
+		hasCompanionRename("aws_sqs_queue.dispatch") &&
+		hasCompanionRename("aws_lambda_function.consumer")
 	);
 }
 
@@ -352,16 +372,20 @@ function isApprovedLegacyRepositoryTransition(resource: PlanChange): boolean {
 	);
 }
 
-function isApprovedProductionReplacement(resource: PlanChange): boolean {
+function isApprovedProductionReplacement(
+	resource: PlanChange,
+	resourceChanges: PlanChange[],
+): boolean {
 	return (
 		isApprovedProductionRename(resource) ||
-		isApprovedEventSourceMappingReplacement(resource)
+		isApprovedEventSourceMappingReplacement(resource, resourceChanges)
 	);
 }
 
 export function classifyAgentCorePlan(plan: TerraformPlan): PlanClassification {
 	const reasons: string[] = [];
-	for (const resource of plan.resource_changes ?? []) {
+	const resourceChanges = plan.resource_changes ?? [];
+	for (const resource of resourceChanges) {
 		const actions = resource.change?.actions ?? [];
 		if (actions.every((action) => action === "no-op" || action === "read")) {
 			continue;
@@ -402,7 +426,7 @@ export function classifyAgentCorePlan(plan: TerraformPlan): PlanClassification {
 		} else if (
 			!isRetiredResource &&
 			actions.includes("delete") &&
-			!isApprovedProductionReplacement(resource)
+			!isApprovedProductionReplacement(resource, resourceChanges)
 		) {
 			reasons.push(`${address} requests unapproved deletion or replacement`);
 		}
