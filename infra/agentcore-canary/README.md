@@ -46,9 +46,9 @@ requires:
 - ready digest-pinned Runtime and `DEFAULT` endpoint with MMDSv2;
 - exact AWSCURRENT secret metadata, scoped invocation IAM, and dispatch alarms.
 
-The Runtime and its execution role share the Terraform-owned
-`objects/agentcore-canary/` object-key prefix. Canary publication therefore
-cannot overwrite ordinary production artifacts in the shared bucket.
+The Runtime publishes Downloadable artifacts through the same standard
+`objects/` namespace as Fargate. Object identities remain UUID-based, and the
+Runtime execution role is scoped to that namespace in the shared bucket.
 
 The inspection performs no Lambda or Runtime invocation and cannot admit a Run.
 

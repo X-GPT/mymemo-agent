@@ -215,6 +215,7 @@ describe("AgentCore canary dispatch infrastructure", () => {
 
 	it("limits workload artifact, event mapping, and secret authority", () => {
 		const source = terraformSource();
+		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");
 		const canaryProduction = readFileSync(
 			join(root, "apps", "agentcore-canary-runtime", "src", "production.ts"),
 			"utf8",
@@ -228,6 +229,8 @@ describe("AgentCore canary dispatch infrastructure", () => {
 		);
 		expect(source).not.toContain("canary_artifact_object_key_prefix");
 		expect(canaryProduction).not.toContain("artifactObjectKeyPrefix");
+		expect(readme).toContain("standard\n`objects/` namespace");
+		expect(readme).not.toContain("objects/agentcore-canary");
 		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(2);
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"runtime_trust"[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
