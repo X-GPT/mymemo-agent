@@ -383,6 +383,7 @@ describe("POST /v1/conversations", () => {
 			const body = (await res.json()) as {
 				conversationId: string;
 				title: string | null;
+				executionRuntime: ConversationExecutionRuntime;
 				scope: string;
 				createdAt: string;
 				lastActivityAt: string;
@@ -391,6 +392,7 @@ describe("POST /v1/conversations", () => {
 			expect(body).toEqual({
 				conversationId: body.conversationId,
 				title: null,
+				executionRuntime: "fargate",
 				scope: "collection",
 				createdAt: body.createdAt,
 				lastActivityAt: body.createdAt,
@@ -494,6 +496,7 @@ describe("GET /v1/conversations", () => {
 				conversations: Array<{
 					conversationId: string;
 					title: string | null;
+					executionRuntime: ConversationExecutionRuntime;
 					scope: string;
 					createdAt: string;
 					lastActivityAt: string;
@@ -509,6 +512,7 @@ describe("GET /v1/conversations", () => {
 			expect(firstBody.conversations[0]).toEqual({
 				conversationId: "conv-c",
 				title: "Recent regular C",
+				executionRuntime: "fargate",
 				scope: "collection",
 				createdAt: "2026-01-03T00:00:00.000Z",
 				lastActivityAt: "2026-01-03T00:00:00.000Z",
@@ -2163,6 +2167,9 @@ describe("Conversation execution runtime gate", () => {
 		});
 
 		expect(res.status).toBe(201);
+		expect(await res.json()).toMatchObject({
+			executionRuntime: expectedRuntime,
+		});
 		expect(created).toHaveLength(1);
 		expect(created[0]?.executionRuntime).toBe(expectedRuntime);
 	});

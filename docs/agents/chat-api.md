@@ -12,7 +12,7 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 `InternalIdentity` comes from `X-Member-Code` and `X-Partner-Code`; `X-Team-Code`, `X-Member-Name`, and `X-Partner-Name` are optional. `memberCode` becomes the owner (`user_id`). The server generates the Conversation UUID.
 
-Return `201 { conversationId, title, scope, createdAt, lastActivityAt, archivedAt }`. A new empty draft has `title: null` and `archivedAt: null`.
+Return `201 { conversationId, title, executionRuntime, scope, createdAt, lastActivityAt, archivedAt }`. The immutable `executionRuntime` is also present in the shared Conversation summaries returned by list and lifecycle routes. A new empty draft has `title: null` and `archivedAt: null`.
 
 ### Manage Conversations
 

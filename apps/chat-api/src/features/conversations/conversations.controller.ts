@@ -15,6 +15,7 @@ import {
 export interface ConversationSummary {
 	conversationId: string;
 	title: string | null;
+	executionRuntime: ConversationExecutionRuntime;
 	scope: ConversationScope;
 	createdAt: string;
 	lastActivityAt: string;
@@ -27,6 +28,7 @@ export function toConversationSummary(
 	return {
 		conversationId: conversation.conversationId,
 		title: conversation.title,
+		executionRuntime: conversation.executionRuntime,
 		scope: conversation.scope,
 		createdAt: conversation.createdAt.toISOString(),
 		lastActivityAt: conversation.lastActivityAt.toISOString(),

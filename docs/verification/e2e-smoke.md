@@ -42,8 +42,8 @@ value fails before the first HTTP request.
 
 | Target | Suite | Invocation | Credentials and network |
 | --- | --- | --- | --- |
-| Local compose | `full` | `bun run smoke:local` | The running trusted services hold the developer's OpenRouter, E2B, and AWS credentials. The smoke process needs only localhost access. |
-| Deployed internal ALB | `core` | `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh` | Run inside the VPC under the allowlisted smoke identity. The caller receives no provider, sandbox, AWS, or database secrets. |
+| Local compose | `full` | `bun run smoke:local` | The entrypoint expects `fargate`, matching local break-glass runtime selection. The running trusted services hold the developer's OpenRouter, E2B, and AWS credentials. The smoke process needs only localhost access. |
+| Deployed internal ALB | `core` | `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh` | The wrapper expects `agentcore`. Run inside the VPC under the synthetic identity targeted in both Statsig gates. The caller receives no provider, sandbox, AWS, or database secrets. |
 
 There is no staging target. Local-real is the pre-merge bar; the deployed core
 suite is the post-deploy bar. The smoke identity must be allowlisted in the
@@ -63,9 +63,16 @@ bun run smoke:local
 ```
 
 The command fixes the local base URL, gate-open expectation, seeded fixture
-member, and `full` suite. A pass prints the Conversation id and all Run ids so
-the evidence can be correlated with service logs. A failure exits non-zero with
-the assertion that failed.
+member, expected `fargate` runtime, and `full` suite. A pass prints the
+Conversation id and all Run ids so the evidence can be correlated with service
+logs. A failure exits non-zero with the assertion that failed.
+
+The deployed wrapper fixes the expected runtime to `agentcore`. After the
+synthetic identity is targeted in both gates, the public creation response must
+report that runtime before the client admits its first Run. A deployed pass is
+the gate for beginning the staged runtime rollout described in the
+[AgentCore rollout runbook](../runbooks/agentcore-rollout.md#deploy-order); it is
+not evidence for widening past the next observed stage.
 
 ## Deterministic verification of the verifier
 

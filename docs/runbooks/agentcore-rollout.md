@@ -151,17 +151,22 @@ publisher, consumer, or Runtime versions independently releasable.
    mapping remains enabled.
 5. In Statsig, target only the synthetic smoke identity in both the exposure
    gate and `mymemo_agent_agentcore_runtime_enabled`. Leave the runtime gate's
-   default OFF, then run the ordinary public-contract smoke from the
-   VPC-reachable environment:
+   default OFF. From the VPC-reachable environment, run the ordinary
+   public-contract smoke through its deployed wrapper, which pins
+   `AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME=agentcore`:
 
    ```sh
    AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh
    ```
 
-   Use the printed Conversation id to confirm `execution_runtime = 'agentcore'`,
-   a terminal Outcome, durable history, and a healthy Runtime invocation. This
-   is an ordinary Conversation through chat-api, not an operator-only creation
-   path.
+   The smoke exits nonzero before Run admission unless the public Conversation
+   creation response reports `executionRuntime: "agentcore"`. A pass then proves
+   done Outcomes, durable history, and Downloadable-artifact listing and
+   download for that ordinary Conversation through chat-api; it uses no database
+   or queue access. Retain the printed Conversation and Run ids for correlation
+   with Runtime telemetry. This pass licenses step 6's staged runtime-gate
+   rollout, but does not license setting the default ON or skipping the telemetry
+   checks at each stage.
 6. Roll out `mymemo_agent_agentcore_runtime_enabled` in deliberate Statsig
    stages. At every stage observe pending age, sustained publisher errors,
    queue/DLQ depth, AgentCore Outcomes, and Fargate health before increasing the
