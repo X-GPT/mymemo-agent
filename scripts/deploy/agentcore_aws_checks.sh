@@ -197,6 +197,9 @@ verify_agentcore_idle_dispatch() {
   consumer_concurrency="$(aws --profile mymemo lambda get-function-concurrency \
     --region "${region}" \
     --function-name "${expected_consumer_function_arn}")"
+  if [[ -z "${consumer_concurrency}" ]]; then
+    consumer_concurrency="{}"
+  fi
   jq -e '(.ReservedConcurrentExecutions // null) == null' \
     <<<"${consumer_concurrency}" >/dev/null
   [[ "$(aws --profile mymemo ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "disabled" ]]

@@ -83,7 +83,10 @@ function expectedWiring(): LiveWiring {
 	};
 }
 
-function verify(wiring: LiveWiring) {
+function verify(
+	wiring: LiveWiring,
+	options: { emptyConcurrencyResponse?: boolean } = {},
+) {
 	const script = `
 set -euo pipefail
 source "${checksPath}"
@@ -91,7 +94,11 @@ aws() {
   case "$*" in
     *"lambda get-event-source-mapping"*) printf '%s\n' "$MAPPING" ;;
     *"lambda get-function-configuration"*) printf '%s\n' "$CONSUMER" ;;
-    *"lambda get-function-concurrency"*) printf '%s\n' "$CONCURRENCY" ;;
+    *"lambda get-function-concurrency"*)
+      if [[ "$EMPTY_CONCURRENCY_RESPONSE" != "true" ]]; then
+        printf '%s\n' "$CONCURRENCY"
+      fi
+      ;;
     *"ssm get-parameter"*) printf '%s\n' "disabled" ;;
     *) exit 97 ;;
   esac
@@ -106,6 +113,9 @@ verify_agentcore_idle_dispatch us-west-2 "$TF_OUTPUT"
 			MAPPING: JSON.stringify(wiring.mapping),
 			CONSUMER: JSON.stringify(wiring.consumer),
 			CONCURRENCY: JSON.stringify(wiring.concurrency),
+			EMPTY_CONCURRENCY_RESPONSE: String(
+				options.emptyConcurrencyResponse ?? false,
+			),
 		},
 	});
 }
@@ -273,6 +283,11 @@ assert_agentcore_legacy_queues_empty us-west-2
 describe("production AgentCore idle dispatch wiring", () => {
 	it("accepts the enabled consumer and fail-closed SSM graph", () => {
 		const result = verify(expectedWiring());
+		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it("accepts AWS's empty response for unreserved consumer concurrency", () => {
+		const result = verify(expectedWiring(), { emptyConcurrencyResponse: true });
 		expect(result.status, result.stderr).toBe(0);
 	});
 
