@@ -67,6 +67,11 @@ informational telemetry. There is no alarm for it.
 
 ## Guarded deployment
 
+Use the full
+[AgentCore rollout and incident runbook](../../docs/runbooks/agentcore-rollout.md)
+for cutover preconditions, control changes, staged rollout, incident response,
+and disposable-Conversation rollback.
+
 Configure the repository variables named `AGENTCORE_*` that are read by
 `scripts/deploy/deploy_agentcore.sh`, then run the command from a clean `main`
 checkout that exactly matches `origin/main`:
