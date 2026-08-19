@@ -80,8 +80,6 @@ export function createProductionAgentCoreDispatchPublisher(options: {
 	};
 
 	return {
-		isEnabled: () => control.isEnabled(),
-		loadPendingAgeMs,
 		async publishPending(lockSignal): Promise<void> {
 			const signal = AbortSignal.any([options.signal, lockSignal]);
 			const publisher = createAgentCoreDispatchPublisher({

@@ -76,8 +76,6 @@ describe("publishAgentCoreDispatchTick", () => {
 			publishAgentCoreDispatchTick({
 				pool: new FakeLockPool(false),
 				publisher: {
-					isEnabled: async () => true,
-					loadPendingAgeMs: async () => 0,
 					async publishPending() {
 						publishCalls += 1;
 					},
@@ -92,53 +90,40 @@ describe("publishAgentCoreDispatchTick", () => {
 		]);
 	});
 
-	it("records pending age without opening a lock when the gate is disabled", async () => {
-		let connectCalls = 0;
-		let publishCalls = 0;
-		const logger = new RecordingLogger();
+	it("runs the complete publisher tick while holding the lock", async () => {
+		const events: string[] = [];
 		await expect(
 			publishAgentCoreDispatchTick({
 				pool: {
 					async connect() {
-						connectCalls += 1;
-						throw new Error("lock must not be attempted");
+						events.push("connect");
+						return {
+							async query(text: string) {
+								events.push(
+									text.includes("pg_try_advisory_lock") ? "lock" : "unlock",
+								);
+								return text.includes("pg_try_advisory_lock")
+									? { rows: [{ locked: true }] }
+									: { rows: [] };
+							},
+							on() {},
+							off() {},
+							release() {
+								events.push("release");
+							},
+						};
 					},
 				},
 				publisher: {
-					isEnabled: async () => false,
-					loadPendingAgeMs: async () => 5_000,
 					publishPending: async () => {
-						publishCalls += 1;
-					},
-				},
-				logger,
-			}),
-		).resolves.toBeUndefined();
-
-		expect(connectCalls).toBe(0);
-		expect(publishCalls).toBe(0);
-		expect(logger.infoRecords).toMatchObject([
-			{ outcome: "disabled", PendingAgeMs: 5_000 },
-		]);
-	});
-
-	it("publishes once while holding the lock", async () => {
-		let publishCalls = 0;
-		await expect(
-			publishAgentCoreDispatchTick({
-				pool: new FakeLockPool(true),
-				publisher: {
-					isEnabled: async () => true,
-					loadPendingAgeMs: async () => 0,
-					async publishPending() {
-						publishCalls += 1;
+						events.push("publish");
 					},
 				},
 				logger: new RecordingLogger(),
 			}),
 		).resolves.toBeUndefined();
 
-		expect(publishCalls).toBe(1);
+		expect(events).toEqual(["connect", "lock", "publish", "unlock", "release"]);
 	});
 });
 
@@ -190,8 +175,6 @@ describe("runAgentCoreDispatchPublisher", () => {
 		await runAgentCoreDispatchPublisher({
 			pool,
 			publisher: {
-				isEnabled: async () => true,
-				loadPendingAgeMs: async () => 0,
 				publishPending: async (lockSignal) => {
 					publishCalls += 1;
 					if (publishCalls === 1) {
@@ -227,8 +210,6 @@ describe("runAgentCoreDispatchPublisher", () => {
 		await runAgentCoreDispatchPublisher({
 			pool: new FakeLockPool(true),
 			publisher: {
-				isEnabled: async () => true,
-				loadPendingAgeMs: async () => 0,
 				publishPending: async () => {
 					publishCalls += 1;
 					if (publishCalls === 1) throw new Error("SSM unavailable");
@@ -255,8 +236,6 @@ describe("runAgentCoreDispatchPublisher", () => {
 		await runAgentCoreDispatchPublisher({
 			pool: new FakeLockPool(true),
 			publisher: {
-				isEnabled: async () => true,
-				loadPendingAgeMs: async () => 5_000,
 				publishPending: async () => {
 					throw new PublisherTickFailure(new Error("SSM unavailable"), 5_000);
 				},
