@@ -69,11 +69,11 @@ jobs:
         with:
           terraform_wrapper: false
       - run: bun install --frozen-lockfile
-      - run: bun test scripts/agentcore-canary-infra.test.ts scripts/deploy/agentcore_canary_plan.test.ts
-      - run: terraform -chdir=infra/agentcore-canary fmt -check
+      - run: bun test scripts/agentcore-infra.test.ts scripts/deploy/agentcore_plan.test.ts
+      - run: terraform -chdir=infra/agentcore fmt -check
       - name: Verify backendless provider initialization and lock file
-        run: terraform -chdir=infra/agentcore-canary init -backend=false -lockfile=readonly
-      - run: terraform -chdir=infra/agentcore-canary validate
+        run: terraform -chdir=infra/agentcore init -backend=false -lockfile=readonly
+      - run: terraform -chdir=infra/agentcore validate
 
   # The agent-worker image build lives in worker-image.yml, path-filtered.
 

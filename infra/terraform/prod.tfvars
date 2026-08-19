@@ -23,9 +23,9 @@ assign_public_ip = true
 
 chat_api_desired_count     = 1
 agent_worker_desired_count = 1
-# The shared AgentCore queue, SSM control, and KMS key are not deployed yet.
-# Keep the Dispatch publisher dormant until that infrastructure exists.
-agentcore_dispatch_publisher_desired_count = 0
+# The dedicated publisher remains a one-task service in steady state. Its
+# advisory lock, rather than task count, is the singleton authority.
+agentcore_dispatch_publisher_desired_count = 1
 
 e2b_template                        = "sandbox-template-prod"
 worker_e2b_template                 = "mymemo-agent-sandbox"

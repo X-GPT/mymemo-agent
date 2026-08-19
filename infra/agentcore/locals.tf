@@ -1,5 +1,5 @@
 locals {
-  name_prefix = "mymemo-agent-agentcore-canary-${var.environment}"
+  name_prefix = "mymemo-agent-agentcore-${var.environment}"
   vpc_id      = data.terraform_remote_state.mymemo_agent.outputs.shared_infra.vpc_id
 
   exact_secret_arn_pattern = "^arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:[A-Za-z0-9/_+=.@-]+$"
@@ -12,7 +12,7 @@ locals {
   ]
 
   lambda_security_group_ids = [
-    aws_security_group.canary.id,
+    aws_security_group.runtime.id,
     data.terraform_remote_state.mymemo_agent.outputs.service_security_group_id,
   ]
   runtime_security_group_ids = concat(
@@ -29,7 +29,7 @@ locals {
 
   runtime_environment = {
     AWS_REGION                                = var.aws_region
-    AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = aws_ssm_parameter.enabled.name
+    AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = aws_ssm_parameter.dispatch_enabled.name
     AGENT_DATABASE_URL_SECRET_ARN             = var.agent_database_url_secret_arn
     KB_DATABASE_URL_SECRET_ARN                = var.kb_database_url_secret_arn
     OPENROUTER_API_KEY_SECRET_ARN             = var.openrouter_api_key_secret_arn
@@ -47,7 +47,7 @@ locals {
   }
 
   lambda_common_environment = {
-    AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = aws_ssm_parameter.enabled.name
+    AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = aws_ssm_parameter.dispatch_enabled.name
     AGENT_DATABASE_URL_SECRET_ARN             = var.agent_database_url_secret_arn
     AGENTCORE_DISPATCH_QUEUE_URL              = aws_sqs_queue.dispatch.url
     RDS_CA_BUNDLE_PATH                        = "/var/task/rds-global-bundle.pem"

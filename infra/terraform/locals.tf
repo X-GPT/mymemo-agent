@@ -11,7 +11,7 @@ locals {
 
   agentcore_dispatch_queue_name = coalesce(
     var.agentcore_dispatch_queue_name,
-    "mymemo-agent-agentcore-canary-${var.environment}-dispatch",
+    "mymemo-agent-agentcore-${var.environment}-dispatch",
   )
   agentcore_dispatch_enabled_parameter_name = coalesce(
     var.agentcore_dispatch_enabled_parameter_name,
@@ -19,7 +19,7 @@ locals {
   )
   agentcore_dispatch_queue_kms_alias_name = coalesce(
     var.agentcore_dispatch_queue_kms_alias_name,
-    "alias/mymemo-agent-agentcore-canary-${var.environment}",
+    "alias/mymemo-agent-agentcore-${var.environment}",
   )
   agentcore_dispatch_queue_url             = "https://sqs.${var.aws_region}.amazonaws.com/${data.aws_caller_identity.current.account_id}/${local.agentcore_dispatch_queue_name}"
   agentcore_dispatch_queue_arn             = "arn:${data.aws_partition.current.partition}:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.agentcore_dispatch_queue_name}"

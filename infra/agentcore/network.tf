@@ -30,13 +30,13 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private[each.key].id
 }
 
-resource "aws_security_group" "canary" {
+resource "aws_security_group" "runtime" {
   name        = "${local.name_prefix}-runtime"
-  description = "Outbound-only security group for dormant AgentCore canary resources"
+  description = "Outbound-only security group for the production AgentCore Runtime and consumer"
   vpc_id      = local.vpc_id
 
   egress {
-    description = "Outbound egress in the retained private no-route network"
+    description = "Outbound egress from the AgentCore private network"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"

@@ -141,19 +141,19 @@ variable "agentcore_dispatch_publisher_interval_ms" {
 }
 
 variable "agentcore_dispatch_queue_name" {
-  description = "Existing AgentCore dispatch queue name. Defaults to the transitional canary name until the production-infrastructure rename."
+  description = "Production AgentCore Dispatch queue name."
   type        = string
   default     = null
 }
 
 variable "agentcore_dispatch_enabled_parameter_name" {
-  description = "Existing fail-closed AgentCore dispatch SSM parameter name. Defaults to the transitional canary path until the production-infrastructure rename."
+  description = "Fail-closed production AgentCore Dispatch SSM parameter name."
   type        = string
   default     = null
 }
 
 variable "agentcore_dispatch_queue_kms_alias_name" {
-  description = "Alias of the customer-managed KMS key encrypting the AgentCore dispatch queue."
+  description = "Alias of the customer-managed KMS key encrypting the production AgentCore Dispatch queue."
   type        = string
   default     = null
 }

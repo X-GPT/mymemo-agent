@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
-	classifyAgentCoreCanaryPlan,
+	classifyAgentCorePlan,
 	verifyAgentCoreProviderLock,
-} from "./classify_agentcore_canary_plan";
+} from "./classify_agentcore_plan";
 
 function plan(changes: unknown[]) {
 	return { format_version: "1.2", resource_changes: changes };
@@ -46,13 +46,13 @@ function runtimeTrust(sourceAccount: string, sourceArn: string) {
 	});
 }
 
-describe("AgentCore canary Terraform plan classification", () => {
-	it("accepts additive and in-place changes only for canary-owned resources", () => {
+describe("production AgentCore Terraform plan classification", () => {
+	it("accepts additive and in-place changes only for production-owned resources", () => {
 		expect(
-			classifyAgentCoreCanaryPlan(
+			classifyAgentCorePlan(
 				plan([
 					change(
-						"aws_bedrockagentcore_agent_runtime.canary",
+						"aws_bedrockagentcore_agent_runtime.runtime",
 						"aws_bedrockagentcore_agent_runtime",
 						["create"],
 					),
@@ -64,109 +64,131 @@ describe("AgentCore canary Terraform plan classification", () => {
 		).toEqual({ safe: true, reasons: [] });
 	});
 
-	it("rejects deletion or replacement of retained resources", () => {
-		for (const actions of [
-			["delete"],
-			["delete", "create"],
-			["create", "delete"],
-		]) {
-			const result = classifyAgentCoreCanaryPlan(
-				plan([
-					change(
-						"aws_lambda_function.consumer",
-						"aws_lambda_function",
-						actions,
-					),
-				]),
-			);
-			expect(result.safe).toBe(false);
-			expect(result.reasons.join(" ")).toContain("deletion or replacement");
+	it("allows only exact one-time canary-to-production replacements", () => {
+		for (const [address, type, field, before, after] of [
+			[
+				"aws_bedrockagentcore_agent_runtime.runtime",
+				"aws_bedrockagentcore_agent_runtime",
+				"agent_runtime_name",
+				"mymemo_agentcore_canary_prod",
+				"mymemo_agentcore_prod",
+			],
+			[
+				"aws_ecr_repository.runtime",
+				"aws_ecr_repository",
+				"name",
+				"mymemo/agentcore-canary-runtime",
+				"mymemo/agentcore-runtime",
+			],
+			[
+				"aws_lambda_function.consumer",
+				"aws_lambda_function",
+				"function_name",
+				"mymemo-agent-agentcore-canary-prod-consumer",
+				"mymemo-agent-agentcore-prod-consumer",
+			],
+			[
+				"aws_sqs_queue.dispatch",
+				"aws_sqs_queue",
+				"name",
+				"mymemo-agent-agentcore-canary-prod-dispatch",
+				"mymemo-agent-agentcore-prod-dispatch",
+			],
+		] as const) {
+			expect(
+				classifyAgentCorePlan(
+					plan([
+						change(
+							address,
+							type,
+							["delete", "create"],
+							{ [field]: before },
+							{ [field]: after },
+						),
+					]),
+				),
+			).toEqual({ safe: true, reasons: [] });
 		}
+
+		const rejected = classifyAgentCorePlan(
+			plan([
+				change(
+					"aws_sqs_queue.dispatch",
+					"aws_sqs_queue",
+					["delete", "create"],
+					{ name: "mymemo-agent-agentcore-prod-dispatch" },
+					{ name: "unexpected" },
+				),
+			]),
+		);
+		expect(rejected.safe).toBe(false);
+		expect(rejected.reasons.join(" ")).toContain(
+			"unapproved deletion or replacement",
+		);
 	});
 
-	it("allows deletion only for the exact retired control-plane resources", () => {
+	it("allows deletion only for exact retired publisher and canary resources", () => {
 		for (const [address, type] of [
-			["aws_lambda_function.control", "aws_lambda_function"],
-			["aws_lambda_function.preflight", "aws_lambda_function"],
-			["aws_iam_role.control", "aws_iam_role"],
-			["aws_iam_role.preflight", "aws_iam_role"],
-			["aws_iam_role_policy.control", "aws_iam_role_policy"],
-			["aws_iam_role_policy.control_base", "aws_iam_role_policy"],
-			["aws_iam_role_policy.preflight", "aws_iam_role_policy"],
-			["aws_eip.campaign[0]", "aws_eip"],
-			["aws_nat_gateway.campaign[0]", "aws_nat_gateway"],
-			['aws_route.campaign_egress["private-a"]', "aws_route"],
+			["aws_lambda_function.publisher", "aws_lambda_function"],
+			["aws_iam_role.publisher", "aws_iam_role"],
+			["aws_iam_role_policy.publisher", "aws_iam_role_policy"],
+			["aws_cloudwatch_event_rule.repair", "aws_cloudwatch_event_rule"],
+			["aws_cloudwatch_event_target.repair", "aws_cloudwatch_event_target"],
+			["aws_lambda_permission.repair", "aws_lambda_permission"],
 			[
-				"aws_cloudwatch_metric_alarm.dormant_runtime_sessions",
+				'aws_cloudwatch_metric_alarm.incident["PoisonDispatch"]',
 				"aws_cloudwatch_metric_alarm",
 			],
 			[
-				'aws_cloudwatch_metric_alarm.lambda_errors["control"]',
-				"aws_cloudwatch_metric_alarm",
-			],
-			[
-				'aws_cloudwatch_metric_alarm.lambda_throttles["preflight"]',
-				"aws_cloudwatch_metric_alarm",
-			],
-			[
-				'aws_cloudwatch_metric_alarm.incident["CampaignDeadlineBreach"]',
-				"aws_cloudwatch_metric_alarm",
-			],
-			[
-				'aws_cloudwatch_metric_alarm.validation["Acquired"]',
+				'aws_cloudwatch_metric_alarm.lambda_errors["publisher"]',
 				"aws_cloudwatch_metric_alarm",
 			],
 		] as const) {
 			expect(
-				classifyAgentCoreCanaryPlan(plan([change(address, type, ["delete"])])),
+				classifyAgentCorePlan(plan([change(address, type, ["delete"])])),
 			).toEqual({ safe: true, reasons: [] });
 		}
 
-		for (const actions of [["create"], ["update"], ["delete", "create"]]) {
-			const result = classifyAgentCoreCanaryPlan(
-				plan([
-					change("aws_lambda_function.control", "aws_lambda_function", actions),
+		const result = classifyAgentCorePlan(
+			plan([
+				change("aws_lambda_function.publisher", "aws_lambda_function", [
+					"create",
 				]),
-			);
-			expect(result.safe).toBe(false);
-			expect(result.reasons.join(" ")).toContain("retired control-plane");
-		}
+			]),
+		);
+		expect(result.safe).toBe(false);
+		expect(result.reasons.join(" ")).toContain("may only be deleted");
 	});
 
-	it("rejects removal from state", () => {
-		const result = classifyAgentCoreCanaryPlan(
+	it("rejects removal from state and resources outside the shared stack", () => {
+		const forgotten = classifyAgentCorePlan(
 			plan([
 				change("aws_lambda_function.consumer", "aws_lambda_function", [
 					"forget",
 				]),
 			]),
 		);
-		expect(result.reasons).toContain(
+		expect(forgotten.reasons).toContain(
 			"aws_lambda_function.consumer requests removal from Terraform state",
 		);
-	});
 
-	it("rejects shared resources, modules, and campaign-only authority", () => {
 		for (const [address, type] of [
 			["aws_ecs_service.agent_worker", "aws_ecs_service"],
+			["aws_ecs_service.agentcore_dispatch_publisher", "aws_ecs_service"],
 			["aws_db_instance.agent", "aws_db_instance"],
 			["module.shared.aws_vpc.main", "aws_vpc"],
-			["aws_iam_role.deployment", "aws_iam_role"],
-			["aws_iam_role.task", "aws_iam_role"],
-			["aws_iam_role.fault_injection", "aws_iam_role"],
-			["aws_iam_role.campaign_launch", "aws_iam_role"],
 		]) {
-			const result = classifyAgentCoreCanaryPlan(
+			const result = classifyAgentCorePlan(
 				plan([change(address, type, ["create"])]),
 			);
 			expect(result.reasons).toContain(
-				`${address} is outside canary ownership (${type})`,
+				`${address} is outside production AgentCore ownership (${type})`,
 			);
 		}
 	});
 
-	it("rejects every workload trust mutation", () => {
-		const result = classifyAgentCoreCanaryPlan(
+	it("rejects workload trust mutation", () => {
+		const result = classifyAgentCorePlan(
 			plan([
 				change(
 					"aws_iam_role.runtime",
@@ -182,11 +204,11 @@ describe("AgentCore canary Terraform plan classification", () => {
 		);
 	});
 
-	it("accepts only the exact Lambda and Runtime creation trusts", () => {
+	it("accepts only the exact consumer and production Runtime creation trusts", () => {
 		expect(
-			classifyAgentCoreCanaryPlan(
+			classifyAgentCorePlan(
 				plan([
-					change("aws_iam_role.publisher", "aws_iam_role", ["create"], null, {
+					change("aws_iam_role.consumer", "aws_iam_role", ["create"], null, {
 						assume_role_policy: lambdaTrust,
 					}),
 				]),
@@ -194,9 +216,9 @@ describe("AgentCore canary Terraform plan classification", () => {
 		).toEqual({ safe: true, reasons: [] });
 
 		const exactRuntimeArn =
-			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_canary_prod-*";
+			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_prod-*";
 		expect(
-			classifyAgentCoreCanaryPlan(
+			classifyAgentCorePlan(
 				plan([
 					change("aws_iam_role.runtime", "aws_iam_role", ["create"], null, {
 						assume_role_policy: runtimeTrust("637423444544", exactRuntimeArn),
@@ -207,7 +229,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 
 		for (const [address, trust] of [
 			[
-				"aws_iam_role.publisher",
+				"aws_iam_role.consumer",
 				JSON.stringify({
 					Version: "2012-10-17",
 					Statement: [
@@ -228,7 +250,7 @@ describe("AgentCore canary Terraform plan classification", () => {
 				),
 			],
 		] as const) {
-			const result = classifyAgentCoreCanaryPlan(
+			const result = classifyAgentCorePlan(
 				plan([
 					change(address, "aws_iam_role", ["create"], null, {
 						assume_role_policy: trust,

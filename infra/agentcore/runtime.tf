@@ -1,7 +1,7 @@
 resource "aws_ecr_repository" "runtime" {
-  name                 = "mymemo/agentcore-canary-runtime"
+  name                 = var.runtime_repository_name
   image_tag_mutability = "IMMUTABLE"
-  force_delete         = false
+  force_delete         = var.runtime_repository_force_delete
 
   image_scanning_configuration {
     scan_on_push = true
@@ -10,11 +10,15 @@ resource "aws_ecr_repository" "runtime" {
   encryption_configuration {
     encryption_type = "AES256"
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
-resource "aws_bedrockagentcore_agent_runtime" "canary" {
-  agent_runtime_name    = "mymemo_agentcore_canary_${var.environment}"
-  description           = "Dormant synthetic-only MyMemo AgentCore canary"
+resource "aws_bedrockagentcore_agent_runtime" "runtime" {
+  agent_runtime_name    = "mymemo_agentcore_${var.environment}"
+  description           = "Production MyMemo AgentCore execution Runtime"
   role_arn              = aws_iam_role.runtime.arn
   environment_variables = local.runtime_environment
 

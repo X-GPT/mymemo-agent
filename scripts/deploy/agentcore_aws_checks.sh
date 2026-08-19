@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-verify_agentcore_canary_current_secrets() {
+verify_agentcore_current_secrets() {
   local region="$1"
   local terraform_output="$2"
   local secret_arn
@@ -15,7 +15,7 @@ verify_agentcore_canary_current_secrets() {
   done < <(jq -r '.runtime_secret_arns.value[]' <<<"${terraform_output}")
 }
 
-verify_agentcore_canary_alarms() {
+verify_agentcore_alarms() {
   local region="$1"
   local terraform_output="$2"
   local expected_alarms
@@ -38,6 +38,7 @@ verify_agentcore_canary_alarms() {
           statistic: .Statistic,
           period: .Period,
           evaluation_periods: .EvaluationPeriods,
+          datapoints_to_alarm: .DatapointsToAlarm,
           comparison_operator: .ComparisonOperator,
           threshold: .Threshold,
           treat_missing_data: .TreatMissingData,
@@ -49,30 +50,21 @@ verify_agentcore_canary_alarms() {
   ' <<<"${live_alarms}" >/dev/null
 }
 
-verify_agentcore_canary_disabled_dispatch() {
+verify_agentcore_idle_dispatch() {
   local region="$1"
   local terraform_output="$2"
   local mapping_uuid
-  local repair_rule
-  local repair_rule_arn
   local dispatch_queue_arn
   local expected_consumer_function_arn
-  local expected_publisher_function_arn
   local enabled_parameter
   local mapping
   local consumer_configuration
   local consumer_concurrency
-  local rule
-  local targets
-  local publisher_policy
 
   mapping_uuid="$(jq -r '.consumer_event_source_mapping_uuid.value' <<<"${terraform_output}")"
-  repair_rule="$(jq -r '.repair_rule_name.value' <<<"${terraform_output}")"
-  repair_rule_arn="$(jq -r '.repair_rule_arn.value' <<<"${terraform_output}")"
   dispatch_queue_arn="$(jq -r '.dispatch_queue_arn.value' <<<"${terraform_output}")"
   expected_consumer_function_arn="$(jq -r '.consumer_function_arn.value' <<<"${terraform_output}")"
-  expected_publisher_function_arn="$(jq -r '.publisher_function_arn.value' <<<"${terraform_output}")"
-  enabled_parameter="$(jq -r '.enabled_parameter_name.value' <<<"${terraform_output}")"
+  enabled_parameter="$(jq -r '.dispatch_enabled_parameter_name.value' <<<"${terraform_output}")"
 
   mapping="$(aws --profile mymemo lambda get-event-source-mapping \
     --region "${region}" \
@@ -81,7 +73,7 @@ verify_agentcore_canary_disabled_dispatch() {
     --arg queueArn "${dispatch_queue_arn}" \
     --arg functionArn "${expected_consumer_function_arn}" \
     '.BatchSize == 1
-      and .State == "Disabled"
+      and .State == "Enabled"
       and .EventSourceArn == $queueArn
       and .FunctionArn == $functionArn
       and (.FunctionResponseTypes | index("ReportBatchItemFailures")) != null' \
@@ -98,43 +90,10 @@ verify_agentcore_canary_disabled_dispatch() {
     --function-name "${expected_consumer_function_arn}")"
   jq -e '(.ReservedConcurrentExecutions // null) == null' \
     <<<"${consumer_concurrency}" >/dev/null
-
-  rule="$(aws --profile mymemo events describe-rule \
-    --region "${region}" \
-    --name "${repair_rule}")"
-  jq -e \
-    --arg ruleArn "${repair_rule_arn}" \
-    '.Arn == $ruleArn and .State == "DISABLED" and .ScheduleExpression == "rate(1 minute)"' \
-    <<<"${rule}" >/dev/null
-  targets="$(aws --profile mymemo events list-targets-by-rule \
-    --region "${region}" \
-    --rule "${repair_rule}")"
-  jq -e --arg publisherArn "${expected_publisher_function_arn}" \
-    '.Targets == [{Arn: $publisherArn, Id: "shared-publisher"}]' \
-    <<<"${targets}" >/dev/null
-  publisher_policy="$(aws --profile mymemo lambda get-policy \
-    --region "${region}" \
-    --function-name "${expected_publisher_function_arn}")"
-  jq -e \
-    --arg publisherArn "${expected_publisher_function_arn}" \
-    --arg ruleArn "${repair_rule_arn}" \
-    '.Policy
-      | fromjson
-      | [.Statement[] | select(.Sid == "AllowEventBridgeRepair")] as $statements
-      | ($statements | length) == 1
-        and $statements[0] == {
-          Sid: "AllowEventBridgeRepair",
-          Effect: "Allow",
-          Principal: {Service: "events.amazonaws.com"},
-          Action: "lambda:InvokeFunction",
-          Resource: $publisherArn,
-          Condition: {ArnLike: {"AWS:SourceArn": $ruleArn}}
-        }' \
-    <<<"${publisher_policy}" >/dev/null
   [[ "$(aws --profile mymemo ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "disabled" ]]
 }
 
-verify_agentcore_canary_runtime_configuration() {
+verify_agentcore_runtime_configuration() {
   local region="$1"
   local terraform_output="$2"
   local expected_digest="$3"
@@ -175,7 +134,7 @@ verify_agentcore_canary_runtime_configuration() {
     '{runtime:($runtime | fromjson), endpoint:($endpoint | fromjson)}'
 }
 
-verify_agentcore_canary_consumer_runtime_authority() {
+verify_agentcore_consumer_runtime_authority() {
   local region="$1"
   local terraform_output="$2"
   local runtime_arn

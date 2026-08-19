@@ -27,7 +27,7 @@ data "aws_iam_policy_document" "runtime_trust" {
     condition {
       test     = "ArnLike"
       variable = "aws:SourceArn"
-      values   = ["arn:aws:bedrock-agentcore:${var.aws_region}:${var.aws_account_id}:runtime/mymemo_agentcore_canary_prod-*"]
+      values   = ["arn:aws:bedrock-agentcore:${var.aws_region}:${var.aws_account_id}:runtime/mymemo_agentcore_prod-*"]
     }
   }
 }
@@ -39,7 +39,7 @@ resource "aws_iam_role" "runtime" {
 
 data "aws_iam_policy_document" "runtime" {
   statement {
-    sid       = "PullFromCanaryRuntimeRepoOnly"
+    sid       = "PullFromRuntimeRepoOnly"
     actions   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
     resources = [aws_ecr_repository.runtime.arn]
   }
@@ -69,28 +69,32 @@ data "aws_iam_policy_document" "runtime" {
   }
 
   statement {
-    sid       = "ReadFailClosedCanaryFlag"
+    sid       = "ReadFailClosedDispatchControl"
     actions   = ["ssm:GetParameter"]
-    resources = [aws_ssm_parameter.enabled.arn]
+    resources = [aws_ssm_parameter.dispatch_enabled.arn]
   }
 
   statement {
-    sid       = "WriteSyntheticArtifactsOnly"
-    actions   = ["s3:AbortMultipartUpload", "s3:PutObject"]
+    sid = "WriteProductionArtifacts"
+    actions = [
+      "s3:AbortMultipartUpload",
+      "s3:DeleteObject",
+      "s3:PutObject",
+    ]
     resources = ["arn:aws:s3:::${var.artifact_bucket_name}/objects/*"]
   }
 
   statement {
-    sid = "ManageCanaryRuntimeLogGroup"
+    sid = "ManageRuntimeLogGroup"
     actions = [
       "logs:CreateLogGroup",
       "logs:DescribeLogStreams",
     ]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agentcore_canary_${var.environment}-*"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agentcore_${var.environment}-*"]
   }
 
   statement {
-    sid       = "ConfigureCanaryRuntimeLogPolicy"
+    sid       = "ConfigureRuntimeLogPolicy"
     actions   = ["logs:PutResourcePolicy"]
     resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:*"]
   }
@@ -102,12 +106,12 @@ data "aws_iam_policy_document" "runtime" {
   }
 
   statement {
-    sid = "WriteCanaryRuntimeLogs"
+    sid = "WriteRuntimeLogs"
     actions = [
       "logs:CreateLogStream",
       "logs:PutLogEvents",
     ]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agentcore_canary_${var.environment}-*:log-stream:*"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agentcore_${var.environment}-*:log-stream:*"]
   }
 
   statement {
@@ -122,7 +126,7 @@ data "aws_iam_policy_document" "runtime" {
   }
 
   statement {
-    sid       = "BoundedCanaryMetrics"
+    sid       = "BoundedDispatchMetrics"
     actions   = ["cloudwatch:PutMetricData"]
     resources = ["*"]
 
@@ -145,11 +149,6 @@ resource "aws_iam_role_policy" "runtime" {
   name   = "${local.name_prefix}-runtime"
   role   = aws_iam_role.runtime.id
   policy = data.aws_iam_policy_document.runtime.json
-}
-
-resource "aws_iam_role" "publisher" {
-  name               = "${local.name_prefix}-publisher"
-  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
 }
 
 resource "aws_iam_role" "consumer" {
@@ -205,46 +204,22 @@ data "aws_iam_policy_document" "lambda_base" {
   }
 
   statement {
-    sid       = "ReadFailClosedCanaryFlag"
+    sid       = "ReadFailClosedDispatchControl"
     actions   = ["ssm:GetParameter"]
-    resources = [aws_ssm_parameter.enabled.arn]
+    resources = [aws_ssm_parameter.dispatch_enabled.arn]
   }
 
   statement {
-    sid       = "DecryptCanaryQueue"
+    sid       = "DecryptDispatchQueue"
     actions   = ["kms:Decrypt"]
-    resources = [aws_kms_key.canary.arn]
+    resources = [aws_kms_key.dispatch.arn]
   }
-}
-
-resource "aws_iam_role_policy" "publisher_base" {
-  name   = "${local.name_prefix}-publisher-base"
-  role   = aws_iam_role.publisher.id
-  policy = data.aws_iam_policy_document.lambda_base.json
 }
 
 resource "aws_iam_role_policy" "consumer_base" {
   name   = "${local.name_prefix}-consumer-base"
   role   = aws_iam_role.consumer.id
   policy = data.aws_iam_policy_document.lambda_base.json
-}
-
-data "aws_iam_policy_document" "publisher" {
-  statement {
-    actions   = ["sqs:GetQueueAttributes", "sqs:SendMessage"]
-    resources = [aws_sqs_queue.dispatch.arn]
-  }
-
-  statement {
-    actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
-    resources = [aws_kms_key.canary.arn]
-  }
-}
-
-resource "aws_iam_role_policy" "publisher" {
-  name   = "${local.name_prefix}-publisher"
-  role   = aws_iam_role.publisher.id
-  policy = data.aws_iam_policy_document.publisher.json
 }
 
 data "aws_iam_policy_document" "consumer" {
@@ -261,8 +236,8 @@ data "aws_iam_policy_document" "consumer" {
   statement {
     actions = ["bedrock-agentcore:InvokeAgentRuntime"]
     resources = [
-      aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn,
-      "${aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn}/runtime-endpoint/DEFAULT",
+      aws_bedrockagentcore_agent_runtime.runtime.agent_runtime_arn,
+      "${aws_bedrockagentcore_agent_runtime.runtime.agent_runtime_arn}/runtime-endpoint/DEFAULT",
     ]
   }
 

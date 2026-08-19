@@ -1,19 +1,19 @@
-resource "aws_kms_key" "canary" {
-  description             = "AgentCore canary queue and log encryption"
+resource "aws_kms_key" "dispatch" {
+  description             = "Production AgentCore dispatch queue encryption"
   enable_key_rotation     = true
   deletion_window_in_days = 30
 }
 
-resource "aws_kms_alias" "canary" {
+resource "aws_kms_alias" "dispatch" {
   name          = "alias/${local.name_prefix}"
-  target_key_id = aws_kms_key.canary.key_id
+  target_key_id = aws_kms_key.dispatch.key_id
 }
 
 resource "aws_sqs_queue" "dead_letter" {
   name                       = "${local.name_prefix}-dlq"
   message_retention_seconds  = 86400
   visibility_timeout_seconds = 300
-  kms_master_key_id          = aws_kms_key.canary.arn
+  kms_master_key_id          = aws_kms_key.dispatch.arn
   sqs_managed_sse_enabled    = false
 }
 
@@ -22,7 +22,7 @@ resource "aws_sqs_queue" "dispatch" {
   message_retention_seconds  = 86400
   visibility_timeout_seconds = 180
   receive_wait_time_seconds  = 20
-  kms_master_key_id          = aws_kms_key.canary.arn
+  kms_master_key_id          = aws_kms_key.dispatch.arn
   sqs_managed_sse_enabled    = false
 
   redrive_policy = jsonencode({
@@ -31,7 +31,7 @@ resource "aws_sqs_queue" "dispatch" {
   })
 }
 
-resource "aws_ssm_parameter" "enabled" {
+resource "aws_ssm_parameter" "dispatch_enabled" {
   name        = "/mymemo/agentcore-dispatch/${var.environment}/enabled"
   description = "Fail-closed AgentCore dispatch control"
   type        = "String"
