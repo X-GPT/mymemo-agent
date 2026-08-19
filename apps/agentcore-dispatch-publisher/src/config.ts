@@ -73,7 +73,7 @@ function validateQueueUrl(value: string, region: string): string {
 		return value;
 	} catch {
 		throw new Error(
-			"CANARY_DISPATCH_QUEUE_URL must be an HTTPS SQS URL in AWS_REGION",
+			"AGENTCORE_DISPATCH_QUEUE_URL must be an HTTPS SQS URL in AWS_REGION",
 		);
 	}
 }
@@ -81,7 +81,7 @@ function validateQueueUrl(value: string, region: string): string {
 function validateParameterName(value: string): string {
 	assert(
 		/^[A-Za-z0-9_.\-/]+$/.test(value),
-		"CANARY_ENABLED_PARAMETER_NAME must be a valid SSM parameter name",
+		"AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME must be a valid SSM parameter name",
 	);
 	return value;
 }
@@ -107,11 +107,11 @@ export function loadAgentCoreDispatchPublisherConfigFromEnv(
 	const rawDatabaseUrl = required(env, "AGENT_DATABASE_URL");
 	const awsRegion = validateAwsRegion(required(env, "AWS_REGION"));
 	const queueUrl = validateQueueUrl(
-		required(env, "CANARY_DISPATCH_QUEUE_URL"),
+		required(env, "AGENTCORE_DISPATCH_QUEUE_URL"),
 		awsRegion,
 	);
 	const enabledParameterName = validateParameterName(
-		required(env, "CANARY_ENABLED_PARAMETER_NAME"),
+		required(env, "AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME"),
 	);
 	const agentDatabaseUrl = validateDatabaseUrl(
 		resolveDatabaseUrl(rawDatabaseUrl, env.DB_PASSWORD, env.DB_SSL),

@@ -7,9 +7,10 @@ function baseEnv(): Record<string, string | undefined> {
 		DB_PASSWORD: "secret",
 		DB_SSL: "disable",
 		AWS_REGION: "us-west-2",
-		CANARY_DISPATCH_QUEUE_URL:
+		AGENTCORE_DISPATCH_QUEUE_URL:
 			"https://sqs.us-west-2.amazonaws.com/123456789012/agentcore-dispatch",
-		CANARY_ENABLED_PARAMETER_NAME: "/mymemo/agentcore-dispatch/enabled",
+		AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
+			"/mymemo/agentcore-dispatch/enabled",
 		LOG_LEVEL: "info",
 	};
 }
@@ -71,25 +72,28 @@ describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
 		["AGENT_DATABASE_URL", "https://publisher@example.com/mymemo_agent"],
 		["AWS_REGION", "us west 2"],
 		["AWS_REGION", " us-west-2"],
-		["CANARY_DISPATCH_QUEUE_URL", "https://example.com/123456789012/dispatch"],
 		[
-			"CANARY_DISPATCH_QUEUE_URL",
+			"AGENTCORE_DISPATCH_QUEUE_URL",
+			"https://example.com/123456789012/dispatch",
+		],
+		[
+			"AGENTCORE_DISPATCH_QUEUE_URL",
 			"https://sqs.us-east-1.amazonaws.com/123456789012/dispatch",
 		],
 		[
-			"CANARY_DISPATCH_QUEUE_URL",
+			"AGENTCORE_DISPATCH_QUEUE_URL",
 			"https://sqs.us-west-2.amazonaws.com/not-an-account/dispatch",
 		],
 		[
-			"CANARY_DISPATCH_QUEUE_URL",
+			"AGENTCORE_DISPATCH_QUEUE_URL",
 			"https://sqs.us-west-2.amazonaws.com/123456789012/dispatch/extra",
 		],
 		[
-			"CANARY_DISPATCH_QUEUE_URL",
+			"AGENTCORE_DISPATCH_QUEUE_URL",
 			"https://sqs.us-west-2.amazonaws.com/123456789012/dispatch.fifo",
 		],
-		["CANARY_ENABLED_PARAMETER_NAME", "/mymemo/dispatch enabled"],
-		["CANARY_ENABLED_PARAMETER_NAME", " /mymemo/dispatch/enabled"],
+		["AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME", "/mymemo/dispatch enabled"],
+		["AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME", " /mymemo/dispatch/enabled"],
 	] as const) {
 		it(`refuses malformed ${key}: ${value}`, () => {
 			const env = baseEnv();
@@ -103,8 +107,8 @@ describe("loadAgentCoreDispatchPublisherConfigFromEnv", () => {
 	for (const key of [
 		"AGENT_DATABASE_URL",
 		"AWS_REGION",
-		"CANARY_DISPATCH_QUEUE_URL",
-		"CANARY_ENABLED_PARAMETER_NAME",
+		"AGENTCORE_DISPATCH_QUEUE_URL",
+		"AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME",
 	]) {
 		it(`refuses to start without ${key}`, () => {
 			const env = baseEnv();

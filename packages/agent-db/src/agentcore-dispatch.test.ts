@@ -11,6 +11,7 @@ import {
 	acquireAgentCoreDispatchTx,
 	claimAgentCoreDispatchesTx,
 	confirmAgentCoreDispatchPublishedTx,
+	loadAgentCoreDispatchRunStatus,
 	loadOldestUnpublishedAgentCoreDispatchAdmittedAt,
 	recordAgentCoreDispatchInTx,
 	requestAgentCoreDispatchReplayTx,
@@ -90,6 +91,26 @@ async function admitRunWithDispatch(): Promise<void> {
 }
 
 describe("Run-keyed AgentCore dispatch outbox", () => {
+	it("reads the exact dispatched Run status for the consumer pre-check", async () => {
+		await admitRunWithDispatch();
+
+		await expect(
+			loadAgentCoreDispatchRunStatus(tdb.db, dispatch),
+		).resolves.toBe("queued");
+		await expect(
+			loadAgentCoreDispatchRunStatus(tdb.db, {
+				...dispatch,
+				userId: "another-user",
+			}),
+		).resolves.toBeNull();
+		await expect(
+			loadAgentCoreDispatchRunStatus(tdb.db, {
+				...dispatch,
+				admittedAt: new Date(admittedAt.getTime() + 1),
+			}),
+		).resolves.toBeNull();
+	});
+
 	it("commits admission and one dispatch record together", async () => {
 		await admitRunWithDispatch();
 

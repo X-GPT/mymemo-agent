@@ -101,11 +101,11 @@ describe("AgentCore canary dispatch infrastructure", () => {
 			/resource\s+"aws_bedrockagentcore_agent_runtime"\s+"canary"[\s\S]*?precondition[\s\S]*?local\.exact_secret_arn_pattern/,
 		);
 		for (const name of [
-			"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
-			"CANARY_KB_DATABASE_URL_SECRET_ARN",
-			"CANARY_OPENROUTER_API_KEY_SECRET_ARN",
-			"CANARY_E2B_API_KEY_SECRET_ARN",
-			"CANARY_REDIS_URL_SECRET_ARN",
+			"AGENT_DATABASE_URL_SECRET_ARN",
+			"KB_DATABASE_URL_SECRET_ARN",
+			"OPENROUTER_API_KEY_SECRET_ARN",
+			"E2B_API_KEY_SECRET_ARN",
+			"REDIS_URL_SECRET_ARN",
 		]) {
 			expect(source).toContain(name);
 		}
@@ -225,12 +225,7 @@ describe("AgentCore canary dispatch infrastructure", () => {
 		expect(source).toMatch(
 			/sid\s*=\s*"WriteSyntheticArtifactsOnly"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{var\.artifact_bucket_name\}\/\$\{local\.canary_artifact_object_key_prefix\}\/\*"\]/,
 		);
-		expect(source).toMatch(
-			/canary_artifact_object_key_prefix\s*=\s*"objects\/agentcore-canary"[\s\S]*?CANARY_ARTIFACT_OBJECT_KEY_PREFIX\s*=\s*local\.canary_artifact_object_key_prefix/,
-		);
-		expect(canaryProduction).toContain(
-			"artifactObjectKeyPrefix: options.bootstrap.artifactObjectKeyPrefix",
-		);
+		expect(canaryProduction).not.toContain("artifactObjectKeyPrefix");
 		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(2);
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"runtime_trust"[\s\S]*?runtime\/mymemo_agentcore_canary_prod-\*/,
@@ -324,8 +319,8 @@ describe("AgentCore canary dispatch infrastructure", () => {
 			"utf8",
 		);
 
-		expect(publisher).not.toContain("CANARY_AGENT_RUNTIME_ARN");
-		expect(consumer).toContain("CANARY_AGENT_RUNTIME_ARN");
+		expect(publisher).not.toContain("AGENTCORE_RUNTIME_ARN");
+		expect(consumer).toContain("AGENTCORE_RUNTIME_ARN");
 		expect(production).toMatch(
 			/const publisher = createRetryableAsyncSingleton[\s\S]*?resolveCanaryDispatchPublisherConfigFromSecretArns/,
 		);
@@ -398,7 +393,7 @@ describe("AgentCore canary dispatch infrastructure", () => {
 			/ssm get-parameter[\s\S]*?"disabled"[\s\S]*?ParameterNotFound[\s\S]*?terraform -chdir="\$\{terraform_dir\}" init/,
 		);
 		expect(deployment).toContain(
-			'enabled_parameter="/mymemo/agentcore-canary/prod/enabled"',
+			'enabled_parameter="/mymemo/agentcore-dispatch/prod/enabled"',
 		);
 		expect(deployment).toContain('ca_digest="');
 		expect(

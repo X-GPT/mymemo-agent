@@ -32,8 +32,8 @@ resource "aws_sqs_queue" "dispatch" {
 }
 
 resource "aws_ssm_parameter" "enabled" {
-  name        = "/mymemo/agentcore-canary/${var.environment}/enabled"
-  description = "Fail-closed AgentCore canary admission and dispatch control"
+  name        = "/mymemo/agentcore-dispatch/${var.environment}/enabled"
+  description = "Fail-closed AgentCore dispatch control"
   type        = "String"
   value       = "disabled"
 

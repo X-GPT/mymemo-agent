@@ -38,7 +38,7 @@ resource "aws_lambda_function" "consumer" {
 
   environment {
     variables = merge(local.lambda_common_environment, {
-      CANARY_AGENT_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn
+      AGENTCORE_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn
     })
   }
 

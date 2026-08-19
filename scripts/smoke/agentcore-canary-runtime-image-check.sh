@@ -59,11 +59,11 @@ if entrypoint_output="$(
     --platform linux/arm64 \
     --network none \
     -e AWS_REGION=us-west-2 \
-    -e CANARY_ENABLED_PARAMETER_NAME=/mymemo/canary/enabled \
-    -e CANARY_AGENT_DATABASE_URL_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-AbCdEf \
-    -e CANARY_KB_DATABASE_URL_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:kb-db-AbCdEf \
-    -e CANARY_OPENROUTER_API_KEY_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:openrouter-AbCdEf \
-    -e CANARY_E2B_API_KEY_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:e2b-AbCdEf \
+    -e AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME=/mymemo/agentcore-dispatch/prod/enabled \
+    -e AGENT_DATABASE_URL_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-AbCdEf \
+    -e KB_DATABASE_URL_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:kb-db-AbCdEf \
+    -e OPENROUTER_API_KEY_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:openrouter-AbCdEf \
+    -e E2B_API_KEY_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:e2b-AbCdEf \
     -e OPENROUTER_BASE_URL=https://openrouter.ai/api \
     -e OPENROUTER_DEFAULT_MODEL=anthropic/claude-sonnet-4 \
     -e WORKER_E2B_TEMPLATE=mymemo-agent-sandbox \
@@ -73,7 +73,7 @@ if entrypoint_output="$(
   echo "AgentCore Runtime entrypoint accepted incomplete bootstrap" >&2
   exit 1
 fi
-if ! grep -q 'CANARY_REDIS_URL_SECRET_ARN is required' <<<"$entrypoint_output"; then
+if ! grep -q 'REDIS_URL_SECRET_ARN is required' <<<"$entrypoint_output"; then
   echo "$entrypoint_output" >&2
   echo "AgentCore Runtime entrypoint did not report its fail-closed boot error" >&2
   exit 1

@@ -122,7 +122,7 @@ const ACTIVE_RUN_DEPTH_BOUND = 1;
  * expiration. AgentCore work gets ten minutes for dispatch and cold
  * start. */
 const FARGATE_UNOWNED_QUEUE_TIMEOUT_MS = 60_000;
-const AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS = 10 * 60_000;
+export const AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS = 10 * 60_000;
 
 /** An owned Run id was reused with different normalized admitted input. */
 export class RunInputMismatchError extends Error {

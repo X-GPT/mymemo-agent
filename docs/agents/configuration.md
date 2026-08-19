@@ -6,28 +6,29 @@ Use this guide when changing deployment configuration, runtime bootstrap, secret
 
 Always use the `mymemo` profile: `aws --profile mymemo ...`.
 
-## AgentCore canary dispatch
+## AgentCore dispatch Lambda boundary
 
 Required by publisher and consumer entrypoints:
 
 - `AWS_REGION`: region for SSM and SQS clients
-- `CANARY_AGENT_DATABASE_URL_SECRET_ARN`: exact same-account, same-region Secrets Manager ARN for the writable `mymemo_agent` URL; resolve only `AWSCURRENT`, and require `sslmode=verify-full`
-- `CANARY_DISPATCH_QUEUE_URL`: encrypted standard canary dispatch queue URL
-- `CANARY_ENABLED_PARAMETER_NAME`: SSM parameter whose only enabling value is exactly `enabled`; fail closed on missing, unreadable, or other values
+- `AGENT_DATABASE_URL_SECRET_ARN`: exact same-account, same-region Secrets Manager ARN for the writable `mymemo_agent` URL; resolve only `AWSCURRENT`, and require `sslmode=verify-full`
+- `AGENTCORE_DISPATCH_QUEUE_URL`: encrypted standard AgentCore dispatch queue URL
+- `AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME`: `/mymemo/agentcore-dispatch/<environment>/enabled`; its only enabling value is exactly `enabled`, and dispatch fails closed on missing, unreadable, or other values
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS`: `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
 
 Required only by consumer, manual-replay, and acquisition entrypoints:
 
-- `CANARY_AGENT_RUNTIME_ARN`: exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity. Do not give the publisher this consumer-only authority.
+- `AGENTCORE_RUNTIME_ARN`: exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity. Do not give the publisher this consumer-only authority.
 
-## AgentCore canary runtime
+## AgentCore Runtime
 
 Required non-secret bootstrap values:
 
-- `AWS_REGION`, `CANARY_ENABLED_PARAMETER_NAME`, `OPENROUTER_BASE_URL`, `OPENROUTER_DEFAULT_MODEL`, `WORKER_E2B_TEMPLATE`, and `ARTIFACT_BUCKET`
-- `CANARY_ARTIFACT_OBJECT_KEY_PREFIX`: deployment-owned `objects/agentcore-canary` namespace; Terraform must scope generated keys and Runtime upload IAM to the same prefix
-- `CANARY_AGENT_DATABASE_URL_SECRET_ARN`, `CANARY_KB_DATABASE_URL_SECRET_ARN`, `CANARY_OPENROUTER_API_KEY_SECRET_ARN`, `CANARY_E2B_API_KEY_SECRET_ARN`, and `CANARY_REDIS_URL_SECRET_ARN`: exact Secrets Manager ARNs. Do not put the corresponding secret values in the Runtime environment. Both database URLs require `sslmode=verify-full`.
+- `AWS_REGION`, `AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME`, `OPENROUTER_BASE_URL`, `OPENROUTER_DEFAULT_MODEL`, `WORKER_E2B_TEMPLATE`, and `ARTIFACT_BUCKET`
+- `AGENT_DATABASE_URL_SECRET_ARN`, `KB_DATABASE_URL_SECRET_ARN`, `OPENROUTER_API_KEY_SECRET_ARN`, `E2B_API_KEY_SECRET_ARN`, and `REDIS_URL_SECRET_ARN`: exact Secrets Manager ARNs. Do not put the corresponding secret values in the Runtime environment. Both database URLs require `sslmode=verify-full`.
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS`: absolute path to the digest-pinned RDS bundle baked into the image
+
+Runtime Downloadable artifact keys use the standard `objects/` production namespace; there is no runtime-specific prefix setting.
 
 Optional:
 
@@ -64,8 +65,8 @@ The dedicated publisher ECS task requires only:
 
 - `AGENT_DATABASE_URL`: writable `mymemo_agent` database
 - `AWS_REGION`: region for SSM and SQS
-- `CANARY_DISPATCH_QUEUE_URL`: encrypted standard AgentCore dispatch queue URL. This transitional name is retired by the production configuration ticket.
-- `CANARY_ENABLED_PARAMETER_NAME`: fail-closed SSM dispatch gate whose only enabling value is exactly `enabled`. This transitional name is retired by the production configuration ticket.
+- `AGENTCORE_DISPATCH_QUEUE_URL`: encrypted standard AgentCore dispatch queue URL
+- `AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME`: fail-closed `/mymemo/agentcore-dispatch/<environment>/enabled` SSM gate whose only enabling value is exactly `enabled`
 
 `AGENTCORE_DISPATCH_PUBLISHER_INTERVAL_MS` optionally changes the two-second tick interval. `LOG_LEVEL`, `DB_PASSWORD`, and `DB_SSL` have the same behavior as the worker. The publisher has its own image, ECS service, task role, execution role, and outbound-only security group. It does not receive KB, model, E2B, artifact, or Redis authority.
 
