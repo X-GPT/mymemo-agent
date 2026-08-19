@@ -25,20 +25,19 @@ resource "aws_lambda_function" "publisher" {
 }
 
 resource "aws_lambda_function" "consumer" {
-  function_name                  = "${local.name_prefix}-consumer"
-  role                           = aws_iam_role.consumer.arn
-  runtime                        = "nodejs22.x"
-  architectures                  = ["arm64"]
-  handler                        = "index.consumerHandler"
-  filename                       = var.dispatch_lambda_package
-  source_code_hash               = filebase64sha256(var.dispatch_lambda_package)
-  timeout                        = 120
-  reserved_concurrent_executions = 1
-  memory_size                    = 1024
+  function_name    = "${local.name_prefix}-consumer"
+  role             = aws_iam_role.consumer.arn
+  runtime          = "nodejs22.x"
+  architectures    = ["arm64"]
+  handler          = "index.consumerHandler"
+  filename         = var.dispatch_lambda_package
+  source_code_hash = filebase64sha256(var.dispatch_lambda_package)
+  timeout          = 120
+  memory_size      = 1024
 
   environment {
     variables = merge(local.lambda_common_environment, {
-      CANARY_AGENT_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn
+      AGENTCORE_RUNTIME_ARN = aws_bedrockagentcore_agent_runtime.canary.agent_runtime_arn
     })
   }
 

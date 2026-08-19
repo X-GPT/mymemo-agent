@@ -1,7 +1,7 @@
 import type { AgentCoreDispatchPublishResult } from "@mymemo/agentcore-dispatch/publisher";
 import { z } from "zod";
 import type { CanarySqsBatchResponse, CanarySqsEvent } from "./consumer";
-import { CANARY_QUEUE_INVARIANTS } from "./invariants";
+import { AGENTCORE_DISPATCH_QUEUE_INVARIANTS } from "./invariants";
 
 const boundedIdentifier = z.string().trim().min(1).max(500);
 const sqsEventSchema = z.object({
@@ -12,7 +12,7 @@ const sqsEventSchema = z.object({
 				body: z.string(),
 			}),
 		)
-		.length(CANARY_QUEUE_INVARIANTS.consumerBatchSize),
+		.length(AGENTCORE_DISPATCH_QUEUE_INVARIANTS.consumerBatchSize),
 });
 const manualReplaySchema = z.strictObject({
 	runId: boundedIdentifier,

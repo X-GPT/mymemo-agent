@@ -15,7 +15,7 @@ locals {
   )
   agentcore_dispatch_enabled_parameter_name = coalesce(
     var.agentcore_dispatch_enabled_parameter_name,
-    "/mymemo/agentcore-canary/${var.environment}/enabled",
+    "/mymemo/agentcore-dispatch/${var.environment}/enabled",
   )
   agentcore_dispatch_queue_kms_alias_name = coalesce(
     var.agentcore_dispatch_queue_kms_alias_name,
@@ -115,8 +115,8 @@ locals {
 
   agentcore_dispatch_publisher_environment = concat([
     { name = "AWS_REGION", value = var.aws_region },
-    { name = "CANARY_DISPATCH_QUEUE_URL", value = local.agentcore_dispatch_queue_url },
-    { name = "CANARY_ENABLED_PARAMETER_NAME", value = local.agentcore_dispatch_enabled_parameter_name },
+    { name = "AGENTCORE_DISPATCH_QUEUE_URL", value = local.agentcore_dispatch_queue_url },
+    { name = "AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME", value = local.agentcore_dispatch_enabled_parameter_name },
     { name = "AGENTCORE_DISPATCH_PUBLISHER_INTERVAL_MS", value = tostring(var.agentcore_dispatch_publisher_interval_ms) },
     { name = "LOG_LEVEL", value = var.log_level },
     { name = "DB_SSL", value = var.db_ssl },

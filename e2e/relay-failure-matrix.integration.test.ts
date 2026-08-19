@@ -139,20 +139,8 @@ function createRelay(
 }
 
 async function killRedisClientsByNamePrefix(prefix: string): Promise<void> {
-	const listing = Bun.spawn(
-		[
-			"redis-cli",
-			"-h",
-			"127.0.0.1",
-			"-p",
-			String(redis.port),
-			"CLIENT",
-			"LIST",
-		],
-		{ stdout: "pipe", stderr: "pipe" },
-	);
-	const output = await new Response(listing.stdout).text();
-	if ((await listing.exited) !== 0) {
+	const output = await redis.command(["CLIENT", "LIST"]);
+	if (typeof output !== "string") {
 		throw new Error("failed to list Redis clients for crash injection");
 	}
 	const clientIds = output
@@ -172,21 +160,7 @@ async function killRedisClientsByNamePrefix(prefix: string): Promise<void> {
 		throw new Error("producer Redis connections were not both observable");
 	}
 	for (const clientId of clientIds) {
-		const killing = Bun.spawn(
-			[
-				"redis-cli",
-				"-h",
-				"127.0.0.1",
-				"-p",
-				String(redis.port),
-				"CLIENT",
-				"KILL",
-				"ID",
-				clientId,
-			],
-			{ stdout: "ignore", stderr: "ignore" },
-		);
-		if ((await killing.exited) !== 0) {
+		if ((await redis.command(["CLIENT", "KILL", "ID", clientId])) !== 1) {
 			throw new Error(`failed to kill producer Redis client ${clientId}`);
 		}
 	}

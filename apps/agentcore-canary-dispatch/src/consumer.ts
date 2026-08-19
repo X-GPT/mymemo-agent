@@ -1,4 +1,8 @@
 import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/agentcore-dispatch";
+import {
+	isTerminalRunStatus,
+	type RunStatus,
+} from "@mymemo/agent-db/run-store";
 import type { AgentCoreDispatchEnablementControl } from "@mymemo/agentcore-dispatch/publisher";
 import {
 	parseCanaryDispatchEnvelope,
@@ -39,6 +43,7 @@ export interface CanarySqsBatchResponse {
 
 export function createCanaryDispatchConsumer(options: {
 	control: AgentCoreDispatchEnablementControl;
+	loadRunStatus(dispatch: AgentCoreDispatchIdentity): Promise<RunStatus | null>;
 	runtime: AgentCoreRuntimeInvoker;
 	alarm: CanaryDispatchAlarm;
 }) {
@@ -67,6 +72,9 @@ export function createCanaryDispatchConsumer(options: {
 
 		let invocation: AgentCoreRuntimeInvocation | undefined;
 		try {
+			const runStatus = await options.loadRunStatus(dispatch);
+			if (runStatus !== null && isTerminalRunStatus(runStatus)) return "ack";
+
 			invocation = await options.runtime.invoke(dispatch);
 			const receipt = await readAcquisitionReceipt(invocation.chunks);
 			if (!receiptCorrelatesDispatch(receipt, dispatch)) {

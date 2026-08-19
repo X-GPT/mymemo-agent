@@ -258,15 +258,10 @@ function blockingUpload() {
 }
 
 describe("Downloadable artifact publication through the Run loop", () => {
-	it("places generated object keys under the configured runtime prefix", async () => {
+	it("places generated object keys under the standard production namespace", async () => {
 		await insertConversation();
 		const workspace = new FakeWorkspace();
-		const harness = buildArtifactHarness(
-			workspace,
-			undefined,
-			silentLogger,
-			"objects/agentcore-canary",
-		);
+		const harness = buildArtifactHarness(workspace);
 
 		await harness.run(
 			"run-1",
@@ -276,9 +271,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		);
 
 		expect([...harness.uploaded.keys()]).toHaveLength(1);
-		expect([...harness.uploaded.keys()][0]).toMatch(
-			/^objects\/agentcore-canary\/[0-9a-f-]+$/,
-		);
+		expect([...harness.uploaded.keys()][0]).toBe("objects/key-1");
 	});
 
 	it("publishes text and binary files before run_done becomes visible", async () => {

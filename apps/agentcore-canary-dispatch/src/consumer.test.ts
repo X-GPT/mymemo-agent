@@ -14,6 +14,7 @@ const dispatch: AgentCoreDispatchIdentity = {
 	runtimeSessionId: "0198b5a2-0d2b-7b64-9f65-4c9d49045001",
 	admittedAt: new Date("2026-08-14T16:00:00.000Z"),
 };
+const loadActiveRunStatus = async () => "queued" as const;
 
 async function* wireChunks(value: unknown): AsyncIterable<Uint8Array> {
 	const wire = `${JSON.stringify(value)}\n`;
@@ -22,11 +23,46 @@ async function* wireChunks(value: unknown): AsyncIterable<Uint8Array> {
 }
 
 describe("Canary SQS consumer", () => {
+	it.each([
+		"done",
+		"error",
+		"interrupted",
+	] as const)("acknowledges a pre-checked %s Run without invoking the Runtime", async (status) => {
+		let invoked = false;
+		const consumer = createCanaryDispatchConsumer({
+			control: { isEnabled: async () => true },
+			loadRunStatus: async (received) => {
+				expect(received).toEqual(dispatch);
+				return status;
+			},
+			runtime: {
+				invoke: async () => {
+					invoked = true;
+					throw new Error("terminal Runs must not invoke the Runtime");
+				},
+			},
+			alarm: { raise: async () => {} },
+		});
+
+		await expect(
+			consumer.handle({
+				Records: [
+					{
+						messageId: "terminal-message",
+						body: serializeCanaryDispatchEnvelope(dispatch),
+					},
+				],
+			}),
+		).resolves.toEqual({ batchItemFailures: [] });
+		expect(invoked).toBe(false);
+	});
+
 	it("acknowledges only a strictly correlated committed acquisition receipt", async () => {
 		let closed = false;
 		const alarms: unknown[] = [];
 		const consumer = createCanaryDispatchConsumer({
 			control: { isEnabled: async () => true },
+			loadRunStatus: loadActiveRunStatus,
 			runtime: {
 				invoke: async (received) => {
 					expect(received).toEqual(dispatch);
@@ -72,6 +108,7 @@ describe("Canary SQS consumer", () => {
 	it("does not turn a durable acknowledgement into a retry when stream cleanup fails", async () => {
 		const consumer = createCanaryDispatchConsumer({
 			control: { isEnabled: async () => true },
+			loadRunStatus: loadActiveRunStatus,
 			runtime: {
 				invoke: async () => ({
 					chunks: wireChunks(
@@ -123,6 +160,7 @@ describe("Canary SQS consumer", () => {
 				: { disposition, status: "done" as const };
 		const consumer = createCanaryDispatchConsumer({
 			control: { isEnabled: async () => true },
+			loadRunStatus: loadActiveRunStatus,
 			runtime: {
 				invoke: async () => ({
 					chunks: wireChunks(createAcquisitionReceipt(dispatch, result)),
@@ -148,6 +186,7 @@ describe("Canary SQS consumer", () => {
 		let invocation = 0;
 		const consumer = createCanaryDispatchConsumer({
 			control: { isEnabled: async () => true },
+			loadRunStatus: loadActiveRunStatus,
 			runtime: {
 				invoke: async () => {
 					invocation += 1;
@@ -193,6 +232,7 @@ describe("Canary SQS consumer", () => {
 		let invoked = 0;
 		const consumer = createCanaryDispatchConsumer({
 			control: { isEnabled: async () => true },
+			loadRunStatus: loadActiveRunStatus,
 			runtime: {
 				invoke: async () => {
 					invoked += 1;
@@ -239,6 +279,7 @@ describe("Canary SQS consumer", () => {
 		let invoked = 0;
 		const consumer = createCanaryDispatchConsumer({
 			control: { isEnabled: async () => true },
+			loadRunStatus: loadActiveRunStatus,
 			runtime: {
 				invoke: async () => {
 					invoked += 1;
@@ -281,6 +322,7 @@ describe("Canary SQS consumer", () => {
 		const alarms: unknown[] = [];
 		const consumer = createCanaryDispatchConsumer({
 			control: { isEnabled: async () => false },
+			loadRunStatus: loadActiveRunStatus,
 			runtime: {
 				invoke: async () => {
 					invoked = true;
@@ -317,6 +359,7 @@ describe("Canary SQS consumer", () => {
 		const alarms: unknown[] = [];
 		const consumer = createCanaryDispatchConsumer({
 			control: { isEnabled: async () => true },
+			loadRunStatus: loadActiveRunStatus,
 			runtime: {
 				invoke: async () => ({
 					chunks: wireChunks(

@@ -20,20 +20,20 @@ resource "aws_sqs_queue" "dead_letter" {
 resource "aws_sqs_queue" "dispatch" {
   name                       = "${local.name_prefix}-dispatch"
   message_retention_seconds  = 86400
-  visibility_timeout_seconds = 300
+  visibility_timeout_seconds = 180
   receive_wait_time_seconds  = 20
   kms_master_key_id          = aws_kms_key.canary.arn
   sqs_managed_sse_enabled    = false
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dead_letter.arn
-    maxReceiveCount     = 3
+    maxReceiveCount     = 5
   })
 }
 
 resource "aws_ssm_parameter" "enabled" {
-  name        = "/mymemo/agentcore-canary/${var.environment}/enabled"
-  description = "Fail-closed AgentCore canary admission and dispatch control"
+  name        = "/mymemo/agentcore-dispatch/${var.environment}/enabled"
+  description = "Fail-closed AgentCore dispatch control"
   type        = "String"
   value       = "disabled"
 

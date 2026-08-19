@@ -31,7 +31,6 @@ export interface RuntimeBootstrapConfig {
 	openrouterDefaultModel: string;
 	e2bTemplate: string;
 	artifactBucket: string;
-	artifactObjectKeyPrefix: string;
 	rdsCaBundlePath: string;
 	port: number;
 	heartbeatIntervalMs: number;
@@ -74,22 +73,21 @@ export function loadRuntimeBootstrapConfig(env: Env): RuntimeBootstrapConfig {
 
 	return {
 		awsRegion: requireEnv(env, "AWS_REGION"),
-		enabledParameterName: requireEnv(env, "CANARY_ENABLED_PARAMETER_NAME"),
+		enabledParameterName: requireEnv(
+			env,
+			"AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME",
+		),
 		secretArns: {
-			agentDatabaseUrl: secretArn(env, "CANARY_AGENT_DATABASE_URL_SECRET_ARN"),
-			kbDatabaseUrl: secretArn(env, "CANARY_KB_DATABASE_URL_SECRET_ARN"),
-			openrouterApiKey: secretArn(env, "CANARY_OPENROUTER_API_KEY_SECRET_ARN"),
-			e2bApiKey: secretArn(env, "CANARY_E2B_API_KEY_SECRET_ARN"),
-			redisUrl: secretArn(env, "CANARY_REDIS_URL_SECRET_ARN"),
+			agentDatabaseUrl: secretArn(env, "AGENT_DATABASE_URL_SECRET_ARN"),
+			kbDatabaseUrl: secretArn(env, "KB_DATABASE_URL_SECRET_ARN"),
+			openrouterApiKey: secretArn(env, "OPENROUTER_API_KEY_SECRET_ARN"),
+			e2bApiKey: secretArn(env, "E2B_API_KEY_SECRET_ARN"),
+			redisUrl: secretArn(env, "REDIS_URL_SECRET_ARN"),
 		},
 		openrouterBaseUrl: requireEnv(env, "OPENROUTER_BASE_URL"),
 		openrouterDefaultModel: requireEnv(env, "OPENROUTER_DEFAULT_MODEL"),
 		e2bTemplate: requireEnv(env, "WORKER_E2B_TEMPLATE"),
 		artifactBucket: requireEnv(env, "ARTIFACT_BUCKET"),
-		artifactObjectKeyPrefix: requireEnv(
-			env,
-			"CANARY_ARTIFACT_OBJECT_KEY_PREFIX",
-		),
 		rdsCaBundlePath,
 		port: positiveInt(env.PORT, 8080, "PORT"),
 		heartbeatIntervalMs: positiveInt(

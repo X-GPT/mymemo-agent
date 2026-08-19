@@ -70,12 +70,12 @@ export async function resolveCanaryDatabaseUrlsFromSecretArns(
 	readCurrentSecret: CurrentSecretReader,
 ): Promise<{ agentDatabaseUrl: string; kbDatabaseUrl: string }> {
 	const agentArn = exactSecretArn(
-		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN,
-		"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
+		env.AGENT_DATABASE_URL_SECRET_ARN,
+		"AGENT_DATABASE_URL_SECRET_ARN",
 	);
 	const kbArn = exactSecretArn(
-		env.CANARY_KB_DATABASE_URL_SECRET_ARN,
-		"CANARY_KB_DATABASE_URL_SECRET_ARN",
+		env.KB_DATABASE_URL_SECRET_ARN,
+		"KB_DATABASE_URL_SECRET_ARN",
 	);
 	const [agentDatabaseUrl, kbDatabaseUrl] = await Promise.all([
 		readCurrentSecret(agentArn),

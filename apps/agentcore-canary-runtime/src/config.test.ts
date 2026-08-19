@@ -7,22 +7,22 @@ import {
 function bootstrapEnv(): Record<string, string | undefined> {
 	return {
 		AWS_REGION: "us-west-2",
-		CANARY_ENABLED_PARAMETER_NAME: "/mymemo/canary/enabled",
-		CANARY_AGENT_DATABASE_URL_SECRET_ARN:
+		AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
+			"/mymemo/agentcore-dispatch/prod/enabled",
+		AGENT_DATABASE_URL_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-AbCdEf",
-		CANARY_KB_DATABASE_URL_SECRET_ARN:
+		KB_DATABASE_URL_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:kb-db-AbCdEf",
-		CANARY_OPENROUTER_API_KEY_SECRET_ARN:
+		OPENROUTER_API_KEY_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:openrouter-AbCdEf",
-		CANARY_E2B_API_KEY_SECRET_ARN:
+		E2B_API_KEY_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:e2b-AbCdEf",
-		CANARY_REDIS_URL_SECRET_ARN:
+		REDIS_URL_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:redis-AbCdEf",
 		OPENROUTER_BASE_URL: "https://openrouter.ai/api",
 		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 		ARTIFACT_BUCKET: "private-artifacts",
-		CANARY_ARTIFACT_OBJECT_KEY_PREFIX: "objects/agentcore-canary",
 		RDS_CA_BUNDLE_PATH: "/etc/ssl/certs/rds-global-bundle.pem",
 		NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/rds-global-bundle.pem",
 	};
@@ -35,7 +35,7 @@ describe("AgentCore Runtime configuration", () => {
 		expect(config.port).toBe(8080);
 		expect(config.heartbeatIntervalMs).toBe(15_000);
 		expect(config.shutdownTimeoutMs).toBe(30_000);
-		expect(config.artifactObjectKeyPrefix).toBe("objects/agentcore-canary");
+		expect(config).not.toHaveProperty("artifactObjectKeyPrefix");
 		expect(Object.values(config.secretArns)).toHaveLength(5);
 		expect(config.rdsCaBundlePath).toBe("/etc/ssl/certs/rds-global-bundle.pem");
 	});
@@ -56,18 +56,18 @@ describe("AgentCore Runtime configuration", () => {
 
 	it("distinguishes a missing secret ARN from a malformed one", () => {
 		const env = bootstrapEnv();
-		delete env.CANARY_REDIS_URL_SECRET_ARN;
+		delete env.REDIS_URL_SECRET_ARN;
 		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
-			"CANARY_REDIS_URL_SECRET_ARN is required",
+			"REDIS_URL_SECRET_ARN is required",
 		);
 	});
 
 	it("rejects secret ARNs outside the commercial AWS partition", () => {
 		const env = bootstrapEnv();
-		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN =
+		env.AGENT_DATABASE_URL_SECRET_ARN =
 			"arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:agent-db-AbCdEf";
 		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
-			"CANARY_AGENT_DATABASE_URL_SECRET_ARN must be an exact Secrets Manager ARN",
+			"AGENT_DATABASE_URL_SECRET_ARN must be an exact Secrets Manager ARN",
 		);
 	});
 

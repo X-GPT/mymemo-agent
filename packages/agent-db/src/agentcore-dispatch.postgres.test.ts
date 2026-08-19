@@ -12,6 +12,7 @@ import {
 	type AgentCoreDispatchIdentity,
 	acquireAgentCoreDispatchTx,
 	claimAgentCoreDispatchesTx,
+	loadAgentCoreDispatchRunStatus,
 } from "./agentcore-dispatch";
 import { createDatabase, type Database } from "./client";
 import { claimConversationTx } from "./conversation-ownership";
@@ -100,6 +101,41 @@ describe.skipIf(!RUN)(
 
 			expect(claims.map((claim) => claim.length).sort()).toEqual([0, 1]);
 			expect(claims.flat()[0]?.runId).toBe(exact.runId);
+		});
+
+		it("prechecks a terminal Run admitted with PostgreSQL's default timestamp", async () => {
+			const exact = input("a");
+			await db.transaction(async (tx) => {
+				await tx.insert(conversations).values({
+					userId: exact.userId,
+					conversationId: exact.conversationId,
+					scope: "general",
+					executionRuntime: "agentcore",
+				});
+				await tx.insert(runs).values({
+					runId: exact.runId,
+					userId: exact.userId,
+					conversationId: exact.conversationId,
+					status: "queued",
+				});
+				await tx.insert(agentCoreDispatchOutbox).values({
+					userId: exact.userId,
+					conversationId: exact.conversationId,
+					runId: exact.runId,
+				});
+			});
+			const [dispatch] = await claimAgentCoreDispatchesTx(db, {
+				publisherId: "publisher-default-timestamp",
+			});
+			if (!dispatch) throw new Error("test dispatch was not claimed");
+			await db
+				.update(runs)
+				.set({ status: "done" })
+				.where(eq(runs.runId, exact.runId));
+
+			await expect(loadAgentCoreDispatchRunStatus(db, dispatch)).resolves.toBe(
+				"done",
+			);
 		});
 
 		it("serializes duplicate Runtime invocations to acquired then already_acquired", async () => {

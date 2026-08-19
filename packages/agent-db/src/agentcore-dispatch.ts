@@ -16,7 +16,11 @@ import {
 	conversationOwnershipLeaseDeadline,
 	liveConversationOwnershipState,
 } from "./conversation-ownership";
-import { isTerminalRunStatus, type TerminalRunStatus } from "./run-store";
+import {
+	isTerminalRunStatus,
+	type RunStatus,
+	type TerminalRunStatus,
+} from "./run-store";
 import {
 	ACTIVE_RUN_STATUSES,
 	agentCoreDispatchOutbox,
@@ -83,6 +87,46 @@ export async function loadOldestUnpublishedAgentCoreDispatchAdmittedAt(
 		.orderBy(agentCoreDispatchOutbox.admittedAt, agentCoreDispatchOutbox.runId)
 		.limit(1);
 	return oldest?.admittedAt ?? null;
+}
+
+/**
+ * Read one exact dispatched Run for the consumer's pre-invocation terminal
+ * check. The globally unique Run id is the indexed lookup; identity predicates
+ * keep a malformed envelope from observing another Conversation's status.
+ */
+export async function loadAgentCoreDispatchRunStatus(
+	db: Database,
+	dispatch: Pick<
+		AgentCoreDispatchIdentity,
+		"userId" | "conversationId" | "runId" | "admittedAt"
+	>,
+): Promise<RunStatus | null> {
+	const [run] = await db
+		.select({
+			status: runs.status,
+			admittedAt: agentCoreDispatchOutbox.admittedAt,
+		})
+		.from(runs)
+		.innerJoin(
+			agentCoreDispatchOutbox,
+			eq(agentCoreDispatchOutbox.runId, runs.runId),
+		)
+		.where(
+			and(
+				eq(runs.runId, dispatch.runId),
+				eq(runs.userId, dispatch.userId),
+				eq(runs.conversationId, dispatch.conversationId),
+				eq(agentCoreDispatchOutbox.userId, dispatch.userId),
+				eq(agentCoreDispatchOutbox.conversationId, dispatch.conversationId),
+			),
+		)
+		.limit(1);
+	// PostgreSQL may retain microseconds that JavaScript Date cannot represent,
+	// so correlate after both values have crossed the same precision boundary.
+	if (!run || run.admittedAt.getTime() !== dispatch.admittedAt.getTime()) {
+		return null;
+	}
+	return run.status as RunStatus;
 }
 
 /**

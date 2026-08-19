@@ -1,7 +1,10 @@
 import { BedrockAgentCoreClient } from "@aws-sdk/client-bedrock-agentcore";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { SSMClient } from "@aws-sdk/client-ssm";
-import { requestAgentCoreDispatchReplayTx } from "@mymemo/agent-db/agentcore-dispatch";
+import {
+	loadAgentCoreDispatchRunStatus,
+	requestAgentCoreDispatchReplayTx,
+} from "@mymemo/agent-db/agentcore-dispatch";
 import { createDatabase } from "@mymemo/agent-db/client";
 import { createDatabaseAgentCoreDispatchPublisherStore } from "@mymemo/agentcore-dispatch/database-store";
 import { createAgentCoreDispatchPublisher } from "@mymemo/agentcore-dispatch/publisher";
@@ -48,8 +51,11 @@ export function loadCanaryDispatchPublisherConfigFromEnv(
 	return {
 		agentDatabaseUrl: requireEnv(env, "AGENT_DATABASE_URL"),
 		awsRegion: requireEnv(env, "AWS_REGION"),
-		queueUrl: requireEnv(env, "CANARY_DISPATCH_QUEUE_URL"),
-		enabledParameterName: requireEnv(env, "CANARY_ENABLED_PARAMETER_NAME"),
+		queueUrl: requireEnv(env, "AGENTCORE_DISPATCH_QUEUE_URL"),
+		enabledParameterName: requireEnv(
+			env,
+			"AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME",
+		),
 	};
 }
 
@@ -58,7 +64,7 @@ export function loadCanaryDispatchConfigFromEnv(
 ): CanaryDispatchConfig {
 	return {
 		...loadCanaryDispatchPublisherConfigFromEnv(env),
-		agentRuntimeArn: requireEnv(env, "CANARY_AGENT_RUNTIME_ARN"),
+		agentRuntimeArn: requireEnv(env, "AGENTCORE_RUNTIME_ARN"),
 	};
 }
 
@@ -71,7 +77,7 @@ export async function resolveCanaryDispatchConfigFromSecretArns(
 			env,
 			readCurrentSecret,
 		)),
-		agentRuntimeArn: requireEnv(env, "CANARY_AGENT_RUNTIME_ARN"),
+		agentRuntimeArn: requireEnv(env, "AGENTCORE_RUNTIME_ARN"),
 	};
 }
 
@@ -80,8 +86,8 @@ export async function resolveCanaryDispatchPublisherConfigFromSecretArns(
 	readCurrentSecret: CurrentSecretReader,
 ): Promise<CanaryDispatchPublisherConfig> {
 	const secretArn = exactSecretArn(
-		env.CANARY_AGENT_DATABASE_URL_SECRET_ARN,
-		"CANARY_AGENT_DATABASE_URL_SECRET_ARN",
+		env.AGENT_DATABASE_URL_SECRET_ARN,
+		"AGENT_DATABASE_URL_SECRET_ARN",
 	);
 	return loadCanaryDispatchPublisherConfigFromEnv({
 		...env,
@@ -107,7 +113,7 @@ export function createEmbeddedMetricCanaryDispatchAlarm(
 						Timestamp: Date.now(),
 						CloudWatchMetrics: [
 							{
-								Namespace: "MyMemo/AgentCoreCanary",
+								Namespace: "MyMemo/AgentCoreDispatch",
 								Dimensions: [[], ["reason"]],
 								Metrics: [{ Name: metricName, Unit: "Count" }],
 							},
@@ -164,6 +170,8 @@ export function createCanaryDispatchProductionServices(
 	});
 	const consumer = createCanaryDispatchConsumer({
 		control,
+		loadRunStatus: async (dispatch) =>
+			await loadAgentCoreDispatchRunStatus(db, dispatch),
 		runtime: createBedrockAgentCoreRuntimeInvoker({
 			client: new BedrockAgentCoreClient({ region: config.awsRegion }),
 			agentRuntimeArn: config.agentRuntimeArn,

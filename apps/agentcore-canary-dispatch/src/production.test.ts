@@ -13,17 +13,18 @@ describe("Canary dispatch production configuration", () => {
 			loadCanaryDispatchConfigFromEnv({
 				AGENT_DATABASE_URL: "postgres://agent",
 				AWS_REGION: "us-west-2",
-				CANARY_DISPATCH_QUEUE_URL:
+				AGENTCORE_DISPATCH_QUEUE_URL:
 					"https://sqs.us-west-2.amazonaws.com/123/canary",
-				CANARY_ENABLED_PARAMETER_NAME: "/mymemo/canary/enabled",
-				CANARY_AGENT_RUNTIME_ARN:
+				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
+					"/mymemo/agentcore-dispatch/prod/enabled",
+				AGENTCORE_RUNTIME_ARN:
 					"arn:aws:bedrock-agentcore:us-west-2:123:runtime/canary",
 			}),
 		).toEqual({
 			agentDatabaseUrl: "postgres://agent",
 			awsRegion: "us-west-2",
 			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/canary",
-			enabledParameterName: "/mymemo/canary/enabled",
+			enabledParameterName: "/mymemo/agentcore-dispatch/prod/enabled",
 			agentRuntimeArn: "arn:aws:bedrock-agentcore:us-west-2:123:runtime/canary",
 		});
 		expect(() => loadCanaryDispatchConfigFromEnv({})).toThrow(
@@ -36,15 +37,16 @@ describe("Canary dispatch production configuration", () => {
 			loadCanaryDispatchPublisherConfigFromEnv({
 				AGENT_DATABASE_URL: "postgres://agent",
 				AWS_REGION: "us-west-2",
-				CANARY_DISPATCH_QUEUE_URL:
+				AGENTCORE_DISPATCH_QUEUE_URL:
 					"https://sqs.us-west-2.amazonaws.com/123/canary",
-				CANARY_ENABLED_PARAMETER_NAME: "/mymemo/canary/enabled",
+				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
+					"/mymemo/agentcore-dispatch/prod/enabled",
 			}),
 		).toEqual({
 			agentDatabaseUrl: "postgres://agent",
 			awsRegion: "us-west-2",
 			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/canary",
-			enabledParameterName: "/mymemo/canary/enabled",
+			enabledParameterName: "/mymemo/agentcore-dispatch/prod/enabled",
 		});
 	});
 
@@ -55,11 +57,12 @@ describe("Canary dispatch production configuration", () => {
 		const config = await resolveCanaryDispatchConfigFromSecretArns(
 			{
 				AWS_REGION: "us-west-2",
-				CANARY_AGENT_DATABASE_URL_SECRET_ARN: secretArn,
-				CANARY_DISPATCH_QUEUE_URL:
+				AGENT_DATABASE_URL_SECRET_ARN: secretArn,
+				AGENTCORE_DISPATCH_QUEUE_URL:
 					"https://sqs.us-west-2.amazonaws.com/123/canary",
-				CANARY_ENABLED_PARAMETER_NAME: "/mymemo/canary/enabled",
-				CANARY_AGENT_RUNTIME_ARN:
+				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
+					"/mymemo/agentcore-dispatch/prod/enabled",
+				AGENTCORE_RUNTIME_ARN:
 					"arn:aws:bedrock-agentcore:us-west-2:123:runtime/canary",
 			},
 			async (arn) => {
@@ -76,11 +79,12 @@ describe("Canary dispatch production configuration", () => {
 			resolveCanaryDispatchConfigFromSecretArns(
 				{
 					AWS_REGION: "us-west-2",
-					CANARY_AGENT_DATABASE_URL_SECRET_ARN: secretArn,
-					CANARY_DISPATCH_QUEUE_URL:
+					AGENT_DATABASE_URL_SECRET_ARN: secretArn,
+					AGENTCORE_DISPATCH_QUEUE_URL:
 						"https://sqs.us-west-2.amazonaws.com/123/canary",
-					CANARY_ENABLED_PARAMETER_NAME: "/mymemo/canary/enabled",
-					CANARY_AGENT_RUNTIME_ARN:
+					AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
+						"/mymemo/agentcore-dispatch/prod/enabled",
+					AGENTCORE_RUNTIME_ARN:
 						"arn:aws:bedrock-agentcore:us-west-2:123:runtime/canary",
 				},
 				async () => "postgresql://agent.example/mymemo_agent?sslmode=require",
@@ -94,10 +98,11 @@ describe("Canary dispatch production configuration", () => {
 		const config = await resolveCanaryDispatchPublisherConfigFromSecretArns(
 			{
 				AWS_REGION: "us-west-2",
-				CANARY_AGENT_DATABASE_URL_SECRET_ARN: secretArn,
-				CANARY_DISPATCH_QUEUE_URL:
+				AGENT_DATABASE_URL_SECRET_ARN: secretArn,
+				AGENTCORE_DISPATCH_QUEUE_URL:
 					"https://sqs.us-west-2.amazonaws.com/123/canary",
-				CANARY_ENABLED_PARAMETER_NAME: "/mymemo/canary/enabled",
+				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
+					"/mymemo/agentcore-dispatch/prod/enabled",
 			},
 			async () => "postgresql://agent.example/mymemo_agent?sslmode=verify-full",
 		);
@@ -107,7 +112,7 @@ describe("Canary dispatch production configuration", () => {
 				"postgresql://agent.example/mymemo_agent?sslmode=verify-full",
 			awsRegion: "us-west-2",
 			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/canary",
-			enabledParameterName: "/mymemo/canary/enabled",
+			enabledParameterName: "/mymemo/agentcore-dispatch/prod/enabled",
 		});
 	});
 
@@ -132,7 +137,7 @@ describe("Canary dispatch production configuration", () => {
 				CloudWatchMetrics: [
 					{
 						Dimensions: [[], ["reason"]],
-						Namespace: "MyMemo/AgentCoreCanary",
+						Namespace: "MyMemo/AgentCoreDispatch",
 						Metrics: [{ Name: "PoisonDispatch", Unit: "Count" }],
 					},
 				],
@@ -159,7 +164,7 @@ describe("Canary dispatch production configuration", () => {
 				CloudWatchMetrics: [
 					{
 						Dimensions: [[], ["reason"]],
-						Namespace: "MyMemo/AgentCoreCanary",
+						Namespace: "MyMemo/AgentCoreDispatch",
 						Metrics: [{ Name: "DisabledDelivery", Unit: "Count" }],
 					},
 				],

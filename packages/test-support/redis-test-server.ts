@@ -1,8 +1,10 @@
 import { createServer } from "node:net";
+import { createClient } from "redis";
 
 export interface RedisTestServer {
 	port: number;
 	url: string;
+	command(arguments_: readonly string[]): Promise<unknown>;
 	stop(): Promise<void>;
 }
 
@@ -10,6 +12,43 @@ interface RedisTestServerOptions {
 	password?: string;
 	port?: number;
 	stdio?: "ignore" | "inherit";
+}
+
+async function runRedisCommand(
+	url: string,
+	arguments_: readonly string[],
+): Promise<unknown> {
+	const client = createClient({
+		url,
+		socket: {
+			connectTimeout: 500,
+			reconnectStrategy: false,
+		},
+	});
+	client.on("error", () => {});
+	try {
+		await client.connect();
+		return await client.sendCommand(arguments_);
+	} finally {
+		if (client.isOpen) {
+			await client.close();
+		} else {
+			client.destroy();
+		}
+	}
+}
+
+async function waitForRedis(url: string): Promise<void> {
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		try {
+			if ((await runRedisCommand(url, ["PING"])) === "PONG") return;
+		} catch {
+			// A newly spawned local process may not be accepting connections yet.
+		}
+		await Bun.sleep(50);
+	}
+	throw new Error("Redis did not become ready");
 }
 
 export async function findFreePort(): Promise<number> {
@@ -31,6 +70,28 @@ export async function findFreePort(): Promise<number> {
 export async function startRedisTestServer(
 	options: RedisTestServerOptions = {},
 ): Promise<RedisTestServer> {
+	const configuredUrl =
+		options.password === undefined && options.port === undefined
+			? process.env.TEST_REDIS_URL?.trim()
+			: undefined;
+	if (configuredUrl) {
+		const parsed = new URL(configuredUrl);
+		const port = Number(parsed.port || 6379);
+		await waitForRedis(configuredUrl);
+		await runRedisCommand(configuredUrl, ["FLUSHDB"]);
+		let stopped = false;
+		return {
+			port,
+			url: configuredUrl,
+			command: (arguments_) => runRedisCommand(configuredUrl, arguments_),
+			async stop() {
+				if (stopped) return;
+				stopped = true;
+				await runRedisCommand(configuredUrl, ["FLUSHDB"]);
+			},
+		};
+	}
+
 	const port = options.port ?? (await findFreePort());
 	const serverArguments = [
 		"redis-server",
@@ -47,38 +108,31 @@ export async function startRedisTestServer(
 		serverArguments.push("--requirepass", options.password);
 	}
 	const stdio = options.stdio ?? "ignore";
-	const process = Bun.spawn(serverArguments, {
+	const serverProcess = Bun.spawn(serverArguments, {
 		stdout: stdio,
 		stderr: stdio,
 	});
-	const deadline = Date.now() + 10_000;
-	while (Date.now() < deadline) {
-		const pingArguments = ["redis-cli", "-h", "127.0.0.1", "-p", String(port)];
-		if (options.password) pingArguments.push("-a", options.password);
-		pingArguments.push("ping");
-		const ping = Bun.spawn(pingArguments, {
-			stdout: "ignore",
-			stderr: "ignore",
-		});
-		if ((await ping.exited) === 0) {
-			let stopped = false;
-			const authority = options.password
-				? `:${encodeURIComponent(options.password)}@127.0.0.1`
-				: "127.0.0.1";
-			return {
-				port,
-				url: `redis://${authority}:${port}`,
-				async stop() {
-					if (stopped) return;
-					stopped = true;
-					process.kill("SIGTERM");
-					await process.exited;
-				},
-			};
-		}
-		await Bun.sleep(50);
+	const authority = options.password
+		? `:${encodeURIComponent(options.password)}@127.0.0.1`
+		: "127.0.0.1";
+	const url = `redis://${authority}:${port}`;
+	try {
+		await waitForRedis(url);
+	} catch (error) {
+		serverProcess.kill("SIGTERM");
+		await serverProcess.exited;
+		throw error;
 	}
-	process.kill("SIGTERM");
-	await process.exited;
-	throw new Error("Redis did not become ready");
+	let stopped = false;
+	return {
+		port,
+		url,
+		command: (arguments_) => runRedisCommand(url, arguments_),
+		async stop() {
+			if (stopped) return;
+			stopped = true;
+			serverProcess.kill("SIGTERM");
+			await serverProcess.exited;
+		},
+	};
 }

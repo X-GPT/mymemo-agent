@@ -1,17 +1,18 @@
 import { MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE } from "@mymemo/agent-db/agentcore-dispatch";
+import { AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS } from "@mymemo/agent-db/run-store";
 
-/** Deployment inputs shared with the dormant infrastructure slice (#452). */
-export const CANARY_QUEUE_INVARIANTS = {
+/** Production deployment inputs shared with the AgentCore infrastructure. */
+export const AGENTCORE_DISPATCH_QUEUE_INVARIANTS = {
 	queueType: "standard",
 	queueEncrypted: true,
 	deadLetterQueueEncrypted: true,
 	publisherBatchSize: MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE,
-	repairIntervalMinutes: 1,
 	consumerBatchSize: 1,
 	partialBatchResponses: true,
 	consumerTimeoutSeconds: 120,
-	visibilityTimeoutSeconds: 300,
+	visibilityTimeoutSeconds: 180,
+	queuedRunTimeoutSeconds: AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS / 1_000,
 	retentionSeconds: 24 * 60 * 60,
-	maxReceiveCount: 3,
-	reservedConsumerConcurrency: 1,
+	maxReceiveCount: 5,
+	reservedConsumerConcurrency: null,
 } as const;

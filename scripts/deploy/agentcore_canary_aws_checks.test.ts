@@ -49,7 +49,7 @@ const alarmConfigurations: Record<string, AlarmConfiguration> = {
 		alarm_actions: ["arn:aws:sns:us-west-2:637423444544:canary-incident"],
 	},
 	"canary-expected-reclamation": {
-		namespace: "MyMemo/AgentCoreCanary",
+		namespace: "MyMemo/AgentCoreDispatch",
 		metric_name: "ExpectedReclamation",
 		dimensions: {},
 		statistic: "Sum",
@@ -119,7 +119,7 @@ aws() {
   case "$*" in
     *"lambda get-event-source-mapping"*) printf '%s\n' "$MAPPING" ;;
     *"lambda get-function-configuration"*) printf '%s\n' "$CONSUMER" ;;
-    *"lambda get-function-concurrency"*) printf '%s\n' "1" ;;
+    *"lambda get-function-concurrency"*) printf '%s\n' '{}' ;;
     *"events describe-rule"*) printf '%s\n' "$RULE" ;;
     *"events list-targets-by-rule"*) printf '%s\n' "$TARGETS" ;;
     *"lambda get-policy"*) printf '%s\n' "$PERMISSION" ;;
