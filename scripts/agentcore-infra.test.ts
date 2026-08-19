@@ -21,6 +21,27 @@ function terraformSource(): string {
 }
 
 describe("production AgentCore dispatch infrastructure", () => {
+	it("builds the Runtime on updated packages and ships a non-root distroless release", () => {
+		const dockerfile = readFileSync(
+			join(root, "apps", "agentcore-canary-runtime", "Dockerfile"),
+			"utf8",
+		);
+
+		expect(dockerfile).toContain("apt-get update");
+		expect(dockerfile).toContain("apt-get upgrade -y --no-install-recommends");
+		expect(dockerfile).toContain("rm -rf /var/lib/apt/lists/*");
+		expect(dockerfile).toContain(
+			`FROM oven/bun:\${BUN_VERSION}-distroless AS release`,
+		);
+		expect(dockerfile).toContain(
+			'AS release\nLABEL com.mymemo.agentcore-runtime.request-oriented="true"\nWORKDIR /usr/src/app',
+		);
+		expect(dockerfile).toContain("USER 65532:65532");
+		expect(dockerfile.indexOf("apt-get update")).toBeLessThan(
+			dockerfile.indexOf("AS release"),
+		);
+	});
+
 	it("keeps the existing isolated state while exposing a production Terraform root", () => {
 		const versions = readFileSync(join(terraformDir, "versions.tf"), "utf8");
 		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");

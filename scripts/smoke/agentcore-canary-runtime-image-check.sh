@@ -32,8 +32,8 @@ fi
 
 # Verify the pinned SDK-owned ARM64 CLI and the baked CA with all networking
 # disabled. Execute the same --version boot check used in production. Old x64
-# Docker/QEMU combinations can SIGSEGV a valid ARM64 binary; only on that
-# identifiable host-emulation path, fall back to checking the resolved ELF.
+# Docker/QEMU combinations can crash or hang a valid ARM64 binary; only on that
+# bounded, identifiable host-emulation path, fall back to the resolved ELF.
 docker run --rm \
   --platform linux/arm64 \
   --network none \
