@@ -1,5 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadWorkerConfigFromEnv } from "../apps/agent-worker/src/config/env";
 import { loadApiConfigFromEnv } from "../apps/chat-api/src/config/env";
@@ -721,6 +728,53 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).not.toContain(
 			"CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod",
 		);
+	});
+
+	it("writes a Terraform-formatted generated image overlay", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "mymemo-deploy-tfvars-"));
+		const generatedTfvars = join(tempDir, "generated.auto.tfvars");
+
+		try {
+			const result = Bun.spawnSync({
+				cmd: [
+					join(root, "scripts", "deploy", "ci_prepare_tfvars.sh"),
+					generatedTfvars,
+				],
+				cwd: root,
+				env: {
+					...process.env,
+					AWS_REGION: "us-west-2",
+					DEPLOY_ENVIRONMENT: "prod",
+					CHAT_API_IMAGE: "example.test/chat-api:release-test",
+					AGENT_WORKER_IMAGE: "example.test/agent-worker:release-test",
+					AGENTCORE_DISPATCH_PUBLISHER_IMAGE:
+						"example.test/agentcore-dispatch-publisher:release-test",
+				},
+			});
+
+			expect(result.exitCode).toBe(0);
+
+			const lines = readFileSync(generatedTfvars, "utf8").trimEnd().split("\n");
+			const assignments = lines.map((line) => {
+				const equalsColumn = line.indexOf("=");
+				return {
+					equalsColumn,
+					key: line.slice(0, equalsColumn).trimEnd(),
+				};
+			});
+			const maxKeyLength = Math.max(
+				...assignments.map(({ key }) => key.length),
+			);
+
+			expect(assignments).toHaveLength(4);
+			expect(
+				assignments.every(
+					({ equalsColumn }) => equalsColumn === maxKeyLength + 1,
+				),
+			).toBe(true);
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	it("bootstrap IAM owns the agent-specific GitHub Actions deploy role", () => {
