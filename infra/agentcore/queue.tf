@@ -14,7 +14,6 @@ resource "aws_sqs_queue" "dead_letter" {
   message_retention_seconds  = 86400
   visibility_timeout_seconds = 300
   kms_master_key_id          = aws_kms_key.dispatch.arn
-  sqs_managed_sse_enabled    = false
 }
 
 resource "aws_sqs_queue" "dispatch" {
@@ -23,7 +22,6 @@ resource "aws_sqs_queue" "dispatch" {
   visibility_timeout_seconds = 180
   receive_wait_time_seconds  = 20
   kms_master_key_id          = aws_kms_key.dispatch.arn
-  sqs_managed_sse_enabled    = false
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dead_letter.arn

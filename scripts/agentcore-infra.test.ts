@@ -134,6 +134,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 				`resource\\s+"aws_sqs_queue"\\s+"dispatch"[\\s\\S]*?message_retention_seconds\\s*=\\s*${queue.retentionSeconds}[\\s\\S]*?visibility_timeout_seconds\\s*=\\s*${queue.visibilityTimeoutSeconds}[\\s\\S]*?kms_master_key_id\\s*=\\s*aws_kms_key\\.dispatch\\.arn`,
 			),
 		);
+		expect(source).not.toContain("sqs_managed_sse_enabled");
 		expect(source).toMatch(
 			new RegExp(`maxReceiveCount\\s*=\\s*${queue.maxReceiveCount}`),
 		);
