@@ -60,6 +60,16 @@ variable "agent_worker_image" {
   }
 }
 
+variable "agentcore_dispatch_publisher_image" {
+  description = "Fully qualified AgentCore dispatch publisher container image URI including tag."
+  type        = string
+
+  validation {
+    condition     = length(var.agentcore_dispatch_publisher_image) > 0
+    error_message = "agentcore_dispatch_publisher_image is required."
+  }
+}
+
 variable "chat_api_desired_count" {
   description = "Desired ECS task count for chat-api."
   type        = number
@@ -70,6 +80,17 @@ variable "agent_worker_desired_count" {
   description = "Desired ECS task count for agent-worker."
   type        = number
   default     = 1
+}
+
+variable "agentcore_dispatch_publisher_desired_count" {
+  description = "Desired ECS task count for the singleton AgentCore dispatch publisher."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.agentcore_dispatch_publisher_desired_count == 0 || var.agentcore_dispatch_publisher_desired_count == 1
+    error_message = "agentcore_dispatch_publisher_desired_count must be zero or one."
+  }
 }
 
 variable "chat_api_cpu" {
@@ -94,6 +115,47 @@ variable "agent_worker_memory" {
   description = "Fargate memory MiB for agent-worker."
   type        = number
   default     = 2048
+}
+
+variable "agentcore_dispatch_publisher_cpu" {
+  description = "Fargate CPU units for the AgentCore dispatch publisher."
+  type        = number
+  default     = 256
+}
+
+variable "agentcore_dispatch_publisher_memory" {
+  description = "Fargate memory MiB for the AgentCore dispatch publisher."
+  type        = number
+  default     = 512
+}
+
+variable "agentcore_dispatch_publisher_interval_ms" {
+  description = "Delay between AgentCore Dispatch publication ticks."
+  type        = number
+  default     = 2000
+
+  validation {
+    condition     = var.agentcore_dispatch_publisher_interval_ms > 0 && var.agentcore_dispatch_publisher_interval_ms <= 2147483647
+    error_message = "agentcore_dispatch_publisher_interval_ms must be positive and no greater than 2147483647."
+  }
+}
+
+variable "agentcore_dispatch_queue_name" {
+  description = "Existing AgentCore dispatch queue name. Defaults to the transitional canary name until the production-infrastructure rename."
+  type        = string
+  default     = null
+}
+
+variable "agentcore_dispatch_enabled_parameter_name" {
+  description = "Existing fail-closed AgentCore dispatch SSM parameter name. Defaults to the transitional canary path until the production-infrastructure rename."
+  type        = string
+  default     = null
+}
+
+variable "agentcore_dispatch_queue_kms_alias_name" {
+  description = "Alias of the customer-managed KMS key encrypting the AgentCore dispatch queue."
+  type        = string
+  default     = null
 }
 
 variable "chat_api_port" {

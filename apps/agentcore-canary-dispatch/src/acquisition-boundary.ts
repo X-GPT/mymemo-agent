@@ -3,13 +3,13 @@ import {
 	type AcquireAgentCoreDispatchResult,
 	type AgentCoreDispatchIdentity,
 	acquireAgentCoreDispatchTx,
-} from "@mymemo/agent-db/canary-dispatch";
+} from "@mymemo/agent-db/agentcore-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
+import type { AgentCoreDispatchEnablementControl } from "@mymemo/agentcore-dispatch/publisher";
 import {
 	createAcquisitionReceipt,
 	parseCanaryDispatchEnvelope,
 } from "./contract";
-import type { CanaryEnablementControl } from "./publisher";
 
 export type CanaryDispatchAcquirer = (input: {
 	dispatch: AgentCoreDispatchIdentity;
@@ -23,7 +23,7 @@ export interface CommittedCanaryAcquisition {
 }
 
 export function createCanaryAcquisitionBoundary(options: {
-	control: CanaryEnablementControl;
+	control: AgentCoreDispatchEnablementControl;
 	acquire: CanaryDispatchAcquirer;
 	createWorkerId: () => string;
 	now?: () => Date;
@@ -79,7 +79,7 @@ export function createCanaryAcquisitionBoundary(options: {
 export function createDatabaseCanaryAcquisitionBoundary(options: {
 	db: Database;
 	bootId: string;
-	control: CanaryEnablementControl;
+	control: AgentCoreDispatchEnablementControl;
 	now?: () => Date;
 }) {
 	return createCanaryAcquisitionBoundary({

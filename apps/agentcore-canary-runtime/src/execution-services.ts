@@ -1,4 +1,4 @@
-import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/agentcore-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	releaseConversationTx,

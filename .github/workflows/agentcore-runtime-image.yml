@@ -9,6 +9,7 @@ on:
       - apps/agentcore-canary-dispatch/**
       - apps/agent-worker/**
       - packages/agent-db/**
+      - packages/agentcore-dispatch/**
       - packages/live-text/**
       - apps/*/package.json
       - packages/*/package.json
@@ -23,6 +24,7 @@ on:
       - apps/agentcore-canary-dispatch/**
       - apps/agent-worker/**
       - packages/agent-db/**
+      - packages/agentcore-dispatch/**
       - packages/live-text/**
       - apps/*/package.json
       - packages/*/package.json

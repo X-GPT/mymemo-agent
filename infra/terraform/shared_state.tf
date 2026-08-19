@@ -25,3 +25,11 @@ data "aws_ecs_cluster" "shared" {
 
   cluster_name = local.shared_ecs_cluster_name_output
 }
+
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
+
+data "aws_kms_alias" "agentcore_dispatch_queue" {
+  name = local.agentcore_dispatch_queue_kms_alias_name
+}

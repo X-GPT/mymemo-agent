@@ -176,6 +176,15 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
+    sid = "AgentCoreDispatchKmsMetadata"
+    actions = [
+      "kms:DescribeKey",
+      "kms:ListAliases",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
     sid = "AgentKmsGrantManagement"
     actions = [
       "kms:CreateGrant",

@@ -8,6 +8,11 @@ resource "aws_cloudwatch_log_group" "agent_worker" {
   retention_in_days = var.log_retention_days
 }
 
+resource "aws_cloudwatch_log_group" "agentcore_dispatch_publisher" {
+  name              = "/ecs/${local.agentcore_dispatch_publisher_name}"
+  retention_in_days = var.log_retention_days
+}
+
 locals {
   live_stream_log_groups = {
     chat-api     = aws_cloudwatch_log_group.chat_api.name

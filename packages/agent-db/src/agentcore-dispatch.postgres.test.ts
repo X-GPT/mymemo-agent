@@ -12,7 +12,7 @@ import {
 	type AgentCoreDispatchIdentity,
 	acquireAgentCoreDispatchTx,
 	claimAgentCoreDispatchesTx,
-} from "./canary-dispatch";
+} from "./agentcore-dispatch";
 import { createDatabase, type Database } from "./client";
 import { claimConversationTx } from "./conversation-ownership";
 import { requestRunInterruptionTx, transitionRunTerminalTx } from "./run-store";

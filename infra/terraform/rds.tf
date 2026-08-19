@@ -14,6 +14,16 @@ resource "aws_security_group_rule" "agent_services_to_agent_db" {
   protocol                 = "tcp"
 }
 
+resource "aws_security_group_rule" "agentcore_dispatch_publisher_to_agent_db" {
+  type                     = "ingress"
+  description              = "AgentCore dispatch publisher to dedicated agent Postgres"
+  security_group_id        = aws_security_group.agent_db.id
+  source_security_group_id = aws_security_group.agentcore_dispatch_publisher.id
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+}
+
 # The KB database lives in the existing mymemo-service RDS instance, whose
 # security group is owned by that stack and admits only its own ECS tasks.
 # agent-worker reads the KB over KB_DATABASE_URL, so this stack attaches the

@@ -24,7 +24,7 @@ import {
 	runs,
 } from "./schema";
 
-const DISPATCH_PUBLISH_LEASE_MS = 3 * 60_000;
+const AGENTCORE_DISPATCH_PUBLISH_LEASE_MS = 3 * 60_000;
 export const MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE = 10;
 
 export interface AgentCoreDispatchIdentity {
@@ -70,6 +70,19 @@ export async function recordAgentCoreDispatchInTx(
 		runId: input.runId,
 		admittedAt: input.admittedAt,
 	});
+}
+
+/** Oldest still-unpublished admission, used for the publisher pending-age metric. */
+export async function loadOldestUnpublishedAgentCoreDispatchAdmittedAt(
+	db: Database,
+): Promise<Date | null> {
+	const [oldest] = await db
+		.select({ admittedAt: agentCoreDispatchOutbox.admittedAt })
+		.from(agentCoreDispatchOutbox)
+		.where(isNull(agentCoreDispatchOutbox.publishedAt))
+		.orderBy(agentCoreDispatchOutbox.admittedAt, agentCoreDispatchOutbox.runId)
+		.limit(1);
+	return oldest?.admittedAt ?? null;
 }
 
 /**
@@ -130,7 +143,9 @@ export async function claimAgentCoreDispatchesTx(
 			.update(agentCoreDispatchOutbox)
 			.set({
 				publishClaimedBy: input.publisherId,
-				publishClaimUntil: new Date(now.getTime() + DISPATCH_PUBLISH_LEASE_MS),
+				publishClaimUntil: new Date(
+					now.getTime() + AGENTCORE_DISPATCH_PUBLISH_LEASE_MS,
+				),
 				publishAttempts: sql`${agentCoreDispatchOutbox.publishAttempts} + 1`,
 			})
 			.where(

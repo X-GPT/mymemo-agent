@@ -1,10 +1,10 @@
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { SSMClient } from "@aws-sdk/client-ssm";
+import { createSsmAgentCoreDispatchEnablementControl } from "@mymemo/agentcore-dispatch/ssm-control";
 import { createLogger, toMessage } from "agent-worker/logger";
 import { createProductionRunResources } from "agent-worker/production-run-resources";
 import { createRunServing } from "agent-worker/run-serving";
 import { createDatabaseCanaryAcquisitionBoundary } from "agentcore-canary-dispatch/acquisition-boundary";
-import { createSsmCanaryEnablementControl } from "agentcore-canary-dispatch/aws-adapters";
 import { createCurrentSecretReader } from "agentcore-canary-dispatch/secret-config";
 import {
 	loadRuntimeBootstrapConfig,
@@ -33,7 +33,7 @@ export async function createProductionCanaryRuntime(options: {
 		telemetryService: "agentcore-canary-runtime",
 		artifactObjectKeyPrefix: options.bootstrap.artifactObjectKeyPrefix,
 	});
-	const control = createSsmCanaryEnablementControl({
+	const control = createSsmAgentCoreDispatchEnablementControl({
 		client: options.ssmClient,
 		parameterName: options.bootstrap.enabledParameterName,
 	});

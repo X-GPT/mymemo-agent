@@ -21,8 +21,9 @@ kb_database_security_group_id = "sg-0c7084b87f3e109d7"
 # inherited network constraint, not the preferred production pattern.
 assign_public_ip = true
 
-chat_api_desired_count     = 1
-agent_worker_desired_count = 1
+chat_api_desired_count                     = 1
+agent_worker_desired_count                 = 1
+agentcore_dispatch_publisher_desired_count = 1
 
 e2b_template                        = "sandbox-template-prod"
 worker_e2b_template                 = "mymemo-agent-sandbox"

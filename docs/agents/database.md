@@ -30,7 +30,7 @@ PGlite tests cover transaction behavior that one in-process backend can express.
 - concurrent reclaimers
 - a superseded holder racing its successor
 
-AgentCore publisher/acquisition races live in `src/canary-dispatch.postgres.test.ts`. These tests are gated on `AGENT_DATABASE_URL` and run in the CI `integration` job against the Postgres major used in production.
+AgentCore outbox/acquisition races live in `packages/agent-db/src/agentcore-dispatch.postgres.test.ts`. The dedicated publisher task's deployment-overlap exclusion and backend-termination release live in `apps/agentcore-dispatch-publisher/src/publisher-loop.postgres.test.ts`; it additionally requires `RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS=true` so the publisher app's local `.env` cannot accidentally target a database during its ordinary unit suite. These tests require `AGENT_DATABASE_URL` and run in the CI `integration` job against the Postgres major used in production.
 
 ## Drizzle dependency identity
 

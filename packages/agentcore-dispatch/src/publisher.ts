@@ -1,11 +1,13 @@
-import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/canary-dispatch";
-import { CANARY_QUEUE_INVARIANTS } from "./invariants";
+import {
+	type AgentCoreDispatchIdentity,
+	MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE,
+} from "@mymemo/agent-db/agentcore-dispatch";
 
-export interface CanaryEnablementControl {
+export interface AgentCoreDispatchEnablementControl {
 	isEnabled(): Promise<boolean>;
 }
 
-export interface CanaryDispatchPublisherStore {
+export interface AgentCoreDispatchPublisherStore {
 	claim(input: {
 		publisherId: string;
 		runId?: string;
@@ -14,34 +16,43 @@ export interface CanaryDispatchPublisherStore {
 	confirm(input: { runId: string; publisherId: string }): Promise<boolean>;
 }
 
-export interface CanaryDispatchQueue {
+export interface AgentCoreDispatchQueue {
 	send(dispatch: AgentCoreDispatchIdentity): Promise<void>;
 }
 
-export interface CanaryPublishResult {
+export interface AgentCoreDispatchPublishResult {
 	status: "enabled" | "disabled";
 	publishedRunIds: string[];
 	ambiguousRunIds: string[];
 }
 
-export type CanaryImmediatePublishResult =
-	| CanaryPublishResult
-	| { status: "failed" };
-
-/** Shared by the immediate launcher attempt and the minute repair invocation. */
-export function createCanaryDispatchPublisher(options: {
+/** Claim, send, and confirm one bounded production dispatch batch. */
+export function createAgentCoreDispatchPublisher(options: {
 	publisherId: string;
-	control: CanaryEnablementControl;
-	store: CanaryDispatchPublisherStore;
-	queue: CanaryDispatchQueue;
+	control: AgentCoreDispatchEnablementControl;
+	store: AgentCoreDispatchPublisherStore;
+	queue: AgentCoreDispatchQueue;
+	shutdownSignal?: AbortSignal;
+	lockSignal?: AbortSignal;
 }) {
+	const shouldStop = () =>
+		options.shutdownSignal?.aborted === true ||
+		options.lockSignal?.aborted === true;
+
 	return {
 		async publishPending(
 			input: { runId?: string } = {},
-		): Promise<CanaryPublishResult> {
+		): Promise<AgentCoreDispatchPublishResult> {
 			if (!(await options.control.isEnabled())) {
 				return {
 					status: "disabled",
+					publishedRunIds: [],
+					ambiguousRunIds: [],
+				};
+			}
+			if (shouldStop()) {
+				return {
+					status: "enabled",
 					publishedRunIds: [],
 					ambiguousRunIds: [],
 				};
@@ -50,19 +61,25 @@ export function createCanaryDispatchPublisher(options: {
 			const claimed = await options.store.claim({
 				publisherId: options.publisherId,
 				runId: input.runId,
-				limit: CANARY_QUEUE_INVARIANTS.publisherBatchSize,
+				limit: MAX_AGENTCORE_DISPATCH_PUBLISH_BATCH_SIZE,
 			});
-			const result: CanaryPublishResult = {
+			const result: AgentCoreDispatchPublishResult = {
 				status: "enabled",
 				publishedRunIds: [],
 				ambiguousRunIds: [],
 			};
 			for (const dispatch of claimed) {
+				if (shouldStop()) return result;
 				if (!(await options.control.isEnabled())) {
 					return { ...result, status: "disabled" };
 				}
+				if (shouldStop()) return result;
 				try {
 					await options.queue.send(dispatch);
+					if (options.lockSignal?.aborted) {
+						result.ambiguousRunIds.push(dispatch.runId);
+						return result;
+					}
 					const confirmed = await options.store.confirm({
 						runId: dispatch.runId,
 						publisherId: options.publisherId,

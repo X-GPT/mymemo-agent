@@ -3,8 +3,8 @@
 // from production installs, so pulling it into the root barrel would break
 // production imports. Import the test harness from `@mymemo/agent-db/testing`.
 
+export * from "./agentcore-dispatch";
 export * from "./artifact-store";
-export * from "./canary-dispatch";
 export * from "./client";
 export * from "./conversation-ownership";
 export * from "./execution-runtime";

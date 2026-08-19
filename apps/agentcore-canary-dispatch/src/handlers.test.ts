@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import type { AgentCoreDispatchPublishResult } from "@mymemo/agentcore-dispatch/publisher";
 import {
 	createCanaryConsumerHandler,
 	createCanaryPublisherHandler,
 	createManualReplayHandler,
 } from "./handlers";
-import type { CanaryPublishResult } from "./publisher";
 
-const enabledPublication: CanaryPublishResult = {
+const enabledPublication: AgentCoreDispatchPublishResult = {
 	status: "enabled",
 	publishedRunIds: ["run-450"],
 	ambiguousRunIds: [],

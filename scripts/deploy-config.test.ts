@@ -192,7 +192,7 @@ describe("agent deployment config", () => {
 		expect(artifactsConfig).toContain('values   = ["false"]');
 		expect(terraformConfig).not.toContain("aws_s3_bucket_cors_configuration");
 		expect(terraformConfig).not.toMatch(/\bcors_rule\s*\{/);
-		expect(terraformConfig).not.toMatch(
+		expect(artifactsConfig).not.toMatch(
 			/aws_kms|kms_master_key_id|SSEKMSKeyId/,
 		);
 		expect(
@@ -476,6 +476,9 @@ describe("agent deployment config", () => {
 			.join("\n");
 
 		expect(ecrCombined).toContain('resource "aws_ecr_repository" "chat_api"');
+		expect(ecrCombined).toContain(
+			'resource "aws_ecr_repository" "agentcore_dispatch_publisher"',
+		);
 		expect(releaseDeployWorkflow).toContain(
 			"terraform -chdir=infra/ecr apply -auto-approve",
 		);
@@ -573,6 +576,9 @@ describe("agent deployment config", () => {
 		expect(ecsConfig).toContain("ignore_changes = [task_definition]");
 		expect(outputs).toContain('output "chat_api_task_definition_arn"');
 		expect(outputs).toContain('output "agent_worker_task_definition_arn"');
+		expect(outputs).toContain(
+			'output "agentcore_dispatch_publisher_task_definition_arn"',
+		);
 		expect(rolloutScript).toContain(
 			"terraform -chdir=infra/terraform output -raw chat_api_task_definition_arn",
 		);
@@ -580,10 +586,16 @@ describe("agent deployment config", () => {
 			"terraform -chdir=infra/terraform output -raw agent_worker_task_definition_arn",
 		);
 		expect(rolloutScript).toContain(
+			"terraform -chdir=infra/terraform output -raw agentcore_dispatch_publisher_task_definition_arn",
+		);
+		expect(rolloutScript).toContain(
 			'--task-definition "$chat_api_task_definition"',
 		);
 		expect(rolloutScript).toContain(
 			'--task-definition "$agent_worker_task_definition"',
+		);
+		expect(rolloutScript).toContain(
+			'--task-definition "$agentcore_dispatch_publisher_task_definition"',
 		);
 		expect(ecsConfig).not.toContain("body.executionRuntime !== 'fargate'");
 		expect(workerDockerfile).toContain(
@@ -652,6 +664,9 @@ describe("agent deployment config", () => {
 		expect(planScript).toContain('-var="chat_api_desired_count=0"');
 		expect(planScript).toContain('-var="agent_worker_desired_count=0"');
 		expect(planScript).toContain(
+			'-var="agentcore_dispatch_publisher_desired_count=0"',
+		);
+		expect(planScript).toContain(
 			'terraform -chdir=infra/terraform plan "${plan_args[@]}" -out="$plan_file"',
 		);
 		expect(planScript).toContain("generated.auto.tfvars");
@@ -672,7 +687,10 @@ describe("agent deployment config", () => {
 			"terraform -chdir=infra/ecr output -raw agent_worker_ecr_repository_url",
 		);
 		expect(prepareScript).toContain(
-			"Set both CHAT_API_IMAGE and AGENT_WORKER_IMAGE",
+			"Set CHAT_API_IMAGE, AGENT_WORKER_IMAGE, and AGENTCORE_DISPATCH_PUBLISHER_IMAGE together",
+		);
+		expect(prepareScript).toContain(
+			"terraform -chdir=infra/ecr output -raw agentcore_dispatch_publisher_ecr_repository_url",
 		);
 		expect(releaseDeployWorkflow).not.toContain("AWS_REGION: us-west-2");
 		expect(releaseDeployWorkflow).not.toContain(
@@ -943,6 +961,9 @@ describe("agent deployment config", () => {
 		expect(ecsConfig).toContain(
 			"desired_count   = var.agent_worker_desired_count",
 		);
+		expect(ecsConfig).toContain(
+			"desired_count   = var.agentcore_dispatch_publisher_desired_count",
+		);
 		expect(ecsConfig).not.toContain("ignore_changes = [desired_count]");
 	});
 
@@ -1005,6 +1026,9 @@ describe("agent deployment config", () => {
 		expect(buildScript).toContain('output_name="chat_api_ecr_repository_url"');
 		expect(buildScript).toContain(
 			'output_name="agent_worker_ecr_repository_url"',
+		);
+		expect(buildScript).toContain(
+			'output_name="agentcore_dispatch_publisher_ecr_repository_url"',
 		);
 		expect(buildScript).toContain(
 			'terraform -chdir=infra/ecr output -raw "$output_name"',

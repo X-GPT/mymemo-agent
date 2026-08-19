@@ -11,9 +11,10 @@ import {
 	acquireAgentCoreDispatchTx,
 	claimAgentCoreDispatchesTx,
 	confirmAgentCoreDispatchPublishedTx,
+	loadOldestUnpublishedAgentCoreDispatchAdmittedAt,
 	recordAgentCoreDispatchInTx,
 	requestAgentCoreDispatchReplayTx,
-} from "./canary-dispatch";
+} from "./agentcore-dispatch";
 import { admitQueuedRunInTx } from "./run-store";
 import {
 	agentCoreDispatchOutbox,
@@ -170,6 +171,28 @@ describe("Run-keyed AgentCore dispatch outbox", () => {
 				publishAttempts: 2,
 			},
 		]);
+	});
+
+	it("reports the oldest unpublished admission for publisher telemetry", async () => {
+		await admitRunWithDispatch();
+
+		await expect(
+			loadOldestUnpublishedAgentCoreDispatchAdmittedAt(tdb.db),
+		).resolves.toEqual(admittedAt);
+
+		await claimAgentCoreDispatchesTx(tdb.db, {
+			publisherId: "publisher-1",
+			now: new Date("2026-08-14T16:01:00.000Z"),
+		});
+		await confirmAgentCoreDispatchPublishedTx(tdb.db, {
+			runId: exact.runId,
+			publisherId: "publisher-1",
+			now: new Date("2026-08-14T16:01:10.000Z"),
+		});
+
+		await expect(
+			loadOldestUnpublishedAgentCoreDispatchAdmittedAt(tdb.db),
+		).resolves.toBeNull();
 	});
 });
 

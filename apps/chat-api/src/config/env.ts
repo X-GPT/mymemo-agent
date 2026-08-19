@@ -1,4 +1,7 @@
+import { resolveDatabaseUrl } from "@mymemo/agent-db/database-url";
 import { resolveLiveStreamRedisUrl } from "@mymemo/live-text";
+
+export { resolveDatabaseUrl };
 
 export type ChatMessagesScope = "general" | "collection" | "document";
 
@@ -57,48 +60,6 @@ export interface ApiConfig {
 	agentExposureBreakGlass: boolean;
 	/** Required authenticated TLS Redis secret for the Live Stream relay. */
 	redisUrl: string;
-}
-
-/**
- * If the DB URL is passwordless (the form the platform injects) and DB_PASSWORD
- * is set, splice the password in. Mirrors the gateway's helper.
- */
-function withPassword(url: string, password: string | undefined): string {
-	if (!password) return url;
-	const m = /^([a-z]+:\/\/)([^@/]+)@(.*)$/i.exec(url);
-	if (!m) return url;
-	const [, scheme, userinfo, rest] = m;
-	if (!scheme || !userinfo || rest === undefined) return url;
-	if (userinfo.includes(":")) return url; // already has a password
-	return `${scheme}${userinfo}:${encodeURIComponent(password)}@${rest}`;
-}
-
-/**
- * Append `sslmode=no-verify` unless TLS is disabled or the URL already sets it.
- * We want the connection encrypted but not CA-verified: RDS presents the Amazon
- * RDS CA, which is not in Node's default trust store. node-postgres's
- * pg-connection-string aliases `sslmode=require` to `verify-full` (strict
- * CA-chain verification), so `require` fails with SELF_SIGNED_CERT_IN_CHAIN;
- * `no-verify` maps to `rejectUnauthorized: false`. Do not change back to
- * `require` without also shipping the RDS CA bundle (e.g. NODE_EXTRA_CA_CERTS).
- */
-function withSsl(url: string, enabled: boolean): string {
-	if (!enabled || /[?&]sslmode=/.test(url)) return url;
-	return `${url}${url.includes("?") ? "&" : "?"}sslmode=no-verify`;
-}
-
-/**
- * Resolve the writable DB connection string from its env parts: splice in
- * DB_PASSWORD when passwordless, and apply TLS unless DB_SSL=disable. Shared by
- * the app config and the standalone migration runner so both connect identically.
- */
-export function resolveDatabaseUrl(
-	databaseUrl: string | undefined,
-	dbPassword: string | undefined,
-	dbSsl: string | undefined,
-): string | undefined {
-	if (!databaseUrl) return undefined;
-	return withSsl(withPassword(databaseUrl, dbPassword), dbSsl !== "disable");
 }
 
 /**

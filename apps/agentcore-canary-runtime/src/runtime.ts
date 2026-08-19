@@ -1,7 +1,7 @@
 import type {
 	AcquireAgentCoreDispatchResult,
 	AgentCoreDispatchIdentity,
-} from "@mymemo/agent-db/canary-dispatch";
+} from "@mymemo/agent-db/agentcore-dispatch";
 import type { ConversationOwner } from "@mymemo/agent-db/conversation-ownership";
 import type { ServeStartedRunResult } from "agent-worker/run-serving";
 import type { CommittedCanaryAcquisition } from "agentcore-canary-dispatch/acquisition-boundary";

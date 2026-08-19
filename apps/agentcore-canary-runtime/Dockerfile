@@ -21,6 +21,7 @@ COPY apps/agentcore-canary-runtime apps/agentcore-canary-runtime
 COPY apps/agentcore-canary-dispatch apps/agentcore-canary-dispatch
 COPY apps/agent-worker apps/agent-worker
 COPY packages/agent-db packages/agent-db
+COPY packages/agentcore-dispatch packages/agentcore-dispatch
 COPY packages/live-text packages/live-text
 COPY package.json .
 

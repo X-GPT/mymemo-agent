@@ -1,15 +1,14 @@
 import { BedrockAgentCoreClient } from "@aws-sdk/client-bedrock-agentcore";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { SSMClient } from "@aws-sdk/client-ssm";
-import { requestAgentCoreDispatchReplayTx } from "@mymemo/agent-db/canary-dispatch";
+import { requestAgentCoreDispatchReplayTx } from "@mymemo/agent-db/agentcore-dispatch";
 import { createDatabase } from "@mymemo/agent-db/client";
+import { createDatabaseAgentCoreDispatchPublisherStore } from "@mymemo/agentcore-dispatch/database-store";
+import { createAgentCoreDispatchPublisher } from "@mymemo/agentcore-dispatch/publisher";
+import { createSqsAgentCoreDispatchQueue } from "@mymemo/agentcore-dispatch/sqs-queue";
+import { createSsmAgentCoreDispatchEnablementControl } from "@mymemo/agentcore-dispatch/ssm-control";
 import { createDatabaseCanaryAcquisitionBoundary } from "./acquisition-boundary";
-import {
-	createBedrockAgentCoreRuntimeInvoker,
-	createDatabaseCanaryDispatchPublisherStore,
-	createSqsCanaryDispatchQueue,
-	createSsmCanaryEnablementControl,
-} from "./aws-adapters";
+import { createBedrockAgentCoreRuntimeInvoker } from "./aws-adapters";
 import {
 	createRetryableAsyncSingleton,
 	type Env,
@@ -25,7 +24,6 @@ import {
 	createManualReplayHandler,
 	type LambdaContext,
 } from "./handlers";
-import { createCanaryDispatchPublisher } from "./publisher";
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
@@ -127,20 +125,20 @@ function createProductionPublisherResources(
 	config: CanaryDispatchPublisherConfig,
 ) {
 	const db = createDatabase(config.agentDatabaseUrl);
-	const control = createSsmCanaryEnablementControl({
+	const control = createSsmAgentCoreDispatchEnablementControl({
 		client: new SSMClient({ region: config.awsRegion }),
 		parameterName: config.enabledParameterName,
 	});
-	const queue = createSqsCanaryDispatchQueue({
+	const queue = createSqsAgentCoreDispatchQueue({
 		client: new SQSClient({ region: config.awsRegion }),
 		queueUrl: config.queueUrl,
 	});
-	const store = createDatabaseCanaryDispatchPublisherStore({ db });
+	const store = createDatabaseAgentCoreDispatchPublisherStore({ db });
 	return {
 		db,
 		control,
 		publish: async (publisherId: string, runId?: string) =>
-			await createCanaryDispatchPublisher({
+			await createAgentCoreDispatchPublisher({
 				publisherId,
 				control,
 				store,
