@@ -269,6 +269,76 @@ verify_agentcore_egress us-west-2 "$TF_OUTPUT"
 	});
 }
 
+function resolveRuntimeRollbackDigest(
+	runtimes: Record<string, unknown>[],
+	containerUri: string,
+) {
+	const script = `
+set -euo pipefail
+source "${checksPath}"
+aws() {
+  case "$*" in
+    *"bedrock-agentcore-control list-agent-runtimes"*) printf '%s\\n' "$RUNTIMES" ;;
+    *"bedrock-agentcore-control get-agent-runtime"*) printf '%s\\n' "$RUNTIME" ;;
+    *) exit 97 ;;
+  esac
+}
+resolve_agentcore_runtime_rollback_digest us-west-2 prod
+`;
+	return spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			AWS_PROFILE: "",
+			RUNTIMES: JSON.stringify({ agentRuntimes: runtimes }),
+			RUNTIME: JSON.stringify({
+				agentRuntimeArtifact: {
+					containerConfiguration: { containerUri },
+				},
+			}),
+		},
+	});
+}
+
+describe("production AgentCore Runtime rollback digest", () => {
+	const digest = `sha256:${"a".repeat(64)}`;
+	const expectedRuntime = {
+		agentRuntimeId: "mymemo_agentcore_prod-runtime",
+		agentRuntimeName: "mymemo_agentcore_prod",
+	};
+
+	it("reads the current digest from the one exact live Runtime", () => {
+		const result = resolveRuntimeRollbackDigest(
+			[expectedRuntime, { ...expectedRuntime, agentRuntimeName: "foreign" }],
+			`example.test/mymemo/agentcore-runtime@${digest}`,
+		);
+
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout.trim()).toBe(digest);
+	});
+
+	it.each([
+		["missing Runtime", []],
+		["duplicate Runtime", [expectedRuntime, expectedRuntime]],
+	] as const)("rejects a %s", (_name, runtimes) => {
+		expect(
+			resolveRuntimeRollbackDigest(
+				[...runtimes],
+				`example.test/mymemo/agentcore-runtime@${digest}`,
+			).status,
+		).not.toBe(0);
+	});
+
+	it("rejects a Runtime image without an exact digest", () => {
+		expect(
+			resolveRuntimeRollbackDigest(
+				[expectedRuntime],
+				"example.test/mymemo/agentcore-runtime:latest",
+			).status,
+		).not.toBe(0);
+	});
+});
+
 describe("production AgentCore dispatch wiring", () => {
 	it("accepts the enabled consumer while preserving disabled Dispatch", () => {
 		const result = verify(expectedWiring());

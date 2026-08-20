@@ -201,10 +201,6 @@ jobs:
             echo "ECR returned an invalid Runtime image digest." >&2
             exit 1
           fi
-          aws ecr wait image-scan-complete \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-id imageDigest="${runtime_image_digest}"
           printf 'TF_VAR_runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_ENV}"
           printf 'runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_OUTPUT}"
 
@@ -303,7 +299,6 @@ jobs:
         run: |
           record_dir="${RUNNER_TEMP}/agentcore-deployment"
           mkdir -p "${record_dir}"
-          terraform -chdir=infra/terraform init
 
           caller_account="$(aws sts get-caller-identity --query Account --output text)"
           if [[ "${caller_account}" != "${AWS_ACCOUNT_ID}" ]]; then
@@ -325,9 +320,10 @@ jobs:
             exit 1
           fi
 
-          previous_digest="$(terraform -chdir=infra/terraform output -raw runtime_image_digest)"
+          source scripts/deploy/agentcore_aws_checks.sh
+          previous_digest="$(resolve_agentcore_runtime_rollback_digest "${AWS_REGION}" "${DEPLOY_ENVIRONMENT}")"
           if [[ ! "${previous_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Terraform state contains an invalid Runtime rollback digest." >&2
+            echo "The live AgentCore Runtime returned an invalid rollback digest." >&2
             exit 1
           fi
           printf 'EXPECTED_DISPATCH_VALUE=%s\n' "${dispatch_value}" >> "${GITHUB_ENV}"

@@ -8,6 +8,49 @@ agentcore_aws() {
   fi
 }
 
+resolve_agentcore_runtime_rollback_digest() {
+  local region="$1"
+  local environment="$2"
+  local expected_runtime_name="mymemo_agentcore_${environment}"
+  local runtimes
+  local matching_runtimes
+  local runtime_count
+  local runtime_id
+  local runtime
+  local container_uri
+  local digest
+
+  runtimes="$(agentcore_aws bedrock-agentcore-control list-agent-runtimes \
+    --region "${region}")"
+  matching_runtimes="$(jq -c \
+    --arg runtimeName "${expected_runtime_name}" \
+    '[.agentRuntimes[]? | select(.agentRuntimeName == $runtimeName)]' \
+    <<<"${runtimes}")"
+  runtime_count="$(jq -r 'length' <<<"${matching_runtimes}")"
+  if [[ "${runtime_count}" != "1" ]]; then
+    echo "Expected exactly one live AgentCore Runtime named ${expected_runtime_name}; found ${runtime_count}." >&2
+    return 1
+  fi
+
+  runtime_id="$(jq -r '.[0].agentRuntimeId // empty' <<<"${matching_runtimes}")"
+  if [[ -z "${runtime_id}" ]]; then
+    echo "The live AgentCore Runtime is missing its Runtime id." >&2
+    return 1
+  fi
+
+  runtime="$(agentcore_aws bedrock-agentcore-control get-agent-runtime \
+    --region "${region}" \
+    --agent-runtime-id "${runtime_id}")"
+  container_uri="$(jq -r '.agentRuntimeArtifact.containerConfiguration.containerUri // empty' <<<"${runtime}")"
+  digest="${container_uri##*@}"
+  if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "The live AgentCore Runtime does not contain an exact image digest." >&2
+    return 1
+  fi
+
+  printf '%s\n' "${digest}"
+}
+
 verify_agentcore_current_secrets() {
   local region="$1"
   local terraform_output="$2"

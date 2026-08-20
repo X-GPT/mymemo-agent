@@ -883,9 +883,9 @@ describe("agent deployment config", () => {
 		expect(combined).toContain('sid = "ArtifactBucketManagement"');
 		for (const action of [
 			"bedrock-agentcore:CreateAgentRuntime",
+			"bedrock-agentcore:ListAgentRuntimes",
 			"bedrock-agentcore:UpdateAgentRuntime",
 			"bedrock-agentcore:GetAgentRuntimeEndpoint",
-			"ecr:DescribeImageScanFindings",
 			"lambda:UpdateFunctionCode",
 			"lambda:CreateEventSourceMapping",
 			"sqs:SetQueueAttributes",
@@ -895,6 +895,7 @@ describe("agent deployment config", () => {
 		]) {
 			expect(combined).toContain(`"${action}"`);
 		}
+		expect(combined).not.toContain('"ecr:DescribeImageScanFindings"');
 		for (const action of [
 			"s3:CreateBucket",
 			"s3:GetAccelerateConfiguration",

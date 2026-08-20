@@ -369,6 +369,13 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(workflow).not.toContain("aws ssm put-parameter");
 		expect(workflow).not.toContain("must be disabled before deployment");
 		expect(workflow).toContain("agentcore-runtime-image-check.sh");
+		expect(workflow).not.toContain("ecr wait image-scan-complete");
+		expect(workflow).toContain(
+			"resolve_agentcore_runtime_rollback_digest",
+		);
+		expect(workflow).not.toContain(
+			"terraform -chdir=infra/terraform output -raw runtime_image_digest",
+		);
 		expect(workflow).toContain("build_agentcore_consumer.sh");
 		expect(workflow.match(/build_agentcore_consumer\.sh/g)).toHaveLength(1);
 		expect(workflow).toContain(
