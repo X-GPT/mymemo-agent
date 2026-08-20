@@ -41,7 +41,7 @@ data "aws_iam_policy_document" "runtime" {
   statement {
     sid       = "PullFromRuntimeRepoOnly"
     actions   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
-    resources = [aws_ecr_repository.production_runtime.arn]
+    resources = [data.aws_ecr_repository.production_runtime.arn]
   }
 
   statement {

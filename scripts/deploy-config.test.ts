@@ -525,8 +525,31 @@ describe("agent deployment config", () => {
 		expect(ecrCombined).toContain(
 			'resource "aws_ecr_repository" "agentcore_dispatch_publisher"',
 		);
+		expect(ecrCombined).toContain(
+			'resource "aws_ecr_repository" "agentcore_runtime"',
+		);
+		expect(ecrCombined).toContain('name                 = "mymemo/agentcore-runtime"');
+		expect(ecrCombined).toContain(
+			'output "agentcore_runtime_ecr_repository_url"',
+		);
+		expect(releaseDeployWorkflow).toContain(
+			'ecr_state_addresses="$(terraform -chdir=infra/ecr state list)"',
+		);
+		expect(releaseDeployWorkflow).toContain(
+			"terraform -chdir=infra/ecr import",
+		);
+		expect(releaseDeployWorkflow).toContain(
+			"aws_ecr_repository.agentcore_runtime",
+		);
 		expect(releaseDeployWorkflow).toContain(
 			"terraform -chdir=infra/ecr apply -auto-approve",
+		);
+		expect(
+			releaseDeployWorkflow.indexOf("terraform -chdir=infra/ecr import"),
+		).toBeLessThan(
+			releaseDeployWorkflow.indexOf(
+				"terraform -chdir=infra/ecr apply -auto-approve",
+			),
 		);
 		expect(releaseDeployWorkflow).not.toContain("-target=");
 		expect(releaseDeployWorkflow).not.toContain(
@@ -745,6 +768,12 @@ describe("agent deployment config", () => {
 		);
 		expect(prepareScript).toContain(
 			"terraform -chdir=infra/ecr output -raw agentcore_dispatch_publisher_ecr_repository_url",
+		);
+		expect(releaseDeployWorkflow).toContain(
+			"terraform -chdir=infra/ecr output -raw agentcore_runtime_ecr_repository_url",
+		);
+		expect(releaseDeployWorkflow).not.toContain(
+			"terraform -chdir=infra/terraform output -raw runtime_repository_url",
 		);
 		expect(releaseDeployWorkflow).not.toContain("AWS_REGION: us-west-2");
 		expect(releaseDeployWorkflow).not.toContain(

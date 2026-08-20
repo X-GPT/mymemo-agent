@@ -5,6 +5,7 @@ import { AGENTCORE_DISPATCH_QUEUE_INVARIANTS } from "../apps/agentcore-dispatch-
 
 const root = process.cwd();
 const terraformDir = join(root, "infra", "terraform");
+const ecrTerraformDir = join(root, "infra", "ecr");
 const terraformEnvironment = "$" + "{var.environment}";
 
 function terraformFiles(): string[] {
@@ -165,6 +166,11 @@ describe("production AgentCore dispatch infrastructure", () => {
 			join(terraformDir, "agentcore-runtime.tf"),
 			"utf8",
 		);
+		const ecr = readFileSync(join(ecrTerraformDir, "main.tf"), "utf8");
+		const ecrOutputs = readFileSync(
+			join(ecrTerraformDir, "outputs.tf"),
+			"utf8",
+		);
 		const variables = readFileSync(join(terraformDir, "variables.tf"), "utf8");
 		const agentOutputs = readFileSync(
 			join(root, "infra", "terraform", "outputs.tf"),
@@ -180,8 +186,17 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(source).toContain(
 			`agentcore_name_prefix = "mymemo-agent-agentcore-${terraformEnvironment}"`,
 		);
+		expect(ecr).toMatch(
+			/resource\s+"aws_ecr_repository"\s+"agentcore_runtime"[\s\S]*?name\s*=\s*"mymemo\/agentcore-runtime"[\s\S]*?image_tag_mutability\s*=\s*"IMMUTABLE"[\s\S]*?force_delete\s*=\s*false[\s\S]*?scan_on_push\s*=\s*true[\s\S]*?encryption_type\s*=\s*"AES256"[\s\S]*?prevent_destroy\s*=\s*true/,
+		);
+		expect(ecrOutputs).toMatch(
+			/output\s+"agentcore_runtime_ecr_repository_url"[\s\S]*?aws_ecr_repository\.agentcore_runtime\.repository_url/,
+		);
 		expect(runtime).toMatch(
-			/resource\s+"aws_ecr_repository"\s+"production_runtime"[\s\S]*?name\s*=\s*"mymemo\/agentcore-runtime"/,
+			/data\s+"aws_ecr_repository"\s+"production_runtime"[\s\S]*?name\s*=\s*"mymemo\/agentcore-runtime"/,
+		);
+		expect(runtime).toMatch(
+			/removed\s*\{[\s\S]*?from\s*=\s*aws_ecr_repository\.production_runtime[\s\S]*?destroy\s*=\s*false/,
 		);
 		expect(runtime).not.toContain(
 			'resource "aws_ecr_repository" "legacy_runtime"',
@@ -194,7 +209,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 			'variable "runtime_repository_force_delete"',
 		);
 		expect(source).toMatch(
-			/container_uri\s*=\s*"\$\{aws_ecr_repository\.production_runtime\.repository_url\}@\$\{var\.runtime_image_digest\}"/,
+			/container_uri\s*=\s*"\$\{data\.aws_ecr_repository\.production_runtime\.repository_url\}@\$\{var\.runtime_image_digest\}"/,
 		);
 		expect(source).toMatch(/network_mode\s*=\s*"VPC"/);
 		expect(source).toMatch(/server_protocol\s*=\s*"HTTP"/);
@@ -249,6 +264,9 @@ describe("production AgentCore dispatch infrastructure", () => {
 		}
 		expect(source).toMatch(
 			/sid\s*=\s*"WriteProductionArtifacts"[\s\S]*?"s3:AbortMultipartUpload"[\s\S]*?"s3:DeleteObject"[\s\S]*?"s3:PutObject"[\s\S]*?resources\s*=\s*\["\$\{aws_s3_bucket\.artifacts\.arn\}\/objects\/\*"\]/,
+		);
+		expect(agentcoreIam).toContain(
+			"resources = [data.aws_ecr_repository.production_runtime.arn]",
 		);
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"runtime_trust"[\s\S]*?runtime\/mymemo_agentcore_prod-\*/,
@@ -412,7 +430,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		);
 	});
 
-	it("preserves remaining state-address moves while removing canary resources", () => {
+	it("preserves remaining state-address moves while handing off the Runtime repository", () => {
 		const source = terraformSource();
 		const moves = readFileSync(
 			join(terraformDir, "agentcore-moved.tf"),
@@ -429,6 +447,9 @@ describe("production AgentCore dispatch infrastructure", () => {
 			expect(moves).toContain(`from = ${oldAddress}`);
 		}
 		expect(moves).not.toContain("aws_ecr_repository");
+		expect(source).toMatch(
+			/removed\s*\{[\s\S]*?from\s*=\s*aws_ecr_repository\.production_runtime[\s\S]*?destroy\s*=\s*false/,
+		);
 		expect(source).not.toContain("legacy_runtime");
 		expect(source).not.toMatch(/resource\s+"[^"]+"\s+"canary"/);
 		expect(source).not.toContain(
@@ -448,9 +469,11 @@ describe("production AgentCore dispatch infrastructure", () => {
 			join(terraformDir, "agentcore-runtime.tf"),
 			"utf8",
 		);
+		const ecr = readFileSync(join(ecrTerraformDir, "main.tf"), "utf8");
 
 		expect(queue.match(/prevent_destroy\s*=\s*true/g)).toHaveLength(4);
-		expect(runtime.match(/prevent_destroy\s*=\s*true/g)).toHaveLength(1);
+		expect(ecr.match(/prevent_destroy\s*=\s*true/g)).toHaveLength(1);
+		expect(runtime).not.toContain("prevent_destroy");
 		expect(runtime).not.toMatch(
 			/resource "aws_bedrockagentcore_agent_runtime" "runtime"[\s\S]*?prevent_destroy/,
 		);

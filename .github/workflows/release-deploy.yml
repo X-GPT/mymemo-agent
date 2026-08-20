@@ -123,6 +123,26 @@ jobs:
       - name: Ensure ECR repositories
         run: |
           terraform -chdir=infra/ecr init
+
+          ecr_state_addresses="$(terraform -chdir=infra/ecr state list)"
+          if ! grep -Fxq "aws_ecr_repository.agentcore_runtime" <<<"${ecr_state_addresses}"; then
+            repository_error="${RUNNER_TEMP}/agentcore-runtime-repository-error"
+            if aws ecr describe-repositories \
+              --region "${AWS_REGION}" \
+              --repository-names mymemo/agentcore-runtime \
+              >/dev/null 2>"${repository_error}"; then
+              terraform -chdir=infra/ecr import \
+                -var="aws_region=${AWS_REGION}" \
+                aws_ecr_repository.agentcore_runtime \
+                mymemo/agentcore-runtime
+            elif grep -q "RepositoryNotFoundException" "${repository_error}"; then
+              echo "AgentCore Runtime repository does not exist yet; Terraform will create it."
+            else
+              sed -n '1,120p' "${repository_error}" >&2
+              exit 1
+            fi
+          fi
+
           terraform -chdir=infra/ecr apply -auto-approve -var="aws_region=${AWS_REGION}"
 
       - name: Resolve image references
@@ -131,9 +151,11 @@ jobs:
           chat_api_repository_url="$(terraform -chdir=infra/ecr output -raw chat_api_ecr_repository_url)"
           agent_worker_repository_url="$(terraform -chdir=infra/ecr output -raw agent_worker_ecr_repository_url)"
           agentcore_dispatch_publisher_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_dispatch_publisher_ecr_repository_url)"
+          agentcore_runtime_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_runtime_ecr_repository_url)"
           printf 'chat_api_image=%s:%s\n' "${chat_api_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agent_worker_image=%s:%s\n' "${agent_worker_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agentcore_dispatch_publisher_image=%s:%s\n' "${agentcore_dispatch_publisher_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
+          printf 'agentcore_runtime_repository_url=%s\n' "${agentcore_runtime_repository_url}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
@@ -156,8 +178,8 @@ jobs:
       - name: Build, verify, and push the ARM64 AgentCore Runtime image
         id: agentcore_runtime_image
         run: |
-          terraform -chdir=infra/terraform init
-          repository_uri="$(terraform -chdir=infra/terraform output -raw runtime_repository_url)"
+          repository_uri="${{ steps.images.outputs.agentcore_runtime_repository_url }}"
+          repository_name="${repository_uri#*/}"
           docker buildx build \
             --platform linux/arm64 \
             --load \
@@ -171,7 +193,7 @@ jobs:
           docker push "${repository_uri}:${IMAGE_TAG}"
           runtime_image_digest="$(aws ecr describe-images \
             --region "${AWS_REGION}" \
-            --repository-name mymemo/agentcore-runtime \
+            --repository-name "${repository_name}" \
             --image-ids imageTag="${IMAGE_TAG}" \
             --query 'imageDetails[0].imageDigest' \
             --output text)"
@@ -181,7 +203,7 @@ jobs:
           fi
           aws ecr wait image-scan-complete \
             --region "${AWS_REGION}" \
-            --repository-name mymemo/agentcore-runtime \
+            --repository-name "${repository_name}" \
             --image-id imageDigest="${runtime_image_digest}"
           printf 'TF_VAR_runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_ENV}"
           printf 'runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_OUTPUT}"

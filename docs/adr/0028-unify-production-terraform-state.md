@@ -3,11 +3,19 @@
 Status: accepted (2026-08-19). Supersedes ADR-0021's independent-state
 consequence for the now-production AgentCore path.
 
+Amended (2026-08-20): immutable image repositories are build prerequisites,
+not executable release resources. The existing `infra/ecr` bootstrap root owns
+all four repositories, including `mymemo/agentcore-runtime`; the production
+root resolves the Runtime repository by its exact name.
+
 The ECS applications, dedicated Dispatch publisher, consumer Lambda, and
 AgentCore Runtime share `infra/terraform` and the
 `mymemo-agent/prod.tfstate` backend. They use one AWS provider line
 (`>= 6.50, < 7.0`) and one Release deploy because their database schema,
 dispatch envelope, and executable versions have one compatibility cycle.
+The separate `infra/ecr` state owns only durable image storage that must exist
+before those executable artifacts can be built and the unified plan can be
+created; it does not independently deploy any executable surface.
 
 This is a lifecycle boundary, not a process or authority merger. The publisher,
 consumer, Runtime, chat-api, and agent-worker keep their separate compute and
@@ -27,18 +35,25 @@ Every complete Terraform plan receives the same operator authorization; there
 is no automatic application lane or attribute-level release classifier.
 Replacement is not a universal error: Terraform lifecycle rules prevent
 destruction only for durable Dispatch queues, its KMS key and SSM control, and
-the immutable Runtime image repository.
+the immutable Runtime image repository in the ECR root.
 
 The existing AgentCore addresses were moved from the historical
 `mymemo-agent/agentcore-canary-prod.tfstate` backend into the production state
 before the unified release path was enabled. The historical state now owns no
 managed resources. S3 object versions retain the migration's recovery record.
+The Runtime repository is subsequently imported into
+`mymemo-agent/ecr-prod.tfstate` before the production root forgets its old
+address without destroying the repository. The ordered handoff permits a
+temporary duplicate state record if a release stops between those operations,
+but never a period in which the physical repository is deleted or recreated.
 
 ## Considered options
 
-- **Keep two roots and apply them sequentially.** Rejected because it preserves
-  duplicate provider configuration, remote-state coupling, two plan policies,
-  and a false lifecycle boundary for components that always ship together.
+- **Keep separate executable roots and apply them sequentially.** Rejected
+  because it preserves duplicate provider configuration, remote-state
+  coupling, two plan policies, and a false lifecycle boundary for components
+  that always ship together. The pre-existing ECR bootstrap root is different:
+  it owns stable image storage and performs no executable deployment.
 - **Apply the complete unified plan before migration.** Rejected because an
   enabled consumer mapping or existing Runtime traffic could execute new code
   against the old schema.
@@ -55,8 +70,9 @@ managed resources. S3 object versions retain the migration's recovery record.
 ## Consequences
 
 - AgentCore resources can directly reference the production database, secrets,
-  artifact bucket, Redis, network, alarms, queue, KMS key, and SSM parameter;
-  the `mymemo_agent` remote-state dependency is removed.
+  artifact bucket, Redis, network, alarms, queue, KMS key, and SSM parameter.
+  The Runtime repository is resolved through an exact ECR data lookup after the
+  bootstrap root is applied; no Terraform remote-state dependency is added.
 - Provider upgrades and drift review happen once for the whole production
   stack.
 - A normal release updates all executable surfaces together after an explicit
