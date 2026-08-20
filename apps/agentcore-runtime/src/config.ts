@@ -5,12 +5,13 @@ import {
 import { type Env, requireEnv } from "agentcore-dispatch-consumer/config-utils";
 import {
 	exactSecretArn,
+	resolveVerifiedAgentDatabaseUrl,
 	verifiedDatabaseUrl,
 } from "agentcore-dispatch-consumer/secret-config";
 import { RUNTIME_SHUTDOWN_TIMEOUT_MS } from "./constants";
 
 const AMBIENT_SECRET_NAMES = [
-	"AGENT_DATABASE_URL",
+	"DB_PASSWORD",
 	"KB_DATABASE_URL",
 	"OPENROUTER_API_KEY",
 	"E2B_API_KEY",
@@ -20,8 +21,9 @@ const AMBIENT_SECRET_NAMES = [
 export interface RuntimeBootstrapConfig {
 	awsRegion: string;
 	enabledParameterName: string;
+	agentDatabaseUrl: string;
 	secretArns: {
-		agentDatabaseUrl: string;
+		agentDatabasePassword: string;
 		kbDatabaseUrl: string;
 		openrouterApiKey: string;
 		e2bApiKey: string;
@@ -78,12 +80,13 @@ export function loadRuntimeBootstrapConfig(env: Env): RuntimeBootstrapConfig {
 			"AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME",
 		),
 		secretArns: {
-			agentDatabaseUrl: secretArn(env, "AGENT_DATABASE_URL_SECRET_ARN"),
+			agentDatabasePassword: secretArn(env, "DB_PASSWORD_SECRET_ARN"),
 			kbDatabaseUrl: secretArn(env, "KB_DATABASE_URL_SECRET_ARN"),
 			openrouterApiKey: secretArn(env, "OPENROUTER_API_KEY_SECRET_ARN"),
 			e2bApiKey: secretArn(env, "E2B_API_KEY_SECRET_ARN"),
 			redisUrl: secretArn(env, "REDIS_URL_SECRET_ARN"),
 		},
+		agentDatabaseUrl: requireEnv(env, "AGENT_DATABASE_URL"),
 		openrouterBaseUrl: requireEnv(env, "OPENROUTER_BASE_URL"),
 		openrouterDefaultModel: requireEnv(env, "OPENROUTER_DEFAULT_MODEL"),
 		e2bTemplate: requireEnv(env, "WORKER_E2B_TEMPLATE"),
@@ -107,13 +110,13 @@ export async function resolveRuntimeWorkerConfig(
 	readCurrentSecret: (arn: string) => Promise<string>,
 ): Promise<WorkerConfig> {
 	const [
-		agentDatabaseUrl,
+		agentDatabasePassword,
 		kbDatabaseUrl,
 		openrouterApiKey,
 		e2bApiKey,
 		redisUrl,
 	] = await Promise.all([
-		readCurrentSecret(bootstrap.secretArns.agentDatabaseUrl),
+		readCurrentSecret(bootstrap.secretArns.agentDatabasePassword),
 		readCurrentSecret(bootstrap.secretArns.kbDatabaseUrl),
 		readCurrentSecret(bootstrap.secretArns.openrouterApiKey),
 		readCurrentSecret(bootstrap.secretArns.e2bApiKey),
@@ -121,9 +124,9 @@ export async function resolveRuntimeWorkerConfig(
 	]);
 
 	return loadWorkerConfigFromEnv({
-		AGENT_DATABASE_URL: verifiedDatabaseUrl(
-			agentDatabaseUrl,
-			"AGENT_DATABASE_URL",
+		AGENT_DATABASE_URL: resolveVerifiedAgentDatabaseUrl(
+			bootstrap.agentDatabaseUrl,
+			agentDatabasePassword,
 		),
 		KB_DATABASE_URL: verifiedDatabaseUrl(kbDatabaseUrl, "KB_DATABASE_URL"),
 		OPENROUTER_API_KEY: openrouterApiKey,

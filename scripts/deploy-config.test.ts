@@ -278,7 +278,11 @@ describe("agent deployment config", () => {
 			"secrets = local.agent_db_password_secret",
 		);
 		expect(migrationConfig).not.toContain("REDIS_URL");
-		expect(outputs).not.toMatch(/live_redis|REDIS_URL|random_password/);
+		// AgentCore consumes the worker's secret ARN through remote state, but
+		// Terraform outputs must never expose the authenticated Redis URL itself.
+		expect(outputs).not.toMatch(
+			/secret_string\s*=|random_password\.live_redis\.result/,
+		);
 	});
 
 	it("requires secure Redis configuration without coupling runtime failure to health", () => {
@@ -300,7 +304,9 @@ describe("agent deployment config", () => {
 		expect(composeConfig).not.toMatch(/redis-data|redisdata/);
 		expect(ciWorkflow.match(/^ {6}redis:$/gm)).toHaveLength(2);
 		expect(ciWorkflow.match(/^ {8}image: redis:7-alpine$/gm)).toHaveLength(2);
-		expect(ciWorkflow.match(/^ {6}TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:6379$/gm)).toHaveLength(2);
+		expect(
+			ciWorkflow.match(/^ {6}TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:6379$/gm),
+		).toHaveLength(2);
 		expect(ciWorkflow).not.toMatch(/apt-get[^\n]*redis-server/);
 		expect(ciWorkflow).not.toContain("apt-get");
 		expect(ciWorkflow).toContain("bun run test");
@@ -842,10 +848,23 @@ describe("agent deployment config", () => {
 		expect(combined).toContain('"iam:ListInstanceProfilesForRole"');
 		expect(combined).toContain('sid = "ArtifactBucketManagement"');
 		for (const action of [
+			"bedrock-agentcore:CreateAgentRuntime",
+			"bedrock-agentcore:UpdateAgentRuntime",
+			"bedrock-agentcore:GetAgentRuntimeEndpoint",
+			"lambda:UpdateFunctionCode",
+			"lambda:CreateEventSourceMapping",
+			"sqs:SetQueueAttributes",
+			"ssm:PutParameter",
+			"kms:CreateKey",
+			"iam:SimulatePrincipalPolicy",
+		]) {
+			expect(combined).toContain(`"${action}"`);
+		}
+		for (const action of [
 			"s3:CreateBucket",
 			"s3:GetAccelerateConfiguration",
+			"s3:GetBucket*",
 			"s3:GetLifecycleConfiguration",
-			"s3:GetObjectLockConfiguration",
 			"s3:GetReplicationConfiguration",
 			"s3:PutLifecycleConfiguration",
 			"s3:PutBucketOwnershipControls",
@@ -857,6 +876,7 @@ describe("agent deployment config", () => {
 		]) {
 			expect(combined).toContain(`"${action}"`);
 		}
+		expect(combined).not.toContain('"s3:GetObjectLockConfiguration"');
 		expect(combined).toContain('"arn:aws:s3:::${var.artifact_bucket_name}"');
 		expect(bootstrapIamProdTfvars).toContain(
 			'artifact_bucket_name = "mymemo-agent-prod-artifacts"',

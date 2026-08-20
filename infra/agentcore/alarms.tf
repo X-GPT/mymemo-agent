@@ -10,7 +10,16 @@ resource "aws_cloudwatch_metric_alarm" "pending_publication_age" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 60000
   treat_missing_data  = "breaching"
-  alarm_actions       = var.alarm_action_arns
+  alarm_actions       = data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns
+
+  lifecycle {
+    precondition {
+      condition = length(data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns) > 0 && alltrue([
+        for arn in data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns : can(regex("^arn:aws:sns:${var.aws_region}:${var.aws_account_id}:[A-Za-z0-9_-]+$", arn))
+      ])
+      error_message = "The agent-worker alarm_action_arns output must contain at least one same-account, same-region SNS topic ARN."
+    }
+  }
 }
 
 resource "aws_cloudwatch_metric_alarm" "publisher_errors" {
@@ -26,7 +35,7 @@ resource "aws_cloudwatch_metric_alarm" "publisher_errors" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = var.alarm_action_arns
+  alarm_actions       = data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns
 }
 
 resource "aws_cloudwatch_metric_alarm" "poison_dispatch" {
@@ -41,7 +50,7 @@ resource "aws_cloudwatch_metric_alarm" "poison_dispatch" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = var.alarm_action_arns
+  alarm_actions       = data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns
 }
 
 resource "aws_cloudwatch_metric_alarm" "dead_letter_work" {
@@ -56,7 +65,7 @@ resource "aws_cloudwatch_metric_alarm" "dead_letter_work" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = var.alarm_action_arns
+  alarm_actions       = data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns
 }
 
 locals {

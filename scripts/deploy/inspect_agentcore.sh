@@ -3,7 +3,6 @@ set -euo pipefail
 
 terraform_dir="infra/agentcore"
 region="${AWS_REGION:?AWS_REGION is required}"
-aws_profile="mymemo"
 expected_digest="${EXPECTED_RUNTIME_IMAGE_DIGEST:?EXPECTED_RUNTIME_IMAGE_DIGEST is required}"
 source "scripts/deploy/agentcore_aws_checks.sh"
 
@@ -12,8 +11,8 @@ runtime_arn="$(jq -r '.agent_runtime_arn.value' <<<"${tf_output}")"
 queue_url="$(jq -r '.dispatch_queue_url.value' <<<"${tf_output}")"
 dlq_url="$(jq -r '.dead_letter_queue_url.value' <<<"${tf_output}")"
 
-queue_attributes="$(aws --profile "${aws_profile}" sqs get-queue-attributes --region "${region}" --queue-url "${queue_url}" --attribute-names All)"
-dlq_attributes="$(aws --profile "${aws_profile}" sqs get-queue-attributes --region "${region}" --queue-url "${dlq_url}" --attribute-names All)"
+queue_attributes="$(agentcore_aws sqs get-queue-attributes --region "${region}" --queue-url "${queue_url}" --attribute-names All)"
+dlq_attributes="$(agentcore_aws sqs get-queue-attributes --region "${region}" --queue-url "${dlq_url}" --attribute-names All)"
 jq -e '(.Attributes.FifoQueue // "false") == "false" and .Attributes.VisibilityTimeout == "180" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and .Attributes.ApproximateNumberOfMessagesDelayed == "0" and (.Attributes.RedrivePolicy | fromjson | .maxReceiveCount == 5)' <<<"${queue_attributes}" >/dev/null
 jq -e '(.Attributes.FifoQueue // "false") == "false" and .Attributes.VisibilityTimeout == "300" and .Attributes.MessageRetentionPeriod == "86400" and .Attributes.KmsMasterKeyId != null and .Attributes.ApproximateNumberOfMessages == "0" and .Attributes.ApproximateNumberOfMessagesNotVisible == "0" and .Attributes.ApproximateNumberOfMessagesDelayed == "0"' <<<"${dlq_attributes}" >/dev/null
 
@@ -30,7 +29,7 @@ verify_agentcore_alarms "${region}" "${tf_output}"
 
 rollback_digest="${ROLLBACK_RUNTIME_IMAGE_DIGEST:-}"
 if [[ -n "${rollback_digest}" && "${rollback_digest}" != "${expected_digest}" ]]; then
-  aws --profile "${aws_profile}" ecr describe-images --region "${region}" --repository-name mymemo/agentcore-runtime --image-ids imageDigest="${rollback_digest}" --query 'imageDetails[0].imageDigest' --output text | grep -Fxq "${rollback_digest}"
+  agentcore_aws ecr describe-images --region "${region}" --repository-name mymemo/agentcore-runtime --image-ids imageDigest="${rollback_digest}" --query 'imageDetails[0].imageDigest' --output text | grep -Fxq "${rollback_digest}"
 fi
 
 jq -n --arg runtimeArn "${runtime_arn}" --arg runtimeVersion "${runtime_version}" --arg endpointArn "$(jq -r '.agentRuntimeEndpointArn' <<<"${endpoint}")" --arg imageDigest "${expected_digest}" --arg rollbackDigest "${rollback_digest}" '{status:"idle", runtimeArn:$runtimeArn, runtimeVersion:$runtimeVersion, endpointName:"DEFAULT", endpointArn:$endpointArn, imageDigest:$imageDigest, rollbackDigest:($rollbackDigest | select(length > 0)), dispatchEnabled:false, consumerEnabled:true, queueDepth:0, dlqDepth:0}'

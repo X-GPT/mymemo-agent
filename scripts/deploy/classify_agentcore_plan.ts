@@ -9,7 +9,6 @@ interface PlanChange {
 		actions?: string[];
 		before?: Record<string, unknown> | null;
 		after?: Record<string, unknown> | null;
-		after_unknown?: Record<string, unknown>;
 	};
 }
 
@@ -25,16 +24,10 @@ export interface PlanClassification {
 const CLASSIFIER_ACCOUNT_ID = "637423444544";
 const CLASSIFIER_REGION = "us-west-2";
 const PRODUCTION_RUNTIME_ARN_PATTERN = `arn:aws:bedrock-agentcore:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:runtime/mymemo_agentcore_prod-*`;
-const LEGACY_RUNTIME_REPOSITORY_ADDRESS = "aws_ecr_repository.legacy_runtime";
-const LEGACY_RUNTIME_REPOSITORY_NAME = "mymemo/agentcore-canary-runtime";
-const LEGACY_DISPATCH_QUEUE_ARN = `arn:aws:sqs:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:mymemo-agent-agentcore-canary-prod-dispatch`;
-const PRODUCTION_DISPATCH_QUEUE_ARN = `arn:aws:sqs:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:mymemo-agent-agentcore-prod-dispatch`;
-const LEGACY_CONSUMER_ARN = `arn:aws:lambda:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:function:mymemo-agent-agentcore-canary-prod-consumer`;
-const PRODUCTION_CONSUMER_ARN = `arn:aws:lambda:${CLASSIFIER_REGION}:${CLASSIFIER_ACCOUNT_ID}:function:mymemo-agent-agentcore-prod-consumer`;
 
 // This is the independent production deployment boundary. It deliberately
-// names owned resources and destructive operations without duplicating
-// Terraform's statement-by-statement IAM graph.
+// names owned resources without duplicating Terraform's statement-by-statement
+// IAM graph. Routine deployment never deletes or replaces infrastructure.
 const PRODUCTION_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_bedrockagentcore_agent_runtime.runtime",
 	"aws_cloudwatch_metric_alarm.dead_letter_work",
@@ -63,133 +56,11 @@ const PRODUCTION_OWNED_RESOURCE_ADDRESSES = new Set([
 	"aws_subnet.private",
 ]);
 
-const RETIRED_RESOURCE_ADDRESSES = new Set([
-	"aws_cloudwatch_event_rule.repair",
-	"aws_cloudwatch_event_target.repair",
-	"aws_cloudwatch_metric_alarm.consumer_duration",
-	"aws_cloudwatch_metric_alarm.dispatch_age",
-	"aws_cloudwatch_metric_alarm.dormant_runtime_sessions",
-	"aws_cloudwatch_metric_alarm.incident",
-	"aws_cloudwatch_metric_alarm.lambda_errors",
-	"aws_cloudwatch_metric_alarm.lambda_throttles",
-	"aws_cloudwatch_metric_alarm.validation",
-	"aws_eip.campaign",
-	"aws_iam_role.control",
-	"aws_iam_role.preflight",
-	"aws_iam_role.publisher",
-	"aws_iam_role_policy.control",
-	"aws_iam_role_policy.control_base",
-	"aws_iam_role_policy.preflight",
-	"aws_iam_role_policy.publisher",
-	"aws_iam_role_policy.publisher_base",
-	"aws_lambda_function.control",
-	"aws_lambda_function.preflight",
-	"aws_lambda_function.publisher",
-	"aws_lambda_permission.repair",
-	"aws_nat_gateway.campaign",
-	"aws_route.campaign_egress",
-]);
-
-const RETIRED_RESOURCE_INSTANCES = new Set([
-	'aws_cloudwatch_metric_alarm.incident["CampaignDeadlineBreach"]',
-	'aws_cloudwatch_metric_alarm.incident["CleanupResidue"]',
-	'aws_cloudwatch_metric_alarm.incident["CrossLaneExecution"]',
-	'aws_cloudwatch_metric_alarm.incident["DisabledDelivery"]',
-	'aws_cloudwatch_metric_alarm.incident["NatExpiryBreach"]',
-	'aws_cloudwatch_metric_alarm.incident["PoisonDispatch"]',
-	'aws_cloudwatch_metric_alarm.lambda_errors["consumer"]',
-	'aws_cloudwatch_metric_alarm.lambda_errors["control"]',
-	'aws_cloudwatch_metric_alarm.lambda_errors["preflight"]',
-	'aws_cloudwatch_metric_alarm.lambda_errors["publisher"]',
-	'aws_cloudwatch_metric_alarm.lambda_throttles["consumer"]',
-	'aws_cloudwatch_metric_alarm.lambda_throttles["control"]',
-	'aws_cloudwatch_metric_alarm.lambda_throttles["preflight"]',
-	'aws_cloudwatch_metric_alarm.lambda_throttles["publisher"]',
-]);
-
 const PRODUCTION_OWNED_RESOURCE_TYPES = new Set(
-	[...PRODUCTION_OWNED_RESOURCE_ADDRESSES, ...RETIRED_RESOURCE_ADDRESSES].map(
+	[...PRODUCTION_OWNED_RESOURCE_ADDRESSES].map(
 		(address) => address.split(".")[0],
 	),
 );
-
-const APPROVED_PRODUCTION_RENAMES = new Map<
-	string,
-	{ field: string; before: string; after: string }
->([
-	[
-		"aws_bedrockagentcore_agent_runtime.runtime",
-		{
-			field: "agent_runtime_name",
-			before: "mymemo_agentcore_canary_prod",
-			after: "mymemo_agentcore_prod",
-		},
-	],
-	...[
-		"aws_iam_role.consumer",
-		"aws_iam_role.runtime",
-		"aws_iam_role_policy.consumer",
-		"aws_iam_role_policy.runtime",
-	].map(
-		(address) =>
-			[
-				address,
-				{
-					field: "name",
-					before: `mymemo-agent-agentcore-canary-prod-${address.endsWith("consumer") ? "consumer" : "runtime"}`,
-					after: `mymemo-agent-agentcore-prod-${address.endsWith("consumer") ? "consumer" : "runtime"}`,
-				},
-			] as const,
-	),
-	[
-		"aws_iam_role_policy.consumer_base",
-		{
-			field: "name",
-			before: "mymemo-agent-agentcore-canary-prod-consumer-base",
-			after: "mymemo-agent-agentcore-prod-consumer-base",
-		},
-	],
-	[
-		"aws_kms_alias.dispatch",
-		{
-			field: "name",
-			before: "alias/mymemo-agent-agentcore-canary-prod",
-			after: "alias/mymemo-agent-agentcore-prod",
-		},
-	],
-	[
-		"aws_lambda_function.consumer",
-		{
-			field: "function_name",
-			before: "mymemo-agent-agentcore-canary-prod-consumer",
-			after: "mymemo-agent-agentcore-prod-consumer",
-		},
-	],
-	[
-		"aws_security_group.runtime",
-		{
-			field: "name",
-			before: "mymemo-agent-agentcore-canary-prod-runtime",
-			after: "mymemo-agent-agentcore-prod-runtime",
-		},
-	],
-	[
-		"aws_sqs_queue.dead_letter",
-		{
-			field: "name",
-			before: "mymemo-agent-agentcore-canary-prod-dlq",
-			after: "mymemo-agent-agentcore-prod-dlq",
-		},
-	],
-	[
-		"aws_sqs_queue.dispatch",
-		{
-			field: "name",
-			before: "mymemo-agent-agentcore-canary-prod-dispatch",
-			after: "mymemo-agent-agentcore-prod-dispatch",
-		},
-	],
-]);
 
 const LAMBDA_ROLE_ADDRESSES = new Set(["aws_iam_role.consumer"]);
 
@@ -303,92 +174,9 @@ function approvedCreatedRoleTrust(address: string, value: unknown): boolean {
 	);
 }
 
-function isApprovedProductionRename(resource: PlanChange): boolean {
-	const address = resourceBaseAddress(resource.address ?? "");
-	const rename = APPROVED_PRODUCTION_RENAMES.get(address);
-	const actions = resource.change?.actions ?? [];
-	if (!rename || !actions.includes("create") || !actions.includes("delete")) {
-		return false;
-	}
-	return (
-		resource.change?.before?.[rename.field] === rename.before &&
-		resource.change?.after?.[rename.field] === rename.after
-	);
-}
-
-function isApprovedEventSourceMappingReplacement(
-	resource: PlanChange,
-	resourceChanges: PlanChange[],
-): boolean {
-	const actions = resource.change?.actions ?? [];
-	const afterValueIsExactOrComputed = (field: string, expected: string) => {
-		const after = resource.change?.after?.[field];
-		return (
-			after === expected ||
-			((after === null || after === undefined) &&
-				resource.change?.after_unknown?.[field] === true)
-		);
-	};
-	const hasCompanionRename = (address: string) =>
-		resourceChanges.some(
-			(candidate) =>
-				resourceBaseAddress(candidate.address ?? "") === address &&
-				isApprovedProductionRename(candidate),
-		);
-	return (
-		resourceBaseAddress(resource.address ?? "") ===
-			"aws_lambda_event_source_mapping.consumer" &&
-		actions.includes("create") &&
-		actions.includes("delete") &&
-		resource.change?.before?.event_source_arn === LEGACY_DISPATCH_QUEUE_ARN &&
-		resource.change?.before?.function_name === LEGACY_CONSUMER_ARN &&
-		afterValueIsExactOrComputed(
-			"event_source_arn",
-			PRODUCTION_DISPATCH_QUEUE_ARN,
-		) &&
-		afterValueIsExactOrComputed("function_name", PRODUCTION_CONSUMER_ARN) &&
-		hasCompanionRename("aws_sqs_queue.dispatch") &&
-		hasCompanionRename("aws_lambda_function.consumer")
-	);
-}
-
-function isApprovedLegacyRepositoryTransition(resource: PlanChange): boolean {
-	const actions = resource.change?.actions ?? [];
-	const before = resource.change?.before;
-	const after = resource.change?.after;
-	if (
-		resourceBaseAddress(resource.address ?? "") !==
-			LEGACY_RUNTIME_REPOSITORY_ADDRESS ||
-		before?.name !== LEGACY_RUNTIME_REPOSITORY_NAME
-	) {
-		return false;
-	}
-	if (actions.length === 1 && actions[0] === "delete") {
-		return before.force_delete === true && after === null;
-	}
-	return (
-		actions.length === 1 &&
-		actions[0] === "update" &&
-		before.force_delete === false &&
-		after?.name === LEGACY_RUNTIME_REPOSITORY_NAME &&
-		after.force_delete === true
-	);
-}
-
-function isApprovedProductionReplacement(
-	resource: PlanChange,
-	resourceChanges: PlanChange[],
-): boolean {
-	return (
-		isApprovedProductionRename(resource) ||
-		isApprovedEventSourceMappingReplacement(resource, resourceChanges)
-	);
-}
-
 export function classifyAgentCorePlan(plan: TerraformPlan): PlanClassification {
 	const reasons: string[] = [];
-	const resourceChanges = plan.resource_changes ?? [];
-	for (const resource of resourceChanges) {
+	for (const resource of plan.resource_changes ?? []) {
 		const actions = resource.change?.actions ?? [];
 		if (actions.every((action) => action === "no-op" || action === "read")) {
 			continue;
@@ -396,42 +184,18 @@ export function classifyAgentCorePlan(plan: TerraformPlan): PlanClassification {
 		const address = resource.address ?? "<unknown>";
 		const type = resource.type ?? "<unknown>";
 		const baseAddress = resourceBaseAddress(address);
-		const isRetiredResource =
-			RETIRED_RESOURCE_ADDRESSES.has(baseAddress) ||
-			RETIRED_RESOURCE_INSTANCES.has(address);
-		const isLegacyRepository =
-			baseAddress === LEGACY_RUNTIME_REPOSITORY_ADDRESS;
 		if (
 			resource.mode !== "managed" ||
 			address.startsWith("module.") ||
 			!PRODUCTION_OWNED_RESOURCE_TYPES.has(type) ||
-			(!PRODUCTION_OWNED_RESOURCE_ADDRESSES.has(baseAddress) &&
-				!isRetiredResource &&
-				!isLegacyRepository)
+			!PRODUCTION_OWNED_RESOURCE_ADDRESSES.has(baseAddress)
 		) {
 			reasons.push(
 				`${address} is outside production AgentCore ownership (${type})`,
 			);
 		}
-		if (isLegacyRepository) {
-			if (!isApprovedLegacyRepositoryTransition(resource)) {
-				reasons.push(
-					`${address} requests an unapproved legacy repository transition`,
-				);
-			}
-		} else if (
-			isRetiredResource &&
-			(actions.length !== 1 || actions[0] !== "delete")
-		) {
-			reasons.push(
-				`${address} is retired infrastructure and may only be deleted`,
-			);
-		} else if (
-			!isRetiredResource &&
-			actions.includes("delete") &&
-			!isApprovedProductionReplacement(resource, resourceChanges)
-		) {
-			reasons.push(`${address} requests unapproved deletion or replacement`);
+		if (actions.includes("delete")) {
+			reasons.push(`${address} requests deletion or replacement`);
 		}
 		if (actions.includes("forget")) {
 			reasons.push(`${address} requests removal from Terraform state`);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	createCurrentSecretReader,
-	resolveAgentCoreDatabaseUrlsFromSecretArns,
+	resolveVerifiedAgentDatabaseUrl,
 	verifiedDatabaseUrl,
 } from "./secret-config";
 
@@ -38,27 +38,29 @@ describe("AgentCore secret configuration", () => {
 		).toThrow("AGENT_DATABASE_URL must use sslmode=verify-full");
 	});
 
-	it("resolves database URLs from production-named secret ARN variables", async () => {
-		const agentArn =
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-AbCdEf";
-		const kbArn =
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:kb-db-AbCdEf";
+	it("materializes the agent-worker passwordless URL with the RDS password secret", () => {
+		const resolved = resolveVerifiedAgentDatabaseUrl(
+			"postgresql://mymemo_agent@agent.example:5432/mymemo_agent",
+			JSON.stringify({ password: "agent password" }),
+		);
+		const url = new URL(resolved);
 
-		await expect(
-			resolveAgentCoreDatabaseUrlsFromSecretArns(
-				{
-					AGENT_DATABASE_URL_SECRET_ARN: agentArn,
-					KB_DATABASE_URL_SECRET_ARN: kbArn,
-				},
-				async (arn) =>
-					arn === agentArn
-						? "postgresql://agent.example/mymemo_agent?sslmode=verify-full"
-						: "postgresql://kb.example/mymemo_kb?sslmode=verify-full",
+		expect(decodeURIComponent(url.password)).toBe("agent password");
+		expect(url.searchParams.get("sslmode")).toBe("verify-full");
+	});
+
+	it("rejects an ambient password or malformed RDS password secret", () => {
+			expect(() =>
+			resolveVerifiedAgentDatabaseUrl(
+				"postgresql://mymemo_agent:secret@agent.example/mymemo_agent",
+				JSON.stringify({ password: "agent password" }),
 			),
-		).resolves.toEqual({
-			agentDatabaseUrl:
-				"postgresql://agent.example/mymemo_agent?sslmode=verify-full",
-			kbDatabaseUrl: "postgresql://kb.example/mymemo_kb?sslmode=verify-full",
-		});
+		).toThrow("without a password");
+		expect(() =>
+			resolveVerifiedAgentDatabaseUrl(
+				"postgresql://mymemo_agent@agent.example/mymemo_agent",
+				"not-json",
+			),
+		).toThrow("DB_PASSWORD secret");
 	});
 });

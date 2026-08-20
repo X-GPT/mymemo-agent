@@ -14,13 +14,12 @@ function change(
 	actions: string[],
 	before: unknown = null,
 	after: unknown = {},
-	afterUnknown: unknown = {},
 ) {
 	return {
 		address,
 		mode: "managed",
 		type,
-		change: { actions, before, after, after_unknown: afterUnknown },
+		change: { actions, before, after },
 	};
 }
 
@@ -77,177 +76,23 @@ describe("production AgentCore Terraform plan classification", () => {
 		).toEqual({ safe: true, reasons: [] });
 	});
 
-	it("allows only exact one-time canary-to-production replacements", () => {
-		for (const [address, type, field, before, after] of [
+	it("rejects every steady-state deletion or replacement", () => {
+		for (const [address, type] of [
 			[
 				"aws_bedrockagentcore_agent_runtime.runtime",
 				"aws_bedrockagentcore_agent_runtime",
-				"agent_runtime_name",
-				"mymemo_agentcore_canary_prod",
-				"mymemo_agentcore_prod",
 			],
-			[
-				"aws_lambda_function.consumer",
-				"aws_lambda_function",
-				"function_name",
-				"mymemo-agent-agentcore-canary-prod-consumer",
-				"mymemo-agent-agentcore-prod-consumer",
-			],
-			[
-				"aws_sqs_queue.dispatch",
-				"aws_sqs_queue",
-				"name",
-				"mymemo-agent-agentcore-canary-prod-dispatch",
-				"mymemo-agent-agentcore-prod-dispatch",
-			],
+			["aws_lambda_function.consumer", "aws_lambda_function"],
+			["aws_sqs_queue.dispatch", "aws_sqs_queue"],
 		] as const) {
-			expect(
-				classifyAgentCorePlan(
-					plan([
-						change(
-							address,
-							type,
-							["delete", "create"],
-							{ [field]: before },
-							{ [field]: after },
-						),
-					]),
-				),
-			).toEqual({ safe: true, reasons: [] });
+			const result = classifyAgentCorePlan(
+				plan([change(address, type, ["delete", "create"])]),
+			);
+			expect(result.safe).toBe(false);
+			expect(result.reasons).toContain(
+				`${address} requests deletion or replacement`,
+			);
 		}
-
-		const rejected = classifyAgentCorePlan(
-			plan([
-				change(
-					"aws_sqs_queue.dispatch",
-					"aws_sqs_queue",
-					["delete", "create"],
-					{ name: "mymemo-agent-agentcore-prod-dispatch" },
-					{ name: "unexpected" },
-				),
-			]),
-		);
-		expect(rejected.safe).toBe(false);
-		expect(rejected.reasons.join(" ")).toContain(
-			"unapproved deletion or replacement",
-		);
-	});
-
-	it("approves the exact event-source mapping replacement forced by the queue rename", () => {
-		const oldQueueArn =
-			"arn:aws:sqs:us-west-2:637423444544:mymemo-agent-agentcore-canary-prod-dispatch";
-		const oldConsumerArn =
-			"arn:aws:lambda:us-west-2:637423444544:function:mymemo-agent-agentcore-canary-prod-consumer";
-		const mappingReplacement = change(
-			"aws_lambda_event_source_mapping.consumer",
-			"aws_lambda_event_source_mapping",
-			["delete", "create"],
-			{ event_source_arn: oldQueueArn, function_name: oldConsumerArn },
-			{ event_source_arn: null, function_name: null },
-			{ event_source_arn: true, function_name: true },
-		);
-		const queueReplacement = change(
-			"aws_sqs_queue.dispatch",
-			"aws_sqs_queue",
-			["delete", "create"],
-			{ name: "mymemo-agent-agentcore-canary-prod-dispatch" },
-			{ name: "mymemo-agent-agentcore-prod-dispatch" },
-		);
-		const consumerReplacement = change(
-			"aws_lambda_function.consumer",
-			"aws_lambda_function",
-			["delete", "create"],
-			{ function_name: "mymemo-agent-agentcore-canary-prod-consumer" },
-			{ function_name: "mymemo-agent-agentcore-prod-consumer" },
-		);
-
-		expect(
-			classifyAgentCorePlan(
-				plan([queueReplacement, consumerReplacement, mappingReplacement]),
-			),
-		).toEqual({ safe: true, reasons: [] });
-
-		const wrongMapping = structuredClone(mappingReplacement);
-		wrongMapping.change.after_unknown.function_name = false;
-		expect(
-			classifyAgentCorePlan(
-				plan([queueReplacement, consumerReplacement, wrongMapping]),
-			).safe,
-		).toBe(false);
-		expect(classifyAgentCorePlan(plan([mappingReplacement])).safe).toBe(false);
-	});
-
-	it("keeps the legacy Runtime repository managed until its copied digest is safe to delete", () => {
-		for (const repositoryChange of [
-			change(
-				"aws_ecr_repository.production_runtime",
-				"aws_ecr_repository",
-				["create"],
-				null,
-				{ name: "mymemo/agentcore-runtime", force_delete: false },
-			),
-			change(
-				"aws_ecr_repository.legacy_runtime[0]",
-				"aws_ecr_repository",
-				["update"],
-				{ name: "mymemo/agentcore-canary-runtime", force_delete: false },
-				{ name: "mymemo/agentcore-canary-runtime", force_delete: true },
-			),
-			change(
-				"aws_ecr_repository.legacy_runtime[0]",
-				"aws_ecr_repository",
-				["delete"],
-				{ name: "mymemo/agentcore-canary-runtime", force_delete: true },
-				null,
-			),
-		]) {
-			expect(classifyAgentCorePlan(plan([repositoryChange]))).toEqual({
-				safe: true,
-				reasons: [],
-			});
-		}
-
-		const wrongLegacyDelete = change(
-			"aws_ecr_repository.legacy_runtime[0]",
-			"aws_ecr_repository",
-			["delete"],
-			{ name: "unrelated", force_delete: true },
-			null,
-		);
-		expect(classifyAgentCorePlan(plan([wrongLegacyDelete])).safe).toBe(false);
-	});
-
-	it("allows deletion only for exact retired publisher and canary resources", () => {
-		for (const [address, type] of [
-			["aws_lambda_function.publisher", "aws_lambda_function"],
-			["aws_iam_role.publisher", "aws_iam_role"],
-			["aws_iam_role_policy.publisher", "aws_iam_role_policy"],
-			["aws_cloudwatch_event_rule.repair", "aws_cloudwatch_event_rule"],
-			["aws_cloudwatch_event_target.repair", "aws_cloudwatch_event_target"],
-			["aws_lambda_permission.repair", "aws_lambda_permission"],
-			[
-				'aws_cloudwatch_metric_alarm.incident["PoisonDispatch"]',
-				"aws_cloudwatch_metric_alarm",
-			],
-			[
-				'aws_cloudwatch_metric_alarm.lambda_errors["publisher"]',
-				"aws_cloudwatch_metric_alarm",
-			],
-		] as const) {
-			expect(
-				classifyAgentCorePlan(plan([change(address, type, ["delete"])])),
-			).toEqual({ safe: true, reasons: [] });
-		}
-
-		const result = classifyAgentCorePlan(
-			plan([
-				change("aws_lambda_function.publisher", "aws_lambda_function", [
-					"create",
-				]),
-			]),
-		);
-		expect(result.safe).toBe(false);
-		expect(result.reasons.join(" ")).toContain("may only be deleted");
 	});
 
 	it("rejects removal from state and resources outside the shared stack", () => {

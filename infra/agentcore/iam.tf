@@ -81,7 +81,7 @@ data "aws_iam_policy_document" "runtime" {
       "s3:DeleteObject",
       "s3:PutObject",
     ]
-    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/objects/*"]
+    resources = ["arn:aws:s3:::${data.terraform_remote_state.mymemo_agent.outputs.artifact_bucket_name}/objects/*"]
   }
 
   statement {
@@ -186,15 +186,15 @@ data "aws_iam_policy_document" "lambda_base" {
   }
 
   statement {
-    sid       = "DescribeAgentDatabaseUrl"
+    sid       = "DescribeAgentDatabasePassword"
     actions   = ["secretsmanager:DescribeSecret"]
-    resources = [var.agent_database_url_secret_arn]
+    resources = [data.terraform_remote_state.mymemo_agent.outputs.agent_database_password_secret_arn]
   }
 
   statement {
-    sid       = "ReadCurrentAgentDatabaseUrl"
+    sid       = "ReadCurrentAgentDatabasePassword"
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = [var.agent_database_url_secret_arn]
+    resources = [data.terraform_remote_state.mymemo_agent.outputs.agent_database_password_secret_arn]
 
     condition {
       test     = "ForAnyValue:StringEquals"

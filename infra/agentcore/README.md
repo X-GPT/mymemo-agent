@@ -13,8 +13,9 @@ The state remains independent from the ordinary MyMemo production and Fargate
 state. `shared.tf` reads that state for existing VPC, database, Redis, artifact,
 and service-security-group inputs; this root never imports or recreates those
 resources. The S3 backend intentionally retains the historical
-`mymemo-agent/agentcore-canary-prod.tfstate` key so the production rename updates
-the existing resources instead of creating a second unmanaged stack.
+`mymemo-agent/agentcore-canary-prod.tfstate` key because that is the state which
+owns the production resources; changing the key would create a second,
+unmanaged stack.
 
 ## Publisher-service boundary
 
@@ -31,8 +32,11 @@ runtimes during coexistence.
 
 ## Runtime and consumer posture
 
-The Runtime environment carries exact Secrets Manager ARNs, never secret
-values. Its role reads only those current secret versions and writes
+The Runtime and consumer read the agent-worker configuration from the ordinary
+agent Terraform state: the passwordless agent DB URL plus the RDS password
+secret, the KB, OpenRouter, E2B, and Redis secret ARNs, and non-secret model,
+artifact, and alarm settings. No GitHub repository variable configures this
+stack. Their roles read only current secret versions and the Runtime writes
 Downloadable artifacts through the standard `objects/` namespace with the same
 multipart, replace, and delete operations available to the Fargate worker. The
 consumer has no reserved-concurrency cap; queue batch size remains one, partial
@@ -65,32 +69,37 @@ destination:
 `PublisherLockNotAcquired` is expected during rolling overlap and remains
 informational telemetry. There is no alarm for it.
 
-## Guarded deployment
+## GitHub Actions deployment
 
 Use the full
 [AgentCore rollout and incident runbook](../../docs/runbooks/agentcore-rollout.md)
 for cutover preconditions, control changes, staged rollout, incident response,
 and disposable-Conversation rollback.
 
-Configure the repository variables named `AGENTCORE_*` that are read by
-`scripts/deploy/deploy_agentcore.sh`, then run the command from a clean `main`
-checkout that exactly matches `origin/main`:
+The production rename and ECR migration are complete. Routine deployment no
+longer contains legacy queue checks, repository copying, targeted Terraform
+applies, or a local deploy command.
 
-```bash
-scripts/deploy/deploy_agentcore.sh deploy-mymemo-agentcore-prod
+First apply the ordinary agent Terraform stack so its shared configuration
+outputs are current. The GitHub OIDC role must include the AgentCore permissions
+declared by `infra/bootstrap-iam`; apply that bootstrap root once before the
+first workflow run after a permission change. Then run the **AgentCore deploy**
+workflow from `main`, choose `prod`, and enter the confirmation phrase:
+
+```text
+deploy-mymemo-agentcore-prod
 ```
 
-An existing Runtime digest may be passed as the second argument for promotion or
-rollback. The command uses only the mandatory `mymemo` AWS profile, verifies
-account `637423444544`, requires the SSM control to be disabled, builds the
-verified consumer package, proves both legacy queues have zero visible,
-in-flight, and delayed messages, and classifies every Terraform plan. During
-the one-time production rename it keeps both repositories Terraform-managed,
-copies and verifies the deployed digest in the production repository, updates
-the Runtime to a verified production-repository image, and only then removes
-the legacy repository. Plan JSON/text, queue and rollback evidence, Runtime
-version, and the idle production inspection are retained under
-`dist/agentcore-deployment/`.
+The workflow assumes `mymemo-agent-github-actions-deploy` through GitHub OIDC,
+verifies account `637423444544`, and requires the SSM Dispatch control to be
+`disabled`. It builds and checks the ARM64 Runtime image, pushes it to the
+immutable production repository, packages the consumer Lambda with the pinned
+RDS CA bundle, classifies the steady-state Terraform plan, and rejects every
+resource deletion or replacement. After apply it enforces MMDSv2 through the
+AWS control-plane API until the Terraform provider supports the field, waits for
+the Runtime and `DEFAULT` endpoint, and runs the idle production inspection.
+Plan and inspection evidence is retained as a GitHub Actions artifact for 30
+days.
 
 The coordinated production order is:
 
@@ -104,5 +113,6 @@ The coordinated production order is:
 
 Ordinary releases keep schema, envelope, publisher, consumer, and Runtime
 compatibility coordinated even though the publisher image and task definition
-are independently rollbackable. Incident shutdown reverses authority first:
+are independently rollbackable. Rollback is a reviewed revert on `main`
+followed by the same workflow. Incident shutdown reverses authority first:
 disable SSM, turn the runtime gate off, then roll binaries.

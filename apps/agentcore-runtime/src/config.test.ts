@@ -9,8 +9,10 @@ function bootstrapEnv(): Record<string, string | undefined> {
 		AWS_REGION: "us-west-2",
 		AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
 			"/mymemo/agentcore-dispatch/prod/enabled",
-		AGENT_DATABASE_URL_SECRET_ARN:
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-AbCdEf",
+		AGENT_DATABASE_URL:
+			"postgresql://mymemo_agent@agent.example:5432/mymemo_agent",
+		DB_PASSWORD_SECRET_ARN:
+			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-password-AbCdEf",
 		KB_DATABASE_URL_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:kb-db-AbCdEf",
 		OPENROUTER_API_KEY_SECRET_ARN:
@@ -42,7 +44,7 @@ describe("AgentCore Runtime configuration", () => {
 
 	it("rejects secret values in the Runtime environment", () => {
 		for (const secretName of [
-			"AGENT_DATABASE_URL",
+			"DB_PASSWORD",
 			"KB_DATABASE_URL",
 			"OPENROUTER_API_KEY",
 			"E2B_API_KEY",
@@ -64,10 +66,10 @@ describe("AgentCore Runtime configuration", () => {
 
 	it("rejects secret ARNs outside the commercial AWS partition", () => {
 		const env = bootstrapEnv();
-		env.AGENT_DATABASE_URL_SECRET_ARN =
+		env.DB_PASSWORD_SECRET_ARN =
 			"arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:agent-db-AbCdEf";
 		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
-			"AGENT_DATABASE_URL_SECRET_ARN must be an exact Secrets Manager ARN",
+			"DB_PASSWORD_SECRET_ARN must be an exact Secrets Manager ARN",
 		);
 	});
 
@@ -75,8 +77,8 @@ describe("AgentCore Runtime configuration", () => {
 		const bootstrap = loadRuntimeBootstrapConfig(bootstrapEnv());
 		const values = new Map([
 			[
-				bootstrap.secretArns.agentDatabaseUrl,
-				"postgresql://agent:secret@agent.example:5432/mymemo_agent?sslmode=verify-full",
+				bootstrap.secretArns.agentDatabasePassword,
+				JSON.stringify({ password: "agent-secret" }),
 			],
 			[
 				bootstrap.secretArns.kbDatabaseUrl,
@@ -103,15 +105,15 @@ describe("AgentCore Runtime configuration", () => {
 		expect(config.shutdownTimeoutMs).toBe(30_000);
 	});
 
-	it("refuses a database secret that weakens certificate verification", async () => {
+	it("refuses a KB database secret that weakens certificate verification", async () => {
 		const bootstrap = loadRuntimeBootstrapConfig(bootstrapEnv());
 		await expect(
 			resolveRuntimeWorkerConfig(bootstrap, async (arn) => {
-				if (arn === bootstrap.secretArns.agentDatabaseUrl) {
-					return "postgresql://agent:secret@agent.example/mymemo_agent?sslmode=no-verify";
+				if (arn === bootstrap.secretArns.agentDatabasePassword) {
+					return JSON.stringify({ password: "agent-secret" });
 				}
 				if (arn === bootstrap.secretArns.kbDatabaseUrl) {
-					return "postgresql://kb:secret@kb.example/mymemo_kb?sslmode=verify-full";
+					return "postgresql://kb:secret@kb.example/mymemo_kb?sslmode=no-verify";
 				}
 				if (arn === bootstrap.secretArns.redisUrl) {
 					return "rediss://default:secret@redis.example:6379";

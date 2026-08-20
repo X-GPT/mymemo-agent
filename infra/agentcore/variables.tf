@@ -56,74 +56,9 @@ variable "runtime_image_digest" {
   }
 }
 
-variable "retain_legacy_runtime_repository" {
-  description = "Keeps the Terraform-managed legacy Runtime repository present only while its deployed image is copied and the production Runtime is verified."
-  type        = bool
-  default     = false
-}
-
 variable "consumer_lambda_package" {
   description = "Path to the verified AgentCore dispatch consumer Lambda deployment package."
   type        = string
-}
-
-variable "agent_database_url_secret_arn" {
-  description = "Exact Secrets Manager ARN containing the verify-full agent database URL."
-  type        = string
-}
-
-variable "kb_database_url_secret_arn" {
-  description = "Exact Secrets Manager ARN containing the verify-full read-only KB database URL."
-  type        = string
-}
-
-variable "openrouter_api_key_secret_arn" {
-  description = "Exact Secrets Manager ARN containing the OpenRouter API key."
-  type        = string
-}
-
-variable "e2b_api_key_secret_arn" {
-  description = "Exact Secrets Manager ARN containing the E2B API key."
-  type        = string
-}
-
-variable "redis_url_secret_arn" {
-  description = "Exact Secrets Manager ARN containing the authenticated rediss URL."
-  type        = string
-}
-
-variable "artifact_bucket_name" {
-  description = "Existing private artifact bucket; referenced read-only by Terraform."
-  type        = string
-}
-
-variable "openrouter_base_url" {
-  description = "Non-secret OpenRouter base URL."
-  type        = string
-  default     = "https://openrouter.ai/api"
-}
-
-variable "openrouter_default_model" {
-  description = "Non-secret model identifier used by the production Runtime."
-  type        = string
-}
-
-variable "worker_e2b_template" {
-  description = "Pinned E2B sandbox template used by the production Runtime."
-  type        = string
-  default     = "mymemo-agent-sandbox"
-}
-
-variable "alarm_action_arns" {
-  description = "Production SNS destinations for every AgentCore Dispatch paging alarm."
-  type        = list(string)
-
-  validation {
-    condition = length(var.alarm_action_arns) > 0 && alltrue([
-      for arn in var.alarm_action_arns : can(regex("^arn:aws:sns:${var.aws_region}:${var.aws_account_id}:[A-Za-z0-9_-]+$", arn))
-    ])
-    error_message = "alarm_action_arns must contain at least one same-account, same-region SNS topic ARN."
-  }
 }
 
 variable "tags" {

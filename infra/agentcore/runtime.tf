@@ -12,25 +12,6 @@ resource "aws_ecr_repository" "production_runtime" {
   }
 }
 
-# The existing repository remains Terraform-managed during the one-time image
-# copy. It is removed only after the production Runtime is healthy on the copied
-# or newly built digest.
-resource "aws_ecr_repository" "legacy_runtime" {
-  count = var.retain_legacy_runtime_repository ? 1 : 0
-
-  name                 = "mymemo/agentcore-canary-runtime"
-  image_tag_mutability = "IMMUTABLE"
-  force_delete         = true
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  encryption_configuration {
-    encryption_type = "AES256"
-  }
-}
-
 resource "aws_bedrockagentcore_agent_runtime" "runtime" {
   agent_runtime_name    = "mymemo_agentcore_${var.environment}"
   description           = "Production MyMemo AgentCore execution Runtime"

@@ -1,63 +1,11 @@
 #!/usr/bin/env bash
 
-agentcore_queue_empty_evidence() {
-  local region="$1"
-  local queue_name="$2"
-  local queue_url
-  local attributes
-
-  if ! queue_url="$(aws --profile mymemo sqs get-queue-url \
-    --region "${region}" \
-    --queue-name "${queue_name}" \
-    --query QueueUrl \
-    --output text 2>&1)"; then
-    if grep -Fq "AWS.SimpleQueueService.NonExistentQueue" <<<"${queue_url}"; then
-      jq -cn --arg queueName "${queue_name}" \
-        '{queueName:$queueName,exists:false}'
-      return
-    fi
-    printf '%s\n' "${queue_url}" >&2
-    return 1
+agentcore_aws() {
+  if [[ -n "${AWS_PROFILE:-}" ]]; then
+    aws --profile "${AWS_PROFILE}" "$@"
+  else
+    aws "$@"
   fi
-
-  attributes="$(aws --profile mymemo sqs get-queue-attributes \
-    --region "${region}" \
-    --queue-url "${queue_url}" \
-    --attribute-names \
-      ApproximateNumberOfMessages \
-      ApproximateNumberOfMessagesNotVisible \
-      ApproximateNumberOfMessagesDelayed)"
-  if ! jq -e '
-    .Attributes.ApproximateNumberOfMessages == "0"
-      and .Attributes.ApproximateNumberOfMessagesNotVisible == "0"
-      and .Attributes.ApproximateNumberOfMessagesDelayed == "0"
-  ' <<<"${attributes}" >/dev/null; then
-    echo "Legacy AgentCore queue ${queue_name} must be empty before production replacement." >&2
-    return 1
-  fi
-
-  jq -c \
-    --arg queueName "${queue_name}" \
-    --arg queueUrl "${queue_url}" \
-    '{queueName:$queueName,queueUrl:$queueUrl,exists:true,attributes:.Attributes}' \
-    <<<"${attributes}"
-}
-
-assert_agentcore_legacy_queues_empty() {
-  local region="$1"
-  local dispatch
-  local dead_letter
-
-  dispatch="$(agentcore_queue_empty_evidence \
-    "${region}" \
-    "mymemo-agent-agentcore-canary-prod-dispatch")" || return
-  dead_letter="$(agentcore_queue_empty_evidence \
-    "${region}" \
-    "mymemo-agent-agentcore-canary-prod-dlq")" || return
-  jq -cn \
-    --argjson dispatch "${dispatch}" \
-    --argjson deadLetter "${dead_letter}" \
-    '{dispatch:$dispatch,deadLetter:$deadLetter}'
 }
 
 verify_agentcore_current_secrets() {
@@ -66,7 +14,7 @@ verify_agentcore_current_secrets() {
   local secret_arn
 
   while IFS= read -r secret_arn; do
-    aws --profile mymemo secretsmanager list-secret-version-ids \
+    agentcore_aws secretsmanager list-secret-version-ids \
       --region "${region}" \
       --secret-id "${secret_arn}" \
       --include-deprecated \
@@ -84,7 +32,7 @@ verify_agentcore_alarms() {
 
   expected_alarms="$(jq -c '.alarm_configurations.value' <<<"${terraform_output}")"
   alarm_names="$(jq -r 'keys | join(" ")' <<<"${expected_alarms}")"
-  live_alarms="$(aws --profile mymemo cloudwatch describe-alarms \
+  live_alarms="$(agentcore_aws cloudwatch describe-alarms \
     --region "${region}" \
     --alarm-names ${alarm_names})"
   jq -e --argjson expected "${expected_alarms}" '
@@ -127,7 +75,7 @@ verify_agentcore_egress() {
     route_table_id="$(jq -r '.route_table_id' <<<"${configuration}")"
     nat_gateway_id="$(jq -r '.nat_gateway_id' <<<"${configuration}")"
 
-    route_table="$(aws --profile mymemo ec2 describe-route-tables \
+    route_table="$(agentcore_aws ec2 describe-route-tables \
       --region "${region}" \
       --route-table-ids "${route_table_id}")"
     jq -e \
@@ -144,7 +92,7 @@ verify_agentcore_egress() {
             and .State == "active")' \
       <<<"${route_table}" >/dev/null
 
-    nat_gateway="$(aws --profile mymemo ec2 describe-nat-gateways \
+    nat_gateway="$(agentcore_aws ec2 describe-nat-gateways \
       --region "${region}" \
       --nat-gateway-ids "${nat_gateway_id}")"
     jq -e \
@@ -175,7 +123,7 @@ verify_agentcore_idle_dispatch() {
   expected_consumer_function_arn="$(jq -r '.consumer_function_arn.value' <<<"${terraform_output}")"
   enabled_parameter="$(jq -r '.dispatch_enabled_parameter_name.value' <<<"${terraform_output}")"
 
-  mapping="$(aws --profile mymemo lambda get-event-source-mapping \
+  mapping="$(agentcore_aws lambda get-event-source-mapping \
     --region "${region}" \
     --uuid "${mapping_uuid}")"
   jq -e \
@@ -187,14 +135,14 @@ verify_agentcore_idle_dispatch() {
       and .FunctionArn == $functionArn
       and (.FunctionResponseTypes | index("ReportBatchItemFailures")) != null' \
     <<<"${mapping}" >/dev/null
-  consumer_configuration="$(aws --profile mymemo lambda get-function-configuration \
+  consumer_configuration="$(agentcore_aws lambda get-function-configuration \
     --region "${region}" \
     --function-name "${expected_consumer_function_arn}")"
   jq -e \
     --arg functionArn "${expected_consumer_function_arn}" \
     '.FunctionArn == $functionArn and .Timeout == 120' \
     <<<"${consumer_configuration}" >/dev/null
-  consumer_concurrency="$(aws --profile mymemo lambda get-function-concurrency \
+  consumer_concurrency="$(agentcore_aws lambda get-function-concurrency \
     --region "${region}" \
     --function-name "${expected_consumer_function_arn}")"
   if [[ -z "${consumer_concurrency}" ]]; then
@@ -202,7 +150,7 @@ verify_agentcore_idle_dispatch() {
   fi
   jq -e '(.ReservedConcurrentExecutions // null) == null' \
     <<<"${consumer_concurrency}" >/dev/null
-  [[ "$(aws --profile mymemo ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "disabled" ]]
+  [[ "$(agentcore_aws ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "disabled" ]]
 }
 
 verify_agentcore_runtime_configuration() {
@@ -217,7 +165,7 @@ verify_agentcore_runtime_configuration() {
 
   runtime_id="$(jq -r '.agent_runtime_id.value' <<<"${terraform_output}")"
   expected_security_configuration="$(jq -c '.runtime_security_configuration.value' <<<"${terraform_output}")"
-  runtime="$(aws --profile mymemo bedrock-agentcore-control get-agent-runtime \
+  runtime="$(agentcore_aws bedrock-agentcore-control get-agent-runtime \
     --region "${region}" \
     --agent-runtime-id "${runtime_id}")"
   jq -e \
@@ -236,7 +184,7 @@ verify_agentcore_runtime_configuration() {
       and .lifecycleConfiguration.maxLifetime == 3600' \
     <<<"${runtime}" >/dev/null
   runtime_version="$(jq -r '.agentRuntimeVersion' <<<"${runtime}")"
-  endpoint="$(aws --profile mymemo bedrock-agentcore-control get-agent-runtime-endpoint \
+  endpoint="$(agentcore_aws bedrock-agentcore-control get-agent-runtime-endpoint \
     --region "${region}" \
     --agent-runtime-id "${runtime_id}" \
     --endpoint-name DEFAULT)"
@@ -257,7 +205,7 @@ verify_agentcore_consumer_runtime_authority() {
   runtime_arn="$(jq -r '.agent_runtime_arn.value' <<<"${terraform_output}")"
   endpoint_arn="${runtime_arn}/runtime-endpoint/DEFAULT"
   consumer_role_arn="$(jq -r '.consumer_role_arn.value' <<<"${terraform_output}")"
-  simulation="$(aws --profile mymemo iam simulate-principal-policy \
+  simulation="$(agentcore_aws iam simulate-principal-policy \
     --policy-source-arn "${consumer_role_arn}" \
     --action-names bedrock-agentcore:InvokeAgentRuntime \
     --resource-arns "${runtime_arn}" "${endpoint_arn}")"

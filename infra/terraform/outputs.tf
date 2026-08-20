@@ -38,9 +38,59 @@ output "agent_database_endpoint" {
   value       = aws_db_instance.agent.address
 }
 
+output "agent_database_url" {
+  description = "Passwordless agent database URL injected into agent-worker."
+  value       = local.managed_agent_database_url
+}
+
 output "agent_database_password_secret_arn" {
   description = "AWS-managed Secrets Manager ARN for the dedicated agent RDS master password."
   value       = aws_db_instance.agent.master_user_secret[0].secret_arn
+}
+
+output "kb_database_url_secret_arn" {
+  description = "Secrets Manager ARN for the KB database URL injected into agent-worker."
+  value       = local.kb_database_url_secret_arn
+}
+
+output "openrouter_api_key_secret_arn" {
+  description = "Secrets Manager ARN for the OpenRouter API key injected into agent-worker."
+  value       = local.openrouter_api_key_secret_arn
+}
+
+output "e2b_api_key_secret_arn" {
+  description = "Secrets Manager ARN for the E2B API key injected into agent-worker."
+  value       = local.e2b_api_key_secret_arn
+}
+
+output "redis_url_secret_arn" {
+  description = "Secrets Manager ARN for the Redis URL injected into agent-worker."
+  value       = local.live_redis_url_secret_arn
+}
+
+output "openrouter_base_url" {
+  description = "OpenRouter base URL configured for agent-worker."
+  value       = var.openrouter_base_url
+}
+
+output "openrouter_default_model" {
+  description = "Default OpenRouter model configured for agent-worker."
+  value       = var.openrouter_default_model
+}
+
+output "worker_e2b_template" {
+  description = "E2B template configured for agent-worker."
+  value       = var.worker_e2b_template
+}
+
+output "artifact_bucket_name" {
+  description = "Artifact bucket configured for agent-worker."
+  value       = aws_s3_bucket.artifacts.bucket
+}
+
+output "alarm_action_arns" {
+  description = "Alarm notification destinations configured for agent services."
+  value       = var.alarm_action_arns
 }
 
 output "database_access_endpoint_id" {

@@ -51,7 +51,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 			'key          = "mymemo-agent/agentcore-canary-prod.tfstate"',
 		);
 		expect(readme).toContain("historical");
-		expect(readme).toContain("updates\nthe existing resources");
+		expect(readme).toContain("state which\nowns the production resources");
 		expect(versions).toMatch(/use_lockfile\s*=\s*true/);
 		expect(versions).toMatch(/encrypt\s*=\s*true/);
 		expect(versions).toMatch(/version\s*=\s*">= 6\.50, < 7\.0"/);
@@ -170,10 +170,14 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(outputs).toContain('output "egress_configurations"');
 	});
 
-	it("deploys production-named Runtime resources with secret-ARN-only configuration", () => {
+	it("deploys production-named Runtime resources from the agent-worker configuration", () => {
 		const source = terraformSource();
 		const runtime = readFileSync(join(terraformDir, "runtime.tf"), "utf8");
 		const variables = readFileSync(join(terraformDir, "variables.tf"), "utf8");
+		const agentOutputs = readFileSync(
+			join(root, "infra", "terraform", "outputs.tf"),
+			"utf8",
+		);
 
 		expect(source).toContain(
 			'resource "aws_bedrockagentcore_agent_runtime" "runtime"',
@@ -187,10 +191,12 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(runtime).toMatch(
 			/resource\s+"aws_ecr_repository"\s+"production_runtime"[\s\S]*?name\s*=\s*"mymemo\/agentcore-runtime"/,
 		);
-		expect(runtime).toMatch(
-			/resource\s+"aws_ecr_repository"\s+"legacy_runtime"[\s\S]*?count\s*=\s*var\.retain_legacy_runtime_repository\s*\?\s*1\s*:\s*0[\s\S]*?name\s*=\s*"mymemo\/agentcore-canary-runtime"[\s\S]*?force_delete\s*=\s*true/,
+		expect(runtime).not.toContain(
+			'resource "aws_ecr_repository" "legacy_runtime"',
 		);
-		expect(variables).toContain('variable "retain_legacy_runtime_repository"');
+		expect(variables).not.toContain(
+			'variable "retain_legacy_runtime_repository"',
+		);
 		expect(variables).not.toContain('variable "runtime_repository_name"');
 		expect(variables).not.toContain(
 			'variable "runtime_repository_force_delete"',
@@ -205,7 +211,8 @@ describe("production AgentCore dispatch infrastructure", () => {
 			/resource\s+"aws_bedrockagentcore_agent_runtime"\s+"runtime"[\s\S]*?precondition[\s\S]*?local\.exact_secret_arn_pattern/,
 		);
 		for (const name of [
-			"AGENT_DATABASE_URL_SECRET_ARN",
+			"AGENT_DATABASE_URL",
+			"DB_PASSWORD_SECRET_ARN",
 			"KB_DATABASE_URL_SECRET_ARN",
 			"OPENROUTER_API_KEY_SECRET_ARN",
 			"E2B_API_KEY_SECRET_ARN",
@@ -213,8 +220,40 @@ describe("production AgentCore dispatch infrastructure", () => {
 		]) {
 			expect(source).toContain(name);
 		}
+		for (const output of [
+			"agent_database_url",
+			"agent_database_password_secret_arn",
+			"kb_database_url_secret_arn",
+			"openrouter_api_key_secret_arn",
+			"e2b_api_key_secret_arn",
+			"redis_url_secret_arn",
+			"openrouter_base_url",
+			"openrouter_default_model",
+			"worker_e2b_template",
+			"artifact_bucket_name",
+			"alarm_action_arns",
+		]) {
+			expect(agentOutputs).toContain(`output "${output}"`);
+			expect(source).toContain(
+				`data.terraform_remote_state.mymemo_agent.outputs.${output}`,
+			);
+		}
+		for (const variable of [
+			"agent_database_url_secret_arn",
+			"kb_database_url_secret_arn",
+			"openrouter_api_key_secret_arn",
+			"e2b_api_key_secret_arn",
+			"redis_url_secret_arn",
+			"artifact_bucket_name",
+			"openrouter_base_url",
+			"openrouter_default_model",
+			"worker_e2b_template",
+			"alarm_action_arns",
+		]) {
+			expect(variables).not.toContain(`variable "${variable}"`);
+		}
 		for (const forbiddenSecret of [
-			"AGENT_DATABASE_URL",
+			"DB_PASSWORD",
 			"KB_DATABASE_URL",
 			"OPENROUTER_API_KEY",
 			"E2B_API_KEY",
@@ -231,7 +270,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 			expect(source).toContain(`resource "aws_iam_role" "${role}"`);
 		}
 		expect(source).toMatch(
-			/sid\s*=\s*"WriteProductionArtifacts"[\s\S]*?"s3:AbortMultipartUpload"[\s\S]*?"s3:DeleteObject"[\s\S]*?"s3:PutObject"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{var\.artifact_bucket_name\}\/objects\/\*"\]/,
+			/sid\s*=\s*"WriteProductionArtifacts"[\s\S]*?"s3:AbortMultipartUpload"[\s\S]*?"s3:DeleteObject"[\s\S]*?"s3:PutObject"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{data\.terraform_remote_state\.mymemo_agent\.outputs\.artifact_bucket_name\}\/objects\/\*"\]/,
 		);
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"runtime_trust"[\s\S]*?runtime\/mymemo_agentcore_prod-\*/,
@@ -262,8 +301,13 @@ describe("production AgentCore dispatch infrastructure", () => {
 			expect(alarms).not.toContain(`"${metric}"`);
 		}
 		expect(
-			alarms.match(/alarm_actions\s*=\s*var\.alarm_action_arns/g),
+			alarms.match(
+				/alarm_actions\s*=\s*data\.terraform_remote_state\.mymemo_agent\.outputs\.alarm_action_arns/g,
+			),
 		).toHaveLength(4);
+		expect(alarms).toMatch(
+			/agent-worker alarm_action_arns output must contain at least one same-account, same-region SNS topic ARN/,
+		);
 		expect(alarms).toMatch(
 			/resource\s+"aws_cloudwatch_metric_alarm"\s+"publisher_errors"[\s\S]*?evaluation_periods\s*=\s*5[\s\S]*?datapoints_to_alarm\s*=\s*3/,
 		);
@@ -272,15 +316,10 @@ describe("production AgentCore dispatch infrastructure", () => {
 		);
 	});
 
-	it("ships one guarded production deployment and live inspection path", () => {
-		const shellDeploymentPlan = "$" + "{deployment_plan}";
+	it("deploys the consumer and Runtime through guarded GitHub Actions", () => {
 		const shellOutputDir = "$" + "{output_dir}";
-		const shellPreviousDigest = "$" + "{previous_runtime_image_digest}";
-		const shellRepoRoot = "$" + "{repo_root}";
-		const shellRepositoryPlan = "$" + "{repository_plan}";
-		const shellTerraformDir = "$" + "{terraform_dir}";
-		const deployment = readFileSync(
-			join(root, "scripts", "deploy", "deploy_agentcore.sh"),
+		const workflow = readFileSync(
+			join(root, ".github", "workflows", "agentcore-deploy.yml"),
 			"utf8",
 		);
 		const consumerBuild = readFileSync(
@@ -295,56 +334,41 @@ describe("production AgentCore dispatch infrastructure", () => {
 			join(root, "scripts", "deploy", "agentcore_aws_checks.sh"),
 			"utf8",
 		);
-
-		expect(deployment).toContain("deploy-mymemo-agentcore-prod");
-		expect(deployment).toContain(
-			`TF_VAR_consumer_lambda_package="${shellRepoRoot}/dist/agentcore-consumer/consumer.zip"`,
+		const mmdsv2 = readFileSync(
+			join(root, "scripts", "deploy", "enforce_agentcore_mmdsv2.sh"),
+			"utf8",
 		);
+
+		expect(
+			existsSync(join(root, "scripts", "deploy", "deploy_agentcore.sh")),
+		).toBe(false);
 		expect(consumerBuild).toContain(`${shellOutputDir}/consumer.zip`);
 		expect(consumerBuild).not.toContain(`${shellOutputDir}/dispatch.zip`);
-		expect(deployment).toContain('terraform_dir="infra/agentcore"');
-		expect(deployment).toContain('aws_profile="mymemo"');
-		expect(deployment).toContain("git rev-parse origin/main");
-		expect(deployment).toContain("sts get-caller-identity");
-		expect(deployment).toContain("AGENTCORE_ALARM_ACTION_ARNS_JSON");
-		expect(deployment).not.toContain("AGENTCORE_CANARY_");
-		expect(deployment).toContain("classify_agentcore_plan.sh");
-		expect(deployment).toContain("assert_agentcore_legacy_queues_empty");
-		expect(deployment).toContain("legacy-queue-precondition.json");
-		expect(deployment).not.toContain("before dormant deployment");
-		expect(deployment).toContain("before idle production deployment");
-		expect(deployment).toContain(
-			"TF_VAR_retain_legacy_runtime_repository=true",
-		);
-		expect(deployment).toContain("copy_agentcore_runtime_digest");
-		expect(deployment).toContain("legacy-repository-cleanup.tfplan");
-		expect(deployment).toContain(
-			"TF_VAR_retain_legacy_runtime_repository=false",
-		);
-		const repositoryApply = deployment.indexOf(
-			`terraform -chdir="${shellTerraformDir}" apply "${shellRepositoryPlan}"`,
-		);
-		const rollbackCopy = deployment.indexOf(
-			`copy_agentcore_runtime_digest "${shellPreviousDigest}"`,
-		);
-		const deploymentApply = deployment.indexOf(
-			`terraform -chdir="${shellTerraformDir}" apply "${shellDeploymentPlan}"`,
-		);
-		const legacyQueuePrecondition = deployment.indexOf(
+		expect(workflow).toContain("workflow_dispatch:");
+		expect(workflow).toContain("deploy-mymemo-agentcore-prod");
+		expect(workflow).toContain("refs/heads/main");
+		expect(workflow).toContain("id-token: write");
+		expect(workflow).toContain("mymemo-agent-github-actions-deploy");
+		expect(workflow).toMatch(/\[\[ "\$\{dispatch_value\}" != "disabled" \]\]/);
+		expect(workflow).toContain("agentcore-runtime-image-check.sh");
+		expect(workflow).toContain("build_agentcore_consumer.sh");
+		expect(workflow).toContain("classify_agentcore_plan.sh");
+		expect(workflow).toMatch(/terraform -chdir="\$\{TERRAFORM_DIR\}" apply/);
+		expect(workflow).toContain("enforce_agentcore_mmdsv2.sh");
+		expect(workflow).toContain("inspect_agentcore.sh");
+		expect(workflow).toContain("actions/upload-artifact@v4");
+		for (const retired of [
+			"mymemo/agentcore-canary-runtime",
 			"assert_agentcore_legacy_queues_empty",
-		);
-		const deploymentPlan = deployment.indexOf(
-			`terraform -chdir="${shellTerraformDir}" plan -out="${shellDeploymentPlan}"`,
-		);
-		const cleanupPlan = deployment.indexOf("legacy-repository-cleanup.tfplan");
-		expect(repositoryApply).toBeGreaterThan(-1);
-		expect(rollbackCopy).toBeGreaterThan(repositoryApply);
-		expect(deploymentApply).toBeGreaterThan(rollbackCopy);
-		expect(legacyQueuePrecondition).toBeGreaterThan(rollbackCopy);
-		expect(deploymentPlan).toBeGreaterThan(legacyQueuePrecondition);
-		expect(cleanupPlan).toBeGreaterThan(deploymentApply);
-		expect(deployment).toContain("inspect_agentcore.sh");
-		expect(deployment).toContain('idle-inspection.json"');
+			"copy_agentcore_runtime_digest",
+			"retain_legacy_runtime_repository",
+		]) {
+			expect(workflow).not.toContain(retired);
+		}
+		expect(mmdsv2).toContain("metadataConfiguration: {requireMMDSV2: true}");
+		expect(mmdsv2).toContain("update-agent-runtime");
+		expect(mmdsv2).toContain("get-agent-runtime-endpoint");
+		expect(mmdsv2).not.toContain("requireServiceS3Endpoint");
 		expect(inspection).toContain('VisibilityTimeout == "180"');
 		expect(inspection).toContain("maxReceiveCount == 5");
 		expect(inspection).toContain("verify_agentcore_idle_dispatch");
@@ -363,15 +387,13 @@ describe("production AgentCore dispatch infrastructure", () => {
 			"Publisher-service boundary",
 			"Runtime and consumer posture",
 			"Production alarms",
-			"Guarded deployment",
+			"GitHub Actions deployment",
 		]) {
 			expect(readme).toContain(`## ${section}`);
 		}
 		expect(readme).toContain("owned by `infra/terraform`");
 		expect(readme).toContain("desired count one");
-		expect(readme).toContain(
-			"copies and verifies the deployed digest in the production repository",
-		);
+		expect(readme).toContain("GitHub Actions");
 		expect(readme).toContain("`PendingAgeMs`");
 		expect(readme).toContain("`PublisherErrors`");
 		expect(readme).toContain("`PublisherLockNotAcquired`");
@@ -379,12 +401,11 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(readme).toContain("disable SSM, turn the runtime gate off");
 	});
 
-	it("preserves state-address moves while removing every canary-named resource", () => {
+	it("preserves remaining state-address moves while removing canary resources", () => {
 		const source = terraformSource();
 		const moves = readFileSync(join(terraformDir, "moved.tf"), "utf8");
 
 		for (const oldAddress of [
-			"aws_ecr_repository.runtime",
 			"aws_bedrockagentcore_agent_runtime.canary",
 			"aws_kms_alias.canary",
 			"aws_kms_key.canary",
@@ -393,7 +414,8 @@ describe("production AgentCore dispatch infrastructure", () => {
 		]) {
 			expect(moves).toContain(`from = ${oldAddress}`);
 		}
-		expect(moves).toContain("to   = aws_ecr_repository.legacy_runtime[0]");
+		expect(moves).not.toContain("aws_ecr_repository");
+		expect(source).not.toContain("legacy_runtime");
 		expect(source).not.toMatch(/resource\s+"[^"]+"\s+"canary"/);
 		expect(source).not.toContain(
 			`mymemo_agentcore_canary_${terraformEnvironment}`,

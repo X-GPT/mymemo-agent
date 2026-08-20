@@ -107,14 +107,9 @@ schema transition. Before starting the reviewed release workflow:
    COMMIT;
    ```
 
-4. Take no legacy queue action. Both
-   `mymemo-agent-agentcore-canary-prod-dispatch` and
-   `mymemo-agent-agentcore-canary-prod-dlq` are absent in `us-west-2`, so there
-   is nothing to purge or wait to converge. The guarded AgentCore deployment
-   records the observed absence as `exists: false` under
-   `dist/agentcore-deployment/`. Its guard also accepts an existing empty queue,
-   so inspect the recorded `exists` value instead of treating command success
-   alone as proof of absence.
+4. Take no legacy queue or Runtime-repository action. The production migration
+   is complete, and routine deployment no longer contains a legacy migration
+   path.
 
 Do not start the release workflow until the destructive database transaction
 has committed, both ECS services are at zero, and the SSM parameter still reads
@@ -138,13 +133,17 @@ publisher, consumer, or Runtime versions independently releasable.
    workflow succeeded and all three ECS services are stable. The publisher must
    have desired count one. Agent-worker remains the global expiration and
    Reclamation runner for both runtimes.
-3. Deploy the de-canaried consumer and AgentCore Runtime while the SSM control
-   remains `disabled`, then inspect the publisher, consumer, and Runtime in the
-   idle state:
+3. Deploy the consumer and AgentCore Runtime while the SSM control remains
+   `disabled`. In GitHub Actions, run **AgentCore deploy** from `main`, choose
+   `prod`, and enter:
 
-   ```sh
-   scripts/deploy/deploy_agentcore.sh deploy-mymemo-agentcore-prod
+   ```text
+   deploy-mymemo-agentcore-prod
    ```
+
+   The workflow builds and verifies the Runtime image, packages the consumer,
+   classifies and applies the independent Terraform plan, enforces MMDSv2,
+   waits for `DEFAULT`, runs the idle inspection, and uploads the evidence.
 
 4. Set `/mymemo/agentcore-dispatch/prod/enabled` to `enabled`. Confirm the
    publisher emits `PendingAgeMs: 0` when idle and the consumer event-source

@@ -25,7 +25,7 @@ if [[ "$request_oriented" != "true" ]]; then
 fi
 
 ambient_env="$(docker image inspect --format '{{ range .Config.Env }}{{ println . }}{{ end }}' "$image")"
-if grep -Eq '^(AGENT_DATABASE_URL|KB_DATABASE_URL|OPENROUTER_API_KEY|E2B_API_KEY|REDIS_URL)=' <<<"$ambient_env"; then
+if grep -Eq '^(DB_PASSWORD|KB_DATABASE_URL|OPENROUTER_API_KEY|E2B_API_KEY|REDIS_URL)=' <<<"$ambient_env"; then
   echo "AgentCore Runtime image contains an ambient secret value variable" >&2
   exit 1
 fi
@@ -60,7 +60,8 @@ if entrypoint_output="$(
     --network none \
     -e AWS_REGION=us-west-2 \
     -e AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME=/mymemo/agentcore-dispatch/prod/enabled \
-    -e AGENT_DATABASE_URL_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-AbCdEf \
+    -e AGENT_DATABASE_URL=postgresql://mymemo_agent@agent.example:5432/mymemo_agent \
+    -e DB_PASSWORD_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-password-AbCdEf \
     -e KB_DATABASE_URL_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:kb-db-AbCdEf \
     -e OPENROUTER_API_KEY_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:openrouter-AbCdEf \
     -e E2B_API_KEY_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:e2b-AbCdEf \
