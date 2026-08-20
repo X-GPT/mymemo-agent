@@ -24,3 +24,25 @@ resource "aws_ecr_repository" "agentcore_dispatch_publisher" {
     scan_on_push = true
   }
 }
+
+resource "aws_ecr_repository" "agentcore_runtime" {
+  name                 = "mymemo/agentcore-runtime"
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = false
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  tags = {
+    Environment = "prod"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

@@ -25,9 +25,9 @@ the direct remote-state output is absent and the fallback input is present.
 
 ## Agent-Owned Resources
 
-- ECR repositories for `mymemo-agent-chat-api`, `mymemo-agent-worker`, and
-  `mymemo-agentcore-dispatch-publisher` in the separate `infra/ecr` Terraform
-  root
+- ECR repositories for `mymemo-agent-chat-api`, `mymemo-agent-worker`,
+  `mymemo-agentcore-dispatch-publisher`, and `mymemo/agentcore-runtime` in the
+  separate `infra/ecr` Terraform root
 - dedicated RDS Postgres instance for writable agent state
 - EC2 Instance Connect Endpoint and private EC2 bridge for operator access to
   the agent and KB databases
@@ -44,8 +44,8 @@ the direct remote-state output is absent and the fallback input is present.
 - CloudWatch log groups and baseline alarms
 - encrypted AgentCore Dispatch and dead-letter queues, their fail-closed SSM
   control, and the batch-size-one consumer Lambda
-- digest-pinned ARM64 AgentCore Runtime, immutable Runtime ECR repository,
-  private subnets, zonal NAT egress, workload IAM, and Dispatch alarms
+- digest-pinned ARM64 AgentCore Runtime, private subnets, zonal NAT egress,
+  workload IAM, and Dispatch alarms
 
 The AgentCore Runtime, consumer, and dedicated Dispatch publisher share this
 state because they ship on the same compatibility cycle as the ECS services and
@@ -159,8 +159,9 @@ Terraform-owned production inputs live in checked-in
 `infra/deploy/prod.env` for CI/deploy settings such as AWS region, AWS account,
 and smoke-test inputs, then generates `infra/terraform/generated.auto.tfvars`
 with release-specific Terraform values: AWS region and the three immutable ECS
-image URIs. The Runtime digest and consumer package path are supplied through
-Terraform environment variables by the same workflow. The plan step uses both:
+image URIs. The Runtime repository URL comes from the separately applied ECR
+root; its digest and the consumer package path are supplied through Terraform
+environment variables by the same workflow. The plan step uses both:
 
 ```sh
 terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars
@@ -168,6 +169,37 @@ terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.
 
 Placeholder values such as `REPLACE_ME_*` in `prod.tfvars` or the generated
 image overlay fail the plan entrypoint before Terraform changes are proposed.
+
+### AgentCore Runtime repository state handoff
+
+The Runtime repository predates its ownership by `infra/ecr`. During the first
+authorized release containing this handoff, the ECR step checks whether
+`aws_ecr_repository.agentcore_runtime` is already in `ecr-prod.tfstate`. If it
+is absent but `mymemo/agentcore-runtime` exists in AWS, the step imports that
+repository before the normal ECR apply. A repository absent from both AWS and
+state is created normally for a clean environment.
+
+The later unified production apply uses a Terraform `removed` block with
+`destroy = false` to forget the historical
+`aws_ecr_repository.production_runtime` address. An interrupted release may
+temporarily leave the repository recorded in both states, but never deletes or
+recreates it; rerun the same reviewed release to finish the handoff. Do not
+manually remove or import either state address during that recovery.
+
+After the release succeeds, verify the single owner without reading image
+contents:
+
+```sh
+AWS_PROFILE=mymemo terraform -chdir=infra/ecr state show aws_ecr_repository.agentcore_runtime
+if AWS_PROFILE=mymemo terraform -chdir=infra/terraform state list \
+  | rg -q '^aws_ecr_repository\.production_runtime$'; then
+  echo "Production state still records the Runtime repository" >&2
+  exit 1
+fi
+```
+
+The first command must succeed and the guard must exit without printing an
+error.
 
 ECS service `task_definition` changes are intentionally ignored by Terraform.
 For an ordinary release, the workflow first applies a strictly classified,

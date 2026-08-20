@@ -12,3 +12,8 @@ output "agentcore_dispatch_publisher_ecr_repository_url" {
   description = "ECR repository URL for AgentCore dispatch publisher images."
   value       = aws_ecr_repository.agentcore_dispatch_publisher.repository_url
 }
+
+output "agentcore_runtime_ecr_repository_url" {
+  description = "ECR repository URL for AgentCore Runtime images."
+  value       = aws_ecr_repository.agentcore_runtime.repository_url
+}

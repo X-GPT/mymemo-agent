@@ -1,18 +1,12 @@
-resource "aws_ecr_repository" "production_runtime" {
-  name                 = "mymemo/agentcore-runtime"
-  image_tag_mutability = "IMMUTABLE"
-  force_delete         = false
+data "aws_ecr_repository" "production_runtime" {
+  name = "mymemo/agentcore-runtime"
+}
 
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  encryption_configuration {
-    encryption_type = "AES256"
-  }
+removed {
+  from = aws_ecr_repository.production_runtime
 
   lifecycle {
-    prevent_destroy = true
+    destroy = false
   }
 }
 
@@ -24,7 +18,7 @@ resource "aws_bedrockagentcore_agent_runtime" "runtime" {
 
   agent_runtime_artifact {
     container_configuration {
-      container_uri = "${aws_ecr_repository.production_runtime.repository_url}@${var.runtime_image_digest}"
+      container_uri = "${data.aws_ecr_repository.production_runtime.repository_url}@${var.runtime_image_digest}"
     }
   }
 
