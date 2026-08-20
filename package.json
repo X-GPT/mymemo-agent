@@ -4,8 +4,8 @@
 	"scripts": {
 		"smoke:local": "AGENT_SMOKE_BASE_URL=http://localhost:3000 AGENT_SMOKE_EXPECT_GATE_CLOSED=false AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME=fargate AGENT_SMOKE_MEMBER_CODE=demo-member AGENT_SMOKE_SUITE=full bun run scripts/smoke/agent-conversation-smoke.ts",
 		"test": "bun test scripts/deploy-config.test.ts scripts/agentcore-infra.test.ts scripts/deploy/agentcore_aws_checks.test.ts scripts/deploy/agentcore_plan.test.ts scripts/smoke/client-contract.test.ts scripts/smoke/agent-conversation-smoke.test.ts && bun run scripts/test-workspaces.ts",
-		"terraform:fmt": "terraform -chdir=infra/bootstrap-iam fmt && terraform -chdir=infra/terraform fmt && terraform -chdir=infra/ecr fmt && terraform -chdir=infra/dev fmt && terraform -chdir=infra/agentcore fmt",
-		"terraform:validate": "terraform -chdir=infra/bootstrap-iam validate && terraform -chdir=infra/terraform validate && terraform -chdir=infra/ecr validate && terraform -chdir=infra/dev validate && terraform -chdir=infra/agentcore validate"
+		"terraform:fmt": "terraform -chdir=infra/bootstrap-iam fmt && terraform -chdir=infra/terraform fmt && terraform -chdir=infra/ecr fmt && terraform -chdir=infra/dev fmt",
+		"terraform:validate": "terraform -chdir=infra/bootstrap-iam validate && terraform -chdir=infra/terraform validate && terraform -chdir=infra/ecr validate && terraform -chdir=infra/dev validate"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.11",

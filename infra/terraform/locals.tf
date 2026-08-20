@@ -21,9 +21,9 @@ locals {
     var.agentcore_dispatch_queue_kms_alias_name,
     "alias/mymemo-agent-agentcore-${var.environment}",
   )
-  agentcore_dispatch_queue_url             = "https://sqs.${var.aws_region}.amazonaws.com/${data.aws_caller_identity.current.account_id}/${local.agentcore_dispatch_queue_name}"
-  agentcore_dispatch_queue_arn             = "arn:${data.aws_partition.current.partition}:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.agentcore_dispatch_queue_name}"
-  agentcore_dispatch_enabled_parameter_arn = "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.agentcore_dispatch_enabled_parameter_name}"
+  agentcore_dispatch_queue_url             = aws_sqs_queue.dispatch.url
+  agentcore_dispatch_queue_arn             = aws_sqs_queue.dispatch.arn
+  agentcore_dispatch_enabled_parameter_arn = aws_ssm_parameter.dispatch_enabled.arn
 
   shared_service_outputs = data.terraform_remote_state.mymemo_service.outputs
 

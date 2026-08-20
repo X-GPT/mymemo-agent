@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-terraform_dir="infra/agentcore"
+terraform_dir="infra/terraform"
 region="${AWS_REGION:?AWS_REGION is required}"
 expected_digest="${EXPECTED_RUNTIME_IMAGE_DIGEST:?EXPECTED_RUNTIME_IMAGE_DIGEST is required}"
 expected_dispatch_value="${EXPECTED_DISPATCH_VALUE:?EXPECTED_DISPATCH_VALUE is required}"

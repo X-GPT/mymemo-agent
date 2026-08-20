@@ -4,7 +4,13 @@ Use this guide when changing deployment configuration, runtime bootstrap, secret
 
 ## AWS CLI
 
-Always use the `mymemo` profile: `aws --profile mymemo ...`.
+For local operator commands, always use the `mymemo` profile:
+`aws --profile mymemo ...`.
+
+GitHub Actions configures short-lived credentials by assuming the deploy role
+through OIDC. Workflow commands and the scripts they invoke use plain `aws` so
+the CLI reads those assumed-role credentials; they must not select the local
+`mymemo` profile.
 
 ## AgentCore dispatch Lambda boundary
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-terraform_dir="infra/agentcore"
+terraform_dir="infra/terraform"
 region="${AWS_REGION:?AWS_REGION is required}"
 evidence_path="${1:-}"
 source "scripts/deploy/agentcore_aws_checks.sh"

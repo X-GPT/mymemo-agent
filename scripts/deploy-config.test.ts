@@ -64,6 +64,10 @@ const artifactOperationsRunbook = readFileSync(
 	join(root, "docs", "runbooks", "downloadable-artifacts.md"),
 	"utf8",
 );
+const configurationGuide = readFileSync(
+	join(root, "docs", "agents", "configuration.md"),
+	"utf8",
+);
 
 function terraformFiles(dir = terraformDir): string[] {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -74,13 +78,13 @@ function terraformFiles(dir = terraformDir): string[] {
 }
 
 describe("agent deployment config", () => {
-	it("does not define a new VPC in mymemo-agent Terraform", () => {
+	it("reuses the shared VPC while owning AgentCore private subnets", () => {
 		const combined = terraformFiles()
 			.map((path) => readFileSync(path, "utf8"))
 			.join("\n");
 
 		expect(combined).not.toMatch(/resource\s+"aws_vpc"/);
-		expect(combined).not.toMatch(/resource\s+"aws_subnet"/);
+		expect(combined).toContain('resource "aws_subnet" "private"');
 		expect(combined).toContain(
 			'data "terraform_remote_state" "mymemo_service"',
 		);
@@ -470,8 +474,8 @@ describe("agent deployment config", () => {
 	it("runs the dedicated Dispatch publisher against the production shared stack", () => {
 		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
 		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
-		const sharedState = readFileSync(
-			join(terraformDir, "shared_state.tf"),
+		const queueConfig = readFileSync(
+			join(terraformDir, "agentcore-queue.tf"),
 			"utf8",
 		);
 
@@ -484,16 +488,11 @@ describe("agent deployment config", () => {
 		expect(locals).toMatch(
 			/"alias\/mymemo-agent-agentcore-\$\{var\.environment\}"/,
 		);
-		expect(sharedState).toContain(
-			"count = var.agentcore_dispatch_publisher_desired_count == 1 ? 1 : 0",
+		expect(queueConfig).toContain('resource "aws_sqs_queue" "dispatch"');
+		expect(locals).toContain(
+			"agentcore_dispatch_queue_url             = aws_sqs_queue.dispatch.url",
 		);
-		expect(iamConfig).toContain('dynamic "statement"');
-		expect(iamConfig).toContain(
-			"for_each = var.agentcore_dispatch_publisher_desired_count == 1 ? [1] : []",
-		);
-		expect(iamConfig).toContain(
-			"data.aws_kms_alias.agentcore_dispatch_queue[0].target_key_arn",
-		);
+		expect(iamConfig).toContain("resources = [aws_kms_key.dispatch.arn]");
 	});
 
 	it("checked-in prod deploy env is limited to CI and smoke inputs", () => {
@@ -575,8 +574,14 @@ describe("agent deployment config", () => {
 		const migrationIndex = releaseDeployWorkflow.indexOf(
 			"scripts/deploy/run_agent_migration.sh",
 		);
-		const desiredPlanIndex = releaseDeployWorkflow.indexOf(
-			"Terraform plan desired service counts",
+		const migrationTaskIndex = releaseDeployWorkflow.indexOf(
+			"Register the migration task definition only",
+		);
+		const unifiedPlanIndex = releaseDeployWorkflow.indexOf(
+			"Plan the unified release after migrations",
+		);
+		const unifiedApplyIndex = releaseDeployWorkflow.indexOf(
+			"Apply the unified release",
 		);
 		const rolloutIndex = releaseDeployWorkflow.indexOf(
 			"scripts/deploy/roll_ecs_services.sh",
@@ -593,7 +598,9 @@ describe("agent deployment config", () => {
 		expect(bootstrapApplyIndex).toBeGreaterThan(bootstrapPlanIndex);
 		expect(migrationIndex).toBeGreaterThan(-1);
 		expect(bootstrapApplyIndex).toBeLessThan(migrationIndex);
-		expect(desiredPlanIndex).toBeGreaterThan(migrationIndex);
+		expect(migrationTaskIndex).toBeLessThan(migrationIndex);
+		expect(unifiedPlanIndex).toBeGreaterThan(migrationIndex);
+		expect(unifiedApplyIndex).toBeGreaterThan(unifiedPlanIndex);
 		expect(rolloutIndex).toBeGreaterThan(-1);
 		expect(migrationIndex).toBeLessThan(rolloutIndex);
 		expect(releaseDeployWorkflow).not.toContain("scripts/deploy/prod_smoke.sh");
@@ -851,6 +858,7 @@ describe("agent deployment config", () => {
 			"bedrock-agentcore:CreateAgentRuntime",
 			"bedrock-agentcore:UpdateAgentRuntime",
 			"bedrock-agentcore:GetAgentRuntimeEndpoint",
+			"ecr:DescribeImageScanFindings",
 			"lambda:UpdateFunctionCode",
 			"lambda:CreateEventSourceMapping",
 			"sqs:SetQueueAttributes",
@@ -883,6 +891,14 @@ describe("agent deployment config", () => {
 		);
 	});
 
+	it("documents separate AWS CLI credential sources for operators and Actions", () => {
+		expect(configurationGuide).toContain("aws --profile mymemo");
+		expect(configurationGuide).toContain(
+			"GitHub Actions configures short-lived credentials",
+		);
+		expect(configurationGuide).toContain("scripts they invoke use plain `aws`");
+	});
+
 	it("release deploy serializes runs and generates unique immutable image tags", () => {
 		expect(releaseDeployWorkflow).toContain("concurrency:");
 		expect(releaseDeployWorkflow).toContain(
@@ -904,8 +920,8 @@ describe("agent deployment config", () => {
 	});
 
 	it("release deploy auto-deploys CI-green main through classified lanes", () => {
-		const classifyScript = readFileSync(
-			join(root, "scripts", "deploy", "classify_terraform_plan.sh"),
+		const classifier = readFileSync(
+			join(root, "scripts", "deploy", "classify_terraform_plan.ts"),
 			"utf8",
 		);
 
@@ -925,20 +941,32 @@ describe("agent deployment config", () => {
 		// App-only plans (the image-tag roll) apply unattended; infra plans fail
 		// the automatic run and require a manual dispatch with the confirm phrase.
 		expect(releaseDeployWorkflow).toContain(
-			"scripts/deploy/classify_terraform_plan.sh",
+			"bun run scripts/deploy/classify_terraform_plan.ts",
 		);
 		expect(releaseDeployWorkflow).toContain(
 			"if: needs.plan.outputs.lane == 'infra' && github.event_name != 'workflow_dispatch'",
 		);
-		expect(classifyScript).toContain(
-			'. != "aws_ecs_task_definition" and . != "aws_ecs_service"',
+		expect(
+			existsSync(join(root, "scripts", "deploy", "classify_terraform_plan.sh")),
+		).toBe(false);
+		expect(classifier).toContain('"terraform",');
+		expect(classifier).toContain('"show",');
+		expect(classifier).toContain('"-json",');
+		expect(classifier).toContain(
+			'"aws_lambda_function.consumer", new Set(["update"])',
 		);
-		expect(classifyScript).toContain('["no-op", "read"]');
+		expect(classifier).toContain(
+			'"aws_bedrockagentcore_agent_runtime.runtime", new Set(["update"])',
+		);
+		expect(classifier).toContain('actions.includes("forget")');
 
 		// The deploy job re-plans and re-classifies so drift between the jobs
 		// cannot smuggle infra changes through the unattended lane.
 		expect(releaseDeployWorkflow).toContain(
 			"if: env.FIRST_DEPLOY != 'true' && needs.plan.outputs.lane == 'app'",
+		);
+		expect(releaseDeployWorkflow).toContain(
+			"scripts/deploy/terraform_prod_migration_plan.sh",
 		);
 
 		// No GitHub environment features anywhere (plan-gated on private repos);

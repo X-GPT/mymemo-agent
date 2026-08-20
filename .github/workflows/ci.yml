@@ -58,7 +58,7 @@ jobs:
       - run: bun run test
       - run: bun test e2e/relay-failure-matrix.integration.test.ts
 
-  agentcore-infrastructure:
+  infrastructure:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -70,10 +70,10 @@ jobs:
           terraform_wrapper: false
       - run: bun install --frozen-lockfile
       - run: bun test scripts/agentcore-infra.test.ts scripts/deploy/agentcore_plan.test.ts
-      - run: terraform -chdir=infra/agentcore fmt -check
+      - run: terraform -chdir=infra/terraform fmt -check
       - name: Verify backendless provider initialization and lock file
-        run: terraform -chdir=infra/agentcore init -backend=false -lockfile=readonly
-      - run: terraform -chdir=infra/agentcore validate
+        run: terraform -chdir=infra/terraform init -backend=false -lockfile=readonly
+      - run: terraform -chdir=infra/terraform validate
 
   # The agent-worker image build lives in worker-image.yml, path-filtered.
 

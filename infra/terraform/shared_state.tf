@@ -20,6 +20,12 @@ data "aws_subnet" "shared_ecs_first" {
   id = local.shared_ecs_subnet_ids[0]
 }
 
+data "aws_subnet" "shared_egress" {
+  for_each = toset(local.shared_ecs_subnet_ids)
+
+  id = each.value
+}
+
 data "aws_ecs_cluster" "shared" {
   count = local.shared_ecs_cluster_arn_output == null && local.shared_ecs_cluster_name_output != null ? 1 : 0
 
@@ -29,9 +35,3 @@ data "aws_ecs_cluster" "shared" {
 data "aws_caller_identity" "current" {}
 
 data "aws_partition" "current" {}
-
-data "aws_kms_alias" "agentcore_dispatch_queue" {
-  count = var.agentcore_dispatch_publisher_desired_count == 1 ? 1 : 0
-
-  name = local.agentcore_dispatch_queue_kms_alias_name
-}

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { AGENTCORE_DISPATCH_QUEUE_INVARIANTS } from "../apps/agentcore-dispatch-consumer/src/invariants";
 
 const root = process.cwd();
-const terraformDir = join(root, "infra", "agentcore");
+const terraformDir = join(root, "infra", "terraform");
 const terraformEnvironment = "$" + "{var.environment}";
 
 function terraformFiles(): string[] {
@@ -42,39 +42,28 @@ describe("production AgentCore dispatch infrastructure", () => {
 		);
 	});
 
-	it("keeps the existing isolated state while exposing a production Terraform root", () => {
+	it("uses the unified production state and current AWS provider", () => {
 		const versions = readFileSync(join(terraformDir, "versions.tf"), "utf8");
-		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");
 
-		expect(existsSync(join(root, "infra", "agentcore-canary"))).toBe(false);
-		expect(versions).toContain(
-			'key          = "mymemo-agent/agentcore-canary-prod.tfstate"',
-		);
-		expect(readme).toContain("historical");
-		expect(readme).toContain("state which\nowns the production resources");
+		const retiredDir = join(root, "infra", "agentcore");
+		expect(existsSync(retiredDir)).toBe(false);
+		expect(versions).toContain('key          = "mymemo-agent/prod.tfstate"');
 		expect(versions).toMatch(/use_lockfile\s*=\s*true/);
 		expect(versions).toMatch(/encrypt\s*=\s*true/);
 		expect(versions).toMatch(/version\s*=\s*">= 6\.50, < 7\.0"/);
 		expect(existsSync(join(terraformDir, ".terraform.lock.hcl"))).toBe(true);
 	});
 
-	it("owns only the shared queue, consumer, Runtime, and their support resources", () => {
+	it("owns ECS and AgentCore in one root without the retired publisher Lambda", () => {
 		const source = terraformSource();
 
-		for (const forbiddenType of [
-			"aws_ecs_cluster",
-			"aws_ecs_service",
-			"aws_ecs_task_definition",
-			"aws_db_instance",
-			"aws_elasticache_replication_group",
-			"aws_s3_bucket",
-			"aws_lb",
-			"aws_lb_listener",
-			"aws_route53_record",
-		]) {
-			expect(source).not.toMatch(new RegExp(`resource\\s+"${forbiddenType}"`));
-		}
-		expect(source).toContain('data "terraform_remote_state" "mymemo_agent"');
+		expect(source).toContain('resource "aws_ecs_service" "agent_worker"');
+		expect(source).toContain(
+			'resource "aws_bedrockagentcore_agent_runtime" "runtime"',
+		);
+		expect(source).not.toContain(
+			'data "terraform_remote_state" "mymemo_agent"',
+		);
 		expect(source).not.toContain('resource "aws_lambda_function" "publisher"');
 		expect(source).not.toContain('resource "aws_iam_role" "publisher"');
 		expect(source).not.toContain(
@@ -87,7 +76,6 @@ describe("production AgentCore dispatch infrastructure", () => {
 	});
 
 	it("consumes the dedicated production publisher service contract without granting it to agent-worker", () => {
-		const source = terraformSource();
 		const sharedLocals = readFileSync(
 			join(root, "infra", "terraform", "locals.tf"),
 			"utf8",
@@ -112,9 +100,6 @@ describe("production AgentCore dispatch infrastructure", () => {
 		);
 		expect(productionValues).toMatch(
 			/agentcore_dispatch_publisher_desired_count\s*=\s*1/,
-		);
-		expect(source).not.toMatch(
-			/resource\s+"aws_ecs_(service|task_definition)"/,
 		);
 
 		const workerPolicy = sharedIam.match(
@@ -152,8 +137,14 @@ describe("production AgentCore dispatch infrastructure", () => {
 	});
 
 	it("provides a zonal NAT egress path for every private Runtime subnet", () => {
-		const network = readFileSync(join(terraformDir, "network.tf"), "utf8");
-		const outputs = readFileSync(join(terraformDir, "outputs.tf"), "utf8");
+		const network = readFileSync(
+			join(terraformDir, "agentcore-network.tf"),
+			"utf8",
+		);
+		const outputs = readFileSync(
+			join(terraformDir, "agentcore-outputs.tf"),
+			"utf8",
+		);
 
 		expect(network).toMatch(
 			/resource\s+"aws_eip"\s+"egress"[\s\S]*?for_each\s*=\s*local\.private_subnets[\s\S]*?domain\s*=\s*"vpc"/,
@@ -164,15 +155,16 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(network).toMatch(
 			/resource\s+"aws_route"\s+"private_egress"[\s\S]*?for_each\s*=\s*local\.private_subnets[\s\S]*?destination_cidr_block\s*=\s*"0\.0\.0\.0\/0"[\s\S]*?nat_gateway_id\s*=\s*aws_nat_gateway\.egress\[each\.key\]\.id/,
 		);
-		expect(network).toContain(
-			"data.terraform_remote_state.mymemo_agent.outputs.assign_public_ip",
-		);
+		expect(network).toContain("condition     = var.assign_public_ip");
 		expect(outputs).toContain('output "egress_configurations"');
 	});
 
 	it("deploys production-named Runtime resources from the agent-worker configuration", () => {
 		const source = terraformSource();
-		const runtime = readFileSync(join(terraformDir, "runtime.tf"), "utf8");
+		const runtime = readFileSync(
+			join(terraformDir, "agentcore-runtime.tf"),
+			"utf8",
+		);
 		const variables = readFileSync(join(terraformDir, "variables.tf"), "utf8");
 		const agentOutputs = readFileSync(
 			join(root, "infra", "terraform", "outputs.tf"),
@@ -186,7 +178,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 			`agent_runtime_name    = "mymemo_agentcore_${terraformEnvironment}"`,
 		);
 		expect(source).toContain(
-			`name_prefix = "mymemo-agent-agentcore-${terraformEnvironment}"`,
+			`agentcore_name_prefix = "mymemo-agent-agentcore-${terraformEnvironment}"`,
 		);
 		expect(runtime).toMatch(
 			/resource\s+"aws_ecr_repository"\s+"production_runtime"[\s\S]*?name\s*=\s*"mymemo\/agentcore-runtime"/,
@@ -220,24 +212,10 @@ describe("production AgentCore dispatch infrastructure", () => {
 		]) {
 			expect(source).toContain(name);
 		}
-		for (const output of [
-			"agent_database_url",
-			"agent_database_password_secret_arn",
-			"kb_database_url_secret_arn",
-			"openrouter_api_key_secret_arn",
-			"e2b_api_key_secret_arn",
-			"redis_url_secret_arn",
-			"openrouter_base_url",
-			"openrouter_default_model",
-			"worker_e2b_template",
-			"artifact_bucket_name",
-			"alarm_action_arns",
-		]) {
-			expect(agentOutputs).toContain(`output "${output}"`);
-			expect(source).toContain(
-				`data.terraform_remote_state.mymemo_agent.outputs.${output}`,
-			);
-		}
+		expect(agentOutputs).toContain('output "agent_database_url"');
+		expect(source).not.toContain("data.terraform_remote_state.mymemo_agent");
+		expect(source).toContain("local.agent_db_password_base_secret_arn");
+		expect(source).toContain("aws_s3_bucket.artifacts.bucket");
 		for (const variable of [
 			"agent_database_url_secret_arn",
 			"kb_database_url_secret_arn",
@@ -245,10 +223,6 @@ describe("production AgentCore dispatch infrastructure", () => {
 			"e2b_api_key_secret_arn",
 			"redis_url_secret_arn",
 			"artifact_bucket_name",
-			"openrouter_base_url",
-			"openrouter_default_model",
-			"worker_e2b_template",
-			"alarm_action_arns",
 		]) {
 			expect(variables).not.toContain(`variable "${variable}"`);
 		}
@@ -265,12 +239,16 @@ describe("production AgentCore dispatch infrastructure", () => {
 
 	it("separates Runtime and consumer authority and grants standard artifact upload", () => {
 		const source = terraformSource();
+		const agentcoreIam = readFileSync(
+			join(terraformDir, "agentcore-iam.tf"),
+			"utf8",
+		);
 
 		for (const role of ["consumer", "runtime"]) {
 			expect(source).toContain(`resource "aws_iam_role" "${role}"`);
 		}
 		expect(source).toMatch(
-			/sid\s*=\s*"WriteProductionArtifacts"[\s\S]*?"s3:AbortMultipartUpload"[\s\S]*?"s3:DeleteObject"[\s\S]*?"s3:PutObject"[\s\S]*?resources\s*=\s*\["arn:aws:s3:::\$\{data\.terraform_remote_state\.mymemo_agent\.outputs\.artifact_bucket_name\}\/objects\/\*"\]/,
+			/sid\s*=\s*"WriteProductionArtifacts"[\s\S]*?"s3:AbortMultipartUpload"[\s\S]*?"s3:DeleteObject"[\s\S]*?"s3:PutObject"[\s\S]*?resources\s*=\s*\["\$\{aws_s3_bucket\.artifacts\.arn\}\/objects\/\*"\]/,
 		);
 		expect(source).toMatch(
 			/data\s+"aws_iam_policy_document"\s+"runtime_trust"[\s\S]*?runtime\/mymemo_agentcore_prod-\*/,
@@ -278,12 +256,15 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(source).toMatch(
 			/"\$\{aws_bedrockagentcore_agent_runtime\.runtime\.agent_runtime_arn\}\/runtime-endpoint\/DEFAULT"/,
 		);
-		expect(source).not.toContain('actions   = ["sqs:SendMessage"]');
+		expect(agentcoreIam).not.toContain('actions   = ["sqs:SendMessage"]');
 		expect(source.match(/secretsmanager:VersionStage/g)).toHaveLength(2);
 	});
 
 	it("pages only on DLQ, poison, pending age, and sustained publisher errors", () => {
-		const alarms = readFileSync(join(terraformDir, "alarms.tf"), "utf8");
+		const alarms = readFileSync(
+			join(terraformDir, "agentcore-alarms.tf"),
+			"utf8",
+		);
 
 		for (const metric of [
 			"ApproximateNumberOfMessagesVisible",
@@ -301,12 +282,10 @@ describe("production AgentCore dispatch infrastructure", () => {
 			expect(alarms).not.toContain(`"${metric}"`);
 		}
 		expect(
-			alarms.match(
-				/alarm_actions\s*=\s*data\.terraform_remote_state\.mymemo_agent\.outputs\.alarm_action_arns/g,
-			),
+			alarms.match(/alarm_actions\s*=\s*var\.alarm_action_arns/g),
 		).toHaveLength(4);
 		expect(alarms).toMatch(
-			/agent-worker alarm_action_arns output must contain at least one same-account, same-region SNS topic ARN/,
+			/alarm_action_arns must contain at least one same-account, same-region SNS topic ARN/,
 		);
 		expect(alarms).toMatch(
 			/resource\s+"aws_cloudwatch_metric_alarm"\s+"publisher_errors"[\s\S]*?evaluation_periods\s*=\s*5[\s\S]*?datapoints_to_alarm\s*=\s*3/,
@@ -351,9 +330,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(workflow).toContain("Run agent DB migrations");
 		expect(workflow).toContain("Roll ECS services");
 		expect(workflow.indexOf("Run agent DB migrations")).toBeLessThan(
-			workflow.indexOf(
-				"Initialize AgentCore and capture the operational control",
-			),
+			workflow.indexOf("Apply the unified release"),
 		);
 		expect(
 			workflow.indexOf(
@@ -361,6 +338,12 @@ describe("production AgentCore dispatch infrastructure", () => {
 			),
 		).toBeLessThan(workflow.indexOf("Roll ECS services"));
 		expect(workflow).toContain("mymemo-agent-github-actions-deploy");
+		expect(workflow).toContain(
+			`printf 'TF_VAR_aws_region=%s\\n' "\${AWS_REGION}"`,
+		);
+		expect(workflow).toContain(
+			`printf 'TF_VAR_aws_account_id=%s\\n' "\${AWS_ACCOUNT_ID}"`,
+		);
 		expect(workflow).toContain("EXPECTED_DISPATCH_VALUE");
 		expect(workflow).toMatch(
 			/"\$\{dispatch_value\}" != "enabled" && "\$\{dispatch_value\}" != "disabled"/,
@@ -369,10 +352,9 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(workflow).not.toContain("must be disabled before deployment");
 		expect(workflow).toContain("agentcore-runtime-image-check.sh");
 		expect(workflow).toContain("build_agentcore_consumer.sh");
-		expect(workflow).toContain("classify_agentcore_plan.sh");
-		expect(workflow).toMatch(
-			/terraform -chdir="\$\{AGENTCORE_TERRAFORM_DIR\}" apply/,
-		);
+		expect(workflow).toContain("classify_terraform_plan.ts");
+		expect(workflow).toContain("terraform_prod_migration_plan.sh");
+		expect(workflow).not.toContain("AGENTCORE_TERRAFORM_DIR");
 		expect(workflow).toContain("enforce_agentcore_mmdsv2.sh");
 		expect(workflow).toContain("inspect_agentcore.sh");
 		expect(workflow).toContain("actions/upload-artifact@v4");
@@ -406,27 +388,20 @@ describe("production AgentCore dispatch infrastructure", () => {
 	it("documents production ownership, alarm routing, and coordinated deployment", () => {
 		const readme = readFileSync(join(terraformDir, "README.md"), "utf8");
 
-		for (const section of [
-			"Publisher-service boundary",
-			"Runtime and consumer posture",
-			"Production alarms",
-			"GitHub Actions deployment",
-		]) {
-			expect(readme).toContain(`## ${section}`);
-		}
-		expect(readme).toContain("owned by `infra/terraform`");
-		expect(readme).toContain("desired count one");
-		expect(readme).toContain("GitHub Actions");
-		expect(readme).toContain("`PendingAgeMs`");
-		expect(readme).toContain("`PublisherErrors`");
-		expect(readme).toContain("`PublisherLockNotAcquired`");
-		expect(readme).toContain("informational telemetry");
-		expect(readme).toContain("disable SSM, turn the runtime gate off");
+		expect(readme).toContain("AgentCore Runtime");
+		expect(readme).toContain("dedicated Dispatch publisher");
+		expect(readme).toContain("same compatibility cycle");
+		expect(readme).toContain(
+			"Routine releases accept and preserve either live",
+		);
 	});
 
 	it("preserves remaining state-address moves while removing canary resources", () => {
 		const source = terraformSource();
-		const moves = readFileSync(join(terraformDir, "moved.tf"), "utf8");
+		const moves = readFileSync(
+			join(terraformDir, "agentcore-moved.tf"),
+			"utf8",
+		);
 
 		for (const oldAddress of [
 			"aws_bedrockagentcore_agent_runtime.canary",
@@ -445,6 +420,23 @@ describe("production AgentCore dispatch infrastructure", () => {
 		);
 		expect(source).not.toContain(
 			`mymemo-agent-agentcore-canary-${terraformEnvironment}`,
+		);
+	});
+
+	it("only protects durable resources", () => {
+		const queue = readFileSync(
+			join(terraformDir, "agentcore-queue.tf"),
+			"utf8",
+		);
+		const runtime = readFileSync(
+			join(terraformDir, "agentcore-runtime.tf"),
+			"utf8",
+		);
+
+		expect(queue.match(/prevent_destroy\s*=\s*true/g)).toHaveLength(4);
+		expect(runtime.match(/prevent_destroy\s*=\s*true/g)).toHaveLength(1);
+		expect(runtime).not.toMatch(
+			/resource "aws_bedrockagentcore_agent_runtime" "runtime"[\s\S]*?prevent_destroy/,
 		);
 	});
 });

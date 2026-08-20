@@ -1,5 +1,5 @@
 resource "aws_cloudwatch_metric_alarm" "pending_publication_age" {
-  alarm_name          = "${local.name_prefix}-pending-publication-age"
+  alarm_name          = "${local.agentcore_name_prefix}-pending-publication-age"
   alarm_description   = "AgentCore Dispatch publication has remained pending beyond one minute"
   namespace           = "MyMemo/AgentCoreDispatch"
   metric_name         = "PendingAgeMs"
@@ -10,20 +10,20 @@ resource "aws_cloudwatch_metric_alarm" "pending_publication_age" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 60000
   treat_missing_data  = "breaching"
-  alarm_actions       = data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns
+  alarm_actions       = var.alarm_action_arns
 
   lifecycle {
     precondition {
-      condition = length(data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns) > 0 && alltrue([
-        for arn in data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns : can(regex("^arn:aws:sns:${var.aws_region}:${var.aws_account_id}:[A-Za-z0-9_-]+$", arn))
+      condition = length(var.alarm_action_arns) > 0 && alltrue([
+        for arn in var.alarm_action_arns : can(regex("^arn:aws:sns:${var.aws_region}:${var.aws_account_id}:[A-Za-z0-9_-]+$", arn))
       ])
-      error_message = "The agent-worker alarm_action_arns output must contain at least one same-account, same-region SNS topic ARN."
+      error_message = "alarm_action_arns must contain at least one same-account, same-region SNS topic ARN."
     }
   }
 }
 
 resource "aws_cloudwatch_metric_alarm" "publisher_errors" {
-  alarm_name          = "${local.name_prefix}-publisher-errors"
+  alarm_name          = "${local.agentcore_name_prefix}-publisher-errors"
   alarm_description   = "AgentCore Dispatch publisher errors have persisted across three of five minutes"
   namespace           = "MyMemo/AgentCoreDispatch"
   metric_name         = "PublisherErrors"
@@ -35,11 +35,11 @@ resource "aws_cloudwatch_metric_alarm" "publisher_errors" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns
+  alarm_actions       = var.alarm_action_arns
 }
 
 resource "aws_cloudwatch_metric_alarm" "poison_dispatch" {
-  alarm_name          = "${local.name_prefix}-poison-dispatch"
+  alarm_name          = "${local.agentcore_name_prefix}-poison-dispatch"
   alarm_description   = "The AgentCore consumer rejected invalid Dispatch work"
   namespace           = "MyMemo/AgentCoreDispatch"
   metric_name         = "PoisonDispatch"
@@ -50,11 +50,11 @@ resource "aws_cloudwatch_metric_alarm" "poison_dispatch" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns
+  alarm_actions       = var.alarm_action_arns
 }
 
 resource "aws_cloudwatch_metric_alarm" "dead_letter_work" {
-  alarm_name          = "${local.name_prefix}-dead-letter-work"
+  alarm_name          = "${local.agentcore_name_prefix}-dead-letter-work"
   alarm_description   = "AgentCore poison or repeatedly failing Dispatch work reached the DLQ"
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateNumberOfMessagesVisible"
@@ -65,7 +65,7 @@ resource "aws_cloudwatch_metric_alarm" "dead_letter_work" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = data.terraform_remote_state.mymemo_agent.outputs.alarm_action_arns
+  alarm_actions       = var.alarm_action_arns
 }
 
 locals {

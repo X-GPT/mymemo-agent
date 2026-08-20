@@ -10,6 +10,10 @@ resource "aws_ecr_repository" "production_runtime" {
   encryption_configuration {
     encryption_type = "AES256"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_bedrockagentcore_agent_runtime" "runtime" {
