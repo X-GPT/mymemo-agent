@@ -37,7 +37,7 @@ Downloadable artifacts through the standard `objects/` namespace with the same
 multipart, replace, and delete operations available to the Fargate worker. The
 consumer has no reserved-concurrency cap; queue batch size remains one, partial
 batch responses stay enabled, and the queue values match the shared production
-invariants in `apps/agentcore-canary-dispatch/src/invariants.ts`.
+invariants in `apps/agentcore-dispatch-consumer/src/invariants.ts`.
 
 Each private Runtime subnet has a same-AZ NAT Gateway in the existing shared
 public subnet layout and an explicit `0.0.0.0/0` route. This supplies the AWS API

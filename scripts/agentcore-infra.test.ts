@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTCORE_DISPATCH_QUEUE_INVARIANTS } from "../apps/agentcore-canary-dispatch/src/invariants";
+import { AGENTCORE_DISPATCH_QUEUE_INVARIANTS } from "../apps/agentcore-dispatch-consumer/src/invariants";
 
 const root = process.cwd();
 const terraformDir = join(root, "infra", "agentcore");
@@ -23,7 +23,7 @@ function terraformSource(): string {
 describe("production AgentCore dispatch infrastructure", () => {
 	it("builds the Runtime on updated packages and ships a non-root distroless release", () => {
 		const dockerfile = readFileSync(
-			join(root, "apps", "agentcore-canary-runtime", "Dockerfile"),
+			join(root, "apps", "agentcore-runtime", "Dockerfile"),
 			"utf8",
 		);
 

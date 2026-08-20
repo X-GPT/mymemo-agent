@@ -210,10 +210,10 @@ if [[ -z "${requested_digest}" ]]; then
   docker buildx build \
     --platform linux/arm64 \
     --load \
-    --file apps/agentcore-canary-runtime/Dockerfile \
+    --file apps/agentcore-runtime/Dockerfile \
     --tag mymemo-agentcore-runtime:verified \
     .
-  scripts/smoke/agentcore-canary-runtime-image-check.sh mymemo-agentcore-runtime:verified
+  scripts/smoke/agentcore-runtime-image-check.sh mymemo-agentcore-runtime:verified
   image_tag="manual-${commit_sha:0:12}-$(date -u +%Y%m%d%H%M%S)"
   docker tag mymemo-agentcore-runtime:verified "${repository_uri}:${image_tag}"
   docker push "${repository_uri}:${image_tag}"
@@ -228,7 +228,7 @@ else
     echo "Existing Runtime image must be linux/arm64." >&2
     exit 1
   fi
-  scripts/smoke/agentcore-canary-runtime-image-check.sh agentcore-existing:verified
+  scripts/smoke/agentcore-runtime-image-check.sh agentcore-existing:verified
 fi
 export TF_VAR_runtime_image_digest="${runtime_image_digest}"
 export EXPECTED_RUNTIME_IMAGE_DIGEST="${runtime_image_digest}"
