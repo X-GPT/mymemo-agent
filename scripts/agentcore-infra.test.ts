@@ -360,6 +360,14 @@ describe("production AgentCore dispatch infrastructure", () => {
 			"Download the planned AgentCore consumer package",
 		);
 		expect(workflow).toContain("actions/download-artifact@v4");
+		expect(workflow.match(/oven-sh\/setup-bun@v2/g)).toHaveLength(2);
+		expect(workflow).not.toContain("deployment-plan.json");
+		expect(workflow).not.toContain(
+			"terraform -chdir=infra/terraform show -json agent-prod.tfplan",
+		);
+		expect(workflow).toContain(
+			"terraform -chdir=infra/terraform show -no-color agent-prod.tfplan",
+		);
 		expect(workflow).not.toContain("classify_terraform_plan");
 		expect(workflow).toContain("terraform_prod_migration_plan.sh");
 		expect(workflow).not.toContain("AGENTCORE_TERRAFORM_DIR");

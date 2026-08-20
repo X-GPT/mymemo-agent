@@ -918,6 +918,9 @@ describe("agent deployment config", () => {
 	});
 
 	it("release deploy requires a manual main-branch dispatch for every apply", () => {
+		const deployJob = releaseDeployWorkflow.slice(
+			releaseDeployWorkflow.indexOf("\n  deploy:"),
+		);
 		const confirmationIndex = releaseDeployWorkflow.indexOf(
 			"Validate production apply confirmation",
 		);
@@ -943,6 +946,10 @@ describe("agent deployment config", () => {
 		);
 		expect(confirmationIndex).toBeGreaterThan(-1);
 		expect(confirmationIndex).toBeLessThan(ecrApplyIndex);
+		expect(deployJob).toContain("uses: oven-sh/setup-bun@v2");
+		expect(deployJob).toContain("bun-version: 1.3.0");
+		expect(deployJob).not.toContain("bun install --frozen-lockfile");
+		expect(releaseDeployWorkflow).not.toContain("deployment-plan.json");
 		expect(releaseDeployWorkflow).toContain(
 			"scripts/deploy/terraform_prod_migration_plan.sh",
 		);

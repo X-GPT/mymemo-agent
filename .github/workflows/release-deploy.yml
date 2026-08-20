@@ -249,6 +249,9 @@ jobs:
             printf 'TF_VAR_aws_account_id=%s\n' "${AWS_ACCOUNT_ID}"
           } >> "${GITHUB_ENV}"
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.0
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
@@ -335,7 +338,6 @@ jobs:
         run: |
           record_dir="${RUNNER_TEMP}/agentcore-deployment"
           scripts/deploy/terraform_prod_in_place_plan.sh
-          terraform -chdir=infra/terraform show -json agent-prod.tfplan > "${record_dir}/deployment-plan.json"
           terraform -chdir=infra/terraform show -no-color agent-prod.tfplan > "${record_dir}/deployment-plan.txt"
 
       - name: Apply the unified release
