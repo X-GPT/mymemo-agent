@@ -1,23 +1,6 @@
 name: AgentCore Runtime image
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - apps/agentcore-runtime/**
-      - apps/agentcore-dispatch-consumer/**
-      - apps/agent-worker/**
-      - packages/agent-db/**
-      - packages/agentcore-dispatch/**
-      - packages/live-text/**
-      - apps/*/package.json
-      - packages/*/package.json
-      - package.json
-      - bun.lock
-      - .dockerignore
-      - scripts/smoke/agentcore-runtime-image-check.sh
-      - .github/workflows/agentcore-runtime-image.yml
   pull_request:
     paths:
       - apps/agentcore-runtime/**

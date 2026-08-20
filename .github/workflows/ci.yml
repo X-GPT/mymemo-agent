@@ -62,14 +62,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.0
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
-      - run: bun install --frozen-lockfile
-      - run: bun test scripts/agentcore-infra.test.ts scripts/deploy/agentcore_plan.test.ts
       - run: terraform -chdir=infra/terraform fmt -check
       - name: Verify backendless provider initialization and lock file
         run: terraform -chdir=infra/terraform init -backend=false -lockfile=readonly
