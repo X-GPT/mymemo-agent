@@ -15,7 +15,7 @@ build_dir="$(mktemp -d /tmp/mymemo-agentcore-lambdas.XXXXXX)"
 trap 'rm -rf "${build_dir}"' EXIT
 
 mkdir -p "${build_dir}/dispatch"
-bun build apps/agentcore-canary-dispatch/src/production.ts \
+bun build apps/agentcore-dispatch-consumer/src/production.ts \
   --target=node \
   --format=esm \
   --outfile="${build_dir}/dispatch/index.mjs"

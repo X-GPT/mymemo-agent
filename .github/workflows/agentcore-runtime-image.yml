@@ -5,8 +5,8 @@ on:
     branches:
       - main
     paths:
-      - apps/agentcore-canary-runtime/**
-      - apps/agentcore-canary-dispatch/**
+      - apps/agentcore-runtime/**
+      - apps/agentcore-dispatch-consumer/**
       - apps/agent-worker/**
       - packages/agent-db/**
       - packages/agentcore-dispatch/**
@@ -16,12 +16,12 @@ on:
       - package.json
       - bun.lock
       - .dockerignore
-      - scripts/smoke/agentcore-canary-runtime-image-check.sh
+      - scripts/smoke/agentcore-runtime-image-check.sh
       - .github/workflows/agentcore-runtime-image.yml
   pull_request:
     paths:
-      - apps/agentcore-canary-runtime/**
-      - apps/agentcore-canary-dispatch/**
+      - apps/agentcore-runtime/**
+      - apps/agentcore-dispatch-consumer/**
       - apps/agent-worker/**
       - packages/agent-db/**
       - packages/agentcore-dispatch/**
@@ -31,7 +31,7 @@ on:
       - package.json
       - bun.lock
       - .dockerignore
-      - scripts/smoke/agentcore-canary-runtime-image-check.sh
+      - scripts/smoke/agentcore-runtime-image-check.sh
       - .github/workflows/agentcore-runtime-image.yml
 
 concurrency:
@@ -49,9 +49,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: apps/agentcore-canary-runtime/Dockerfile
+          file: apps/agentcore-runtime/Dockerfile
           platforms: linux/arm64
           load: true
-          tags: mymemo-agentcore-canary-runtime:image-check
+          tags: mymemo-agentcore-runtime:image-check
       - name: Verify request-oriented image offline
-        run: scripts/smoke/agentcore-canary-runtime-image-check.sh mymemo-agentcore-canary-runtime:image-check
+        run: scripts/smoke/agentcore-runtime-image-check.sh mymemo-agentcore-runtime:image-check
