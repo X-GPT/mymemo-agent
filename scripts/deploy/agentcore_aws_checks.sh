@@ -107,9 +107,10 @@ verify_agentcore_egress() {
   done < <(jq -c '.egress_configurations.value | to_entries[].value' <<<"${terraform_output}")
 }
 
-verify_agentcore_idle_dispatch() {
+verify_agentcore_dispatch_wiring() {
   local region="$1"
   local terraform_output="$2"
+  local expected_dispatch_value="$3"
   local mapping_uuid
   local dispatch_queue_arn
   local expected_consumer_function_arn
@@ -150,7 +151,7 @@ verify_agentcore_idle_dispatch() {
   fi
   jq -e '(.ReservedConcurrentExecutions // null) == null' \
     <<<"${consumer_concurrency}" >/dev/null
-  [[ "$(agentcore_aws ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "disabled" ]]
+  [[ "$(agentcore_aws ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "${expected_dispatch_value}" ]]
 }
 
 verify_agentcore_runtime_configuration() {

@@ -90,7 +90,11 @@ function expectedWiring(): LiveWiring {
 
 function verify(
 	wiring: LiveWiring,
-	options: { emptyConcurrencyResponse?: boolean } = {},
+	options: {
+		emptyConcurrencyResponse?: boolean;
+		liveDispatchValue?: "enabled" | "disabled";
+		expectedDispatchValue?: "enabled" | "disabled";
+	} = {},
 ) {
 	const script = `
 set -euo pipefail
@@ -104,11 +108,11 @@ aws() {
         printf '%s\n' "$CONCURRENCY"
       fi
       ;;
-    *"ssm get-parameter"*) printf '%s\n' "disabled" ;;
+    *"ssm get-parameter"*) printf '%s\n' "$LIVE_DISPATCH_VALUE" ;;
     *) exit 97 ;;
   esac
 }
-verify_agentcore_idle_dispatch us-west-2 "$TF_OUTPUT"
+verify_agentcore_dispatch_wiring us-west-2 "$TF_OUTPUT" "$EXPECTED_DISPATCH_VALUE"
 `;
 	return spawnSync("bash", ["-c", script], {
 		encoding: "utf8",
@@ -121,6 +125,8 @@ verify_agentcore_idle_dispatch us-west-2 "$TF_OUTPUT"
 			EMPTY_CONCURRENCY_RESPONSE: String(
 				options.emptyConcurrencyResponse ?? false,
 			),
+			LIVE_DISPATCH_VALUE: options.liveDispatchValue ?? "disabled",
+			EXPECTED_DISPATCH_VALUE: options.expectedDispatchValue ?? "disabled",
 		},
 	});
 }
@@ -263,10 +269,26 @@ verify_agentcore_egress us-west-2 "$TF_OUTPUT"
 	});
 }
 
-describe("production AgentCore idle dispatch wiring", () => {
-	it("accepts the enabled consumer and fail-closed SSM graph", () => {
+describe("production AgentCore dispatch wiring", () => {
+	it("accepts the enabled consumer while preserving disabled Dispatch", () => {
 		const result = verify(expectedWiring());
 		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it("accepts the enabled consumer while preserving enabled Dispatch", () => {
+		const result = verify(expectedWiring(), {
+			liveDispatchValue: "enabled",
+			expectedDispatchValue: "enabled",
+		});
+		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it("rejects a Dispatch control change during deployment", () => {
+		const result = verify(expectedWiring(), {
+			liveDispatchValue: "enabled",
+			expectedDispatchValue: "disabled",
+		});
+		expect(result.status).not.toBe(0);
 	});
 
 	it("accepts AWS's empty response for unreserved consumer concurrency", () => {

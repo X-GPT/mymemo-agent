@@ -122,33 +122,24 @@ The publisher image and task definition can be deployed or rolled back
 independently during an incident, but that does not make schema, envelope,
 publisher, consumer, or Runtime versions independently releasable.
 
-1. Run the reviewed release workflow. CI applies Terraform, runs its **Run agent
-   DB migrations** step, then uses `scripts/deploy/roll_ecs_services.sh` to roll
-   chat-api, the runtime-aware agent-worker, and the dedicated Dispatch
-   publisher together and wait for their shared stable point. The previously
-   applied runtime rename and canary-table removal are skipped by migration
-   history; do not run a separate manual migration. Retain the successful reset
-   with the release record.
+1. Run the reviewed **Release deploy** workflow. CI applies the ordinary
+   Terraform root, runs its **Run agent DB migrations** step, deploys the
+   consumer and AgentCore Runtime from their independent Terraform root,
+   enforces MMDSv2, and verifies the Runtime and `DEFAULT` endpoint. It then
+   uses `scripts/deploy/roll_ecs_services.sh` to roll chat-api, the runtime-aware
+   agent-worker, and the dedicated Dispatch publisher together and waits for
+   their shared stable point. The previously applied runtime rename and
+   canary-table removal are skipped by migration history; do not run a separate
+   manual migration. Retain the AgentCore plan and inspection artifact with the
+   release record.
 2. With both Statsig gates OFF and SSM still `disabled`, confirm the release
    workflow succeeded and all three ECS services are stable. The publisher must
    have desired count one. Agent-worker remains the global expiration and
    Reclamation runner for both runtimes.
-3. Deploy the consumer and AgentCore Runtime while the SSM control remains
-   `disabled`. In GitHub Actions, run **AgentCore deploy** from `main`, choose
-   `prod`, and enter:
-
-   ```text
-   deploy-mymemo-agentcore-prod
-   ```
-
-   The workflow builds and verifies the Runtime image, packages the consumer,
-   classifies and applies the independent Terraform plan, enforces MMDSv2,
-   waits for `DEFAULT`, runs the idle inspection, and uploads the evidence.
-
-4. Set `/mymemo/agentcore-dispatch/prod/enabled` to `enabled`. Confirm the
+3. Set `/mymemo/agentcore-dispatch/prod/enabled` to `enabled`. Confirm the
    publisher emits `PendingAgeMs: 0` when idle and the consumer event-source
    mapping remains enabled.
-5. In Statsig, target only the synthetic smoke identity in both the exposure
+4. In Statsig, target only the synthetic smoke identity in both the exposure
    gate and `mymemo_agent_agentcore_runtime_enabled`. Leave the runtime gate's
    default OFF. From the VPC-reachable environment, run the ordinary
    public-contract smoke through its deployed wrapper, which pins
@@ -163,17 +154,23 @@ publisher, consumer, or Runtime versions independently releasable.
    done Outcomes, durable history, and Downloadable-artifact listing and
    download for that ordinary Conversation through chat-api; it uses no database
    or queue access. Retain the printed Conversation and Run ids for correlation
-   with Runtime telemetry. This pass licenses step 6's staged runtime-gate
+   with Runtime telemetry. This pass licenses step 5's staged runtime-gate
    rollout, but does not license setting the default ON or skipping the telemetry
    checks at each stage.
-6. Roll out `mymemo_agent_agentcore_runtime_enabled` in deliberate Statsig
+5. Roll out `mymemo_agent_agentcore_runtime_enabled` in deliberate Statsig
    stages. At every stage observe pending age, sustained publisher errors,
    queue/DLQ depth, AgentCore Outcomes, and Fargate health before increasing the
    cohort. Existing Conversations never move when the percentage changes.
 
 Do not enable SSM or widen the runtime gate merely because the deploy commands
-returned successfully; the idle inspection and targeted smoke are separate
-gates.
+returned successfully; the deployment inspection and targeted smoke are
+separate gates.
+
+After the first cutover, routine **Release deploy** runs preserve the exact SSM
+Dispatch value they observe at startup. They accept either `enabled` or
+`disabled`, never toggle the control, and do not require empty queues. Changing
+the SSM value remains a separate operator action for rollout and incident
+containment.
 
 ## Publisher operations
 

@@ -9,6 +9,9 @@ name: Release deploy
 #   image-tag task-definition roll — applies unattended. Any other change
 #   fails the automatic run with instructions; a human applies it by
 #   re-running via workflow_dispatch with the typed confirm phrase.
+# - After the ordinary Terraform apply and compatible migration, the same
+#   deploy job updates the AgentCore Runtime and consumer from their independent
+#   state, preserves the operator-owned SSM Dispatch value, then rolls ECS.
 # - workflow_dispatch (from main only; other refs cannot assume the deploy
 #   role) also covers bootstrap, re-deploys, and incident response.
 
@@ -39,6 +42,9 @@ env:
   TF_IN_AUTOMATION: true
   DEPLOY_ENVIRONMENT: ${{ inputs.environment || 'prod' }}
   DEPLOY_CONFIG: infra/deploy/${{ inputs.environment || 'prod' }}.env
+  AGENTCORE_TERRAFORM_DIR: infra/agentcore
+  AGENTCORE_DISPATCH_PARAMETER: /mymemo/agentcore-dispatch/prod/enabled
+  RDS_CA_DIGEST: e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3
   # The commit CI validated (workflow_run) or the dispatched ref's head — the
   # only commit this workflow builds, plans, and applies.
   DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -211,11 +217,18 @@ jobs:
         with:
           terraform_wrapper: false
 
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
@@ -262,5 +275,128 @@ jobs:
         if: env.FIRST_DEPLOY == 'true'
         run: scripts/deploy/terraform_prod_in_place_apply.sh
 
+      - name: Initialize AgentCore and capture the operational control
+        id: agentcore_state
+        run: |
+          record_dir="${RUNNER_TEMP}/agentcore-deployment"
+          mkdir -p "${record_dir}"
+
+          terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" init
+          terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" fmt -check
+          terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" validate
+
+          caller_account="$(aws sts get-caller-identity --query Account --output text)"
+          if [[ "${caller_account}" != "${AWS_ACCOUNT_ID}" ]]; then
+            echo "The deploy role must target AWS account ${AWS_ACCOUNT_ID}." >&2
+            exit 1
+          fi
+
+          dispatch_value="$(aws ssm get-parameter \
+            --region "${AWS_REGION}" \
+            --name "${AGENTCORE_DISPATCH_PARAMETER}" \
+            --query Parameter.Value \
+            --output text)"
+          if [[ "${dispatch_value}" != "enabled" && "${dispatch_value}" != "disabled" ]]; then
+            echo "${AGENTCORE_DISPATCH_PARAMETER} must be exactly enabled or disabled." >&2
+            exit 1
+          fi
+
+          repository_uri="$(terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" output -raw runtime_repository_url)"
+          previous_digest="$(terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" output -raw runtime_image_digest)"
+          if [[ ! "${previous_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Terraform state contains an invalid Runtime rollback digest." >&2
+            exit 1
+          fi
+          aws ecr describe-repositories \
+            --region "${AWS_REGION}" \
+            --repository-names mymemo/agentcore-runtime >/dev/null
+
+          printf 'EXPECTED_DISPATCH_VALUE=%s\n' "${dispatch_value}" >> "${GITHUB_ENV}"
+          printf 'ROLLBACK_RUNTIME_IMAGE_DIGEST=%s\n' "${previous_digest}" >> "${GITHUB_ENV}"
+          printf 'repository_uri=%s\n' "${repository_uri}" >> "${GITHUB_OUTPUT}"
+          printf 'previous_digest=%s\n' "${previous_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build, verify, and push the ARM64 AgentCore Runtime image
+        id: agentcore_runtime_image
+        env:
+          REPOSITORY_URI: ${{ steps.agentcore_state.outputs.repository_uri }}
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --load \
+            --file apps/agentcore-runtime/Dockerfile \
+            --tag mymemo-agentcore-runtime:verified \
+            .
+          scripts/smoke/agentcore-runtime-image-check.sh mymemo-agentcore-runtime:verified
+          aws ecr get-login-password --region "${AWS_REGION}" |
+            docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          docker tag mymemo-agentcore-runtime:verified "${REPOSITORY_URI}:${IMAGE_TAG}"
+          docker push "${REPOSITORY_URI}:${IMAGE_TAG}"
+          runtime_image_digest="$(aws ecr describe-images \
+            --region "${AWS_REGION}" \
+            --repository-name mymemo/agentcore-runtime \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+          if [[ ! "${runtime_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ECR returned an invalid Runtime image digest." >&2
+            exit 1
+          fi
+          aws ecr wait image-scan-complete \
+            --region "${AWS_REGION}" \
+            --repository-name mymemo/agentcore-runtime \
+            --image-id imageDigest="${runtime_image_digest}"
+          printf 'TF_VAR_runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_ENV}"
+          printf 'EXPECTED_RUNTIME_IMAGE_DIGEST=%s\n' "${runtime_image_digest}" >> "${GITHUB_ENV}"
+          printf 'runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Package the AgentCore consumer Lambda
+        run: |
+          ca_bundle="${RUNNER_TEMP}/rds-global-bundle.pem"
+          consumer_dir="${RUNNER_TEMP}/agentcore-consumer"
+          curl --fail --silent --show-error --location \
+            https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+            --output "${ca_bundle}"
+          echo "${RDS_CA_DIGEST}  ${ca_bundle}" | sha256sum --check
+          scripts/deploy/build_agentcore_consumer.sh "${consumer_dir}" "${ca_bundle}"
+          printf 'TF_VAR_consumer_lambda_package=%s/consumer.zip\n' "${consumer_dir}" >> "${GITHUB_ENV}"
+
+      - name: Plan, classify, and apply AgentCore Runtime and consumer
+        run: |
+          record_dir="${RUNNER_TEMP}/agentcore-deployment"
+          plan_file="${record_dir}/deployment.tfplan"
+          terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" plan -out="${plan_file}"
+          terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" show -json "${plan_file}" > "${record_dir}/deployment-plan.json"
+          terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" show -no-color "${plan_file}" > "${record_dir}/deployment-plan.txt"
+          scripts/deploy/classify_agentcore_plan.sh "${plan_file}"
+          terraform -chdir="${AGENTCORE_TERRAFORM_DIR}" apply "${plan_file}"
+
+      - name: Enforce AgentCore MMDSv2 and wait for the DEFAULT endpoint
+        run: scripts/deploy/enforce_agentcore_mmdsv2.sh "${RUNNER_TEMP}/agentcore-deployment/runtime-readiness.json"
+
+      - name: Verify AgentCore deployment and unchanged Dispatch control
+        env:
+          DEPLOYED_RUNTIME_IMAGE_DIGEST: ${{ steps.agentcore_runtime_image.outputs.runtime_image_digest }}
+        run: |
+          record_dir="${RUNNER_TEMP}/agentcore-deployment"
+          scripts/deploy/inspect_agentcore.sh | tee "${record_dir}/deployment-inspection.json"
+          jq -n \
+            --arg commit "${DEPLOY_SHA}" \
+            --arg runtimeImageDigest "${DEPLOYED_RUNTIME_IMAGE_DIGEST}" \
+            --arg rollbackImageDigest "${ROLLBACK_RUNTIME_IMAGE_DIGEST}" \
+            --arg dispatchValue "${EXPECTED_DISPATCH_VALUE}" \
+            --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,rollbackImageDigest:$rollbackImageDigest,dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
+            > "${record_dir}/deployment-record.json"
+
       - name: Roll ECS services
         run: scripts/deploy/roll_ecs_services.sh
+
+      - name: Upload AgentCore deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentcore-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agentcore-deployment
+          if-no-files-found: ignore
+          retention-days: 30

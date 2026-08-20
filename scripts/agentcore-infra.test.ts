@@ -319,7 +319,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 	it("deploys the consumer and Runtime through guarded GitHub Actions", () => {
 		const shellOutputDir = "$" + "{output_dir}";
 		const workflow = readFileSync(
-			join(root, ".github", "workflows", "agentcore-deploy.yml"),
+			join(root, ".github", "workflows", "release-deploy.yml"),
 			"utf8",
 		);
 		const consumerBuild = readFileSync(
@@ -342,18 +342,37 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(
 			existsSync(join(root, "scripts", "deploy", "deploy_agentcore.sh")),
 		).toBe(false);
+		expect(
+			existsSync(join(root, ".github", "workflows", "agentcore-deploy.yml")),
+		).toBe(false);
 		expect(consumerBuild).toContain(`${shellOutputDir}/consumer.zip`);
 		expect(consumerBuild).not.toContain(`${shellOutputDir}/dispatch.zip`);
 		expect(workflow).toContain("workflow_dispatch:");
-		expect(workflow).toContain("deploy-mymemo-agentcore-prod");
-		expect(workflow).toContain("refs/heads/main");
-		expect(workflow).toContain("id-token: write");
+		expect(workflow).toContain("Run agent DB migrations");
+		expect(workflow).toContain("Roll ECS services");
+		expect(workflow.indexOf("Run agent DB migrations")).toBeLessThan(
+			workflow.indexOf(
+				"Initialize AgentCore and capture the operational control",
+			),
+		);
+		expect(
+			workflow.indexOf(
+				"Verify AgentCore deployment and unchanged Dispatch control",
+			),
+		).toBeLessThan(workflow.indexOf("Roll ECS services"));
 		expect(workflow).toContain("mymemo-agent-github-actions-deploy");
-		expect(workflow).toMatch(/\[\[ "\$\{dispatch_value\}" != "disabled" \]\]/);
+		expect(workflow).toContain("EXPECTED_DISPATCH_VALUE");
+		expect(workflow).toMatch(
+			/"\$\{dispatch_value\}" != "enabled" && "\$\{dispatch_value\}" != "disabled"/,
+		);
+		expect(workflow).not.toContain("aws ssm put-parameter");
+		expect(workflow).not.toContain("must be disabled before deployment");
 		expect(workflow).toContain("agentcore-runtime-image-check.sh");
 		expect(workflow).toContain("build_agentcore_consumer.sh");
 		expect(workflow).toContain("classify_agentcore_plan.sh");
-		expect(workflow).toMatch(/terraform -chdir="\$\{TERRAFORM_DIR\}" apply/);
+		expect(workflow).toMatch(
+			/terraform -chdir="\$\{AGENTCORE_TERRAFORM_DIR\}" apply/,
+		);
 		expect(workflow).toContain("enforce_agentcore_mmdsv2.sh");
 		expect(workflow).toContain("inspect_agentcore.sh");
 		expect(workflow).toContain("actions/upload-artifact@v4");
@@ -371,7 +390,11 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(mmdsv2).not.toContain("requireServiceS3Endpoint");
 		expect(inspection).toContain('VisibilityTimeout == "180"');
 		expect(inspection).toContain("maxReceiveCount == 5");
-		expect(inspection).toContain("verify_agentcore_idle_dispatch");
+		expect(inspection).toContain("verify_agentcore_dispatch_wiring");
+		expect(inspection).toContain("expected_dispatch_value");
+		expect(inspection).not.toContain(
+			'.Attributes.ApproximateNumberOfMessages == "0"',
+		);
 		expect(checks).not.toContain("events describe-rule");
 		expect(checks).not.toContain("lambda get-policy");
 		expect(checks).toContain("(.ReservedConcurrentExecutions // null) == null");

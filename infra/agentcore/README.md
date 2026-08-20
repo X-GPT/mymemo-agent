@@ -25,6 +25,7 @@ repair schedule, publisher role, ECS service, or task definition. The publisher
 service consumes this root's production queue, KMS alias, and SSM parameter by
 their agreed names and emits `PendingAgeMs`, `PublisherErrors`, and informational
 `PublisherLockNotAcquired` metrics in `MyMemo/AgentCoreDispatch`.
+Production keeps the publisher at desired count one.
 
 `agent-worker` receives no SQS, SSM, KMS, or publisher lifecycle authority. It
 continues to own global queued-Run expiration and Reclamation for both execution
@@ -80,39 +81,42 @@ The production rename and ECR migration are complete. Routine deployment no
 longer contains legacy queue checks, repository copying, targeted Terraform
 applies, or a local deploy command.
 
-First apply the ordinary agent Terraform stack so its shared configuration
-outputs are current. The GitHub OIDC role must include the AgentCore permissions
-declared by `infra/bootstrap-iam`; apply that bootstrap root once before the
-first workflow run after a permission change. Then run the **AgentCore deploy**
-workflow from `main`, choose `prod`, and enter the confirmation phrase:
+The GitHub OIDC role must include the AgentCore permissions declared by
+`infra/bootstrap-iam`; apply that bootstrap root once before the first release
+after a permission change. The ordinary **Release deploy** workflow then owns
+the complete coordinated release. Its ordinary Terraform apply publishes the
+agent-worker configuration outputs before the independent AgentCore root reads
+them.
 
-```text
-deploy-mymemo-agentcore-prod
-```
-
-The workflow assumes `mymemo-agent-github-actions-deploy` through GitHub OIDC,
-verifies account `637423444544`, and requires the SSM Dispatch control to be
-`disabled`. It builds and checks the ARM64 Runtime image, pushes it to the
+The release workflow assumes `mymemo-agent-github-actions-deploy` through
+GitHub OIDC and verifies account `637423444544`. After the compatible schema
+migration it builds and checks the ARM64 Runtime image, pushes it to the
 immutable production repository, packages the consumer Lambda with the pinned
 RDS CA bundle, classifies the steady-state Terraform plan, and rejects every
 resource deletion or replacement. After apply it enforces MMDSv2 through the
-AWS control-plane API until the Terraform provider supports the field, waits for
-the Runtime and `DEFAULT` endpoint, and runs the idle production inspection.
-Plan and inspection evidence is retained as a GitHub Actions artifact for 30
-days.
+AWS control-plane API until the Terraform provider supports the field, waits
+for the Runtime and `DEFAULT` endpoint, verifies the deployment, then rolls the
+publisher and other ECS services.
+
+Routine deployment reads the SSM Dispatch control before changing the Runtime
+and verifies the exact value afterward. It accepts both `enabled` and
+`disabled`, never changes the value, and does not require empty queues. Plan and
+inspection evidence is retained as a GitHub Actions artifact for 30 days.
 
 The coordinated production order is:
 
-1. apply the compatible schema;
-2. deploy chat-api with the runtime gate off;
-3. deploy this consumer/Runtime stack idle and the dedicated publisher service
-   with desired count one;
-4. enable the SSM Dispatch control;
-5. run the ordinary synthetic Conversation smoke; and
-6. stage the runtime gate rollout.
+1. apply the ordinary Terraform root so shared outputs and ECS task definitions
+   are current;
+2. run the compatible schema migration;
+3. deploy this consumer/Runtime stack while preserving the SSM control;
+4. roll chat-api, agent-worker, and the dedicated publisher service at desired
+   count one together;
+5. during first cutover only, enable the SSM Dispatch control;
+6. run the ordinary synthetic Conversation smoke; and
+7. stage the runtime gate rollout.
 
 Ordinary releases keep schema, envelope, publisher, consumer, and Runtime
 compatibility coordinated even though the publisher image and task definition
 are independently rollbackable. Rollback is a reviewed revert on `main`
-followed by the same workflow. Incident shutdown reverses authority first:
+followed by **Release deploy**. Incident shutdown reverses authority first:
 disable SSM, turn the runtime gate off, then roll binaries.
