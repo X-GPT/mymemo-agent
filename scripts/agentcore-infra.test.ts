@@ -352,7 +352,15 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(workflow).not.toContain("must be disabled before deployment");
 		expect(workflow).toContain("agentcore-runtime-image-check.sh");
 		expect(workflow).toContain("build_agentcore_consumer.sh");
-		expect(workflow).toContain("classify_terraform_plan.ts");
+		expect(workflow.match(/build_agentcore_consumer\.sh/g)).toHaveLength(1);
+		expect(workflow).toContain(
+			"Preserve the planned AgentCore consumer package",
+		);
+		expect(workflow).toContain(
+			"Download the planned AgentCore consumer package",
+		);
+		expect(workflow).toContain("actions/download-artifact@v4");
+		expect(workflow).not.toContain("classify_terraform_plan");
 		expect(workflow).toContain("terraform_prod_migration_plan.sh");
 		expect(workflow).not.toContain("AGENTCORE_TERRAFORM_DIR");
 		expect(workflow).toContain("enforce_agentcore_mmdsv2.sh");

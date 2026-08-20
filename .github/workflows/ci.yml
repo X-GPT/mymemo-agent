@@ -8,12 +8,9 @@ on:
 # Supersede in-flight runs for the same PR. Keyed on the PR number, so pushes
 # to one PR cancel each other and nothing else.
 #
-# A push to main has no pull_request.number and falls back to the unique
-# run id, putting every main run alone in its own group. That is deliberate
-# and load-bearing: release-deploy.yml triggers on `workflow_run` of this
-# workflow per commit, and Actions keeps at most one *pending* run per group —
-# a third arrival evicts the pending one even with cancel-in-progress false.
-# Grouping main at all could therefore silently drop a production deploy.
+# A push to main has no pull_request.number and falls back to the unique run
+# id, so main CI runs do not cancel one another and each commit keeps its own
+# verification record before an operator manually dispatches a release.
 #
 # Groups are repository-wide, not per-workflow, hence the `ci-` prefix.
 concurrency:

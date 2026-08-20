@@ -767,10 +767,8 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain("confirm_prod_apply");
 		expect(releaseDeployWorkflow).not.toContain("gateway_public_url");
 		expect(releaseDeployWorkflow).not.toContain("GATEWAY_PUBLIC_URL");
-		// The phrase is auto-supplied only for the unattended app lane; the infra
-		// lane still requires the operator-typed dispatch input.
 		expect(releaseDeployWorkflow).toContain(
-			"CONFIRM_AGENT_PROD_APPLY: ${{ needs.plan.outputs.lane == 'app' && 'apply-mymemo-agent-prod' || inputs.confirm_prod_apply }}",
+			"CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}",
 		);
 		expect(releaseDeployWorkflow).not.toContain(
 			"CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod",
@@ -919,52 +917,32 @@ describe("agent deployment config", () => {
 		);
 	});
 
-	it("release deploy auto-deploys CI-green main through classified lanes", () => {
-		const classifier = readFileSync(
-			join(root, "scripts", "deploy", "classify_terraform_plan.ts"),
-			"utf8",
+	it("release deploy requires a manual main-branch dispatch for every apply", () => {
+		const confirmationIndex = releaseDeployWorkflow.indexOf(
+			"Validate production apply confirmation",
+		);
+		const ecrApplyIndex = releaseDeployWorkflow.indexOf(
+			"Ensure ECR repositories",
 		);
 
-		// Auto trigger: only a green CI run on main, deploying the exact commit
-		// CI validated rather than main's tip at run time.
-		expect(releaseDeployWorkflow).toContain("workflow_run:");
-		expect(releaseDeployWorkflow).toContain("workflows: [CI]");
-		expect(releaseDeployWorkflow).toContain("branches: [main]");
+		expect(releaseDeployWorkflow).toContain("workflow_dispatch:");
+		expect(releaseDeployWorkflow).not.toContain("workflow_run:");
+		expect(releaseDeployWorkflow).not.toContain("workflows: [CI]");
 		expect(releaseDeployWorkflow).toContain(
-			"github.event.workflow_run.conclusion == 'success'",
+			"if: github.ref == 'refs/heads/main'",
 		);
-		expect(releaseDeployWorkflow).toContain(
-			"DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}",
-		);
+		expect(releaseDeployWorkflow).toContain("DEPLOY_SHA: ${{ github.sha }}");
 		expect(releaseDeployWorkflow).toContain("ref: ${{ env.DEPLOY_SHA }}");
-
-		// App-only plans (the image-tag roll) apply unattended; infra plans fail
-		// the automatic run and require a manual dispatch with the confirm phrase.
+		expect(releaseDeployWorkflow).not.toContain("classify_terraform_plan");
+		expect(releaseDeployWorkflow).not.toContain("outputs.lane");
 		expect(releaseDeployWorkflow).toContain(
-			"bun run scripts/deploy/classify_terraform_plan.ts",
+			"CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}",
 		);
 		expect(releaseDeployWorkflow).toContain(
-			"if: needs.plan.outputs.lane == 'infra' && github.event_name != 'workflow_dispatch'",
+			'if [[ "${CONFIRM_AGENT_PROD_APPLY}" != "apply-mymemo-agent-prod" ]]',
 		);
-		expect(
-			existsSync(join(root, "scripts", "deploy", "classify_terraform_plan.sh")),
-		).toBe(false);
-		expect(classifier).toContain('"terraform",');
-		expect(classifier).toContain('"show",');
-		expect(classifier).toContain('"-json",');
-		expect(classifier).toContain(
-			'"aws_lambda_function.consumer", new Set(["update"])',
-		);
-		expect(classifier).toContain(
-			'"aws_bedrockagentcore_agent_runtime.runtime", new Set(["update"])',
-		);
-		expect(classifier).toContain('actions.includes("forget")');
-
-		// The deploy job re-plans and re-classifies so drift between the jobs
-		// cannot smuggle infra changes through the unattended lane.
-		expect(releaseDeployWorkflow).toContain(
-			"if: env.FIRST_DEPLOY != 'true' && needs.plan.outputs.lane == 'app'",
-		);
+		expect(confirmationIndex).toBeGreaterThan(-1);
+		expect(confirmationIndex).toBeLessThan(ecrApplyIndex);
 		expect(releaseDeployWorkflow).toContain(
 			"scripts/deploy/terraform_prod_migration_plan.sh",
 		);

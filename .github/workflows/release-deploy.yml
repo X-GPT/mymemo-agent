@@ -1,25 +1,16 @@
 name: Release deploy
 
-# Trunk-based continuous deploy with hybrid lanes (private-repo friendly: no
-# GitHub environment features are used — the deploy role's OIDC trust is
-# pinned to runs on refs/heads/main instead, see infra/bootstrap-iam):
-# - Every CI-green push to main deploys that exact commit automatically.
-# - The plan job builds and pushes every release artifact, then classifies the unified Terraform plan
-#   (scripts/deploy/classify_terraform_plan.ts). An app-only plan — just the
-#   image-tag task-definition roll — applies unattended. Any other change
-#   fails the automatic run with instructions; a human applies it by
-#   re-running via workflow_dispatch with the typed confirm phrase.
+# Manually dispatched production deploy. The deploy role's OIDC trust is
+# pinned to runs on refs/heads/main (see infra/bootstrap-iam), and every apply
+# requires the typed workflow input. There is no unattended application lane:
+# every unified Terraform plan receives the same operator authorization.
 # - The deploy job registers only the migration task definition, migrates the
 #   database, then applies the unified plan and rolls ECS. This keeps new
 #   Runtime, Lambda, and ECS code behind the compatible schema.
-# - workflow_dispatch (from main only; other refs cannot assume the deploy
-#   role) also covers bootstrap, re-deploys, and incident response.
+# - Dispatch from main covers releases, bootstrap, re-deploys, and incident
+#   response. Other refs are rejected before any release work starts.
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
@@ -30,7 +21,7 @@ on:
         required: true
         default: "prod"
       confirm_prod_apply:
-        description: "Type apply-mymemo-agent-prod to apply infra-lane (non-app) Terraform changes."
+        description: "Type apply-mymemo-agent-prod to authorize the production Terraform apply."
         required: true
 
 concurrency:
@@ -44,13 +35,13 @@ env:
   DEPLOY_CONFIG: infra/deploy/${{ inputs.environment || 'prod' }}.env
   AGENTCORE_DISPATCH_PARAMETER: /mymemo/agentcore-dispatch/prod/enabled
   RDS_CA_DIGEST: e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3
-  # The commit CI validated (workflow_run) or the dispatched ref's head — the
-  # only commit this workflow builds, plans, and applies.
-  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  # The manually dispatched main commit is the only commit this workflow
+  # builds, plans, and applies.
+  DEPLOY_SHA: ${{ github.sha }}
 
 jobs:
   plan:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,8 +53,16 @@ jobs:
       agentcore_dispatch_publisher_image: ${{ steps.images.outputs.agentcore_dispatch_publisher_image }}
       runtime_image_digest: ${{ steps.agentcore_runtime_image.outputs.runtime_image_digest }}
       first_deploy: ${{ steps.agent_deploy_state.outputs.first_deploy }}
-      lane: ${{ steps.classify.outputs.lane }}
     steps:
+      - name: Validate production apply confirmation
+        env:
+          CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
+        run: |
+          if [[ "${CONFIRM_AGENT_PROD_APPLY}" != "apply-mymemo-agent-prod" ]]; then
+            echo "Refusing to start the production release. Set confirm_prod_apply to apply-mymemo-agent-prod." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.DEPLOY_SHA }}
@@ -198,21 +197,16 @@ jobs:
           scripts/deploy/build_agentcore_consumer.sh "${consumer_dir}" "${ca_bundle}"
           printf 'TF_VAR_consumer_lambda_package=%s/consumer.zip\n' "${consumer_dir}" >> "${GITHUB_ENV}"
 
+      - name: Preserve the planned AgentCore consumer package
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentcore-consumer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agentcore-consumer/consumer.zip
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Terraform plan
         run: scripts/deploy/terraform_prod_in_place_plan.sh
-
-      - name: Classify plan into a deploy lane
-        id: classify
-        env:
-          FIRST_DEPLOY: ${{ steps.agent_deploy_state.outputs.first_deploy }}
-        run: |
-          if [[ "${FIRST_DEPLOY}" == "true" ]]; then
-            lane="infra"
-          else
-            lane="$(bun run scripts/deploy/classify_terraform_plan.ts)"
-          fi
-          echo "Deploy lane: ${lane}"
-          printf 'lane=%s\n' "${lane}" >> "${GITHUB_OUTPUT}"
 
   deploy:
     needs: plan
@@ -230,20 +224,8 @@ jobs:
       TF_VAR_runtime_image_digest: ${{ needs.plan.outputs.runtime_image_digest }}
       EXPECTED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.runtime_image_digest }}
       FIRST_DEPLOY: ${{ needs.plan.outputs.first_deploy }}
-      # App lane: human intent is the CI-green merge, so the phrase is
-      # supplied automatically. Infra lane: the operator must have typed it
-      # into the workflow_dispatch input (validated by the apply script).
-      CONFIRM_AGENT_PROD_APPLY: ${{ needs.plan.outputs.lane == 'app' && 'apply-mymemo-agent-prod' || inputs.confirm_prod_apply }}
+      CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
     steps:
-      # A failed run (rather than a skip) so infra changes waiting for a human
-      # are impossible to miss.
-      - name: Require manual dispatch for infra changes
-        if: needs.plan.outputs.lane == 'infra' && github.event_name != 'workflow_dispatch'
-        run: |
-          echo "This deploy includes non-app Terraform changes (or is the bootstrap deploy) and cannot apply unattended." >&2
-          echo "Review the plan in the plan job's log, then run the 'Release deploy' workflow manually from main with confirm_prod_apply=apply-mymemo-agent-prod." >&2
-          exit 1
-
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.DEPLOY_SHA }}
@@ -267,9 +249,6 @@ jobs:
             printf 'TF_VAR_aws_account_id=%s\n' "${AWS_ACCOUNT_ID}"
           } >> "${GITHUB_ENV}"
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.0
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
@@ -280,21 +259,19 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/mymemo-agent-github-actions-deploy
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
 
-      - name: Package the AgentCore consumer Lambda
+      - name: Download the planned AgentCore consumer package
+        uses: actions/download-artifact@v4
+        with:
+          name: agentcore-consumer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agentcore-consumer
+
+      - name: Use the planned AgentCore consumer package
         run: |
-          ca_bundle="${RUNNER_TEMP}/rds-global-bundle.pem"
           consumer_dir="${RUNNER_TEMP}/agentcore-consumer"
-          curl --fail --silent --show-error --location \
-            https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
-            --output "${ca_bundle}"
-          echo "${RDS_CA_DIGEST}  ${ca_bundle}" | sha256sum --check
-          scripts/deploy/build_agentcore_consumer.sh "${consumer_dir}" "${ca_bundle}"
+          test -f "${consumer_dir}/consumer.zip"
           printf 'TF_VAR_consumer_lambda_package=%s/consumer.zip\n' "${consumer_dir}" >> "${GITHUB_ENV}"
 
       - name: Capture the AgentCore operational control
@@ -345,19 +322,6 @@ jobs:
         if: env.FIRST_DEPLOY != 'true'
         run: scripts/deploy/terraform_prod_in_place_plan.sh
 
-      # The plan is recomputed in this job (a saved plan file may embed
-      # sensitive values, so it is never passed between jobs as an artifact).
-      # Re-classify so state drift between the jobs cannot smuggle infra
-      # changes through the unattended lane.
-      - name: Confirm plan still qualifies for the unattended lane
-        if: env.FIRST_DEPLOY != 'true' && needs.plan.outputs.lane == 'app'
-        run: |
-          lane="$(bun run scripts/deploy/classify_terraform_plan.ts)"
-          if [[ "${lane}" != "app" ]]; then
-            echo "Plan gained non-app changes after lane selection; re-run the workflow so it requires manual confirmation." >&2
-            exit 1
-          fi
-
       - name: Register the migration task definition only
         if: env.FIRST_DEPLOY != 'true'
         run: |
@@ -373,11 +337,6 @@ jobs:
           scripts/deploy/terraform_prod_in_place_plan.sh
           terraform -chdir=infra/terraform show -json agent-prod.tfplan > "${record_dir}/deployment-plan.json"
           terraform -chdir=infra/terraform show -no-color agent-prod.tfplan > "${record_dir}/deployment-plan.txt"
-          lane="$(bun run scripts/deploy/classify_terraform_plan.ts)"
-          if [[ "${{ needs.plan.outputs.lane }}" == "app" && "${lane}" != "app" ]]; then
-            echo "Plan gained infrastructure changes after migration; re-run the workflow so it requires manual confirmation." >&2
-            exit 1
-          fi
 
       - name: Apply the unified release
         run: scripts/deploy/terraform_prod_in_place_apply.sh

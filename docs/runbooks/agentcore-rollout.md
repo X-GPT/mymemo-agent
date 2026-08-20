@@ -124,16 +124,16 @@ The publisher image and task definition can be deployed or rolled back
 independently during an incident, but that does not make schema, envelope,
 publisher, consumer, or Runtime versions independently releasable.
 
-1. Run the reviewed **Release deploy** workflow. CI classifies the complete
-   unified plan, registers only the new migration task definition, runs **Run
-   agent DB migrations**, then re-plans and applies ECS, the consumer, and the
-   AgentCore Runtime together. It enforces MMDSv2, verifies the Runtime and
-   `DEFAULT` endpoint, and uses `scripts/deploy/roll_ecs_services.sh` to roll
-   chat-api, the runtime-aware agent-worker, and the dedicated Dispatch
-   publisher together. The previously applied runtime rename and canary-table
-   removal are skipped by migration history; do not run a separate manual
-   migration. Retain the unified plan and inspection artifact with the release
-   record.
+1. From `main`, manually run **Release deploy** and enter the production
+   confirmation phrase. The workflow plans the complete unified state,
+   registers only the new migration task definition, runs **Run agent DB
+   migrations**, then re-plans and applies ECS, the consumer, and the AgentCore
+   Runtime together. It enforces MMDSv2, verifies the Runtime and `DEFAULT`
+   endpoint, and uses `scripts/deploy/roll_ecs_services.sh` to roll chat-api,
+   the runtime-aware agent-worker, and the dedicated Dispatch publisher
+   together. The previously applied runtime rename and canary-table removal are
+   skipped by migration history; do not run a separate manual migration.
+   Retain the unified plan and inspection artifact with the release record.
 2. With both Statsig gates OFF and SSM still `disabled`, confirm the release
    workflow succeeded and all three ECS services are stable. The publisher must
    have desired count one. Agent-worker remains the global expiration and
