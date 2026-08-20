@@ -1,5 +1,6 @@
-aws_region  = "us-east-1"
-environment = "prod"
+aws_region     = "us-east-1"
+aws_account_id = "123456789012"
+environment    = "prod"
 
 tags = {
   Application = "mymemo-agent"
@@ -24,6 +25,8 @@ assign_public_ip = true
 chat_api_image                         = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-chat-api:REPLACE_WITH_GIT_SHA"
 agent_worker_image                     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-worker:REPLACE_WITH_GIT_SHA"
 agentcore_dispatch_publisher_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agentcore-dispatch-publisher:REPLACE_WITH_GIT_SHA"
+runtime_image_digest                   = "sha256:REPLACE_WITH_64_HEX_CHARACTERS"
+consumer_lambda_package                = "/absolute/path/to/consumer.zip"
 
 chat_api_desired_count                        = 1
 agent_worker_desired_count                    = 1

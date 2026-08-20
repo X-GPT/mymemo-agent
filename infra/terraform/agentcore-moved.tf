@@ -1,8 +1,5 @@
-moved {
-  from = aws_ecr_repository.runtime
-  to   = aws_ecr_repository.legacy_runtime[0]
-}
-
+# Historical in-state canary renames remain valid after the one-time state
+# transfer into the unified production backend.
 moved {
   from = aws_bedrockagentcore_agent_runtime.canary
   to   = aws_bedrockagentcore_agent_runtime.runtime

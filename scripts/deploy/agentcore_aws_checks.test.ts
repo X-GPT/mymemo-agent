@@ -90,7 +90,11 @@ function expectedWiring(): LiveWiring {
 
 function verify(
 	wiring: LiveWiring,
-	options: { emptyConcurrencyResponse?: boolean } = {},
+	options: {
+		emptyConcurrencyResponse?: boolean;
+		liveDispatchValue?: "enabled" | "disabled";
+		expectedDispatchValue?: "enabled" | "disabled";
+	} = {},
 ) {
 	const script = `
 set -euo pipefail
@@ -104,11 +108,11 @@ aws() {
         printf '%s\n' "$CONCURRENCY"
       fi
       ;;
-    *"ssm get-parameter"*) printf '%s\n' "disabled" ;;
+    *"ssm get-parameter"*) printf '%s\n' "$LIVE_DISPATCH_VALUE" ;;
     *) exit 97 ;;
   esac
 }
-verify_agentcore_idle_dispatch us-west-2 "$TF_OUTPUT"
+verify_agentcore_dispatch_wiring us-west-2 "$TF_OUTPUT" "$EXPECTED_DISPATCH_VALUE"
 `;
 	return spawnSync("bash", ["-c", script], {
 		encoding: "utf8",
@@ -121,6 +125,8 @@ verify_agentcore_idle_dispatch us-west-2 "$TF_OUTPUT"
 			EMPTY_CONCURRENCY_RESPONSE: String(
 				options.emptyConcurrencyResponse ?? false,
 			),
+			LIVE_DISPATCH_VALUE: options.liveDispatchValue ?? "disabled",
+			EXPECTED_DISPATCH_VALUE: options.expectedDispatchValue ?? "disabled",
 		},
 	});
 }
@@ -263,59 +269,26 @@ verify_agentcore_egress us-west-2 "$TF_OUTPUT"
 	});
 }
 
-function verifyLegacyQueues(options: {
-	mode?: "present" | "absent" | "denied";
-	visible?: string;
-	notVisible?: string;
-	delayed?: string;
-}) {
-	const attributes = {
-		Attributes: {
-			ApproximateNumberOfMessages: options.visible ?? "0",
-			ApproximateNumberOfMessagesNotVisible: options.notVisible ?? "0",
-			ApproximateNumberOfMessagesDelayed: options.delayed ?? "0",
-		},
-	};
-	const script = `
-set -euo pipefail
-source "${checksPath}"
-aws() {
-  case "$*" in
-    *"sqs get-queue-url"*)
-      if [[ "$QUEUE_MODE" == "absent" ]]; then
-        printf '%s\\n' 'AWS.SimpleQueueService.NonExistentQueue' >&2
-        return 254
-      fi
-      if [[ "$QUEUE_MODE" == "denied" ]]; then
-        printf '%s\\n' 'AccessDenied' >&2
-        return 254
-      fi
-      if [[ "$*" == *"-dlq"* ]]; then
-        printf '%s\\n' 'https://sqs.us-west-2.amazonaws.com/637423444544/mymemo-agent-agentcore-canary-prod-dlq'
-      else
-        printf '%s\\n' 'https://sqs.us-west-2.amazonaws.com/637423444544/mymemo-agent-agentcore-canary-prod-dispatch'
-      fi
-      ;;
-    *"sqs get-queue-attributes"*) printf '%s\\n' "$ATTRIBUTES" ;;
-    *) exit 97 ;;
-  esac
-}
-assert_agentcore_legacy_queues_empty us-west-2
-`;
-	return spawnSync("bash", ["-c", script], {
-		encoding: "utf8",
-		env: {
-			...process.env,
-			QUEUE_MODE: options.mode ?? "present",
-			ATTRIBUTES: JSON.stringify(attributes),
-		},
-	});
-}
-
-describe("production AgentCore idle dispatch wiring", () => {
-	it("accepts the enabled consumer and fail-closed SSM graph", () => {
+describe("production AgentCore dispatch wiring", () => {
+	it("accepts the enabled consumer while preserving disabled Dispatch", () => {
 		const result = verify(expectedWiring());
 		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it("accepts the enabled consumer while preserving enabled Dispatch", () => {
+		const result = verify(expectedWiring(), {
+			liveDispatchValue: "enabled",
+			expectedDispatchValue: "enabled",
+		});
+		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it("rejects a Dispatch control change during deployment", () => {
+		const result = verify(expectedWiring(), {
+			liveDispatchValue: "enabled",
+			expectedDispatchValue: "disabled",
+		});
+		expect(result.status).not.toBe(0);
 	});
 
 	it("accepts AWS's empty response for unreserved consumer concurrency", () => {
@@ -429,37 +402,5 @@ describe("production AgentCore egress configuration", () => {
 		["foreign public subnet", { natSubnetId: "subnet-foreign" }],
 	] as const)("rejects %s", (_name, options) => {
 		expect(verifyEgress(options).status).not.toBe(0);
-	});
-});
-
-describe("legacy AgentCore queue cutover precondition", () => {
-	it("records both legacy queues as empty before replacement", () => {
-		const result = verifyLegacyQueues({});
-		expect(result.status, result.stderr).toBe(0);
-		expect(JSON.parse(result.stdout)).toMatchObject({
-			dispatch: { exists: true },
-			deadLetter: { exists: true },
-		});
-	});
-
-	it("accepts a greenfield deployment with no legacy queues", () => {
-		const result = verifyLegacyQueues({ mode: "absent" });
-		expect(result.status, result.stderr).toBe(0);
-		expect(JSON.parse(result.stdout)).toMatchObject({
-			dispatch: { exists: false },
-			deadLetter: { exists: false },
-		});
-	});
-
-	it.each([
-		["visible", { visible: "1" }],
-		["in-flight", { notVisible: "1" }],
-		["delayed", { delayed: "1" }],
-	] as const)("rejects %s legacy messages", (_name, options) => {
-		expect(verifyLegacyQueues(options).status).not.toBe(0);
-	});
-
-	it("fails closed when a legacy queue cannot be inspected", () => {
-		expect(verifyLegacyQueues({ mode: "denied" }).status).not.toBe(0);
 	});
 });

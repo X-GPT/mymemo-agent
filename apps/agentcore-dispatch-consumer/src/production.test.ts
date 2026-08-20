@@ -51,14 +51,16 @@ describe("AgentCore dispatch production configuration", () => {
 		});
 	});
 
-	it("resolves the Lambda database URL from one exact current secret ARN", async () => {
-		const secretArn =
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agentcore-agent-db-AbCdEf";
+	it("resolves the Lambda database URL from the worker URL and current RDS password secret", async () => {
+		const passwordSecretArn =
+			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-password-AbCdEf";
 		const reads: string[] = [];
 		const config = await resolveAgentCoreDispatchConfigFromSecretArns(
 			{
 				AWS_REGION: "us-west-2",
-				AGENT_DATABASE_URL_SECRET_ARN: secretArn,
+				AGENT_DATABASE_URL:
+					"postgresql://mymemo_agent@agent.example/mymemo_agent",
+				DB_PASSWORD_SECRET_ARN: passwordSecretArn,
 				AGENTCORE_DISPATCH_QUEUE_URL:
 					"https://sqs.us-west-2.amazonaws.com/123/agentcore",
 				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
@@ -68,19 +70,21 @@ describe("AgentCore dispatch production configuration", () => {
 			},
 			async (arn) => {
 				reads.push(arn);
-				return "postgresql://agent.example/mymemo_agent?sslmode=verify-full";
+				return JSON.stringify({ password: "agent-secret" });
 			},
 		);
 
-		expect(reads).toEqual([secretArn]);
+		expect(reads).toEqual([passwordSecretArn]);
 		expect(config.agentDatabaseUrl).toBe(
-			"postgresql://agent.example/mymemo_agent?sslmode=verify-full",
+			"postgresql://mymemo_agent:agent-secret@agent.example/mymemo_agent?sslmode=verify-full",
 		);
 		await expect(
 			resolveAgentCoreDispatchConfigFromSecretArns(
 				{
 					AWS_REGION: "us-west-2",
-					AGENT_DATABASE_URL_SECRET_ARN: secretArn,
+					AGENT_DATABASE_URL:
+						"postgresql://mymemo_agent@agent.example/mymemo_agent",
+					DB_PASSWORD_SECRET_ARN: passwordSecretArn,
 					AGENTCORE_DISPATCH_QUEUE_URL:
 						"https://sqs.us-west-2.amazonaws.com/123/agentcore",
 					AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
@@ -88,29 +92,31 @@ describe("AgentCore dispatch production configuration", () => {
 					AGENTCORE_RUNTIME_ARN:
 						"arn:aws:bedrock-agentcore:us-west-2:123:runtime/agentcore",
 				},
-				async () => "postgresql://agent.example/mymemo_agent?sslmode=require",
+				async () => "not-json",
 			),
-		).rejects.toThrow("AGENT_DATABASE_URL must use sslmode=verify-full");
+		).rejects.toThrow("DB_PASSWORD secret must contain a JSON password");
 	});
 
 	it("resolves publisher secrets without consumer-only Runtime authority", async () => {
-		const secretArn =
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agentcore-agent-db-AbCdEf";
+		const passwordSecretArn =
+			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-password-AbCdEf";
 		const config = await resolveAgentCoreDispatchPublisherConfigFromSecretArns(
 			{
 				AWS_REGION: "us-west-2",
-				AGENT_DATABASE_URL_SECRET_ARN: secretArn,
+				AGENT_DATABASE_URL:
+					"postgresql://mymemo_agent@agent.example/mymemo_agent",
+				DB_PASSWORD_SECRET_ARN: passwordSecretArn,
 				AGENTCORE_DISPATCH_QUEUE_URL:
 					"https://sqs.us-west-2.amazonaws.com/123/agentcore",
 				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
 					"/mymemo/agentcore-dispatch/prod/enabled",
 			},
-			async () => "postgresql://agent.example/mymemo_agent?sslmode=verify-full",
+			async () => JSON.stringify({ password: "agent-secret" }),
 		);
 
 		expect(config).toEqual({
 			agentDatabaseUrl:
-				"postgresql://agent.example/mymemo_agent?sslmode=verify-full",
+				"postgresql://mymemo_agent:agent-secret@agent.example/mymemo_agent?sslmode=verify-full",
 			awsRegion: "us-west-2",
 			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/agentcore",
 			enabledParameterName: "/mymemo/agentcore-dispatch/prod/enabled",

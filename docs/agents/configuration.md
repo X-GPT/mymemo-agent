@@ -4,14 +4,21 @@ Use this guide when changing deployment configuration, runtime bootstrap, secret
 
 ## AWS CLI
 
-Always use the `mymemo` profile: `aws --profile mymemo ...`.
+For local operator commands, always use the `mymemo` profile:
+`aws --profile mymemo ...`.
+
+GitHub Actions configures short-lived credentials by assuming the deploy role
+through OIDC. Workflow commands and the scripts they invoke use plain `aws` so
+the CLI reads those assumed-role credentials; they must not select the local
+`mymemo` profile.
 
 ## AgentCore dispatch Lambda boundary
 
 Required by publisher and consumer entrypoints:
 
 - `AWS_REGION`: region for SSM and SQS clients
-- `AGENT_DATABASE_URL_SECRET_ARN`: exact same-account, same-region Secrets Manager ARN for the writable `mymemo_agent` URL; resolve only `AWSCURRENT`, and require `sslmode=verify-full`
+- `AGENT_DATABASE_URL`: the passwordless writable `mymemo_agent` URL used by agent-worker
+- `DB_PASSWORD_SECRET_ARN`: exact same-account, same-region RDS password-secret ARN; resolve only `AWSCURRENT`, extract its `password` JSON key, and require `sslmode=verify-full`
 - `AGENTCORE_DISPATCH_QUEUE_URL`: encrypted standard AgentCore dispatch queue URL
 - `AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME`: `/mymemo/agentcore-dispatch/<environment>/enabled`; its only enabling value is exactly `enabled`, and dispatch fails closed on missing, unreadable, or other values
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS`: `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
@@ -25,7 +32,8 @@ Required only by consumer, manual-replay, and acquisition entrypoints:
 Required non-secret bootstrap values:
 
 - `AWS_REGION`, `AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME`, `OPENROUTER_BASE_URL`, `OPENROUTER_DEFAULT_MODEL`, `WORKER_E2B_TEMPLATE`, and `ARTIFACT_BUCKET`
-- `AGENT_DATABASE_URL_SECRET_ARN`, `KB_DATABASE_URL_SECRET_ARN`, `OPENROUTER_API_KEY_SECRET_ARN`, `E2B_API_KEY_SECRET_ARN`, and `REDIS_URL_SECRET_ARN`: exact Secrets Manager ARNs. Do not put the corresponding secret values in the Runtime environment. Both database URLs require `sslmode=verify-full`.
+- `AGENT_DATABASE_URL`: the passwordless writable `mymemo_agent` URL used by agent-worker; it must not contain a password
+- `DB_PASSWORD_SECRET_ARN`, `KB_DATABASE_URL_SECRET_ARN`, `OPENROUTER_API_KEY_SECRET_ARN`, `E2B_API_KEY_SECRET_ARN`, and `REDIS_URL_SECRET_ARN`: exact Secrets Manager ARNs. Do not put the corresponding secret values in the Runtime environment. The RDS password is read from the `password` JSON key; both database URLs require `sslmode=verify-full`.
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS`: absolute path to the digest-pinned RDS bundle baked into the image
 
 Runtime Downloadable artifact keys use the standard `objects/` production namespace; there is no runtime-specific prefix setting.

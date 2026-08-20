@@ -2,7 +2,6 @@ import {
 	GetSecretValueCommand,
 	SecretsManagerClient,
 } from "@aws-sdk/client-secrets-manager";
-import type { Env } from "./config-utils";
 
 const SECRET_ARN_PATTERN =
 	/^arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+$/;
@@ -45,6 +44,48 @@ export function verifiedDatabaseUrl(value: string, name: string): string {
 	return value;
 }
 
+/**
+ * Materialize the agent-worker's passwordless RDS URL with the current RDS
+ * master-secret password, then pin certificate verification for AgentCore.
+ */
+export function resolveVerifiedAgentDatabaseUrl(
+	passwordlessUrl: string,
+	passwordSecret: string,
+): string {
+	let url: URL;
+	try {
+		url = new URL(passwordlessUrl);
+	} catch {
+		throw new Error(
+			"AGENT_DATABASE_URL must be a PostgreSQL URL without a password",
+		);
+	}
+	if (
+		(url.protocol !== "postgresql:" && url.protocol !== "postgres:") ||
+		!url.hostname ||
+		!url.username ||
+		url.password
+	) {
+		throw new Error(
+			"AGENT_DATABASE_URL must be a PostgreSQL URL without a password",
+		);
+	}
+
+	let password: unknown;
+	try {
+		password = (JSON.parse(passwordSecret) as { password?: unknown }).password;
+	} catch {
+		throw new Error("DB_PASSWORD secret must contain a JSON password");
+	}
+	if (typeof password !== "string" || !password) {
+		throw new Error("DB_PASSWORD secret must contain a JSON password");
+	}
+
+	url.password = password;
+	url.searchParams.set("sslmode", "verify-full");
+	return verifiedDatabaseUrl(url.toString(), "AGENT_DATABASE_URL");
+}
+
 export function createCurrentSecretReader(
 	client: SecretCommandClient,
 ): CurrentSecretReader {
@@ -63,29 +104,4 @@ export function createAwsCurrentSecretReader(
 	region: string,
 ): CurrentSecretReader {
 	return createCurrentSecretReader(new SecretsManagerClient({ region }));
-}
-
-export async function resolveAgentCoreDatabaseUrlsFromSecretArns(
-	env: Env,
-	readCurrentSecret: CurrentSecretReader,
-): Promise<{ agentDatabaseUrl: string; kbDatabaseUrl: string }> {
-	const agentArn = exactSecretArn(
-		env.AGENT_DATABASE_URL_SECRET_ARN,
-		"AGENT_DATABASE_URL_SECRET_ARN",
-	);
-	const kbArn = exactSecretArn(
-		env.KB_DATABASE_URL_SECRET_ARN,
-		"KB_DATABASE_URL_SECRET_ARN",
-	);
-	const [agentDatabaseUrl, kbDatabaseUrl] = await Promise.all([
-		readCurrentSecret(agentArn),
-		readCurrentSecret(kbArn),
-	]);
-	return {
-		agentDatabaseUrl: verifiedDatabaseUrl(
-			agentDatabaseUrl,
-			"AGENT_DATABASE_URL",
-		),
-		kbDatabaseUrl: verifiedDatabaseUrl(kbDatabaseUrl, "KB_DATABASE_URL"),
-	};
 }

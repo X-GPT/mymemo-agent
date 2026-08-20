@@ -33,7 +33,7 @@ data "aws_iam_policy_document" "runtime_trust" {
 }
 
 resource "aws_iam_role" "runtime" {
-  name               = "${local.name_prefix}-runtime"
+  name               = "${local.agentcore_name_prefix}-runtime"
   assume_role_policy = data.aws_iam_policy_document.runtime_trust.json
 }
 
@@ -81,7 +81,7 @@ data "aws_iam_policy_document" "runtime" {
       "s3:DeleteObject",
       "s3:PutObject",
     ]
-    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/objects/*"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/objects/*"]
   }
 
   statement {
@@ -146,13 +146,13 @@ data "aws_iam_policy_document" "runtime" {
 }
 
 resource "aws_iam_role_policy" "runtime" {
-  name   = "${local.name_prefix}-runtime"
+  name   = "${local.agentcore_name_prefix}-runtime"
   role   = aws_iam_role.runtime.id
   policy = data.aws_iam_policy_document.runtime.json
 }
 
 resource "aws_iam_role" "consumer" {
-  name               = "${local.name_prefix}-consumer"
+  name               = "${local.agentcore_name_prefix}-consumer"
   assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
 }
 
@@ -173,7 +173,7 @@ data "aws_iam_policy_document" "lambda_base" {
   statement {
     sid       = "CreateFunctionLogGroups"
     actions   = ["logs:CreateLogGroup"]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.name_prefix}-*"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.agentcore_name_prefix}-*"]
   }
 
   statement {
@@ -182,19 +182,19 @@ data "aws_iam_policy_document" "lambda_base" {
       "logs:CreateLogStream",
       "logs:PutLogEvents",
     ]
-    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.name_prefix}-*:*"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/${local.agentcore_name_prefix}-*:*"]
   }
 
   statement {
-    sid       = "DescribeAgentDatabaseUrl"
+    sid       = "DescribeAgentDatabasePassword"
     actions   = ["secretsmanager:DescribeSecret"]
-    resources = [var.agent_database_url_secret_arn]
+    resources = [local.agent_db_password_base_secret_arn]
   }
 
   statement {
-    sid       = "ReadCurrentAgentDatabaseUrl"
+    sid       = "ReadCurrentAgentDatabasePassword"
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = [var.agent_database_url_secret_arn]
+    resources = [local.agent_db_password_base_secret_arn]
 
     condition {
       test     = "ForAnyValue:StringEquals"
@@ -217,7 +217,7 @@ data "aws_iam_policy_document" "lambda_base" {
 }
 
 resource "aws_iam_role_policy" "consumer_base" {
-  name   = "${local.name_prefix}-consumer-base"
+  name   = "${local.agentcore_name_prefix}-consumer-base"
   role   = aws_iam_role.consumer.id
   policy = data.aws_iam_policy_document.lambda_base.json
 }
@@ -254,7 +254,7 @@ data "aws_iam_policy_document" "consumer" {
 }
 
 resource "aws_iam_role_policy" "consumer" {
-  name   = "${local.name_prefix}-consumer"
+  name   = "${local.agentcore_name_prefix}-consumer"
   role   = aws_iam_role.consumer.id
   policy = data.aws_iam_policy_document.consumer.json
 }

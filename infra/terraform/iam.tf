@@ -100,16 +100,12 @@ data "aws_iam_policy_document" "agentcore_dispatch_publisher" {
     resources = [local.agentcore_dispatch_queue_arn]
   }
 
-  dynamic "statement" {
-    for_each = var.agentcore_dispatch_publisher_desired_count == 1 ? [1] : []
-
-    content {
-      actions = [
-        "kms:Decrypt",
-        "kms:GenerateDataKey",
-      ]
-      resources = [data.aws_kms_alias.agentcore_dispatch_queue[0].target_key_arn]
-    }
+  statement {
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey",
+    ]
+    resources = [aws_kms_key.dispatch.arn]
   }
 }
 

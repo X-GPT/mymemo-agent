@@ -63,7 +63,6 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "s3:GetBucket*",
       "s3:GetEncryptionConfiguration",
       "s3:GetLifecycleConfiguration",
-      "s3:GetObjectLockConfiguration",
       "s3:GetReplicationConfiguration",
       "s3:ListBucket",
       "s3:PutBucketOwnershipControls",
@@ -84,6 +83,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "ecr:BatchGetImage",
       "ecr:CompleteLayerUpload",
       "ecr:CreateRepository",
+      "ecr:DescribeImageScanFindings",
       "ecr:DescribeImages",
       "ecr:DescribeRepositories",
       "ecr:GetAuthorizationToken",
@@ -176,11 +176,107 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
-    sid = "AgentCoreDispatchKmsMetadata"
+    sid = "AgentCoreDispatchKmsManagement"
     actions = [
+      "kms:CancelKeyDeletion",
+      "kms:CreateAlias",
+      "kms:CreateKey",
+      "kms:DeleteAlias",
       "kms:DescribeKey",
+      "kms:DisableKey",
+      "kms:DisableKeyRotation",
+      "kms:EnableKey",
+      "kms:EnableKeyRotation",
+      "kms:GetKeyPolicy",
+      "kms:GetKeyRotationStatus",
       "kms:ListAliases",
+      "kms:ListResourceTags",
+      "kms:PutKeyPolicy",
+      "kms:ScheduleKeyDeletion",
+      "kms:TagResource",
+      "kms:UntagResource",
+      "kms:UpdateAlias",
+      "kms:UpdateKeyDescription",
     ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "AgentCoreRuntimeManagement"
+    actions = [
+      "bedrock-agentcore:CreateAgentRuntime",
+      "bedrock-agentcore:DeleteAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntime",
+      "bedrock-agentcore:GetAgentRuntimeEndpoint",
+      "bedrock-agentcore:ListAgentRuntimeVersions",
+      "bedrock-agentcore:ListTagsForResource",
+      "bedrock-agentcore:TagResource",
+      "bedrock-agentcore:UntagResource",
+      "bedrock-agentcore:UpdateAgentRuntime",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "AgentCoreConsumerManagement"
+    actions = [
+      "lambda:CreateFunction",
+      "lambda:DeleteFunction",
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:GetFunctionConcurrency",
+      "lambda:ListTags",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+    ]
+    resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:function:mymemo-agent-agentcore-*"]
+  }
+
+  statement {
+    sid = "AgentCoreConsumerMappingManagement"
+    actions = [
+      "lambda:CreateEventSourceMapping",
+      "lambda:DeleteEventSourceMapping",
+      "lambda:GetEventSourceMapping",
+      "lambda:ListEventSourceMappings",
+      "lambda:UpdateEventSourceMapping",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "AgentCoreDispatchQueueManagement"
+    actions = [
+      "sqs:CreateQueue",
+      "sqs:DeleteQueue",
+      "sqs:GetQueueAttributes",
+      "sqs:GetQueueUrl",
+      "sqs:ListQueueTags",
+      "sqs:SetQueueAttributes",
+      "sqs:TagQueue",
+      "sqs:UntagQueue",
+    ]
+    resources = ["arn:aws:sqs:${var.aws_region}:${var.aws_account_id}:mymemo-agent-agentcore-prod-*"]
+  }
+
+  statement {
+    sid = "AgentCoreDispatchControlManagement"
+    actions = [
+      "ssm:AddTagsToResource",
+      "ssm:DeleteParameter",
+      "ssm:GetParameter",
+      "ssm:ListTagsForResource",
+      "ssm:PutParameter",
+      "ssm:RemoveTagsFromResource",
+    ]
+    resources = ["arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/mymemo/agentcore-dispatch/prod/enabled"]
+  }
+
+  statement {
+    sid       = "AgentCoreDispatchControlDiscovery"
+    actions   = ["ssm:DescribeParameters"]
     resources = ["*"]
   }
 
@@ -232,6 +328,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "iam:ListRolePolicies",
       "iam:PassRole",
       "iam:PutRolePolicy",
+      "iam:SimulatePrincipalPolicy",
       "iam:TagRole",
       "iam:UpdateAssumeRolePolicy",
     ]

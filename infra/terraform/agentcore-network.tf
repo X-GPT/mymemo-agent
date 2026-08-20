@@ -7,7 +7,7 @@ resource "aws_subnet" "private" {
   map_public_ip_on_launch = false
 
   tags = {
-    Name       = "${local.name_prefix}-private-${each.key}"
+    Name       = "${local.agentcore_name_prefix}-private-${each.key}"
     CostWindow = "persistent-zero-compute"
   }
 }
@@ -18,7 +18,7 @@ resource "aws_route_table" "private" {
   vpc_id = local.vpc_id
 
   tags = {
-    Name       = "${local.name_prefix}-private-${each.key}"
+    Name       = "${local.agentcore_name_prefix}-private-${each.key}"
     CostWindow = "persistent-zero-compute"
   }
 }
@@ -36,7 +36,7 @@ resource "aws_eip" "egress" {
   domain = "vpc"
 
   tags = {
-    Name       = "${local.name_prefix}-egress-${each.key}"
+    Name       = "${local.agentcore_name_prefix}-egress-${each.key}"
     CostWindow = "persistent-production-egress"
   }
 }
@@ -49,7 +49,7 @@ resource "aws_nat_gateway" "egress" {
 
   lifecycle {
     precondition {
-      condition     = data.terraform_remote_state.mymemo_agent.outputs.assign_public_ip
+      condition     = var.assign_public_ip
       error_message = "Production AgentCore NAT Gateways require the shared public ECS subnet contract."
     }
 
@@ -60,7 +60,7 @@ resource "aws_nat_gateway" "egress" {
   }
 
   tags = {
-    Name       = "${local.name_prefix}-egress-${each.key}"
+    Name       = "${local.agentcore_name_prefix}-egress-${each.key}"
     CostWindow = "persistent-production-egress"
   }
 }
@@ -74,7 +74,7 @@ resource "aws_route" "private_egress" {
 }
 
 resource "aws_security_group" "runtime" {
-  name        = "${local.name_prefix}-runtime"
+  name        = "${local.agentcore_name_prefix}-runtime"
   description = "Outbound-only security group for the production AgentCore Runtime and consumer"
   vpc_id      = local.vpc_id
 
@@ -87,6 +87,6 @@ resource "aws_security_group" "runtime" {
   }
 
   tags = {
-    Name = "${local.name_prefix}-runtime"
+    Name = "${local.agentcore_name_prefix}-runtime"
   }
 }

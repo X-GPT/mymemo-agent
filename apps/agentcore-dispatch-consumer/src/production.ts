@@ -31,7 +31,7 @@ import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
 	exactSecretArn,
-	verifiedDatabaseUrl,
+	resolveVerifiedAgentDatabaseUrl,
 } from "./secret-config";
 
 export interface AgentCoreDispatchPublisherConfig {
@@ -86,15 +86,15 @@ export async function resolveAgentCoreDispatchPublisherConfigFromSecretArns(
 	env: Env,
 	readCurrentSecret: CurrentSecretReader,
 ): Promise<AgentCoreDispatchPublisherConfig> {
-	const secretArn = exactSecretArn(
-		env.AGENT_DATABASE_URL_SECRET_ARN,
-		"AGENT_DATABASE_URL_SECRET_ARN",
+	const passwordSecretArn = exactSecretArn(
+		env.DB_PASSWORD_SECRET_ARN,
+		"DB_PASSWORD_SECRET_ARN",
 	);
 	return loadAgentCoreDispatchPublisherConfigFromEnv({
 		...env,
-		AGENT_DATABASE_URL: verifiedDatabaseUrl(
-			await readCurrentSecret(secretArn),
-			"AGENT_DATABASE_URL",
+		AGENT_DATABASE_URL: resolveVerifiedAgentDatabaseUrl(
+			requireEnv(env, "AGENT_DATABASE_URL"),
+			await readCurrentSecret(passwordSecretArn),
 		),
 	});
 }

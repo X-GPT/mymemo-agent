@@ -64,6 +64,10 @@ const artifactOperationsRunbook = readFileSync(
 	join(root, "docs", "runbooks", "downloadable-artifacts.md"),
 	"utf8",
 );
+const configurationGuide = readFileSync(
+	join(root, "docs", "agents", "configuration.md"),
+	"utf8",
+);
 
 function terraformFiles(dir = terraformDir): string[] {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -74,13 +78,13 @@ function terraformFiles(dir = terraformDir): string[] {
 }
 
 describe("agent deployment config", () => {
-	it("does not define a new VPC in mymemo-agent Terraform", () => {
+	it("reuses the shared VPC while owning AgentCore private subnets", () => {
 		const combined = terraformFiles()
 			.map((path) => readFileSync(path, "utf8"))
 			.join("\n");
 
 		expect(combined).not.toMatch(/resource\s+"aws_vpc"/);
-		expect(combined).not.toMatch(/resource\s+"aws_subnet"/);
+		expect(combined).toContain('resource "aws_subnet" "private"');
 		expect(combined).toContain(
 			'data "terraform_remote_state" "mymemo_service"',
 		);
@@ -278,7 +282,11 @@ describe("agent deployment config", () => {
 			"secrets = local.agent_db_password_secret",
 		);
 		expect(migrationConfig).not.toContain("REDIS_URL");
-		expect(outputs).not.toMatch(/live_redis|REDIS_URL|random_password/);
+		// AgentCore consumes the worker's secret ARN through remote state, but
+		// Terraform outputs must never expose the authenticated Redis URL itself.
+		expect(outputs).not.toMatch(
+			/secret_string\s*=|random_password\.live_redis\.result/,
+		);
 	});
 
 	it("requires secure Redis configuration without coupling runtime failure to health", () => {
@@ -300,7 +308,9 @@ describe("agent deployment config", () => {
 		expect(composeConfig).not.toMatch(/redis-data|redisdata/);
 		expect(ciWorkflow.match(/^ {6}redis:$/gm)).toHaveLength(2);
 		expect(ciWorkflow.match(/^ {8}image: redis:7-alpine$/gm)).toHaveLength(2);
-		expect(ciWorkflow.match(/^ {6}TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:6379$/gm)).toHaveLength(2);
+		expect(
+			ciWorkflow.match(/^ {6}TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:6379$/gm),
+		).toHaveLength(2);
 		expect(ciWorkflow).not.toMatch(/apt-get[^\n]*redis-server/);
 		expect(ciWorkflow).not.toContain("apt-get");
 		expect(ciWorkflow).toContain("bun run test");
@@ -464,8 +474,8 @@ describe("agent deployment config", () => {
 	it("runs the dedicated Dispatch publisher against the production shared stack", () => {
 		const iamConfig = readFileSync(join(terraformDir, "iam.tf"), "utf8");
 		const locals = readFileSync(join(terraformDir, "locals.tf"), "utf8");
-		const sharedState = readFileSync(
-			join(terraformDir, "shared_state.tf"),
+		const queueConfig = readFileSync(
+			join(terraformDir, "agentcore-queue.tf"),
 			"utf8",
 		);
 
@@ -478,16 +488,11 @@ describe("agent deployment config", () => {
 		expect(locals).toMatch(
 			/"alias\/mymemo-agent-agentcore-\$\{var\.environment\}"/,
 		);
-		expect(sharedState).toContain(
-			"count = var.agentcore_dispatch_publisher_desired_count == 1 ? 1 : 0",
+		expect(queueConfig).toContain('resource "aws_sqs_queue" "dispatch"');
+		expect(locals).toContain(
+			"agentcore_dispatch_queue_url             = aws_sqs_queue.dispatch.url",
 		);
-		expect(iamConfig).toContain('dynamic "statement"');
-		expect(iamConfig).toContain(
-			"for_each = var.agentcore_dispatch_publisher_desired_count == 1 ? [1] : []",
-		);
-		expect(iamConfig).toContain(
-			"data.aws_kms_alias.agentcore_dispatch_queue[0].target_key_arn",
-		);
+		expect(iamConfig).toContain("resources = [aws_kms_key.dispatch.arn]");
 	});
 
 	it("checked-in prod deploy env is limited to CI and smoke inputs", () => {
@@ -569,8 +574,14 @@ describe("agent deployment config", () => {
 		const migrationIndex = releaseDeployWorkflow.indexOf(
 			"scripts/deploy/run_agent_migration.sh",
 		);
-		const desiredPlanIndex = releaseDeployWorkflow.indexOf(
-			"Terraform plan desired service counts",
+		const migrationTaskIndex = releaseDeployWorkflow.indexOf(
+			"Register the migration task definition only",
+		);
+		const unifiedPlanIndex = releaseDeployWorkflow.indexOf(
+			"Plan the unified release after migrations",
+		);
+		const unifiedApplyIndex = releaseDeployWorkflow.indexOf(
+			"Apply the unified release",
 		);
 		const rolloutIndex = releaseDeployWorkflow.indexOf(
 			"scripts/deploy/roll_ecs_services.sh",
@@ -587,7 +598,9 @@ describe("agent deployment config", () => {
 		expect(bootstrapApplyIndex).toBeGreaterThan(bootstrapPlanIndex);
 		expect(migrationIndex).toBeGreaterThan(-1);
 		expect(bootstrapApplyIndex).toBeLessThan(migrationIndex);
-		expect(desiredPlanIndex).toBeGreaterThan(migrationIndex);
+		expect(migrationTaskIndex).toBeLessThan(migrationIndex);
+		expect(unifiedPlanIndex).toBeGreaterThan(migrationIndex);
+		expect(unifiedApplyIndex).toBeGreaterThan(unifiedPlanIndex);
 		expect(rolloutIndex).toBeGreaterThan(-1);
 		expect(migrationIndex).toBeLessThan(rolloutIndex);
 		expect(releaseDeployWorkflow).not.toContain("scripts/deploy/prod_smoke.sh");
@@ -754,10 +767,8 @@ describe("agent deployment config", () => {
 		expect(releaseDeployWorkflow).toContain("confirm_prod_apply");
 		expect(releaseDeployWorkflow).not.toContain("gateway_public_url");
 		expect(releaseDeployWorkflow).not.toContain("GATEWAY_PUBLIC_URL");
-		// The phrase is auto-supplied only for the unattended app lane; the infra
-		// lane still requires the operator-typed dispatch input.
 		expect(releaseDeployWorkflow).toContain(
-			"CONFIRM_AGENT_PROD_APPLY: ${{ needs.plan.outputs.lane == 'app' && 'apply-mymemo-agent-prod' || inputs.confirm_prod_apply }}",
+			"CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}",
 		);
 		expect(releaseDeployWorkflow).not.toContain(
 			"CONFIRM_AGENT_PROD_APPLY: apply-mymemo-agent-prod",
@@ -842,10 +853,24 @@ describe("agent deployment config", () => {
 		expect(combined).toContain('"iam:ListInstanceProfilesForRole"');
 		expect(combined).toContain('sid = "ArtifactBucketManagement"');
 		for (const action of [
+			"bedrock-agentcore:CreateAgentRuntime",
+			"bedrock-agentcore:UpdateAgentRuntime",
+			"bedrock-agentcore:GetAgentRuntimeEndpoint",
+			"ecr:DescribeImageScanFindings",
+			"lambda:UpdateFunctionCode",
+			"lambda:CreateEventSourceMapping",
+			"sqs:SetQueueAttributes",
+			"ssm:PutParameter",
+			"kms:CreateKey",
+			"iam:SimulatePrincipalPolicy",
+		]) {
+			expect(combined).toContain(`"${action}"`);
+		}
+		for (const action of [
 			"s3:CreateBucket",
 			"s3:GetAccelerateConfiguration",
+			"s3:GetBucket*",
 			"s3:GetLifecycleConfiguration",
-			"s3:GetObjectLockConfiguration",
 			"s3:GetReplicationConfiguration",
 			"s3:PutLifecycleConfiguration",
 			"s3:PutBucketOwnershipControls",
@@ -857,10 +882,19 @@ describe("agent deployment config", () => {
 		]) {
 			expect(combined).toContain(`"${action}"`);
 		}
+		expect(combined).not.toContain('"s3:GetObjectLockConfiguration"');
 		expect(combined).toContain('"arn:aws:s3:::${var.artifact_bucket_name}"');
 		expect(bootstrapIamProdTfvars).toContain(
 			'artifact_bucket_name = "mymemo-agent-prod-artifacts"',
 		);
+	});
+
+	it("documents separate AWS CLI credential sources for operators and Actions", () => {
+		expect(configurationGuide).toContain("aws --profile mymemo");
+		expect(configurationGuide).toContain(
+			"GitHub Actions configures short-lived credentials",
+		);
+		expect(configurationGuide).toContain("scripts they invoke use plain `aws`");
 	});
 
 	it("release deploy serializes runs and generates unique immutable image tags", () => {
@@ -883,42 +917,41 @@ describe("agent deployment config", () => {
 		);
 	});
 
-	it("release deploy auto-deploys CI-green main through classified lanes", () => {
-		const classifyScript = readFileSync(
-			join(root, "scripts", "deploy", "classify_terraform_plan.sh"),
-			"utf8",
+	it("release deploy requires a manual main-branch dispatch for every apply", () => {
+		const deployJob = releaseDeployWorkflow.slice(
+			releaseDeployWorkflow.indexOf("\n  deploy:"),
+		);
+		const confirmationIndex = releaseDeployWorkflow.indexOf(
+			"Validate production apply confirmation",
+		);
+		const ecrApplyIndex = releaseDeployWorkflow.indexOf(
+			"Ensure ECR repositories",
 		);
 
-		// Auto trigger: only a green CI run on main, deploying the exact commit
-		// CI validated rather than main's tip at run time.
-		expect(releaseDeployWorkflow).toContain("workflow_run:");
-		expect(releaseDeployWorkflow).toContain("workflows: [CI]");
-		expect(releaseDeployWorkflow).toContain("branches: [main]");
+		expect(releaseDeployWorkflow).toContain("workflow_dispatch:");
+		expect(releaseDeployWorkflow).not.toContain("workflow_run:");
+		expect(releaseDeployWorkflow).not.toContain("workflows: [CI]");
 		expect(releaseDeployWorkflow).toContain(
-			"github.event.workflow_run.conclusion == 'success'",
+			"if: github.ref == 'refs/heads/main'",
 		);
-		expect(releaseDeployWorkflow).toContain(
-			"DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}",
-		);
+		expect(releaseDeployWorkflow).toContain("DEPLOY_SHA: ${{ github.sha }}");
 		expect(releaseDeployWorkflow).toContain("ref: ${{ env.DEPLOY_SHA }}");
-
-		// App-only plans (the image-tag roll) apply unattended; infra plans fail
-		// the automatic run and require a manual dispatch with the confirm phrase.
+		expect(releaseDeployWorkflow).not.toContain("classify_terraform_plan");
+		expect(releaseDeployWorkflow).not.toContain("outputs.lane");
 		expect(releaseDeployWorkflow).toContain(
-			"scripts/deploy/classify_terraform_plan.sh",
+			"CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}",
 		);
 		expect(releaseDeployWorkflow).toContain(
-			"if: needs.plan.outputs.lane == 'infra' && github.event_name != 'workflow_dispatch'",
+			'if [[ "${CONFIRM_AGENT_PROD_APPLY}" != "apply-mymemo-agent-prod" ]]',
 		);
-		expect(classifyScript).toContain(
-			'. != "aws_ecs_task_definition" and . != "aws_ecs_service"',
-		);
-		expect(classifyScript).toContain('["no-op", "read"]');
-
-		// The deploy job re-plans and re-classifies so drift between the jobs
-		// cannot smuggle infra changes through the unattended lane.
+		expect(confirmationIndex).toBeGreaterThan(-1);
+		expect(confirmationIndex).toBeLessThan(ecrApplyIndex);
+		expect(deployJob).toContain("uses: oven-sh/setup-bun@v2");
+		expect(deployJob).toContain("bun-version: 1.3.0");
+		expect(deployJob).not.toContain("bun install --frozen-lockfile");
+		expect(releaseDeployWorkflow).not.toContain("deployment-plan.json");
 		expect(releaseDeployWorkflow).toContain(
-			"if: env.FIRST_DEPLOY != 'true' && needs.plan.outputs.lane == 'app'",
+			"scripts/deploy/terraform_prod_migration_plan.sh",
 		);
 
 		// No GitHub environment features anywhere (plan-gated on private repos);

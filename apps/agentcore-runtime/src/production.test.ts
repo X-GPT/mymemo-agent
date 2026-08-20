@@ -8,8 +8,10 @@ function bootstrapConfig() {
 		AWS_REGION: "us-west-2",
 		AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
 			"/mymemo/agentcore-dispatch/prod/enabled",
-		AGENT_DATABASE_URL_SECRET_ARN:
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-AbCdEf",
+		AGENT_DATABASE_URL:
+			"postgresql://mymemo_agent@agent.example:5432/mymemo_agent",
+		DB_PASSWORD_SECRET_ARN:
+			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-password-AbCdEf",
 		KB_DATABASE_URL_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:kb-db-AbCdEf",
 		OPENROUTER_API_KEY_SECRET_ARN:

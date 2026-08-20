@@ -1,8 +1,9 @@
 # mymemo-agent Terraform
 
-This Terraform root owns the AWS resources for `mymemo-agent` while consuming
-the existing `mymemo-service` network. It deliberately does not create a VPC,
-subnets, or ECS cluster.
+This Terraform root owns the production AWS resources for `mymemo-agent`,
+including ECS, the AgentCore Runtime, and its Dispatch consumer. It consumes the
+existing `mymemo-service` VPC and ECS cluster, while owning the private AgentCore
+subnets and NAT egress inside that VPC.
 
 ## Shared Network Contract
 
@@ -41,6 +42,19 @@ the direct remote-state output is absent and the fallback input is present.
 - internal agent-owned ALB, ALB security group, listeners, and chat-api target group
 - IAM execution/task roles for the agent tasks
 - CloudWatch log groups and baseline alarms
+- encrypted AgentCore Dispatch and dead-letter queues, their fail-closed SSM
+  control, and the batch-size-one consumer Lambda
+- digest-pinned ARM64 AgentCore Runtime, immutable Runtime ECR repository,
+  private subnets, zonal NAT egress, workload IAM, and Dispatch alarms
+
+The AgentCore Runtime, consumer, and dedicated Dispatch publisher share this
+state because they ship on the same compatibility cycle as the ECS services and
+database schema. The publisher remains a separate process and IAM boundary; a
+shared Terraform state does not grant it agent-worker authority.
+
+The SQS mapping stays enabled while the SSM value is an operator-owned,
+fail-closed control. Terraform creates the parameter with `disabled`, ignores
+later value drift, and preserves the exact live value through routine releases.
 
 The artifact bucket blocks all public access, enforces bucket-owner ownership,
 uses SSE-S3 encryption, denies non-TLS requests, has versioning disabled, and
@@ -144,8 +158,9 @@ Terraform-owned production inputs live in checked-in
 `infra/terraform/prod.tfvars`. The GitHub Actions workflow sources
 `infra/deploy/prod.env` for CI/deploy settings such as AWS region, AWS account,
 and smoke-test inputs, then generates `infra/terraform/generated.auto.tfvars`
-with release-specific Terraform values: AWS region and the three immutable image
-URIs. The plan step uses both:
+with release-specific Terraform values: AWS region and the three immutable ECS
+image URIs. The Runtime digest and consumer package path are supplied through
+Terraform environment variables by the same workflow. The plan step uses both:
 
 ```sh
 terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars
@@ -155,16 +170,19 @@ Placeholder values such as `REPLACE_ME_*` in `prod.tfvars` or the generated
 image overlay fail the plan entrypoint before Terraform changes are proposed.
 
 ECS service `task_definition` changes are intentionally ignored by Terraform.
-`terraform apply` registers the new task definitions and updates infrastructure,
-but it does not roll existing running services onto the new image. For the first
-deploy only, the workflow detects that the ECS services are absent and applies a
-bootstrap plan with all three service desired counts forced to `0`; that creates
-the RDS instance, task definitions, ALB, and ECS service shells without starting
-app containers. It then runs the agent database migration task, applies the normal
-desired counts from `prod.tfvars`, and calls `roll_ecs_services.sh` to wait for
-stability. Later deploys apply the new task definitions first, run migrations,
-then roll the existing services. This keeps schema-dependent images from
-starting before migrations.
+For an ordinary release, the workflow first applies a strictly classified,
+targeted plan containing only the new migration task definition. It runs that
+migration, then re-plans and applies the complete state so the consumer Lambda,
+AgentCore Runtime, publisher task definition, and other ECS task definitions all
+move together after the compatible schema exists. Finally it rolls the ECS
+services. The target is an ordering mechanism inside one release, not a second
+state or a manual pause.
+
+For the one-time empty ECS bootstrap, all three service desired counts are
+forced to zero until the migration completes. Because that bootstrap may create
+or update the consumer before the schema exists, it requires the SSM Dispatch
+control to be `disabled`. Routine releases accept and preserve either live
+value.
 
 `assign_public_ip=true` is intentionally kept while the existing shared
 `mymemo-service` ECS subnets are public/default subnets with no NAT/VPC endpoint
