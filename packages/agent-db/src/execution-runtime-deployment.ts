@@ -22,8 +22,9 @@ async function setFargateRuntimeAwareness(
 /**
  * Gate AgentCore creation on the durable record written only after ECS has
  * fully converged to a runtime-aware Fargate task definition. The row lock
- * composes with the rollback transaction, so creation and rollback cannot both
- * pass from the same previously-ready state.
+ * composes with the deployment-compatibility transaction, so creation and a
+ * runtime-unaware deployment cannot both pass from the same previously-ready
+ * state.
  */
 export async function assertAgentCoreCreationReady(tx: DbTx): Promise<void> {
 	const [deployment] = await tx
@@ -51,11 +52,12 @@ export async function markFargateRuntimeAwareDeploymentReady(
 }
 
 /**
- * A runtime-aware candidate is always safe. A runtime-unaware rollback is safe
- * only after cleanup has removed every AgentCore Conversation; the runtime
- * column deliberately remains in place.
+ * A runtime-aware candidate preserves readiness. Before a runtime-unaware
+ * candidate may deploy, atomically clear readiness and require that no
+ * AgentCore Conversation depends on the capability it lacks. This is a
+ * compatibility guard, not an incident-recovery or Conversation-cleanup path.
  */
-export async function assertFargateRollbackAllowed(
+export async function prepareFargateDeploymentCompatibility(
 	db: Database,
 	input: { candidateRuntimeAware: boolean },
 ): Promise<void> {
@@ -69,7 +71,7 @@ export async function assertFargateRollbackAllowed(
 			.limit(1);
 		if (agentCoreConversation) {
 			throw new Error(
-				"runtime-unaware Fargate rollback refused while AgentCore Conversations exist",
+				"runtime-unaware Fargate deployment is incompatible while AgentCore Conversations exist",
 			);
 		}
 	});

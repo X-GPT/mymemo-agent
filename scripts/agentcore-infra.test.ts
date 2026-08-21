@@ -473,6 +473,19 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(publisherAdr).toContain(rollForwardAdrLink);
 		expect(runbook).toContain("## Containment and corrected release");
 		expect(runbook).not.toContain("## Rollback");
+		const incidentLadder = runbook.slice(
+			runbook.indexOf("## Incident ladder"),
+			runbook.indexOf("## Containment and corrected release"),
+		);
+		expect(incidentLadder).toContain(
+			"[containment and corrected release](#containment-and-corrected-release)",
+		);
+		expect(incidentLadder).not.toContain(
+			"Set `/mymemo/agentcore-dispatch/prod/enabled` to `disabled`",
+		);
+		expect(incidentLadder).not.toContain(
+			"Keep the runtime-aware agent-worker running throughout containment",
+		);
 		expect(runbook.indexOf("SSM Dispatch control to `disabled`")).toBeLessThan(
 			runbook.indexOf("runtime gate OFF"),
 		);

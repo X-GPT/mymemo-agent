@@ -9,7 +9,7 @@ load_deploy_config
 action="${1:-}"
 candidate_runtime_aware="${2:-false}"
 case "$action" in
-  prepare-fargate-deployment)
+  prepare-fargate-deployment-compatibility)
     if [[ "$candidate_runtime_aware" != "true" && "$candidate_runtime_aware" != "false" ]]; then
       echo "Candidate runtime-awareness must be exactly true or false" >&2
       exit 1
@@ -19,7 +19,7 @@ case "$action" in
     candidate_runtime_aware="true"
     ;;
   *)
-    echo "Usage: $0 prepare-fargate-deployment <true|false> | mark-fargate-runtime-aware" >&2
+    echo "Usage: $0 prepare-fargate-deployment-compatibility <true|false> | mark-fargate-runtime-aware" >&2
     exit 1
     ;;
 esac

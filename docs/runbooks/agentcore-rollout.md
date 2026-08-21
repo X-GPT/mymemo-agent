@@ -239,17 +239,9 @@ When pending age rises:
    SSM, KMS, and SQS reachability. Treat sustained `PublisherErrors` as
    corroborating evidence; do not wait for it before containing an old pending
    row.
-2. Set `/mymemo/agentcore-dispatch/prod/enabled` to `disabled` first. This
-   removes Dispatch authority for already-existing AgentCore Conversations at
-   both publisher and consumer boundaries.
-3. Turn `mymemo_agent_agentcore_runtime_enabled` OFF next. This prevents new
-   AgentCore Conversations but deliberately leaves existing Conversations on
-   their immutable runtime. Do not accidentally turn off
-   `mymemo_agent_split_runtime_enabled`: that denies all new agent work rather
-   than routing new Conversations to Fargate.
-4. Only after both controls are safe, diagnose the incident and prepare a
-   corrected coordinated release. Do not select or deploy an older production
-   binary as a recovery target.
+2. Follow [containment and corrected release](#containment-and-corrected-release)
+   from step 1. Its order is mandatory; do not continue diagnosis while
+   Dispatch remains enabled or improvise a binary recovery target.
 
 While SSM is disabled, an admitted Run on an existing AgentCore Conversation
 cannot be delivered. It remains `queued`, produces no Assistant response, and
@@ -260,11 +252,6 @@ Outcome `error` after ten minutes of continuous eligibility. The user therefore
 sees a delayed `error` Outcome and cannot admit another distinct Run on that
 Conversation in the meantime; the system never retries the Run as new work. Do
 not wait for this timeout before preparing and deploying the corrected release.
-
-Keep the runtime-aware agent-worker running throughout containment. It remains
-the only global queued-Run expiration and Reclamation runner for both `fargate`
-and `agentcore` Conversations. The AgentCore Runtime, consumer, and publisher
-do not take over that responsibility.
 
 ## Containment and corrected release
 
