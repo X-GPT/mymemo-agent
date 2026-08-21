@@ -2,16 +2,20 @@
 set -euo pipefail
 
 plan_file="${1:-agent-migration.tfplan}"
-unexpected_changes="$({
-  terraform -chdir=infra/terraform show -json "${plan_file}" |
-    jq -r '
-      .resource_changes[]?
-      | select(.mode == "managed")
-      | select((.change.actions - ["no-op", "read"]) != [])
-      | select(.address != "aws_ecs_task_definition.agent_migration")
-      | .address
-    '
-} || exit 1)"
+plan_text="$(terraform -chdir=infra/terraform show -no-color "${plan_file}")"
+unexpected_changes="$(
+  awk '
+    /^  # / {
+      change = $0
+      sub(/^  # /, "", change)
+      if (change ~ / will be read during apply$/) next
+
+      address = change
+      sub(/ (will|must) .*/, "", address)
+      if (address != "aws_ecs_task_definition.agent_migration") print address
+    }
+  ' <<<"${plan_text}"
+)"
 
 if [[ -n "${unexpected_changes}" ]]; then
   echo "The migration-only plan includes unexpected managed changes:" >&2

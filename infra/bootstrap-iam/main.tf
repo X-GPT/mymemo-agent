@@ -222,9 +222,11 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "lambda:CreateFunction",
       "lambda:DeleteFunction",
       "lambda:GetFunction",
+      "lambda:GetFunctionCodeSigningConfig",
       "lambda:GetFunctionConfiguration",
       "lambda:GetFunctionConcurrency",
       "lambda:ListTags",
+      "lambda:ListVersionsByFunction",
       "lambda:TagResource",
       "lambda:UntagResource",
       "lambda:UpdateFunctionCode",
@@ -240,6 +242,9 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "lambda:DeleteEventSourceMapping",
       "lambda:GetEventSourceMapping",
       "lambda:ListEventSourceMappings",
+      "lambda:ListTags",
+      "lambda:TagResource",
+      "lambda:UntagResource",
       "lambda:UpdateEventSourceMapping",
     ]
     resources = ["*"]
