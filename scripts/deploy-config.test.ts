@@ -852,6 +852,10 @@ describe("agent deployment config", () => {
 	});
 
 	it("bootstrap IAM owns the agent-specific GitHub Actions deploy role", () => {
+		const bootstrapIamConfig = readFileSync(
+			join(bootstrapIamTerraformDir, "main.tf"),
+			"utf8",
+		);
 		const combined = terraformFiles(bootstrapIamTerraformDir)
 			.map((path) => readFileSync(path, "utf8"))
 			.join("\n");
@@ -895,6 +899,21 @@ describe("agent deployment config", () => {
 			"iam:SimulatePrincipalPolicy",
 		]) {
 			expect(combined).toContain(`"${action}"`);
+		}
+		const mappingManagement = bootstrapIamConfig.slice(
+			bootstrapIamConfig.indexOf(
+				'sid = "AgentCoreConsumerMappingManagement"',
+			),
+			bootstrapIamConfig.indexOf(
+				'sid = "AgentCoreDispatchQueueManagement"',
+			),
+		);
+		for (const action of [
+			"lambda:ListTags",
+			"lambda:TagResource",
+			"lambda:UntagResource",
+		]) {
+			expect(mappingManagement).toContain(`"${action}"`);
 		}
 		expect(combined).not.toContain('"bedrock-agentcore:ListAgentRuntimes"');
 		expect(combined).not.toContain('"ecr:DescribeImageScanFindings"');
