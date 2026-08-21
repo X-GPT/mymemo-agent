@@ -369,13 +369,17 @@ jobs:
         run: |
           record_dir="${RUNNER_TEMP}/agentcore-deployment"
           scripts/deploy/inspect_agentcore.sh | tee "${record_dir}/deployment-inspection.json"
+          source scripts/deploy/agentcore_aws_checks.sh
+          rollback_image_digest_json="$(agentcore_runtime_rollback_digest_json \
+            "${ROLLBACK_RUNTIME_IMAGE_DIGEST}" \
+            "${FIRST_DEPLOY}")"
           jq -n \
             --arg commit "${DEPLOY_SHA}" \
             --arg runtimeImageDigest "${DEPLOYED_RUNTIME_IMAGE_DIGEST}" \
-            --arg rollbackImageDigest "${ROLLBACK_RUNTIME_IMAGE_DIGEST}" \
+            --argjson rollbackImageDigest "${rollback_image_digest_json}" \
             --arg dispatchValue "${EXPECTED_DISPATCH_VALUE}" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,rollbackImageDigest:(if $rollbackImageDigest == "" then null else $rollbackImageDigest end),dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
+            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,rollbackImageDigest:$rollbackImageDigest,dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
             > "${record_dir}/deployment-record.json"
 
       - name: Roll ECS services

@@ -31,7 +31,21 @@ resolve_agentcore_runtime_rollback_digest() {
     echo "Failed to list live AgentCore Runtimes." >&2
     return 1
   fi
-  if ! jq -e '.agentRuntimes | type == "array"' <<<"${runtimes}" >/dev/null; then
+  if ! jq -e '
+    (.agentRuntimes | type) == "array"
+    and (.agentRuntimes | all(.[];
+      try (
+        type == "object"
+        and (.agentRuntimeArn | type == "string" and length > 0)
+        and (.agentRuntimeId | type == "string" and length > 0)
+        and (.agentRuntimeName | type == "string" and length > 0)
+        and (.agentRuntimeVersion | type == "string" and length > 0)
+        and (.description | type == "string" and length > 0)
+        and (.lastUpdatedAt | type == "string" and length > 0)
+        and (.status | type == "string" and length > 0)
+      ) catch false
+    ))
+  ' <<<"${runtimes}" >/dev/null; then
     echo "AgentCore returned a malformed Runtime list." >&2
     return 1
   fi
@@ -92,6 +106,18 @@ validate_agentcore_runtime_rollback_digest() {
     echo "The Runtime rollback digest is invalid." >&2
     return 1
   fi
+}
+
+agentcore_runtime_rollback_digest_json() {
+  local rollback_digest="$1"
+  local first_deploy="$2"
+
+  validate_agentcore_runtime_rollback_digest "${rollback_digest}" "${first_deploy}" || return 1
+  if [[ -z "${rollback_digest}" ]]; then
+    printf 'null\n'
+    return 0
+  fi
+  jq -cn --arg rollbackDigest "${rollback_digest}" '$rollbackDigest'
 }
 
 verify_agentcore_current_secrets() {

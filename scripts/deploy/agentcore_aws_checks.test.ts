@@ -308,16 +308,67 @@ resolve_agentcore_runtime_rollback_digest us-west-2 prod "$FIRST_DEPLOY"
 	});
 }
 
+function validateRuntimeRollbackDigest(
+	rollbackDigest: string,
+	firstDeploy: string,
+) {
+	const script = `
+set -euo pipefail
+source "${checksPath}"
+validate_agentcore_runtime_rollback_digest "$ROLLBACK_DIGEST" "$FIRST_DEPLOY"
+`;
+	return spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			ROLLBACK_DIGEST: rollbackDigest,
+			FIRST_DEPLOY: firstDeploy,
+		},
+	});
+}
+
+function renderRuntimeRollbackDigestJson(
+	rollbackDigest: string,
+	firstDeploy: string,
+) {
+	const script = `
+set -euo pipefail
+source "${checksPath}"
+agentcore_runtime_rollback_digest_json "$ROLLBACK_DIGEST" "$FIRST_DEPLOY"
+`;
+	return spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			ROLLBACK_DIGEST: rollbackDigest,
+			FIRST_DEPLOY: firstDeploy,
+		},
+	});
+}
+
 describe("production AgentCore Runtime rollback digest", () => {
 	const digest = `sha256:${"a".repeat(64)}`;
 	const expectedRuntime = {
+		agentRuntimeArn:
+			"arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/mymemo_agentcore_prod-runtime",
 		agentRuntimeId: "mymemo_agentcore_prod-runtime",
 		agentRuntimeName: "mymemo_agentcore_prod",
+		agentRuntimeVersion: "1",
+		description: "Production Runtime",
+		lastUpdatedAt: "2026-08-20T00:00:00Z",
+		status: "READY",
 	};
 
 	it("reads the current digest from the one exact live Runtime", () => {
 		const result = resolveRuntimeRollbackDigest(
-			[expectedRuntime, { ...expectedRuntime, agentRuntimeName: "foreign" }],
+			[
+				expectedRuntime,
+				{
+					...expectedRuntime,
+					agentRuntimeId: "foreign-runtime",
+					agentRuntimeName: "foreign",
+				},
+			],
 			`example.test/mymemo/agentcore-runtime@${digest}`,
 		);
 
@@ -365,6 +416,16 @@ describe("production AgentCore Runtime rollback digest", () => {
 		).not.toBe(0);
 	});
 
+	it("rejects a malformed Runtime summary during first deployment", () => {
+		expect(
+			resolveRuntimeRollbackDigest(
+				[{}],
+				`example.test/mymemo/agentcore-runtime@${digest}`,
+				{ firstDeploy: true },
+			).status,
+		).not.toBe(0);
+	});
+
 	it("rejects a Runtime image without an exact digest", () => {
 		expect(
 			resolveRuntimeRollbackDigest(
@@ -372,6 +433,32 @@ describe("production AgentCore Runtime rollback digest", () => {
 				"example.test/mymemo/agentcore-runtime:latest",
 			).status,
 		).not.toBe(0);
+	});
+});
+
+describe("production AgentCore Runtime rollback evidence", () => {
+	const digest = `sha256:${"b".repeat(64)}`;
+
+	it("accepts an absent rollback target only during first deployment", () => {
+		expect(validateRuntimeRollbackDigest("", "true").status).toBe(0);
+		expect(validateRuntimeRollbackDigest("", "false").status).not.toBe(0);
+	});
+
+	it("rejects malformed first-deploy state and digests", () => {
+		expect(validateRuntimeRollbackDigest(digest, "yes").status).not.toBe(0);
+		expect(
+			validateRuntimeRollbackDigest("sha256:not-a-digest", "false").status,
+		).not.toBe(0);
+	});
+
+	it("renders absent and existing rollback targets as JSON values", () => {
+		const absent = renderRuntimeRollbackDigestJson("", "true");
+		const existing = renderRuntimeRollbackDigestJson(digest, "false");
+
+		expect(absent.status, absent.stderr).toBe(0);
+		expect(absent.stdout.trim()).toBe("null");
+		expect(existing.status, existing.stderr).toBe(0);
+		expect(JSON.parse(existing.stdout)).toBe(digest);
 	});
 });
 
