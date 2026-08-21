@@ -386,7 +386,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(workflow).toContain(
 			"Download the planned AgentCore consumer package",
 		);
-		expect(workflow).toContain("actions/download-artifact@v4");
+		expect(workflow).toContain("actions/download-artifact@v8");
 		expect(workflow.match(/oven-sh\/setup-bun@v2/g)).toHaveLength(2);
 		expect(workflow).not.toContain("deployment-plan.json");
 		expect(workflow).not.toContain(
@@ -400,7 +400,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(workflow).not.toContain("AGENTCORE_TERRAFORM_DIR");
 		expect(workflow).toContain("enforce_agentcore_mmdsv2.sh");
 		expect(workflow).toContain("inspect_agentcore.sh");
-		expect(workflow).toContain("actions/upload-artifact@v4");
+		expect(workflow).toContain("actions/upload-artifact@v7");
 		for (const retired of [
 			"mymemo/agentcore-canary-runtime",
 			"assert_agentcore_legacy_queues_empty",
