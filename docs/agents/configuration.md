@@ -12,19 +12,15 @@ through OIDC. Workflow commands and the scripts they invoke use plain `aws` so
 the CLI reads those assumed-role credentials; they must not select the local
 `mymemo` profile.
 
-## AgentCore dispatch Lambda boundary
+## AgentCore dispatch consumer Lambda
 
-Required by publisher and consumer entrypoints:
+Required by the consumer entrypoint:
 
-- `AWS_REGION`: region for SSM and SQS clients
+- `AWS_REGION`: region for SSM and Bedrock AgentCore clients
 - `AGENT_DATABASE_URL`: the passwordless writable `mymemo_agent` URL used by agent-worker
 - `DB_PASSWORD_SECRET_ARN`: exact same-account, same-region RDS password-secret ARN; resolve only `AWSCURRENT`, extract its `password` JSON key, and require `sslmode=verify-full`
-- `AGENTCORE_DISPATCH_QUEUE_URL`: encrypted standard AgentCore dispatch queue URL
 - `AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME`: `/mymemo/agentcore-dispatch/<environment>/enabled`; its only enabling value is exactly `enabled`, and dispatch fails closed on missing, unreadable, or other values
 - `RDS_CA_BUNDLE_PATH` and `NODE_EXTRA_CA_CERTS`: `/var/task/rds-global-bundle.pem`, the digest-pinned RDS trust bundle packaged with the Lambda
-
-Required only by consumer, manual-replay, and acquisition entrypoints:
-
 - `AGENTCORE_RUNTIME_ARN`: exact AgentCore Runtime invoked with `DEFAULT` and the Conversation UUID as Runtime-session identity. Do not give the publisher this consumer-only authority.
 
 ## AgentCore Runtime
