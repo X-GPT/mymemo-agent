@@ -264,11 +264,10 @@ export async function runGlobFileTool(
 		const commandResult = await context.client.runCommand({
 			command: buildGlobCommand({
 				pattern: input.pattern,
-				path: resolved.path.relativePath,
 				includeHidden: input.includeHidden ?? false,
 				maxResults,
 			}),
-			cwd: path.normalize(context.workspaceRoot),
+			cwd: resolved.path.absolutePath,
 			timeoutMs: context.limits.commandTimeoutMs,
 			maxOutputBytes: context.limits.commandMaxOutputBytes,
 		});
@@ -279,7 +278,11 @@ export async function runGlobFileTool(
 			.split("\n")
 			.map((line) => line.trim())
 			.filter(Boolean)
-			.map(normalizeCommandRelativePath)
+			.map((line) =>
+				normalizeCommandRelativePath(
+					path.join(resolved.path.relativePath, line),
+				),
+			)
 			.filter((line): line is string => line !== undefined)
 			.sort();
 		const uniquePaths = [...new Set(paths)];
@@ -406,18 +409,17 @@ function buildGrepCommand(input: {
 
 function buildGlobCommand(input: {
 	pattern: string;
-	path: string;
 	includeHidden: boolean;
 	maxResults: number;
 }): string {
 	const args = ["rg", "--files", "--no-ignore", "--sort", "path"];
-	args.push("--glob", path.join("/", input.path, input.pattern));
+	args.push("--glob", path.join("/", input.pattern));
 	if (input.includeHidden) {
 		args.push("--hidden");
 	} else {
 		args.push("--glob", "!.*", "--glob", "!**/.*");
 	}
-	args.push("--", input.path);
+	args.push("--", ".");
 	return `${args.map(shellQuote).join(" ")} | head -n ${input.maxResults + 1}`;
 }
 

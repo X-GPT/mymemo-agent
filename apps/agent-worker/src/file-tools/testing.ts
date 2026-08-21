@@ -33,6 +33,14 @@ export async function runFileToolsContract(
 		path: `${root}/src/!nested.txt`,
 		content: "bang\n",
 	});
+	await context.client.writeFile({
+		path: `${root}/dir[1]/direct.md`,
+		content: "direct\n",
+	});
+	await context.client.writeFile({
+		path: `${root}/dir[1]/nested/deep.md`,
+		content: "deep\n",
+	});
 
 	const grepResult = await runGrepFileTool(
 		{ pattern: "alpha", maxResults: 10 },
@@ -64,6 +72,16 @@ export async function runFileToolsContract(
 	expect(shallowGlobResult.isError).toBeUndefined();
 	expect(parseToolResult(shallowGlobResult)).toEqual({
 		paths: ["!important.txt"],
+		truncated: false,
+	});
+
+	const nestedRootGlobResult = await runGlobFileTool(
+		{ pattern: "*.md", path: "dir[1]", maxResults: 10 },
+		context,
+	);
+	expect(nestedRootGlobResult.isError).toBeUndefined();
+	expect(parseToolResult(nestedRootGlobResult)).toEqual({
+		paths: ["dir[1]/direct.md"],
 		truncated: false,
 	});
 }
