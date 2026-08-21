@@ -207,7 +207,6 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "bedrock-agentcore:DeleteAgentRuntime",
       "bedrock-agentcore:GetAgentRuntime",
       "bedrock-agentcore:GetAgentRuntimeEndpoint",
-      "bedrock-agentcore:ListAgentRuntimes",
       "bedrock-agentcore:ListAgentRuntimeVersions",
       "bedrock-agentcore:ListTagsForResource",
       "bedrock-agentcore:TagResource",

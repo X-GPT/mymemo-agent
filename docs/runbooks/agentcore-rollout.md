@@ -11,11 +11,11 @@ and the dedicated-service boundary in
 The unified production release state is defined by
 [ADR-0028](../adr/0028-unify-production-terraform-state.md).
 
-This runbook treats existing Conversations as disposable during the first
-cutover and existing `agentcore` Conversations as disposable during a
-runtime-unaware Fargate rollback. It deletes them instead of draining or
-reassigning them. That intentionally replaces ADR-0025's preservation-oriented
-cutover and break-glass preconditions for these operations.
+This runbook treats existing Conversations as disposable only during the first
+cutover. Production releases are roll-forward only: contain an incident, ship a
+reviewed corrected release, verify it, and restore controls deliberately. This
+operator policy replaces ADR-0025's binary-rollback procedure; no production
+binary rollback target is maintained by the release workflow.
 
 Use the `mymemo` AWS profile in `us-west-2`. Run repository deployment commands
 only from a clean `main` checkout that matches `origin/main`. Use the
@@ -120,9 +120,9 @@ has committed, both ECS services are at zero, and the SSM parameter still reads
 ## Deploy order
 
 The first cutover and ordinary releases are coordinated compatibility events.
-The publisher image and task definition can be deployed or rolled back
-independently during an incident, but that does not make schema, envelope,
-publisher, consumer, or Runtime versions independently releasable.
+The publisher may be paused independently during containment, but every binary
+correction ships through a reviewed coordinated release. Schema, envelope,
+publisher, consumer, and Runtime versions are not independently releasable.
 
 1. From `main`, manually run **Release deploy** and enter the production
    confirmation phrase. The workflow plans the complete unified state,
@@ -245,9 +245,9 @@ When pending age rises:
    their immutable runtime. Do not accidentally turn off
    `mymemo_agent_split_runtime_enabled`: that denies all new agent work rather
    than routing new Conversations to Fargate.
-4. Only after both controls are safe, roll back or roll forward binaries. A
-   publisher-only task-definition rollback is available, but any schema,
-   envelope, consumer, or Runtime compatibility change remains coordinated.
+4. Only after both controls are safe, diagnose the incident and prepare a
+   corrected coordinated release. Do not select or deploy an older production
+   binary as a recovery target.
 
 While SSM is disabled, an admitted Run on an existing AgentCore Conversation
 cannot be delivered. It remains `queued`, produces no Assistant response, and
@@ -257,88 +257,41 @@ agent-worker's global queue backstop terminalizes an unowned AgentCore Run with
 Outcome `error` after ten minutes of continuous eligibility. The user therefore
 sees a delayed `error` Outcome and cannot admit another distinct Run on that
 Conversation in the meantime; the system never retries the Run as new work. Do
-not wait for this timeout when selecting a runtime-unaware rollback: discard the
-AgentCore Conversations as described below.
+not wait for this timeout before preparing and deploying the corrected release.
 
 Keep the runtime-aware agent-worker running throughout containment. It remains
 the only global queued-Run expiration and Reclamation runner for both `fargate`
 and `agentcore` Conversations. The AgentCore Runtime, consumer, and publisher
 do not take over that responsibility.
 
-## Rollback
+## Containment and corrected release
 
-Follow the same containment order for every rollback: disable SSM first, turn
-the runtime gate OFF second, then change binaries. Keep the runtime-aware
-agent-worker running while deciding between a forward fix and rollback because
-it remains the global expiration and Reclamation runner.
+Production incidents use containment followed by a corrected release; there is
+no maintained binary-rollback procedure or rollback image target.
 
-This is a binary rollback, not a database-schema rollback. Keep the migrated
-`conversations.execution_runtime` column and its `fargate`/`agentcore` values.
-The deployment fence is specifically designed to admit a runtime-unaware
-Fargate worker against that current schema after every `agentcore` Conversation
-is gone. A binary that requires the retired `execution_lane` schema is not a
-valid target for this procedure; restoring that schema would be a separate,
-coordinated database downgrade.
-
-`scripts/deploy/roll_ecs_services.sh` inspects the candidate agent-worker
-image's `com.mymemo.agent-worker.execution-runtime-aware` label. A runtime-aware
-candidate can roll normally. A runtime-unaware candidate is refused while even
-one `agentcore` Conversation exists:
-
-```sh
-scripts/deploy/run_execution_runtime_deployment_assertion.sh \
-  prepare-fargate-deployment false
-```
-
-Do not bypass the assertion. For a runtime-unaware rollback, discard the
-AgentCore Conversations:
-
-1. Verify SSM is `disabled`.
-2. Turn both Statsig gates OFF. The runtime gate prevents new AgentCore
-   Conversations; the exposure gate prevents new Runs during the destructive
-   maintenance window.
-3. Set the publisher service desired count to zero and wait for zero running
-   and pending publisher tasks.
-4. Use the operator database connection to run the transaction below. This is
-   intentionally destructive: it deletes every `agentcore` Conversation, its
-   cascading Runs and history, and every associated Dispatch outbox row. It
-   does not wait for Active Runs or preserve user data.
-
-```sql
-BEGIN;
-
-LOCK TABLE conversations, runs, agentcore_dispatch_outbox
-	IN SHARE ROW EXCLUSIVE MODE;
-
-WITH discarded AS MATERIALIZED (
-	SELECT user_id, conversation_id
-	FROM conversations
-	WHERE execution_runtime = 'agentcore'
-), deleted_dispatch AS (
-	DELETE FROM agentcore_dispatch_outbox AS dispatch
-	USING discarded
-	WHERE dispatch.user_id = discarded.user_id
-		AND dispatch.conversation_id = discarded.conversation_id
-	RETURNING 1
-), deleted_conversations AS (
-	DELETE FROM conversations AS conversation
-	USING discarded
-	WHERE conversation.user_id = discarded.user_id
-		AND conversation.conversation_id = discarded.conversation_id
-	RETURNING 1
-)
-SELECT
-	(SELECT count(*) FROM deleted_conversations) AS deleted_conversations,
-	(SELECT count(*) FROM deleted_dispatch) AS deleted_dispatch_rows;
-
-COMMIT;
-```
-
-The existing agent-worker cleanup sweeps remove the deleted Conversations'
-runtime sandboxes, SDK transcripts, and artifact objects. Record both delete
-counts, then rerun the runtime-unaware deployment assertion. It must pass before
-rolling the old Fargate binary.
-
-Keep SSM and the runtime gate OFF after rollback. Restore the publisher to its
-normal desired count of one, verify the Fargate services are stable, then reopen
-the exposure gate. A later reviewed forward rollout can restore AgentCore.
+1. Set the SSM Dispatch control to `disabled` and verify the read-back. This
+   stops publication and consumption for existing AgentCore Conversations.
+2. Turn the Execution runtime gate OFF by setting
+   `mymemo_agent_agentcore_runtime_enabled` OFF. This sends newly created
+   Conversations to Fargate while preserving the immutable runtime of existing
+   Conversations. Turn the exposure gate OFF only when the incident requires
+   denying all new agent work.
+3. Keep the runtime-aware agent-worker running. It remains the global queued-Run
+   expiration and Reclamation runner while AgentCore Dispatch is contained.
+4. Diagnose the failure and prepare a reviewed forward fix on `main`. Preserve
+   the migrated database schema and do not select a previous container digest,
+   task definition, or Runtime version as a release target.
+5. Deploy the corrected release with **Release deploy**. The workflow migrates,
+   applies the unified production state, rolls all coordinated ECS services,
+   verifies the Runtime and `DEFAULT` endpoint, and records the deployed commit
+   and immutable Runtime image digest.
+6. With SSM still `disabled` and the runtime gate OFF, verify the workflow
+   evidence, ECS service stability, Runtime readiness, queue/DLQ state, and
+   publisher telemetry. Do not restore controls merely because the apply
+   completed.
+7. Restore controls deliberately. Set SSM to `enabled` and confirm Dispatch
+   health. Target the synthetic smoke identity in the exposure and runtime
+   gates, run `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh`, and observe
+   telemetry. Restore the runtime-gate cohort in stages only after the smoke and
+   each telemetry checkpoint pass. If the exposure gate was turned OFF during
+   containment, reopen it only after the service is ready for new work.
