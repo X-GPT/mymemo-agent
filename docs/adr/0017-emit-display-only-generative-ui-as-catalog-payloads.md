@@ -11,8 +11,7 @@ projected to SSE under the 16 KiB never-split event cap, replayable from
 Postgres forever. This ADR locks the wire contract decided across the
 generative-UI wayfinder map (#320); the landscape survey behind it is
 `docs/research/generative-ui-landscape-2026.md` (PR #327), and the rendering
-prototype that reality-checked it is
-`docs/prototypes/generative-ui-payloads.prototype.html` (PR #414).
+prototype that reality-checked it was recorded in PR #414.
 
 The payload paradigm is **component-catalog JSON**: the model emits typed
 components from a fixed, client-owned allowlist, and a trusted renderer maps
