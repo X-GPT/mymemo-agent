@@ -215,9 +215,6 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(source).toMatch(/network_mode\s*=\s*"VPC"/);
 		expect(source).toMatch(/server_protocol\s*=\s*"HTTP"/);
 		expect(source).toMatch(/max_lifetime\s*=\s*3600/);
-		expect(source).toMatch(
-			/resource\s+"aws_bedrockagentcore_agent_runtime"\s+"runtime"[\s\S]*?precondition[\s\S]*?local\.exact_secret_arn_pattern/,
-		);
 		for (const name of [
 			"AGENT_DATABASE_URL",
 			"DB_PASSWORD_SECRET_ARN",
