@@ -1,9 +1,10 @@
 import { Template, type TemplateClass } from "e2b";
 
 /**
- * The custom E2B sandbox template (Task 9.2). The agent's Grep/Glob tools use
- * `rg`; secure artifact publication uses `python3` for descriptor-pinned file
- * reads. E2B's stock `base` template ships python3 but no rg.
+ * The custom E2B sandbox template (Task 9.2). The agent's Grep tool and Bash
+ * filename discovery use `rg`; secure artifact publication uses `python3` for
+ * descriptor-pinned file reads. E2B's stock `base` template ships python3 but
+ * no rg.
  *
  * The toolchain is pinned so rebuilds are reproducible:
  * - the base image by digest — neither Docker Hub (a moving `latest` plus

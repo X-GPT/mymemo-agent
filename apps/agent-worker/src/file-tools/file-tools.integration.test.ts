@@ -55,7 +55,6 @@ const limits: FileToolLimits = {
 	readMaxBytes: 1024,
 	readMaxLines: 200,
 	grepMaxResults: 100,
-	globMaxResults: 500,
 	commandMaxOutputBytes: 16_384,
 	commandTimeoutMs: 10_000,
 };
@@ -70,7 +69,7 @@ afterEach(async () => {
 });
 
 describe("command-backed file tools", () => {
-	it("runs grep and glob against the real command path with bounded sorted results", async () => {
+	it("runs grep against the real command path with bounded sorted results", async () => {
 		workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "mymemo-file-tools-"));
 
 		await runFileToolsContract({

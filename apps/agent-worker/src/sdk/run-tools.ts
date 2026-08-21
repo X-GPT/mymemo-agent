@@ -19,7 +19,6 @@ import { runSearchDocumentsTool } from "../documents/search-documents-tool";
 import {
 	type FileToolLimits,
 	runEditFileTool,
-	runGlobFileTool,
 	runGrepFileTool,
 	runReadFileTool,
 	runWriteFileTool,
@@ -66,7 +65,6 @@ const EXECUTOR_TOOL_NAMES = [
 	"Write",
 	"Edit",
 	"Grep",
-	"Glob",
 	"Bash",
 	"ListDocuments",
 	"SearchDocuments",
@@ -199,18 +197,6 @@ export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
 			},
 			async (input) =>
 				toCallToolResult(await runGrepFileTool(input, fileContext)),
-		),
-		tool(
-			"Glob",
-			"List workspace files matching a glob pattern; use ** to include subdirectories.",
-			{
-				pattern: z.string(),
-				path: z.string().optional(),
-				includeHidden: z.boolean().optional(),
-				maxResults: z.number().optional(),
-			},
-			async (input) =>
-				toCallToolResult(await runGlobFileTool(input, fileContext)),
 		),
 		tool(
 			"Bash",

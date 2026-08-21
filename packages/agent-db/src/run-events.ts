@@ -97,9 +97,10 @@ export interface ParsedUiPayloadEventPayload {
 }
 
 /**
- * The nine short public tool names a client may see (ADR-0009). Tool events
- * carry these — never the executor's prefixed tool names — and the guards fail
- * closed on anything else, so an internal name cannot reach the client stream.
+ * The short public tool names accepted in durable history (ADR-0009). `Glob`
+ * remains only so historical Run events keep replaying after ADR-0030 removed
+ * it from the active executor. Tool events carry these — never the executor's
+ * prefixed names — and the guards fail closed on anything else.
  */
 export const PUBLIC_TOOL_NAMES = [
 	"Read",

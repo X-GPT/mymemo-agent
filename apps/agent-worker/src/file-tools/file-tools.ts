@@ -5,7 +5,6 @@ export interface FileToolLimits {
 	readMaxBytes: number;
 	readMaxLines: number;
 	grepMaxResults: number;
-	globMaxResults: number;
 	commandMaxOutputBytes: number;
 	commandTimeoutMs: number;
 }
@@ -68,13 +67,6 @@ export interface GrepFileToolInput {
 	path?: string;
 	include?: string;
 	caseSensitive?: boolean;
-	maxResults?: number;
-}
-
-export interface GlobFileToolInput {
-	pattern: string;
-	path?: string;
-	includeHidden?: boolean;
 	maxResults?: number;
 }
 
@@ -244,57 +236,6 @@ export async function runGrepFileTool(
 	}
 }
 
-export async function runGlobFileTool(
-	input: GlobFileToolInput,
-	context: FileToolContext,
-): Promise<FileToolResult> {
-	const patternError = validateWorkspacePattern(input.pattern, "Glob");
-	if (patternError) return toolError(patternError);
-	const resolved = resolveWorkspacePath(
-		input.path ?? ".",
-		context.workspaceRoot,
-	);
-	if (!resolved.ok) return toolError(resolved.error);
-
-	const maxResults = clampResultLimit(
-		input.maxResults,
-		context.limits.globMaxResults,
-	);
-	try {
-		const commandResult = await context.client.runCommand({
-			command: buildGlobCommand({
-				pattern: input.pattern,
-				includeHidden: input.includeHidden ?? false,
-				maxResults,
-			}),
-			cwd: resolved.path.absolutePath,
-			timeoutMs: context.limits.commandTimeoutMs,
-			maxOutputBytes: context.limits.commandMaxOutputBytes,
-		});
-		const commandError = commandFailure(commandResult);
-		if (commandError) return toolError(`Glob failed: ${commandError}`);
-
-		const paths = commandResult.stdout
-			.split("\n")
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map((line) =>
-				normalizeCommandRelativePath(
-					path.join(resolved.path.relativePath, line),
-				),
-			)
-			.filter((line): line is string => line !== undefined)
-			.sort();
-		const uniquePaths = [...new Set(paths)];
-		return toolText({
-			paths: uniquePaths.slice(0, maxResults),
-			truncated: uniquePaths.length > maxResults || commandResult.truncated,
-		});
-	} catch (error) {
-		return toolError(`Glob failed: ${boundedErrorMessage(error)}`);
-	}
-}
-
 export function resolveWorkspacePath(
 	inputPath: string | undefined,
 	workspaceRoot: string,
@@ -404,22 +345,6 @@ function buildGrepCommand(input: {
 	if (!input.caseSensitive) args.push("--ignore-case");
 	if (input.include) args.push("--glob", input.include);
 	args.push("--", input.pattern, input.path);
-	return `${args.map(shellQuote).join(" ")} | head -n ${input.maxResults + 1}`;
-}
-
-function buildGlobCommand(input: {
-	pattern: string;
-	includeHidden: boolean;
-	maxResults: number;
-}): string {
-	const args = ["rg", "--files", "--no-ignore", "--sort", "path"];
-	args.push("--glob", path.join("/", input.pattern));
-	if (input.includeHidden) {
-		args.push("--hidden");
-	} else {
-		args.push("--glob", "!.*", "--glob", "!**/.*");
-	}
-	args.push("--", ".");
 	return `${args.map(shellQuote).join(" ")} | head -n ${input.maxResults + 1}`;
 }
 

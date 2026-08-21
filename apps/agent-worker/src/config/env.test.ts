@@ -115,7 +115,6 @@ describe("loadWorkerConfigFromEnv — SDK execution limits", () => {
 			readMaxBytes: 65_536,
 			readMaxLines: 2_000,
 			grepMaxResults: 100,
-			globMaxResults: 500,
 			commandMaxOutputBytes: 65_536,
 			commandTimeoutMs: 30_000,
 		});

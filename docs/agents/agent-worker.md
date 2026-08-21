@@ -23,6 +23,8 @@ Each Claim's snapshot Runs execute one at a time in submission order through an 
 
 `src/sdk/run-tools.ts` binds the file, Bash, Searchable document, and display-only `PresentUI` catalog tools. Exclude `PresentUI` itself from Tool projection. Built-in tools are disabled; the executor allowlist is fail-closed.
 
+Use `Bash` with `rg --files`, `find`, or `ls` for workspace filename discovery. `Grep` remains the structured, bounded content-search tool. `Glob` is no longer executable; its shared event name remains only for replaying historical Run events. See [ADR-0030](../adr/0030-use-bash-for-workspace-file-discovery.md).
+
 ## Conversation continuity
 
 The worker mirrors the SDK transcript to Postgres through `src/sdk/session-store.ts` under a deterministic per-Conversation query working directory. The bound `SessionStore` supplies evidence for the successfully mirrored main Agent session.

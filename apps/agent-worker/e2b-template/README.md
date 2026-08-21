@@ -1,6 +1,6 @@
 # Custom E2B sandbox template (`mymemo-agent-sandbox`)
 
-The agent's `Grep` and `Glob` tools use `rg` inside the run sandbox. Secure
+The agent's `Grep` tool and Bash filename discovery use `rg` inside the run sandbox. Secure
 artifact publication uses `python3` to pin validated files by descriptor before
 streaming them. E2B's stock `base` template ships Python but lacks ripgrep, so
 every run sandbox uses this custom template and verifies both runtime tools.
