@@ -21,4 +21,3 @@ MyMemo is a Bun-workspace TypeScript monorepo for an AI Conversation service, it
 - [Configuration and operations](docs/agents/configuration.md) — environment variables and AWS CLI conventions
 - [Domain language and ADR usage](docs/agents/domain.md) — required terminology and architectural decisions
 - [Issue tracker](docs/agents/issue-tracker.md) and [triage labels](docs/agents/triage-labels.md) — GitHub workflow
-- [Refactor audit](docs/agents/refactor-audit.md) — resolved contradiction and deletion candidates from the progressive-disclosure refactor
