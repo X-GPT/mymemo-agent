@@ -13,8 +13,11 @@ The unified production release state is defined by
 recovery policy is defined by
 [ADR-0029](../adr/0029-recover-production-releases-by-rolling-forward.md).
 
-This runbook treats existing Conversations as disposable only during the first
-cutover. Production releases are roll-forward only: contain an incident, ship a
+For the one-time first cutover, this runbook treats all existing Conversations
+as disposable and deletes them instead of draining or reassigning them. That
+intentionally overrides ADR-0025's preservation-oriented cutover preconditions.
+ADR-0029 neither authorizes nor extends this destructive exception. After the
+cutover, production releases are roll-forward only: contain an incident, ship a
 reviewed corrected release, verify it, and restore controls deliberately. This
 implements ADR-0029's amendments to ADR-0025 and ADR-0027; no production binary
 rollback target is maintained by the release workflow.

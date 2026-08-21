@@ -464,7 +464,10 @@ describe("production AgentCore dispatch infrastructure", () => {
 		const rollForwardAdrLink =
 			"[ADR-0029](./0029-recover-production-releases-by-rolling-forward.md)";
 
-		expect(runbook).toContain("Production releases are roll-forward only");
+		expect(runbook).toContain("production releases are roll-forward only");
+		expect(runbook).toContain(
+			"intentionally overrides ADR-0025's preservation-oriented cutover preconditions",
+		);
 		expect(runbook).toContain(
 			"[ADR-0029](../adr/0029-recover-production-releases-by-rolling-forward.md)",
 		);
