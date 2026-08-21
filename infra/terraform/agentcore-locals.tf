@@ -55,7 +55,6 @@ locals {
     AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = aws_ssm_parameter.dispatch_enabled.name
     AGENT_DATABASE_URL                        = local.managed_agent_database_url
     DB_PASSWORD_SECRET_ARN                    = local.agent_db_password_base_secret_arn
-    AGENTCORE_DISPATCH_QUEUE_URL              = aws_sqs_queue.dispatch.url
     RDS_CA_BUNDLE_PATH                        = "/var/task/rds-global-bundle.pem"
     NODE_EXTRA_CA_CERTS                       = "/var/task/rds-global-bundle.pem"
   }

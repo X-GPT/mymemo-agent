@@ -2,19 +2,15 @@ import { describe, expect, it } from "bun:test";
 import {
 	createEmbeddedMetricAgentCoreDispatchAlarm,
 	loadAgentCoreDispatchConfigFromEnv,
-	loadAgentCoreDispatchPublisherConfigFromEnv,
 	resolveAgentCoreDispatchConfigFromSecretArns,
-	resolveAgentCoreDispatchPublisherConfigFromSecretArns,
 } from "./production";
 
 describe("AgentCore dispatch production configuration", () => {
-	it("loads every queue/control/Runtime authority from deployment environment", () => {
+	it("loads every consumer authority from deployment environment", () => {
 		expect(
 			loadAgentCoreDispatchConfigFromEnv({
 				AGENT_DATABASE_URL: "postgres://agent",
 				AWS_REGION: "us-west-2",
-				AGENTCORE_DISPATCH_QUEUE_URL:
-					"https://sqs.us-west-2.amazonaws.com/123/agentcore",
 				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
 					"/mymemo/agentcore-dispatch/prod/enabled",
 				AGENTCORE_RUNTIME_ARN:
@@ -23,7 +19,6 @@ describe("AgentCore dispatch production configuration", () => {
 		).toEqual({
 			agentDatabaseUrl: "postgres://agent",
 			awsRegion: "us-west-2",
-			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/agentcore",
 			enabledParameterName: "/mymemo/agentcore-dispatch/prod/enabled",
 			agentRuntimeArn:
 				"arn:aws:bedrock-agentcore:us-west-2:123:runtime/agentcore",
@@ -31,24 +26,6 @@ describe("AgentCore dispatch production configuration", () => {
 		expect(() => loadAgentCoreDispatchConfigFromEnv({})).toThrow(
 			"AGENT_DATABASE_URL is required",
 		);
-	});
-
-	it("loads the control publisher without requiring consumer-only Runtime authority", () => {
-		expect(
-			loadAgentCoreDispatchPublisherConfigFromEnv({
-				AGENT_DATABASE_URL: "postgres://agent",
-				AWS_REGION: "us-west-2",
-				AGENTCORE_DISPATCH_QUEUE_URL:
-					"https://sqs.us-west-2.amazonaws.com/123/agentcore",
-				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
-					"/mymemo/agentcore-dispatch/prod/enabled",
-			}),
-		).toEqual({
-			agentDatabaseUrl: "postgres://agent",
-			awsRegion: "us-west-2",
-			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/agentcore",
-			enabledParameterName: "/mymemo/agentcore-dispatch/prod/enabled",
-		});
 	});
 
 	it("resolves the Lambda database URL from the worker URL and current RDS password secret", async () => {
@@ -61,8 +38,6 @@ describe("AgentCore dispatch production configuration", () => {
 				AGENT_DATABASE_URL:
 					"postgresql://mymemo_agent@agent.example/mymemo_agent",
 				DB_PASSWORD_SECRET_ARN: passwordSecretArn,
-				AGENTCORE_DISPATCH_QUEUE_URL:
-					"https://sqs.us-west-2.amazonaws.com/123/agentcore",
 				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
 					"/mymemo/agentcore-dispatch/prod/enabled",
 				AGENTCORE_RUNTIME_ARN:
@@ -85,8 +60,6 @@ describe("AgentCore dispatch production configuration", () => {
 					AGENT_DATABASE_URL:
 						"postgresql://mymemo_agent@agent.example/mymemo_agent",
 					DB_PASSWORD_SECRET_ARN: passwordSecretArn,
-					AGENTCORE_DISPATCH_QUEUE_URL:
-						"https://sqs.us-west-2.amazonaws.com/123/agentcore",
 					AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
 						"/mymemo/agentcore-dispatch/prod/enabled",
 					AGENTCORE_RUNTIME_ARN:
@@ -95,32 +68,6 @@ describe("AgentCore dispatch production configuration", () => {
 				async () => "not-json",
 			),
 		).rejects.toThrow("DB_PASSWORD secret must contain a JSON password");
-	});
-
-	it("resolves publisher secrets without consumer-only Runtime authority", async () => {
-		const passwordSecretArn =
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-password-AbCdEf";
-		const config = await resolveAgentCoreDispatchPublisherConfigFromSecretArns(
-			{
-				AWS_REGION: "us-west-2",
-				AGENT_DATABASE_URL:
-					"postgresql://mymemo_agent@agent.example/mymemo_agent",
-				DB_PASSWORD_SECRET_ARN: passwordSecretArn,
-				AGENTCORE_DISPATCH_QUEUE_URL:
-					"https://sqs.us-west-2.amazonaws.com/123/agentcore",
-				AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME:
-					"/mymemo/agentcore-dispatch/prod/enabled",
-			},
-			async () => JSON.stringify({ password: "agent-secret" }),
-		);
-
-		expect(config).toEqual({
-			agentDatabaseUrl:
-				"postgresql://mymemo_agent:agent-secret@agent.example/mymemo_agent?sslmode=verify-full",
-			awsRegion: "us-west-2",
-			queueUrl: "https://sqs.us-west-2.amazonaws.com/123/agentcore",
-			enabledParameterName: "/mymemo/agentcore-dispatch/prod/enabled",
-		});
 	});
 
 	it("emits a bounded CloudWatch embedded metric without dispatch content", async () => {
