@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
+	chmodSync,
 	existsSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,6 +70,12 @@ const configurationGuide = readFileSync(
 	join(root, "docs", "agents", "configuration.md"),
 	"utf8",
 );
+const classifyMigrationPlanScript = join(
+	root,
+	"scripts",
+	"deploy",
+	"classify_migration_plan.sh",
+);
 
 function terraformFiles(dir = terraformDir): string[] {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -75,6 +83,37 @@ function terraformFiles(dir = terraformDir): string[] {
 		if (entry.isDirectory()) return terraformFiles(path);
 		return entry.name.endsWith(".tf") ? [path] : [];
 	});
+}
+
+function classifyMigrationPlan(terraformShowOutput: string) {
+	const tempDir = mkdtempSync(join(tmpdir(), "mymemo-migration-plan-"));
+	const terraform = join(tempDir, "terraform");
+
+	writeFileSync(
+		terraform,
+		`#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "-chdir=infra/terraform show -no-color fixture.tfplan" ]]; then
+	exit 97
+fi
+printf '%s\\n' "\${TERRAFORM_SHOW_OUTPUT}"
+`,
+	);
+	chmodSync(terraform, 0o755);
+
+	try {
+		return Bun.spawnSync({
+			cmd: [classifyMigrationPlanScript, "fixture.tfplan"],
+			cwd: root,
+			env: {
+				...process.env,
+				PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+				TERRAFORM_SHOW_OUTPUT: terraformShowOutput,
+			},
+		});
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
+	}
 }
 
 describe("agent deployment config", () => {
@@ -627,6 +666,33 @@ describe("agent deployment config", () => {
 		expect(rolloutIndex).toBeGreaterThan(-1);
 		expect(migrationIndex).toBeLessThan(rolloutIndex);
 		expect(releaseDeployWorkflow).not.toContain("scripts/deploy/prod_smoke.sh");
+	});
+
+	it("classifies migration-only plans without decoding stale prior state", () => {
+		const migrationOnly = classifyMigrationPlan(`
+  # data.aws_iam_policy_document.migration will be read during apply
+  # aws_ecs_task_definition.agent_migration must be replaced
+
+Plan: 1 to add, 0 to change, 1 to destroy.
+
+Warning: Failed to decode resource from state
+unsupported attribute "inference_accelerator"
+`);
+
+		expect(migrationOnly.exitCode).toBe(0);
+		expect(migrationOnly.stdout.toString()).toContain("migration-only");
+
+		const unexpectedChange = classifyMigrationPlan(`
+  # aws_ecs_task_definition.agent_migration must be replaced
+  # aws_iam_role.agent_migration_task will be updated in-place
+
+Plan: 1 to add, 1 to change, 1 to destroy.
+`);
+
+		expect(unexpectedChange.exitCode).not.toBe(0);
+		expect(unexpectedChange.stderr.toString()).toContain(
+			"aws_iam_role.agent_migration_task",
+		);
 	});
 
 	it("terraform does not roll ECS services before migrations", () => {
