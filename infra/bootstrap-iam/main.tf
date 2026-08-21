@@ -222,6 +222,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "lambda:CreateFunction",
       "lambda:DeleteFunction",
       "lambda:GetFunction",
+      "lambda:GetFunctionCodeSigningConfig",
       "lambda:GetFunctionConfiguration",
       "lambda:GetFunctionConcurrency",
       "lambda:ListTags",
