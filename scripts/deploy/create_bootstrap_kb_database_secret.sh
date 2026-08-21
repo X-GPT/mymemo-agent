@@ -6,7 +6,8 @@ usage() {
 Usage:
   scripts/deploy/create_bootstrap_kb_database_secret.sh
 
-Creates or updates the temporary KB_DATABASE_URL secret used by agent-worker.
+Creates or updates the temporary KB_DATABASE_URL secret used by agent-worker
+and AgentCore Runtime.
 This is option-2 bootstrap wiring: it reuses the existing mymemo-service DB
 role/password and should be replaced by a read-only KB role.
 
@@ -66,7 +67,7 @@ encoded_password="$(
   PASSWORD="$password" bun -e 'console.log(encodeURIComponent(Bun.env.PASSWORD ?? ""))'
 )"
 
-database_url="postgresql://${db_user}:${encoded_password}@${endpoint}:${port}/${db_name}"
+database_url="postgresql://${db_user}:${encoded_password}@${endpoint}:${port}/${db_name}?sslmode=verify-full"
 
 if aws secretsmanager describe-secret \
   --profile "$profile" \

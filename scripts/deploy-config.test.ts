@@ -62,6 +62,10 @@ const createAgentSecretsScript = readFileSync(
 	join(root, "scripts", "deploy", "create_agent_secrets.sh"),
 	"utf8",
 );
+const createBootstrapKbDatabaseSecretScript = readFileSync(
+	join(root, "scripts", "deploy", "create_bootstrap_kb_database_secret.sh"),
+	"utf8",
+);
 const artifactOperationsRunbook = readFileSync(
 	join(root, "docs", "runbooks", "downloadable-artifacts.md"),
 	"utf8",
@@ -1324,6 +1328,12 @@ Plan: 1 to add, 1 to change, 1 to destroy.
 		expect(createAgentSecretsScript).toContain("load_dotenv_file");
 		expect(createAgentSecretsScript).not.toContain('source "$secrets_config"');
 		expect(createAgentSecretsScript).not.toContain("secret-arns.env");
+	});
+
+	it("bootstrap KB database connections verify the RDS certificate", () => {
+		expect(createBootstrapKbDatabaseSecretScript).toContain(
+			"/${db_name}?sslmode=verify-full",
+		);
 	});
 
 	it("terraform resolves application secret ARNs from stable secret names", () => {
