@@ -202,7 +202,7 @@ export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
 		),
 		tool(
 			"Glob",
-			"List workspace files matching a glob pattern.",
+			"List workspace files matching a glob pattern; use ** to include subdirectories.",
 			{
 				pattern: z.string(),
 				path: z.string().optional(),

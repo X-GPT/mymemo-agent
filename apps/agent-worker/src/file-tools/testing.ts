@@ -25,6 +25,14 @@ export async function runFileToolsContract(
 		path: `${root}/.hidden.txt`,
 		content: "alpha\n",
 	});
+	await context.client.writeFile({
+		path: `${root}/!important.txt`,
+		content: "bang\n",
+	});
+	await context.client.writeFile({
+		path: `${root}/src/!nested.txt`,
+		content: "bang\n",
+	});
 
 	const grepResult = await runGrepFileTool(
 		{ pattern: "alpha", maxResults: 10 },
@@ -45,7 +53,17 @@ export async function runFileToolsContract(
 	);
 	expect(globResult.isError).toBeUndefined();
 	expect(parseToolResult(globResult)).toEqual({
-		paths: ["notes.txt", "src/memo.txt"],
+		paths: ["!important.txt", "notes.txt", "src/!nested.txt", "src/memo.txt"],
+		truncated: false,
+	});
+
+	const shallowGlobResult = await runGlobFileTool(
+		{ pattern: "!*.txt", maxResults: 10 },
+		context,
+	);
+	expect(shallowGlobResult.isError).toBeUndefined();
+	expect(parseToolResult(shallowGlobResult)).toEqual({
+		paths: ["!important.txt"],
 		truncated: false,
 	});
 }

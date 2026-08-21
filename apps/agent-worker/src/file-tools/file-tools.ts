@@ -411,7 +411,7 @@ function buildGlobCommand(input: {
 	maxResults: number;
 }): string {
 	const args = ["rg", "--files", "--no-ignore", "--sort", "path"];
-	args.push("--glob", input.pattern);
+	args.push("--glob", path.join("/", input.path, input.pattern));
 	if (input.includeHidden) {
 		args.push("--hidden");
 	} else {
