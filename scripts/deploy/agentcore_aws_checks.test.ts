@@ -272,24 +272,32 @@ verify_agentcore_egress us-west-2 "$TF_OUTPUT"
 function resolveRuntimeRollbackDigest(
 	runtimes: Record<string, unknown>[],
 	containerUri: string,
+	options: { firstDeploy?: boolean; listFails?: boolean } = {},
 ) {
 	const script = `
 set -euo pipefail
 source "${checksPath}"
 aws() {
   case "$*" in
-    *"bedrock-agentcore-control list-agent-runtimes"*) printf '%s\\n' "$RUNTIMES" ;;
+    *"bedrock-agentcore-control list-agent-runtimes"*)
+      if [[ "$LIST_FAILS" == "true" ]]; then
+        return 42
+      fi
+      printf '%s\\n' "$RUNTIMES"
+      ;;
     *"bedrock-agentcore-control get-agent-runtime"*) printf '%s\\n' "$RUNTIME" ;;
     *) exit 97 ;;
   esac
 }
-resolve_agentcore_runtime_rollback_digest us-west-2 prod
+resolve_agentcore_runtime_rollback_digest us-west-2 prod "$FIRST_DEPLOY"
 `;
 	return spawnSync("bash", ["-c", script], {
 		encoding: "utf8",
 		env: {
 			...process.env,
 			AWS_PROFILE: "",
+			FIRST_DEPLOY: String(options.firstDeploy ?? false),
+			LIST_FAILS: String(options.listFails ?? false),
 			RUNTIMES: JSON.stringify({ agentRuntimes: runtimes }),
 			RUNTIME: JSON.stringify({
 				agentRuntimeArtifact: {
@@ -317,14 +325,42 @@ describe("production AgentCore Runtime rollback digest", () => {
 		expect(result.stdout.trim()).toBe(digest);
 	});
 
-	it.each([
-		["missing Runtime", []],
-		["duplicate Runtime", [expectedRuntime, expectedRuntime]],
-	] as const)("rejects a %s", (_name, runtimes) => {
+	it("allows a first deployment without a rollback target", () => {
+		const result = resolveRuntimeRollbackDigest(
+			[],
+			`example.test/mymemo/agentcore-runtime@${digest}`,
+			{ firstDeploy: true },
+		);
+
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toBe("");
+	});
+
+	it("rejects an ordinary release without a live Runtime", () => {
 		expect(
 			resolveRuntimeRollbackDigest(
-				[...runtimes],
+				[],
 				`example.test/mymemo/agentcore-runtime@${digest}`,
+			).status,
+		).not.toBe(0);
+	});
+
+	it("rejects duplicate live Runtimes", () => {
+		expect(
+			resolveRuntimeRollbackDigest(
+				[expectedRuntime, expectedRuntime],
+				`example.test/mymemo/agentcore-runtime@${digest}`,
+				{ firstDeploy: true },
+			).status,
+		).not.toBe(0);
+	});
+
+	it("fails closed when Runtime discovery fails", () => {
+		expect(
+			resolveRuntimeRollbackDigest(
+				[],
+				`example.test/mymemo/agentcore-runtime@${digest}`,
+				{ firstDeploy: true, listFails: true },
 			).status,
 		).not.toBe(0);
 	});

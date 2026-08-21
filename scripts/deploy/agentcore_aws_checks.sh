@@ -11,6 +11,7 @@ agentcore_aws() {
 resolve_agentcore_runtime_rollback_digest() {
   local region="$1"
   local environment="$2"
+  local first_deploy="$3"
   local expected_runtime_name="mymemo_agentcore_${environment}"
   local runtimes
   local matching_runtimes
@@ -20,13 +21,31 @@ resolve_agentcore_runtime_rollback_digest() {
   local container_uri
   local digest
 
-  runtimes="$(agentcore_aws bedrock-agentcore-control list-agent-runtimes \
-    --region "${region}")"
-  matching_runtimes="$(jq -c \
+  if [[ "${first_deploy}" != "true" && "${first_deploy}" != "false" ]]; then
+    echo "First-deploy state must be exactly true or false." >&2
+    return 1
+  fi
+
+  if ! runtimes="$(agentcore_aws bedrock-agentcore-control list-agent-runtimes \
+    --region "${region}")"; then
+    echo "Failed to list live AgentCore Runtimes." >&2
+    return 1
+  fi
+  if ! jq -e '.agentRuntimes | type == "array"' <<<"${runtimes}" >/dev/null; then
+    echo "AgentCore returned a malformed Runtime list." >&2
+    return 1
+  fi
+  if ! matching_runtimes="$(jq -c \
     --arg runtimeName "${expected_runtime_name}" \
-    '[.agentRuntimes[]? | select(.agentRuntimeName == $runtimeName)]' \
-    <<<"${runtimes}")"
+    '[.agentRuntimes[] | select(.agentRuntimeName == $runtimeName)]' \
+    <<<"${runtimes}")"; then
+    echo "Failed to inspect the live AgentCore Runtime list." >&2
+    return 1
+  fi
   runtime_count="$(jq -r 'length' <<<"${matching_runtimes}")"
+  if [[ "${runtime_count}" == "0" && "${first_deploy}" == "true" ]]; then
+    return 0
+  fi
   if [[ "${runtime_count}" != "1" ]]; then
     echo "Expected exactly one live AgentCore Runtime named ${expected_runtime_name}; found ${runtime_count}." >&2
     return 1
@@ -38,17 +57,41 @@ resolve_agentcore_runtime_rollback_digest() {
     return 1
   fi
 
-  runtime="$(agentcore_aws bedrock-agentcore-control get-agent-runtime \
+  if ! runtime="$(agentcore_aws bedrock-agentcore-control get-agent-runtime \
     --region "${region}" \
-    --agent-runtime-id "${runtime_id}")"
+    --agent-runtime-id "${runtime_id}")"; then
+    echo "Failed to read the live AgentCore Runtime." >&2
+    return 1
+  fi
   container_uri="$(jq -r '.agentRuntimeArtifact.containerConfiguration.containerUri // empty' <<<"${runtime}")"
   digest="${container_uri##*@}"
-  if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  if [[ ! "${container_uri}" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]; then
     echo "The live AgentCore Runtime does not contain an exact image digest." >&2
     return 1
   fi
 
   printf '%s\n' "${digest}"
+}
+
+validate_agentcore_runtime_rollback_digest() {
+  local rollback_digest="$1"
+  local first_deploy="$2"
+
+  if [[ "${first_deploy}" != "true" && "${first_deploy}" != "false" ]]; then
+    echo "First-deploy state must be exactly true or false." >&2
+    return 1
+  fi
+  if [[ -z "${rollback_digest}" ]]; then
+    if [[ "${first_deploy}" == "true" ]]; then
+      return 0
+    fi
+    echo "An ordinary release requires a Runtime rollback digest." >&2
+    return 1
+  fi
+  if [[ ! "${rollback_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "The Runtime rollback digest is invalid." >&2
+    return 1
+  fi
 }
 
 verify_agentcore_current_secrets() {

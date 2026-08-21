@@ -373,8 +373,14 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(workflow).toContain(
 			"resolve_agentcore_runtime_rollback_digest",
 		);
+		expect(workflow).toMatch(
+			/resolve_agentcore_runtime_rollback_digest[\\\s]*"\$\{AWS_REGION\}"[\\\s]*"\$\{DEPLOY_ENVIRONMENT\}"[\\\s]*"\$\{FIRST_DEPLOY\}"/,
+		);
 		expect(workflow).not.toContain(
 			"terraform -chdir=infra/terraform output -raw runtime_image_digest",
+		);
+		expect(workflow).toContain(
+			'rollbackImageDigest:(if $rollbackImageDigest == "" then null else $rollbackImageDigest end)',
 		);
 		expect(workflow).toContain("build_agentcore_consumer.sh");
 		expect(workflow.match(/build_agentcore_consumer\.sh/g)).toHaveLength(1);
@@ -415,6 +421,12 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(inspection).toContain("maxReceiveCount == 5");
 		expect(inspection).toContain("verify_agentcore_dispatch_wiring");
 		expect(inspection).toContain("expected_dispatch_value");
+		expect(inspection).toContain(
+			"validate_agentcore_runtime_rollback_digest",
+		);
+		expect(inspection).toContain(
+			'if $rollbackDigest == "" then null else $rollbackDigest end',
+		);
 		expect(inspection).not.toContain(
 			'.Attributes.ApproximateNumberOfMessages == "0"',
 		);

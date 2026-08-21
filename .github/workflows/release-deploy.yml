@@ -321,11 +321,10 @@ jobs:
           fi
 
           source scripts/deploy/agentcore_aws_checks.sh
-          previous_digest="$(resolve_agentcore_runtime_rollback_digest "${AWS_REGION}" "${DEPLOY_ENVIRONMENT}")"
-          if [[ ! "${previous_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "The live AgentCore Runtime returned an invalid rollback digest." >&2
-            exit 1
-          fi
+          previous_digest="$(resolve_agentcore_runtime_rollback_digest \
+            "${AWS_REGION}" \
+            "${DEPLOY_ENVIRONMENT}" \
+            "${FIRST_DEPLOY}")"
           printf 'EXPECTED_DISPATCH_VALUE=%s\n' "${dispatch_value}" >> "${GITHUB_ENV}"
           printf 'ROLLBACK_RUNTIME_IMAGE_DIGEST=%s\n' "${previous_digest}" >> "${GITHUB_ENV}"
 
@@ -376,7 +375,7 @@ jobs:
             --arg rollbackImageDigest "${ROLLBACK_RUNTIME_IMAGE_DIGEST}" \
             --arg dispatchValue "${EXPECTED_DISPATCH_VALUE}" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,rollbackImageDigest:$rollbackImageDigest,dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
+            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,rollbackImageDigest:(if $rollbackImageDigest == "" then null else $rollbackImageDigest end),dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
             > "${record_dir}/deployment-record.json"
 
       - name: Roll ECS services
