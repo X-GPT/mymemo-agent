@@ -225,6 +225,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "lambda:GetFunctionConfiguration",
       "lambda:GetFunctionConcurrency",
       "lambda:ListTags",
+      "lambda:ListVersionsByFunction",
       "lambda:TagResource",
       "lambda:UntagResource",
       "lambda:UpdateFunctionCode",

@@ -885,6 +885,7 @@ describe("agent deployment config", () => {
 			"bedrock-agentcore:CreateAgentRuntime",
 			"bedrock-agentcore:UpdateAgentRuntime",
 			"bedrock-agentcore:GetAgentRuntimeEndpoint",
+			"lambda:ListVersionsByFunction",
 			"lambda:UpdateFunctionCode",
 			"lambda:CreateEventSourceMapping",
 			"sqs:SetQueueAttributes",
