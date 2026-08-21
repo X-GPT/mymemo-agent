@@ -20,7 +20,7 @@
  */
 
 /** Where per-command process-group id files live. Outside any workspace so the
- * agent's own Read/Grep/Glob never see them. */
+ * agent's workspace-rooted Read/Grep tools never see them. */
 export const DEFAULT_COMMAND_CONTROL_DIR = "/tmp/mymemo-commands";
 
 /** Env var names the wrapper reads. Kept as constants so the JS side and the

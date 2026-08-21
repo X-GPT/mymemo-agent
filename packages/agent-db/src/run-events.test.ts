@@ -434,7 +434,7 @@ describe("isToolUsePayload", () => {
 				truncated: false,
 			}),
 		).toBe(true);
-		// A projection may legitimately produce an empty arguments record.
+		// ADR-0030 removed active Glob execution, but historical events must replay.
 		expect(
 			isToolUsePayload({ tool: "Glob", arguments: {}, truncated: true }),
 		).toBe(true);

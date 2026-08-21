@@ -6,11 +6,11 @@ import type {
 	SandboxFileRead,
 	SandboxFileWrite,
 } from "../file-tools/file-tools";
-import { takeUtf8Bytes } from "../file-tools/file-tools";
+import { takeUtf8Bytes } from "../utf8";
 import type { CommandSandbox } from "./command-client";
 
 /** The slice of an E2B `Sandbox` the file client drives: the files API plus
- * command execution (Grep/Glob shell out to `rg`/`python3` in the sandbox). */
+ * command execution (Grep shells out to `rg` in the sandbox). */
 export interface FileSandbox extends CommandSandbox {
 	files: {
 		read(path: string, opts: { format: "bytes" }): Promise<Uint8Array>;
@@ -20,7 +20,7 @@ export interface FileSandbox extends CommandSandbox {
 
 /**
  * The real E2B-backed {@link SandboxFileClient} (Task 9.4): reads and writes go
- * through the sandbox files API, and the Grep/Glob command path goes through
+ * through the sandbox files API, and the Grep command path goes through
  * `commands.run`. Exit-code interpretation belongs to the file tools, so a
  * non-zero exit comes back as a result — only transport failures throw.
  */

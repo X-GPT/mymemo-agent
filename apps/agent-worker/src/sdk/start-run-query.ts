@@ -66,8 +66,9 @@ import {
  */
 export const MYMEMO_SYSTEM_PROMPT =
 	"You are MyMemo's agent. You answer the user's questions and do file-backed work on their behalf.\n\n" +
-	"Your only tools are the MyMemo executor tools. Read, Write, Edit, Grep, Glob, and Bash act on the " +
+	"Your only tools are the MyMemo executor tools. Read, Write, Edit, Grep, and Bash act on the " +
 	`conversation's sandboxed workspace rooted at ${SANDBOX_WORKSPACE_ROOT} — never on the machine running you. ` +
+	"Use Bash with rg --files, find, or ls to discover workspace files. " +
 	"ListDocuments, SearchDocuments, and LoadDocuments reach the user's MyMemo knowledge base, limited to this " +
 	"conversation's scope. Use ListDocuments for inventory and exact count questions, SearchDocuments for relevant " +
 	"passages, and LoadDocuments to write chosen documents into the workspace's docs cache and return their paths " +

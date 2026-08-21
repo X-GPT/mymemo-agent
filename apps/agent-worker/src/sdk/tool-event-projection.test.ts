@@ -41,7 +41,6 @@ describe("publicToolName", () => {
 		expect(publicToolName("mcp__mymemo-executor__Write")).toBe("Write");
 		expect(publicToolName("mcp__mymemo-executor__Edit")).toBe("Edit");
 		expect(publicToolName("mcp__mymemo-executor__Grep")).toBe("Grep");
-		expect(publicToolName("mcp__mymemo-executor__Glob")).toBe("Glob");
 		expect(publicToolName("mcp__mymemo-executor__ListDocuments")).toBe(
 			"ListDocuments",
 		);
@@ -59,6 +58,7 @@ describe("publicToolName", () => {
 		// Another server's prefixed tool must never become client-visible.
 		expect(publicToolName("mcp__other-server__Bash")).toBeNull();
 		expect(publicToolName("WebSearch")).toBeNull();
+		expect(publicToolName("mcp__mymemo-executor__Glob")).toBeNull();
 		// Inherited object properties are not allowlisted tool names.
 		expect(publicToolName("constructor")).toBeNull();
 		expect(publicToolName("")).toBeNull();
@@ -66,12 +66,11 @@ describe("publicToolName", () => {
 		expect(publicToolName(42)).toBeNull();
 	});
 
-	it("allowlists exactly the nine executor tool names", () => {
+	it("allowlists exactly the eight projected executor tool names", () => {
 		expect(allowlistedExecutorToolNames().sort()).toEqual(
 			[
 				"mcp__mymemo-executor__Bash",
 				"mcp__mymemo-executor__Edit",
-				"mcp__mymemo-executor__Glob",
 				"mcp__mymemo-executor__Grep",
 				"mcp__mymemo-executor__LoadDocuments",
 				"mcp__mymemo-executor__ListDocuments",
@@ -90,7 +89,6 @@ describe("shared tool payload vocabulary", () => {
 		["Write", { path: "notes.md", content: "x" }],
 		["Edit", { path: "src/app.ts", oldText: "a", newText: "b" }],
 		["Grep", { pattern: "x" }],
-		["Glob", { pattern: "*" }],
 	] satisfies ReadonlyArray<readonly [PublicToolName, unknown]>;
 
 	for (const [tool, input] of toolUseCases) {
@@ -129,7 +127,6 @@ describe("shared tool payload vocabulary", () => {
 				truncated: false,
 			},
 		],
-		["Glob", { paths: ["a.ts"], truncated: false }],
 	] satisfies ReadonlyArray<readonly [PublicToolName, Record<string, unknown>]>;
 
 	for (const [tool, result] of toolResultCases) {
@@ -1216,146 +1213,6 @@ describe("projectToolResult — Grep", () => {
 			projectToolResult(
 				"Grep",
 				executorResultContent({ matches: [grepMatch()] }),
-				false,
-			).ok,
-		).toBe(false);
-	});
-});
-
-describe("projectToolUse — Glob", () => {
-	it("exposes the glob arguments", () => {
-		const projected = projectToolUse("Glob", {
-			pattern: "**/*.test.ts",
-			path: "apps",
-			includeHidden: true,
-			maxResults: 100,
-		});
-
-		expect(projected).toEqual({
-			ok: true,
-			payload: {
-				tool: "Glob",
-				arguments: {
-					pattern: "**/*.test.ts",
-					path: "apps",
-					includeHidden: true,
-					maxResults: 100,
-				},
-				truncated: false,
-			},
-		});
-	});
-
-	it("omits invocations with missing or wrong-typed required arguments", () => {
-		for (const input of [{}, { pattern: 7 }]) {
-			expect(projectToolUse("Glob", input).ok).toBe(false);
-		}
-	});
-
-	it("caps a huge pattern to a bounded preview and flags truncation", () => {
-		const projected = projectToolUse("Glob", {
-			pattern: "*/".repeat(50_000),
-		});
-		if (!projected.ok) throw new Error("expected a projected payload");
-
-		expect(projected.payload.truncated).toBe(true);
-		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
-			TOOL_EVENT_MAX_JSON_BYTES,
-		);
-	});
-});
-
-describe("projectToolResult — Glob", () => {
-	it("re-projects the executor path list field by field", () => {
-		const projected = projectToolResult(
-			"Glob",
-			executorResultContent({
-				paths: ["a.ts", "lib/b.ts"],
-				truncated: false,
-			}),
-			false,
-		);
-
-		expect(projected).toEqual({
-			ok: true,
-			payload: {
-				tool: "Glob",
-				result: { paths: ["a.ts", "lib/b.ts"], truncated: false },
-				isError: false,
-				truncated: false,
-			},
-		});
-	});
-
-	it("bounds a long path list and marks the list incomplete", () => {
-		const paths = Array.from({ length: 500 }, (_, i) => `src/file-${i}.ts`);
-		const projected = projectToolResult(
-			"Glob",
-			executorResultContent({ paths, truncated: false }),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-
-		expect((projected.payload.result.paths as unknown[]).length).toBe(40);
-		expect(projected.payload.result.truncated).toBe(true);
-		expect(projected.payload.truncated).toBe(true);
-		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
-			TOOL_EVENT_MAX_JSON_BYTES,
-		);
-	});
-
-	it("caps a huge per-item path preview and flags truncation", () => {
-		const projected = projectToolResult(
-			"Glob",
-			executorResultContent({
-				paths: [`${"deep/".repeat(20_000)}file.ts`],
-				truncated: false,
-			}),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-
-		expect(projected.payload.truncated).toBe(true);
-		const [first] = projected.payload.result.paths as string[];
-		if (!first) throw new Error("expected one projected path");
-		expect(first.length).toBeLessThan(100_000);
-		// The path list itself is still complete.
-		expect(projected.payload.result.truncated).toBe(false);
-		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
-			TOOL_EVENT_MAX_JSON_BYTES,
-		);
-	});
-
-	it("keeps the executor's own truncated flag when everything fits", () => {
-		const projected = projectToolResult(
-			"Glob",
-			executorResultContent({ paths: ["a.ts"], truncated: true }),
-			false,
-		);
-		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(projected.payload.result.truncated).toBe(true);
-		expect(projected.payload.truncated).toBe(false);
-	});
-
-	it("omits results whose text is not the known executor shape", () => {
-		expect(
-			projectToolResult(
-				"Glob",
-				executorResultContent({ paths: "a.ts", truncated: false }),
-				false,
-			).ok,
-		).toBe(false);
-		expect(
-			projectToolResult(
-				"Glob",
-				executorResultContent({ paths: ["a.ts", 42], truncated: false }),
-				false,
-			).ok,
-		).toBe(false);
-		expect(
-			projectToolResult(
-				"Glob",
-				executorResultContent({ paths: ["a.ts"] }),
 				false,
 			).ok,
 		).toBe(false);

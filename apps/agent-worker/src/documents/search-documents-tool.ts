@@ -2,8 +2,6 @@ import type { DocumentAccessBinding } from "./audit";
 import type { ScopedDocumentQueryClient } from "./client";
 import type { FrozenConversationScope } from "./scope";
 
-export const SEARCH_DOCUMENTS_TOOL_NAME = "SearchDocuments";
-
 export interface SearchDocumentsToolInput {
 	query: string;
 	maxResults?: number;

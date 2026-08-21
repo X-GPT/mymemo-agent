@@ -1,11 +1,10 @@
 import { Template, type TemplateClass } from "e2b";
 
 /**
- * The custom E2B sandbox template (Task 9.2). The agent's Grep/Glob tools
- * shell out to `rg` and `python3` inside the sandbox. E2B's stock `base`
- * template ships python3 (with git/curl/build tools) but no rg — every run
- * sandbox is created from this template instead, so the search tools work
- * identically in every sandbox.
+ * The custom E2B sandbox template (Task 9.2). The agent's Grep tool and Bash
+ * filename discovery use `rg`; secure artifact publication uses `python3` for
+ * descriptor-pinned file reads. E2B's stock `base` template ships python3 but
+ * no rg.
  *
  * The toolchain is pinned so rebuilds are reproducible:
  * - the base image by digest — neither Docker Hub (a moving `latest` plus
@@ -37,9 +36,7 @@ export const RIPGREP_DEB_SHA256 =
 const RIPGREP_DEB = `ripgrep_${RIPGREP_VERSION}-1_amd64.deb`;
 const RIPGREP_DEB_URL = `https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/${RIPGREP_DEB}`;
 
-/** The template definition: base image + pinned rg install + a build-time
- * confirmation of the whole Grep/Glob toolchain (fails the build if the base
- * image ever drops python3). */
+/** The template definition plus build-time confirmation of its runtime tools. */
 export function sandboxTemplate(): TemplateClass {
 	return Template()
 		.fromImage(BASE_IMAGE)

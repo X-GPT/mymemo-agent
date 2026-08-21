@@ -1,10 +1,10 @@
 import path from "node:path/posix";
+import { takeUtf8Bytes } from "../utf8";
 
 export interface FileToolLimits {
 	readMaxBytes: number;
 	readMaxLines: number;
 	grepMaxResults: number;
-	globMaxResults: number;
 	commandMaxOutputBytes: number;
 	commandTimeoutMs: number;
 }
@@ -67,13 +67,6 @@ export interface GrepFileToolInput {
 	path?: string;
 	include?: string;
 	caseSensitive?: boolean;
-	maxResults?: number;
-}
-
-export interface GlobFileToolInput {
-	pattern: string;
-	path?: string;
-	includeHidden?: boolean;
 	maxResults?: number;
 }
 
@@ -154,7 +147,7 @@ export async function runWriteFileTool(
 		});
 		return toolText({
 			path: resolved.path.relativePath,
-			bytesWritten: utf8ByteLength(input.content),
+			bytesWritten: Buffer.byteLength(input.content, "utf8"),
 		});
 	} catch (error) {
 		return toolError(`Write failed: ${boundedErrorMessage(error)}`);
@@ -243,54 +236,6 @@ export async function runGrepFileTool(
 	}
 }
 
-export async function runGlobFileTool(
-	input: GlobFileToolInput,
-	context: FileToolContext,
-): Promise<FileToolResult> {
-	const patternError = validateWorkspacePattern(input.pattern, "Glob");
-	if (patternError) return toolError(patternError);
-	const resolved = resolveWorkspacePath(
-		input.path ?? ".",
-		context.workspaceRoot,
-	);
-	if (!resolved.ok) return toolError(resolved.error);
-
-	const maxResults = clampResultLimit(
-		input.maxResults,
-		context.limits.globMaxResults,
-	);
-	try {
-		const commandResult = await context.client.runCommand({
-			command: buildGlobCommand({
-				pattern: input.pattern,
-				path: resolved.path.relativePath,
-				includeHidden: input.includeHidden ?? false,
-				maxResults,
-			}),
-			cwd: path.normalize(context.workspaceRoot),
-			timeoutMs: context.limits.commandTimeoutMs,
-			maxOutputBytes: context.limits.commandMaxOutputBytes,
-		});
-		const commandError = commandFailure(commandResult);
-		if (commandError) return toolError(`Glob failed: ${commandError}`);
-
-		const paths = commandResult.stdout
-			.split("\n")
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map(normalizeCommandRelativePath)
-			.filter((line): line is string => line !== undefined)
-			.sort();
-		const uniquePaths = [...new Set(paths)];
-		return toolText({
-			paths: uniquePaths.slice(0, maxResults),
-			truncated: uniquePaths.length > maxResults || commandResult.truncated,
-		});
-	} catch (error) {
-		return toolError(`Glob failed: ${boundedErrorMessage(error)}`);
-	}
-}
-
 export function resolveWorkspacePath(
 	inputPath: string | undefined,
 	workspaceRoot: string,
@@ -331,28 +276,6 @@ function isInsideWorkspace(
 		absolutePath === workspaceRoot ||
 		absolutePath.startsWith(`${workspaceRoot}/`)
 	);
-}
-
-export function takeUtf8Bytes(
-	text: string,
-	maxBytes: number,
-): { text: string; truncated: boolean } {
-	const encoder = new TextEncoder();
-	let bytes = 0;
-	let output = "";
-	for (const char of text) {
-		const nextBytes = encoder.encode(char).byteLength;
-		if (bytes + nextBytes > maxBytes) {
-			return { text: output, truncated: true };
-		}
-		bytes += nextBytes;
-		output += char;
-	}
-	return { text: output, truncated: false };
-}
-
-function utf8ByteLength(text: string): number {
-	return new TextEncoder().encode(text).byteLength;
 }
 
 function normalizeStartLine(offset: number | undefined): number {
@@ -423,50 +346,6 @@ function buildGrepCommand(input: {
 	if (input.include) args.push("--glob", input.include);
 	args.push("--", input.pattern, input.path);
 	return `${args.map(shellQuote).join(" ")} | head -n ${input.maxResults + 1}`;
-}
-
-function buildGlobCommand(input: {
-	pattern: string;
-	path: string;
-	includeHidden: boolean;
-	maxResults: number;
-}): string {
-	const script = `
-import glob
-import os
-import sys
-
-search_path = sys.argv[1]
-pattern = sys.argv[2]
-include_hidden = sys.argv[3] == "1"
-limit = int(sys.argv[4])
-root = os.getcwd()
-search_root = os.path.normpath(os.path.join(root, search_path))
-matches = []
-for candidate in glob.glob(os.path.join(search_root, pattern), recursive=True):
-    normalized = os.path.normpath(candidate)
-    rel = os.path.relpath(normalized, root)
-    if rel == "." or rel.startswith(".."):
-        continue
-    parts = rel.split(os.sep)
-    if not include_hidden and any(part.startswith(".") for part in parts):
-        continue
-    matches.append(rel)
-
-for rel in sorted(set(matches))[:limit]:
-    print(rel)
-`;
-	return [
-		"python3",
-		"-c",
-		script,
-		input.path,
-		input.pattern,
-		input.includeHidden ? "1" : "0",
-		String(input.maxResults + 1),
-	]
-		.map(shellQuote)
-		.join(" ");
 }
 
 function parseRipgrepVimgrep(

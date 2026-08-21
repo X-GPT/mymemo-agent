@@ -146,8 +146,7 @@ function provisionedHandle(
 
 export interface E2bSandboxProvisionerConfig {
 	apiKey: string;
-	/** The pinned E2B template id fresh sandboxes are created from (Task 9.2:
-	 * ships the `rg`/`python3` the Grep/Glob tools shell out to). */
+	/** The pinned E2B template id fresh sandboxes are created from (Task 9.2). */
 	template: string;
 	sandboxIdleMs: number;
 	logger: WorkerLogger;

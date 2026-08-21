@@ -11,31 +11,25 @@
 // package.json, so a new package opts in just by declaring one — no list to
 // keep in sync here.
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { globSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-const WORKSPACE_GROUPS = ["packages", "apps"];
 const root = process.cwd();
 
 const targets: string[] = [];
-for (const group of WORKSPACE_GROUPS) {
-	const groupDir = join(root, group);
-	if (!existsSync(groupDir)) continue;
-	for (const name of readdirSync(groupDir).sort()) {
-		const dir = join(group, name);
-		const pkgPath = join(root, dir, "package.json");
-		if (!existsSync(pkgPath)) continue;
-		let pkg: { scripts?: Record<string, string> };
-		try {
-			pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-		} catch (err) {
-			console.error(
-				`Invalid package.json at ${pkgPath}: ${(err as Error).message}`,
-			);
-			process.exit(1);
-		}
-		if (pkg.scripts?.test) targets.push(dir);
+for (const pkgPath of globSync("{apps,packages}/*/package.json", {
+	cwd: root,
+}).sort()) {
+	let pkg: { scripts?: Record<string, string> };
+	try {
+		pkg = JSON.parse(readFileSync(join(root, pkgPath), "utf8"));
+	} catch (err) {
+		console.error(
+			`Invalid package.json at ${pkgPath}: ${(err as Error).message}`,
+		);
+		process.exit(1);
 	}
+	if (pkg.scripts?.test) targets.push(dirname(pkgPath));
 }
 
 if (targets.length === 0) {

@@ -43,8 +43,8 @@ export interface WorkerConfig {
 	e2bApiKey: string;
 	/**
 	 * E2B template id/alias run sandboxes are created from. The custom template
-	 * (apps/agent-worker/e2b-template/) ships the Grep/Glob runtime toolchain —
-	 * `rg` installed (the stock `base` template lacks it), `python3` confirmed.
+	 * (apps/agent-worker/e2b-template/) installs `rg` and verifies the runtime
+	 * tools used by file search and secure artifact publication.
 	 * Required so a misconfigured worker fails at boot, not per run.
 	 */
 	e2bTemplate: string;
@@ -97,7 +97,6 @@ const DEFAULT_SANDBOX_IDLE_MS = 300_000;
 const DEFAULT_FILE_READ_MAX_BYTES = 65_536;
 const DEFAULT_FILE_READ_MAX_LINES = 2_000;
 const DEFAULT_FILE_GREP_MAX_RESULTS = 100;
-const DEFAULT_FILE_GLOB_MAX_RESULTS = 500;
 const DEFAULT_FILE_COMMAND_MAX_OUTPUT_BYTES = 65_536;
 const DEFAULT_FILE_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS = 8;
@@ -143,12 +142,6 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
 	});
 
-	const bashMaxOutputBytes = positiveIntOr(
-		env.WORKER_BASH_MAX_OUTPUT_BYTES,
-		DEFAULT_BASH_TOOL_LIMITS.maxStdoutBytes,
-		"WORKER_BASH_MAX_OUTPUT_BYTES",
-	);
-
 	return {
 		// DB_PASSWORD is the writable agent role's password in the platform's
 		// passwordless-URL form; the KB carries its own credential inline.
@@ -175,71 +168,26 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			region: env.AWS_REGION,
 		},
 		redisUrl,
-		sandboxIdleMs: positiveIntOr(
-			env.WORKER_SANDBOX_IDLE_MS,
-			DEFAULT_SANDBOX_IDLE_MS,
-			"WORKER_SANDBOX_IDLE_MS",
-		),
+		sandboxIdleMs: DEFAULT_SANDBOX_IDLE_MS,
 		fileLimits: {
-			readMaxBytes: positiveIntOr(
-				env.WORKER_FILE_READ_MAX_BYTES,
-				DEFAULT_FILE_READ_MAX_BYTES,
-				"WORKER_FILE_READ_MAX_BYTES",
-			),
+			readMaxBytes: DEFAULT_FILE_READ_MAX_BYTES,
 			readMaxLines: DEFAULT_FILE_READ_MAX_LINES,
-			grepMaxResults: positiveIntOr(
-				env.WORKER_FILE_GREP_MAX_RESULTS,
-				DEFAULT_FILE_GREP_MAX_RESULTS,
-				"WORKER_FILE_GREP_MAX_RESULTS",
-			),
-			globMaxResults: positiveIntOr(
-				env.WORKER_FILE_GLOB_MAX_RESULTS,
-				DEFAULT_FILE_GLOB_MAX_RESULTS,
-				"WORKER_FILE_GLOB_MAX_RESULTS",
-			),
+			grepMaxResults: DEFAULT_FILE_GREP_MAX_RESULTS,
 			commandMaxOutputBytes: DEFAULT_FILE_COMMAND_MAX_OUTPUT_BYTES,
 			commandTimeoutMs: DEFAULT_FILE_COMMAND_TIMEOUT_MS,
 		},
-		bashLimits: {
-			systemMaxTimeoutMs: positiveIntOr(
-				env.WORKER_BASH_TIMEOUT_MS,
-				DEFAULT_BASH_TOOL_LIMITS.systemMaxTimeoutMs,
-				"WORKER_BASH_TIMEOUT_MS",
-			),
-			maxStdoutBytes: bashMaxOutputBytes,
-			maxStderrBytes: bashMaxOutputBytes,
-		},
+		bashLimits: { ...DEFAULT_BASH_TOOL_LIMITS },
 		maxConcurrentConversations: positiveIntOr(
 			env.WORKER_MAX_CONCURRENT_CONVERSATIONS,
 			DEFAULT_MAX_CONCURRENT_CONVERSATIONS,
 			"WORKER_MAX_CONCURRENT_CONVERSATIONS",
 		),
-		maxDocumentSearchResults: positiveIntOr(
-			env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS,
-			DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS,
-			"WORKER_DOCUMENT_SEARCH_MAX_RESULTS",
-		),
-		maxDocumentListResults: positiveIntOr(
-			env.WORKER_DOCUMENT_LIST_MAX_RESULTS,
-			DEFAULT_DOCUMENT_LIST_MAX_RESULTS,
-			"WORKER_DOCUMENT_LIST_MAX_RESULTS",
-		),
+		maxDocumentSearchResults: DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS,
+		maxDocumentListResults: DEFAULT_DOCUMENT_LIST_MAX_RESULTS,
 		documentLoad: {
-			maxDocuments: positiveIntOr(
-				env.WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS,
-				DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS,
-				"WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS",
-			),
-			perDocumentMaxBytes: positiveIntOr(
-				env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES,
-				DEFAULT_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES,
-				"WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES",
-			),
-			perCallMaxBytes: positiveIntOr(
-				env.WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES,
-				DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES,
-				"WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES",
-			),
+			maxDocuments: DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS,
+			perDocumentMaxBytes: DEFAULT_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES,
+			perCallMaxBytes: DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES,
 		},
 		heartbeatIntervalMs: positiveIntOr(
 			env.WORKER_HEARTBEAT_INTERVAL_MS,
@@ -252,11 +200,7 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			"WORKER_SHUTDOWN_TIMEOUT_MS",
 		),
 		cleanup: {
-			intervalMs: positiveIntOr(
-				env.WORKER_CLEANUP_INTERVAL_MS,
-				DEFAULT_CLEANUP_INTERVAL_MS,
-				"WORKER_CLEANUP_INTERVAL_MS",
-			),
+			intervalMs: DEFAULT_CLEANUP_INTERVAL_MS,
 		},
 		logLevel: env.LOG_LEVEL || "info",
 		port: positiveIntOr(env.PORT, DEFAULT_PORT, "PORT"),

@@ -120,9 +120,7 @@ describe("E2BCommandClient", () => {
 		});
 		const client = new E2BCommandClient(sandbox, DEFAULT_COMMAND_CONTROL_DIR);
 
-		await expect(client.start(spec).outcome).rejects.toThrow(
-			"connection lost",
-		);
+		await expect(client.start(spec).outcome).rejects.toThrow("connection lost");
 	});
 
 	it("kill and reap act on the command's process group via the control dir", async () => {

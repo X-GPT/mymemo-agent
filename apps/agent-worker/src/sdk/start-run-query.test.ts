@@ -323,7 +323,6 @@ function buildHarness(
 			readMaxBytes: 1024,
 			readMaxLines: 100,
 			grepMaxResults: 10,
-			globMaxResults: 10,
 			commandMaxOutputBytes: 1024,
 			commandTimeoutMs: 1_000,
 		},
@@ -427,6 +426,12 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		expect(MYMEMO_SYSTEM_PROMPT).toContain("count");
 		expect(MYMEMO_SYSTEM_PROMPT).toContain("SearchDocuments");
 		expect(MYMEMO_SYSTEM_PROMPT).toContain("LoadDocuments");
+	});
+
+	it("teaches the model to use Bash for file discovery", () => {
+		expect(MYMEMO_SYSTEM_PROMPT).toContain("Bash");
+		expect(MYMEMO_SYSTEM_PROMPT).toContain("rg --files");
+		expect(MYMEMO_SYSTEM_PROMPT).not.toContain("Glob");
 	});
 
 	it("reserves the artifact root for user deliverables", () => {

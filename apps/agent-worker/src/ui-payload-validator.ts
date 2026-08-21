@@ -1,5 +1,6 @@
 import type { UiNode } from "@mymemo/agent-db/run-events";
 import Ajv, { type ErrorObject, type ValidateFunction } from "ajv";
+import { z } from "zod";
 // Vendored from https://unpkg.com/vega-lite@5.23.0/build/vega-lite-schema.json
 // SHA-256: 1aeeda8aa44dcce60f6b6fb7d8b650487e3e389a8284a2040e590be9a4c7610e
 import vegaLiteV5Schema from "./schemas/vega-lite-v5.23.0.schema.json";
@@ -26,6 +27,112 @@ export const UI_PAYLOAD_LIMITS = {
 	cardChildren: 16,
 	cardChildCharacters: 1_000,
 } as const;
+
+const UI_TITLE_SCHEMA = z.string().optional();
+const UI_TABLE_CELL_SCHEMA = z.union([
+	z.string(),
+	z.number(),
+	z.boolean(),
+	z.null(),
+]);
+
+const UI_CHART_SCHEMA = z
+	.object({
+		component: z.literal("chart"),
+		props: z
+			.object({
+				title: UI_TITLE_SCHEMA,
+				spec: z.record(z.string(), z.unknown()),
+			})
+			.strict(),
+	})
+	.strict();
+
+const UI_DIAGRAM_SCHEMA = z
+	.object({
+		component: z.literal("diagram"),
+		props: z.object({ title: UI_TITLE_SCHEMA, source: z.string() }).strict(),
+	})
+	.strict();
+
+const UI_TABLE_SCHEMA = z
+	.object({
+		component: z.literal("table"),
+		props: z
+			.object({
+				title: UI_TITLE_SCHEMA,
+				columns: z.array(
+					z
+						.object({
+							key: z.string(),
+							label: z.string(),
+							align: z.enum(["left", "center", "right"]).optional(),
+						})
+						.strict(),
+				),
+				rows: z.array(z.record(z.string(), UI_TABLE_CELL_SCHEMA)),
+			})
+			.strict(),
+	})
+	.strict();
+
+const UI_CITATION_CARD_SCHEMA = z
+	.object({
+		component: z.literal("citation-card"),
+		props: z
+			.object({
+				title: z.string(),
+				snippet: z.string(),
+				source: z
+					.object({
+						collection: z.string().optional(),
+						updated: z.string().optional(),
+						pages: z.union([z.string(), z.number()]).optional(),
+					})
+					.strict(),
+				relevance: z.number().optional(),
+			})
+			.strict(),
+	})
+	.strict();
+
+const UI_CHILD_SCHEMA = z.discriminatedUnion("component", [
+	UI_CHART_SCHEMA,
+	UI_DIAGRAM_SCHEMA,
+	UI_TABLE_SCHEMA,
+	UI_CITATION_CARD_SCHEMA,
+]);
+
+const UI_CARD_SCHEMA = z
+	.object({
+		component: z.literal("card"),
+		props: z
+			.object({
+				title: UI_TITLE_SCHEMA,
+				tone: z
+					.enum(["neutral", "info", "success", "warning", "danger"])
+					.optional(),
+			})
+			.strict(),
+		children: z.array(z.union([z.string(), UI_CHILD_SCHEMA])).optional(),
+	})
+	.strict();
+
+// Claude Code omits MCP tools whose input schema has a top-level `oneOf`.
+// Keep the direct root object it supports and the strict catalog below it.
+export const UI_NODE_ROOT_SCHEMA = z
+	.object({
+		component: z.enum(["chart", "diagram", "table", "citation-card", "card"]),
+		props: z.union([
+			UI_CHART_SCHEMA.shape.props,
+			UI_DIAGRAM_SCHEMA.shape.props,
+			UI_TABLE_SCHEMA.shape.props,
+			UI_CITATION_CARD_SCHEMA.shape.props,
+			UI_CARD_SCHEMA.shape.props,
+		]),
+		children: UI_CARD_SCHEMA.shape.children,
+	})
+	.strict();
 
 /**
  * Stable model-repair vocabulary. The legacy `Envelope` names refer to the
@@ -73,46 +180,35 @@ export type UiPayloadValidationResult =
 	| { ok: true; value: UiNode }
 	| { ok: false; violation: UiPayloadViolation };
 
-type SupportedComponent =
-	| "chart"
-	| "diagram"
-	| "table"
-	| "citation-card"
-	| "card";
-
 type ComponentDefinition = {
-	nodeKeys: readonly string[];
-	propKeys: readonly string[];
+	schema: z.ZodObject;
 	validate: (
 		node: Record<string, unknown>,
 		props: Record<string, unknown>,
 	) => UiPayloadValidationResult | undefined;
 };
 
+type SupportedComponent = z.infer<typeof UI_NODE_ROOT_SCHEMA>["component"];
+
 const COMPONENT_DEFINITIONS: Record<SupportedComponent, ComponentDefinition> = {
 	chart: {
-		nodeKeys: ["component", "props"],
-		propKeys: ["title", "spec"],
+		schema: UI_CHART_SCHEMA,
 		validate: (_node, props) => validateChartProps(props),
 	},
 	diagram: {
-		nodeKeys: ["component", "props"],
-		propKeys: ["title", "source"],
+		schema: UI_DIAGRAM_SCHEMA,
 		validate: (_node, props) => validateDiagramProps(props),
 	},
 	table: {
-		nodeKeys: ["component", "props"],
-		propKeys: ["title", "columns", "rows"],
+		schema: UI_TABLE_SCHEMA,
 		validate: (_node, props) => validateTableProps(props),
 	},
 	"citation-card": {
-		nodeKeys: ["component", "props"],
-		propKeys: ["title", "snippet", "source", "relevance"],
+		schema: UI_CITATION_CARD_SCHEMA,
 		validate: (_node, props) => validateCitationCardProps(props),
 	},
 	card: {
-		nodeKeys: ["component", "props", "children"],
-		propKeys: ["title", "tone"],
+		schema: UI_CARD_SCHEMA,
 		validate: (node) => validateCard(node),
 	},
 };
@@ -146,7 +242,7 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 	}
 	const definition = COMPONENT_DEFINITIONS[component];
 
-	const nodeExtra = firstExtraKey(input, definition.nodeKeys);
+	const nodeExtra = firstExtraKey(input, Object.keys(definition.schema.shape));
 	if (nodeExtra !== undefined) return extraProperty(nodeExtra);
 	if (!isRecord(input.props)) {
 		return violation(
@@ -154,10 +250,18 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 			`${component} props must be an object`,
 		);
 	}
-	const propsExtra = firstExtraKey(input.props, definition.propKeys);
+	const propsSchema = definition.schema.shape.props as z.ZodObject;
+	const propsExtra = firstExtraKey(input.props, Object.keys(propsSchema.shape));
 	if (propsExtra !== undefined) return extraProperty(propsExtra);
 	const invalid = definition.validate(input, input.props);
 	if (invalid) return invalid;
+	const parsed = definition.schema.safeParse(input);
+	if (!parsed.success) {
+		return violation(
+			UiPayloadRule.ComponentInvalid,
+			`${component} payload does not match the component schema`,
+		);
+	}
 	const envelopeBytes = serializedUiPayloadEnvelopeBytes(input);
 	if (envelopeBytes > UI_PAYLOAD_LIMITS.envelopeBytes) {
 		return violation(
@@ -166,17 +270,18 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 		);
 	}
 
-	return { ok: true, value: input as unknown as UiNode };
+	return { ok: true, value: parsed.data as unknown as UiNode };
 }
 
 /** Serialized size of the worker-owned durable envelope for a model payload. */
 export function serializedUiPayloadEnvelopeBytes(payload: unknown): number {
-	return utf8ByteLength(
+	return Buffer.byteLength(
 		JSON.stringify({
 			messageId: UI_PAYLOAD_MESSAGE_ID_PLACEHOLDER,
 			version: UI_PAYLOAD_VERSION,
 			payload,
 		}),
+		"utf8",
 	);
 }
 
@@ -192,7 +297,7 @@ function validateChartProps(
 		);
 	}
 
-	const specBytes = utf8ByteLength(JSON.stringify(props.spec));
+	const specBytes = Buffer.byteLength(JSON.stringify(props.spec), "utf8");
 	if (specBytes > UI_PAYLOAD_LIMITS.chartSpecBytes) {
 		return violation(
 			UiPayloadRule.ChartSpecTooLarge,
@@ -552,7 +657,10 @@ function validateDiagramProps(
 			"diagram source must be a string",
 		);
 	}
-	if (utf8ByteLength(props.source) > UI_PAYLOAD_LIMITS.diagramSourceBytes) {
+	if (
+		Buffer.byteLength(props.source, "utf8") >
+		UI_PAYLOAD_LIMITS.diagramSourceBytes
+	) {
 		return violation(
 			UiPayloadRule.DiagramSourceTooLarge,
 			`diagram source must be at most ${UI_PAYLOAD_LIMITS.diagramSourceBytes} UTF-8 bytes; shrink source`,
@@ -628,8 +736,4 @@ function isTableCell(
 		typeof value === "boolean" ||
 		(typeof value === "number" && Number.isFinite(value))
 	);
-}
-
-function utf8ByteLength(value: string): number {
-	return new TextEncoder().encode(value).byteLength;
 }

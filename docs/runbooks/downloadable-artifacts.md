@@ -106,8 +106,7 @@ deletion cannot be revoked and may remain usable until its five-minute expiry.
 
 ## Diagnose cleanup failures
 
-The worker runs one advisory-lock-protected cleanup pass at
-`WORKER_CLEANUP_INTERVAL_MS` (five minutes by default). It never lists S3 and
+The worker runs one advisory-lock-protected cleanup pass every five minutes. It never lists S3 and
 never deletes an object still referenced by current metadata. Pending objects
 from active Runs are skipped. Failed deletion retains the ledger row and is
 retried on a later pass; one failed object does not stop other candidates.

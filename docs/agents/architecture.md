@@ -42,7 +42,6 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/chat-api/src/features/exposure-gate/` | Statsig and break-glass implementations of the new-work gate |
 | `apps/chat-api/src/features/runtime-gate/` | Fail-safe Statsig selection of the immutable Conversation execution runtime |
 | `apps/chat-api/src/features/run-store/` | Run admission, owner-scoped Run reads, and durable interruption |
-| `apps/chat-api/src/features/conversation-runtime-store/` | Thin re-export of shared fenced Workspace, taint, and Agent session runtime persistence |
 | `apps/chat-api/src/db/` | Thin bindings to `@mymemo/agent-db` and the shared migration runner |
 | `apps/agent-worker/src/run-loop.ts` | Fargate-only Claim, ordering, expiration, Reclamation, and release control plane |
 | `apps/agentcore-dispatch-publisher/src/` | Dedicated AgentCore Dispatch publication entrypoint, loop, and production adapters |

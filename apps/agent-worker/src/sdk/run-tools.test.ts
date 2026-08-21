@@ -138,7 +138,6 @@ function buildDeps(overrides: Partial<RunToolDeps> = {}): {
 			readMaxBytes: 65_536,
 			readMaxLines: 2_000,
 			grepMaxResults: 100,
-			globMaxResults: 100,
 			commandMaxOutputBytes: 65_536,
 			commandTimeoutMs: 30_000,
 		},
@@ -184,7 +183,6 @@ describe("buildRunTools — surface", () => {
 		expect(names).toEqual([
 			"Bash",
 			"Edit",
-			"Glob",
 			"Grep",
 			"ListDocuments",
 			"LoadDocuments",

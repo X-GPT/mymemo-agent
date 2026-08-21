@@ -8,8 +8,6 @@ export type {
 	ListedDocument,
 } from "./kb-queries";
 
-export const LIST_DOCUMENTS_TOOL_NAME = "ListDocuments";
-
 export interface ListDocumentsToolInput {
 	limit?: number;
 	cursor?: string;

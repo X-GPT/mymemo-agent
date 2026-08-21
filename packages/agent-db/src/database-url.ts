@@ -24,18 +24,17 @@ export function resolveDatabaseUrl(
 	dbSsl: string | undefined,
 ): string | undefined {
 	if (!databaseUrl) return undefined;
-	let resolved = databaseUrl;
-	if (dbPassword) {
-		const match = /^([a-z]+:\/\/)([^@/]+)@(.*)$/i.exec(resolved);
-		if (match) {
-			const [, scheme, userinfo, rest] = match;
-			if (scheme && userinfo && rest !== undefined && !userinfo.includes(":")) {
-				resolved = `${scheme}${userinfo}:${encodeURIComponent(dbPassword)}@${rest}`;
-			}
-		}
+	let resolved: URL;
+	try {
+		resolved = new URL(databaseUrl);
+	} catch {
+		return databaseUrl;
 	}
-	if (dbSsl !== "disable" && !/[?&]sslmode=/.test(resolved)) {
-		resolved = `${resolved}${resolved.includes("?") ? "&" : "?"}sslmode=no-verify`;
+	if (dbPassword && !resolved.password) {
+		resolved.password = dbPassword;
 	}
-	return resolved;
+	if (dbSsl !== "disable" && !resolved.searchParams.has("sslmode")) {
+		resolved.searchParams.set("sslmode", "no-verify");
+	}
+	return resolved.toString();
 }

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
 	runEditFileTool,
-	runGlobFileTool,
 	runGrepFileTool,
 	runReadFileTool,
 	runWriteFileTool,
@@ -52,7 +51,6 @@ const baseContext = {
 		readMaxBytes: 12,
 		readMaxLines: 2,
 		grepMaxResults: 100,
-		globMaxResults: 500,
 		commandMaxOutputBytes: 16_384,
 		commandTimeoutMs: 10_000,
 	},
@@ -228,30 +226,5 @@ describe("Grep file tool", () => {
 			result.content[0]?.text.startsWith("Grep failed: E2B unavailable"),
 		).toBe(true);
 		expect(result.content[0]?.text.length).toBeLessThan(280);
-	});
-});
-
-describe("Glob file tool", () => {
-	it("returns deterministic bounded paths from command output", async () => {
-		const client = new FakeSandboxFileClient();
-		client.commandResult = {
-			exitCode: 0,
-			stdout: "z.txt\nb.txt\na.txt\n",
-			stderr: "",
-			truncated: false,
-		};
-
-		const result = await runGlobFileTool(
-			{ pattern: "*.txt", maxResults: 2 },
-			{ ...baseContext, client },
-		);
-
-		expect(result.isError).toBeUndefined();
-		expect(client.commands).toHaveLength(1);
-		expect(client.commands[0]?.cwd).toBe("/workspace");
-		expect(parseResult(result)).toEqual({
-			paths: ["a.txt", "b.txt"],
-			truncated: true,
-		});
 	});
 });

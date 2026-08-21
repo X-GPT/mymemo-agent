@@ -1,6 +1,6 @@
+import { sValidator as zValidator } from "@hono/standard-validator";
 import { InvalidRunEventError } from "@mymemo/agent-db/run-events";
 import { Hono } from "hono";
-import { validator as zValidator } from "hono-openapi";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import { ConversationIdParam } from "@/features/conversations/conversations.schema";

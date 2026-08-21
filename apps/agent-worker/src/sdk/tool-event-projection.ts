@@ -16,7 +16,7 @@ import { EXECUTOR_SERVER_NAME } from "./run-tools";
  * and the run continues (fail closed — a surprising shape degrades visibility,
  * not correctness).
  *
- * All nine executor tools have bounded client projections.
+ * All eight projected executor tools have bounded client projections.
  */
 
 /** Hard cap on one tool event: 16 KiB of UTF-8 JSON after projection. An event
@@ -40,7 +40,6 @@ const DOCUMENT_SNIPPET_PREVIEW_MAX_JSON_BYTES = 2_048;
 /** List budgets: count bounds and per-item previews sized so the largest list
  * event stays comfortably under the cap (Grep worst case ≈ 12 KiB). */
 const GREP_RESULT_MAX_MATCHES = 20;
-const GLOB_RESULT_MAX_PATHS = 40;
 const LIST_PATH_PREVIEW_MAX_JSON_BYTES = 256;
 const MATCH_TEXT_PREVIEW_MAX_JSON_BYTES = 256;
 const SEARCH_PASSAGE_PREVIEW_MAX_ITEMS = 5;
@@ -54,7 +53,7 @@ const LOAD_FAILURE_SUMMARY = "Some documents could not be loaded";
 const TOOL_FAILED_RESULT = { message: "Tool failed" } as const;
 
 /**
- * The allowlist from the executor server's prefixed tool names to the nine
+ * The allowlist from the executor server's prefixed tool names to the eight
  * short public names. Only names in this map may ever reach the client stream;
  * unknown, built-in, or permission-denied tool names map to `null` and their
  * events are omitted. A drift pin ties this map's domain to the executor tools
@@ -66,7 +65,6 @@ const PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME: ReadonlyMap<string, PublicToolName> =
 		[`mcp__${EXECUTOR_SERVER_NAME}__Write`, "Write"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__Edit`, "Edit"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__Grep`, "Grep"],
-		[`mcp__${EXECUTOR_SERVER_NAME}__Glob`, "Glob"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__Bash`, "Bash"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__ListDocuments`, "ListDocuments"],
 		[`mcp__${EXECUTOR_SERVER_NAME}__SearchDocuments`, "SearchDocuments"],
@@ -214,8 +212,6 @@ function projectToolUseArguments(
 			return editToolUseArguments(fields);
 		case "Grep":
 			return grepToolUseArguments(fields);
-		case "Glob":
-			return globToolUseArguments(fields);
 		case "Bash":
 			return bashToolUseArguments(fields);
 		default:
@@ -322,25 +318,6 @@ function grepToolUseArguments(
 	return { args, clipped };
 }
 
-function globToolUseArguments(
-	fields: Record<string, unknown>,
-): ProjectedArguments | null {
-	if (typeof fields.pattern !== "string") return null;
-	const args: Record<string, unknown> = {};
-	let clipped = putClampedString(
-		args,
-		"pattern",
-		fields.pattern,
-		PATTERN_PREVIEW_MAX_JSON_BYTES,
-	);
-	clipped =
-		putClampedString(args, "path", fields.path, PATH_PREVIEW_MAX_JSON_BYTES) ||
-		clipped;
-	putBoolean(args, "includeHidden", fields.includeHidden);
-	putFiniteNumber(args, "maxResults", fields.maxResults);
-	return { args, clipped };
-}
-
 /** Set `args[key]` to a bounded text preview and `args[<key>Bytes]` to the
  * full UTF-8 byte count when `value` is a string — the count reports the true
  * size even when the preview is clipped. Returns whether it was clipped. */
@@ -422,8 +399,6 @@ export function projectToolResult(
 			return projectEditResult(content);
 		case "Grep":
 			return projectGrepResult(content);
-		case "Glob":
-			return projectGlobResult(content);
 		case "Bash":
 			return projectBashResult(content);
 		case "ListDocuments":
@@ -503,36 +478,6 @@ function projectGrepResult(
 		result: {
 			matches,
 			// A list clipped by projection is no longer the complete match list,
-			// exactly as when the executor's own result cap truncated it.
-			truncated: raw.truncated || listClipped,
-		},
-		isError: false,
-		truncated: listClipped || itemClipped,
-	});
-}
-
-function projectGlobResult(
-	content: unknown,
-): ToolEventProjection<ToolResultPayload> {
-	const raw = parseGlobResult(content);
-	if (raw === null) {
-		return {
-			ok: false,
-			reason: "Glob result did not match the executor shape",
-		};
-	}
-	const listClipped = raw.paths.length > GLOB_RESULT_MAX_PATHS;
-	let itemClipped = false;
-	const paths = raw.paths.slice(0, GLOB_RESULT_MAX_PATHS).map((rawPath) => {
-		const path = clampJsonString(rawPath, LIST_PATH_PREVIEW_MAX_JSON_BYTES);
-		itemClipped ||= path.clipped;
-		return path.text;
-	});
-	return fitOrOmit({
-		tool: "Glob",
-		result: {
-			paths,
-			// A list clipped by projection is no longer the complete path list,
 			// exactly as when the executor's own result cap truncated it.
 			truncated: raw.truncated || listClipped,
 		},
@@ -924,26 +869,6 @@ function parseGrepResult(content: unknown): RawGrepResult | null {
 		});
 	}
 	return { matches, truncated: parsed.truncated };
-}
-
-/** The executor Glob tool's structured success result (see `runGlobFileTool`). */
-interface RawGlobResult {
-	paths: string[];
-	truncated: boolean;
-}
-
-function parseGlobResult(content: unknown): RawGlobResult | null {
-	const parsed = parseExecutorResult(content);
-	if (parsed === null) return null;
-	if (!Array.isArray(parsed.paths) || typeof parsed.truncated !== "boolean") {
-		return null;
-	}
-	const paths: string[] = [];
-	for (const path of parsed.paths) {
-		if (typeof path !== "string") return null;
-		paths.push(path);
-	}
-	return { paths, truncated: parsed.truncated };
 }
 
 /** Extract and parse the executor's structured JSON success text out of the

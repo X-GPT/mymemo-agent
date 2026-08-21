@@ -3,7 +3,9 @@ import { requestId } from "hono/request-id";
 import { pinoLogger } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import { type AppDeps, type AppEnv, createDeps } from "./deps";
-import routes from "./routes";
+import { artifactRoutes } from "./features/artifacts";
+import { conversationHistoryRoutes } from "./features/conversation-history";
+import { conversationsRoutes } from "./features/conversations";
 
 /**
  * Build the app from a validated config. Dependencies are injectable so route
@@ -23,7 +25,9 @@ export function createApp(
 
 	app.get("/", (c) => c.text("Hello Hono!"));
 	app.get("/health", (c) => c.json({ status: "ok" }));
-	app.route("/", routes);
+	app.route("/v1/conversations", conversationsRoutes);
+	app.route("/v1/conversations", conversationHistoryRoutes);
+	app.route("/v1/conversations", artifactRoutes);
 
 	return app;
 }

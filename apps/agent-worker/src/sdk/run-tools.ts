@@ -19,7 +19,6 @@ import { runSearchDocumentsTool } from "../documents/search-documents-tool";
 import {
 	type FileToolLimits,
 	runEditFileTool,
-	runGlobFileTool,
 	runGrepFileTool,
 	runReadFileTool,
 	runWriteFileTool,
@@ -31,6 +30,7 @@ import {
 	runPresentUiTool,
 } from "../present-ui-tool";
 import type { RunBinding } from "../sandbox-env";
+import { UI_NODE_ROOT_SCHEMA } from "../ui-payload-validator";
 
 /**
  * The MCP tool-result shape an SDK tool handler must resolve to, derived from
@@ -65,127 +65,12 @@ const EXECUTOR_TOOL_NAMES = [
 	"Write",
 	"Edit",
 	"Grep",
-	"Glob",
 	"Bash",
 	"ListDocuments",
 	"SearchDocuments",
 	"LoadDocuments",
 	PRESENT_UI_TOOL_NAME,
 ] as const;
-
-const UI_TITLE_SCHEMA = z.string().optional();
-const UI_TABLE_CELL_SCHEMA = z.union([
-	z.string(),
-	z.number(),
-	z.boolean(),
-	z.null(),
-]);
-
-const UI_CHART_SCHEMA = z
-	.object({
-		component: z.literal("chart"),
-		props: z
-			.object({
-				title: UI_TITLE_SCHEMA,
-				spec: z.record(z.string(), z.unknown()),
-			})
-			.strict(),
-	})
-	.strict();
-
-const UI_DIAGRAM_SCHEMA = z
-	.object({
-		component: z.literal("diagram"),
-		props: z
-			.object({
-				title: UI_TITLE_SCHEMA,
-				source: z.string(),
-			})
-			.strict(),
-	})
-	.strict();
-
-const UI_TABLE_SCHEMA = z
-	.object({
-		component: z.literal("table"),
-		props: z
-			.object({
-				title: UI_TITLE_SCHEMA,
-				columns: z.array(
-					z
-						.object({
-							key: z.string(),
-							label: z.string(),
-							align: z.enum(["left", "center", "right"]).optional(),
-						})
-						.strict(),
-				),
-				rows: z.array(z.record(z.string(), UI_TABLE_CELL_SCHEMA)),
-			})
-			.strict(),
-	})
-	.strict();
-
-const UI_CITATION_CARD_SCHEMA = z
-	.object({
-		component: z.literal("citation-card"),
-		props: z
-			.object({
-				title: z.string(),
-				snippet: z.string(),
-				source: z
-					.object({
-						collection: z.string().optional(),
-						updated: z.string().optional(),
-						pages: z.union([z.string(), z.number()]).optional(),
-					})
-					.strict(),
-				relevance: z.number().optional(),
-			})
-			.strict(),
-	})
-	.strict();
-
-const UI_CHILD_SCHEMA = z.discriminatedUnion("component", [
-	UI_CHART_SCHEMA,
-	UI_DIAGRAM_SCHEMA,
-	UI_TABLE_SCHEMA,
-	UI_CITATION_CARD_SCHEMA,
-]);
-
-const UI_CARD_SCHEMA = z
-	.object({
-		component: z.literal("card"),
-		props: z
-			.object({
-				title: UI_TITLE_SCHEMA,
-				tone: z
-					.enum(["neutral", "info", "success", "warning", "danger"])
-					.optional(),
-			})
-			.strict(),
-		children: z.array(z.union([z.string(), UI_CHILD_SCHEMA])).optional(),
-	})
-	.strict();
-
-// Claude Code omits MCP tools whose input schema has a top-level `oneOf`, even
-// though it is valid JSON Schema. Keep the direct root object it supports and
-// expose the five strict prop shapes as a nested union. The authoritative
-// validator retains exact component-to-props correlation and rejects children
-// on every component except card.
-const UI_NODE_ROOT_SCHEMA = z
-	.object({
-		component: z.enum(["chart", "diagram", "table", "citation-card", "card"]),
-		props: z.union([
-			UI_CHART_SCHEMA.shape.props,
-			UI_DIAGRAM_SCHEMA.shape.props,
-			UI_TABLE_SCHEMA.shape.props,
-			UI_CITATION_CARD_SCHEMA.shape.props,
-			UI_CARD_SCHEMA.shape.props,
-		]),
-		children: UI_CARD_SCHEMA.shape.children,
-	})
-	.strict();
 
 /**
  * Expose one schema to the model while preserving the raw value at runtime.
@@ -312,18 +197,6 @@ export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
 			},
 			async (input) =>
 				toCallToolResult(await runGrepFileTool(input, fileContext)),
-		),
-		tool(
-			"Glob",
-			"List workspace files matching a glob pattern.",
-			{
-				pattern: z.string(),
-				path: z.string().optional(),
-				includeHidden: z.boolean().optional(),
-				maxResults: z.number().optional(),
-			},
-			async (input) =>
-				toCallToolResult(await runGlobFileTool(input, fileContext)),
 		),
 		tool(
 			"Bash",

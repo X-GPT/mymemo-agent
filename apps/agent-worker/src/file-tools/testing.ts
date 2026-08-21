@@ -1,13 +1,13 @@
 import { expect } from "bun:test";
 import type { FileToolContext, FileToolResult } from "./file-tools";
-import { runGlobFileTool, runGrepFileTool } from "./file-tools";
+import { runGrepFileTool } from "./file-tools";
 
 /**
  * The file-tools integration contract, shared by every real
  * `SandboxFileClient` substrate (the local-command integration test and the
  * live E2B file-client test): seeded through the client itself, the
- * `rg`-backed Grep and `python3`-backed Glob return bounded, sorted,
- * hidden-filtered results that are identical across substrates.
+ * `rg`-backed Grep returns bounded, sorted, hidden-filtered results that are
+ * identical across substrates.
  */
 export async function runFileToolsContract(
 	context: FileToolContext,
@@ -36,16 +36,6 @@ export async function runFileToolsContract(
 			{ path: "notes.txt", line: 1, column: 1, text: "alpha" },
 			{ path: "src/memo.txt", line: 1, column: 1, text: "alpha" },
 		],
-		truncated: false,
-	});
-
-	const globResult = await runGlobFileTool(
-		{ pattern: "**/*.txt", maxResults: 10 },
-		context,
-	);
-	expect(globResult.isError).toBeUndefined();
-	expect(parseToolResult(globResult)).toEqual({
-		paths: ["notes.txt", "src/memo.txt"],
 		truncated: false,
 	});
 }
