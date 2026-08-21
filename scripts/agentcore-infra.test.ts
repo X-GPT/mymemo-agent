@@ -31,6 +31,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(dockerfile).toContain("apt-get update");
 		expect(dockerfile).toContain("apt-get upgrade -y --no-install-recommends");
 		expect(dockerfile).toContain("rm -rf /var/lib/apt/lists/*");
+		expect(dockerfile).toMatch(/^ARG BUN_VERSION=1$/m);
 		expect(dockerfile).toContain(
 			`FROM oven/bun:\${BUN_VERSION}-distroless AS release`,
 		);
