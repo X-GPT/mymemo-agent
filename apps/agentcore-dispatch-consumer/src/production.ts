@@ -17,7 +17,6 @@ import { createAgentCoreConsumerHandler } from "./handlers";
 import {
 	type CurrentSecretReader,
 	createAwsCurrentSecretReader,
-	exactSecretArn,
 	resolveVerifiedAgentDatabaseUrl,
 } from "./secret-config";
 
@@ -46,10 +45,7 @@ export async function resolveAgentCoreDispatchConfigFromSecretArns(
 	env: Env,
 	readCurrentSecret: CurrentSecretReader,
 ): Promise<AgentCoreDispatchConfig> {
-	const passwordSecretArn = exactSecretArn(
-		env.DB_PASSWORD_SECRET_ARN,
-		"DB_PASSWORD_SECRET_ARN",
-	);
+	const passwordSecretArn = requireEnv(env, "DB_PASSWORD_SECRET_ARN");
 	return loadAgentCoreDispatchConfigFromEnv({
 		...env,
 		AGENT_DATABASE_URL: resolveVerifiedAgentDatabaseUrl(

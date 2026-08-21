@@ -3,23 +3,10 @@ import {
 	SecretsManagerClient,
 } from "@aws-sdk/client-secrets-manager";
 
-const SECRET_ARN_PATTERN =
-	/^arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+$/;
-
 export type CurrentSecretReader = (arn: string) => Promise<string>;
 
 export interface SecretCommandClient {
 	send(command: GetSecretValueCommand): Promise<{ SecretString?: string }>;
-}
-
-export function exactSecretArn(
-	value: string | undefined,
-	name: string,
-): string {
-	if (!value || !SECRET_ARN_PATTERN.test(value)) {
-		throw new Error(`${name} must be an exact Secrets Manager ARN`);
-	}
-	return value;
 }
 
 export function verifiedDatabaseUrl(value: string, name: string): string {
