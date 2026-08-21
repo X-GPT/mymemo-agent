@@ -2,7 +2,7 @@ locals {
   agentcore_name_prefix = "mymemo-agent-agentcore-${var.environment}"
   vpc_id                = local.shared_vpc_id
 
-  exact_secret_arn_pattern = "^arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:[A-Za-z0-9/_+=.@-]+$"
+  exact_secret_arn_pattern = "^arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:[^:*?]+$"
   exact_secret_arns = [
     local.agent_db_password_base_secret_arn,
     local.kb_database_url_secret_arn,

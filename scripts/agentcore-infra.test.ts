@@ -253,6 +253,42 @@ describe("production AgentCore dispatch infrastructure", () => {
 		}
 	});
 
+	it("validates exact Runtime secret scope without validating AWS-generated names", () => {
+		const locals = readFileSync(
+			join(terraformDir, "agentcore-locals.tf"),
+			"utf8",
+		);
+		const terraformPattern = locals.match(
+			/exact_secret_arn_pattern\s*=\s*"([^"]+)"/,
+		)?.[1];
+		if (!terraformPattern) {
+			throw new Error("missing exact_secret_arn_pattern");
+		}
+
+		const terraformRegion = "$" + "{var.aws_region}";
+		const terraformAccountId = "$" + "{var.aws_account_id}";
+		const exactSecretArn = new RegExp(
+			terraformPattern
+				.replace(terraformRegion, "us-west-2")
+				.replace(terraformAccountId, "123456789012"),
+		);
+		const prefix = "arn:aws:secretsmanager:us-west-2:123456789012:secret:";
+
+		expect(exactSecretArn.test(`${prefix}rds!db-example-AbCdEf`)).toBe(true);
+		expect(exactSecretArn.test(`${prefix}future~aws-generated-name`)).toBe(
+			true,
+		);
+		expect(exactSecretArn.test(`${prefix}mymemo-agent-prod-AbCdEf`)).toBe(true);
+		for (const rejectedArn of [
+			`${prefix}rds!db-example-*`,
+			`${prefix}rds!db-example-AbCdEf:password::`,
+			"arn:aws:secretsmanager:us-east-1:123456789012:secret:rds!db-example-AbCdEf",
+			"arn:aws:secretsmanager:us-west-2:210987654321:secret:rds!db-example-AbCdEf",
+		]) {
+			expect(exactSecretArn.test(rejectedArn)).toBe(false);
+		}
+	});
+
 	it("separates Runtime and consumer authority and grants standard artifact upload", () => {
 		const source = terraformSource();
 		const agentcoreIam = readFileSync(
