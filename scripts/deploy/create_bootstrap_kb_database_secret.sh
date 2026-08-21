@@ -6,8 +6,8 @@ usage() {
 Usage:
   scripts/deploy/create_bootstrap_kb_database_secret.sh
 
-Creates or updates the temporary KB_DATABASE_URL secret used by agent-worker
-and AgentCore Runtime.
+Creates or updates the temporary KB_DATABASE_URL secret used by AgentCore
+Runtime.
 This is option-2 bootstrap wiring: it reuses the existing mymemo-service DB
 role/password and should be replaced by a read-only KB role.
 

@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 FROM oven/bun:1 AS base
 WORKDIR /usr/src/app
 
@@ -28,10 +26,6 @@ RUN cd /temp/prod \
 # Final release image.
 FROM base AS release
 LABEL com.mymemo.agent-worker.execution-runtime-aware="true"
-ADD --checksum=sha256:e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
-RUN chmod 0444 /etc/ssl/certs/rds-global-bundle.pem
-ENV RDS_CA_BUNDLE_PATH=/etc/ssl/certs/rds-global-bundle.pem
-ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agent-worker/src apps/agent-worker/src
 COPY apps/agent-worker/package.json apps/agent-worker/tsconfig.json apps/agent-worker/
