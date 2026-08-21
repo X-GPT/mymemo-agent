@@ -89,12 +89,10 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 	it("honors overrides for concurrency and intervals", () => {
 		const env = baseEnv();
 		env.WORKER_MAX_CONCURRENT_CONVERSATIONS = "4";
-		env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS = "12";
 		env.WORKER_HEARTBEAT_INTERVAL_MS = "10000";
 		env.WORKER_SHUTDOWN_TIMEOUT_MS = "5000";
 		const config = loadWorkerConfigFromEnv(env);
 		expect(config.maxConcurrentConversations).toBe(4);
-		expect(config.maxDocumentSearchResults).toBe(12);
 		expect(config.heartbeatIntervalMs).toBe(10_000);
 		expect(config.shutdownTimeoutMs).toBe(5_000);
 	});
@@ -104,14 +102,6 @@ describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
 		env.WORKER_MAX_CONCURRENT_CONVERSATIONS = "0";
 		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
 			/WORKER_MAX_CONCURRENT_CONVERSATIONS/,
-		);
-	});
-
-	it("rejects a non-positive document search limit override", () => {
-		const env = baseEnv();
-		env.WORKER_DOCUMENT_SEARCH_MAX_RESULTS = "0";
-		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
-			/WORKER_DOCUMENT_SEARCH_MAX_RESULTS/,
 		);
 	});
 });
@@ -135,51 +125,12 @@ describe("loadWorkerConfigFromEnv — SDK execution limits", () => {
 			maxStderrBytes: 65_536,
 		});
 	});
-
-	it("honors sandbox, file, and Bash limit overrides", () => {
-		const env = baseEnv();
-		env.WORKER_SANDBOX_IDLE_MS = "600000";
-		env.WORKER_FILE_GREP_MAX_RESULTS = "25";
-		env.WORKER_FILE_GLOB_MAX_RESULTS = "75";
-		env.WORKER_FILE_READ_MAX_BYTES = "32768";
-		env.WORKER_BASH_TIMEOUT_MS = "45000";
-		env.WORKER_BASH_MAX_OUTPUT_BYTES = "8192";
-
-		const config = loadWorkerConfigFromEnv(env);
-
-		expect(config.sandboxIdleMs).toBe(600_000);
-		expect(config.fileLimits).toMatchObject({
-			grepMaxResults: 25,
-			globMaxResults: 75,
-			readMaxBytes: 32_768,
-		});
-		expect(config.bashLimits).toEqual({
-			systemMaxTimeoutMs: 45_000,
-			maxStdoutBytes: 8_192,
-			maxStderrBytes: 8_192,
-		});
-	});
 });
 
 describe("loadWorkerConfigFromEnv — cleanup loop", () => {
 	it("defaults the cleanup interval", () => {
 		const config = loadWorkerConfigFromEnv(baseEnv());
 		expect(config.cleanup.intervalMs).toBe(300_000);
-	});
-
-	it("honors the cleanup interval override", () => {
-		const env = baseEnv();
-		env.WORKER_CLEANUP_INTERVAL_MS = "120000";
-		const config = loadWorkerConfigFromEnv(env);
-		expect(config.cleanup.intervalMs).toBe(120_000);
-	});
-
-	it("rejects a non-positive cleanup interval override", () => {
-		const env = baseEnv();
-		env.WORKER_CLEANUP_INTERVAL_MS = "0";
-		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
-			/WORKER_CLEANUP_INTERVAL_MS/,
-		);
 	});
 });
 
@@ -192,44 +143,11 @@ describe("loadWorkerConfigFromEnv — LoadDocuments caps", () => {
 			config.documentLoad.perDocumentMaxBytes,
 		);
 	});
-
-	it("honors document-load cap overrides", () => {
-		const env = baseEnv();
-		env.WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS = "3";
-		env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = "1000";
-		env.WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES = "4000";
-		const config = loadWorkerConfigFromEnv(env);
-		expect(config.documentLoad.maxDocuments).toBe(3);
-		expect(config.documentLoad.perDocumentMaxBytes).toBe(1_000);
-		expect(config.documentLoad.perCallMaxBytes).toBe(4_000);
-	});
-
-	it("rejects a non-positive document-load byte cap override", () => {
-		const env = baseEnv();
-		env.WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = "0";
-		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
-			/WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES/,
-		);
-	});
 });
 
 describe("loadWorkerConfigFromEnv — ListDocuments cap", () => {
 	it("defaults the document-list page cap to twenty", () => {
 		expect(loadWorkerConfigFromEnv(baseEnv()).maxDocumentListResults).toBe(20);
-	});
-
-	it("honors the document-list page cap override", () => {
-		const env = baseEnv();
-		env.WORKER_DOCUMENT_LIST_MAX_RESULTS = "35";
-		expect(loadWorkerConfigFromEnv(env).maxDocumentListResults).toBe(35);
-	});
-
-	it("rejects a non-positive document-list page cap override", () => {
-		const env = baseEnv();
-		env.WORKER_DOCUMENT_LIST_MAX_RESULTS = "0";
-		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
-			/WORKER_DOCUMENT_LIST_MAX_RESULTS/,
-		);
 	});
 });
 

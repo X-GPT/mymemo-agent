@@ -1,4 +1,5 @@
 import { validateUiPayload } from "./ui-payload-validator";
+import { takeUtf8Bytes } from "./utf8";
 
 export const PRESENT_UI_TOOL_NAME = "PresentUI";
 
@@ -29,10 +30,10 @@ export function runPresentUiTool(input: unknown): PresentUiToolResult {
 					text: JSON.stringify({
 						error: "invalid_ui_payload",
 						rule: result.violation.rule,
-						detail: clampUtf8(
+						detail: takeUtf8Bytes(
 							result.violation.detail,
 							REPAIR_DETAIL_MAX_UTF8_BYTES,
-						),
+						).text,
 					}),
 				},
 			],
@@ -51,10 +52,4 @@ export function runPresentUiTool(input: unknown): PresentUiToolResult {
 			},
 		],
 	};
-}
-
-function clampUtf8(value: string, maxBytes: number): string {
-	const encoded = new TextEncoder().encode(value);
-	if (encoded.byteLength <= maxBytes) return value;
-	return new TextDecoder().decode(encoded.slice(0, maxBytes));
 }

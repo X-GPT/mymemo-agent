@@ -1,9 +1,10 @@
 # Custom E2B sandbox template (`mymemo-agent-sandbox`)
 
-The agent's `Grep` and `Glob` tools shell out to `rg` and `python3` inside the
-run sandbox. E2B's stock `base` template ships `python3` but lacks `rg`, so
-every run sandbox is created from this custom template instead (Task 9.2) and
-the toolchain is confirmed at build time. Workers reference it by
+The agent's `Grep` and `Glob` tools use `rg` inside the run sandbox. Secure
+artifact publication uses `python3` to pin validated files by descriptor before
+streaming them. E2B's stock `base` template ships Python but lacks ripgrep, so
+every run sandbox uses this custom template and verifies both runtime tools.
+Workers reference it by
 the **required** `WORKER_E2B_TEMPLATE` config — a worker refuses to boot
 without it.
 
@@ -20,9 +21,8 @@ pinned so rebuilds are reproducible:
   the digest is the only stable pin.
 - **ripgrep**: the official `ripgrep_<version>-1_amd64.deb` release artifact,
   verified against its published sha256 before install.
-- **python3**: shipped by the base image; the build *confirms* it (a build
-  step runs `rg --version && python3 --version`), so base-image drift that
-  drops python3 fails the build instead of breaking sandboxes at run time.
+- **python3**: shipped by the base image and verified because secure artifact
+  publication uses it for descriptor-pinned reads.
 
 To bump a pin, edit the constants in `template.ts`, then rebuild and
 re-verify.

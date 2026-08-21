@@ -1,9 +1,8 @@
 import path from "node:path/posix";
+import { takeUtf8Bytes } from "../utf8";
 import type { DocumentAccessBinding } from "./audit";
 import type { ScopedDocumentQueryClient } from "./client";
 import type { FrozenConversationScope } from "./scope";
-
-export const LOAD_DOCUMENTS_TOOL_NAME = "LoadDocuments";
 
 /**
  * Reserved, conversation-scoped docs cache under the sandbox workspace root
@@ -170,7 +169,7 @@ export async function runLoadDocumentsTool(
 		}
 
 		// Only the document content counts against the budget; the marker does not.
-		remainingCallBytes -= utf8ByteLength(clipped.text);
+		remainingCallBytes -= Buffer.byteLength(clipped.text, "utf8");
 		loaded.push({
 			documentId,
 			title: fetched.title,
@@ -180,27 +179,6 @@ export async function runLoadDocumentsTool(
 	}
 
 	return toolText({ loaded, errors });
-}
-
-/** Take a whole-character prefix within `maxBytes` UTF-8 bytes (no split runes). */
-function takeUtf8Bytes(
-	text: string,
-	maxBytes: number,
-): { text: string; truncated: boolean } {
-	const encoder = new TextEncoder();
-	let bytes = 0;
-	let output = "";
-	for (const char of text) {
-		const nextBytes = encoder.encode(char).byteLength;
-		if (bytes + nextBytes > maxBytes) return { text: output, truncated: true };
-		bytes += nextBytes;
-		output += char;
-	}
-	return { text: output, truncated: false };
-}
-
-function utf8ByteLength(text: string): number {
-	return new TextEncoder().encode(text).byteLength;
 }
 
 function boundedMessage(error: unknown): string {

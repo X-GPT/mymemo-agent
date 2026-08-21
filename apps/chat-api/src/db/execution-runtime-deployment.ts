@@ -1,8 +1,8 @@
+import { createDatabase } from "@mymemo/agent-db/client";
 import {
-	createDatabase,
 	markFargateRuntimeAwareDeploymentReady,
 	prepareFargateDeploymentCompatibility,
-} from "@mymemo/agent-db";
+} from "@mymemo/agent-db/execution-runtime-deployment";
 import { resolveDatabaseUrl } from "@/config/env";
 
 const databaseUrl = resolveDatabaseUrl(

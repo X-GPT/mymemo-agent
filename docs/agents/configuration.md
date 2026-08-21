@@ -94,21 +94,12 @@ Optional:
 | Variable | Default | Purpose |
 | --- | ---: | --- |
 | `WORKER_MAX_CONCURRENT_CONVERSATIONS` | `2` | Conversation-level supervisor capacity |
-| `WORKER_SANDBOX_IDLE_MS` | `300000` | E2B idle window before pause |
-| `WORKER_FILE_GREP_MAX_RESULTS` | `100` | File grep result cap |
-| `WORKER_FILE_GLOB_MAX_RESULTS` | `500` | File glob result cap |
-| `WORKER_FILE_READ_MAX_BYTES` | `65536` | File read byte cap |
-| `WORKER_BASH_TIMEOUT_MS` | `120000` | Bash timeout ceiling |
-| `WORKER_BASH_MAX_OUTPUT_BYTES` | `65536` | Per-stream Bash output cap |
-| `WORKER_DOCUMENT_LIST_MAX_RESULTS` | `20` | Document inventory page cap before the hard backstop of 100 |
-| `WORKER_DOCUMENT_SEARCH_MAX_RESULTS` | `8` | Passage-search result cap before the query-client backstop |
-| `WORKER_DOCUMENT_LOAD_MAX_DOCUMENTS` | `10` | Searchable document ids per Load invocation |
-| `WORKER_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES` | `262144` | Materialized bytes per Searchable document |
-| `WORKER_DOCUMENT_LOAD_PER_CALL_MAX_BYTES` | `1048576` | Materialized bytes per load call |
 | `WORKER_HEARTBEAT_INTERVAL_MS` | `15000` | Ownership renewal and interruption-observation interval |
 | `WORKER_SHUTDOWN_TIMEOUT_MS` | `30000` | Grace for aborting active work, terminalizing it, and releasing the Conversation before forced exit |
-| `WORKER_CLEANUP_INTERVAL_MS` | `300000` | Advisory-lock-protected orphan and deleted-Conversation cleanup interval |
 | `PORT` | `8080` | `/health` port |
 | `LOG_LEVEL` | `info` | Log level |
 
 `LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS`, `DB_PASSWORD`, and `DB_SSL` have the same restrictions and behavior as chat-api.
+
+Sandbox, file, Bash, document, and artifact-cleanup safety bounds are fixed in
+the worker so deployments cannot silently weaken them.

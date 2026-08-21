@@ -6,11 +6,11 @@ import type {
 	SandboxFileRead,
 	SandboxFileWrite,
 } from "../file-tools/file-tools";
-import { takeUtf8Bytes } from "../file-tools/file-tools";
+import { takeUtf8Bytes } from "../utf8";
 import type { CommandSandbox } from "./command-client";
 
 /** The slice of an E2B `Sandbox` the file client drives: the files API plus
- * command execution (Grep/Glob shell out to `rg`/`python3` in the sandbox). */
+ * command execution (Grep/Glob shell out to `rg` in the sandbox). */
 export interface FileSandbox extends CommandSandbox {
 	files: {
 		read(path: string, opts: { format: "bytes" }): Promise<Uint8Array>;

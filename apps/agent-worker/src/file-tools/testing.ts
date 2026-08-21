@@ -6,7 +6,7 @@ import { runGlobFileTool, runGrepFileTool } from "./file-tools";
  * The file-tools integration contract, shared by every real
  * `SandboxFileClient` substrate (the local-command integration test and the
  * live E2B file-client test): seeded through the client itself, the
- * `rg`-backed Grep and `python3`-backed Glob return bounded, sorted,
+ * `rg`-backed Grep and Glob return bounded, sorted,
  * hidden-filtered results that are identical across substrates.
  */
 export async function runFileToolsContract(

@@ -1,6 +1,6 @@
 // Live E2B test (Task 9.4 acceptance): proves the production E2BFileClient
 // against a real sandbox provisioned from the custom template (Task 9.2),
-// which ships the `rg`/`python3` the Grep/Glob tools shell out to — the stock
+// which ships the `rg` the Grep/Glob tools shell out to — the stock
 // `base` template lacks rg. Skipped unless E2B_API_KEY is set; run locally
 // with `E2B_API_KEY=... bun test file-client.e2b` (WORKER_E2B_TEMPLATE
 // overrides the default template alias, as in template:verify).
@@ -68,7 +68,7 @@ describe.skipIf(!LIVE)("E2BFileClient against live E2B", () => {
 	});
 
 	it(
-		"passes the file-tools integration contract (rg-backed Grep, python3-backed Glob)",
+		"passes the file-tools integration contract (rg-backed Grep and Glob)",
 		async () => {
 			await runFileToolsContract({
 				client: provisioned.fileClient,

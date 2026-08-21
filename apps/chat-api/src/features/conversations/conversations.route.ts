@@ -1,3 +1,4 @@
+import { sValidator as zValidator } from "@hono/standard-validator";
 import {
 	classifyLiveStreamFailure,
 	type LiveStreamAttachResult,
@@ -6,7 +7,6 @@ import {
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
-import { validator as zValidator } from "hono-openapi";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import {

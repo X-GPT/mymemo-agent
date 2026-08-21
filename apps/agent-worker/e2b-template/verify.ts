@@ -1,5 +1,4 @@
-// Task 9.2 acceptance check: a sandbox created from the template runs
-// `rg --version` and `python3 --version` successfully.
+// Task 9.2 acceptance check for file search and artifact publication tools.
 //
 //   E2B_API_KEY=... bun run template:verify [templateNameOrId]
 //
@@ -18,7 +17,7 @@ if (!process.env.E2B_API_KEY) {
 const template =
 	process.argv[2] ?? process.env.WORKER_E2B_TEMPLATE ?? TEMPLATE_NAME;
 
-// The toolchain the agent's Grep/Glob tools shell out to at run time.
+// Runtime dependencies for file search and descriptor-pinned artifact reads.
 const checks = ["rg --version", "python3 --version"];
 
 console.log(`creating sandbox from template ${template} ...`);

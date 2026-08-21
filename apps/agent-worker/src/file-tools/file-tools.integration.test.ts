@@ -2,6 +2,7 @@ import { afterEach, describe, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { takeUtf8Bytes } from "../utf8";
 import type {
 	FileToolLimits,
 	SandboxFileClient,
@@ -37,7 +38,7 @@ class LocalCommandSandboxFileClient implements SandboxFileClient {
 				new Response(proc.stdout).text(),
 				new Response(proc.stderr).text(),
 			]);
-			const bounded = boundOutput(stdout, input.maxOutputBytes);
+			const bounded = takeUtf8Bytes(stdout, input.maxOutputBytes);
 			return {
 				exitCode,
 				stdout: bounded.text,
@@ -67,24 +68,6 @@ afterEach(async () => {
 		workspaceRoot = undefined;
 	}
 });
-
-function boundOutput(
-	text: string,
-	maxBytes: number,
-): { text: string; truncated: boolean } {
-	const encoder = new TextEncoder();
-	let bytes = 0;
-	let output = "";
-	for (const char of text) {
-		const nextBytes = encoder.encode(char).byteLength;
-		if (bytes + nextBytes > maxBytes) {
-			return { text: output, truncated: true };
-		}
-		bytes += nextBytes;
-		output += char;
-	}
-	return { text: output, truncated: false };
-}
 
 describe("command-backed file tools", () => {
 	it("runs grep and glob against the real command path with bounded sorted results", async () => {
