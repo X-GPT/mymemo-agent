@@ -436,8 +436,41 @@ describe("production AgentCore dispatch infrastructure", () => {
 			join(root, "docs", "runbooks", "agentcore-rollout.md"),
 			"utf8",
 		);
+		const rollForwardAdrPath = join(
+			root,
+			"docs",
+			"adr",
+			"0029-recover-production-releases-by-rolling-forward.md",
+		);
+		const rollForwardAdr = readFileSync(rollForwardAdrPath, "utf8");
+		const runtimeAdr = readFileSync(
+			join(
+				root,
+				"docs",
+				"adr",
+				"0025-select-the-execution-runtime-at-conversation-creation.md",
+			),
+			"utf8",
+		);
+		const publisherAdr = readFileSync(
+			join(
+				root,
+				"docs",
+				"adr",
+				"0027-deploy-the-agentcore-dispatch-publisher-as-a-dedicated-service.md",
+			),
+			"utf8",
+		);
+		const rollForwardAdrLink =
+			"[ADR-0029](./0029-recover-production-releases-by-rolling-forward.md)";
 
 		expect(runbook).toContain("Production releases are roll-forward only");
+		expect(runbook).toContain(
+			"[ADR-0029](../adr/0029-recover-production-releases-by-rolling-forward.md)",
+		);
+		expect(rollForwardAdr).toContain("Amends ADR-0025 and ADR-0027");
+		expect(runtimeAdr).toContain(rollForwardAdrLink);
+		expect(publisherAdr).toContain(rollForwardAdrLink);
 		expect(runbook).toContain("## Containment and corrected release");
 		expect(runbook).not.toContain("## Rollback");
 		expect(runbook.indexOf("SSM Dispatch control to `disabled`")).toBeLessThan(

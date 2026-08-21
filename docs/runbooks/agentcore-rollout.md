@@ -9,13 +9,15 @@ the advisory-locked publication contract in
 and the dedicated-service boundary in
 [ADR-0027](../adr/0027-deploy-the-agentcore-dispatch-publisher-as-a-dedicated-service.md).
 The unified production release state is defined by
-[ADR-0028](../adr/0028-unify-production-terraform-state.md).
+[ADR-0028](../adr/0028-unify-production-terraform-state.md), and the production
+recovery policy is defined by
+[ADR-0029](../adr/0029-recover-production-releases-by-rolling-forward.md).
 
 This runbook treats existing Conversations as disposable only during the first
 cutover. Production releases are roll-forward only: contain an incident, ship a
 reviewed corrected release, verify it, and restore controls deliberately. This
-operator policy replaces ADR-0025's binary-rollback procedure; no production
-binary rollback target is maintained by the release workflow.
+implements ADR-0029's amendments to ADR-0025 and ADR-0027; no production binary
+rollback target is maintained by the release workflow.
 
 Use the `mymemo` AWS profile in `us-west-2`. Run repository deployment commands
 only from a clean `main` checkout that matches `origin/main`. Use the
