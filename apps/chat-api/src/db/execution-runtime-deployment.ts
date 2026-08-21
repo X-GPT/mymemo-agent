@@ -1,7 +1,7 @@
 import {
-	assertFargateRollbackAllowed,
 	createDatabase,
 	markFargateRuntimeAwareDeploymentReady,
+	prepareFargateDeploymentCompatibility,
 } from "@mymemo/agent-db";
 import { resolveDatabaseUrl } from "@/config/env";
 
@@ -19,17 +19,17 @@ if (!databaseUrl) {
 const db = createDatabase(databaseUrl);
 try {
 	switch (Bun.env.EXECUTION_RUNTIME_DEPLOYMENT_ACTION) {
-		case "prepare-fargate-deployment": {
+		case "prepare-fargate-deployment-compatibility": {
 			const value = Bun.env.CANDIDATE_FARGATE_RUNTIME_AWARE;
 			if (value !== "true" && value !== "false") {
 				throw new Error(
 					"CANDIDATE_FARGATE_RUNTIME_AWARE must be exactly true or false",
 				);
 			}
-			await assertFargateRollbackAllowed(db, {
+			await prepareFargateDeploymentCompatibility(db, {
 				candidateRuntimeAware: value === "true",
 			});
-			console.log("Fargate execution-runtime deployment preflight passed");
+			console.log("Fargate execution-runtime compatibility preflight passed");
 			break;
 		}
 		case "mark-fargate-runtime-aware":
@@ -38,7 +38,7 @@ try {
 			break;
 		default:
 			throw new Error(
-				"EXECUTION_RUNTIME_DEPLOYMENT_ACTION must be prepare-fargate-deployment or mark-fargate-runtime-aware",
+				"EXECUTION_RUNTIME_DEPLOYMENT_ACTION must be prepare-fargate-deployment-compatibility or mark-fargate-runtime-aware",
 			);
 	}
 } finally {

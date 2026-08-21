@@ -32,12 +32,7 @@ verify_agentcore_consumer_runtime_authority "${region}" "${tf_output}"
 verify_agentcore_current_secrets "${region}" "${tf_output}"
 verify_agentcore_alarms "${region}" "${tf_output}"
 
-rollback_digest="${ROLLBACK_RUNTIME_IMAGE_DIGEST:-}"
-if [[ -n "${rollback_digest}" && "${rollback_digest}" != "${expected_digest}" ]]; then
-  agentcore_aws ecr describe-images --region "${region}" --repository-name mymemo/agentcore-runtime --image-ids imageDigest="${rollback_digest}" --query 'imageDetails[0].imageDigest' --output text | grep -Fxq "${rollback_digest}"
-fi
-
 dispatch_enabled=false
 [[ "${expected_dispatch_value}" == "enabled" ]] && dispatch_enabled=true
 
-jq -n --arg runtimeArn "${runtime_arn}" --arg runtimeVersion "${runtime_version}" --arg endpointArn "$(jq -r '.agentRuntimeEndpointArn' <<<"${endpoint}")" --arg imageDigest "${expected_digest}" --arg rollbackDigest "${rollback_digest}" --arg dispatchValue "${expected_dispatch_value}" --argjson dispatchEnabled "${dispatch_enabled}" --argjson queueDepth "${queue_depth}" --argjson queueInFlight "${queue_in_flight}" --argjson queueDelayed "${queue_delayed}" --argjson dlqDepth "${dlq_depth}" '{status:"ready", runtimeArn:$runtimeArn, runtimeVersion:$runtimeVersion, endpointName:"DEFAULT", endpointArn:$endpointArn, imageDigest:$imageDigest, rollbackDigest:($rollbackDigest | select(length > 0)), dispatchValue:$dispatchValue, dispatchEnabled:$dispatchEnabled, consumerEnabled:true, queueDepth:$queueDepth, queueInFlight:$queueInFlight, queueDelayed:$queueDelayed, dlqDepth:$dlqDepth}'
+jq -n --arg runtimeArn "${runtime_arn}" --arg runtimeVersion "${runtime_version}" --arg endpointArn "$(jq -r '.agentRuntimeEndpointArn' <<<"${endpoint}")" --arg imageDigest "${expected_digest}" --arg dispatchValue "${expected_dispatch_value}" --argjson dispatchEnabled "${dispatch_enabled}" --argjson queueDepth "${queue_depth}" --argjson queueInFlight "${queue_in_flight}" --argjson queueDelayed "${queue_delayed}" --argjson dlqDepth "${dlq_depth}" '{status:"ready", runtimeArn:$runtimeArn, runtimeVersion:$runtimeVersion, endpointName:"DEFAULT", endpointArn:$endpointArn, imageDigest:$imageDigest, dispatchValue:$dispatchValue, dispatchEnabled:$dispatchEnabled, consumerEnabled:true, queueDepth:$queueDepth, queueInFlight:$queueInFlight, queueDelayed:$queueDelayed, dlqDepth:$dlqDepth}'

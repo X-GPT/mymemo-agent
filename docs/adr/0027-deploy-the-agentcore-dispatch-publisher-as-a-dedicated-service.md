@@ -2,6 +2,10 @@
 
 Status: accepted (2026-08-17). Amends ADR-0025 and supersedes ADR-0026's
 initial compute-home consequence.
+Amended (2026-08-20) by
+[ADR-0029](./0029-recover-production-releases-by-rolling-forward.md), which
+retains independent publisher control but supersedes independent binary
+rollback as a production recovery procedure.
 
 AgentCore Dispatch publication runs in one dedicated long-lived ECS service,
 not in the Conversation-serving agent-worker process. The service has its own
@@ -23,8 +27,9 @@ as ADR-0023 and ADR-0025 require.
 This is a process, dependency, and AWS-capability boundary, not a complete
 trust or release boundary. The publisher initially retains the shared writable
 agent database credential, unrestricted outbound egress, and the coordinated
-release train. Its image and task definition are independently deployable and
-rollbackable, but ordinary releases remain coordinated so schema, envelope,
+release train. Its image and task definition are independently deployable, but
+ADR-0029 supersedes the earlier independently rollbackable consequence:
+production binary corrections remain coordinated so schema, envelope,
 publisher, and consumer compatibility move together.
 
 On termination the publisher stops beginning ticks and batches, bounds SSM and

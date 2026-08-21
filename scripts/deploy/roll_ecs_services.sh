@@ -100,7 +100,7 @@ candidate_image="$(
 candidate_runtime_aware="$(read_agent_worker_runtime_awareness "$candidate_image")"
 
 "$script_dir/run_execution_runtime_deployment_assertion.sh" \
-  prepare-fargate-deployment \
+  prepare-fargate-deployment-compatibility \
   "$candidate_runtime_aware"
 
 aws ecs update-service \

@@ -696,11 +696,11 @@ describe("agent deployment config", () => {
 		expect(rolloutScript).toContain(
 			"run_execution_runtime_deployment_assertion.sh",
 		);
-		expect(rolloutScript).toContain("prepare-fargate-deployment");
+		expect(rolloutScript).toContain("prepare-fargate-deployment-compatibility");
 		expect(rolloutScript).toContain("mark-fargate-runtime-aware");
-		expect(rolloutScript.indexOf("prepare-fargate-deployment")).toBeLessThan(
-			rolloutScript.indexOf("aws ecs update-service"),
-		);
+		expect(
+			rolloutScript.indexOf("prepare-fargate-deployment-compatibility"),
+		).toBeLessThan(rolloutScript.indexOf("aws ecs update-service"));
 		expect(rolloutScript.indexOf("mark-fargate-runtime-aware")).toBeGreaterThan(
 			rolloutScript.indexOf("for task_definition in"),
 		);
@@ -885,7 +885,6 @@ describe("agent deployment config", () => {
 			"bedrock-agentcore:CreateAgentRuntime",
 			"bedrock-agentcore:UpdateAgentRuntime",
 			"bedrock-agentcore:GetAgentRuntimeEndpoint",
-			"ecr:DescribeImageScanFindings",
 			"lambda:UpdateFunctionCode",
 			"lambda:CreateEventSourceMapping",
 			"sqs:SetQueueAttributes",
@@ -895,6 +894,8 @@ describe("agent deployment config", () => {
 		]) {
 			expect(combined).toContain(`"${action}"`);
 		}
+		expect(combined).not.toContain('"bedrock-agentcore:ListAgentRuntimes"');
+		expect(combined).not.toContain('"ecr:DescribeImageScanFindings"');
 		for (const action of [
 			"s3:CreateBucket",
 			"s3:GetAccelerateConfiguration",

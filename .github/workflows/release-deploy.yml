@@ -201,10 +201,6 @@ jobs:
             echo "ECR returned an invalid Runtime image digest." >&2
             exit 1
           fi
-          aws ecr wait image-scan-complete \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-id imageDigest="${runtime_image_digest}"
           printf 'TF_VAR_runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_ENV}"
           printf 'runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_OUTPUT}"
 
@@ -303,7 +299,6 @@ jobs:
         run: |
           record_dir="${RUNNER_TEMP}/agentcore-deployment"
           mkdir -p "${record_dir}"
-          terraform -chdir=infra/terraform init
 
           caller_account="$(aws sts get-caller-identity --query Account --output text)"
           if [[ "${caller_account}" != "${AWS_ACCOUNT_ID}" ]]; then
@@ -325,13 +320,7 @@ jobs:
             exit 1
           fi
 
-          previous_digest="$(terraform -chdir=infra/terraform output -raw runtime_image_digest)"
-          if [[ ! "${previous_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Terraform state contains an invalid Runtime rollback digest." >&2
-            exit 1
-          fi
           printf 'EXPECTED_DISPATCH_VALUE=%s\n' "${dispatch_value}" >> "${GITHUB_ENV}"
-          printf 'ROLLBACK_RUNTIME_IMAGE_DIGEST=%s\n' "${previous_digest}" >> "${GITHUB_ENV}"
 
       - name: Terraform bootstrap plan
         if: env.FIRST_DEPLOY == 'true'
@@ -377,10 +366,9 @@ jobs:
           jq -n \
             --arg commit "${DEPLOY_SHA}" \
             --arg runtimeImageDigest "${DEPLOYED_RUNTIME_IMAGE_DIGEST}" \
-            --arg rollbackImageDigest "${ROLLBACK_RUNTIME_IMAGE_DIGEST}" \
             --arg dispatchValue "${EXPECTED_DISPATCH_VALUE}" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,rollbackImageDigest:$rollbackImageDigest,dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
+            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
             > "${record_dir}/deployment-record.json"
 
       - name: Roll ECS services

@@ -8,8 +8,8 @@ import {
 } from "bun:test";
 import {
 	assertAgentCoreCreationReady,
-	assertFargateRollbackAllowed,
 	markFargateRuntimeAwareDeploymentReady,
+	prepareFargateDeploymentCompatibility,
 } from "./execution-runtime-deployment";
 import { conversations, executionRuntimeDeployments } from "./schema";
 import { createTestDatabase, type TestDb } from "./testing";
@@ -45,11 +45,13 @@ describe("AgentCore creation deployment assertion", () => {
 	});
 });
 
-describe("Fargate rollback assertion", () => {
-	it("permits a runtime-unaware rollback only when no AgentCore Conversation remains", async () => {
+describe("Fargate deployment compatibility", () => {
+	it("clears readiness for a runtime-unaware candidate only when no AgentCore Conversation exists", async () => {
 		await markFargateRuntimeAwareDeploymentReady(tdb.db);
 		await expect(
-			assertFargateRollbackAllowed(tdb.db, { candidateRuntimeAware: false }),
+			prepareFargateDeploymentCompatibility(tdb.db, {
+				candidateRuntimeAware: false,
+			}),
 		).resolves.toBeUndefined();
 		await expect(
 			tdb.db.transaction(assertAgentCoreCreationReady),
@@ -66,12 +68,16 @@ describe("Fargate rollback assertion", () => {
 		});
 
 		await expect(
-			assertFargateRollbackAllowed(tdb.db, { candidateRuntimeAware: false }),
+			prepareFargateDeploymentCompatibility(tdb.db, {
+				candidateRuntimeAware: false,
+			}),
 		).rejects.toThrow(
-			"runtime-unaware Fargate rollback refused while AgentCore Conversations exist",
+			"runtime-unaware Fargate deployment is incompatible while AgentCore Conversations exist",
 		);
 		await expect(
-			assertFargateRollbackAllowed(tdb.db, { candidateRuntimeAware: true }),
+			prepareFargateDeploymentCompatibility(tdb.db, {
+				candidateRuntimeAware: true,
+			}),
 		).resolves.toBeUndefined();
 		await expect(
 			tdb.db.transaction(assertAgentCoreCreationReady),

@@ -369,6 +369,17 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(workflow).not.toContain("aws ssm put-parameter");
 		expect(workflow).not.toContain("must be disabled before deployment");
 		expect(workflow).toContain("agentcore-runtime-image-check.sh");
+		expect(workflow).not.toContain("ecr wait image-scan-complete");
+		expect(workflow).not.toContain(
+			"terraform -chdir=infra/terraform output -raw runtime_image_digest",
+		);
+		for (const rollbackTarget of [
+			"resolve_agentcore_runtime_rollback_digest",
+			"ROLLBACK_RUNTIME_IMAGE_DIGEST",
+			"rollbackImageDigest",
+		]) {
+			expect(workflow).not.toContain(rollbackTarget);
+		}
 		expect(workflow).toContain("build_agentcore_consumer.sh");
 		expect(workflow.match(/build_agentcore_consumer\.sh/g)).toHaveLength(1);
 		expect(workflow).toContain(
@@ -408,6 +419,7 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(inspection).toContain("maxReceiveCount == 5");
 		expect(inspection).toContain("verify_agentcore_dispatch_wiring");
 		expect(inspection).toContain("expected_dispatch_value");
+		expect(inspection).not.toContain("rollbackDigest");
 		expect(inspection).not.toContain(
 			'.Attributes.ApproximateNumberOfMessages == "0"',
 		);
@@ -416,6 +428,72 @@ describe("production AgentCore dispatch infrastructure", () => {
 		expect(checks).toContain("(.ReservedConcurrentExecutions // null) == null");
 		expect(consumerBuild).toMatch(
 			/cp "\$\{ca_bundle\}" "\$\{build_dir\}\/dispatch\/rds-global-bundle\.pem"/,
+		);
+	});
+
+	it("documents roll-forward incident containment", () => {
+		const runbook = readFileSync(
+			join(root, "docs", "runbooks", "agentcore-rollout.md"),
+			"utf8",
+		);
+		const rollForwardAdrPath = join(
+			root,
+			"docs",
+			"adr",
+			"0029-recover-production-releases-by-rolling-forward.md",
+		);
+		const rollForwardAdr = readFileSync(rollForwardAdrPath, "utf8");
+		const runtimeAdr = readFileSync(
+			join(
+				root,
+				"docs",
+				"adr",
+				"0025-select-the-execution-runtime-at-conversation-creation.md",
+			),
+			"utf8",
+		);
+		const publisherAdr = readFileSync(
+			join(
+				root,
+				"docs",
+				"adr",
+				"0027-deploy-the-agentcore-dispatch-publisher-as-a-dedicated-service.md",
+			),
+			"utf8",
+		);
+		const rollForwardAdrLink =
+			"[ADR-0029](./0029-recover-production-releases-by-rolling-forward.md)";
+
+		expect(runbook).toContain("production releases are roll-forward only");
+		expect(runbook).toContain(
+			"intentionally overrides ADR-0025's preservation-oriented cutover preconditions",
+		);
+		expect(runbook).toContain(
+			"[ADR-0029](../adr/0029-recover-production-releases-by-rolling-forward.md)",
+		);
+		expect(rollForwardAdr).toContain("Amends ADR-0025 and ADR-0027");
+		expect(runtimeAdr).toContain(rollForwardAdrLink);
+		expect(publisherAdr).toContain(rollForwardAdrLink);
+		expect(runbook).toContain("## Containment and corrected release");
+		expect(runbook).not.toContain("## Rollback");
+		const incidentLadder = runbook.slice(
+			runbook.indexOf("## Incident ladder"),
+			runbook.indexOf("## Containment and corrected release"),
+		);
+		expect(incidentLadder).toContain(
+			"[containment and corrected release](#containment-and-corrected-release)",
+		);
+		expect(incidentLadder).not.toContain(
+			"Set `/mymemo/agentcore-dispatch/prod/enabled` to `disabled`",
+		);
+		expect(incidentLadder).not.toContain(
+			"Keep the runtime-aware agent-worker running throughout containment",
+		);
+		expect(runbook.indexOf("SSM Dispatch control to `disabled`")).toBeLessThan(
+			runbook.indexOf("runtime gate OFF"),
+		);
+		expect(runbook.indexOf("runtime gate OFF")).toBeLessThan(
+			runbook.indexOf("Deploy the corrected release"),
 		);
 	});
 

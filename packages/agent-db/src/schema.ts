@@ -185,8 +185,9 @@ export const conversations = pgTable(
 /**
  * Durable rollout fence for the later operator-only AgentCore creation path.
  * Absence is fail-closed. The Fargate rollout marks this row ready only after
- * every running task uses the runtime-aware task definition; preparing a safe
- * runtime-unaware rollback clears it before the service can be rolled back.
+ * every running task uses the runtime-aware task definition. A runtime-unaware
+ * deployment preflight clears it only when no AgentCore Conversation depends
+ * on runtime-aware Fargate behavior.
  */
 export const executionRuntimeDeployments = pgTable(
 	"execution_runtime_deployments",

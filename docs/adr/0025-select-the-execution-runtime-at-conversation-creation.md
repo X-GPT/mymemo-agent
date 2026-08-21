@@ -3,6 +3,10 @@
 Status: accepted (2026-08-16). Supersedes ADR-0019, ADR-0021, and ADR-0024.
 Amended (2026-08-17) by
 [ADR-0027](./0027-deploy-the-agentcore-dispatch-publisher-as-a-dedicated-service.md).
+Amended (2026-08-20) by
+[ADR-0029](./0029-recover-production-releases-by-rolling-forward.md), which
+supersedes the binary-rollback procedure while retaining the deployment fence
+as defense in depth.
 
 Every Conversation carries an immutable execution runtime — `fargate` or
 `agentcore` — selected exactly once at creation by a server-side Statsig gate
@@ -98,13 +102,14 @@ construction.
   instead of assuming them: zero `agentcore_canary` Conversations, zero
   Campaign rows, and an empty dispatch queue before the migration runs. The
   deployment-readiness fence survives, renamed: a runtime-unaware Fargate
-  binary cannot be restored while any `agentcore` Conversation exists, and the
-  rollback runbook — not per-request chat-api code — consults it.
+  binary cannot be installed while any `agentcore` Conversation exists.
+  ADR-0029 retains that fence as defense in depth but supersedes the destructive
+  runtime-unaware rollback procedure that consulted it.
 - Deploy order after the schema lands: chat-api with the gate off (everything
   stamps `fargate`), the de-canaried dispatch and Runtime deployed idle, the
   SSM parameter enabled, the operator smoke through a gate-targeted synthetic
-  member, then staged gate rollout. Rollback mirrors it: parameter off, gate
-  off, then binaries.
+  member, then staged gate rollout. ADR-0029 amends incident recovery to disable
+  the parameter and gate before deploying a corrected coordinated release.
 - The AG-UI-on-invocation-stream exploration (#462–#467) is out of scope: the
   live transport for `agentcore` Conversations remains the Redis Live Stream
   relay, identical to Fargate.

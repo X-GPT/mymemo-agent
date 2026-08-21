@@ -83,7 +83,6 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "ecr:BatchGetImage",
       "ecr:CompleteLayerUpload",
       "ecr:CreateRepository",
-      "ecr:DescribeImageScanFindings",
       "ecr:DescribeImages",
       "ecr:DescribeRepositories",
       "ecr:GetAuthorizationToken",
