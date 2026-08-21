@@ -4,7 +4,6 @@ import {
 } from "agent-worker/config";
 import { type Env, requireEnv } from "agentcore-dispatch-consumer/config-utils";
 import {
-	exactSecretArn,
 	resolveVerifiedAgentDatabaseUrl,
 	verifiedDatabaseUrl,
 } from "agentcore-dispatch-consumer/secret-config";
@@ -38,10 +37,6 @@ export interface RuntimeBootstrapConfig {
 	heartbeatIntervalMs: number;
 	shutdownTimeoutMs: typeof RUNTIME_SHUTDOWN_TIMEOUT_MS;
 	logLevel: string;
-}
-
-function secretArn(env: Env, name: string): string {
-	return exactSecretArn(requireEnv(env, name), name);
 }
 
 function positiveInt(
@@ -80,11 +75,11 @@ export function loadRuntimeBootstrapConfig(env: Env): RuntimeBootstrapConfig {
 			"AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME",
 		),
 		secretArns: {
-			agentDatabasePassword: secretArn(env, "DB_PASSWORD_SECRET_ARN"),
-			kbDatabaseUrl: secretArn(env, "KB_DATABASE_URL_SECRET_ARN"),
-			openrouterApiKey: secretArn(env, "OPENROUTER_API_KEY_SECRET_ARN"),
-			e2bApiKey: secretArn(env, "E2B_API_KEY_SECRET_ARN"),
-			redisUrl: secretArn(env, "REDIS_URL_SECRET_ARN"),
+			agentDatabasePassword: requireEnv(env, "DB_PASSWORD_SECRET_ARN"),
+			kbDatabaseUrl: requireEnv(env, "KB_DATABASE_URL_SECRET_ARN"),
+			openrouterApiKey: requireEnv(env, "OPENROUTER_API_KEY_SECRET_ARN"),
+			e2bApiKey: requireEnv(env, "E2B_API_KEY_SECRET_ARN"),
+			redisUrl: requireEnv(env, "REDIS_URL_SECRET_ARN"),
 		},
 		agentDatabaseUrl: requireEnv(env, "AGENT_DATABASE_URL"),
 		openrouterBaseUrl: requireEnv(env, "OPENROUTER_BASE_URL"),

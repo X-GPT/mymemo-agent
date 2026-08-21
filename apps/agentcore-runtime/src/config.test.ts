@@ -12,7 +12,7 @@ function bootstrapEnv(): Record<string, string | undefined> {
 		AGENT_DATABASE_URL:
 			"postgresql://mymemo_agent@agent.example:5432/mymemo_agent",
 		DB_PASSWORD_SECRET_ARN:
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-password-AbCdEf",
+			"arn:aws:secretsmanager:us-west-2:123456789012:secret:rds!db-example-AbCdEf",
 		KB_DATABASE_URL_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:kb-db-AbCdEf",
 		OPENROUTER_API_KEY_SECRET_ARN:
@@ -31,7 +31,7 @@ function bootstrapEnv(): Record<string, string | undefined> {
 }
 
 describe("AgentCore Runtime configuration", () => {
-	it("accepts only exact secret ARNs and non-secret boot values", () => {
+	it("requires secret references and non-secret boot values", () => {
 		const config = loadRuntimeBootstrapConfig(bootstrapEnv());
 
 		expect(config.port).toBe(8080);
@@ -56,20 +56,11 @@ describe("AgentCore Runtime configuration", () => {
 		}
 	});
 
-	it("distinguishes a missing secret ARN from a malformed one", () => {
+	it("rejects a missing secret reference", () => {
 		const env = bootstrapEnv();
 		delete env.REDIS_URL_SECRET_ARN;
 		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
 			"REDIS_URL_SECRET_ARN is required",
-		);
-	});
-
-	it("rejects secret ARNs outside the commercial AWS partition", () => {
-		const env = bootstrapEnv();
-		env.DB_PASSWORD_SECRET_ARN =
-			"arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:agent-db-AbCdEf";
-		expect(() => loadRuntimeBootstrapConfig(env)).toThrow(
-			"DB_PASSWORD_SECRET_ARN must be an exact Secrets Manager ARN",
 		);
 	});
 

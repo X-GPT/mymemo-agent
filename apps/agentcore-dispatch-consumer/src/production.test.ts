@@ -30,7 +30,7 @@ describe("AgentCore dispatch production configuration", () => {
 
 	it("resolves the Lambda database URL from the worker URL and current RDS password secret", async () => {
 		const passwordSecretArn =
-			"arn:aws:secretsmanager:us-west-2:123456789012:secret:agent-db-password-AbCdEf";
+			"arn:aws:secretsmanager:us-west-2:123456789012:secret:rds!db-example-AbCdEf";
 		const reads: string[] = [];
 		const config = await resolveAgentCoreDispatchConfigFromSecretArns(
 			{
