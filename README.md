@@ -21,7 +21,7 @@ cd apps/chat-api
 bun run dev
 ```
 
-See [apps/chat-api/README.md](./apps/chat-api/README.md) for chat-api documentation.
+See [the chat API guide](./docs/agents/chat-api.md) for chat-api documentation.
 
 ## Repository Structure
 
