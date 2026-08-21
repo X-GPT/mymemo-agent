@@ -967,12 +967,8 @@ Plan: 1 to add, 1 to change, 1 to destroy.
 			expect(combined).toContain(`"${action}"`);
 		}
 		const mappingManagement = bootstrapIamConfig.slice(
-			bootstrapIamConfig.indexOf(
-				'sid = "AgentCoreConsumerMappingManagement"',
-			),
-			bootstrapIamConfig.indexOf(
-				'sid = "AgentCoreDispatchQueueManagement"',
-			),
+			bootstrapIamConfig.indexOf('sid = "AgentCoreConsumerMappingManagement"'),
+			bootstrapIamConfig.indexOf('sid = "AgentCoreDispatchQueueManagement"'),
 		);
 		for (const action of [
 			"lambda:ListTags",
