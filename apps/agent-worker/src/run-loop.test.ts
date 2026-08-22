@@ -3,6 +3,7 @@ import { EventType } from "@ag-ui/core";
 import { claimConversationTx } from "@mymemo/agent-db/conversation-ownership";
 import {
 	appendRunEventTx,
+	reclaimConversationTx,
 	requestRunInterruptionTx,
 	startClaimedRunTx,
 	transitionRunTerminalTx,
@@ -31,6 +32,7 @@ import {
 } from "@mymemo/live-text";
 import { eq, inArray, sql } from "drizzle-orm";
 import type { WorkerLogger } from "./logger";
+import { MaintenanceRunner } from "./maintenance-runner";
 import { RunLoop } from "./run-loop";
 import type { RunProcessor } from "./run-serving";
 import { Worker } from "./worker";
@@ -90,6 +92,23 @@ function buildLoop(
 		liveStreamTelemetry,
 		heartbeatIntervalMs: 15_000,
 		logger: silentLogger,
+	});
+}
+
+function buildMaintenanceRunner(liveStreamTelemetry?: LiveStreamTelemetry) {
+	return new MaintenanceRunner({
+		db: tdb.db,
+		pool: {
+			async connect() {
+				throw new Error("cleanup is not used by RunLoop tests");
+			},
+		},
+		sandboxJanitor: { async killSandbox() {} },
+		artifactJanitor: { async deleteObject() {} },
+		workerId: "maintenance-1",
+		cleanupIntervalMs: 60_000,
+		logger: silentLogger,
+		liveStreamTelemetry,
 	});
 }
 
@@ -163,8 +182,8 @@ async function ageRunsPastQueueTimeout(...runIds: string[]) {
 	await tdb.db
 		.update(runs)
 		.set({
-			createdAt: sql`now() - interval '2 minutes'`,
-			updatedAt: sql`now() - interval '2 minutes'`,
+			createdAt: sql`now() - interval '11 minutes'`,
+			updatedAt: sql`now() - interval '11 minutes'`,
 		})
 		.where(inArray(runs.runId, runIds));
 }
@@ -469,7 +488,8 @@ describe("RunLoop — conversation drain", () => {
 		await startDrain(loop);
 
 		await lapseOwnershipLease("conv-1"); // no successor yet
-		await loop.tick(); // renewal matches zero rows → halt
+		await reclaimConversationTx(tdb.db);
+		await loop.tick(); // renewal observes the maintenance-owned Reclamation
 		gate.resolve();
 		await worker.drain();
 
@@ -1282,7 +1302,7 @@ describe("RunLoop — agent session pointer", () => {
 		expect(await readEventTypes("run-1")).toEqual([]);
 
 		// The Run is left intact for Reclamation, which records stale_worker.
-		await loop.tick();
+		await reclaimConversationTx(tdb.db);
 		expect((await readRun("run-1"))?.status).toBe("error");
 		expect(await readEventTypes("run-1")).toEqual(["run_error"]);
 	});
@@ -1479,15 +1499,13 @@ describe("RunLoop — shutdown", () => {
 	});
 });
 
-describe("RunLoop — Conversation Reclamation", () => {
+describe("MaintenanceRunner — Conversation Reclamation", () => {
 	it("reclaims every lapsed Conversation in one tick", async () => {
 		await claimRun("run-a", "conv-a", "vanished-a");
 		await claimRun("run-b", "conv-b", "vanished-b");
 		await lapseOwnershipLease("conv-a");
 		await lapseOwnershipLease("conv-b");
-		const loop = buildLoop(buildWorker(1), appendMessageProcessor);
-
-		expect(await loop.tick()).toBe(0);
+		await buildMaintenanceRunner().runLivenessOnce();
 		expect((await readRun("run-a"))?.status).toBe("error");
 		expect((await readRun("run-b"))?.status).toBe("error");
 	});
@@ -1500,6 +1518,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor);
 
+		await buildMaintenanceRunner().runLivenessOnce();
 		expect(await loop.tick()).toBe(1);
 		await worker.drain();
 
@@ -1516,15 +1535,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 				metrics.push({ operation, result, ...options });
 			},
 		};
-		const worker = buildWorker(1);
-		const loop = buildLoop(
-			worker,
-			appendMessageProcessor,
-			undefined,
-			telemetry,
-		);
-
-		await loop.tick();
+		await buildMaintenanceRunner(telemetry).runLivenessOnce();
 
 		expect(metrics).toEqual([
 			{
@@ -1554,15 +1565,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 				metrics.push({ operation, result, ...options });
 			},
 		};
-		const worker = buildWorker(1);
-		const loop = buildLoop(
-			worker,
-			appendMessageProcessor,
-			undefined,
-			telemetry,
-		);
-
-		await loop.tick();
+		await buildMaintenanceRunner(telemetry).runLivenessOnce();
 
 		expect(metrics).toEqual([
 			{
@@ -1577,13 +1580,8 @@ describe("RunLoop — Conversation Reclamation", () => {
 	it("terminalizes a running Run after its Ownership lease lapses", async () => {
 		await claimRun("run-stale", "conv-1", "stale-worker");
 		await lapseOwnershipLease("conv-1");
-		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendMessageProcessor);
+		await buildMaintenanceRunner().runLivenessOnce();
 
-		const claimed = await loop.tick();
-		await worker.drain();
-
-		expect(claimed).toBe(0);
 		expect((await readRun("run-stale"))?.status).toBe("error");
 		expect(await readEventTypes("run-stale")).toEqual(["run_error"]);
 	});
@@ -1596,11 +1594,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 			conversationId: "conv-1",
 		});
 		await lapseOwnershipLease("conv-1");
-		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendMessageProcessor);
-
-		await loop.tick();
-		await worker.drain();
+		await buildMaintenanceRunner().runLivenessOnce();
 
 		expect((await readRun("run-stale"))?.status).toBe("interrupted");
 		expect(await readEventTypes("run-stale")).toEqual(["run_interrupted"]);
@@ -1609,10 +1603,7 @@ describe("RunLoop — Conversation Reclamation", () => {
 	it("rejects the former owner's appends after Reclamation terminalizes the Run", async () => {
 		const lapsedOwner = await claimRun("run-stale", "conv-1", "stale-worker");
 		await lapseOwnershipLease("conv-1");
-		const worker = buildWorker(1);
-		const loop = buildLoop(worker, appendMessageProcessor);
-
-		await loop.tick();
+		await buildMaintenanceRunner().runLivenessOnce();
 
 		expect(
 			await appendRunEventTx(tdb.db, {
@@ -1644,7 +1635,8 @@ describe("RunLoop — Conversation Reclamation", () => {
 		await loop.tick(); // claim + dispatch (processor blocks)
 		await lapseOwnershipLease("conv-1");
 
-		await loop.tick(); // reclaims the Conversation, then observes lost ownership
+		await buildMaintenanceRunner().runLivenessOnce();
+		await loop.tick(); // observes the maintenance-owned Reclamation
 		gate.resolve();
 		await worker.drain();
 
@@ -1658,13 +1650,14 @@ describe("RunLoop — Conversation Reclamation", () => {
 	});
 });
 
-describe("RunLoop — unowned queue timeout", () => {
+describe("MaintenanceRunner — unowned queue timeout", () => {
 	it("expires an old queued Run without claiming its Conversation", async () => {
 		await queueRun("run-old", "conv-1");
 		await ageRunsPastQueueTimeout("run-old");
 		const worker = buildWorker(1);
 		const loop = buildLoop(worker, appendMessageProcessor);
 
+		await buildMaintenanceRunner().runLivenessOnce();
 		const claimed = await loop.tick();
 
 		expect(claimed).toBe(0);

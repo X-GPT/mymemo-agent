@@ -5,11 +5,6 @@ import {
 	liveConversationOwnershipExists,
 } from "./conversation-ownership";
 import {
-	AGENTCORE_EXECUTION_RUNTIME,
-	FARGATE_EXECUTION_RUNTIME,
-	requireConversationExecutionRuntime,
-} from "./execution-runtime";
-import {
 	CANONICAL_MODEL_RUN_EVENT_TYPES,
 	InvalidRunEventError,
 	parseDurableRunEvent,
@@ -114,14 +109,9 @@ export class ActiveRunConflictError extends Error {
  */
 const ACTIVE_RUN_DEPTH_BOUND = 1;
 
-/** How long a queued Run may remain continuously eligible on an unowned
- * Conversation before the queue-age backstop ends it. Reclamation refreshes
- * `updated_at` to start a new window for legitimately waiting work. The
- * Fargate window deliberately matches today's 60-second Ownership lease,
- * but remains a distinct policy so lease tuning cannot silently retune queue
- * expiration. AgentCore work gets ten minutes for dispatch and cold
- * start. */
-const FARGATE_UNOWNED_QUEUE_TIMEOUT_MS = 60_000;
+/** How long a queued AgentCore Run may remain continuously eligible on an
+ * unowned Conversation before the queue-age backstop ends it. Reclamation
+ * refreshes `updated_at` to start a new window for legitimately waiting work. */
 export const AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS = 10 * 60_000;
 
 /** An owned Run id was reused with different normalized admitted input. */
@@ -1205,19 +1195,13 @@ export async function expireUnownedQueuedRunsTx(
 		const result = await tx.execute<{
 			user_id: string;
 			conversation_id: string;
-			execution_runtime: string;
 		}>(sql`
-			select c.user_id, c.conversation_id, c.execution_runtime
+			select c.user_id, c.conversation_id
 			  from ${runs} r
 			  join ${conversations} c using (user_id, conversation_id)
 			 where r.status = 'queued'
 			   and greatest(r.created_at, r.updated_at) <= now() -
-			     case c.execution_runtime
-			       when ${FARGATE_EXECUTION_RUNTIME}
-			         then interval '${sql.raw(String(FARGATE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
-			       when ${AGENTCORE_EXECUTION_RUNTIME}
-			         then interval '${sql.raw(String(AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
-			     end
+			     interval '${sql.raw(String(AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
 			   and c.owner_until is null
 			 order by r.created_at
 			   for update of c skip locked
@@ -1228,16 +1212,9 @@ export async function expireUnownedQueuedRunsTx(
 			? {
 					userId: candidateRow.user_id,
 					conversationId: candidateRow.conversation_id,
-					executionRuntime: requireConversationExecutionRuntime(
-						candidateRow.execution_runtime,
-					),
 				}
 			: null;
 		if (!candidate) return null;
-		const timeoutMs =
-			candidate.executionRuntime === FARGATE_EXECUTION_RUNTIME
-				? FARGATE_UNOWNED_QUEUE_TIMEOUT_MS
-				: AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS;
 
 		const queuedRunsToExpire = await tx
 			.select({
@@ -1253,7 +1230,7 @@ export async function expireUnownedQueuedRunsTx(
 					eq(runs.userId, candidate.userId),
 					eq(runs.conversationId, candidate.conversationId),
 					eq(runs.status, "queued"),
-					sql`greatest(${runs.createdAt}, ${runs.updatedAt}) <= now() - interval '${sql.raw(String(timeoutMs))} milliseconds'`,
+					sql`greatest(${runs.createdAt}, ${runs.updatedAt}) <= now() - interval '${sql.raw(String(AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'`,
 				),
 			)
 			.for("update");

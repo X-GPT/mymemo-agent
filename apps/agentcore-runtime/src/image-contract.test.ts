@@ -59,7 +59,7 @@ describe("AgentCore Runtime image contract", () => {
 
 		for (const forbidden of [
 			"RunLoop",
-			"CleanupLoop",
+			"MaintenanceRunner",
 			"claimConversationTx",
 			"expireUnownedQueuedRunsTx",
 			"reclaimConversationTx",
@@ -69,7 +69,7 @@ describe("AgentCore Runtime image contract", () => {
 		const graph = runtimeImportGraph();
 		for (const forbidden of [
 			"/apps/agent-worker/src/run-loop.ts",
-			"/apps/agent-worker/src/cleanup-loop.ts",
+			"/apps/agent-worker/src/maintenance-runner.ts",
 			"/packages/agentcore-dispatch/src/sqs-queue.ts",
 		]) {
 			expect([...graph].some((file) => file.endsWith(forbidden))).toBe(false);
