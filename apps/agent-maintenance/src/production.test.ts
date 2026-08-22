@@ -21,6 +21,11 @@ describe("agent-maintenance production entrypoint", () => {
 		});
 
 		await Bun.sleep(1_000);
+		const health = await fetch(`http://127.0.0.1:${port}/health`);
+		expect(await health.json()).toEqual({
+			status: "ok",
+			service: "agent-maintenance",
+		});
 		child.kill("SIGTERM");
 		const [exitCode, stdout, stderr] = await Promise.all([
 			child.exited,
@@ -28,6 +33,7 @@ describe("agent-maintenance production entrypoint", () => {
 			new Response(child.stderr).text(),
 		]);
 
+		expect(health.status).toBe(200);
 		expect(exitCode).toBe(0);
 		expect(stderr).toBe("");
 		expect(stdout).toContain('"message":"agent-maintenance started"');

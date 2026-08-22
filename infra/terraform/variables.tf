@@ -207,17 +207,6 @@ variable "agent_maintenance_memory" {
   default     = 512
 }
 
-variable "agent_maintenance_cleanup_interval_ms" {
-  description = "Delay between asynchronous agent-maintenance cleanup passes."
-  type        = number
-  default     = 300000
-
-  validation {
-    condition     = var.agent_maintenance_cleanup_interval_ms > 0 && var.agent_maintenance_cleanup_interval_ms <= 2147483647
-    error_message = "agent_maintenance_cleanup_interval_ms must be positive and no greater than 2147483647."
-  }
-}
-
 variable "agentcore_dispatch_publisher_cpu" {
   description = "Fargate CPU units for the AgentCore dispatch publisher."
   type        = number

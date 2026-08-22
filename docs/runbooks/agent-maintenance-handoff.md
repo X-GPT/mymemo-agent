@@ -43,8 +43,8 @@ Resolve `agent_maintenance_service_name` through Terraform output and wait for
 the service to stabilize. Verify one healthy task, a successful
 `agent-maintenance started` log in `/ecs/mymemo-agent-prod-maintenance`, and no
 new `agent-maintenance-errors` alarm. The task receives only the agent database
-password, E2B API key, artifact bucket/region, logging, health-port, and cleanup
-cadence configuration. Its task role can only delete artifact objects.
+password, E2B API key, artifact bucket/region, logging, and health-port settings.
+Its task role can only delete artifact objects.
 
 Re-enable Dispatch and exposure only after queued-Run expiration, Reclamation,
 and cleanup logs have appeared at their normal cadence and the old worker

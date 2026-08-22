@@ -17,7 +17,6 @@ describe("agent-maintenance config", () => {
 				"postgresql://agent:secret@db.example.com:5432/mymemo_agent?sslmode=no-verify",
 			e2bApiKey: "e2b-secret",
 			artifact: { bucket: "mymemo-artifacts", region: "us-west-2" },
-			cleanupIntervalMs: 300_000,
 			logLevel: "info",
 			port: 8080,
 		});
@@ -36,25 +35,24 @@ describe("agent-maintenance config", () => {
 		expect(Object.keys(config).sort()).toEqual([
 			"agentDatabaseUrl",
 			"artifact",
-			"cleanupIntervalMs",
 			"e2bApiKey",
 			"logLevel",
 			"port",
 		]);
 	});
 
-	it("validates timer overrides", () => {
+	it("validates port overrides", () => {
 		expect(() =>
 			loadMaintenanceConfigFromEnv({
 				...maintenanceEnv,
-				MAINTENANCE_CLEANUP_INTERVAL_MS: "0",
+				PORT: "0",
 			}),
-		).toThrow("MAINTENANCE_CLEANUP_INTERVAL_MS must be a positive integer");
+		).toThrow("PORT must be a positive integer");
 		expect(() =>
 			loadMaintenanceConfigFromEnv({
 				...maintenanceEnv,
-				MAINTENANCE_CLEANUP_INTERVAL_MS: "2147483648",
+				PORT: "2147483648",
 			}),
-		).toThrow("MAINTENANCE_CLEANUP_INTERVAL_MS must be a positive integer");
+		).toThrow("PORT must be a positive integer");
 	});
 });

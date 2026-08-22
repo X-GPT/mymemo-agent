@@ -119,7 +119,6 @@ locals {
     { name = "LOG_LEVEL", value = var.log_level },
     { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket },
     { name = "AWS_REGION", value = var.aws_region },
-    { name = "MAINTENANCE_CLEANUP_INTERVAL_MS", value = tostring(var.agent_maintenance_cleanup_interval_ms) },
     { name = "DB_SSL", value = var.db_ssl },
   ], local.agent_database_url_environment)
 

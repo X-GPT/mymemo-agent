@@ -9,12 +9,10 @@ export interface MaintenanceConfig {
 		bucket: string;
 		region: string;
 	};
-	cleanupIntervalMs: number;
 	logLevel: string;
 	port: number;
 }
 
-const DEFAULT_CLEANUP_INTERVAL_MS = 300_000;
 const DEFAULT_PORT = 8080;
 const MAX_TIMER_INTERVAL_MS = 2_147_483_647;
 
@@ -56,11 +54,6 @@ export function loadMaintenanceConfigFromEnv(env: Env): MaintenanceConfig {
 			bucket: required(env, "ARTIFACT_BUCKET"),
 			region,
 		},
-		cleanupIntervalMs: positiveIntOr(
-			env.MAINTENANCE_CLEANUP_INTERVAL_MS,
-			DEFAULT_CLEANUP_INTERVAL_MS,
-			"MAINTENANCE_CLEANUP_INTERVAL_MS",
-		),
 		logLevel: env.LOG_LEVEL ?? "info",
 		port: positiveIntOr(env.PORT, DEFAULT_PORT, "PORT"),
 	};

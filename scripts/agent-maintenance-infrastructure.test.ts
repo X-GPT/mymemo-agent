@@ -45,12 +45,7 @@ describe("agent-maintenance infrastructure", () => {
 			"agentcore_dispatch_publisher_environment =",
 		);
 
-		for (const required of [
-			"E2B_API_KEY",
-			"ARTIFACT_BUCKET",
-			"AWS_REGION",
-			"MAINTENANCE_CLEANUP_INTERVAL_MS",
-		]) {
+		for (const required of ["E2B_API_KEY", "ARTIFACT_BUCKET", "AWS_REGION"]) {
 			expect(maintenance).toContain(required);
 		}
 		expect(maintenance).toContain("local.agent_database_url_environment");
