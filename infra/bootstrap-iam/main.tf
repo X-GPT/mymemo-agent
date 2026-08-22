@@ -127,6 +127,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "ec2:ModifyInstanceConnectEndpoint",
       "ec2:ModifyNetworkInterfaceAttribute",
       "ec2:ReleaseAddress",
+      "ec2:ReplaceRoute",
       "ec2:RevokeSecurityGroupEgress",
       "ec2:RevokeSecurityGroupIngress",
       "ec2:RunInstances",
