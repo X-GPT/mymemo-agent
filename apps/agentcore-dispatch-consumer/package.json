@@ -4,6 +4,7 @@
 		"./acquisition-boundary": "./src/acquisition-boundary.ts",
 		"./aws-adapters": "./src/aws-adapters.ts",
 		"./config-utils": "./src/config-utils.ts",
+		"./consumer": "./src/consumer.ts",
 		"./contract": "./src/contract.ts",
 		"./production": "./src/production.ts",
 		"./secret-config": "./src/secret-config.ts"

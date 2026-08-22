@@ -11,6 +11,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | `apps/agentcore-dispatch-publisher` | Dedicated AgentCore Dispatch publication app. Runs as one ECS task, separate from Conversation-serving workers. |
 | `apps/agentcore-dispatch-consumer` | AgentCore dispatch consumer Lambda and shared dispatch-boundary modules. Its production composition validates strict content-free SQS envelopes, invokes the Runtime, and returns partial-batch acknowledgements; the Runtime composes exact acquisition directly. |
 | `apps/agentcore-runtime` | Linux ARM64 AgentCore Runtime exposing `/ping` and `/invocations`. It serves one acquired AgentCore Run and delegates the already-running Run to shared Run-serving behavior. It does not run Fargate Claim, drain, expiration, Reclamation, or cleanup loops. |
+| `apps/agentcore-local-dispatch-bridge` | Development-only outbox poller that composes the shared publisher and consumer contracts against a local AgentCore Runtime. It is absent from production startup paths and images. |
 | `packages/agent-db` | Shared writable `mymemo_agent` data layer: schema, migrations, Run and Conversation Ownership transactions, runtime pointers, session transcripts, artifact metadata, and PGlite test support. |
 | `packages/agentcore-dispatch` | Production-neutral AgentCore Dispatch publication behavior, strict envelope serialization, and separately importable SQS and SSM adapters. |
 | `packages/live-text` | Redis configuration, event validation, and producer-buffered in-memory/Redis Live Stream relay implementations. |
@@ -39,7 +40,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/chat-api/src/features/conversation-history/` | Owner-scoped permanent history over canonical Run events |
 | `apps/chat-api/src/features/artifacts/` | Current-artifact listing and five-minute S3 download signing |
 | `apps/chat-api/src/features/conversation-store/` | Durable Conversation registry and frozen Scope |
-| `apps/chat-api/src/features/exposure-gate/` | Statsig and break-glass implementations of the new-work gate |
+| `apps/chat-api/src/features/exposure-gate/` | Production Statsig implementation of the new-work gate |
 | `apps/chat-api/src/features/run-store/` | Run admission, owner-scoped Run reads, and durable interruption |
 | `apps/chat-api/src/db/` | Thin bindings to `@mymemo/agent-db` and the shared migration runner |
 | `apps/agent-worker/src/run-loop.ts` | Fargate-only Claim, ordering, expiration, Reclamation, and release control plane |

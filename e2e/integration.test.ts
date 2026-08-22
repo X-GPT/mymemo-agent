@@ -187,17 +187,6 @@ function interruptRun(
 	);
 }
 
-/** Spawn `bun run src/index.ts` for an app under apps/<name>. Output is inherited
- * so a boot failure surfaces directly in the test/CI logs. */
-function spawnApp(name: string, env: Record<string, string>) {
-	return Bun.spawn(["bun", "run", "src/index.ts"], {
-		cwd: resolve(REPO_ROOT, "apps", name),
-		env: { ...process.env, ...env },
-		stdout: "inherit",
-		stderr: "inherit",
-	});
-}
-
 /** Spawn the deterministic test-only AgentCore Runtime. */
 function spawnAgentCoreRuntime(env: Record<string, string>) {
 	return Bun.spawn(["bun", "run", "e2e/synthetic-agentcore-runtime.ts"], {
@@ -416,16 +405,21 @@ describe.skipIf(!RUN)("AgentCore integration (real Postgres and Redis)", () => {
 			INTEGRATION_RESUME_DELAY_MS: "1500",
 			INTEGRATION_RUNTIME_PORT: String(runtimePort),
 		};
-		chat = spawnApp("chat-api", {
-			AGENT_DATABASE_URL: dbUrl,
-			ARTIFACT_BUCKET: "mymemo-agent-integration-artifacts",
-			AWS_REGION: "us-west-2",
-			DB_SSL: "disable",
-			AGENT_EXPOSURE_BREAK_GLASS: "true",
-			REDIS_URL: redisUrl,
-			LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
-			PORT: String(chatPort),
-			LOG_LEVEL: "warn",
+		chat = Bun.spawn(["bun", "run", "local/index.ts"], {
+			cwd: resolve(REPO_ROOT, "apps", "chat-api"),
+			env: {
+				...process.env,
+				AGENT_DATABASE_URL: dbUrl,
+				ARTIFACT_BUCKET: "mymemo-agent-integration-artifacts",
+				AWS_REGION: "us-west-2",
+				DB_SSL: "disable",
+				REDIS_URL: redisUrl,
+				LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
+				PORT: String(chatPort),
+				LOG_LEVEL: "warn",
+			},
+			stdout: "inherit",
+			stderr: "inherit",
 		});
 
 		if (!(await waitForHealthy(30_000))) {

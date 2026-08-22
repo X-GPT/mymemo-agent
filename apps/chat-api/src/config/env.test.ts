@@ -106,24 +106,16 @@ describe("loadApiConfigFromEnv — worker-secret boundary", () => {
 });
 
 describe("loadApiConfigFromEnv — Statsig exposure config", () => {
-	it("requires STATSIG_SERVER_SECRET when break-glass is off", () => {
+	it("always requires STATSIG_SERVER_SECRET", () => {
 		const env = baseEnv();
 		delete env.STATSIG_SERVER_SECRET;
 		expect(() => loadApiConfigFromEnv(env)).toThrow(/STATSIG_SERVER_SECRET/);
-	});
-
-	it("allows boot without the Statsig secret under operator break-glass", () => {
-		const env = baseEnv();
-		delete env.STATSIG_SERVER_SECRET;
 		env.AGENT_EXPOSURE_BREAK_GLASS = "true";
-		const config = loadApiConfigFromEnv(env);
-		expect(config.agentExposureBreakGlass).toBe(true);
-		expect(config.statsigServerSecret).toBeUndefined();
+		expect(() => loadApiConfigFromEnv(env)).toThrow(/STATSIG_SERVER_SECRET/);
 	});
 
 	it("carries the Statsig secret when configured normally", () => {
 		const config = loadApiConfigFromEnv(baseEnv());
-		expect(config.agentExposureBreakGlass).toBe(false);
 		expect(config.statsigServerSecret).toBe("secret-statsig");
 	});
 	it("ignores legacy prototype provider settings", () => {

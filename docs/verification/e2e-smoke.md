@@ -42,22 +42,23 @@ value fails before the first HTTP request.
 
 | Target | Suite | Invocation | Credentials and network |
 | --- | --- | --- | --- |
-| Local compose | `full` | Unavailable until #523 | AgentCore-only creation cannot use the current Fargate-only compose runtime. `bun run smoke:local` fails immediately with this explanation. |
+| Local compose | one Run | `bun run smoke:local` | Requires OpenRouter and E2B development credentials; uses Postgres, Redis, the development bridge, and the real local Runtime without AWS-managed Dispatch infrastructure. |
 | Deployed internal ALB | `core` | `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh` | The wrapper expects `agentcore`. Run inside the VPC under the synthetic identity targeted in the Statsig exposure gate. The caller receives no provider, sandbox, AWS, or database secrets. |
 
-There is no staging target. The credential-free integration suite remains the
-pre-merge bar until #523 restores local-real; the deployed core suite is the
-post-deploy bar. The smoke identity must be allowlisted in the
+There is no staging target. The credential-free integration suite and local
+Compose smoke are the pre-merge bars; the deployed core suite is the post-deploy
+bar. The smoke identity must be allowlisted in the
 `mymemo_agent_split_runtime_enabled` Statsig gate before a gate-open deployed
 run. Until the in-VPC release one-shot in
 [#305](https://github.com/X-GPT/mymemo-agent/issues/305) lands, the deployed
 command remains manual from a VPC-reachable environment.
 
-## Local smoke transition
+## Local smoke
 
-Issue #523 owns the local AgentCore bridge and restoration of `smoke:local`.
-Until then, use the credential-free integration suite as the pre-merge bar;
-the local command fails immediately rather than advertising an impossible run.
+`bun run smoke:local` builds the local-only Chat API and Runtime targets, waits
+for the durable bridge, and admits one public Run that must reach
+`RUN_FINISHED`. The production images omit both local composition entrypoints
+and the bridge application.
 
 The deployed wrapper fixes the expected runtime to `agentcore`. After the
 synthetic identity is targeted in the exposure gate, the public creation response

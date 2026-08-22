@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import type { InternalIdentity } from "@/features/conversations/conversations.schema";
 import {
 	AGENT_EXPOSURE_GATE,
-	BreakGlassExposureGate,
 	type StatsigClientLike,
 	StatsigExposureGate,
 } from "./exposure-gate";
@@ -11,19 +10,6 @@ const allowedIdentity: InternalIdentity = {
 	memberCode: "member-allowed",
 	partnerCode: "partner-1",
 };
-const deniedIdentity: InternalIdentity = {
-	memberCode: "member-denied",
-	partnerCode: "partner-1",
-};
-
-describe("BreakGlassExposureGate", () => {
-	it("always allows (operator override)", async () => {
-		const gate = new BreakGlassExposureGate();
-		expect(await gate.isAgentEnabled(allowedIdentity)).toBe(true);
-		expect(await gate.isAgentEnabled(deniedIdentity)).toBe(true);
-	});
-});
-
 describe("StatsigExposureGate — fail closed", () => {
 	it("denies when initialization fails", async () => {
 		const client: StatsigClientLike = {

@@ -11,6 +11,8 @@ architecture and trust boundaries.
 |-----|----------|------|
 | **chat-api** | `apps/chat-api/` | AI chat service; owns Conversation resources, strict Run admission, producer-buffered Live Stream attachment, history, and artifact delivery |
 | **agent-worker** | `apps/agent-worker/` | Split-runtime Fargate worker; claims Runs, holds worker-only credentials, executes Claude Agent SDK turns, and publishes standard AG-UI events including validated display-only UI payloads |
+| **agentcore-runtime** | `apps/agentcore-runtime/` | Request-oriented AgentCore Runtime using shared Run-serving behavior |
+| **agentcore-local-dispatch-bridge** | `apps/agentcore-local-dispatch-bridge/` | Development-only durable-outbox bridge to the local Runtime |
 
 Shared libraries live under `packages/` (e.g. `@mymemo/agent-db`).
 
@@ -32,7 +34,7 @@ See [the chat API guide](./docs/agents/chat-api.md) for chat-api documentation.
 │   └── agent-worker/       # Split-runtime worker (claims + runs turns)
 ├── packages/               # Shared libraries (e.g. @mymemo/agent-db)
 ├── AGENTS.md               # Architecture & agent guidance
-├── compose.yaml            # Legacy Fargate local stack (new turns unavailable until #523)
+├── compose.yaml            # Local AgentCore Runtime stack
 └── README.md               # This file
 ```
 
@@ -42,9 +44,9 @@ Each project can be developed independently. Navigate to the respective project 
 
 ## Runtime verification
 
-Conversation creation is AgentCore-only. The checked-in Compose stack still
-runs the legacy Fargate worker and cannot execute a new turn; #523 owns the
-local AgentCore bridge. Do not use Compose as current end-to-end evidence.
+Conversation creation and the checked-in Compose stack are AgentCore-only.
+`bun run smoke:local` proves one Run from public admission through the durable
+outbox, development bridge, and real local Runtime.
 
 The credential-free PR suite covers durable AgentCore acquisition and
 stream/reconnect behavior through the shared Run-serving seam. The process
@@ -65,10 +67,8 @@ writes a unique Downloadable artifact, lists it after `RUN_FINISHED`, obtains a 
 signed URL, and downloads the exact attachment without identity headers. The
 local `full` suite adds one interrupted Run and two seeded searchable-document
 Runs that prove inventory, search, docs-cache load, file read-back, and durable
-Tool history. It is temporarily unavailable: Conversation creation is
-AgentCore-only, while #523 owns the local AgentCore bridge. `bun run smoke:local`
-exits immediately with that explanation instead of exercising the incompatible
-Fargate-only stack.
+Tool history. The smaller `bun run smoke:local` Compose gate proves one real Run;
+the broader suites can target the running local stack directly.
 
 For production, run `scripts/deploy/prod_smoke.sh` from inside the VPC with
 `AGENT_SMOKE_BASE_URL` configured and the checked-in `codex-smoke` identity
@@ -78,8 +78,8 @@ Run. OpenRouter and E2B credentials stay in the deployed worker; the smoke calle
 receives none of them. To check only the default-closed gate, set
 `AGENT_SMOKE_EXPECT_GATE_CLOSED=true`.
 
-`AGENT_SMOKE_SUITE` defaults to `core`; `full` remains the local superset that
-#523 will restore. See [the two-target smoke verification guide](./docs/verification/e2e-smoke.md)
+`AGENT_SMOKE_SUITE` defaults to `core`; `full` remains the local superset. See
+[the two-target smoke verification guide](./docs/verification/e2e-smoke.md)
 for suite contents, target selection, and deterministic harness tests.
 
 ### Worker image check

@@ -1,19 +1,17 @@
 {
 	"compilerOptions": {
 		"lib": ["ESNext"],
+		"strict": true,
 		"target": "ESNext",
 		"module": "Preserve",
 		"moduleDetection": "force",
 		"moduleResolution": "bundler",
-		"allowImportingTsExtensions": true,
-		"verbatimModuleSyntax": true,
 		"noEmit": true,
-		"strict": true,
 		"skipLibCheck": true,
 		"noFallthroughCasesInSwitch": true,
 		"noUncheckedIndexedAccess": true,
 		"noImplicitOverride": true,
 		"types": ["bun"]
 	},
-	"include": ["src/**/*.ts", "local/**/*.ts"]
+	"include": ["src/**/*.ts"]
 }

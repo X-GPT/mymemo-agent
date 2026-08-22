@@ -36,6 +36,19 @@ COPY packages/agent-db/ packages/agent-db/
 COPY packages/live-text/ packages/live-text/
 COPY package.json .
 
+# Development-only composition. The production release stage below copies only
+# src/, so this always-open local entrypoint cannot ship in the release image.
+FROM base AS local
+COPY --from=install /temp/prod/node_modules node_modules
+COPY --from=prerelease /usr/src/app/apps/chat-api apps/chat-api
+COPY --from=prerelease /usr/src/app/packages/agent-db packages/agent-db
+COPY --from=prerelease /usr/src/app/packages/live-text packages/live-text
+COPY --from=prerelease /usr/src/app/package.json .
+WORKDIR /usr/src/app/apps/chat-api
+USER bun
+EXPOSE 3000/tcp
+ENTRYPOINT [ "bun", "run", "local/index.ts" ]
+
 # Final release image
 FROM base AS release
 COPY --from=install /temp/prod/node_modules node_modules

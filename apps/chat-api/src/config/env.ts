@@ -47,17 +47,9 @@ export interface ApiConfig {
 	databaseUrl: string;
 	/**
 	 * Statsig server secret backing the production exposure gate.
-	 * Required unless operator break-glass is on; undefined only in that case.
 	 * Never sent to the sandbox or logged.
 	 */
-	statsigServerSecret: string | undefined;
-	/**
-	 * Operator break-glass for Statsig exposure. When true, new agent work is
-	 * allowed without Statsig (local dev, or an incident where Statsig is
-	 * unavailable). When false (production default), the exposure gate fails
-	 * closed and a Statsig secret is required.
-	 */
-	agentExposureBreakGlass: boolean;
+	statsigServerSecret: string;
 	/** Required authenticated TLS Redis secret for the Live Stream relay. */
 	redisUrl: string;
 }
@@ -86,25 +78,15 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	const artifactRegion = env.AWS_REGION?.trim();
 	assert(artifactRegion, "AWS_REGION is required");
 
-	// Statsig exposure fails closed: a Statsig secret is required unless an operator
-	// explicitly enables break-glass (local dev, or an incident where Statsig is
-	// unavailable). Worker-only secrets (OpenRouter,
-	// KB) are intentionally NOT read here — chat-api must not hold them.
-	const agentExposureBreakGlass = env.AGENT_EXPOSURE_BREAK_GLASS === "true";
-	if (!agentExposureBreakGlass) {
-		assert(
-			env.STATSIG_SERVER_SECRET,
-			"STATSIG_SERVER_SECRET is required (or set AGENT_EXPOSURE_BREAK_GLASS=true to open the gate without Statsig)",
-		);
-	}
+	const statsigServerSecret = env.STATSIG_SERVER_SECRET?.trim();
+	assert(statsigServerSecret, "STATSIG_SERVER_SECRET is required");
 
 	return {
 		logLevel: env.LOG_LEVEL || "info",
 		databaseUrl,
 		artifactBucket,
 		artifactRegion,
-		statsigServerSecret: env.STATSIG_SERVER_SECRET,
-		agentExposureBreakGlass,
+		statsigServerSecret,
 		redisUrl: resolveLiveStreamRedisUrl(env.REDIS_URL, {
 			allowInsecureLoopback:
 				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
