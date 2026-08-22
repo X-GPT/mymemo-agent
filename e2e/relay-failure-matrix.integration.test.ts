@@ -215,7 +215,7 @@ function buildApp(
 	return createApp({ logLevel: "silent" } as ApiConfig, deps);
 }
 
-function buildAgentCoreExecution(
+function createAgentCoreExecutionStarter(
 	processor: RunProcessor,
 	liveStreamRelay: LiveStreamRelay,
 	workerId = `agentcore-${crypto.randomUUID()}`,
@@ -226,40 +226,37 @@ function buildAgentCoreExecution(
 		liveStreamRelay,
 		logger: silentLogger,
 	});
-	return {
-		async start(runId: string) {
-			const [dispatch] = await claimAgentCoreDispatchesTx(testDatabase.db, {
-				publisherId: `${workerId}-publisher`,
-				runId,
+	return async (runId: string) => {
+		const [dispatch] = await claimAgentCoreDispatchesTx(testDatabase.db, {
+			publisherId: `${workerId}-publisher`,
+			runId,
+		});
+		if (!dispatch) throw new Error("test AgentCore dispatch was not claimable");
+		const acquisition = await acquireAgentCoreDispatchTx(testDatabase.db, {
+			dispatch,
+			workerId,
+		});
+		if (acquisition.disposition !== "acquired") {
+			throw new Error(
+				`test AgentCore dispatch was not acquired: ${acquisition.disposition}`,
+			);
+		}
+		const owner = { ...acquisition.owner, runId, workerId };
+		const run = await loadExecutingRunTx(testDatabase.db, owner);
+		if (!run) throw new Error("test AgentCore Run was not executable");
+		const done = runServing
+			.serveStartedRun({
+				run,
+				owner,
+				shutdownSignal: new AbortController().signal,
+			})
+			.then(async (result) => {
+				if (result.type !== "ownership_lost") {
+					await releaseConversationTx(testDatabase.db, owner);
+				}
+				return result;
 			});
-			if (!dispatch)
-				throw new Error("test AgentCore dispatch was not claimable");
-			const acquisition = await acquireAgentCoreDispatchTx(testDatabase.db, {
-				dispatch,
-				workerId,
-			});
-			if (acquisition.disposition !== "acquired") {
-				throw new Error(
-					`test AgentCore dispatch was not acquired: ${acquisition.disposition}`,
-				);
-			}
-			const owner = { ...acquisition.owner, runId, workerId };
-			const run = await loadExecutingRunTx(testDatabase.db, owner);
-			if (!run) throw new Error("test AgentCore Run was not executable");
-			const done = runServing
-				.serveStartedRun({
-					run,
-					owner,
-					shutdownSignal: new AbortController().signal,
-				})
-				.then(async (result) => {
-					if (result.type !== "ownership_lost") {
-						await releaseConversationTx(testDatabase.db, owner);
-					}
-					return result;
-				});
-			return { done };
-		},
+		return { done };
 	};
 }
 
@@ -400,7 +397,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("queued attach");
 		const processorStarted = deferred();
 		const continueProcessor = deferred();
-		const execution = buildAgentCoreExecution(async (ctx) => {
+		const startExecution = createAgentCoreExecutionStarter(async (ctx) => {
 			processorStarted.resolve();
 			await continueProcessor.promise;
 			await completeTextProcessor(ctx);
@@ -413,7 +410,7 @@ describe("ADR-0014 relay failure matrix", () => {
 
 		await queuedAttachRetry.observed;
 		expect((await readRun(runId))?.status).toBe("queued");
-		const running = await execution.start(runId);
+		const running = await startExecution(runId);
 		await processorStarted.promise;
 		await readerAttached.observed;
 		continueProcessor.resolve();
@@ -441,7 +438,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("producer death");
 		const processorStarted = deferred();
 		const releaseCrashedProcessor = deferred();
-		const crashed = buildAgentCoreExecution(
+		const startCrashedExecution = createAgentCoreExecutionStarter(
 			async (ctx) => {
 				await ctx.appendLiveEvent({
 					type: "TEXT_MESSAGE_START",
@@ -455,7 +452,7 @@ describe("ADR-0014 relay failure matrix", () => {
 			"crashed-worker",
 		);
 
-		const crashedRun = await crashed.start(runId);
+		const crashedRun = await startCrashedExecution(runId);
 		await processorStarted.promise;
 
 		// Intentionally no client timeout: silent producer death must converge
@@ -515,13 +512,13 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("terminal attach race");
 		const processorStarted = deferred();
 		const continueProcessor = deferred();
-		const execution = buildAgentCoreExecution(async (ctx) => {
+		const startExecution = createAgentCoreExecutionStarter(async (ctx) => {
 			processorStarted.resolve();
 			await continueProcessor.promise;
 			await completeTextProcessor(ctx);
 		}, producerRelay);
 
-		const running = await execution.start(runId);
+		const running = await startExecution(runId);
 		await processorStarted.promise;
 		const responsePromise = app.request(eventsUrl(conversationId, runId), {
 			headers: IDENTITY_HEADERS,
@@ -562,13 +559,13 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("live terminal race");
 		const processorStarted = deferred();
 		const continueProcessor = deferred();
-		const execution = buildAgentCoreExecution(async (ctx) => {
+		const startExecution = createAgentCoreExecutionStarter(async (ctx) => {
 			processorStarted.resolve();
 			await continueProcessor.promise;
 			await completeTextProcessor(ctx);
 		}, producerRelay);
 
-		const running = await execution.start(runId);
+		const running = await startExecution(runId);
 		await processorStarted.promise;
 		const responsePromise = app.request(eventsUrl(conversationId, runId), {
 			headers: IDENTITY_HEADERS,
@@ -599,7 +596,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("buffer cap overflow");
 		const processorStarted = deferred();
 		const continueProcessor = deferred();
-		const execution = buildAgentCoreExecution(async (ctx) => {
+		const startExecution = createAgentCoreExecutionStarter(async (ctx) => {
 			processorStarted.resolve();
 			await continueProcessor.promise;
 			await completeTextProcessor(ctx);
@@ -608,7 +605,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		const responsePromise = app.request(eventsUrl(conversationId, runId), {
 			headers: IDENTITY_HEADERS,
 		});
-		const running = await execution.start(runId);
+		const running = await startExecution(runId);
 		await processorStarted.promise;
 		await readerAttached.observed;
 		continueProcessor.resolve();
@@ -655,11 +652,11 @@ describe("ADR-0014 relay failure matrix", () => {
 			error: "Live stream temporarily unavailable",
 		});
 
-		const execution = buildAgentCoreExecution(
+		const startExecution = createAgentCoreExecutionStarter(
 			completeTextProcessor,
 			producerRelay,
 		);
-		await (await execution.start(runId)).done;
+		await (await startExecution(runId)).done;
 		expect(await readRun(runId)).toMatchObject({
 			status: "done",
 			liveStreamFailedAt: expect.any(Date),

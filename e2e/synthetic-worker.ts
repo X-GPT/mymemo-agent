@@ -25,10 +25,7 @@ import {
 	confirmAgentCoreDispatchPublishedTx,
 } from "../packages/agent-db/src/agentcore-dispatch";
 import { createDatabase } from "../packages/agent-db/src/client";
-import {
-	createRedisLiveStreamRelay,
-	type LiveStreamRelay,
-} from "../packages/live-text/src";
+import { createRedisLiveStreamRelay } from "../packages/live-text/src";
 
 const agentDatabaseUrl = process.env.AGENT_DATABASE_URL;
 if (!agentDatabaseUrl) throw new Error("AGENT_DATABASE_URL is required");
@@ -38,15 +35,6 @@ const runtimePort = Number(process.env.INTEGRATION_RUNTIME_PORT);
 if (!Number.isInteger(runtimePort) || runtimePort < 1) {
 	throw new Error("INTEGRATION_RUNTIME_PORT is required");
 }
-const maxEvents = optionalPositiveInteger(
-	process.env.INTEGRATION_LIVE_STREAM_MAX_EVENTS,
-);
-const maxStreamBytes = optionalPositiveInteger(
-	process.env.INTEGRATION_LIVE_STREAM_MAX_BYTES,
-);
-const liveStreamFault = parseLiveStreamFault(
-	process.env.INTEGRATION_LIVE_STREAM_FAIL_AT,
-);
 const heartbeatIntervalMs =
 	optionalPositiveInteger(process.env.INTEGRATION_HEARTBEAT_INTERVAL_MS) ?? 500;
 
@@ -54,32 +42,10 @@ const logger = createLogger(process.env.LOG_LEVEL ?? "warn");
 const runtimeId = `integration-agentcore-${crypto.randomUUID()}`;
 const publisherId = `${runtimeId}/publisher`;
 const database = createDatabase(agentDatabaseUrl);
-const redisLiveStreamRelay = createRedisLiveStreamRelay({
+const liveStreamRelay = createRedisLiveStreamRelay({
 	url: redisUrl,
 	deployment: "current",
-	...(maxEvents !== undefined || maxStreamBytes !== undefined
-		? {
-				testLimits: {
-					...(maxEvents === undefined ? {} : { maxEvents }),
-					...(maxStreamBytes === undefined
-						? {}
-						: { maxBufferBytes: maxStreamBytes }),
-				},
-			}
-		: {}),
-	...(liveStreamFault && liveStreamFault !== "before_creation"
-		? {
-				testHooks: {
-					failEventPublishWhen: ({ eventType, terminal }) =>
-						matchesLiveStreamFault(liveStreamFault, eventType, terminal),
-				},
-			}
-		: {}),
 });
-const liveStreamRelay =
-	liveStreamFault === "before_creation"
-		? withInjectedProducerCreationFault(redisLiveStreamRelay)
-		: redisLiveStreamRelay;
 const resumeDelayMs = Number(process.env.INTEGRATION_RESUME_DELAY_MS ?? 0);
 
 type SyntheticScenario =
@@ -254,50 +220,36 @@ async function invokeNextDispatch(): Promise<void> {
 	await response.body?.cancel();
 }
 
-async function tick(): Promise<void> {
-	await invokeNextDispatch();
-}
-
 let shuttingDown = false;
-let ticking = false;
-let tickPending = false;
 let activeTick = Promise.resolve();
+let tickTimer: ReturnType<typeof setTimeout> | undefined;
 
-function scheduleTick(): void {
+function scheduleTick(delayMs = heartbeatIntervalMs): void {
 	if (shuttingDown) return;
-	if (ticking) {
-		tickPending = true;
-		return;
-	}
-	activeTick = runTicks();
+	tickTimer = setTimeout(() => {
+		activeTick = runTick();
+	}, delayMs);
 }
 
-async function runTicks(): Promise<void> {
-	ticking = true;
+async function runTick(): Promise<void> {
 	try {
-		do {
-			tickPending = false;
-			try {
-				await tick();
-			} catch (error) {
-				logger.error({
-					message: "test AgentCore dispatch tick failed",
-					error: toMessage(error),
-				});
-			}
-		} while (tickPending && !shuttingDown);
+		await invokeNextDispatch();
+	} catch (error) {
+		logger.error({
+			message: "test AgentCore dispatch tick failed",
+			error: toMessage(error),
+		});
 	} finally {
-		ticking = false;
+		scheduleTick();
 	}
 }
 
-const tickInterval = setInterval(scheduleTick, heartbeatIntervalMs);
-scheduleTick();
+scheduleTick(0);
 
 async function shutdown(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
-	clearInterval(tickInterval);
+	if (tickTimer) clearTimeout(tickTimer);
 	await activeTick;
 	await runtime.shutdown();
 	await liveStreamRelay.close();
@@ -308,63 +260,6 @@ async function shutdown(): Promise<void> {
 
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
-
-type LiveStreamFault = "before_creation" | "mid_text" | "tool" | "terminal";
-
-/** The creation fault is outside a producer; later fault points use the relay's
- * publish hook so its real failure signal reaches attached readers. */
-function withInjectedProducerCreationFault(
-	relay: LiveStreamRelay,
-): LiveStreamRelay {
-	let injected = false;
-	return {
-		async openProducer(runId) {
-			if (!injected) {
-				injected = true;
-				throw new Error("injected Redis failure before producer creation");
-			}
-			return relay.openProducer(runId);
-		},
-		attach(runId, signal) {
-			return relay.attach(runId, signal);
-		},
-		close() {
-			return relay.close();
-		},
-	};
-}
-
-function parseLiveStreamFault(
-	value: string | undefined,
-): LiveStreamFault | undefined {
-	return isLiveStreamFault(value) ? value : undefined;
-}
-
-function matchesLiveStreamFault(
-	fault: Exclude<LiveStreamFault, "before_creation">,
-	eventType: string,
-	terminal: boolean,
-): boolean {
-	switch (fault) {
-		case "mid_text":
-			return eventType === "TEXT_MESSAGE_CONTENT";
-		case "tool":
-			return eventType === "TOOL_CALL_START";
-		case "terminal":
-			return terminal;
-	}
-}
-
-function isLiveStreamFault(
-	value: string | undefined,
-): value is LiveStreamFault {
-	return (
-		value === "before_creation" ||
-		value === "mid_text" ||
-		value === "tool" ||
-		value === "terminal"
-	);
-}
 
 function optionalPositiveInteger(raw: string | undefined): number | undefined {
 	if (raw === undefined) return undefined;
