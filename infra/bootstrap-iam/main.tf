@@ -103,18 +103,28 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     sid = "AgentInfrastructureManagement"
     actions = [
       "application-autoscaling:*",
+      "autoscaling:*",
       "cloudwatch:*",
+      "ec2:AllocateAddress",
       "ec2:AuthorizeSecurityGroupEgress",
       "ec2:AuthorizeSecurityGroupIngress",
       "ec2:CreateInstanceConnectEndpoint",
+      "ec2:CreateLaunchTemplate",
+      "ec2:CreateLaunchTemplateVersion",
+      "ec2:CreateNetworkInterface",
       "ec2:CreateSecurityGroup",
       "ec2:CreateTags",
       "ec2:DeleteInstanceConnectEndpoint",
+      "ec2:DeleteLaunchTemplate",
+      "ec2:DeleteLaunchTemplateVersions",
+      "ec2:DeleteNetworkInterface",
       "ec2:DeleteSecurityGroup",
       "ec2:DeleteTags",
       "ec2:Describe*",
       "ec2:ModifyInstanceAttribute",
       "ec2:ModifyInstanceConnectEndpoint",
+      "ec2:ModifyNetworkInterfaceAttribute",
+      "ec2:ReleaseAddress",
       "ec2:RevokeSecurityGroupEgress",
       "ec2:RevokeSecurityGroupIngress",
       "ec2:RunInstances",
@@ -279,6 +289,19 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
+    sid = "AgentCoreEgressMonitoringManagement"
+    actions = [
+      "ssm:AddTagsToResource",
+      "ssm:DeleteParameter",
+      "ssm:GetParameter",
+      "ssm:ListTagsForResource",
+      "ssm:PutParameter",
+      "ssm:RemoveTagsFromResource",
+    ]
+    resources = ["arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/mymemo-agent-agentcore-prod-egress-*-cloudwatch-agent-config"]
+  }
+
+  statement {
     sid       = "AgentCoreDispatchControlDiscovery"
     actions   = ["ssm:DescribeParameters"]
     resources = ["*"]
@@ -312,15 +335,19 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   statement {
     sid = "AgentIamManagement"
     actions = [
+      "iam:AddRoleToInstanceProfile",
       "iam:AttachRolePolicy",
+      "iam:CreateInstanceProfile",
       "iam:CreatePolicy",
       "iam:CreatePolicyVersion",
       "iam:CreateRole",
+      "iam:DeleteInstanceProfile",
       "iam:DeletePolicy",
       "iam:DeletePolicyVersion",
       "iam:DeleteRole",
       "iam:DeleteRolePolicy",
       "iam:DetachRolePolicy",
+      "iam:GetInstanceProfile",
       "iam:GetOpenIDConnectProvider",
       "iam:GetPolicy",
       "iam:GetPolicyVersion",
@@ -332,13 +359,21 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "iam:ListRolePolicies",
       "iam:PassRole",
       "iam:PutRolePolicy",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:SetDefaultPolicyVersion",
       "iam:SimulatePrincipalPolicy",
+      "iam:TagInstanceProfile",
+      "iam:TagPolicy",
       "iam:TagRole",
+      "iam:UntagInstanceProfile",
+      "iam:UntagPolicy",
+      "iam:UntagRole",
       "iam:UpdateAssumeRolePolicy",
     ]
     resources = [
       "arn:aws:iam::${var.aws_account_id}:role/mymemo-agent-*",
       "arn:aws:iam::${var.aws_account_id}:policy/mymemo-agent-*",
+      "arn:aws:iam::${var.aws_account_id}:instance-profile/mymemo-agent-*",
       local.github_oidc_provider_arn,
     ]
   }

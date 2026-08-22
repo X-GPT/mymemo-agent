@@ -3,7 +3,7 @@
 This Terraform root owns the production AWS resources for `mymemo-agent`,
 including ECS, the AgentCore Runtime, and its Dispatch consumer. It consumes the
 existing `mymemo-service` VPC and ECS cluster, while owning the private AgentCore
-subnets and NAT egress inside that VPC.
+subnets and zonal fck-nat egress inside that VPC.
 
 ## Shared Network Contract
 
@@ -44,8 +44,8 @@ the direct remote-state output is absent and the fallback input is present.
 - CloudWatch log groups and baseline alarms
 - encrypted AgentCore Dispatch and dead-letter queues, their fail-closed SSM
   control, and the batch-size-one consumer Lambda
-- digest-pinned ARM64 AgentCore Runtime, private subnets, zonal NAT egress,
-  workload IAM, and Dispatch alarms
+- digest-pinned ARM64 AgentCore Runtime, private subnets, one pinned fck-nat
+  Auto Scaling group per availability zone, workload IAM, and Dispatch alarms
 
 The AgentCore Runtime, consumer, and dedicated Dispatch publisher share this
 state because they ship on the same compatibility cycle as the ECS services and
@@ -216,10 +216,17 @@ or update the consumer before the schema exists, it requires the SSM Dispatch
 control to be `disabled`. Routine releases accept and preserve either live
 value.
 
-`assign_public_ip=true` is intentionally kept while the existing shared
-`mymemo-service` ECS subnets are public/default subnets with no NAT/VPC endpoint
-egress path. It is an inherited network constraint, not the preferred production
-networking pattern.
+`assign_public_ip=true` remains an inherited constraint for chat-api and
+agent-worker in the shared public/default ECS subnets. The Dispatch publisher
+runs without a public address in the AgentCore private subnets and shares their
+zonal fck-nat egress.
+
+The fck-nat Terraform module is pinned to `1.5.0`, and production pins the
+reviewed official ARM64 AMI ID instead of resolving the latest publisher image.
+Each availability zone gets a one-instance Auto Scaling group, static internal
+ENI, new EIP, encrypted root disk, CloudWatch agent metrics, and an alarm when
+the group has no in-service instance. A replacement loses existing connections
+and can interrupt egress for that zone for several minutes.
 
 The agent internal ALB URL and `AGENT_SMOKE_BASE_URL` are intentionally
 different settings:

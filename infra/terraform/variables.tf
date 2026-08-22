@@ -52,6 +52,16 @@ variable "private_subnet_cidrs" {
   }
 }
 
+variable "fck_nat_ami_id" {
+  description = "Reviewed immutable ARM64 fck-nat AMI ID for the deployment region."
+  type        = string
+
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]+$", var.fck_nat_ami_id))
+    error_message = "fck_nat_ami_id must be an exact EC2 AMI ID."
+  }
+}
+
 variable "runtime_image_digest" {
   description = "Verified Linux ARM64 AgentCore Runtime image digest (sha256:...). Tags are never deployed."
   type        = string

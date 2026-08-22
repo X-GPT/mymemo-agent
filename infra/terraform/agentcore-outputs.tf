@@ -72,13 +72,17 @@ output "private_subnet_ids" {
 }
 
 output "egress_configurations" {
-  description = "Exact zonal NAT routes verified after deployment."
+  description = "Exact zonal fck-nat routes verified after deployment."
   value = {
     for availability_zone in keys(local.private_subnets) : availability_zone => {
-      private_subnet_id = aws_subnet.private[availability_zone].id
-      public_subnet_id  = aws_nat_gateway.egress[availability_zone].subnet_id
-      route_table_id    = aws_route_table.private[availability_zone].id
-      nat_gateway_id    = aws_nat_gateway.egress[availability_zone].id
+      availability_zone      = availability_zone
+      private_subnet_id      = aws_subnet.private[availability_zone].id
+      public_subnet_id       = module.fck_nat_egress[availability_zone].subnet_id
+      route_table_id         = aws_route_table.private[availability_zone].id
+      network_interface_id   = module.fck_nat_egress[availability_zone].eni_id
+      eip_allocation_id      = aws_eip.fck_nat_egress[availability_zone].id
+      autoscaling_group_name = module.fck_nat_egress[availability_zone].name
+      ami_id                 = module.fck_nat_egress[availability_zone].ami_id
     }
   }
 }

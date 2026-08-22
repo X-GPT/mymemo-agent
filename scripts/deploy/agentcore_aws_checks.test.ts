@@ -203,14 +203,28 @@ verify_agentcore_alarms us-west-2 "$TF_OUTPUT"
 
 function verifyEgress(options: {
 	routeState?: string;
-	routeNatGatewayId?: string;
-	natState?: string;
-	natSubnetId?: string;
+	routeNetworkInterfaceId?: string;
+	asgHealth?: string;
+	asgAvailabilityZone?: string;
+	networkInterfaceSourceDestCheck?: boolean;
+	networkInterfaceSubnetId?: string;
+	addressInstanceId?: string;
+	instanceState?: string;
+	instanceAmiId?: string;
+	httpTokens?: string;
+	deleteOnTermination?: boolean;
+	volumeEncrypted?: boolean;
 }) {
 	const privateSubnetId = "subnet-private-a";
 	const publicSubnetId = "subnet-public-a";
 	const routeTableId = "rtb-private-a";
-	const natGatewayId = "nat-a";
+	const networkInterfaceId = "eni-a";
+	const eipAllocationId = "eipalloc-a";
+	const autoscalingGroupName = "fck-nat-a";
+	const availabilityZone = "us-west-2a";
+	const instanceId = "i-a";
+	const amiId = "ami-a";
+	const volumeId = "vol-a";
 	const routeTable = {
 		RouteTables: [
 			{
@@ -219,20 +233,80 @@ function verifyEgress(options: {
 				Routes: [
 					{
 						DestinationCidrBlock: "0.0.0.0/0",
-						NatGatewayId: options.routeNatGatewayId ?? natGatewayId,
+						NetworkInterfaceId:
+							options.routeNetworkInterfaceId ?? networkInterfaceId,
 						State: options.routeState ?? "active",
 					},
 				],
 			},
 		],
 	};
-	const natGateway = {
-		NatGateways: [
+	const autoscalingGroup = {
+		AutoScalingGroups: [
 			{
-				NatGatewayId: natGatewayId,
-				State: options.natState ?? "available",
-				SubnetId: options.natSubnetId ?? publicSubnetId,
+				AutoScalingGroupName: autoscalingGroupName,
+				MinSize: 1,
+				MaxSize: 1,
+				DesiredCapacity: 1,
+				Instances: [
+					{
+						InstanceId: instanceId,
+						AvailabilityZone: options.asgAvailabilityZone ?? availabilityZone,
+						LifecycleState: "InService",
+						HealthStatus: options.asgHealth ?? "Healthy",
+					},
+				],
 			},
+		],
+	};
+	const networkInterface = {
+		NetworkInterfaces: [
+			{
+				NetworkInterfaceId: networkInterfaceId,
+				SubnetId: options.networkInterfaceSubnetId ?? publicSubnetId,
+				Status: "in-use",
+				SourceDestCheck: options.networkInterfaceSourceDestCheck ?? false,
+				Attachment: { InstanceId: instanceId },
+			},
+		],
+	};
+	const address = {
+		Addresses: [
+			{
+				AllocationId: eipAllocationId,
+				AssociationId: "eipassoc-a",
+				InstanceId: options.addressInstanceId ?? instanceId,
+				PublicIp: "203.0.113.1",
+			},
+		],
+	};
+	const instance = {
+		Reservations: [
+			{
+				Instances: [
+					{
+						InstanceId: instanceId,
+						SubnetId: publicSubnetId,
+						Placement: { AvailabilityZone: availabilityZone },
+						ImageId: options.instanceAmiId ?? amiId,
+						State: { Name: options.instanceState ?? "running" },
+						MetadataOptions: { HttpTokens: options.httpTokens ?? "required" },
+						BlockDeviceMappings: [
+							{
+								Ebs: {
+									VolumeId: volumeId,
+									DeleteOnTermination: options.deleteOnTermination ?? true,
+								},
+							},
+						],
+					},
+				],
+			},
+		],
+	};
+	const volume = {
+		Volumes: [
+			{ VolumeId: volumeId, Encrypted: options.volumeEncrypted ?? true },
 		],
 	};
 	const script = `
@@ -241,7 +315,11 @@ source "${checksPath}"
 aws() {
   case "$*" in
     *"ec2 describe-route-tables"*) printf '%s\\n' "$ROUTE_TABLE" ;;
-    *"ec2 describe-nat-gateways"*) printf '%s\\n' "$NAT_GATEWAY" ;;
+    *"autoscaling describe-auto-scaling-groups"*) printf '%s\\n' "$AUTO_SCALING_GROUP" ;;
+    *"ec2 describe-network-interfaces"*) printf '%s\\n' "$NETWORK_INTERFACE" ;;
+    *"ec2 describe-addresses"*) printf '%s\\n' "$ADDRESS" ;;
+    *"ec2 describe-instances"*) printf '%s\\n' "$INSTANCE" ;;
+    *"ec2 describe-volumes"*) printf '%s\\n' "$VOLUME" ;;
     *) exit 97 ;;
   esac
 }
@@ -255,16 +333,24 @@ verify_agentcore_egress us-west-2 "$TF_OUTPUT"
 				egress_configurations: {
 					value: {
 						"us-west-2a": {
+							availability_zone: availabilityZone,
 							private_subnet_id: privateSubnetId,
 							public_subnet_id: publicSubnetId,
 							route_table_id: routeTableId,
-							nat_gateway_id: natGatewayId,
+							network_interface_id: networkInterfaceId,
+							eip_allocation_id: eipAllocationId,
+							autoscaling_group_name: autoscalingGroupName,
+							ami_id: amiId,
 						},
 					},
 				},
 			}),
 			ROUTE_TABLE: JSON.stringify(routeTable),
-			NAT_GATEWAY: JSON.stringify(natGateway),
+			AUTO_SCALING_GROUP: JSON.stringify(autoscalingGroup),
+			NETWORK_INTERFACE: JSON.stringify(networkInterface),
+			ADDRESS: JSON.stringify(address),
+			INSTANCE: JSON.stringify(instance),
+			VOLUME: JSON.stringify(volume),
 		},
 	});
 }
@@ -390,16 +476,27 @@ describe("production AgentCore alarm configuration", () => {
 });
 
 describe("production AgentCore egress configuration", () => {
-	it("accepts an active private route through an available NAT", () => {
+	it("accepts a healthy zonal fck-nat route", () => {
 		const result = verifyEgress({});
 		expect(result.status, result.stderr).toBe(0);
 	});
 
 	it.each([
 		["inactive route", { routeState: "blackhole" }],
-		["foreign route target", { routeNatGatewayId: "nat-foreign" }],
-		["unavailable NAT", { natState: "failed" }],
-		["foreign public subnet", { natSubnetId: "subnet-foreign" }],
+		["foreign route target", { routeNetworkInterfaceId: "eni-foreign" }],
+		["unhealthy instance", { asgHealth: "Unhealthy" }],
+		["cross-AZ instance", { asgAvailabilityZone: "us-west-2b" }],
+		[
+			"enabled source/destination checks",
+			{ networkInterfaceSourceDestCheck: true },
+		],
+		["foreign public subnet", { networkInterfaceSubnetId: "subnet-foreign" }],
+		["unattached EIP", { addressInstanceId: "i-foreign" }],
+		["stopped instance", { instanceState: "stopped" }],
+		["unreviewed AMI", { instanceAmiId: "ami-foreign" }],
+		["optional IMDSv2", { httpTokens: "optional" }],
+		["persistent root disk", { deleteOnTermination: false }],
+		["unencrypted root disk", { volumeEncrypted: false }],
 	] as const)("rejects %s", (_name, options) => {
 		expect(verifyEgress(options).status).not.toBe(0);
 	});

@@ -193,9 +193,9 @@ resource "aws_ecs_service" "agentcore_dispatch_publisher" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = local.shared_ecs_subnet_ids
+    subnets          = values(aws_subnet.private)[*].id
     security_groups  = [aws_security_group.agentcore_dispatch_publisher.id]
-    assign_public_ip = var.assign_public_ip
+    assign_public_ip = false
   }
 
   lifecycle {

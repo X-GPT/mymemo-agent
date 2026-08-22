@@ -40,6 +40,10 @@ Optional:
 - `LOG_LEVEL` (default `info`)
 - `WORKER_HEARTBEAT_INTERVAL_MS` (default `15000`)
 
+Production Terraform also requires `fck_nat_ami_id`, an exact reviewed ARM64
+AMI ID owned by the official fck-nat publisher in `aws_region`. Do not replace
+it with a latest-image lookup.
+
 Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one execution.
 
 ## Chat API
