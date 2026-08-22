@@ -1,4 +1,4 @@
-# Split-runtime end-to-end smoke verification
+# AgentCore Conversation smoke verification
 
 The Conversation smoke is one public-contract client with two targets. It uses
 `AGENT_SMOKE_BASE_URL` to address either the local compose harness or the
@@ -25,11 +25,11 @@ value fails before the first HTTP request.
   request, with exactly one trailing newline tolerated.
 - `full` is the local pre-merge superset. After the `core` checks it creates a
   second Conversation, asks its Run to start an immediate long-running Bash
-  command, reads the live SSE incrementally, and calls the Run cancellation
+  command, reads the live SSE incrementally, and calls the Run interruption
   resource only after the first Tool invocation arrives. It requires the
-  running-Run `cancel_requested` response, a `RUN_CANCELLED` live outcome with no surviving
+  running-Run `interrupt_requested` response, a `RUN_INTERRUPTED` live Outcome with no surviving
   provisional Assistant text, and terminal recovery through Conversation
-  history with the committed messages and Tool events ending `RUN_CANCELLED`. A third
+  history with the committed messages and Tool events ending `RUN_INTERRUPTED`. A third
   Conversation performs two searchable-document Runs against the local KB seed: the first
   reports the exact inventory count through `ListDocuments`; the second uses
   `SearchDocuments`, `LoadDocuments`, and `Read` to report the seeded title and
@@ -42,7 +42,7 @@ value fails before the first HTTP request.
 
 | Target | Suite | Invocation | Credentials and network |
 | --- | --- | --- | --- |
-| Local compose | one Run | `bun run smoke:local` | Requires OpenRouter and E2B development credentials; uses Postgres, Redis, the development bridge, and the real local Runtime without AWS-managed Dispatch infrastructure. |
+| Local compose | `full` | `bun run smoke:local` | Requires OpenRouter and E2B development credentials; uses Postgres, Redis, a disposable S3-compatible object store, the development bridge, and the real local Runtime. |
 | Deployed internal ALB | `core` | `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh` | The wrapper expects `agentcore`. Run inside the VPC under the synthetic identity targeted in the Statsig exposure gate. The caller receives no provider, sandbox, AWS, or database secrets. |
 
 There is no staging target. The credential-free integration suite and local
@@ -55,10 +55,27 @@ command remains manual from a VPC-reachable environment.
 
 ## Local smoke
 
-`bun run smoke:local` builds the local-only Chat API and Runtime targets, waits
-for the durable bridge, and admits one public Run that must reach
-`RUN_FINISHED`. The production images omit both local composition entrypoints
-and the bridge application.
+Export `OPENROUTER_API_KEY` and `E2B_API_KEY`, build the
+`WORKER_E2B_TEMPLATE` described in `apps/agent-worker/e2b-template/`, then run:
+
+```sh
+bun run smoke:local
+```
+
+The command builds the local-only Chat API, Dispatch bridge, and Runtime,
+starts Postgres, Redis, and a disposable MinIO bucket, and runs `full` under the
+seeded `demo-member` identity. It proves three sequential successful Runs in
+one Conversation, Agent-session and Workspace continuity, streaming and
+permanent history, one running-Run interruption, two Searchable-document Runs,
+and public Downloadable-artifact listing, signing, and byte-exact download.
+Cleanup stops the Compose stack when the smoke exits. The production images
+omit both local composition entrypoints and the bridge application.
+
+This local workflow deliberately covers no AWS-managed Dispatch boundary. SQS,
+Lambda, SSM, IAM, VPC networking, the managed AgentCore Runtime, and production
+S3 remain the responsibility of the deployed synthetic smoke and deployment
+checks. A local pass is evidence for application behavior through the Runtime
+HTTP contract, not for those managed boundaries.
 
 The deployed wrapper fixes the expected runtime to `agentcore`. After the
 synthetic identity is targeted in the exposure gate, the public creation response
@@ -76,6 +93,7 @@ recovery, and identity-free signed-object fetching:
 
 ```sh
 bun test scripts/smoke/agent-conversation-smoke.test.ts
+bun test scripts/smoke/local-agentcore-smoke.test.ts
 ```
 
 The broader client-contract decision and release contract are recorded in

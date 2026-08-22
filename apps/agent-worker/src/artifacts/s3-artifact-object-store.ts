@@ -26,6 +26,7 @@ export type PutArtifactObject = (
 ) => Promise<void>;
 
 export interface ArtifactObjectStoreDependencies {
+	endpoint?: string;
 	putObject?: PutArtifactObject;
 	createMultipartUpload?: (
 		request: CreateMultipartUploadCommandInput,
@@ -49,7 +50,13 @@ export function createS3ArtifactObjectStore(
 	config: ArtifactBucketConfig,
 	dependencies: ArtifactObjectStoreDependencies = {},
 ): ArtifactObjectStore {
-	const client = new S3Client({ region: config.region, maxAttempts: 3 });
+	const client = new S3Client({
+		region: config.region,
+		maxAttempts: 3,
+		...(dependencies.endpoint
+			? { endpoint: dependencies.endpoint, forcePathStyle: true }
+			: {}),
+	});
 	const putObject =
 		dependencies.putObject ??
 		(async (request: PutObjectCommandInput, signal: AbortSignal) => {

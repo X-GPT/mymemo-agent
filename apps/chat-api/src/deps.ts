@@ -74,6 +74,12 @@ export function createDeps(
 		},
 	),
 	exposureGate: ExposureGate = createExposureGate(config),
+	artifactDownloadSigner: ArtifactDownloadSigner = createS3ArtifactDownloadSigner(
+		{
+			bucket: config.artifactBucket,
+			region: config.artifactRegion,
+		},
+	),
 ): AppDeps {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
@@ -90,10 +96,7 @@ export function createDeps(
 	return {
 		config,
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
-		artifactDownloadSigner: createS3ArtifactDownloadSigner({
-			bucket: config.artifactBucket,
-			region: config.artifactRegion,
-		}),
+		artifactDownloadSigner,
 		conversationStore,
 		conversationHistoryStore,
 		runStore,
