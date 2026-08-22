@@ -32,7 +32,7 @@ See [the chat API guide](./docs/agents/chat-api.md) for chat-api documentation.
 │   └── agent-worker/       # Split-runtime worker (claims + runs turns)
 ├── packages/               # Shared libraries (e.g. @mymemo/agent-db)
 ├── AGENTS.md               # Architecture & agent guidance
-├── compose.yaml            # Local end-to-end harness (chat-api + agent-worker + postgres)
+├── compose.yaml            # Legacy Fargate local stack (new turns unavailable until #523)
 └── README.md               # This file
 ```
 
@@ -40,92 +40,14 @@ See [the chat API guide](./docs/agents/chat-api.md) for chat-api documentation.
 
 Each project can be developed independently. Navigate to the respective project directory and follow its setup instructions.
 
-## Local end-to-end harness
+## Runtime verification
 
-`compose.yaml` runs the split-runtime path locally: **chat-api admits a Run →
-agent-worker claims and processes it → chat-api attaches to the worker's
-producer-buffered standard AG-UI Live Stream as SSE**. The worker runs a real
-Claude Agent SDK turn through OpenRouter and an E2B workspace. Postgres backs
-permanent Conversation history; Redis pub/sub relays the temporary per-Run
-delivery and reconnect lane without storing stream content.
+Conversation creation is AgentCore-only. The checked-in Compose stack still
+runs the legacy Fargate worker and cannot execute a new turn; #523 owns the
+local AgentCore bridge. Do not use Compose as current end-to-end evidence.
 
-### Run it
-
-Before starting the harness:
-
-- Build the worker's E2B template as described in
-  `apps/agent-worker/e2b-template/README.md`.
-- Export `OPENROUTER_API_KEY` and `E2B_API_KEY`. Optionally override
-  `OPENROUTER_BASE_URL`, `OPENROUTER_DEFAULT_MODEL`, or
-  `WORKER_E2B_TEMPLATE`.
-- Provide AWS credentials that can access the shared Terraform state, provision
-  the dev artifact bucket, and get, put, and delete its objects. Compose mounts
-  `~/.aws` read-only; to use the repository's usual profile, export
-  `AWS_PROFILE=mymemo` and authenticate it first when needed (for example,
-  `aws sso login --profile mymemo`). To use exported credentials instead,
-  leave `AWS_PROFILE` unset and set `AWS_ACCESS_KEY_ID`,
-  `AWS_SECRET_ACCESS_KEY`, and, for temporary credentials,
-  `AWS_SESSION_TOKEN`.
-
-Provision the shared dev infrastructure once, and re-apply it whenever
-`infra/dev` changes. These commands use the `mymemo` profile; omit the
-`AWS_PROFILE=mymemo` prefix when using exported credentials:
-
-```sh
-AWS_PROFILE=mymemo terraform -chdir=infra/dev init
-AWS_PROFILE=mymemo terraform -chdir=infra/dev apply
-```
-
-This separate dev Terraform state owns the fixed
-`mymemo-agent-local-artifacts` bucket, blocks public access, enforces
-bucket-owner ownership and encryption, and expires objects after seven days.
-
-Compose passes the developer AWS credentials only to the two trusted runtimes.
-The worker's structurally restricted sandbox environment does not pass them to
-the E2B sandbox. This shared developer credential is a local-harness convenience
-only; deployed chat-api and agent-worker tasks keep their separate
-least-privilege artifact roles. Chat-api opens its exposure gate locally via
-`AGENT_EXPOSURE_BREAK_GLASS=true` in `compose.yaml`.
-
-Bring the stack up with one command:
-
-```sh
-docker compose up --build
-```
-
-Create a Conversation, then admit a strict AG-UI Run to stream the turn. First
-create the Conversation (its document scope is frozen at creation):
-
-```sh
-curl -sS http://localhost:3000/v1/conversations \
-  -H 'Content-Type: application/json' \
-  -H 'X-Member-Code: demo-member' \
-  -H 'X-Partner-Code: demo-partner' \
-  -d '{}'
-# → {"conversationId":"<uuid>","scope":"general"}
-```
-
-Then generate client-owned Run and message UUIDs and POST a standard
-`RunAgentInput` to the returned `conversationId` (SSE stream):
-
-```sh
-curl -N http://localhost:3000/v1/conversations/<conversationId>/runs \
-  -H 'Content-Type: application/json' \
-  -H 'X-Member-Code: demo-member' \
-  -H 'X-Partner-Code: demo-partner' \
-  -d '{"threadId":"<conversationId>","runId":"<run-uuid>","messages":[{"id":"<message-uuid>","role":"user","content":"Hello, split runtime."}],"tools":[],"context":[]}'
-```
-
-The stream emits standard AG-UI `RUN_STARTED`, Assistant text lifecycle and
-Tool events, then one terminal event. SSE frames carry data only. Reconnect at
-`GET /v1/conversations/<conversationId>/runs/<runId>/events`; every attach
-rebuilds the active Run from the beginning. POST another client-owned Run id to
-the same Conversation for the next turn.
-
-This `compose.yaml` is a **manual** local stack for poking the running services
-by hand; it is not what gates correctness. The credential-free PR suite covers
-durable AgentCore acquisition and stream/reconnect behavior through the shared
-Run-serving seam:
+The credential-free PR suite covers durable AgentCore acquisition and
+stream/reconnect behavior through the shared Run-serving seam:
 
 ```sh
 bun test e2e/relay-failure-matrix.integration.test.ts
@@ -175,5 +97,3 @@ scripts/smoke/agent-worker-image-check.sh mymemo-agent-worker:image-check
 
 The container check resolves the SDK-owned glibc Claude CLI and executes its
 `--version` command with no network or runtime credentials.
-
-`docker compose down -v` wipes the volumes (the KB seed + writable DB) to start clean.
