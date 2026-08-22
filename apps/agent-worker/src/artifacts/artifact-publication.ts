@@ -80,7 +80,7 @@ export interface ArtifactPublisherDependencies {
 /**
  * Capture the Run's baseline now, then return a session that compares the
  * final manifest, ledgers every intended object, and uploads changed files.
- * Metadata remains non-current until the Run loop's fenced success transaction.
+ * Metadata remains non-current until the fenced success transaction.
  */
 export function createArtifactPublisher(
 	deps: ArtifactPublisherDependencies,

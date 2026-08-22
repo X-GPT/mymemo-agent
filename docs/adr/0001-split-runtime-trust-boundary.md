@@ -2,6 +2,11 @@
 
 Status: accepted
 
+Amended by [ADR-0031](0031-make-agentcore-the-sole-execution-runtime.md):
+Fargate Run serving is retired. AgentCore Runtime now hosts the trusted agent
+loop, while E2B remains the untrusted filesystem and shell boundary. References
+below to `agent-worker` Fargate describe the historical split-runtime design.
+
 The agent control loop moves out of the E2B sandbox into a trusted
 `agent-worker` Fargate service; E2B keeps only untrusted filesystem/shell
 execution on a persistent workspace. The load-bearing reason is the trust

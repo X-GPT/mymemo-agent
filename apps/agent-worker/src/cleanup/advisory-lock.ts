@@ -1,10 +1,8 @@
 /**
- * Single-flighting for the worker-embedded cleanup pass (design "Deployment
- * Shape": cleanup loops are worker-embedded and single-flighted via a Postgres
- * advisory lock — no separate scheduled job). Every worker replica runs the
- * loop, but only the one holding the lock runs a pass; the rest skip. This is
- * an optimization, not a correctness requirement — the pass's E2B operations
- * are all idempotent — but it avoids N replicas doing the same reconciliation.
+ * Single-flighting for the cleanup pass owned by `agent-maintenance`.
+ * Production runs one service task; the advisory lock also prevents overlapping
+ * passes during rollouts or duplicate starts. This is an optimization, not a
+ * correctness requirement, because the pass's E2B operations are idempotent.
  */
 
 /** The minimal pooled-connection surface the lock needs; `pg.Pool` satisfies it. */
@@ -23,7 +21,7 @@ export interface AdvisoryLockClient {
 
 /**
  * Fixed 63-bit key for the cleanup advisory lock (ASCII "mymclean"-derived);
- * every replica must use the same value or they would not exclude each other.
+ * every process must use the same value or they would not exclude each other.
  */
 export const CLEANUP_ADVISORY_LOCK_KEY = 8_242_869_154_306_402;
 

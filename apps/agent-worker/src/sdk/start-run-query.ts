@@ -318,7 +318,7 @@ async function killOrRecordOrphan(
 
 /**
  * Ledger the sandbox a successful repoint just replaced. Best-effort like the
- * run loop's pointer advance: the new pointer is already durable, so a failed
+ * serving path's pointer advance: the new pointer is already durable, so a failed
  * ledger write only risks leaking the old sandbox — never the turn.
  */
 async function recordReplacedSandbox(

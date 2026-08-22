@@ -40,8 +40,8 @@ export interface AgentSessionEntry {
 }
 
 /**
- * Identifies one SDK transcript within its Claim-owned Conversation. `subpath`
- * undefined names the main transcript (stored as `''`); a non-empty
+ * Identifies one SDK transcript within its Conversation's live Ownership.
+ * `subpath` undefined names the main transcript (stored as `''`); a non-empty
  * `subagents/agent-…` value names a subagent transcript.
  */
 export interface AgentSessionRef {
@@ -223,7 +223,7 @@ export async function deleteConversationAgentSessionsTx(
 /**
  * Validate a mutation-shaped no-op without opening a transaction. There is no
  * write to protect with a lock, but the bound SessionStore call still rejects
- * a Claim whose Ownership lease is no longer active.
+ * an owner whose Ownership lease is no longer active.
  */
 async function assertConversationOwnershipForNoop(
 	db: Database,
