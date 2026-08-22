@@ -5,6 +5,7 @@
 	"type": "module",
 	"exports": {
 		"./ag-ui-sse": "./ag-ui-sse.ts",
+		"./import-graph": "./import-graph.ts",
 		"./redis-test-server": "./redis-test-server.ts"
 	},
 	"scripts": {

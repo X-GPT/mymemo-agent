@@ -4,7 +4,9 @@ Use this guide for changes under `apps/agent-worker`, shared Run-serving behavio
 
 ## Conversation control plane and Run serving
 
-`src/run-loop.ts` owns the Fargate-only control plane: global queued expiration and Reclamation, Conversation Claim, bounded snapshot ordering, Run start, and unconditional release. One supervisor slot is held for an entire Conversation drain. A tick renews unserved Claim windows and prompts attached Run heartbeats; timer ticks remain authoritative even when the optional `RunDoorbell` provides low-latency pickup.
+`src/run-loop.ts` owns the Fargate-only serving control plane: Conversation Claim, bounded snapshot ordering, Run start, and unconditional release. One supervisor slot is held for an entire Conversation drain. A tick renews unserved Claim windows and prompts attached Run heartbeats; timer ticks remain authoritative even when the optional `RunDoorbell` provides low-latency pickup.
+
+`src/maintenance-runner.ts` owns global queued-Run expiration, fenced Reclamation, and asynchronous resource cleanup without Claiming or serving Runs. The current worker starts it before the Run loop and stops it during the same graceful shutdown; the isolated runner can later move to the dedicated maintenance service without moving Run-serving dependencies.
 
 Each Claim's snapshot Runs execute one at a time in submission order through an injected `RunProcessor`. A lost Ownership lease halts the drain without release. Graceful shutdown aborts the active Run, stops serving the remaining snapshot, and releases the Conversation so unstarted Runs remain queued and become eligible for the next Claim.
 

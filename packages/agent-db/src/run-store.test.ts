@@ -325,8 +325,8 @@ async function ageRunsPastQueueTimeout(...runIds: string[]) {
 	await tdb.db
 		.update(runs)
 		.set({
-			createdAt: sql`now() - interval '2 minutes'`,
-			updatedAt: sql`now() - interval '2 minutes'`,
+			createdAt: sql`now() - interval '11 minutes'`,
+			updatedAt: sql`now() - interval '11 minutes'`,
 		})
 		.where(inArray(runs.runId, runIds));
 }
@@ -1744,13 +1744,15 @@ describe("markLiveStreamFailedTx", () => {
 });
 
 describe("Run liveness sweep transactions", () => {
-	it("uses the ten-minute queued backstop for AgentCore Conversations", async () => {
-		await tdb.db
-			.update(conversations)
-			.set({ executionRuntime: "agentcore" })
-			.where(eq(conversations.conversationId, "conv-1"));
+	it("uses the AgentCore queued backstop without consulting the compatibility marker", async () => {
 		await queueRun("run-agentcore-queued", "conv-1");
-		await ageRunsPastQueueTimeout("run-agentcore-queued");
+		await tdb.db
+			.update(runs)
+			.set({
+				createdAt: sql`now() - interval '2 minutes'`,
+				updatedAt: sql`now() - interval '2 minutes'`,
+			})
+			.where(eq(runs.runId, "run-agentcore-queued"));
 
 		expect(await expireUnownedQueuedRunsTx(tdb.db)).toBeNull();
 		expect((await readRun("run-agentcore-queued"))?.status).toBe("queued");

@@ -81,7 +81,7 @@ export interface WorkerConfig {
 	heartbeatIntervalMs: number;
 	/** Grace period to drain active runs on shutdown before forcing exit (ms). */
 	shutdownTimeoutMs: number;
-	/** Worker-embedded orphan/deleted-conversation cleanup loop (Task 8.1). */
+	/** Worker-embedded maintenance runner's asynchronous cleanup cadence. */
 	cleanup: {
 		/** How often the single-flighted cleanup pass is attempted (ms). */
 		intervalMs: number;

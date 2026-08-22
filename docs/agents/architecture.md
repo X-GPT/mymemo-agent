@@ -43,7 +43,8 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/chat-api/src/features/exposure-gate/` | Production Statsig implementation of the new-work gate |
 | `apps/chat-api/src/features/run-store/` | Run admission, owner-scoped Run reads, and durable interruption |
 | `apps/chat-api/src/db/` | Thin bindings to `@mymemo/agent-db` and the shared migration runner |
-| `apps/agent-worker/src/run-loop.ts` | Fargate-only Claim, ordering, expiration, Reclamation, and release control plane |
+| `apps/agent-worker/src/run-loop.ts` | Fargate-only Claim, ordering, and release control plane |
+| `apps/agent-worker/src/maintenance-runner.ts` | Global queued-Run expiration, Reclamation, and asynchronous cleanup |
 | `apps/agentcore-dispatch-publisher/src/` | Dedicated AgentCore Dispatch publication entrypoint, loop, and production adapters |
 | `apps/agent-worker/src/run-serving.ts` | Shared serving behavior for an already-running Run |
 | `apps/agent-worker/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |

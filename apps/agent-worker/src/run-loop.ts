@@ -5,10 +5,8 @@ import {
 	releaseConversationTx,
 } from "@mymemo/agent-db/conversation-ownership";
 import {
-	expireUnownedQueuedRunsTx,
 	type RunRecord,
 	type RunWriteRejected,
-	reclaimConversationTx,
 	startClaimedRunTx,
 } from "@mymemo/agent-db/run-store";
 import type { LiveStreamRelay, LiveStreamTelemetry } from "@mymemo/live-text";
@@ -71,25 +69,20 @@ function conversationKey(owner: ConversationOwner): string {
 	return `${owner.userId}/${owner.conversationId}`;
 }
 
-const RUN_LIVENESS_SWEEP_INTERVAL_MS = 15_000;
 /**
  * The agent-worker control loop over the shared queue helpers. Its unit is the
  * Conversation (ADR-0015): a worker Claims a Conversation, serves the Runs it
  * had queued at that moment one at a time in submission order, and releases.
  * One `tick`:
- *  1. expires old queued Runs whose Conversation was already unowned, then
- *     reclaims lapsed Ownership so preserved queued Runs remain available to
- *     this tick's Claim;
- *  2. renews Claims between snapshot Runs and prompts the shared Run-serving
+ *  1. renews Claims between snapshot Runs and prompts the shared Run-serving
  *     seam's active-Run heartbeats; and
- *  3. Claims Conversations up to the supervisor's remaining capacity and
+ *  2. Claims Conversations up to the supervisor's remaining capacity and
  *     dispatches each as one supervised drain.
  *
- * `tick` is the whole loop and is directly awaitable, so tests drive Reclamation,
- * claim, renewal, and terminalization deterministically (PGlite + explicit
- * ticks, no wall-clock timers — Bun lacks `setInterval` fake timers). `start`
- * schedules both `tick` and the at-least-15s Run liveness sweep; `stop`
- * unschedules them and drains in-flight work.
+ * `tick` is directly awaitable, so tests drive Claim, renewal, and
+ * terminalization deterministically (PGlite + explicit ticks, no wall-clock
+ * timers — Bun lacks `setInterval` fake timers). Global expiration and
+ * Reclamation belong to `MaintenanceRunner`.
  *
  * Ownership and single-terminalization are enforced by the DB fences in the
  * helpers, not here: two workers cannot Claim one Conversation (`FOR UPDATE
@@ -106,7 +99,6 @@ export class RunLoop {
 	private readonly runServing: RunServing;
 	private running = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
-	private runLivenessSweepTimer: ReturnType<typeof setTimeout> | undefined;
 	private doorbellUnsubscribe: (() => void) | undefined;
 
 	constructor(private readonly opts: RunLoopOptions) {
@@ -124,13 +116,11 @@ export class RunLoop {
 	}
 
 	/**
-	 * Run one control-loop iteration: expire already-unowned queued Runs, reclaim
-	 * lapsed Conversations, renew the Ownership lease of every Conversation this
-	 * worker is draining, then Claim and dispatch Conversations up to capacity.
+	 * Renew the Ownership lease of every Conversation this worker is draining,
+	 * then Claim and dispatch Conversations up to capacity.
 	 * Returns how many Conversations were Claimed this tick.
 	 */
 	async tick(): Promise<number> {
-		await this.tryRunLivenessSweep();
 		await this.renewDrainsWithoutActiveRuns();
 		await this.runServing.heartbeat();
 		return this.claimAndDrain();
@@ -158,10 +148,6 @@ export class RunLoop {
 			}
 		};
 		void runTick();
-		this.runLivenessSweepTimer = setTimeout(
-			() => void this.onRunLivenessSweepTimer(),
-			RUN_LIVENESS_SWEEP_INTERVAL_MS,
-		);
 		if (this.opts.doorbell) {
 			// Rings coalesce so a burst of admissions costs one trailing claim pass,
 			// and doorbell ticks never run concurrently with each other. A doorbell
@@ -201,10 +187,6 @@ export class RunLoop {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
-		if (this.runLivenessSweepTimer) {
-			clearTimeout(this.runLivenessSweepTimer);
-			this.runLivenessSweepTimer = undefined;
-		}
 		// Stop every in-flight run before draining: cancel Tool/E2B work, then
 		// force-close private SDK resources without granting the user-interruption
 		// grace window. `state.interrupted` stays false, so shutdown drains to
@@ -216,90 +198,6 @@ export class RunLoop {
 			drain.served?.shutdownController.abort();
 		}
 		await this.opts.worker.shutdown();
-	}
-
-	private async onRunLivenessSweepTimer(): Promise<void> {
-		if (!this.running) return;
-		try {
-			await this.tryRunLivenessSweep();
-		} finally {
-			if (this.running) {
-				this.runLivenessSweepTimer = setTimeout(
-					() => void this.onRunLivenessSweepTimer(),
-					RUN_LIVENESS_SWEEP_INTERVAL_MS,
-				);
-			}
-		}
-	}
-
-	private async tryRunLivenessSweep(): Promise<void> {
-		await this.tryExpireUnownedQueuedRuns();
-		await this.tryReclaimConversations();
-	}
-
-	private async tryReclaimConversations(): Promise<void> {
-		try {
-			for (;;) {
-				const reclamation = await reclaimConversationTx(this.opts.db);
-				if (!reclamation) break;
-				if (reclamation.runs.length > 0) {
-					this.opts.logger.warn({
-						message: "reclaimed Conversation",
-						workerId: this.workerId,
-						conversationId: reclamation.conversationId,
-						reclaimedRuns: reclamation.runs.map((run) => ({
-							runId: run.runId,
-							status: run.status,
-						})),
-					});
-				}
-				for (const run of reclamation.runs) {
-					if (run.liveStreamFailedAt === null) continue;
-					if (run.liveStreamFailureMarkedByReclamation) {
-						this.opts.liveStreamTelemetry?.record("degradation", "started", {
-							reason: "stale_worker",
-						});
-					}
-					this.opts.liveStreamTelemetry?.record("degradation", "ended", {
-						reason: "stale_worker",
-						durationMs: Math.max(
-							0,
-							Date.now() - run.liveStreamFailedAt.getTime(),
-						),
-					});
-				}
-			}
-		} catch (error) {
-			this.opts.logger.error({
-				message: "Conversation Reclamation failed",
-				workerId: this.workerId,
-				error: toMessage(error),
-			});
-		}
-	}
-
-	private async tryExpireUnownedQueuedRuns(): Promise<void> {
-		try {
-			for (;;) {
-				const expiration = await expireUnownedQueuedRunsTx(this.opts.db);
-				if (!expiration) break;
-				this.opts.logger.warn({
-					message: "expired unowned queued Runs",
-					workerId: this.workerId,
-					conversationId: expiration.conversationId,
-					expiredRuns: expiration.runs.map((run) => ({
-						runId: run.runId,
-						status: run.status,
-					})),
-				});
-			}
-		} catch (error) {
-			this.opts.logger.error({
-				message: "unowned queue timeout sweep failed",
-				workerId: this.workerId,
-				error: toMessage(error),
-			});
-		}
 	}
 
 	/** Preserve the Claim across start/between-Run windows. Once a Run is

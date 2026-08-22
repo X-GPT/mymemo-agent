@@ -1,9 +1,9 @@
 import type { AdvisoryLockPool } from "./cleanup/advisory-lock";
-import { CleanupLoop } from "./cleanup/cleanup-loop";
 import { createS3ArtifactObjectJanitor } from "./cleanup/s3-artifact-janitor";
 import { loadWorkerConfigFromEnv } from "./config/env";
 import { startHealthServer } from "./health";
 import { createLogger } from "./logger";
+import { MaintenanceRunner } from "./maintenance-runner";
 import { createProductionRunResources } from "./production-run-resources";
 import { PostgresRunDoorbell } from "./run-doorbell";
 import { RunLoop } from "./run-loop";
@@ -40,24 +40,25 @@ const runLoop = new RunLoop({
 	doorbell: new PostgresRunDoorbell(config.agentDatabaseUrl, logger),
 	logger,
 });
-// Worker-embedded external-resource cleanup (Task 8.1, ADR-0007/ADR-0011).
-// Single-flighted across replicas by a Postgres advisory lock taken on a
-// dedicated connection from Drizzle's underlying pg pool (`db.$client`). The
-// The pass expires bounded Canary audit and reconciles E2B sandboxes and S3
-// artifact objects from Postgres ledgers; it never lists either provider.
-const cleanupLoop = new CleanupLoop({
+// Global expiration, Reclamation, and external-resource cleanup are isolated
+// from Run serving behind the maintenance runner. Cleanup remains
+// single-flighted across replicas by a Postgres advisory lock.
+const maintenanceRunner = new MaintenanceRunner({
 	db,
 	pool: db.$client as unknown as AdvisoryLockPool,
 	sandboxJanitor,
 	artifactJanitor: artifactObjectJanitor,
 	workerId,
-	intervalMs: config.cleanup.intervalMs,
+	cleanupIntervalMs: config.cleanup.intervalMs,
 	logger,
+	liveStreamTelemetry,
 });
 const server = startHealthServer(worker, config.port, logger);
 
-runLoop.start();
-cleanupLoop.start();
+let shuttingDown = false;
+void maintenanceRunner.start().then(() => {
+	if (!shuttingDown) runLoop.start();
+});
 
 logger.info({
 	message: "agent-worker started",
@@ -66,12 +67,11 @@ logger.info({
 	heartbeatIntervalMs: config.heartbeatIntervalMs,
 });
 
-let shuttingDown = false;
 async function handleShutdownSignal(signal: NodeJS.Signals): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	logger.info({ message: "Received shutdown signal", signal, workerId });
-	cleanupLoop.stop();
+	maintenanceRunner.stop();
 	await runLoop.stop();
 	await liveStreamRelay.close().catch(() => {});
 	server.stop();
