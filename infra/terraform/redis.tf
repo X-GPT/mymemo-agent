@@ -10,6 +10,10 @@ resource "aws_security_group" "live_redis_clients" {
   name        = "${local.common_name}-live-redis-clients"
   description = "chat-api and AgentCore Runtime clients of the Redis Live Stream lane"
   vpc_id      = local.shared_vpc_id
+
+  lifecycle {
+    ignore_changes = [description]
+  }
 }
 
 resource "aws_security_group_rule" "live_redis_from_services" {
