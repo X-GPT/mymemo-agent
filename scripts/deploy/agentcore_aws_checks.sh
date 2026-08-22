@@ -61,49 +61,134 @@ verify_agentcore_alarms() {
 verify_agentcore_egress() {
   local region="$1"
   local terraform_output="$2"
+  local verify_route="${3:-true}"
   local configuration
   local private_subnet_id
   local public_subnet_id
   local route_table_id
-  local nat_gateway_id
+  local network_interface_id
+  local eip_allocation_id
+  local autoscaling_group_name
+  local availability_zone
+  local ami_id
+  local instance_id
+  local volume_id
   local route_table
-  local nat_gateway
+  local network_interface
+  local address
+  local autoscaling_group
+  local instance
+  local volume
+
+  [[ "${verify_route}" == "true" || "${verify_route}" == "false" ]]
 
   while IFS= read -r configuration; do
     private_subnet_id="$(jq -r '.private_subnet_id' <<<"${configuration}")"
     public_subnet_id="$(jq -r '.public_subnet_id' <<<"${configuration}")"
     route_table_id="$(jq -r '.route_table_id' <<<"${configuration}")"
-    nat_gateway_id="$(jq -r '.nat_gateway_id' <<<"${configuration}")"
+    network_interface_id="$(jq -r '.network_interface_id' <<<"${configuration}")"
+    eip_allocation_id="$(jq -r '.eip_allocation_id' <<<"${configuration}")"
+    autoscaling_group_name="$(jq -r '.autoscaling_group_name' <<<"${configuration}")"
+    availability_zone="$(jq -r '.availability_zone' <<<"${configuration}")"
+    ami_id="$(jq -r '.ami_id' <<<"${configuration}")"
 
-    route_table="$(agentcore_aws ec2 describe-route-tables \
+    if [[ "${verify_route}" == "true" ]]; then
+      route_table="$(agentcore_aws ec2 describe-route-tables \
+        --region "${region}" \
+        --route-table-ids "${route_table_id}")"
+      jq -e \
+        --arg routeTableId "${route_table_id}" \
+        --arg privateSubnetId "${private_subnet_id}" \
+        --arg networkInterfaceId "${network_interface_id}" \
+        '.RouteTables
+          | length == 1
+            and .[0].RouteTableId == $routeTableId
+            and any(.[0].Associations[]?; .SubnetId == $privateSubnetId)
+            and any(.[0].Routes[]?;
+              .DestinationCidrBlock == "0.0.0.0/0"
+              and .NetworkInterfaceId == $networkInterfaceId
+              and .State == "active")' \
+        <<<"${route_table}" >/dev/null
+    fi
+
+    autoscaling_group="$(agentcore_aws autoscaling describe-auto-scaling-groups \
       --region "${region}" \
-      --route-table-ids "${route_table_id}")"
+      --auto-scaling-group-names "${autoscaling_group_name}")"
     jq -e \
-      --arg routeTableId "${route_table_id}" \
-      --arg privateSubnetId "${private_subnet_id}" \
-      --arg natGatewayId "${nat_gateway_id}" \
-      '.RouteTables
+      --arg autoscalingGroupName "${autoscaling_group_name}" \
+      --arg availabilityZone "${availability_zone}" \
+      '.AutoScalingGroups
         | length == 1
-          and .[0].RouteTableId == $routeTableId
-          and any(.[0].Associations[]?; .SubnetId == $privateSubnetId)
-          and any(.[0].Routes[]?;
-            .DestinationCidrBlock == "0.0.0.0/0"
-            and .NatGatewayId == $natGatewayId
-            and .State == "active")' \
-      <<<"${route_table}" >/dev/null
+          and .[0].AutoScalingGroupName == $autoscalingGroupName
+          and .[0].MinSize == 1
+          and .[0].MaxSize == 1
+          and .[0].DesiredCapacity == 1
+          and (.[0].Instances | length == 1)
+          and .[0].Instances[0].AvailabilityZone == $availabilityZone
+          and .[0].Instances[0].LifecycleState == "InService"
+          and .[0].Instances[0].HealthStatus == "Healthy"' \
+      <<<"${autoscaling_group}" >/dev/null
+    instance_id="$(jq -r '.AutoScalingGroups[0].Instances[0].InstanceId' <<<"${autoscaling_group}")"
 
-    nat_gateway="$(agentcore_aws ec2 describe-nat-gateways \
+    network_interface="$(agentcore_aws ec2 describe-network-interfaces \
       --region "${region}" \
-      --nat-gateway-ids "${nat_gateway_id}")"
+      --network-interface-ids "${network_interface_id}")"
     jq -e \
-      --arg natGatewayId "${nat_gateway_id}" \
+      --arg networkInterfaceId "${network_interface_id}" \
       --arg publicSubnetId "${public_subnet_id}" \
-      '.NatGateways
+      --arg instanceId "${instance_id}" \
+      '.NetworkInterfaces
         | length == 1
-          and .[0].NatGatewayId == $natGatewayId
+          and .[0].NetworkInterfaceId == $networkInterfaceId
           and .[0].SubnetId == $publicSubnetId
-          and .[0].State == "available"' \
-      <<<"${nat_gateway}" >/dev/null
+          and .[0].Status == "in-use"
+          and .[0].SourceDestCheck == false
+          and .[0].Attachment.InstanceId == $instanceId' \
+      <<<"${network_interface}" >/dev/null
+
+    address="$(agentcore_aws ec2 describe-addresses \
+      --region "${region}" \
+      --allocation-ids "${eip_allocation_id}")"
+    jq -e \
+      --arg eipAllocationId "${eip_allocation_id}" \
+      --arg instanceId "${instance_id}" \
+      '.Addresses
+        | length == 1
+          and .[0].AllocationId == $eipAllocationId
+          and .[0].InstanceId == $instanceId
+          and (.[0].AssociationId | strings | length > 0)
+          and (.[0].PublicIp | strings | length > 0)' \
+      <<<"${address}" >/dev/null
+
+    instance="$(agentcore_aws ec2 describe-instances \
+      --region "${region}" \
+      --instance-ids "${instance_id}")"
+    jq -e \
+      --arg instanceId "${instance_id}" \
+      --arg publicSubnetId "${public_subnet_id}" \
+      --arg availabilityZone "${availability_zone}" \
+      --arg amiId "${ami_id}" \
+      '.Reservations
+        | length == 1
+          and (.[0].Instances | length == 1)
+          and .[0].Instances[0].InstanceId == $instanceId
+          and .[0].Instances[0].SubnetId == $publicSubnetId
+          and .[0].Instances[0].Placement.AvailabilityZone == $availabilityZone
+          and .[0].Instances[0].ImageId == $amiId
+          and .[0].Instances[0].State.Name == "running"
+          and .[0].Instances[0].MetadataOptions.HttpTokens == "required"
+          and (.[0].Instances[0].BlockDeviceMappings | length == 1)
+          and .[0].Instances[0].BlockDeviceMappings[0].Ebs.DeleteOnTermination == true' \
+      <<<"${instance}" >/dev/null
+    volume_id="$(jq -r '.Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' <<<"${instance}")"
+
+    volume="$(agentcore_aws ec2 describe-volumes \
+      --region "${region}" \
+      --volume-ids "${volume_id}")"
+    jq -e \
+      --arg volumeId "${volume_id}" \
+      '.Volumes | length == 1 and .[0].VolumeId == $volumeId and .[0].Encrypted == true' \
+      <<<"${volume}" >/dev/null
   done < <(jq -c '.egress_configurations.value | to_entries[].value' <<<"${terraform_output}")
 }
 

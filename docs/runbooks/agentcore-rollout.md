@@ -124,6 +124,45 @@ has committed, both ECS services are at zero, and the SSM parameter still reads
 
 ## Deploy order
 
+From the merged `main` branch, before manually dispatching the first release
+that replaces managed NAT gateways with fck-nat:
+
+1. Apply `infra/bootstrap-iam` locally with the `mymemo` profile so the release
+   role can manage the fck-nat launch templates, Auto Scaling groups, instance
+   profiles, ENIs, EIPs, and CloudWatch configuration.
+2. As a one-time staged migration, apply only `module.fck_nat_egress` with the
+   same reviewed production variable files. Terraform includes its new EIPs as
+   dependencies while leaving the managed NAT routes in service. Then verify
+   the new capacity without checking the not-yet-cut-over routes:
+
+   ```sh
+   export AWS_PROFILE=mymemo
+   terraform -chdir=infra/terraform plan \
+     -var-file=prod.tfvars \
+     -var-file=generated.auto.tfvars \
+     -target=module.fck_nat_egress \
+     -out=fck-nat-stage.tfplan
+   terraform -chdir=infra/terraform apply fck-nat-stage.tfplan
+   source scripts/deploy/agentcore_aws_checks.sh
+   staged_output="$(terraform -chdir=infra/terraform output -json)"
+   verify_agentcore_egress us-west-2 "$staged_output" false
+   ```
+
+   This targeted apply is only the migration preflight; do not use it for
+   routine releases.
+3. Review the complete production plan. It must create one fck-nat Auto Scaling
+   group in each configured availability zone before changing that zone's
+   private default route, move the Dispatch publisher to the private subnets
+   with no public IP, and remove both managed NAT gateways only after their
+   routes no longer reference them.
+4. After the authorized apply, retain the deployment inspection result. It
+   verifies each exact route target, healthy same-zone instance, static ENI,
+   disabled source/destination check, attached EIP, pinned AMI, required
+   IMDSv2, and encrypted disposable root volume.
+5. Replace one fck-nat instance through its Auto Scaling group and observe the
+   zonal alarm, route recovery, Dispatch pending age, and AgentCore behavior.
+   Existing connections are expected to be lost during replacement.
+
 The first cutover and ordinary releases are coordinated compatibility events.
 The publisher may be paused independently during containment, but every binary
 correction ships through a reviewed coordinated release. Schema, envelope,

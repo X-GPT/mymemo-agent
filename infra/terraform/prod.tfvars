@@ -21,6 +21,9 @@ kb_database_security_group_id = "sg-0c7084b87f3e109d7"
 # inherited network constraint, not the preferred production pattern.
 assign_public_ip = true
 
+# fck-nat 1.4.0, published by AWS account 568608671756 for us-west-2 ARM64.
+fck_nat_ami_id = "ami-0d1db1251d2b64626"
+
 chat_api_desired_count     = 1
 agent_worker_desired_count = 1
 # The dedicated publisher remains a one-task service in steady state. Its
