@@ -107,36 +107,35 @@ wins the Run's Outcome and prevents Downloadable artifact publication.
 _Avoid_: cancellation, Conversation termination, HITL interrupt
 
 **Conversation Ownership**:
-The exclusive execution authority over one Conversation, taken by Claim, held
-under an Ownership lease and epoch, and recovered by Reclamation. It is the
-single authority every execution write is fenced on, whichever runtime holds
-it.
+The exclusive execution authority over one Conversation, established by
+Durable acquisition, held under an Ownership lease and epoch, and recovered by
+Reclamation. It is the single authority every execution write is fenced on.
 _Avoid_: lock, worker assignment, run ownership
 
-**Claim**:
-Taking exclusive execution ownership of a Conversation in order to serve, one at
-a time in submission order, the Runs it had active at that moment. A Conversation
-is claimed many times over its life by any worker, and Runs submitted after a
-Claim are left for a later one.
-_Avoid_: job reservation, run claim
+**Durable acquisition**:
+Atomically taking Conversation Ownership for one exact dispatched queued Run,
+advancing its Ownership epoch, and transitioning that Run to running. A later
+Run is acquired by a separate Runtime invocation rather than drained from a
+global queue snapshot.
+_Avoid_: Claim, job reservation, run claim
 
 **Ownership lease**:
 The time-bounded, exclusive write authority over one Conversation and every
-resource scoped to it, obtained by claiming it and kept alive by heartbeat. Once
-it lapses or is superseded, that holder's writes are rejected.
+resource scoped to it, obtained by Durable acquisition and kept alive by
+heartbeat. Once it lapses or is superseded, that holder's writes are rejected.
 _Avoid_: run lease, sandbox lease (the decommissioned prototype concept)
 
 **Ownership epoch**:
-The per-Conversation number identifying one Claim, increasing with every Claim.
-It names the holder in every fenced write, so a superseded holder is rejected
-even while it still believes it holds the lease.
+The per-Conversation number identifying one Durable acquisition, increasing
+with every acquisition. It names the holder in every fenced write, so a
+superseded holder is rejected even while it still believes it holds the lease.
 _Avoid_: fencing token, version, generation
 
 **Reclamation**:
 Terminalizing the started Runs of a Conversation whose Ownership lease lapsed
 without release, so a Conversation whose worker vanished cannot hold executing
 Runs that never reach an Outcome. Never-started queued Runs remain for the next
-Claim. Distinct from Recovering, which is a client behavior.
+Dispatch attempt. Distinct from Recovering, which is a client behavior.
 _Avoid_: recovery (that word is the client-side term), stale-run recovery
 
 **Run event**:

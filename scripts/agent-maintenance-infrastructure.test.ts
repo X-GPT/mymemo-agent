@@ -57,6 +57,9 @@ describe("agent-maintenance infrastructure", () => {
 			expect(source).not.toContain("agent_worker");
 			expect(source).not.toContain("agent-worker");
 		}
+		expect(terraformFile("variables.tf")).not.toContain(
+			"worker_heartbeat_interval_ms",
+		);
 	});
 
 	it("collects Live Stream metrics from AgentCore Runtime logs", () => {

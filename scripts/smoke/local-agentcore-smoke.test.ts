@@ -34,7 +34,6 @@ describe("local AgentCore smoke", () => {
 			env: {
 				...Bun.env,
 				AGENT_SMOKE_BASE_URL: `http://127.0.0.1:${server.port}`,
-				AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME: "fargate",
 				AGENT_SMOKE_EXPECT_GATE_CLOSED: "true",
 				AGENT_SMOKE_MEMBER_CODE: "wrong-member",
 				AGENT_SMOKE_SUITE: "core",

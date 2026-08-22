@@ -119,7 +119,6 @@ describe("agent conversation smoke", () => {
 
 		const result = await runSmoke(`http://127.0.0.1:${server.port}`, {
 			AGENT_SMOKE_EXPECT_GATE_CLOSED: "false",
-			AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME: "agentcore",
 		});
 
 		expect(result.exitCode).not.toBe(0);
@@ -246,7 +245,6 @@ describe("agent conversation smoke", () => {
 
 		const result = await runSmoke(`http://127.0.0.1:${server.port}`, {
 			AGENT_SMOKE_EXPECT_GATE_CLOSED: "false",
-			AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME: "agentcore",
 		});
 
 		expect(result).toMatchObject({ exitCode: 0, stderr: "" });

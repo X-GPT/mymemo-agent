@@ -291,12 +291,6 @@ variable "openrouter_default_model" {
   type        = string
 }
 
-variable "worker_heartbeat_interval_ms" {
-  description = "Active Run heartbeat interval for the AgentCore Runtime."
-  type        = number
-  default     = 15000
-}
-
 variable "log_level" {
   description = "Application log level."
   type        = string
