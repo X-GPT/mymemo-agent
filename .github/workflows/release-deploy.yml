@@ -337,7 +337,7 @@ jobs:
         if: env.FIRST_DEPLOY != 'true'
         run: scripts/deploy/terraform_prod_in_place_plan.sh
 
-      - name: Apply migration task definition and prerequisites
+      - name: Apply migration and chat-api task definitions and prerequisites
         if: env.FIRST_DEPLOY != 'true'
         run: |
           scripts/deploy/terraform_prod_migration_plan.sh
@@ -345,6 +345,10 @@ jobs:
 
       - name: Run agent DB migrations
         run: scripts/deploy/run_agent_migration.sh
+
+      - name: Roll the Service Connect named-port prerequisite
+        if: env.FIRST_DEPLOY != 'true'
+        run: scripts/deploy/prepare_chat_api_service_connect.sh
 
       - name: Plan the unified release after migrations
         run: |
