@@ -156,6 +156,38 @@ describe("agent-maintenance infrastructure", () => {
 		expect(redis).toContain("ignore_changes = [description]");
 	});
 
+	it("keeps the Valkey Live Stream relay ephemeral and endpoint-compatible", () => {
+		const redis = terraformFile("redis.tf");
+		const nodeType = section(
+			terraformFile("variables.tf"),
+			'variable "live_redis_node_type"',
+			'variable "live_redis_engine_version"',
+		);
+		const engineVersion = section(
+			terraformFile("variables.tf"),
+			'variable "live_redis_engine_version"',
+			'variable "alarm_action_arns"',
+		);
+
+		expect(redis).toContain('engine         = "valkey"');
+		expect(engineVersion).toContain('default     = "7.2"');
+		expect(nodeType).toContain('default     = "cache.t4g.micro"');
+		expect(redis).toContain("node_type      = var.live_redis_node_type");
+		expect(redis).toContain("num_cache_clusters         = 1");
+		expect(redis).toContain("automatic_failover_enabled = false");
+		expect(redis).toContain("multi_az_enabled           = false");
+		expect(redis).toContain("transit_encryption_enabled = true");
+		expect(redis).toContain('transit_encryption_mode    = "required"');
+		expect(redis).toContain(
+			"auth_token                 = random_password.live_redis.result",
+		);
+		expect(redis).toContain("snapshot_retention_limit = 0");
+		expect(redis).toContain(
+			"aws_elasticache_replication_group.live.primary_endpoint_address",
+		);
+		expect(redis).toContain('secret_string = "rediss://default:');
+	});
+
 	it("keeps retired repository deletion in the one-time handoff", () => {
 		const ecr = readFileSync("infra/ecr/main.tf", "utf8");
 		const release = readFileSync(

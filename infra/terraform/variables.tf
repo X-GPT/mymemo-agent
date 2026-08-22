@@ -245,9 +245,9 @@ variable "live_redis_node_type" {
 }
 
 variable "live_redis_engine_version" {
-  description = "Redis engine version for the per-Run Live Stream relay."
+  description = "Valkey engine version for the per-Run Live Stream relay."
   type        = string
-  default     = "7.1"
+  default     = "7.2"
 }
 
 variable "alarm_action_arns" {

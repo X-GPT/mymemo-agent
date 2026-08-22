@@ -34,7 +34,7 @@ Every execution mutation is fenced by the live Conversation Ownership epoch and 
 
 ### Live and permanent output
 
-The AgentCore Runtime keeps each active Run's standard AG-UI Live Stream backlog in memory and relays events over Redis pub/sub. Redis stores no stream content. Permanent Assistant messages, Tool activity, UI payloads, and Outcomes commit to Postgres before their matching completion events are published. Relay failure degrades live delivery without changing durable Run execution. See [ADR-0014](../adr/0014-producer-buffered-live-stream-over-pubsub.md).
+The AgentCore Runtime keeps each active Run's standard AG-UI Live Stream backlog in memory and relays events over Redis-compatible pub/sub through ElastiCache for Valkey. The cache stores no stream content. Permanent Assistant messages, Tool activity, UI payloads, and Outcomes commit to Postgres before their matching completion events are published. Relay failure degrades live delivery without changing durable Run execution. See [ADR-0014](../adr/0014-producer-buffered-live-stream-over-pubsub.md).
 
 Workspace persistence, Agent session continuity, Searchable document loading, and Downloadable artifact publication belong to the trusted runtime. Follow [the worker guide](agent-worker.md) for their detailed invariants.
 

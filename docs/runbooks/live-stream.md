@@ -1,10 +1,11 @@
 # Live Stream operations
 
-The Live Stream is buffered in the producing AgentCore Runtime's memory and relayed over
-Redis pub/sub. Redis stores no stream content. Postgres remains authoritative
-for Run execution, complete messages, Tool activity, and terminal Outcomes. A
-Live Stream alarm is a delivery incident: it must not fail service health,
-restart a Run, or be counted as a model or Run failure.
+The Live Stream is buffered in the producing AgentCore Runtime's memory and
+relayed over Redis-compatible pub/sub through ElastiCache for Valkey. The cache
+stores no stream content. Postgres remains authoritative for Run execution,
+complete messages, Tool activity, and terminal Outcomes. A Live Stream alarm is
+a delivery incident: it must not fail service health, restart a Run, or be
+counted as a model or Run failure.
 
 Both trusted services require `REDIS_URL` at startup. It must be an
 authenticated `rediss://` URL; missing, malformed, unauthenticated, or

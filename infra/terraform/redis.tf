@@ -40,7 +40,9 @@ resource "aws_elasticache_replication_group" "live" {
   replication_group_id = substr(replace("${local.common_name}-live", "_", "-"), 0, 40)
   description          = "Ephemeral Redis pub/sub relay for AG-UI Live Stream delivery"
 
-  engine         = "redis"
+  # Keep the Redis-named Terraform addresses and rediss:// client contract
+  # stable while AWS upgrades the existing replication group in place.
+  engine         = "valkey"
   engine_version = var.live_redis_engine_version
   node_type      = var.live_redis_node_type
   port           = var.live_redis_port
