@@ -38,7 +38,7 @@ let tdb: TestDb;
 // multiplies WASM memory that is not reclaimed promptly and OOMs CI runners.
 // Tests are isolated by clearing the tables they touch instead.
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 });
 
 afterAll(async () => {
@@ -54,6 +54,7 @@ beforeEach(async () => {
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
+		executionRuntime: "fargate",
 	});
 });
 

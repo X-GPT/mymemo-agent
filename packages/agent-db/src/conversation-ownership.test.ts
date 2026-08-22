@@ -28,7 +28,7 @@ let tdb: TestDb;
 // One PGlite (WASM) instance for the whole file — a per-test instance
 // multiplies WASM memory that is not reclaimed promptly and OOMs CI runners.
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 });
 
 afterAll(async () => {
@@ -39,8 +39,18 @@ beforeEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
 	await tdb.db.delete(conversations);
 	await tdb.db.insert(conversations).values([
-		{ userId: "user-1", conversationId: "conv-1", scope: "general" },
-		{ userId: "user-1", conversationId: "conv-2", scope: "general" },
+		{
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+			executionRuntime: "fargate",
+		},
+		{
+			userId: "user-1",
+			conversationId: "conv-2",
+			scope: "general",
+			executionRuntime: "fargate",
+		},
 	]);
 });
 

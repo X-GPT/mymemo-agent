@@ -27,7 +27,7 @@ import { createAgentCoreRuntime } from "./runtime";
 let tdb: TestDb;
 
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 });
 
 afterAll(async () => {
@@ -53,6 +53,7 @@ async function startOwnedRun(input: {
 		userId: "agentcore-service-user",
 		conversationId: input.conversationId,
 		scope: "general",
+		executionRuntime: "fargate",
 	});
 	await seedQueuedRun(tdb.db, {
 		runId: input.runId,

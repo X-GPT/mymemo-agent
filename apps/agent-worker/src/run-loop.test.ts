@@ -42,7 +42,7 @@ let tdb: TestDb;
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from empty tables via delete, keeping isolation without the cost.
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 });
 
 afterAll(async () => {
@@ -107,7 +107,12 @@ async function startDrain(loop: RunLoop, runId = "run-1") {
 async function queueRun(runId: string, conversationId: string) {
 	await tdb.db
 		.insert(conversations)
-		.values({ userId: "user-1", conversationId, scope: "general" })
+		.values({
+			userId: "user-1",
+			conversationId,
+			scope: "general",
+			executionRuntime: "fargate",
+		})
 		.onConflictDoNothing();
 	await seedQueuedRun(tdb.db, { runId, userId: "user-1", conversationId });
 }

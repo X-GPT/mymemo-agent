@@ -52,7 +52,7 @@ describe("PostgresRunStore", () => {
 	// test starts from an empty runs table via delete, keeping isolation without
 	// the cost. The conversation seed is stable, so it is inserted once.
 	beforeAll(async () => {
-		tdb = await createTestDatabase();
+		tdb = await createTestDatabase(undefined, { legacyFargate: true });
 		store = new PostgresRunStore(tdb.db);
 		conversationStore = new PostgresConversationStore(tdb.db);
 		await tdb.db.insert(conversations).values(conversation);

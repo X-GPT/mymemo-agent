@@ -40,7 +40,6 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/chat-api/src/features/artifacts/` | Current-artifact listing and five-minute S3 download signing |
 | `apps/chat-api/src/features/conversation-store/` | Durable Conversation registry and frozen Scope |
 | `apps/chat-api/src/features/exposure-gate/` | Statsig and break-glass implementations of the new-work gate |
-| `apps/chat-api/src/features/runtime-gate/` | Fail-safe Statsig selection of the immutable Conversation execution runtime |
 | `apps/chat-api/src/features/run-store/` | Run admission, owner-scoped Run reads, and durable interruption |
 | `apps/chat-api/src/db/` | Thin bindings to `@mymemo/agent-db` and the shared migration runner |
 | `apps/agent-worker/src/run-loop.ts` | Fargate-only Claim, ordering, expiration, Reclamation, and release control plane |

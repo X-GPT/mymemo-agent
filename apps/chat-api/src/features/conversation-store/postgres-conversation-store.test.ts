@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
 	agentSessions,
 	artifactObjects,
@@ -16,7 +16,7 @@ import { PostgresConversationStore } from "./postgres-conversation-store";
 const collectionConversation: ConversationCreateInput = {
 	userId: "user-1",
 	conversationId: "conv-1",
-	executionRuntime: "fargate",
+	executionRuntime: "agentcore",
 	scope: "collection",
 	collectionId: "col-1",
 	summaryId: null,
@@ -67,29 +67,31 @@ describe("PostgresConversationStore", () => {
 			.select({ executionRuntime: conversations.executionRuntime })
 			.from(conversations)
 			.where(eq(conversations.conversationId, "conv-1"));
-		expect(row?.executionRuntime).toBe("fargate");
+		expect(row?.executionRuntime).toBe("agentcore");
 	});
 
-	it("persists the selected AgentCore runtime without exposing an update path", async () => {
-		await store.create({
-			...collectionConversation,
-			conversationId: "agentcore-conversation",
-			executionRuntime: "agentcore",
-		});
-
+	it("requires the AgentCore compatibility marker", async () => {
 		await expect(
-			store.get({
-				userId: "user-1",
-				conversationId: "agentcore-conversation",
-			}),
-		).resolves.toMatchObject({ executionRuntime: "agentcore" });
+			Promise.resolve(
+				tdb.db.execute(
+					sql`insert into conversations (user_id, conversation_id, scope) values ('user-1', 'missing-runtime', 'general')`,
+				),
+			),
+		).rejects.toThrow();
+		await expect(
+			Promise.resolve(
+				tdb.db.execute(
+					sql`insert into conversations (user_id, conversation_id, scope, execution_runtime) values ('user-1', 'fargate-runtime', 'general', 'fargate')`,
+				),
+			),
+		).rejects.toThrow();
 	});
 
 	it("round-trips general and document scopes with null id columns", async () => {
 		await store.create({
 			userId: "u",
 			conversationId: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 			scope: "general",
 			collectionId: null,
 			summaryId: null,
@@ -97,7 +99,7 @@ describe("PostgresConversationStore", () => {
 		await store.create({
 			userId: "u",
 			conversationId: "doc",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 			scope: "document",
 			collectionId: null,
 			summaryId: "sum-9",

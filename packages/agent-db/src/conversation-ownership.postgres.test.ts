@@ -43,11 +43,13 @@ import { conversations, runs } from "./schema";
  * here, because an `EXPLAIN` assertion fails for planner and statistics changes
  * that are not regressions.
  *
- * Gated on `AGENT_DATABASE_URL` — the same variable the existing integration
- * lane uses — and invoked by that lane's CI job, so with no database configured
- * the package's suite runs exactly as it did before. Locally:
+ * Release 1's AgentCore-only database invariant cannot represent these dormant
+ * Fargate Claims. Keep this suite available against a schema through migration
+ * 0023 until #527 deletes the machinery, but do not run it against the migrated
+ * integration database. Against a scratch database intentionally held at
+ * migration 0023:
  *
- *   bun run --cwd apps/chat-api db:migrate
+ *   RUN_LEGACY_FARGATE_POSTGRES_TESTS=true \
  *   AGENT_DATABASE_URL=postgres://… bun test \
  *     packages/agent-db/src/conversation-ownership.postgres.test.ts
  *
@@ -56,7 +58,8 @@ import { conversations, runs } from "./schema";
  */
 
 const DB_URL = process.env.AGENT_DATABASE_URL ?? "";
-const RUN = DB_URL !== "";
+const RUN =
+	DB_URL !== "" && process.env.RUN_LEGACY_FARGATE_POSTGRES_TESTS === "true";
 
 /** Owner of every row this file writes, so cleanup never touches anything else. */
 const USER_ID = `ownership-${crypto.randomUUID()}`;
@@ -109,6 +112,7 @@ async function seedConversations(...conversationIds: string[]): Promise<void> {
 			userId: USER_ID,
 			conversationId,
 			scope: "general",
+			executionRuntime: "fargate" as const,
 		})),
 	);
 }

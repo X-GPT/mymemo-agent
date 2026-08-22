@@ -103,8 +103,16 @@ async function bootWithMigrations(createClient: () => PGlite): Promise<PGlite> {
 export async function createTestDatabase(
 	// Seam for the harness's own tests; real callers take the default.
 	createClient: () => PGlite = () => new PGlite(),
+	options: { legacyFargate?: boolean } = {},
 ): Promise<TestDb> {
 	const client = await bootWithMigrations(createClient);
+	// ponytail: Release 1 retains dormant Fargate machinery until #527; delete
+	// this opt-out with those focused tests.
+	if (options.legacyFargate) {
+		await client.exec(
+			"alter table conversations drop constraint conversations_execution_runtime_check",
+		);
+	}
 	return {
 		db: drizzle(client, { schema }) as unknown as Database,
 		close: () => releaseClient(client),
@@ -172,6 +180,7 @@ export async function seedAgentSessionFenceConversation(
 			userId: input.userId,
 			conversationId: input.conversationId,
 			scope: "general",
+			executionRuntime: "agentcore",
 			epoch: input.epoch ?? 1,
 			ownerWorkerId: input.workerId,
 			ownerUntil: input.ownerUntil ?? new Date(Date.now() + 60_000),

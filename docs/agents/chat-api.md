@@ -8,11 +8,11 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 ### Create a Conversation
 
-`POST /v1/conversations` accepts the strict `CreateConversationBody` (`.strict()`) with optional `collectionId` and `summaryId`. It resolves the Scope once and freezes it on the Conversation. After the exposure gate allows, the runtime gate is evaluated once on trusted identity and the result is frozen as the Conversation's execution runtime; later surfaces never re-evaluate it.
+`POST /v1/conversations` accepts the strict `CreateConversationBody` (`.strict()`) with optional `collectionId` and `summaryId`. It validates the body, resolves trusted identity, checks exposure admission, then persists the frozen Scope and the AgentCore-only execution-runtime compatibility marker. Runtime selection is not public input and no runtime gate is consulted.
 
 `InternalIdentity` comes from `X-Member-Code` and `X-Partner-Code`; `X-Team-Code`, `X-Member-Name`, and `X-Partner-Name` are optional. `memberCode` becomes the owner (`user_id`). The server generates the Conversation UUID.
 
-Return `201 { conversationId, title, executionRuntime, scope, createdAt, lastActivityAt, archivedAt }`. The immutable `executionRuntime` is also present in the shared Conversation summaries returned by list and lifecycle routes. A new empty draft has `title: null` and `archivedAt: null`.
+Return `201 { conversationId, title, executionRuntime, scope, createdAt, lastActivityAt, archivedAt }`. During Release 1, `executionRuntime` is the constant compatibility value `agentcore` and is also present in the shared Conversation summaries returned by list and lifecycle routes. A new empty draft has `title: null` and `archivedAt: null`.
 
 ### Manage Conversations
 

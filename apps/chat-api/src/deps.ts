@@ -28,7 +28,6 @@ import {
 	type ExposureGate,
 } from "./features/exposure-gate";
 import { PostgresRunStore, type RunStore } from "./features/run-store";
-import { createRuntimeGate, type RuntimeGate } from "./features/runtime-gate";
 
 /**
  * Application dependencies, built once from a validated `ApiConfig` at the
@@ -60,8 +59,6 @@ export interface AppDeps {
 	 * parsed and before any write. Fails closed.
 	 */
 	exposureGate: ExposureGate;
-	/** Selects and freezes one execution runtime at Conversation creation. */
-	runtimeGate: RuntimeGate;
 }
 
 /** Hono environment: pino logger vars plus the injected `AppDeps`. */
@@ -103,6 +100,5 @@ export function createDeps(
 		liveStreamTelemetry,
 		closeLiveResources: () => liveStreamRelay.close(),
 		exposureGate: createExposureGate(config),
-		runtimeGate: createRuntimeGate(config),
 	};
 }

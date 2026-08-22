@@ -26,12 +26,6 @@ import {
 	type RunRecord,
 	type RunStore,
 } from "@/features/run-store";
-import {
-	BreakGlassRuntimeGate,
-	type RuntimeGate,
-	type StatsigClientLike as RuntimeStatsigClientLike,
-	StatsigRuntimeGate,
-} from "@/features/runtime-gate";
 import type { InternalIdentity } from "./conversations.schema";
 
 const { createApp } = await import("@/app");
@@ -96,30 +90,17 @@ function gateThatFailsIfConsulted(): ExposureGate {
 	};
 }
 
-function recordingRuntimeGate(executionRuntime: ConversationExecutionRuntime) {
-	const seen: InternalIdentity[] = [];
-	const gate: RuntimeGate = {
-		async selectRuntime(identity) {
-			seen.push(identity);
-			return executionRuntime;
-		},
-	};
-	return { gate, seen };
-}
-
 function buildApp(
 	conversationStore: ConversationStore,
 	exposureGate: ExposureGate = recordingGate(true).gate,
 	fakeRuns = fakeRunStore(),
 	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 	liveStreamTelemetry: LiveStreamTelemetry = silentLiveStreamTelemetry,
-	runtimeGate: RuntimeGate = recordingRuntimeGate("fargate").gate,
 ) {
 	const deps = {
 		config: {},
 		conversationStore,
 		exposureGate,
-		runtimeGate,
 		runStore: fakeRuns.runStore,
 		liveStreamRelay,
 		liveStreamTelemetry,
@@ -392,7 +373,7 @@ describe("POST /v1/conversations", () => {
 			expect(body).toEqual({
 				conversationId: body.conversationId,
 				title: null,
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "collection",
 				createdAt: body.createdAt,
 				lastActivityAt: body.createdAt,
@@ -404,7 +385,11 @@ describe("POST /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: body.conversationId,
 				}),
-			).toMatchObject({ scope: "collection", collectionId: "col-1" });
+			).toMatchObject({
+				executionRuntime: "agentcore",
+				scope: "collection",
+				collectionId: "col-1",
+			});
 		} finally {
 			await tdb.close();
 		}
@@ -452,6 +437,7 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "conv-a",
 					scope: "general",
+					executionRuntime: "agentcore",
 					title: "Old regular",
 					createdAt: new Date("2026-01-01T00:00:00.000Z"),
 					lastActivityAt: new Date("2026-01-02T00:00:00.000Z"),
@@ -460,6 +446,7 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "conv-b",
 					scope: "general",
+					executionRuntime: "agentcore",
 					title: "Recent regular B",
 					createdAt: new Date("2026-01-02T00:00:00.000Z"),
 					lastActivityAt: new Date("2026-01-03T00:00:00.000Z"),
@@ -468,6 +455,7 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "conv-c",
 					scope: "collection",
+					executionRuntime: "agentcore",
 					collectionId: "collection-1",
 					title: "Recent regular C",
 					createdAt: new Date("2026-01-03T00:00:00.000Z"),
@@ -477,6 +465,7 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "conv-archived",
 					scope: "general",
+					executionRuntime: "agentcore",
 					title: "Archived",
 					createdAt: new Date("2026-01-04T00:00:00.000Z"),
 					lastActivityAt: new Date("2026-01-04T00:00:00.000Z"),
@@ -512,7 +501,7 @@ describe("GET /v1/conversations", () => {
 			expect(firstBody.conversations[0]).toEqual({
 				conversationId: "conv-c",
 				title: "Recent regular C",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "collection",
 				createdAt: "2026-01-03T00:00:00.000Z",
 				lastActivityAt: "2026-01-03T00:00:00.000Z",
@@ -522,6 +511,7 @@ describe("GET /v1/conversations", () => {
 				userId: "member-1",
 				conversationId: "conv-newer-after-page-one",
 				scope: "general",
+				executionRuntime: "agentcore",
 				title: "Newly active",
 				lastActivityAt: new Date("2026-01-06T00:00:00.000Z"),
 			});
@@ -553,6 +543,7 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "owned-archived-match",
 					scope: "general",
+					executionRuntime: "agentcore",
 					title: "Quarterly Planning",
 					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
 				},
@@ -560,12 +551,14 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "owned-regular-match",
 					scope: "general",
+					executionRuntime: "agentcore",
 					title: "Quarterly planning notes",
 				},
 				{
 					userId: "member-1",
 					conversationId: "owned-archived-miss",
 					scope: "general",
+					executionRuntime: "agentcore",
 					title: "Travel ideas",
 					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
 				},
@@ -573,6 +566,7 @@ describe("GET /v1/conversations", () => {
 					userId: "other-member",
 					conversationId: "foreign-archived-match",
 					scope: "general",
+					executionRuntime: "agentcore",
 					title: "Secret planning",
 					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
 				},
@@ -602,10 +596,10 @@ describe("GET /v1/conversations", () => {
 		try {
 			await tdb.db.execute(sql`
 				insert into conversations
-					(user_id, conversation_id, scope, title, last_activity_at)
+					(user_id, conversation_id, scope, execution_runtime, title, last_activity_at)
 				values
-					('member-1', 'micro-newest', 'general', 'Newest', '2026-01-03T00:00:00.000900Z'),
-					('member-1', 'micro-next', 'general', 'Next', '2026-01-03T00:00:00.000800Z')
+					('member-1', 'micro-newest', 'general', 'agentcore', 'Newest', '2026-01-03T00:00:00.000900Z'),
+					('member-1', 'micro-next', 'general', 'agentcore', 'Next', '2026-01-03T00:00:00.000800Z')
 			`);
 			const app = buildApp(new PostgresConversationStore(tdb.db));
 
@@ -662,7 +656,7 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-lifecycle",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -745,7 +739,7 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-archive-race",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -753,7 +747,7 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-unarchive-race",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -846,7 +840,7 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "other-member",
 				conversationId: "foreign-conversation",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -964,7 +958,7 @@ describe("DELETE /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-delete",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -1034,7 +1028,7 @@ describe("DELETE /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-delete-race",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -2133,134 +2127,5 @@ describe("exposure gate (MYM-46)", () => {
 		});
 		expect(res.status).toBe(401);
 		expect(seen).toHaveLength(0);
-	});
-});
-
-describe("Conversation execution runtime gate", () => {
-	it.each([
-		["gate on", recordingRuntimeGate("agentcore").gate, "agentcore"],
-		["gate off", recordingRuntimeGate("fargate").gate, "fargate"],
-		[
-			"Statsig error",
-			new StatsigRuntimeGate({
-				initialize: async () => {
-					throw new Error("Statsig unavailable");
-				},
-				checkGate: () => true,
-			} satisfies RuntimeStatsigClientLike),
-			"fargate",
-		],
-		["break-glass", new BreakGlassRuntimeGate(), "fargate"],
-	] as const)("stamps %s selection exactly once at Conversation creation", async (_condition, runtimeGate, expectedRuntime) => {
-		const { store, created } = fakeStore();
-		const res = await buildApp(
-			store,
-			recordingGate(true).gate,
-			fakeRunStore(),
-			createInMemoryLiveStreamRelay(),
-			silentLiveStreamTelemetry,
-			runtimeGate,
-		).request("/v1/conversations", {
-			method: "POST",
-			headers: identityHeaders,
-			body: JSON.stringify({}),
-		});
-
-		expect(res.status).toBe(201);
-		expect(await res.json()).toMatchObject({
-			executionRuntime: expectedRuntime,
-		});
-		expect(created).toHaveLength(1);
-		expect(created[0]?.executionRuntime).toBe(expectedRuntime);
-	});
-
-	it("evaluates runtime selection after exposure allows", async () => {
-		const order: string[] = [];
-		const { store } = fakeStore();
-		const exposureGate: ExposureGate = {
-			async isAgentEnabled() {
-				order.push("exposure");
-				return true;
-			},
-		};
-		const runtimeGate: RuntimeGate = {
-			async selectRuntime() {
-				order.push("runtime");
-				return "agentcore";
-			},
-		};
-
-		const res = await buildApp(
-			store,
-			exposureGate,
-			fakeRunStore(),
-			createInMemoryLiveStreamRelay(),
-			silentLiveStreamTelemetry,
-			runtimeGate,
-		).request("/v1/conversations", {
-			method: "POST",
-			headers: identityHeaders,
-			body: JSON.stringify({}),
-		});
-
-		expect(res.status).toBe(201);
-		expect(order).toEqual(["exposure", "runtime"]);
-	});
-
-	it("never re-evaluates the frozen runtime during later Run admission", async () => {
-		const { store } = fakeStore();
-		let runtimeGateCalls = 0;
-		const runtimeGate: RuntimeGate = {
-			async selectRuntime() {
-				runtimeGateCalls++;
-				if (runtimeGateCalls > 1) {
-					throw new Error(
-						"runtime gate must only run at Conversation creation",
-					);
-				}
-				return "agentcore";
-			},
-		};
-		const fakeRuns = fakeRunStore();
-		fakeRuns.runStore.admitRun = async (input) => {
-			return {
-				outcome: "created",
-				run: runRecord({
-					runId: input.runId,
-					userId: input.conversation.userId,
-					conversationId: input.conversation.conversationId,
-					status: "done",
-				}),
-			};
-		};
-		const app = buildApp(
-			store,
-			recordingGate(true).gate,
-			fakeRuns,
-			createInMemoryLiveStreamRelay(),
-			silentLiveStreamTelemetry,
-			runtimeGate,
-		);
-
-		const created = await app.request("/v1/conversations", {
-			method: "POST",
-			headers: identityHeaders,
-			body: JSON.stringify({}),
-		});
-		const { conversationId } = (await created.json()) as {
-			conversationId: string;
-		};
-		const admitted = await app.request(
-			`/v1/conversations/${conversationId}/runs`,
-			{
-				method: "POST",
-				headers: identityHeaders,
-				body: JSON.stringify(agUiRunInput({ threadId: conversationId })),
-			},
-		);
-
-		expect(created.status).toBe(201);
-		expect(admitted.status).toBe(410);
-		expect(runtimeGateCalls).toBe(1);
 	});
 });

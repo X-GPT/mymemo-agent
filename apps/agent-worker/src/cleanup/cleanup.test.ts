@@ -351,9 +351,12 @@ describe("Downloadable artifact object cleanup", () => {
 });
 
 async function insertConversation(userId: string, conversationId: string) {
-	await tdb.db
-		.insert(conversations)
-		.values({ userId, conversationId, scope: "general" });
+	await tdb.db.insert(conversations).values({
+		userId,
+		conversationId,
+		scope: "general",
+		executionRuntime: "agentcore",
+	});
 }
 
 async function insertRuntime(row: {

@@ -142,25 +142,21 @@ writes a unique Downloadable artifact, lists it after `RUN_FINISHED`, obtains a 
 signed URL, and downloads the exact attachment without identity headers. The
 local `full` suite adds one interrupted Run and two seeded searchable-document
 Runs that prove inventory, search, docs-cache load, file read-back, and durable
-Tool history.
-
-With the local compose stack running, execute the full pre-merge suite with one
-command:
-
-```sh
-bun run smoke:local
-```
+Tool history. It is temporarily unavailable: Conversation creation is
+AgentCore-only, while #523 owns the local AgentCore bridge. `bun run smoke:local`
+exits immediately with that explanation instead of exercising the incompatible
+Fargate-only stack.
 
 For production, run `scripts/deploy/prod_smoke.sh` from inside the VPC with
 `AGENT_SMOKE_BASE_URL` configured and the checked-in `codex-smoke` identity
-targeted in both the exposure and AgentCore runtime Statsig gates. The wrapper
+targeted in the exposure Statsig gate. The wrapper
 requires the public creation response to report `agentcore` before admitting a
 Run. OpenRouter and E2B credentials stay in the deployed worker; the smoke caller
 receives none of them. To check only the default-closed gate, set
 `AGENT_SMOKE_EXPECT_GATE_CLOSED=true`.
 
-`AGENT_SMOKE_SUITE` defaults to `core`; `full` is the local superset used by
-`smoke:local`. See [the two-target smoke verification guide](./docs/verification/e2e-smoke.md)
+`AGENT_SMOKE_SUITE` defaults to `core`; `full` remains the local superset that
+#523 will restore. See [the two-target smoke verification guide](./docs/verification/e2e-smoke.md)
 for suite contents, target selection, and deterministic harness tests.
 
 ### Worker image check

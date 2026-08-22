@@ -23,7 +23,7 @@ chat-api's `PostgresRunStore` composes shared admission inside the Conversation 
 
 ## Concurrency tests
 
-PGlite tests cover transaction behavior that one in-process backend can express. The following races require real Postgres and live in `src/conversation-ownership.postgres.test.ts`:
+PGlite tests cover transaction behavior that one in-process backend can express. The dormant Fargate Claim races that require real Postgres remain in `src/conversation-ownership.postgres.test.ts` until #527, but the AgentCore-only schema cannot represent their fixtures. They are excluded from the normal integration lane rather than weakening its migrated schema.
 
 - `SKIP LOCKED` Claim contention
 - the Claim-versus-admission snapshot boundary

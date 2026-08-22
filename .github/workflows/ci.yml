@@ -75,9 +75,6 @@ jobs:
   # without live provider credentials. Task 9.7 owns the production SDK path's
   # credentialed smoke.
   #
-  # It also carries the Claim protocol's concurrency suite, which needs
-  # genuinely concurrent backends the PGlite harness structurally cannot
-  # provide. Both suites are gated on AGENT_DATABASE_URL.
   integration:
     runs-on: ubuntu-latest
     services:
@@ -119,9 +116,6 @@ jobs:
       # Apply the @mymemo/agent-db migrations to the service DB before the apps boot.
       - run: bun run db:migrate
         working-directory: apps/chat-api
-      # Ahead of the AG-UI lane: the Claim is global, so this suite wants a
-      # database no other suite has left claimable Conversations in.
-      - run: bun test packages/agent-db/src/conversation-ownership.postgres.test.ts
       # The AgentCore publisher/acquisition races use the same migrated
       # real-Postgres service as the surrounding integration suites.
       - run: bun test packages/agent-db/src/agentcore-dispatch.postgres.test.ts

@@ -62,11 +62,12 @@ let tdb: TestDb;
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from empty tables via delete, keeping isolation without the cost.
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 	await tdb.db.insert(conversations).values({
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
+		executionRuntime: "fargate",
 	});
 });
 

@@ -1,4 +1,7 @@
-import type { ConversationExecutionRuntime } from "@mymemo/agent-db/execution-runtime";
+import {
+	AGENTCORE_EXECUTION_RUNTIME,
+	type ConversationExecutionRuntime,
+} from "@mymemo/agent-db/execution-runtime";
 import type { AppDeps } from "@/deps";
 import type {
 	ConversationRecord,
@@ -45,7 +48,6 @@ export async function createConversation(
 	store: ConversationStore,
 	identity: InternalIdentity,
 	body: { collectionId?: string | null; summaryId?: string | null },
-	executionRuntime: ConversationExecutionRuntime,
 ): Promise<ConversationSummary> {
 	const conversationId = crypto.randomUUID();
 	const collectionId = body.collectionId?.trim() || null;
@@ -61,7 +63,7 @@ export async function createConversation(
 	const conversation = await store.create({
 		userId: identity.memberCode,
 		conversationId,
-		executionRuntime,
+		executionRuntime: AGENTCORE_EXECUTION_RUNTIME,
 		scope,
 		collectionId,
 		summaryId,
