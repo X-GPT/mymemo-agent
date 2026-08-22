@@ -23,12 +23,11 @@ chat-api's `PostgresRunStore` composes shared admission inside the Conversation 
 
 ## Concurrency tests
 
-PGlite tests cover transaction behavior that one in-process backend can express. The dormant Fargate Claim races that require real Postgres remain in `src/conversation-ownership.postgres.test.ts` until #527, but the AgentCore-only schema cannot represent their fixtures. They are excluded from the normal integration lane rather than weakening its migrated schema.
+PGlite tests cover transaction behavior that one in-process backend can express. AgentCore Reclamation races that require concurrent sessions live in `src/conversation-ownership.postgres.test.ts` and run in the real-Postgres integration lane:
 
-- `SKIP LOCKED` Claim contention
-- the Claim-versus-admission snapshot boundary
-- concurrent reclaimers
-- a superseded holder racing its successor
+- concurrent reclaimers splitting lapsed Conversations through `SKIP LOCKED`
+- Reclamation skipping a Conversation row held by another session
+- queued-Run expiration racing Reclamation
 
 AgentCore outbox/acquisition races live in `packages/agent-db/src/agentcore-dispatch.postgres.test.ts`. The dedicated publisher task's deployment-overlap exclusion and backend-termination release live in `apps/agentcore-dispatch-publisher/src/publisher-loop.postgres.test.ts`; it additionally requires `RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS=true` so the publisher app's local `.env` cannot accidentally target a database during its ordinary unit suite. These tests require `AGENT_DATABASE_URL` and run in the CI `integration` job against the Postgres major used in production.
 

@@ -15,7 +15,6 @@ import {
 	loadAgentCoreDispatchRunStatus,
 } from "./agentcore-dispatch";
 import { createDatabase, type Database } from "./client";
-import { claimConversationTx } from "./conversation-ownership";
 import { requestRunInterruptionTx, transitionRunTerminalTx } from "./run-store";
 import { agentCoreDispatchOutbox, conversations, runs } from "./schema";
 
@@ -157,22 +156,6 @@ describe.skipIf(!RUN)(
 				"acquired",
 				"already_acquired",
 			]);
-		});
-
-		it("keeps generic Fargate Claim disjoint from exact AgentCore acquisition", async () => {
-			const exact = input("a");
-			const dispatch = await seedDispatch(exact);
-
-			const [generic, acquired] = await Promise.all([
-				claimConversationTx(db, { workerId: "fargate-racer" }),
-				acquireAgentCoreDispatchTx(db, {
-					dispatch,
-					workerId: "agentcore-racer",
-				}),
-			]);
-
-			expect(generic).toBeNull();
-			expect(acquired.disposition).toBe("acquired");
 		});
 
 		it("never reacquires expired running Ownership before Reclamation", async () => {

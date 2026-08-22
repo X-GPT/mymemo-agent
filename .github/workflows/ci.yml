@@ -116,6 +116,8 @@ jobs:
       # Apply the @mymemo/agent-db migrations to the service DB before the apps boot.
       - run: bun run db:migrate
         working-directory: apps/chat-api
+      # Reclamation uses SKIP LOCKED and needs concurrent real-Postgres sessions.
+      - run: bun test packages/agent-db/src/conversation-ownership.postgres.test.ts
       # The AgentCore publisher/acquisition races use the same migrated
       # real-Postgres service as the surrounding integration suites.
       - run: bun test packages/agent-db/src/agentcore-dispatch.postgres.test.ts

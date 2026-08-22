@@ -1,15 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { claimConversationTx } from "@mymemo/agent-db/conversation-ownership";
 import {
+	acquireAgentCoreDispatchTx,
+	recordAgentCoreDispatchInTx,
+} from "@mymemo/agent-db/agentcore-dispatch";
+import {
+	admitQueuedRunInTx,
 	requestRunInterruptionTx,
-	startClaimedRunTx,
 } from "@mymemo/agent-db/run-store";
 import { conversations, runs } from "@mymemo/agent-db/schema";
-import {
-	createTestDatabase,
-	seedQueuedRun,
-	type TestDb,
-} from "@mymemo/agent-db/testing";
+import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import {
 	createInMemoryLiveStreamRelay,
 	createRedisLiveStreamRelay,
@@ -27,7 +26,7 @@ import { createAgentCoreRuntime } from "./runtime";
 let tdb: TestDb;
 
 beforeAll(async () => {
-	tdb = await createTestDatabase(undefined, { legacyFargate: true });
+	tdb = await createTestDatabase();
 });
 
 afterAll(async () => {
@@ -49,30 +48,36 @@ async function startOwnedRun(input: {
 	runId: string;
 	workerId: string;
 }) {
+	const dispatch = dispatchFor(input);
 	await tdb.db.insert(conversations).values({
 		userId: "agentcore-service-user",
 		conversationId: input.conversationId,
 		scope: "general",
-		executionRuntime: "fargate",
+		executionRuntime: "agentcore",
 	});
-	await seedQueuedRun(tdb.db, {
-		runId: input.runId,
-		userId: "agentcore-service-user",
-		conversationId: input.conversationId,
+	await tdb.db.transaction(async (tx) => {
+		await admitQueuedRunInTx(tx, {
+			runId: input.runId,
+			userId: "agentcore-service-user",
+			conversationId: input.conversationId,
+			messageId: `${input.runId}-message`,
+			text: "Run the AgentCore execution-services test.",
+			scope: "general",
+			collectionId: null,
+			summaryId: null,
+		});
+		await recordAgentCoreDispatchInTx(tx, dispatch);
 	});
-	const owner = await claimConversationTx(tdb.db, {
+	const acquired = await acquireAgentCoreDispatchTx(tdb.db, {
+		dispatch,
 		workerId: input.workerId,
 	});
-	if (!owner || owner.conversationId !== input.conversationId) {
-		throw new Error("test did not Claim the expected Conversation");
+	if (acquired.disposition !== "acquired") {
+		throw new Error(
+			`test AgentCore Run was not acquired: ${acquired.disposition}`,
+		);
 	}
-	const started = await startClaimedRunTx(tdb.db, {
-		owner,
-		runId: input.runId,
-		workerId: input.workerId,
-	});
-	if (started.outcome !== "started") throw new Error("test Run did not start");
-	return owner;
+	return acquired.owner;
 }
 
 function dispatchFor(input: { conversationId: string; runId: string }) {

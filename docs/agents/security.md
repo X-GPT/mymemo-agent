@@ -17,7 +17,7 @@ New agent work is gated by the server-side Statsig gate `mymemo_agent_split_runt
 
 After exposure allows Conversation creation, chat-api explicitly persists the AgentCore-only execution-runtime compatibility marker. Runtime selection is not an input or operational control, and Statsig failures cannot select Fargate. chat-api records AgentCore dispatch only in Postgres and holds no SQS or SSM authority.
 
-Reconnect, interruption, history, artifact access, and Conversation management for existing owned resources do not consult either gate.
+Reconnect, interruption, history, artifact access, and Conversation management for existing owned resources do not consult the exposure gate.
 
 ## Runtime trust boundary
 
