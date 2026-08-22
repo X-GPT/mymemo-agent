@@ -117,6 +117,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "ec2:DeleteInstanceConnectEndpoint",
       "ec2:DeleteLaunchTemplate",
       "ec2:DeleteLaunchTemplateVersions",
+      "ec2:DeleteNatGateway",
       "ec2:DeleteNetworkInterface",
       "ec2:DeleteSecurityGroup",
       "ec2:DeleteTags",
