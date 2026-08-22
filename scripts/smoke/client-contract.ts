@@ -1,3 +1,5 @@
+import { parseRawAgUiSse } from "../../packages/test-support/ag-ui-sse";
+
 export interface ClientContractFrame {
 	event: string;
 	data: unknown;
@@ -152,6 +154,15 @@ export function createClientContractFixture(): ClientContractFixture {
 			};
 		},
 	};
+}
+
+export function readClientContractSse(raw: string): ClientContractSnapshot {
+	const client = createClientContractFixture();
+	for (const frame of parseRawAgUiSse(raw)) {
+		if (frame.event === "ping") continue;
+		client.receive({ event: frame.event, data: JSON.parse(frame.data) });
+	}
+	return client.snapshot();
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

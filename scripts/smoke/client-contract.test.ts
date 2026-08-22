@@ -1,7 +1,44 @@
 import { describe, expect, it } from "bun:test";
-import { createClientContractFixture } from "./client-contract";
+import {
+	createClientContractFixture,
+	readClientContractSse,
+} from "./client-contract";
 
 describe("AG-UI smoke client contract", () => {
+	it("assembles split data-only SSE deltas around a heartbeat", () => {
+		const raw = [
+			{ type: "RUN_STARTED", threadId: "conv-1", runId: "run-1" },
+			{ type: "ping" },
+			{ type: "TEXT_MESSAGE_START", messageId: "assistant-1" },
+			{
+				type: "TEXT_MESSAGE_CONTENT",
+				messageId: "assistant-1",
+				delta: "LOCAL_AGENTCORE",
+			},
+			{
+				type: "TEXT_MESSAGE_CONTENT",
+				messageId: "assistant-1",
+				delta: "_OK",
+			},
+			{ type: "TEXT_MESSAGE_END", messageId: "assistant-1" },
+			{ type: "RUN_FINISHED", threadId: "conv-1", runId: "run-1" },
+		]
+			.map((data) => `data: ${JSON.stringify(data)}\n\n`)
+			.join("");
+
+		expect(readClientContractSse(raw)).toEqual({
+			messages: [
+				{
+					messageId: "assistant-1",
+					text: "LOCAL_AGENTCORE_OK",
+					provisional: false,
+				},
+			],
+			toolEvents: [],
+			terminal: "done",
+		});
+	});
+
 	it("assembles standard Assistant text, Tool activity, and a successful Outcome", () => {
 		const client = createClientContractFixture();
 		for (const data of [

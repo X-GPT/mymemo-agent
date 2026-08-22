@@ -105,11 +105,12 @@ services:
   smoke:
     image: oven/bun:1
     network_mode: "service:redis"
-    command: ["bun", "run", "/smoke/local-agentcore-smoke.ts"]
+    command: ["bun", "run", "/workspace/scripts/smoke/local-agentcore-smoke.ts"]
     environment:
       AGENT_SMOKE_BASE_URL: http://127.0.0.1:3000
     volumes:
-      - ./scripts/smoke/local-agentcore-smoke.ts:/smoke/local-agentcore-smoke.ts:ro
+      - ./scripts/smoke:/workspace/scripts/smoke:ro
+      - ./packages/test-support:/workspace/packages/test-support:ro
     depends_on:
       chat-api:
         condition: service_started

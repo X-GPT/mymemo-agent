@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { readClientContractSse } from "./client-contract";
+
 const baseUrl = (
 	Bun.env.AGENT_SMOKE_BASE_URL ?? "http://127.0.0.1:3000"
 ).replace(/\/+$/, "");
@@ -66,9 +68,12 @@ const events = await run.text();
 if (!run.ok) {
 	throw new Error(`local Run returned ${run.status}: ${events}`);
 }
+const snapshot = readClientContractSse(events);
 if (
-	!events.includes("LOCAL_AGENTCORE_OK") ||
-	!events.includes("RUN_FINISHED")
+	snapshot.terminal !== "done" ||
+	snapshot.messages.length !== 1 ||
+	snapshot.messages[0]?.provisional ||
+	snapshot.messages[0]?.text !== "LOCAL_AGENTCORE_OK"
 ) {
 	throw new Error("local Run did not complete through the AgentCore Runtime");
 }
