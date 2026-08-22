@@ -77,17 +77,22 @@ describe("agent-maintenance infrastructure", () => {
 		expect(cloudwatch).toContain('Service = "agentcore-runtime"');
 	});
 
-	it("deletes the retired worker image repository during release", () => {
+	it("keeps retired repository deletion in the one-time handoff", () => {
 		const ecr = readFileSync("infra/ecr/main.tf", "utf8");
 		const release = readFileSync(
 			".github/workflows/release-deploy.yml",
 			"utf8",
 		);
+		const handoff = readFileSync(
+			"docs/runbooks/agent-maintenance-handoff.md",
+			"utf8",
+		);
 
 		expect(ecr).not.toContain("agent_worker");
-		expect(release).toContain("aws ecr delete-repository");
-		expect(release).toContain("--repository-name mymemo-agent-worker");
-		expect(release).toContain("--force");
+		expect(release).not.toContain("aws ecr delete-repository");
+		expect(handoff).toContain("aws ecr delete-repository");
+		expect(handoff).toContain("--repository-name mymemo-agent-worker");
+		expect(handoff).toContain("--force");
 	});
 
 	it("injects only maintenance environment and secrets", () => {

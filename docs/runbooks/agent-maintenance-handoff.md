@@ -28,13 +28,33 @@ queued-Run expiration, Reclamation, and asynchronous cleanup.
    Do not apply the retirement migration until the final command reports both
    counts as zero; an old binary must not read the removed queue index,
    doorbell, or deployment-readiness table.
+5. From the reviewed retirement-release checkout, confirm the production AWS
+   identity and delete the now-unused worker image repository as a one-time
+   operator action. This permanently deletes every image in the repository:
+
+   ```bash
+   AWS_PROFILE=mymemo aws sts get-caller-identity
+   AWS_PROFILE=mymemo aws ecr describe-repositories --region us-west-2 \
+     --repository-names mymemo-agent-worker
+   AWS_PROFILE=mymemo aws ecr list-images --region us-west-2 \
+     --repository-name mymemo-agent-worker --output json
+   AWS_PROFILE=mymemo aws ecr delete-repository --region us-west-2 \
+     --repository-name mymemo-agent-worker --force
+   ```
+
+   Re-run `describe-repositories` and require the specific
+   `RepositoryNotFoundException` response; another error is not proof of
+   deletion. Do not run the pre-retirement ECR Terraform after deletion because
+   that checkout still declares the worker repository. The recurring release
+   role intentionally has no repository-deletion authority.
 
 ## Apply the retirement release
 
 Run the ordinary reviewed release. Its compatible migration drops the retired
 doorbell triggers/function, queue-Claim index, and execution-runtime deployment
-table. Terraform removes the worker task/service, ECR repository and images,
-IAM, secrets, and alarms, and runs `agent-maintenance` with desired count one.
+table. Terraform reconciles the manually deleted repository out of ECR state,
+removes the worker task/service, IAM, secrets, and alarms, and runs
+`agent-maintenance` with desired count one.
 
 Wait for the chat-api, Dispatch publisher, and maintenance ECS services to
 stabilize. Verify the AgentCore Runtime digest was updated by the same release.

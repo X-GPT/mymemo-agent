@@ -124,16 +124,6 @@ jobs:
         run: |
           terraform -chdir=infra/ecr init
 
-          if aws ecr describe-repositories \
-            --region "${AWS_REGION}" \
-            --repository-names mymemo-agent-worker \
-            >/dev/null 2>&1; then
-            aws ecr delete-repository \
-              --region "${AWS_REGION}" \
-              --repository-name mymemo-agent-worker \
-              --force
-          fi
-
           ecr_state_addresses="$(terraform -chdir=infra/ecr state list)"
           if ! grep -Fxq "aws_ecr_repository.agentcore_runtime" <<<"${ecr_state_addresses}"; then
             repository_error="${RUNNER_TEMP}/agentcore-runtime-repository-error"
