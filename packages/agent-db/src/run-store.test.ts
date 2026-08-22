@@ -70,13 +70,11 @@ beforeEach(async () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		},
 		{
 			userId: "user-1",
 			conversationId: "conv-2",
 			scope: "general",
-			executionRuntime: "agentcore",
 		},
 	]);
 });
@@ -298,7 +296,6 @@ async function queueRun(runId: string, conversationId: string) {
 			userId: "user-1",
 			conversationId,
 			scope: "general",
-			executionRuntime: "agentcore",
 		})
 		.onConflictDoNothing();
 	return await seedQueuedRun(tdb.db, {
@@ -1570,7 +1567,7 @@ describe("markLiveStreamFailedTx", () => {
 });
 
 describe("Run liveness sweep transactions", () => {
-	it("uses the AgentCore queued backstop without consulting the compatibility marker", async () => {
+	it("uses the AgentCore queued backstop directly", async () => {
 		await queueRun("run-agentcore-queued", "conv-1");
 		await tdb.db
 			.update(runs)
@@ -1600,7 +1597,6 @@ describe("Run liveness sweep transactions", () => {
 		await tdb.db
 			.update(conversations)
 			.set({
-				executionRuntime: "agentcore",
 				ownerWorkerId: "dead-agentcore-invocation",
 				ownerUntil: sql`now() - interval '1 second'`,
 				epoch: 1,

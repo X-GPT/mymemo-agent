@@ -14,7 +14,6 @@ import {
 	timestamp,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { CONVERSATION_EXECUTION_RUNTIMES } from "./execution-runtime";
 
 /**
  * Drizzle schema for the writable agent database (`mymemo_agent`), distinct from
@@ -109,10 +108,6 @@ export const conversations = pgTable(
 		conversationId: text("conversation_id").notNull(),
 		/** 'general' | 'collection' | 'document' — frozen at creation. */
 		scope: text("scope").notNull(),
-		/** AgentCore-only compatibility marker, retained until Release 2. */
-		executionRuntime: text("execution_runtime", {
-			enum: CONVERSATION_EXECUTION_RUNTIMES,
-		}).notNull(),
 		/** Non-null only for collection scope. */
 		collectionId: text("collection_id"),
 		/** Non-null only for document scope. */
@@ -156,10 +151,6 @@ export const conversations = pgTable(
 		check(
 			"conversations_scope_check",
 			sql`${t.scope} in ('general', 'collection', 'document')`,
-		),
-		check(
-			"conversations_execution_runtime_check",
-			sql`${t.executionRuntime} = 'agentcore'`,
 		),
 		index("conversations_regular_activity_idx")
 			.on(t.userId, t.lastActivityAt, t.conversationId)

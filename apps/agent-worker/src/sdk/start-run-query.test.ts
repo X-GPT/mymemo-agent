@@ -97,7 +97,6 @@ async function createAcquiredRun(input: {
 			userId: USER_ID,
 			conversationId: input.conversationId,
 			scope: "general",
-			executionRuntime: "agentcore",
 		})
 		.onConflictDoNothing();
 	await seedQueuedRun(tdb.db, {

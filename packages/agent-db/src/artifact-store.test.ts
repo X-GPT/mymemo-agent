@@ -54,7 +54,6 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
@@ -122,7 +121,6 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		for (const [runId, objectKey, artifactId] of [
 			["run-1", "objects/one", "artifact-stable"],
@@ -183,7 +181,6 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -225,7 +222,6 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
@@ -278,7 +274,6 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -339,7 +334,6 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",

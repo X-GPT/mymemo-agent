@@ -61,7 +61,6 @@ async function insertConversation(): Promise<void> {
 		userId: exact.userId,
 		conversationId: exact.conversationId,
 		scope: "general",
-		executionRuntime: "agentcore",
 	});
 }
 

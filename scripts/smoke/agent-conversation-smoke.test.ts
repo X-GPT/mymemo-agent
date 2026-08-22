@@ -96,38 +96,6 @@ describe("agent conversation smoke", () => {
 		expect(result.stdout).toContain("Statsig gate is closed by default");
 	});
 
-	it("refuses to admit a Run when the created Conversation is not agentcore", async () => {
-		const paths: string[] = [];
-		const server = Bun.serve({
-			port: 0,
-			fetch(request) {
-				const url = new URL(request.url);
-				paths.push(`${request.method} ${url.pathname}`);
-				if (request.method === "POST" && url.pathname === "/v1/conversations") {
-					return Response.json(
-						{
-							conversationId: "fargate-conversation",
-							executionRuntime: "fargate",
-						},
-						{ status: 201 },
-					);
-				}
-				return new Response("unexpected request", { status: 500 });
-			},
-		});
-		servers.push(server);
-
-		const result = await runSmoke(`http://127.0.0.1:${server.port}`, {
-			AGENT_SMOKE_EXPECT_GATE_CLOSED: "false",
-		});
-
-		expect(result.exitCode).not.toBe(0);
-		expect(result.stderr).toContain(
-			"conversation create selected fargate, expected agentcore",
-		);
-		expect(paths).toEqual(["POST /v1/conversations"]);
-	});
-
 	it("uses strict Run admission and terminal history recovery", async () => {
 		const conversationId = "conversation-1";
 		const workspaceMarker = "workspace-0123456789abcdef0123456789abcdef";
@@ -147,10 +115,7 @@ describe("agent conversation smoke", () => {
 				const url = new URL(request.url);
 				paths.push(`${request.method} ${url.pathname}`);
 				if (request.method === "POST" && url.pathname === "/v1/conversations") {
-					return Response.json(
-						{ conversationId, executionRuntime: "agentcore" },
-						{ status: 201 },
-					);
+					return Response.json({ conversationId }, { status: 201 });
 				}
 				if (
 					request.method === "POST" &&

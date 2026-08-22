@@ -28,7 +28,6 @@ describe("PostgresArtifactMetadataStore", () => {
 			userId,
 			conversationId,
 			scope: "general",
-			executionRuntime: "agentcore",
 			collectionId: null,
 			summaryId: null,
 		});

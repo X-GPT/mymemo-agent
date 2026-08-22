@@ -48,8 +48,7 @@ _Avoid_: Run target, worker preference, routing hint
 
 **AgentCore dispatch**:
 An at-least-once request for AgentCore to acquire one exact Run from a
-Conversation whose execution runtime is `agentcore`. Repeated delivery never
-creates another Run.
+Conversation. Repeated delivery never creates another Run.
 _Avoid_: Run retry, job, invocation attempt
 
 **Dispatch publication**:

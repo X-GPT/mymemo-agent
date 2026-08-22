@@ -1,9 +1,9 @@
 # AgentCore production operations
 
-AgentCore is the sole production execution runtime. Conversation creation
-persists an AgentCore-only compatibility marker, Run admission writes the
+AgentCore is the sole production execution runtime. Run admission writes the
 transactional Dispatch outbox, the dedicated publisher sends strict envelopes,
-and the consumer invokes the Runtime. There is no runtime selector or fallback.
+and the consumer invokes the Runtime. There is no runtime selector, persisted
+discriminator, or fallback.
 
 ## Controls
 
@@ -25,8 +25,8 @@ exposure is closed.
    publisher, and ECS service rollout.
 3. Verify one healthy Dispatch publisher and one healthy maintenance task.
 4. Verify the Runtime `/ping` contract and image check, then enable Dispatch.
-5. Open exposure only after the production smoke creates an `agentcore`
-   Conversation and completes a Run with durable history and Live Stream output.
+5. Open exposure only after the production smoke creates a Conversation and
+   completes a Run with durable history and Live Stream output.
 
 ## Incident response
 
@@ -43,10 +43,13 @@ Inspect these boundaries in order:
 4. maintenance heartbeat, Reclamation, and cleanup logs;
 5. chat-api reconnect/history behavior and permanent Postgres Outcomes.
 
-Recover by rolling forward. Do not introduce runtime reassignment, change the
-AgentCore-only compatibility marker, or restore the retired Fargate service.
+Recover by rolling forward. Do not introduce runtime reassignment or restore the
+retired Fargate service.
 
 ## Controlled retirement release
 
 The one-time procedure for removing the former service and its schema machinery
 is [Fargate retirement handoff](agent-maintenance-handoff.md).
+
+The later one-time procedure for removing the compatibility contract is
+[Execution-runtime contract removal](execution-runtime-contract-removal.md).

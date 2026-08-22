@@ -212,7 +212,6 @@ export async function seedAgentSessionFenceConversation(
 			userId: input.userId,
 			conversationId: input.conversationId,
 			scope: "general",
-			executionRuntime: "agentcore",
 			epoch: input.epoch ?? 1,
 			ownerWorkerId: input.workerId,
 			ownerUntil: input.ownerUntil ?? new Date(Date.now() + 60_000),

@@ -269,7 +269,6 @@ async function admitRun(message: string): Promise<{
 	await new PostgresConversationStore(testDatabase.db).create({
 		userId: MEMBER_CODE,
 		conversationId,
-		executionRuntime: "agentcore",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,

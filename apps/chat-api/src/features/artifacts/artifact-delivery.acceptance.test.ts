@@ -232,7 +232,6 @@ describe("Downloadable artifact delivery acceptance", () => {
 			await http.conversationStore.create({
 				userId: "member-1",
 				conversationId: "conversation-1",
-				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -393,7 +392,6 @@ describe("Downloadable artifact delivery acceptance", () => {
 			await http.conversationStore.create({
 				userId: "member-1",
 				conversationId: "conversation-1",
-				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,

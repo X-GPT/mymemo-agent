@@ -49,7 +49,6 @@ async function seedDispatch(
 			userId: exact.userId,
 			conversationId: exact.conversationId,
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tx.insert(runs).values({
 			runId: exact.runId,
@@ -111,7 +110,6 @@ describe.skipIf(!RUN)(
 					userId: exact.userId,
 					conversationId: exact.conversationId,
 					scope: "general",
-					executionRuntime: "agentcore",
 				});
 				await tx.insert(runs).values({
 					runId: exact.runId,

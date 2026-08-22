@@ -183,6 +183,13 @@
       "when": 1787390885979,
       "tag": "0025_right_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1787431907007,
+      "tag": "0026_soft_the_hunter",
+      "breakpoints": true
     }
   ]
 }

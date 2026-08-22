@@ -1,7 +1,3 @@
-import {
-	AGENTCORE_EXECUTION_RUNTIME,
-	type ConversationExecutionRuntime,
-} from "@mymemo/agent-db/execution-runtime";
 import type { AppDeps } from "@/deps";
 import type {
 	ConversationRecord,
@@ -18,7 +14,6 @@ import {
 export interface ConversationSummary {
 	conversationId: string;
 	title: string | null;
-	executionRuntime: ConversationExecutionRuntime;
 	scope: ConversationScope;
 	createdAt: string;
 	lastActivityAt: string;
@@ -31,7 +26,6 @@ export function toConversationSummary(
 	return {
 		conversationId: conversation.conversationId,
 		title: conversation.title,
-		executionRuntime: conversation.executionRuntime,
 		scope: conversation.scope,
 		createdAt: conversation.createdAt.toISOString(),
 		lastActivityAt: conversation.lastActivityAt.toISOString(),
@@ -63,7 +57,6 @@ export async function createConversation(
 	const conversation = await store.create({
 		userId: identity.memberCode,
 		conversationId,
-		executionRuntime: AGENTCORE_EXECUTION_RUNTIME,
 		scope,
 		collectionId,
 		summaryId,

@@ -8,11 +8,11 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 ### Create a Conversation
 
-`POST /v1/conversations` accepts the strict `CreateConversationBody` (`.strict()`) with optional `collectionId` and `summaryId`. It validates the body, resolves trusted identity, checks exposure admission, then persists the frozen Scope and the AgentCore-only execution-runtime compatibility marker. Runtime selection is not public input and no runtime gate is consulted.
+`POST /v1/conversations` accepts the strict `CreateConversationBody` (`.strict()`) with optional `collectionId` and `summaryId`. It validates the body, resolves trusted identity, checks exposure admission, then persists the frozen Scope. Runtime selection is not public input and no runtime gate is consulted.
 
 `InternalIdentity` comes from `X-Member-Code` and `X-Partner-Code`; `X-Team-Code`, `X-Member-Name`, and `X-Partner-Name` are optional. `memberCode` becomes the owner (`user_id`). The server generates the Conversation UUID.
 
-Return `201 { conversationId, title, executionRuntime, scope, createdAt, lastActivityAt, archivedAt }`. During Release 1, `executionRuntime` is the constant compatibility value `agentcore` and is also present in the shared Conversation summaries returned by list and lifecycle routes. A new empty draft has `title: null` and `archivedAt: null`.
+Return `201 { conversationId, title, scope, createdAt, lastActivityAt, archivedAt }`. The same Conversation summary shape is returned by list and lifecycle routes. A new empty draft has `title: null` and `archivedAt: null`.
 
 ### Manage Conversations
 
@@ -24,7 +24,7 @@ All operations are owner-scoped. Missing and foreign Conversations both return `
 
 `POST /v1/conversations/:conversationId/runs` strictly validates one standard `RunAgentInput` and requires `threadId` to equal the owned Conversation id. Reject client Tools, state, and forwarded authority.
 
-`admitAgUiRun` is the only admission path. It atomically writes the client-supplied `runId`, the final plain-text User message, `run_started`, and the Run-keyed AgentCore dispatch outbox row under the Conversation lifecycle lock. The frozen execution runtime is retained only as an AgentCore-only compatibility marker. Exact retries reattach to the same logical Run without another dispatch; mismatched reuse returns `409`. Admission commits before Redis access. Backpressure uses the explicit Active Run count under the same Conversation row lock.
+`admitAgUiRun` is the only admission path. It atomically writes the client-supplied `runId`, the final plain-text User message, `run_started`, and the Run-keyed AgentCore dispatch outbox row under the Conversation lifecycle lock. Exact retries reattach to the same logical Run without another dispatch; mismatched reuse returns `409`. Admission commits before Redis access. Backpressure uses the explicit Active Run count under the same Conversation row lock.
 
 Do not reintroduce the removed `runs_one_active_per_conversation` partial unique index as an implicit backpressure mechanism.
 

@@ -53,7 +53,6 @@ beforeEach(async () => {
 		userId: dispatch.userId,
 		conversationId: dispatch.conversationId,
 		scope: "general",
-		executionRuntime: "agentcore",
 	});
 	await tdb.db.transaction(async (tx) => {
 		await admitQueuedRunInTx(tx, {

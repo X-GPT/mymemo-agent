@@ -109,7 +109,6 @@ async function seedConversationRun(input: {
 		userId: "user-1",
 		conversationId: input.conversationId,
 		scope: "general",
-		executionRuntime: "agentcore",
 		...(input.status === "running"
 			? {
 					ownerWorkerId: "vanished-runtime",
