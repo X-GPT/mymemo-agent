@@ -8,6 +8,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | --- | --- |
 | `apps/chat-api` | Creates and manages Conversations, admits Runs idempotently, attaches clients to Live Streams, projects permanent history, and lists or signs current Downloadable artifacts. |
 | `apps/agent-worker` | Trusted Fargate execution runtime. Claims Conversations, serves their Runs in submission order, calls the Claude Agent SDK through OpenRouter, accesses scoped Searchable documents, delegates untrusted file and shell work to E2B, and publishes artifacts. |
+| `apps/agent-maintenance` | Dedicated global queued-Run expiration, Reclamation, and cleanup service. It has no Claim or Run-serving path and remains inactive until the controlled ownership handoff. |
 | `apps/agentcore-dispatch-publisher` | Dedicated AgentCore Dispatch publication app. Runs as one ECS task, separate from Conversation-serving workers. |
 | `apps/agentcore-dispatch-consumer` | AgentCore dispatch consumer Lambda and shared dispatch-boundary modules. Its production composition validates strict content-free SQS envelopes, invokes the Runtime, and returns partial-batch acknowledgements; the Runtime composes exact acquisition directly. |
 | `apps/agentcore-runtime` | Linux ARM64 AgentCore Runtime exposing `/ping` and `/invocations`. It serves one acquired AgentCore Run and delegates the already-running Run to shared Run-serving behavior. It does not run Fargate Claim, drain, expiration, Reclamation, or cleanup loops. |

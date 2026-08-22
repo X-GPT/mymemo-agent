@@ -26,6 +26,9 @@ fck_nat_ami_id = "ami-0d1db1251d2b64626"
 
 chat_api_desired_count     = 1
 agent_worker_desired_count = 1
+# Defined and deployable, but deliberately inactive until the runbook handoff
+# stops every old worker maintenance owner.
+agent_maintenance_desired_count = 0
 # The dedicated publisher remains a one-task service in steady state. Its
 # advisory lock, rather than task count, is the singleton authority.
 agentcore_dispatch_publisher_desired_count = 1

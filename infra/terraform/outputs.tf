@@ -8,6 +8,11 @@ output "agent_worker_service_name" {
   value       = aws_ecs_service.agent_worker.name
 }
 
+output "agent_maintenance_service_name" {
+  description = "ECS service name for agent-maintenance."
+  value       = aws_ecs_service.agent_maintenance.name
+}
+
 output "agentcore_dispatch_publisher_service_name" {
   description = "ECS service name for the AgentCore dispatch publisher."
   value       = aws_ecs_service.agentcore_dispatch_publisher.name
@@ -26,6 +31,11 @@ output "chat_api_task_definition_arn" {
 output "agent_worker_task_definition_arn" {
   description = "Task definition ARN for the agent-worker release built by Terraform."
   value       = aws_ecs_task_definition.agent_worker.arn
+}
+
+output "agent_maintenance_task_definition_arn" {
+  description = "Task definition ARN for the agent-maintenance release built by Terraform."
+  value       = aws_ecs_task_definition.agent_maintenance.arn
 }
 
 output "agentcore_dispatch_publisher_task_definition_arn" {

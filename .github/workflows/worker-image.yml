@@ -27,6 +27,7 @@ on:
   pull_request:
     paths:
       - apps/agent-worker/**
+      - apps/agent-maintenance/**
       - packages/agent-db/**
       - packages/live-text/**
       - apps/*/package.json
@@ -35,6 +36,7 @@ on:
       - bun.lock
       - .dockerignore
       - scripts/smoke/agent-worker-image-check.sh
+      - scripts/smoke/agent-maintenance-image-check.sh
       - .github/workflows/worker-image.yml
 
 # Plain ref keying is enough here — every run is a pull_request run, so the ref
@@ -56,3 +58,10 @@ jobs:
           -t mymemo-agent-worker:image-check .
       - name: Exec-verify pinned Claude CLI
         run: scripts/smoke/agent-worker-image-check.sh mymemo-agent-worker:image-check
+      - name: Build agent-maintenance image
+        run: >-
+          docker build --platform linux/amd64
+          -f apps/agent-maintenance/Dockerfile
+          -t mymemo-agent-maintenance:image-check .
+      - name: Verify maintenance-only image boundary
+        run: scripts/smoke/agent-maintenance-image-check.sh mymemo-agent-maintenance:image-check

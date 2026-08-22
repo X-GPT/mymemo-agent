@@ -1,13 +1,16 @@
 {
 	"name": "agent-worker",
 	"exports": {
+		"./advisory-lock": "./src/cleanup/advisory-lock.ts",
 		"./artifact-object-store": "./src/artifacts/s3-artifact-object-store.ts",
 		"./claude-code-executable": "./src/sdk/claude-code-executable.ts",
 		"./config": "./src/config/env.ts",
+		"./e2b-janitor": "./src/cleanup/e2b-janitor.ts",
 		"./logger": "./src/logger.ts",
 		"./maintenance-runner": "./src/maintenance-runner.ts",
 		"./production-run-resources": "./src/production-run-resources.ts",
-		"./run-serving": "./src/run-serving.ts"
+		"./run-serving": "./src/run-serving.ts",
+		"./s3-artifact-janitor": "./src/cleanup/s3-artifact-janitor.ts"
 	},
 	"scripts": {
 		"test": "bun test --timeout=30000",

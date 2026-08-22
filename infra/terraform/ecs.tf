@@ -82,6 +82,49 @@ resource "aws_ecs_task_definition" "agent_worker" {
   ])
 }
 
+resource "aws_ecs_task_definition" "agent_maintenance" {
+  family                   = local.agent_maintenance_name
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.agent_maintenance_cpu
+  memory                   = var.agent_maintenance_memory
+  execution_role_arn       = aws_iam_role.agent_maintenance_execution.arn
+  task_role_arn            = aws_iam_role.agent_maintenance_task.arn
+
+  container_definitions = jsonencode([
+    {
+      name        = "agent-maintenance"
+      image       = var.agent_maintenance_image
+      essential   = true
+      stopTimeout = 30
+      portMappings = [
+        {
+          containerPort = var.agent_maintenance_port
+          hostPort      = var.agent_maintenance_port
+          protocol      = "tcp"
+        }
+      ]
+      environment = local.agent_maintenance_environment
+      secrets     = local.agent_maintenance_secrets
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.agent_maintenance.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "agent-maintenance"
+        }
+      }
+      healthCheck = {
+        command     = ["CMD-SHELL", "bun -e \"const r=await fetch('http://127.0.0.1:${var.agent_maintenance_port}/health'); if(!r.ok) process.exit(1)\""]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 30
+      }
+    }
+  ])
+}
+
 resource "aws_ecs_task_definition" "agentcore_dispatch_publisher" {
   family                   = local.agentcore_dispatch_publisher_name
   requires_compatibilities = ["FARGATE"]
@@ -182,6 +225,29 @@ resource "aws_ecs_service" "agent_worker" {
 
   lifecycle {
     ignore_changes = [task_definition]
+  }
+}
+
+resource "aws_ecs_service" "agent_maintenance" {
+  name            = local.agent_maintenance_name
+  cluster         = local.shared_ecs_cluster_arn
+  task_definition = aws_ecs_task_definition.agent_maintenance.arn
+  desired_count   = var.agent_maintenance_desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = local.shared_ecs_subnet_ids
+    security_groups  = [aws_security_group.agent_maintenance.id]
+    assign_public_ip = var.assign_public_ip
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+
+    precondition {
+      condition     = var.agent_maintenance_desired_count == 0 || var.agent_worker_desired_count == 0
+      error_message = "agent-maintenance and agent-worker cannot both have a nonzero desired count; follow the controlled handoff runbook."
+    }
   }
 }
 

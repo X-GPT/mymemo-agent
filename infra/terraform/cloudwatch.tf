@@ -8,6 +8,70 @@ resource "aws_cloudwatch_log_group" "agent_worker" {
   retention_in_days = var.log_retention_days
 }
 
+resource "aws_cloudwatch_log_group" "agent_maintenance" {
+  name              = "/ecs/${local.agent_maintenance_name}"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_cloudwatch_log_metric_filter" "agent_maintenance_errors" {
+  name           = "${local.agent_maintenance_name}-errors"
+  log_group_name = aws_cloudwatch_log_group.agent_maintenance.name
+  pattern        = "{ $.level >= 50 }"
+
+  metric_transformation {
+    name      = "Errors"
+    namespace = "${local.common_name}/Maintenance"
+    value     = "1"
+    unit      = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "agent_maintenance_errors" {
+  alarm_name          = "${local.agent_maintenance_name}-errors"
+  alarm_description   = "agent-maintenance logged a failed expiration, Reclamation, or cleanup operation."
+  namespace           = "${local.common_name}/Maintenance"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
+}
+
+resource "aws_cloudwatch_log_metric_filter" "agent_maintenance_heartbeat" {
+  name           = "${local.agent_maintenance_name}-heartbeat"
+  log_group_name = aws_cloudwatch_log_group.agent_maintenance.name
+  pattern        = "{ $.message = \"maintenance liveness pass complete\" }"
+
+  metric_transformation {
+    name      = "Heartbeat"
+    namespace = "${local.common_name}/Maintenance"
+    value     = "1"
+    unit      = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "agent_maintenance_heartbeat" {
+  count = var.agent_maintenance_desired_count
+
+  alarm_name          = "${local.agent_maintenance_name}-heartbeat"
+  alarm_description   = "agent-maintenance has not completed a liveness pass for two minutes."
+  namespace           = "${local.common_name}/Maintenance"
+  metric_name         = "Heartbeat"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  threshold           = 1
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
+}
+
 resource "aws_cloudwatch_log_group" "agentcore_dispatch_publisher" {
   name              = "/ecs/${local.agentcore_dispatch_publisher_name}"
   retention_in_days = var.log_retention_days

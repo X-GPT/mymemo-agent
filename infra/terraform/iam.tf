@@ -61,6 +61,35 @@ resource "aws_iam_role_policy" "agentcore_dispatch_publisher_read_database_secre
   policy = data.aws_iam_policy_document.agentcore_dispatch_publisher_read_database_secret.json
 }
 
+resource "aws_iam_role" "agent_maintenance_execution" {
+  name               = "${local.agent_maintenance_name}-execution"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
+}
+
+resource "aws_iam_role_policy_attachment" "agent_maintenance_execution" {
+  role       = aws_iam_role.agent_maintenance_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+data "aws_iam_policy_document" "agent_maintenance_read_secrets" {
+  statement {
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+    ]
+    resources = [
+      local.agent_db_password_base_secret_arn,
+      local.e2b_api_key_secret_arn,
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "agent_maintenance_read_secrets" {
+  name   = "${local.agent_maintenance_name}-read-secrets"
+  role   = aws_iam_role.agent_maintenance_execution.id
+  policy = data.aws_iam_policy_document.agent_maintenance_read_secrets.json
+}
+
 resource "aws_iam_role" "chat_api_task" {
   name               = "${local.common_name}-chat-api-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
@@ -82,6 +111,24 @@ resource "aws_iam_role_policy" "chat_api_artifact_read" {
 resource "aws_iam_role" "agent_worker_task" {
   name               = "${local.common_name}-worker-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
+}
+
+resource "aws_iam_role" "agent_maintenance_task" {
+  name               = "${local.agent_maintenance_name}-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
+}
+
+data "aws_iam_policy_document" "agent_maintenance_artifact_delete" {
+  statement {
+    actions   = ["s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "agent_maintenance_artifact_delete" {
+  name   = "${local.agent_maintenance_name}-artifact-delete"
+  role   = aws_iam_role.agent_maintenance_task.id
+  policy = data.aws_iam_policy_document.agent_maintenance_artifact_delete.json
 }
 
 resource "aws_iam_role" "agentcore_dispatch_publisher_task" {

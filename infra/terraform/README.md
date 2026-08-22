@@ -26,7 +26,8 @@ the direct remote-state output is absent and the fallback input is present.
 ## Agent-Owned Resources
 
 - ECR repositories for `mymemo-agent-chat-api`, `mymemo-agent-worker`,
-  `mymemo-agentcore-dispatch-publisher`, and `mymemo/agentcore-runtime` in the
+  `mymemo-agent-maintenance`, `mymemo-agentcore-dispatch-publisher`, and
+  `mymemo/agentcore-runtime` in the
   separate `infra/ecr` Terraform root
 - dedicated RDS Postgres instance for writable agent state
 - EC2 Instance Connect Endpoint and private EC2 bridge for operator access to
@@ -34,11 +35,12 @@ the direct remote-state output is absent and the fallback input is present.
 - single-node ElastiCache Redis replication group for temporary per-Run Live
   Streams
 - private S3 bucket for durable Downloadable artifact objects
-- ECS Fargate task definitions and services for chat-api, agent-worker, and the
-  singleton AgentCore dispatch publisher
+- ECS Fargate task definitions and services for chat-api, agent-worker,
+  agent-maintenance, and the singleton AgentCore dispatch publisher
 - agent DB migration task definition
-- service security groups inside the shared VPC, including an outbound-only
-  publisher group that can reach the agent database but not the KB database
+- service security groups inside the shared VPC, including outbound-only
+  publisher and maintenance groups that can reach the agent database but not
+  the KB database
 - internal agent-owned ALB, ALB security group, listeners, and chat-api target group
 - IAM execution/task roles for the agent tasks
 - CloudWatch log groups and baseline alarms
@@ -210,14 +212,15 @@ move together after the compatible schema exists. Finally it rolls the ECS
 services. The target is an ordering mechanism inside one release, not a second
 state or a manual pause.
 
-For the one-time empty ECS bootstrap, all three service desired counts are
+For the one-time empty ECS bootstrap, all service desired counts are
 forced to zero until the migration completes. Because that bootstrap may create
 or update the consumer before the schema exists, it requires the SSM Dispatch
 control to be `disabled`. Routine releases accept and preserve either live
 value.
 
-`assign_public_ip=true` remains an inherited constraint for chat-api and
-agent-worker in the shared public/default ECS subnets. The Dispatch publisher
+`assign_public_ip=true` remains an inherited constraint for chat-api,
+agent-worker, and agent-maintenance in the shared public/default ECS subnets.
+The Dispatch publisher
 runs without a public address in the AgentCore private subnets and shares their
 zonal fck-nat egress.
 

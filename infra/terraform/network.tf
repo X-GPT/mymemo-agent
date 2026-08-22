@@ -48,6 +48,44 @@ resource "aws_security_group" "agentcore_dispatch_publisher" {
   }
 }
 
+resource "aws_security_group" "agent_maintenance" {
+  name        = local.agent_maintenance_name
+  description = "Outbound-only global Run maintenance service"
+  vpc_id      = local.shared_vpc_id
+
+  egress {
+    description     = "Dedicated agent Postgres"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.agent_db.id]
+  }
+
+  egress {
+    description = "E2B cleanup and AWS APIs over HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "VPC DNS over UDP"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = [data.aws_vpc.shared.cidr_block]
+  }
+
+  egress {
+    description = "VPC DNS over TCP"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.shared.cidr_block]
+  }
+}
+
 resource "aws_security_group_rule" "chat_api_from_alb" {
   type                     = "ingress"
   description              = "Agent ALB to chat-api"
