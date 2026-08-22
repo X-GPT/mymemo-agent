@@ -56,8 +56,8 @@ AWS provider `>= 6.50, < 7.0` supports the configured zero timeout values.
 - dedicated RDS Postgres instance for writable agent state
 - EC2 Instance Connect Endpoint and private EC2 bridge for operator access to
   the agent and KB databases
-- single-node ElastiCache Redis replication group for temporary per-Run Live
-  Streams
+- single-node ElastiCache for Valkey replication group for temporary per-Run
+  Live Streams
 - private S3 bucket for durable Downloadable artifact objects
 - ECS Fargate task definitions and services for chat-api, agent-maintenance,
   and the singleton AgentCore dispatch publisher
@@ -134,24 +134,34 @@ role can read that parameter and publish to the exact encrypted queue. Its
 separate execution role can read only the RDS password secret; it receives no
 KB, OpenRouter, E2B, artifact, or Redis credentials.
 
-## Redis Live Stream Infrastructure
+## Valkey Live Stream Infrastructure
 
-The Redis cache is an ephemeral pub/sub relay for AG-UI Live Streams, not a
-storage or permanent-history authority. Producers keep active-Run backlogs in
-Runtime memory; Redis holds no per-Run keys. It is a single small node with no
-replicas, Multi-AZ failover, automatic snapshots, final snapshot, or backup
-retention. The cache is reachable on its TLS port only from a dedicated client
-security group attached to `chat-api` and the AgentCore Runtime;
-the migration task does not receive that group.
+The ElastiCache for Valkey cache is an ephemeral Redis-compatible pub/sub relay
+for AG-UI Live Streams, not a storage or permanent-history authority. Producers
+keep active-Run backlogs in Runtime memory; the cache holds no per-Run keys. It
+is a single `cache.t4g.micro` node with no replicas, Multi-AZ failover,
+automatic snapshots, final snapshot, or backup retention. The cache is
+reachable on its TLS port only from a dedicated client security group attached
+to `chat-api` and the AgentCore Runtime; the migration task does not receive
+that group.
 ElastiCache does not receive a public address or a CIDR-based ingress rule.
 Authentication and in-transit encryption are mandatory.
+
+Production upgrades the existing Redis OSS 7.1 replication group to Valkey 7.2
+in place. The Terraform resource address, replication-group identifier,
+`cache.t4g.micro` node type, primary endpoint DNS name, TLS port, AUTH token,
+and `rediss://` secret contract remain stable. AWS may change the node's
+underlying IP during the cross-engine upgrade, so clients must continue using
+the endpoint DNS name. Because the relay is deliberately non-durable, the
+upgrade does not add snapshots or persistence; brief publication interruption
+degrades active Live Streams to permanent Postgres history.
 
 Before the first cache plan in an existing environment, reapply
 `infra/bootstrap-iam` with the admin profile as shown below. That updates the
 GitHub Actions deploy role with the ElastiCache permissions used by this root.
 
 `REDIS_URL` is required at chat-api and AgentCore Runtime startup and must be an
-authenticated `rediss://` URL. Runtime Redis availability remains outside
+authenticated `rediss://` URL. Runtime cache availability remains outside
 readiness: an outage degrades live delivery but does not make either service
 unhealthy, and permanent Conversation history and Outcomes remain in Postgres.
 
