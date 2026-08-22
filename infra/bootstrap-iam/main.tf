@@ -122,6 +122,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "ec2:DeleteSecurityGroup",
       "ec2:DeleteTags",
       "ec2:Describe*",
+      "ec2:DisassociateAddress",
       "ec2:ModifyInstanceAttribute",
       "ec2:ModifyInstanceConnectEndpoint",
       "ec2:ModifyNetworkInterfaceAttribute",
