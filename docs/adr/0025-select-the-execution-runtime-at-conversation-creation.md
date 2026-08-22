@@ -7,6 +7,8 @@ Amended (2026-08-20) by
 [ADR-0029](./0029-recover-production-releases-by-rolling-forward.md), which
 supersedes the binary-rollback procedure while retaining the deployment fence
 as defense in depth.
+Runtime-selection, Fargate-fallback, and reassignment decisions are superseded
+by [ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md).
 
 Every Conversation carries an immutable execution runtime — `fargate` or
 `agentcore` — selected exactly once at creation by a server-side Statsig gate
