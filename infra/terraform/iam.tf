@@ -128,7 +128,7 @@ resource "aws_iam_role" "chat_api_task" {
 data "aws_iam_policy_document" "chat_api_artifact_read" {
   statement {
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/objects/*"]
   }
 }
 
@@ -146,7 +146,7 @@ resource "aws_iam_role" "agent_maintenance_task" {
 data "aws_iam_policy_document" "agent_maintenance_artifact_delete" {
   statement {
     actions   = ["s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/objects/*"]
   }
 }
 

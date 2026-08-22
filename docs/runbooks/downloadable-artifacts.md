@@ -50,7 +50,7 @@ The post-upsert current set is limited to:
 - 100 current artifact paths per conversation;
 - 1 GiB total current artifact bytes per conversation.
 
-Validation, quota, upload, ownership, cancellation, or persistence failure
+Validation, quota, upload, Ownership, interruption, or persistence failure
 leaves the prior current set unchanged. A Run with an `error` Outcome exposes
 only the generic `Run failed` message to the client. Internal structured
 diagnostics identify a bounded failure category or stage without object bodies,
@@ -102,7 +102,7 @@ deletion cannot be revoked and may remain usable until its five-minute expiry.
 3. For upload failures, verify AgentCore Runtime role access and bucket/region
    injection. Do not copy credentials or a presigned URL into the sandbox for
    diagnosis.
-4. Confirm that an errored or canceled Run did not change the list endpoint.
+4. Confirm that an errored or interrupted Run did not change the list endpoint.
    Staged objects may remain in the ledger; that is expected until cleanup.
 
 ## Diagnose cleanup failures

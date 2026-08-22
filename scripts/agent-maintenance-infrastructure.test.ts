@@ -199,6 +199,11 @@ describe("agent-maintenance infrastructure", () => {
 			'data "aws_iam_policy_document" "agent_maintenance_artifact_delete"',
 			'resource "aws_iam_role" "agentcore_dispatch_publisher_task"',
 		);
+		const chatApiArtifactPolicy = section(
+			iam,
+			'data "aws_iam_policy_document" "chat_api_artifact_read"',
+			'resource "aws_iam_role_policy" "chat_api_artifact_read"',
+		);
 		const runtimePolicy = section(
 			agentCoreIam,
 			'data "aws_iam_policy_document" "runtime"',
@@ -218,8 +223,10 @@ describe("agent-maintenance infrastructure", () => {
 		expect(executionPolicy).not.toContain("openrouter_api_key_secret_arn");
 		expect(executionPolicy).not.toContain("live_redis_url_secret_arn");
 		expect(taskPolicy).toContain('actions   = ["s3:DeleteObject"]');
+		expect(taskPolicy).toContain("/objects/*");
 		expect(taskPolicy).not.toContain("s3:PutObject");
 		expect(taskPolicy).not.toContain("s3:GetObject");
+		expect(chatApiArtifactPolicy).toContain("/objects/*");
 		expect(runtimePolicy).toContain("s3:PutObject");
 		expect(runtimePolicy).toContain("s3:AbortMultipartUpload");
 		expect(runtimePolicy).not.toContain("s3:DeleteObject");

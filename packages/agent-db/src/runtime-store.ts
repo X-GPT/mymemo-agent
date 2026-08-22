@@ -21,13 +21,13 @@ import { conversationRuntime, orphanSandboxes } from "./schema";
  * on the Conversation's live Ownership fence. Every update carries that fence
  * as an `EXISTS` subquery inside the same statement that performs the write,
  * and row creation checks the same predicate `FOR SHARE` in its transaction —
- * so a worker whose Claim lapses or is superseded cannot overwrite pointers a
- * later Claim now relies on. The two deliberate exceptions are
+ * so a Runtime invocation whose Ownership lapses or is superseded cannot
+ * overwrite pointers a later Durable acquisition relies on. The two deliberate exceptions are
  * orphan recording and Reclamation taint, which exist precisely for the
  * ownership-already-lost path.
  *
  * `interrupt_requested` is inside the fence (mirroring the run-store
- * "cancellation" append class): command cleanup while an interruption stops
+ * interruption append class): command cleanup while an interruption stops
  * the run is where sandbox taint decisions happen, and those must stay
  * durable.
  */
@@ -57,7 +57,7 @@ export async function loadConversationRuntimeTx(
 /**
  * Create the conversation's runtime row (empty pointers). The fence
  * is checked `FOR SHARE` in the same transaction as the insert, so Reclamation
- * cannot release or supersede the authorizing Claim between check and insert.
+ * cannot release or supersede the authorizing Ownership between check and insert.
  * Idempotent: if a previous attempt already created the row, the existing row
  * is returned unchanged. Idempotency is for the retry, not for concurrency: the
  * Ownership lease is what makes the Conversation single-writer.
@@ -164,7 +164,7 @@ export async function markRuntimeSandboxTaintedTx(
  * Taint the Conversation's sandbox from Reclamation, inside Reclamation's own
  * transaction. The second deliberate exception to the ownership fence, and
  * for the same reason as orphan recording: the run whose ownership would
- * authorize the write is precisely the run that lost it, and its worker may be
+ * authorize the write is precisely the Run that lost it, and its Runtime may be
  * partitioned rather than dead — still writing to a workspace the next turn
  * would otherwise reconnect to. Restricted to conversations that actually hold
  * a sandbox, so taint keeps describing the current sandbox only.
@@ -193,7 +193,7 @@ export type OrphanSandboxRecord = typeof orphanSandboxes.$inferSelect;
  * pointer update failed and the kill could not be confirmed). Deliberately
  * unfenced — this path exists precisely because Ownership is already
  * lost. Idempotent per sandbox id: re-recording returns the original row
- * unchanged, so a retrying worker cannot overwrite the first record.
+ * unchanged, so a retrying Runtime invocation cannot overwrite the first record.
  */
 export async function recordOrphanSandboxTx(
 	db: Database,

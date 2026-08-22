@@ -122,10 +122,10 @@ export type RunEventPayload = Record<string, unknown>;
 /**
  * The two owned append classes (design doc "State Ownership"): `model` is
  * normal SDK content — assistant text, tool results — and is only legal while
- * the run is `running`; `cancellation` is the bounded command/process-kill
- * cleanup and audit trail the owning worker may still write after
- * `interrupt_requested` (the class keeps its internal process-cancellation
- * name per ADR-0013 — user-facing Run control is "interruption"). Terminal
+ * the Run is `running`; `cancellation` is the internal append-class name for
+ * bounded command/process-stop cleanup and audit that the owning Runtime may
+ * still write after `interrupt_requested`. It does not change the public Run
+ * interruption vocabulary. Terminal
  * events are deliberately not an append class here — they only exist through
  * the terminal transition helpers.
  */
@@ -144,7 +144,7 @@ const APPEND_CLASS_STATUSES: Record<RunEventAppendClass, RunStatus[]> = {
 	cancellation: ["running", "interrupt_requested"],
 };
 
-/** The three terminal statuses a worker can transition an owned run into. */
+/** The three terminal statuses a Runtime can transition an owned Run into. */
 export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
 
 export function isTerminalRunStatus(
@@ -349,7 +349,7 @@ function normalizedInputsEqual(
  * What a run's `run_started` event recorded about the turn: the user message
  * (the query prompt) and the conversation's frozen scope columns, exactly as
  * chat-api's admission transaction wrote them. The scope stays in row form
- * here — the worker parses it into its typed scope (fail-closed) at the edge
+ * here — the Runtime parses it into its typed scope (fail-closed) at the edge
  * where document access is built.
  */
 export interface RunStartedEvent {
@@ -361,7 +361,7 @@ export interface RunStartedEvent {
 
 /**
  * Load the run's `run_started` event — the durable record of what the user
- * asked for (design: the worker reads the turn from the log, never from a
+ * asked for (design: the Runtime reads the turn from the log, never from a
  * request body). Throws when the event is missing or its payload carries no
  * string message/scope: a run that cannot say what was asked must fail, not
  * run an empty prompt.
@@ -850,7 +850,7 @@ async function insertTerminalEvent(
  * queued run directly, or the interruption already won and this is a safe
  * retry (ADR-0013 keeps both at `202 { status: "interrupted" }`, distinct
  * from a `done`/`error` terminal). `interrupt_requested`: the run is
- * executing; the owning worker keeps ownership and terminalizes after
+ * executing; the owning Runtime keeps Ownership and terminalizes after
  * stopping (repeat requests are idempotent no-ops). `already_terminal`: the
  * run already committed `done` or `error`, so interruption conflicts — `run`
  * carries the status the caller should report.
@@ -888,9 +888,9 @@ export async function requestRunInterruptionTx(
 		if (!run) return { outcome: "not_found" };
 
 		if (run.status === "queued") {
-			// Never claimed, so there is no owner to hand the interruption to:
+			// Never started through Durable acquisition, so no Runtime owns it:
 			// terminalize directly, with the same counter-allocated terminal event
-			// a worker transition would produce.
+			// an owned Runtime transition would produce.
 			const [row] = await tx
 				.update(runs)
 				.set({

@@ -18,7 +18,7 @@ import { CONVERSATION_EXECUTION_RUNTIMES } from "./execution-runtime";
 
 /**
  * Drizzle schema for the writable agent database (`mymemo_agent`), distinct from
- * the worker's read-only KB. This file is the single source of truth for the
+ * the Runtime's read-only KB. This file is the single source of truth for the
  * writable DB shared by `chat-api` (run creation, SSE projection) and
  * AgentCore and agent-maintenance: types are inferred from
  * it, and `drizzle-kit generate` emits the SQL migrations under `drizzle/` from
@@ -33,8 +33,8 @@ import { CONVERSATION_EXECUTION_RUNTIMES } from "./execution-runtime";
  * active execution ownership** — that lives exclusively on the Conversation.
  * Sandbox and taint mutations use the runtime-store helpers; Agent-session
  * pointer updates compose through run-store's terminal transaction. Both paths
- * fence on the live Conversation Ownership epoch, so a superseded worker cannot
- * overwrite pointers a later Claim now relies on.
+ * fence on the live Conversation Ownership epoch, so a superseded Runtime
+ * invocation cannot overwrite pointers a later Durable acquisition relies on.
  */
 export const conversationRuntime = pgTable(
 	"conversation_runtime",
@@ -129,22 +129,22 @@ export const conversations = pgTable(
 		/** Non-null while the Conversation is archived. */
 		archivedAt: timestamp("archived_at", { withTimezone: true }),
 		/**
-		 * The worker holding the current Claim. Provenance for log correlation
-		 * only — it carries no safety weight, because an epoch names exactly one
-		 * Claim and therefore exactly one worker. NULL while unowned.
+		 * The Runtime invocation holding current Conversation Ownership. Provenance
+		 * for log correlation only — it carries no safety weight, because an epoch
+		 * names exactly one Durable acquisition. NULL while unowned.
 		 */
 		ownerWorkerId: text("owner_worker_id"),
 		/** Deadline of the current Ownership lease; NULL while unowned. */
 		ownerUntil: timestamp("owner_until", { withTimezone: true }),
 		/**
-		 * Ownership epoch (ADR-0015): incremented by every Claim, so it names one
-		 * Claim of this Conversation. Fenced writes validate a matching epoch
+		 * Ownership epoch (ADR-0015): incremented by every Durable acquisition, so
+		 * it names one acquisition of this Conversation. Fenced writes validate a
+		 * matching epoch
 		 * **and** a live `owner_until` — the two conjuncts cover different
-		 * failures, the epoch a lease superseded by a re-Claim and the deadline
-		 * one that merely lapsed with no successor. A token is necessary rather
-		 * than redundant here precisely because a Conversation is claimed many
-		 * times across its life, by different workers; the older
-		 * claimed-exactly-once argument does not survive that.
+		 * failures, the epoch a lease superseded by another acquisition and the
+		 * deadline one that merely lapsed with no successor. A token is necessary
+		 * rather than redundant because a Conversation is acquired many times
+		 * across its life by different Runtime invocations.
 		 */
 		epoch: integer("epoch").notNull().default(0),
 	},
@@ -261,7 +261,7 @@ export const conversationArtifacts = pgTable(
 
 /**
  * Internal lifecycle ledger for every private object a Run intends to upload.
- * Rows are inserted before object-store I/O so a worker crash cannot create an
+ * Rows are inserted before object-store I/O so a Runtime crash cannot create an
  * untracked object. Current reachability still comes from
  * `conversation_artifacts`; this ledger exists for crash-safe cleanup, not as
  * user-visible version history (ADR-0011).
@@ -332,11 +332,11 @@ function statusList(statuses: readonly string[]) {
 }
 
 /**
- * Durable run queue for the split-runtime worker. Execution ownership lives on
+ * Durable Run queue for AgentCore. Execution authority lives on
  * the Conversation and every write validates its live Ownership epoch
- * (ADR-0015). The epoch is necessary because a Conversation is Claimed many
- * times over its life, by different workers: once Claim-at-most-once is false,
- * worker identity cannot distinguish a stale holder from its successor.
+ * (ADR-0015). The epoch is necessary because a Conversation can be acquired
+ * many times over its life: Runtime identity cannot distinguish a stale holder
+ * from its successor.
  */
 export const runs = pgTable(
 	"runs",
@@ -352,9 +352,9 @@ export const runs = pgTable(
 		normalizedInput: jsonb("normalized_input"),
 		status: text("status").notNull(),
 		/**
-		 * Which worker executed this Run, stamped by the epoch-fenced queued→running
-		 * transition. Provenance for log correlation, never authority — that is the
-		 * Conversation's Ownership lease.
+		 * Which Runtime invocation executed this Run, stamped by the epoch-fenced
+		 * queued→running transition. Provenance for log correlation, never authority
+		 * — that is the Conversation's Ownership lease.
 		 */
 		executedByWorkerId: text("executed_by_worker_id"),
 		interruptRequestedAt: timestamp("interrupt_requested_at", {
@@ -395,8 +395,8 @@ export const runs = pgTable(
 		// guarantees that a writer starts one Run at a time. What survives here is
 		// only the access path `runs_one_active_per_conversation` also happened to
 		// provide, which four hot reads need: admission's bound check, the
-		// Archive/Permanent-deletion guard, the Claim's snapshot (`status =
-		// 'queued'` sits inside this predicate), and the history store's captured
+		// Archive/Permanent-deletion guard, the Durable-acquisition candidate read
+		// (`status = 'queued'` sits inside this predicate), and history's captured
 		// active Run.
 		// Partial on purpose: one entry per *Active* Run keeps it sized by
 		// concurrently-busy conversations rather than by every Run ever admitted.
@@ -455,7 +455,7 @@ export const runEvents = pgTable(
 
 /**
  * The Claude Agent SDK session-transcript mirror — the backing table for the
- * worker's `SessionStore` adapter (ADR-0005, Task 7.3). One row per transcript
+ * Runtime's `SessionStore` adapter (ADR-0005, Task 7.3). One row per transcript
  * entry (a JSONL line the SDK mirrors after its local write), insertion-ordered
  * by the `bigserial` id so a session replays in the order it was appended.
  *
@@ -493,12 +493,12 @@ export const agentSessions = pgTable(
 		/** The opaque JSONL transcript line, round-tripped as-is. */
 		entry: jsonb("entry").notNull(),
 		/**
-		 * The Ownership epoch of the Claim that mirrored this entry — provenance,
+		 * The Ownership epoch of the Durable acquisition that mirrored this entry — provenance,
 		 * not a fence. Resume stays pointer-driven and never consults it; it
-		 * exists so "which Claim wrote this transcript" is answerable when a dead
-		 * attempt's transcript is the newest one. Current appends stamp the Claim
-		 * epoch; the column stays nullable for entries mirrored before Conversation
-		 * ownership.
+		 * exists so "which acquisition wrote this transcript" is answerable when a
+		 * dead Runtime invocation's transcript is newest. Current appends stamp the
+		 * Ownership epoch; the column stays nullable for entries mirrored before
+		 * Conversation Ownership.
 		 */
 		epoch: integer("epoch"),
 		createdAt: timestamp("created_at", { withTimezone: true })
