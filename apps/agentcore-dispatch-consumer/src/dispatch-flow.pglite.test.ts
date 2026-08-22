@@ -25,7 +25,6 @@ describe("AgentCore dispatch flow through PGlite", () => {
 				userId,
 				conversationId,
 				scope: "general",
-				executionRuntime: "agentcore",
 			});
 			await tdb.db.transaction(async (tx) => {
 				const admission = await admitQueuedRunInTx(tx, {

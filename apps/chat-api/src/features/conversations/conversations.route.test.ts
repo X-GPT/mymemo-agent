@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
-import type { ConversationExecutionRuntime } from "@mymemo/agent-db/execution-runtime";
 import {
 	createInMemoryLiveStreamRelay,
 	createLiveStreamTelemetry,
@@ -247,14 +246,11 @@ function transactionalAdmissionFake(
 	};
 }
 
-function persistedConversation(
-	executionRuntime: ConversationExecutionRuntime,
-): ConversationRecord {
+function persistedConversation(): ConversationRecord {
 	const createdAt = new Date("2026-01-01T00:00:00.000Z");
 	return {
 		userId: "member-1",
 		conversationId: "conv-1",
-		executionRuntime,
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
@@ -363,7 +359,6 @@ describe("POST /v1/conversations", () => {
 			const body = (await res.json()) as {
 				conversationId: string;
 				title: string | null;
-				executionRuntime: ConversationExecutionRuntime;
 				scope: string;
 				createdAt: string;
 				lastActivityAt: string;
@@ -372,7 +367,6 @@ describe("POST /v1/conversations", () => {
 			expect(body).toEqual({
 				conversationId: body.conversationId,
 				title: null,
-				executionRuntime: "agentcore",
 				scope: "collection",
 				createdAt: body.createdAt,
 				lastActivityAt: body.createdAt,
@@ -385,7 +379,6 @@ describe("POST /v1/conversations", () => {
 					conversationId: body.conversationId,
 				}),
 			).toMatchObject({
-				executionRuntime: "agentcore",
 				scope: "collection",
 				collectionId: "col-1",
 			});
@@ -436,7 +429,6 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "conv-a",
 					scope: "general",
-					executionRuntime: "agentcore",
 					title: "Old regular",
 					createdAt: new Date("2026-01-01T00:00:00.000Z"),
 					lastActivityAt: new Date("2026-01-02T00:00:00.000Z"),
@@ -445,7 +437,6 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "conv-b",
 					scope: "general",
-					executionRuntime: "agentcore",
 					title: "Recent regular B",
 					createdAt: new Date("2026-01-02T00:00:00.000Z"),
 					lastActivityAt: new Date("2026-01-03T00:00:00.000Z"),
@@ -454,7 +445,6 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "conv-c",
 					scope: "collection",
-					executionRuntime: "agentcore",
 					collectionId: "collection-1",
 					title: "Recent regular C",
 					createdAt: new Date("2026-01-03T00:00:00.000Z"),
@@ -464,7 +454,6 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "conv-archived",
 					scope: "general",
-					executionRuntime: "agentcore",
 					title: "Archived",
 					createdAt: new Date("2026-01-04T00:00:00.000Z"),
 					lastActivityAt: new Date("2026-01-04T00:00:00.000Z"),
@@ -484,7 +473,6 @@ describe("GET /v1/conversations", () => {
 				conversations: Array<{
 					conversationId: string;
 					title: string | null;
-					executionRuntime: ConversationExecutionRuntime;
 					scope: string;
 					createdAt: string;
 					lastActivityAt: string;
@@ -500,7 +488,6 @@ describe("GET /v1/conversations", () => {
 			expect(firstBody.conversations[0]).toEqual({
 				conversationId: "conv-c",
 				title: "Recent regular C",
-				executionRuntime: "agentcore",
 				scope: "collection",
 				createdAt: "2026-01-03T00:00:00.000Z",
 				lastActivityAt: "2026-01-03T00:00:00.000Z",
@@ -510,7 +497,6 @@ describe("GET /v1/conversations", () => {
 				userId: "member-1",
 				conversationId: "conv-newer-after-page-one",
 				scope: "general",
-				executionRuntime: "agentcore",
 				title: "Newly active",
 				lastActivityAt: new Date("2026-01-06T00:00:00.000Z"),
 			});
@@ -542,7 +528,6 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "owned-archived-match",
 					scope: "general",
-					executionRuntime: "agentcore",
 					title: "Quarterly Planning",
 					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
 				},
@@ -550,14 +535,12 @@ describe("GET /v1/conversations", () => {
 					userId: "member-1",
 					conversationId: "owned-regular-match",
 					scope: "general",
-					executionRuntime: "agentcore",
 					title: "Quarterly planning notes",
 				},
 				{
 					userId: "member-1",
 					conversationId: "owned-archived-miss",
 					scope: "general",
-					executionRuntime: "agentcore",
 					title: "Travel ideas",
 					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
 				},
@@ -565,7 +548,6 @@ describe("GET /v1/conversations", () => {
 					userId: "other-member",
 					conversationId: "foreign-archived-match",
 					scope: "general",
-					executionRuntime: "agentcore",
 					title: "Secret planning",
 					archivedAt: new Date("2026-01-05T00:00:00.000Z"),
 				},
@@ -595,10 +577,10 @@ describe("GET /v1/conversations", () => {
 		try {
 			await tdb.db.execute(sql`
 				insert into conversations
-					(user_id, conversation_id, scope, execution_runtime, title, last_activity_at)
+					(user_id, conversation_id, scope, title, last_activity_at)
 				values
-					('member-1', 'micro-newest', 'general', 'agentcore', 'Newest', '2026-01-03T00:00:00.000900Z'),
-					('member-1', 'micro-next', 'general', 'agentcore', 'Next', '2026-01-03T00:00:00.000800Z')
+					('member-1', 'micro-newest', 'general', 'Newest', '2026-01-03T00:00:00.000900Z'),
+					('member-1', 'micro-next', 'general', 'Next', '2026-01-03T00:00:00.000800Z')
 			`);
 			const app = buildApp(new PostgresConversationStore(tdb.db));
 
@@ -655,7 +637,6 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-lifecycle",
-				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -738,7 +719,6 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-archive-race",
-				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -746,7 +726,6 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-unarchive-race",
-				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -839,7 +818,6 @@ describe("PATCH /v1/conversations/:id", () => {
 			await store.create({
 				userId: "other-member",
 				conversationId: "foreign-conversation",
-				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -911,7 +889,6 @@ describe("DELETE /v1/conversations/:id", () => {
 				conversationId: "canary-delete",
 				scope: "collection",
 				collectionId: "canary-collection",
-				executionRuntime: "agentcore",
 			});
 			await tdb.db.insert(runs).values({
 				runId: "canary-delete-run",
@@ -957,7 +934,6 @@ describe("DELETE /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-delete",
-				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -1027,7 +1003,6 @@ describe("DELETE /v1/conversations/:id", () => {
 			await store.create({
 				userId: "member-1",
 				conversationId: "conv-delete-race",
-				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -1077,7 +1052,6 @@ describe("POST /v1/conversations/:id/runs", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
-		executionRuntime: "agentcore",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
@@ -1405,7 +1379,7 @@ describe("POST /v1/conversations/:id/runs", () => {
 
 describe("Run dispatch admission through HTTP", () => {
 	it("records one AgentCore dispatch and reattaches an exact retry", async () => {
-		const { store } = fakeStore([persistedConversation("agentcore")]);
+		const { store } = fakeStore([persistedConversation()]);
 		const admission = transactionalAdmissionFake(store);
 		const exposure = recordingGate(true);
 		const app = buildApp(store, exposure.gate, {
@@ -1435,7 +1409,7 @@ describe("Run dispatch admission through HTTP", () => {
 		"run",
 		"dispatch",
 	] as const)("leaves neither an AgentCore Run nor dispatch when %s recording fails", async (failure) => {
-		const { store } = fakeStore([persistedConversation("agentcore")]);
+		const { store } = fakeStore([persistedConversation()]);
 		const admission = transactionalAdmissionFake(store, failure);
 		const app = buildApp(store, recordingGate(true).gate, {
 			...fakeRunStore(),
@@ -1458,7 +1432,6 @@ describe("POST /v1/conversations/:id/runs/:runId/interrupt", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
-		executionRuntime: "agentcore",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
@@ -1602,7 +1575,6 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
-		executionRuntime: "agentcore",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,

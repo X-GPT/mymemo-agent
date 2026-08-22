@@ -209,7 +209,6 @@ async function insertConversation(): Promise<void> {
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
-		executionRuntime: "agentcore",
 	});
 }
 
@@ -321,7 +320,6 @@ describe("Downloadable artifact publication through the AgentCore harness", () =
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",

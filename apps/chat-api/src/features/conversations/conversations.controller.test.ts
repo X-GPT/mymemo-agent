@@ -42,7 +42,6 @@ function fakeStore() {
 const conversation: ConversationRecord = {
 	userId: "member-1",
 	conversationId: "conv-1",
-	executionRuntime: "agentcore",
 	scope: "general",
 	collectionId: null,
 	summaryId: null,
@@ -65,7 +64,6 @@ describe("createConversation", () => {
 		expect(created[0]?.conversationId).toBe(result.conversationId);
 		expect(created[0]).toMatchObject({
 			userId: "member-1",
-			executionRuntime: "agentcore",
 			scope: "general",
 			collectionId: null,
 			summaryId: null,

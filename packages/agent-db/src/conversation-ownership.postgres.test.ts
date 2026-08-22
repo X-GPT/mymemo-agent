@@ -50,7 +50,6 @@ async function seedConversations(...conversationIds: string[]): Promise<void> {
 			userId: USER_ID,
 			conversationId,
 			scope: "general",
-			executionRuntime: "agentcore" as const,
 		})),
 	);
 }

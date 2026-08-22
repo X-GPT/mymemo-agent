@@ -102,11 +102,10 @@ stabilize. Verify the AgentCore Runtime digest was updated by the same release.
 3. Confirm neither `agent-maintenance-errors` nor
    `agent-maintenance-heartbeat` is alarming.
 4. Inspect the production schema and confirm the retired table, index, triggers,
-   and function are absent while `conversations.execution_runtime` remains and
-   accepts only `agentcore`.
+   and function are absent.
 5. Re-enable Dispatch, then reopen exposure. Run the production smoke and verify
-   Conversation creation reports `agentcore` and a Run completes through the
-   AgentCore Runtime.
+   Conversation creation succeeds and a Run completes through the AgentCore
+   Runtime.
 
 If any proof fails, keep Dispatch disabled and exposure closed, roll forward a
 fix, and repeat the checks. Do not restore the retired worker binary against the

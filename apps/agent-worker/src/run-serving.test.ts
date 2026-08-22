@@ -53,7 +53,6 @@ async function startRun() {
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
-		executionRuntime: "agentcore",
 	});
 	await seedQueuedRun(tdb.db, {
 		runId: "run-1",

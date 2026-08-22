@@ -2,8 +2,8 @@
 
 // Deployed operator use: run this client through scripts/deploy/prod_smoke.sh
 // only after AgentCore Dispatch is enabled and the synthetic identity is
-// targeted in the exposure gate. A pass proves that the public creation response
-// selected agentcore before the client admits Runs, then proves done Outcomes,
+// targeted in the exposure gate. A pass proves Conversation creation before the
+// client admits Runs, then proves done Outcomes,
 // durable
 // history, and Downloadable-artifact listing/download. It licenses the staged
 // exposure rollout in docs/runbooks/agentcore-rollout.md; it does not license
@@ -247,18 +247,12 @@ async function requireCreatedConversation(response: Response): Promise<string> {
 		);
 	}
 
-	const { conversationId, executionRuntime } = (await response.json()) as {
+	const { conversationId } = (await response.json()) as {
 		conversationId?: string;
-		executionRuntime?: unknown;
 	};
 	if (!conversationId) {
 		throw new Error(
 			"conversation create response did not include conversationId",
-		);
-	}
-	if (executionRuntime !== "agentcore") {
-		throw new Error(
-			`conversation create selected ${String(executionRuntime)}, expected agentcore`,
 		);
 	}
 	return conversationId;

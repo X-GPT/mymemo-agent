@@ -53,7 +53,6 @@ async function startOwnedRun(input: {
 		userId: "agentcore-service-user",
 		conversationId: input.conversationId,
 		scope: "general",
-		executionRuntime: "agentcore",
 	});
 	await tdb.db.transaction(async (tx) => {
 		await admitQueuedRunInTx(tx, {

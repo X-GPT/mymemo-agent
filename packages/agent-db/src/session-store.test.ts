@@ -321,7 +321,6 @@ describe("SDK session mutation ownership fence", () => {
 			userId: input.userId ?? OWNER.userId,
 			conversationId: input.conversationId ?? OWNER.conversationId,
 			scope: "general",
-			executionRuntime: "agentcore",
 			epoch: input.epoch ?? OWNER.epoch,
 			ownerWorkerId: "worker-owned",
 			ownerUntil: input.expired

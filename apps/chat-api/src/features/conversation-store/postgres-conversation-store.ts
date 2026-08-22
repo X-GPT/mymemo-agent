@@ -1,4 +1,3 @@
-import { requireConversationExecutionRuntime } from "@mymemo/agent-db/execution-runtime";
 import {
 	and,
 	desc,
@@ -30,7 +29,6 @@ type ConversationRow = typeof conversations.$inferSelect;
 type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 function toConversationRecord(row: ConversationRow): ConversationRecord {
-	requireConversationExecutionRuntime(row.executionRuntime);
 	return { ...row, scope: row.scope as ConversationScope };
 }
 
@@ -66,7 +64,6 @@ export class PostgresConversationStore implements ConversationStore {
 			.values({
 				userId: record.userId,
 				conversationId: record.conversationId,
-				executionRuntime: record.executionRuntime,
 				scope: record.scope,
 				collectionId: record.collectionId,
 				summaryId: record.summaryId,

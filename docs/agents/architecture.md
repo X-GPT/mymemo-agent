@@ -25,8 +25,10 @@ The removed `gateway`, `sandbox-daemon`, `mymemo-docs`, and `@mymemo/llm-token` 
 
 AgentCore exact acquisition atomically starts the dispatched Run and establishes
 its live Conversation Ownership boundary. There is no queue Claim, runtime
-selection, or fallback execution path. The persisted `execution_runtime`
-column is a temporary AgentCore-only compatibility marker. See [ADR-0022](../adr/0022-acquire-an-agentcore-dispatch-atomically.md), [ADR-0031](../adr/0031-make-agentcore-the-sole-execution-runtime.md), and [the Run-serving guide](agent-worker.md).
+selection, persisted runtime discriminator, or fallback execution path. See
+[ADR-0022](../adr/0022-acquire-an-agentcore-dispatch-atomically.md),
+[ADR-0031](../adr/0031-make-agentcore-the-sole-execution-runtime.md), and [the
+Run-serving guide](agent-worker.md).
 
 Every execution mutation is fenced by the live Conversation Ownership epoch and lease. The maintenance service terminalizes started Runs after a lapsed lease, leaves unstarted queued Runs for a later Dispatch retry, taints the Workspace when cleanup is unproven, and clears Ownership.
 

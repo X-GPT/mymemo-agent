@@ -4,11 +4,16 @@ Status: accepted (2026-08-21). Amends ADR-0025 and ADR-0029 by retiring
 runtime selection, the Fargate creation fallback, runtime reassignment, and the
 Execution runtime gate.
 
-Amended (2026-08-22) by the Fargate-retirement release: the retirement removes
+Amended (2026-08-22) by the Fargate-retirement release: the retirement removed
 the Fargate Claim, doorbell, deployment-readiness, and Run-serving machinery,
-but deliberately retains `execution_runtime` and public
-`executionRuntime: "agentcore"` as AgentCore-only compatibility markers. Their
-coordinated contract removal is deferred to a follow-up change.
+while temporarily retaining database and public compatibility markers.
+
+Amended again (2026-08-22) by the coordinated contract-removal release. The
+known MyMemo frontend and gateway repositories had no dependency on the public
+marker; the deployment smoke client was the remaining consumer and stopped
+reading it with this release. The public Conversation shape dropped the field,
+and the schema and application domain model removed the discriminator.
+AgentCore behavior is now an invariant rather than stored compatibility data.
 
 AgentCore is the sole supported execution runtime. Production's remaining
 Fargate Conversations were permanently deleted before this decision, so there
@@ -29,7 +34,7 @@ deployment-readiness, and Run-serving machinery during controlled maintenance,
 after every still-running process was independent of them and the old worker was
 stopped. It moved global queued-Run expiration, Reclamation, and cleanup from
 agent-worker into a smaller, least-privilege agent-maintenance ECS service while
-intentionally leaving the compatibility marker and public field in place. The
+temporarily leaving the compatibility marker and public field in place. The
 service remains always running, preserves the existing Reclamation cadence, and
 holds only the database, E2B-cleanup, and S3-deletion authority its maintenance
 responsibilities require.
@@ -75,9 +80,7 @@ leaves the record available for retry.
 - Runtime assignment is no longer a product or operator decision.
 - The first release must prevent old gate-aware chat-api tasks from recreating
   Fargate state while the database invariant is narrowed to AgentCore-only.
-- The public `executionRuntime` field is AgentCore-only compatibility output,
-  not evidence of an available runtime choice; removing it requires a
-  coordinated contract change.
+- Conversation responses and rows carry no execution-runtime discriminator.
 - Fargate execution code and its broad worker authority are removed rather than
   retained as a supported fallback.
 - Production images do not contain the local Dispatch bridge or its combined

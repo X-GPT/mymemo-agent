@@ -355,7 +355,6 @@ async function insertConversation(userId: string, conversationId: string) {
 		userId,
 		conversationId,
 		scope: "general",
-		executionRuntime: "agentcore",
 	});
 }
 

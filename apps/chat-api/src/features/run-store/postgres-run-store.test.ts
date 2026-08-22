@@ -24,7 +24,6 @@ const initialActivity = new Date("2026-01-01T00:00:00.000Z");
 const conversation: ConversationRecord = {
 	userId: "user-1",
 	conversationId: "conv-1",
-	executionRuntime: "agentcore",
 	scope: "collection",
 	collectionId: "col-1",
 	summaryId: null,
@@ -69,7 +68,6 @@ describe("PostgresRunStore", () => {
 			.onConflictDoUpdate({
 				target: [conversations.userId, conversations.conversationId],
 				set: {
-					executionRuntime: "agentcore",
 					title: null,
 					lastActivityAt: initialActivity,
 					archivedAt: null,

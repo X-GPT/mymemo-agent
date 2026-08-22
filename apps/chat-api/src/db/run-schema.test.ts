@@ -38,13 +38,11 @@ beforeEach(async () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		},
 		{
 			userId: "user-1",
 			conversationId: "conv-2",
 			scope: "general",
-			executionRuntime: "agentcore",
 		},
 	]);
 	await tdb.db.delete(documentAccessEvents);
@@ -61,7 +59,7 @@ async function expectDbWriteToFail(write: () => PromiseLike<unknown>) {
 }
 
 describe("run queue schema", () => {
-	it("retains only the AgentCore compatibility marker", async () => {
+	it("does not persist an execution-runtime discriminator", async () => {
 		const { rows: columns } = await tdb.db.execute(sql`
 			select table_name, column_name
 			from information_schema.columns
@@ -70,9 +68,7 @@ describe("run queue schema", () => {
 				and column_name in ('execution_runtime', 'runtime_aware')
 			order by table_name, column_name
 		`);
-		expect(columns).toEqual([
-			{ table_name: "conversations", column_name: "execution_runtime" },
-		]);
+		expect(columns).toEqual([]);
 		const { rows: retiredTables } = await tdb.db.execute(sql`
 			select tablename
 			from pg_tables
@@ -80,13 +76,6 @@ describe("run queue schema", () => {
 				and tablename in ('execution_lane_deployments', 'execution_runtime_deployments')
 		`);
 		expect(retiredTables).toEqual([]);
-		await expectDbWriteToFail(() =>
-			tdb.db.execute(sql`
-				update ${conversations}
-				set execution_runtime = 'agentcore_canary'
-				where conversation_id = 'conv-1'
-			`),
-		);
 	});
 
 	it("creates runs with queue defaults", async () => {

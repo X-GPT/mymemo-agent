@@ -36,7 +36,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "collection",
-			executionRuntime: "agentcore",
 			collectionId: "collection-1",
 			summaryId: null,
 			title: "Quarterly plan",
@@ -129,7 +128,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		for (const [index, runId] of ["run-1", "run-2", "run-3"].entries()) {
 			const createdAt = new Date(`2026-07-20T0${index + 1}:00:00.000Z`);
@@ -200,7 +198,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.execute(sql`
 			insert into runs (
@@ -261,7 +258,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(runs).values([
 			{
@@ -357,7 +353,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(runs).values({
 			runId: "run-tool",
@@ -467,7 +462,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(runs).values({
 			runId: "run-ui",
@@ -657,7 +651,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		for (const [index, outcome] of ["error", "interrupted"].entries()) {
 			const runId = `run-${outcome}`;
@@ -737,7 +730,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(runs).values({
 			runId: "run-interrupted-ui",
@@ -834,7 +826,6 @@ describe("PostgresConversationHistoryStore", () => {
 			userId: "member-1",
 			conversationId: "conversation-1",
 			scope: "general",
-			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(runs).values({
 			runId: "run-1",
@@ -926,7 +917,6 @@ describe("PostgresConversationHistoryStore", () => {
 		await conversationStore.create({
 			userId: "member-1",
 			conversationId: "conversation-1",
-			executionRuntime: "agentcore",
 			scope: "general",
 			collectionId: null,
 			summaryId: null,

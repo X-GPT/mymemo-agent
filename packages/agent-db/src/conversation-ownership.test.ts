@@ -40,7 +40,6 @@ beforeEach(async () => {
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
-		executionRuntime: "agentcore",
 	});
 });
 
