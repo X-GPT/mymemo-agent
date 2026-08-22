@@ -6,8 +6,7 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import {
 	artifactObjects,
 	conversations,
@@ -20,6 +19,7 @@ import {
 	seedQueuedRun,
 	type TestDb,
 } from "@mymemo/agent-db/testing";
+import { workspaceImportGraph } from "@mymemo/test-support/import-graph";
 import { eq, sql } from "drizzle-orm";
 import type {
 	AdvisoryLockClient,
@@ -46,17 +46,13 @@ class FakeArtifactJanitor {
 }
 
 class FakePool implements AdvisoryLockPool {
-	constructor(
-		private readonly locked: boolean,
-		private readonly failConnect = false,
-	) {}
+	constructor(private readonly failConnect = false) {}
 	async connect(): Promise<AdvisoryLockClient> {
 		if (this.failConnect) throw new Error("pool exhausted");
-		const locked = this.locked;
 		return {
 			async query(text: string) {
 				return text.includes("pg_try_advisory_lock")
-					? { rows: [{ locked }] }
+					? { rows: [{ locked: true }] }
 					: { rows: [] };
 			},
 			release() {},
@@ -93,7 +89,7 @@ function buildRunner(
 ) {
 	return new MaintenanceRunner({
 		db: tdb.db,
-		pool: overrides.pool ?? new FakePool(true),
+		pool: overrides.pool ?? new FakePool(),
 		sandboxJanitor: janitor,
 		artifactJanitor,
 		workerId: "worker-1",
@@ -201,7 +197,7 @@ describe("MaintenanceRunner", () => {
 
 	it("isolates cleanup lock failures for retry on the next interval", async () => {
 		const summary = await buildRunner({
-			pool: new FakePool(true, true),
+			pool: new FakePool(true),
 		}).runCleanupOnce();
 
 		expect(summary).toBeUndefined();
@@ -225,11 +221,6 @@ describe("MaintenanceRunner", () => {
 		const runner = buildRunner();
 
 		await runner.start();
-		for (let i = 0; i < 100; i++) {
-			const [run] = await tdb.db.select().from(runs);
-			if (run?.status === "error") break;
-			await Bun.sleep(5);
-		}
 		runner.stop();
 
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("error");
@@ -237,51 +228,15 @@ describe("MaintenanceRunner", () => {
 	});
 });
 
-function resolveWorkspaceImport(from: string, request: string): string | null {
-	if (request.startsWith(".")) {
-		const target = resolve(dirname(from), request);
-		for (const candidate of [
-			target,
-			`${target}.ts`,
-			join(target, "index.ts"),
-		]) {
-			if (existsSync(candidate)) return candidate;
-		}
-		return null;
-	}
-	try {
-		return Bun.resolveSync(request, dirname(from));
-	} catch {
-		return null;
-	}
-}
-
-function maintenanceImportGraph(): Set<string> {
-	const root = join(import.meta.dir, "../../..");
-	const pending = [join(import.meta.dir, "maintenance-runner.ts")];
-	const graph = new Set<string>();
-	const transpiler = new Bun.Transpiler({ loader: "ts" });
-	while (pending.length > 0) {
-		const file = pending.pop();
-		if (!file || graph.has(file)) continue;
-		graph.add(file);
-		for (const imported of transpiler.scanImports(readFileSync(file, "utf8"))) {
-			const resolved = resolveWorkspaceImport(file, imported.path);
-			if (
-				resolved?.startsWith(`${root}/`) &&
-				!resolved.includes("/node_modules/") &&
-				/\.[cm]?[jt]sx?$/.test(resolved)
-			) {
-				pending.push(resolved);
-			}
-		}
-	}
-	return graph;
-}
-
 describe("MaintenanceRunner import boundary", () => {
 	it("loads maintenance capabilities without Run-serving dependencies", () => {
-		const graph = [...maintenanceImportGraph()];
+		const root = join(import.meta.dir, "../../..");
+		const graph = [
+			...workspaceImportGraph(
+				root,
+				join(import.meta.dir, "maintenance-runner.ts"),
+			),
+		];
 		for (const forbidden of [
 			"/apps/agent-worker/src/run-loop.ts",
 			"/apps/agent-worker/src/run-serving.ts",
