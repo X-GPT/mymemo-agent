@@ -261,8 +261,8 @@ file and shell tools act. It *is* the paused E2B sandbox between turns —
 persistence is best-effort: reconnect restores it, but a lost sandbox starts
 the next turn empty. Run interruption preserves its current contents rather
 than rolling them back, so stopping a command may leave partial edits for a
-later Run to inspect or repair. Not the Fargate query cwd (that is only a stable
-projectKey anchor), and not durable like the Agent session.
+later Run to inspect or repair. Not the Runtime-side query cwd (that is only a
+stable projectKey anchor), and not durable like the Agent session.
 _Avoid_: sandbox (that is the runtime; the workspace is its filesystem)
 
 **Downloadable artifact**:
