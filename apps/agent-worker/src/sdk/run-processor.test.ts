@@ -220,7 +220,7 @@ function stepQuery(
 	};
 }
 
-function buildLoop(
+function buildHarness(
 	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
 	startStopDeadline?: StartStopDeadline,
@@ -325,7 +325,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				{ toolUseId: "toolu-ui-1", text: '{"accepted":true}' },
 			]),
 		];
-		const loop = buildLoop(
+		const loop = buildHarness(
 			async () => {
 				processorStarted.resolve();
 				await startQuery.promise;
@@ -418,7 +418,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				},
 			],
 		});
-		const loop = buildLoop(async () => ({
+		const loop = buildHarness(async () => ({
 			...noArtifactPublication,
 			sessionEvidence: noSessionMirrorEvidence,
 			close() {
@@ -469,7 +469,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not publish a pointer from an SDK initialization id alone", async () => {
-		const loop = buildLoop(async (_run, _signal, owner) => {
+		const loop = buildHarness(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			return messageQuery([initMessage("session-initialized")], store);
 		});
@@ -491,7 +491,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("publishes the first pointer only when the bound store mirrored that main session", async () => {
-		const loop = buildLoop(async (_run, _signal, owner) => {
+		const loop = buildHarness(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-proven" },
@@ -514,7 +514,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not publish a pointer from subagent-only mirroring", async () => {
-		const loop = buildLoop(async (_run, _signal, owner) => {
+		const loop = buildHarness(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{
@@ -541,7 +541,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("commits one durable Assistant message for a complete provider envelope", async () => {
-		const loop = buildLoop(async () =>
+		const loop = buildHarness(async () =>
 			messageQuery(textEnvelope({ completeText: "Hello there." })),
 		);
 		await seedQueuedRun(tdb.db, {
@@ -581,7 +581,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			]),
 			resultMessage(),
 		];
-		const loop = buildLoop(async () => messageQuery(messages));
+		const loop = buildHarness(async () => messageQuery(messages));
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
@@ -798,7 +798,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		},
 	]) {
 		it(`fails the Run closed for ${fixture.name}`, async () => {
-			const loop = buildLoop(async () => messageQuery(fixture.messages));
+			const loop = buildHarness(async () => messageQuery(fixture.messages));
 			await seedQueuedRun(tdb.db, {
 				runId: "run-1",
 				userId: "user-1",
@@ -822,7 +822,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		let seenRunId: string | undefined;
 		let seenOwner: RunWriteOwner | undefined;
 		let sawSignal = false;
-		const loop = buildLoop(async (run, signal, owner) => {
+		const loop = buildHarness(async (run, signal, owner) => {
 			seenRunId = run.runId;
 			seenOwner = owner;
 			sawSignal = signal instanceof AbortSignal;
@@ -864,7 +864,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				errors.push(fields);
 			},
 		};
-		const loop = buildLoop(
+		const loop = buildHarness(
 			async (_run, signal, owner) => {
 				await createRuntimeFor(owner);
 				signal.addEventListener(
@@ -945,7 +945,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const started = Promise.withResolvers<void>();
 		const releaseMirrorError = Promise.withResolvers<void>();
 		const calls: string[] = [];
-		const loop = buildLoop(async (_run, signal) => {
+		const loop = buildHarness(async (_run, signal) => {
 			signal.addEventListener("abort", () => calls.push("tool-abort"), {
 				once: true,
 			});
@@ -988,7 +988,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("retains an existing session pointer after mirror_error", async () => {
-		const loop = buildLoop(async (run, _signal, owner) => {
+		const loop = buildHarness(async (run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			await tdb.db
 				.update(conversationRuntime)
@@ -1019,7 +1019,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const calls: string[] = [];
 		let deadlineMs: number | undefined;
 		let deadlineCancelled = false;
-		const loop = buildLoop(
+		const loop = buildHarness(
 			async (_run, signal) => {
 				signal.addEventListener("abort", () => calls.push("tool-abort"), {
 					once: true,
@@ -1091,7 +1091,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			},
 		};
 		const deadline = virtualStopDeadline();
-		const loop = buildLoop(
+		const loop = buildHarness(
 			async (_run, signal, owner) => {
 				const store = await createRuntimeSessionStoreFor(owner);
 				await store.append(
@@ -1173,7 +1173,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const releaseStream = Promise.withResolvers<void>();
 		const deadline = virtualStopDeadline();
 		const calls: string[] = [];
-		const loop = buildLoop(
+		const loop = buildHarness(
 			async () => {
 				started.resolve();
 				return withNoSessionMirrorEvidence({
@@ -1227,7 +1227,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const closeCalled = Promise.withResolvers<void>();
 		const releaseStream = Promise.withResolvers<void>();
 		const deadline = virtualStopDeadline();
-		const loop = buildLoop(
+		const loop = buildHarness(
 			async () =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1278,7 +1278,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const started = Promise.withResolvers<void>();
 		const forceCloseController = new AbortController();
 		const calls: string[] = [];
-		const loop = buildLoop(
+		const loop = buildHarness(
 			async () =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1327,7 +1327,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const settled = Promise.withResolvers<void>();
 		const calls: string[] = [];
 		let deadlines = 0;
-		const loop = buildLoop(
+		const loop = buildHarness(
 			async (_run, _signal) =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1374,7 +1374,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			const started = Promise.withResolvers<void>();
 			const stopped = Promise.withResolvers<void>();
 			const deadline = virtualStopDeadline();
-			const loop = buildLoop(
+			const loop = buildHarness(
 				async () =>
 					withNoSessionMirrorEvidence({
 						...noArtifactPublication,
@@ -1419,7 +1419,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	it("terminalizes an SDK failure with the generic client message", async () => {
 		const incomplete = textEnvelope({ completeText: "partial" }).slice(0, 4);
-		const loop = buildLoop(async () =>
+		const loop = buildHarness(async () =>
 			stepQuery([...incomplete, { throw: new Error("model exploded") }]),
 		);
 		await seedQueuedRun(tdb.db, {
@@ -1444,7 +1444,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("preserves mirrored continuity when a thrown failure reconciles to interruption", async () => {
-		const loop = buildLoop(async (run, _signal, owner) => {
+		const loop = buildHarness(async (run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-reconciled" },
@@ -1478,7 +1478,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	it("records one error outcome for an SDK error result followed by rejection", async () => {
 		const incomplete = textEnvelope({ completeText: "partial" }).slice(0, 4);
-		const loop = buildLoop(async () =>
+		const loop = buildHarness(async () =>
 			stepQuery([
 				...incomplete,
 				errorResultMessage("provider rejected the request"),
@@ -1501,7 +1501,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("advances the agent-session pointer only after a valid successful stream", async () => {
-		const loop = buildLoop(async (_run, _signal, owner) => {
+		const loop = buildHarness(async (_run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			return messageQuery(
 				[
@@ -1534,7 +1534,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not advance the agent-session pointer for an invalid envelope", async () => {
-		const loop = buildLoop(async (_run, _signal, owner) => {
+		const loop = buildHarness(async (_run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			return messageQuery([
 				...textEnvelope({ completeText: "uncommitted" }).slice(0, -1),

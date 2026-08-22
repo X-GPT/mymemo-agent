@@ -347,9 +347,9 @@ async function acquireRun(
 ): Promise<RunWriteOwner> {
 	await queueRun(runId, conversationId);
 	await backdateRun(runId, 5_000);
-	const acquired = await acquireQueuedRunForTest(tdb.db, { workerId });
+	const acquired = await acquireQueuedRunForTest(tdb.db, { runId, workerId });
 	if (!acquired) throw new Error("test setup acquired no Conversation");
-	return { ...acquired, runId, workerId };
+	return acquired;
 }
 
 function owner(overrides: Partial<RunWriteOwner> = {}): RunWriteOwner {

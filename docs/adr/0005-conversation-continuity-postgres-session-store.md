@@ -5,6 +5,12 @@ Status: accepted
 Amended by
 [ADR-0013](./0013-interrupt-runs-without-ending-conversation-continuity.md).
 
+Amended (2026-08-22) by
+[ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md): AgentCore Runtime
+now runs the SDK and establishes Conversation Ownership through Durable
+acquisition. References below to Fargate workers and Claims describe the
+original decision context.
+
 In the split runtime the Claude Agent SDK runs in Fargate workers, its
 session transcripts are worker-local disk files, and a conversation is not
 pinned to a worker — so the prototype's implicit continuity story (SDK

@@ -107,6 +107,12 @@ describe("agent-maintenance infrastructure", () => {
 		expect(migrationTask).toContain(
 			"execution_role_arn       = aws_iam_role.agent_migration_execution.arn",
 		);
+		expect(migrationTask).toContain(
+			"aws_iam_role_policy_attachment.agent_migration_execution",
+		);
+		expect(migrationTask).toContain(
+			"aws_iam_role_policy.agent_migration_read_database_secret",
+		);
 		expect(migrationTask).not.toContain("task_role_arn");
 	});
 
@@ -169,6 +175,7 @@ describe("agent-maintenance infrastructure", () => {
 
 	it("limits IAM and network authority to maintenance operations", () => {
 		const iam = terraformFile("iam.tf");
+		const agentCoreIam = terraformFile("agentcore-iam.tf");
 		const network = terraformFile("network.tf");
 		const executionPolicy = section(
 			iam,
@@ -179,6 +186,11 @@ describe("agent-maintenance infrastructure", () => {
 			iam,
 			'data "aws_iam_policy_document" "agent_maintenance_artifact_delete"',
 			'resource "aws_iam_role" "agentcore_dispatch_publisher_task"',
+		);
+		const runtimePolicy = section(
+			agentCoreIam,
+			'data "aws_iam_policy_document" "runtime"',
+			'resource "aws_iam_role_policy" "runtime"',
 		);
 		const securityGroup = section(
 			network,
@@ -196,6 +208,9 @@ describe("agent-maintenance infrastructure", () => {
 		expect(taskPolicy).toContain('actions   = ["s3:DeleteObject"]');
 		expect(taskPolicy).not.toContain("s3:PutObject");
 		expect(taskPolicy).not.toContain("s3:GetObject");
+		expect(runtimePolicy).toContain("s3:PutObject");
+		expect(runtimePolicy).toContain("s3:AbortMultipartUpload");
+		expect(runtimePolicy).not.toContain("s3:DeleteObject");
 		expect(securityGroup).toContain("from_port       = 5432");
 		expect(securityGroup).toContain("from_port   = 443");
 		expect(securityGroup).toContain("VPC DNS over UDP");

@@ -78,7 +78,6 @@ data "aws_iam_policy_document" "runtime" {
     sid = "WriteProductionArtifacts"
     actions = [
       "s3:AbortMultipartUpload",
-      "s3:DeleteObject",
       "s3:PutObject",
     ]
     resources = ["${aws_s3_bucket.artifacts.arn}/objects/*"]

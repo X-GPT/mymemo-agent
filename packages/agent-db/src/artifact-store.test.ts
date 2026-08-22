@@ -43,9 +43,9 @@ async function acquireRun(
 	runId: string,
 	workerId = "worker-1",
 ): Promise<RunWriteOwner> {
-	const acquired = await acquireQueuedRunForTest(tdb.db, { workerId });
+	const acquired = await acquireQueuedRunForTest(tdb.db, { runId, workerId });
 	if (!acquired) throw new Error("test setup acquired no Conversation");
-	return { ...acquired, runId, workerId };
+	return acquired;
 }
 
 describe("Downloadable artifact publication", () => {

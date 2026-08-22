@@ -113,6 +113,11 @@ resource "aws_ecs_task_definition" "agentcore_dispatch_publisher" {
 }
 
 resource "aws_ecs_task_definition" "agent_migration" {
+  depends_on = [
+    aws_iam_role_policy_attachment.agent_migration_execution,
+    aws_iam_role_policy.agent_migration_read_database_secret,
+  ]
+
   family                   = "${local.common_name}-migration"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"

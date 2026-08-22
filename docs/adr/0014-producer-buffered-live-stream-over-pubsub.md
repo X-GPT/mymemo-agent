@@ -10,6 +10,12 @@ retained per-Run Redis Stream transport of
 decision there (admission, authorization, event vocabulary, Postgres-first
 commit ordering, history, interruption) remains in force.
 
+Amended (2026-08-22) by
+[ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md): AgentCore Runtime
+is now the sole Live Stream producer and obtains Conversation Ownership through
+Durable acquisition. References below to a claiming worker describe the
+original decision context; the producer-buffered transport is unchanged.
+
 To simplify the live-transport adapter and remove Redis storage, MyMemo
 replaces the retained per-Run Redis Stream with the pattern behind
 `vercel/resumable-stream`: **the producer's memory is the store; Redis is only

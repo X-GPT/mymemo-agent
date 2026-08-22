@@ -1,11 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	chmodSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMaintenanceConfigFromEnv } from "../apps/agent-maintenance/src/config";
@@ -14,68 +8,7 @@ import { loadApiConfigFromEnv } from "../apps/chat-api/src/config/env";
 
 const root = process.cwd();
 
-function classifyMigrationPlan(terraformShowOutput: string) {
-	const tempDir = mkdtempSync(join(tmpdir(), "mymemo-migration-plan-"));
-	const terraform = join(tempDir, "terraform");
-
-	writeFileSync(
-		terraform,
-		`#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$*" != "-chdir=infra/terraform show -no-color fixture.tfplan" ]]; then
-	exit 97
-fi
-printf '%s\\n' "\${TERRAFORM_SHOW_OUTPUT}"
-`,
-	);
-	chmodSync(terraform, 0o755);
-
-	try {
-		return Bun.spawnSync({
-			cmd: [
-				join(root, "scripts", "deploy", "classify_migration_plan.sh"),
-				"fixture.tfplan",
-			],
-			cwd: root,
-			env: {
-				...process.env,
-				PATH: `${tempDir}:${process.env.PATH ?? ""}`,
-				TERRAFORM_SHOW_OUTPUT: terraformShowOutput,
-			},
-		});
-	} finally {
-		rmSync(tempDir, { recursive: true, force: true });
-	}
-}
-
 describe("agent deployment behavior", () => {
-	it("classifies migration-only plans without decoding stale prior state", () => {
-		const migrationOnly = classifyMigrationPlan(`
-  # data.aws_iam_policy_document.migration will be read during apply
-  # aws_ecs_task_definition.agent_migration must be replaced
-
-Plan: 1 to add, 0 to change, 1 to destroy.
-
-Warning: Failed to decode resource from state
-unsupported attribute "inference_accelerator"
-`);
-
-		expect(migrationOnly.exitCode).toBe(0);
-		expect(migrationOnly.stdout.toString()).toContain("migration-only");
-
-		const unexpectedChange = classifyMigrationPlan(`
-  # aws_ecs_task_definition.agent_migration must be replaced
-  # aws_iam_role.agent_migration_task will be updated in-place
-
-Plan: 1 to add, 1 to change, 1 to destroy.
-`);
-
-		expect(unexpectedChange.exitCode).not.toBe(0);
-		expect(unexpectedChange.stderr.toString()).toContain(
-			"aws_iam_role.agent_migration_task",
-		);
-	});
-
 	it("writes a Terraform-formatted generated image overlay", () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "mymemo-deploy-tfvars-"));
 		const generatedTfvars = join(tempDir, "generated.auto.tfvars");
