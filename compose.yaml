@@ -20,8 +20,6 @@
 x-runtime-environment: &runtime-environment
   ARTIFACT_BUCKET: "mymemo-agent-local-artifacts"
   AWS_REGION: "us-west-2"
-  AWS_ACCESS_KEY_ID: "local-artifacts"
-  AWS_SECRET_ACCESS_KEY: "local-artifacts-secret"
   AWS_EC2_METADATA_DISABLED: "true"
   LOCAL_ARTIFACT_ENDPOINT: "http://127.0.0.1:9000"
 
@@ -40,6 +38,8 @@ services:
       # run_events. Local-only dev credential, so inline. Named AGENT_DATABASE_URL
       # so it never collides with the worker's read-only KB DATABASE_URL.
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
+      AWS_ACCESS_KEY_ID: "local-artifact-reader"
+      AWS_SECRET_ACCESS_KEY: "local-artifact-reader-secret"
       DB_SSL: disable
       LOG_LEVEL: info
       REDIS_URL: redis://127.0.0.1:6379
@@ -64,6 +64,8 @@ services:
     environment:
       <<: *runtime-environment
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
+      AWS_ACCESS_KEY_ID: "local-artifact-writer"
+      AWS_SECRET_ACCESS_KEY: "local-artifact-writer-secret"
       DB_SSL: disable
       LOG_LEVEL: info
       WORKER_HEARTBEAT_INTERVAL_MS: "2000"
@@ -134,8 +136,8 @@ services:
     network_mode: "service:redis"
     command: ["server", "/data", "--address", ":9000"]
     environment:
-      MINIO_ROOT_USER: "local-artifacts"
-      MINIO_ROOT_PASSWORD: "local-artifacts-secret"
+      MINIO_ROOT_USER: "local-artifact-admin"
+      MINIO_ROOT_PASSWORD: "local-artifact-admin-secret"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
       interval: 2s
@@ -152,8 +154,12 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        mc alias set local http://127.0.0.1:9000 local-artifacts local-artifacts-secret
+        mc alias set local http://127.0.0.1:9000 local-artifact-admin local-artifact-admin-secret
         && mc mb --ignore-existing local/mymemo-agent-local-artifacts
+        && mc admin user add local local-artifact-reader local-artifact-reader-secret
+        && mc admin policy attach local readonly --user local-artifact-reader
+        && mc admin user add local local-artifact-writer local-artifact-writer-secret
+        && mc admin policy attach local writeonly --user local-artifact-writer
     depends_on:
       artifact-store:
         condition: service_healthy

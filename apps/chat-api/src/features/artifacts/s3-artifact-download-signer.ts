@@ -20,6 +20,7 @@ export type PresignGetObject = (
 ) => Promise<string>;
 
 export interface S3ArtifactDownloadSignerDependencies {
+	endpoint?: string;
 	presignGetObject?: PresignGetObject;
 }
 
@@ -34,7 +35,12 @@ export function createS3ArtifactDownloadSigner(
 	const presignGetObject =
 		dependencies.presignGetObject ??
 		(() => {
-			const client = new S3Client({ region: config.region });
+			const client = new S3Client({
+				region: config.region,
+				...(dependencies.endpoint
+					? { endpoint: dependencies.endpoint, forcePathStyle: true }
+					: {}),
+			});
 			return (request: GetObjectCommandInput, expiresInSeconds: number) =>
 				getSignedUrl(client, new GetObjectCommand(request), {
 					expiresIn: expiresInSeconds,
