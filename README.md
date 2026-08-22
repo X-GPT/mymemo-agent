@@ -45,8 +45,9 @@ Each project can be developed independently. Navigate to the respective project 
 ## Runtime verification
 
 Conversation creation and the checked-in Compose stack are AgentCore-only.
-`bun run smoke:local` proves one Run from public admission through the durable
-outbox, development bridge, and real local Runtime.
+`bun run smoke:local` proves the complete local Conversation flow from public
+admission through the durable outbox, development bridge, and real local
+Runtime.
 
 The credential-free PR suite covers durable AgentCore acquisition and
 stream/reconnect behavior through the shared Run-serving seam. The process
@@ -67,8 +68,9 @@ writes a unique Downloadable artifact, lists it after `RUN_FINISHED`, obtains a 
 signed URL, and downloads the exact attachment without identity headers. The
 local `full` suite adds one interrupted Run and two seeded searchable-document
 Runs that prove inventory, search, docs-cache load, file read-back, and durable
-Tool history. The smaller `bun run smoke:local` Compose gate proves one real Run;
-the broader suites can target the running local stack directly.
+Tool history. `bun run smoke:local` runs that complete `full` suite against
+Postgres, Redis, the local Dispatch bridge, the real Runtime, and a disposable
+S3-compatible artifact store.
 
 For production, run `scripts/deploy/prod_smoke.sh` from inside the VPC with
 `AGENT_SMOKE_BASE_URL` configured and the checked-in `codex-smoke` identity

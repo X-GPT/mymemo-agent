@@ -8,7 +8,10 @@ import {
 	createRedisLiveStreamRelay,
 	type LiveStreamService,
 } from "@mymemo/live-text";
-import { createArtifactPublisher } from "./artifacts/artifact-publication";
+import {
+	type ArtifactObjectStore,
+	createArtifactPublisher,
+} from "./artifacts/artifact-publication";
 import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
 import { createE2bSandboxJanitor } from "./cleanup/e2b-janitor";
 import type { WorkerConfig } from "./config/env";
@@ -29,6 +32,7 @@ export function createProductionRunResources(options: {
 	processEnv?: Record<string, string | undefined>;
 	telemetryService?: LiveStreamService;
 	artifactObjectKeyPrefix?: string;
+	artifactObjectStore?: ArtifactObjectStore;
 }) {
 	const { config, logger } = options;
 	const liveStreamTelemetry = createLiveStreamTelemetry(
@@ -46,7 +50,9 @@ export function createProductionRunResources(options: {
 	const db = createDatabase(config.agentDatabaseUrl);
 	const artifactPublisher = createArtifactPublisher({
 		db,
-		objectStore: createS3ArtifactObjectStore(config.artifact),
+		objectStore:
+			options.artifactObjectStore ??
+			createS3ArtifactObjectStore(config.artifact),
 		objectKeyPrefix: options.artifactObjectKeyPrefix,
 	});
 	const sandboxJanitor = createE2bSandboxJanitor(config.e2bApiKey);

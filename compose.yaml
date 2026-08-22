@@ -11,6 +11,7 @@
 #   agentcore-runtime — acquires one exact Dispatch and serves its Run
 #   dispatch-bridge — polls the durable outbox and invokes the local Runtime
 #   redis         — disposable Redis 7 for real relay contract testing
+#   artifact-store — disposable S3-compatible Downloadable artifact storage
 #
 # The prototype gateway/sandbox services were removed once the split runtime
 # replaced them end to end (ADR-0002). Bring the demo up with:
@@ -19,6 +20,10 @@
 x-runtime-environment: &runtime-environment
   ARTIFACT_BUCKET: "mymemo-agent-local-artifacts"
   AWS_REGION: "us-west-2"
+  AWS_ACCESS_KEY_ID: "local-artifacts"
+  AWS_SECRET_ACCESS_KEY: "local-artifacts-secret"
+  AWS_EC2_METADATA_DISABLED: "true"
+  LOCAL_ARTIFACT_ENDPOINT: "http://127.0.0.1:9000"
 
 services:
   chat-api:
@@ -46,6 +51,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      artifact-bucket:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   agentcore-runtime:
@@ -81,6 +88,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      artifact-bucket:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   dispatch-bridge:
@@ -114,6 +123,40 @@ services:
         condition: service_started
       dispatch-bridge:
         condition: service_started
+      artifact-bucket:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # Local-only S3-compatible object store. The trusted Runtime uploads private
+  # objects here and chat-api signs loopback URLs that the smoke downloads.
+  artifact-store:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    network_mode: "service:redis"
+    command: ["server", "/data", "--address", ":9000"]
+    environment:
+      MINIO_ROOT_USER: "local-artifacts"
+      MINIO_ROOT_PASSWORD: "local-artifacts-secret"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  artifact-bucket:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    network_mode: "service:redis"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://127.0.0.1:9000 local-artifacts local-artifacts-secret
+        && mc mb --ignore-existing local/mymemo-agent-local-artifacts
+    depends_on:
+      artifact-store:
+        condition: service_healthy
     restart: "no"
 
   # One-shot: apply the writable DB (mymemo_agent) schema from Drizzle migrations,

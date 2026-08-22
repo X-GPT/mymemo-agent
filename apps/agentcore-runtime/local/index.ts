@@ -1,3 +1,4 @@
+import { createS3ArtifactObjectStore } from "agent-worker/artifact-object-store";
 import { loadWorkerConfigFromEnv } from "agent-worker/config";
 import { createLogger, toMessage } from "agent-worker/logger";
 import { createProductionRunResources } from "agent-worker/production-run-resources";
@@ -8,12 +9,17 @@ import { createAgentCoreRuntime } from "../src/runtime";
 import { startRuntimeServer } from "../src/server";
 
 const config = loadWorkerConfigFromEnv(Bun.env);
+const artifactEndpoint = Bun.env.LOCAL_ARTIFACT_ENDPOINT?.trim();
+if (!artifactEndpoint) throw new Error("LOCAL_ARTIFACT_ENDPOINT is required");
 const logger = createLogger(config.logLevel);
 const resources = createProductionRunResources({
 	config,
 	logger,
 	processEnv: Bun.env,
 	telemetryService: "agentcore-runtime",
+	artifactObjectStore: createS3ArtifactObjectStore(config.artifact, {
+		endpoint: artifactEndpoint,
+	}),
 });
 const acquisition = createDatabaseAgentCoreAcquisitionBoundary({
 	db: resources.db,

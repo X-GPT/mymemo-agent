@@ -8,16 +8,16 @@
 // history, and Downloadable-artifact listing/download. It licenses the staged
 // exposure rollout in docs/runbooks/agentcore-rollout.md; it does not license
 // skipping that rollout's telemetry checks. The Compose-level local smoke uses
-// scripts/smoke/local-agentcore-smoke.ts for its smaller one-Run contract.
+// this client's full suite through scripts/smoke/local-agentcore-smoke.ts.
 
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { ConversationExecutionRuntime } from "../../packages/agent-db/src/execution-runtime";
+import type { PublicToolName } from "../../packages/agent-db/src/run-events";
 import {
 	parseRawAgUiSse as parseSSE,
 	type RawAgUiSseFrame,
-} from "@mymemo/test-support/ag-ui-sse";
-import type { ConversationExecutionRuntime } from "../../packages/agent-db/src/execution-runtime";
-import type { PublicToolName } from "../../packages/agent-db/src/run-events";
+} from "../../packages/test-support/ag-ui-sse";
 import {
 	type ClientContractMessage,
 	type ClientContractTerminal,
