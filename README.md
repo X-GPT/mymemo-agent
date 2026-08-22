@@ -123,14 +123,12 @@ rebuilds the active Run from the beginning. POST another client-owned Run id to
 the same Conversation for the next turn.
 
 This `compose.yaml` is a **manual** local stack for poking the running services
-by hand; it is not what gates correctness. That is `e2e/integration.test.ts`,
-which runs the create → admit → stream/reconnect flow with chat-api and a
-deterministic test-only Stream producer on every PR.
-Run the integration locally against its configured dependencies:
+by hand; it is not what gates correctness. The credential-free PR suite covers
+durable AgentCore acquisition and stream/reconnect behavior through the shared
+Run-serving seam:
 
 ```sh
-AGENT_DATABASE_URL=postgres://mymemo:mymemo@localhost:5432/mymemo_agent \
-  DB_SSL=disable bun test e2e/integration.test.ts
+bun test e2e/relay-failure-matrix.integration.test.ts
 ```
 
 ### Live runtime smoke

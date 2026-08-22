@@ -69,12 +69,8 @@ jobs:
 
   # The agent-worker image build lives in worker-image.yml, path-filtered.
 
-  # Split-runtime AG-UI integration: runs chat-api plus a deterministic
-  # test-only worker against real Postgres and Redis, so atomic admission,
-  # durable completion, and relay-backed streaming are exercised on every PR
-  # without live provider credentials. Task 9.7 owns the production SDK path's
-  # credentialed smoke.
-  #
+  # AgentCore ownership and dispatch races that require concurrent database
+  # sessions run against the production Postgres major on every PR.
   integration:
     runs-on: ubuntu-latest
     services:
@@ -94,19 +90,9 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 12
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 12
     env:
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@localhost:5432/mymemo_agent
       DB_SSL: disable
-      TEST_REDIS_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -124,4 +110,3 @@ jobs:
       # The dedicated publisher task's session lock must exclude a rolling-
       # deploy overlap and release when its database backend dies.
       - run: RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS=true bun test apps/agentcore-dispatch-publisher/src/publisher-loop.postgres.test.ts
-      - run: bun test e2e/integration.test.ts
