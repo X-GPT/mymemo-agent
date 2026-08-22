@@ -59,13 +59,13 @@ describe("createConversation", () => {
 			store,
 			{ memberCode: "member-1", partnerCode: "partner-1" },
 			{},
-			"fargate",
 		);
 
 		expect(result.scope).toBe("general");
 		expect(created[0]?.conversationId).toBe(result.conversationId);
 		expect(created[0]).toMatchObject({
 			userId: "member-1",
+			executionRuntime: "agentcore",
 			scope: "general",
 			collectionId: null,
 			summaryId: null,
@@ -78,7 +78,6 @@ describe("createConversation", () => {
 			store,
 			{ memberCode: "member-1", partnerCode: "partner-1" },
 			{ collectionId: " col-9 " },
-			"fargate",
 		);
 
 		expect(result.scope).toBe("collection");
@@ -94,7 +93,6 @@ describe("createConversation", () => {
 			store,
 			{ memberCode: "member-1", partnerCode: "partner-1" },
 			{ collectionId: "col-9", summaryId: "sum-3" },
-			"fargate",
 		);
 
 		expect(result.scope).toBe("document");

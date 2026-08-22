@@ -363,21 +363,6 @@ describe("acquireAgentCoreDispatchTx", () => {
 		}
 	});
 
-	it("does not consult the Conversation execution runtime", async () => {
-		await admitRunWithDispatch();
-		await tdb.db
-			.update(conversations)
-			.set({ executionRuntime: "fargate" })
-			.where(eq(conversations.conversationId, exact.conversationId));
-
-		await expect(
-			acquireAgentCoreDispatchTx(tdb.db, {
-				dispatch,
-				workerId: "agentcore-boot/invocation-1",
-			}),
-		).resolves.toMatchObject({ disposition: "acquired" });
-	});
-
 	it("refuses a dispatched Run that is not the oldest Active Run", async () => {
 		await admitRunWithDispatch();
 		await tdb.db.insert(runs).values({

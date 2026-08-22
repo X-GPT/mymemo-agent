@@ -11,7 +11,7 @@ Bun.env.AWS_REGION = Bun.env.AWS_REGION ?? "us-west-2";
 // Run tests with the exposure gate in break-glass mode. This lets config load
 // without a Statsig secret AND, crucially, makes the entrypoint's default export
 // (`createApp(loadApiConfigFromEnv(Bun.env))`, evaluated whenever a test imports
-// `@/index`) build break-glass exposure and runtime gates — so no real Statsig
+// `@/index`) builds break-glass exposure — so no real Statsig
 // client is constructed and no network I/O fires at import time. Gate-specific
 // tests construct Statsig-backed gates directly with fake/offline clients.
 Bun.env.AGENT_EXPOSURE_BREAK_GLASS =

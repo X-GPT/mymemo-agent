@@ -112,12 +112,10 @@ export const conversations = pgTable(
 		conversationId: text("conversation_id").notNull(),
 		/** 'general' | 'collection' | 'document' — frozen at creation. */
 		scope: text("scope").notNull(),
-		/** Immutable runtime classification, selected once at Conversation creation. */
+		/** AgentCore-only compatibility marker, retained until Release 2. */
 		executionRuntime: text("execution_runtime", {
 			enum: CONVERSATION_EXECUTION_RUNTIMES,
-		})
-			.notNull()
-			.default(FARGATE_EXECUTION_RUNTIME),
+		}).notNull(),
 		/** Non-null only for collection scope. */
 		collectionId: text("collection_id"),
 		/** Non-null only for document scope. */
@@ -164,7 +162,7 @@ export const conversations = pgTable(
 		),
 		check(
 			"conversations_execution_runtime_check",
-			sql`${t.executionRuntime} in ('fargate', 'agentcore')`,
+			sql`${t.executionRuntime} = 'agentcore'`,
 		),
 		index("conversations_regular_activity_idx")
 			.on(t.userId, t.lastActivityAt, t.conversationId)

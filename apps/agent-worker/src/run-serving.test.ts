@@ -28,7 +28,7 @@ const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 let tdb: TestDb;
 
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 });
 
 afterAll(async () => {
@@ -53,6 +53,7 @@ async function startRun() {
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
+		executionRuntime: "fargate",
 	});
 	await seedQueuedRun(tdb.db, {
 		runId: "run-1",

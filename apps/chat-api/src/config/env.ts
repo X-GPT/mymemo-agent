@@ -46,16 +46,16 @@ export interface ApiConfig {
 	 */
 	databaseUrl: string;
 	/**
-	 * Statsig server secret backing the production exposure and runtime gates.
+	 * Statsig server secret backing the production exposure gate.
 	 * Required unless operator break-glass is on; undefined only in that case.
 	 * Never sent to the sandbox or logged.
 	 */
 	statsigServerSecret: string | undefined;
 	/**
-	 * Operator break-glass for Statsig gating. When true, new agent work is allowed
-	 * without Statsig and every new Conversation selects Fargate (local dev, or an
-	 * incident where Statsig is unavailable). When false (production default), the
-	 * exposure gate fails closed and a Statsig secret is required.
+	 * Operator break-glass for Statsig exposure. When true, new agent work is
+	 * allowed without Statsig (local dev, or an incident where Statsig is
+	 * unavailable). When false (production default), the exposure gate fails
+	 * closed and a Statsig secret is required.
 	 */
 	agentExposureBreakGlass: boolean;
 	/** Required authenticated TLS Redis secret for the Live Stream relay. */
@@ -86,9 +86,9 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	const artifactRegion = env.AWS_REGION?.trim();
 	assert(artifactRegion, "AWS_REGION is required");
 
-	// Statsig exposure fails closed and runtime selection fails safe to Fargate: a
-	// Statsig secret is required unless an operator explicitly enables break-glass
-	// (local dev, or an incident where Statsig is unavailable). Worker-only secrets (OpenRouter,
+	// Statsig exposure fails closed: a Statsig secret is required unless an operator
+	// explicitly enables break-glass (local dev, or an incident where Statsig is
+	// unavailable). Worker-only secrets (OpenRouter,
 	// KB) are intentionally NOT read here — chat-api must not hold them.
 	const agentExposureBreakGlass = env.AGENT_EXPOSURE_BREAK_GLASS === "true";
 	if (!agentExposureBreakGlass) {

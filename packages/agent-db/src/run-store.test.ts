@@ -58,7 +58,7 @@ function committed(result: TerminalTransitionResult): RunRecord {
 // multiplies WASM memory that is not reclaimed promptly and OOMs CI runners.
 // Tests are isolated by clearing the tables they touch instead.
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 });
 
 afterAll(async () => {
@@ -74,11 +74,13 @@ beforeEach(async () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
+			executionRuntime: "fargate",
 		},
 		{
 			userId: "user-1",
 			conversationId: "conv-2",
 			scope: "general",
+			executionRuntime: "fargate",
 		},
 	]);
 });
@@ -296,7 +298,12 @@ describe("admitQueuedRunTx", () => {
 async function queueRun(runId: string, conversationId: string) {
 	await tdb.db
 		.insert(conversations)
-		.values({ userId: "user-1", conversationId, scope: "general" })
+		.values({
+			userId: "user-1",
+			conversationId,
+			scope: "general",
+			executionRuntime: "fargate",
+		})
 		.onConflictDoNothing();
 	return await seedQueuedRun(tdb.db, {
 		runId,

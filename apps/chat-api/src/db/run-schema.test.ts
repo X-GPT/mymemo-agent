@@ -34,8 +34,18 @@ beforeEach(async () => {
 	await tdb.db.delete(runs); // cascades run_events
 	await tdb.db.delete(conversations);
 	await tdb.db.insert(conversations).values([
-		{ userId: "user-1", conversationId: "conv-1", scope: "general" },
-		{ userId: "user-1", conversationId: "conv-2", scope: "general" },
+		{
+			userId: "user-1",
+			conversationId: "conv-1",
+			scope: "general",
+			executionRuntime: "agentcore",
+		},
+		{
+			userId: "user-1",
+			conversationId: "conv-2",
+			scope: "general",
+			executionRuntime: "agentcore",
+		},
 	]);
 	await tdb.db.delete(documentAccessEvents);
 });

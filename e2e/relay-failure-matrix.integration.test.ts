@@ -1,9 +1,10 @@
 /**
  * ADR-0014 cross-service verification matrix.
  *
- * The production worker RunLoop and chat-api routes share one PGlite database
- * while separate relay instances communicate through a disposable real Redis.
- * Tests observe only HTTP/SSE, durable Conversation history, and Run state.
+ * AgentCore dispatch acquisition, shared Run-serving, and chat-api routes use
+ * one PGlite database while separate relay instances communicate through a
+ * disposable real Redis. Tests observe only HTTP/SSE, durable Conversation
+ * history, and Run state.
  */
 
 import {
@@ -22,13 +23,24 @@ import {
 	startRedisTestServer,
 } from "@mymemo/test-support/redis-test-server";
 import type { WorkerLogger } from "../apps/agent-worker/src/logger";
-import { RunLoop, type RunProcessor } from "../apps/agent-worker/src/run-loop";
-import { Worker } from "../apps/agent-worker/src/worker";
+import {
+	createRunServing,
+	type RunProcessor,
+} from "../apps/agent-worker/src/run-serving";
 import type { ApiConfig } from "../apps/chat-api/src/config/env";
 import type { AppDeps } from "../apps/chat-api/src/deps";
 import { PostgresConversationHistoryStore } from "../apps/chat-api/src/features/conversation-history";
 import { PostgresConversationStore } from "../apps/chat-api/src/features/conversation-store";
 import { PostgresRunStore } from "../apps/chat-api/src/features/run-store";
+import {
+	acquireAgentCoreDispatchTx,
+	claimAgentCoreDispatchesTx,
+} from "../packages/agent-db/src/agentcore-dispatch";
+import { releaseConversationTx } from "../packages/agent-db/src/conversation-ownership";
+import {
+	loadExecutingRunTx,
+	reclaimConversationTx,
+} from "../packages/agent-db/src/run-store";
 import {
 	conversationRuntime,
 	conversations,
@@ -203,27 +215,48 @@ function buildApp(
 	return createApp({ logLevel: "silent" } as ApiConfig, deps);
 }
 
-function buildLoop(
+function createAgentCoreExecutionStarter(
 	processor: RunProcessor,
 	liveStreamRelay: LiveStreamRelay,
-	workerId = `worker-${crypto.randomUUID()}`,
-): { loop: RunLoop; worker: Worker } {
-	const worker = new Worker({
-		workerId,
-		maxConcurrentConversations: 1,
-		shutdownTimeoutMs: 1_000,
+	workerId = `agentcore-${crypto.randomUUID()}`,
+) {
+	const runServing = createRunServing({
+		db: testDatabase.db,
+		processor,
+		liveStreamRelay,
 		logger: silentLogger,
 	});
-	return {
-		worker,
-		loop: new RunLoop({
-			db: testDatabase.db,
-			worker,
-			processor,
-			liveStreamRelay,
-			heartbeatIntervalMs: 15_000,
-			logger: silentLogger,
-		}),
+	return async (runId: string) => {
+		const [dispatch] = await claimAgentCoreDispatchesTx(testDatabase.db, {
+			publisherId: `${workerId}-publisher`,
+			runId,
+		});
+		if (!dispatch) throw new Error("test AgentCore dispatch was not claimable");
+		const acquisition = await acquireAgentCoreDispatchTx(testDatabase.db, {
+			dispatch,
+			workerId,
+		});
+		if (acquisition.disposition !== "acquired") {
+			throw new Error(
+				`test AgentCore dispatch was not acquired: ${acquisition.disposition}`,
+			);
+		}
+		const owner = { ...acquisition.owner, runId, workerId };
+		const run = await loadExecutingRunTx(testDatabase.db, owner);
+		if (!run) throw new Error("test AgentCore Run was not executable");
+		const done = runServing
+			.serveStartedRun({
+				run,
+				owner,
+				shutdownSignal: new AbortController().signal,
+			})
+			.then(async (result) => {
+				if (result.type !== "ownership_lost") {
+					await releaseConversationTx(testDatabase.db, owner);
+				}
+				return result;
+			});
+		return { done };
 	};
 }
 
@@ -236,7 +269,10 @@ async function admitRun(message: string): Promise<{
 	await new PostgresConversationStore(testDatabase.db).create({
 		userId: MEMBER_CODE,
 		conversationId,
+		executionRuntime: "agentcore",
 		scope: "general",
+		collectionId: null,
+		summaryId: null,
 	});
 	await new PostgresRunStore(testDatabase.db).admitRun({
 		conversation: { userId: MEMBER_CODE, conversationId },
@@ -348,7 +384,7 @@ const completeTextProcessor: RunProcessor = async (ctx) => {
 };
 
 describe("ADR-0014 relay failure matrix", () => {
-	it("streams a queued Run from its first event once the RunLoop claims it", async () => {
+	it("streams a queued Run from its first event after durable acquisition", async () => {
 		const queuedAttachRetry = telemetryProbe("attach_attempt", "retry");
 		const readerAttached = telemetryProbe("attach_attempt", "success");
 		const telemetry = combineTelemetry(
@@ -361,7 +397,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("queued attach");
 		const processorStarted = deferred();
 		const continueProcessor = deferred();
-		const { loop, worker } = buildLoop(async (ctx) => {
+		const startExecution = createAgentCoreExecutionStarter(async (ctx) => {
 			processorStarted.resolve();
 			await continueProcessor.promise;
 			await completeTextProcessor(ctx);
@@ -374,11 +410,11 @@ describe("ADR-0014 relay failure matrix", () => {
 
 		await queuedAttachRetry.observed;
 		expect((await readRun(runId))?.status).toBe("queued");
-		expect(await loop.tick()).toBe(1);
+		const running = await startExecution(runId);
 		await processorStarted.promise;
 		await readerAttached.observed;
 		continueProcessor.resolve();
-		await worker.drain();
+		await running.done;
 		const response = await responsePromise;
 
 		expect(response.status).toBe(200);
@@ -391,7 +427,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		]);
 	});
 
-	it("recovers producer death through stale-Run recovery and Conversation history without fabricating a live Outcome", async () => {
+	it("reclaims a lapsed Conversation after producer death and serves history without fabricating a live Outcome", async () => {
 		const readerAttached = telemetryProbe("attach_attempt", "success");
 		const consumerRelay = createRelay({ telemetry: readerAttached.telemetry });
 		const producerClientName = `issue-370-producer-${crypto.randomUUID()}`;
@@ -402,7 +438,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("producer death");
 		const processorStarted = deferred();
 		const releaseCrashedProcessor = deferred();
-		const crashed = buildLoop(
+		const startCrashedExecution = createAgentCoreExecutionStarter(
 			async (ctx) => {
 				await ctx.appendLiveEvent({
 					type: "TEXT_MESSAGE_START",
@@ -416,11 +452,11 @@ describe("ADR-0014 relay failure matrix", () => {
 			"crashed-worker",
 		);
 
-		expect(await crashed.loop.tick()).toBe(1);
+		const crashedRun = await startCrashedExecution(runId);
 		await processorStarted.promise;
 
 		// Intentionally no client timeout: silent producer death must converge
-		// through durable recovery, or the test itself must time out and fail.
+		// through Reclamation, or the test itself must time out and fail.
 		const responsePromise = app.request(eventsUrl(conversationId, runId), {
 			headers: IDENTITY_HEADERS,
 		});
@@ -433,12 +469,9 @@ describe("ADR-0014 relay failure matrix", () => {
 			"update conversations set owner_until = $1 where conversation_id = $2",
 			[new Date(0), conversationId],
 		);
-		const recovery = buildLoop(
-			async () => {},
-			createRelay(),
-			"recovery-worker",
-		);
-		expect(await recovery.loop.tick()).toBe(0);
+		expect(await reclaimConversationTx(testDatabase.db)).toMatchObject({
+			conversationId,
+		});
 
 		const response = await responsePromise;
 		expect(response.status).toBe(200);
@@ -460,7 +493,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		]);
 
 		releaseCrashedProcessor.resolve();
-		await crashed.worker.drain();
+		await crashedRun.done;
 	});
 
 	it("serves history when attach pauses before its backlog request across terminal close", async () => {
@@ -479,13 +512,13 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("terminal attach race");
 		const processorStarted = deferred();
 		const continueProcessor = deferred();
-		const { loop, worker } = buildLoop(async (ctx) => {
+		const startExecution = createAgentCoreExecutionStarter(async (ctx) => {
 			processorStarted.resolve();
 			await continueProcessor.promise;
 			await completeTextProcessor(ctx);
 		}, producerRelay);
 
-		expect(await loop.tick()).toBe(1);
+		const running = await startExecution(runId);
 		await processorStarted.promise;
 		const responsePromise = app.request(eventsUrl(conversationId, runId), {
 			headers: IDENTITY_HEADERS,
@@ -493,7 +526,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		});
 		await liveSubscribed.promise;
 		continueProcessor.resolve();
-		await worker.drain();
+		await running.done;
 		continueAttach.resolve();
 
 		const response = await responsePromise;
@@ -526,13 +559,13 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("live terminal race");
 		const processorStarted = deferred();
 		const continueProcessor = deferred();
-		const { loop, worker } = buildLoop(async (ctx) => {
+		const startExecution = createAgentCoreExecutionStarter(async (ctx) => {
 			processorStarted.resolve();
 			await continueProcessor.promise;
 			await completeTextProcessor(ctx);
 		}, producerRelay);
 
-		expect(await loop.tick()).toBe(1);
+		const running = await startExecution(runId);
 		await processorStarted.promise;
 		const responsePromise = app.request(eventsUrl(conversationId, runId), {
 			headers: IDENTITY_HEADERS,
@@ -542,7 +575,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		continueProcessor.resolve();
 		await terminalPublished.promise;
 		continueBacklogReply.resolve();
-		await worker.drain();
+		await running.done;
 
 		const response = await responsePromise;
 		expect(response.status).toBe(200);
@@ -563,7 +596,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		const { conversationId, runId } = await admitRun("buffer cap overflow");
 		const processorStarted = deferred();
 		const continueProcessor = deferred();
-		const { loop, worker } = buildLoop(async (ctx) => {
+		const startExecution = createAgentCoreExecutionStarter(async (ctx) => {
 			processorStarted.resolve();
 			await continueProcessor.promise;
 			await completeTextProcessor(ctx);
@@ -572,11 +605,11 @@ describe("ADR-0014 relay failure matrix", () => {
 		const responsePromise = app.request(eventsUrl(conversationId, runId), {
 			headers: IDENTITY_HEADERS,
 		});
-		expect(await loop.tick()).toBe(1);
+		const running = await startExecution(runId);
 		await processorStarted.promise;
 		await readerAttached.observed;
 		continueProcessor.resolve();
-		await worker.drain();
+		await running.done;
 
 		const response = await responsePromise;
 		expect(response.status).toBe(200);
@@ -619,9 +652,11 @@ describe("ADR-0014 relay failure matrix", () => {
 			error: "Live stream temporarily unavailable",
 		});
 
-		const { loop, worker } = buildLoop(completeTextProcessor, producerRelay);
-		expect(await loop.tick()).toBe(1);
-		await worker.drain();
+		const startExecution = createAgentCoreExecutionStarter(
+			completeTextProcessor,
+			producerRelay,
+		);
+		await (await startExecution(runId)).done;
 		expect(await readRun(runId)).toMatchObject({
 			status: "done",
 			liveStreamFailedAt: expect.any(Date),

@@ -545,15 +545,10 @@ app.post(
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(identity.data))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
-		const executionRuntime = await c.var.deps.runtimeGate.selectRuntime(
-			identity.data,
-		);
-
 		const result = await createConversation(
 			c.var.deps.conversationStore,
 			identity.data,
 			c.req.valid("json"),
-			executionRuntime,
 		);
 		return c.json(result, 201);
 	},

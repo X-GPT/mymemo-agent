@@ -234,7 +234,7 @@ async function artifactList(app: ReturnType<typeof createApp>) {
 
 describe("Downloadable artifact delivery acceptance", () => {
 	it("publishes a queued Run through Postgres, HTTP download, overwrite, cleanup, and deletion", async () => {
-		const tdb = await createTestDatabase();
+		const tdb = await createTestDatabase(undefined, { legacyFargate: true });
 		try {
 			const workspace = new AcceptanceWorkspace();
 			const delivery = createDeliveryHarness(tdb, workspace);
@@ -385,7 +385,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 	});
 
 	it("keeps the prior current Downloadable artifact set intact across validation, quota, upload, interruption, and cleanup failures", async () => {
-		const tdb = await createTestDatabase();
+		const tdb = await createTestDatabase(undefined, { legacyFargate: true });
 		try {
 			const logEvents: Record<string, unknown>[] = [];
 			const logger: WorkerLogger = {

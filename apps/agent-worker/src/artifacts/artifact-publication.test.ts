@@ -42,7 +42,7 @@ const MAX_CONVERSATION_ARTIFACT_BYTES = 1_024 * MIB;
 let tdb: TestDb;
 
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 });
 
 afterAll(async () => {
@@ -219,6 +219,7 @@ async function insertConversation(): Promise<void> {
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
+		executionRuntime: "fargate",
 	});
 }
 
@@ -338,6 +339,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
+			executionRuntime: "fargate",
 		});
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",

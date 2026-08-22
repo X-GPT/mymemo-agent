@@ -1,9 +1,9 @@
 # AgentCore rollout and incident operations
 
 This runbook operates the production AgentCore execution runtime, its Dispatch
-consumer, and the dedicated Dispatch publisher. It implements the coexistence
-boundary in
-[ADR-0025](../adr/0025-select-the-execution-runtime-at-conversation-creation.md),
+consumer, and the dedicated Dispatch publisher. AgentCore is the sole execution
+runtime under
+[ADR-0031](../adr/0031-make-agentcore-the-sole-execution-runtime.md),
 the advisory-locked publication contract in
 [ADR-0026](../adr/0026-publish-agentcore-dispatch-through-one-advisory-locked-loop.md),
 and the dedicated-service boundary in
@@ -13,13 +13,10 @@ The unified production release state is defined by
 recovery policy is defined by
 [ADR-0029](../adr/0029-recover-production-releases-by-rolling-forward.md).
 
-For the one-time first cutover, this runbook treats all existing Conversations
-as disposable and deletes them instead of draining or reassigning them. That
-intentionally overrides ADR-0025's preservation-oriented cutover preconditions.
-ADR-0029 neither authorizes nor extends this destructive exception. After the
-cutover, production releases are roll-forward only: contain an incident, ship a
-reviewed corrected release, verify it, and restore controls deliberately. This
-implements ADR-0029's amendments to ADR-0025 and ADR-0027; no production binary
+The completed one-time cutover treated old Conversations as disposable and
+removed them rather than retaining a Fargate execution path. Production
+releases are roll-forward only: contain an incident, ship a reviewed corrected
+release, verify it, and restore controls deliberately. No production binary
 rollback target is maintained by the release workflow.
 
 Use the `mymemo` AWS profile in `us-west-2`. Run repository deployment commands
@@ -29,15 +26,13 @@ for every SQL block below; do not copy database credentials into incident notes.
 
 ## Control surfaces
 
-A Statsig console search for "runtime" returns two controls with different,
-effectively opposite blast radii. Confirm the full name before changing either
-one.
+Exposure admission and Dispatch are independent controls. Neither selects an
+execution runtime.
 
 | Control | Owner and safe value | Blast radius |
 | --- | --- | --- |
-| `mymemo_agent_agentcore_runtime_enabled` | Statsig runtime gate; OFF is safe | Evaluated once, after exposure allows Conversation creation. ON stamps a new Conversation `agentcore`; OFF, evaluation failure, or Statsig failure stamps it `fargate`. It does not reroute an existing Conversation, stop its Runs, or halt Dispatch. |
 | `mymemo_agent_split_runtime_enabled` | Statsig exposure gate; OFF denies new work | Controls new Conversation creation and new, non-idempotent Run admission. OFF returns `403` instead of falling back to Fargate. Existing-resource reads, reconnect, interruption, and exact Run retries remain available. It never selects an execution runtime. |
-| `/mymemo/agentcore-dispatch/prod/enabled` | SSM Dispatch control; only the exact value `enabled` opens it | Fail-closed kill-switch consulted by the publisher and consumer. `disabled`, a missing parameter, an unreadable parameter, or any other value stops delivery for existing AgentCore Conversations. It does not change Conversation stamping. Terraform intentionally ignores value drift. |
+| `/mymemo/agentcore-dispatch/prod/enabled` | SSM Dispatch control; only the exact value `enabled` opens it | Fail-closed kill-switch consulted by the publisher and consumer. `disabled`, a missing parameter, an unreadable parameter, or any other value stops delivery for existing AgentCore Conversations. It does not change Conversation creation. Terraform intentionally ignores value drift. |
 
 Change the SSM control explicitly and verify the read-back:
 
@@ -65,7 +60,7 @@ The `conversations.execution_runtime` rename is already applied and the retired
 canary tables are already gone, so this cutover has no pending incompatible
 schema transition. Before starting the reviewed release workflow:
 
-1. Turn both Statsig gates OFF and verify the SSM Dispatch parameter is
+1. Turn the Statsig exposure gate OFF and verify the SSM Dispatch parameter is
    `disabled`.
 2. Scale the old chat-api and agent-worker services to zero and wait for them to
    become stable. Keep them at zero until the release workflow starts. Its
@@ -170,17 +165,20 @@ publisher, consumer, and Runtime versions are not independently releasable.
    together. The previously applied runtime rename and canary-table removal are
    skipped by migration history; do not run a separate manual migration.
    Retain the unified plan and inspection artifact with the release record.
-2. With both Statsig gates OFF and SSM still `disabled`, confirm the release
+2. With the Statsig exposure gate OFF and SSM still `disabled`, confirm the release
    workflow succeeded and all three ECS services are stable. The publisher must
    have desired count one. Agent-worker remains the global expiration and
-   Reclamation runner for both runtimes.
+   Reclamation runner during Release 1.
 3. Set `/mymemo/agentcore-dispatch/prod/enabled` to `enabled`. Confirm the
    publisher emits `PendingAgeMs: 0` when idle and the consumer event-source
    mapping remains enabled.
-4. In Statsig, target only the synthetic smoke identity in both the exposure
-   gate and `mymemo_agent_agentcore_runtime_enabled`. Leave the runtime gate's
-   default OFF. From the VPC-reachable environment, run the ordinary
-   public-contract smoke through its deployed wrapper, which pins
+4. Keep normal exposure closed until every older gate-aware chat-api task has
+   drained and the service contains only the new task definition. Only then
+   remove `mymemo_agent_agentcore_runtime_enabled` from Statsig; an older task
+   must never observe its removal and fall back to Fargate. Target only the
+   synthetic smoke identity in the exposure gate. From the VPC-reachable
+   environment, run the ordinary public-contract smoke through its deployed
+   wrapper, which pins
    `AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME=agentcore`:
 
    ```sh
@@ -192,15 +190,13 @@ publisher, consumer, and Runtime versions are not independently releasable.
    done Outcomes, durable history, and Downloadable-artifact listing and
    download for that ordinary Conversation through chat-api; it uses no database
    or queue access. Retain the printed Conversation and Run ids for correlation
-   with Runtime telemetry. This pass licenses step 5's staged runtime-gate
-   rollout, but does not license setting the default ON or skipping the telemetry
-   checks at each stage.
-5. Roll out `mymemo_agent_agentcore_runtime_enabled` in deliberate Statsig
-   stages. At every stage observe pending age, sustained publisher errors,
-   queue/DLQ depth, AgentCore Outcomes, and Fargate health before increasing the
-   cohort. Existing Conversations never move when the percentage changes.
+   with Runtime telemetry. This pass licenses step 5's staged exposure rollout,
+   but does not license skipping the telemetry checks at each stage.
+5. Reopen the intended exposure cohort in deliberate Statsig stages. At every
+   stage observe pending age, sustained publisher errors, queue/DLQ depth, and
+   AgentCore Outcomes before increasing the cohort.
 
-Do not enable SSM or widen the runtime gate merely because the deploy commands
+Do not enable SSM or widen exposure merely because the deploy commands
 returned successfully; the deployment inspection and targeted smoke are
 separate gates.
 
@@ -279,9 +275,8 @@ When pending age rises:
 
 While SSM is disabled, an admitted Run on an existing AgentCore Conversation
 cannot be delivered. It remains `queued`, produces no Assistant response, and
-occupies that Conversation's one Active Run slot. The runtime gate cannot help
-because the Conversation is already stamped. The runtime-aware Fargate
-agent-worker's global queue backstop terminalizes an unowned AgentCore Run with
+occupies that Conversation's one Active Run slot. There is no Fargate fallback.
+The existing agent-worker's global queue backstop terminalizes an unowned AgentCore Run with
 Outcome `error` after ten minutes of continuous eligibility. The user therefore
 sees a delayed `error` Outcome and cannot admit another distinct Run on that
 Conversation in the meantime; the system never retries the Run as new work. Do
@@ -294,11 +289,9 @@ no maintained binary-rollback procedure or rollback image target.
 
 1. Set the SSM Dispatch control to `disabled` and verify the read-back. This
    stops publication and consumption for existing AgentCore Conversations.
-2. Turn the Execution runtime gate OFF by setting
-   `mymemo_agent_agentcore_runtime_enabled` OFF. This sends newly created
-   Conversations to Fargate while preserving the immutable runtime of existing
-   Conversations. Turn the exposure gate OFF only when the incident requires
-   denying all new agent work.
+2. Turn the exposure gate OFF when the incident requires denying new agent
+   work. Do not introduce a runtime-selection incident control or Fargate
+   fallback.
 3. Keep the runtime-aware agent-worker running. It remains the global queued-Run
    expiration and Reclamation runner while AgentCore Dispatch is contained.
 4. Diagnose the failure and prepare a reviewed forward fix on `main`. Preserve
@@ -308,13 +301,12 @@ no maintained binary-rollback procedure or rollback image target.
    applies the unified production state, rolls all coordinated ECS services,
    verifies the Runtime and `DEFAULT` endpoint, and records the deployed commit
    and immutable Runtime image digest.
-6. With SSM still `disabled` and the runtime gate OFF, verify the workflow
+6. With SSM still `disabled` and exposure still closed, verify the workflow
    evidence, ECS service stability, Runtime readiness, queue/DLQ state, and
    publisher telemetry. Do not restore controls merely because the apply
    completed.
 7. Restore controls deliberately. Set SSM to `enabled` and confirm Dispatch
-   health. Target the synthetic smoke identity in the exposure and runtime
-   gates, run `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh`, and observe
-   telemetry. Restore the runtime-gate cohort in stages only after the smoke and
-   each telemetry checkpoint pass. If the exposure gate was turned OFF during
-   containment, reopen it only after the service is ready for new work.
+   health. Target the synthetic smoke identity in the exposure gate, run
+   `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh`, and observe telemetry.
+   Reopen the exposure cohort in stages only after the smoke and each telemetry
+   checkpoint pass.

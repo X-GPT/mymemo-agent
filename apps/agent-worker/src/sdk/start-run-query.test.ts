@@ -67,7 +67,7 @@ const owners = new Map<string, RunWriteOwner>();
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from empty tables via delete, keeping isolation without the cost.
 beforeAll(async () => {
-	tdb = await createTestDatabase();
+	tdb = await createTestDatabase(undefined, { legacyFargate: true });
 });
 
 afterAll(async () => {
@@ -98,6 +98,7 @@ async function createClaimedRun(input: {
 			userId: USER_ID,
 			conversationId: input.conversationId,
 			scope: "general",
+			executionRuntime: "fargate",
 		})
 		.onConflictDoNothing();
 	await seedQueuedRun(tdb.db, {

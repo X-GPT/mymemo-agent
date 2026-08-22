@@ -42,35 +42,27 @@ value fails before the first HTTP request.
 
 | Target | Suite | Invocation | Credentials and network |
 | --- | --- | --- | --- |
-| Local compose | `full` | `bun run smoke:local` | The entrypoint expects `fargate`, matching local break-glass runtime selection. The running trusted services hold the developer's OpenRouter, E2B, and AWS credentials. The smoke process needs only localhost access. |
-| Deployed internal ALB | `core` | `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh` | The wrapper expects `agentcore`. Run inside the VPC under the synthetic identity targeted in both Statsig gates. The caller receives no provider, sandbox, AWS, or database secrets. |
+| Local compose | `full` | Unavailable until #523 | AgentCore-only creation cannot use the current Fargate-only compose runtime. `bun run smoke:local` fails immediately with this explanation. |
+| Deployed internal ALB | `core` | `AGENT_SMOKE_SUITE=core scripts/deploy/prod_smoke.sh` | The wrapper expects `agentcore`. Run inside the VPC under the synthetic identity targeted in the Statsig exposure gate. The caller receives no provider, sandbox, AWS, or database secrets. |
 
-There is no staging target. Local-real is the pre-merge bar; the deployed core
-suite is the post-deploy bar. The smoke identity must be allowlisted in the
+There is no staging target. The credential-free integration suite remains the
+pre-merge bar until #523 restores local-real; the deployed core suite is the
+post-deploy bar. The smoke identity must be allowlisted in the
 `mymemo_agent_split_runtime_enabled` Statsig gate before a gate-open deployed
 run. Until the in-VPC release one-shot in
 [#305](https://github.com/X-GPT/mymemo-agent/issues/305) lands, the deployed
 command remains manual from a VPC-reachable environment.
 
-## One-command pre-merge run
+## Local smoke transition
 
-First satisfy the compose prerequisites and start the stack as described in the
-[local harness guide](../../README.md#local-end-to-end-harness). With the stack
-healthy, run:
-
-```sh
-bun run smoke:local
-```
-
-The command fixes the local base URL, gate-open expectation, seeded fixture
-member, expected `fargate` runtime, and `full` suite. A pass prints the
-Conversation id and all Run ids so the evidence can be correlated with service
-logs. A failure exits non-zero with the assertion that failed.
+Issue #523 owns the local AgentCore bridge and restoration of `smoke:local`.
+Until then, use the credential-free integration suite as the pre-merge bar;
+the local command fails immediately rather than advertising an impossible run.
 
 The deployed wrapper fixes the expected runtime to `agentcore`. After the
-synthetic identity is targeted in both gates, the public creation response must
-report that runtime before the client admits its first Run. A deployed pass is
-the gate for beginning the staged runtime rollout described in the
+synthetic identity is targeted in the exposure gate, the public creation response
+must report that runtime before the client admits its first Run. A deployed pass
+is the gate for beginning the staged exposure rollout described in the
 [AgentCore rollout runbook](../runbooks/agentcore-rollout.md#deploy-order); it is
 not evidence for widening past the next observed stage.
 

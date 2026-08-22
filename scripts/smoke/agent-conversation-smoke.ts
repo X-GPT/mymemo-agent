@@ -2,13 +2,13 @@
 
 // Deployed operator use: run this client through scripts/deploy/prod_smoke.sh
 // only after AgentCore Dispatch is enabled and the synthetic identity is
-// targeted in both Statsig gates. The wrapper pins the expected execution
+// targeted in the exposure gate. The wrapper pins the expected execution
 // runtime to agentcore. A pass proves that the public creation response selected
 // agentcore before the client admits Runs, then proves done Outcomes, durable
 // history, and Downloadable-artifact listing/download. It licenses the staged
-// runtime-gate rollout in docs/runbooks/agentcore-rollout.md; it does not license
+// exposure rollout in docs/runbooks/agentcore-rollout.md; it does not license
 // skipping that rollout's telemetry checks. The local smoke:local entrypoint
-// instead pins the expected runtime to fargate for break-glass compose.
+// is unavailable until #523 adds the local AgentCore bridge.
 
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";

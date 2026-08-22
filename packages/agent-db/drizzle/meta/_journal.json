@@ -169,6 +169,13 @@
       "when": 1786926383897,
       "tag": "0023_execution_runtime",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787363116427,
+      "tag": "0024_narrow_pestilence",
+      "breakpoints": true
     }
   ]
 }
