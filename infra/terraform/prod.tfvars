@@ -24,6 +24,9 @@ assign_public_ip = true
 # fck-nat 1.4.0, published by AWS account 568608671756 for us-west-2 ARM64.
 fck_nat_ami_id = "ami-0d1db1251d2b64626"
 
+# Production must keep exactly one always-on global maintenance owner.
+agent_maintenance_desired_count = 1
+
 openrouter_default_model = "anthropic/claude-sonnet-4"
 
 # Established account alarm channel used by the shared staging infrastructure.
