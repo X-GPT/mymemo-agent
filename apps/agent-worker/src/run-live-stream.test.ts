@@ -109,7 +109,7 @@ it("observes a payload-safe degradation transition separately from Run outcome",
 		record(operation, result, options) {
 			metrics.push({
 				message: "Live Stream metric",
-				service: "agent-worker",
+				service: "agentcore-runtime",
 				operation,
 				result,
 				...options,

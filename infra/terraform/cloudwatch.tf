@@ -3,11 +3,6 @@ resource "aws_cloudwatch_log_group" "chat_api" {
   retention_in_days = var.log_retention_days
 }
 
-resource "aws_cloudwatch_log_group" "agent_worker" {
-  name              = "/ecs/${local.agent_worker_name}"
-  retention_in_days = var.log_retention_days
-}
-
 resource "aws_cloudwatch_log_group" "agent_maintenance" {
   name              = "/ecs/${local.agent_maintenance_name}"
   retention_in_days = var.log_retention_days
@@ -79,8 +74,8 @@ resource "aws_cloudwatch_log_group" "agentcore_dispatch_publisher" {
 
 locals {
   live_stream_log_groups = {
-    chat-api     = aws_cloudwatch_log_group.chat_api.name
-    agent-worker = aws_cloudwatch_log_group.agent_worker.name
+    agentcore-runtime = "/aws/bedrock-agentcore/runtimes/${aws_bedrockagentcore_agent_runtime.runtime.agent_runtime_id}-DEFAULT"
+    chat-api          = aws_cloudwatch_log_group.chat_api.name
   }
 }
 
@@ -169,9 +164,9 @@ resource "aws_cloudwatch_log_metric_filter" "live_stream_capacity" {
     "stream_events_exceeded",
   ])
 
-  name           = "${local.common_name}-agent-worker-live-stream-capacity-${replace(each.key, "_", "-")}"
-  log_group_name = aws_cloudwatch_log_group.agent_worker.name
-  pattern        = "{ $.message = \"Live Stream metric\" && $.service = \"agent-worker\" && $.reason = \"${each.key}\" }"
+  name           = "${local.common_name}-agentcore-runtime-live-stream-capacity-${replace(each.key, "_", "-")}"
+  log_group_name = local.live_stream_log_groups["agentcore-runtime"]
+  pattern        = "{ $.message = \"Live Stream metric\" && $.service = \"agentcore-runtime\" && $.reason = \"${each.key}\" }"
 
   metric_transformation {
     name      = "CapacityFailures"
@@ -186,9 +181,9 @@ resource "aws_cloudwatch_log_metric_filter" "live_stream_capacity" {
 }
 
 resource "aws_cloudwatch_log_metric_filter" "live_stream_degraded_duration" {
-  name           = "${local.common_name}-agent-worker-live-stream-degraded-duration"
-  log_group_name = aws_cloudwatch_log_group.agent_worker.name
-  pattern        = "{ $.message = \"Live Stream metric\" && $.service = \"agent-worker\" && $.operation = \"degradation\" && $.result = \"ended\" && $.durationMs = * }"
+  name           = "${local.common_name}-agentcore-runtime-live-stream-degraded-duration"
+  log_group_name = local.live_stream_log_groups["agentcore-runtime"]
+  pattern        = "{ $.message = \"Live Stream metric\" && $.service = \"agentcore-runtime\" && $.operation = \"degradation\" && $.result = \"ended\" && $.durationMs = * }"
 
   metric_transformation {
     name      = "DegradedDurationMs"
@@ -206,7 +201,7 @@ resource "aws_cloudwatch_metric_alarm" "live_stream_redis_unavailable" {
   for_each = local.live_stream_log_groups
 
   alarm_name          = "${local.common_name}-${each.key}-live-stream-redis-unavailable"
-  alarm_description   = "${each.key} has sustained Redis failures. agent-worker owns Live Stream production; chat-api owns reconnect and recovery responses. See docs/runbooks/live-stream.md."
+  alarm_description   = "${each.key} has sustained Redis failures. See docs/runbooks/live-stream.md."
   namespace           = "${local.common_name}/LiveStream"
   metric_name         = "RedisUnavailable"
   statistic           = "Sum"
@@ -246,8 +241,8 @@ resource "aws_cloudwatch_metric_alarm" "live_stream_recovery_rate" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "live_stream_capacity_bound" {
-  alarm_name          = "${local.common_name}-agent-worker-live-stream-capacity-bound"
-  alarm_description   = "Live Stream capacity bounds are repeatedly exhausted; agent-worker owns Live Stream production. See docs/runbooks/live-stream.md."
+  alarm_name          = "${local.common_name}-agentcore-runtime-live-stream-capacity-bound"
+  alarm_description   = "Live Stream capacity bounds are repeatedly exhausted in AgentCore Runtime. See docs/runbooks/live-stream.md."
   namespace           = "${local.common_name}/LiveStream"
   metric_name         = "CapacityFailures"
   statistic           = "Sum"
@@ -261,7 +256,7 @@ resource "aws_cloudwatch_metric_alarm" "live_stream_capacity_bound" {
   ok_actions          = var.alarm_action_arns
 
   dimensions = {
-    Service = "agent-worker"
+    Service = "agentcore-runtime"
   }
 }
 
@@ -296,22 +291,5 @@ resource "aws_cloudwatch_metric_alarm" "chat_api_cpu_high" {
   dimensions = {
     ClusterName = local.shared_ecs_cluster_name
     ServiceName = aws_ecs_service.chat_api.name
-  }
-}
-
-resource "aws_cloudwatch_metric_alarm" "agent_worker_cpu_high" {
-  alarm_name          = "${local.agent_worker_name}-cpu-high"
-  alarm_description   = "agent-worker ECS service CPU is high."
-  namespace           = "AWS/ECS"
-  metric_name         = "CPUUtilization"
-  statistic           = "Average"
-  period              = 60
-  evaluation_periods  = 5
-  threshold           = 80
-  comparison_operator = "GreaterThanThreshold"
-
-  dimensions = {
-    ClusterName = local.shared_ecs_cluster_name
-    ServiceName = aws_ecs_service.agent_worker.name
   }
 }

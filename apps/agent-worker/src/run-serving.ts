@@ -137,8 +137,8 @@ export interface ServeStartedRunInput {
 	owner: RunWriteOwner;
 	/** Runtime shutdown, distinct from durable user interruption. */
 	shutdownSignal: AbortSignal;
-	/** Lets the runtime resume drain-level renewal before terminalization or while
-	 * an abandoned processor unwinds, and halt immediately on Ownership loss. A
+	/** Lets AgentCore Runtime resume Ownership renewal before terminalization or
+	 * while an abandoned processor unwinds, and halt immediately on Ownership loss. A
 	 * later terminal-fence rejection can report Ownership loss after detachment.
 	 * This early liveness notification complements, rather than replaces, the
 	 * final platform-neutral result returned by `serveStartedRun`. */
@@ -190,14 +190,11 @@ class RunWriteRejectedError extends Error {
  * Shared serving behavior for one already-running Run (ADR-0023). It owns the
  * Run's heartbeat, interruption observation, Live Stream, processor, durable
  * model content, terminal reconciliation, continuity evidence, and artifacts.
- * Runtime control loops retain acquisition/Claim, ordering, Reclamation, and
- * release outside this module.
+ * AgentCore retains exact acquisition and release outside this module;
+ * agent-maintenance owns Reclamation.
  */
 export interface RunServing {
 	serveStartedRun(input: ServeStartedRunInput): Promise<ServeStartedRunResult>;
-	/** Renew Ownership and observe interruption for every attached Run. The
-	 * runtime control plane owns the timer/doorbell cadence and renews Claim
-	 * windows before Run start and after this seam detaches. */
 	heartbeat(): Promise<void>;
 }
 
@@ -311,11 +308,11 @@ class OwnedRunServing implements RunServing {
 		if (!observed) {
 			// This Run reached its Outcome under us while the Conversation lease
 			// stayed live. Stop the private SDK immediately and detach only this Run;
-			// the caller may continue draining the Conversation snapshot.
+			// AgentCore Runtime may continue the Conversation lifecycle and release.
 			entry.state.skipTerminalizationReason = "already_terminal";
 			this.abortForOwnershipLoss(entry);
 			this.options.logger.warn({
-				message: "abandoning a run this worker no longer owns",
+				message: "abandoning a run this runtime no longer owns",
 				workerId: owner.workerId,
 				conversationId: owner.conversationId,
 				runId: owner.runId,
@@ -448,7 +445,7 @@ class OwnedRunServing implements RunServing {
 						: { error };
 			}
 		}
-		// Detach before terminalizing: the drain-level loop owns renewal from here,
+		// Detach before terminalizing: AgentCore Runtime owns renewal from here,
 		// and a concurrent heartbeat must not race this Run's terminal transition.
 		this.detachRun(entry);
 

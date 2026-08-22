@@ -14,8 +14,6 @@
 	},
 	"scripts": {
 		"test": "bun test --timeout=30000",
-		"dev": "bun run --hot src/index.ts",
-		"start": "bun run src/index.ts",
 		"template:build": "bun run e2b-template/build.ts",
 		"template:verify": "bun run e2b-template/verify.ts",
 		"format": "biome format --write",

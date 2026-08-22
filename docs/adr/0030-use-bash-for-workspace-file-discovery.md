@@ -6,6 +6,12 @@ This decision supersedes the active `Glob` tool portions of ADR-0006 and
 ADR-0009. Their records remain unchanged as the history of the tool surface
 they introduced.
 
+Amended (2026-08-22) by
+[ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md): AgentCore
+Runtime is now the sole trusted executor, while prompt-injectable filesystem
+and shell work remains isolated in E2B. The Fargate-tool wording below records
+the original decision context.
+
 The custom `Glob` executor was a shallow wrapper around `rg --files`. Its
 working-directory and pattern semantics created separate behavior to specify,
 test, and secure, including hidden search-root and symlink-root surprises.

@@ -25,7 +25,11 @@ data "aws_iam_policy_document" "read_secrets" {
       "secretsmanager:GetSecretValue",
       "secretsmanager:DescribeSecret",
     ]
-    resources = local.all_secret_arns
+    resources = [
+      local.agent_db_password_base_secret_arn,
+      local.statsig_server_secret_arn,
+      local.live_redis_url_secret_arn,
+    ]
   }
 }
 
@@ -33,6 +37,32 @@ resource "aws_iam_role_policy" "task_execution_read_secrets" {
   name   = "${local.common_name}-read-secrets"
   role   = aws_iam_role.task_execution.id
   policy = data.aws_iam_policy_document.read_secrets.json
+}
+
+resource "aws_iam_role" "agent_migration_execution" {
+  name               = "${local.common_name}-migration-execution"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
+}
+
+resource "aws_iam_role_policy_attachment" "agent_migration_execution" {
+  role       = aws_iam_role.agent_migration_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+data "aws_iam_policy_document" "agent_migration_read_database_secret" {
+  statement {
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+    ]
+    resources = [local.agent_db_password_base_secret_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "agent_migration_read_database_secret" {
+  name   = "${local.common_name}-migration-read-database-secret"
+  role   = aws_iam_role.agent_migration_execution.id
+  policy = data.aws_iam_policy_document.agent_migration_read_database_secret.json
 }
 
 resource "aws_iam_role" "agentcore_dispatch_publisher_execution" {
@@ -98,7 +128,7 @@ resource "aws_iam_role" "chat_api_task" {
 data "aws_iam_policy_document" "chat_api_artifact_read" {
   statement {
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/objects/*"]
   }
 }
 
@@ -106,11 +136,6 @@ resource "aws_iam_role_policy" "chat_api_artifact_read" {
   name   = "${local.common_name}-artifact-read"
   role   = aws_iam_role.chat_api_task.id
   policy = data.aws_iam_policy_document.chat_api_artifact_read.json
-}
-
-resource "aws_iam_role" "agent_worker_task" {
-  name               = "${local.common_name}-worker-task"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }
 
 resource "aws_iam_role" "agent_maintenance_task" {
@@ -121,7 +146,7 @@ resource "aws_iam_role" "agent_maintenance_task" {
 data "aws_iam_policy_document" "agent_maintenance_artifact_delete" {
   statement {
     actions   = ["s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/objects/*"]
   }
 }
 
@@ -160,26 +185,4 @@ resource "aws_iam_role_policy" "agentcore_dispatch_publisher" {
   name   = "${local.common_name}-agentcore-dispatch-publisher"
   role   = aws_iam_role.agentcore_dispatch_publisher_task.id
   policy = data.aws_iam_policy_document.agentcore_dispatch_publisher.json
-}
-
-data "aws_iam_policy_document" "agent_worker_artifact_write" {
-  statement {
-    actions = [
-      "s3:AbortMultipartUpload",
-      "s3:DeleteObject",
-      "s3:PutObject",
-    ]
-    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
-  }
-}
-
-resource "aws_iam_role_policy" "agent_worker_artifact_write" {
-  name   = "${local.common_name}-artifact-write"
-  role   = aws_iam_role.agent_worker_task.id
-  policy = data.aws_iam_policy_document.agent_worker_artifact_write.json
-}
-
-resource "aws_iam_role" "agent_migration_task" {
-  name               = "${local.common_name}-migration-task"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }

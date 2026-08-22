@@ -13,7 +13,7 @@ mymemo_service_api_security_group_ids = ["sg-05d48e36ef8966c9e"]
 
 # Security group on the existing mymemo-service RDS instance (mymemo-staging-pg)
 # hosting the KB database. mymemo-agent attaches an ingress rule to it so
-# agent-worker can reach the KB over KB_DATABASE_URL.
+# AgentCore Runtime can reach the KB over KB_DATABASE_URL.
 kb_database_security_group_id = "sg-0c7084b87f3e109d7"
 
 # Existing mymemo-service ECS subnets are public/default subnets with no
@@ -24,20 +24,15 @@ assign_public_ip = true
 # fck-nat 1.4.0, published by AWS account 568608671756 for us-west-2 ARM64.
 fck_nat_ami_id = "ami-0d1db1251d2b64626"
 
-chat_api_desired_count     = 1
-agent_worker_desired_count = 1
-# Defined and deployable, but deliberately inactive until the runbook handoff
-# stops every old worker maintenance owner.
-agent_maintenance_desired_count = 0
+chat_api_desired_count          = 1
+agent_maintenance_desired_count = 1
 # The dedicated publisher remains a one-task service in steady state. Its
 # advisory lock, rather than task count, is the singleton authority.
 agentcore_dispatch_publisher_desired_count = 1
 
-e2b_template                        = "sandbox-template-prod"
-worker_e2b_template                 = "mymemo-agent-sandbox"
-openrouter_base_url                 = "https://openrouter.ai/api"
-openrouter_default_model            = "anthropic/claude-sonnet-4"
-worker_max_concurrent_conversations = 2
+worker_e2b_template      = "mymemo-agent-sandbox"
+openrouter_base_url      = "https://openrouter.ai/api"
+openrouter_default_model = "anthropic/claude-sonnet-4"
 
 # Temporary Live Streams only: one small node, with replication and backups
 # disabled in redis.tf.

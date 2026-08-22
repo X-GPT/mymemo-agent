@@ -19,7 +19,6 @@ Object.assign(Bun.env, {
 	AGENT_SMOKE_MEMBER_CODE: "demo-member",
 	AGENT_SMOKE_PARTNER_CODE: "local-development",
 	AGENT_SMOKE_EXPECT_GATE_CLOSED: "false",
-	AGENT_SMOKE_EXPECT_EXECUTION_RUNTIME: "agentcore",
 	AGENT_SMOKE_SUITE: "full",
 });
 

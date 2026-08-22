@@ -25,7 +25,7 @@ the direct remote-state output is absent and the fallback input is present.
 
 ## Agent-Owned Resources
 
-- ECR repositories for `mymemo-agent-chat-api`, `mymemo-agent-worker`,
+- ECR repositories for `mymemo-agent-chat-api`,
   `mymemo-agent-maintenance`, `mymemo-agentcore-dispatch-publisher`, and
   `mymemo/agentcore-runtime` in the
   separate `infra/ecr` Terraform root
@@ -35,8 +35,8 @@ the direct remote-state output is absent and the fallback input is present.
 - single-node ElastiCache Redis replication group for temporary per-Run Live
   Streams
 - private S3 bucket for durable Downloadable artifact objects
-- ECS Fargate task definitions and services for chat-api, agent-worker,
-  agent-maintenance, and the singleton AgentCore dispatch publisher
+- ECS Fargate task definitions and services for chat-api, agent-maintenance,
+  and the singleton AgentCore dispatch publisher
 - agent DB migration task definition
 - service security groups inside the shared VPC, including outbound-only
   publisher and maintenance groups that can reach the agent database but not
@@ -52,7 +52,7 @@ the direct remote-state output is absent and the fallback input is present.
 The AgentCore Runtime, consumer, and dedicated Dispatch publisher share this
 state because they ship on the same compatibility cycle as the ECS services and
 database schema. The publisher remains a separate process and IAM boundary; a
-shared Terraform state does not grant it agent-worker authority.
+shared Terraform state does not grant it Runtime authority.
 
 The SQS mapping stays enabled while the SSM value is an operator-owned,
 fail-closed control. Terraform creates the parameter with `disabled`, ignores
@@ -73,14 +73,14 @@ This Terraform root always creates a dedicated RDS Postgres instance for
 receives `AGENT_DATABASE_URL` without a password plus `DB_PASSWORD` from the
 RDS-managed secret. This is the writable agent state database for conversations,
 leases, run state, and migrations. It is separate from the read-only KB database
-URL used by `agent-worker`.
+URL used by the AgentCore Runtime.
 
 Terraform also generates the Live Stream cache authentication token and stores
 the complete `rediss://` connection URL in the Terraform-managed
 `<name_prefix>-<environment>-REDIS_URL` Secrets Manager secret. ECS injects that
-secret as `REDIS_URL` into `chat-api` and `agent-worker` only. It is not added to
-the migration task or any E2B sandbox configuration, and neither the credential
-nor the complete URL is exposed as a Terraform output.
+secret into `chat-api`; the AgentCore Runtime resolves it from Secrets Manager.
+It is not added to maintenance, the migration task, or any E2B sandbox, and
+neither the credential nor the complete URL is exposed as a Terraform output.
 
 Other secret values are not committed. Terraform resolves conventional Secrets
 Manager names to ARNs at plan/apply time, and ECS task definitions consume those
@@ -103,11 +103,6 @@ only the secret name. This is a temporary bootstrap shortcut: the secret uses
 the existing service DB role, so the database does not enforce read-only access.
 Replace it with a read-only KB role before broad exposure.
 
-`chat-api` currently receives `E2B_API_KEY` because its deployed code still
-validates that variable when `SANDBOX_PROVIDER=e2b`. The final split-runtime
-boundary should remove that from chat-api once sandbox creation moves fully to
-`agent-worker`.
-
 The AgentCore dispatch publisher receives only `AGENT_DATABASE_URL`, the RDS
 password secret, its SQS queue URL, and its fail-closed SSM gate name. Its task
 role can read that parameter and publish to the exact encrypted queue. Its
@@ -118,10 +113,10 @@ KB, OpenRouter, E2B, artifact, or Redis credentials.
 
 The Redis cache is an ephemeral pub/sub relay for AG-UI Live Streams, not a
 storage or permanent-history authority. Producers keep active-Run backlogs in
-worker memory; Redis holds no per-Run keys. It is a single small node with no
+Runtime memory; Redis holds no per-Run keys. It is a single small node with no
 replicas, Multi-AZ failover, automatic snapshots, final snapshot, or backup
 retention. The cache is reachable on its TLS port only from a dedicated client
-security group attached to the trusted `chat-api` and `agent-worker` services;
+security group attached to `chat-api` and the AgentCore Runtime;
 the migration task does not receive that group.
 ElastiCache does not receive a public address or a CIDR-based ingress rule.
 Authentication and in-transit encryption are mandatory.
@@ -130,14 +125,14 @@ Before the first cache plan in an existing environment, reapply
 `infra/bootstrap-iam` with the admin profile as shown below. That updates the
 GitHub Actions deploy role with the ElastiCache permissions used by this root.
 
-`REDIS_URL` is required at chat-api and agent-worker startup and must be an
+`REDIS_URL` is required at chat-api and AgentCore Runtime startup and must be an
 authenticated `rediss://` URL. Runtime Redis availability remains outside
 readiness: an outage degrades live delivery but does not make either service
 unhealthy, and permanent Conversation history and Outcomes remain in Postgres.
 
 Live Stream telemetry is converted into a CloudWatch namespace using bounded
 operation/result dimensions and reason classifications. The alarms identify
-agent-worker production failures, chat-api recovery responses, and capacity
+AgentCore Runtime production failures, chat-api recovery responses, and capacity
 exhaustion without feeding service health. Production must set
 `alarm_action_arns` to an SNS topic with a confirmed incident subscription. See
 [`docs/runbooks/live-stream.md`](../../docs/runbooks/live-stream.md) for Live
@@ -204,13 +199,13 @@ The first command must succeed and the guard must exit without printing an
 error.
 
 ECS service `task_definition` changes are intentionally ignored by Terraform.
-For an ordinary release, the workflow first applies a strictly classified,
-targeted plan containing only the new migration task definition. It runs that
-migration, then re-plans and applies the complete state so the consumer Lambda,
-AgentCore Runtime, publisher task definition, and other ECS task definitions all
-move together after the compatible schema exists. Finally it rolls the ECS
-services. The target is an ordering mechanism inside one release, not a second
-state or a manual pause.
+For an ordinary release, the workflow first applies a saved, targeted plan
+containing the migration task definition and its Terraform-declared IAM
+prerequisites. It runs that migration, then re-plans and applies the complete
+state so the consumer Lambda, AgentCore Runtime, publisher task definition, and
+other ECS task definitions all move together after the compatible schema
+exists. Finally it rolls the ECS services. The target is an ordering mechanism
+inside one release, not a second state or a manual pause.
 
 For the one-time empty ECS bootstrap, all service desired counts are
 forced to zero until the migration completes. Because that bootstrap may create
@@ -218,8 +213,8 @@ or update the consumer before the schema exists, it requires the SSM Dispatch
 control to be `disabled`. Routine releases accept and preserve either live
 value.
 
-`assign_public_ip=true` remains an inherited constraint for chat-api,
-agent-worker, and agent-maintenance in the shared public/default ECS subnets.
+`assign_public_ip=true` remains an inherited constraint for chat-api and
+agent-maintenance in the shared public/default ECS subnets.
 The Dispatch publisher
 runs without a public address in the AgentCore private subnets and shares their
 zonal fck-nat egress.

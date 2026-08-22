@@ -3,7 +3,7 @@ import { createLiveStreamTelemetry } from "./live-stream-telemetry";
 
 it("emits bounded payload-safe Live Stream operation metrics", () => {
 	const events: Record<string, unknown>[] = [];
-	const telemetry = createLiveStreamTelemetry("agent-worker", {
+	const telemetry = createLiveStreamTelemetry("agentcore-runtime", {
 		info: (event) => events.push(event),
 		warn: (event) => events.push(event),
 	});
@@ -18,7 +18,7 @@ it("emits bounded payload-safe Live Stream operation metrics", () => {
 	expect(events).toEqual([
 		{
 			message: "Live Stream metric",
-			service: "agent-worker",
+			service: "agentcore-runtime",
 			operation: "publish",
 			result: "success",
 			durationMs: 7,
@@ -26,7 +26,7 @@ it("emits bounded payload-safe Live Stream operation metrics", () => {
 		},
 		{
 			message: "Live Stream metric",
-			service: "agent-worker",
+			service: "agentcore-runtime",
 			operation: "publish",
 			result: "failure",
 			reason: "stream_bytes_exceeded",
@@ -35,7 +35,7 @@ it("emits bounded payload-safe Live Stream operation metrics", () => {
 		},
 		{
 			message: "Live Stream metric",
-			service: "agent-worker",
+			service: "agentcore-runtime",
 			operation: "degradation",
 			result: "ended",
 			durationMs: 1_250,

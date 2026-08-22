@@ -3,9 +3,13 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { and, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
+import {
+	acquireAgentCoreDispatchTx,
+	recordAgentCoreDispatchInTx,
+} from "./agentcore-dispatch";
 import type { Database } from "./client";
 import { MIGRATIONS_DIR } from "./migrations";
-import { type RunRecord, toRunRecord } from "./run-store";
+import { type RunRecord, type RunWriteOwner, toRunRecord } from "./run-store";
 import * as schema from "./schema";
 
 /**
@@ -15,7 +19,7 @@ import * as schema from "./schema";
  * database. Cast to {@link Database} because pglite and the node-postgres
  * production driver share the same query builder but differ in static type.
  *
- * Shared by chat-api and agent-worker tests: both replay this package's
+ * Shared by chat-api and trusted-runtime tests: both replay this package's
  * migrations, so the two apps exercise the identical writable-DB schema.
  *
  * Always `close()` the returned handle (e.g. in `afterAll`): an unclosed pglite
@@ -101,34 +105,16 @@ async function bootWithMigrations(createClient: () => PGlite): Promise<PGlite> {
 }
 
 export async function createTestDatabase(
-	// Seam for the harness's own tests; real callers take the default.
 	createClient: () => PGlite = () => new PGlite(),
-	options: { legacyFargate?: boolean } = {},
 ): Promise<TestDb> {
 	const client = await bootWithMigrations(createClient);
-	// ponytail: Release 1 retains dormant Fargate machinery until #527; delete
-	// this opt-out with those focused tests.
-	if (options.legacyFargate) {
-		await client.exec(
-			"alter table conversations drop constraint conversations_execution_runtime_check",
-		);
-	}
 	return {
 		db: drizzle(client, { schema }) as unknown as Database,
 		close: () => releaseClient(client),
 	};
 }
 
-/**
- * Seed one `queued` run for tests that need a claimable row rather than a
- * faithful admission. Production admission is `admitQueuedRunTx`, which also
- * writes the `run_started` event and normalized input; tests exercising claim,
- * heartbeat, terminal transitions, or runtime state care about none of that.
- * A raw insert here, so the admission path keeps exactly one implementation and
- * the Active Run bound — admission's, not the database's — stays out of the way
- * of seeding a Conversation several queued Runs. The conversation row must
- * already exist.
- */
+/** Seed a queued Run without exercising admission. */
 export async function seedQueuedRun(
 	db: Database,
 	input: { runId: string; userId: string; conversationId: string },
@@ -141,12 +127,60 @@ export async function seedQueuedRun(
 	return toRunRecord(row);
 }
 
-/**
- * Force a Conversation's Ownership lease to have lapsed, without waiting out its
- * real duration. Shared rather than per-file because every drain, fence, and
- * Reclamation suite across both packages needs the same lapse, and the ADR-0015
- * cutover moves the columns it writes.
- */
+export async function acquireQueuedRunForTest(
+	db: Database,
+	input: { workerId: string; runId?: string },
+): Promise<RunWriteOwner | null> {
+	const [queued] = await db
+		.select()
+		.from(schema.runs)
+		.where(
+			and(
+				eq(schema.runs.status, "queued"),
+				input.runId ? eq(schema.runs.runId, input.runId) : undefined,
+			),
+		)
+		.orderBy(schema.runs.createdAt, schema.runs.runId)
+		.limit(1);
+	if (!queued) return null;
+
+	// The production outbox is deliberately non-cascading audit history. Tests
+	// commonly reuse Run ids, so replace any prior fixture's dispatch identity.
+	await db
+		.delete(schema.agentCoreDispatchOutbox)
+		.where(eq(schema.agentCoreDispatchOutbox.runId, queued.runId));
+	await db.transaction(async (tx) => {
+		await recordAgentCoreDispatchInTx(tx, {
+			runId: queued.runId,
+			userId: queued.userId,
+			conversationId: queued.conversationId,
+			admittedAt: queued.createdAt,
+		});
+	});
+	const acquired = await acquireAgentCoreDispatchTx(db, {
+		workerId: input.workerId,
+		dispatch: {
+			schemaVersion: 2,
+			userId: queued.userId,
+			conversationId: queued.conversationId,
+			runId: queued.runId,
+			runtimeSessionId: queued.conversationId,
+			admittedAt: queued.createdAt,
+		},
+	});
+	if (acquired.disposition !== "acquired") {
+		throw new Error(
+			`test acquisition ${queued.runId} returned ${acquired.disposition}`,
+		);
+	}
+	return {
+		...acquired.owner,
+		runId: queued.runId,
+		workerId: input.workerId,
+	};
+}
+
+/** Expire Conversation Ownership immediately for tests. */
 export async function lapseConversationOwnership(
 	db: Database,
 	input: { userId: string; conversationId: string },
@@ -162,8 +196,6 @@ export async function lapseConversationOwnership(
 		);
 }
 
-/** Seed one live Conversation Claim for SessionStore fence tests. Callers choose
- * every identity explicitly and remain responsible for clearing their tables. */
 export async function seedAgentSessionFenceConversation(
 	db: Database,
 	input: {

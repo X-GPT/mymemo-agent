@@ -7,7 +7,7 @@ state="$(
   terraform -chdir=infra/terraform state list 2>/dev/null || true
 )"
 
-if [[ "$state" == *"aws_ecs_service.chat_api"* && "$state" == *"aws_ecs_service.agent_worker"* ]]; then
+if [[ "$state" == *"aws_ecs_service.chat_api"* && "$state" == *"aws_ecs_service.agent_maintenance"* ]]; then
   echo "false"
 else
   echo "true"

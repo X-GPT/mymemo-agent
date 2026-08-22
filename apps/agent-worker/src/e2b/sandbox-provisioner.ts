@@ -13,7 +13,7 @@ import { E2BFileClient, type FileSandbox } from "./file-client";
 
 /**
  * The sandbox workspace root every run's file and shell work resolves under:
- * the E2B user home. Distinct from the SDK query's Fargate-side working
+ * the E2B user home. Distinct from the SDK query's Runtime-side working
  * directory (a per-conversation session anchor) — never conflate the two
  * filesystems.
  */
@@ -146,14 +146,11 @@ function provisionedHandle(
 
 export interface E2bSandboxProvisionerConfig {
 	apiKey: string;
-	/** The pinned E2B template id fresh sandboxes are created from (Task 9.2). */
 	template: string;
 	sandboxIdleMs: number;
 	logger: WorkerLogger;
 }
 
-/** The exact trusted-worker calls made to the E2B SDK, injectable so boundary
- * tests can prove which options and metadata leave the worker process. */
 export interface E2bSandboxFactory {
 	connect(
 		sandboxId: string,

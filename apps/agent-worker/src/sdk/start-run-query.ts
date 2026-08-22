@@ -61,7 +61,7 @@ import {
 /**
  * The static MyMemo system prompt (ADR-0006): a plain string, no `claude_code`
  * preset — the preset describes native tools the query disables and
- * Fargate-side anchors that would mislead. Static by construction (no per-run
+ * Runtime-side anchors that would mislead. Static by construction (no per-run
  * interpolation) so it is cacheable across conversations.
  */
 export const MYMEMO_SYSTEM_PROMPT =
@@ -114,15 +114,13 @@ export interface StartRunQueryDeps {
 	janitor: SandboxJanitor;
 	documentClient: ScopedDocumentQueryClient;
 	modelClient: ModelClientConfig;
-	/** The boot-verified pinned glibc CLI binary (spike s3). */
 	pathToClaudeCodeExecutable: string;
 	/** Create one throwaway directory per query for the CLI's local transcript
 	 * copy; the Postgres session store is the durable mirror (ADR-0005). */
 	createClaudeConfigDir(): Promise<ClaudeConfigDirectory>;
-	/** The worker process env the model-client vars are spread over — the SDK
-	 * query env REPLACES the subprocess env, so it must ride along (spike s2). */
+	/** The trusted Runtime process env that model-client vars are spread over. The
+	 * SDK query env REPLACES the subprocess env, so it must ride along (spike s2). */
 	processEnv: Record<string, string | undefined>;
-	/** The sandbox idle window; renewal runs at half this cadence. */
 	sandboxIdleMs: number;
 	fileLimits: FileToolLimits;
 	bashLimits: BashToolLimits;
@@ -134,7 +132,7 @@ export interface StartRunQueryDeps {
 		perCallMaxBytes: number;
 	};
 	artifactPublisher: ArtifactPublisher;
-	/** Prepare the Fargate-side cwd that anchors the SDK session project key. */
+	/** Prepare the Runtime-side cwd that anchors the SDK session project key. */
 	ensureWorkingDirectory(path: string): Promise<void>;
 	query: RunQueryFn;
 	logger: WorkerLogger;
@@ -318,7 +316,7 @@ async function killOrRecordOrphan(
 
 /**
  * Ledger the sandbox a successful repoint just replaced. Best-effort like the
- * run loop's pointer advance: the new pointer is already durable, so a failed
+ * serving path's pointer advance: the new pointer is already durable, so a failed
  * ledger write only risks leaking the old sandbox — never the turn.
  */
 async function recordReplacedSandbox(
@@ -412,14 +410,14 @@ function buildQueryOptions(
 		includePartialMessages: true,
 		// Two independent guards (ADR-0006): every built-in tool is disabled, and
 		// even a tool that reappeared is denied — never prompted, never executed
-		// on the worker host.
+		// on the AgentCore Runtime host.
 		tools: [],
 		settingSources: [],
 		permissionMode: "dontAsk",
 		allowedTools: [...EXECUTOR_ALLOWED_TOOLS],
 		systemPrompt: MYMEMO_SYSTEM_PROMPT,
 		model: deps.modelClient.model,
-		// Options.env REPLACES the subprocess env (spike s2): worker env under
+		// Options.env REPLACES the subprocess env (spike s2): Runtime env under
 		// the model-client vars, with the ephemeral config dir winning over any
 		// ambient CLAUDE_CONFIG_DIR.
 		env: {

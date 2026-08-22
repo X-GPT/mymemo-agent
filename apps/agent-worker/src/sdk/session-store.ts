@@ -1,6 +1,6 @@
 /**
  * Conversation continuity for the split runtime (ADR-0005, Task 7.3): the Claude
- * Agent SDK runs in stateless Fargate workers, so its worker-local transcript
+ * Agent SDK runs in stateless AgentCore Runtime sessions, so its local transcript
  * files cannot carry a conversation's model-side memory across turns. This
  * module restores continuity by mirroring transcripts to the writable agent
  * Postgres through the SDK's `SessionStore` seam, and pointing each turn's query
@@ -37,10 +37,10 @@ export interface ConversationSessionStore
 		SessionMirrorEvidence {}
 
 /**
- * The deterministic, conversation-stable working directory the worker runs every
+ * The deterministic, conversation-stable working directory the Runtime uses for every
  * query in. The SDK derives a session's `projectKey` from the sanitized cwd, and
- * the store must see the SAME projectKey for a conversation on every worker and
- * turn or a later turn cannot find the earlier transcript. A path derived purely
+ * the store must see the SAME projectKey for a Conversation on every Runtime
+ * invocation or a later turn cannot find the earlier transcript. A path derived purely
  * from the (path-safe, server-generated) conversation id guarantees that.
  */
 export function conversationWorkingDirectory(conversationId: string): string {
@@ -48,11 +48,11 @@ export function conversationWorkingDirectory(conversationId: string): string {
 }
 
 /**
- * A Postgres-backed {@link ConversationSessionStore} bound to one claimed Run.
+ * A Postgres-backed {@link ConversationSessionStore} bound to one started Run.
  * It stamps every mirrored entry with the Run's conversation id and fences SDK
  * append/delete mutations with the Conversation's live Ownership fence. A
- * later turn on any worker can therefore read the same transcript, while stale
- * Claims cannot mutate it. The adapter also records this Run's latest
+ * later turn in any Runtime invocation can therefore read the same transcript,
+ * while superseded acquisitions cannot mutate it. The adapter records this Run's latest
  * successful non-empty main-session mirror as continuity evidence.
  *
  * `projectKey` from the SDK key is retained for fidelity but is not a lookup

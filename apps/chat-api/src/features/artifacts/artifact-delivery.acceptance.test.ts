@@ -21,11 +21,10 @@ import {
 } from "../../../../agent-worker/src/artifacts/artifact-publication";
 import { runCleanupPass } from "../../../../agent-worker/src/cleanup/cleanup";
 import type { WorkerLogger } from "../../../../agent-worker/src/logger";
-import { RunLoop } from "../../../../agent-worker/src/run-loop";
 import type { SupervisedQuery } from "../../../../agent-worker/src/sdk/agent-stream";
 import { createSdkRunProcessor } from "../../../../agent-worker/src/sdk/run-processor";
 import { withNoSessionMirrorEvidence } from "../../../../agent-worker/src/sdk/testing/session-mirror-fixtures";
-import { Worker } from "../../../../agent-worker/src/worker";
+import { createAgentCoreRunHarness } from "../../../../agent-worker/src/testing/agentcore-run-harness";
 import type {
 	ArtifactDownloadSigner,
 	ArtifactDownloadSignInput,
@@ -124,15 +123,8 @@ function createDeliveryHarness(
 		createObjectKey: () => `objects/acceptance-${nextObject++}`,
 		createArtifactId: () => `artifact-${nextArtifact++}`,
 	});
-	const worker = new Worker({
-		workerId: "acceptance-worker",
-		maxConcurrentConversations: 1,
-		shutdownTimeoutMs: 1_000,
-		logger,
-	});
-	const loop = new RunLoop({
+	const harness = createAgentCoreRunHarness({
 		db: tdb.db,
-		worker,
 		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
 			logger,
@@ -145,14 +137,12 @@ function createDeliveryHarness(
 				);
 			},
 		}),
-		heartbeatIntervalMs: 15_000,
 		logger,
 	});
 	const queries = new Map<string, SupervisedQuery>();
 
 	return {
-		loop,
-		worker,
+		harness,
 		storedObjects,
 		setUploadOverride(override?: ArtifactObjectStore["upload"]) {
 			uploadOverride = override;
@@ -170,8 +160,8 @@ function createDeliveryHarness(
 		},
 		async run(runId: string, query: SupervisedQuery) {
 			await this.queue(runId, query);
-			await loop.tick();
-			await worker.drain();
+			await harness.tick();
+			await harness.drain();
 		},
 		async cleanup(now: Date) {
 			return await runCleanupPass({
@@ -234,7 +224,7 @@ async function artifactList(app: ReturnType<typeof createApp>) {
 
 describe("Downloadable artifact delivery acceptance", () => {
 	it("publishes a queued Run through Postgres, HTTP download, overwrite, cleanup, and deletion", async () => {
-		const tdb = await createTestDatabase(undefined, { legacyFargate: true });
+		const tdb = await createTestDatabase();
 		try {
 			const workspace = new AcceptanceWorkspace();
 			const delivery = createDeliveryHarness(tdb, workspace);
@@ -242,7 +232,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 			await http.conversationStore.create({
 				userId: "member-1",
 				conversationId: "conversation-1",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -385,7 +375,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 	});
 
 	it("keeps the prior current Downloadable artifact set intact across validation, quota, upload, interruption, and cleanup failures", async () => {
-		const tdb = await createTestDatabase(undefined, { legacyFargate: true });
+		const tdb = await createTestDatabase();
 		try {
 			const logEvents: Record<string, unknown>[] = [];
 			const logger: WorkerLogger = {
@@ -403,7 +393,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 			await http.conversationStore.create({
 				userId: "member-1",
 				conversationId: "conversation-1",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -473,14 +463,14 @@ describe("Downloadable artifact delivery acceptance", () => {
 					workspace.write("interrupt.txt", encoder.encode("partial"), "5");
 				}),
 			);
-			await delivery.loop.tick();
+			await delivery.harness.tick();
 			await started;
 			await tdb.db
 				.update(runs)
 				.set({ status: "interrupt_requested" })
 				.where(eq(runs.runId, "run-interrupt"));
-			await delivery.loop.tick();
-			await delivery.worker.drain();
+			await delivery.harness.tick();
+			await delivery.harness.drain();
 			delivery.setUploadOverride();
 			workspace.delete("interrupt.txt");
 

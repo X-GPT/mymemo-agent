@@ -2,6 +2,11 @@
 
 Status: accepted
 
+Amended by [ADR-0031](0031-make-agentcore-the-sole-execution-runtime.md):
+Fargate Run serving is retired. AgentCore Runtime now hosts the trusted SDK
+subprocess and preserves the fail-closed E2B tool boundary decided here.
+References below to the Fargate worker and worker image are historical.
+
 Milestone 7 built the SDK run loop behind the `RunProcessor` seam
 (`agent-stream.ts`, `run-tools.ts`, `session-store.ts`) but left `index.ts`
 wiring the synthetic processor and `startRunQuery` unimplemented. This decision

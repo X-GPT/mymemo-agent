@@ -93,13 +93,15 @@ describe.skipIf(!RUN)(
 			const exact = input("a");
 			await seedDispatch(exact);
 			const now = new Date();
-			const claims = await Promise.all([
+			const acquisitions = await Promise.all([
 				claimAgentCoreDispatchesTx(db, { publisherId: "publisher-a", now }),
 				claimAgentCoreDispatchesTx(db, { publisherId: "publisher-b", now }),
 			]);
 
-			expect(claims.map((claim) => claim.length).sort()).toEqual([0, 1]);
-			expect(claims.flat()[0]?.runId).toBe(exact.runId);
+			expect(
+				acquisitions.map((acquisition) => acquisition.length).sort(),
+			).toEqual([0, 1]);
+			expect(acquisitions.flat()[0]?.runId).toBe(exact.runId);
 		});
 
 		it("prechecks a terminal Run admitted with PostgreSQL's default timestamp", async () => {
@@ -126,7 +128,7 @@ describe.skipIf(!RUN)(
 			const [dispatch] = await claimAgentCoreDispatchesTx(db, {
 				publisherId: "publisher-default-timestamp",
 			});
-			if (!dispatch) throw new Error("test dispatch was not claimed");
+			if (!dispatch) throw new Error("test dispatch was not acquired");
 			await db
 				.update(runs)
 				.set({ status: "done" })

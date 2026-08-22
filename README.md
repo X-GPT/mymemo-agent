@@ -10,8 +10,8 @@ architecture and trust boundaries.
 | App | Location | Role |
 |-----|----------|------|
 | **chat-api** | `apps/chat-api/` | AI chat service; owns Conversation resources, strict Run admission, producer-buffered Live Stream attachment, history, and artifact delivery |
-| **agent-worker** | `apps/agent-worker/` | Split-runtime Fargate worker; claims Runs, holds worker-only credentials, executes Claude Agent SDK turns, and publishes standard AG-UI events including validated display-only UI payloads |
-| **agentcore-runtime** | `apps/agentcore-runtime/` | Request-oriented AgentCore Runtime using shared Run-serving behavior |
+| **agentcore-runtime** | `apps/agentcore-runtime/` | Sole production execution runtime; exactly acquires dispatched Runs and composes the shared SDK, E2B, Live Stream, and artifact behavior in `apps/agent-worker/` |
+| **agent-maintenance** | `apps/agent-maintenance/` | Sole production owner of queued-Run expiration, Reclamation, and asynchronous resource cleanup |
 | **agentcore-local-dispatch-bridge** | `apps/agentcore-local-dispatch-bridge/` | Development-only durable-outbox bridge to the local Runtime |
 
 Shared libraries live under `packages/` (e.g. `@mymemo/agent-db`).
@@ -31,7 +31,9 @@ See [the chat API guide](./docs/agents/chat-api.md) for chat-api documentation.
 .
 ├── apps/                   # Deployable applications
 │   ├── chat-api/           # AI chat service (admits Runs, attaches SSE)
-│   └── agent-worker/       # Split-runtime worker (claims + runs turns)
+│   ├── agentcore-runtime/  # Sole trusted execution runtime
+│   ├── agent-maintenance/  # Global liveness and cleanup service
+│   └── agent-worker/       # Shared Run-serving implementation (not deployed)
 ├── packages/               # Shared libraries (e.g. @mymemo/agent-db)
 ├── AGENTS.md               # Architecture & agent guidance
 ├── compose.yaml            # Local AgentCore Runtime stack
@@ -61,7 +63,7 @@ AGENT_DATABASE_URL=postgres://… DB_SSL=disable bun test e2e/integration.test.t
 
 ### Live runtime smoke
 
-The credentialed smoke's `core` suite drives the real worker across three Runs
+The credentialed smoke's `core` suite drives the real AgentCore Runtime across three Runs
 of one Conversation. The first two prove Agent-session resume, Workspace
 persistence, exact Assistant commits, and byte-exact durable replay. The third
 writes a unique Downloadable artifact, lists it after `RUN_FINISHED`, obtains a fresh
@@ -76,7 +78,7 @@ For production, run `scripts/deploy/prod_smoke.sh` from inside the VPC with
 `AGENT_SMOKE_BASE_URL` configured and the checked-in `codex-smoke` identity
 targeted in the exposure Statsig gate. The wrapper
 requires the public creation response to report `agentcore` before admitting a
-Run. OpenRouter and E2B credentials stay in the deployed worker; the smoke caller
+Run. OpenRouter and E2B credentials stay in the Runtime; the smoke caller
 receives none of them. To check only the default-closed gate, set
 `AGENT_SMOKE_EXPECT_GATE_CLOSED=true`.
 
@@ -84,21 +86,8 @@ receives none of them. To check only the default-closed gate, set
 [the two-target smoke verification guide](./docs/verification/e2e-smoke.md)
 for suite contents, target selection, and deterministic harness tests.
 
-### Worker image check
+### Runtime and maintenance image checks
 
-A PR that touches the worker image's inputs — the Dockerfile and the trees it
-COPYs, any workspace manifest, the lockfile, `.dockerignore`, or the check
-script — builds the final production-pruned image and runs this same
-credential-free gate (`.github/workflows/worker-image.yml`, path-filtered so
-unrelated PRs skip it). Release deployment runs it unconditionally, after
-build and before push:
-
-```sh
-docker build --platform linux/amd64 \
-  -f apps/agent-worker/Dockerfile \
-  -t mymemo-agent-worker:image-check .
-scripts/smoke/agent-worker-image-check.sh mymemo-agent-worker:image-check
-```
-
-The container check resolves the SDK-owned glibc Claude CLI and executes its
-`--version` command with no network or runtime credentials.
+Path-filtered PR workflows build the ARM64 AgentCore Runtime and the
+least-privilege maintenance image, then verify each image boundary offline.
+Release deployment repeats both checks before pushing the images.

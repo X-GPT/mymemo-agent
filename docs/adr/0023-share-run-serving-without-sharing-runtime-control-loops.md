@@ -2,28 +2,39 @@
 
 Status: accepted
 
-Amended (2026-08-16) by
+Amended (2026-08-22) by
+[ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md) and the Fargate
+retirement: the coexistence-specific control-loop decision below is superseded.
+AgentCore Durable acquisition now owns one exact dispatched Run, and the
+always-on `agent-maintenance` service solely owns expiration, Reclamation, and
+cleanup. Fargate Claims, doorbells, snapshot draining, and Run serving no
+longer exist.
+
+Historical amendment (2026-08-16) by
 [ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md):
 the execution lane becomes the execution runtime and the canary qualifiers
 drop — the one-execution-per-process registry is the production AgentCore
 posture, because one session process serves one Conversation, and the
-ten-minute queued backstop is the `agentcore` timeout. During coexistence
-Fargate remains the single global Reclamation runner; re-homing it is out of
-scope until Fargate retirement is decided.
+ten-minute queued backstop is the `agentcore` timeout. During coexistence,
+Fargate remained the single global Reclamation runner; re-homing it was out of
+scope until Fargate retirement was decided.
 
-Fargate and AgentCore will share one `serveStartedRun` behavior for lease
+## Original coexistence decision
+
+Fargate and AgentCore shared one `serveStartedRun` behavior for lease
 renewal, interruption observation, Live Stream production, SDK and Tool work,
-terminalization, and abort reconciliation. Fargate keeps its global queue
+terminalization, and abort reconciliation. Fargate kept its global queue
 control loop, snapshot drain, lane-filtered Claim, and release; an AgentCore
 invocation atomically acquires one exact Run, serves it once, and releases. This
-keeps Run semantics identical without starting a global claimant or sweeper per
+kept Run semantics identical without starting a global claimant or sweeper per
 HTTP invocation.
 
-The always-on Fargate loop remains the single global Reclamation runner and may
-reclaim expired Ownership from either execution lane. Fargate claimable counts,
-doorbells, and Claims filter to Fargate, while the shared queued backstop uses a
-60-second Fargate timeout and a ten-minute AgentCore-canary timeout. AgentCore
-request handlers never run global expiration or Reclamation.
+The always-on Fargate loop remained the single global Reclamation runner and
+could reclaim expired Ownership from either execution lane. Fargate claimable
+counts, doorbells, and Claims filtered to Fargate, while the shared queued
+backstop used a 60-second Fargate timeout and a ten-minute AgentCore-canary
+timeout. AgentCore request handlers did not run global expiration or
+Reclamation.
 
 An AgentCore handler emits its Acquisition receipt after commit but remains
 alive until shared Run serving ends. Response-stream cancellation does not abort

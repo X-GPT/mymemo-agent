@@ -1,8 +1,6 @@
-name: Worker image
+name: Maintenance image
 
-# Build the final production-pruned image and exercise the SDK's native CLI
-# inside it. This needs no runtime credentials and catches both optional-dep
-# pruning and the Debian/glibc vs musl platform-binary trap.
+# Build the least-privilege maintenance image and verify its dependency boundary.
 #
 # Split out of ci.yml purely so it can be path-filtered — `paths` is a
 # workflow-level trigger, not a job-level one, and a gate job would bill its
@@ -35,29 +33,21 @@ on:
       - package.json
       - bun.lock
       - .dockerignore
-      - scripts/smoke/agent-worker-image-check.sh
       - scripts/smoke/agent-maintenance-image-check.sh
-      - .github/workflows/worker-image.yml
+      - .github/workflows/maintenance-image.yml
 
 # Plain ref keying is enough here — every run is a pull_request run, so the ref
 # is already per-PR. ci.yml needs its more careful keying only because it also
 # runs on main, where release-deploy.yml's per-commit gate must not lose a run.
 concurrency:
-  group: worker-image-${{ github.ref }}
+  group: maintenance-image-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  worker-image:
+  maintenance-image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Build agent-worker image
-        run: >-
-          docker build --platform linux/amd64
-          -f apps/agent-worker/Dockerfile
-          -t mymemo-agent-worker:image-check .
-      - name: Exec-verify pinned Claude CLI
-        run: scripts/smoke/agent-worker-image-check.sh mymemo-agent-worker:image-check
       - name: Build agent-maintenance image
         run: >-
           docker build --platform linux/amd64

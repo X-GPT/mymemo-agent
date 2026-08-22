@@ -40,48 +40,6 @@ resource "aws_ecs_task_definition" "chat_api" {
   ])
 }
 
-resource "aws_ecs_task_definition" "agent_worker" {
-  family                   = local.agent_worker_name
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = var.agent_worker_cpu
-  memory                   = var.agent_worker_memory
-  execution_role_arn       = aws_iam_role.task_execution.arn
-  task_role_arn            = aws_iam_role.agent_worker_task.arn
-
-  container_definitions = jsonencode([
-    {
-      name      = "agent-worker"
-      image     = var.agent_worker_image
-      essential = true
-      portMappings = [
-        {
-          containerPort = var.agent_worker_port
-          hostPort      = var.agent_worker_port
-          protocol      = "tcp"
-        }
-      ]
-      environment = local.agent_worker_environment
-      secrets     = local.agent_worker_secrets
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.agent_worker.name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "agent-worker"
-        }
-      }
-      healthCheck = {
-        command     = ["CMD-SHELL", "bun -e \"const r=await fetch('http://127.0.0.1:${var.agent_worker_port}/health'); if(!r.ok) process.exit(1)\""]
-        interval    = 30
-        timeout     = 5
-        retries     = 3
-        startPeriod = 30
-      }
-    }
-  ])
-}
-
 resource "aws_ecs_task_definition" "agent_maintenance" {
   family                   = local.agent_maintenance_name
   requires_compatibilities = ["FARGATE"]
@@ -155,13 +113,17 @@ resource "aws_ecs_task_definition" "agentcore_dispatch_publisher" {
 }
 
 resource "aws_ecs_task_definition" "agent_migration" {
+  depends_on = [
+    aws_iam_role_policy_attachment.agent_migration_execution,
+    aws_iam_role_policy.agent_migration_read_database_secret,
+  ]
+
   family                   = "${local.common_name}-migration"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = 512
   memory                   = 1024
-  execution_role_arn       = aws_iam_role.task_execution.arn
-  task_role_arn            = aws_iam_role.agent_migration_task.arn
+  execution_role_arn       = aws_iam_role.agent_migration_execution.arn
 
   container_definitions = jsonencode([
     {
@@ -210,24 +172,6 @@ resource "aws_ecs_service" "chat_api" {
   }
 }
 
-resource "aws_ecs_service" "agent_worker" {
-  name            = local.agent_worker_name
-  cluster         = local.shared_ecs_cluster_arn
-  task_definition = aws_ecs_task_definition.agent_worker.arn
-  desired_count   = var.agent_worker_desired_count
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    subnets          = local.shared_ecs_subnet_ids
-    security_groups  = [aws_security_group.services.id, aws_security_group.live_redis_clients.id]
-    assign_public_ip = var.assign_public_ip
-  }
-
-  lifecycle {
-    ignore_changes = [task_definition]
-  }
-}
-
 resource "aws_ecs_service" "agent_maintenance" {
   name            = local.agent_maintenance_name
   cluster         = local.shared_ecs_cluster_arn
@@ -243,11 +187,6 @@ resource "aws_ecs_service" "agent_maintenance" {
 
   lifecycle {
     ignore_changes = [task_definition]
-
-    precondition {
-      condition     = var.agent_maintenance_desired_count == 0 || var.agent_worker_desired_count == 0
-      error_message = "agent-maintenance and agent-worker cannot both have a nonzero desired count; follow the controlled handoff runbook."
-    }
   }
 }
 

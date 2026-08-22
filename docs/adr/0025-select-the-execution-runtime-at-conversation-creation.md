@@ -10,6 +10,12 @@ as defense in depth.
 Runtime-selection, Fargate-fallback, and reassignment decisions are superseded
 by [ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md).
 
+Amended (2026-08-22) by the Fargate-retirement release implementing ADR-0031:
+AgentCore is the sole execution runtime, `agent-maintenance` owns global
+expiration, Reclamation, and cleanup, and the runtime gate, reassignment path,
+deployment-readiness fence, and deployed Fargate worker are removed. The
+coexistence design below is historical.
+
 Every Conversation carries an immutable execution runtime — `fargate` or
 `agentcore` — selected exactly once at creation by a server-side Statsig gate
 evaluated on the trusted identity after the existing exposure gate allows the

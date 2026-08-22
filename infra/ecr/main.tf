@@ -7,15 +7,6 @@ resource "aws_ecr_repository" "chat_api" {
   }
 }
 
-resource "aws_ecr_repository" "agent_worker" {
-  name                 = "mymemo-agent-worker"
-  image_tag_mutability = "IMMUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
 resource "aws_ecr_repository" "agent_maintenance" {
   name                 = "mymemo-agent-maintenance"
   image_tag_mutability = "IMMUTABLE"

@@ -74,35 +74,20 @@ describe("loadWorkerConfigFromEnv — required settings", () => {
 	});
 });
 
-describe("loadWorkerConfigFromEnv — concurrency and intervals", () => {
-	it("defaults to conservative concurrency", () => {
-		const config = loadWorkerConfigFromEnv(baseEnv());
-		expect(config.maxConcurrentConversations).toBe(2);
-	});
-
+describe("loadWorkerConfigFromEnv — serving intervals", () => {
 	it("defaults heartbeat to 15s and a bounded shutdown grace", () => {
 		const config = loadWorkerConfigFromEnv(baseEnv());
 		expect(config.heartbeatIntervalMs).toBe(15_000);
 		expect(config.shutdownTimeoutMs).toBeGreaterThan(0);
 	});
 
-	it("honors overrides for concurrency and intervals", () => {
+	it("honors heartbeat and shutdown overrides", () => {
 		const env = baseEnv();
-		env.WORKER_MAX_CONCURRENT_CONVERSATIONS = "4";
 		env.WORKER_HEARTBEAT_INTERVAL_MS = "10000";
 		env.WORKER_SHUTDOWN_TIMEOUT_MS = "5000";
 		const config = loadWorkerConfigFromEnv(env);
-		expect(config.maxConcurrentConversations).toBe(4);
 		expect(config.heartbeatIntervalMs).toBe(10_000);
 		expect(config.shutdownTimeoutMs).toBe(5_000);
-	});
-
-	it("rejects a non-positive concurrency override", () => {
-		const env = baseEnv();
-		env.WORKER_MAX_CONCURRENT_CONVERSATIONS = "0";
-		expect(() => loadWorkerConfigFromEnv(env)).toThrow(
-			/WORKER_MAX_CONCURRENT_CONVERSATIONS/,
-		);
 	});
 });
 
@@ -123,13 +108,6 @@ describe("loadWorkerConfigFromEnv — SDK execution limits", () => {
 			maxStdoutBytes: 65_536,
 			maxStderrBytes: 65_536,
 		});
-	});
-});
-
-describe("loadWorkerConfigFromEnv — cleanup loop", () => {
-	it("defaults the cleanup interval", () => {
-		const config = loadWorkerConfigFromEnv(baseEnv());
-		expect(config.cleanup.intervalMs).toBe(300_000);
 	});
 });
 

@@ -29,7 +29,7 @@ import {
  * Narrow transaction helpers over `runs`/`run_events` — the only write path for
  * Run state — plus Agent-session pointer publication composed into terminal Run
  * transactions (design doc "State Ownership"). Shared by chat-api (run
- * creation and interruption requests) and agent-worker (start, append, and
+ * creation and interruption requests) and AgentCore (start, append, and
  * terminalize). Each helper owns one transaction: sequence
  * allocation is database-owned (`runs.next_event_seq`, never app-side
  * `max(seq) + 1`), and every status change or append carries its fence either
@@ -39,9 +39,8 @@ import {
  *
  * Run-state writes — start, event append, terminal transition, and the active
  * Live Stream failure marker — fence on the Conversation Ownership epoch
- * (ADR-0015). The epoch is necessary because a Conversation is Claimed many
- * times by different workers; worker identity alone cannot distinguish a stale
- * holder from a later Claim by the same process.
+ * (ADR-0015). The epoch distinguishes a stale holder from a later exact
+ * acquisition, including one made by the same process.
  */
 
 /** All legal `runs.status` values. Derived from the same tuple `runs_status_check`
@@ -102,10 +101,8 @@ export class ActiveRunConflictError extends Error {
 
 /**
  * How many Active Runs one Conversation may hold. Raising it is a product
- * decision, not a tuning knob: the Claim's candidate scan walks `runs` in
- * global submission order and probes `conversations` per row, so every queued
- * Run on an already-owned Conversation is a row every idle worker walks past on
- * every tick. This bound therefore bounds claim cost as much as drain length.
+ * decision, not a tuning knob. It is also the serialized admission bound that
+ * keeps one Conversation from accumulating competing active work.
  */
 const ACTIVE_RUN_DEPTH_BOUND = 1;
 
@@ -125,16 +122,16 @@ export type RunEventPayload = Record<string, unknown>;
 /**
  * The two owned append classes (design doc "State Ownership"): `model` is
  * normal SDK content — assistant text, tool results — and is only legal while
- * the run is `running`; `cancellation` is the bounded command/process-kill
- * cleanup and audit trail the owning worker may still write after
- * `interrupt_requested` (the class keeps its internal process-cancellation
- * name per ADR-0013 — user-facing Run control is "interruption"). Terminal
+ * the Run is `running`; `cancellation` is the internal append-class name for
+ * bounded command/process-stop cleanup and audit that the owning Runtime may
+ * still write after `interrupt_requested`. It does not change the public Run
+ * interruption vocabulary. Terminal
  * events are deliberately not an append class here — they only exist through
  * the terminal transition helpers.
  */
 export type RunEventAppendClass = "model" | "cancellation";
 
-/** One Run addressed through the Claim that owns its Conversation. The epoch
+/** One Run addressed through the acquisition that owns its Conversation. The epoch
  * is the write authority. `workerId` is provenance for orphan-sandbox records,
  * never fence authority. */
 export interface RunWriteOwner extends ConversationOwner {
@@ -147,7 +144,7 @@ const APPEND_CLASS_STATUSES: Record<RunEventAppendClass, RunStatus[]> = {
 	cancellation: ["running", "interrupt_requested"],
 };
 
-/** The three terminal statuses a worker can transition an owned run into. */
+/** The three terminal statuses a Runtime can transition an owned Run into. */
 export type TerminalRunStatus = (typeof TERMINAL_RUN_STATUSES)[number];
 
 export function isTerminalRunStatus(
@@ -352,7 +349,7 @@ function normalizedInputsEqual(
  * What a run's `run_started` event recorded about the turn: the user message
  * (the query prompt) and the conversation's frozen scope columns, exactly as
  * chat-api's admission transaction wrote them. The scope stays in row form
- * here — the worker parses it into its typed scope (fail-closed) at the edge
+ * here — the Runtime parses it into its typed scope (fail-closed) at the edge
  * where document access is built.
  */
 export interface RunStartedEvent {
@@ -364,7 +361,7 @@ export interface RunStartedEvent {
 
 /**
  * Load the run's `run_started` event — the durable record of what the user
- * asked for (design: the worker reads the turn from the log, never from a
+ * asked for (design: the Runtime reads the turn from the log, never from a
  * request body). Throws when the event is missing or its payload carries no
  * string message/scope: a run that cannot say what was asked must fail, not
  * run an empty prompt.
@@ -422,57 +419,11 @@ export type FenceRejection =
 	| { rejected: "status"; current: RunStatus }
 	| { rejected: "gone" };
 
-/** Shared rejected arm returned by every fenced Run-state write. */
 export type RunWriteRejected = { outcome: "rejected" } & FenceRejection;
 
-export type StartClaimedRunResult =
-	| { outcome: "started"; run: RunRecord }
-	| RunWriteRejected;
-
 /**
- * Serve one Run of a Claimed Conversation: `queued` → `running` under the
- * Ownership epoch fence, recording which worker executes it. This is the drain's
- * per-Run entry point — the Conversation, not the Run, is what was claimed, so
- * the authority here is the Claim's epoch and a live Ownership deadline.
- *
- * A refusal is a classified {@link FenceRejection} rather than an exception,
- * because the drain answers the three cases differently: `lease` — a successor
- * owns the Conversation, so halt and abandon without releasing; `status` — this
- * Run reached its Outcome underneath us (a queued Run interrupted between the
- * snapshot and here), so skip it and serve the next one; `gone` — the
- * Conversation was deleted and took its Runs with it, so stop.
- */
-export async function startClaimedRunTx(
-	db: Database,
-	input: { owner: ConversationOwner; runId: string; workerId: string },
-): Promise<StartClaimedRunResult> {
-	return await db.transaction(async (tx) => {
-		const [row] = await tx
-			.update(runs)
-			.set({
-				status: "running",
-				executedByWorkerId: input.workerId,
-				updatedAt: sql`now()`,
-			})
-			.where(
-				and(
-					claimedRunConditions(input.owner, input.runId),
-					eq(runs.status, "queued"),
-					liveConversationOwnershipExists(input.owner),
-				),
-			)
-			.returning();
-		if (row) return { outcome: "started", run: toRunRecord(row) };
-		return {
-			outcome: "rejected",
-			...(await classifyStartRejectionInTx(tx, input.owner, input.runId)),
-		};
-	});
-}
-
-/**
- * Read the status of the Run currently served by a Conversation drain. This is
- * interruption observation only, not authority: every mutation still carries
+ * Read the status of the Run currently served by an active Runtime invocation.
+ * This is interruption observation only, not authority: every mutation carries
  * the Conversation Ownership epoch fence. A missing row means the Run reached
  * an Outcome or its Conversation was deleted while the processor was active.
  */
@@ -495,10 +446,9 @@ export async function loadExecutingRunTx(
 	return row ? toRunRecord(row) : null;
 }
 
-/** The Run as a Claim addresses it: this Run, of this Claimed Conversation. The
- * Conversation scoping is what keeps one Claim's authority from reaching a Run
- * it never snapshotted. */
-function claimedRunConditions(owner: ConversationOwner, runId: string) {
+/** The Run addressed through live Conversation Ownership. Conversation scoping
+ * keeps one acquisition's authority from reaching another Conversation's Run. */
+function ownedRunConditions(owner: ConversationOwner, runId: string) {
 	return and(
 		eq(runs.runId, runId),
 		eq(runs.userId, owner.userId),
@@ -507,31 +457,9 @@ function claimedRunConditions(owner: ConversationOwner, runId: string) {
 }
 
 /**
- * Name why {@link startClaimedRunTx} found no row. The lookup carries the
- * write's Conversation scoping, so a Run outside the Claim is reported as `gone`
- * rather than distinguished. That is deliberate: only a Run of the Claim's own
- * snapshot can legitimately be asked about, and both readings tell the drain the
- * same thing — stop, there is nothing here to serve. Dropping the scoping to
- * tell them apart would be worse, because the epoch fence is on `conversations`
- * and would then hold for a foreign Run, reporting it as a skippable `status`
- * refusal.
- */
-function classifyStartRejectionInTx(
-	tx: DbTx,
-	owner: ConversationOwner,
-	runId: string,
-): Promise<FenceRejection> {
-	return classifyFenceRejectionInTx(
-		tx,
-		claimedRunConditions(owner, runId),
-		liveConversationOwnershipExists(owner),
-	);
-}
-
-/**
  * Append one owned run event, allocating `seq` from `runs.next_event_seq` and
  * inserting the event row in the same transaction — the counter update carries
- * the append status and Ownership epoch fence, so a superseded Claim cannot
+ * the append status and Ownership epoch fence, so a superseded acquisition cannot
  * allocate a sequence number at all. A refusal is classified through the same
  * {@link FenceRejection} vocabulary as every other fenced Run write.
  */
@@ -589,7 +517,7 @@ export async function appendRunEventsTx(
 			})
 			.where(
 				and(
-					claimedRunConditions(input.owner, input.owner.runId),
+					ownedRunConditions(input.owner, input.owner.runId),
 					inArray(runs.status, APPEND_CLASS_STATUSES[input.appendClass]),
 					liveConversationOwnershipExists(input.owner),
 				),
@@ -600,7 +528,7 @@ export async function appendRunEventsTx(
 				outcome: "rejected",
 				...(await classifyFenceRejectionInTx(
 					tx,
-					claimedRunConditions(input.owner, input.owner.runId),
+					ownedRunConditions(input.owner, input.owner.runId),
 					liveConversationOwnershipExists(input.owner),
 				)),
 			};
@@ -669,7 +597,7 @@ export async function appendRunEventsTx(
  * `terminal_at`, sequence allocation, and event insert are one transaction.
  * The fence makes double-terminalization impossible (the second caller finds
  * the Run already terminal and is rejected), which is what makes "exactly one
- * terminal event per run" hold. Only the live Claim's epoch may terminalize it.
+ * terminal event per run" hold. Only the live Ownership epoch may terminalize it.
  *
  * A refused fence is a {@link TerminalTransitionResult}, not an exception:
  * losing to a durable interruption is an ordinary outcome the caller resolves,
@@ -728,7 +656,7 @@ export async function lockRunForTerminalInTx(
 		.from(runs)
 		.where(
 			and(
-				claimedRunConditions(owner, owner.runId),
+				ownedRunConditions(owner, owner.runId),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[status]),
 				liveConversationOwnershipExists(owner),
 			),
@@ -770,7 +698,7 @@ async function classifyFenceRejectionInTx(
 /**
  * Re-evaluate exactly the epoch fence the refused Run write evaluated. Keeping
  * the classifier on that authority is what distinguishes a live-epoch status
- * refusal from a lost Claim.
+ * refusal from lost Ownership.
  */
 function classifyRunWriteRejectionInTx(
 	tx: DbTx,
@@ -778,7 +706,7 @@ function classifyRunWriteRejectionInTx(
 ): Promise<FenceRejection> {
 	return classifyFenceRejectionInTx(
 		tx,
-		claimedRunConditions(owner, owner.runId),
+		ownedRunConditions(owner, owner.runId),
 		liveConversationOwnershipExists(owner),
 	);
 }
@@ -857,7 +785,7 @@ export async function commitLockedRunTerminalInTx(
 		})
 		.where(
 			and(
-				claimedRunConditions(input.owner, input.owner.runId),
+				ownedRunConditions(input.owner, input.owner.runId),
 				inArray(runs.status, TERMINAL_FROM_STATUSES[input.status]),
 				liveConversationOwnershipExists(input.owner),
 			),
@@ -921,7 +849,7 @@ async function insertTerminalEvent(
  * queued run directly, or the interruption already won and this is a safe
  * retry (ADR-0013 keeps both at `202 { status: "interrupted" }`, distinct
  * from a `done`/`error` terminal). `interrupt_requested`: the run is
- * executing; the owning worker keeps ownership and terminalizes after
+ * executing; the owning Runtime keeps Ownership and terminalizes after
  * stopping (repeat requests are idempotent no-ops). `already_terminal`: the
  * run already committed `done` or `error`, so interruption conflicts — `run`
  * carries the status the caller should report.
@@ -959,9 +887,9 @@ export async function requestRunInterruptionTx(
 		if (!run) return { outcome: "not_found" };
 
 		if (run.status === "queued") {
-			// Never claimed, so there is no owner to hand the interruption to:
+			// Never started through Durable acquisition, so no Runtime owns it:
 			// terminalize directly, with the same counter-allocated terminal event
-			// a worker transition would produce.
+			// an owned Runtime transition would produce.
 			const [row] = await tx
 				.update(runs)
 				.set({
@@ -1026,7 +954,7 @@ export async function markLiveStreamFailedTx(
 		const [before] = await tx
 			.select()
 			.from(runs)
-			.where(claimedRunConditions(input.owner, input.owner.runId))
+			.where(ownedRunConditions(input.owner, input.owner.runId))
 			.for("update");
 		if (!before) return { outcome: "rejected", rejected: "gone" };
 
@@ -1042,10 +970,7 @@ export async function markLiveStreamFailedTx(
 				.select()
 				.from(runs)
 				.where(
-					and(
-						claimedRunConditions(input.owner, input.owner.runId),
-						writeAllowed,
-					),
+					and(ownedRunConditions(input.owner, input.owner.runId), writeAllowed),
 				)
 				.limit(1);
 			if (authorized) {
@@ -1065,7 +990,7 @@ export async function markLiveStreamFailedTx(
 			})
 			.where(
 				and(
-					claimedRunConditions(input.owner, input.owner.runId),
+					ownedRunConditions(input.owner, input.owner.runId),
 					isNull(runs.liveStreamFailedAt),
 					writeAllowed,
 				),
@@ -1086,13 +1011,13 @@ export async function markLiveStreamFailedTx(
 
 /**
  * Reclaim one Conversation whose Ownership lease lapsed without release. The
- * Conversation row is taken `FOR UPDATE SKIP LOCKED`, exactly as a Claim takes
- * it, so Claim, admission, and Reclamation cannot interleave on one
+ * Conversation row is taken `FOR UPDATE SKIP LOCKED`, so exact acquisition,
+ * admission, and Reclamation cannot interleave on one
  * Conversation while concurrent reclaimers split work instead of blocking.
  *
  * One transaction terminalizes every started Active Run, taints the current
  * Workspace when command cleanup is unproven, and clears the Ownership columns.
- * Never-started queued Runs remain for the next Claim. An accepted interruption
+ * Never-started queued Runs remain for a later Dispatch attempt. An accepted interruption
  * remains `interrupted`; every running Run becomes `error`. The durable terminal
  * reason and Live Stream failure-marker behavior are unchanged.
  */
@@ -1149,8 +1074,8 @@ export async function reclaimConversationTx(
 			await taintRuntimeSandboxForReclamationInTx(tx, candidate);
 		}
 		// Preserve queued Runs without letting the unowned queue-age backstop race
-		// the next Claim after Ownership is cleared. `created_at` remains the stable
-		// submission/Claim order; `updated_at` starts a fresh timeout window because
+		// the next Dispatch attempt after Ownership is cleared. `created_at` remains
+		// the stable submission order; `updated_at` starts a fresh timeout window because
 		// these Runs were legitimately waiting behind the vanished owner's work.
 		await tx
 			.update(runs)
@@ -1184,9 +1109,9 @@ export async function reclaimConversationTx(
  * Expire old queued Runs only when their Conversation is unowned and their
  * queue-backstop timestamp has also stayed old for the whole timeout. The
  * second deadline gives Runs preserved by Reclamation a fresh window to be
- * Claimed without changing their `created_at` queue order. The Conversation row
+ * dispatched without changing their `created_at` queue order. The Conversation row
  * is locked with `FOR UPDATE SKIP LOCKED`, so this backstop cannot race
- * admission or Claim and never waits behind their lifecycle lock.
+ * admission or exact acquisition and never waits behind their lifecycle lock.
  */
 export async function expireUnownedQueuedRunsTx(
 	db: Database,

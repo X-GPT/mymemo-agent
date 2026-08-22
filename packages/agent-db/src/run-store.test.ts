@@ -8,10 +8,6 @@ import {
 } from "bun:test";
 import { eq, inArray, sql } from "drizzle-orm";
 import {
-	type ConversationOwner,
-	claimConversationTx,
-} from "./conversation-ownership";
-import {
 	InvalidRunEventError,
 	RunEventType,
 	validateDurableRunEventSequence,
@@ -30,12 +26,12 @@ import {
 	type RunWriteOwner,
 	reclaimConversationTx,
 	requestRunInterruptionTx,
-	startClaimedRunTx,
 	type TerminalTransitionResult,
 	transitionRunTerminalTx,
 } from "./run-store";
 import { conversationRuntime, conversations, runEvents, runs } from "./schema";
 import {
+	acquireQueuedRunForTest,
 	createTestDatabase,
 	lapseConversationOwnership,
 	seedQueuedRun,
@@ -58,7 +54,7 @@ function committed(result: TerminalTransitionResult): RunRecord {
 // multiplies WASM memory that is not reclaimed promptly and OOMs CI runners.
 // Tests are isolated by clearing the tables they touch instead.
 beforeAll(async () => {
-	tdb = await createTestDatabase(undefined, { legacyFargate: true });
+	tdb = await createTestDatabase();
 });
 
 afterAll(async () => {
@@ -74,13 +70,13 @@ beforeEach(async () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		},
 		{
 			userId: "user-1",
 			conversationId: "conv-2",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		},
 	]);
 });
@@ -302,7 +298,7 @@ async function queueRun(runId: string, conversationId: string) {
 			userId: "user-1",
 			conversationId,
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		})
 		.onConflictDoNothing();
 	return await seedQueuedRun(tdb.db, {
@@ -312,7 +308,7 @@ async function queueRun(runId: string, conversationId: string) {
 	});
 }
 
-/** Push a run's created_at into the past so claim-order tests are deterministic
+/** Push a run's created_at into the past so acquired-order tests are deterministic
  * (PGlite can give two inserts the same timestamp). */
 async function backdateRun(runId: string, msAgo: number) {
 	await tdb.db
@@ -343,142 +339,17 @@ function lapseOwnershipLease(conversationId: string) {
 	});
 }
 
-describe("startClaimedRunTx", () => {
-	/** Claim the Conversation the seeded Runs belong to. */
-	async function claimConv(workerId = "worker-1"): Promise<ConversationOwner> {
-		const claim = await claimConversationTx(tdb.db, { workerId });
-		if (!claim) throw new Error("test setup claimed no Conversation");
-		return claim;
-	}
-
-	it("starts a snapshot Run and records which worker executes it", async () => {
-		await queueRun("run-1", "conv-1");
-		const owner = await claimConv();
-
-		const started = await startClaimedRunTx(tdb.db, {
-			owner,
-			runId: "run-1",
-			workerId: "worker-1",
-		});
-
-		expect(started).toMatchObject({
-			outcome: "started",
-			run: {
-				runId: "run-1",
-				status: "running",
-				executedByWorkerId: "worker-1",
-			},
-		});
-	});
-
-	it("refuses a superseded Claim from starting the successor's queued Run", async () => {
-		await queueRun("run-1", "conv-1");
-		const superseded = await claimConv("worker-1");
-		await lapseOwnershipLease("conv-1");
-		await reclaimConversationTx(tdb.db);
-		await queueRun("run-2", "conv-1");
-		await claimConv("worker-2");
-
-		const started = await startClaimedRunTx(tdb.db, {
-			owner: superseded,
-			runId: "run-2",
-			workerId: "worker-1",
-		});
-
-		expect(started).toEqual({ outcome: "rejected", rejected: "lease" });
-		expect((await readRun("run-2"))?.status).toBe("queued");
-	});
-
-	it("refuses a lease that merely lapsed, with no successor", async () => {
-		await queueRun("run-1", "conv-1");
-		const owner = await claimConv();
-		await lapseOwnershipLease("conv-1");
-
-		expect(
-			await startClaimedRunTx(tdb.db, {
-				owner,
-				runId: "run-1",
-				workerId: "worker-1",
-			}),
-		).toEqual({ outcome: "rejected", rejected: "lease" });
-	});
-
-	it("names the current status when the Run reached its Outcome first", async () => {
-		await queueRun("run-1", "conv-1");
-		const owner = await claimConv();
-		await requestRunInterruptionTx(tdb.db, {
-			runId: "run-1",
-			userId: "user-1",
-			conversationId: "conv-1",
-		});
-
-		expect(
-			await startClaimedRunTx(tdb.db, {
-				owner,
-				runId: "run-1",
-				workerId: "worker-1",
-			}),
-		).toEqual({
-			outcome: "rejected",
-			rejected: "status",
-			current: "interrupted",
-		});
-	});
-
-	it("reports a Run its deleted Conversation took with it as gone", async () => {
-		await queueRun("run-1", "conv-1");
-		const owner = await claimConv();
-		await tdb.db
-			.delete(conversations)
-			.where(eq(conversations.conversationId, "conv-1"));
-
-		expect(
-			await startClaimedRunTx(tdb.db, {
-				owner,
-				runId: "run-1",
-				workerId: "worker-1",
-			}),
-		).toEqual({ outcome: "rejected", rejected: "gone" });
-	});
-
-	it("serves only the Claimed Conversation's own Runs", async () => {
-		await queueRun("run-1", "conv-1");
-		await queueRun("run-other", "conv-2");
-		const owner = await claimConv();
-
-		const started = await startClaimedRunTx(tdb.db, {
-			owner,
-			runId: "run-other",
-			workerId: "worker-1",
-		});
-
-		// A Run outside the Claim is refused with a class that stops the drain,
-		// never one that skips and continues — which is the property that matters;
-		// it reports as `gone` because the scoped lookup cannot see it at all.
-		expect(started).toEqual({ outcome: "rejected", rejected: "gone" });
-		expect((await readRun("run-other"))?.status).toBe("queued");
-	});
-});
-
-/** Queue and claim one run so append/terminal tests start from a live claim. */
-async function claimRun(
+/** Queue and acquire one run so append/terminal tests start from live Ownership. */
+async function acquireRun(
 	runId: string,
 	conversationId: string,
 	workerId: string,
 ): Promise<RunWriteOwner> {
 	await queueRun(runId, conversationId);
 	await backdateRun(runId, 5_000);
-	const claim = await claimConversationTx(tdb.db, { workerId });
-	if (!claim) throw new Error("test setup claimed no Conversation");
-	const started = await startClaimedRunTx(tdb.db, {
-		owner: claim,
-		runId,
-		workerId,
-	});
-	if (started.outcome !== "started") {
-		throw new Error(`test setup could not start ${runId}`);
-	}
-	return { ...claim, runId, workerId };
+	const acquired = await acquireQueuedRunForTest(tdb.db, { runId, workerId });
+	if (!acquired) throw new Error("test setup acquired no Conversation");
+	return acquired;
 }
 
 function owner(overrides: Partial<RunWriteOwner> = {}): RunWriteOwner {
@@ -503,23 +374,19 @@ async function readEvents(runId: string) {
 describe("appendRunEventTx", () => {
 	it("rejects a lapsed Ownership epoch without allocating a sequence number", async () => {
 		await queueRun("run-1", "conv-1");
-		const claim = await claimConversationTx(tdb.db, {
-			workerId: "worker-1",
-		});
-		if (!claim) throw new Error("test setup claimed no Conversation");
-		await startClaimedRunTx(tdb.db, {
-			owner: claim,
+		const acquired = await acquireQueuedRunForTest(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
 		});
+		if (!acquired) throw new Error("test setup acquired no Conversation");
 		await lapseOwnershipLease("conv-1");
 
 		expect(
 			await appendRunEventTx(tdb.db, {
 				owner: {
-					userId: claim.userId,
-					conversationId: claim.conversationId,
-					epoch: claim.epoch,
+					userId: acquired.userId,
+					conversationId: acquired.conversationId,
+					epoch: acquired.epoch,
 					runId: "run-1",
 					workerId: "worker-1",
 				},
@@ -533,7 +400,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("allocates monotonic database-owned sequence numbers", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		const first = await appendRunEventTx(tdb.db, {
 			owner: owner(),
@@ -562,7 +429,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("rejects malformed known events without consuming a sequence number", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		await expect(
 			appendRunEventTx(tdb.db, {
@@ -582,7 +449,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("rejects terminal events outside the terminal status transition", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		await expect(
 			appendRunEventTx(tdb.db, {
@@ -596,7 +463,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("reserves run_started for atomic admission", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		await expect(
 			appendRunEventTx(tdb.db, {
@@ -618,7 +485,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("persists stable Assistant and correlated Tool identities in order", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		const events = [
 			{
 				type: RunEventType.ToolCallStarted,
@@ -679,19 +546,12 @@ describe("appendRunEventTx", () => {
 			collectionId: null,
 			summaryId: null,
 		});
-		const claim = await claimConversationTx(tdb.db, {
-			workerId: "worker-1",
-		});
-		if (!claim) throw new Error("test setup claimed no Conversation");
-		const started = await startClaimedRunTx(tdb.db, {
-			owner: claim,
+		const acquired = await acquireQueuedRunForTest(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
 		});
-		if (started.outcome !== "started") {
-			throw new Error("test setup could not start run-1");
-		}
-		const runOwner = { ...claim, runId: "run-1", workerId: "worker-1" };
+		if (!acquired) throw new Error("test setup acquired no Conversation");
+		const runOwner = acquired;
 		const appendUiPayload = (messageId: string) =>
 			appendRunEventTx(tdb.db, {
 				owner: runOwner,
@@ -758,7 +618,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("fences UI payload appends by Ownership epoch and running status", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		const input = {
 			type: RunEventType.UiPayload,
 			payload: {
@@ -789,7 +649,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("rejects a UI payload through the cancellation append class", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
@@ -820,7 +680,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("atomically appends one complete Tool invocation lifecycle", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		const events = [
 			{
 				type: RunEventType.ToolCallStarted,
@@ -860,7 +720,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("rejects orphaned, duplicate, and out-of-order Tool lifecycle events", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		const append = (type: string, payload: Record<string, unknown>) =>
 			appendRunEventTx(tdb.db, {
 				owner: owner(),
@@ -927,25 +787,8 @@ describe("appendRunEventTx", () => {
 		).rejects.toBeInstanceOf(InvalidRunEventError);
 	});
 
-	it("classifies a model append on a queued Run as a status rejection", async () => {
-		await queueRun("run-1", "conv-1");
-		const claim = await claimConversationTx(tdb.db, {
-			workerId: "worker-1",
-		});
-		if (!claim) throw new Error("test setup claimed no Conversation");
-
-		expect(
-			await appendRunEventTx(tdb.db, {
-				owner: owner(),
-				type: RunEventType.AssistantMessageCompleted,
-				payload: {},
-				appendClass: "model",
-			}),
-		).toEqual({ outcome: "rejected", rejected: "status", current: "queued" });
-	});
-
 	it("does not treat worker provenance as append authority", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		expect(
 			await appendRunEventTx(tdb.db, {
@@ -958,7 +801,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("rejects model appends after interruption is requested", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
 			.set({ status: "interrupt_requested" })
@@ -968,7 +811,7 @@ describe("appendRunEventTx", () => {
 			await appendRunEventTx(tdb.db, {
 				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
-				payload: {},
+				payload: { messageId: "message-1", text: "too late" },
 				appendClass: "model",
 			}),
 		).toEqual({
@@ -979,7 +822,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("sequences canonical Tool lifecycle events with Assistant text", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		const toolStart = await appendRunEventTx(tdb.db, {
 			owner: owner(),
@@ -1040,7 +883,7 @@ describe("appendRunEventTx", () => {
 	// Tool events ride the same `model` append class as assistant text, so the
 	// same fence rejects them once the run leaves `running`…
 	it("rejects a tool-event model append after interruption is requested", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
 			.set({ status: "interrupt_requested" })
@@ -1066,7 +909,7 @@ describe("appendRunEventTx", () => {
 
 	// …or the worker no longer owns it.
 	it("rejects a tool-event append from a worker that lost ownership", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await lapseOwnershipLease("conv-1");
 
 		expect(
@@ -1085,7 +928,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("allows cancellation audit appends while running or interrupt_requested", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		const whileRunning = await appendRunEventTx(tdb.db, {
 			owner: owner(),
@@ -1109,7 +952,7 @@ describe("appendRunEventTx", () => {
 	});
 
 	it("fences cancellation audit appends by the Ownership deadline", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
 			.set({ status: "interrupt_requested" })
@@ -1132,7 +975,7 @@ describe("transitionRunTerminalTx", () => {
 		"done",
 		"interrupted",
 	] as const)("validates and retains UI payloads when a Run becomes %s", async (status) => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
@@ -1172,24 +1015,15 @@ describe("transitionRunTerminalTx", () => {
 
 	it("rejects a lapsed Ownership epoch without committing an Outcome", async () => {
 		await queueRun("run-1", "conv-1");
-		const claim = await claimConversationTx(tdb.db, {
+		const acquired = await acquireQueuedRunForTest(tdb.db, {
 			workerId: "worker-1",
 		});
-		if (!claim) throw new Error("test setup claimed no Conversation");
-		await startClaimedRunTx(tdb.db, {
-			owner: claim,
-			runId: "run-1",
-			workerId: "worker-1",
-		});
+		if (!acquired) throw new Error("test setup acquired no Conversation");
 		await lapseOwnershipLease("conv-1");
 
 		expect(
 			await transitionRunTerminalTx(tdb.db, {
-				owner: {
-					...claim,
-					runId: "run-1",
-					workerId: "worker-1",
-				},
+				owner: acquired,
 				status: "done",
 			}),
 		).toEqual({ outcome: "rejected", rejected: "lease" });
@@ -1201,7 +1035,7 @@ describe("transitionRunTerminalTx", () => {
 		"done",
 		"interrupted",
 	] as const)("publishes the first Agent-session pointer atomically with %s", async (status) => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1226,7 +1060,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("writes no pointer when the terminal Outcome loses a status race", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1255,7 +1089,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("terminalizes without a pointer when the optional runtime row is absent", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		const terminal = committed(
 			await transitionRunTerminalTx(tdb.db, {
@@ -1275,7 +1109,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("rejects terminalization with an incomplete Tool lifecycle", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
 			owner: owner(),
 			type: RunEventType.ToolCallStarted,
@@ -1305,7 +1139,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("allows an errored Run to retain a completed Tool without a result", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		for (const event of [
 			{
 				type: RunEventType.ToolCallStarted,
@@ -1343,7 +1177,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("completes a running run and appends exactly one run_done event", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
@@ -1373,7 +1207,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("rejects a second terminal transition for the same run", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
 			owner: owner(),
 			status: "done",
@@ -1392,7 +1226,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("refuses done once interruption was requested; interrupted wins", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
 			.set({ status: "interrupt_requested" })
@@ -1426,7 +1260,7 @@ describe("transitionRunTerminalTx", () => {
 		// "Do not overload `error` for user-directed interruption": after
 		// interrupt_requested the only legal terminal is interrupted, even when the
 		// SDK errors during the interrupt.
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
 			.set({ status: "interrupt_requested" })
@@ -1446,7 +1280,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("marks a running run as error with the error payload", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		const run = committed(
 			await transitionRunTerminalTx(tdb.db, {
@@ -1463,8 +1297,8 @@ describe("transitionRunTerminalTx", () => {
 		]);
 	});
 
-	it("rejects a terminal transition from a superseded or lapsed Claim", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+	it("rejects a terminal transition from a superseded or lapsed acquisition", async () => {
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1496,7 +1330,7 @@ describe("transitionRunTerminalTx", () => {
 	});
 
 	it("names a deleted Conversation as gone rather than a lost lease", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		// Permanent Conversation deletion; its Runs cascade with it. The worker
 		// has nothing left to terminalize and no successor to stand aside for,
 		// which is why this is not the `lease` rejection.
@@ -1537,7 +1371,7 @@ describe("requestRunInterruptionTx", () => {
 	});
 
 	it("moves a running run to interrupt_requested and leaves ownership intact", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		const result = await requestRunInterruptionTx(tdb.db, ref);
 
@@ -1553,7 +1387,7 @@ describe("requestRunInterruptionTx", () => {
 	});
 
 	it("is idempotent while interruption is already requested", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await requestRunInterruptionTx(tdb.db, ref);
 
 		const again = await requestRunInterruptionTx(tdb.db, ref);
@@ -1579,7 +1413,7 @@ describe("requestRunInterruptionTx", () => {
 	});
 
 	it("stays a success when retried after the owner terminalized interrupted", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await requestRunInterruptionTx(tdb.db, ref);
 		await transitionRunTerminalTx(tdb.db, {
 			owner: owner(),
@@ -1596,7 +1430,7 @@ describe("requestRunInterruptionTx", () => {
 	});
 
 	it("reports an already-terminal run without touching it", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
 			owner: owner(),
 			status: "done",
@@ -1638,31 +1472,23 @@ describe("requestRunInterruptionTx", () => {
 describe("markLiveStreamFailedTx", () => {
 	it("rejects an active marker after the Ownership lease lapses", async () => {
 		await queueRun("run-1", "conv-1");
-		const claim = await claimConversationTx(tdb.db, {
-			workerId: "worker-1",
-		});
-		if (!claim) throw new Error("test setup claimed no Conversation");
-		await startClaimedRunTx(tdb.db, {
-			owner: claim,
+		const acquired = await acquireQueuedRunForTest(tdb.db, {
 			runId: "run-1",
 			workerId: "worker-1",
 		});
+		if (!acquired) throw new Error("test setup acquired no Conversation");
 		await lapseOwnershipLease("conv-1");
 
 		expect(
 			await markLiveStreamFailedTx(tdb.db, {
-				owner: {
-					...claim,
-					runId: "run-1",
-					workerId: "worker-1",
-				},
+				owner: acquired,
 			}),
 		).toEqual({ outcome: "rejected", rejected: "lease" });
 		expect((await readRun("run-1"))?.liveStreamFailedAt).toBeNull();
 	});
 
 	it("marks an active Run only through its live Ownership fence", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 
 		expect(
 			await markLiveStreamFailedTx(tdb.db, {
@@ -1680,7 +1506,7 @@ describe("markLiveStreamFailedTx", () => {
 	});
 
 	it("is idempotent for the owning worker without moving the timestamp", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		const first = await markLiveStreamFailedTx(tdb.db, {
 			owner: owner(),
 		});
@@ -1696,7 +1522,7 @@ describe("markLiveStreamFailedTx", () => {
 	});
 
 	it("rejects expired ownership but permits the monotonic null-to-time write after terminalization", async () => {
-		await claimRun("run-expired", "conv-expired", "worker-1");
+		await acquireRun("run-expired", "conv-expired", "worker-1");
 		await lapseOwnershipLease("conv-expired");
 		expect(
 			await markLiveStreamFailedTx(tdb.db, {
@@ -1707,7 +1533,7 @@ describe("markLiveStreamFailedTx", () => {
 			}),
 		).toEqual({ outcome: "rejected", rejected: "lease" });
 
-		await claimRun("run-terminal", "conv-terminal", "worker-1");
+		await acquireRun("run-terminal", "conv-terminal", "worker-1");
 		await transitionRunTerminalTx(tdb.db, {
 			owner: owner({
 				runId: "run-terminal",
@@ -1797,7 +1623,7 @@ describe("Run liveness sweep transactions", () => {
 	});
 
 	it("Reclamation closes a Run after a crash left an incomplete Tool prefix", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await appendRunEventTx(tdb.db, {
 			owner: owner(),
 			type: RunEventType.ToolCallStarted,
@@ -1828,7 +1654,7 @@ describe("Run liveness sweep transactions", () => {
 	});
 
 	it("terminalizes a running Run after its Ownership lease lapses", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1863,8 +1689,8 @@ describe("Run liveness sweep transactions", () => {
 		expect(runtime?.agentSessionId).toBe("session-existing");
 	});
 
-	it("terminalizes started Runs and gives queued Runs a fresh timeout window for the next Claim", async () => {
-		await claimRun("run-running", "conv-1", "worker-1");
+	it("terminalizes started Runs and gives queued Runs a fresh timeout window for the next acquisition", async () => {
+		await acquireRun("run-running", "conv-1", "worker-1");
 		await queueRun("run-interrupted", "conv-1");
 		await queueRun("run-queued", "conv-1");
 		await tdb.db
@@ -1891,15 +1717,16 @@ describe("Run liveness sweep transactions", () => {
 		expect(await readEvents("run-queued")).toEqual([]);
 		expect(await expireUnownedQueuedRunsTx(tdb.db)).toBeNull();
 		expect(
-			await claimConversationTx(tdb.db, { workerId: "worker-2" }),
+			await acquireQueuedRunForTest(tdb.db, { workerId: "worker-2" }),
 		).toMatchObject({
+			userId: "user-1",
 			conversationId: "conv-1",
-			runIds: ["run-queued"],
 		});
+		expect((await readRun("run-queued"))?.status).toBe("running");
 	});
 
 	it("taints the conversation's sandbox so the next turn cannot reconnect to it", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1928,7 +1755,7 @@ describe("Run liveness sweep transactions", () => {
 	});
 
 	it("preserves the Workspace when the lapsed Conversation has no started Active Run", async () => {
-		await claimRun("run-done", "conv-1", "worker-1");
+		await acquireRun("run-done", "conv-1", "worker-1");
 		await tdb.db
 			.update(runs)
 			.set({ status: "done", terminalAt: sql`now()` })
@@ -1962,7 +1789,7 @@ describe("Run liveness sweep transactions", () => {
 	});
 
 	it("taints after an accepted interruption too — command cleanup is equally unproven", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -1984,7 +1811,7 @@ describe("Run liveness sweep transactions", () => {
 		expect(runtime?.sandboxTainted).toBe(true);
 	});
 
-	it("leaves the sandbox untainted when an unclaimed queued run ages out", async () => {
+	it("leaves the sandbox untainted when an unowned queued run ages out", async () => {
 		await queueRun("run-queued", "conv-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -2003,7 +1830,7 @@ describe("Run liveness sweep transactions", () => {
 	});
 
 	it("terminalizes interrupt_requested after its Ownership lease lapses", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
@@ -2020,9 +1847,9 @@ describe("Run liveness sweep transactions", () => {
 		expect(events.map((e) => e.type)).toEqual(["run_interrupted"]);
 	});
 
-	it("leaves queued runs and live claims alone", async () => {
+	it("leaves queued Runs and live Ownership alone", async () => {
 		await queueRun("run-queued", "conv-1");
-		await claimRun("run-live", "conv-2", "worker-1");
+		await acquireRun("run-live", "conv-2", "worker-1");
 
 		const reclamation = await reclaimConversationTx(tdb.db);
 
@@ -2040,7 +1867,7 @@ describe("Run liveness sweep transactions", () => {
 	});
 
 	it("does not age out a queued Run waiting behind work in a live Conversation", async () => {
-		await claimRun("run-running", "conv-1", "worker-1");
+		await acquireRun("run-running", "conv-1", "worker-1");
 		await queueRun("run-waiting", "conv-1");
 		await ageRunsPastQueueTimeout("run-waiting");
 
@@ -2049,7 +1876,7 @@ describe("Run liveness sweep transactions", () => {
 		expect((await readRun("run-waiting"))?.status).toBe("queued");
 	});
 
-	it("terminalizes old unclaimed queued runs as error", async () => {
+	it("terminalizes old unowned queued runs as error", async () => {
 		await queueRun("run-queued", "conv-1");
 		await ageRunsPastQueueTimeout("run-queued");
 
@@ -2063,7 +1890,7 @@ describe("Run liveness sweep transactions", () => {
 	});
 
 	it("never double-terminalizes: a second sweep finds nothing", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await lapseOwnershipLease("conv-1");
 		await reclaimConversationTx(tdb.db);
 
@@ -2075,7 +1902,7 @@ describe("Run liveness sweep transactions", () => {
 	});
 
 	it("rejects the former owner's appends once Reclamation has terminalized", async () => {
-		await claimRun("run-1", "conv-1", "worker-1");
+		await acquireRun("run-1", "conv-1", "worker-1");
 		await lapseOwnershipLease("conv-1");
 		await reclaimConversationTx(tdb.db);
 

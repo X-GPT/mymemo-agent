@@ -8,7 +8,7 @@ resource "aws_security_group" "live_redis" {
 
 resource "aws_security_group" "live_redis_clients" {
   name        = "${local.common_name}-live-redis-clients"
-  description = "chat-api and agent-worker clients of the Redis live preview lane"
+  description = "chat-api and AgentCore Runtime clients of the Redis Live Stream lane"
   vpc_id      = local.shared_vpc_id
 }
 

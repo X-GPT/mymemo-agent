@@ -16,7 +16,7 @@ export type RunQuery = ArtifactAwareQuery & {
 };
 
 /**
- * Start a Claude Agent SDK query for one claimed run. This is the seam between
+ * Start a Claude Agent SDK query for one acquired Run. This is the seam between
  * run supervision (plan Task 7.2, this module) and everything a query needs that
  * later milestones own: the provisioned E2B sandbox and its clients, the bound
  * executor tools ({@link buildRunTools}), the OpenRouter model client, the docs
@@ -40,7 +40,7 @@ export interface SdkRunProcessorDeps {
  * The Milestone 7 run processor: start the run's SDK query and consume its
  * stream under supervision, persisting complete Assistant messages as Run
  * events (plan Task 7.2). It slots into the same {@link RunProcessor} seam the
- * synthetic processor used, so the control loop's Claim/renew/terminalize
+ * synthetic processor used, so the Runtime's acquire/renew/terminalize
  * behavior — including mapping this processor's throw to `error` and a
  * supervisor-observed interruption to `interrupted` — is unchanged.
  *

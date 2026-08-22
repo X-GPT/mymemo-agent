@@ -23,9 +23,6 @@ import { resolveAndVerifyClaudeCodeExecutable } from "./sdk/claude-code-executab
 import { createSdkRunProcessor } from "./sdk/run-processor";
 import { createStartRunQuery } from "./sdk/start-run-query";
 
-/** Production resources shared by Fargate's global control loop and the
- * request-oriented AgentCore one-shot control plane. Neither runtime control
- * loop is constructed here. */
 export function createProductionRunResources(options: {
 	config: WorkerConfig;
 	logger: WorkerLogger;
@@ -36,7 +33,7 @@ export function createProductionRunResources(options: {
 }) {
 	const { config, logger } = options;
 	const liveStreamTelemetry = createLiveStreamTelemetry(
-		options.telemetryService ?? "agent-worker",
+		options.telemetryService ?? "agentcore-runtime",
 		logger,
 	);
 	const liveStreamRelay = createRedisLiveStreamRelay({

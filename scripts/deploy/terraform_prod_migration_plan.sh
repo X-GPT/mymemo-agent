@@ -13,4 +13,3 @@ terraform -chdir=infra/terraform plan \
   -var-file="${generated_tfvars_file_abs}" \
   -target=aws_ecs_task_definition.agent_migration \
   -out="${plan_file}"
-scripts/deploy/classify_migration_plan.sh "${plan_file}"

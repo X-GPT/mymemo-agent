@@ -9,20 +9,21 @@ integration contract.
 
 ## Trusted-runtime configuration
 
-Both `chat-api` and `agent-worker` require:
+The AgentCore Runtime, `chat-api`, and `agent-maintenance` require:
 
 - `ARTIFACT_BUCKET`: the private S3 bucket provisioned for the environment;
 - `AWS_REGION`: the region containing that bucket.
 
-The AWS SDK uses each ECS task role through its default credential provider
-chain. Do not configure long-lived AWS credentials. `agent-worker` may upload
-and delete objects, while `chat-api` may read the one current object selected by
-an ownership-checked Postgres record so it can sign a download. Neither role may
-list the bucket. The migration task receives neither artifact configuration nor
-artifact S3 permissions.
+The AWS SDK uses each service's deployed role through its default credential
+provider chain. Do not configure long-lived AWS credentials. The AgentCore
+Runtime may upload objects, `agent-maintenance` may delete retired objects, and
+`chat-api` may read the one current object selected by an ownership-checked
+Postgres record so it can sign a download. None of those roles may list the
+bucket. The migration task receives neither artifact configuration nor artifact
+S3 permissions.
 
 Artifact bucket configuration, AWS credentials, and presigned URLs stay inside
-the trusted Fargate runtimes. None are passed to E2B. The sandbox receives only
+trusted services. None are passed to E2B. The sandbox receives only
 the per-Run binding produced by `buildSandboxEnv`.
 
 Terraform owns the bucket and enforces Block Public Access,
@@ -33,7 +34,7 @@ artifacts.
 
 ## Publication and quotas
 
-The worker captures the reserved tree at Run start and publishes only files
+The AgentCore Runtime captures the reserved tree at Run start and publishes only files
 whose size or modification timestamp changed during a successful Run. Files
 outside `/home/user/artifacts/`, including scratch files and `.mymemo/docs/`,
 are not Downloadable artifacts.
@@ -49,7 +50,7 @@ The post-upsert current set is limited to:
 - 100 current artifact paths per conversation;
 - 1 GiB total current artifact bytes per conversation.
 
-Validation, quota, upload, ownership, cancellation, or persistence failure
+Validation, quota, upload, Ownership, interruption, or persistence failure
 leaves the prior current set unchanged. A Run with an `error` Outcome exposes
 only the generic `Run failed` message to the client. Internal structured
 diagnostics identify a bounded failure category or stage without object bodies,
@@ -95,28 +96,30 @@ deletion cannot be revoked and may remain usable until its five-minute expiry.
    GROUP BY status;
    ```
 
-2. Search worker logs for the bounded `artifactFailure` fields. `validation`
+2. Search Runtime logs for the bounded `artifactFailure` fields. `validation`
    indicates an unsafe path or tree entry; `quota` names the exceeded bound;
    `publication` names `manifest`, `ledger`, `read`, or `upload`.
-3. For upload failures, verify worker task-role access and bucket/region
+3. For upload failures, verify AgentCore Runtime role access and bucket/region
    injection. Do not copy credentials or a presigned URL into the sandbox for
    diagnosis.
-4. Confirm that an errored or canceled Run did not change the list endpoint.
+4. Confirm that an errored or interrupted Run did not change the list endpoint.
    Staged objects may remain in the ledger; that is expected until cleanup.
 
 ## Diagnose cleanup failures
 
-The worker runs one advisory-lock-protected cleanup pass every five minutes. It never lists S3 and
-never deletes an object still referenced by current metadata. Pending objects
-from active Runs are skipped. Failed deletion retains the ledger row and is
-retried on a later pass; one failed object does not stop other candidates.
+`agent-maintenance` runs one advisory-lock-protected cleanup pass every five
+minutes. It never lists S3 and never deletes an object still referenced by
+current metadata. Pending objects from active Runs are skipped. Failed deletion
+retains the ledger row and is retried on a later pass; one failed object does
+not stop other candidates.
 
 If pending or superseded counts keep growing:
 
-1. confirm at least one worker is healthy and cleanup passes continue;
+1. confirm exactly one `agent-maintenance` task is healthy and cleanup passes
+   continue;
 2. inspect the cleanup summary and bounded warning counts;
-3. verify the worker task role still has object-scoped `s3:DeleteObject` and no
-   bucket-list permission; and
+3. verify the `agent-maintenance` task role still has object-scoped
+   `s3:DeleteObject` and no bucket-list permission; and
 4. leave ledger rows intact so the next pass can retry safely.
 
 Do not add an S3 age-expiration rule as a cleanup shortcut. It could delete a
@@ -124,17 +127,18 @@ live conversation's current object behind Postgres.
 
 ## Deployment order
 
-Run the agent database migrations before rolling either ECS service. The
-release workflow registers infrastructure/task definitions, runs
-`scripts/deploy/run_agent_migration.sh`, then updates the services through
-`scripts/deploy/roll_ecs_services.sh`. This ordering is required because the
-worker publication and API retrieval paths depend on the artifact metadata and
-lifecycle tables.
+Run the agent database migrations before rolling the services. The release
+workflow registers infrastructure and task definitions, runs
+`scripts/deploy/run_agent_migration.sh`, then deploys the AgentCore Runtime and
+updates the ECS services. This ordering is required because AgentCore
+publication, API retrieval, and maintenance cleanup depend on the artifact
+metadata and lifecycle tables.
 
-After deployment, verify that both services boot with `ARTIFACT_BUCKET` and
-`AWS_REGION`, then exercise one Run that writes a small file and confirm `done`,
-list, and signed attachment URL behavior. Never follow or log the presigned URL
-as part of automated diagnostics.
+After deployment, verify that the AgentCore Runtime, `chat-api`, and
+`agent-maintenance` receive `ARTIFACT_BUCKET` and `AWS_REGION`, then exercise
+one Run that writes a small file and confirm `done`, list, and signed attachment
+URL behavior. Never follow or log the presigned URL as part of automated
+diagnostics.
 
 ## Downstream integration contract
 

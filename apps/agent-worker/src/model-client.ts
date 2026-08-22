@@ -1,15 +1,7 @@
 import type { WorkerConfig } from "./config/env";
 
-/**
- * Model client configuration for the Claude Agent SDK, built from the worker's
- * validated OpenRouter settings (ADR-0003: direct OpenRouter, Anthropic-
- * compatible). The SDK integration (Task 7.2) passes `env` to the spawned query
- * process and `model` as the query option — both stay inside the trusted
- * Fargate worker. Nothing here may ever flow into `buildSandboxEnv`: the
- * sandbox reaches the model only through tool results, never with a credential.
- */
+/** Provider credentials stay in AgentCore Runtime and never enter E2B. */
 export interface ModelClientConfig {
-	/** Env for the SDK's model process. Holds the provider credential. */
 	env: {
 		ANTHROPIC_BASE_URL: string;
 		ANTHROPIC_AUTH_TOKEN: string;
@@ -19,12 +11,7 @@ export interface ModelClientConfig {
 	model: string;
 }
 
-/**
- * Build the trusted-worker model client config. Pure. The same shape serves
- * the direct-Anthropic contingency (ADR-0003): flipping OPENROUTER_BASE_URL /
- * OPENROUTER_API_KEY to first-party values needs no code change, because
- * Anthropic also accepts Bearer auth via ANTHROPIC_AUTH_TOKEN.
- */
+/** Also supports direct Anthropic through configuration alone (ADR-0003). */
 export function buildModelClientConfig(
 	openrouter: WorkerConfig["openrouter"],
 ): ModelClientConfig {

@@ -12,13 +12,12 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
 	ConversationOwnershipFenceError,
-	claimConversationTx,
 	releaseConversationTx,
 } from "@mymemo/agent-db/conversation-ownership";
 import {
+	loadExecutingRunTx,
 	type RunRecord,
 	type RunWriteOwner,
-	startClaimedRunTx,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 import {
@@ -29,6 +28,7 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import {
+	acquireQueuedRunForTest,
 	createTestDatabase,
 	seedQueuedRun,
 	type TestDb,
@@ -67,7 +67,7 @@ const owners = new Map<string, RunWriteOwner>();
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from empty tables via delete, keeping isolation without the cost.
 beforeAll(async () => {
-	tdb = await createTestDatabase(undefined, { legacyFargate: true });
+	tdb = await createTestDatabase();
 });
 
 afterAll(async () => {
@@ -82,9 +82,8 @@ beforeEach(async () => {
 	await tdb.db.delete(conversations);
 });
 
-/** Queue a run with its run_started event (as chat-api admission writes it)
- * and claim it for WORKER_ID, so the orchestration acts under live ownership. */
-async function createClaimedRun(input: {
+/** Queue a Run with its run_started event and acquire it exactly for WORKER_ID. */
+async function createAcquiredRun(input: {
 	runId: string;
 	conversationId: string;
 	message?: string;
@@ -98,7 +97,7 @@ async function createClaimedRun(input: {
 			userId: USER_ID,
 			conversationId: input.conversationId,
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		})
 		.onConflictDoNothing();
 	await seedQueuedRun(tdb.db, {
@@ -125,22 +124,15 @@ async function createClaimedRun(input: {
 			summaryId: input.summaryId ?? null,
 		},
 	});
-	const claim = await claimConversationTx(tdb.db, { workerId: WORKER_ID });
-	if (!claim) throw new Error("test setup claimed no Conversation");
-	const started = await startClaimedRunTx(tdb.db, {
-		owner: claim,
-		runId: input.runId,
+	const acquired = await acquireQueuedRunForTest(tdb.db, {
 		workerId: WORKER_ID,
-	});
-	if (started.outcome !== "started") {
-		throw new Error(`test setup could not start ${input.runId}`);
-	}
-	owners.set(input.runId, {
-		...claim,
 		runId: input.runId,
-		workerId: WORKER_ID,
 	});
-	return started.run;
+	if (!acquired) throw new Error("test setup acquired no Run");
+	const started = await loadExecutingRunTx(tdb.db, acquired);
+	if (!started) throw new Error(`test setup could not start ${input.runId}`);
+	owners.set(input.runId, acquired);
+	return started;
 }
 
 async function insertRuntimeRow(input: {
@@ -386,7 +378,7 @@ function freshSignal(): AbortSignal {
 describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 	it("passes the run_started user message as a plain-string prompt", async () => {
 		const h = buildHarness();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 			message: "summarize my notes",
@@ -400,7 +392,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 
 	it("builds the fail-closed query options", async () => {
 		const h = buildHarness();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -445,7 +437,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 
 	it("spreads the model-client env over the process env plus the ephemeral config dir", async () => {
 		const h = buildHarness();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -467,13 +459,13 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 
 	it("uses and disposes a fresh Claude config directory for every query", async () => {
 		const h = buildHarness();
-		const firstRun = await createClaimedRun({
+		const firstRun = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
 		await consume(await h.startRunQuery(firstRun, freshSignal()));
 
-		const secondRun = await createClaimedRun({
+		const secondRun = await createAcquiredRun({
 			runId: "run-2",
 			conversationId: "conv-2",
 		});
@@ -488,7 +480,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 
 	it("exposes the run's executor tools as the in-process MCP server", async () => {
 		const h = buildHarness();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -501,7 +493,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 
 	it("wires the session store and conversation-stable cwd, with no resume on a first turn", async () => {
 		const h = buildHarness();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -527,7 +519,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 
 	it("creates the conversation working directory before starting the query", async () => {
 		const h = buildHarness();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -546,7 +538,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 
 	it("captures the artifact baseline before the query and publishes before settling", async () => {
 		const h = buildHarness();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -571,7 +563,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		const h = buildHarness({
 			provision: { sandboxId: "sb-old", isNew: false },
 		});
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -583,7 +575,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 
 	it("fails closed on an invalid frozen scope before any provisioning", async () => {
 		const h = buildHarness();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 			scope: "collection",
@@ -604,7 +596,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 		const h = buildHarness({
 			provision: { sandboxId: "sb-old", isNew: false },
 		});
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -625,7 +617,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 
 	it("creates the runtime row when absent and repoints to the new sandbox", async () => {
 		const h = buildHarness({ provision: { sandboxId: "sb-new", isNew: true } });
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -651,31 +643,31 @@ describe("createStartRunQuery — fenced provisioning", () => {
 		const first = buildHarness({
 			provision: { sandboxId: "sb-1", isNew: true },
 		});
-		const run1 = await createClaimedRun({
+		const run1 = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
 		await first.startRunQuery(run1, freshSignal());
-		await transitionRunTerminalTx(tdb.db, {
-			owner: {
-				runId: "run-1",
-				workerId: WORKER_ID,
-				userId: "user-1",
-				conversationId: "conv-1",
-				epoch: 1,
-			},
-			status: "done",
-		});
-		await releaseConversationTx(tdb.db, {
-			userId: "user-1",
-			conversationId: "conv-1",
-			epoch: 1,
-		});
+		const firstOwner = owners.get("run-1");
+		if (!firstOwner) throw new Error("test setup has no first Run owner");
+		expect(
+			await transitionRunTerminalTx(tdb.db, {
+				owner: firstOwner,
+				status: "done",
+			}),
+		).toMatchObject({ outcome: "committed" });
+		expect(await releaseConversationTx(tdb.db, firstOwner)).toBe(true);
+		expect(
+			(await tdb.db.select().from(runs)).map(({ runId, status }) => ({
+				runId,
+				status,
+			})),
+		).toEqual([{ runId: "run-1", status: "done" }]);
 
 		const second = buildHarness({
 			provision: { sandboxId: "sb-1", isNew: false },
 		});
-		const run2 = await createClaimedRun({
+		const run2 = await createAcquiredRun({
 			runId: "run-2",
 			conversationId: "conv-1",
 		});
@@ -692,7 +684,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 			sandboxTainted: true,
 		});
 		const h = buildHarness({ provision: { sandboxId: "sb-new", isNew: true } });
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -719,7 +711,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 		await insertRuntimeRow({ conversationId: "conv-1", sandboxId: "sb-old" });
 		// Untainted pointer, yet the provisioner created fresh: connect failed.
 		const h = buildHarness({ provision: { sandboxId: "sb-new", isNew: true } });
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -737,7 +729,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 			provision: {
 				sandboxId: "sb-new",
 				isNew: true,
-				// Supersede the Claim between the runtime-row ensure and the repoint.
+				// Supersede the acquisition between the runtime-row ensure and the repoint.
 				onProvision: async () => {
 					await tdb.db
 						.update(conversations)
@@ -746,7 +738,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 				},
 			},
 		});
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -778,7 +770,7 @@ describe("createStartRunQuery — fenced provisioning", () => {
 			},
 			killError: new Error("e2b unreachable"),
 		});
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -822,7 +814,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 				},
 			},
 		});
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -864,7 +856,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 				},
 			},
 		});
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -883,7 +875,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		});
 		const gated = gatedQuery();
 		h.setQuery(gated);
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -914,7 +906,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 				await new Promise<void>(() => {});
 			},
 		});
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -944,7 +936,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		});
 		const gated = gatedQuery();
 		h.setQuery(gated);
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});
@@ -976,7 +968,7 @@ describe("createStartRunQuery — renewal and abort linkage", () => {
 		const gated = gatedQuery();
 		h.setQuery(gated);
 		const controller = new AbortController();
-		const run = await createClaimedRun({
+		const run = await createAcquiredRun({
 			runId: "run-1",
 			conversationId: "conv-1",
 		});

@@ -1,6 +1,6 @@
 # Live Stream operations
 
-The Live Stream is buffered in the producing worker's memory and relayed over
+The Live Stream is buffered in the producing AgentCore Runtime's memory and relayed over
 Redis pub/sub. Redis stores no stream content. Postgres remains authoritative
 for Run execution, complete messages, Tool activity, and terminal Outcomes. A
 Live Stream alarm is a delivery incident: it must not fail service health,
@@ -24,7 +24,7 @@ The CloudWatch namespace `<name-prefix>-<environment>/LiveStream` contains:
 - `CapacityFailures`, dimensioned only by `Service`; and
 - `DegradedDurationMs`, dimensioned only by `Service`.
 
-`agent-worker` owns producer creation, event publication, backlog replies,
+`agentcore-runtime` owns producer creation, event publication, backlog replies,
 buffer-cap enforcement, and persistence of `live_stream_failed_at`. `chat-api`
 owns attach attempts, Postgres-governed retries, retryable `503` responses, and
 permanent-history recovery `410` responses.
@@ -36,7 +36,7 @@ Redis credentials, URLs, or full Redis keys. Failure logs may include the Run id
 needed for operational correlation, but use a bounded reason code instead of a
 thrown Redis error.
 
-Use this Logs Insights query across the chat-api and agent-worker log groups:
+Use this Logs Insights query across the chat-api and AgentCore Runtime log groups:
 
 ```text
 fields @timestamp, service, operation, result, reason, durationMs, count
@@ -58,7 +58,7 @@ duration pair when it creates the marker after an owner disappears.
 
 The per-service alarm identifies the owner:
 
-1. For `agent-worker`, inspect `publish`, `backlog_request`, and `degradation`
+1. For `agentcore-runtime`, inspect `publish`, `backlog_request`, and `degradation`
    failures and latency. Confirm Runs still terminalize and permanent history
    remains available.
 2. For `chat-api`, inspect `attach_attempt`, `reconnect_response`, and
@@ -73,14 +73,14 @@ The per-service alarm identifies the owner:
 
 `chat-api` owns this alarm. Inspect `history_410`, then compare it with
 `retryable_503` reconnect results in `Operations`. Check `DegradedDurationMs`
-and the worker's Redis failures. Confirm the target
+and the Runtime's Redis failures. Confirm the target
 Run eventually appears terminal in permanent Conversation history. A rise in
 `410` with healthy Postgres Outcomes indicates delivery degradation, not model
 failure.
 
 ### Capacity-bound failures
 
-`agent-worker` owns this alarm. Inspect the bounded reason in logs:
+The AgentCore Runtime owns these failures. Inspect the bounded reason in logs:
 `event_too_large`, `stream_bytes_exceeded`, or `stream_events_exceeded`. Confirm
 the Run continued through Postgres and that the client recovered from history.
 Do not raise limits before identifying whether an event projection or Run is

@@ -32,7 +32,7 @@ export function verifiedDatabaseUrl(value: string, name: string): string {
 }
 
 /**
- * Materialize the agent-worker's passwordless RDS URL with the current RDS
+ * Materialize the trusted runtime's passwordless RDS URL with the current RDS
  * master-secret password, then pin certificate verification for AgentCore.
  */
 export function resolveVerifiedAgentDatabaseUrl(

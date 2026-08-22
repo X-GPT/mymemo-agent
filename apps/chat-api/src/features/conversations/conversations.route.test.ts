@@ -1077,7 +1077,7 @@ describe("POST /v1/conversations/:id/runs", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
-		executionRuntime: "fargate",
+		executionRuntime: "agentcore",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
@@ -1458,7 +1458,7 @@ describe("POST /v1/conversations/:id/runs/:runId/interrupt", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
-		executionRuntime: "fargate",
+		executionRuntime: "agentcore",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,
@@ -1602,7 +1602,7 @@ describe("GET /v1/conversations/:id/runs/:runId/events", () => {
 	const existing: ConversationRecord = {
 		userId: "member-1",
 		conversationId: "conv-1",
-		executionRuntime: "fargate",
+		executionRuntime: "agentcore",
 		scope: "general",
 		collectionId: null,
 		summaryId: null,

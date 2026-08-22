@@ -8,6 +8,10 @@ This ADR is the implementation source of truth. Earlier
 cancellation-to-interruption planning notes are superseded wherever they differ
 from this accepted decision.
 
+Amended by [ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md):
+AgentCore Runtime replaces the Fargate Claim and doorbell mechanics below; it
+observes durable interruption during Ownership renewal.
+
 A user interruption ends only the targeted Run with the `interrupted` Outcome;
 it does not terminate the Conversation, Agent session, or Workspace. Postgres is
 the race's linearization point: if `interrupt_requested` or `interrupted` commits

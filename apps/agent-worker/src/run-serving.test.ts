@@ -1,9 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { recordArtifactObjectsTx } from "@mymemo/agent-db/artifact-store";
-import { claimConversationTx } from "@mymemo/agent-db/conversation-ownership";
 import {
+	loadExecutingRunTx,
 	requestRunInterruptionTx,
-	startClaimedRunTx,
 	transitionRunTerminalTx,
 } from "@mymemo/agent-db/run-store";
 import { createConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
@@ -14,6 +13,7 @@ import {
 	runs,
 } from "@mymemo/agent-db/schema";
 import {
+	acquireQueuedRunForTest,
 	createTestDatabase,
 	seedQueuedRun,
 	type TestDb,
@@ -28,7 +28,7 @@ const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
 let tdb: TestDb;
 
 beforeAll(async () => {
-	tdb = await createTestDatabase(undefined, { legacyFargate: true });
+	tdb = await createTestDatabase();
 });
 
 afterAll(async () => {
@@ -53,29 +53,25 @@ async function startRun() {
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
-		executionRuntime: "fargate",
+		executionRuntime: "agentcore",
 	});
 	await seedQueuedRun(tdb.db, {
 		runId: "run-1",
 		userId: "user-1",
 		conversationId: "conv-1",
 	});
-	const claim = await claimConversationTx(tdb.db, { workerId: "worker-1" });
-	if (!claim) throw new Error("test setup did not Claim the Conversation");
-	const started = await startClaimedRunTx(tdb.db, {
-		owner: claim,
-		runId: "run-1",
+	const acquired = await acquireQueuedRunForTest(tdb.db, {
 		workerId: "worker-1",
 	});
-	if (started.outcome !== "started") {
-		throw new Error("test setup did not start the Run");
-	}
-	return { claim, run: started.run };
+	if (!acquired) throw new Error("test setup did not acquire the Conversation");
+	const run = await loadExecutingRunTx(tdb.db, acquired);
+	if (!run) throw new Error("test setup did not start the Run");
+	return { acquired, run };
 }
 
 describe("serveStartedRun", () => {
 	it("serves an already-running Run through its terminal Outcome", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const serving = createRunServing({
 			db: tdb.db,
 			processor: async (ctx) => {
@@ -90,7 +86,7 @@ describe("serveStartedRun", () => {
 
 		const result = await serving.serveStartedRun({
 			run,
-			owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 		});
 
@@ -103,7 +99,7 @@ describe("serveStartedRun", () => {
 	});
 
 	it("returns ownership loss without terminalizing the Run", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const gate = deferred();
 		const serving = createRunServing({
 			db: tdb.db,
@@ -115,7 +111,7 @@ describe("serveStartedRun", () => {
 		});
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 		});
 		await tdb.db
@@ -142,7 +138,7 @@ describe("serveStartedRun", () => {
 	});
 
 	it("abandons a Run that already reached an Outcome without halting its Conversation", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const processorStarted = deferred();
 		const ownershipStopped = deferred();
 		const releaseProcessor = deferred();
@@ -164,16 +160,18 @@ describe("serveStartedRun", () => {
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			logger: silentLogger,
 		});
-		const owner = { ...claim, runId: run.runId, workerId: "worker-1" };
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner,
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 		});
 		await processorStarted.promise;
 
 		expect(
-			await transitionRunTerminalTx(tdb.db, { owner, status: "done" }),
+			await transitionRunTerminalTx(tdb.db, {
+				owner: acquired,
+				status: "done",
+			}),
 		).toMatchObject({ outcome: "committed" });
 		await serving.heartbeat();
 		await ownershipStopped.promise;
@@ -193,7 +191,7 @@ describe("serveStartedRun", () => {
 	});
 
 	it("keeps a status-rejected Run attached until the next heartbeat", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const processorStarted = deferred();
 		const attemptAppend = deferred();
 		const appendRejected = deferred();
@@ -217,10 +215,9 @@ describe("serveStartedRun", () => {
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			logger: silentLogger,
 		});
-		const owner = { ...claim, runId: run.runId, workerId: "worker-1" };
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner,
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 			onDetached: (event) => {
 				if (event.type === "run_detached") detachments++;
@@ -228,7 +225,10 @@ describe("serveStartedRun", () => {
 		});
 		await processorStarted.promise;
 		expect(
-			await transitionRunTerminalTx(tdb.db, { owner, status: "done" }),
+			await transitionRunTerminalTx(tdb.db, {
+				owner: acquired,
+				status: "done",
+			}),
 		).toMatchObject({ outcome: "committed" });
 
 		attemptAppend.resolve();
@@ -253,7 +253,7 @@ describe("serveStartedRun", () => {
 	});
 
 	it("lets durable interruption win over processor failure", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const serving = createRunServing({
 			db: tdb.db,
 			processor: async (ctx) => {
@@ -268,7 +268,7 @@ describe("serveStartedRun", () => {
 		});
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 		});
 		await requestRunInterruptionTx(tdb.db, {
@@ -285,7 +285,7 @@ describe("serveStartedRun", () => {
 	});
 
 	it("returns shutdown after terminalizing active work as error", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const shutdownController = new AbortController();
 		const processorGate = deferred();
 		const serving = createRunServing({
@@ -303,7 +303,7 @@ describe("serveStartedRun", () => {
 		});
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: shutdownController.signal,
 		});
 		await tdb.db
@@ -329,7 +329,7 @@ describe("serveStartedRun", () => {
 	});
 
 	it("lets durable interruption committed during shutdown win", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const shutdownController = new AbortController();
 		const processorStopped = deferred();
 		const releaseProcessor = deferred();
@@ -349,7 +349,7 @@ describe("serveStartedRun", () => {
 		});
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: shutdownController.signal,
 		});
 
@@ -369,7 +369,7 @@ describe("serveStartedRun", () => {
 	});
 
 	it("degrades Live Stream publication without changing durable execution", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const liveStreamRelay = createInMemoryLiveStreamRelay();
 		await liveStreamRelay.close();
 		const serving = createRunServing({
@@ -387,7 +387,7 @@ describe("serveStartedRun", () => {
 		expect(
 			await serving.serveStartedRun({
 				run,
-				owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+				owner: acquired,
 				shutdownSignal: new AbortController().signal,
 			}),
 		).toEqual({ type: "terminal", status: "done" });
@@ -405,7 +405,7 @@ describe("serveStartedRun", () => {
 	});
 
 	it("fails closed on unreliable mirror evidence", async () => {
-		const { claim, run } = await startRun();
+		const { acquired, run } = await startRun();
 		const serving = createRunServing({
 			db: tdb.db,
 			processor: async () => ({
@@ -422,16 +422,15 @@ describe("serveStartedRun", () => {
 		expect(
 			await serving.serveStartedRun({
 				run,
-				owner: { ...claim, runId: run.runId, workerId: "worker-1" },
+				owner: acquired,
 				shutdownSignal: new AbortController().signal,
 			}),
 		).toEqual({ type: "terminal", status: "error" });
 	});
 
 	it("publishes staged artifacts and resumable session evidence atomically", async () => {
-		const { claim, run } = await startRun();
-		const owner = { ...claim, runId: run.runId, workerId: "worker-1" };
-		await createConversationRuntimeTx(tdb.db, claim);
+		const { acquired, run } = await startRun();
+		await createConversationRuntimeTx(tdb.db, acquired);
 		await recordArtifactObjectsTx(tdb.db, {
 			objects: [
 				{
@@ -470,7 +469,7 @@ describe("serveStartedRun", () => {
 		expect(
 			await serving.serveStartedRun({
 				run,
-				owner,
+				owner: acquired,
 				shutdownSignal: new AbortController().signal,
 			}),
 		).toEqual({ type: "terminal", status: "done" });

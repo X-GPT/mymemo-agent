@@ -4,9 +4,10 @@ name: Release deploy
 # pinned to runs on refs/heads/main (see infra/bootstrap-iam), and every apply
 # requires the typed workflow input. There is no unattended application lane:
 # every unified Terraform plan receives the same operator authorization.
-# - The deploy job registers only the migration task definition, migrates the
-#   database, then applies the unified plan and rolls ECS. This keeps new
-#   Runtime, Lambda, and ECS code behind the compatible schema.
+# - The deploy job applies the migration task definition and its Terraform
+#   prerequisites, migrates the database, then applies the unified plan and
+#   rolls ECS. This keeps new Runtime, Lambda, and ECS code behind the
+#   compatible schema.
 # - Dispatch from main covers releases, bootstrap, re-deploys, and incident
 #   response. Other refs are rejected before any release work starts.
 
@@ -49,7 +50,6 @@ jobs:
     outputs:
       image_tag: ${{ steps.image_tag.outputs.image_tag }}
       chat_api_image: ${{ steps.images.outputs.chat_api_image }}
-      agent_worker_image: ${{ steps.images.outputs.agent_worker_image }}
       agent_maintenance_image: ${{ steps.images.outputs.agent_maintenance_image }}
       agentcore_dispatch_publisher_image: ${{ steps.images.outputs.agentcore_dispatch_publisher_image }}
       runtime_image_digest: ${{ steps.agentcore_runtime_image.outputs.runtime_image_digest }}
@@ -150,12 +150,10 @@ jobs:
         id: images
         run: |
           chat_api_repository_url="$(terraform -chdir=infra/ecr output -raw chat_api_ecr_repository_url)"
-          agent_worker_repository_url="$(terraform -chdir=infra/ecr output -raw agent_worker_ecr_repository_url)"
           agent_maintenance_repository_url="$(terraform -chdir=infra/ecr output -raw agent_maintenance_ecr_repository_url)"
           agentcore_dispatch_publisher_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_dispatch_publisher_ecr_repository_url)"
           agentcore_runtime_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_runtime_ecr_repository_url)"
           printf 'chat_api_image=%s:%s\n' "${chat_api_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
-          printf 'agent_worker_image=%s:%s\n' "${agent_worker_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agent_maintenance_image=%s:%s\n' "${agent_maintenance_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agentcore_dispatch_publisher_image=%s:%s\n' "${agentcore_dispatch_publisher_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agentcore_runtime_repository_url=%s\n' "${agentcore_runtime_repository_url}" >> "${GITHUB_OUTPUT}"
@@ -171,9 +169,6 @@ jobs:
 
       - name: Build and push chat-api image
         run: scripts/deploy/build_and_push_agent_image.sh chat-api
-
-      - name: Build and push agent-worker image
-        run: scripts/deploy/build_and_push_agent_image.sh agent-worker
 
       - name: Build and push agent-maintenance image
         run: scripts/deploy/build_and_push_agent_image.sh agent-maintenance
@@ -243,7 +238,6 @@ jobs:
       # Pin the exact images the plan job pushed so this job never resolves
       # ECR outputs (ci_prepare_tfvars.sh short-circuits on these).
       CHAT_API_IMAGE: ${{ needs.plan.outputs.chat_api_image }}
-      AGENT_WORKER_IMAGE: ${{ needs.plan.outputs.agent_worker_image }}
       AGENT_MAINTENANCE_IMAGE: ${{ needs.plan.outputs.agent_maintenance_image }}
       AGENTCORE_DISPATCH_PUBLISHER_IMAGE: ${{ needs.plan.outputs.agentcore_dispatch_publisher_image }}
       TF_VAR_runtime_image_digest: ${{ needs.plan.outputs.runtime_image_digest }}
@@ -343,7 +337,7 @@ jobs:
         if: env.FIRST_DEPLOY != 'true'
         run: scripts/deploy/terraform_prod_in_place_plan.sh
 
-      - name: Register the migration task definition only
+      - name: Apply migration task definition and prerequisites
         if: env.FIRST_DEPLOY != 'true'
         run: |
           scripts/deploy/terraform_prod_migration_plan.sh

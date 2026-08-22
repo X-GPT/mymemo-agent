@@ -330,7 +330,7 @@ describe("SDK session mutation ownership fence", () => {
 		});
 	}
 
-	it("records the Claim epoch on every mirrored transcript entry", async () => {
+	it("records the Ownership epoch on every mirrored transcript entry", async () => {
 		await insertOwnedConversation({});
 
 		await appendAgentSessionEntriesTx(tdb.db, {
@@ -358,7 +358,7 @@ describe("SDK session mutation ownership fence", () => {
 		]);
 	});
 
-	it("keeps transcript writes authorized after a Run terminalizes while the Claim remains live", async () => {
+	it("keeps transcript writes authorized after a Run terminalizes while the Ownership remains live", async () => {
 		await insertOwnedConversation({});
 		await tdb.db.insert(runs).values({
 			userId: OWNER.userId,
@@ -383,8 +383,8 @@ describe("SDK session mutation ownership fence", () => {
 		["a different user", { userId: "user-other" }],
 		["a stale epoch", { epoch: OWNER.epoch + 1 }],
 		["an expired lease", { expired: true }],
-	])("rejects mutations under %s without effect", async (_name, claim) => {
-		await insertOwnedConversation(claim);
+	])("rejects mutations under %s without effect", async (_name, owner) => {
+		await insertOwnedConversation(owner);
 		await tdb.db.insert(agentSessions).values({
 			conversationId: OWNER.conversationId,
 			...REF,

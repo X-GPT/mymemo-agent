@@ -65,10 +65,13 @@ executes Runs.
 _Avoid_: dispatch worker, Run executor, execution runtime
 
 **Durable acquisition**:
-The committed transition in which one AgentCore invocation obtains live
-Conversation Ownership and starts its exact dispatched Run. Runtime entry or
-an HTTP response alone is not acquisition.
-_Avoid_: container start, invocation acceptance, queue acknowledgement
+The committed, atomic transition in which one AgentCore Runtime invocation
+obtains live Conversation Ownership, advances its Ownership epoch, and starts
+its exact dispatched queued Run. A later Run requires a separate Runtime
+invocation rather than being drained from a global queue snapshot. Runtime entry
+or an HTTP response alone is not acquisition.
+_Avoid_: Claim, container start, invocation acceptance, queue acknowledgement,
+job reservation, run claim
 
 **Dispatch disposition**:
 The typed result of evaluating an AgentCore dispatch against durable Run and
@@ -107,36 +110,29 @@ wins the Run's Outcome and prevents Downloadable artifact publication.
 _Avoid_: cancellation, Conversation termination, HITL interrupt
 
 **Conversation Ownership**:
-The exclusive execution authority over one Conversation, taken by Claim, held
-under an Ownership lease and epoch, and recovered by Reclamation. It is the
-single authority every execution write is fenced on, whichever runtime holds
-it.
+The exclusive execution authority over one Conversation, established by
+Durable acquisition, held under an Ownership lease and epoch, and recovered by
+Reclamation. It is the single authority every execution write is fenced on.
 _Avoid_: lock, worker assignment, run ownership
-
-**Claim**:
-Taking exclusive execution ownership of a Conversation in order to serve, one at
-a time in submission order, the Runs it had active at that moment. A Conversation
-is claimed many times over its life by any worker, and Runs submitted after a
-Claim are left for a later one.
-_Avoid_: job reservation, run claim
 
 **Ownership lease**:
 The time-bounded, exclusive write authority over one Conversation and every
-resource scoped to it, obtained by claiming it and kept alive by heartbeat. Once
-it lapses or is superseded, that holder's writes are rejected.
+resource scoped to it, obtained by Durable acquisition and kept alive by
+heartbeat. Once it lapses or is superseded, that holder's writes are rejected.
 _Avoid_: run lease, sandbox lease (the decommissioned prototype concept)
 
 **Ownership epoch**:
-The per-Conversation number identifying one Claim, increasing with every Claim.
-It names the holder in every fenced write, so a superseded holder is rejected
-even while it still believes it holds the lease.
+The per-Conversation number identifying one Durable acquisition, increasing
+with every acquisition. It names the holder in every fenced write, so a
+superseded holder is rejected even while it still believes it holds the lease.
 _Avoid_: fencing token, version, generation
 
 **Reclamation**:
 Terminalizing the started Runs of a Conversation whose Ownership lease lapsed
-without release, so a Conversation whose worker vanished cannot hold executing
-Runs that never reach an Outcome. Never-started queued Runs remain for the next
-Claim. Distinct from Recovering, which is a client behavior.
+without release, so a Conversation whose Runtime invocation vanished cannot
+hold executing Runs that never reach an Outcome. Never-started queued Runs
+remain for the next Dispatch attempt. Distinct from Recovering, which is a
+client behavior.
 _Avoid_: recovery (that word is the client-side term), stale-run recovery
 
 **Run event**:
@@ -148,12 +144,12 @@ not Run events.
 
 **Live Stream**:
 The temporary, ordered sequence of standard AG-UI events for one active Run,
-buffered in the producing worker's memory and relayed event-by-event over Redis
-pub/sub. No stream content is stored in Redis: a reader attaches by requesting
-the full backlog from the living producer, and every reconnect rebuilds the
-active Run from that backlog. The Live Stream ends with the Run's Outcome and
-dies with its producer; after either, permanent Conversation history is the
-only source.
+buffered in the producing Runtime process's memory and relayed event-by-event
+over Redis pub/sub. No stream content is stored in Redis: a reader attaches by
+requesting the full backlog from the living producer, and every reconnect
+rebuilds the active Run from that backlog. The Live Stream ends with the Run's
+Outcome and dies with its producer; after either, permanent Conversation history
+is the only source.
 _Avoid_: Live preview, retained stream, replay cursor, Conversation history
 
 **Reconnecting**:
@@ -165,7 +161,7 @@ _Avoid_: Recovering, resuming after a cursor
 Waiting for permanent Conversation history after a Live Stream becomes
 unusable, then replacing the Run's provisional client state with that durable
 projection.
-_Avoid_: Reconnecting, Reclamation (that is the worker-side term)
+_Avoid_: Reconnecting, Reclamation (that is the maintenance-side term)
 
 **Conversation history**:
 The durable, user-visible record of submitted messages, Assistant messages,
@@ -175,8 +171,8 @@ public agent surface it is represented as AG-UI messages grouped by Run, with
 the Run's AG-UI terminal event kept alongside those messages rather than
 inventing an Outcome message. An interrupted Run retains every Run event
 committed before interruption; its provisional open response is excluded. A
-queued interruption retains the submitted User message even when no worker
-delivered it to Claude.
+queued interruption retains the submitted User message even when no Runtime
+invocation delivered it to Claude.
 _Avoid_: thread history, Agent session, transcript
 
 **AG-UI agent surface**:
@@ -265,8 +261,8 @@ file and shell tools act. It *is* the paused E2B sandbox between turns —
 persistence is best-effort: reconnect restores it, but a lost sandbox starts
 the next turn empty. Run interruption preserves its current contents rather
 than rolling them back, so stopping a command may leave partial edits for a
-later Run to inspect or repair. Not the Fargate query cwd (that is only a stable
-projectKey anchor), and not durable like the Agent session.
+later Run to inspect or repair. Not the Runtime-side query cwd (that is only a
+stable projectKey anchor), and not durable like the Agent session.
 _Avoid_: sandbox (that is the runtime; the workspace is its filesystem)
 
 **Downloadable artifact**:
@@ -290,7 +286,7 @@ refreshes its cached copy.
 _Avoid_: fetch (the prototype path's word for content-into-context)
 
 **Agent session**:
-The internal, worker-owned Claude SDK transcript that carries a Conversation's
+The internal, Runtime-owned Claude SDK transcript that carries a Conversation's
 model-side memory across Runs, including a successfully preserved interrupted
 Run even when its provisional response is absent from Conversation history. It
 is never client-facing or stored in the Workspace.

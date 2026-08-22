@@ -5,15 +5,8 @@ import {
 	publishArtifactsAndTransitionRunDoneTx,
 	recordArtifactObjectsTx,
 } from "./artifact-store";
-import {
-	claimConversationTx,
-	releaseConversationTx,
-} from "./conversation-ownership";
-import {
-	type RunWriteOwner,
-	startClaimedRunTx,
-	type TerminalTransitionResult,
-} from "./run-store";
+import { releaseConversationTx } from "./conversation-ownership";
+import type { RunWriteOwner, TerminalTransitionResult } from "./run-store";
 import {
 	artifactObjects,
 	conversationArtifacts,
@@ -22,12 +15,17 @@ import {
 	runEvents,
 	runs,
 } from "./schema";
-import { createTestDatabase, seedQueuedRun, type TestDb } from "./testing";
+import {
+	acquireQueuedRunForTest,
+	createTestDatabase,
+	seedQueuedRun,
+	type TestDb,
+} from "./testing";
 
 let tdb: TestDb;
 
 beforeAll(async () => {
-	tdb = await createTestDatabase(undefined, { legacyFargate: true });
+	tdb = await createTestDatabase();
 });
 
 afterAll(async () => {
@@ -41,21 +39,13 @@ afterEach(async () => {
 	await tdb.db.delete(conversations);
 });
 
-async function claimRun(
+async function acquireRun(
 	runId: string,
 	workerId = "worker-1",
 ): Promise<RunWriteOwner> {
-	const claim = await claimConversationTx(tdb.db, { workerId });
-	if (!claim) throw new Error("test setup claimed no Conversation");
-	const started = await startClaimedRunTx(tdb.db, {
-		owner: claim,
-		runId,
-		workerId,
-	});
-	if (started.outcome !== "started") {
-		throw new Error(`test setup could not start ${runId}`);
-	}
-	return { ...claim, runId, workerId };
+	const acquired = await acquireQueuedRunForTest(tdb.db, { runId, workerId });
+	if (!acquired) throw new Error("test setup acquired no Conversation");
+	return acquired;
 }
 
 describe("Downloadable artifact publication", () => {
@@ -64,14 +54,14 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		});
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		const owner = await claimRun("run-1");
+		const owner = await acquireRun("run-1");
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
 			conversationId: "conv-1",
@@ -132,7 +122,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		});
 		for (const [runId, objectKey, artifactId] of [
 			["run-1", "objects/one", "artifact-stable"],
@@ -143,7 +133,7 @@ describe("Downloadable artifact publication", () => {
 				userId: "user-1",
 				conversationId: "conv-1",
 			});
-			const owner = await claimRun(runId);
+			const owner = await acquireRun(runId);
 			await recordArtifactObjectsTx(tdb.db, {
 				objects: [
 					{
@@ -193,7 +183,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -205,7 +195,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		const owner = await claimRun("run-1");
+		const owner = await acquireRun("run-1");
 
 		await expect(
 			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
@@ -235,14 +225,14 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		});
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		const owner = await claimRun("run-1");
+		const owner = await acquireRun("run-1");
 		await recordArtifactObjectsTx(tdb.db, {
 			objects: [
 				{
@@ -288,7 +278,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -299,7 +289,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		const owner = await claimRun("run-1");
+		const owner = await acquireRun("run-1");
 
 		await expect(
 			publishArtifactsAndTransitionRunDoneTx(tdb.db, {
@@ -349,7 +339,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		});
 		await tdb.db.insert(conversationRuntime).values({
 			userId: "user-1",
@@ -360,7 +350,7 @@ describe("Downloadable artifact publication", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		const owner = await claimRun("run-1");
+		const owner = await acquireRun("run-1");
 		await recordArtifactObjectsTx(tdb.db, {
 			objects: [
 				{

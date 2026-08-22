@@ -18,7 +18,7 @@ export interface LiveStreamFailureMarker {
 	failedAt: Date;
 }
 
-/** One claimed Run's best-effort AG-UI producer. Relay failure disables every
+/** One executing Run's best-effort AG-UI producer. Relay failure disables every
  * later write but never escapes into model execution or the Postgres Outcome. */
 export class RunLiveStream {
 	#enabled = false;

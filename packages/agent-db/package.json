@@ -10,7 +10,6 @@
 		"./database-url": "./src/database-url.ts",
 		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./execution-runtime": "./src/execution-runtime.ts",
-		"./execution-runtime-deployment": "./src/execution-runtime-deployment.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",
 		"./runtime-store": "./src/runtime-store.ts",

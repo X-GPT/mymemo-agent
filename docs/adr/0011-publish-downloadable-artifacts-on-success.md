@@ -2,6 +2,13 @@
 
 Status: accepted
 
+Amended (2026-08-22) by
+[ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md): AgentCore Runtime
+is the sole production artifact publisher and may upload but not delete object
+keys. `agent-maintenance` solely owns asynchronous artifact deletion, while
+`chat-api` retains read-only delivery authority. The worker-role split described
+below is historical.
+
 A workspace contains private scratch files, reconstructible knowledge-base
 content, and user-facing outputs, and its files may be written by either the
 text file tools or Bash. Only files deliberately placed in a reserved

@@ -14,7 +14,7 @@ function section(source: string, start: string, end: string): string {
 }
 
 describe("agent-maintenance infrastructure", () => {
-	it("defines an independently healthy, logged, inactive service", () => {
+	it("defines the independently healthy, logged sole maintenance owner", () => {
 		const ecs = terraformFile("ecs.tf");
 		const cloudwatch = terraformFile("cloudwatch.tf");
 		const production = terraformFile("prod.tfvars");
@@ -25,9 +25,7 @@ describe("agent-maintenance infrastructure", () => {
 		expect(ecs).toContain('resource "aws_ecs_service" "agent_maintenance"');
 		expect(ecs).toContain("aws_cloudwatch_log_group.agent_maintenance.name");
 		expect(ecs).toContain("/health");
-		expect(ecs).toContain(
-			"var.agent_maintenance_desired_count == 0 || var.agent_worker_desired_count == 0",
-		);
+		expect(ecs).not.toContain("agent_worker");
 		expect(cloudwatch).toContain(
 			'resource "aws_cloudwatch_log_metric_filter" "agent_maintenance_errors"',
 		);
@@ -42,7 +40,125 @@ describe("agent-maintenance infrastructure", () => {
 		);
 		expect(cloudwatch).toContain("count = var.agent_maintenance_desired_count");
 		expect(cloudwatch).toContain('treat_missing_data  = "breaching"');
-		expect(production).toContain("agent_maintenance_desired_count = 0");
+		expect(production).toContain("agent_maintenance_desired_count = 1");
+	});
+
+	it("contains no retired worker execution infrastructure", () => {
+		for (const name of [
+			"cloudwatch.tf",
+			"ecs.tf",
+			"iam.tf",
+			"locals.tf",
+			"network.tf",
+			"outputs.tf",
+			"variables.tf",
+		]) {
+			const source = terraformFile(name);
+			expect(source).not.toContain("agent_worker");
+			expect(source).not.toContain("agent-worker");
+		}
+		expect(terraformFile("variables.tf")).not.toContain(
+			"worker_heartbeat_interval_ms",
+		);
+	});
+
+	it("scopes chat-api and migration secrets independently", () => {
+		const locals = terraformFile("locals.tf");
+		const iam = terraformFile("iam.tf");
+		const ecs = terraformFile("ecs.tf");
+		const chatApi = section(
+			locals,
+			"chat_api_environment =",
+			"agent_maintenance_environment =",
+		);
+		const chatApiSecretPolicy = section(
+			iam,
+			'data "aws_iam_policy_document" "read_secrets"',
+			'resource "aws_iam_role" "agent_migration_execution"',
+		);
+		const migrationSecretPolicy = section(
+			iam,
+			'resource "aws_iam_role" "agent_migration_execution"',
+			'resource "aws_iam_role" "agentcore_dispatch_publisher_execution"',
+		);
+		const migrationTask = section(
+			ecs,
+			'resource "aws_ecs_task_definition" "agent_migration"',
+			'resource "aws_ecs_service" "chat_api"',
+		);
+
+		for (const forbidden of ["E2B", "OPENROUTER", "KB_DATABASE_URL"]) {
+			expect(chatApi).not.toContain(forbidden);
+			expect(chatApiSecretPolicy).not.toContain(forbidden);
+			expect(migrationSecretPolicy).not.toContain(forbidden);
+		}
+		for (const required of [
+			"agent_db_password_base_secret_arn",
+			"statsig_server_secret_arn",
+			"live_redis_url_secret_arn",
+		]) {
+			expect(chatApiSecretPolicy).toContain(required);
+		}
+		expect(migrationSecretPolicy).toContain(
+			"agent_db_password_base_secret_arn",
+		);
+		expect(migrationSecretPolicy).not.toContain("statsig_server_secret_arn");
+		expect(migrationSecretPolicy).not.toContain("live_redis_url_secret_arn");
+		expect(migrationTask).toContain(
+			"execution_role_arn       = aws_iam_role.agent_migration_execution.arn",
+		);
+		expect(migrationTask).toContain(
+			"aws_iam_role_policy_attachment.agent_migration_execution",
+		);
+		expect(migrationTask).toContain(
+			"aws_iam_role_policy.agent_migration_read_database_secret",
+		);
+		expect(migrationTask).not.toContain("task_role_arn");
+	});
+
+	it("collects Live Stream metrics from AgentCore Runtime logs", () => {
+		const cloudwatch = terraformFile("cloudwatch.tf");
+
+		expect(cloudwatch).toContain(
+			`agentcore-runtime = "/aws/bedrock-agentcore/runtimes/\${aws_bedrockagentcore_agent_runtime.runtime.agent_runtime_id}-DEFAULT"`,
+		);
+		expect(cloudwatch).toContain(
+			'resource "aws_cloudwatch_log_metric_filter" "live_stream_capacity"',
+		);
+		expect(cloudwatch).toContain(
+			'resource "aws_cloudwatch_log_metric_filter" "live_stream_degraded_duration"',
+		);
+		expect(cloudwatch).toContain('Service = "agentcore-runtime"');
+	});
+
+	it("keeps retired repository deletion in the one-time handoff", () => {
+		const ecr = readFileSync("infra/ecr/main.tf", "utf8");
+		const release = readFileSync(
+			".github/workflows/release-deploy.yml",
+			"utf8",
+		);
+		const handoff = readFileSync(
+			"docs/runbooks/agent-maintenance-handoff.md",
+			"utf8",
+		);
+
+		expect(ecr).not.toContain("agent_worker");
+		expect(release).not.toContain("aws ecr delete-repository");
+		expect(handoff).toContain("aws --profile mymemo ecr delete-repository");
+		expect(handoff).toContain("--repository-name mymemo-agent-worker");
+		expect(handoff).toContain("--force");
+	});
+
+	it("waits for every retired worker task to reach STOPPED", () => {
+		const handoff = readFileSync(
+			"docs/runbooks/agent-maintenance-handoff.md",
+			"utf8",
+		);
+
+		expect(handoff).toContain("--desired-status STOPPED");
+		expect(handoff).toContain("lastStatus!=`STOPPED`");
+		expect(handoff).toContain("DEACTIVATING");
+		expect(handoff).toContain("DEPROVISIONING");
 	});
 
 	it("injects only maintenance environment and secrets", () => {
@@ -71,6 +187,7 @@ describe("agent-maintenance infrastructure", () => {
 
 	it("limits IAM and network authority to maintenance operations", () => {
 		const iam = terraformFile("iam.tf");
+		const agentCoreIam = terraformFile("agentcore-iam.tf");
 		const network = terraformFile("network.tf");
 		const executionPolicy = section(
 			iam,
@@ -81,6 +198,16 @@ describe("agent-maintenance infrastructure", () => {
 			iam,
 			'data "aws_iam_policy_document" "agent_maintenance_artifact_delete"',
 			'resource "aws_iam_role" "agentcore_dispatch_publisher_task"',
+		);
+		const chatApiArtifactPolicy = section(
+			iam,
+			'data "aws_iam_policy_document" "chat_api_artifact_read"',
+			'resource "aws_iam_role_policy" "chat_api_artifact_read"',
+		);
+		const runtimePolicy = section(
+			agentCoreIam,
+			'data "aws_iam_policy_document" "runtime"',
+			'resource "aws_iam_role_policy" "runtime"',
 		);
 		const securityGroup = section(
 			network,
@@ -96,8 +223,13 @@ describe("agent-maintenance infrastructure", () => {
 		expect(executionPolicy).not.toContain("openrouter_api_key_secret_arn");
 		expect(executionPolicy).not.toContain("live_redis_url_secret_arn");
 		expect(taskPolicy).toContain('actions   = ["s3:DeleteObject"]');
+		expect(taskPolicy).toContain("/objects/*");
 		expect(taskPolicy).not.toContain("s3:PutObject");
 		expect(taskPolicy).not.toContain("s3:GetObject");
+		expect(chatApiArtifactPolicy).toContain("/objects/*");
+		expect(runtimePolicy).toContain("s3:PutObject");
+		expect(runtimePolicy).toContain("s3:AbortMultipartUpload");
+		expect(runtimePolicy).not.toContain("s3:DeleteObject");
 		expect(securityGroup).toContain("from_port       = 5432");
 		expect(securityGroup).toContain("from_port   = 443");
 		expect(securityGroup).toContain("VPC DNS over UDP");
