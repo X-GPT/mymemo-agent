@@ -1,7 +1,4 @@
-import {
-	type AgentCoreDispatchIdentity,
-	loadAgentCoreDispatchRunStatus,
-} from "@mymemo/agent-db/agentcore-dispatch";
+import type { AgentCoreDispatchIdentity } from "@mymemo/agent-db/agentcore-dispatch";
 import type { Database } from "@mymemo/agent-db/client";
 import { createDatabaseAgentCoreDispatchPublisherStore } from "@mymemo/agentcore-dispatch/database-store";
 import { serializeAgentCoreDispatchEnvelope } from "@mymemo/agentcore-dispatch/envelope";
@@ -87,8 +84,7 @@ export function createLocalAgentCoreDispatchBridge(options: {
 	const control = { isEnabled: async () => true };
 	const consumer = createAgentCoreDispatchConsumer({
 		control,
-		loadRunStatus: (dispatch) =>
-			loadAgentCoreDispatchRunStatus(options.db, dispatch),
+		loadRunStatus: async () => null,
 		runtime: createLocalRuntimeInvoker({
 			runtimeUrl: options.runtimeUrl,
 			invocationTimeoutMs: options.invocationTimeoutMs ?? 30_000,

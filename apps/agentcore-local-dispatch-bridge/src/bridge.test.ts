@@ -11,6 +11,7 @@ import { admitQueuedRunInTx } from "@mymemo/agent-db/run-store";
 import {
 	agentCoreDispatchOutbox,
 	conversations,
+	runs,
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { createAcquisitionReceipt } from "agentcore-dispatch-consumer/contract";
@@ -211,5 +212,31 @@ describe("local AgentCore Dispatch bridge", () => {
 		await expect(bridge.pollOnce()).resolves.toMatchObject({
 			publishedRunIds: [dispatch.runId],
 		});
+	});
+
+	it("observes a correlated Runtime receipt even when the Run is terminal", async () => {
+		await tdb.db.update(runs).set({ status: "done" });
+		let invoked = false;
+		const receipt = createAcquisitionReceipt(dispatch, {
+			disposition: "terminal",
+			status: "done",
+		});
+		const bridge = createLocalAgentCoreDispatchBridge({
+			db: tdb.db,
+			publisherId: "local-bridge",
+			runtimeUrl: "http://runtime:8080",
+			fetch: async () => {
+				invoked = true;
+				return new Response(`${JSON.stringify(receipt)}\n`, {
+					headers: { "content-type": "application/x-ndjson" },
+				});
+			},
+			now: () => new Date("2026-08-21T12:01:00.000Z"),
+		});
+
+		await expect(bridge.pollOnce()).resolves.toMatchObject({
+			publishedRunIds: [dispatch.runId],
+		});
+		expect(invoked).toBe(true);
 	});
 });
