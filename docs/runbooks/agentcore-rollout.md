@@ -130,31 +130,17 @@ that replaces managed NAT gateways with fck-nat:
 1. Apply `infra/bootstrap-iam` locally with the `mymemo` profile so the release
    role can manage the fck-nat launch templates, Auto Scaling groups, instance
    profiles, ENIs, EIPs, and CloudWatch configuration.
-2. As a one-time staged migration, apply only `module.fck_nat_egress` with the
-   same reviewed production variable files. Terraform includes its new EIPs as
-   dependencies while leaving the managed NAT routes in service. Then verify
-   the new capacity without checking the not-yet-cut-over routes:
-
-   ```sh
-   export AWS_PROFILE=mymemo
-   terraform -chdir=infra/terraform plan \
-     -var-file=prod.tfvars \
-     -var-file=generated.auto.tfvars \
-     -target=module.fck_nat_egress \
-     -out=fck-nat-stage.tfplan
-   terraform -chdir=infra/terraform apply fck-nat-stage.tfplan
-   source scripts/deploy/agentcore_aws_checks.sh
-   staged_output="$(terraform -chdir=infra/terraform output -json)"
-   verify_agentcore_egress us-west-2 "$staged_output" false
-   ```
-
-   This targeted apply is only the migration preflight; do not use it for
-   routine releases.
-3. Review the complete production plan. It must create one fck-nat Auto Scaling
-   group in each configured availability zone before changing that zone's
-   private default route, move the Dispatch publisher to the private subnets
-   with no public IP, and remove both managed NAT gateways only after their
-   routes no longer reference them.
+2. Confirm that the migration release record contains the successful one-time
+   staged preflight completed by the migration operator from the exact merged
+   commit. It must retain the saved targeted plan for
+   `module.fck_nat_egress` and the `verify_agentcore_egress` result with route
+   checking disabled. This is not a reusable release path; do not use targeted
+   applies for routine releases.
+3. Review the complete production plan. It must preserve one staged fck-nat
+   Auto Scaling group in each configured availability zone, change each
+   private default route to its same-zone ENI, move the Dispatch publisher to
+   the private subnets with no public IP, and remove both managed NAT gateways
+   only after their routes no longer reference them.
 4. After the authorized apply, retain the deployment inspection result. It
    verifies each exact route target, healthy same-zone instance, static ENI,
    disabled source/destination check, attached EIP, pinned AMI, required

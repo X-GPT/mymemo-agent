@@ -31,7 +31,14 @@ their existing security groups and IAM authority.
   unavailable for several minutes while the static ENI and EIP are reattached.
 - New EIPs allow the fck-nat instances to become healthy before routes change,
   but the production egress addresses change during the migration.
+- The upstream module's static-ENI security group accepts traffic from the VPC
+  CIDRs, which matches the supported fck-nat deployment pattern. Only the
+  AgentCore private route tables target these ENIs; do not add other subnet
+  routes to them without reopening this boundary.
 - CloudWatch exposes bandwidth, packet-drop, connection, and allowance metrics;
-  the stable Auto Scaling group health alarm pages when no instance is serving.
+  the stable Auto Scaling group health alarm pages when no instance is serving,
+  and the existing Dispatch pending-age alarm detects workload impact. The
+  deployment inspection verifies ENI/EIP attachment and route state, but the
+  initial change does not page independently on every published metric.
 - A reviewed production plan, post-apply inspection, and a simulated instance
   replacement are required before the migration is considered complete.
