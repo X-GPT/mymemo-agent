@@ -18,5 +18,5 @@ export function createExposureGate(
 	config: ApiConfig,
 	logger?: GateLogger,
 ): ExposureGate {
-	return createStatsigExposureGate(config.statsigServerSecret, {}, logger);
+	return createStatsigExposureGate(config.statsigServerSecret, logger);
 }

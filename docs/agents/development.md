@@ -23,4 +23,4 @@ From `apps/chat-api`, use `bun run dev` for the hot-reload development server, `
 
 Bun can fork same-version `drizzle-orm` installations when their optional-peer contexts differ. Because `@electric-sql/pglite` is one such optional peer, every workspace that consumes `drizzle-orm` must also list `@electric-sql/pglite` as a dev dependency. Keep those peer sets aligned; do not cast around dual-instance type errors.
 
-`packages/agent-db` owns the Drizzle schema and `packages/agent-db/drizzle/` migrations. `apps/chat-api/src/db/` contains thin bindings and runs the shared migrations through `MIGRATIONS_DIR`.
+`packages/agent-db` owns the Drizzle schema and `packages/agent-db/drizzle/` migrations. chat-api imports that package directly; `apps/chat-api/src/db/migrate.ts` runs the shared migrations through `MIGRATIONS_DIR`.

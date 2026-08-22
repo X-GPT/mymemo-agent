@@ -17,12 +17,23 @@ describe("agent-maintenance infrastructure", () => {
 	it("defines the independently healthy, logged sole maintenance owner", () => {
 		const ecs = terraformFile("ecs.tf");
 		const cloudwatch = terraformFile("cloudwatch.tf");
-		const production = terraformFile("prod.tfvars");
+		const desiredCount = section(
+			terraformFile("variables.tf"),
+			'variable "agent_maintenance_desired_count"',
+			'variable "agentcore_dispatch_publisher_desired_count"',
+		);
+		const deployment = readFileSync(
+			"scripts/deploy/terraform_prod_in_place_plan.sh",
+			"utf8",
+		);
 
 		expect(ecs).toContain(
 			'resource "aws_ecs_task_definition" "agent_maintenance"',
 		);
 		expect(ecs).toContain('resource "aws_ecs_service" "agent_maintenance"');
+		expect(ecs).toContain(
+			"desired_count   = var.agent_maintenance_desired_count",
+		);
 		expect(ecs).toContain("aws_cloudwatch_log_group.agent_maintenance.name");
 		expect(ecs).toContain("/health");
 		expect(ecs).not.toContain("agent_worker");
@@ -40,7 +51,11 @@ describe("agent-maintenance infrastructure", () => {
 		);
 		expect(cloudwatch).toContain("count = var.agent_maintenance_desired_count");
 		expect(cloudwatch).toContain('treat_missing_data  = "breaching"');
-		expect(production).toContain("agent_maintenance_desired_count = 1");
+		expect(desiredCount).toContain("default     = 1");
+		expect(desiredCount).toContain(
+			"var.agent_maintenance_desired_count == 0 || var.agent_maintenance_desired_count == 1",
+		);
+		expect(deployment).toContain('-var="agent_maintenance_desired_count=0"');
 	});
 
 	it("contains no retired worker execution infrastructure", () => {

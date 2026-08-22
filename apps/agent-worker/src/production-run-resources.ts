@@ -13,15 +13,33 @@ import {
 	createArtifactPublisher,
 } from "./artifacts/artifact-publication";
 import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
+import { DEFAULT_BASH_TOOL_LIMITS } from "./bash-tool/bash-tool";
 import { createE2bSandboxJanitor } from "./cleanup/e2b-janitor";
 import type { WorkerConfig } from "./config/env";
 import { createDocumentSearch } from "./documents/client";
 import { createE2bSandboxProvisioner } from "./e2b/sandbox-provisioner";
+import type { FileToolLimits } from "./file-tools/file-tools";
 import type { WorkerLogger } from "./logger";
 import { buildModelClientConfig } from "./model-client";
 import { resolveAndVerifyClaudeCodeExecutable } from "./sdk/claude-code-executable";
 import { createSdkRunProcessor } from "./sdk/run-processor";
 import { createStartRunQuery } from "./sdk/start-run-query";
+
+const SANDBOX_IDLE_MS = 300_000;
+const FILE_LIMITS: FileToolLimits = {
+	readMaxBytes: 65_536,
+	readMaxLines: 2_000,
+	grepMaxResults: 100,
+	commandMaxOutputBytes: 65_536,
+	commandTimeoutMs: 30_000,
+};
+const DOCUMENT_SEARCH_MAX_RESULTS = 8;
+const DOCUMENT_LIST_MAX_RESULTS = 20;
+const DOCUMENT_LOAD_LIMITS = {
+	maxDocuments: 10,
+	perDocumentMaxBytes: 262_144,
+	perCallMaxBytes: 1_048_576,
+};
 
 export function createProductionRunResources(options: {
 	config: WorkerConfig;
@@ -58,7 +76,7 @@ export function createProductionRunResources(options: {
 		provisioner: createE2bSandboxProvisioner({
 			apiKey: config.e2bApiKey,
 			template: config.e2bTemplate,
-			sandboxIdleMs: config.sandboxIdleMs,
+			sandboxIdleMs: SANDBOX_IDLE_MS,
 			logger,
 		}),
 		janitor: sandboxJanitor,
@@ -81,12 +99,12 @@ export function createProductionRunResources(options: {
 			};
 		},
 		processEnv: options.processEnv ?? Bun.env,
-		sandboxIdleMs: config.sandboxIdleMs,
-		fileLimits: config.fileLimits,
-		bashLimits: config.bashLimits,
-		documentSearchMaxResults: config.maxDocumentSearchResults,
-		documentListMaxResults: config.maxDocumentListResults,
-		documentLoad: config.documentLoad,
+		sandboxIdleMs: SANDBOX_IDLE_MS,
+		fileLimits: FILE_LIMITS,
+		bashLimits: DEFAULT_BASH_TOOL_LIMITS,
+		documentSearchMaxResults: DOCUMENT_SEARCH_MAX_RESULTS,
+		documentListMaxResults: DOCUMENT_LIST_MAX_RESULTS,
+		documentLoad: DOCUMENT_LOAD_LIMITS,
 		artifactPublisher,
 		ensureWorkingDirectory: async (path) => {
 			await mkdir(path, { recursive: true });

@@ -6,8 +6,6 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { eq, sql } from "drizzle-orm";
-import { createTestDatabase, type TestDb } from "@/db/testing";
 import {
 	ACTIVE_RUN_STATUSES,
 	conversations,
@@ -15,7 +13,9 @@ import {
 	runEvents,
 	runs,
 	TERMINAL_RUN_STATUSES,
-} from "./schema";
+} from "@mymemo/agent-db/schema";
+import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import { eq, sql } from "drizzle-orm";
 
 let tdb: TestDb;
 

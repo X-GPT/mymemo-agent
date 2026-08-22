@@ -24,32 +24,10 @@ assign_public_ip = true
 # fck-nat 1.4.0, published by AWS account 568608671756 for us-west-2 ARM64.
 fck_nat_ami_id = "ami-0d1db1251d2b64626"
 
-chat_api_desired_count          = 1
-agent_maintenance_desired_count = 1
-# The dedicated publisher remains a one-task service in steady state. Its
-# advisory lock, rather than task count, is the singleton authority.
-agentcore_dispatch_publisher_desired_count = 1
-
-worker_e2b_template      = "mymemo-agent-sandbox"
-openrouter_base_url      = "https://openrouter.ai/api"
 openrouter_default_model = "anthropic/claude-sonnet-4"
-
-# Temporary Live Streams only: one small node, with replication and backups
-# disabled in redis.tf.
-live_redis_node_type      = "cache.t4g.micro"
-live_redis_engine_version = "7.1"
 
 # Established account alarm channel used by the shared staging infrastructure.
 alarm_action_arns = ["arn:aws:sns:us-west-2:637423444544:mymemo-staging-alarms"]
-
-agent_database_name               = "mymemo_agent"
-agent_database_username           = "mymemo_agent"
-agent_db_instance_class           = "db.t4g.micro"
-agent_db_allocated_storage_gb     = 20
-agent_db_max_allocated_storage_gb = 100
-agent_db_engine_version           = "17"
-agent_db_backup_retention_days    = 7
-agent_db_deletion_protection      = true
 
 # Secret values live in AWS Secrets Manager. Terraform resolves these
 # conventional names internally unless an environment overrides *_secret_name:

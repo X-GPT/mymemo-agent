@@ -1,3 +1,4 @@
+import { createDatabase } from "@mymemo/agent-db/client";
 import {
 	createLiveStreamTelemetry,
 	createRedisLiveStreamRelay,
@@ -6,7 +7,6 @@ import {
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
-import { createDatabase } from "./db/client";
 import type {
 	ArtifactDownloadSigner,
 	ArtifactMetadataStore,
@@ -23,6 +23,7 @@ import {
 	type ConversationStore,
 	PostgresConversationStore,
 } from "./features/conversation-store";
+import type { InternalIdentity } from "./features/conversations/conversations.schema";
 import {
 	createExposureGate,
 	type ExposureGate,
@@ -61,8 +62,10 @@ export interface AppDeps {
 	exposureGate: ExposureGate;
 }
 
-/** Hono environment: pino logger vars plus the injected `AppDeps`. */
-export type AppEnv = PinoEnv & { Variables: { deps: AppDeps } };
+/** Hono environment: pino logger vars plus request-scoped dependencies and identity. */
+export type AppEnv = PinoEnv & {
+	Variables: { deps: AppDeps; identity: InternalIdentity };
+};
 
 export function createDeps(
 	config: ApiConfig,

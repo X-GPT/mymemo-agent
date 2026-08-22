@@ -8,7 +8,7 @@ Use this guide for changes to `packages/agent-db`, Drizzle consumers, Run state,
 
 The package exposes concurrency-critical operations including `acquireAgentCoreDispatchTx`, `appendRunEventTx`, `transitionRunTerminalTx`, `requestRunInterruptionTx`, `reclaimConversationTx`, `expireUnownedQueuedRunsTx`, `admitQueuedRunTx`, `loadExecutingRunTx`, and `loadRunStartedTx`.
 
-`apps/chat-api/src/db/` is a thin binding layer. Its migration entrypoint imports `MIGRATIONS_DIR` from `@mymemo/agent-db/migrations` and applies `packages/agent-db/drizzle/`.
+chat-api imports the shared client and schema directly. Its migration entrypoint imports `MIGRATIONS_DIR` from `@mymemo/agent-db/migrations` and applies `packages/agent-db/drizzle/`.
 
 ## Store boundaries
 

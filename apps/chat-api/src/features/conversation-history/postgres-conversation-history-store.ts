@@ -1,20 +1,20 @@
 import { Buffer } from "node:buffer";
 import { EventType, type ToolCall } from "@ag-ui/core";
+import type { Database } from "@mymemo/agent-db/client";
 import {
 	InvalidRunEventError,
 	parseDurableRunEvent,
 	RunEventType,
 	validateDurableRunEventSequence,
 } from "@mymemo/agent-db/run-events";
-import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
-import type { Database } from "@/db/client";
 import {
 	ACTIVE_RUN_STATUSES,
 	conversations,
 	runEvents,
 	runs,
 	TERMINAL_RUN_STATUSES,
-} from "@/db/schema";
+} from "@mymemo/agent-db/schema";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import type { ConversationScope } from "@/features/conversation-store";
 import type {
 	ActiveRunSummary,

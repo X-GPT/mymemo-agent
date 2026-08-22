@@ -91,43 +91,6 @@ describe("loadWorkerConfigFromEnv — serving intervals", () => {
 	});
 });
 
-describe("loadWorkerConfigFromEnv — SDK execution limits", () => {
-	it("defaults the sandbox, file, and Bash limits", () => {
-		const config = loadWorkerConfigFromEnv(baseEnv());
-
-		expect(config.sandboxIdleMs).toBe(300_000);
-		expect(config.fileLimits).toEqual({
-			readMaxBytes: 65_536,
-			readMaxLines: 2_000,
-			grepMaxResults: 100,
-			commandMaxOutputBytes: 65_536,
-			commandTimeoutMs: 30_000,
-		});
-		expect(config.bashLimits).toEqual({
-			systemMaxTimeoutMs: 120_000,
-			maxStdoutBytes: 65_536,
-			maxStderrBytes: 65_536,
-		});
-	});
-});
-
-describe("loadWorkerConfigFromEnv — LoadDocuments caps", () => {
-	it("defaults the document-load caps", () => {
-		const config = loadWorkerConfigFromEnv(baseEnv());
-		expect(config.documentLoad.maxDocuments).toBe(10);
-		expect(config.documentLoad.perDocumentMaxBytes).toBeGreaterThan(0);
-		expect(config.documentLoad.perCallMaxBytes).toBeGreaterThanOrEqual(
-			config.documentLoad.perDocumentMaxBytes,
-		);
-	});
-});
-
-describe("loadWorkerConfigFromEnv — ListDocuments cap", () => {
-	it("defaults the document-list page cap to twenty", () => {
-		expect(loadWorkerConfigFromEnv(baseEnv()).maxDocumentListResults).toBe(20);
-	});
-});
-
 describe("loadWorkerConfigFromEnv — required Live Stream Redis", () => {
 	it("accepts only an authenticated TLS URL", () => {
 		const env = baseEnv();

@@ -8,9 +8,9 @@ import {
 } from "bun:test";
 import { EventType } from "@ag-ui/core";
 import { RunEventType } from "@mymemo/agent-db/run-events";
+import { conversations, runEvents, runs } from "@mymemo/agent-db/schema";
+import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { and, eq, sql } from "drizzle-orm";
-import { conversations, runEvents, runs } from "@/db/schema";
-import { createTestDatabase, type TestDb } from "@/db/testing";
 import { PostgresConversationStore } from "@/features/conversation-store";
 import { PostgresConversationHistoryStore } from "./postgres-conversation-history-store";
 

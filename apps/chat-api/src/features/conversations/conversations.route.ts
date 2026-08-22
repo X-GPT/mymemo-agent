@@ -1,4 +1,9 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { sValidator as zValidator } from "@hono/standard-validator";
+import {
+	RunInputMismatchError,
+	type RunRecord,
+} from "@mymemo/agent-db/run-store";
 import {
 	classifyLiveStreamFailure,
 	type LiveStreamAttachResult,
@@ -13,8 +18,6 @@ import {
 	ActiveRunExistsError,
 	ConversationArchivedError,
 	ConversationNotFoundError,
-	RunInputMismatchError,
-	type RunRecord,
 } from "@/features/run-store";
 import {
 	admitAgUiRun,
@@ -32,7 +35,7 @@ import {
 	RunIdParam,
 	UpdateConversationBody,
 } from "./conversations.schema";
-import { identityFromContext } from "./internal-identity";
+import { requireInternalIdentity } from "./internal-identity";
 
 const app = new Hono<AppEnv>();
 
@@ -40,6 +43,11 @@ const app = new Hono<AppEnv>();
 const conversationBodyLimit = bodyLimit({
 	maxSize: MAX_REQUEST_BODY_BYTES,
 	onError: (c) => c.json({ error: "Request body too large" }, 413),
+});
+const ConversationPath = z.object({ conversationId: ConversationIdParam });
+const RunPath = z.object({
+	conversationId: ConversationIdParam,
+	runId: RunIdParam,
 });
 
 const LIVE_STREAM_START_POLL_MS = 100;
@@ -85,31 +93,20 @@ async function liveStreamReadFailureResponse(
 	return c.json({ error: "Live stream temporarily unavailable" }, 503);
 }
 
-function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-	return new Promise((resolve) => {
-		if (signal.aborted) return resolve();
-		const timer = setTimeout(done, ms);
-		function done(): void {
-			clearTimeout(timer);
-			signal.removeEventListener("abort", done);
-			resolve();
-		}
-		signal.addEventListener("abort", done, { once: true });
-	});
+async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+	try {
+		await delay(ms, undefined, { signal });
+	} catch (error) {
+		if (!signal.aborted) throw error;
+	}
 }
 
 function linkedAbortController(parent: AbortSignal): {
 	controller: AbortController;
-	dispose: () => void;
+	signal: AbortSignal;
 } {
 	const controller = new AbortController();
-	const forwardAbort = () => controller.abort(parent.reason);
-	if (parent.aborted) forwardAbort();
-	else parent.addEventListener("abort", forwardAbort, { once: true });
-	return {
-		controller,
-		dispose: () => parent.removeEventListener("abort", forwardAbort),
-	};
+	return { controller, signal: AbortSignal.any([parent, controller.signal]) };
 }
 
 function endAgUiStreamOnKeepaliveFailure(
@@ -304,7 +301,6 @@ function streamAttachedAgUiReader(
 			stopKeepalive();
 			await reader.close();
 			readAbort.controller.abort();
-			readAbort.dispose();
 		}
 	});
 }
@@ -326,7 +322,6 @@ async function streamAgUiRun(
 	if (initial.outcome === "error") {
 		const { error } = initial;
 		await reader.close();
-		readAbort.dispose();
 		c.var.logger.error({
 			message: "AG-UI Live Stream initial read failed",
 			runId: run.runId,
@@ -342,7 +337,6 @@ async function streamAgUiRun(
 		if (requestSignal.aborted) {
 			readAbort.controller.abort(requestSignal.reason);
 			await reader.close();
-			readAbort.dispose();
 			return c.body(null, 204);
 		}
 		return streamAttachedAgUiReader(c, run, readAbort, reader, {
@@ -351,7 +345,6 @@ async function streamAgUiRun(
 	}
 	if (initial.outcome === "ended") {
 		await reader.close();
-		readAbort.dispose();
 		if (requestSignal.aborted) return c.body(null, 204);
 		return liveStreamReadFailureResponse(c, run, "relay_failed");
 	}
@@ -374,7 +367,7 @@ async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 	}
 	return streamSSE(c, async (stream) => {
 		const readAbort = linkedAbortController(requestSignal);
-		const readSignal = readAbort.controller.signal;
+		const readSignal = readAbort.signal;
 		let retryDelayMs = LIVE_STREAM_START_POLL_MS;
 		stream.onAbort(() => readAbort.controller.abort());
 		const stopKeepalive = startAgUiKeepalive(
@@ -440,7 +433,6 @@ async function waitForAndStreamAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 		} finally {
 			stopKeepalive();
 			readAbort.controller.abort();
-			readAbort.dispose();
 		}
 	});
 }
@@ -453,11 +445,10 @@ async function respondWithAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 	try {
 		attached = await c.var.deps.liveStreamRelay.attach(
 			run.runId,
-			readAbort.controller.signal,
+			readAbort.signal,
 		);
 	} catch (error) {
 		readAbort.controller.abort();
-		readAbort.dispose();
 		return liveStreamReadFailureResponse(
 			c,
 			run,
@@ -468,7 +459,6 @@ async function respondWithAgUiRun(c: Context<AppEnv>, run: RunRecord) {
 		return streamAgUiRun(c, run, attached.events, readAbort);
 	}
 	readAbort.controller.abort();
-	readAbort.dispose();
 	if (attached.outcome === "no_producer")
 		return waitForAndStreamAgUiRun(c, run);
 	if (attached.outcome === "aborted") return c.body(null, 204);
@@ -484,15 +474,8 @@ app.get(
 			return c.json({ error: "Invalid query", issues: result.error }, 400);
 		}
 	}),
+	requireInternalIdentity,
 	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
-		}
-
 		const query = c.req.valid("query");
 		const after =
 			query.cursor === undefined
@@ -503,7 +486,7 @@ app.get(
 		}
 
 		const page = await c.var.deps.conversationStore.list({
-			userId: identity.data.memberCode,
+			userId: c.var.identity.memberCode,
 			archived: query.archived,
 			search: query.search,
 			after: after ?? undefined,
@@ -531,23 +514,16 @@ app.post(
 			);
 		}
 	}),
+	requireInternalIdentity,
 	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
-		}
-
 		// New-work exposure gate: evaluated on the trusted identity (not the body)
 		// before any conversation write. Fails closed.
-		if (!(await c.var.deps.exposureGate.isAgentEnabled(identity.data))) {
+		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
 		const result = await createConversation(
 			c.var.deps.conversationStore,
-			identity.data,
+			c.var.identity,
 			c.req.valid("json"),
 		);
 		return c.json(result, 201);
@@ -559,15 +535,11 @@ app.post(
 app.patch(
 	"/:conversationId",
 	conversationBodyLimit,
-	zValidator(
-		"param",
-		z.object({ conversationId: ConversationIdParam }),
-		(result, c) => {
-			if (!result.success) {
-				return c.json({ error: "Invalid conversation id" }, 400);
-			}
-		},
-	),
+	zValidator("param", ConversationPath, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid conversation id" }, 400);
+		}
+	}),
 	zValidator("json", UpdateConversationBody, (result, c) => {
 		if (!result.success) {
 			return c.json(
@@ -576,18 +548,11 @@ app.patch(
 			);
 		}
 	}),
+	requireInternalIdentity,
 	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
-		}
-
 		const result = await c.var.deps.conversationStore.update(
 			{
-				userId: identity.data.memberCode,
+				userId: c.var.identity.memberCode,
 				conversationId: c.req.valid("param").conversationId,
 			},
 			c.req.valid("json"),
@@ -605,26 +570,15 @@ app.patch(
 // deletion. External workspace/session/object cleanup remains asynchronous.
 app.delete(
 	"/:conversationId",
-	zValidator(
-		"param",
-		z.object({ conversationId: ConversationIdParam }),
-		(result, c) => {
-			if (!result.success) {
-				return c.json({ error: "Invalid conversation id" }, 400);
-			}
-		},
-	),
-	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
+	zValidator("param", ConversationPath, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid conversation id" }, 400);
 		}
-
+	}),
+	requireInternalIdentity,
+	async (c) => {
 		const result = await c.var.deps.conversationStore.deletePermanently({
-			userId: identity.data.memberCode,
+			userId: c.var.identity.memberCode,
 			conversationId: c.req.valid("param").conversationId,
 		});
 		if (result.outcome === "not_found") {
@@ -642,15 +596,11 @@ app.delete(
 app.post(
 	"/:conversationId/runs",
 	conversationBodyLimit,
-	zValidator(
-		"param",
-		z.object({ conversationId: ConversationIdParam }),
-		(result, c) => {
-			if (!result.success) {
-				return c.json({ error: "Invalid conversation id" }, 400);
-			}
-		},
-	),
+	zValidator("param", ConversationPath, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid conversation id" }, 400);
+		}
+	}),
 	zValidator("json", RunAgentInputBody, (result, c) => {
 		if (!result.success) {
 			return c.json(
@@ -659,35 +609,28 @@ app.post(
 			);
 		}
 	}),
+	requireInternalIdentity,
 	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
-		}
-
 		const { conversationId } = c.req.valid("param");
 		const input = c.req.valid("json");
 		if (input.threadId !== conversationId) {
 			return c.json({ error: "threadId must match the Conversation id" }, 400);
 		}
 		const conversation = await c.var.deps.conversationStore.get({
-			userId: identity.data.memberCode,
+			userId: c.var.identity.memberCode,
 			conversationId,
 		});
 		if (!conversation) {
 			return c.json({ error: "Conversation not found" }, 404);
 		}
 		const existingRun = await c.var.deps.runStore.getRun({
-			userId: identity.data.memberCode,
+			userId: c.var.identity.memberCode,
 			conversationId,
 			runId: input.runId,
 		});
 		if (
 			existingRun === null &&
-			!(await c.var.deps.exposureGate.isAgentEnabled(identity.data))
+			!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))
 		) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
@@ -729,30 +672,16 @@ app.post(
 // answers stay retry-safe across the terminal transition.
 app.post(
 	"/:conversationId/runs/:runId/interrupt",
-	zValidator(
-		"param",
-		z.object({
-			conversationId: ConversationIdParam,
-			runId: RunIdParam,
-		}),
-		(result, c) => {
-			if (!result.success) {
-				return c.json({ error: "Invalid conversation or Run id" }, 400);
-			}
-		},
-	),
-	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
+	zValidator("param", RunPath, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid conversation or Run id" }, 400);
 		}
-
+	}),
+	requireInternalIdentity,
+	async (c) => {
 		const { conversationId, runId } = c.req.valid("param");
 		const result = await c.var.deps.runStore.requestInterruption({
-			userId: identity.data.memberCode,
+			userId: c.var.identity.memberCode,
 			conversationId,
 			runId,
 		});
@@ -768,30 +697,16 @@ app.post(
 // existing owned run without creating another backend attempt.
 app.get(
 	"/:conversationId/runs/:runId/events",
-	zValidator(
-		"param",
-		z.object({
-			conversationId: ConversationIdParam,
-			runId: RunIdParam,
-		}),
-		(result, c) => {
-			if (!result.success) {
-				return c.json({ error: "Invalid conversation or run id" }, 400);
-			}
-		},
-	),
-	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
+	zValidator("param", RunPath, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid conversation or run id" }, 400);
 		}
-
+	}),
+	requireInternalIdentity,
+	async (c) => {
 		const { conversationId, runId } = c.req.valid("param");
 		const conversation = await c.var.deps.conversationStore.get({
-			userId: identity.data.memberCode,
+			userId: c.var.identity.memberCode,
 			conversationId,
 		});
 		if (!conversation) {
@@ -799,7 +714,7 @@ app.get(
 		}
 
 		const run = await c.var.deps.runStore.getRun({
-			userId: identity.data.memberCode,
+			userId: c.var.identity.memberCode,
 			conversationId,
 			runId,
 		});

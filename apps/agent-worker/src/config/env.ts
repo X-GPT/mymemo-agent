@@ -1,10 +1,5 @@
 import { resolveDatabaseUrl } from "@mymemo/agent-db/database-url";
 import { resolveLiveStreamRedisUrl } from "@mymemo/live-text";
-import {
-	type BashToolLimits,
-	DEFAULT_BASH_TOOL_LIMITS,
-} from "../bash-tool/bash-tool";
-import type { FileToolLimits } from "../file-tools/file-tools";
 
 type Env = Record<string, string | undefined>;
 
@@ -34,35 +29,12 @@ export interface WorkerConfig {
 		region: string;
 	};
 	redisUrl: string;
-	sandboxIdleMs: number;
-	fileLimits: FileToolLimits;
-	bashLimits: BashToolLimits;
-	maxDocumentSearchResults: number;
-	maxDocumentListResults: number;
-	documentLoad: {
-		maxDocuments: number;
-		perDocumentMaxBytes: number;
-		perCallMaxBytes: number;
-	};
 	heartbeatIntervalMs: number;
 	shutdownTimeoutMs: number;
 	logLevel: string;
 	port: number;
 }
 
-const DEFAULT_SANDBOX_IDLE_MS = 300_000;
-const DEFAULT_FILE_READ_MAX_BYTES = 65_536;
-const DEFAULT_FILE_READ_MAX_LINES = 2_000;
-const DEFAULT_FILE_GREP_MAX_RESULTS = 100;
-const DEFAULT_FILE_COMMAND_MAX_OUTPUT_BYTES = 65_536;
-const DEFAULT_FILE_COMMAND_TIMEOUT_MS = 30_000;
-const DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS = 8;
-const DEFAULT_DOCUMENT_LIST_MAX_RESULTS = 20;
-const DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS = 10;
-// The KB fetch already clips content at 50k chars; these byte caps are the
-// tool-side backstop so a heavy multibyte document cannot balloon on disk.
-const DEFAULT_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES = 262_144;
-const DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES = 1_048_576;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const DEFAULT_PORT = 8080;
@@ -123,22 +95,6 @@ export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 			region: env.AWS_REGION,
 		},
 		redisUrl,
-		sandboxIdleMs: DEFAULT_SANDBOX_IDLE_MS,
-		fileLimits: {
-			readMaxBytes: DEFAULT_FILE_READ_MAX_BYTES,
-			readMaxLines: DEFAULT_FILE_READ_MAX_LINES,
-			grepMaxResults: DEFAULT_FILE_GREP_MAX_RESULTS,
-			commandMaxOutputBytes: DEFAULT_FILE_COMMAND_MAX_OUTPUT_BYTES,
-			commandTimeoutMs: DEFAULT_FILE_COMMAND_TIMEOUT_MS,
-		},
-		bashLimits: { ...DEFAULT_BASH_TOOL_LIMITS },
-		maxDocumentSearchResults: DEFAULT_DOCUMENT_SEARCH_MAX_RESULTS,
-		maxDocumentListResults: DEFAULT_DOCUMENT_LIST_MAX_RESULTS,
-		documentLoad: {
-			maxDocuments: DEFAULT_DOCUMENT_LOAD_MAX_DOCUMENTS,
-			perDocumentMaxBytes: DEFAULT_DOCUMENT_LOAD_PER_DOCUMENT_MAX_BYTES,
-			perCallMaxBytes: DEFAULT_DOCUMENT_LOAD_PER_CALL_MAX_BYTES,
-		},
 		heartbeatIntervalMs: positiveIntOr(
 			env.WORKER_HEARTBEAT_INTERVAL_MS,
 			DEFAULT_HEARTBEAT_INTERVAL_MS,

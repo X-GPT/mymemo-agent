@@ -3,6 +3,7 @@ import type {
 	ToolResultPayload,
 	ToolUsePayload,
 } from "@mymemo/agent-db/run-events";
+import { z } from "zod";
 import { PRESENT_UI_TOOL_NAME } from "../present-ui-tool";
 import { EXECUTOR_SERVER_NAME } from "./run-tools";
 
@@ -650,239 +651,123 @@ function projectReadResult(
 	});
 }
 
-interface RawSearchPassage {
-	title: string;
-	snippet: string;
-}
+const finiteNumber = z.number().finite();
 
-interface RawListDocumentsResult {
-	total: number;
-	titles: string[];
-	hasMore: boolean;
-}
+const listDocumentsResult = z
+	.object({
+		total: finiteNumber.int().nonnegative(),
+		documents: z.array(z.object({ title: z.string() })),
+		nextCursor: z.string().nullable(),
+	})
+	.transform(({ total, documents, nextCursor }) => ({
+		total,
+		titles: documents.map(({ title }) => title),
+		hasMore: nextCursor !== null,
+	}));
 
 function parseListDocumentsResult(
 	content: unknown,
-): RawListDocumentsResult | null {
-	const parsed = parseExecutorResult(content);
-	if (
-		parsed === null ||
-		!isFiniteNumber(parsed.total) ||
-		!Number.isInteger(parsed.total) ||
-		parsed.total < 0 ||
-		!Array.isArray(parsed.documents) ||
-		!(parsed.nextCursor === null || typeof parsed.nextCursor === "string")
-	) {
-		return null;
-	}
-	const titles: string[] = [];
-	for (const document of parsed.documents) {
-		if (!isRecord(document) || typeof document.title !== "string") return null;
-		titles.push(document.title);
-	}
-	return {
-		total: parsed.total,
-		titles,
-		hasMore: parsed.nextCursor !== null,
-	};
+): z.output<typeof listDocumentsResult> | null {
+	return parseExecutorResult(content, listDocumentsResult);
 }
+
+const searchDocumentsResult = z
+	.object({
+		passages: z.array(z.object({ title: z.string(), snippet: z.string() })),
+	})
+	.transform(({ passages }) => passages);
 
 function parseSearchDocumentsResult(
 	content: unknown,
-): RawSearchPassage[] | null {
-	const parsed = parseExecutorResult(content);
-	if (parsed === null || !Array.isArray(parsed.passages)) return null;
-	const passages: RawSearchPassage[] = [];
-	for (const passage of parsed.passages) {
-		if (
-			!isRecord(passage) ||
-			typeof passage.title !== "string" ||
-			typeof passage.snippet !== "string"
-		) {
-			return null;
-		}
-		passages.push({ title: passage.title, snippet: passage.snippet });
-	}
-	return passages;
+): z.output<typeof searchDocumentsResult> | null {
+	return parseExecutorResult(content, searchDocumentsResult);
 }
 
-interface RawLoadDocumentsResult {
-	loadedTitles: string[];
-	failedCount: number;
-}
+const loadDocumentsResult = z
+	.object({
+		loaded: z.array(z.object({ title: z.string() })),
+		errors: z.array(z.object({ error: z.string() })),
+	})
+	.transform(({ loaded, errors }) => ({
+		loadedTitles: loaded.map(({ title }) => title),
+		failedCount: errors.length,
+	}));
 
 function parseLoadDocumentsResult(
 	content: unknown,
-): RawLoadDocumentsResult | null {
-	const parsed = parseExecutorResult(content);
-	if (
-		parsed === null ||
-		!Array.isArray(parsed.loaded) ||
-		!Array.isArray(parsed.errors)
-	) {
-		return null;
-	}
-	const loadedTitles: string[] = [];
-	for (const loaded of parsed.loaded) {
-		if (!isRecord(loaded) || typeof loaded.title !== "string") return null;
-		loadedTitles.push(loaded.title);
-	}
-	for (const error of parsed.errors) {
-		if (!isRecord(error) || typeof error.error !== "string") return null;
-	}
-	return { loadedTitles, failedCount: parsed.errors.length };
+): z.output<typeof loadDocumentsResult> | null {
+	return parseExecutorResult(content, loadDocumentsResult);
 }
 
-/** The executor Bash tool's structured success result (see `runBashTool`). */
-interface RawBashResult {
-	exitCode: number | null;
-	stdout: string;
-	stderr: string;
-	stdoutTruncated: boolean;
-	stderrTruncated: boolean;
-	outcome: string;
+const bashResult = z.object({
+	exitCode: finiteNumber.nullable(),
+	stdout: z.string(),
+	stderr: z.string(),
+	stdoutTruncated: z.boolean(),
+	stderrTruncated: z.boolean(),
+	outcome: z.string(),
+});
+
+function parseBashResult(content: unknown): z.output<typeof bashResult> | null {
+	return parseExecutorResult(content, bashResult);
 }
 
-/** Parse the worker-owned executor JSON out of the MCP result content,
- * field by field; `null` on any shape surprise (omit upstream). */
-function parseBashResult(content: unknown): RawBashResult | null {
-	const parsed = parseExecutorResult(content);
-	if (parsed === null) return null;
-	const exitCode = parsed.exitCode;
-	if (exitCode !== null && !isFiniteNumber(exitCode)) {
-		return null;
-	}
-	if (typeof parsed.stdout !== "string" || typeof parsed.stderr !== "string") {
-		return null;
-	}
-	if (
-		typeof parsed.stdoutTruncated !== "boolean" ||
-		typeof parsed.stderrTruncated !== "boolean" ||
-		typeof parsed.outcome !== "string"
-	) {
-		return null;
-	}
-	return {
-		exitCode,
-		stdout: parsed.stdout,
-		stderr: parsed.stderr,
-		stdoutTruncated: parsed.stdoutTruncated,
-		stderrTruncated: parsed.stderrTruncated,
-		outcome: parsed.outcome,
-	};
+const readResult = z.object({
+	path: z.string(),
+	content: z.string(),
+	startLine: finiteNumber,
+	linesRead: finiteNumber,
+	truncated: z.boolean(),
+});
+
+function parseReadResult(content: unknown): z.output<typeof readResult> | null {
+	return parseExecutorResult(content, readResult);
 }
 
-/** The executor Read tool's structured success result (see `runReadFileTool`). */
-interface RawReadResult {
-	path: string;
-	content: string;
-	startLine: number;
-	linesRead: number;
-	truncated: boolean;
+const writeResult = z.object({ path: z.string(), bytesWritten: finiteNumber });
+
+function parseWriteResult(
+	content: unknown,
+): z.output<typeof writeResult> | null {
+	return parseExecutorResult(content, writeResult);
 }
 
-function parseReadResult(content: unknown): RawReadResult | null {
-	const parsed = parseExecutorResult(content);
-	if (parsed === null) return null;
-	if (typeof parsed.path !== "string" || typeof parsed.content !== "string") {
-		return null;
-	}
-	if (!isFiniteNumber(parsed.startLine) || !isFiniteNumber(parsed.linesRead)) {
-		return null;
-	}
-	if (typeof parsed.truncated !== "boolean") return null;
-	return {
-		path: parsed.path,
-		content: parsed.content,
-		startLine: parsed.startLine,
-		linesRead: parsed.linesRead,
-		truncated: parsed.truncated,
-	};
+const editResult = z.object({ path: z.string(), replacements: finiteNumber });
+
+function parseEditResult(content: unknown): z.output<typeof editResult> | null {
+	return parseExecutorResult(content, editResult);
 }
 
-/** The executor Write tool's structured success result (see `runWriteFileTool`). */
-interface RawWriteResult {
-	path: string;
-	bytesWritten: number;
-}
+const grepResult = z.object({
+	matches: z.array(
+		z.object({
+			path: z.string(),
+			line: finiteNumber,
+			column: finiteNumber,
+			text: z.string(),
+		}),
+	),
+	truncated: z.boolean(),
+});
 
-function parseWriteResult(content: unknown): RawWriteResult | null {
-	const parsed = parseExecutorResult(content);
-	if (parsed === null) return null;
-	if (typeof parsed.path !== "string" || !isFiniteNumber(parsed.bytesWritten)) {
-		return null;
-	}
-	return { path: parsed.path, bytesWritten: parsed.bytesWritten };
-}
-
-/** The executor Edit tool's structured success result (see `runEditFileTool`). */
-interface RawEditResult {
-	path: string;
-	replacements: number;
-}
-
-function parseEditResult(content: unknown): RawEditResult | null {
-	const parsed = parseExecutorResult(content);
-	if (parsed === null) return null;
-	if (typeof parsed.path !== "string" || !isFiniteNumber(parsed.replacements)) {
-		return null;
-	}
-	return { path: parsed.path, replacements: parsed.replacements };
-}
-
-/** One match of the executor Grep tool's structured success result. */
-interface RawGrepMatch {
-	path: string;
-	line: number;
-	column: number;
-	text: string;
-}
-
-/** The executor Grep tool's structured success result (see `runGrepFileTool`). */
-interface RawGrepResult {
-	matches: RawGrepMatch[];
-	truncated: boolean;
-}
-
-function parseGrepResult(content: unknown): RawGrepResult | null {
-	const parsed = parseExecutorResult(content);
-	if (parsed === null) return null;
-	if (!Array.isArray(parsed.matches) || typeof parsed.truncated !== "boolean") {
-		return null;
-	}
-	const matches: RawGrepMatch[] = [];
-	for (const match of parsed.matches) {
-		if (
-			!isRecord(match) ||
-			typeof match.path !== "string" ||
-			!isFiniteNumber(match.line) ||
-			!isFiniteNumber(match.column) ||
-			typeof match.text !== "string"
-		) {
-			return null;
-		}
-		matches.push({
-			path: match.path,
-			line: match.line,
-			column: match.column,
-			text: match.text,
-		});
-	}
-	return { matches, truncated: parsed.truncated };
+function parseGrepResult(content: unknown): z.output<typeof grepResult> | null {
+	return parseExecutorResult(content, grepResult);
 }
 
 /** Extract and parse the executor's structured JSON success text out of the
  * MCP result content; `null` on any surprise (omit upstream). */
-function parseExecutorResult(content: unknown): Record<string, unknown> | null {
+function parseExecutorResult<T>(
+	content: unknown,
+	schema: z.ZodType<T>,
+): T | null {
 	const text = resultText(content);
 	if (text === null) return null;
-	let parsed: unknown;
 	try {
-		parsed = JSON.parse(text);
+		const parsed = schema.safeParse(JSON.parse(text));
+		return parsed.success ? parsed.data : null;
 	} catch {
 		return null;
 	}
-	return isRecord(parsed) ? parsed : null;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -952,23 +837,7 @@ function clampJsonString(
 
 /** UTF-8 bytes one code point contributes inside a JSON string literal. */
 function jsonStringByteCost(char: string): number {
-	const code = char.codePointAt(0) ?? 0;
-	if (code === 0x22 || code === 0x5c) return 2; // \" and \\
-	if (code < 0x20) {
-		// \b \t \n \f \r are two-byte escapes; other controls escape as \u00XX.
-		return code === 0x08 ||
-			code === 0x09 ||
-			code === 0x0a ||
-			code === 0x0c ||
-			code === 0x0d
-			? 2
-			: 6;
-	}
-	if (code >= 0xd800 && code <= 0xdfff) return 6; // lone surrogate → \uXXXX
-	if (code < 0x80) return 1;
-	if (code < 0x800) return 2;
-	if (code < 0x10000) return 3;
-	return 4;
+	return Buffer.byteLength(JSON.stringify(char), "utf8") - 2;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

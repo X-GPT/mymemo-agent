@@ -1,5 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { EventType } from "@ag-ui/core";
+import type { RunRecord } from "@mymemo/agent-db/run-store";
+import {
+	agentCoreDispatchOutbox,
+	conversations,
+	runs,
+} from "@mymemo/agent-db/schema";
+import { createTestDatabase } from "@mymemo/agent-db/testing";
 import {
 	createInMemoryLiveStreamRelay,
 	createLiveStreamTelemetry,
@@ -11,8 +18,6 @@ import {
 } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
-import { agentCoreDispatchOutbox, conversations, runs } from "@/db/schema";
-import { createTestDatabase } from "@/db/testing";
 import type { AppDeps } from "@/deps";
 import type {
 	ConversationRecord,
@@ -20,11 +25,7 @@ import type {
 } from "@/features/conversation-store";
 import { PostgresConversationStore } from "@/features/conversation-store";
 import type { ExposureGate } from "@/features/exposure-gate";
-import {
-	PostgresRunStore,
-	type RunRecord,
-	type RunStore,
-} from "@/features/run-store";
+import { PostgresRunStore, type RunStore } from "@/features/run-store";
 import type { InternalIdentity } from "./conversations.schema";
 
 const { createApp } = await import("@/app");

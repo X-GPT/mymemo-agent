@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import { ConversationIdParam } from "@/features/conversations/conversations.schema";
-import { identityFromContext } from "@/features/conversations/internal-identity";
+import { requireInternalIdentity } from "@/features/conversations/internal-identity";
 import {
 	type ConversationHistoryPage,
 	InvalidConversationHistoryCursorError,
@@ -43,20 +43,14 @@ app.get(
 			return c.json({ error: "Invalid history query" }, 400);
 		}
 	}),
+	requireInternalIdentity,
 	async (c) => {
-		const identity = identityFromContext(c);
-		if (!identity.success) {
-			return c.json(
-				{ error: "Missing or invalid internal identity headers" },
-				401,
-			);
-		}
 		const { conversationId } = c.req.valid("param");
 		const query = c.req.valid("query");
 		let page: ConversationHistoryPage | null;
 		try {
 			page = await c.var.deps.conversationHistoryStore.getPage({
-				userId: identity.data.memberCode,
+				userId: c.var.identity.memberCode,
 				conversationId,
 				limit: query.limit,
 				cursor: query.cursor ?? null,

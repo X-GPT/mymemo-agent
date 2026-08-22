@@ -1,13 +1,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { loadRunStartedTx } from "@mymemo/agent-db/run-store";
-import { eq } from "drizzle-orm";
+import {
+	loadRunStartedTx,
+	RunInputMismatchError,
+} from "@mymemo/agent-db/run-store";
 import {
 	agentCoreDispatchOutbox,
 	conversations,
 	runEvents,
 	runs,
-} from "@/db/schema";
-import { createTestDatabase, type TestDb } from "@/db/testing";
+} from "@mymemo/agent-db/schema";
+import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import { eq } from "drizzle-orm";
 import {
 	type ConversationRecord,
 	PostgresConversationStore,
@@ -17,7 +20,6 @@ import {
 	ConversationArchivedError,
 	ConversationNotFoundError,
 	PostgresRunStore,
-	RunInputMismatchError,
 } from "./run-store";
 
 const initialActivity = new Date("2026-01-01T00:00:00.000Z");
