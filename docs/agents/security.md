@@ -13,7 +13,7 @@ Use this guide for changes involving identity, authorization, feature exposure, 
 
 New agent work is gated by the server-side Statsig gate `mymemo_agent_split_runtime_enabled` in `apps/chat-api/src/features/exposure-gate/`. Evaluate it on trusted identity after identity parsing and before any Conversation or Run write. A denial returns `403 { error: "Agent is not enabled" }`; gate errors fail closed.
 
-`createExposureGate(config)` selects the fail-closed `StatsigExposureGate` or the explicitly configured always-allow `BreakGlassExposureGate`.
+Production `createExposureGate(config)` always selects the fail-closed `StatsigExposureGate`. The development-only Chat API composition injects its always-open gate directly and is not selectable through production configuration.
 
 After exposure allows Conversation creation, chat-api explicitly persists the AgentCore-only execution-runtime compatibility marker. Runtime selection is not an input or operational control, and Statsig failures cannot select Fargate. chat-api records AgentCore dispatch only in Postgres and holds no SQS or SSM authority.
 

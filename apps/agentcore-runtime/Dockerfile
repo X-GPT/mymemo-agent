@@ -32,7 +32,9 @@ FROM oven/bun:${BUN_VERSION}-distroless AS release
 LABEL com.mymemo.agentcore-runtime.request-oriented="true"
 WORKDIR /usr/src/app
 COPY --from=install /temp/prod/node_modules node_modules
-COPY apps/agentcore-runtime apps/agentcore-runtime
+COPY apps/agentcore-runtime/src apps/agentcore-runtime/src
+COPY apps/agentcore-runtime/package.json apps/agentcore-runtime/
+COPY apps/agentcore-runtime/tsconfig.json apps/agentcore-runtime/
 COPY apps/agentcore-dispatch-consumer apps/agentcore-dispatch-consumer
 COPY apps/agent-worker apps/agent-worker
 COPY packages/agent-db packages/agent-db
@@ -49,3 +51,20 @@ WORKDIR /usr/src/app/apps/agentcore-runtime
 USER 65532:65532
 EXPOSE 8080/tcp
 ENTRYPOINT [ "bun", "run", "src/index.ts" ]
+
+# Development-only direct-env composition. Kept in a separate target so the
+# local entrypoint is absent from the production release image above.
+FROM base AS local
+COPY --from=install /temp/prod/node_modules node_modules
+COPY apps/agentcore-runtime apps/agentcore-runtime
+COPY apps/agentcore-dispatch-consumer apps/agentcore-dispatch-consumer
+COPY apps/agent-worker apps/agent-worker
+COPY packages/agent-db packages/agent-db
+COPY packages/agentcore-dispatch packages/agentcore-dispatch
+COPY packages/live-text packages/live-text
+COPY package.json .
+RUN mkdir -p /workspace/conversations && chown -R bun:bun /workspace
+WORKDIR /usr/src/app/apps/agentcore-runtime
+USER bun
+EXPOSE 8080/tcp
+ENTRYPOINT [ "bun", "run", "local/index.ts" ]

@@ -7,8 +7,8 @@
 // agentcore before the client admits Runs, then proves done Outcomes, durable
 // history, and Downloadable-artifact listing/download. It licenses the staged
 // exposure rollout in docs/runbooks/agentcore-rollout.md; it does not license
-// skipping that rollout's telemetry checks. The local smoke:local entrypoint
-// is unavailable until #523 adds the local AgentCore bridge.
+// skipping that rollout's telemetry checks. The Compose-level local smoke uses
+// scripts/smoke/local-agentcore-smoke.ts for its smaller one-Run contract.
 
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";

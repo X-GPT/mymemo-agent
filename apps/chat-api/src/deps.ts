@@ -73,6 +73,7 @@ export function createDeps(
 			warn() {},
 		},
 	),
+	exposureGate: ExposureGate = createExposureGate(config),
 ): AppDeps {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
@@ -99,6 +100,6 @@ export function createDeps(
 		liveStreamRelay,
 		liveStreamTelemetry,
 		closeLiveResources: () => liveStreamRelay.close(),
-		exposureGate: createExposureGate(config),
+		exposureGate,
 	};
 }

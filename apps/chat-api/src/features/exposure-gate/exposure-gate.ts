@@ -24,26 +24,12 @@ export interface ExposureGate {
 }
 
 /**
- * Operator break-glass gate: always allows. Used for local dev and for incident
- * response when Statsig is unavailable and an operator has explicitly opted in
- * via `AGENT_EXPOSURE_BREAK_GLASS=true`. Never the production default.
- */
-export class BreakGlassExposureGate implements ExposureGate {
-	async isAgentEnabled(_identity: InternalIdentity): Promise<boolean> {
-		return true;
-	}
-}
-
-/**
  * Statsig-backed production gate. Fails CLOSED: if initialization fails or an
  * evaluation throws, new work is denied. The Statsig secret is never logged.
  *
  * Initialization is kicked off in the constructor and awaited on the first
  * `isAgentEnabled`, so it overlaps boot (the gate is warm before the first
- * turn). Tests never construct this against the real Statsig client — the local
- * harness and `test-setup` run with `AGENT_EXPOSURE_BREAK_GLASS=true`, so the
- * entrypoint builds a `BreakGlassExposureGate` instead and no Statsig network
- * I/O fires at import.
+ * turn).
  */
 export class StatsigExposureGate implements ExposureGate {
 	private readonly gate: StatsigBooleanGate;

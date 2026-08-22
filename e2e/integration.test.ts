@@ -189,8 +189,12 @@ function interruptRun(
 
 /** Spawn `bun run src/index.ts` for an app under apps/<name>. Output is inherited
  * so a boot failure surfaces directly in the test/CI logs. */
-function spawnApp(name: string, env: Record<string, string>) {
-	return Bun.spawn(["bun", "run", "src/index.ts"], {
+function spawnApp(
+	name: string,
+	env: Record<string, string>,
+	entrypoint = "src/index.ts",
+) {
+	return Bun.spawn(["bun", "run", entrypoint], {
 		cwd: resolve(REPO_ROOT, "apps", name),
 		env: { ...process.env, ...env },
 		stdout: "inherit",
@@ -416,17 +420,20 @@ describe.skipIf(!RUN)("AgentCore integration (real Postgres and Redis)", () => {
 			INTEGRATION_RESUME_DELAY_MS: "1500",
 			INTEGRATION_RUNTIME_PORT: String(runtimePort),
 		};
-		chat = spawnApp("chat-api", {
-			AGENT_DATABASE_URL: dbUrl,
-			ARTIFACT_BUCKET: "mymemo-agent-integration-artifacts",
-			AWS_REGION: "us-west-2",
-			DB_SSL: "disable",
-			AGENT_EXPOSURE_BREAK_GLASS: "true",
-			REDIS_URL: redisUrl,
-			LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
-			PORT: String(chatPort),
-			LOG_LEVEL: "warn",
-		});
+		chat = spawnApp(
+			"chat-api",
+			{
+				AGENT_DATABASE_URL: dbUrl,
+				ARTIFACT_BUCKET: "mymemo-agent-integration-artifacts",
+				AWS_REGION: "us-west-2",
+				DB_SSL: "disable",
+				REDIS_URL: redisUrl,
+				LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
+				PORT: String(chatPort),
+				LOG_LEVEL: "warn",
+			},
+			"local/index.ts",
+		);
 
 		if (!(await waitForHealthy(30_000))) {
 			throw new Error(
