@@ -131,6 +131,16 @@ describe("agent-maintenance infrastructure", () => {
 		expect(cloudwatch).toContain('Service = "agentcore-runtime"');
 	});
 
+	it("does not replace the fixed-name Live Stream client security group", () => {
+		const redis = section(
+			terraformFile("redis.tf"),
+			'resource "aws_security_group" "live_redis_clients"',
+			'resource "aws_security_group_rule" "live_redis_from_services"',
+		);
+
+		expect(redis).toContain("ignore_changes = [description]");
+	});
+
 	it("keeps retired repository deletion in the one-time handoff", () => {
 		const ecr = readFileSync("infra/ecr/main.tf", "utf8");
 		const release = readFileSync(
