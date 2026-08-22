@@ -41,10 +41,9 @@ The set of documents a conversation may access — `general`, `collection`, or
 _Avoid_: permissions, access level
 
 **Execution runtime**:
-The immutable choice, made once at Conversation creation, of which trusted
-runtime executes a Conversation's Runs: `fargate` or `agentcore`. A
-Conversation never mixes runtimes; reassignment exists only as a documented
-operator break-glass step.
+The trusted runtime that executes a Conversation's Runs. AgentCore is the only
+supported execution runtime; there is no runtime reassignment or Fargate
+fallback path.
 _Avoid_: Run target, worker preference, routing hint
 
 **AgentCore dispatch**:
@@ -307,9 +306,8 @@ An SDK initialization id and subagent-only mirrors do not count, and a
 _Avoid_: SDK result id, initialization id, transcript contents
 
 **Split runtime**:
-The target architecture: the agent loop runs in a trusted runtime — the
-Fargate worker or the AgentCore Runtime — while untrusted filesystem and shell
-execution stays in E2B.
+The architecture in which the agent loop runs in the trusted AgentCore Runtime
+while untrusted filesystem and shell execution stays in E2B.
 
 **Prototype path**:
 The superseded daemon-based architecture — agent loop inside the sandbox,

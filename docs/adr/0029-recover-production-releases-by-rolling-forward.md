@@ -2,6 +2,9 @@
 
 Status: accepted (2026-08-20). Amends ADR-0025 and ADR-0027 by superseding
 their production binary-rollback consequences.
+Amended by
+[ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md), which removes
+the Execution runtime gate from rollout and incident recovery.
 
 Production recovery for the AgentCore release train is roll-forward only. An
 incident is contained before another binary is deployed: disable the SSM
