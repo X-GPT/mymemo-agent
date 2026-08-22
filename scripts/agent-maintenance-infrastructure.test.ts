@@ -144,7 +144,7 @@ describe("agent-maintenance infrastructure", () => {
 
 		expect(ecr).not.toContain("agent_worker");
 		expect(release).not.toContain("aws ecr delete-repository");
-		expect(handoff).toContain("aws ecr delete-repository");
+		expect(handoff).toContain("aws --profile mymemo ecr delete-repository");
 		expect(handoff).toContain("--repository-name mymemo-agent-worker");
 		expect(handoff).toContain("--force");
 	});

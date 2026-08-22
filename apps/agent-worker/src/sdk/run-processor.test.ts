@@ -1272,6 +1272,11 @@ describe("createSdkRunProcessor — through the run harness", () => {
 			executedByWorkerId: "worker-1",
 		});
 		expect(await readEvents("run-1")).toEqual([]);
+		expect(
+			await tdb.db
+				.select({ ownerWorkerId: conversations.ownerWorkerId })
+				.from(conversations),
+		).toEqual([{ ownerWorkerId: "worker-1" }]);
 	});
 
 	it("force-closes a query-local infrastructure stop and maps it to error", async () => {

@@ -25,13 +25,12 @@ export function createAgentCoreRunHarness(options: {
 		if (!owner) return;
 		const run = await loadExecutingRunTx(options.db, owner);
 		if (!run) throw new Error(`test Run ${owner.runId} was not executable`);
-		try {
-			await runServing.serveStartedRun({
-				run,
-				owner,
-				shutdownSignal: shutdown.signal,
-			});
-		} finally {
+		const result = await runServing.serveStartedRun({
+			run,
+			owner,
+			shutdownSignal: shutdown.signal,
+		});
+		if (result.type !== "ownership_lost") {
 			await releaseConversationTx(options.db, owner);
 		}
 	}

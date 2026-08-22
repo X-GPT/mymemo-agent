@@ -19,18 +19,18 @@ queued-Run expiration, Reclamation, and asynchronous cleanup.
 
      cluster_arn="$(AWS_PROFILE=mymemo terraform -chdir=infra/terraform output -raw shared_ecs_cluster_arn)"
      worker_service="$(AWS_PROFILE=mymemo terraform -chdir=infra/terraform output -raw agent_worker_service_name)"
-     AWS_PROFILE=mymemo aws ecs update-service --region us-west-2 \
+     aws --profile mymemo ecs update-service --region us-west-2 \
        --cluster "${cluster_arn}" --service "${worker_service}" --desired-count 0
-     AWS_PROFILE=mymemo aws ecs wait services-stable --region us-west-2 \
+     aws --profile mymemo ecs wait services-stable --region us-west-2 \
        --cluster "${cluster_arn}" --services "${worker_service}"
 
      running_worker_task_arns="$(
-       AWS_PROFILE=mymemo aws ecs list-tasks --region us-west-2 \
+       aws --profile mymemo ecs list-tasks --region us-west-2 \
          --cluster "${cluster_arn}" --service-name "${worker_service}" \
          --desired-status RUNNING --query taskArns --output json
      )"
      stopped_worker_task_arns="$(
-       AWS_PROFILE=mymemo aws ecs list-tasks --region us-west-2 \
+       aws --profile mymemo ecs list-tasks --region us-west-2 \
          --cluster "${cluster_arn}" --service-name "${worker_service}" \
          --desired-status STOPPED --query taskArns --output json
      )"
@@ -43,7 +43,7 @@ queued-Run expiration, Reclamation, and asynchronous cleanup.
      worker_task_state='{"nonStopped":[],"failures":[]}'
      if (( $(jq 'length' <<<"${worker_task_arns_json}") > 0 )); then
        worker_task_state="$(
-         AWS_PROFILE=mymemo aws ecs describe-tasks --region us-west-2 \
+         aws --profile mymemo ecs describe-tasks --region us-west-2 \
            --cluster "${cluster_arn}" \
            --tasks $(jq -r '.[]' <<<"${worker_task_arns_json}") \
            --query '{nonStopped:tasks[?lastStatus!=`STOPPED`].{taskArn:taskArn,lastStatus:lastStatus,desiredStatus:desiredStatus},failures:failures}' \
@@ -67,12 +67,12 @@ queued-Run expiration, Reclamation, and asynchronous cleanup.
    operator action. This permanently deletes every image in the repository:
 
    ```bash
-   AWS_PROFILE=mymemo aws sts get-caller-identity
-   AWS_PROFILE=mymemo aws ecr describe-repositories --region us-west-2 \
+   aws --profile mymemo sts get-caller-identity
+   aws --profile mymemo ecr describe-repositories --region us-west-2 \
      --repository-names mymemo-agent-worker
-   AWS_PROFILE=mymemo aws ecr list-images --region us-west-2 \
+   aws --profile mymemo ecr list-images --region us-west-2 \
      --repository-name mymemo-agent-worker --output json
-   AWS_PROFILE=mymemo aws ecr delete-repository --region us-west-2 \
+   aws --profile mymemo ecr delete-repository --region us-west-2 \
      --repository-name mymemo-agent-worker --force
    ```
 
