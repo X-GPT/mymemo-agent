@@ -2,7 +2,8 @@
  * Test-only AgentCore Runtime for the credential-free Postgres/Redis
  * integration. It replaces AWS queue transport with a local outbox poll, but
  * keeps dispatch publication, durable acquisition, Runtime invocation,
- * shared Run-serving, Reclamation, and the Live Stream on production seams.
+ * shared Run-serving, and the Live Stream on production seams. Global
+ * expiration and Reclamation remain outside the Runtime process.
  */
 
 import { createLogger, toMessage } from "../apps/agent-worker/src/logger";
@@ -24,10 +25,6 @@ import {
 	confirmAgentCoreDispatchPublishedTx,
 } from "../packages/agent-db/src/agentcore-dispatch";
 import { createDatabase } from "../packages/agent-db/src/client";
-import {
-	expireUnownedQueuedRunsTx,
-	reclaimConversationTx,
-} from "../packages/agent-db/src/run-store";
 import {
 	createRedisLiveStreamRelay,
 	type LiveStreamRelay,
@@ -258,9 +255,6 @@ async function invokeNextDispatch(): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-	await runServing.heartbeat();
-	while (await reclaimConversationTx(database)) {}
-	while (await expireUnownedQueuedRunsTx(database)) {}
 	await invokeNextDispatch();
 }
 

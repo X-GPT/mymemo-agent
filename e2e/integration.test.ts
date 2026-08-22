@@ -47,6 +47,11 @@ import {
 	type RedisTestServer,
 	startRedisTestServer,
 } from "@mymemo/test-support/redis-test-server";
+import { createDatabase } from "../packages/agent-db/src/client";
+import {
+	expireUnownedQueuedRunsTx,
+	reclaimConversationTx,
+} from "../packages/agent-db/src/run-store";
 
 const DB_URL = process.env.AGENT_DATABASE_URL;
 const RUN = Boolean(DB_URL);
@@ -203,6 +208,38 @@ function spawnAgentCoreRuntime(env: Record<string, string>) {
 	});
 }
 
+/** Release 1 keeps global expiration and Reclamation outside AgentCore
+ * Runtime. Drive that production ordering from the outer test orchestration so
+ * Runtime failure cannot also remove the maintenance backstop under test. */
+function startAgentCoreMaintenance(databaseUrl: string): () => Promise<void> {
+	const database = createDatabase(databaseUrl);
+	let stopping = false;
+	let failure: unknown;
+	let activeSweep = Promise.resolve();
+
+	async function sweep(): Promise<void> {
+		while (await expireUnownedQueuedRunsTx(database)) {}
+		while (await reclaimConversationTx(database)) {}
+	}
+
+	function scheduleSweep(): void {
+		if (stopping || failure !== undefined) return;
+		activeSweep = activeSweep.then(sweep).catch((error) => {
+			failure = error;
+		});
+	}
+
+	const interval = setInterval(scheduleSweep, 500);
+	scheduleSweep();
+	return async () => {
+		stopping = true;
+		clearInterval(interval);
+		await activeSweep;
+		await database.$client.end();
+		if (failure !== undefined) throw failure;
+	};
+}
+
 async function chatApiHealthy(): Promise<boolean> {
 	try {
 		const res = await fetch(`${CHAT_URL}/health`, {
@@ -347,6 +384,7 @@ let runtimeProcess: Bun.Subprocess | undefined;
 let redis: RedisTestServer | undefined;
 let runtimePort: number;
 let runtimeEnv: Record<string, string>;
+let stopMaintenance: (() => Promise<void>) | undefined;
 
 async function waitForRuntimeHealthy(timeoutMs: number): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
@@ -388,6 +426,7 @@ describe.skipIf(!RUN)("AgentCore integration (real Postgres and Redis)", () => {
 		runtimePort = await findFreePort();
 		redis = await startRedisTestServer({ stdio: "inherit" });
 		const redisUrl = redis.url;
+		stopMaintenance = startAgentCoreMaintenance(dbUrl);
 		runtimeEnv = {
 			AGENT_DATABASE_URL: dbUrl,
 			REDIS_URL: redisUrl,
@@ -420,6 +459,7 @@ describe.skipIf(!RUN)("AgentCore integration (real Postgres and Redis)", () => {
 	afterAll(async () => {
 		chat?.kill();
 		await stopAgentCoreRuntime();
+		await stopMaintenance?.();
 		await redis?.stop();
 	});
 
@@ -1385,7 +1425,8 @@ describe.skipIf(!RUN)("AgentCore integration (real Postgres and Redis)", () => {
 			expect(await crashedRuntime.exited).toBe(17);
 			runtimeProcess = undefined;
 
-			await startAgentCoreRuntime();
+			// The separate Release 1 maintenance actor must establish the durable
+			// Outcome while the crashed Runtime stays down.
 			const staleHistory = await waitForHistoryRun(
 				stale.conversationId,
 				stale.runId,
