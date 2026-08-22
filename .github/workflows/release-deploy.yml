@@ -4,9 +4,10 @@ name: Release deploy
 # pinned to runs on refs/heads/main (see infra/bootstrap-iam), and every apply
 # requires the typed workflow input. There is no unattended application lane:
 # every unified Terraform plan receives the same operator authorization.
-# - The deploy job registers only the migration task definition, migrates the
-#   database, then applies the unified plan and rolls ECS. This keeps new
-#   Runtime, Lambda, and ECS code behind the compatible schema.
+# - The deploy job applies the migration task definition and its Terraform
+#   prerequisites, migrates the database, then applies the unified plan and
+#   rolls ECS. This keeps new Runtime, Lambda, and ECS code behind the
+#   compatible schema.
 # - Dispatch from main covers releases, bootstrap, re-deploys, and incident
 #   response. Other refs are rejected before any release work starts.
 

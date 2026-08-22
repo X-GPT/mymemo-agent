@@ -299,7 +299,7 @@ async function collectAttachedEvents(
 	return events;
 }
 
-describe("createSdkRunProcessor — through the run loop", () => {
+describe("createSdkRunProcessor — through the run harness", () => {
 	it("carries scripted PresentUI through the durable fence and Live Stream reconnect", async () => {
 		const relay = createInMemoryLiveStreamRelay();
 		const processorStarted = Promise.withResolvers<void>();
@@ -325,7 +325,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				{ toolUseId: "toolu-ui-1", text: '{"accepted":true}' },
 			]),
 		];
-		const loop = buildHarness(
+		const harness = buildHarness(
 			async () => {
 				processorStarted.resolve();
 				await startQuery.promise;
@@ -352,14 +352,14 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
+		await harness.tick();
 		await processorStarted.promise;
 		const originalEvents = collectAttachedEvents(relay, "run-1");
 		startQuery.resolve();
 		await envelopeConsumed.promise;
 		const reconnectEvents = collectAttachedEvents(relay, "run-1");
 		finishQuery.resolve();
-		await loop.drain();
+		await harness.drain();
 		const [original, reconnect] = await Promise.all([
 			originalEvents,
 			reconnectEvents,
@@ -418,7 +418,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				},
 			],
 		});
-		const loop = buildHarness(async () => ({
+		const harness = buildHarness(async () => ({
 			...noArtifactPublication,
 			sessionEvidence: noSessionMirrorEvidence,
 			close() {
@@ -439,15 +439,15 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
+		await harness.tick();
 		await envelopeConsumed.promise;
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("interrupted");
 		const durable = await readEvents("run-1");
@@ -469,7 +469,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not publish a pointer from an SDK initialization id alone", async () => {
-		const loop = buildHarness(async (_run, _signal, owner) => {
+		const harness = buildHarness(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			return messageQuery([initMessage("session-initialized")], store);
 		});
@@ -479,8 +479,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
@@ -491,7 +491,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("publishes the first pointer only when the bound store mirrored that main session", async () => {
-		const loop = buildHarness(async (_run, _signal, owner) => {
+		const harness = buildHarness(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-proven" },
@@ -505,8 +505,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
@@ -514,7 +514,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not publish a pointer from subagent-only mirroring", async () => {
-		const loop = buildHarness(async (_run, _signal, owner) => {
+		const harness = buildHarness(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{
@@ -532,8 +532,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
@@ -541,7 +541,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("commits one durable Assistant message for a complete provider envelope", async () => {
-		const loop = buildHarness(async () =>
+		const harness = buildHarness(async () =>
 			messageQuery(textEnvelope({ completeText: "Hello there." })),
 		);
 		await seedQueuedRun(tdb.db, {
@@ -550,8 +550,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("done");
 		const events = await readEvents("run-1");
@@ -581,15 +581,15 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			]),
 			resultMessage(),
 		];
-		const loop = buildHarness(async () => messageQuery(messages));
+		const harness = buildHarness(async () => messageQuery(messages));
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("done");
 		const events = await readEvents("run-1");
@@ -798,15 +798,15 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		},
 	]) {
 		it(`fails the Run closed for ${fixture.name}`, async () => {
-			const loop = buildHarness(async () => messageQuery(fixture.messages));
+			const harness = buildHarness(async () => messageQuery(fixture.messages));
 			await seedQueuedRun(tdb.db, {
 				runId: "run-1",
 				userId: "user-1",
 				conversationId: "conv-1",
 			});
 
-			await loop.tick();
-			await loop.drain();
+			await harness.tick();
+			await harness.drain();
 
 			expect((await readRun("run-1"))?.status).toBe("error");
 			const events = await readEvents("run-1");
@@ -822,7 +822,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		let seenRunId: string | undefined;
 		let seenOwner: RunWriteOwner | undefined;
 		let sawSignal = false;
-		const loop = buildHarness(async (run, signal, owner) => {
+		const harness = buildHarness(async (run, signal, owner) => {
 			seenRunId = run.runId;
 			seenOwner = owner;
 			sawSignal = signal instanceof AbortSignal;
@@ -834,8 +834,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		expect(seenRunId).toBe("run-1");
 		expect(sawSignal).toBe(true);
@@ -864,7 +864,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				errors.push(fields);
 			},
 		};
-		const loop = buildHarness(
+		const harness = buildHarness(
 			async (_run, signal, owner) => {
 				await createRuntimeFor(owner);
 				signal.addEventListener(
@@ -912,8 +912,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 		expect(toolAbortReason).toEqual(new Error("agent session mirror failed"));
@@ -945,7 +945,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const started = Promise.withResolvers<void>();
 		const releaseMirrorError = Promise.withResolvers<void>();
 		const calls: string[] = [];
-		const loop = buildHarness(async (_run, signal) => {
+		const harness = buildHarness(async (_run, signal) => {
 			signal.addEventListener("abort", () => calls.push("tool-abort"), {
 				once: true,
 			});
@@ -969,7 +969,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await loop.tick();
+		await harness.tick();
 		await started.promise;
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
@@ -978,7 +978,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		releaseMirrorError.resolve();
-		await loop.drain();
+		await harness.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 		expect((await readRun("run-1"))?.status).toBe("interrupted");
@@ -988,7 +988,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("retains an existing session pointer after mirror_error", async () => {
-		const loop = buildHarness(async (run, _signal, owner) => {
+		const harness = buildHarness(async (run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			await tdb.db
 				.update(conversationRuntime)
@@ -1005,8 +1005,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("error");
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
@@ -1019,7 +1019,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const calls: string[] = [];
 		let deadlineMs: number | undefined;
 		let deadlineCancelled = false;
-		const loop = buildHarness(
+		const harness = buildHarness(
 			async (_run, signal) => {
 				signal.addEventListener("abort", () => calls.push("tool-abort"), {
 					once: true,
@@ -1058,15 +1058,15 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
+		await harness.tick();
 		await started.promise;
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 		expect(deadlineMs).toBe(30_000);
@@ -1091,7 +1091,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			},
 		};
 		const deadline = virtualStopDeadline();
-		const loop = buildHarness(
+		const harness = buildHarness(
 			async (_run, signal, owner) => {
 				const store = await createRuntimeSessionStoreFor(owner);
 				await store.append(
@@ -1130,14 +1130,14 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
+		await harness.tick();
 		await started.promise;
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await loop.tick();
+		await harness.tick();
 		await interrupted.promise;
 		expect(await deadline.started).toBe(30_000);
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
@@ -1147,7 +1147,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			.update(conversations)
 			.set({ ownerUntil: new Date(Date.now() + 1_000) })
 			.where(eq(conversations.conversationId, "conv-1"));
-		await loop.tick();
+		await harness.tick();
 		const [conversation] = await tdb.db.select().from(conversations);
 		expect(conversation?.ownerUntil?.getTime()).toBeGreaterThan(
 			Date.now() + 30_000,
@@ -1155,7 +1155,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 
 		deadline.elapse();
-		await loop.drain();
+		await harness.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt", "close"]);
 		expect(warnings).toContainEqual({
@@ -1173,7 +1173,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const releaseStream = Promise.withResolvers<void>();
 		const deadline = virtualStopDeadline();
 		const calls: string[] = [];
-		const loop = buildHarness(
+		const harness = buildHarness(
 			async () => {
 				started.resolve();
 				return withNoSessionMirrorEvidence({
@@ -1198,7 +1198,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await loop.tick();
+		await harness.tick();
 		await started.promise;
 		await tdb.db
 			.update(conversations)
@@ -1208,12 +1208,12 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				ownerUntil: new Date(Date.now() + 60_000),
 			})
 			.where(eq(conversations.conversationId, "conv-1"));
-		await loop.tick();
+		await harness.tick();
 		await Promise.resolve();
 
 		expect(calls).toEqual(["close"]);
 		releaseStream.resolve();
-		await loop.drain();
+		await harness.drain();
 
 		expect(await readRun("run-1")).toMatchObject({
 			status: "running",
@@ -1227,7 +1227,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const closeCalled = Promise.withResolvers<void>();
 		const releaseStream = Promise.withResolvers<void>();
 		const deadline = virtualStopDeadline();
-		const loop = buildHarness(
+		const harness = buildHarness(
 			async () =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1249,14 +1249,14 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await loop.tick();
+		await harness.tick();
 		await started.promise;
 		await requestRunInterruptionTx(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await loop.tick();
+		await harness.tick();
 		deadline.elapse();
 		await closeCalled.promise;
 
@@ -1265,7 +1265,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 		releaseStream.resolve();
-		await loop.drain();
+		await harness.drain();
 
 		expect(await readRun("run-1")).toMatchObject({
 			status: "interrupt_requested",
@@ -1278,7 +1278,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const started = Promise.withResolvers<void>();
 		const forceCloseController = new AbortController();
 		const calls: string[] = [];
-		const loop = buildHarness(
+		const harness = buildHarness(
 			async () =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1310,10 +1310,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
+		await harness.tick();
 		await started.promise;
 		forceCloseController.abort();
-		await loop.drain();
+		await harness.drain();
 
 		expect(calls).toEqual(["close"]);
 		expect((await readRun("run-1"))?.status).toBe("error");
@@ -1327,7 +1327,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const settled = Promise.withResolvers<void>();
 		const calls: string[] = [];
 		let deadlines = 0;
-		const loop = buildHarness(
+		const harness = buildHarness(
 			async (_run, _signal) =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1356,10 +1356,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 		});
-		await loop.tick();
+		await harness.tick();
 		await started.promise;
 
-		await loop.stop();
+		await harness.stop();
 
 		expect(calls).toEqual(["close"]);
 		expect(deadlines).toBe(0);
@@ -1374,7 +1374,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			const started = Promise.withResolvers<void>();
 			const stopped = Promise.withResolvers<void>();
 			const deadline = virtualStopDeadline();
-			const loop = buildHarness(
+			const harness = buildHarness(
 				async () =>
 					withNoSessionMirrorEvidence({
 						...noArtifactPublication,
@@ -1399,7 +1399,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				userId: "user-1",
 				conversationId: "conv-1",
 			});
-			await loop.tick();
+			await harness.tick();
 			await started.promise;
 			await requestRunInterruptionTx(tdb.db, {
 				runId: "run-1",
@@ -1407,8 +1407,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				conversationId: "conv-1",
 			});
 
-			await loop.tick();
-			await loop.drain();
+			await harness.tick();
+			await harness.drain();
 
 			expect((await readRun("run-1"))?.status).toBe("interrupted");
 			expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
@@ -1419,7 +1419,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	it("terminalizes an SDK failure with the generic client message", async () => {
 		const incomplete = textEnvelope({ completeText: "partial" }).slice(0, 4);
-		const loop = buildHarness(async () =>
+		const harness = buildHarness(async () =>
 			stepQuery([...incomplete, { throw: new Error("model exploded") }]),
 		);
 		await seedQueuedRun(tdb.db, {
@@ -1428,8 +1428,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		const run = await readRun("run-1");
 		expect(run?.status).toBe("error");
@@ -1444,13 +1444,13 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("preserves mirrored continuity when a thrown failure reconciles to interruption", async () => {
-		const loop = buildHarness(async (run, _signal, owner) => {
+		const harness = buildHarness(async (run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-reconciled" },
 				[{ type: "user", uuid: "main-entry" } as SessionStoreEntry],
 			);
-			// Land the durable request after the loop's last heartbeat so local
+			// Land the durable request after the harness's last heartbeat so local
 			// interruption state remains false and the error CAS must reconcile.
 			await requestRunInterruptionTx(tdb.db, {
 				runId: run.runId,
@@ -1465,8 +1465,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("interrupted");
@@ -1478,7 +1478,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	it("records one error outcome for an SDK error result followed by rejection", async () => {
 		const incomplete = textEnvelope({ completeText: "partial" }).slice(0, 4);
-		const loop = buildHarness(async () =>
+		const harness = buildHarness(async () =>
 			stepQuery([
 				...incomplete,
 				errorResultMessage("provider rejected the request"),
@@ -1491,8 +1491,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("error");
 		const events = await readEvents("run-1");
@@ -1501,7 +1501,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("advances the agent-session pointer only after a valid successful stream", async () => {
-		const loop = buildHarness(async (_run, _signal, owner) => {
+		const harness = buildHarness(async (_run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			return messageQuery(
 				[
@@ -1521,8 +1521,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
@@ -1534,7 +1534,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not advance the agent-session pointer for an invalid envelope", async () => {
-		const loop = buildHarness(async (_run, _signal, owner) => {
+		const harness = buildHarness(async (_run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			return messageQuery([
 				...textEnvelope({ completeText: "uncommitted" }).slice(0, -1),
@@ -1547,8 +1547,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("error");

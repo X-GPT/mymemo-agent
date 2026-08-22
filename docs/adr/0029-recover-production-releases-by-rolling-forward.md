@@ -6,6 +6,12 @@ Amended by
 [ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md), which removes
 the Execution runtime gate from rollout and incident recovery.
 
+Amended (2026-08-22) by the Fargate-retirement release implementing ADR-0031:
+containment now disables Dispatch and, when all new work must stop, the exposure
+gate. `agent-maintenance` remains running for expiration, Reclamation, and
+cleanup. The runtime gate, deployment-readiness fence, and deployed
+`agent-worker` referenced below are retired historical context.
+
 Production recovery for the AgentCore release train is roll-forward only. An
 incident is contained before another binary is deployed: disable the SSM
 Dispatch control, turn the Execution runtime gate OFF, and turn the exposure

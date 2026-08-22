@@ -123,7 +123,7 @@ function createDeliveryHarness(
 		createObjectKey: () => `objects/acceptance-${nextObject++}`,
 		createArtifactId: () => `artifact-${nextArtifact++}`,
 	});
-	const loop = createAgentCoreRunHarness({
+	const harness = createAgentCoreRunHarness({
 		db: tdb.db,
 		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
@@ -142,7 +142,7 @@ function createDeliveryHarness(
 	const queries = new Map<string, SupervisedQuery>();
 
 	return {
-		loop,
+		harness,
 		storedObjects,
 		setUploadOverride(override?: ArtifactObjectStore["upload"]) {
 			uploadOverride = override;
@@ -160,8 +160,8 @@ function createDeliveryHarness(
 		},
 		async run(runId: string, query: SupervisedQuery) {
 			await this.queue(runId, query);
-			await loop.tick();
-			await loop.drain();
+			await harness.tick();
+			await harness.drain();
 		},
 		async cleanup(now: Date) {
 			return await runCleanupPass({
@@ -463,14 +463,14 @@ describe("Downloadable artifact delivery acceptance", () => {
 					workspace.write("interrupt.txt", encoder.encode("partial"), "5");
 				}),
 			);
-			await delivery.loop.tick();
+			await delivery.harness.tick();
 			await started;
 			await tdb.db
 				.update(runs)
 				.set({ status: "interrupt_requested" })
 				.where(eq(runs.runId, "run-interrupt"));
-			await delivery.loop.tick();
-			await delivery.loop.drain();
+			await delivery.harness.tick();
+			await delivery.harness.drain();
 			delivery.setUploadOverride();
 			workspace.delete("interrupt.txt");
 

@@ -8,6 +8,12 @@ not executable release resources. The existing `infra/ecr` bootstrap root owns
 all four repositories, including `mymemo/agentcore-runtime`; the production
 root resolves the Runtime repository by its exact name.
 
+Amended (2026-08-22) by the Fargate-retirement release: `agent-worker` is now a
+shared code package rather than deployed compute. `agent-maintenance` owns its
+former global maintenance responsibilities. The targeted pre-migration apply
+includes the migration task definition and its Terraform-declared prerequisites
+without a separate plan classifier.
+
 The ECS applications, dedicated Dispatch publisher, consumer Lambda, and
 AgentCore Runtime share `infra/terraform` and the
 `mymemo-agent/prod.tfstate` backend. They use one AWS provider line
@@ -18,18 +24,20 @@ before those executable artifacts can be built and the unified plan can be
 created; it does not independently deploy any executable surface.
 
 This is a lifecycle boundary, not a process or authority merger. The publisher,
-consumer, Runtime, chat-api, and agent-worker keep their separate compute and
-IAM roles. The SSM Dispatch parameter remains an operator-owned fail-closed
-control whose value Terraform ignores after creation.
+consumer, Runtime, chat-api, and `agent-maintenance` keep their separate compute
+and IAM roles. `agent-worker` supplies shared Runtime and maintenance code but
+is not deployed. The SSM Dispatch parameter remains an operator-owned
+fail-closed control whose value Terraform ignores after creation.
 
 One state does not mean one undifferentiated apply phase. Every release is
 manually dispatched from `main` with the production confirmation phrase. It
 first produces the complete plan, then applies a narrowly targeted and
-separately validated migration task definition. After the migration succeeds,
-it re-plans and applies the complete state and rolls ECS. This preserves
-schema-before-code ordering without a second backend. The one-time empty ECS
-bootstrap additionally requires Dispatch disabled because the initial
-base-infrastructure apply precedes the migration.
+saved plan containing the migration task definition and its Terraform-declared
+prerequisites. After the migration succeeds, it re-plans and applies the
+complete state and rolls ECS. This preserves schema-before-code ordering
+without a second backend. The one-time empty ECS bootstrap additionally
+requires Dispatch disabled because the initial base-infrastructure apply
+precedes the migration.
 
 Every complete Terraform plan receives the same operator authorization; there
 is no automatic application lane or attribute-level release classifier.

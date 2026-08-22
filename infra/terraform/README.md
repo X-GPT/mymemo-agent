@@ -199,13 +199,13 @@ The first command must succeed and the guard must exit without printing an
 error.
 
 ECS service `task_definition` changes are intentionally ignored by Terraform.
-For an ordinary release, the workflow first applies a strictly classified,
-targeted plan containing only the new migration task definition. It runs that
-migration, then re-plans and applies the complete state so the consumer Lambda,
-AgentCore Runtime, publisher task definition, and other ECS task definitions all
-move together after the compatible schema exists. Finally it rolls the ECS
-services. The target is an ordering mechanism inside one release, not a second
-state or a manual pause.
+For an ordinary release, the workflow first applies a saved, targeted plan
+containing the migration task definition and its Terraform-declared IAM
+prerequisites. It runs that migration, then re-plans and applies the complete
+state so the consumer Lambda, AgentCore Runtime, publisher task definition, and
+other ECS task definitions all move together after the compatible schema
+exists. Finally it rolls the ECS services. The target is an ordering mechanism
+inside one release, not a second state or a manual pause.
 
 For the one-time empty ECS bootstrap, all service desired counts are
 forced to zero until the migration completes. Because that bootstrap may create

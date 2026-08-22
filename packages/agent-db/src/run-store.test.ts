@@ -546,10 +546,11 @@ describe("appendRunEventTx", () => {
 			summaryId: null,
 		});
 		const acquired = await acquireQueuedRunForTest(tdb.db, {
+			runId: "run-1",
 			workerId: "worker-1",
 		});
 		if (!acquired) throw new Error("test setup acquired no Conversation");
-		const runOwner = { ...acquired, runId: "run-1", workerId: "worker-1" };
+		const runOwner = acquired;
 		const appendUiPayload = (messageId: string) =>
 			appendRunEventTx(tdb.db, {
 				owner: runOwner,
