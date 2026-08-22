@@ -117,6 +117,16 @@ variable "agent_worker_image" {
   }
 }
 
+variable "agent_maintenance_image" {
+  description = "Fully qualified agent-maintenance container image URI including tag."
+  type        = string
+
+  validation {
+    condition     = length(var.agent_maintenance_image) > 0
+    error_message = "agent_maintenance_image is required."
+  }
+}
+
 variable "agentcore_dispatch_publisher_image" {
   description = "Fully qualified AgentCore dispatch publisher container image URI including tag."
   type        = string
@@ -137,6 +147,17 @@ variable "agent_worker_desired_count" {
   description = "Desired ECS task count for agent-worker."
   type        = number
   default     = 1
+}
+
+variable "agent_maintenance_desired_count" {
+  description = "Desired ECS task count for the singleton agent-maintenance owner. Keep zero until the controlled handoff."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.agent_maintenance_desired_count == 0 || var.agent_maintenance_desired_count == 1
+    error_message = "agent_maintenance_desired_count must be zero or one."
+  }
 }
 
 variable "agentcore_dispatch_publisher_desired_count" {
@@ -172,6 +193,29 @@ variable "agent_worker_memory" {
   description = "Fargate memory MiB for agent-worker."
   type        = number
   default     = 2048
+}
+
+variable "agent_maintenance_cpu" {
+  description = "Fargate CPU units for agent-maintenance."
+  type        = number
+  default     = 256
+}
+
+variable "agent_maintenance_memory" {
+  description = "Fargate memory MiB for agent-maintenance."
+  type        = number
+  default     = 512
+}
+
+variable "agent_maintenance_cleanup_interval_ms" {
+  description = "Delay between asynchronous agent-maintenance cleanup passes."
+  type        = number
+  default     = 300000
+
+  validation {
+    condition     = var.agent_maintenance_cleanup_interval_ms > 0 && var.agent_maintenance_cleanup_interval_ms <= 2147483647
+    error_message = "agent_maintenance_cleanup_interval_ms must be positive and no greater than 2147483647."
+  }
 }
 
 variable "agentcore_dispatch_publisher_cpu" {
@@ -223,6 +267,12 @@ variable "chat_api_port" {
 
 variable "agent_worker_port" {
   description = "Container port exposed by agent-worker health server."
+  type        = number
+  default     = 8080
+}
+
+variable "agent_maintenance_port" {
+  description = "Container port exposed by the agent-maintenance health server."
   type        = number
   default     = 8080
 }

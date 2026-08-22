@@ -6,6 +6,7 @@ locals {
 
   chat_api_name                     = "${local.common_name}-chat-api"
   agent_worker_name                 = "${local.common_name}-worker"
+  agent_maintenance_name            = "${local.common_name}-maintenance"
   agentcore_dispatch_publisher_name = "${local.common_name}-agentcore-dispatch-publisher"
   alb_name                          = "${local.common_name}-alb"
 
@@ -112,6 +113,19 @@ locals {
     { name = "OPENROUTER_API_KEY", valueFrom = local.openrouter_api_key_secret_arn },
     { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
   ], local.live_redis_url_secret, local.agent_db_password_secret)
+
+  agent_maintenance_environment = concat([
+    { name = "PORT", value = tostring(var.agent_maintenance_port) },
+    { name = "LOG_LEVEL", value = var.log_level },
+    { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket },
+    { name = "AWS_REGION", value = var.aws_region },
+    { name = "MAINTENANCE_CLEANUP_INTERVAL_MS", value = tostring(var.agent_maintenance_cleanup_interval_ms) },
+    { name = "DB_SSL", value = var.db_ssl },
+  ], local.agent_database_url_environment)
+
+  agent_maintenance_secrets = concat([
+    { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
+  ], local.agent_db_password_secret)
 
   agentcore_dispatch_publisher_environment = concat([
     { name = "AWS_REGION", value = var.aws_region },

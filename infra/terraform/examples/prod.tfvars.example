@@ -27,6 +27,7 @@ fck_nat_ami_id = "ami-REPLACE_WITH_REVIEWED_FCK_NAT_AMI"
 
 chat_api_image                         = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-chat-api:REPLACE_WITH_GIT_SHA"
 agent_worker_image                     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-worker:REPLACE_WITH_GIT_SHA"
+agent_maintenance_image                = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-maintenance:REPLACE_WITH_GIT_SHA"
 agentcore_dispatch_publisher_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agentcore-dispatch-publisher:REPLACE_WITH_GIT_SHA"
 runtime_image_digest                   = "sha256:REPLACE_WITH_64_HEX_CHARACTERS"
 consumer_lambda_package                = "/absolute/path/to/consumer.zip"

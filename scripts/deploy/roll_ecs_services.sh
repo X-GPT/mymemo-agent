@@ -75,6 +75,10 @@ agent_worker_service_name="$(
   terraform -chdir=infra/terraform output -raw agent_worker_service_name
 )"
 
+agent_maintenance_service_name="$(
+  terraform -chdir=infra/terraform output -raw agent_maintenance_service_name
+)"
+
 agentcore_dispatch_publisher_service_name="$(
   terraform -chdir=infra/terraform output -raw agentcore_dispatch_publisher_service_name
 )"
@@ -86,6 +90,10 @@ chat_api_task_definition="$(
 agent_worker_task_definition="${AGENT_WORKER_TASK_DEFINITION_ARN:-$(
   terraform -chdir=infra/terraform output -raw agent_worker_task_definition_arn
 )}"
+
+agent_maintenance_task_definition="$(
+  terraform -chdir=infra/terraform output -raw agent_maintenance_task_definition_arn
+)"
 
 agentcore_dispatch_publisher_task_definition="$(
   terraform -chdir=infra/terraform output -raw agentcore_dispatch_publisher_task_definition_arn
@@ -119,6 +127,13 @@ aws ecs update-service \
 
 aws ecs update-service \
   --cluster "$ecs_cluster_arn" \
+  --service "$agent_maintenance_service_name" \
+  --task-definition "$agent_maintenance_task_definition" \
+  --force-new-deployment \
+  >/dev/null
+
+aws ecs update-service \
+  --cluster "$ecs_cluster_arn" \
   --service "$agentcore_dispatch_publisher_service_name" \
   --task-definition "$agentcore_dispatch_publisher_task_definition" \
   --force-new-deployment \
@@ -126,7 +141,7 @@ aws ecs update-service \
 
 aws ecs wait services-stable \
   --cluster "$ecs_cluster_arn" \
-  --services "$chat_api_service_name" "$agent_worker_service_name" "$agentcore_dispatch_publisher_service_name"
+  --services "$chat_api_service_name" "$agent_worker_service_name" "$agent_maintenance_service_name" "$agentcore_dispatch_publisher_service_name"
 
 expected_task_definition="$agent_worker_task_definition"
 service_task_definition="$(

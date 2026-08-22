@@ -50,6 +50,7 @@ jobs:
       image_tag: ${{ steps.image_tag.outputs.image_tag }}
       chat_api_image: ${{ steps.images.outputs.chat_api_image }}
       agent_worker_image: ${{ steps.images.outputs.agent_worker_image }}
+      agent_maintenance_image: ${{ steps.images.outputs.agent_maintenance_image }}
       agentcore_dispatch_publisher_image: ${{ steps.images.outputs.agentcore_dispatch_publisher_image }}
       runtime_image_digest: ${{ steps.agentcore_runtime_image.outputs.runtime_image_digest }}
       first_deploy: ${{ steps.agent_deploy_state.outputs.first_deploy }}
@@ -150,10 +151,12 @@ jobs:
         run: |
           chat_api_repository_url="$(terraform -chdir=infra/ecr output -raw chat_api_ecr_repository_url)"
           agent_worker_repository_url="$(terraform -chdir=infra/ecr output -raw agent_worker_ecr_repository_url)"
+          agent_maintenance_repository_url="$(terraform -chdir=infra/ecr output -raw agent_maintenance_ecr_repository_url)"
           agentcore_dispatch_publisher_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_dispatch_publisher_ecr_repository_url)"
           agentcore_runtime_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_runtime_ecr_repository_url)"
           printf 'chat_api_image=%s:%s\n' "${chat_api_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agent_worker_image=%s:%s\n' "${agent_worker_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
+          printf 'agent_maintenance_image=%s:%s\n' "${agent_maintenance_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agentcore_dispatch_publisher_image=%s:%s\n' "${agentcore_dispatch_publisher_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agentcore_runtime_repository_url=%s\n' "${agentcore_runtime_repository_url}" >> "${GITHUB_OUTPUT}"
 
@@ -171,6 +174,9 @@ jobs:
 
       - name: Build and push agent-worker image
         run: scripts/deploy/build_and_push_agent_image.sh agent-worker
+
+      - name: Build and push agent-maintenance image
+        run: scripts/deploy/build_and_push_agent_image.sh agent-maintenance
 
       - name: Build and push AgentCore dispatch publisher image
         run: scripts/deploy/build_and_push_agent_image.sh agentcore-dispatch-publisher
@@ -238,6 +244,7 @@ jobs:
       # ECR outputs (ci_prepare_tfvars.sh short-circuits on these).
       CHAT_API_IMAGE: ${{ needs.plan.outputs.chat_api_image }}
       AGENT_WORKER_IMAGE: ${{ needs.plan.outputs.agent_worker_image }}
+      AGENT_MAINTENANCE_IMAGE: ${{ needs.plan.outputs.agent_maintenance_image }}
       AGENTCORE_DISPATCH_PUBLISHER_IMAGE: ${{ needs.plan.outputs.agentcore_dispatch_publisher_image }}
       TF_VAR_runtime_image_digest: ${{ needs.plan.outputs.runtime_image_digest }}
       EXPECTED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.runtime_image_digest }}
