@@ -75,7 +75,7 @@ module "fck_nat_egress" {
   vpc_id               = local.vpc_id
   subnet_id            = one(local.shared_public_subnet_ids_by_az[each.key])
   ami_id               = data.aws_ami.fck_nat.id
-  instance_type        = "t4g.micro"
+  instance_type        = "t4g.nano"
   ha_mode              = true
   auto_rollout         = true
   eip_allocation_ids   = [aws_eip.fck_nat_egress[each.key].id]
