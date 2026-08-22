@@ -22,7 +22,6 @@ const runner = new MaintenanceRunner({
 	cleanupIntervalMs: 300_000,
 	logger,
 });
-await runner.start();
 const server = Bun.serve({
 	port: config.port,
 	fetch(request) {
@@ -36,6 +35,7 @@ logger.info({
 	message: "agent-maintenance health server listening",
 	port: config.port,
 });
+await runner.start();
 
 logger.info({ message: "agent-maintenance started", maintenanceId });
 

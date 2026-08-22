@@ -36,6 +36,9 @@ describe("agent-maintenance production entrypoint", () => {
 		expect(health.status).toBe(200);
 		expect(exitCode).toBe(0);
 		expect(stderr).toBe("");
+		expect(stdout.indexOf("health server listening")).toBeLessThan(
+			stdout.indexOf("unowned queue timeout sweep failed"),
+		);
 		expect(stdout).toContain('"message":"agent-maintenance started"');
 		expect(stdout).toContain('"message":"agent-maintenance stopped"');
 	});

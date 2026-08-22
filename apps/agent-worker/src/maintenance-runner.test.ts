@@ -85,6 +85,7 @@ function buildRunner(
 	overrides: {
 		pool?: AdvisoryLockPool;
 		telemetry?: { record(...args: unknown[]): void };
+		logger?: WorkerLogger;
 	} = {},
 ) {
 	return new MaintenanceRunner({
@@ -94,7 +95,7 @@ function buildRunner(
 		artifactJanitor,
 		workerId: "worker-1",
 		cleanupIntervalMs: 60_000,
-		logger: silentLogger,
+		logger: overrides.logger ?? silentLogger,
 		liveStreamTelemetry: overrides.telemetry,
 	});
 }
@@ -137,6 +138,20 @@ async function seedConversationRun(input: {
 }
 
 describe("MaintenanceRunner", () => {
+	it("logs a heartbeat after a successful liveness pass with no work", async () => {
+		const messages: unknown[] = [];
+
+		await buildRunner({
+			logger: {
+				info: ({ message }) => messages.push(message),
+				warn() {},
+				error() {},
+			},
+		}).runLivenessOnce();
+
+		expect(messages).toEqual(["maintenance liveness pass complete"]);
+	});
+
 	it("expires queued Runs and reclaims lapsed Ownership without serving Runs", async () => {
 		await seedConversationRun({
 			conversationId: "conv-queued",

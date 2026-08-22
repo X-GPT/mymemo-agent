@@ -34,6 +34,14 @@ describe("agent-maintenance infrastructure", () => {
 		expect(cloudwatch).toContain(
 			'resource "aws_cloudwatch_metric_alarm" "agent_maintenance_errors"',
 		);
+		expect(cloudwatch).toContain(
+			'resource "aws_cloudwatch_log_metric_filter" "agent_maintenance_heartbeat"',
+		);
+		expect(cloudwatch).toContain(
+			'resource "aws_cloudwatch_metric_alarm" "agent_maintenance_heartbeat"',
+		);
+		expect(cloudwatch).toContain("count = var.agent_maintenance_desired_count");
+		expect(cloudwatch).toContain('treat_missing_data  = "breaching"');
 		expect(production).toContain("agent_maintenance_desired_count = 0");
 	});
 

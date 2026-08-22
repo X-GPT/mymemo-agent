@@ -53,8 +53,14 @@ export class MaintenanceRunner {
 
 	/** Expire old unowned queued Runs before reclaiming lapsed Ownership. */
 	async runLivenessOnce(): Promise<void> {
-		await this.tryExpireUnownedQueuedRuns();
-		await this.tryReclaimConversations();
+		const expirationSucceeded = await this.tryExpireUnownedQueuedRuns();
+		const reclamationSucceeded = await this.tryReclaimConversations();
+		if (expirationSucceeded && reclamationSucceeded) {
+			this.opts.logger.info({
+				message: "maintenance liveness pass complete",
+				workerId: this.opts.workerId,
+			});
+		}
 	}
 
 	/** Attempt one advisory-lock-protected cleanup pass. Never throws. */
@@ -143,7 +149,7 @@ export class MaintenanceRunner {
 		}
 	}
 
-	private async tryReclaimConversations(): Promise<void> {
+	private async tryReclaimConversations(): Promise<boolean> {
 		try {
 			for (;;) {
 				const reclamation = await reclaimConversationTx(this.opts.db);
@@ -175,16 +181,18 @@ export class MaintenanceRunner {
 					});
 				}
 			}
+			return true;
 		} catch (error) {
 			this.opts.logger.error({
 				message: "Conversation Reclamation failed",
 				workerId: this.opts.workerId,
 				error: toMessage(error),
 			});
+			return false;
 		}
 	}
 
-	private async tryExpireUnownedQueuedRuns(): Promise<void> {
+	private async tryExpireUnownedQueuedRuns(): Promise<boolean> {
 		try {
 			for (;;) {
 				const expiration = await expireUnownedQueuedRunsTx(this.opts.db);
@@ -199,12 +207,14 @@ export class MaintenanceRunner {
 					})),
 				});
 			}
+			return true;
 		} catch (error) {
 			this.opts.logger.error({
 				message: "unowned queue timeout sweep failed",
 				workerId: this.opts.workerId,
 				error: toMessage(error),
 			});
+			return false;
 		}
 	}
 }
