@@ -93,8 +93,6 @@ services:
       AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
       DB_SSL: disable
       AGENTCORE_RUNTIME_URL: http://127.0.0.1:8080
-      AGENTCORE_POLL_INTERVAL_MS: "250"
-      AGENTCORE_INVOCATION_TIMEOUT_MS: "30000"
     depends_on:
       migrate:
         condition: service_completed_successfully

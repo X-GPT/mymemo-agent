@@ -8,16 +8,6 @@ function required(name: string): string {
 	return value;
 }
 
-function positiveInt(name: string, fallback: number): number {
-	const raw = Bun.env[name];
-	if (raw === undefined) return fallback;
-	const value = Number(raw);
-	if (!Number.isInteger(value) || value <= 0) {
-		throw new Error(`${name} must be a positive integer`);
-	}
-	return value;
-}
-
 const databaseUrl = resolveDatabaseUrl(
 	required("AGENT_DATABASE_URL"),
 	Bun.env.DB_PASSWORD,
@@ -28,9 +18,7 @@ const bridge = createLocalAgentCoreDispatchBridge({
 	db,
 	publisherId: `local-bridge/${crypto.randomUUID()}`,
 	runtimeUrl: required("AGENTCORE_RUNTIME_URL"),
-	invocationTimeoutMs: positiveInt("AGENTCORE_INVOCATION_TIMEOUT_MS", 30_000),
 });
-const pollIntervalMs = positiveInt("AGENTCORE_POLL_INTERVAL_MS", 250);
 let stopping = false;
 process.once("SIGINT", () => {
 	stopping = true;
@@ -58,7 +46,7 @@ while (!stopping) {
 			}),
 		);
 	}
-	if (!stopping) await Bun.sleep(pollIntervalMs);
+	if (!stopping) await Bun.sleep(250);
 }
 
 await db.$client.end();
