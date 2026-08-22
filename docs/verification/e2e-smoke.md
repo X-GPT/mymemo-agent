@@ -3,6 +3,9 @@
 The Conversation smoke is one public-contract client with two targets. It uses
 `AGENT_SMOKE_BASE_URL` to address either the local compose harness or the
 deployed internal ALB; it does not read databases, logs, or runtime internals.
+The first Service Connect migration stage deliberately keeps this ALB target
+unchanged; the smoke path does not switch to the Service Connect endpoint until
+a later coordinated caller migration.
 This guide records the verification strategy from
 [#300](https://github.com/X-GPT/mymemo-agent/issues/300) and the core artifact
 check from [#302](https://github.com/X-GPT/mymemo-agent/issues/302), plus the
