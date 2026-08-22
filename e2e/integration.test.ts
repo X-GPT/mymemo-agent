@@ -200,7 +200,7 @@ function spawnApp(name: string, env: Record<string, string>) {
 
 /** Spawn the deterministic test-only AgentCore Runtime. */
 function spawnAgentCoreRuntime(env: Record<string, string>) {
-	return Bun.spawn(["bun", "run", "e2e/synthetic-worker.ts"], {
+	return Bun.spawn(["bun", "run", "e2e/synthetic-agentcore-runtime.ts"], {
 		cwd: REPO_ROOT,
 		env: { ...process.env, ...env },
 		stdout: "inherit",
@@ -941,7 +941,7 @@ describe.skipIf(!RUN)("AgentCore integration (real Postgres and Redis)", () => {
 	);
 
 	it(
-		"keeps queued interruption and stale recovery free of fabricated Live Streams",
+		"keeps queued interruption and Reclamation free of fabricated Live Streams",
 		async () => {
 			await stopAgentCoreRuntime();
 			const queued = await admitIntegrationRun(

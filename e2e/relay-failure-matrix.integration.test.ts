@@ -427,7 +427,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		]);
 	});
 
-	it("recovers producer death through stale-Run recovery and Conversation history without fabricating a live Outcome", async () => {
+	it("reclaims a lapsed Conversation after producer death and serves history without fabricating a live Outcome", async () => {
 		const readerAttached = telemetryProbe("attach_attempt", "success");
 		const consumerRelay = createRelay({ telemetry: readerAttached.telemetry });
 		const producerClientName = `issue-370-producer-${crypto.randomUUID()}`;
@@ -456,7 +456,7 @@ describe("ADR-0014 relay failure matrix", () => {
 		await processorStarted.promise;
 
 		// Intentionally no client timeout: silent producer death must converge
-		// through durable recovery, or the test itself must time out and fail.
+		// through Reclamation, or the test itself must time out and fail.
 		const responsePromise = app.request(eventsUrl(conversationId, runId), {
 			headers: IDENTITY_HEADERS,
 		});

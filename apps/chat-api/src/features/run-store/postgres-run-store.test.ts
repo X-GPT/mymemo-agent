@@ -24,7 +24,7 @@ const initialActivity = new Date("2026-01-01T00:00:00.000Z");
 const conversation: ConversationRecord = {
 	userId: "user-1",
 	conversationId: "conv-1",
-	executionRuntime: "fargate",
+	executionRuntime: "agentcore",
 	scope: "collection",
 	collectionId: "col-1",
 	summaryId: null,
@@ -52,7 +52,7 @@ describe("PostgresRunStore", () => {
 	// test starts from an empty runs table via delete, keeping isolation without
 	// the cost. The conversation seed is stable, so it is inserted once.
 	beforeAll(async () => {
-		tdb = await createTestDatabase(undefined, { legacyFargate: true });
+		tdb = await createTestDatabase();
 		store = new PostgresRunStore(tdb.db);
 		conversationStore = new PostgresConversationStore(tdb.db);
 		await tdb.db.insert(conversations).values(conversation);
@@ -69,7 +69,7 @@ describe("PostgresRunStore", () => {
 			.onConflictDoUpdate({
 				target: [conversations.userId, conversations.conversationId],
 				set: {
-					executionRuntime: "fargate",
+					executionRuntime: "agentcore",
 					title: null,
 					lastActivityAt: initialActivity,
 					archivedAt: null,
@@ -117,11 +117,6 @@ describe("PostgresRunStore", () => {
 	});
 
 	it("records one dispatch with a newly admitted AgentCore Run", async () => {
-		await tdb.db
-			.update(conversations)
-			.set({ executionRuntime: "agentcore" })
-			.where(eq(conversations.conversationId, "conv-1"));
-
 		await expect(
 			store.admitRun(runInput("run-agentcore", "hello AgentCore")),
 		).resolves.toMatchObject({ outcome: "created" });
@@ -139,10 +134,6 @@ describe("PostgresRunStore", () => {
 	});
 
 	it("reattaches an exact AgentCore retry without a second dispatch", async () => {
-		await tdb.db
-			.update(conversations)
-			.set({ executionRuntime: "agentcore" })
-			.where(eq(conversations.conversationId, "conv-1"));
 		const input = runInput("run-agentcore-retry", "retry-safe work");
 
 		await expect(store.admitRun(input)).resolves.toMatchObject({
@@ -155,19 +146,7 @@ describe("PostgresRunStore", () => {
 		expect(await tdb.db.select().from(agentCoreDispatchOutbox)).toHaveLength(1);
 	});
 
-	it("does not record a dispatch for a Fargate Run", async () => {
-		await expect(
-			store.admitRun(runInput("run-fargate", "stay on Fargate")),
-		).resolves.toMatchObject({ outcome: "created" });
-
-		expect(await tdb.db.select().from(agentCoreDispatchOutbox)).toEqual([]);
-	});
-
 	it("rolls back an AgentCore Run when dispatch recording fails", async () => {
-		await tdb.db
-			.update(conversations)
-			.set({ executionRuntime: "agentcore" })
-			.where(eq(conversations.conversationId, "conv-1"));
 		await tdb.db.insert(agentCoreDispatchOutbox).values({
 			runId: "run-dispatch-conflict",
 			userId: "preexisting-user",
@@ -191,10 +170,6 @@ describe("PostgresRunStore", () => {
 	});
 
 	it("does not record a dispatch when AgentCore Run admission rolls back", async () => {
-		await tdb.db
-			.update(conversations)
-			.set({ executionRuntime: "agentcore" })
-			.where(eq(conversations.conversationId, "conv-1"));
 		await store.admitRun(runInput("run-active", "first"));
 
 		await expect(

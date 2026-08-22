@@ -224,13 +224,12 @@ function transactionalAdmissionFake(
 				conversationId: input.conversation.conversationId,
 				status: "done",
 			});
-			const recordsDispatch = conversation.executionRuntime === "agentcore";
-			if (recordsDispatch && failure === "dispatch") {
+			if (failure === "dispatch") {
 				throw new Error("dispatch recording failed");
 			}
 
 			admittedRuns.set(input.runId, run);
-			if (recordsDispatch) dispatchRunIds.add(input.runId);
+			dispatchRunIds.add(input.runId);
 			return { outcome: "created", run };
 		},
 		async requestInterruption() {
@@ -1430,25 +1429,6 @@ describe("Run dispatch admission through HTTP", () => {
 		expect(admission.runIds).toEqual(["client-run-1"]);
 		expect(admission.dispatchRunIds).toEqual(["client-run-1"]);
 		expect(exposure.seen).toHaveLength(1);
-	});
-
-	it("admits a Fargate Run without a dispatch", async () => {
-		const { store } = fakeStore([persistedConversation("fargate")]);
-		const admission = transactionalAdmissionFake(store);
-		const app = buildApp(store, recordingGate(true).gate, {
-			...fakeRunStore(),
-			runStore: admission.runStore,
-		});
-
-		const response = await app.request("/v1/conversations/conv-1/runs", {
-			method: "POST",
-			headers: identityHeaders,
-			body: JSON.stringify(agUiRunInput()),
-		});
-
-		expect(response.status).toBe(410);
-		expect(admission.runIds).toEqual(["client-run-1"]);
-		expect(admission.dispatchRunIds).toEqual([]);
 	});
 
 	it.each([

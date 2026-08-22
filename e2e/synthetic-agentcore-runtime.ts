@@ -1,6 +1,7 @@
 /**
  * Test-only AgentCore Runtime for the credential-free Postgres/Redis
- * integration. It replaces AWS queue transport with a local outbox poll, but
+ * integration suite. It replaces AWS queue transport with a local outbox poll,
+ * but
  * keeps dispatch publication, durable acquisition, Runtime invocation,
  * shared Run-serving, and the Live Stream on production seams. Global
  * expiration and Reclamation remain outside the Runtime process.
