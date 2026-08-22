@@ -268,12 +268,6 @@ variable "log_retention_days" {
   default     = 30
 }
 
-variable "e2b_template" {
-  description = "E2B template used by chat-api while it still owns sandbox creation."
-  type        = string
-  default     = "sandbox-template-dev"
-}
-
 variable "worker_e2b_template" {
   description = "Custom E2B template used by the AgentCore Runtime; installs rg and verifies artifact runtime tools."
   type        = string

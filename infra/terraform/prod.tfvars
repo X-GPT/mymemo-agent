@@ -30,7 +30,6 @@ agent_maintenance_desired_count = 1
 # advisory lock, rather than task count, is the singleton authority.
 agentcore_dispatch_publisher_desired_count = 1
 
-e2b_template             = "sandbox-template-prod"
 worker_e2b_template      = "mymemo-agent-sandbox"
 openrouter_base_url      = "https://openrouter.ai/api"
 openrouter_default_model = "anthropic/claude-sonnet-4"

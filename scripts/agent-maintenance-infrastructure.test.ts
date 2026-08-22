@@ -62,6 +62,54 @@ describe("agent-maintenance infrastructure", () => {
 		);
 	});
 
+	it("scopes chat-api and migration secrets independently", () => {
+		const locals = terraformFile("locals.tf");
+		const iam = terraformFile("iam.tf");
+		const ecs = terraformFile("ecs.tf");
+		const chatApi = section(
+			locals,
+			"chat_api_environment =",
+			"agent_maintenance_environment =",
+		);
+		const chatApiSecretPolicy = section(
+			iam,
+			'data "aws_iam_policy_document" "read_secrets"',
+			'resource "aws_iam_role" "agent_migration_execution"',
+		);
+		const migrationSecretPolicy = section(
+			iam,
+			'resource "aws_iam_role" "agent_migration_execution"',
+			'resource "aws_iam_role" "agentcore_dispatch_publisher_execution"',
+		);
+		const migrationTask = section(
+			ecs,
+			'resource "aws_ecs_task_definition" "agent_migration"',
+			'resource "aws_ecs_service" "chat_api"',
+		);
+
+		for (const forbidden of ["E2B", "OPENROUTER", "KB_DATABASE_URL"]) {
+			expect(chatApi).not.toContain(forbidden);
+			expect(chatApiSecretPolicy).not.toContain(forbidden);
+			expect(migrationSecretPolicy).not.toContain(forbidden);
+		}
+		for (const required of [
+			"agent_db_password_base_secret_arn",
+			"statsig_server_secret_arn",
+			"live_redis_url_secret_arn",
+		]) {
+			expect(chatApiSecretPolicy).toContain(required);
+		}
+		expect(migrationSecretPolicy).toContain(
+			"agent_db_password_base_secret_arn",
+		);
+		expect(migrationSecretPolicy).not.toContain("statsig_server_secret_arn");
+		expect(migrationSecretPolicy).not.toContain("live_redis_url_secret_arn");
+		expect(migrationTask).toContain(
+			"execution_role_arn       = aws_iam_role.agent_migration_execution.arn",
+		);
+		expect(migrationTask).not.toContain("task_role_arn");
+	});
+
 	it("collects Live Stream metrics from AgentCore Runtime logs", () => {
 		const cloudwatch = terraformFile("cloudwatch.tf");
 

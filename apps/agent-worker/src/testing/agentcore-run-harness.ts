@@ -16,7 +16,7 @@ export function createAgentCoreRunHarness(options: {
 }) {
 	const shutdown = new AbortController();
 	const runServing = createRunServing(options);
-	let task: Promise<void> | null = null;
+	let activeRunServing: Promise<void> | null = null;
 
 	async function executeNext(): Promise<void> {
 		const owner = await acquireQueuedRunForTest(options.db, {
@@ -38,17 +38,17 @@ export function createAgentCoreRunHarness(options: {
 
 	return {
 		async tick(): Promise<void> {
-			if (task) {
+			if (activeRunServing) {
 				await runServing.heartbeat();
 				return;
 			}
-			task = executeNext().finally(() => {
-				task = null;
+			activeRunServing = executeNext().finally(() => {
+				activeRunServing = null;
 			});
 			await Promise.resolve();
 		},
 		async drain(): Promise<void> {
-			while (task) await task;
+			while (activeRunServing) await activeRunServing;
 		},
 		async stop(): Promise<void> {
 			shutdown.abort(new Error("test Runtime stopped"));

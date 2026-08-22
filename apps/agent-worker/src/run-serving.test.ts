@@ -64,10 +64,7 @@ async function startRun() {
 		workerId: "worker-1",
 	});
 	if (!acquired) throw new Error("test setup did not acquire the Conversation");
-	const run = await loadExecutingRunTx(tdb.db, {
-		...acquired,
-		runId: "run-1",
-	});
+	const run = await loadExecutingRunTx(tdb.db, acquired);
 	if (!run) throw new Error("test setup did not start the Run");
 	return { acquired, run };
 }
@@ -89,7 +86,7 @@ describe("serveStartedRun", () => {
 
 		const result = await serving.serveStartedRun({
 			run,
-			owner: { ...acquired, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 		});
 
@@ -114,7 +111,7 @@ describe("serveStartedRun", () => {
 		});
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner: { ...acquired, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 		});
 		await tdb.db
@@ -163,16 +160,18 @@ describe("serveStartedRun", () => {
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			logger: silentLogger,
 		});
-		const owner = { ...acquired, runId: run.runId, workerId: "worker-1" };
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner,
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 		});
 		await processorStarted.promise;
 
 		expect(
-			await transitionRunTerminalTx(tdb.db, { owner, status: "done" }),
+			await transitionRunTerminalTx(tdb.db, {
+				owner: acquired,
+				status: "done",
+			}),
 		).toMatchObject({ outcome: "committed" });
 		await serving.heartbeat();
 		await ownershipStopped.promise;
@@ -216,10 +215,9 @@ describe("serveStartedRun", () => {
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			logger: silentLogger,
 		});
-		const owner = { ...acquired, runId: run.runId, workerId: "worker-1" };
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner,
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 			onDetached: (event) => {
 				if (event.type === "run_detached") detachments++;
@@ -227,7 +225,10 @@ describe("serveStartedRun", () => {
 		});
 		await processorStarted.promise;
 		expect(
-			await transitionRunTerminalTx(tdb.db, { owner, status: "done" }),
+			await transitionRunTerminalTx(tdb.db, {
+				owner: acquired,
+				status: "done",
+			}),
 		).toMatchObject({ outcome: "committed" });
 
 		attemptAppend.resolve();
@@ -267,7 +268,7 @@ describe("serveStartedRun", () => {
 		});
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner: { ...acquired, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: new AbortController().signal,
 		});
 		await requestRunInterruptionTx(tdb.db, {
@@ -302,7 +303,7 @@ describe("serveStartedRun", () => {
 		});
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner: { ...acquired, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: shutdownController.signal,
 		});
 		await tdb.db
@@ -348,7 +349,7 @@ describe("serveStartedRun", () => {
 		});
 		const resultPromise = serving.serveStartedRun({
 			run,
-			owner: { ...acquired, runId: run.runId, workerId: "worker-1" },
+			owner: acquired,
 			shutdownSignal: shutdownController.signal,
 		});
 
@@ -386,7 +387,7 @@ describe("serveStartedRun", () => {
 		expect(
 			await serving.serveStartedRun({
 				run,
-				owner: { ...acquired, runId: run.runId, workerId: "worker-1" },
+				owner: acquired,
 				shutdownSignal: new AbortController().signal,
 			}),
 		).toEqual({ type: "terminal", status: "done" });
@@ -421,7 +422,7 @@ describe("serveStartedRun", () => {
 		expect(
 			await serving.serveStartedRun({
 				run,
-				owner: { ...acquired, runId: run.runId, workerId: "worker-1" },
+				owner: acquired,
 				shutdownSignal: new AbortController().signal,
 			}),
 		).toEqual({ type: "terminal", status: "error" });
@@ -429,7 +430,6 @@ describe("serveStartedRun", () => {
 
 	it("publishes staged artifacts and resumable session evidence atomically", async () => {
 		const { acquired, run } = await startRun();
-		const owner = { ...acquired, runId: run.runId, workerId: "worker-1" };
 		await createConversationRuntimeTx(tdb.db, acquired);
 		await recordArtifactObjectsTx(tdb.db, {
 			objects: [
@@ -469,7 +469,7 @@ describe("serveStartedRun", () => {
 		expect(
 			await serving.serveStartedRun({
 				run,
-				owner,
+				owner: acquired,
 				shutdownSignal: new AbortController().signal,
 			}),
 		).toEqual({ type: "terminal", status: "done" });

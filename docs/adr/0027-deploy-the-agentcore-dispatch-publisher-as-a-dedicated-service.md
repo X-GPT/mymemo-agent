@@ -6,6 +6,11 @@ Amended (2026-08-20) by
 [ADR-0029](./0029-recover-production-releases-by-rolling-forward.md), which
 retains independent publisher control but supersedes independent binary
 rollback as a production recovery procedure.
+Amended (2026-08-22) by
+[ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md): Fargate
+coexistence ended, and `agent-maintenance` became the sole global expiration,
+Reclamation, and cleanup owner. The publisher remains independently bounded and
+owns none of those responsibilities.
 
 AgentCore Dispatch publication runs in one dedicated long-lived ECS service,
 not in the Conversation-serving agent-worker process. The service has its own
@@ -20,9 +25,9 @@ publication latency.
 The deployment has one ECS service with desired count one in steady state.
 Operators may deliberately set it to zero, and old and new tasks may overlap
 during a rolling deploy; the tick-scoped advisory lock, rather than task count,
-ensures that only one publishing critical section runs. Fargate agent-worker
-remains the single global expiration and Reclamation runner during coexistence,
-as ADR-0023 and ADR-0025 require.
+ensures that only one publishing critical section runs. During coexistence,
+Fargate agent-worker remained the single global expiration and Reclamation
+runner, as ADR-0023 and ADR-0025 required.
 
 This is a process, dependency, and AWS-capability boundary, not a complete
 trust or release boundary. The publisher initially retains the shared writable
@@ -61,14 +66,15 @@ it did not lose a lock it previously held.
   cadence creates a compatibility matrix across the database schema, envelope,
   publisher, and consumer without improving the selected runtime boundary.
 - **Create a general AgentCore control-plane service.** Rejected during
-  coexistence because global expiration and Reclamation deliberately remain in
-  Fargate; extracting them belongs to a later Fargate-retirement decision.
+  coexistence because global expiration and Reclamation deliberately remained
+  in Fargate; extracting them belonged to a later Fargate-retirement decision.
 
 ## Consequences
 
-- agent-worker holds no Dispatch publication code, configuration, queue
-  authority, or responsibility, but it continues global expiration and
-  Reclamation for both execution runtimes.
+- agent-worker held no Dispatch publication code, configuration, queue
+  authority, or responsibility, but continued global expiration and
+  Reclamation for both execution runtimes during coexistence. ADR-0031 moved
+  those global responsibilities to `agent-maintenance` when Fargate retired.
 - Publication latency is on the order of seconds while the service is healthy;
   task replacement may pause publication, with pending age and the queued-Run
   timeout exposing and bounding the degradation.

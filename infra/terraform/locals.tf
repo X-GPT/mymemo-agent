@@ -59,15 +59,6 @@ locals {
   openrouter_api_key_secret_arn = data.aws_secretsmanager_secret.openrouter_api_key.arn
   e2b_api_key_secret_arn        = data.aws_secretsmanager_secret.e2b_api_key.arn
 
-  all_secret_arns = distinct(compact([
-    local.agent_db_password_base_secret_arn,
-    local.kb_database_url_secret_arn,
-    local.statsig_server_secret_arn,
-    local.openrouter_api_key_secret_arn,
-    local.e2b_api_key_secret_arn,
-    local.live_redis_url_secret_arn,
-  ]))
-
   agent_db_password_secret = [
     {
       name      = "DB_PASSWORD"
@@ -84,13 +75,11 @@ locals {
     { name = "LOG_LEVEL", value = var.log_level },
     { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket },
     { name = "AWS_REGION", value = var.aws_region },
-    { name = "E2B_TEMPLATE", value = var.e2b_template },
     { name = "DB_SSL", value = var.db_ssl },
   ], local.agent_database_url_environment)
 
   chat_api_secrets = concat([
     { name = "STATSIG_SERVER_SECRET", valueFrom = local.statsig_server_secret_arn },
-    { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
   ], local.live_redis_url_secret, local.agent_db_password_secret)
 
   agent_maintenance_environment = concat([
