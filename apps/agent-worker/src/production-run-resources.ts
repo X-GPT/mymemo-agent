@@ -23,7 +23,6 @@ import { resolveAndVerifyClaudeCodeExecutable } from "./sdk/claude-code-executab
 import { createSdkRunProcessor } from "./sdk/run-processor";
 import { createStartRunQuery } from "./sdk/start-run-query";
 
-/** Production resources used by AgentCore's request-oriented control plane. */
 export function createProductionRunResources(options: {
 	config: WorkerConfig;
 	logger: WorkerLogger;

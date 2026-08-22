@@ -6,7 +6,6 @@ import {
 } from "../bash-tool/bash-tool";
 import type { FileToolLimits } from "../file-tools/file-tools";
 
-/** Subset of the process environment the trusted Run-serving runtime reads. */
 type Env = Record<string, string | undefined>;
 
 /**
@@ -19,68 +18,35 @@ function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
 
-/**
- * Typed, validated configuration for shared AgentCore Run serving. Built once
- * from the environment at the entrypoint and injected down, mirroring chat-api's
- * `loadApiConfigFromEnv` seam so no other module reads global env.
- *
- * AgentCore Runtime owns the credentials chat-api must NOT hold: the read-only
- * KB, the OpenRouter provider key, and the E2B key. None are ever placed into
- * E2B sandbox env (see `buildSandboxEnv`).
- */
+/** Trusted credentials stay in AgentCore Runtime and never enter E2B. */
 export interface WorkerConfig {
-	/** Writable mymemo_agent DB: runs, run_events, conversation_runtime, etc. */
 	agentDatabaseUrl: string;
-	/** Read-only KB DB: scoped document search/fetch only. */
 	kbDatabaseUrl: string;
-	/** OpenRouter Anthropic-compatible model traffic. Trusted-runtime-only. */
 	openrouter: {
 		apiKey: string;
 		baseUrl: string;
 		defaultModel: string;
 	};
-	/** E2B API key for the untrusted filesystem/shell executor. */
 	e2bApiKey: string;
-	/**
-	 * E2B template id/alias run sandboxes are created from. The custom template
-	 * (apps/agent-worker/e2b-template/) installs `rg` and verifies the runtime
-	 * tools used by file search and secure artifact publication.
-	 * Required so a misconfigured Runtime fails at boot, not per Run.
-	 */
 	e2bTemplate: string;
-	/** Private durable object store for successful-Run Downloadable artifacts. */
 	artifact: {
 		bucket: string;
 		region: string;
 	};
-	/** Required authenticated TLS Redis secret for the Live Stream relay. */
 	redisUrl: string;
-	/** How long an unrenewed E2B sandbox stays active before idle-pausing. */
 	sandboxIdleMs: number;
-	/** Bounds for the model-facing workspace file tools. */
 	fileLimits: FileToolLimits;
-	/** Bounds for one model-facing Bash invocation. */
 	bashLimits: BashToolLimits;
-	/** Per-call cap for model-facing document search results. */
 	maxDocumentSearchResults: number;
-	/** Per-page cap for model-facing document inventory results. */
 	maxDocumentListResults: number;
-	/** Caps for the model-facing LoadDocuments tool (documents-as-files). */
 	documentLoad: {
-		/** Most document ids one LoadDocuments call may materialize. */
 		maxDocuments: number;
-		/** Byte cap on a single cached document's content. */
 		perDocumentMaxBytes: number;
-		/** Byte cap on the summed content written by one LoadDocuments call. */
 		perCallMaxBytes: number;
 	};
-	/** How often an active invocation renews Conversation Ownership (ms). */
 	heartbeatIntervalMs: number;
-	/** Grace period for an active invocation to stop before forced shutdown (ms). */
 	shutdownTimeoutMs: number;
-	/** pino log level. */
 	logLevel: string;
-	/** Port the health endpoint listens on. */
 	port: number;
 }
 
@@ -116,7 +82,6 @@ function positiveIntOr(
 	return n;
 }
 
-/** Parse and validate the environment into typed Run-serving config. Pure. */
 export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 	assert(env.AGENT_DATABASE_URL, "AGENT_DATABASE_URL is required");
 	assert(env.KB_DATABASE_URL, "KB_DATABASE_URL is required");

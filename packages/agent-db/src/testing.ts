@@ -105,7 +105,6 @@ async function bootWithMigrations(createClient: () => PGlite): Promise<PGlite> {
 }
 
 export async function createTestDatabase(
-	// Seam for the harness's own tests; real callers take the default.
 	createClient: () => PGlite = () => new PGlite(),
 ): Promise<TestDb> {
 	const client = await bootWithMigrations(createClient);
@@ -115,16 +114,7 @@ export async function createTestDatabase(
 	};
 }
 
-/**
- * Seed one `queued` run for tests that need an acquirable row rather than a
- * faithful admission. Production admission is `admitQueuedRunTx`, which also
- * writes the `run_started` event and normalized input; tests exercising acquisition,
- * heartbeat, terminal transitions, or runtime state care about none of that.
- * A raw insert here, so the admission path keeps exactly one implementation and
- * the Active Run bound — admission's, not the database's — stays out of the way
- * of seeding a Conversation several queued Runs. The conversation row must
- * already exist.
- */
+/** Seed a queued Run without exercising admission. */
 export async function seedQueuedRun(
 	db: Database,
 	input: { runId: string; userId: string; conversationId: string },
@@ -137,7 +127,6 @@ export async function seedQueuedRun(
 	return toRunRecord(row);
 }
 
-/** Acquire one exact queued Run through the production AgentCore transaction. */
 export async function acquireQueuedRunForTest(
 	db: Database,
 	input: { workerId: string; runId?: string },
@@ -191,12 +180,7 @@ export async function acquireQueuedRunForTest(
 	};
 }
 
-/**
- * Force a Conversation's Ownership lease to have lapsed, without waiting out its
- * real duration. Shared rather than per-file because every invocation, fence,
- * and Reclamation suite across both packages needs the same lapse; the ADR-0015
- * cutover moves the columns it writes.
- */
+/** Expire Conversation Ownership immediately for tests. */
 export async function lapseConversationOwnership(
 	db: Database,
 	input: { userId: string; conversationId: string },
@@ -212,8 +196,6 @@ export async function lapseConversationOwnership(
 		);
 }
 
-/** Seed one live Conversation Ownership lease for SessionStore fence tests. Callers choose
- * every identity explicitly and remain responsible for clearing their tables. */
 export async function seedAgentSessionFenceConversation(
 	db: Database,
 	input: {

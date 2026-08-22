@@ -1,22 +1,15 @@
 import pino from "pino";
 
-/**
- * The minimal structured-logger surface the worker depends on. `pino.Logger`
- * satisfies it; tests pass a no-op. Keeping it narrow means worker code is not
- * coupled to pino-specific APIs.
- */
 export interface WorkerLogger {
 	info(obj: Record<string, unknown>): void;
 	warn(obj: Record<string, unknown>): void;
 	error(obj: Record<string, unknown>): void;
 }
 
-/** Structured JSON logger for trusted Run serving. */
 export function createLogger(level: string): WorkerLogger {
 	return pino({ level });
 }
 
-/** Render an unknown thrown value as a log-safe message string. */
 export function toMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }

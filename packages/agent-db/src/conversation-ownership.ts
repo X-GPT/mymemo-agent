@@ -2,9 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import { conversations } from "./schema";
 
-/** Conversation Ownership renewal, release, and mutation fences. AgentCore's
- * exact-dispatch transaction establishes Ownership; no queue Claim lives here.
- * No Run-scoped lease or competing ownership predicate exists. */
+/** Ownership is Conversation-scoped; no Run-scoped lease exists. */
 
 /**
  * How far ahead acquisition or renewal pushes `owner_until`: a 60s hold renewed
@@ -13,34 +11,26 @@ import { conversations } from "./schema";
  */
 export const CONVERSATION_OWNERSHIP_LEASE_MS = 60_000;
 
-/** The shared database-time expression for Ownership mutations and their Run writes. */
 export function conversationOwnershipClock(now?: Date) {
 	return now ? sql`${now}::timestamptz` : sql`now()`;
 }
 
-/** Exact acquisition or renewal pushes the same database deadline. */
 export function conversationOwnershipLeaseDeadline(now?: Date) {
 	return sql`${conversationOwnershipClock(now)} + (${CONVERSATION_OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
 }
 
-/** The one database-clock predicate defining whether Ownership is live. */
 export function liveConversationOwnershipState(now?: Date) {
 	return sql<boolean>`${conversations.ownerWorkerId} is not null
 		and ${conversations.ownerUntil} > ${conversationOwnershipClock(now)}`;
 }
 
-/**
- * One acquisition of a Conversation and its Ownership epoch. This is the whole
- * authority a fenced write needs — the
- * owning worker's id is provenance and deliberately absent.
- */
+/** Fenced-write authority; worker identity is provenance, not authority. */
 export interface ConversationOwner {
 	userId: string;
 	conversationId: string;
 	epoch: number;
 }
 
-/** A Conversation's live Ownership fence rejected a worker mutation. */
 export class ConversationOwnershipFenceError extends Error {
 	override name = "ConversationOwnershipFenceError" as const;
 }
@@ -87,7 +77,6 @@ export async function renewConversationLeaseTx(
 	return renewed?.ownerUntil ?? null;
 }
 
-/** This acquisition's Conversation, identified by key and epoch. */
 function ownedConversationConditions(owner: ConversationOwner) {
 	return and(
 		eq(conversations.userId, owner.userId),

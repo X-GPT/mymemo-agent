@@ -195,7 +195,6 @@ class RunWriteRejectedError extends Error {
  */
 export interface RunServing {
 	serveStartedRun(input: ServeStartedRunInput): Promise<ServeStartedRunResult>;
-	/** Renew Ownership and observe interruption for every attached Run. */
 	heartbeat(): Promise<void>;
 }
 

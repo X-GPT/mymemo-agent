@@ -146,14 +146,11 @@ function provisionedHandle(
 
 export interface E2bSandboxProvisionerConfig {
 	apiKey: string;
-	/** The pinned E2B template id fresh sandboxes are created from (Task 9.2). */
 	template: string;
 	sandboxIdleMs: number;
 	logger: WorkerLogger;
 }
 
-/** The exact trusted-runtime calls made to the E2B SDK, injectable so boundary
- * tests can prove which options and metadata leave the Runtime process. */
 export interface E2bSandboxFactory {
 	connect(
 		sandboxId: string,

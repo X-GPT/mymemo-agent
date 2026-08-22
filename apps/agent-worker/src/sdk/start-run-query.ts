@@ -114,7 +114,6 @@ export interface StartRunQueryDeps {
 	janitor: SandboxJanitor;
 	documentClient: ScopedDocumentQueryClient;
 	modelClient: ModelClientConfig;
-	/** The boot-verified pinned glibc CLI binary (spike s3). */
 	pathToClaudeCodeExecutable: string;
 	/** Create one throwaway directory per query for the CLI's local transcript
 	 * copy; the Postgres session store is the durable mirror (ADR-0005). */
@@ -122,7 +121,6 @@ export interface StartRunQueryDeps {
 	/** The trusted Runtime process env that model-client vars are spread over. The
 	 * SDK query env REPLACES the subprocess env, so it must ride along (spike s2). */
 	processEnv: Record<string, string | undefined>;
-	/** The sandbox idle window; renewal runs at half this cadence. */
 	sandboxIdleMs: number;
 	fileLimits: FileToolLimits;
 	bashLimits: BashToolLimits;

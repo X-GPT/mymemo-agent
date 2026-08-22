@@ -419,7 +419,6 @@ export type FenceRejection =
 	| { rejected: "status"; current: RunStatus }
 	| { rejected: "gone" };
 
-/** Shared rejected arm returned by every fenced Run-state write. */
 export type RunWriteRejected = { outcome: "rejected" } & FenceRejection;
 
 /**
