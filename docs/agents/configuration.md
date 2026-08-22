@@ -50,7 +50,7 @@ Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one ex
 
 Required:
 
-- `AGENT_DATABASE_URL`: writable `mymemo_agent` database. It is deliberately not named `DATABASE_URL`, which denotes the read-only KB credential elsewhere. It is separate from the worker's read-only `mymemo_kb` credential. The process fails at startup when it is absent. `bun run db:migrate` in `apps/chat-api` applies migrations owned by `packages/agent-db` through its exported `MIGRATIONS_DIR`.
+- `AGENT_DATABASE_URL`: writable `mymemo_agent` database. It is deliberately not named `DATABASE_URL`, which denotes the read-only KB credential elsewhere. It is separate from AgentCore Runtime's read-only `mymemo_kb` credential. The process fails at startup when it is absent. `bun run db:migrate` in `apps/chat-api` applies migrations owned by `packages/agent-db` through its exported `MIGRATIONS_DIR`.
 - `STATSIG_SERVER_SECRET`: required production exposure-gate secret
 - `ARTIFACT_BUCKET`: private artifact bucket; chat-api receives read-only object access
 - `AWS_REGION`: artifact S3 region

@@ -423,8 +423,8 @@ export type FenceRejection =
 export type RunWriteRejected = { outcome: "rejected" } & FenceRejection;
 
 /**
- * Read the status of the Run currently served by a Conversation drain. This is
- * interruption observation only, not authority: every mutation still carries
+ * Read the status of the Run currently served by an active Runtime invocation.
+ * This is interruption observation only, not authority: every mutation carries
  * the Conversation Ownership epoch fence. A missing row means the Run reached
  * an Outcome or its Conversation was deleted while the processor was active.
  */

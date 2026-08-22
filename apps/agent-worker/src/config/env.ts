@@ -24,8 +24,8 @@ function assert(condition: unknown, message: string): asserts condition {
  * from the environment at the entrypoint and injected down, mirroring chat-api's
  * `loadApiConfigFromEnv` seam so no other module reads global env.
  *
- * The worker owns the credentials chat-api must NOT hold: the read-only KB, the
- * OpenRouter provider key, and the E2B key. None of these are ever placed into
+ * AgentCore Runtime owns the credentials chat-api must NOT hold: the read-only
+ * KB, the OpenRouter provider key, and the E2B key. None are ever placed into
  * E2B sandbox env (see `buildSandboxEnv`).
  */
 export interface WorkerConfig {
@@ -33,7 +33,7 @@ export interface WorkerConfig {
 	agentDatabaseUrl: string;
 	/** Read-only KB DB: scoped document search/fetch only. */
 	kbDatabaseUrl: string;
-	/** OpenRouter Anthropic-compatible model traffic. Trusted-worker-only. */
+	/** OpenRouter Anthropic-compatible model traffic. Trusted-runtime-only. */
 	openrouter: {
 		apiKey: string;
 		baseUrl: string;
@@ -45,7 +45,7 @@ export interface WorkerConfig {
 	 * E2B template id/alias run sandboxes are created from. The custom template
 	 * (apps/agent-worker/e2b-template/) installs `rg` and verifies the runtime
 	 * tools used by file search and secure artifact publication.
-	 * Required so a misconfigured worker fails at boot, not per run.
+	 * Required so a misconfigured Runtime fails at boot, not per Run.
 	 */
 	e2bTemplate: string;
 	/** Private durable object store for successful-Run Downloadable artifacts. */
@@ -74,9 +74,9 @@ export interface WorkerConfig {
 		/** Byte cap on the summed content written by one LoadDocuments call. */
 		perCallMaxBytes: number;
 	};
-	/** How often active Conversation drains renew their Ownership lease (ms). */
+	/** How often an active invocation renews Conversation Ownership (ms). */
 	heartbeatIntervalMs: number;
-	/** Grace period to drain active runs on shutdown before forcing exit (ms). */
+	/** Grace period for an active invocation to stop before forced shutdown (ms). */
 	shutdownTimeoutMs: number;
 	/** pino log level. */
 	logLevel: string;
@@ -116,7 +116,7 @@ function positiveIntOr(
 	return n;
 }
 
-/** Parse + validate the environment into a typed worker config. Pure. */
+/** Parse and validate the environment into typed Run-serving config. Pure. */
 export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
 	assert(env.AGENT_DATABASE_URL, "AGENT_DATABASE_URL is required");
 	assert(env.KB_DATABASE_URL, "KB_DATABASE_URL is required");

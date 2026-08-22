@@ -193,8 +193,8 @@ export async function acquireQueuedRunForTest(
 
 /**
  * Force a Conversation's Ownership lease to have lapsed, without waiting out its
- * real duration. Shared rather than per-file because every drain, fence, and
- * Reclamation suite across both packages needs the same lapse, and the ADR-0015
+ * real duration. Shared rather than per-file because every invocation, fence,
+ * and Reclamation suite across both packages needs the same lapse; the ADR-0015
  * cutover moves the columns it writes.
  */
 export async function lapseConversationOwnership(

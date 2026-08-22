@@ -20,7 +20,7 @@ export interface ModelClientConfig {
 }
 
 /**
- * Build the trusted-worker model client config. Pure. The same shape serves
+ * Build the trusted-runtime model client config. Pure. The same shape serves
  * the direct-Anthropic contingency (ADR-0003): flipping OPENROUTER_BASE_URL /
  * OPENROUTER_API_KEY to first-party values needs no code change, because
  * Anthropic also accepts Bearer auth via ANTHROPIC_AUTH_TOKEN.

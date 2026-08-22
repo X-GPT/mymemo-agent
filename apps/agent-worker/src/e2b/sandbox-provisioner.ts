@@ -152,8 +152,8 @@ export interface E2bSandboxProvisionerConfig {
 	logger: WorkerLogger;
 }
 
-/** The exact trusted-worker calls made to the E2B SDK, injectable so boundary
- * tests can prove which options and metadata leave the worker process. */
+/** The exact trusted-runtime calls made to the E2B SDK, injectable so boundary
+ * tests can prove which options and metadata leave the Runtime process. */
 export interface E2bSandboxFactory {
 	connect(
 		sandboxId: string,

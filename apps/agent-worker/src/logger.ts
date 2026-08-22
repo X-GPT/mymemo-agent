@@ -11,7 +11,7 @@ export interface WorkerLogger {
 	error(obj: Record<string, unknown>): void;
 }
 
-/** Structured JSON logger for the worker process. */
+/** Structured JSON logger for trusted Run serving. */
 export function createLogger(level: string): WorkerLogger {
 	return pino({ level });
 }

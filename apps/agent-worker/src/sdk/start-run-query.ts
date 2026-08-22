@@ -119,8 +119,8 @@ export interface StartRunQueryDeps {
 	/** Create one throwaway directory per query for the CLI's local transcript
 	 * copy; the Postgres session store is the durable mirror (ADR-0005). */
 	createClaudeConfigDir(): Promise<ClaudeConfigDirectory>;
-	/** The worker process env the model-client vars are spread over — the SDK
-	 * query env REPLACES the subprocess env, so it must ride along (spike s2). */
+	/** The trusted Runtime process env that model-client vars are spread over. The
+	 * SDK query env REPLACES the subprocess env, so it must ride along (spike s2). */
 	processEnv: Record<string, string | undefined>;
 	/** The sandbox idle window; renewal runs at half this cadence. */
 	sandboxIdleMs: number;
@@ -412,14 +412,14 @@ function buildQueryOptions(
 		includePartialMessages: true,
 		// Two independent guards (ADR-0006): every built-in tool is disabled, and
 		// even a tool that reappeared is denied — never prompted, never executed
-		// on the worker host.
+		// on the AgentCore Runtime host.
 		tools: [],
 		settingSources: [],
 		permissionMode: "dontAsk",
 		allowedTools: [...EXECUTOR_ALLOWED_TOOLS],
 		systemPrompt: MYMEMO_SYSTEM_PROMPT,
 		model: deps.modelClient.model,
-		// Options.env REPLACES the subprocess env (spike s2): worker env under
+		// Options.env REPLACES the subprocess env (spike s2): Runtime env under
 		// the model-client vars, with the ephemeral config dir winning over any
 		// ambient CLAUDE_CONFIG_DIR.
 		env: {

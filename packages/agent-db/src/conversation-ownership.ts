@@ -67,8 +67,8 @@ export async function releaseConversationTx(
 
 /**
  * Push the Ownership lease deadline forward, under the epoch fence. Returns the
- * new deadline, or `null` when the lease is gone — which is the lost-lease
- * signal the drain halts and abandons on.
+ * new deadline, or `null` when the lease is gone — which signals the active
+ * invocation to halt and abandon execution.
  *
  * The live-deadline conjunct is load-bearing, not belt-and-braces: Reclamation
  * clears the ownership columns without bumping the epoch (a lapsed lease and a

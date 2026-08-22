@@ -9,7 +9,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | `apps/chat-api` | Creates and manages Conversations, admits Runs idempotently, attaches clients to Live Streams, projects permanent history, and lists or signs current Downloadable artifacts. |
 | `apps/agent-worker` | Shared trusted Run-serving implementation used by AgentCore. It is a workspace package, not a deployed service or image. |
 | `apps/agent-maintenance` | Sole production owner of global queued-Run expiration, Reclamation, and asynchronous cleanup. It has no Run-serving path. |
-| `apps/agentcore-dispatch-publisher` | Dedicated AgentCore Dispatch publication app. Runs as one ECS task, separate from Conversation-serving workers. |
+| `apps/agentcore-dispatch-publisher` | Dedicated AgentCore Dispatch publication app. Runs as one ECS task, separate from chat-api and AgentCore Runtime. |
 | `apps/agentcore-dispatch-consumer` | AgentCore dispatch consumer Lambda and shared dispatch-boundary modules. Its production composition validates strict content-free SQS envelopes, invokes the Runtime, and returns partial-batch acknowledgements; the Runtime composes exact acquisition directly. |
 | `apps/agentcore-runtime` | Sole production execution runtime. The Linux ARM64 image exposes `/ping` and `/invocations`, exactly acquires one dispatched Run, and delegates it to shared Run-serving behavior. |
 | `apps/agentcore-local-dispatch-bridge` | Development-only outbox poller that composes the shared publisher and consumer contracts against a local AgentCore Runtime. It is absent from production startup paths and images. |
@@ -57,7 +57,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `packages/agent-db/src/conversation-ownership.ts` | Live Ownership renew, release, and mutation fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |
 | `packages/agent-db/src/runtime-store.ts` | Fenced sandbox, taint, and Agent session pointers plus orphan ledger |
-| `packages/agent-db/src/session-store.ts` | Worker-fenced SDK transcript mutation and administrative deletion |
+| `packages/agent-db/src/session-store.ts` | Ownership-fenced SDK transcript mutation and administrative deletion |
 | `packages/agent-db/src/artifact-store.ts` | Object ledger and atomic current-artifact/Outcome commit |
 | `packages/agent-db/src/run-events.ts` | Canonical `run_events.type` vocabulary |
 | `packages/agent-db/drizzle/` | Shared database migrations |
