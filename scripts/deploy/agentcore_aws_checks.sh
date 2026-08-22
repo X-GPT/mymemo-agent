@@ -61,7 +61,6 @@ verify_agentcore_alarms() {
 verify_agentcore_egress() {
   local region="$1"
   local terraform_output="$2"
-  local verify_route="${3:-true}"
   local configuration
   local private_subnet_id
   local public_subnet_id
@@ -80,8 +79,6 @@ verify_agentcore_egress() {
   local instance
   local volume
 
-  [[ "${verify_route}" == "true" || "${verify_route}" == "false" ]]
-
   while IFS= read -r configuration; do
     private_subnet_id="$(jq -r '.private_subnet_id' <<<"${configuration}")"
     public_subnet_id="$(jq -r '.public_subnet_id' <<<"${configuration}")"
@@ -92,24 +89,22 @@ verify_agentcore_egress() {
     availability_zone="$(jq -r '.availability_zone' <<<"${configuration}")"
     ami_id="$(jq -r '.ami_id' <<<"${configuration}")"
 
-    if [[ "${verify_route}" == "true" ]]; then
-      route_table="$(agentcore_aws ec2 describe-route-tables \
-        --region "${region}" \
-        --route-table-ids "${route_table_id}")"
-      jq -e \
-        --arg routeTableId "${route_table_id}" \
-        --arg privateSubnetId "${private_subnet_id}" \
-        --arg networkInterfaceId "${network_interface_id}" \
-        '.RouteTables
-          | length == 1
-            and .[0].RouteTableId == $routeTableId
-            and any(.[0].Associations[]?; .SubnetId == $privateSubnetId)
-            and any(.[0].Routes[]?;
-              .DestinationCidrBlock == "0.0.0.0/0"
-              and .NetworkInterfaceId == $networkInterfaceId
-              and .State == "active")' \
-        <<<"${route_table}" >/dev/null
-    fi
+    route_table="$(agentcore_aws ec2 describe-route-tables \
+      --region "${region}" \
+      --route-table-ids "${route_table_id}")"
+    jq -e \
+      --arg routeTableId "${route_table_id}" \
+      --arg privateSubnetId "${private_subnet_id}" \
+      --arg networkInterfaceId "${network_interface_id}" \
+      '.RouteTables
+        | length == 1
+          and .[0].RouteTableId == $routeTableId
+          and any(.[0].Associations[]?; .SubnetId == $privateSubnetId)
+          and any(.[0].Routes[]?;
+            .DestinationCidrBlock == "0.0.0.0/0"
+            and .NetworkInterfaceId == $networkInterfaceId
+            and .State == "active")' \
+      <<<"${route_table}" >/dev/null
 
     autoscaling_group="$(agentcore_aws autoscaling describe-auto-scaling-groups \
       --region "${region}" \

@@ -130,22 +130,28 @@ that replaces managed NAT gateways with fck-nat:
 1. Apply `infra/bootstrap-iam` locally with the `mymemo` profile so the release
    role can manage the fck-nat launch templates, Auto Scaling groups, instance
    profiles, ENIs, EIPs, and CloudWatch configuration.
-2. Confirm that the migration release record contains the successful one-time
-   staged preflight completed by the migration operator from the exact merged
-   commit. It must retain the saved targeted plan for
-   `module.fck_nat_egress` and the `verify_agentcore_egress` result with route
-   checking disabled. This is not a reusable release path; do not use targeted
-   applies for routine releases.
-3. Review the complete production plan. It must preserve one staged fck-nat
+2. From the exact merged commit, perform the one-time fck-nat preparation.
+   Save and apply a targeted plan for `module.fck_nat_egress`. Confirm that the
+   plan contains only the module and its dependencies; it must not change the
+   private routes, managed NAT gateways, or Dispatch publisher. Do not use
+   targeted applies for routine releases.
+3. Before route cutover, inspect the prepared resources directly with the AWS
+   CLI. Confirm that each Auto Scaling group has one healthy same-zone
+   instance, its static ENI has source/destination checks disabled and the
+   expected VPC-CIDR ingress and unrestricted egress security-group rules, its
+   EIP is attached, and its public subnet has an active default route to the
+   VPC Internet Gateway. Retain the command output in the migration release
+   record. This is a one-time operator check, not a deployment mode.
+4. Review the complete production plan. It must preserve one prepared fck-nat
    Auto Scaling group in each configured availability zone, change each
    private default route to its same-zone ENI, move the Dispatch publisher to
    the private subnets with no public IP, and remove both managed NAT gateways
    only after their routes no longer reference them.
-4. After the authorized apply, retain the deployment inspection result. It
+5. After the authorized apply, retain the deployment inspection result. It
    verifies each exact route target, healthy same-zone instance, static ENI,
    disabled source/destination check, attached EIP, pinned AMI, required
    IMDSv2, and encrypted disposable root volume.
-5. Replace one fck-nat instance through its Auto Scaling group and observe the
+6. Replace one fck-nat instance through its Auto Scaling group and observe the
    zonal alarm, route recovery, Dispatch pending age, and AgentCore behavior.
    Existing connections are expected to be lost during replacement.
 

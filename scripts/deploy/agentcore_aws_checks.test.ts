@@ -202,7 +202,6 @@ verify_agentcore_alarms us-west-2 "$TF_OUTPUT"
 }
 
 function verifyEgress(options: {
-	verifyRoute?: boolean;
 	routeState?: string;
 	routeNetworkInterfaceId?: string;
 	asgHealth?: string;
@@ -324,7 +323,7 @@ aws() {
     *) exit 97 ;;
   esac
 }
-verify_agentcore_egress us-west-2 "$TF_OUTPUT" "$VERIFY_ROUTE"
+verify_agentcore_egress us-west-2 "$TF_OUTPUT"
 `;
 	return spawnSync("bash", ["-c", script], {
 		encoding: "utf8",
@@ -346,7 +345,6 @@ verify_agentcore_egress us-west-2 "$TF_OUTPUT" "$VERIFY_ROUTE"
 					},
 				},
 			}),
-			VERIFY_ROUTE: String(options.verifyRoute ?? true),
 			ROUTE_TABLE: JSON.stringify(routeTable),
 			AUTO_SCALING_GROUP: JSON.stringify(autoscalingGroup),
 			NETWORK_INTERFACE: JSON.stringify(networkInterface),
@@ -480,14 +478,6 @@ describe("production AgentCore alarm configuration", () => {
 describe("production AgentCore egress configuration", () => {
 	it("accepts a healthy zonal fck-nat route", () => {
 		const result = verifyEgress({});
-		expect(result.status, result.stderr).toBe(0);
-	});
-
-	it("supports staged fck-nat validation before route cutover", () => {
-		const result = verifyEgress({
-			verifyRoute: false,
-			routeState: "blackhole",
-		});
 		expect(result.status, result.stderr).toBe(0);
 	});
 
