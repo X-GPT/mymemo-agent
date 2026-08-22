@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { conversationArtifacts, conversations } from "@mymemo/agent-db/schema";
+import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { and, eq } from "drizzle-orm";
-import { conversationArtifacts, conversations } from "@/db/schema";
-import { createTestDatabase, type TestDb } from "@/db/testing";
 import { PostgresArtifactMetadataStore } from "./postgres-artifact-metadata-store";
 
 describe("PostgresArtifactMetadataStore", () => {

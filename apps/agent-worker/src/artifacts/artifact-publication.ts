@@ -7,7 +7,6 @@ import {
 import type { Database } from "@mymemo/agent-db/client";
 import type { RunRecord } from "@mymemo/agent-db/run-store";
 import type { SupervisedQuery } from "../sdk/agent-stream";
-import { artifactContentType } from "./artifact-content-type";
 import {
 	type ArtifactManifestEntry,
 	ArtifactValidationError,
@@ -129,7 +128,9 @@ export function createArtifactPublisher(
 							path: entry.path,
 							objectKey: createObjectKey(),
 							sizeBytes: entry.sizeBytes,
-							contentType: artifactContentType(entry.path),
+							contentType:
+								Bun.file(entry.path).type.split(";", 1)[0] ??
+								"application/octet-stream",
 						},
 					}));
 					const artifacts = candidates.map(({ artifact }) => artifact);

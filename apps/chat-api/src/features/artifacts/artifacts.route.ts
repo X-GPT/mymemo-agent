@@ -3,34 +3,18 @@ import { type Context, Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import { ConversationIdParam } from "@/features/conversations/conversations.schema";
-import { identityFromContext } from "@/features/conversations/internal-identity";
+import { requireInternalIdentity } from "@/features/conversations/internal-identity";
 import { attachmentContentDisposition } from "./artifact-download-signer";
 
 const app = new Hono<AppEnv>();
 const ArtifactIdParam = ConversationIdParam;
 
 async function ownedConversation(c: Context<AppEnv>, conversationId: string) {
-	const identity = identityFromContext(c);
-	if (!identity.success) return { outcome: "invalid_identity" as const };
 	const conversation = await c.var.deps.conversationStore.get({
-		userId: identity.data.memberCode,
+		userId: c.var.identity.memberCode,
 		conversationId,
 	});
-	if (!conversation) return { outcome: "not_found" as const };
-	return { outcome: "found" as const, identity: identity.data };
-}
-
-function ownershipErrorResponse(
-	c: Context<AppEnv>,
-	outcome: "invalid_identity" | "not_found",
-) {
-	if (outcome === "invalid_identity") {
-		return c.json(
-			{ error: "Missing or invalid internal identity headers" },
-			401,
-		);
-	}
-	return c.json({ error: "Conversation not found" }, 404);
+	return conversation !== null;
 }
 
 app.get(
@@ -44,15 +28,15 @@ app.get(
 			}
 		},
 	),
+	requireInternalIdentity,
 	async (c) => {
 		const { conversationId } = c.req.valid("param");
-		const ownership = await ownedConversation(c, conversationId);
-		if (ownership.outcome !== "found") {
-			return ownershipErrorResponse(c, ownership.outcome);
+		if (!(await ownedConversation(c, conversationId))) {
+			return c.json({ error: "Conversation not found" }, 404);
 		}
 
 		const artifacts = await c.var.deps.artifactMetadataStore.listCurrent({
-			userId: ownership.identity.memberCode,
+			userId: c.var.identity.memberCode,
 			conversationId,
 		});
 		return c.json({ artifacts });
@@ -73,15 +57,15 @@ app.get(
 			}
 		},
 	),
+	requireInternalIdentity,
 	async (c) => {
 		const { conversationId, artifactId } = c.req.valid("param");
-		const ownership = await ownedConversation(c, conversationId);
-		if (ownership.outcome !== "found") {
-			return ownershipErrorResponse(c, ownership.outcome);
+		if (!(await ownedConversation(c, conversationId))) {
+			return c.json({ error: "Conversation not found" }, 404);
 		}
 
 		const artifact = await c.var.deps.artifactMetadataStore.getCurrent({
-			userId: ownership.identity.memberCode,
+			userId: c.var.identity.memberCode,
 			conversationId,
 			artifactId,
 		});

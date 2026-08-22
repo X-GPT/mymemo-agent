@@ -1,3 +1,9 @@
+import type { Database } from "@mymemo/agent-db/client";
+import {
+	ACTIVE_RUN_STATUSES,
+	conversations,
+	runs,
+} from "@mymemo/agent-db/schema";
 import {
 	and,
 	desc,
@@ -10,8 +16,6 @@ import {
 	or,
 	sql,
 } from "drizzle-orm";
-import type { Database } from "@/db/client";
-import { ACTIVE_RUN_STATUSES, conversations, runs } from "@/db/schema";
 import type {
 	ConversationCreateInput,
 	ConversationDeleteResult,

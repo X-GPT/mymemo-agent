@@ -1,4 +1,5 @@
 import { recordAgentCoreDispatchInTx } from "@mymemo/agent-db/agentcore-dispatch";
+import type { Database } from "@mymemo/agent-db/client";
 import {
 	ActiveRunConflictError,
 	admitQueuedRunInTx,
@@ -9,9 +10,8 @@ import {
 	requestRunInterruptionTx,
 	toRunRecord,
 } from "@mymemo/agent-db/run-store";
+import { conversations, runs } from "@mymemo/agent-db/schema";
 import { and, eq, sql } from "drizzle-orm";
-import type { Database } from "@/db/client";
-import { conversations, runs } from "@/db/schema";
 import type { ConversationRef } from "@/features/conversation-store";
 
 /**
@@ -19,35 +19,11 @@ import type { ConversationRef } from "@/features/conversation-store";
  * (start, append, terminal, and interrupt) and their types
  * live in the shared `@mymemo/agent-db` package, so chat-api and AgentCore
  * run one implementation of the queue protocol over the same `runs`/`run_events`
- * tables. They are re-exported here so the feature barrel and existing
- * `@/features/run-store` importers see an unchanged surface. What stays
- * chat-api-specific is run *admission* — inserting the queued run and writing the
+ * tables. What stays chat-api-specific is run *admission* — inserting the
+ * queued run and writing the
  * `run_started` event that carries the frozen conversation scope — plus the
  * `PostgresRunStore` read surface the routes and SSE projector consume.
  */
-
-// Locally-bound helpers/types (used by this module's admission code) are
-// re-exported through their import binding; the rest are pure pass-throughs.
-export { ActiveRunConflictError, requestRunInterruptionTx };
-export type { RunInterruptionResult, RunRecord };
-export type {
-	AdmitQueuedRunInput,
-	MarkLiveStreamFailedResult,
-	NormalizedRunInput,
-	NormalizedRunInputV1,
-	RunAdmissionResult,
-	RunEventAppendClass,
-	RunEventPayload,
-	RunStatus,
-	TerminalRunStatus,
-} from "@mymemo/agent-db/run-store";
-export {
-	admitQueuedRunTx,
-	appendRunEventTx,
-	markLiveStreamFailedTx,
-	RunInputMismatchError,
-	transitionRunTerminalTx,
-} from "@mymemo/agent-db/run-store";
 
 /**
  * Queue admission failed: the conversation already has an active

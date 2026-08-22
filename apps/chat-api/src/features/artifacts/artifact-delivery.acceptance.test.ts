@@ -1,15 +1,19 @@
 import { describe, expect, it } from "bun:test";
-import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
-import { asc, eq } from "drizzle-orm";
-import type { ApiConfig } from "@/config/env";
 import {
 	artifactObjects,
 	conversationArtifacts,
 	conversations,
 	runEvents,
 	runs,
-} from "@/db/schema";
-import { createTestDatabase, seedQueuedRun, type TestDb } from "@/db/testing";
+} from "@mymemo/agent-db/schema";
+import {
+	createTestDatabase,
+	seedQueuedRun,
+	type TestDb,
+} from "@mymemo/agent-db/testing";
+import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
+import { asc, eq } from "drizzle-orm";
+import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store";
 import type { ArtifactManifestEntry } from "../../../../agent-worker/src/artifacts/artifact-manifest";

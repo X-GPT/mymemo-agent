@@ -30,18 +30,7 @@ agentcore_dispatch_publisher_image     = "123456789012.dkr.ecr.us-east-1.amazona
 runtime_image_digest                   = "sha256:REPLACE_WITH_64_HEX_CHARACTERS"
 consumer_lambda_package                = "/absolute/path/to/consumer.zip"
 
-chat_api_desired_count                        = 1
-agent_maintenance_desired_count               = 1
-agentcore_dispatch_publisher_desired_count    = 1
-
-worker_e2b_template                 = "mymemo-agent-sandbox"
-openrouter_base_url                 = "https://openrouter.ai/api"
 openrouter_default_model            = "anthropic/claude-sonnet-4"
-
-# Temporary Live Streams only: one small node, with replication and backups
-# disabled in redis.tf.
-live_redis_node_type      = "cache.t4g.micro"
-live_redis_engine_version = "7.1"
 
 # SNS topics must already have confirmed incident subscriptions.
 # alarm_action_arns = ["arn:aws:sns:us-east-1:123456789012:mymemo-prod-alarms"]
@@ -50,15 +39,6 @@ live_redis_engine_version = "7.1"
 # RDS instance. The password is generated and stored by RDS in AWS Secrets
 # Manager; ECS receives AGENT_DATABASE_URL without a password plus a DB_PASSWORD
 # secret reference to the RDS-managed password.
-agent_database_name               = "mymemo_agent"
-agent_database_username           = "mymemo_agent"
-agent_db_instance_class           = "db.t4g.micro"
-agent_db_allocated_storage_gb     = 20
-agent_db_max_allocated_storage_gb = 100
-agent_db_engine_version           = "17"
-agent_db_backup_retention_days    = 7
-agent_db_deletion_protection      = true
-
 # Non-database secret values are created and rotated outside this example.
 # By default Terraform resolves conventional Secrets Manager names:
 # - <name_prefix>-<environment>-KB_DATABASE_URL

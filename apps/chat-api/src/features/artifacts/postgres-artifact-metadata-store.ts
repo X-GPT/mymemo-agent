@@ -1,6 +1,6 @@
+import type { Database } from "@mymemo/agent-db/client";
+import { conversationArtifacts } from "@mymemo/agent-db/schema";
 import { and, asc, eq } from "drizzle-orm";
-import type { Database } from "@/db/client";
-import { conversationArtifacts } from "@/db/schema";
 import type { ConversationRef } from "@/features/conversation-store";
 import type {
 	ArtifactMetadata,

@@ -1,12 +1,14 @@
+import { Statsig, StatsigUser } from "@statsig/statsig-node-core";
 import type { InternalIdentity } from "@/features/conversations/conversations.schema";
-import {
-	createStatsigClient,
-	type GateLogger,
-	StatsigBooleanGate,
-	type StatsigClientLike,
-} from "@/features/statsig-gate";
 
-export type { StatsigClientLike } from "@/features/statsig-gate";
+export interface StatsigClientLike {
+	initialize(): Promise<unknown>;
+	checkGate(user: StatsigUser, gateName: string): boolean;
+}
+
+interface GateLogger {
+	error(obj: Record<string, unknown>): void;
+}
 
 /** The server-side gate name that controls split-runtime agent exposure. */
 export const AGENT_EXPOSURE_GATE = "mymemo_agent_split_runtime_enabled";
@@ -32,37 +34,58 @@ export interface ExposureGate {
  * turn).
  */
 export class StatsigExposureGate implements ExposureGate {
-	private readonly gate: StatsigBooleanGate;
+	private readonly ready: Promise<boolean>;
 
-	constructor(client: StatsigClientLike, logger?: GateLogger) {
-		this.gate = new StatsigBooleanGate(
-			client,
-			AGENT_EXPOSURE_GATE,
-			{
-				initialization: "Statsig initialization failed; failing closed",
-				evaluation: "Statsig gate evaluation failed; failing closed",
-			},
-			logger,
-		);
+	constructor(
+		private readonly client: StatsigClientLike,
+		private readonly logger?: GateLogger,
+	) {
+		this.ready = client
+			.initialize()
+			.then(() => true)
+			.catch((error) => {
+				logger?.error({
+					message: "Statsig initialization failed; failing closed",
+					error: error instanceof Error ? error.message : String(error),
+				});
+				return false;
+			});
 	}
 
 	async isAgentEnabled(identity: InternalIdentity): Promise<boolean> {
-		return this.gate.isEnabled(identity);
+		if (!(await this.ready)) return false;
+		try {
+			return this.client.checkGate(
+				new StatsigUser({
+					userID: identity.memberCode,
+					customIDs: { partnerCode: identity.partnerCode },
+					custom: {
+						partnerCode: identity.partnerCode,
+						...(identity.teamCode ? { teamCode: identity.teamCode } : {}),
+					},
+				}),
+				AGENT_EXPOSURE_GATE,
+			);
+		} catch (error) {
+			this.logger?.error({
+				message: "Statsig gate evaluation failed; failing closed",
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
 	}
 }
 
 /**
  * Construct the real Statsig-backed gate. Kicks off initialization immediately;
- * the first `isAgentEnabled` awaits it. `environment` tiers the gate (e.g.
- * "production") so rollout cohorts can differ per environment.
+ * the first `isAgentEnabled` awaits it.
  */
 export function createStatsigExposureGate(
 	serverSecret: string,
-	options: { environment?: string } = {},
 	logger?: GateLogger,
 ): StatsigExposureGate {
 	return new StatsigExposureGate(
-		createStatsigClient(serverSecret, options),
+		new Statsig(serverSecret, { outputLogLevel: "warn" }),
 		logger,
 	);
 }

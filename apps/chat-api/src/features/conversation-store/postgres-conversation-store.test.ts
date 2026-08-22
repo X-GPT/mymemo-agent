@@ -7,8 +7,8 @@ import {
 	conversations,
 	runEvents,
 	runs,
-} from "@/db/schema";
-import { createTestDatabase, type TestDb } from "@/db/testing";
+} from "@mymemo/agent-db/schema";
+import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { ConversationCreateInput } from "./conversation-store";
 import { PostgresConversationStore } from "./postgres-conversation-store";
 
