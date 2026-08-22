@@ -10,24 +10,58 @@ queued-Run expiration, Reclamation, and asynchronous cleanup.
 2. Set the AgentCore Dispatch SSM control to `disabled` so no queued Dispatch is
    delivered during the schema and service transition.
 3. Confirm Postgres contains zero Active Runs and no live Conversation Ownership.
-4. From the pre-retirement checkout, stop the old worker service and wait for
-   both `RUNNING` and `PENDING` task counts to reach zero:
+4. From the pre-retirement checkout, stop the old worker service and wait until
+   every task reaches the `STOPPED` lifecycle state:
 
    ```bash
-   cluster_arn="$(terraform -chdir=infra/terraform output -raw shared_ecs_cluster_arn)"
-   worker_service="$(terraform -chdir=infra/terraform output -raw agent_worker_service_name)"
-   AWS_PROFILE=mymemo aws ecs update-service --region us-west-2 \
-     --cluster "${cluster_arn}" --service "${worker_service}" --desired-count 0
-   AWS_PROFILE=mymemo aws ecs wait services-stable --region us-west-2 \
-     --cluster "${cluster_arn}" --services "${worker_service}"
-   AWS_PROFILE=mymemo aws ecs describe-services --region us-west-2 \
-     --cluster "${cluster_arn}" --services "${worker_service}" \
-     --query 'services[0].{running:runningCount,pending:pendingCount}'
+   (
+     set -euo pipefail
+
+     cluster_arn="$(terraform -chdir=infra/terraform output -raw shared_ecs_cluster_arn)"
+     worker_service="$(terraform -chdir=infra/terraform output -raw agent_worker_service_name)"
+     AWS_PROFILE=mymemo aws ecs update-service --region us-west-2 \
+       --cluster "${cluster_arn}" --service "${worker_service}" --desired-count 0
+     AWS_PROFILE=mymemo aws ecs wait services-stable --region us-west-2 \
+       --cluster "${cluster_arn}" --services "${worker_service}"
+
+     running_worker_task_arns="$(
+       AWS_PROFILE=mymemo aws ecs list-tasks --region us-west-2 \
+         --cluster "${cluster_arn}" --service-name "${worker_service}" \
+         --desired-status RUNNING --query taskArns --output json
+     )"
+     stopped_worker_task_arns="$(
+       AWS_PROFILE=mymemo aws ecs list-tasks --region us-west-2 \
+         --cluster "${cluster_arn}" --service-name "${worker_service}" \
+         --desired-status STOPPED --query taskArns --output json
+     )"
+     worker_task_arns_json="$(
+       jq -cn \
+         --argjson running "${running_worker_task_arns}" \
+         --argjson stopped "${stopped_worker_task_arns}" \
+         '$running + $stopped | unique'
+     )"
+     mapfile -t worker_task_arns < <(jq -r '.[]' <<<"${worker_task_arns_json}")
+     worker_task_state='{"nonStopped":[],"failures":[]}'
+     if (( ${#worker_task_arns[@]} > 0 )); then
+       worker_task_state="$(
+         AWS_PROFILE=mymemo aws ecs describe-tasks --region us-west-2 \
+           --cluster "${cluster_arn}" --tasks "${worker_task_arns[@]}" \
+           --query '{nonStopped:tasks[?lastStatus!=`STOPPED`].{taskArn:taskArn,lastStatus:lastStatus,desiredStatus:desiredStatus},failures:failures}' \
+           --output json
+       )"
+     fi
+     jq . <<<"${worker_task_state}"
+     jq -e \
+       '(.nonStopped | length) == 0 and (.failures | length) == 0' \
+       <<<"${worker_task_state}" >/dev/null
+   )
    ```
 
-   Do not apply the retirement migration until the final command reports both
-   counts as zero; an old binary must not read the removed queue index,
-   doorbell, or deployment-readiness table.
+   Do not apply the retirement migration unless the final JSON contains empty
+   `nonStopped` and `failures` arrays and the subshell exits successfully. This
+   explicitly covers tasks in `DEACTIVATING`, `STOPPING`, and `DEPROVISIONING`;
+   an old binary must not read the removed queue index, doorbell, or
+   deployment-readiness table.
 5. From the reviewed retirement-release checkout, confirm the production AWS
    identity and delete the now-unused worker image repository as a one-time
    operator action. This permanently deletes every image in the repository:

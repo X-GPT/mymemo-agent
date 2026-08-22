@@ -165,7 +165,7 @@ function buildArtifactHarness(
 			: { createObjectKey: () => `objects/key-${nextObject++}` }),
 		createArtifactId: () => `artifact-${nextArtifact++}`,
 	});
-	const loop = createAgentCoreRunHarness({
+	const harness = createAgentCoreRunHarness({
 		db: tdb.db,
 		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
@@ -186,7 +186,7 @@ function buildArtifactHarness(
 		logger,
 	});
 	return {
-		loop,
+		harness,
 		uploaded,
 		async queue(runId: string, query: SupervisedQuery) {
 			queries.set(runId, query);
@@ -198,8 +198,8 @@ function buildArtifactHarness(
 		},
 		async run(runId: string, query: SupervisedQuery) {
 			await this.queue(runId, query);
-			await loop.tick();
-			await loop.drain();
+			await harness.tick();
+			await harness.drain();
 		},
 	};
 }
@@ -248,7 +248,7 @@ function blockingUpload() {
 	return { upload, started };
 }
 
-describe("Downloadable artifact publication through the Run loop", () => {
+describe("Downloadable artifact publication through the AgentCore harness", () => {
 	it("places generated object keys under the standard production namespace", async () => {
 		await insertConversation();
 		const workspace = new FakeWorkspace();
@@ -286,7 +286,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			createObjectKey: () => `objects/key-${nextObject++}`,
 			createArtifactId: () => `artifact-${nextArtifact++}`,
 		});
-		const loop = createAgentCoreRunHarness({
+		const harness = createAgentCoreRunHarness({
 			db: tdb.db,
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			processor: createSdkRunProcessor({
@@ -329,8 +329,8 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			conversationId: "conv-1",
 		});
 
-		await loop.tick();
-		await loop.drain();
+		await harness.tick();
+		await harness.drain();
 
 		const artifacts = await tdb.db
 			.select()
@@ -784,14 +784,14 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			}),
 		);
 
-		await h.loop.tick();
+		await h.harness.tick();
 		await blocked.started;
 		await tdb.db
 			.update(runs)
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
-		await h.loop.tick();
-		await h.loop.drain();
+		await h.harness.tick();
+		await h.harness.drain();
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("interrupted");
@@ -812,7 +812,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			}),
 		);
 
-		await h.loop.tick();
+		await h.harness.tick();
 		await blocked.started;
 		await tdb.db
 			.update(conversations)
@@ -822,8 +822,8 @@ describe("Downloadable artifact publication through the Run loop", () => {
 				ownerUntil: new Date(Date.now() + 60_000),
 			})
 			.where(eq(conversations.conversationId, "conv-1"));
-		await h.loop.tick();
-		await h.loop.drain();
+		await h.harness.tick();
+		await h.harness.drain();
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 		expect((await tdb.db.select().from(runs))[0]).toMatchObject({
@@ -833,7 +833,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		expect(await tdb.db.select().from(runEvents)).toEqual([]);
 	});
 
-	it("aborts publication during worker shutdown and ends with the generic error", async () => {
+	it("aborts publication during Runtime shutdown and ends with the generic error", async () => {
 		await insertConversation();
 		const workspace = new FakeWorkspace();
 		const blocked = blockingUpload();
@@ -845,9 +845,9 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			}),
 		);
 
-		await h.loop.tick();
+		await h.harness.tick();
 		await blocked.started;
-		await h.loop.stop();
+		await h.harness.stop();
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("error");

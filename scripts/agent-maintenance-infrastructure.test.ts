@@ -149,6 +149,18 @@ describe("agent-maintenance infrastructure", () => {
 		expect(handoff).toContain("--force");
 	});
 
+	it("waits for every retired worker task to reach STOPPED", () => {
+		const handoff = readFileSync(
+			"docs/runbooks/agent-maintenance-handoff.md",
+			"utf8",
+		);
+
+		expect(handoff).toContain("--desired-status STOPPED");
+		expect(handoff).toContain("lastStatus!=`STOPPED`");
+		expect(handoff).toContain("DEACTIVATING");
+		expect(handoff).toContain("DEPROVISIONING");
+	});
+
 	it("injects only maintenance environment and secrets", () => {
 		const locals = terraformFile("locals.tf");
 		const maintenance = section(

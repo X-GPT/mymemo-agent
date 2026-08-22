@@ -129,16 +129,9 @@ async function createAcquiredRun(input: {
 		runId: input.runId,
 	});
 	if (!acquired) throw new Error("test setup acquired no Run");
-	const started = await loadExecutingRunTx(tdb.db, {
-		...acquired,
-		runId: input.runId,
-	});
+	const started = await loadExecutingRunTx(tdb.db, acquired);
 	if (!started) throw new Error(`test setup could not start ${input.runId}`);
-	owners.set(input.runId, {
-		...acquired,
-		runId: input.runId,
-		workerId: WORKER_ID,
-	});
+	owners.set(input.runId, acquired);
 	return started;
 }
 

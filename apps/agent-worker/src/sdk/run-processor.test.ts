@@ -1322,7 +1322,7 @@ describe("createSdkRunProcessor — through the run harness", () => {
 		]);
 	});
 
-	it("maps worker shutdown of a supervised query to error", async () => {
+	it("maps Runtime shutdown of a supervised query to error", async () => {
 		const started = Promise.withResolvers<void>();
 		const settled = Promise.withResolvers<void>();
 		const calls: string[] = [];
@@ -1339,7 +1339,7 @@ describe("createSdkRunProcessor — through the run harness", () => {
 						calls.push("close");
 						settled.resolve();
 					},
-					// biome-ignore lint/correctness/useYield: models a query stopped by worker shutdown.
+					// biome-ignore lint/correctness/useYield: models a query stopped by Runtime shutdown.
 					async *[Symbol.asyncIterator]() {
 						started.resolve();
 						await settled.promise;

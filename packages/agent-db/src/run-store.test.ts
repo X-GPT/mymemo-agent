@@ -375,6 +375,7 @@ describe("appendRunEventTx", () => {
 	it("rejects a lapsed Ownership epoch without allocating a sequence number", async () => {
 		await queueRun("run-1", "conv-1");
 		const acquired = await acquireQueuedRunForTest(tdb.db, {
+			runId: "run-1",
 			workerId: "worker-1",
 		});
 		if (!acquired) throw new Error("test setup acquired no Conversation");
@@ -1022,11 +1023,7 @@ describe("transitionRunTerminalTx", () => {
 
 		expect(
 			await transitionRunTerminalTx(tdb.db, {
-				owner: {
-					...acquired,
-					runId: "run-1",
-					workerId: "worker-1",
-				},
+				owner: acquired,
 				status: "done",
 			}),
 		).toEqual({ outcome: "rejected", rejected: "lease" });
@@ -1476,6 +1473,7 @@ describe("markLiveStreamFailedTx", () => {
 	it("rejects an active marker after the Ownership lease lapses", async () => {
 		await queueRun("run-1", "conv-1");
 		const acquired = await acquireQueuedRunForTest(tdb.db, {
+			runId: "run-1",
 			workerId: "worker-1",
 		});
 		if (!acquired) throw new Error("test setup acquired no Conversation");
@@ -1483,11 +1481,7 @@ describe("markLiveStreamFailedTx", () => {
 
 		expect(
 			await markLiveStreamFailedTx(tdb.db, {
-				owner: {
-					...acquired,
-					runId: "run-1",
-					workerId: "worker-1",
-				},
+				owner: acquired,
 			}),
 		).toEqual({ outcome: "rejected", rejected: "lease" });
 		expect((await readRun("run-1"))?.liveStreamFailedAt).toBeNull();
