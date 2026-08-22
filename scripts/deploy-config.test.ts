@@ -94,7 +94,6 @@ Plan: 1 to add, 1 to change, 1 to destroy.
 					CHAT_API_IMAGE: "example.test/chat-api:release-test",
 					AGENT_MAINTENANCE_IMAGE:
 						"example.test/agent-maintenance:release-test",
-					AGENT_WORKER_IMAGE: "example.test/agent-worker:release-test",
 					AGENTCORE_DISPATCH_PUBLISHER_IMAGE:
 						"example.test/agentcore-dispatch-publisher:release-test",
 				},
@@ -103,7 +102,7 @@ Plan: 1 to add, 1 to change, 1 to destroy.
 			expect(result.exitCode).toBe(0);
 			const lines = readFileSync(generatedTfvars, "utf8").trimEnd().split("\n");
 			const equalsColumns = lines.map((line) => line.indexOf("="));
-			expect(lines).toHaveLength(5);
+			expect(lines).toHaveLength(4);
 			expect(new Set(equalsColumns).size).toBe(1);
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });

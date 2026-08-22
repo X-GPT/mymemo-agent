@@ -14,7 +14,7 @@ function section(source: string, start: string, end: string): string {
 }
 
 describe("agent-maintenance infrastructure", () => {
-	it("defines an independently healthy, logged, inactive service", () => {
+	it("defines the independently healthy, logged sole maintenance owner", () => {
 		const ecs = terraformFile("ecs.tf");
 		const cloudwatch = terraformFile("cloudwatch.tf");
 		const production = terraformFile("prod.tfvars");
@@ -25,9 +25,7 @@ describe("agent-maintenance infrastructure", () => {
 		expect(ecs).toContain('resource "aws_ecs_service" "agent_maintenance"');
 		expect(ecs).toContain("aws_cloudwatch_log_group.agent_maintenance.name");
 		expect(ecs).toContain("/health");
-		expect(ecs).toContain(
-			"var.agent_maintenance_desired_count == 0 || var.agent_worker_desired_count == 0",
-		);
+		expect(ecs).not.toContain("agent_worker");
 		expect(cloudwatch).toContain(
 			'resource "aws_cloudwatch_log_metric_filter" "agent_maintenance_errors"',
 		);
@@ -42,7 +40,52 @@ describe("agent-maintenance infrastructure", () => {
 		);
 		expect(cloudwatch).toContain("count = var.agent_maintenance_desired_count");
 		expect(cloudwatch).toContain('treat_missing_data  = "breaching"');
-		expect(production).toContain("agent_maintenance_desired_count = 0");
+		expect(production).toContain("agent_maintenance_desired_count = 1");
+	});
+
+	it("contains no retired worker execution infrastructure", () => {
+		for (const name of [
+			"cloudwatch.tf",
+			"ecs.tf",
+			"iam.tf",
+			"locals.tf",
+			"network.tf",
+			"outputs.tf",
+			"variables.tf",
+		]) {
+			const source = terraformFile(name);
+			expect(source).not.toContain("agent_worker");
+			expect(source).not.toContain("agent-worker");
+		}
+	});
+
+	it("collects Live Stream metrics from AgentCore Runtime logs", () => {
+		const cloudwatch = terraformFile("cloudwatch.tf");
+
+		expect(cloudwatch).toContain(
+			`agentcore-runtime = "/aws/bedrock-agentcore/runtimes/\${aws_bedrockagentcore_agent_runtime.runtime.agent_runtime_id}-DEFAULT"`,
+		);
+		expect(cloudwatch).toContain(
+			'resource "aws_cloudwatch_log_metric_filter" "live_stream_capacity"',
+		);
+		expect(cloudwatch).toContain(
+			'resource "aws_cloudwatch_log_metric_filter" "live_stream_degraded_duration"',
+		);
+		expect(cloudwatch).toContain('Service = "agentcore-runtime"');
+	});
+
+	it("deletes the retired worker image repository during release", () => {
+		const ecr = readFileSync("infra/ecr/main.tf", "utf8");
+		const release = readFileSync(
+			".github/workflows/release-deploy.yml",
+			"utf8",
+		);
+
+		expect(ecr).toContain("from = aws_ecr_repository.agent_worker");
+		expect(ecr).toContain("destroy = true");
+		expect(release).toContain("aws ecr delete-repository");
+		expect(release).toContain("--repository-name mymemo-agent-worker");
+		expect(release).toContain("--force");
 	});
 
 	it("injects only maintenance environment and secrets", () => {

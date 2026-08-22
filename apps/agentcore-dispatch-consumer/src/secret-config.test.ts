@@ -38,7 +38,7 @@ describe("AgentCore secret configuration", () => {
 		).toThrow("AGENT_DATABASE_URL must use sslmode=verify-full");
 	});
 
-	it("materializes the agent-worker passwordless URL with the RDS password secret", () => {
+	it("materializes the Runtime passwordless URL with the RDS password secret", () => {
 		const resolved = resolveVerifiedAgentDatabaseUrl(
 			"postgresql://mymemo_agent@agent.example:5432/mymemo_agent",
 			JSON.stringify({ password: "agent password" }),
@@ -50,7 +50,7 @@ describe("AgentCore secret configuration", () => {
 	});
 
 	it("rejects an ambient password or malformed RDS password secret", () => {
-			expect(() =>
+		expect(() =>
 			resolveVerifiedAgentDatabaseUrl(
 				"postgresql://mymemo_agent:secret@agent.example/mymemo_agent",
 				JSON.stringify({ password: "agent password" }),

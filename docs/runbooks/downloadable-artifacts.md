@@ -9,20 +9,20 @@ integration contract.
 
 ## Trusted-runtime configuration
 
-Both `chat-api` and `agent-worker` require:
+Both `chat-api` and the AgentCore Runtime require:
 
 - `ARTIFACT_BUCKET`: the private S3 bucket provisioned for the environment;
 - `AWS_REGION`: the region containing that bucket.
 
 The AWS SDK uses each ECS task role through its default credential provider
-chain. Do not configure long-lived AWS credentials. `agent-worker` may upload
-and delete objects, while `chat-api` may read the one current object selected by
+chain. Do not configure long-lived AWS credentials. AgentCore may upload
+objects, maintenance may delete retired objects, and `chat-api` may read the one current object selected by
 an ownership-checked Postgres record so it can sign a download. Neither role may
 list the bucket. The migration task receives neither artifact configuration nor
 artifact S3 permissions.
 
 Artifact bucket configuration, AWS credentials, and presigned URLs stay inside
-the trusted Fargate runtimes. None are passed to E2B. The sandbox receives only
+trusted services. None are passed to E2B. The sandbox receives only
 the per-Run binding produced by `buildSandboxEnv`.
 
 Terraform owns the bucket and enforces Block Public Access,
@@ -33,7 +33,7 @@ artifacts.
 
 ## Publication and quotas
 
-The worker captures the reserved tree at Run start and publishes only files
+The AgentCore Runtime captures the reserved tree at Run start and publishes only files
 whose size or modification timestamp changed during a successful Run. Files
 outside `/home/user/artifacts/`, including scratch files and `.mymemo/docs/`,
 are not Downloadable artifacts.
@@ -95,7 +95,7 @@ deletion cannot be revoked and may remain usable until its five-minute expiry.
    GROUP BY status;
    ```
 
-2. Search worker logs for the bounded `artifactFailure` fields. `validation`
+2. Search Runtime logs for the bounded `artifactFailure` fields. `validation`
    indicates an unsafe path or tree entry; `quota` names the exceeded bound;
    `publication` names `manifest`, `ledger`, `read`, or `upload`.
 3. For upload failures, verify worker task-role access and bucket/region

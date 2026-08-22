@@ -17,7 +17,7 @@ describe("buildSandboxEnv — credential boundary", () => {
 			MYMEMO_CONVERSATION_ID: "conv-1",
 			MYMEMO_RUN_ID: "run-1",
 			MYMEMO_SANDBOX_ID: "sbx-1",
-			MYMEMO_RUNTIME: "split-fargate-e2b",
+			MYMEMO_RUNTIME: "agentcore-e2b",
 		});
 	});
 

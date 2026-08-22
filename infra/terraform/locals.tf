@@ -5,7 +5,6 @@ locals {
   alb_security_group_name     = "${local.common_name}-alb"
 
   chat_api_name                     = "${local.common_name}-chat-api"
-  agent_worker_name                 = "${local.common_name}-worker"
   agent_maintenance_name            = "${local.common_name}-maintenance"
   agentcore_dispatch_publisher_name = "${local.common_name}-agentcore-dispatch-publisher"
   alb_name                          = "${local.common_name}-alb"
@@ -91,26 +90,6 @@ locals {
 
   chat_api_secrets = concat([
     { name = "STATSIG_SERVER_SECRET", valueFrom = local.statsig_server_secret_arn },
-    { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
-  ], local.live_redis_url_secret, local.agent_db_password_secret)
-
-  agent_worker_environment = concat([
-    { name = "PORT", value = tostring(var.agent_worker_port) },
-    { name = "LOG_LEVEL", value = var.log_level },
-    { name = "OPENROUTER_BASE_URL", value = var.openrouter_base_url },
-    { name = "OPENROUTER_DEFAULT_MODEL", value = var.openrouter_default_model },
-    { name = "WORKER_E2B_TEMPLATE", value = var.worker_e2b_template },
-    { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket },
-    { name = "AWS_REGION", value = var.aws_region },
-    { name = "WORKER_MAX_CONCURRENT_CONVERSATIONS", value = tostring(var.worker_max_concurrent_conversations) },
-    { name = "WORKER_HEARTBEAT_INTERVAL_MS", value = tostring(var.worker_heartbeat_interval_ms) },
-    { name = "WORKER_SHUTDOWN_TIMEOUT_MS", value = tostring(var.worker_shutdown_timeout_ms) },
-    { name = "DB_SSL", value = var.db_ssl },
-  ], local.agent_database_url_environment)
-
-  agent_worker_secrets = concat([
-    { name = "KB_DATABASE_URL", valueFrom = local.kb_database_url_secret_arn },
-    { name = "OPENROUTER_API_KEY", valueFrom = local.openrouter_api_key_secret_arn },
     { name = "E2B_API_KEY", valueFrom = local.e2b_api_key_secret_arn },
   ], local.live_redis_url_secret, local.agent_db_password_secret)
 

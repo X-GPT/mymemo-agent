@@ -14,8 +14,7 @@ tags = {
 mymemo_service_api_security_group_ids = ["sg-REPLACE_WITH_MYMEMO_SERVICE_API_SG"]
 
 # Security group on the existing mymemo-service RDS instance hosting the KB
-# database. mymemo-agent attaches an ingress rule to it so agent-worker can
-# reach the KB over KB_DATABASE_URL.
+# database. mymemo-agent attaches an ingress rule for the AgentCore Runtime.
 kb_database_security_group_id = "sg-REPLACE_WITH_KB_DATABASE_SG"
 
 # Existing ECS subnets are public/default subnets with no NAT/VPC endpoint egress
@@ -26,21 +25,19 @@ assign_public_ip = true
 fck_nat_ami_id = "ami-REPLACE_WITH_REVIEWED_FCK_NAT_AMI"
 
 chat_api_image                         = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-chat-api:REPLACE_WITH_GIT_SHA"
-agent_worker_image                     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-worker:REPLACE_WITH_GIT_SHA"
 agent_maintenance_image                = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-maintenance:REPLACE_WITH_GIT_SHA"
 agentcore_dispatch_publisher_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agentcore-dispatch-publisher:REPLACE_WITH_GIT_SHA"
 runtime_image_digest                   = "sha256:REPLACE_WITH_64_HEX_CHARACTERS"
 consumer_lambda_package                = "/absolute/path/to/consumer.zip"
 
 chat_api_desired_count                        = 1
-agent_worker_desired_count                    = 1
+agent_maintenance_desired_count               = 1
 agentcore_dispatch_publisher_desired_count    = 1
 
 e2b_template                        = "sandbox-template-prod"
 worker_e2b_template                 = "mymemo-agent-sandbox"
 openrouter_base_url                 = "https://openrouter.ai/api"
 openrouter_default_model            = "anthropic/claude-sonnet-4"
-worker_max_concurrent_conversations = 2
 
 # Temporary Live Streams only: one small node, with replication and backups
 # disabled in redis.tf.

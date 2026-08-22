@@ -13,7 +13,7 @@ import { conversationRuntime, orphanSandboxes } from "./schema";
  * Narrow transaction helpers over `conversation_runtime` and
  * `orphan_sandboxes`, plus the named in-transaction Agent-session pointer
  * operation used by terminal Run transactions (design doc "State Ownership",
- * Task 4.2). Shared by chat-api and agent-worker so the runtime write protocol
+ * Task 4.2). Shared by chat-api and AgentCore so the runtime write protocol
  * lives in one place over one `pg` driver. Sandbox/taint helpers live here;
  * Agent-session pointer publication is composed by run-store with the terminal
  * Outcome.

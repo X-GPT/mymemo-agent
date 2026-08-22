@@ -3,11 +3,6 @@ output "chat_api_service_name" {
   value       = aws_ecs_service.chat_api.name
 }
 
-output "agent_worker_service_name" {
-  description = "ECS service name for agent-worker."
-  value       = aws_ecs_service.agent_worker.name
-}
-
 output "agent_maintenance_service_name" {
   description = "ECS service name for agent-maintenance."
   value       = aws_ecs_service.agent_maintenance.name
@@ -28,11 +23,6 @@ output "chat_api_task_definition_arn" {
   value       = aws_ecs_task_definition.chat_api.arn
 }
 
-output "agent_worker_task_definition_arn" {
-  description = "Task definition ARN for the agent-worker release built by Terraform."
-  value       = aws_ecs_task_definition.agent_worker.arn
-}
-
 output "agent_maintenance_task_definition_arn" {
   description = "Task definition ARN for the agent-maintenance release built by Terraform."
   value       = aws_ecs_task_definition.agent_maintenance.arn
@@ -49,7 +39,7 @@ output "agent_database_endpoint" {
 }
 
 output "agent_database_url" {
-  description = "Passwordless agent database URL injected into agent-worker."
+  description = "Passwordless writable agent database URL."
   value       = local.managed_agent_database_url
 }
 
@@ -59,42 +49,42 @@ output "agent_database_password_secret_arn" {
 }
 
 output "kb_database_url_secret_arn" {
-  description = "Secrets Manager ARN for the KB database URL injected into agent-worker."
+  description = "Secrets Manager ARN for the AgentCore Runtime KB database URL."
   value       = local.kb_database_url_secret_arn
 }
 
 output "openrouter_api_key_secret_arn" {
-  description = "Secrets Manager ARN for the OpenRouter API key injected into agent-worker."
+  description = "Secrets Manager ARN for the AgentCore Runtime OpenRouter API key."
   value       = local.openrouter_api_key_secret_arn
 }
 
 output "e2b_api_key_secret_arn" {
-  description = "Secrets Manager ARN for the E2B API key injected into agent-worker."
+  description = "Secrets Manager ARN for the E2B API key."
   value       = local.e2b_api_key_secret_arn
 }
 
 output "redis_url_secret_arn" {
-  description = "Secrets Manager ARN for the Redis URL injected into agent-worker."
+  description = "Secrets Manager ARN for the Redis URL."
   value       = local.live_redis_url_secret_arn
 }
 
 output "openrouter_base_url" {
-  description = "OpenRouter base URL configured for agent-worker."
+  description = "OpenRouter base URL configured for the AgentCore Runtime."
   value       = var.openrouter_base_url
 }
 
 output "openrouter_default_model" {
-  description = "Default OpenRouter model configured for agent-worker."
+  description = "Default OpenRouter model configured for the AgentCore Runtime."
   value       = var.openrouter_default_model
 }
 
 output "worker_e2b_template" {
-  description = "E2B template configured for agent-worker."
+  description = "E2B template configured for the AgentCore Runtime."
   value       = var.worker_e2b_template
 }
 
 output "artifact_bucket_name" {
-  description = "Artifact bucket configured for agent-worker."
+  description = "Artifact bucket configured for trusted services."
   value       = aws_s3_bucket.artifacts.bucket
 }
 

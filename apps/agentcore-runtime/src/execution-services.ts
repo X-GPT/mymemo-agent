@@ -10,9 +10,8 @@ import type { RunServing } from "agent-worker/run-serving";
 import type { CommittedAgentCoreAcquisition } from "agentcore-dispatch-consumer/acquisition-boundary";
 import type { AgentCoreRuntimeDependencies } from "./runtime";
 
-/** Bind exact AgentCore acquisition to the same already-running Run-serving
- * seam Fargate uses, without importing its Claim, drain, expiration, or
- * Reclamation loops. */
+/** Bind exact AgentCore acquisition to shared already-running Run serving
+ * without importing expiration or Reclamation loops. */
 export function createAgentCoreExecutionServices(options: {
 	db: Database;
 	acquire(
@@ -77,7 +76,7 @@ export function createAgentCoreExecutionServices(options: {
 					runId: input.runId,
 				});
 			} catch (error) {
-				// The lease lapses and shared Fargate Reclamation remains the backstop.
+				// The lease lapses and agent-maintenance Reclamation is the backstop.
 				options.logger.error({
 					message: "AgentCore Ownership release failed",
 					workerId: input.workerId,

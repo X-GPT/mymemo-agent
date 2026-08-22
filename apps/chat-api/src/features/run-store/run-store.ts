@@ -17,7 +17,7 @@ import type { ConversationRef } from "@/features/conversation-store";
 /**
  * chat-api's run-store surface. The concurrency-critical transaction helpers
  * (start, append, terminal, and interrupt) and their types
- * live in the shared `@mymemo/agent-db` package, so chat-api and agent-worker
+ * live in the shared `@mymemo/agent-db` package, so chat-api and AgentCore
  * run one implementation of the queue protocol over the same `runs`/`run_events`
  * tables. They are re-exported here so the feature barrel and existing
  * `@/features/run-store` importers see an unchanged surface. What stays

@@ -88,7 +88,7 @@ variable "mymemo_service_api_security_group_ids" {
 }
 
 variable "kb_database_security_group_id" {
-  description = "Security group ID of the existing mymemo-service RDS instance hosting the KB database. Owned by the mymemo-service stack; this stack only attaches an ingress rule so agent-worker can reach the KB over KB_DATABASE_URL."
+  description = "Security group ID of the existing mymemo-service RDS instance hosting the KB database. Owned by the mymemo-service stack; this stack attaches AgentCore Runtime ingress."
   type        = string
 
   validation {
@@ -104,16 +104,6 @@ variable "chat_api_image" {
   validation {
     condition     = length(var.chat_api_image) > 0
     error_message = "chat_api_image is required."
-  }
-}
-
-variable "agent_worker_image" {
-  description = "Fully qualified agent-worker container image URI including tag."
-  type        = string
-
-  validation {
-    condition     = length(var.agent_worker_image) > 0
-    error_message = "agent_worker_image is required."
   }
 }
 
@@ -143,16 +133,10 @@ variable "chat_api_desired_count" {
   default     = 1
 }
 
-variable "agent_worker_desired_count" {
-  description = "Desired ECS task count for agent-worker."
+variable "agent_maintenance_desired_count" {
+  description = "Desired ECS task count for the singleton agent-maintenance owner."
   type        = number
   default     = 1
-}
-
-variable "agent_maintenance_desired_count" {
-  description = "Desired ECS task count for the singleton agent-maintenance owner. Keep zero until the controlled handoff."
-  type        = number
-  default     = 0
 
   validation {
     condition     = var.agent_maintenance_desired_count == 0 || var.agent_maintenance_desired_count == 1
@@ -181,18 +165,6 @@ variable "chat_api_memory" {
   description = "Fargate memory MiB for chat-api."
   type        = number
   default     = 1024
-}
-
-variable "agent_worker_cpu" {
-  description = "Fargate CPU units for agent-worker."
-  type        = number
-  default     = 1024
-}
-
-variable "agent_worker_memory" {
-  description = "Fargate memory MiB for agent-worker."
-  type        = number
-  default     = 2048
 }
 
 variable "agent_maintenance_cpu" {
@@ -254,12 +226,6 @@ variable "chat_api_port" {
   default     = 3000
 }
 
-variable "agent_worker_port" {
-  description = "Container port exposed by agent-worker health server."
-  type        = number
-  default     = 8080
-}
-
 variable "agent_maintenance_port" {
   description = "Container port exposed by the agent-maintenance health server."
   type        = number
@@ -309,38 +275,26 @@ variable "e2b_template" {
 }
 
 variable "worker_e2b_template" {
-  description = "Custom E2B template agent-worker creates run sandboxes from (apps/agent-worker/e2b-template/); installs rg and verifies artifact runtime tools."
+  description = "Custom E2B template used by the AgentCore Runtime; installs rg and verifies artifact runtime tools."
   type        = string
   default     = "mymemo-agent-sandbox"
 }
 
 variable "openrouter_base_url" {
-  description = "OpenRouter base URL used by agent-worker."
+  description = "OpenRouter base URL used by the AgentCore Runtime."
   type        = string
   default     = "https://openrouter.ai/api"
 }
 
 variable "openrouter_default_model" {
-  description = "Default OpenRouter model used by agent-worker."
+  description = "Default OpenRouter model used by the AgentCore Runtime."
   type        = string
 }
 
-variable "worker_max_concurrent_conversations" {
-  description = "Maximum concurrent Conversation drains per agent-worker task. One slot is held for a whole drain, not per Run."
-  type        = number
-  default     = 2
-}
-
 variable "worker_heartbeat_interval_ms" {
-  description = "Active run heartbeat interval for agent-worker."
+  description = "Active Run heartbeat interval for the AgentCore Runtime."
   type        = number
   default     = 15000
-}
-
-variable "worker_shutdown_timeout_ms" {
-  description = "Shutdown drain timeout for agent-worker."
-  type        = number
-  default     = 30000
 }
 
 variable "log_level" {
@@ -404,7 +358,7 @@ variable "agent_db_deletion_protection" {
 }
 
 variable "kb_database_url_secret_name" {
-  description = "Secrets Manager secret name containing KB_DATABASE_URL for agent-worker. Defaults to <name_prefix>-<environment>-KB_DATABASE_URL."
+  description = "Secrets Manager secret name containing the AgentCore Runtime KB_DATABASE_URL. Defaults to <name_prefix>-<environment>-KB_DATABASE_URL."
   type        = string
   default     = null
 }

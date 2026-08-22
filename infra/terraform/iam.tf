@@ -108,11 +108,6 @@ resource "aws_iam_role_policy" "chat_api_artifact_read" {
   policy = data.aws_iam_policy_document.chat_api_artifact_read.json
 }
 
-resource "aws_iam_role" "agent_worker_task" {
-  name               = "${local.common_name}-worker-task"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
-}
-
 resource "aws_iam_role" "agent_maintenance_task" {
   name               = "${local.agent_maintenance_name}-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
@@ -160,23 +155,6 @@ resource "aws_iam_role_policy" "agentcore_dispatch_publisher" {
   name   = "${local.common_name}-agentcore-dispatch-publisher"
   role   = aws_iam_role.agentcore_dispatch_publisher_task.id
   policy = data.aws_iam_policy_document.agentcore_dispatch_publisher.json
-}
-
-data "aws_iam_policy_document" "agent_worker_artifact_write" {
-  statement {
-    actions = [
-      "s3:AbortMultipartUpload",
-      "s3:DeleteObject",
-      "s3:PutObject",
-    ]
-    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
-  }
-}
-
-resource "aws_iam_role_policy" "agent_worker_artifact_write" {
-  name   = "${local.common_name}-artifact-write"
-  role   = aws_iam_role.agent_worker_task.id
-  policy = data.aws_iam_policy_document.agent_worker_artifact_write.json
 }
 
 resource "aws_iam_role" "agent_migration_task" {

@@ -17,14 +17,13 @@ import {
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
-import { RunLoop } from "../run-loop";
 import type { SupervisedQuery } from "../sdk/agent-stream";
 import { createSdkRunProcessor } from "../sdk/run-processor";
 import {
 	withNoSessionMirrorEvidence,
 	withSessionMirrorEvidence,
 } from "../sdk/testing/session-mirror-fixtures";
-import { Worker } from "../worker";
+import { createAgentCoreRunHarness } from "../testing/agentcore-run-harness";
 import type { ArtifactManifestEntry } from "./artifact-manifest";
 import {
 	type ArtifactObjectStore,
@@ -42,7 +41,7 @@ const MAX_CONVERSATION_ARTIFACT_BYTES = 1_024 * MIB;
 let tdb: TestDb;
 
 beforeAll(async () => {
-	tdb = await createTestDatabase(undefined, { legacyFargate: true });
+	tdb = await createTestDatabase();
 });
 
 afterAll(async () => {
@@ -166,15 +165,8 @@ function buildArtifactHarness(
 			: { createObjectKey: () => `objects/key-${nextObject++}` }),
 		createArtifactId: () => `artifact-${nextArtifact++}`,
 	});
-	const worker = new Worker({
-		workerId: "worker-1",
-		maxConcurrentConversations: 1,
-		shutdownTimeoutMs: 1_000,
-		logger,
-	});
-	const loop = new RunLoop({
+	const loop = createAgentCoreRunHarness({
 		db: tdb.db,
-		worker,
 		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
 			logger,
@@ -191,9 +183,9 @@ function buildArtifactHarness(
 				);
 			},
 		}),
-		heartbeatIntervalMs: 15_000,
 		logger,
 	});
+	const worker = { drain: () => loop.drain() };
 	return {
 		loop,
 		worker,
@@ -219,7 +211,7 @@ async function insertConversation(): Promise<void> {
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
-		executionRuntime: "fargate",
+		executionRuntime: "agentcore",
 	});
 }
 
@@ -296,15 +288,8 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			createObjectKey: () => `objects/key-${nextObject++}`,
 			createArtifactId: () => `artifact-${nextArtifact++}`,
 		});
-		const worker = new Worker({
-			workerId: "worker-1",
-			maxConcurrentConversations: 1,
-			shutdownTimeoutMs: 1_000,
-			logger: silentLogger,
-		});
-		const loop = new RunLoop({
+		const loop = createAgentCoreRunHarness({
 			db: tdb.db,
-			worker,
 			liveStreamRelay: createInMemoryLiveStreamRelay(),
 			processor: createSdkRunProcessor({
 				logger: silentLogger,
@@ -331,7 +316,6 @@ describe("Downloadable artifact publication through the Run loop", () => {
 					);
 				},
 			}),
-			heartbeatIntervalMs: 15_000,
 			logger: silentLogger,
 		});
 
@@ -339,7 +323,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			scope: "general",
-			executionRuntime: "fargate",
+			executionRuntime: "agentcore",
 		});
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
@@ -348,7 +332,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		const artifacts = await tdb.db
 			.select()

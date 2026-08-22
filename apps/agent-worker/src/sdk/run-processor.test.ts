@@ -29,8 +29,7 @@ import {
 } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
-import { RunLoop } from "../run-loop";
-import { Worker } from "../worker";
+import { createAgentCoreRunHarness } from "../testing/agentcore-run-harness";
 import type { StartStopDeadline } from "./agent-stream";
 import {
 	createSdkRunProcessor,
@@ -62,12 +61,12 @@ let tdb: TestDb;
 // One PGlite instance for the whole file (spin-up is the slow part); each test
 // starts from empty tables via delete, keeping isolation without the cost.
 beforeAll(async () => {
-	tdb = await createTestDatabase(undefined, { legacyFargate: true });
+	tdb = await createTestDatabase();
 	await tdb.db.insert(conversations).values({
 		userId: "user-1",
 		conversationId: "conv-1",
 		scope: "general",
-		executionRuntime: "fargate",
+		executionRuntime: "agentcore",
 	});
 });
 
@@ -221,34 +220,38 @@ function stepQuery(
 	};
 }
 
+interface TestWorker {
+	harness?: ReturnType<typeof createAgentCoreRunHarness>;
+	drain(): Promise<void>;
+}
+
 function buildLoop(
-	worker: Worker,
+	worker: TestWorker,
 	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
 	startStopDeadline?: StartStopDeadline,
 	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 ) {
-	return new RunLoop({
+	const harness = createAgentCoreRunHarness({
 		db: tdb.db,
-		worker,
 		liveStreamRelay,
 		processor: createSdkRunProcessor({
 			startRunQuery,
 			logger,
 			startStopDeadline,
 		}),
-		heartbeatIntervalMs: 15_000,
 		logger,
 	});
+	worker.harness = harness;
+	return harness;
 }
 
-function buildWorker() {
-	return new Worker({
-		workerId: "worker-1",
-		maxConcurrentConversations: 1,
-		shutdownTimeoutMs: 1_000,
-		logger: silentLogger,
-	});
+function buildWorker(): TestWorker {
+	return {
+		async drain() {
+			await this.harness?.drain();
+		},
+	};
 }
 
 async function createRuntimeFor(owner: RunWriteOwner): Promise<void> {
@@ -842,7 +845,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 	}
 
-	it("passes the claimed run, abort signal, and Ownership epoch to startRunQuery", async () => {
+	it("passes the acquired Run, abort signal, and Ownership epoch to startRunQuery", async () => {
 		const worker = buildWorker();
 		let seenRunId: string | undefined;
 		let seenOwner: RunWriteOwner | undefined;

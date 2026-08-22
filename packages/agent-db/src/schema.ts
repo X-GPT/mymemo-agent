@@ -14,16 +14,13 @@ import {
 	timestamp,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
-import {
-	CONVERSATION_EXECUTION_RUNTIMES,
-	FARGATE_EXECUTION_RUNTIME,
-} from "./execution-runtime";
+import { CONVERSATION_EXECUTION_RUNTIMES } from "./execution-runtime";
 
 /**
  * Drizzle schema for the writable agent database (`mymemo_agent`), distinct from
  * the worker's read-only KB. This file is the single source of truth for the
  * writable DB shared by `chat-api` (run creation, SSE projection) and
- * `agent-worker` (the Claim/renew/terminalize loop): types are inferred from
+ * AgentCore and agent-maintenance: types are inferred from
  * it, and `drizzle-kit generate` emits the SQL migrations under `drizzle/` from
  * it. Do not hand-edit the generated DDL — change a table here and regenerate.
  */
@@ -177,34 +174,6 @@ export const conversations = pgTable(
 		index("conversations_reclamation_idx")
 			.on(t.ownerUntil)
 			.where(sql`${t.ownerUntil} is not null`),
-	],
-);
-
-/**
- * Durable rollout fence for the later operator-only AgentCore creation path.
- * Absence is fail-closed. The Fargate rollout marks this row ready only after
- * every running task uses the runtime-aware task definition. A runtime-unaware
- * deployment preflight clears it only when no AgentCore Conversation depends
- * on runtime-aware Fargate behavior.
- */
-export const executionRuntimeDeployments = pgTable(
-	"execution_runtime_deployments",
-	{
-		executionRuntime: text("execution_runtime", {
-			enum: [FARGATE_EXECUTION_RUNTIME],
-		})
-			.primaryKey()
-			.default(FARGATE_EXECUTION_RUNTIME),
-		runtimeAware: boolean("runtime_aware").notNull().default(false),
-		updatedAt: timestamp("updated_at", { withTimezone: true })
-			.notNull()
-			.defaultNow(),
-	},
-	(t) => [
-		check(
-			"execution_runtime_deployments_runtime_check",
-			sql`${t.executionRuntime} = 'fargate'`,
-		),
 	],
 );
 
@@ -434,10 +403,6 @@ export const runs = pgTable(
 		index("runs_conversation_active_idx")
 			.on(t.userId, t.conversationId)
 			.where(sql`${t.status} in (${statusList(ACTIVE_RUN_STATUSES)})`),
-		// Queue claim: oldest queued run first (`FOR UPDATE SKIP LOCKED` scan).
-		index("runs_queue_claim_idx")
-			.on(t.createdAt)
-			.where(sql`${t.status} = 'queued'`),
 		// Cleanup/retention: terminal runs by when they finished.
 		index("runs_cleanup_idx")
 			.on(t.terminalAt)
@@ -563,7 +528,7 @@ export const agentSessions = pgTable(
 );
 
 /**
- * Audit ledger for trusted document access performed by agent-worker: which
+ * Audit ledger for trusted document access performed by AgentCore: which
  * scoped documents a run listed, searched, or loaded, under which scope
  * filter. Kept separate from `run_events` because its job differs —
  * security/compliance queries, and retention/access controls that can diverge

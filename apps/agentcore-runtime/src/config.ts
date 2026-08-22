@@ -132,7 +132,6 @@ export async function resolveRuntimeWorkerConfig(
 		ARTIFACT_BUCKET: bootstrap.artifactBucket,
 		AWS_REGION: bootstrap.awsRegion,
 		REDIS_URL: redisUrl,
-		WORKER_MAX_CONCURRENT_CONVERSATIONS: "1",
 		WORKER_HEARTBEAT_INTERVAL_MS: String(bootstrap.heartbeatIntervalMs),
 		WORKER_SHUTDOWN_TIMEOUT_MS: String(bootstrap.shutdownTimeoutMs),
 		LOG_LEVEL: bootstrap.logLevel,

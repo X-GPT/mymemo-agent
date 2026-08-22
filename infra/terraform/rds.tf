@@ -36,7 +36,7 @@ resource "aws_security_group_rule" "agent_maintenance_to_agent_db" {
 
 # The KB database lives in the existing mymemo-service RDS instance, whose
 # security group is owned by that stack and admits only its own ECS tasks.
-# agent-worker reads the KB over KB_DATABASE_URL, so this stack attaches the
+# AgentCore Runtime reads the KB over KB_DATABASE_URL, so this stack attaches the
 # one ingress rule that lets agent services reach it.
 resource "aws_security_group_rule" "agent_services_to_kb_db" {
   type                     = "ingress"

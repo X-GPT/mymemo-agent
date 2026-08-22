@@ -21,11 +21,10 @@ import {
 } from "../../../../agent-worker/src/artifacts/artifact-publication";
 import { runCleanupPass } from "../../../../agent-worker/src/cleanup/cleanup";
 import type { WorkerLogger } from "../../../../agent-worker/src/logger";
-import { RunLoop } from "../../../../agent-worker/src/run-loop";
 import type { SupervisedQuery } from "../../../../agent-worker/src/sdk/agent-stream";
 import { createSdkRunProcessor } from "../../../../agent-worker/src/sdk/run-processor";
 import { withNoSessionMirrorEvidence } from "../../../../agent-worker/src/sdk/testing/session-mirror-fixtures";
-import { Worker } from "../../../../agent-worker/src/worker";
+import { createAgentCoreRunHarness } from "../../../../agent-worker/src/testing/agentcore-run-harness";
 import type {
 	ArtifactDownloadSigner,
 	ArtifactDownloadSignInput,
@@ -124,15 +123,8 @@ function createDeliveryHarness(
 		createObjectKey: () => `objects/acceptance-${nextObject++}`,
 		createArtifactId: () => `artifact-${nextArtifact++}`,
 	});
-	const worker = new Worker({
-		workerId: "acceptance-worker",
-		maxConcurrentConversations: 1,
-		shutdownTimeoutMs: 1_000,
-		logger,
-	});
-	const loop = new RunLoop({
+	const loop = createAgentCoreRunHarness({
 		db: tdb.db,
-		worker,
 		liveStreamRelay: createInMemoryLiveStreamRelay(),
 		processor: createSdkRunProcessor({
 			logger,
@@ -145,9 +137,9 @@ function createDeliveryHarness(
 				);
 			},
 		}),
-		heartbeatIntervalMs: 15_000,
 		logger,
 	});
+	const worker = { drain: () => loop.drain() };
 	const queries = new Map<string, SupervisedQuery>();
 
 	return {
@@ -234,7 +226,7 @@ async function artifactList(app: ReturnType<typeof createApp>) {
 
 describe("Downloadable artifact delivery acceptance", () => {
 	it("publishes a queued Run through Postgres, HTTP download, overwrite, cleanup, and deletion", async () => {
-		const tdb = await createTestDatabase(undefined, { legacyFargate: true });
+		const tdb = await createTestDatabase();
 		try {
 			const workspace = new AcceptanceWorkspace();
 			const delivery = createDeliveryHarness(tdb, workspace);
@@ -242,7 +234,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 			await http.conversationStore.create({
 				userId: "member-1",
 				conversationId: "conversation-1",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,
@@ -385,7 +377,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 	});
 
 	it("keeps the prior current Downloadable artifact set intact across validation, quota, upload, interruption, and cleanup failures", async () => {
-		const tdb = await createTestDatabase(undefined, { legacyFargate: true });
+		const tdb = await createTestDatabase();
 		try {
 			const logEvents: Record<string, unknown>[] = [];
 			const logger: WorkerLogger = {
@@ -403,7 +395,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 			await http.conversationStore.create({
 				userId: "member-1",
 				conversationId: "conversation-1",
-				executionRuntime: "fargate",
+				executionRuntime: "agentcore",
 				scope: "general",
 				collectionId: null,
 				summaryId: null,

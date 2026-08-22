@@ -22,6 +22,6 @@ export function buildSandboxEnv(binding: RunBinding): Record<string, string> {
 		MYMEMO_CONVERSATION_ID: binding.conversationId,
 		MYMEMO_RUN_ID: binding.runId,
 		MYMEMO_SANDBOX_ID: binding.sandboxId,
-		MYMEMO_RUNTIME: "split-fargate-e2b",
+		MYMEMO_RUNTIME: "agentcore-e2b",
 	};
 }

@@ -25,4 +25,8 @@ Treat the E2B sandbox as untrusted because it runs prompt-injectable file and Ba
 
 chat-api must not hold OpenRouter, KB, or E2B credentials. It admits Runs, serves history and artifact metadata, attaches clients to Live Streams, and signs read-only artifact URLs.
 
-The trusted Fargate worker and AgentCore Runtime own model traffic, scoped Searchable document access, E2B execution, relay production, and Downloadable artifact publication. The worker's KB credential is read-only and separate from the writable `mymemo_agent` credential.
+The AgentCore Runtime alone owns model traffic, scoped Searchable document
+access, E2B execution, relay production, and Downloadable artifact publication.
+Its KB credential is read-only and separate from the writable `mymemo_agent`
+credential. The maintenance service receives only writable agent DB, E2B
+cleanup, and artifact-delete authority; it cannot serve Runs.

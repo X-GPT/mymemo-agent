@@ -61,7 +61,7 @@ async function expectDbWriteToFail(write: () => PromiseLike<unknown>) {
 }
 
 describe("run queue schema", () => {
-	it("uses execution-runtime vocabulary for Conversations and deployment readiness", async () => {
+	it("retains only the AgentCore compatibility marker", async () => {
 		const { rows: columns } = await tdb.db.execute(sql`
 			select table_name, column_name
 			from information_schema.columns
@@ -72,19 +72,12 @@ describe("run queue schema", () => {
 		`);
 		expect(columns).toEqual([
 			{ table_name: "conversations", column_name: "execution_runtime" },
-			{
-				table_name: "execution_runtime_deployments",
-				column_name: "execution_runtime",
-			},
-			{
-				table_name: "execution_runtime_deployments",
-				column_name: "runtime_aware",
-			},
 		]);
 		const { rows: retiredTables } = await tdb.db.execute(sql`
 			select tablename
 			from pg_tables
-			where schemaname = 'public' and tablename = 'execution_lane_deployments'
+			where schemaname = 'public'
+				and tablename in ('execution_lane_deployments', 'execution_runtime_deployments')
 		`);
 		expect(retiredTables).toEqual([]);
 		await expectDbWriteToFail(() =>
@@ -151,13 +144,13 @@ describe("run queue schema", () => {
 		]);
 	});
 
-	it("has the conversation-active, queue-claim, and cleanup indexes", async () => {
+	it("has only the retained conversation and cleanup indexes", async () => {
 		const { rows } = await tdb.db.execute(sql`
 			select indexname from pg_indexes where tablename = 'runs'
 		`);
 		const names = rows.map((row) => row.indexname);
 		expect(names).toContain("runs_conversation_active_idx");
-		expect(names).toContain("runs_queue_claim_idx");
+		expect(names).not.toContain("runs_queue_claim_idx");
 		expect(names).toContain("runs_cleanup_idx");
 		expect(names).not.toContain("runs_stale_recovery_idx");
 		expect(names).not.toContain("runs_one_active_per_conversation");
@@ -250,39 +243,19 @@ describe("run queue schema", () => {
 		]);
 	});
 
-	it("rings the run_doorbell function from queued inserts and interruption transitions only", async () => {
+	it("has no retired Fargate doorbell triggers or functions", async () => {
 		const { rows: triggers } = await tdb.db.execute(sql`
 			select tgname, pg_get_triggerdef(oid) as def
 			from pg_trigger
 			where tgrelid = 'runs'::regclass and not tgisinternal
 			order by tgname
 		`);
-		expect(triggers.map((row) => row.tgname)).toEqual([
-			"runs_notify_interrupt_requested",
-			"runs_notify_queued",
-		]);
-		// The WHEN clauses are the silence guarantees: only the committed `running`
-		// → `interrupt_requested` status transition rings the UPDATE trigger, and a
-		// queued interruption (`queued` → `interrupted` directly) rings nothing.
-		const definitions = triggers.map((row) => String(row.def));
-		expect(definitions[0]).toContain("AFTER UPDATE OF status ON public.runs");
-		expect(definitions[0]).toContain(
-			"WHEN (((old.status = 'running'::text) AND (new.status = 'interrupt_requested'::text)))",
-		);
-		expect(definitions[0]).toContain("EXECUTE FUNCTION notify_run_doorbell()");
-		expect(definitions[1]).toContain("AFTER INSERT ON public.runs");
-		expect(definitions[1]).toContain("WHEN ((new.status = 'queued'::text))");
-		expect(definitions[1]).toContain("EXECUTE FUNCTION notify_run_doorbell()");
+		expect(triggers).toEqual([]);
 		const { rows: functions } = await tdb.db.execute(sql`
 			select proname, pg_get_functiondef(oid) as def from pg_proc
 			where proname in ('notify_run_doorbell', 'notify_run_queued')
 		`);
-		expect(functions.map((row) => row.proname)).toEqual([
-			"notify_run_doorbell",
-		]);
-		const functionDefinition = String(functions[0]?.def);
-		expect(functionDefinition).toContain("execution_runtime");
-		expect(functionDefinition).toContain("execution_runtime = 'fargate'");
+		expect(functions).toEqual([]);
 	});
 
 	it("installs a trigger that notifies listeners when run events are inserted", async () => {

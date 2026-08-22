@@ -61,7 +61,7 @@ import {
 /**
  * The static MyMemo system prompt (ADR-0006): a plain string, no `claude_code`
  * preset — the preset describes native tools the query disables and
- * Fargate-side anchors that would mislead. Static by construction (no per-run
+ * Runtime-side anchors that would mislead. Static by construction (no per-run
  * interpolation) so it is cacheable across conversations.
  */
 export const MYMEMO_SYSTEM_PROMPT =
@@ -134,7 +134,7 @@ export interface StartRunQueryDeps {
 		perCallMaxBytes: number;
 	};
 	artifactPublisher: ArtifactPublisher;
-	/** Prepare the Fargate-side cwd that anchors the SDK session project key. */
+	/** Prepare the Runtime-side cwd that anchors the SDK session project key. */
 	ensureWorkingDirectory(path: string): Promise<void>;
 	query: RunQueryFn;
 	logger: WorkerLogger;

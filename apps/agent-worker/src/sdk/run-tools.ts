@@ -105,7 +105,7 @@ export const EXECUTOR_ALLOWED_TOOLS: readonly string[] =
 	EXECUTOR_TOOL_NAMES.map((name) => `mcp__${EXECUTOR_SERVER_NAME}__${name}`);
 
 /**
- * Everything one claimed run needs to expose its executor tools to the Claude
+ * Everything one acquired Run needs to expose its executor tools to the Claude
  * Agent SDK. Assembled per run from the run binding, the provisioned sandbox
  * clients, the frozen document scope, and the worker's caps. The tools built
  * from it close over the binding, so every file, shell, and document action the

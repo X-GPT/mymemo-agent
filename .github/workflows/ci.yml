@@ -67,7 +67,7 @@ jobs:
         run: terraform -chdir=infra/terraform init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra/terraform validate
 
-  # The agent-worker image build lives in worker-image.yml, path-filtered.
+  # Runtime and maintenance image builds live in path-filtered workflows.
 
   # AgentCore process integration: real Postgres and Redis join chat-api to a
   # deterministic test-only Runtime through dispatch publication, durable

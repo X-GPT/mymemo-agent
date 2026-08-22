@@ -92,7 +92,6 @@ describe("AgentCore Runtime configuration", () => {
 		expect(config.agentDatabaseUrl).toContain("sslmode=verify-full");
 		expect(config.kbDatabaseUrl).toContain("sslmode=verify-full");
 		expect(config.openrouter.apiKey).toBe("sk-or-secret");
-		expect(config.maxConcurrentConversations).toBe(1);
 		expect(config.shutdownTimeoutMs).toBe(30_000);
 	});
 

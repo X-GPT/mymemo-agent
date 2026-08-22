@@ -13,7 +13,7 @@ import { E2BFileClient, type FileSandbox } from "./file-client";
 
 /**
  * The sandbox workspace root every run's file and shell work resolves under:
- * the E2B user home. Distinct from the SDK query's Fargate-side working
+ * the E2B user home. Distinct from the SDK query's Runtime-side working
  * directory (a per-conversation session anchor) — never conflate the two
  * filesystems.
  */

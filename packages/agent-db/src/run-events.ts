@@ -1,7 +1,7 @@
 /**
  * The `run_events.type` vocabulary — the write-side contract for the durable
  * run-event log, shared by every appender so the type strings are defined in
- * exactly one place: chat-api's run queue writes `run_started`; the agent-worker
+ * exactly one place: chat-api's run queue writes `run_started`; AgentCore
  * writes assistant text and tool events and, through the run-store terminal
  * helpers, the terminal events. Permanent-history readers consume this same
  * vocabulary; live AG-UI delivery uses the separate producer-buffered relay.

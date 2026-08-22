@@ -5,7 +5,7 @@ import type { WorkerConfig } from "./config/env";
  * validated OpenRouter settings (ADR-0003: direct OpenRouter, Anthropic-
  * compatible). The SDK integration (Task 7.2) passes `env` to the spawned query
  * process and `model` as the query option — both stay inside the trusted
- * Fargate worker. Nothing here may ever flow into `buildSandboxEnv`: the
+ * trusted AgentCore Runtime. Nothing here may ever flow into `buildSandboxEnv`: the
  * sandbox reaches the model only through tool results, never with a credential.
  */
 export interface ModelClientConfig {

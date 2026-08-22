@@ -190,14 +190,12 @@ class RunWriteRejectedError extends Error {
  * Shared serving behavior for one already-running Run (ADR-0023). It owns the
  * Run's heartbeat, interruption observation, Live Stream, processor, durable
  * model content, terminal reconciliation, continuity evidence, and artifacts.
- * Runtime control loops retain acquisition/Claim, ordering, Reclamation, and
- * release outside this module.
+ * AgentCore retains exact acquisition and release outside this module;
+ * agent-maintenance owns Reclamation.
  */
 export interface RunServing {
 	serveStartedRun(input: ServeStartedRunInput): Promise<ServeStartedRunResult>;
-	/** Renew Ownership and observe interruption for every attached Run. The
-	 * runtime control plane owns the timer/doorbell cadence and renews Claim
-	 * windows before Run start and after this seam detaches. */
+	/** Renew Ownership and observe interruption for every attached Run. */
 	heartbeat(): Promise<void>;
 }
 

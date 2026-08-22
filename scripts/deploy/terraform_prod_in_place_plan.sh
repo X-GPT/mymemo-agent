@@ -31,7 +31,6 @@ plan_args=(
 if [[ "${BOOTSTRAP_ZERO_DESIRED_COUNT:-false}" == "true" ]]; then
   plan_args+=(
     -var="chat_api_desired_count=0"
-    -var="agent_worker_desired_count=0"
     -var="agent_maintenance_desired_count=0"
     -var="agentcore_dispatch_publisher_desired_count=0"
   )

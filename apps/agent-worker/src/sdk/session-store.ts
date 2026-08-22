@@ -1,6 +1,6 @@
 /**
  * Conversation continuity for the split runtime (ADR-0005, Task 7.3): the Claude
- * Agent SDK runs in stateless Fargate workers, so its worker-local transcript
+ * Agent SDK runs in stateless AgentCore Runtime sessions, so its local transcript
  * files cannot carry a conversation's model-side memory across turns. This
  * module restores continuity by mirroring transcripts to the writable agent
  * Postgres through the SDK's `SessionStore` seam, and pointing each turn's query

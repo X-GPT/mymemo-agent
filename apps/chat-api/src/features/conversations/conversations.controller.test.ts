@@ -42,7 +42,7 @@ function fakeStore() {
 const conversation: ConversationRecord = {
 	userId: "member-1",
 	conversationId: "conv-1",
-	executionRuntime: "fargate",
+	executionRuntime: "agentcore",
 	scope: "general",
 	collectionId: null,
 	summaryId: null,
