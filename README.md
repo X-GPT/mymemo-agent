@@ -47,10 +47,13 @@ runs the legacy Fargate worker and cannot execute a new turn; #523 owns the
 local AgentCore bridge. Do not use Compose as current end-to-end evidence.
 
 The credential-free PR suite covers durable AgentCore acquisition and
-stream/reconnect behavior through the shared Run-serving seam:
+stream/reconnect behavior through the shared Run-serving seam. The process
+suite adds public HTTP admission, real Postgres and Redis, Runtime invocation,
+interruption, lifecycle conflicts, Tool errors, and Reclamation:
 
 ```sh
 bun test e2e/relay-failure-matrix.integration.test.ts
+AGENT_DATABASE_URL=postgres://… DB_SSL=disable bun test e2e/integration.test.ts
 ```
 
 ### Live runtime smoke
