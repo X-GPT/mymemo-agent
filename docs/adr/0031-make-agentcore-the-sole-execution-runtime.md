@@ -32,9 +32,10 @@ agent-worker remains for those global maintenance responsibilities.
 The second release is a controlled maintenance event because the old
 agent-worker still reads the compatibility marker. With Dispatch paused, zero
 Active Runs, and the old worker stopped, its migration removes the marker and
-must refuse to proceed if any non-AgentCore Conversation exists. A migration
-never deletes Conversations to satisfy that precondition. The new
-agent-maintenance service starts after the compatible schema is installed.
+the new agent-maintenance service starts after the compatible schema is
+installed. It adds no one-use Fargate-data preflight: production was already
+reset, and the first release's AgentCore-only database constraint naturally
+validates the invariant when it is installed.
 
 Local development runs the AgentCore Runtime application rather than retaining
 Fargate execution. A dedicated development-only Dispatch bridge app combines
@@ -75,5 +76,5 @@ leaves the record available for retry.
   with an explicit deletion condition, not a supported fallback.
 - Production images do not contain the local Dispatch bridge or its combined
   publisher-and-consumer dependency graph.
-- Schema retirement fails closed on any remaining Fargate data and never uses
-  destructive migration behavior to force the invariant.
+- No one-use migration code rediscovers the already-established absence of
+  Fargate Conversations.
