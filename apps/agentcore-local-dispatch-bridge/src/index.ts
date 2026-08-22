@@ -1,15 +1,10 @@
 import { createDatabase } from "@mymemo/agent-db/client";
 import { resolveDatabaseUrl } from "@mymemo/agent-db/database-url";
+import { requireEnv } from "agentcore-dispatch-consumer/config-utils";
 import { createLocalAgentCoreDispatchBridge } from "./bridge";
 
-function required(name: string): string {
-	const value = Bun.env[name]?.trim();
-	if (!value) throw new Error(`${name} is required`);
-	return value;
-}
-
 const databaseUrl = resolveDatabaseUrl(
-	required("AGENT_DATABASE_URL"),
+	requireEnv(Bun.env, "AGENT_DATABASE_URL"),
 	Bun.env.DB_PASSWORD,
 	Bun.env.DB_SSL,
 );
@@ -17,7 +12,7 @@ const db = createDatabase(databaseUrl);
 const bridge = createLocalAgentCoreDispatchBridge({
 	db,
 	publisherId: `local-bridge/${crypto.randomUUID()}`,
-	runtimeUrl: required("AGENTCORE_RUNTIME_URL"),
+	runtimeUrl: requireEnv(Bun.env, "AGENTCORE_RUNTIME_URL"),
 });
 let stopping = false;
 process.once("SIGINT", () => {

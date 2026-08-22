@@ -12,25 +12,6 @@ const RUNTIME_SESSION_HEADER = "x-amzn-bedrock-agentcore-runtime-session-id";
 
 type Fetch = (request: Request) => Promise<Response>;
 
-function responseChunks(
-	body: ReadableStream<Uint8Array>,
-): AsyncIterable<Uint8Array> {
-	return {
-		async *[Symbol.asyncIterator]() {
-			const reader = body.getReader();
-			try {
-				for (;;) {
-					const part = await reader.read();
-					if (part.done) return;
-					yield part.value;
-				}
-			} finally {
-				reader.releaseLock();
-			}
-		},
-	};
-}
-
 function createLocalRuntimeInvoker(options: {
 	runtimeUrl: string;
 	invocationTimeoutMs: number;
@@ -65,7 +46,7 @@ function createLocalRuntimeInvoker(options: {
 				throw new Error("local AgentCore Runtime returned an invalid response");
 			}
 			return {
-				chunks: responseChunks(response.body),
+				chunks: response.body,
 				close: () => response.body?.cancel(),
 			};
 		},

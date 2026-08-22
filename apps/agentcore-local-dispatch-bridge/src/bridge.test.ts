@@ -28,6 +28,15 @@ const dispatch = {
 	runtimeSessionId: "0198c9f6-cf40-7de1-9cb6-5cb7a57b5101",
 	admittedAt,
 };
+const acquiredReceipt = createAcquisitionReceipt(dispatch, {
+	disposition: "acquired",
+	owner: {
+		userId: dispatch.userId,
+		conversationId: dispatch.conversationId,
+		epoch: 1,
+	},
+	workerId: "local-runtime/1",
+});
 
 beforeAll(async () => {
 	tdb = await createTestDatabase();
@@ -64,22 +73,13 @@ beforeEach(async () => {
 describe("local AgentCore Dispatch bridge", () => {
 	it("acknowledges a real outbox row after a correlated Acquisition receipt", async () => {
 		const requests: Request[] = [];
-		const receipt = createAcquisitionReceipt(dispatch, {
-			disposition: "acquired",
-			owner: {
-				userId: dispatch.userId,
-				conversationId: dispatch.conversationId,
-				epoch: 1,
-			},
-			workerId: "local-runtime/1",
-		});
 		const bridge = createLocalAgentCoreDispatchBridge({
 			db: tdb.db,
 			publisherId: "local-bridge",
 			runtimeUrl: "http://runtime:8080",
 			fetch: async (request) => {
 				requests.push(request);
-				return new Response(`${JSON.stringify(receipt)}\n`, {
+				return new Response(`${JSON.stringify(acquiredReceipt)}\n`, {
 					headers: { "content-type": "application/x-ndjson" },
 				});
 			},
@@ -135,15 +135,6 @@ describe("local AgentCore Dispatch bridge", () => {
 	])("leaves the Dispatch retryable after $name", async ({ respond }) => {
 		let now = new Date("2026-08-21T12:01:00.000Z");
 		let failing = true;
-		const receipt = createAcquisitionReceipt(dispatch, {
-			disposition: "acquired",
-			owner: {
-				userId: dispatch.userId,
-				conversationId: dispatch.conversationId,
-				epoch: 1,
-			},
-			workerId: "local-runtime/1",
-		});
 		const bridge = createLocalAgentCoreDispatchBridge({
 			db: tdb.db,
 			publisherId: "local-bridge",
@@ -151,7 +142,7 @@ describe("local AgentCore Dispatch bridge", () => {
 			invocationTimeoutMs: 5,
 			fetch: async (request) => {
 				if (failing) return await respond(request);
-				return new Response(`${JSON.stringify(receipt)}\n`, {
+				return new Response(`${JSON.stringify(acquiredReceipt)}\n`, {
 					headers: { "content-type": "application/x-ndjson" },
 				});
 			},
@@ -178,22 +169,13 @@ describe("local AgentCore Dispatch bridge", () => {
 	it("does not acknowledge a receipt correlated to another Dispatch", async () => {
 		let now = new Date("2026-08-21T12:01:00.000Z");
 		let mismatched = true;
-		const receipt = createAcquisitionReceipt(dispatch, {
-			disposition: "acquired",
-			owner: {
-				userId: dispatch.userId,
-				conversationId: dispatch.conversationId,
-				epoch: 1,
-			},
-			workerId: "local-runtime/1",
-		});
 		const bridge = createLocalAgentCoreDispatchBridge({
 			db: tdb.db,
 			publisherId: "local-bridge",
 			runtimeUrl: "http://runtime:8080",
 			fetch: async () =>
 				new Response(
-					`${JSON.stringify(mismatched ? { ...receipt, runId: "another-run" } : receipt)}\n`,
+					`${JSON.stringify(mismatched ? { ...acquiredReceipt, runId: "another-run" } : acquiredReceipt)}\n`,
 					{ headers: { "content-type": "application/x-ndjson" } },
 				),
 			now: () => now,
