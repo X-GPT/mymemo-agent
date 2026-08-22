@@ -220,19 +220,13 @@ function stepQuery(
 	};
 }
 
-interface TestWorker {
-	harness?: ReturnType<typeof createAgentCoreRunHarness>;
-	drain(): Promise<void>;
-}
-
 function buildLoop(
-	worker: TestWorker,
 	startRunQuery: StartRunQuery,
 	logger: WorkerLogger = silentLogger,
 	startStopDeadline?: StartStopDeadline,
 	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 ) {
-	const harness = createAgentCoreRunHarness({
+	return createAgentCoreRunHarness({
 		db: tdb.db,
 		liveStreamRelay,
 		processor: createSdkRunProcessor({
@@ -242,16 +236,6 @@ function buildLoop(
 		}),
 		logger,
 	});
-	worker.harness = harness;
-	return harness;
-}
-
-function buildWorker(): TestWorker {
-	return {
-		async drain() {
-			await this.harness?.drain();
-		},
-	};
 }
 
 async function createRuntimeFor(owner: RunWriteOwner): Promise<void> {
@@ -322,7 +306,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		const startQuery = Promise.withResolvers<void>();
 		const envelopeConsumed = Promise.withResolvers<void>();
 		const finishQuery = Promise.withResolvers<void>();
-		const worker = buildWorker();
 		const uiInput = {
 			component: "diagram",
 			props: { source: "flowchart LR\nA --> B" },
@@ -343,7 +326,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			]),
 		];
 		const loop = buildLoop(
-			worker,
 			async () => {
 				processorStarted.resolve();
 				await startQuery.promise;
@@ -377,7 +359,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		await envelopeConsumed.promise;
 		const reconnectEvents = collectAttachedEvents(relay, "run-1");
 		finishQuery.resolve();
-		await worker.drain();
+		await loop.drain();
 		const [original, reconnect] = await Promise.all([
 			originalEvents,
 			reconnectEvents,
@@ -424,7 +406,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	it("retains a committed PresentUI payload when the Run terminalizes interrupted", async () => {
 		const envelopeConsumed = Promise.withResolvers<void>();
 		const querySettled = Promise.withResolvers<void>();
-		const worker = buildWorker();
 		const messages = toolEnvelope({
 			toolUses: [
 				{
@@ -437,7 +418,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 				},
 			],
 		});
-		const loop = buildLoop(worker, async () => ({
+		const loop = buildLoop(async () => ({
 			...noArtifactPublication,
 			sessionEvidence: noSessionMirrorEvidence,
 			close() {
@@ -466,7 +447,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("interrupted");
 		const durable = await readEvents("run-1");
@@ -488,8 +469,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not publish a pointer from an SDK initialization id alone", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async (_run, _signal, owner) => {
+		const loop = buildLoop(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			return messageQuery([initMessage("session-initialized")], store);
 		});
@@ -500,7 +480,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
@@ -511,8 +491,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("publishes the first pointer only when the bound store mirrored that main session", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async (_run, _signal, owner) => {
+		const loop = buildLoop(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-proven" },
@@ -527,7 +506,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
@@ -535,8 +514,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not publish a pointer from subagent-only mirroring", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async (_run, _signal, owner) => {
+		const loop = buildLoop(async (_run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{
@@ -555,7 +533,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
@@ -563,8 +541,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("commits one durable Assistant message for a complete provider envelope", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async () =>
+		const loop = buildLoop(async () =>
 			messageQuery(textEnvelope({ completeText: "Hello there." })),
 		);
 		await seedQueuedRun(tdb.db, {
@@ -574,7 +551,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("done");
 		const events = await readEvents("run-1");
@@ -591,7 +568,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("keeps sequential envelopes separate, ignores non-text blocks, and skips empty messages", async () => {
-		const worker = buildWorker();
 		const messages = [
 			...providerEnvelope("provider-1", [
 				{ type: "text", completeText: "ALPHA|" },
@@ -605,7 +581,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			]),
 			resultMessage(),
 		];
-		const loop = buildLoop(worker, async () => messageQuery(messages));
+		const loop = buildLoop(async () => messageQuery(messages));
 		await seedQueuedRun(tdb.db, {
 			runId: "run-1",
 			userId: "user-1",
@@ -613,7 +589,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("done");
 		const events = await readEvents("run-1");
@@ -822,10 +798,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		},
 	]) {
 		it(`fails the Run closed for ${fixture.name}`, async () => {
-			const worker = buildWorker();
-			const loop = buildLoop(worker, async () =>
-				messageQuery(fixture.messages),
-			);
+			const loop = buildLoop(async () => messageQuery(fixture.messages));
 			await seedQueuedRun(tdb.db, {
 				runId: "run-1",
 				userId: "user-1",
@@ -833,7 +806,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			});
 
 			await loop.tick();
-			await worker.drain();
+			await loop.drain();
 
 			expect((await readRun("run-1"))?.status).toBe("error");
 			const events = await readEvents("run-1");
@@ -846,11 +819,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	}
 
 	it("passes the acquired Run, abort signal, and Ownership epoch to startRunQuery", async () => {
-		const worker = buildWorker();
 		let seenRunId: string | undefined;
 		let seenOwner: RunWriteOwner | undefined;
 		let sawSignal = false;
-		const loop = buildLoop(worker, async (run, signal, owner) => {
+		const loop = buildLoop(async (run, signal, owner) => {
 			seenRunId = run.runId;
 			seenOwner = owner;
 			sawSignal = signal instanceof AbortSignal;
@@ -863,7 +835,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		expect(seenRunId).toBe("run-1");
 		expect(sawSignal).toBe(true);
@@ -878,7 +850,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("fails fast on mirror_error without establishing a first session pointer", async () => {
-		const worker = buildWorker();
 		const settled = Promise.withResolvers<void>();
 		const calls: string[] = [];
 		const errors: Record<string, unknown>[] = [];
@@ -894,7 +865,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			},
 		};
 		const loop = buildLoop(
-			worker,
 			async (_run, signal, owner) => {
 				await createRuntimeFor(owner);
 				signal.addEventListener(
@@ -943,7 +913,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 		expect(toolAbortReason).toEqual(new Error("agent session mirror failed"));
@@ -972,11 +942,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("lets an already-committed interruption win over mirror_error", async () => {
-		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const releaseMirrorError = Promise.withResolvers<void>();
 		const calls: string[] = [];
-		const loop = buildLoop(worker, async (_run, signal) => {
+		const loop = buildLoop(async (_run, signal) => {
 			signal.addEventListener("abort", () => calls.push("tool-abort"), {
 				once: true,
 			});
@@ -1009,7 +978,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		releaseMirrorError.resolve();
-		await worker.drain();
+		await loop.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 		expect((await readRun("run-1"))?.status).toBe("interrupted");
@@ -1019,8 +988,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("retains an existing session pointer after mirror_error", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async (run, _signal, owner) => {
+		const loop = buildLoop(async (run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			await tdb.db
 				.update(conversationRuntime)
@@ -1038,7 +1006,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("error");
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
@@ -1046,14 +1014,12 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("stops an interrupted Run cleanly inside the 30-second deadline", async () => {
-		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const settled = Promise.withResolvers<void>();
 		const calls: string[] = [];
 		let deadlineMs: number | undefined;
 		let deadlineCancelled = false;
 		const loop = buildLoop(
-			worker,
 			async (_run, signal) => {
 				signal.addEventListener("abort", () => calls.push("tool-abort"), {
 					once: true,
@@ -1100,7 +1066,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 		expect(deadlineMs).toBe(30_000);
@@ -1112,7 +1078,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("keeps renewing Ownership for a hung interrupted Run and force-closes it after the deadline", async () => {
-		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const interrupted = Promise.withResolvers<void>();
 		const closed = Promise.withResolvers<void>();
@@ -1127,7 +1092,6 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		};
 		const deadline = virtualStopDeadline();
 		const loop = buildLoop(
-			worker,
 			async (_run, signal, owner) => {
 				const store = await createRuntimeSessionStoreFor(owner);
 				await store.append(
@@ -1191,7 +1155,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		expect(calls).toEqual(["tool-abort", "interrupt"]);
 
 		deadline.elapse();
-		await worker.drain();
+		await loop.drain();
 
 		expect(calls).toEqual(["tool-abort", "interrupt", "close"]);
 		expect(warnings).toContainEqual({
@@ -1205,13 +1169,11 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("force-closes immediately and writes no terminal Outcome after ownership loss", async () => {
-		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const releaseStream = Promise.withResolvers<void>();
 		const deadline = virtualStopDeadline();
 		const calls: string[] = [];
 		const loop = buildLoop(
-			worker,
 			async () => {
 				started.resolve();
 				return withNoSessionMirrorEvidence({
@@ -1251,7 +1213,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 		expect(calls).toEqual(["close"]);
 		releaseStream.resolve();
-		await worker.drain();
+		await loop.drain();
 
 		expect(await readRun("run-1")).toMatchObject({
 			status: "running",
@@ -1261,13 +1223,11 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("writes no terminal Outcome when the fence is lost after forced close", async () => {
-		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const closeCalled = Promise.withResolvers<void>();
 		const releaseStream = Promise.withResolvers<void>();
 		const deadline = virtualStopDeadline();
 		const loop = buildLoop(
-			worker,
 			async () =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1305,7 +1265,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			conversationId: "conv-1",
 		});
 		releaseStream.resolve();
-		await worker.drain();
+		await loop.drain();
 
 		expect(await readRun("run-1")).toMatchObject({
 			status: "interrupt_requested",
@@ -1315,12 +1275,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("force-closes a query-local infrastructure stop and maps it to error", async () => {
-		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const forceCloseController = new AbortController();
 		const calls: string[] = [];
 		const loop = buildLoop(
-			worker,
 			async () =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1355,7 +1313,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		await loop.tick();
 		await started.promise;
 		forceCloseController.abort();
-		await worker.drain();
+		await loop.drain();
 
 		expect(calls).toEqual(["close"]);
 		expect((await readRun("run-1"))?.status).toBe("error");
@@ -1365,13 +1323,11 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("maps worker shutdown of a supervised query to error", async () => {
-		const worker = buildWorker();
 		const started = Promise.withResolvers<void>();
 		const settled = Promise.withResolvers<void>();
 		const calls: string[] = [];
 		let deadlines = 0;
 		const loop = buildLoop(
-			worker,
 			async (_run, _signal) =>
 				withNoSessionMirrorEvidence({
 					...noArtifactPublication,
@@ -1415,12 +1371,10 @@ describe("createSdkRunProcessor — through the run loop", () => {
 
 	for (const lateResult of ["success", "error"] as const) {
 		it(`lets durable interruption beat a late SDK ${lateResult}`, async () => {
-			const worker = buildWorker();
 			const started = Promise.withResolvers<void>();
 			const stopped = Promise.withResolvers<void>();
 			const deadline = virtualStopDeadline();
 			const loop = buildLoop(
-				worker,
 				async () =>
 					withNoSessionMirrorEvidence({
 						...noArtifactPublication,
@@ -1454,7 +1408,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 			});
 
 			await loop.tick();
-			await worker.drain();
+			await loop.drain();
 
 			expect((await readRun("run-1"))?.status).toBe("interrupted");
 			expect((await readEvents("run-1")).map((event) => event.type)).toEqual([
@@ -1464,9 +1418,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	}
 
 	it("terminalizes an SDK failure with the generic client message", async () => {
-		const worker = buildWorker();
 		const incomplete = textEnvelope({ completeText: "partial" }).slice(0, 4);
-		const loop = buildLoop(worker, async () =>
+		const loop = buildLoop(async () =>
 			stepQuery([...incomplete, { throw: new Error("model exploded") }]),
 		);
 		await seedQueuedRun(tdb.db, {
@@ -1476,7 +1429,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		const run = await readRun("run-1");
 		expect(run?.status).toBe("error");
@@ -1491,8 +1444,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("preserves mirrored continuity when a thrown failure reconciles to interruption", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async (run, _signal, owner) => {
+		const loop = buildLoop(async (run, _signal, owner) => {
 			const store = await createRuntimeSessionStoreFor(owner);
 			await store.append(
 				{ projectKey: "project-1", sessionId: "session-reconciled" },
@@ -1514,7 +1466,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("interrupted");
@@ -1525,9 +1477,8 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("records one error outcome for an SDK error result followed by rejection", async () => {
-		const worker = buildWorker();
 		const incomplete = textEnvelope({ completeText: "partial" }).slice(0, 4);
-		const loop = buildLoop(worker, async () =>
+		const loop = buildLoop(async () =>
 			stepQuery([
 				...incomplete,
 				errorResultMessage("provider rejected the request"),
@@ -1541,7 +1492,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		expect((await readRun("run-1"))?.status).toBe("error");
 		const events = await readEvents("run-1");
@@ -1550,8 +1501,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("advances the agent-session pointer only after a valid successful stream", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async (_run, _signal, owner) => {
+		const loop = buildLoop(async (_run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			return messageQuery(
 				[
@@ -1572,7 +1522,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("done");
@@ -1584,8 +1534,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 	});
 
 	it("does not advance the agent-session pointer for an invalid envelope", async () => {
-		const worker = buildWorker();
-		const loop = buildLoop(worker, async (_run, _signal, owner) => {
+		const loop = buildLoop(async (_run, _signal, owner) => {
 			await createRuntimeFor(owner);
 			return messageQuery([
 				...textEnvelope({ completeText: "uncommitted" }).slice(0, -1),
@@ -1599,7 +1548,7 @@ describe("createSdkRunProcessor — through the run loop", () => {
 		});
 
 		await loop.tick();
-		await worker.drain();
+		await loop.drain();
 
 		const [runtime] = await tdb.db.select().from(conversationRuntime);
 		expect((await readRun("run-1"))?.status).toBe("error");

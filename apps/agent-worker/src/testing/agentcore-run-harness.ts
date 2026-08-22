@@ -1,10 +1,8 @@
 import type { Database } from "@mymemo/agent-db/client";
 import { releaseConversationTx } from "@mymemo/agent-db/conversation-ownership";
 import { loadExecutingRunTx } from "@mymemo/agent-db/run-store";
-import { runs } from "@mymemo/agent-db/schema";
 import { acquireQueuedRunForTest } from "@mymemo/agent-db/testing";
 import type { LiveStreamRelay } from "@mymemo/live-text";
-import { eq } from "drizzle-orm";
 import type { WorkerLogger } from "../logger";
 import { createRunServing, type RunProcessor } from "../run-serving";
 
@@ -15,30 +13,18 @@ export function createAgentCoreRunHarness(options: {
 	processor: RunProcessor;
 	liveStreamRelay: LiveStreamRelay;
 	logger: WorkerLogger;
-	workerId?: string;
 }) {
 	const shutdown = new AbortController();
 	const runServing = createRunServing(options);
 	let task: Promise<void> | null = null;
 
 	async function executeNext(): Promise<void> {
-		const [queued] = await options.db
-			.select()
-			.from(runs)
-			.where(eq(runs.status, "queued"))
-			.orderBy(runs.createdAt, runs.runId)
-			.limit(1);
-		if (!queued) return;
-
-		const workerId = options.workerId ?? "worker-1";
-		const acquired = await acquireQueuedRunForTest(options.db, {
-			workerId,
-			runId: queued.runId,
+		const owner = await acquireQueuedRunForTest(options.db, {
+			workerId: "worker-1",
 		});
-		if (!acquired) throw new Error(`test Run ${queued.runId} was not acquired`);
-		const owner = { ...acquired, runId: queued.runId, workerId };
+		if (!owner) return;
 		const run = await loadExecutingRunTx(options.db, owner);
-		if (!run) throw new Error(`test Run ${queued.runId} was not executable`);
+		if (!run) throw new Error(`test Run ${owner.runId} was not executable`);
 		try {
 			await runServing.serveStartedRun({
 				run,
@@ -46,7 +32,7 @@ export function createAgentCoreRunHarness(options: {
 				shutdownSignal: shutdown.signal,
 			});
 		} finally {
-			await releaseConversationTx(options.db, acquired);
+			await releaseConversationTx(options.db, owner);
 		}
 	}
 

@@ -139,12 +139,10 @@ function createDeliveryHarness(
 		}),
 		logger,
 	});
-	const worker = { drain: () => loop.drain() };
 	const queries = new Map<string, SupervisedQuery>();
 
 	return {
 		loop,
-		worker,
 		storedObjects,
 		setUploadOverride(override?: ArtifactObjectStore["upload"]) {
 			uploadOverride = override;
@@ -163,7 +161,7 @@ function createDeliveryHarness(
 		async run(runId: string, query: SupervisedQuery) {
 			await this.queue(runId, query);
 			await loop.tick();
-			await worker.drain();
+			await loop.drain();
 		},
 		async cleanup(now: Date) {
 			return await runCleanupPass({
@@ -472,7 +470,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 				.set({ status: "interrupt_requested" })
 				.where(eq(runs.runId, "run-interrupt"));
 			await delivery.loop.tick();
-			await delivery.worker.drain();
+			await delivery.loop.drain();
 			delivery.setUploadOverride();
 			workspace.delete("interrupt.txt");
 

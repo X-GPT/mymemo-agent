@@ -81,8 +81,7 @@ describe("agent-maintenance infrastructure", () => {
 			"utf8",
 		);
 
-		expect(ecr).toContain("from = aws_ecr_repository.agent_worker");
-		expect(ecr).toContain("destroy = true");
+		expect(ecr).not.toContain("agent_worker");
 		expect(release).toContain("aws ecr delete-repository");
 		expect(release).toContain("--repository-name mymemo-agent-worker");
 		expect(release).toContain("--force");

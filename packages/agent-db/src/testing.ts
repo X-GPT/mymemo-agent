@@ -9,7 +9,7 @@ import {
 } from "./agentcore-dispatch";
 import type { Database } from "./client";
 import { MIGRATIONS_DIR } from "./migrations";
-import { type RunRecord, toRunRecord } from "./run-store";
+import { type RunRecord, type RunWriteOwner, toRunRecord } from "./run-store";
 import * as schema from "./schema";
 
 /**
@@ -141,7 +141,7 @@ export async function seedQueuedRun(
 export async function acquireQueuedRunForTest(
 	db: Database,
 	input: { workerId: string; runId?: string },
-) {
+): Promise<RunWriteOwner | null> {
 	const [queued] = await db
 		.select()
 		.from(schema.runs)
@@ -168,13 +168,6 @@ export async function acquireQueuedRunForTest(
 			admittedAt: queued.createdAt,
 		});
 	});
-	const [outbox] = await db
-		.select()
-		.from(schema.agentCoreDispatchOutbox)
-		.where(eq(schema.agentCoreDispatchOutbox.runId, queued.runId));
-	if (!outbox)
-		throw new Error(`test Dispatch ${queued.runId} was not recorded`);
-
 	const acquired = await acquireAgentCoreDispatchTx(db, {
 		workerId: input.workerId,
 		dispatch: {
@@ -183,7 +176,7 @@ export async function acquireQueuedRunForTest(
 			conversationId: queued.conversationId,
 			runId: queued.runId,
 			runtimeSessionId: queued.conversationId,
-			admittedAt: outbox.admittedAt,
+			admittedAt: queued.createdAt,
 		},
 	});
 	if (acquired.disposition !== "acquired") {
@@ -191,7 +184,11 @@ export async function acquireQueuedRunForTest(
 			`test acquisition ${queued.runId} returned ${acquired.disposition}`,
 		);
 	}
-	return acquired.owner;
+	return {
+		...acquired.owner,
+		runId: queued.runId,
+		workerId: input.workerId,
+	};
 }
 
 /**

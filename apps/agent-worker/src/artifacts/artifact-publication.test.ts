@@ -185,10 +185,8 @@ function buildArtifactHarness(
 		}),
 		logger,
 	});
-	const worker = { drain: () => loop.drain() };
 	return {
 		loop,
-		worker,
 		uploaded,
 		async queue(runId: string, query: SupervisedQuery) {
 			queries.set(runId, query);
@@ -201,7 +199,7 @@ function buildArtifactHarness(
 		async run(runId: string, query: SupervisedQuery) {
 			await this.queue(runId, query);
 			await loop.tick();
-			await worker.drain();
+			await loop.drain();
 		},
 	};
 }
@@ -793,7 +791,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 		await h.loop.tick();
-		await h.worker.drain();
+		await h.loop.drain();
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 		expect((await tdb.db.select().from(runs))[0]?.status).toBe("interrupted");
@@ -825,7 +823,7 @@ describe("Downloadable artifact publication through the Run loop", () => {
 			})
 			.where(eq(conversations.conversationId, "conv-1"));
 		await h.loop.tick();
-		await h.worker.drain();
+		await h.loop.drain();
 
 		expect(await tdb.db.select().from(conversationArtifacts)).toEqual([]);
 		expect((await tdb.db.select().from(runs))[0]).toMatchObject({

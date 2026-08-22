@@ -7,14 +7,6 @@ resource "aws_ecr_repository" "chat_api" {
   }
 }
 
-removed {
-  from = aws_ecr_repository.agent_worker
-
-  lifecycle {
-    destroy = true
-  }
-}
-
 resource "aws_ecr_repository" "agent_maintenance" {
   name                 = "mymemo-agent-maintenance"
   image_tag_mutability = "IMMUTABLE"
