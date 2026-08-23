@@ -23,30 +23,6 @@ data sources instead of duplicating IDs in this repo.
 Fallback AWS data sources are conditional: Terraform only evaluates them when
 the direct remote-state output is absent and the fallback input is present.
 
-## Chat API Service Connect Migration
-
-This first stage publishes `http://chat-api:<chat_api_port>` in an agent-owned
-Cloud Map namespace. A later `mymemo-service` change must join its ECS service
-to the exported namespace ARN before using the endpoint:
-
-```sh
-terraform -chdir=infra/terraform output -raw chat_api_service_connect_namespace_arn
-terraform -chdir=infra/terraform output -raw chat_api_service_connect_endpoint
-```
-
-The internal ALB, smoke path, target-group alarm, and trusted-caller boundary
-remain unchanged. A separate proxy ingress port admits only the same
-`mymemo_service_api_security_group_ids`. The named HTTP port disables both
-Service Connect request and idle timeouts for long-lived Run Live Streams, and
-the task size includes proxy capacity.
-
-Before the first release, reapply `infra/bootstrap-iam` for Cloud Map authority.
-After migrations, the release rolls the named-port task revision only when the
-deployed revision lacks it; the unified apply then enables Service Connect.
-
-AWS provider `>= 6.50, < 7.0` supports the configured zero timeout values.
-`appProtocol = "http"` is required for the per-request timeout setting.
-
 ## Agent-Owned Resources
 
 - ECR repositories for `mymemo-agent-chat-api`,
@@ -66,7 +42,6 @@ AWS provider `>= 6.50, < 7.0` supports the configured zero timeout values.
   publisher and maintenance groups that can reach the agent database but not
   the KB database
 - internal agent-owned ALB, ALB security group, listeners, and chat-api target group
-- Cloud Map HTTP namespace and chat-api ECS Service Connect endpoint
 - IAM execution/task roles for the agent tasks
 - CloudWatch log groups and baseline alarms
 - encrypted AgentCore Dispatch and dead-letter queues, their fail-closed SSM
@@ -283,9 +258,9 @@ different settings:
   `AGENT_SMOKE_EXPECT_GATE_CLOSED=true` only when checking the default-deny path
   instead.
 
-The internal ALB and Service Connect endpoint accept traffic only from the
-configured `mymemo_service_api_security_group_ids`. Neither is exposed to the
-public internet, and no Cloudflare DNS record is needed for `chat-api`.
+The internal ALB accepts traffic only from the configured
+`mymemo_service_api_security_group_ids`. It is not exposed to the public
+internet, and no Cloudflare DNS record is needed for `chat-api`.
 
 ## Operator Database Access
 

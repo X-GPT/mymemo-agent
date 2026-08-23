@@ -12,5 +12,4 @@ terraform -chdir=infra/terraform plan \
   -var-file="${tfvars_file_abs}" \
   -var-file="${generated_tfvars_file_abs}" \
   -target=aws_ecs_task_definition.agent_migration \
-  -target=aws_ecs_task_definition.chat_api \
   -out="${plan_file}"

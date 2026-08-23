@@ -14,11 +14,9 @@ resource "aws_ecs_task_definition" "chat_api" {
       essential = true
       portMappings = [
         {
-          name          = local.chat_api_service_connect_port_name
           containerPort = var.chat_api_port
           hostPort      = var.chat_api_port
           protocol      = "tcp"
-          appProtocol   = "http"
         }
       ]
       environment = local.chat_api_environment
@@ -167,27 +165,6 @@ resource "aws_ecs_service" "chat_api" {
     target_group_arn = aws_lb_target_group.chat_api.arn
     container_name   = "chat-api"
     container_port   = var.chat_api_port
-  }
-
-  service_connect_configuration {
-    enabled   = true
-    namespace = aws_service_discovery_http_namespace.services.arn
-
-    service {
-      port_name             = local.chat_api_service_connect_port_name
-      discovery_name        = local.chat_api_service_connect_dns_name
-      ingress_port_override = local.chat_api_service_connect_ingress_port
-
-      client_alias {
-        dns_name = local.chat_api_service_connect_dns_name
-        port     = var.chat_api_port
-      }
-
-      timeout {
-        idle_timeout_seconds        = 0
-        per_request_timeout_seconds = 0
-      }
-    }
   }
 
   lifecycle {

@@ -95,15 +95,3 @@ resource "aws_security_group_rule" "chat_api_from_alb" {
   to_port                  = var.chat_api_port
   protocol                 = "tcp"
 }
-
-resource "aws_security_group_rule" "chat_api_service_connect_from_trusted_callers" {
-  for_each = toset(local.trusted_caller_security_group_ids)
-
-  type                     = "ingress"
-  description              = "Trusted mymemo-service API to chat-api Service Connect proxy"
-  security_group_id        = aws_security_group.services.id
-  source_security_group_id = each.value
-  from_port                = local.chat_api_service_connect_ingress_port
-  to_port                  = local.chat_api_service_connect_ingress_port
-  protocol                 = "tcp"
-}
