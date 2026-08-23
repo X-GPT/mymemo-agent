@@ -7,9 +7,8 @@ tags = {
 }
 
 # Existing mymemo-service VPC/subnets/ECS cluster are read from Terraform remote
-# state. The internal ALB and chat-api Service Connect endpoint are owned by
-# mymemo-agent and accept traffic only from the mymemo-service API ECS service
-# security group.
+# state. The internal ALB is owned by mymemo-agent and accepts traffic only from
+# the mymemo-service API ECS service security group.
 mymemo_service_api_security_group_ids = ["sg-05d48e36ef8966c9e"]
 
 # Security group on the existing mymemo-service RDS instance (mymemo-staging-pg)

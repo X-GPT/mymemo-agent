@@ -78,7 +78,7 @@ variable "consumer_lambda_package" {
 }
 
 variable "mymemo_service_api_security_group_ids" {
-  description = "Security group IDs for trusted mymemo-service API tasks allowed to call chat-api through the internal ALB or Service Connect."
+  description = "Security group IDs for mymemo-service API tasks allowed to call the internal agent ALB."
   type        = list(string)
 
   validation {
@@ -156,15 +156,15 @@ variable "agentcore_dispatch_publisher_desired_count" {
 }
 
 variable "chat_api_cpu" {
-  description = "Fargate CPU units for chat-api and its Service Connect proxy."
+  description = "Fargate CPU units for chat-api."
   type        = number
-  default     = 1024
+  default     = 512
 }
 
 variable "chat_api_memory" {
-  description = "Fargate memory MiB for chat-api and its Service Connect proxy."
+  description = "Fargate memory MiB for chat-api."
   type        = number
-  default     = 2048
+  default     = 1024
 }
 
 variable "agent_maintenance_cpu" {

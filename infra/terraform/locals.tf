@@ -9,11 +9,6 @@ locals {
   agentcore_dispatch_publisher_name = "${local.common_name}-agentcore-dispatch-publisher"
   alb_name                          = "${local.common_name}-alb"
 
-  service_connect_namespace_name        = "${local.common_name}.local"
-  chat_api_service_connect_port_name    = "chat-api-http"
-  chat_api_service_connect_dns_name     = "chat-api"
-  chat_api_service_connect_ingress_port = var.chat_api_port + 1
-
   agentcore_dispatch_queue_name = coalesce(
     var.agentcore_dispatch_queue_name,
     "mymemo-agent-agentcore-${var.environment}-dispatch",

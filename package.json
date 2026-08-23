@@ -3,7 +3,7 @@
 	"module": "index.ts",
 	"scripts": {
 		"smoke:local": "sh scripts/smoke/local-agentcore-compose.sh",
-		"test": "bun test scripts/deploy-config.test.ts scripts/agent-maintenance-infrastructure.test.ts scripts/service-connect-infrastructure.test.ts scripts/deploy/agentcore_aws_checks.test.ts scripts/smoke/client-contract.test.ts scripts/smoke/agent-conversation-smoke.test.ts scripts/smoke/local-agentcore-smoke.test.ts && bun run scripts/test-workspaces.ts",
+		"test": "bun test scripts/deploy-config.test.ts scripts/agent-maintenance-infrastructure.test.ts scripts/deploy/agentcore_aws_checks.test.ts scripts/smoke/client-contract.test.ts scripts/smoke/agent-conversation-smoke.test.ts scripts/smoke/local-agentcore-smoke.test.ts && bun run scripts/test-workspaces.ts",
 		"terraform:fmt": "terraform -chdir=infra/bootstrap-iam fmt && terraform -chdir=infra/terraform fmt && terraform -chdir=infra/ecr fmt && terraform -chdir=infra/dev fmt",
 		"terraform:validate": "terraform -chdir=infra/bootstrap-iam validate && terraform -chdir=infra/terraform validate && terraform -chdir=infra/ecr validate && terraform -chdir=infra/dev validate"
 	},

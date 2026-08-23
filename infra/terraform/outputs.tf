@@ -133,16 +133,6 @@ output "chat_api_target_group_arn" {
   value       = aws_lb_target_group.chat_api.arn
 }
 
-output "chat_api_service_connect_namespace_arn" {
-  description = "Service Connect namespace ARN for the later mymemo-service client configuration."
-  value       = aws_service_discovery_http_namespace.services.arn
-}
-
-output "chat_api_service_connect_endpoint" {
-  description = "Internal Service Connect endpoint for later mymemo-service adoption."
-  value       = "http://${local.chat_api_service_connect_dns_name}:${var.chat_api_port}"
-}
-
 output "agent_internal_alb_dns_name" {
   description = "DNS name of the agent-owned internal ALB."
   value       = aws_lb.agent.dns_name
@@ -154,7 +144,7 @@ output "agent_internal_base_url" {
 }
 
 output "agent_internal_allowed_caller_security_group_ids" {
-  description = "Trusted caller security group IDs allowed to call chat-api through the internal ALB or Service Connect."
+  description = "Security group IDs allowed to call the internal agent ALB."
   value       = local.trusted_caller_security_group_ids
 }
 
