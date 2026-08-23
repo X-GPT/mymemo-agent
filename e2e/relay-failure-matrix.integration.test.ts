@@ -26,7 +26,7 @@ import type { ApiConfig } from "../apps/chat-api/src/config/env";
 import type { AppDeps } from "../apps/chat-api/src/deps";
 import { PostgresConversationHistoryStore } from "../apps/chat-api/src/features/conversation-history/postgres-conversation-history-store";
 import { PostgresConversationStore } from "../apps/chat-api/src/features/conversation-store/postgres-conversation-store";
-import { PostgresRunStore } from "../apps/chat-api/src/features/run-store/postgres-run-store";
+import { PostgresRunStore } from "../apps/chat-api/src/features/run-store/run-store";
 import {
 	acquireAgentCoreDispatchTx,
 	claimAgentCoreDispatchesTx,
