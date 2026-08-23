@@ -15,7 +15,7 @@ From `apps/chat-api`, use `bun run dev` for the hot-reload development server, `
 - Biome is the formatter and linter.
 - Use tab indentation and double quotes.
 - Let Biome organize imports.
-- In `apps/chat-api` and `apps/agent-worker`, `@/*` maps to `./src/*`.
+- In `apps/chat-api` and `packages/agent-worker`, `@/*` maps to `./src/*`.
 
 ## Single Drizzle instance invariant
 

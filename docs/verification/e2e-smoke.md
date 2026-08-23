@@ -56,7 +56,7 @@ command remains manual from a VPC-reachable environment.
 ## Local smoke
 
 Export `OPENROUTER_API_KEY` and `E2B_API_KEY`, build the
-`WORKER_E2B_TEMPLATE` described in `apps/agent-worker/e2b-template/`, then run:
+`WORKER_E2B_TEMPLATE` described in `packages/agent-worker/e2b-template/`, then run:
 
 ```sh
 bun run smoke:local

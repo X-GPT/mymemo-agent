@@ -10,11 +10,12 @@ architecture and trust boundaries.
 | App | Location | Role |
 |-----|----------|------|
 | **chat-api** | `apps/chat-api/` | AI chat service; owns Conversation resources, strict Run admission, producer-buffered Live Stream attachment, history, and artifact delivery |
-| **agentcore-runtime** | `apps/agentcore-runtime/` | Sole production execution runtime; exactly acquires dispatched Runs and composes the shared SDK, E2B, Live Stream, and artifact behavior in `apps/agent-worker/` |
+| **agentcore-runtime** | `apps/agentcore-runtime/` | Sole production execution runtime; exactly acquires dispatched Runs and composes the shared SDK, E2B, Live Stream, and artifact behavior in `packages/agent-worker/` |
 | **agent-maintenance** | `apps/agent-maintenance/` | Sole production owner of queued-Run expiration, Reclamation, and asynchronous resource cleanup |
 | **agentcore-local-dispatch-bridge** | `apps/agentcore-local-dispatch-bridge/` | Development-only durable-outbox bridge to the local Runtime |
 
-Shared libraries live under `packages/` (e.g. `@mymemo/agent-db`).
+Shared libraries live under `packages/`, including the trusted Run-serving
+implementation in `packages/agent-worker/`.
 
 **Setup:**
 ```bash
@@ -32,9 +33,9 @@ See [the chat API guide](./docs/agents/chat-api.md) for chat-api documentation.
 ├── apps/                   # Deployable applications
 │   ├── chat-api/           # AI chat service (admits Runs, attaches SSE)
 │   ├── agentcore-runtime/  # Sole trusted execution runtime
-│   ├── agent-maintenance/  # Global liveness and cleanup service
-│   └── agent-worker/       # Shared Run-serving implementation (not deployed)
-├── packages/               # Shared libraries (e.g. @mymemo/agent-db)
+│   └── agent-maintenance/  # Global liveness and cleanup service
+├── packages/               # Shared libraries
+│   └── agent-worker/       # Shared trusted Run-serving implementation
 ├── AGENTS.md               # Architecture & agent guidance
 ├── compose.yaml            # Local AgentCore Runtime stack
 └── README.md               # This file

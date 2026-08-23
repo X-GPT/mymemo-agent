@@ -7,7 +7,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | Component | Responsibility |
 | --- | --- |
 | `apps/chat-api` | Creates and manages Conversations, admits Runs idempotently, attaches clients to Live Streams, projects permanent history, and lists or signs current Downloadable artifacts. |
-| `apps/agent-worker` | Shared trusted Run-serving implementation used by AgentCore. It is a workspace package, not a deployed service or image. |
+| `packages/agent-worker` | Shared trusted Run-serving implementation used by AgentCore. It is a workspace package, not a deployed service or image. |
 | `apps/agent-maintenance` | Sole production owner of global queued-Run expiration, Reclamation, and asynchronous cleanup. It has no Run-serving path. |
 | `apps/agentcore-dispatch-publisher` | Dedicated AgentCore Dispatch publication app. Runs as one ECS task, separate from chat-api and AgentCore Runtime. |
 | `apps/agentcore-dispatch-consumer` | AgentCore dispatch consumer Lambda and shared dispatch-boundary modules. Its production composition validates strict content-free SQS envelopes, invokes the Runtime, and returns partial-batch acknowledgements; the Runtime composes exact acquisition directly. |
@@ -50,11 +50,11 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/chat-api/src/features/run-store/` | Run admission, owner-scoped Run reads, and durable interruption |
 | `apps/chat-api/src/db/` | Thin bindings to `@mymemo/agent-db` and the shared migration runner |
 | `apps/agent-maintenance/src/` | Production entrypoint and health surface for global maintenance |
-| `apps/agent-worker/src/maintenance-runner.ts` | Shared queued-Run expiration, Reclamation, and cleanup implementation composed only by agent-maintenance |
+| `packages/agent-worker/src/maintenance-runner.ts` | Shared queued-Run expiration, Reclamation, and cleanup implementation composed only by agent-maintenance |
 | `apps/agentcore-dispatch-publisher/src/` | Dedicated AgentCore Dispatch publication entrypoint, loop, and production adapters |
-| `apps/agent-worker/src/run-serving.ts` | Shared serving behavior for an already-running Run |
-| `apps/agent-worker/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |
-| `apps/agent-worker/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |
+| `packages/agent-worker/src/run-serving.ts` | Shared serving behavior for an already-running Run |
+| `packages/agent-worker/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |
+| `packages/agent-worker/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |
 | `packages/agentcore-dispatch/src/` | Shared AgentCore Dispatch publisher policy, envelope serialization, and isolated SQS/SSM adapters |
 | `packages/agent-db/src/conversation-ownership.ts` | Live Ownership renew, release, and mutation fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |

@@ -28,7 +28,7 @@
         "drizzle-orm": "^0.45.2",
       },
     },
-    "apps/agent-worker": {
+    "packages/agent-worker": {
       "name": "agent-worker",
       "dependencies": {
         "@ag-ui/core": "^0.0.57",
@@ -451,7 +451,7 @@
 
     "agent-maintenance": ["agent-maintenance@workspace:apps/agent-maintenance"],
 
-    "agent-worker": ["agent-worker@workspace:apps/agent-worker"],
+    "agent-worker": ["agent-worker@workspace:packages/agent-worker"],
 
     "agentcore-dispatch-consumer": ["agentcore-dispatch-consumer@workspace:apps/agentcore-dispatch-consumer"],
 

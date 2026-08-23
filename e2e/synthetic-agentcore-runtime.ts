@@ -7,11 +7,6 @@
  * expiration and Reclamation remain outside the Runtime process.
  */
 
-import { createLogger, toMessage } from "../apps/agent-worker/src/logger";
-import {
-	createRunServing,
-	type RunProcessor,
-} from "../apps/agent-worker/src/run-serving";
 import { createAgentCoreAcquisitionBoundary } from "../apps/agentcore-dispatch-consumer/src/acquisition-boundary";
 import { serializeAgentCoreDispatchEnvelope } from "../apps/agentcore-dispatch-consumer/src/contract";
 import { createAgentCoreExecutionServices } from "../apps/agentcore-runtime/src/execution-services";
@@ -26,6 +21,11 @@ import {
 	confirmAgentCoreDispatchPublishedTx,
 } from "../packages/agent-db/src/agentcore-dispatch";
 import { createDatabase } from "../packages/agent-db/src/client";
+import { createLogger, toMessage } from "../packages/agent-worker/src/logger";
+import {
+	createRunServing,
+	type RunProcessor,
+} from "../packages/agent-worker/src/run-serving";
 import { createRedisLiveStreamRelay } from "../packages/live-text/src";
 
 const agentDatabaseUrl = process.env.AGENT_DATABASE_URL;

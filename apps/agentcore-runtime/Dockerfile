@@ -34,7 +34,7 @@ FROM base AS local
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agentcore-runtime apps/agentcore-runtime
 COPY apps/agentcore-dispatch-consumer apps/agentcore-dispatch-consumer
-COPY apps/agent-worker apps/agent-worker
+COPY packages/agent-worker packages/agent-worker
 COPY packages/agent-db packages/agent-db
 COPY packages/agentcore-dispatch packages/agentcore-dispatch
 COPY packages/live-text packages/live-text
@@ -53,7 +53,7 @@ COPY apps/agentcore-runtime/src apps/agentcore-runtime/src
 COPY apps/agentcore-runtime/package.json apps/agentcore-runtime/
 COPY apps/agentcore-runtime/tsconfig.json apps/agentcore-runtime/
 COPY apps/agentcore-dispatch-consumer apps/agentcore-dispatch-consumer
-COPY apps/agent-worker apps/agent-worker
+COPY packages/agent-worker packages/agent-worker
 COPY packages/agent-db packages/agent-db
 COPY packages/agentcore-dispatch packages/agentcore-dispatch
 COPY packages/live-text packages/live-text

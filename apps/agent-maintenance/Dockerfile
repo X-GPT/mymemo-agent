@@ -16,9 +16,9 @@ RUN cd /temp/prod \
 FROM base AS release
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agent-maintenance apps/agent-maintenance
-COPY apps/agent-worker/package.json apps/agent-worker/
-COPY apps/agent-worker/src/maintenance-runner.ts apps/agent-worker/src/logger.ts apps/agent-worker/src/
-COPY apps/agent-worker/src/cleanup/advisory-lock.ts apps/agent-worker/src/cleanup/cleanup.ts apps/agent-worker/src/cleanup/e2b-janitor.ts apps/agent-worker/src/cleanup/s3-artifact-janitor.ts apps/agent-worker/src/cleanup/
+COPY packages/agent-worker/package.json packages/agent-worker/
+COPY packages/agent-worker/src/maintenance-runner.ts packages/agent-worker/src/logger.ts packages/agent-worker/src/
+COPY packages/agent-worker/src/cleanup/advisory-lock.ts packages/agent-worker/src/cleanup/cleanup.ts packages/agent-worker/src/cleanup/e2b-janitor.ts packages/agent-worker/src/cleanup/s3-artifact-janitor.ts packages/agent-worker/src/cleanup/
 COPY packages/agent-db packages/agent-db
 COPY package.json ./
 
