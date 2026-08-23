@@ -6,7 +6,7 @@ import { createCurrentSecretReader } from "agentcore-dispatch-consumer/secret-co
 import {
 	loadRuntimeBootstrapConfig,
 	type RuntimeBootstrapConfig,
-	resolveRuntimeWorkerConfig,
+	resolveRuntimeConfig,
 } from "./config";
 import { createAgentCoreExecutionServices } from "./execution-services";
 import { createLogger, toMessage } from "./logger";
@@ -22,12 +22,12 @@ export async function createProductionAgentCoreRuntime(options: {
 	ssmClient: SSMClient;
 }) {
 	const logger = createLogger(options.bootstrap.logLevel);
-	const workerConfig = await resolveRuntimeWorkerConfig(
+	const runtimeConfig = await resolveRuntimeConfig(
 		options.bootstrap,
 		options.readCurrentSecret,
 	);
 	const resources = createProductionRunResources({
-		config: workerConfig,
+		config: runtimeConfig,
 		logger,
 		processEnv: options.processEnv,
 		telemetryService: "agentcore-runtime",

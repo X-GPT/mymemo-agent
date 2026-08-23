@@ -7,10 +7,10 @@ import {
 	type LiveStreamRelayOptions,
 	type LiveStreamTelemetry,
 } from "@mymemo/live-text";
-import type { WorkerLogger } from "./logger";
+import type { RuntimeLogger } from "./logger";
 import { RunLiveStream } from "./run-live-stream";
 
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 
 it("publishes RUN_STARTED through the terminal event over one relay producer", async () => {
 	const relay = createInMemoryLiveStreamRelay();
@@ -100,7 +100,7 @@ it("replays a generative UI CUSTOM event identically to a mid-Run reconnect", as
 it("observes a payload-safe degradation transition separately from Run outcome", async () => {
 	const logs: Record<string, unknown>[] = [];
 	const metrics: LiveStreamMetricEvent[] = [];
-	const logger: WorkerLogger = {
+	const logger: RuntimeLogger = {
 		info: (event) => logs.push(event),
 		warn: (event) => logs.push(event),
 		error: (event) => logs.push(event),

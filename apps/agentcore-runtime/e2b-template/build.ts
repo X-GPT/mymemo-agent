@@ -4,7 +4,7 @@
 //
 // `name` defaults to TEMPLATE_NAME; pass an override to build a side-by-side
 // candidate (e.g. `mymemo-agent-sandbox:next`) without touching the alias
-// workers point at. Follow with `bun run template:verify [name]`.
+// the Runtime points at. Follow with `bun run template:verify [name]`.
 import { defaultBuildLogger, Template } from "e2b";
 import { sandboxTemplate, TEMPLATE_NAME } from "./template";
 

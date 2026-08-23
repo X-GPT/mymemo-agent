@@ -19,7 +19,7 @@ export type ArtifactPublicationStage =
 	| "read"
 	| "upload";
 
-/** Safe publication-stage detail suitable for structured worker logs. */
+/** Safe publication-stage detail suitable for structured Runtime logs. */
 export class ArtifactPublicationError extends Error {
 	override readonly name = "ArtifactPublicationError";
 
@@ -28,7 +28,7 @@ export class ArtifactPublicationError extends Error {
 	}
 }
 
-/** Trusted-worker view of the reserved artifact subtree in one live workspace. */
+/** Trusted Runtime view of the reserved artifact subtree in one live Workspace. */
 export interface ArtifactWorkspace {
 	captureManifest(signal: AbortSignal): Promise<ArtifactManifestEntry[]>;
 	openFile(

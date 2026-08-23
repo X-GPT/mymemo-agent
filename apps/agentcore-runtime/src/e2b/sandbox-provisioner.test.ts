@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import {
 	createE2bSandboxProvisioner,
 	createSandboxProvisioner,
@@ -39,7 +39,7 @@ function makeFakeSandbox(sandboxId: string): {
 }
 
 function makeLogger(): {
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 	warns: Record<string, unknown>[];
 } {
 	const warns: Record<string, unknown>[] = [];

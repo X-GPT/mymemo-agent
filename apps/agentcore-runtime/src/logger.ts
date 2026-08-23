@@ -1,12 +1,12 @@
 import pino from "pino";
 
-export interface WorkerLogger {
+export interface RuntimeLogger {
 	info(obj: Record<string, unknown>): void;
 	warn(obj: Record<string, unknown>): void;
 	error(obj: Record<string, unknown>): void;
 }
 
-export function createLogger(level: string): WorkerLogger {
+export function createLogger(level: string): RuntimeLogger {
 	return pino({ level });
 }
 

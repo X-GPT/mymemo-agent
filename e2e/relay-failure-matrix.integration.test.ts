@@ -22,7 +22,7 @@ import {
 	type RedisTestServer,
 	startRedisTestServer,
 } from "@mymemo/test-support/redis-test-server";
-import type { WorkerLogger } from "../apps/agentcore-runtime/src/logger";
+import type { RuntimeLogger } from "../apps/agentcore-runtime/src/logger";
 import {
 	createRunServing,
 	type RunProcessor,
@@ -65,7 +65,7 @@ const IDENTITY_HEADERS = {
 	"x-member-code": MEMBER_CODE,
 	"x-partner-code": "relay-matrix-partner",
 };
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 
 type TestApp = ReturnType<
 	typeof import("../apps/chat-api/src/app")["createApp"]

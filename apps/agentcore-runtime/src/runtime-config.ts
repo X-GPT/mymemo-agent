@@ -14,7 +14,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 /** Trusted credentials stay in AgentCore Runtime and never enter E2B. */
-export interface WorkerConfig {
+export interface RuntimeConfig {
 	agentDatabaseUrl: string;
 	kbDatabaseUrl: string;
 	openrouter: {
@@ -54,7 +54,7 @@ function positiveIntOr(
 	return n;
 }
 
-export function loadWorkerConfigFromEnv(env: Env): WorkerConfig {
+export function loadRuntimeConfigFromEnv(env: Env): RuntimeConfig {
 	assert(env.AGENT_DATABASE_URL, "AGENT_DATABASE_URL is required");
 	assert(env.KB_DATABASE_URL, "KB_DATABASE_URL is required");
 	assert(env.OPENROUTER_API_KEY, "OPENROUTER_API_KEY is required");

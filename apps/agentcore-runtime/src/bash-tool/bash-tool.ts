@@ -18,7 +18,7 @@ export const DEFAULT_BASH_TOOL_LIMITS: BashToolLimits = {
 	maxStderrBytes: 65_536,
 };
 
-/** What the worker asks the sandbox to run as a managed, group-owned command. */
+/** What the Runtime asks the sandbox to run as a managed, group-owned command. */
 export interface ManagedCommandSpec {
 	commandId: string;
 	command: string;
@@ -180,7 +180,7 @@ function boundedErrorMessage(error: unknown): string {
 /**
  * Run one foreground shell command in the sandbox under the process-group
  * wrapper. All model-controlled shell execution goes through here; nothing runs
- * in Fargate. The flow is: validate + clamp (before any sandbox call) → audit
+ * in the Runtime. The flow is: validate + clamp (before any sandbox call) → audit
  * `started` → start the managed command → race the command against the system
  * timeout and the run's cancel signal (either kills the process group) → reap
  * the group and, if anything survived, taint the sandbox and refuse a clean

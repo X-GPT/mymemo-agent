@@ -1,8 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	loadRuntimeBootstrapConfig,
-	resolveRuntimeWorkerConfig,
-} from "./config";
+import { loadRuntimeBootstrapConfig, resolveRuntimeConfig } from "./config";
 
 function bootstrapEnv(): Record<string, string | undefined> {
 	return {
@@ -83,7 +80,7 @@ describe("AgentCore Runtime configuration", () => {
 			],
 		]);
 
-		const config = await resolveRuntimeWorkerConfig(bootstrap, async (arn) => {
+		const config = await resolveRuntimeConfig(bootstrap, async (arn) => {
 			const value = values.get(arn);
 			if (!value) throw new Error("secret missing");
 			return value;
@@ -98,7 +95,7 @@ describe("AgentCore Runtime configuration", () => {
 	it("refuses a KB database secret that weakens certificate verification", async () => {
 		const bootstrap = loadRuntimeBootstrapConfig(bootstrapEnv());
 		await expect(
-			resolveRuntimeWorkerConfig(bootstrap, async (arn) => {
+			resolveRuntimeConfig(bootstrap, async (arn) => {
 				if (arn === bootstrap.secretArns.agentDatabasePassword) {
 					return JSON.stringify({ password: "agent-secret" });
 				}

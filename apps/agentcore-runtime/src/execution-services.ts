@@ -6,7 +6,7 @@ import {
 } from "@mymemo/agent-db/conversation-ownership";
 import { loadExecutingRunTx } from "@mymemo/agent-db/run-store";
 import type { CommittedAgentCoreAcquisition } from "agentcore-dispatch-consumer/acquisition-boundary";
-import { toMessage, type WorkerLogger } from "./logger";
+import { type RuntimeLogger, toMessage } from "./logger";
 import type { RunServing } from "./run-serving";
 import type { AgentCoreRuntimeDependencies } from "./runtime";
 
@@ -18,7 +18,7 @@ export function createAgentCoreExecutionServices(options: {
 		dispatch: AgentCoreDispatchIdentity,
 	): Promise<CommittedAgentCoreAcquisition>;
 	runServing: RunServing;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 }): Pick<
 	AgentCoreRuntimeDependencies,
 	"acquire" | "serve" | "heartbeat" | "release"

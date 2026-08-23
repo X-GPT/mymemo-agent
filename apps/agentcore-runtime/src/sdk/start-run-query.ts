@@ -21,14 +21,13 @@ import { ARTIFACT_ROOT } from "../artifacts/artifact-workspace";
 import type { BashToolLimits } from "../bash-tool/bash-tool";
 import type { ScopedDocumentQueryClient } from "../documents/client";
 import { parseFrozenScope } from "../documents/scope";
-import type { SandboxJanitor } from "../e2b/sandbox-janitor";
 import {
 	type ProvisionedSandbox,
 	SANDBOX_WORKSPACE_ROOT,
 	type SandboxProvisioner,
 } from "../e2b/sandbox-provisioner";
 import type { FileToolLimits } from "../file-tools/file-tools";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import type { ModelClientConfig } from "../model-client";
 import type { RunBinding } from "../sandbox-env";
 import { onAbort, type SupervisedQuery } from "./agent-stream";
@@ -111,7 +110,7 @@ export interface StartRunQueryDeps {
 	db: Database;
 	provisioner: SandboxProvisioner;
 	/** Kills a fresh sandbox the fence refused to point to (never a live one). */
-	janitor: SandboxJanitor;
+	janitor: { killSandbox(sandboxId: string): Promise<void> };
 	documentClient: ScopedDocumentQueryClient;
 	modelClient: ModelClientConfig;
 	pathToClaudeCodeExecutable: string;
@@ -135,7 +134,7 @@ export interface StartRunQueryDeps {
 	/** Prepare the Runtime-side cwd that anchors the SDK session project key. */
 	ensureWorkingDirectory(path: string): Promise<void>;
 	query: RunQueryFn;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 }
 
 export function createStartRunQuery(deps: StartRunQueryDeps): StartRunQuery {

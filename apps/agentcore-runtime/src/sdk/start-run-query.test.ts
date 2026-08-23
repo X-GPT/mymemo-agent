@@ -46,7 +46,7 @@ import type {
 	SandboxProvisioner,
 } from "../e2b/sandbox-provisioner";
 import type { SandboxFileClient } from "../file-tools/file-tools";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import type { SupervisedQuery } from "./agent-stream";
 import { EXECUTOR_ALLOWED_TOOLS, EXECUTOR_SERVER_NAME } from "./run-tools";
 import { conversationWorkingDirectory } from "./session-store";
@@ -56,7 +56,7 @@ import {
 	type StartRunQueryDeps,
 } from "./start-run-query";
 
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 
 const WORKER_ID = "worker-1";
 const USER_ID = "user-1";
@@ -444,7 +444,7 @@ describe("createStartRunQuery — query configuration (ADR-0006)", () => {
 		await h.startRunQuery(run, freshSignal());
 
 		const env = h.captured.options?.env;
-		// The subprocess env is replaced wholesale (spike s2), so the worker's
+		// The subprocess env is replaced wholesale (spike s2), so the Runtime's
 		// own env must ride along...
 		expect(env?.PATH).toBe("/usr/bin");
 		expect(env?.HOME).toBe("/home/worker");

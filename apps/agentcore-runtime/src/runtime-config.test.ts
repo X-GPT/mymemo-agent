@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { loadWorkerConfigFromEnv } from "./worker-config";
+import { loadRuntimeConfigFromEnv } from "./runtime-config";
 
 /**
  * Runtime env ownership (MYM-47 / MYM-45 boundary). AgentCore Runtime owns the
@@ -22,7 +22,7 @@ function baseEnv(): Record<string, string | undefined> {
 	};
 }
 
-describe("loadWorkerConfigFromEnv — required settings", () => {
+describe("loadRuntimeConfigFromEnv — required settings", () => {
 	const required = [
 		"AGENT_DATABASE_URL",
 		"KB_DATABASE_URL",
@@ -37,46 +37,46 @@ describe("loadWorkerConfigFromEnv — required settings", () => {
 	];
 
 	it("loads cleanly with all required settings present", () => {
-		expect(() => loadWorkerConfigFromEnv(baseEnv())).not.toThrow();
+		expect(() => loadRuntimeConfigFromEnv(baseEnv())).not.toThrow();
 	});
 
 	for (const key of required) {
 		it(`refuses to boot without ${key}`, () => {
 			const env = baseEnv();
 			delete env[key];
-			expect(() => loadWorkerConfigFromEnv(env)).toThrow(new RegExp(key));
+			expect(() => loadRuntimeConfigFromEnv(env)).toThrow(new RegExp(key));
 		});
 	}
 
 	it("surfaces the two DB connections separately", () => {
-		const config = loadWorkerConfigFromEnv(baseEnv());
+		const config = loadRuntimeConfigFromEnv(baseEnv());
 		expect(config.agentDatabaseUrl).toContain("mymemo_agent");
 		expect(config.kbDatabaseUrl).toContain("mymemo_kb");
 	});
 
-	it("surfaces the E2B template the worker provisions sandboxes from", () => {
-		const config = loadWorkerConfigFromEnv(baseEnv());
+	it("surfaces the E2B template the Runtime provisions sandboxes from", () => {
+		const config = loadRuntimeConfigFromEnv(baseEnv());
 		expect(config.e2bTemplate).toBe("mymemo-agent-sandbox");
 	});
 
 	it("surfaces the private artifact bucket configuration", () => {
-		expect(loadWorkerConfigFromEnv(baseEnv()).artifact).toEqual({
+		expect(loadRuntimeConfigFromEnv(baseEnv()).artifact).toEqual({
 			bucket: "private-artifacts",
 			region: "us-west-2",
 		});
 	});
 
 	it("surfaces the OpenRouter provider config", () => {
-		const config = loadWorkerConfigFromEnv(baseEnv());
+		const config = loadRuntimeConfigFromEnv(baseEnv());
 		expect(config.openrouter.apiKey).toBe("sk-or-test");
 		expect(config.openrouter.baseUrl).toBe("https://openrouter.ai/api");
 		expect(config.openrouter.defaultModel).toBe("anthropic/claude-sonnet-4");
 	});
 });
 
-describe("loadWorkerConfigFromEnv — serving intervals", () => {
+describe("loadRuntimeConfigFromEnv — serving intervals", () => {
 	it("defaults heartbeat to 15s and a bounded shutdown grace", () => {
-		const config = loadWorkerConfigFromEnv(baseEnv());
+		const config = loadRuntimeConfigFromEnv(baseEnv());
 		expect(config.heartbeatIntervalMs).toBe(15_000);
 		expect(config.shutdownTimeoutMs).toBeGreaterThan(0);
 	});
@@ -85,16 +85,16 @@ describe("loadWorkerConfigFromEnv — serving intervals", () => {
 		const env = baseEnv();
 		env.WORKER_HEARTBEAT_INTERVAL_MS = "10000";
 		env.WORKER_SHUTDOWN_TIMEOUT_MS = "5000";
-		const config = loadWorkerConfigFromEnv(env);
+		const config = loadRuntimeConfigFromEnv(env);
 		expect(config.heartbeatIntervalMs).toBe(10_000);
 		expect(config.shutdownTimeoutMs).toBe(5_000);
 	});
 });
 
-describe("loadWorkerConfigFromEnv — required Live Stream Redis", () => {
+describe("loadRuntimeConfigFromEnv — required Live Stream Redis", () => {
 	it("accepts only an authenticated TLS URL", () => {
 		const env = baseEnv();
-		expect(loadWorkerConfigFromEnv(env).redisUrl).toBe(
+		expect(loadRuntimeConfigFromEnv(env).redisUrl).toBe(
 			"rediss://default:secret@redis.internal:6379",
 		);
 	});
@@ -103,7 +103,7 @@ describe("loadWorkerConfigFromEnv — required Live Stream Redis", () => {
 		const env = baseEnv();
 		env.REDIS_URL = "redis://127.0.0.1:6379";
 		env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS = "true";
-		expect(loadWorkerConfigFromEnv(env).redisUrl).toBe(env.REDIS_URL);
+		expect(loadRuntimeConfigFromEnv(env).redisUrl).toBe(env.REDIS_URL);
 	});
 
 	it("refuses to boot with missing, malformed, or insecure Redis configuration", () => {
@@ -115,7 +115,7 @@ describe("loadWorkerConfigFromEnv — required Live Stream Redis", () => {
 		]) {
 			const env = baseEnv();
 			env.REDIS_URL = redisUrl;
-			expect(() => loadWorkerConfigFromEnv(env)).toThrow(/REDIS_URL/);
+			expect(() => loadRuntimeConfigFromEnv(env)).toThrow(/REDIS_URL/);
 		}
 	});
 });

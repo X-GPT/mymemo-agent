@@ -4,7 +4,7 @@ import type { FrozenConversationScope } from "./scope";
 /**
  * Identifies one run's document access for the audit ledger. Narrower than the
  * sandbox `RunBinding` on purpose: document access happens in the trusted
- * worker, so there is no sandbox in the picture.
+ * Runtime, so there is no sandbox in the picture.
  */
 export interface DocumentAccessBinding {
 	userId: string;

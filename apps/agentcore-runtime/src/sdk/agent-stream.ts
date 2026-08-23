@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { type AGUIEvent, EventType } from "@ag-ui/core";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PublicToolName } from "@mymemo/agent-db/run-events";
-import { toMessage, type WorkerLogger } from "../logger";
+import { type RuntimeLogger, toMessage } from "../logger";
 import type {
 	AgentStreamMetadata,
 	ModelContent,
@@ -133,7 +133,7 @@ export interface ConsumeAgentStreamParams {
 	/** Receives the omission logs ADR-0012 requires (unknown tool names,
 	 * unmatched result ids, unprojectable payloads). Optional: omissions
 	 * degrade visibility, never correctness. */
-	logger?: WorkerLogger;
+	logger?: RuntimeLogger;
 	/** Injectable only for deterministic supervision tests. */
 	startStopDeadline?: StartStopDeadline;
 }
@@ -151,7 +151,7 @@ export interface ConsumeAgentStreamParams {
  * its start/arguments/end batch before those standard AG-UI events publish.
  * A `tool_result` derives only from a complete,
  * non-replay SDK user message and matches the invocation through a provider-id
- * map that never leaves the worker. Results without a committed invocation are
+ * map that never leaves the Runtime. Results without a committed invocation are
  * logged and omitted; correlation is never fabricated. Omissions
  * (non-allowlisted tools, unprojectable payloads) degrade visibility only; a
  * failed append of valid Tool content fails the run exactly like Assistant
@@ -184,7 +184,7 @@ export async function consumeAgentStream(
 	};
 	const agUiText = new AgUiTextStream({ appendEvent: appendLiveEvent });
 
-	// Provider Tool-use ids stay worker-internal. They only index the public,
+	// Provider Tool-use ids stay Runtime-internal. They only index the public,
 	// MyMemo-generated identity needed to correlate a later Tool result.
 	const toolInvocationsByUseId = new Map<
 		string,
@@ -425,7 +425,7 @@ export async function consumeAgentStream(
 	);
 	// These catch boundaries intentionally differ: iterator failures originate
 	// in the provider stream and may repeat mirror payload detail, while
-	// query.close() below is a worker-side cleanup operation.
+	// query.close() below is a Runtime-side cleanup operation.
 	const reportUnexpectedStoppedStreamFailure = (error: unknown): void => {
 		if (isExpectedStopError(error)) return;
 		params.logger?.error({
@@ -464,7 +464,7 @@ export async function consumeAgentStream(
 			query.close();
 		} catch (error) {
 			// `close()` is an operational cleanup boundary, not the mirror
-			// stream payload. Keep its worker-only diagnostic on every stop path.
+			// stream payload. Keep its Runtime-only diagnostic on every stop path.
 			params.logger?.error({
 				message: "agent query force-close failed",
 				runId: params.runId,
@@ -503,7 +503,7 @@ export async function consumeAgentStream(
 			if (next.type === "force_closed") {
 				// `Query.close()` is the terminal SDK cleanup boundary. Do not wait
 				// indefinitely for a misbehaving iterator to acknowledge it; late
-				// rejection is still retained in worker-only diagnostics.
+				// rejection is still retained in Runtime-only diagnostics.
 				void nextMessage.catch(reportUnexpectedStoppedStreamFailure);
 				try {
 					const returned = iterator.return?.();

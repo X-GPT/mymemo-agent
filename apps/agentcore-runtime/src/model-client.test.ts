@@ -3,9 +3,9 @@ import { buildModelClientConfig } from "./model-client";
 
 /**
  * Task 7.1 (ADR-0003): model headers/credentials are injected only in the
- * trusted worker. The model client config is derived from the worker's
+ * trusted Runtime. The model client config is derived from the Runtime's
  * validated OpenRouter settings and is what the Claude Agent SDK integration
- * (Task 7.2) hands to `query()` — it never leaves the Fargate process.
+ * (Task 7.2) hands to `query()` — it never leaves the Runtime process.
  */
 const openrouter = {
 	apiKey: "sk-or-secret",
@@ -13,7 +13,7 @@ const openrouter = {
 	defaultModel: "anthropic/claude-sonnet-4",
 };
 
-describe("buildModelClientConfig — trusted-worker model path", () => {
+describe("buildModelClientConfig — trusted Runtime model path", () => {
 	it("points the SDK at OpenRouter's Anthropic-compatible endpoint", () => {
 		const config = buildModelClientConfig(openrouter);
 		expect(config.env.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");

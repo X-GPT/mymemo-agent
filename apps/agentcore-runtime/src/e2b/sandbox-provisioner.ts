@@ -7,7 +7,7 @@ import {
 import type { SandboxCommandClient } from "../bash-tool/bash-tool";
 import { DEFAULT_COMMAND_CONTROL_DIR } from "../bash-tool/bash-wrapper";
 import type { SandboxFileClient } from "../file-tools/file-tools";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import { type CommandSandbox, E2BCommandClient } from "./command-client";
 import { E2BFileClient, type FileSandbox } from "./file-client";
 
@@ -76,7 +76,7 @@ export interface SandboxProvisionerDeps {
 	/** Idle window each connect/create/renew grants; unrenewed, the sandbox
 	 * pauses this long after the last extension. */
 	sandboxIdleMs: number;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 	/** Connect to (and auto-resume) an existing sandbox. */
 	connectSandbox(sandboxId: string): Promise<ProvisionerSandbox>;
 	/** Create a fresh sandbox from the pinned template. */
@@ -148,7 +148,7 @@ export interface E2bSandboxProvisionerConfig {
 	apiKey: string;
 	template: string;
 	sandboxIdleMs: number;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 }
 
 export interface E2bSandboxFactory {

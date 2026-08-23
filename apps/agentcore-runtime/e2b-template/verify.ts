@@ -3,7 +3,7 @@
 //   E2B_API_KEY=... bun run template:verify [templateNameOrId]
 //
 // The template defaults to WORKER_E2B_TEMPLATE, then TEMPLATE_NAME — the same
-// id a configured worker would provision run sandboxes from. Exits non-zero
+// id the configured Runtime provisions Run sandboxes from. Exits non-zero
 // on any failure so the deploy flow's template build/verify stage can gate on
 // it.
 import { CommandExitError, Sandbox } from "e2b";

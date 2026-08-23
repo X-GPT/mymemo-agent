@@ -159,7 +159,7 @@ describe("ListDocuments tool", () => {
 		expect(called).toBe(false);
 	});
 
-	it("caps a requested page by both worker config and the hard backstop", async () => {
+	it("caps a requested page by both Runtime config and the hard backstop", async () => {
 		let observedLimit: number | undefined;
 		await runListDocumentsTool(
 			{ limit: 500 },

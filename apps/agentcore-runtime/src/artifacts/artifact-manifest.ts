@@ -16,7 +16,7 @@ export type ArtifactValidationCode =
 	| "special_entry"
 	| "unstable_entry";
 
-/** Safe, bounded validation detail suitable for structured worker logs. */
+/** Safe, bounded validation detail suitable for structured Runtime logs. */
 export class ArtifactValidationError extends Error {
 	override readonly name = "ArtifactValidationError";
 

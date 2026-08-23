@@ -136,7 +136,7 @@ export const UI_NODE_ROOT_SCHEMA = z
 
 /**
  * Stable model-repair vocabulary. The legacy `Envelope` names refer to the
- * worker-owned durable `{ messageId, version, payload }` envelope, never a
+ * Runtime-owned durable `{ messageId, version, payload }` envelope, never a
  * wrapper authored by the model.
  */
 export const UiPayloadRule = {
@@ -273,7 +273,7 @@ export function validateUiPayload(input: unknown): UiPayloadValidationResult {
 	return { ok: true, value: parsed.data as unknown as UiNode };
 }
 
-/** Serialized size of the worker-owned durable envelope for a model payload. */
+/** Serialized size of the Runtime-owned durable envelope for a model payload. */
 export function serializedUiPayloadEnvelopeBytes(payload: unknown): number {
 	return Buffer.byteLength(
 		JSON.stringify({

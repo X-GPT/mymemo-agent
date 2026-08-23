@@ -28,7 +28,7 @@ import {
 	type LiveStreamRelay,
 } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import { createAgentCoreRunHarness } from "../testing/agentcore-run-harness";
 import type { StartStopDeadline } from "./agent-stream";
 import {
@@ -53,7 +53,7 @@ import {
 	withSessionMirrorEvidence,
 } from "./testing/session-mirror-fixtures";
 
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 const noArtifactPublication = { getArtifactPublication: () => null };
 
 let tdb: TestDb;
@@ -221,7 +221,7 @@ function stepQuery(
 
 function buildHarness(
 	startRunQuery: StartRunQuery,
-	logger: WorkerLogger = silentLogger,
+	logger: RuntimeLogger = silentLogger,
 	startStopDeadline?: StartStopDeadline,
 	liveStreamRelay: LiveStreamRelay = createInMemoryLiveStreamRelay(),
 ) {
@@ -856,7 +856,7 @@ describe("createSdkRunProcessor — through the run harness", () => {
 		let artifactPublicationReads = 0;
 		let deadlineMs: number | undefined;
 		let deadlineCancelled = false;
-		const logger: WorkerLogger = {
+		const logger: RuntimeLogger = {
 			info() {},
 			warn() {},
 			error(fields) {
@@ -1082,7 +1082,7 @@ describe("createSdkRunProcessor — through the run harness", () => {
 		const closed = Promise.withResolvers<void>();
 		const calls: string[] = [];
 		const warnings: Record<string, unknown>[] = [];
-		const logger: WorkerLogger = {
+		const logger: RuntimeLogger = {
 			info() {},
 			error() {},
 			warn(fields) {

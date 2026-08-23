@@ -62,7 +62,7 @@ describe("SearchDocuments tool", () => {
 		});
 	});
 
-	it("caps requested maxResults by worker config before calling the client", async () => {
+	it("caps requested maxResults by Runtime config before calling the client", async () => {
 		let observedMaxResults: number | undefined;
 		await runSearchDocumentsTool(
 			{ query: "revenue", maxResults: 50 },

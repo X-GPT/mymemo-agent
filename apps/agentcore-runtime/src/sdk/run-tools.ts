@@ -107,7 +107,7 @@ export const EXECUTOR_ALLOWED_TOOLS: readonly string[] =
 /**
  * Everything one acquired Run needs to expose its executor tools to the Claude
  * Agent SDK. Assembled per run from the run binding, the provisioned sandbox
- * clients, the frozen document scope, and the worker's caps. The tools built
+ * clients, the frozen document scope, and the Runtime's caps. The tools built
  * from it close over the binding, so every file, shell, and document action the
  * model takes is attributed to the exact `{userId, conversationId, runId,
  * sandboxId}` that caused it (plan Task 7.2).
@@ -136,7 +136,7 @@ export interface RunToolDeps {
 }
 
 /** The document-access binding is the run binding minus the sandbox id: document
- * search is trusted worker-side work, never reachable from the sandbox. */
+ * search is trusted Runtime-side work, never reachable from the sandbox. */
 function documentBinding(binding: RunBinding) {
 	return {
 		userId: binding.userId,
@@ -275,7 +275,7 @@ export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
 /**
  * Wrap the run's bound tools in an in-process SDK MCP server, the form
  * `query({ options: { mcpServers } })` accepts. The server runs inside the
- * trusted worker; no credential crosses into the sandbox.
+ * trusted Runtime; no credential crosses into the sandbox.
  */
 export function createRunMcpServer(
 	deps: RunToolDeps,

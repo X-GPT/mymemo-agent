@@ -2,7 +2,7 @@
  * Errors the document query client exposes to callers (ultimately the model
  * via MCP tool results). Messages on both classes are bounded and
  * model-readable by construction: they are fixed strings chosen here, never
- * driver error text, SQL, or connection strings — those stay in the worker
+ * driver error text, SQL, or connection strings — those stay in the Runtime
  * log. Tool layers may surface `.message` verbatim.
  */
 

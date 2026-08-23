@@ -23,7 +23,7 @@ import {
 	listAgentSessionsTx,
 	loadAgentSessionEntriesTx,
 } from "@mymemo/agent-db/session-store";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 
 /** Query-level projection of the bound adapter's per-Run mirror evidence. */
 export interface SessionMirrorEvidence {
@@ -62,7 +62,7 @@ export function createConversationSessionStore(
 	db: Database,
 	binding: {
 		owner: RunWriteOwner;
-		logger: WorkerLogger;
+		logger: RuntimeLogger;
 	},
 ): ConversationSessionStore {
 	const { owner, logger } = binding;
@@ -160,7 +160,7 @@ export function buildAgentSessionQueryConfig(input: {
 	db: Database;
 	owner: RunWriteOwner;
 	runtime: ConversationRuntimeRecord | null;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 }): AgentSessionQueryConfig {
 	const { db, owner, runtime, logger } = input;
 	const config: AgentSessionQueryConfig = {

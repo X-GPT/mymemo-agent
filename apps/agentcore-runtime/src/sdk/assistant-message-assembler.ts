@@ -33,7 +33,7 @@ export interface AssistantMessageAssemblerOptions {
 
 /**
  * One completed `tool_use` content block, buffered in content-block order: the
- * SDK id (worker-internal, for associating the later result), the tool name as
+ * SDK id (Runtime-internal, for associating the later result), the tool name as
  * the SDK reports it, and the raw model-authored input. Nothing here is
  * client-safe yet — allowlisting and projection happen at commit, before any
  * append (ADR-0012).

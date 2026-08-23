@@ -17,7 +17,7 @@ import { Template, type TemplateClass } from "e2b";
  * (the Task 9.2 acceptance check). See README.md for the deploy-flow slot.
  */
 
-/** Default alias the template is built under and workers reference via
+/** Default alias the template is built under and the Runtime references via
  * `WORKER_E2B_TEMPLATE`. */
 export const TEMPLATE_NAME = "mymemo-agent-sandbox";
 

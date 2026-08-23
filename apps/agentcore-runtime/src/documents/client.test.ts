@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import {
 	createDocumentSearch,
 	createScopedDocumentQueryClient,
@@ -7,7 +7,7 @@ import {
 import type { Db } from "./db";
 import { DocumentQueryError, DocumentScopeError } from "./errors";
 
-const noopLogger: WorkerLogger = {
+const noopLogger: RuntimeLogger = {
 	info() {},
 	warn() {},
 	error() {},
@@ -466,7 +466,7 @@ describe("searchDocuments — bounded errors", () => {
 		expect(rejection.message).not.toContain("SELECT");
 		expect(rejection.message).not.toContain("kb-secret");
 		expect(rejection.message).not.toContain("postgresql://");
-		// The real cause is preserved for operators in the worker log.
+		// The real cause is preserved for operators in the Runtime log.
 		expect(logged.length).toBeGreaterThan(0);
 	});
 

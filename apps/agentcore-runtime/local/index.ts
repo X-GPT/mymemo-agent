@@ -5,10 +5,10 @@ import { createLogger, toMessage } from "../src/logger";
 import { createProductionRunResources } from "../src/production-run-resources";
 import { createRunServing } from "../src/run-serving";
 import { createAgentCoreRuntime } from "../src/runtime";
+import { loadRuntimeConfigFromEnv } from "../src/runtime-config";
 import { startRuntimeServer } from "../src/server";
-import { loadWorkerConfigFromEnv } from "../src/worker-config";
 
-const config = loadWorkerConfigFromEnv(Bun.env);
+const config = loadRuntimeConfigFromEnv(Bun.env);
 const artifactEndpoint = Bun.env.LOCAL_ARTIFACT_ENDPOINT?.trim();
 if (!artifactEndpoint) throw new Error("LOCAL_ARTIFACT_ENDPOINT is required");
 const logger = createLogger(config.logLevel);

@@ -11,7 +11,7 @@ export interface RunBinding {
 
 /**
  * Build the environment placed on an E2B sandbox for a run. By design this
- * accepts ONLY the run binding — never the worker config — so no provider key,
+ * accepts ONLY the Run binding — never the Runtime config — so no provider key,
  * KB credential, or E2B key can structurally reach the untrusted sandbox. The
  * sandbox gets per-run executor metadata that cannot grant provider or document
  * access (split-runtime credential model).

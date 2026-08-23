@@ -3,16 +3,16 @@ import { releaseConversationTx } from "@mymemo/agent-db/conversation-ownership";
 import { loadExecutingRunTx } from "@mymemo/agent-db/run-store";
 import { acquireQueuedRunForTest } from "@mymemo/agent-db/testing";
 import type { LiveStreamRelay } from "@mymemo/live-text";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import { createRunServing, type RunProcessor } from "../run-serving";
 
 /** Test-only adapter that drives shared Run serving through AgentCore's exact
- * acquisition boundary without recreating the retired Fargate Claim loop. */
+ * acquisition boundary without recreating the retired global Claim loop. */
 export function createAgentCoreRunHarness(options: {
 	db: Database;
 	processor: RunProcessor;
 	liveStreamRelay: LiveStreamRelay;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 }) {
 	const shutdown = new AbortController();
 	const runServing = createRunServing(options);

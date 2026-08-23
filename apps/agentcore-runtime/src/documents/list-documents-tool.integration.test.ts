@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import { createScopedDocumentQueryClient } from "./client";
 import type { Db } from "./db";
 import { runListDocumentsTool } from "./list-documents-tool";
@@ -13,7 +13,7 @@ const binding = {
 	runId: "run-1",
 };
 
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 
 let pglite: PGlite;
 let db: Db;

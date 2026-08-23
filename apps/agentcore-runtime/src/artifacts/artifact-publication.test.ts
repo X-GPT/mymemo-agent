@@ -16,7 +16,7 @@ import {
 } from "@mymemo/agent-db/testing";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import type { SupervisedQuery } from "../sdk/agent-stream";
 import { createSdkRunProcessor } from "../sdk/run-processor";
 import {
@@ -32,7 +32,7 @@ import {
 	withArtifactPublication,
 } from "./artifact-publication";
 
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 const encoder = new TextEncoder();
 const MIB = 1_024 * 1_024;
 const MAX_ARTIFACT_SIZE_BYTES = 100 * MIB;
@@ -144,7 +144,7 @@ function failedQuery(onStart: () => void, error: Error): SupervisedQuery {
 function buildArtifactHarness(
 	workspace: FakeWorkspace,
 	upload?: ArtifactObjectStore["upload"],
-	logger: WorkerLogger = silentLogger,
+	logger: RuntimeLogger = silentLogger,
 	objectKeyPrefix?: string,
 ) {
 	const uploaded = new Map<string, Uint8Array>();
@@ -481,7 +481,7 @@ describe("Downloadable artifact publication through the AgentCore harness", () =
 		});
 		const workspace = new FakeWorkspace();
 		const errors: Record<string, unknown>[] = [];
-		const logger: WorkerLogger = {
+		const logger: RuntimeLogger = {
 			...silentLogger,
 			error(event) {
 				errors.push(event);
@@ -552,7 +552,7 @@ describe("Downloadable artifact publication through the AgentCore harness", () =
 		await insertConversation();
 		const workspace = new FakeWorkspace();
 		const errors: Record<string, unknown>[] = [];
-		const logger: WorkerLogger = {
+		const logger: RuntimeLogger = {
 			...silentLogger,
 			error(event) {
 				errors.push(event);
@@ -695,7 +695,7 @@ describe("Downloadable artifact publication through the AgentCore harness", () =
 		await insertConversation();
 		const workspace = new FakeWorkspace();
 		const errors: Record<string, unknown>[] = [];
-		const logger: WorkerLogger = {
+		const logger: RuntimeLogger = {
 			...silentLogger,
 			error(event) {
 				errors.push(event);

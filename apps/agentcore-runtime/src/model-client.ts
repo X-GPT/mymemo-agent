@@ -1,4 +1,4 @@
-import type { WorkerConfig } from "./worker-config";
+import type { RuntimeConfig } from "./runtime-config";
 
 /** Provider credentials stay in AgentCore Runtime and never enter E2B. */
 export interface ModelClientConfig {
@@ -13,7 +13,7 @@ export interface ModelClientConfig {
 
 /** Also supports direct Anthropic through configuration alone (ADR-0003). */
 export function buildModelClientConfig(
-	openrouter: WorkerConfig["openrouter"],
+	openrouter: RuntimeConfig["openrouter"],
 ): ModelClientConfig {
 	return {
 		env: {

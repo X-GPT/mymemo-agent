@@ -8,6 +8,7 @@ import {
 	createRedisLiveStreamRelay,
 	type LiveStreamService,
 } from "@mymemo/live-text";
+import { Sandbox } from "e2b";
 import {
 	type ArtifactObjectStore,
 	createArtifactPublisher,
@@ -15,15 +16,14 @@ import {
 import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
 import { DEFAULT_BASH_TOOL_LIMITS } from "./bash-tool/bash-tool";
 import { createDocumentSearch } from "./documents/client";
-import { createE2bSandboxJanitor } from "./e2b/sandbox-janitor";
 import { createE2bSandboxProvisioner } from "./e2b/sandbox-provisioner";
 import type { FileToolLimits } from "./file-tools/file-tools";
-import type { WorkerLogger } from "./logger";
+import type { RuntimeLogger } from "./logger";
 import { buildModelClientConfig } from "./model-client";
+import type { RuntimeConfig } from "./runtime-config";
 import { resolveAndVerifyClaudeCodeExecutable } from "./sdk/claude-code-executable";
 import { createSdkRunProcessor } from "./sdk/run-processor";
 import { createStartRunQuery } from "./sdk/start-run-query";
-import type { WorkerConfig } from "./worker-config";
 
 const SANDBOX_IDLE_MS = 300_000;
 const FILE_LIMITS: FileToolLimits = {
@@ -42,8 +42,8 @@ const DOCUMENT_LOAD_LIMITS = {
 };
 
 export function createProductionRunResources(options: {
-	config: WorkerConfig;
-	logger: WorkerLogger;
+	config: RuntimeConfig;
+	logger: RuntimeLogger;
 	processEnv?: Record<string, string | undefined>;
 	telemetryService?: LiveStreamService;
 	artifactObjectKeyPrefix?: string;
@@ -59,7 +59,7 @@ export function createProductionRunResources(options: {
 		deployment: "current",
 		telemetry: liveStreamTelemetry,
 	});
-	// A missing or wrong-libc SDK binary must crash before either runtime can
+	// A missing or wrong-libc SDK binary must crash before the Runtime can
 	// obtain Conversation Ownership.
 	const pathToClaudeCodeExecutable = resolveAndVerifyClaudeCodeExecutable();
 	const db = createDatabase(config.agentDatabaseUrl);
@@ -70,7 +70,6 @@ export function createProductionRunResources(options: {
 			createS3ArtifactObjectStore(config.artifact),
 		objectKeyPrefix: options.artifactObjectKeyPrefix,
 	});
-	const sandboxJanitor = createE2bSandboxJanitor(config.e2bApiKey);
 	const startRunQuery = createStartRunQuery({
 		db,
 		provisioner: createE2bSandboxProvisioner({
@@ -79,7 +78,11 @@ export function createProductionRunResources(options: {
 			sandboxIdleMs: SANDBOX_IDLE_MS,
 			logger,
 		}),
-		janitor: sandboxJanitor,
+		janitor: {
+			async killSandbox(sandboxId) {
+				await Sandbox.kill(sandboxId, { apiKey: config.e2bApiKey });
+			},
+		},
 		documentClient: createDocumentSearch(
 			{
 				kbDatabaseUrl: config.kbDatabaseUrl,
@@ -118,6 +121,5 @@ export function createProductionRunResources(options: {
 		processor: createSdkRunProcessor({ startRunQuery, logger }),
 		liveStreamRelay,
 		liveStreamTelemetry,
-		sandboxJanitor,
 	};
 }

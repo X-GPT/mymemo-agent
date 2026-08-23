@@ -86,7 +86,7 @@ function dedupe(ids: string[]): string[] {
  * the result carries metadata only, so no document body ever reaches run events
  * or tool-result persistence. Scope checks, capping, and the
  * `document_access_events` audit all live behind `fetchDocumentInScope`, so the
- * KB credential never leaves the trusted worker and unknown/out-of-scope ids
+ * KB credential never leaves the trusted Runtime and unknown/out-of-scope ids
  * fail with one uniform message that cannot probe cross-scope existence.
  */
 export async function runLoadDocumentsTool(

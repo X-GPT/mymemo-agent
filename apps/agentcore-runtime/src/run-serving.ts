@@ -32,7 +32,7 @@ import type {
 } from "@mymemo/live-text";
 import { ArtifactValidationError } from "./artifacts/artifact-manifest";
 import { ArtifactPublicationError } from "./artifacts/artifact-publication";
-import { toMessage, type WorkerLogger } from "./logger";
+import { type RuntimeLogger, toMessage } from "./logger";
 import { renewOwnershipLease } from "./ownership-lease";
 import { RunLiveStream } from "./run-live-stream";
 import {
@@ -104,7 +104,7 @@ export interface RunProcessContext {
 	interruptionSignal: AbortSignal;
 	/** Fires on runtime shutdown. */
 	shutdownSignal: AbortSignal;
-	/** Fires when this worker must immediately stop private SDK work because the
+	/** Fires when this Runtime must immediately stop private SDK work because the
 	 * Conversation fence was lost or the Run reached an Outcome elsewhere. */
 	ownershipLostSignal: AbortSignal;
 	appendModelContent(content: ModelContent): Promise<number>;
@@ -127,7 +127,7 @@ export interface RunServingOptions {
 	processor: RunProcessor;
 	liveStreamRelay: LiveStreamRelay;
 	liveStreamTelemetry?: LiveStreamTelemetry;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 }
 
 export interface ServeStartedRunInput {

@@ -11,7 +11,7 @@ import {
 	type LiveStreamTelemetry,
 	RUN_INTERRUPTED_EVENT_TYPE,
 } from "@mymemo/live-text";
-import type { WorkerLogger } from "./logger";
+import type { RuntimeLogger } from "./logger";
 
 export interface LiveStreamFailureMarker {
 	outcome: "marked" | "already_failed";
@@ -33,7 +33,7 @@ export class RunLiveStream {
 		private readonly runId: string,
 		private readonly conversationId: string,
 		private readonly markLiveStreamFailed: () => Promise<LiveStreamFailureMarker>,
-		private readonly logger: WorkerLogger,
+		private readonly logger: RuntimeLogger,
 		private readonly telemetry: LiveStreamTelemetry,
 	) {}
 
@@ -42,7 +42,7 @@ export class RunLiveStream {
 		runId: string;
 		conversationId: string;
 		markLiveStreamFailed: () => Promise<LiveStreamFailureMarker>;
-		logger: WorkerLogger;
+		logger: RuntimeLogger;
 		telemetry?: LiveStreamTelemetry;
 	}): Promise<RunLiveStream> {
 		const stream = new RunLiveStream(
@@ -113,7 +113,7 @@ export class RunLiveStream {
 		this.#recordDegradationEnded();
 	}
 
-	/** Release a producer when this worker can no longer terminalize the Run. */
+	/** Release a producer when this Runtime can no longer terminalize the Run. */
 	async close(): Promise<void> {
 		this.#enabled = false;
 		await this.#closeProducer();

@@ -7,7 +7,7 @@
  * enabling Bash we must run every command as the leader of its own process
  * group and signal the whole group on timeout / cancel / Reclamation.
  *
- * This module produces three shell fragments the worker feeds to E2B:
+ * This module produces three shell fragments the Runtime feeds to E2B:
  *  - {@link WRAPPER_PROGRAM} runs the user command as a fresh session leader
  *    (its own process group) and records the group id to a control file;
  *  - {@link buildKillGroupCommand} signals that group (TERM, grace, KILL);
@@ -58,7 +58,7 @@ export function wrapperEnv(input: {
  *  1. starts the user command as a new session leader via `setsid`, so the
  *     command and every descendant share one process group;
  *  2. has that inner shell record its own pid (== the new process-group id) to
- *     the control file *before* exec'ing the user command, so the worker can
+ *     the control file *before* exec'ing the user command, so the Runtime can
  *     find the group even if the wrapper is later SIGKILLed;
  *  3. forwards TERM/INT to the whole group; and
  *  4. on exit, force-kills the group (sweeping any strays the command left) and

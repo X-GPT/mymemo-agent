@@ -1,6 +1,6 @@
 import type { RunRecord, RunWriteOwner } from "@mymemo/agent-db/run-store";
 import type { ArtifactAwareQuery } from "../artifacts/artifact-publication";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import { type RunProcessor, RunProcessorFailure } from "../run-serving";
 import {
 	consumeAgentStream,
@@ -32,7 +32,7 @@ export type StartRunQuery = (
 
 export interface SdkRunProcessorDeps {
 	startRunQuery: StartRunQuery;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 	startStopDeadline?: StartStopDeadline;
 }
 

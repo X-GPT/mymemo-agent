@@ -3,7 +3,7 @@ import {
 	type ConversationOwner,
 	renewConversationLeaseTx,
 } from "@mymemo/agent-db/conversation-ownership";
-import { toMessage, type WorkerLogger } from "./logger";
+import { type RuntimeLogger, toMessage } from "./logger";
 
 export type OwnershipLeaseRenewal =
 	| { type: "renewed" }
@@ -16,7 +16,7 @@ export async function renewOwnershipLease(input: {
 	db: Database;
 	owner: ConversationOwner;
 	workerId: string;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 }): Promise<OwnershipLeaseRenewal> {
 	let ownerUntil: Date | null;
 	try {

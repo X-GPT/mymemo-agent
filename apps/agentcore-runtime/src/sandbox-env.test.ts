@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { buildModelClientConfig } from "./model-client";
+import { loadRuntimeConfigFromEnv } from "./runtime-config";
 import { buildSandboxEnv } from "./sandbox-env";
-import { loadWorkerConfigFromEnv } from "./worker-config";
 
 const binding = {
 	userId: "member-1",
@@ -22,8 +22,8 @@ describe("buildSandboxEnv — credential boundary", () => {
 	});
 
 	it("carries no trusted-runtime secret or artifact access material", () => {
-		// The worker config holds OpenRouter/KB/E2B secrets...
-		const config = loadWorkerConfigFromEnv({
+		// The Runtime config holds OpenRouter/KB/E2B secrets...
+		const config = loadRuntimeConfigFromEnv({
 			AGENT_DATABASE_URL: "postgresql://u:p@localhost:5432/mymemo_agent",
 			KB_DATABASE_URL: "postgresql://r:r@localhost:5432/mymemo_kb",
 			OPENROUTER_API_KEY: "sk-or-secret",
@@ -64,7 +64,7 @@ describe("buildSandboxEnv — credential boundary", () => {
 	});
 
 	it("is disjoint from the model client env built for the same run", () => {
-		// Task 7.1: model headers are injected only in the trusted worker. The
+		// Task 7.1: model headers are injected only in the trusted Runtime. The
 		// two env builders for one run must share no keys and no secret values,
 		// so an E2B tool call can never see the provider credential.
 		const modelClient = buildModelClientConfig({

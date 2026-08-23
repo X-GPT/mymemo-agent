@@ -10,7 +10,7 @@ import { TEMPLATE_NAME } from "../../e2b-template/template";
 import type { FileToolLimits } from "../file-tools/file-tools";
 import { runReadFileTool, runWriteFileTool } from "../file-tools/file-tools";
 import { parseToolResult, runFileToolsContract } from "../file-tools/testing";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import {
 	createE2bSandboxProvisioner,
 	type ProvisionedSandbox,
@@ -21,7 +21,7 @@ const TEMPLATE = process.env.WORKER_E2B_TEMPLATE ?? TEMPLATE_NAME;
 const LIVE = !!API_KEY;
 const TEST_TIMEOUT_MS = 180_000;
 
-const noopLogger: WorkerLogger = {
+const noopLogger: RuntimeLogger = {
 	info: () => {},
 	warn: () => {},
 	error: () => {},

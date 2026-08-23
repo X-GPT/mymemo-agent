@@ -1,7 +1,7 @@
 import type { Db } from "./db";
 
 /**
- * Read-side of the MyMemo knowledge base, FTS-only. This worker path is the sole
+ * Read-side of the MyMemo knowledge base, FTS-only. This Runtime path is the sole
  * implementation of scoped document access since the split runtime replaced the
  * prototype gateway's document module (ADR-0002).
  *
@@ -254,7 +254,7 @@ export interface FetchedDocument {
 /**
  * Fetch a single document's content, pinned to the workspace and clipped to
  * `maxChars` server-side so a large document can never dump hundreds of KB
- * into the worker. The full length is read alongside so truncation is
+ * into the Runtime. The full length is read alongside so truncation is
  * reported, not silent.
  */
 export async function fetchDocument(

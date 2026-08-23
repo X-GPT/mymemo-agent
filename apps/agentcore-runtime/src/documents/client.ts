@@ -1,4 +1,4 @@
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import {
 	type DocumentAccessBinding,
 	type DocumentAccessOperation,
@@ -21,7 +21,7 @@ import type { FrozenConversationScope } from "./scope";
 
 /**
  * The scoped document query client (plan Task 6.1): the single trusted path
- * from the worker's agent loop to the read-only KB. Applies the conversation's
+ * from the Runtime's agent loop to the read-only KB. Applies the Conversation's
  * frozen scope server-side before any query and audits every access to
  * `document_access_events`. Model-facing tools (ListDocuments,
  * SearchDocuments, and LoadDocuments) call these named methods only — no Db
@@ -63,7 +63,7 @@ export interface DocumentSearchConfig {
 interface ClientOptions {
 	kbDb: Db;
 	agentDb: Db;
-	logger: WorkerLogger;
+	logger: RuntimeLogger;
 }
 
 const DEFAULT_SEARCH_LIMIT = 8;
@@ -100,7 +100,7 @@ export function createScopedDocumentQueryClient(
 	/**
 	 * Reduce an infrastructure failure (KB or audit ledger) to a fixed,
 	 * model-safe message. The underlying cause — which may carry SQL or a
-	 * connection string — goes only to the worker log. Scope rejections are
+	 * connection string — goes only to the Runtime log. Scope rejections are
 	 * already model-safe and pass through untouched.
 	 */
 	function bounded(
@@ -267,7 +267,7 @@ export function createScopedDocumentQueryClient(
  */
 export function createDocumentSearch(
 	config: DocumentSearchConfig,
-	logger: WorkerLogger,
+	logger: RuntimeLogger,
 ): ScopedDocumentQueryClient {
 	return createScopedDocumentQueryClient({
 		kbDb: createKbDb(config.kbDatabaseUrl),

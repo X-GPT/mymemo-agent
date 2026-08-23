@@ -23,7 +23,7 @@ import {
 	createArtifactPublisher,
 	withArtifactPublication,
 } from "../../../../../apps/agentcore-runtime/src/artifacts/artifact-publication";
-import type { WorkerLogger } from "../../../../../apps/agentcore-runtime/src/logger";
+import type { RuntimeLogger } from "../../../../../apps/agentcore-runtime/src/logger";
 import type { SupervisedQuery } from "../../../../../apps/agentcore-runtime/src/sdk/agent-stream";
 import { createSdkRunProcessor } from "../../../../../apps/agentcore-runtime/src/sdk/run-processor";
 import { withNoSessionMirrorEvidence } from "../../../../../apps/agentcore-runtime/src/sdk/testing/session-mirror-fixtures";
@@ -41,7 +41,7 @@ const identityHeaders = {
 	"x-member-code": "member-1",
 	"x-partner-code": "partner-1",
 };
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 const encoder = new TextEncoder();
 
 class AcceptanceWorkspace implements ArtifactWorkspace {
@@ -109,7 +109,7 @@ async function readBody(body: ReadableStream<Uint8Array>): Promise<Uint8Array> {
 function createDeliveryHarness(
 	tdb: TestDb,
 	workspace: AcceptanceWorkspace,
-	logger: WorkerLogger = silentLogger,
+	logger: RuntimeLogger = silentLogger,
 ) {
 	const storedObjects = new Map<string, Uint8Array>();
 	let uploadOverride: ArtifactObjectStore["upload"] | undefined;
@@ -381,7 +381,7 @@ describe("Downloadable artifact delivery acceptance", () => {
 		const tdb = await createTestDatabase();
 		try {
 			const logEvents: Record<string, unknown>[] = [];
-			const logger: WorkerLogger = {
+			const logger: RuntimeLogger = {
 				info() {},
 				warn(event) {
 					logEvents.push(event);

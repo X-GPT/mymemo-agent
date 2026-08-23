@@ -58,7 +58,7 @@ const TOOL_FAILED_RESULT = { message: "Tool failed" } as const;
  * short public names. Only names in this map may ever reach the client stream;
  * unknown, built-in, or permission-denied tool names map to `null` and their
  * events are omitted. A drift pin ties this map's domain to the executor tools
- * the worker actually builds.
+ * the Runtime actually builds.
  */
 const PUBLIC_TOOL_NAMES_BY_EXECUTOR_NAME: ReadonlyMap<string, PublicToolName> =
 	new Map<string, PublicToolName>([

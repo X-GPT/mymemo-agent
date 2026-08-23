@@ -18,7 +18,7 @@ import {
 	seedAgentSessionFenceConversation,
 	type TestDb,
 } from "@mymemo/agent-db/testing";
-import type { WorkerLogger } from "../logger";
+import type { RuntimeLogger } from "../logger";
 import {
 	buildAgentSessionQueryConfig,
 	conversationWorkingDirectory,
@@ -26,7 +26,7 @@ import {
 } from "./session-store";
 
 let tdb: TestDb;
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 
 function storeBinding(conversationId: string) {
 	return {

@@ -38,10 +38,10 @@ function platformBinaryRequest(
 }
 
 /**
- * Resolve and exec-verify the SDK's native Claude Code binary before the worker
+ * Resolve and exec-verify the SDK's native Claude Code binary before the Runtime
  * can acquire a Run. Resolution starts from the SDK package directory because
  * the native platform packages are its optional dependencies, not the
- * worker's. On Linux the package name deliberately omits `-musl`: the worker
+ * Runtime's. On Linux the package name deliberately omits `-musl`: the Runtime
  * image is Debian/glibc and the SDK's musl-first default cannot execute there.
  */
 export function resolveAndVerifyClaudeCodeExecutable(
@@ -56,7 +56,7 @@ export function resolveAndVerifyClaudeCodeExecutable(
 	try {
 		sdkEntry = resolve("@anthropic-ai/claude-agent-sdk");
 	} catch (cause) {
-		throw new Error("Could not resolve the Claude Agent SDK at worker boot", {
+		throw new Error("Could not resolve the Claude Agent SDK at Runtime boot", {
 			cause,
 		});
 	}

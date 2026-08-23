@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMaintenanceConfigFromEnv } from "../apps/agent-maintenance/src/config";
-import { loadWorkerConfigFromEnv } from "../apps/agentcore-runtime/src/worker-config";
+import { loadRuntimeConfigFromEnv } from "../apps/agentcore-runtime/src/runtime-config";
 import { loadApiConfigFromEnv } from "../apps/chat-api/src/config/env";
 
 const root = process.cwd();
@@ -64,7 +64,7 @@ describe("agent deployment behavior", () => {
 		).not.toThrow();
 
 		expect(() =>
-			loadWorkerConfigFromEnv({
+			loadRuntimeConfigFromEnv({
 				...common,
 				KB_DATABASE_URL: "postgresql://kb:kb@db.example.com:5432/mymemo_kb",
 				OPENROUTER_API_KEY: "openrouter-test-key",

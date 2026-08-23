@@ -20,10 +20,10 @@ import {
 } from "@mymemo/agent-db/testing";
 import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { eq, sql } from "drizzle-orm";
-import type { WorkerLogger } from "./logger";
+import type { RuntimeLogger } from "./logger";
 import { createRunServing } from "./run-serving";
 
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 
 let tdb: TestDb;
 
