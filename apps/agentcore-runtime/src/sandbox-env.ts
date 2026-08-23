@@ -8,20 +8,3 @@ export interface RunBinding {
 	runId: string;
 	sandboxId: string;
 }
-
-/**
- * Build the environment placed on an E2B sandbox for a run. By design this
- * accepts ONLY the Run binding — never the Runtime config — so no provider key,
- * KB credential, or E2B key can structurally reach the untrusted sandbox. The
- * sandbox gets per-run executor metadata that cannot grant provider or document
- * access (split-runtime credential model).
- */
-export function buildSandboxEnv(binding: RunBinding): Record<string, string> {
-	return {
-		MYMEMO_USER_ID: binding.userId,
-		MYMEMO_CONVERSATION_ID: binding.conversationId,
-		MYMEMO_RUN_ID: binding.runId,
-		MYMEMO_SANDBOX_ID: binding.sandboxId,
-		MYMEMO_RUNTIME: "agentcore-e2b",
-	};
-}

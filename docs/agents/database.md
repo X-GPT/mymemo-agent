@@ -6,7 +6,7 @@ Use this guide for changes to `packages/agent-db`, Drizzle consumers, Run state,
 
 `packages/agent-db` owns the writable `mymemo_agent` schema, Drizzle migrations, database client, canonical `run_events.type` vocabulary, and transaction helpers shared by chat-api, AgentCore, and maintenance. Applications may bind or compose these helpers but must not create competing definitions.
 
-The package exposes concurrency-critical operations including `acquireAgentCoreDispatchTx`, `appendRunEventTx`, `transitionRunTerminalTx`, `requestRunInterruptionTx`, `reclaimConversationTx`, `expireUnownedQueuedRunsTx`, `admitQueuedRunTx`, `loadExecutingRunTx`, and `loadRunStartedTx`.
+The package exposes concurrency-critical operations including `acquireAgentCoreDispatchTx`, `appendRunEventsTx`, `transitionRunTerminalTx`, `requestRunInterruptionTx`, `reclaimConversationTx`, `expireUnownedQueuedRunsTx`, `admitQueuedRunTx`, `loadExecutingRunTx`, and `loadRunStartedTx`.
 
 chat-api imports the shared client and schema directly. Its migration entrypoint imports `MIGRATIONS_DIR` from `@mymemo/agent-db/migrations` and applies `packages/agent-db/drizzle/`.
 

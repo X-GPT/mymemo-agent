@@ -7,7 +7,7 @@ import {
 import type { SandboxCommandClient } from "../bash-tool/bash-tool";
 import { DEFAULT_COMMAND_CONTROL_DIR } from "../bash-tool/bash-wrapper";
 import type { SandboxFileClient } from "../file-tools/file-tools";
-import type { RuntimeLogger } from "../logger";
+import { type RuntimeLogger, toMessage } from "../logger";
 import { type CommandSandbox, E2BCommandClient } from "./command-client";
 import { E2BFileClient, type FileSandbox } from "./file-client";
 
@@ -198,8 +198,4 @@ export function createE2bSandboxProvisioner(
 				},
 			}),
 	});
-}
-
-function toMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

@@ -1,4 +1,4 @@
-import type { ConversationRef } from "@/features/conversation-store";
+import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 /** Public metadata returned by the complete current-artifact list. */
 export interface ArtifactMetadata {

@@ -175,8 +175,9 @@ export const conversations = pgTable(
  * details, artifact data, or credentials can enter the queue boundary through
  * this record. Publication uses an expiring database lease; a confirmed send
  * advances `published_at`, while an ambiguous send becomes eligible again only
- * after `publish_claim_until`. Manual replay is audited on the same immutable
- * dispatch identity.
+ * after `publish_claim_until`. The deprecated replay columns remain for one
+ * rolling-deploy compatibility release; the current publisher does not read or
+ * write them.
  */
 export const agentCoreDispatchOutbox = pgTable(
 	"agentcore_dispatch_outbox",

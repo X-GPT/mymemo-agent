@@ -1,14 +1,4 @@
-import {
-	and,
-	eq,
-	gt,
-	inArray,
-	isNotNull,
-	isNull,
-	lte,
-	or,
-	sql,
-} from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
@@ -155,7 +145,12 @@ export async function claimAgentCoreDispatchesTx(
 
 	return await db.transaction(async (tx) => {
 		const candidates = await tx
-			.select()
+			.select({
+				runId: agentCoreDispatchOutbox.runId,
+				userId: agentCoreDispatchOutbox.userId,
+				conversationId: agentCoreDispatchOutbox.conversationId,
+				admittedAt: agentCoreDispatchOutbox.admittedAt,
+			})
 			.from(agentCoreDispatchOutbox)
 			.where(
 				and(
@@ -166,13 +161,7 @@ export async function claimAgentCoreDispatchesTx(
 						isNull(agentCoreDispatchOutbox.publishClaimUntil),
 						lte(agentCoreDispatchOutbox.publishClaimUntil, now),
 					),
-					or(
-						isNull(agentCoreDispatchOutbox.publishedAt),
-						and(
-							isNotNull(agentCoreDispatchOutbox.replayRequestedAt),
-							sql`${agentCoreDispatchOutbox.replayRequestedAt} > ${agentCoreDispatchOutbox.publishedAt}`,
-						),
-					),
+					isNull(agentCoreDispatchOutbox.publishedAt),
 				),
 			)
 			.orderBy(
@@ -234,25 +223,6 @@ export async function confirmAgentCoreDispatchPublishedTx(
 	return confirmed.length > 0;
 }
 
-/** Audit an operator replay request without disturbing a live publish lease. */
-export async function requestAgentCoreDispatchReplayTx(
-	db: Database,
-	input: { runId: string; requestedBy: string; now?: Date },
-): Promise<boolean> {
-	if (input.requestedBy.trim() === "") {
-		throw new Error("manual replay requires an operator identity");
-	}
-	const replay = await db
-		.update(agentCoreDispatchOutbox)
-		.set({
-			replayRequestedAt: input.now ?? new Date(),
-			replayRequestedBy: input.requestedBy,
-		})
-		.where(eq(agentCoreDispatchOutbox.runId, input.runId))
-		.returning({ runId: agentCoreDispatchOutbox.runId });
-	return replay.length > 0;
-}
-
 /**
  * Acquire one exact AgentCore dispatch. The Conversation is locked before its
  * Run to preserve the global Ownership lock order. Ownership establishment and
@@ -305,7 +275,11 @@ export async function acquireAgentCoreDispatchTx(
 			)
 			.for("update");
 		const [outbox] = await tx
-			.select()
+			.select({
+				userId: agentCoreDispatchOutbox.userId,
+				conversationId: agentCoreDispatchOutbox.conversationId,
+				admittedAt: agentCoreDispatchOutbox.admittedAt,
+			})
 			.from(agentCoreDispatchOutbox)
 			.where(eq(agentCoreDispatchOutbox.runId, input.dispatch.runId))
 			.limit(1);

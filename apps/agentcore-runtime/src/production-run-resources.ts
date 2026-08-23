@@ -6,7 +6,6 @@ import { createDatabase } from "@mymemo/agent-db/client";
 import {
 	createLiveStreamTelemetry,
 	createRedisLiveStreamRelay,
-	type LiveStreamService,
 } from "@mymemo/live-text";
 import { Sandbox } from "e2b";
 import {
@@ -45,13 +44,11 @@ export function createProductionRunResources(options: {
 	config: RuntimeConfig;
 	logger: RuntimeLogger;
 	processEnv?: Record<string, string | undefined>;
-	telemetryService?: LiveStreamService;
-	artifactObjectKeyPrefix?: string;
 	artifactObjectStore?: ArtifactObjectStore;
 }) {
 	const { config, logger } = options;
 	const liveStreamTelemetry = createLiveStreamTelemetry(
-		options.telemetryService ?? "agentcore-runtime",
+		"agentcore-runtime",
 		logger,
 	);
 	const liveStreamRelay = createRedisLiveStreamRelay({
@@ -68,7 +65,6 @@ export function createProductionRunResources(options: {
 		objectStore:
 			options.artifactObjectStore ??
 			createS3ArtifactObjectStore(config.artifact),
-		objectKeyPrefix: options.artifactObjectKeyPrefix,
 	});
 	const startRunQuery = createStartRunQuery({
 		db,

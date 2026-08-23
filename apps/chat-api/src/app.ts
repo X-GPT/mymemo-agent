@@ -3,9 +3,9 @@ import { requestId } from "hono/request-id";
 import { pinoLogger } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import { type AppDeps, type AppEnv, createDeps } from "./deps";
-import { artifactRoutes } from "./features/artifacts";
-import { conversationHistoryRoutes } from "./features/conversation-history";
-import { conversationsRoutes } from "./features/conversations";
+import artifactRoutes from "./features/artifacts/artifacts.route";
+import conversationHistoryRoutes from "./features/conversation-history/conversation-history.route";
+import conversationsRoutes from "./features/conversations/conversations.route";
 
 /**
  * Build the app from a validated config. Dependencies are injectable so route

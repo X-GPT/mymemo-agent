@@ -2,8 +2,9 @@ import type {
 	AcquireAgentCoreDispatchResult,
 	AgentCoreDispatchIdentity,
 } from "@mymemo/agent-db/agentcore-dispatch";
-import { serializeAgentCoreDispatchEnvelope as serializeSharedAgentCoreDispatchEnvelope } from "@mymemo/agentcore-dispatch/envelope";
 import { z } from "zod";
+
+export { serializeAgentCoreDispatchEnvelope } from "@mymemo/agentcore-dispatch/envelope";
 
 const nonEmptyString = z.string().trim().min(1);
 
@@ -78,12 +79,6 @@ function parseJson(value: string, invalid: () => Error): unknown {
 	} catch {
 		throw invalid();
 	}
-}
-
-export function serializeAgentCoreDispatchEnvelope(
-	dispatch: AgentCoreDispatchIdentity,
-): string {
-	return serializeSharedAgentCoreDispatchEnvelope(dispatch);
 }
 
 export function parseAgentCoreDispatchEnvelope(

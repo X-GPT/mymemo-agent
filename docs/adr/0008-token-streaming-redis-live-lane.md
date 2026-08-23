@@ -18,7 +18,7 @@ Assistant message, and chat-api projects it as the authoritative, replayable
 `text_commit`. Coordinated client rollout remains a release concern.
 
 A smooth Live preview cannot use the durable tier for every fragment: one
-`text_delta` per token would mean hundreds of fenced `appendRunEventTx` and
+`text_delta` per token would mean hundreds of fenced `appendRunEventsTx` and
 `NOTIFY` transactions per turn. The accepted design therefore separates the
 provisional Live preview from authoritative Assistant-message storage.
 

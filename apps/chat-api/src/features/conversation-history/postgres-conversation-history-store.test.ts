@@ -11,7 +11,7 @@ import { RunEventType } from "@mymemo/agent-db/run-events";
 import { conversations, runEvents, runs } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { and, eq, sql } from "drizzle-orm";
-import { PostgresConversationStore } from "@/features/conversation-store";
+import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
 import { PostgresConversationHistoryStore } from "./postgres-conversation-history-store";
 
 let tdb: TestDb;
