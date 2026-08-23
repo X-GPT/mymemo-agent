@@ -14,9 +14,8 @@ import {
 } from "./artifacts/artifact-publication";
 import { createS3ArtifactObjectStore } from "./artifacts/s3-artifact-object-store";
 import { DEFAULT_BASH_TOOL_LIMITS } from "./bash-tool/bash-tool";
-import { createE2bSandboxJanitor } from "./cleanup/e2b-janitor";
-import type { WorkerConfig } from "./config/env";
 import { createDocumentSearch } from "./documents/client";
+import { createE2bSandboxJanitor } from "./e2b/sandbox-janitor";
 import { createE2bSandboxProvisioner } from "./e2b/sandbox-provisioner";
 import type { FileToolLimits } from "./file-tools/file-tools";
 import type { WorkerLogger } from "./logger";
@@ -24,6 +23,7 @@ import { buildModelClientConfig } from "./model-client";
 import { resolveAndVerifyClaudeCodeExecutable } from "./sdk/claude-code-executable";
 import { createSdkRunProcessor } from "./sdk/run-processor";
 import { createStartRunQuery } from "./sdk/start-run-query";
+import type { WorkerConfig } from "./worker-config";
 
 const SANDBOX_IDLE_MS = 300_000;
 const FILE_LIMITS: FileToolLimits = {

@@ -1,11 +1,11 @@
 # Trusted Run serving
 
-Use this guide for changes under `packages/agent-worker`, shared Run-serving behavior, Claude Agent SDK integration, E2B provisioning, Searchable document tools, or artifact publication.
+Use this guide for changes under `apps/agentcore-runtime`, Run-serving behavior, Claude Agent SDK integration, E2B provisioning, Searchable document tools, or artifact publication.
 
-`packages/agent-worker` is now a shared workspace package. It has no production
-entrypoint, Dockerfile, queue poller, Claim loop, or health server. AgentCore is
-the sole execution runtime; `apps/agent-maintenance` is the sole global
-maintenance process.
+`apps/agentcore-runtime` is the sole production execution runtime and owns its
+Run-serving implementation directly. `packages/agent-worker` now contains only
+the maintenance implementation composed by `apps/agent-maintenance`; it has no
+Run-serving path.
 
 ## Exact acquisition and Run serving
 
@@ -14,9 +14,9 @@ that queued Run through `acquireAgentCoreDispatchTx`. Acquisition starts the Run
 and establishes Conversation Ownership in one transaction. Runtime concurrency
 is one invocation; there is no snapshot drain or alternative runtime path.
 
-`src/maintenance-runner.ts` implements queued-Run expiration, fenced
-Reclamation, and asynchronous resource cleanup. Only the independently healthy
-`apps/agent-maintenance` service composes it in production.
+`packages/agent-worker/src/maintenance-runner.ts` implements queued-Run
+expiration, fenced Reclamation, and asynchronous resource cleanup. Only the
+independently healthy `apps/agent-maintenance` service composes it in production.
 
 `src/run-serving.ts` owns an already-running Run's lease renewal, durable interruption observation, Live Stream production and degradation, processor supervision, artifact publication, and terminalization. It contains no Claim, ordering, expiration, Reclamation, or release behavior and returns a typed terminal, Ownership-loss, or shutdown result. See [ADR-0023](../adr/0023-share-run-serving-without-sharing-runtime-control-loops.md).
 

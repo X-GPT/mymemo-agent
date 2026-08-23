@@ -17,7 +17,8 @@ RUN find apps packages -type f ! -name package.json -delete \
 
 FROM base AS install
 COPY --from=manifests /usr/src/app /temp/prod
-RUN cd /temp/prod && bun install --frozen-lockfile --production
+RUN cd /temp/prod \
+ && bun install --frozen-lockfile --production --filter agentcore-runtime
 
 FROM base AS runtime-files
 
@@ -34,7 +35,6 @@ FROM base AS local
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agentcore-runtime apps/agentcore-runtime
 COPY apps/agentcore-dispatch-consumer apps/agentcore-dispatch-consumer
-COPY packages/agent-worker packages/agent-worker
 COPY packages/agent-db packages/agent-db
 COPY packages/agentcore-dispatch packages/agentcore-dispatch
 COPY packages/live-text packages/live-text
@@ -53,7 +53,6 @@ COPY apps/agentcore-runtime/src apps/agentcore-runtime/src
 COPY apps/agentcore-runtime/package.json apps/agentcore-runtime/
 COPY apps/agentcore-runtime/tsconfig.json apps/agentcore-runtime/
 COPY apps/agentcore-dispatch-consumer apps/agentcore-dispatch-consumer
-COPY packages/agent-worker packages/agent-worker
 COPY packages/agent-db packages/agent-db
 COPY packages/agentcore-dispatch packages/agentcore-dispatch
 COPY packages/live-text packages/live-text

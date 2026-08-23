@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { loadWorkerConfigFromEnv } from "./config/env";
 import { buildModelClientConfig } from "./model-client";
 import { buildSandboxEnv } from "./sandbox-env";
+import { loadWorkerConfigFromEnv } from "./worker-config";
 
 const binding = {
 	userId: "member-1",

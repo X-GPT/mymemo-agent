@@ -4,8 +4,8 @@ The agent's `Grep` tool and Bash filename discovery use `rg` inside the run sand
 artifact publication uses `python3` to pin validated files by descriptor before
 streaming them. E2B's stock `base` template ships Python but lacks ripgrep, so
 every run sandbox uses this custom template and verifies both runtime tools.
-Workers reference it by
-the **required** `WORKER_E2B_TEMPLATE` config — a worker refuses to boot
+The Runtime references it by
+the **required** `WORKER_E2B_TEMPLATE` config — the Runtime refuses to boot
 without it.
 
 ## What the template contains
@@ -30,7 +30,7 @@ re-verify.
 ## Build
 
 ```bash
-# From packages/agent-worker (E2B_API_KEY comes from .env or the environment):
+# From apps/agentcore-runtime (E2B_API_KEY comes from .env or the environment):
 bun run template:build            # builds/updates the alias mymemo-agent-sandbox
 bun run template:build my-name    # optional: build under a different name/tag
 ```

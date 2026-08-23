@@ -5,9 +5,9 @@ import {
 	renewConversationLeaseTx,
 } from "@mymemo/agent-db/conversation-ownership";
 import { loadExecutingRunTx } from "@mymemo/agent-db/run-store";
-import { toMessage, type WorkerLogger } from "agent-worker/logger";
-import type { RunServing } from "agent-worker/run-serving";
 import type { CommittedAgentCoreAcquisition } from "agentcore-dispatch-consumer/acquisition-boundary";
+import { toMessage, type WorkerLogger } from "./logger";
+import type { RunServing } from "./run-serving";
 import type { AgentCoreRuntimeDependencies } from "./runtime";
 
 /** Bind exact AgentCore acquisition to shared already-running Run serving

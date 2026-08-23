@@ -1,13 +1,10 @@
-import {
-	loadWorkerConfigFromEnv,
-	type WorkerConfig,
-} from "agent-worker/config";
 import { type Env, requireEnv } from "agentcore-dispatch-consumer/config-utils";
 import {
 	resolveVerifiedAgentDatabaseUrl,
 	verifiedDatabaseUrl,
 } from "agentcore-dispatch-consumer/secret-config";
 import { RUNTIME_SHUTDOWN_TIMEOUT_MS } from "./constants";
+import { loadWorkerConfigFromEnv, type WorkerConfig } from "./worker-config";
 
 const AMBIENT_SECRET_NAMES = [
 	"DB_PASSWORD",

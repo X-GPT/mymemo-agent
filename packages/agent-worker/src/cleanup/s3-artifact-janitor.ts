@@ -3,8 +3,12 @@ import {
 	type DeleteObjectCommandInput,
 	S3Client,
 } from "@aws-sdk/client-s3";
-import type { ArtifactBucketConfig } from "../artifacts/s3-artifact-object-store";
 import type { ArtifactObjectJanitor } from "./cleanup";
+
+export interface ArtifactBucketConfig {
+	bucket: string;
+	region: string;
+}
 
 export type DeleteArtifactObject = (
 	request: DeleteObjectCommandInput,

@@ -9,10 +9,11 @@ all four repositories, including `mymemo/agentcore-runtime`; the production
 root resolves the Runtime repository by its exact name.
 
 Amended (2026-08-22) by the Fargate-retirement release: `agent-worker` is now a
-shared code package rather than deployed compute. `agent-maintenance` owns its
-former global maintenance responsibilities. The targeted pre-migration apply
-includes the migration task definition and its Terraform-declared prerequisites
-without a separate plan classifier.
+maintenance-only code package rather than deployed compute. `agent-maintenance`
+owns its former global maintenance responsibilities, while Run serving is local
+to `apps/agentcore-runtime`. The targeted pre-migration apply includes the
+migration task definition and its Terraform-declared prerequisites without a
+separate plan classifier.
 
 The ECS applications, dedicated Dispatch publisher, consumer Lambda, and
 AgentCore Runtime share `infra/terraform` and the
@@ -25,8 +26,8 @@ created; it does not independently deploy any executable surface.
 
 This is a lifecycle boundary, not a process or authority merger. The publisher,
 consumer, Runtime, chat-api, and `agent-maintenance` keep their separate compute
-and IAM roles. `agent-worker` supplies shared Runtime and maintenance code but
-is not deployed. The SSM Dispatch parameter remains an operator-owned
+and IAM roles. `agent-worker` supplies maintenance code but is not deployed.
+The SSM Dispatch parameter remains an operator-owned
 fail-closed control whose value Terraform ignores after creation.
 
 One state does not mean one undifferentiated apply phase. Every release is

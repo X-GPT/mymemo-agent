@@ -10,6 +10,11 @@
 import { createAgentCoreAcquisitionBoundary } from "../apps/agentcore-dispatch-consumer/src/acquisition-boundary";
 import { serializeAgentCoreDispatchEnvelope } from "../apps/agentcore-dispatch-consumer/src/contract";
 import { createAgentCoreExecutionServices } from "../apps/agentcore-runtime/src/execution-services";
+import { createLogger, toMessage } from "../apps/agentcore-runtime/src/logger";
+import {
+	createRunServing,
+	type RunProcessor,
+} from "../apps/agentcore-runtime/src/run-serving";
 import { createAgentCoreRuntime } from "../apps/agentcore-runtime/src/runtime";
 import {
 	AGENTCORE_RUNTIME_SESSION_HEADER,
@@ -21,11 +26,6 @@ import {
 	confirmAgentCoreDispatchPublishedTx,
 } from "../packages/agent-db/src/agentcore-dispatch";
 import { createDatabase } from "../packages/agent-db/src/client";
-import { createLogger, toMessage } from "../packages/agent-worker/src/logger";
-import {
-	createRunServing,
-	type RunProcessor,
-} from "../packages/agent-worker/src/run-serving";
 import { createRedisLiveStreamRelay } from "../packages/live-text/src";
 
 const agentDatabaseUrl = process.env.AGENT_DATABASE_URL;

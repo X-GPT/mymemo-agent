@@ -2,38 +2,24 @@
 	"name": "agent-worker",
 	"exports": {
 		"./advisory-lock": "./src/cleanup/advisory-lock.ts",
-		"./artifact-object-store": "./src/artifacts/s3-artifact-object-store.ts",
-		"./claude-code-executable": "./src/sdk/claude-code-executable.ts",
-		"./config": "./src/config/env.ts",
 		"./e2b-janitor": "./src/cleanup/e2b-janitor.ts",
 		"./logger": "./src/logger.ts",
 		"./maintenance-runner": "./src/maintenance-runner.ts",
-		"./production-run-resources": "./src/production-run-resources.ts",
-		"./run-serving": "./src/run-serving.ts",
 		"./s3-artifact-janitor": "./src/cleanup/s3-artifact-janitor.ts"
 	},
 	"scripts": {
 		"test": "bun test --timeout=30000",
-		"template:build": "bun run e2b-template/build.ts",
-		"template:verify": "bun run e2b-template/verify.ts",
 		"format": "biome format --write",
 		"lint": "biome lint --write",
 		"check": "biome check --write"
 	},
 	"dependencies": {
-		"@ag-ui/core": "^0.0.57",
-		"@anthropic-ai/claude-agent-sdk": "0.3.233",
-		"@anthropic-ai/sdk": "^0.113.0",
 		"@aws-sdk/client-s3": "^3.883.0",
-		"@modelcontextprotocol/sdk": "^1.29.0",
 		"@mymemo/agent-db": "workspace:*",
-		"@mymemo/live-text": "workspace:*",
-		"ajv": "^8.18.0",
 		"drizzle-orm": "^0.45.2",
 		"e2b": "^2.14.0",
 		"pg": "^8.22.0",
-		"pino": "^9.14.0",
-		"zod": "4.3.6"
+		"pino": "^9.14.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.11",

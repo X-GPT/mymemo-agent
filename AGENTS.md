@@ -15,7 +15,7 @@ MyMemo is a Bun-workspace TypeScript monorepo for an AI Conversation service, it
 - [Development and verification](docs/agents/development.md) — commands, formatting, tests, and the Drizzle dependency invariant
 - [System architecture](docs/agents/architecture.md) — service responsibilities, persistence, and module boundaries
 - [Chat API behavior](docs/agents/chat-api.md) — routes, Run admission, history, artifacts, and Scopes
-- [Agent worker runtime](docs/agents/agent-worker.md) — Run serving, SDK streams, E2B, Searchable documents, and artifacts
+- [AgentCore Runtime](docs/agents/agentcore-runtime.md) — Run serving, SDK streams, E2B, Searchable documents, and artifacts
 - [Database and concurrency](docs/agents/database.md) — schema ownership, fenced stores, and Postgres-only race tests
 - [Security boundaries](docs/agents/security.md) — identity, exposure gating, sandbox trust, and secret ownership
 - [Configuration and operations](docs/agents/configuration.md) — environment variables and AWS CLI conventions

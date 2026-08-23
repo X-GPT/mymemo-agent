@@ -28,12 +28,16 @@ describe("AgentCore Runtime image contract", () => {
 			root,
 			join(root, "apps/agentcore-runtime/src/index.ts"),
 		);
+		expect(
+			[...graph].some((file) =>
+				file.endsWith("/apps/agentcore-runtime/src/run-serving.ts"),
+			),
+		).toBe(true);
 		for (const forbidden of [
-			"/packages/agent-worker/src/run-loop.ts",
-			"/packages/agent-worker/src/maintenance-runner.ts",
+			"/packages/agent-worker/",
 			"/packages/agentcore-dispatch/src/sqs-queue.ts",
 		]) {
-			expect([...graph].some((file) => file.endsWith(forbidden))).toBe(false);
+			expect([...graph].some((file) => file.includes(forbidden))).toBe(false);
 		}
 	});
 });

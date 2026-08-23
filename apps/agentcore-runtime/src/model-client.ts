@@ -1,4 +1,4 @@
-import type { WorkerConfig } from "./config/env";
+import type { WorkerConfig } from "./worker-config";
 
 /** Provider credentials stay in AgentCore Runtime and never enter E2B. */
 export interface ModelClientConfig {

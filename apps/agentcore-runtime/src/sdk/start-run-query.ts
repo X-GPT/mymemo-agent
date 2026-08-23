@@ -19,9 +19,9 @@ import {
 } from "../artifacts/artifact-publication";
 import { ARTIFACT_ROOT } from "../artifacts/artifact-workspace";
 import type { BashToolLimits } from "../bash-tool/bash-tool";
-import type { SandboxJanitor } from "../cleanup/cleanup";
 import type { ScopedDocumentQueryClient } from "../documents/client";
 import { parseFrozenScope } from "../documents/scope";
+import type { SandboxJanitor } from "../e2b/sandbox-janitor";
 import {
 	type ProvisionedSandbox,
 	SANDBOX_WORKSPACE_ROOT,

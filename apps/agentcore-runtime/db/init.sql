@@ -1,8 +1,8 @@
 -- Local KB seed for the docker-compose harness (MYM-31).
 --
--- The agent-worker's scoped document client reads this read-only KB schema
--- (packages/agent-worker/src/documents/) over KB_DATABASE_URL. This seed provides the
--- schema plus a small fixture so the worker's document search/load tools return
+-- AgentCore Runtime's scoped document client reads this read-only KB schema
+-- (apps/agentcore-runtime/src/documents/) over KB_DATABASE_URL. This seed provides the
+-- schema plus a small fixture so the Runtime's document search/load tools return
 -- real results for the seeded member in local development.
 --
 -- Scope model:

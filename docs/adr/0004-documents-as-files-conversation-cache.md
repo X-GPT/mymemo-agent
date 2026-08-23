@@ -5,7 +5,7 @@ Status: accepted
 The original split-runtime draft banned writing KB document content into the
 E2B workspace: search snippets and fetched documents were model context only.
 We reversed this. Full document content now reaches the agent as files:
-`LoadDocuments(documentIds)` runs in the trusted worker (the only holder of
+`LoadDocuments(documentIds)` runs in the trusted Runtime (the only holder of
 KB credentials), copies scope-checked, size-capped content into a reserved
 docs-cache directory in the conversation's sandbox workspace, and returns
 metadata only (`path`, `documentId`, `title`). The agent works over the files
@@ -43,6 +43,6 @@ of model context, run events, and tool-result persistence entirely.
   does by itself. A restored sandbox may arrive with an empty or stale cache;
   the agent reloads.
 - Any future "agent skill" packaging of search-and-load is prompt-layer
-  guidance over these same worker-backed tools. A sandbox-side script cannot
+  guidance over these same Runtime-backed tools. A sandbox-side script cannot
   reach the KB — that would resurrect the token/gateway machinery ADR-0001
   deletes.

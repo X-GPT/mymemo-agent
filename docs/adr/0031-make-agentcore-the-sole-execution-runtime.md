@@ -83,6 +83,8 @@ leaves the record available for retry.
 - Conversation responses and rows carry no execution-runtime discriminator.
 - Fargate execution code and its broad worker authority are removed rather than
   retained as a supported fallback.
+- Run-serving implementation is local to the sole AgentCore Runtime caller;
+  `agent-worker` retains only maintenance behavior.
 - Production images do not contain the local Dispatch bridge or its combined
   publisher-and-consumer dependency graph.
 - No one-use migration code rediscovers the already-established absence of

@@ -1,9 +1,6 @@
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { SSMClient } from "@aws-sdk/client-ssm";
 import { createSsmAgentCoreDispatchEnablementControl } from "@mymemo/agentcore-dispatch/ssm-control";
-import { createLogger, toMessage } from "agent-worker/logger";
-import { createProductionRunResources } from "agent-worker/production-run-resources";
-import { createRunServing } from "agent-worker/run-serving";
 import { createDatabaseAgentCoreAcquisitionBoundary } from "agentcore-dispatch-consumer/acquisition-boundary";
 import { createCurrentSecretReader } from "agentcore-dispatch-consumer/secret-config";
 import {
@@ -12,6 +9,9 @@ import {
 	resolveRuntimeWorkerConfig,
 } from "./config";
 import { createAgentCoreExecutionServices } from "./execution-services";
+import { createLogger, toMessage } from "./logger";
+import { createProductionRunResources } from "./production-run-resources";
+import { createRunServing } from "./run-serving";
 import { createAgentCoreRuntime } from "./runtime";
 
 export async function createProductionAgentCoreRuntime(options: {

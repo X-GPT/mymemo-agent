@@ -60,13 +60,13 @@ S3. `conversation_artifacts` holds one current record per
 size, content type, and timestamps. A separate internal `artifact_objects`
 ledger records every intended S3 key before upload and retains it until the key
 is either referenced by a current artifact or successfully deleted. This lets
-cleanup recover pending and superseded objects after a worker crash without
+cleanup recover pending and superseded objects after a Runtime crash without
 creating user-visible version history.
 
-The artifact bucket is private and the two trusted runtimes use separate ECS
-task roles. `agent-worker` may upload and asynchronously delete artifact objects;
-`chat-api` may read only the object named by an ownership-checked Postgres
-artifact record. Neither runtime needs bucket-wide listing, and S3 credentials
+The artifact bucket is private and the trusted services use separate task
+roles. AgentCore Runtime may upload artifact objects, `agent-maintenance` may
+delete ledger-selected objects, and `chat-api` may read only the object named by
+an ownership-checked Postgres artifact record. No service needs bucket-wide listing, and S3 credentials
 or presigned access are never placed in the untrusted sandbox.
 
 Terraform provisions a dedicated artifact bucket per environment with S3 Block

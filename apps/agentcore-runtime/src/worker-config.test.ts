@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { loadWorkerConfigFromEnv } from "./env";
+import { loadWorkerConfigFromEnv } from "./worker-config";
 
 /**
- * Worker env ownership (MYM-47 / MYM-45 boundary). `agent-worker` owns the
+ * Runtime env ownership (MYM-47 / MYM-45 boundary). AgentCore Runtime owns the
  * writable agent DB, the read-only KB, the OpenRouter provider credentials, and
  * the E2B key. It must refuse to boot when any required setting is missing.
  */

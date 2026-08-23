@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMaintenanceConfigFromEnv } from "../apps/agent-maintenance/src/config";
+import { loadWorkerConfigFromEnv } from "../apps/agentcore-runtime/src/worker-config";
 import { loadApiConfigFromEnv } from "../apps/chat-api/src/config/env";
-import { loadWorkerConfigFromEnv } from "../packages/agent-worker/src/config/env";
 
 const root = process.cwd();
 
