@@ -55,17 +55,17 @@ beforeEach(async () => {
 	await tdb.db.delete(conversations);
 });
 
-async function insertConversation(): Promise<void> {
-	await tdb.db.insert(conversations).values({
+async function insertConversation(database = tdb): Promise<void> {
+	await database.db.insert(conversations).values({
 		userId: exact.userId,
 		conversationId: exact.conversationId,
 		scope: "general",
 	});
 }
 
-async function admitRunWithDispatch(): Promise<void> {
-	await insertConversation();
-	await tdb.db.transaction(async (tx) => {
+async function admitRunWithDispatch(database = tdb): Promise<void> {
+	await insertConversation(database);
+	await database.db.transaction(async (tx) => {
 		await tx
 			.select({ conversationId: conversations.conversationId })
 			.from(conversations)
@@ -211,6 +211,33 @@ describe("Run-keyed AgentCore dispatch outbox", () => {
 		await expect(
 			loadOldestUnpublishedAgentCoreDispatchAdmittedAt(tdb.db),
 		).resolves.toBeNull();
+	});
+
+	it("keeps publisher and acquisition queries independent of deprecated replay columns", async () => {
+		const compatibilityDb = await createTestDatabase();
+		try {
+			await admitRunWithDispatch(compatibilityDb);
+			await compatibilityDb.db.execute(sql`
+				alter table ${agentCoreDispatchOutbox} drop column replay_requested_at
+			`);
+			await compatibilityDb.db.execute(sql`
+				alter table ${agentCoreDispatchOutbox} drop column replay_requested_by
+			`);
+
+			const [claimed] = await claimAgentCoreDispatchesTx(compatibilityDb.db, {
+				publisherId: "publisher-without-replay-columns",
+			});
+			if (!claimed) throw new Error("test dispatch was not claimed");
+
+			await expect(
+				acquireAgentCoreDispatchTx(compatibilityDb.db, {
+					dispatch: claimed,
+					workerId: "agentcore-without-replay-columns",
+				}),
+			).resolves.toMatchObject({ disposition: "acquired" });
+		} finally {
+			await compatibilityDb.close();
+		}
 	});
 });
 

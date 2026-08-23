@@ -145,7 +145,12 @@ export async function claimAgentCoreDispatchesTx(
 
 	return await db.transaction(async (tx) => {
 		const candidates = await tx
-			.select()
+			.select({
+				runId: agentCoreDispatchOutbox.runId,
+				userId: agentCoreDispatchOutbox.userId,
+				conversationId: agentCoreDispatchOutbox.conversationId,
+				admittedAt: agentCoreDispatchOutbox.admittedAt,
+			})
 			.from(agentCoreDispatchOutbox)
 			.where(
 				and(
@@ -270,7 +275,11 @@ export async function acquireAgentCoreDispatchTx(
 			)
 			.for("update");
 		const [outbox] = await tx
-			.select()
+			.select({
+				userId: agentCoreDispatchOutbox.userId,
+				conversationId: agentCoreDispatchOutbox.conversationId,
+				admittedAt: agentCoreDispatchOutbox.admittedAt,
+			})
 			.from(agentCoreDispatchOutbox)
 			.where(eq(agentCoreDispatchOutbox.runId, input.dispatch.runId))
 			.limit(1);
