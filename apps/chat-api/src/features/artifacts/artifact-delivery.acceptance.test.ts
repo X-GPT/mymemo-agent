@@ -16,19 +16,19 @@ import { asc, eq } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store";
-import type { ArtifactManifestEntry } from "../../../../agent-worker/src/artifacts/artifact-manifest";
+import type { ArtifactManifestEntry } from "../../../../../packages/agent-worker/src/artifacts/artifact-manifest";
 import {
 	type ArtifactObjectStore,
 	type ArtifactWorkspace,
 	createArtifactPublisher,
 	withArtifactPublication,
-} from "../../../../agent-worker/src/artifacts/artifact-publication";
-import { runCleanupPass } from "../../../../agent-worker/src/cleanup/cleanup";
-import type { WorkerLogger } from "../../../../agent-worker/src/logger";
-import type { SupervisedQuery } from "../../../../agent-worker/src/sdk/agent-stream";
-import { createSdkRunProcessor } from "../../../../agent-worker/src/sdk/run-processor";
-import { withNoSessionMirrorEvidence } from "../../../../agent-worker/src/sdk/testing/session-mirror-fixtures";
-import { createAgentCoreRunHarness } from "../../../../agent-worker/src/testing/agentcore-run-harness";
+} from "../../../../../packages/agent-worker/src/artifacts/artifact-publication";
+import { runCleanupPass } from "../../../../../packages/agent-worker/src/cleanup/cleanup";
+import type { WorkerLogger } from "../../../../../packages/agent-worker/src/logger";
+import type { SupervisedQuery } from "../../../../../packages/agent-worker/src/sdk/agent-stream";
+import { createSdkRunProcessor } from "../../../../../packages/agent-worker/src/sdk/run-processor";
+import { withNoSessionMirrorEvidence } from "../../../../../packages/agent-worker/src/sdk/testing/session-mirror-fixtures";
+import { createAgentCoreRunHarness } from "../../../../../packages/agent-worker/src/testing/agentcore-run-harness";
 import type {
 	ArtifactDownloadSigner,
 	ArtifactDownloadSignInput,

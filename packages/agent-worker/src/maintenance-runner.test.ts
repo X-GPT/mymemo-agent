@@ -252,11 +252,11 @@ describe("MaintenanceRunner import boundary", () => {
 			),
 		];
 		for (const forbidden of [
-			"/apps/agent-worker/src/run-loop.ts",
-			"/apps/agent-worker/src/run-serving.ts",
-			"/apps/agent-worker/src/model-client.ts",
-			"/apps/agent-worker/src/documents/",
-			"/apps/agent-worker/src/sdk/",
+			"/packages/agent-worker/src/run-loop.ts",
+			"/packages/agent-worker/src/run-serving.ts",
+			"/packages/agent-worker/src/model-client.ts",
+			"/packages/agent-worker/src/documents/",
+			"/packages/agent-worker/src/sdk/",
 			"/packages/live-text/",
 			"/packages/agentcore-dispatch/",
 		]) {

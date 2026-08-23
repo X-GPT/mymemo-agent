@@ -8,10 +8,10 @@ name: Maintenance image
 # that can change the built image or the check's outcome: the Dockerfile, the
 # trees that survive into the final image, every workspace manifest
 # (--frozen-lockfile reads them all), .dockerignore (it decides what the COPYs
-# ingest), and the smoke script. The build context is wider than this — `COPY
-# apps apps` reads every app — but the manifests stage prunes it to
-# package.json files, so nothing else reaches the image. Untracked drift in the
-# `oven/bun:1` base image is not path-filterable and is caught by the
+# ingest), and the smoke script. The build context is wider than this — the
+# workspace COPYs read every app and package — but the manifests stage prunes
+# it to package.json files, so nothing else reaches the image. Untracked drift
+# in the `oven/bun:1` base image is not path-filterable and is caught by the
 # deploy-time build instead.
 #
 # Pull requests only. A main-push run would be pure duplicate work: nothing
@@ -24,7 +24,7 @@ name: Maintenance image
 on:
   pull_request:
     paths:
-      - apps/agent-worker/**
+      - packages/agent-worker/**
       - apps/agent-maintenance/**
       - packages/agent-db/**
       - packages/live-text/**

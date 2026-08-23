@@ -30,7 +30,7 @@ re-verify.
 ## Build
 
 ```bash
-# From apps/agent-worker (E2B_API_KEY comes from .env or the environment):
+# From packages/agent-worker (E2B_API_KEY comes from .env or the environment):
 bun run template:build            # builds/updates the alias mymemo-agent-sandbox
 bun run template:build my-name    # optional: build under a different name/tag
 ```

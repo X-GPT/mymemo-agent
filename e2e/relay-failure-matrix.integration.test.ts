@@ -22,11 +22,6 @@ import {
 	type RedisTestServer,
 	startRedisTestServer,
 } from "@mymemo/test-support/redis-test-server";
-import type { WorkerLogger } from "../apps/agent-worker/src/logger";
-import {
-	createRunServing,
-	type RunProcessor,
-} from "../apps/agent-worker/src/run-serving";
 import type { ApiConfig } from "../apps/chat-api/src/config/env";
 import type { AppDeps } from "../apps/chat-api/src/deps";
 import { PostgresConversationHistoryStore } from "../apps/chat-api/src/features/conversation-history";
@@ -50,6 +45,11 @@ import {
 	createTestDatabase,
 	type TestDb,
 } from "../packages/agent-db/src/testing";
+import type { WorkerLogger } from "../packages/agent-worker/src/logger";
+import {
+	createRunServing,
+	type RunProcessor,
+} from "../packages/agent-worker/src/run-serving";
 import {
 	createRedisLiveStreamRelay,
 	disabledLiveStreamTelemetry,

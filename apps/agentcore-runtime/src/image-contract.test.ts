@@ -29,8 +29,8 @@ describe("AgentCore Runtime image contract", () => {
 			join(root, "apps/agentcore-runtime/src/index.ts"),
 		);
 		for (const forbidden of [
-			"/apps/agent-worker/src/run-loop.ts",
-			"/apps/agent-worker/src/maintenance-runner.ts",
+			"/packages/agent-worker/src/run-loop.ts",
+			"/packages/agent-worker/src/maintenance-runner.ts",
 			"/packages/agentcore-dispatch/src/sqs-queue.ts",
 		]) {
 			expect([...graph].some((file) => file.endsWith(forbidden))).toBe(false);

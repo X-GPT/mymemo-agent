@@ -1,8 +1,8 @@
 # Trusted Run serving
 
-Use this guide for changes under `apps/agent-worker`, shared Run-serving behavior, Claude Agent SDK integration, E2B provisioning, Searchable document tools, or artifact publication.
+Use this guide for changes under `packages/agent-worker`, shared Run-serving behavior, Claude Agent SDK integration, E2B provisioning, Searchable document tools, or artifact publication.
 
-`apps/agent-worker` is now a shared workspace package. It has no production
+`packages/agent-worker` is now a shared workspace package. It has no production
 entrypoint, Dockerfile, queue poller, Claim loop, or health server. AgentCore is
 the sole execution runtime; `apps/agent-maintenance` is the sole global
 maintenance process.
