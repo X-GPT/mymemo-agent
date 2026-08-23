@@ -11,10 +11,8 @@ import {
 } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import { eq } from "drizzle-orm";
-import {
-	type ConversationRecord,
-	PostgresConversationStore,
-} from "@/features/conversation-store";
+import type { ConversationRecord } from "@/features/conversation-store/conversation-store";
+import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
 import {
 	ActiveRunExistsError,
 	ConversationArchivedError,

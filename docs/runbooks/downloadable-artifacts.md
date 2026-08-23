@@ -23,8 +23,8 @@ bucket. The migration task receives neither artifact configuration nor artifact
 S3 permissions.
 
 Artifact bucket configuration, AWS credentials, and presigned URLs stay inside
-trusted services. None are passed to E2B. The sandbox receives only
-the per-Run binding produced by `buildSandboxEnv`.
+trusted services. None are passed to E2B; the Runtime keeps the per-Run binding
+inside its trusted Tool adapters.
 
 Terraform owns the bucket and enforces Block Public Access,
 bucket-owner-enforced ownership, TLS-only access, SSE-S3 (`AES256`) encryption,

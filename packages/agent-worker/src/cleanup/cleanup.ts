@@ -10,7 +10,7 @@ import {
 } from "@mymemo/agent-db/schema";
 import { deleteConversationAgentSessionsTx } from "@mymemo/agent-db/session-store";
 import { and, eq, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
-import type { WorkerLogger } from "../logger";
+import { toMessage, type WorkerLogger } from "../logger";
 
 /**
  * Runtime hygiene for external E2B resources Postgres cannot delete
@@ -355,8 +355,4 @@ async function referencedSandboxIds(db: Database): Promise<Set<string>> {
 	const set = new Set<string>();
 	for (const row of rows) if (row.sandboxId !== null) set.add(row.sandboxId);
 	return set;
-}
-
-function toMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

@@ -1,9 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	isToolResultPayload,
-	isToolUsePayload,
-	type PublicToolName,
-} from "@mymemo/agent-db/run-events";
+import type { PublicToolName } from "@mymemo/agent-db/run-events";
 import {
 	allowlistedExecutorToolNames,
 	fitOrOmit,
@@ -92,10 +88,14 @@ describe("shared tool payload vocabulary", () => {
 	] satisfies ReadonlyArray<readonly [PublicToolName, unknown]>;
 
 	for (const [tool, input] of toolUseCases) {
-		it(`${tool} tool-use projection satisfies the shared guard`, () => {
+		it(`${tool} tool-use projection has the durable shape`, () => {
 			const projected = projectToolUse(tool, input);
 			if (!projected.ok) throw new Error("expected a projected payload");
-			expect(isToolUsePayload(projected.payload)).toBe(true);
+			expect(projected.payload).toEqual({
+				tool,
+				arguments: expect.any(Object),
+				truncated: expect.any(Boolean),
+			});
 		});
 	}
 
@@ -130,14 +130,19 @@ describe("shared tool payload vocabulary", () => {
 	] satisfies ReadonlyArray<readonly [PublicToolName, Record<string, unknown>]>;
 
 	for (const [tool, result] of toolResultCases) {
-		it(`${tool} tool-result projection satisfies the shared guard`, () => {
+		it(`${tool} tool-result projection has the durable shape`, () => {
 			const projected = projectToolResult(
 				tool,
 				executorResultContent(result),
 				false,
 			);
 			if (!projected.ok) throw new Error("expected a projected payload");
-			expect(isToolResultPayload(projected.payload)).toBe(true);
+			expect(projected.payload).toEqual({
+				tool,
+				result: expect.any(Object),
+				isError: false,
+				truncated: expect.any(Boolean),
+			});
 		});
 	}
 });
@@ -272,7 +277,6 @@ describe("projectToolUse — SearchDocuments", () => {
 
 		if (!projected.ok) throw new Error("expected a projected payload");
 		expect(projected.payload.truncated).toBe(true);
-		expect(isToolUsePayload(projected.payload)).toBe(true);
 		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
 			TOOL_EVENT_MAX_JSON_BYTES,
 		);
@@ -315,7 +319,6 @@ describe("projectToolUse — LoadDocuments", () => {
 			},
 		});
 		if (!projected.ok) throw new Error("expected a projected payload");
-		expect(isToolUsePayload(projected.payload)).toBe(true);
 	});
 
 	it("omits malformed inputs instead of counting arbitrary array members", () => {
@@ -572,7 +575,6 @@ describe("projectToolResult — SearchDocuments", () => {
 		if (!projected.ok) throw new Error("expected a projected payload");
 		expect(projected.payload.result.passages).toHaveLength(5);
 		expect(projected.payload.truncated).toBe(true);
-		expect(isToolResultPayload(projected.payload)).toBe(true);
 		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
 			TOOL_EVENT_MAX_JSON_BYTES,
 		);
@@ -637,7 +639,6 @@ describe("projectToolResult — ListDocuments", () => {
 		expect(projected.payload.result.documents).toHaveLength(10);
 		expect(projected.payload.result.hasMore).toBe(false);
 		expect(projected.payload.truncated).toBe(true);
-		expect(isToolResultPayload(projected.payload)).toBe(true);
 		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
 			TOOL_EVENT_MAX_JSON_BYTES,
 		);
@@ -717,7 +718,6 @@ describe("projectToolResult — LoadDocuments", () => {
 		expect(projected.payload.result.loadedCount).toBe(30);
 		expect(projected.payload.result.loaded).toHaveLength(10);
 		expect(projected.payload.truncated).toBe(true);
-		expect(isToolResultPayload(projected.payload)).toBe(true);
 		expect(jsonBytes(projected.payload)).toBeLessThanOrEqual(
 			TOOL_EVENT_MAX_JSON_BYTES,
 		);

@@ -28,7 +28,7 @@ import {
 	type SandboxProvisioner,
 } from "../e2b/sandbox-provisioner";
 import type { FileToolLimits } from "../file-tools/file-tools";
-import type { WorkerLogger } from "../logger";
+import { toMessage, type WorkerLogger } from "../logger";
 import type { ModelClientConfig } from "../model-client";
 import type { RunBinding } from "../sandbox-env";
 import { onAbort, type SupervisedQuery } from "./agent-stream";
@@ -495,8 +495,4 @@ function superviseTurn(input: {
 			}
 		},
 	};
-}
-
-function toMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

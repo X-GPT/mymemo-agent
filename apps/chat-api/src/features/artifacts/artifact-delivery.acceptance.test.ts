@@ -15,7 +15,7 @@ import { createInMemoryLiveStreamRelay } from "@mymemo/live-text";
 import { asc, eq } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
-import { PostgresConversationStore } from "@/features/conversation-store";
+import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
 import type { ArtifactManifestEntry } from "../../../../../packages/agent-worker/src/artifacts/artifact-manifest";
 import {
 	type ArtifactObjectStore,

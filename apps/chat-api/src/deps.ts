@@ -7,28 +7,23 @@ import {
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
-import type {
-	ArtifactDownloadSigner,
-	ArtifactMetadataStore,
-} from "./features/artifacts";
-import {
-	createS3ArtifactDownloadSigner,
-	PostgresArtifactMetadataStore,
-} from "./features/artifacts";
-import {
-	type ConversationHistoryStore,
-	PostgresConversationHistoryStore,
-} from "./features/conversation-history";
-import {
-	type ConversationStore,
-	PostgresConversationStore,
-} from "./features/conversation-store";
+import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
+import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
+import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
+import { createS3ArtifactDownloadSigner } from "./features/artifacts/s3-artifact-download-signer";
+import type { ConversationHistoryStore } from "./features/conversation-history/conversation-history-store";
+import { PostgresConversationHistoryStore } from "./features/conversation-history/postgres-conversation-history-store";
+import type { ConversationStore } from "./features/conversation-store/conversation-store";
+import { PostgresConversationStore } from "./features/conversation-store/postgres-conversation-store";
 import type { InternalIdentity } from "./features/conversations/conversations.schema";
 import {
 	createExposureGate,
 	type ExposureGate,
 } from "./features/exposure-gate";
-import { PostgresRunStore, type RunStore } from "./features/run-store";
+import {
+	PostgresRunStore,
+	type RunStore,
+} from "./features/run-store/run-store";
 
 /**
  * Application dependencies, built once from a validated `ApiConfig` at the

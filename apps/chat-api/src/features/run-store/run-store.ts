@@ -12,7 +12,7 @@ import {
 } from "@mymemo/agent-db/run-store";
 import { conversations, runs } from "@mymemo/agent-db/schema";
 import { and, eq, sql } from "drizzle-orm";
-import type { ConversationRef } from "@/features/conversation-store";
+import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 /**
  * chat-api's run-store surface. The concurrency-critical transaction helpers

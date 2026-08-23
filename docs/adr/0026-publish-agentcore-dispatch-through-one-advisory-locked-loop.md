@@ -6,6 +6,13 @@ Amended (2026-08-17) by
 [ADR-0027](./0027-deploy-the-agentcore-dispatch-publisher-as-a-dedicated-service.md),
 which supersedes only this ADR's initial compute-home consequence.
 
+Amended (2026-08-23): manual, flag-based replay is retired because it has no
+operator workflow. Automatic replay after an ambiguous send remains controlled
+by the publish lease, and published rows remain available for overdue evidence.
+The unused replay columns remain for one compatibility release because database
+migrations precede Dispatch publisher rollout; a later release may drop them
+after every deployed publisher no longer reads them.
+
 One publisher: a continuously running loop, single-flighted by a session-scoped
 Postgres advisory lock taken and released around each tick. Each tick selects
 unpublished outbox rows, sends them to the queue, and marks them published.
@@ -26,7 +33,8 @@ compensating write: delivery is at-least-once and Postgres Durable acquisition
 remains the duplicate-execution authority. Published rows are marked, not
 deleted: deleting would blind overdue detection to exactly the case it exists
 to catch — dispatched but never acquired — and would turn manual replay into
-re-insertion, to shrink a table that stays at pending size anyway.
+re-insertion, to shrink a table that stays at pending size anyway. The 2026-08-23
+amendment retires that unused operator path without changing row retention.
 
 ## Considered options
 
@@ -42,9 +50,9 @@ re-insertion, to shrink a table that stays at pending size anyway.
   tuning. Whether the tick's implementation retains the claim/confirm columns
   internally is an implementation choice this contract does not depend on.
 - **Delete rows on publish.** Rejected for now: the crash window is unchanged
-  either way, and marking preserves overdue detection, flag-based replay, and
-  `publish_attempts` evidence. Revisit only if retention ever becomes a real
-  cost.
+  either way, and marking preserves overdue detection and `publish_attempts`
+  evidence. Revisit only if retention ever becomes a real cost. The 2026-08-23
+  amendment retires flag-based replay.
 
 ## Consequences
 

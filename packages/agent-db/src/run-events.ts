@@ -176,36 +176,6 @@ export interface ToolResultPayload {
 	truncated: boolean;
 }
 
-export function isToolUsePayload(value: unknown): value is ToolUsePayload {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"tool" in value &&
-		isPublicToolName(value.tool) &&
-		"arguments" in value &&
-		isPlainRecord(value.arguments) &&
-		"truncated" in value &&
-		typeof value.truncated === "boolean"
-	);
-}
-
-export function isToolResultPayload(
-	value: unknown,
-): value is ToolResultPayload {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"tool" in value &&
-		isPublicToolName(value.tool) &&
-		"result" in value &&
-		isPlainRecord(value.result) &&
-		"isError" in value &&
-		typeof value.isError === "boolean" &&
-		"truncated" in value &&
-		typeof value.truncated === "boolean"
-	);
-}
-
 export type DurableRunEvent =
 	| { type: typeof RunEventType.Started; payload: RunStartedPayload }
 	| {

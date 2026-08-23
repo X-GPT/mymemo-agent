@@ -6,7 +6,7 @@ import type {
 } from "@ag-ui/core";
 import type { ParsedUiPayloadEventPayload } from "@mymemo/agent-db/run-events";
 import type { RunInterruptedEvent } from "@mymemo/live-text";
-import type { ConversationScope } from "@/features/conversation-store";
+import type { ConversationScope } from "@/features/conversation-store/conversation-store";
 
 export interface ConversationSummary {
 	conversationId: string;

@@ -4,8 +4,8 @@ import type {
 	ConversationCreateInput,
 	ConversationRecord,
 	ConversationStore,
-} from "@/features/conversation-store";
-import type { RunStore } from "@/features/run-store";
+} from "@/features/conversation-store/conversation-store";
+import type { RunStore } from "@/features/run-store/run-store";
 import { admitAgUiRun, createConversation } from "./conversations.controller";
 
 /** In-memory store capturing every created record. */

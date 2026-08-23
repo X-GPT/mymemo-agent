@@ -456,38 +456,6 @@ function ownedRunConditions(owner: ConversationOwner, runId: string) {
 	);
 }
 
-/**
- * Append one owned run event, allocating `seq` from `runs.next_event_seq` and
- * inserting the event row in the same transaction — the counter update carries
- * the append status and Ownership epoch fence, so a superseded acquisition cannot
- * allocate a sequence number at all. A refusal is classified through the same
- * {@link FenceRejection} vocabulary as every other fenced Run write.
- */
-export async function appendRunEventTx(
-	db: Database,
-	input: {
-		owner: RunWriteOwner;
-		type: string;
-		payload: RunEventPayload;
-		appendClass: RunEventAppendClass;
-	},
-): Promise<AppendRunEventResult> {
-	const result = await appendRunEventsTx(db, {
-		owner: input.owner,
-		appendClass: input.appendClass,
-		events: [{ type: input.type, payload: input.payload }],
-	});
-	if (result.outcome === "rejected") return result;
-	const [appended] = result.events;
-	if (!appended)
-		throw new Error("single Run-event append returned no sequence");
-	return { outcome: "appended", seq: appended.seq };
-}
-
-export type AppendRunEventResult =
-	| { outcome: "appended"; seq: number }
-	| RunWriteRejected;
-
 export type AppendRunEventsResult =
 	| { outcome: "appended"; events: Array<{ seq: number }> }
 	| RunWriteRejected;

@@ -3,7 +3,7 @@ import type {
 	ConversationRecord,
 	ConversationScope,
 	ConversationStore,
-} from "@/features/conversation-store";
+} from "@/features/conversation-store/conversation-store";
 import {
 	type InternalIdentity,
 	type RunAgentInputBody,
