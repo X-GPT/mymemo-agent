@@ -1,0 +1,121 @@
+import { describe, expect, it } from "bun:test";
+import { loadRuntimeConfigFromEnv } from "./runtime-config";
+
+/**
+ * Runtime env ownership (MYM-47 / MYM-45 boundary). AgentCore Runtime owns the
+ * writable agent DB, the read-only KB, the OpenRouter provider credentials, and
+ * the E2B key. It must refuse to boot when any required setting is missing.
+ */
+function baseEnv(): Record<string, string | undefined> {
+	return {
+		AGENT_DATABASE_URL: "postgresql://u:p@localhost:5432/mymemo_agent",
+		KB_DATABASE_URL: "postgresql://r:r@localhost:5432/mymemo_kb",
+		OPENROUTER_API_KEY: "sk-or-test",
+		OPENROUTER_BASE_URL: "https://openrouter.ai/api",
+		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
+		REDIS_URL: "rediss://default:secret@redis.internal:6379",
+		E2B_API_KEY: "e2b-test",
+		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
+		ARTIFACT_BUCKET: "private-artifacts",
+		AWS_REGION: "us-west-2",
+		DB_SSL: "disable",
+	};
+}
+
+describe("loadRuntimeConfigFromEnv — required settings", () => {
+	const required = [
+		"AGENT_DATABASE_URL",
+		"KB_DATABASE_URL",
+		"OPENROUTER_API_KEY",
+		"OPENROUTER_BASE_URL",
+		"OPENROUTER_DEFAULT_MODEL",
+		"E2B_API_KEY",
+		"WORKER_E2B_TEMPLATE",
+		"ARTIFACT_BUCKET",
+		"AWS_REGION",
+		"REDIS_URL",
+	];
+
+	it("loads cleanly with all required settings present", () => {
+		expect(() => loadRuntimeConfigFromEnv(baseEnv())).not.toThrow();
+	});
+
+	for (const key of required) {
+		it(`refuses to boot without ${key}`, () => {
+			const env = baseEnv();
+			delete env[key];
+			expect(() => loadRuntimeConfigFromEnv(env)).toThrow(new RegExp(key));
+		});
+	}
+
+	it("surfaces the two DB connections separately", () => {
+		const config = loadRuntimeConfigFromEnv(baseEnv());
+		expect(config.agentDatabaseUrl).toContain("mymemo_agent");
+		expect(config.kbDatabaseUrl).toContain("mymemo_kb");
+	});
+
+	it("surfaces the E2B template the Runtime provisions sandboxes from", () => {
+		const config = loadRuntimeConfigFromEnv(baseEnv());
+		expect(config.e2bTemplate).toBe("mymemo-agent-sandbox");
+	});
+
+	it("surfaces the private artifact bucket configuration", () => {
+		expect(loadRuntimeConfigFromEnv(baseEnv()).artifact).toEqual({
+			bucket: "private-artifacts",
+			region: "us-west-2",
+		});
+	});
+
+	it("surfaces the OpenRouter provider config", () => {
+		const config = loadRuntimeConfigFromEnv(baseEnv());
+		expect(config.openrouter.apiKey).toBe("sk-or-test");
+		expect(config.openrouter.baseUrl).toBe("https://openrouter.ai/api");
+		expect(config.openrouter.defaultModel).toBe("anthropic/claude-sonnet-4");
+	});
+});
+
+describe("loadRuntimeConfigFromEnv — serving intervals", () => {
+	it("defaults heartbeat to 15s and a bounded shutdown grace", () => {
+		const config = loadRuntimeConfigFromEnv(baseEnv());
+		expect(config.heartbeatIntervalMs).toBe(15_000);
+		expect(config.shutdownTimeoutMs).toBeGreaterThan(0);
+	});
+
+	it("honors heartbeat and shutdown overrides", () => {
+		const env = baseEnv();
+		env.WORKER_HEARTBEAT_INTERVAL_MS = "10000";
+		env.WORKER_SHUTDOWN_TIMEOUT_MS = "5000";
+		const config = loadRuntimeConfigFromEnv(env);
+		expect(config.heartbeatIntervalMs).toBe(10_000);
+		expect(config.shutdownTimeoutMs).toBe(5_000);
+	});
+});
+
+describe("loadRuntimeConfigFromEnv — required Live Stream Redis", () => {
+	it("accepts only an authenticated TLS URL", () => {
+		const env = baseEnv();
+		expect(loadRuntimeConfigFromEnv(env).redisUrl).toBe(
+			"rediss://default:secret@redis.internal:6379",
+		);
+	});
+
+	it("allows insecure loopback Redis only under the integration-test switch", () => {
+		const env = baseEnv();
+		env.REDIS_URL = "redis://127.0.0.1:6379";
+		env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS = "true";
+		expect(loadRuntimeConfigFromEnv(env).redisUrl).toBe(env.REDIS_URL);
+	});
+
+	it("refuses to boot with missing, malformed, or insecure Redis configuration", () => {
+		for (const redisUrl of [
+			undefined,
+			"not a URL",
+			"redis://default:secret@redis.internal:6379",
+			"rediss://redis.internal:6379",
+		]) {
+			const env = baseEnv();
+			env.REDIS_URL = redisUrl;
+			expect(() => loadRuntimeConfigFromEnv(env)).toThrow(/REDIS_URL/);
+		}
+	});
+});

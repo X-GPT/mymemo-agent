@@ -20,7 +20,7 @@ RUN cd /temp/dev && bun install --frozen-lockfile
 
 # Scope the production install to chat-api and its workspace deps. Without the
 # filter, bun installs every workspace member's prod deps into the hoisted root
-# node_modules — chat-api would ship agent-worker's ~459MB Claude Agent SDK
+# node_modules — chat-api would ship agentcore-runtime's ~459MB Claude Agent SDK
 # (plus e2b) that it never imports. --filter=chat-api keeps only the reachable
 # closure (chat-api + agent-db + live-text), cutting node_modules ~660MB → ~145MB.
 COPY --from=manifests /usr/src/app /temp/prod

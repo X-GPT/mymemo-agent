@@ -22,6 +22,11 @@ import {
 	type RedisTestServer,
 	startRedisTestServer,
 } from "@mymemo/test-support/redis-test-server";
+import type { RuntimeLogger } from "../apps/agentcore-runtime/src/logger";
+import {
+	createRunServing,
+	type RunProcessor,
+} from "../apps/agentcore-runtime/src/run-serving";
 import type { ApiConfig } from "../apps/chat-api/src/config/env";
 import type { AppDeps } from "../apps/chat-api/src/deps";
 import { PostgresConversationHistoryStore } from "../apps/chat-api/src/features/conversation-history/postgres-conversation-history-store";
@@ -45,11 +50,6 @@ import {
 	createTestDatabase,
 	type TestDb,
 } from "../packages/agent-db/src/testing";
-import type { WorkerLogger } from "../packages/agent-worker/src/logger";
-import {
-	createRunServing,
-	type RunProcessor,
-} from "../packages/agent-worker/src/run-serving";
 import {
 	createRedisLiveStreamRelay,
 	disabledLiveStreamTelemetry,
@@ -65,7 +65,7 @@ const IDENTITY_HEADERS = {
 	"x-member-code": MEMBER_CODE,
 	"x-partner-code": "relay-matrix-partner",
 };
-const silentLogger: WorkerLogger = { info() {}, warn() {}, error() {} };
+const silentLogger: RuntimeLogger = { info() {}, warn() {}, error() {} };
 
 type TestApp = ReturnType<
 	typeof import("../apps/chat-api/src/app")["createApp"]

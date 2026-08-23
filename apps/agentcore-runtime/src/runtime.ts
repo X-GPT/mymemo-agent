@@ -3,13 +3,13 @@ import type {
 	AgentCoreDispatchIdentity,
 } from "@mymemo/agent-db/agentcore-dispatch";
 import type { ConversationOwner } from "@mymemo/agent-db/conversation-ownership";
-import type { ServeStartedRunResult } from "agent-worker/run-serving";
 import type { CommittedAgentCoreAcquisition } from "agentcore-dispatch-consumer/acquisition-boundary";
 import {
 	parseAgentCoreDispatchEnvelope,
 	sameAgentCoreDispatch,
 } from "agentcore-dispatch-consumer/contract";
 import { RUNTIME_SHUTDOWN_TIMEOUT_MS } from "./constants";
+import type { ServeStartedRunResult } from "./run-serving";
 
 type AcquiredDispatch = Extract<
 	AcquireAgentCoreDispatchResult,

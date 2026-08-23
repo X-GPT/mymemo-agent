@@ -14,13 +14,13 @@ import {
 	createRedisLiveStreamRelay,
 } from "@mymemo/live-text";
 import { startRedisTestServer } from "@mymemo/test-support/redis-test-server";
-import { createRunServing, type RunServing } from "agent-worker/run-serving";
 import {
 	createAcquisitionReceipt,
 	serializeAgentCoreDispatchEnvelope,
 } from "agentcore-dispatch-consumer/contract";
 import { eq, sql } from "drizzle-orm";
 import { createAgentCoreExecutionServices } from "./execution-services";
+import { createRunServing, type RunServing } from "./run-serving";
 import { createAgentCoreRuntime } from "./runtime";
 
 let tdb: TestDb;

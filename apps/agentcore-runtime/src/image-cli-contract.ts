@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolveAndVerifyClaudeCodeExecutable } from "agent-worker/claude-code-executable";
+import { resolveAndVerifyClaudeCodeExecutable } from "./sdk/claude-code-executable";
 
 const MIN_RDS_CA_BUNDLE_BYTES = 100_000;
 const ELF_MACHINE_OFFSET = 18;

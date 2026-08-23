@@ -17,7 +17,7 @@ import { agentSessions, conversations } from "./schema";
  * the mutation cannot be undercut by release or Reclamation. Reads and
  * administrative Conversation deletion are deliberately unfenced. The helpers
  * live here so the schema, fence, and SQL use the shared package's one Drizzle
- * instance; the adapter that imports SDK types lives in agent-worker and
+ * instance; the adapter that imports SDK types lives in agentcore-runtime and
  * delegates here.
  *
  * Mutations take `conversationId` only from their Conversation owner — the stable

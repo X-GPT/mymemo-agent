@@ -12,10 +12,10 @@ import { existsSync } from "node:fs";
 import { loadMaintenanceConfigFromEnv } from "./src/config.ts";
 
 for (const path of [
-  "/usr/src/app/packages/agent-worker/src/run-loop.ts",
-  "/usr/src/app/packages/agent-worker/src/run-serving.ts",
-  "/usr/src/app/packages/agent-worker/src/model-client.ts",
-  "/usr/src/app/packages/agent-worker/src/production-run-resources.ts",
+  "/usr/src/app/apps/agentcore-runtime/src/run-serving.ts",
+  "/usr/src/app/apps/agentcore-runtime/src/model-client.ts",
+  "/usr/src/app/apps/agentcore-runtime/src/production-run-resources.ts",
+  "/usr/src/app/apps/agentcore-runtime/src/sdk",
 ]) {
   if (existsSync(path)) throw new Error(`Run-serving source shipped: ${path}`);
 }

@@ -1,13 +1,10 @@
-import {
-	loadWorkerConfigFromEnv,
-	type WorkerConfig,
-} from "agent-worker/config";
 import { type Env, requireEnv } from "agentcore-dispatch-consumer/config-utils";
 import {
 	resolveVerifiedAgentDatabaseUrl,
 	verifiedDatabaseUrl,
 } from "agentcore-dispatch-consumer/secret-config";
 import { RUNTIME_SHUTDOWN_TIMEOUT_MS } from "./constants";
+import { loadRuntimeConfigFromEnv, type RuntimeConfig } from "./runtime-config";
 
 const AMBIENT_SECRET_NAMES = [
 	"DB_PASSWORD",
@@ -99,11 +96,11 @@ export function loadRuntimeBootstrapConfig(env: Env): RuntimeBootstrapConfig {
 }
 
 /** Resolve AWSCURRENT secret values once for this fresh Runtime session and
- * adapt them to the existing validated worker execution configuration. */
-export async function resolveRuntimeWorkerConfig(
+ * adapt them to the validated Runtime execution configuration. */
+export async function resolveRuntimeConfig(
 	bootstrap: RuntimeBootstrapConfig,
 	readCurrentSecret: (arn: string) => Promise<string>,
-): Promise<WorkerConfig> {
+): Promise<RuntimeConfig> {
 	const [
 		agentDatabasePassword,
 		kbDatabaseUrl,
@@ -118,7 +115,7 @@ export async function resolveRuntimeWorkerConfig(
 		readCurrentSecret(bootstrap.secretArns.redisUrl),
 	]);
 
-	return loadWorkerConfigFromEnv({
+	return loadRuntimeConfigFromEnv({
 		AGENT_DATABASE_URL: resolveVerifiedAgentDatabaseUrl(
 			bootstrap.agentDatabaseUrl,
 			agentDatabasePassword,

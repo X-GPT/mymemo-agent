@@ -10,12 +10,12 @@ architecture and trust boundaries.
 | App | Location | Role |
 |-----|----------|------|
 | **chat-api** | `apps/chat-api/` | AI chat service; owns Conversation resources, strict Run admission, producer-buffered Live Stream attachment, history, and artifact delivery |
-| **agentcore-runtime** | `apps/agentcore-runtime/` | Sole production execution runtime; exactly acquires dispatched Runs and composes the shared SDK, E2B, Live Stream, and artifact behavior in `packages/agent-worker/` |
+| **agentcore-runtime** | `apps/agentcore-runtime/` | Sole production execution runtime; exactly acquires dispatched Runs and owns its SDK, E2B, Live Stream, and artifact behavior |
 | **agent-maintenance** | `apps/agent-maintenance/` | Sole production owner of queued-Run expiration, Reclamation, and asynchronous resource cleanup |
 | **agentcore-local-dispatch-bridge** | `apps/agentcore-local-dispatch-bridge/` | Development-only durable-outbox bridge to the local Runtime |
 
-Shared libraries live under `packages/`, including the trusted Run-serving
-implementation in `packages/agent-worker/`.
+Shared libraries live under `packages/`; `packages/agent-worker/` contains only
+the maintenance implementation composed by `apps/agent-maintenance/`.
 
 **Setup:**
 ```bash
@@ -35,7 +35,7 @@ See [the chat API guide](./docs/agents/chat-api.md) for chat-api documentation.
 │   ├── agentcore-runtime/  # Sole trusted execution runtime
 │   └── agent-maintenance/  # Global liveness and cleanup service
 ├── packages/               # Shared libraries
-│   └── agent-worker/       # Shared trusted Run-serving implementation
+│   └── agent-worker/       # Maintenance-only implementation package
 ├── AGENTS.md               # Architecture & agent guidance
 ├── compose.yaml            # Local AgentCore Runtime stack
 └── README.md               # This file
@@ -53,7 +53,7 @@ admission through the durable outbox, development bridge, and real local
 Runtime.
 
 The credential-free PR suite covers durable AgentCore acquisition and
-stream/reconnect behavior through the shared Run-serving seam. The process
+stream/reconnect behavior through AgentCore Runtime Run serving. The process
 suite adds public HTTP admission, real Postgres and Redis, Runtime invocation,
 interruption, lifecycle conflicts, Tool errors, and Reclamation:
 

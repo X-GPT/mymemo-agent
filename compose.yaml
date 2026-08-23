@@ -1,7 +1,7 @@
 # Local end-to-end harness using the real AgentCore Runtime implementation.
 # Export
 # OPENROUTER_API_KEY and E2B_API_KEY before starting the stack and build the
-# WORKER_E2B_TEMPLATE described in packages/agent-worker/e2b-template/.
+# WORKER_E2B_TEMPLATE described in apps/agentcore-runtime/e2b-template/.
 #
 # Services (non-secret wiring inline; local-only dev credentials):
 #   postgres      — the writable mymemo_agent DB (conversations/runs/run_events)
@@ -208,7 +208,7 @@ services:
       - mymemo-network
 
   # The worker's read-only KB (mymemo_kb) is seeded here with the KB schema + FTS
-  # and a small fixture (see packages/agent-worker/db/init.sql) so document
+  # and a small fixture (see apps/agentcore-runtime/db/init.sql) so document
   # search/fetch return results for the seeded member. Local-only dev
   # credentials, inline.
   postgres:
@@ -225,7 +225,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       # Two databases on one instance: the worker's read-only KB (mymemo_kb,
       # seeded here) and chat-api's writable mymemo_agent.
-      - ./packages/agent-worker/db/init.sql:/docker-entrypoint-initdb.d/00-kb.sql:ro
+      - ./apps/agentcore-runtime/db/init.sql:/docker-entrypoint-initdb.d/00-kb.sql:ro
       - ./apps/chat-api/db/init.sql:/docker-entrypoint-initdb.d/10-chat-api.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mymemo -d mymemo_kb"]

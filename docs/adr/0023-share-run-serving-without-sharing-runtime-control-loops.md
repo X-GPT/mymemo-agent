@@ -8,7 +8,9 @@ retirement: the coexistence-specific control-loop decision below is superseded.
 AgentCore Durable acquisition now owns one exact dispatched Run, and the
 always-on `agent-maintenance` service solely owns expiration, Reclamation, and
 cleanup. Fargate Claims, doorbells, snapshot draining, and Run serving no
-longer exist.
+longer exist. With AgentCore Runtime as the sole Run-serving caller, the
+implementation is local to `apps/agentcore-runtime`; no compatibility package
+or shared serving seam remains.
 
 Historical amendment (2026-08-16) by
 [ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md):
