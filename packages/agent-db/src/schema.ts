@@ -193,10 +193,6 @@ export const agentCoreDispatchOutbox = pgTable(
 			withTimezone: true,
 		}),
 		publishAttempts: integer("publish_attempts").notNull().default(0),
-		replayRequestedAt: timestamp("replay_requested_at", {
-			withTimezone: true,
-		}),
-		replayRequestedBy: text("replay_requested_by"),
 	},
 	(t) => [
 		index("agentcore_dispatch_outbox_pending_idx")

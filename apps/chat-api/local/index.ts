@@ -3,7 +3,7 @@ import pino from "pino";
 import { createApp } from "../src/app";
 import { loadApiConfigFromEnv } from "../src/config/env";
 import { createDeps } from "../src/deps";
-import { createS3ArtifactDownloadSigner } from "../src/features/artifacts";
+import { createS3ArtifactDownloadSigner } from "../src/features/artifacts/s3-artifact-download-signer";
 
 const config = loadApiConfigFromEnv({
 	...Bun.env,

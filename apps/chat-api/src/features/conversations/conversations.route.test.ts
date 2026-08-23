@@ -22,10 +22,13 @@ import type { AppDeps } from "@/deps";
 import type {
 	ConversationRecord,
 	ConversationStore,
-} from "@/features/conversation-store";
-import { PostgresConversationStore } from "@/features/conversation-store";
+} from "@/features/conversation-store/conversation-store";
+import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
 import type { ExposureGate } from "@/features/exposure-gate";
-import { PostgresRunStore, type RunStore } from "@/features/run-store";
+import {
+	PostgresRunStore,
+	type RunStore,
+} from "@/features/run-store/run-store";
 import type { InternalIdentity } from "./conversations.schema";
 
 const { createApp } = await import("@/app");

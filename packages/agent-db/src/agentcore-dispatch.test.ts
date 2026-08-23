@@ -14,7 +14,6 @@ import {
 	loadAgentCoreDispatchRunStatus,
 	loadOldestUnpublishedAgentCoreDispatchAdmittedAt,
 	recordAgentCoreDispatchInTx,
-	requestAgentCoreDispatchReplayTx,
 } from "./agentcore-dispatch";
 import { admitQueuedRunInTx } from "./run-store";
 import {
@@ -188,44 +187,6 @@ describe("Run-keyed AgentCore dispatch outbox", () => {
 				publishClaimedBy: "publisher-1",
 				publishClaimUntil: new Date("2026-08-14T16:04:00.000Z"),
 				publishAttempts: 1,
-			},
-		]);
-	});
-
-	it("preserves publication and replay audit on the same Run", async () => {
-		await admitRunWithDispatch();
-		await claimAgentCoreDispatchesTx(tdb.db, {
-			publisherId: "publisher-1",
-			now: new Date("2026-08-14T16:01:00.000Z"),
-		});
-		await expect(
-			confirmAgentCoreDispatchPublishedTx(tdb.db, {
-				runId: exact.runId,
-				publisherId: "publisher-1",
-				now: new Date("2026-08-14T16:01:10.000Z"),
-			}),
-		).resolves.toBe(true);
-		await expect(
-			requestAgentCoreDispatchReplayTx(tdb.db, {
-				runId: exact.runId,
-				requestedBy: "operator@example.com",
-				now: new Date("2026-08-14T16:02:00.000Z"),
-			}),
-		).resolves.toBe(true);
-		await expect(
-			claimAgentCoreDispatchesTx(tdb.db, {
-				publisherId: "replay-publisher",
-				runId: exact.runId,
-				now: new Date("2026-08-14T16:02:01.000Z"),
-			}),
-		).resolves.toEqual([dispatch]);
-		expect(await tdb.db.select().from(agentCoreDispatchOutbox)).toMatchObject([
-			{
-				runId: exact.runId,
-				publishedAt: new Date("2026-08-14T16:01:10.000Z"),
-				replayRequestedAt: new Date("2026-08-14T16:02:00.000Z"),
-				replayRequestedBy: "operator@example.com",
-				publishAttempts: 2,
 			},
 		]);
 	});

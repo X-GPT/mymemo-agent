@@ -15,7 +15,7 @@ import {
 	TERMINAL_RUN_STATUSES,
 } from "@mymemo/agent-db/schema";
 import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
-import type { ConversationScope } from "@/features/conversation-store";
+import type { ConversationScope } from "@/features/conversation-store/conversation-store";
 import type {
 	ActiveRunSummary,
 	ConversationHistoryAssistantMessage,

@@ -30,7 +30,6 @@ export async function createProductionAgentCoreRuntime(options: {
 		config: workerConfig,
 		logger,
 		processEnv: options.processEnv,
-		telemetryService: "agentcore-runtime",
 	});
 	const control = createSsmAgentCoreDispatchEnablementControl({
 		client: options.ssmClient,

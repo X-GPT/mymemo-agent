@@ -17,7 +17,6 @@ import {
 	type AdmitQueuedRunInput,
 	admitQueuedRunTx,
 	appendRunEventsTx,
-	appendRunEventTx,
 	expireUnownedQueuedRunsTx,
 	loadRunStartedTx,
 	markLiveStreamFailedTx,
@@ -48,6 +47,27 @@ function committed(result: TerminalTransitionResult): RunRecord {
 		);
 	}
 	return result.run;
+}
+
+async function appendSingleRunEvent(
+	db: Parameters<typeof appendRunEventsTx>[0],
+	input: Omit<Parameters<typeof appendRunEventsTx>[1], "events"> & {
+		type: string;
+		payload: Parameters<
+			typeof appendRunEventsTx
+		>[1]["events"][number]["payload"];
+	},
+) {
+	const result = await appendRunEventsTx(db, {
+		owner: input.owner,
+		appendClass: input.appendClass,
+		events: [{ type: input.type, payload: input.payload }],
+	});
+	if (result.outcome === "rejected") return result;
+	const [appended] = result.events;
+	if (!appended)
+		throw new Error("single Run-event append returned no sequence");
+	return { outcome: "appended" as const, seq: appended.seq };
 }
 
 // One PGlite (WASM) instance for the whole file — a per-test instance
@@ -368,7 +388,7 @@ async function readEvents(runId: string) {
 		.orderBy(runEvents.seq);
 }
 
-describe("appendRunEventTx", () => {
+describe("appendSingleRunEvent", () => {
 	it("rejects a lapsed Ownership epoch without allocating a sequence number", async () => {
 		await queueRun("run-1", "conv-1");
 		const acquired = await acquireQueuedRunForTest(tdb.db, {
@@ -379,7 +399,7 @@ describe("appendRunEventTx", () => {
 		await lapseOwnershipLease("conv-1");
 
 		expect(
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: {
 					userId: acquired.userId,
 					conversationId: acquired.conversationId,
@@ -399,13 +419,13 @@ describe("appendRunEventTx", () => {
 	it("allocates monotonic database-owned sequence numbers", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 
-		const first = await appendRunEventTx(tdb.db, {
+		const first = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "hel" },
 			appendClass: "model",
 		});
-		const second = await appendRunEventTx(tdb.db, {
+		const second = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-2", text: "lo" },
@@ -429,7 +449,7 @@ describe("appendRunEventTx", () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 
 		await expect(
-			appendRunEventTx(tdb.db, {
+			appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: { text: "missing a stable message id" },
@@ -449,7 +469,7 @@ describe("appendRunEventTx", () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 
 		await expect(
-			appendRunEventTx(tdb.db, {
+			appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: RunEventType.Done,
 				payload: { outcome: "done" },
@@ -463,7 +483,7 @@ describe("appendRunEventTx", () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 
 		await expect(
-			appendRunEventTx(tdb.db, {
+			appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: RunEventType.Started,
 				payload: {
@@ -516,7 +536,7 @@ describe("appendRunEventTx", () => {
 		] as const;
 
 		for (const event of events) {
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				...event,
 				appendClass: "model",
@@ -550,7 +570,7 @@ describe("appendRunEventTx", () => {
 		if (!acquired) throw new Error("test setup acquired no Conversation");
 		const runOwner = acquired;
 		const appendUiPayload = (messageId: string) =>
-			appendRunEventTx(tdb.db, {
+			appendSingleRunEvent(tdb.db, {
 				owner: runOwner,
 				type: RunEventType.UiPayload,
 				payload: {
@@ -567,7 +587,7 @@ describe("appendRunEventTx", () => {
 		await expect(appendUiPayload("user-message-1")).rejects.toBeInstanceOf(
 			InvalidRunEventError,
 		);
-		await appendRunEventTx(tdb.db, {
+		await appendSingleRunEvent(tdb.db, {
 			owner: runOwner,
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "assistant-message-1", text: "Here it is." },
@@ -627,7 +647,7 @@ describe("appendRunEventTx", () => {
 		} as const;
 
 		expect(
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner({ epoch: 999, workerId: "worker-2" }),
 				...input,
 			}),
@@ -637,7 +657,7 @@ describe("appendRunEventTx", () => {
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
 		expect(
-			await appendRunEventTx(tdb.db, { owner: owner(), ...input }),
+			await appendSingleRunEvent(tdb.db, { owner: owner(), ...input }),
 		).toEqual({
 			outcome: "rejected",
 			rejected: "status",
@@ -647,7 +667,7 @@ describe("appendRunEventTx", () => {
 
 	it("rejects a UI payload through the cancellation append class", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
-		await appendRunEventTx(tdb.db, {
+		await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "assistant-message-1", text: "Results" },
@@ -660,7 +680,7 @@ describe("appendRunEventTx", () => {
 		});
 
 		await expect(
-			appendRunEventTx(tdb.db, {
+			appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: RunEventType.UiPayload,
 				payload: {
@@ -719,7 +739,7 @@ describe("appendRunEventTx", () => {
 	it("rejects orphaned, duplicate, and out-of-order Tool lifecycle events", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 		const append = (type: string, payload: Record<string, unknown>) =>
-			appendRunEventTx(tdb.db, {
+			appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type,
 				payload,
@@ -788,7 +808,7 @@ describe("appendRunEventTx", () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 
 		expect(
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner({ workerId: "worker-2" }),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: { messageId: "message-1", text: "epoch owns this" },
@@ -805,7 +825,7 @@ describe("appendRunEventTx", () => {
 			.where(eq(runs.runId, "run-1"));
 
 		expect(
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: { messageId: "message-1", text: "too late" },
@@ -821,7 +841,7 @@ describe("appendRunEventTx", () => {
 	it("sequences canonical Tool lifecycle events with Assistant text", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 
-		const toolStart = await appendRunEventTx(tdb.db, {
+		const toolStart = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.ToolCallStarted,
 			payload: {
@@ -831,19 +851,19 @@ describe("appendRunEventTx", () => {
 			},
 			appendClass: "model",
 		});
-		const toolArgs = await appendRunEventTx(tdb.db, {
+		const toolArgs = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.ToolCallArgs,
 			payload: { toolCallId: "tool-1", delta: '{"command":"ls"}' },
 			appendClass: "model",
 		});
-		const toolEnd = await appendRunEventTx(tdb.db, {
+		const toolEnd = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.ToolCallCompleted,
 			payload: { toolCallId: "tool-1" },
 			appendClass: "model",
 		});
-		const toolResult = await appendRunEventTx(tdb.db, {
+		const toolResult = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.ToolCallResult,
 			payload: {
@@ -854,7 +874,7 @@ describe("appendRunEventTx", () => {
 			},
 			appendClass: "model",
 		});
-		const text = await appendRunEventTx(tdb.db, {
+		const text = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "done" },
@@ -887,7 +907,7 @@ describe("appendRunEventTx", () => {
 			.where(eq(runs.runId, "run-1"));
 
 		expect(
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: RunEventType.ToolCallStarted,
 				payload: {
@@ -910,7 +930,7 @@ describe("appendRunEventTx", () => {
 		await lapseOwnershipLease("conv-1");
 
 		expect(
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: RunEventType.ToolCallResult,
 				payload: {
@@ -927,7 +947,7 @@ describe("appendRunEventTx", () => {
 	it("allows cancellation audit appends while running or interrupt_requested", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 
-		const whileRunning = await appendRunEventTx(tdb.db, {
+		const whileRunning = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: "model_interrupt_requested",
 			payload: {},
@@ -937,7 +957,7 @@ describe("appendRunEventTx", () => {
 			.update(runs)
 			.set({ status: "interrupt_requested" })
 			.where(eq(runs.runId, "run-1"));
-		const whileInterruptRequested = await appendRunEventTx(tdb.db, {
+		const whileInterruptRequested = await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: "command_canceled",
 			payload: {},
@@ -957,7 +977,7 @@ describe("appendRunEventTx", () => {
 		await lapseOwnershipLease("conv-1");
 
 		expect(
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: "command_canceled",
 				payload: {},
@@ -973,13 +993,13 @@ describe("transitionRunTerminalTx", () => {
 		"interrupted",
 	] as const)("validates and retains UI payloads when a Run becomes %s", async (status) => {
 		await acquireRun("run-1", "conv-1", "worker-1");
-		await appendRunEventTx(tdb.db, {
+		await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "assistant-message-1", text: "Results" },
 			appendClass: "model",
 		});
-		await appendRunEventTx(tdb.db, {
+		await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.UiPayload,
 			payload: {
@@ -1107,7 +1127,7 @@ describe("transitionRunTerminalTx", () => {
 
 	it("rejects terminalization with an incomplete Tool lifecycle", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
-		await appendRunEventTx(tdb.db, {
+		await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.ToolCallStarted,
 			payload: {
@@ -1155,7 +1175,7 @@ describe("transitionRunTerminalTx", () => {
 				payload: { toolCallId: "tool-1" },
 			},
 		] as const) {
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				...event,
 				appendClass: "model",
@@ -1175,7 +1195,7 @@ describe("transitionRunTerminalTx", () => {
 
 	it("completes a running run and appends exactly one run_done event", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
-		await appendRunEventTx(tdb.db, {
+		await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.AssistantMessageCompleted,
 			payload: { messageId: "message-1", text: "hi" },
@@ -1620,7 +1640,7 @@ describe("Run liveness sweep transactions", () => {
 
 	it("Reclamation closes a Run after a crash left an incomplete Tool prefix", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
-		await appendRunEventTx(tdb.db, {
+		await appendSingleRunEvent(tdb.db, {
 			owner: owner(),
 			type: RunEventType.ToolCallStarted,
 			payload: {
@@ -1903,7 +1923,7 @@ describe("Run liveness sweep transactions", () => {
 		await reclaimConversationTx(tdb.db);
 
 		expect(
-			await appendRunEventTx(tdb.db, {
+			await appendSingleRunEvent(tdb.db, {
 				owner: owner(),
 				type: RunEventType.AssistantMessageCompleted,
 				payload: {},

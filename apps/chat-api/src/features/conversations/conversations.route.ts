@@ -18,7 +18,7 @@ import {
 	ActiveRunExistsError,
 	ConversationArchivedError,
 	ConversationNotFoundError,
-} from "@/features/run-store";
+} from "@/features/run-store/run-store";
 import {
 	admitAgUiRun,
 	createConversation,

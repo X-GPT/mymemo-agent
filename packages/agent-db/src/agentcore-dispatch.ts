@@ -1,14 +1,4 @@
-import {
-	and,
-	eq,
-	gt,
-	inArray,
-	isNotNull,
-	isNull,
-	lte,
-	or,
-	sql,
-} from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
@@ -166,13 +156,7 @@ export async function claimAgentCoreDispatchesTx(
 						isNull(agentCoreDispatchOutbox.publishClaimUntil),
 						lte(agentCoreDispatchOutbox.publishClaimUntil, now),
 					),
-					or(
-						isNull(agentCoreDispatchOutbox.publishedAt),
-						and(
-							isNotNull(agentCoreDispatchOutbox.replayRequestedAt),
-							sql`${agentCoreDispatchOutbox.replayRequestedAt} > ${agentCoreDispatchOutbox.publishedAt}`,
-						),
-					),
+					isNull(agentCoreDispatchOutbox.publishedAt),
 				),
 			)
 			.orderBy(
@@ -232,25 +216,6 @@ export async function confirmAgentCoreDispatchPublishedTx(
 		)
 		.returning({ runId: agentCoreDispatchOutbox.runId });
 	return confirmed.length > 0;
-}
-
-/** Audit an operator replay request without disturbing a live publish lease. */
-export async function requestAgentCoreDispatchReplayTx(
-	db: Database,
-	input: { runId: string; requestedBy: string; now?: Date },
-): Promise<boolean> {
-	if (input.requestedBy.trim() === "") {
-		throw new Error("manual replay requires an operator identity");
-	}
-	const replay = await db
-		.update(agentCoreDispatchOutbox)
-		.set({
-			replayRequestedAt: input.now ?? new Date(),
-			replayRequestedBy: input.requestedBy,
-		})
-		.where(eq(agentCoreDispatchOutbox.runId, input.runId))
-		.returning({ runId: agentCoreDispatchOutbox.runId });
-	return replay.length > 0;
 }
 
 /**

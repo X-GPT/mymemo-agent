@@ -1,6 +1,6 @@
 import { RunAgentInputSchema } from "@ag-ui/core";
 import { z } from "zod";
-import type { ConversationListPosition } from "@/features/conversation-store";
+import type { ConversationListPosition } from "@/features/conversation-store/conversation-store";
 
 const MAX_IDENTIFIER_LENGTH = 256;
 const MAX_MESSAGE_LENGTH = 50_000;

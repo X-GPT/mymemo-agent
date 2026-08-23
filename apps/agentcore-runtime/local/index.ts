@@ -16,7 +16,6 @@ const resources = createProductionRunResources({
 	config,
 	logger,
 	processEnv: Bun.env,
-	telemetryService: "agentcore-runtime",
 	artifactObjectStore: createS3ArtifactObjectStore(config.artifact, {
 		endpoint: artifactEndpoint,
 	}),
