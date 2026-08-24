@@ -1,14 +1,16 @@
 import type { Database } from "@mymemo/agent-db/client";
 import { conversationMessages, conversations } from "@mymemo/agent-db/schema";
+import type { UIMessage } from "ai";
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { ConversationRef } from "@/features/conversation-store/conversation-store";
-import type {
-	ChatMessage,
-	ChatMessageStore,
-	UserMessageAdmission,
-} from "./chat-message-store";
 
-export class PostgresChatMessageStore implements ChatMessageStore {
+export type ChatMessage = UIMessage<unknown, never, never>;
+
+type UserMessageAdmission =
+	| { outcome: "admitted"; conversationEpoch: number }
+	| { outcome: "not_found" | "archived" | "duplicate" };
+
+export class PostgresChatMessageStore {
 	constructor(private readonly db: Database) {}
 
 	async ownedConversationExists(ref: ConversationRef): Promise<boolean> {

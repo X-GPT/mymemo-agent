@@ -13,10 +13,11 @@ import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { Hono } from "hono";
 import type { AppEnv } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
-import type { AgentRuntimeInvoker } from "./agent-query";
-import { createAiChatRoutes } from "./ai-chat.route";
-import type { ChatMessageStore } from "./chat-message-store";
+import { type AgentQueryChatDeps, createAiChatRoutes } from "./ai-chat.route";
 import { PostgresChatMessageStore } from "./postgres-chat-message-store";
+
+type MessageStore = AgentQueryChatDeps["messageStore"];
+type RuntimeInvoker = AgentQueryChatDeps["runtimeInvoker"];
 
 const identityHeaders = {
 	"content-type": "application/json",
@@ -97,8 +98,8 @@ function successfulClaudeEvents(): SDKMessage[] {
 }
 
 function buildApp(
-	store: ChatMessageStore,
-	runtimeInvoker: AgentRuntimeInvoker,
+	store: MessageStore,
+	runtimeInvoker: RuntimeInvoker,
 	exposureGate = {
 		async isAgentEnabled() {
 			return true;
@@ -526,7 +527,7 @@ describe("injected Agent-query POST /api/chat", () => {
 
 	const failureScenarios: Array<{
 		name: string;
-		invoker: () => AgentRuntimeInvoker;
+		invoker: () => RuntimeInvoker;
 	}> = [
 		{
 			name: "Runtime rejection",
@@ -636,12 +637,11 @@ describe("injected Agent-query POST /api/chat", () => {
 
 	it("omits the Assistant and exposes only a generic error when completion persistence fails", async () => {
 		const postgresStore = new PostgresChatMessageStore(tdb.db);
-		const store: ChatMessageStore = {
+		const store: MessageStore = {
 			ownedConversationExists: (ref) =>
 				postgresStore.ownedConversationExists(ref),
 			admitUserMessage: (ref, message) =>
 				postgresStore.admitUserMessage(ref, message),
-			listMessages: (ref) => postgresStore.listMessages(ref),
 			async persistAssistantMessage() {
 				throw new Error("private database and session persistence failure");
 			},
