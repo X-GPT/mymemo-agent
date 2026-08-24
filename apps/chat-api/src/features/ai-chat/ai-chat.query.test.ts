@@ -26,16 +26,16 @@ const identityHeaders = {
 	"x-partner-code": "partner-1",
 };
 
+const expectedUserMessage = {
+	id: "user-message-1",
+	role: "user",
+	parts: [{ type: "text", text: "Tell me something" }],
+};
+
 function input(overrides: Record<string, unknown> = {}) {
 	return {
 		id: "conversation-1",
-		messages: [
-			{
-				id: "user-message-1",
-				role: "user",
-				parts: [{ type: "text", text: "Tell me something" }],
-			},
-		],
+		messages: [expectedUserMessage],
 		model: "anthropic/claude-sonnet-5",
 		trigger: "submit-message",
 		...overrides,
@@ -120,13 +120,14 @@ function buildApp(
 	},
 ) {
 	const app = new Hono<AppEnv>();
+	let messageId = 0;
 	app.route(
 		"/api/chat",
 		createAiChatRoutes({
 			messageStore: store,
 			runtimeInvoker,
 			exposureGate,
-			createMessageId: () => "assistant-message-1",
+			createMessageId: () => `assistant-message-${++messageId}`,
 		}),
 	);
 	return app;
@@ -155,19 +156,13 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 	});
 
-	it("persists the User before direct invocation, streams text, then persists the complete Assistant", async () => {
+	it("persists the User before direct invocation and the complete Assistant through onEnd", async () => {
 		const store = new PostgresChatMessageStore(tdb.db);
 		const requests: AgentQueryRequest[] = [];
 		const runtimeInvoker = {
 			async invoke(request: AgentQueryRequest) {
 				requests.push(request);
-				expect(await listPersistedMessages(tdb)).toEqual([
-					{
-						id: "user-message-1",
-						role: "user",
-						parts: [{ type: "text", text: "Tell me something" }],
-					},
-				]);
+				expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
 				return successfulClaudeEvents();
 			},
 		};
@@ -209,15 +204,11 @@ describe("injected Agent-query POST /api/chat", () => {
 			"[DONE]",
 		]);
 		expect(await listPersistedMessages(tdb)).toEqual([
-			{
-				id: "user-message-1",
-				role: "user",
-				parts: [{ type: "text", text: "Tell me something" }],
-			},
+			expectedUserMessage,
 			{
 				id: "assistant-message-1",
 				role: "assistant",
-				parts: [{ type: "text", text: "A direct answer." }],
+				parts: [{ type: "text", text: "A direct answer.", state: "done" }],
 			},
 		]);
 
@@ -229,6 +220,48 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(conversation?.lastActivityAt.getTime()).toBeGreaterThan(
 			new Date("2026-01-01T00:00:00.000Z").getTime(),
 		);
+	});
+
+	it("does not persist a partial Assistant when the client aborts", async () => {
+		const store = new PostgresChatMessageStore(tdb.db);
+		const runtimeGate = Promise.withResolvers<void>();
+		const runtimeFinished = Promise.withResolvers<void>();
+		const app = buildApp(store, {
+			async invoke() {
+				return {
+					async *[Symbol.asyncIterator]() {
+						const events = successfulClaudeEvents();
+						try {
+							for (const event of events.slice(0, 3)) yield event;
+							await runtimeGate.promise;
+							for (const event of events.slice(3)) yield event;
+						} finally {
+							runtimeFinished.resolve();
+						}
+					},
+				};
+			},
+		});
+
+		const response = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(input()),
+		});
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("expected response body");
+		let responseText = "";
+		const decoder = new TextDecoder();
+		while (!responseText.includes("A direct ")) {
+			const { done, value } = await reader.read();
+			if (done) throw new Error("response ended before partial text");
+			responseText += decoder.decode(value, { stream: true });
+		}
+
+		await reader.cancel();
+		runtimeGate.resolve();
+		await runtimeFinished.promise;
+		expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
 	});
 
 	it("keeps the initial title and advances activity for each later User message", async () => {
@@ -603,17 +636,11 @@ describe("injected Agent-query POST /api/chat", () => {
 			expect(responseText).not.toContain("Tool");
 			expect(responseText).not.toContain("session-id");
 			expect(responseText).not.toContain("Tell me something");
-			expect(await listPersistedMessages(tdb)).toEqual([
-				{
-					id: "user-message-1",
-					role: "user",
-					parts: [{ type: "text", text: "Tell me something" }],
-				},
-			]);
+			expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
 		});
 	}
 
-	it("omits the Assistant and exposes only a generic error when completion persistence fails", async () => {
+	it("leaves only the User when onEnd persistence fails", async () => {
 		const postgresStore = new PostgresChatMessageStore(tdb.db);
 		const store: MessageStore = {
 			ownedConversationExists: (ref) =>
@@ -635,18 +662,8 @@ describe("injected Agent-query POST /api/chat", () => {
 			headers: identityHeaders,
 			body: JSON.stringify(input()),
 		});
-		const responseText = await response.text();
 
-		expect(responseText).toContain(
-			'"type":"error","errorText":"Response failed"',
-		);
-		expect(responseText).not.toContain("private");
-		expect(await listPersistedMessages(tdb)).toEqual([
-			{
-				id: "user-message-1",
-				role: "user",
-				parts: [{ type: "text", text: "Tell me something" }],
-			},
-		]);
+		await expect(response.text()).rejects.toThrow();
+		expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
 	});
 });
