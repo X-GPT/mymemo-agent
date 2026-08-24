@@ -187,7 +187,9 @@ _Avoid_: Conversation API, Assistant Cloud
 An additive, AI SDK-compatible data plane through which a client submits a
 message to an existing Conversation and receives that Run's live response. It
 shares the same Run admission and execution authority as the AG-UI agent
-surface rather than defining a second execution path.
+surface rather than defining a second execution path. Issue #560's replacement
+Agent-query path and canonical message store remain test-seam-only until the
+production composition and authority cut over together.
 _Avoid_: messaging layer, AI SDK runtime
 
 **Assistant text delta**:

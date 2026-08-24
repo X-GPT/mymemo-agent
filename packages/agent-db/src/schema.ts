@@ -169,6 +169,44 @@ export const conversations = pgTable(
 );
 
 /**
+ * Canonical AI SDK messages for the direct-response expansion path. The
+ * browser-facing representation is stored intact as role plus parts; the
+ * monotonically increasing sequence supplies deterministic Conversation order.
+ * This table is not read by the production Run/AG-UI path before cutover.
+ */
+export const conversationMessages = pgTable(
+	"conversation_messages",
+	{
+		sequence: bigserial("sequence", { mode: "number" }).notNull().unique(),
+		userId: text("user_id").notNull(),
+		conversationId: text("conversation_id").notNull(),
+		messageId: text("message_id").notNull(),
+		role: text("role").notNull(),
+		parts: jsonb("parts").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.userId, t.conversationId, t.messageId] }),
+		foreignKey({
+			columns: [t.userId, t.conversationId],
+			foreignColumns: [conversations.userId, conversations.conversationId],
+			name: "conversation_messages_conversation_fk",
+		}).onDelete("cascade"),
+		check(
+			"conversation_messages_role_check",
+			sql`${t.role} in ('user', 'assistant')`,
+		),
+		index("conversation_messages_order_idx").on(
+			t.userId,
+			t.conversationId,
+			t.sequence,
+		),
+	],
+);
+
+/**
  * Non-cascading transactional outbox for AgentCore dispatch. A Run id is the
  * dispatch identity, so the primary key enforces at most one dispatch per Run.
  * It stores only identifiers and timestamps; no prompt, model content, document

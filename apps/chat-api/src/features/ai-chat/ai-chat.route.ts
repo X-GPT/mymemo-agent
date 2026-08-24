@@ -1,10 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { EventType } from "@ag-ui/core";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { sValidator as zValidator } from "@hono/standard-validator";
 import {
 	isTerminalRunStatus,
 	RunInputMismatchError,
 	type RunRecord,
 } from "@mymemo/agent-db/run-store";
+import type { AgentQueryRequest } from "@mymemo/agent-query";
 import {
 	decodeAgUiLiveStreamEvent,
 	RUN_INTERRUPTED_EVENT_TYPE,
@@ -15,7 +18,7 @@ import {
 	safeValidateUIMessages,
 	type UIMessageStreamWriter,
 } from "ai";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import type { AppDeps, AppEnv } from "@/deps";
@@ -25,20 +28,55 @@ import {
 	RunIdParam,
 } from "@/features/conversations/conversations.schema";
 import { requireInternalIdentity } from "@/features/conversations/internal-identity";
+import type { ExposureGate } from "@/features/exposure-gate";
 import {
 	ActiveRunExistsError,
 	ConversationArchivedError,
 	ConversationNotFoundError,
 } from "@/features/run-store/run-store";
+import type {
+	ChatMessage,
+	PostgresChatMessageStore,
+} from "./postgres-chat-message-store";
 
-const app = new Hono<AppEnv>();
 const MAX_MESSAGE_LENGTH = 50_000;
+export const AI_CHAT_MODELS = ["anthropic/claude-sonnet-5"] as const;
 
 const AiChatBody = z.strictObject({
 	id: ConversationIdParam,
 	messages: z.unknown(),
 	trigger: z.literal("submit-message"),
 });
+
+const QueryTextPart = z.strictObject({
+	type: z.literal("text"),
+	text: z.string().min(1).max(MAX_MESSAGE_LENGTH),
+});
+const QueryUserMessage = z.strictObject({
+	id: RunIdParam,
+	role: z.literal("user"),
+	parts: z.tuple([QueryTextPart]),
+});
+const AgentQueryChatBody = z.strictObject({
+	id: ConversationIdParam,
+	messages: z.tuple([QueryUserMessage]),
+	model: z.string(),
+	trigger: z.literal("submit-message"),
+});
+
+export type AgentQueryChatDeps = {
+	messageStore: Pick<
+		PostgresChatMessageStore,
+		"ownedConversationExists" | "admitUserMessage" | "persistAssistantMessage"
+	>;
+	runtimeInvoker: {
+		invoke(
+			request: AgentQueryRequest,
+		): Promise<AsyncIterable<SDKMessage> | Iterable<SDKMessage>>;
+	};
+	exposureGate: ExposureGate;
+	createMessageId?: () => string;
+};
 
 async function waitForRunEvents(
 	deps: AppDeps,
@@ -106,105 +144,284 @@ async function writeAiMessageStream(
 	}
 }
 
-app.post(
-	"/",
-	bodyLimit({
-		maxSize: MAX_REQUEST_BODY_BYTES,
-		onError: (c) => c.json({ error: "Request body too large" }, 413),
-	}),
-	zValidator("json", AiChatBody, (result, c) => {
-		if (!result.success)
-			return c.json({ error: "Invalid AI SDK chat input" }, 400);
-	}),
-	requireInternalIdentity,
-	async (c) => {
-		const body = c.req.valid("json");
-		const validated = await safeValidateUIMessages({ messages: body.messages });
-		const finalMessage = validated.success ? validated.data.at(-1) : undefined;
-		const part = finalMessage?.parts[0];
-		if (
-			finalMessage?.role !== "user" ||
-			finalMessage.parts.length !== 1 ||
-			part?.type !== "text" ||
-			!RunIdParam.safeParse(finalMessage.id).success ||
-			part.text.length === 0 ||
-			part.text.length > MAX_MESSAGE_LENGTH
-		) {
-			return c.json({ error: "Final message must contain only text" }, 400);
-		}
+async function handleRunBackedChat(
+	c: Context<AppEnv>,
+	body: z.infer<typeof AiChatBody>,
+) {
+	const validated = await safeValidateUIMessages({ messages: body.messages });
+	const finalMessage = validated.success ? validated.data.at(-1) : undefined;
+	const part = finalMessage?.parts[0];
+	if (
+		finalMessage?.role !== "user" ||
+		finalMessage.parts.length !== 1 ||
+		part?.type !== "text" ||
+		!RunIdParam.safeParse(finalMessage.id).success ||
+		part.text.length === 0 ||
+		part.text.length > MAX_MESSAGE_LENGTH
+	) {
+		return c.json({ error: "Final message must contain only text" }, 400);
+	}
 
-		const conversation = await c.var.deps.conversationStore.get({
-			userId: c.var.identity.memberCode,
-			conversationId: body.id,
+	const conversation = await c.var.deps.conversationStore.get({
+		userId: c.var.identity.memberCode,
+		conversationId: body.id,
+	});
+	if (!conversation) return c.json({ error: "Conversation not found" }, 404);
+
+	if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
+		return c.json({ error: "Agent is not enabled" }, 403);
+	}
+
+	let run: RunRecord;
+	try {
+		const admission = await c.var.deps.runStore.admitRun({
+			conversation,
+			runId: finalMessage.id,
+			messageId: finalMessage.id,
+			message: part.text,
 		});
-		if (!conversation) return c.json({ error: "Conversation not found" }, 404);
+		if (admission.outcome === "not_found") {
+			return c.json({ error: "Run not found" }, 404);
+		}
+		run = admission.run;
+	} catch (error) {
+		if (error instanceof ActiveRunExistsError) {
+			return c.json({ error: "Conversation already has an active Run" }, 409);
+		}
+		if (error instanceof RunInputMismatchError) {
+			return c.json(
+				{ error: "Message id was reused with different input" },
+				409,
+			);
+		}
+		if (error instanceof ConversationArchivedError) {
+			return c.json({ error: "Conversation is archived" }, 409);
+		}
+		if (error instanceof ConversationNotFoundError) {
+			return c.json({ error: "Conversation not found" }, 404);
+		}
+		throw error;
+	}
 
-		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
-			return c.json({ error: "Agent is not enabled" }, 403);
+	const stream = createUIMessageStream({
+		async execute({ writer }) {
+			const source = await waitForRunEvents(c.var.deps, run, c.req.raw.signal);
+			if (source.outcome === "attached") {
+				await writeAiMessageStream(writer, source.events);
+				return;
+			}
+			switch (source.status) {
+				case "done":
+					writer.write({
+						type: "error",
+						errorText: "Live response unavailable",
+					});
+					writer.write({ type: "finish", finishReason: "error" });
+					break;
+				case "error":
+					writer.write({ type: "error", errorText: "Run failed" });
+					writer.write({ type: "finish", finishReason: "error" });
+					break;
+				case "interrupted":
+					writer.write({ type: "abort" });
+					break;
+			}
+		},
+	});
+	return createUIMessageStreamResponse({ stream });
+}
+
+async function writeClaudeMessageStream(
+	writer: UIMessageStreamWriter,
+	events: AsyncIterable<SDKMessage> | Iterable<SDKMessage>,
+	messageId: string,
+): Promise<string> {
+	const textPartId = `${messageId}-text`;
+	let text = "";
+	let messageStarted = false;
+	let messageStopped = false;
+	let textOpen = false;
+	let textClosed = false;
+	let terminal = false;
+	writer.write({ type: "start", messageId });
+
+	for await (const value of events) {
+		const message = value;
+		if (message?.type === "result") {
+			if (
+				terminal ||
+				message.subtype !== "success" ||
+				message.is_error ||
+				typeof message.session_id !== "string" ||
+				message.session_id.length === 0 ||
+				!messageStopped
+			) {
+				throw new Error("invalid terminal Claude result");
+			}
+			terminal = true;
+			continue;
+		}
+		if (message?.type !== "stream_event" || terminal) {
+			throw new Error("invalid Claude event");
 		}
 
-		let run: RunRecord;
-		try {
-			const admission = await c.var.deps.runStore.admitRun({
-				conversation,
-				runId: finalMessage.id,
-				messageId: finalMessage.id,
-				message: part.text,
+		const event = message.event;
+		switch (event.type) {
+			case "message_start":
+				if (messageStarted || event.message.id.length === 0) {
+					throw new Error("invalid Claude message start");
+				}
+				messageStarted = true;
+				break;
+			case "message_stop":
+				if (!messageStarted || !textClosed || messageStopped) {
+					throw new Error("invalid Claude message stop");
+				}
+				messageStopped = true;
+				break;
+			case "content_block_start":
+				if (
+					!messageStarted ||
+					messageStopped ||
+					event.index !== 0 ||
+					event.content_block.type !== "text" ||
+					textOpen ||
+					textClosed
+				) {
+					throw new Error("unsupported Claude content block");
+				}
+				textOpen = true;
+				writer.write({ type: "text-start", id: textPartId });
+				break;
+			case "content_block_delta":
+				if (
+					event.index !== 0 ||
+					event.delta.type !== "text_delta" ||
+					typeof event.delta.text !== "string" ||
+					!textOpen
+				) {
+					throw new Error("invalid Claude text delta");
+				}
+				text += event.delta.text;
+				writer.write({
+					type: "text-delta",
+					id: textPartId,
+					delta: event.delta.text,
+				});
+				break;
+			case "content_block_stop":
+				if (event.index !== 0 || !textOpen) {
+					throw new Error("invalid Claude text end");
+				}
+				textOpen = false;
+				textClosed = true;
+				writer.write({ type: "text-end", id: textPartId });
+				break;
+			default:
+				throw new Error("unsupported Claude event");
+		}
+	}
+
+	if (!terminal || !messageStopped || text.length === 0) {
+		throw new Error("Claude stream ended before completion");
+	}
+	return text;
+}
+
+async function handleAgentQueryChat(
+	c: Context<AppEnv>,
+	body: z.infer<typeof AgentQueryChatBody>,
+	deps: AgentQueryChatDeps,
+) {
+	if (!(AI_CHAT_MODELS as readonly string[]).includes(body.model)) {
+		return c.json({ error: "Unsupported model" }, 400);
+	}
+	const ref = {
+		userId: c.var.identity.memberCode,
+		conversationId: body.id,
+	};
+	if (!(await deps.messageStore.ownedConversationExists(ref))) {
+		return c.json({ error: "Conversation not found" }, 404);
+	}
+	if (!(await deps.exposureGate.isAgentEnabled(c.var.identity))) {
+		return c.json({ error: "Agent is not enabled" }, 403);
+	}
+
+	const userMessage = body.messages[0] as ChatMessage;
+	const admission = await deps.messageStore.admitUserMessage(ref, userMessage);
+	switch (admission.outcome) {
+		case "not_found":
+			return c.json({ error: "Conversation not found" }, 404);
+		case "archived":
+			return c.json({ error: "Conversation is archived" }, 409);
+		case "duplicate":
+			return c.json({ error: "Message id was already used" }, 409);
+	}
+
+	const assistantMessageId = (deps.createMessageId ?? randomUUID)();
+	const stream = createUIMessageStream({
+		onError: () => "Response failed",
+		async execute({ writer }) {
+			const events = await deps.runtimeInvoker.invoke({
+				version: 1,
+				conversationId: body.id,
+				conversationEpoch: admission.conversationEpoch,
+				prompt: body.messages[0].parts[0].text,
+				model: body.model,
 			});
-			if (admission.outcome === "not_found") {
-				return c.json({ error: "Run not found" }, 404);
-			}
-			run = admission.run;
-		} catch (error) {
-			if (error instanceof ActiveRunExistsError) {
-				return c.json({ error: "Conversation already has an active Run" }, 409);
-			}
-			if (error instanceof RunInputMismatchError) {
-				return c.json(
-					{ error: "Message id was reused with different input" },
-					409,
-				);
-			}
-			if (error instanceof ConversationArchivedError) {
-				return c.json({ error: "Conversation is archived" }, 409);
-			}
-			if (error instanceof ConversationNotFoundError) {
-				return c.json({ error: "Conversation not found" }, 404);
-			}
-			throw error;
-		}
+			const text = await writeClaudeMessageStream(
+				writer,
+				events,
+				assistantMessageId,
+			);
+			await deps.messageStore.persistAssistantMessage(ref, {
+				id: assistantMessageId,
+				role: "assistant",
+				parts: [{ type: "text", text }],
+			});
+			writer.write({ type: "finish", finishReason: "stop" });
+		},
+	});
+	return createUIMessageStreamResponse({ stream });
+}
 
-		const stream = createUIMessageStream({
-			async execute({ writer }) {
-				const source = await waitForRunEvents(
-					c.var.deps,
-					run,
-					c.req.raw.signal,
-				);
-				if (source.outcome === "attached") {
-					await writeAiMessageStream(writer, source.events);
-					return;
+/**
+ * The injected Agent-query seam exercises the replacement behavior without
+ * selecting it in production composition. The default remains the Run-backed
+ * route until the hard-swap issue changes the composition root.
+ */
+export function createAiChatRoutes(queryDeps?: AgentQueryChatDeps) {
+	const routes = new Hono<AppEnv>();
+	routes.post(
+		"/",
+		bodyLimit({
+			maxSize: MAX_REQUEST_BODY_BYTES,
+			onError: (c) => c.json({ error: "Request body too large" }, 413),
+		}),
+		zValidator("json", z.unknown(), (result, c) => {
+			if (!result.success) {
+				return c.json({ error: "Invalid AI SDK chat input" }, 400);
+			}
+		}),
+		requireInternalIdentity,
+		async (c) => {
+			const input = c.req.valid("json");
+			if (queryDeps) {
+				const parsed = AgentQueryChatBody.safeParse(input);
+				if (!parsed.success) {
+					return c.json({ error: "Invalid AI SDK chat input" }, 400);
 				}
-				switch (source.status) {
-					case "done":
-						writer.write({
-							type: "error",
-							errorText: "Live response unavailable",
-						});
-						writer.write({ type: "finish", finishReason: "error" });
-						break;
-					case "error":
-						writer.write({ type: "error", errorText: "Run failed" });
-						writer.write({ type: "finish", finishReason: "error" });
-						break;
-					case "interrupted":
-						writer.write({ type: "abort" });
-						break;
-				}
-			},
-		});
-		return createUIMessageStreamResponse({ stream });
-	},
-);
+				return handleAgentQueryChat(c, parsed.data, queryDeps);
+			}
 
-export default app;
+			const parsed = AiChatBody.safeParse(input);
+			if (!parsed.success) {
+				return c.json({ error: "Invalid AI SDK chat input" }, 400);
+			}
+			return handleRunBackedChat(c, parsed.data);
+		},
+	);
+	return routes;
+}
+
+export default createAiChatRoutes();
