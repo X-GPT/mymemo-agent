@@ -16,6 +16,7 @@ import {
 	createUIMessageStream,
 	createUIMessageStreamResponse,
 	safeValidateUIMessages,
+	type UIMessageChunk,
 	type UIMessageStreamWriter,
 } from "ai";
 import { type Context, Hono } from "hono";
@@ -232,10 +233,10 @@ async function handleRunBackedChat(
 }
 
 async function writeClaudeMessageStream(
-	writer: UIMessageStreamWriter,
+	writer: UIMessageStreamWriter<ChatMessage>,
 	events: AsyncIterable<SDKMessage> | Iterable<SDKMessage>,
 	messageId: string,
-): Promise<string> {
+): Promise<void> {
 	const textPartId = `${messageId}-text`;
 	let text = "";
 	let messageStarted = false;
@@ -325,7 +326,6 @@ async function writeClaudeMessageStream(
 	if (!terminal || !messageStopped || text.length === 0) {
 		throw new Error("Claude stream ended before completion");
 	}
-	return text;
 }
 
 async function handleAgentQueryChat(
@@ -359,8 +359,12 @@ async function handleAgentQueryChat(
 	}
 
 	const assistantMessageId = (deps.createMessageId ?? randomUUID)();
-	const stream = createUIMessageStream({
+	const stream = createUIMessageStream<ChatMessage>({
 		onError: () => "Response failed",
+		async onEnd({ finishReason, isAborted, responseMessage }) {
+			if (finishReason !== "stop" || isAborted) return;
+			await deps.messageStore.persistAssistantMessage(ref, responseMessage);
+		},
 		async execute({ writer }) {
 			const events = await deps.runtimeInvoker.invoke({
 				version: 1,
@@ -369,20 +373,40 @@ async function handleAgentQueryChat(
 				prompt: body.messages[0].parts[0].text,
 				model: body.model,
 			});
-			const text = await writeClaudeMessageStream(
-				writer,
-				events,
-				assistantMessageId,
-			);
-			await deps.messageStore.persistAssistantMessage(ref, {
-				id: assistantMessageId,
-				role: "assistant",
-				parts: [{ type: "text", text }],
-			});
+			await writeClaudeMessageStream(writer, events, assistantMessageId);
 			writer.write({ type: "finish", finishReason: "stop" });
 		},
 	});
-	return createUIMessageStreamResponse({ stream });
+
+	// AI SDK calls onEnd after forwarding finish. Hold finish until persistence
+	// succeeds so callback failure remains a generic failed response.
+	const reader = stream.getReader();
+	let finishChunk: UIMessageChunk | undefined;
+	const durableStream = new ReadableStream<UIMessageChunk>({
+		async pull(controller) {
+			try {
+				for (;;) {
+					const { done, value } = await reader.read();
+					if (done) {
+						if (finishChunk) controller.enqueue(finishChunk);
+						controller.close();
+						return;
+					}
+					if (value.type === "finish") {
+						finishChunk = value;
+						continue;
+					}
+					controller.enqueue(value);
+					return;
+				}
+			} catch {
+				controller.enqueue({ type: "error", errorText: "Response failed" });
+				controller.close();
+			}
+		},
+		cancel: (reason) => reader.cancel(reason),
+	});
+	return createUIMessageStreamResponse({ stream: durableStream });
 }
 
 /**

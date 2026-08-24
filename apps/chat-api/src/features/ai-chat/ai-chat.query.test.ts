@@ -155,7 +155,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 	});
 
-	it("persists the User before direct invocation, streams text, then persists the complete Assistant", async () => {
+	it("persists the User before direct invocation and the complete Assistant through onEnd", async () => {
 		const store = new PostgresChatMessageStore(tdb.db);
 		const requests: AgentQueryRequest[] = [];
 		const runtimeInvoker = {
@@ -217,7 +217,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			{
 				id: "assistant-message-1",
 				role: "assistant",
-				parts: [{ type: "text", text: "A direct answer." }],
+				parts: [{ type: "text", text: "A direct answer.", state: "done" }],
 			},
 		]);
 
@@ -229,6 +229,112 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(conversation?.lastActivityAt.getTime()).toBeGreaterThan(
 			new Date("2026-01-01T00:00:00.000Z").getTime(),
 		);
+	});
+
+	it("does not expose finish until onEnd persistence commits", async () => {
+		const postgresStore = new PostgresChatMessageStore(tdb.db);
+		let persistenceStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			persistenceStarted = resolve;
+		});
+		let releasePersistence!: () => void;
+		const persistenceGate = new Promise<void>((resolve) => {
+			releasePersistence = resolve;
+		});
+		const store: MessageStore = {
+			ownedConversationExists: (ref) =>
+				postgresStore.ownedConversationExists(ref),
+			admitUserMessage: (ref, message) =>
+				postgresStore.admitUserMessage(ref, message),
+			async persistAssistantMessage(ref, message) {
+				persistenceStarted();
+				await persistenceGate;
+				await postgresStore.persistAssistantMessage(ref, message);
+			},
+		};
+		const app = buildApp(store, {
+			async invoke() {
+				return successfulClaudeEvents();
+			},
+		});
+
+		const response = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(input()),
+		});
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("expected response body");
+		const decoder = new TextDecoder();
+		let responseText = "";
+		const consume = (async () => {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) return;
+				responseText += decoder.decode(value, { stream: true });
+			}
+		})();
+
+		await started;
+		expect(responseText).toContain('"type":"text-end"');
+		expect(responseText).not.toContain('"type":"finish"');
+		releasePersistence();
+		await consume;
+		expect(responseText).toContain('"type":"finish","finishReason":"stop"');
+	});
+
+	it("does not persist a partial Assistant when the client aborts", async () => {
+		const store = new PostgresChatMessageStore(tdb.db);
+		let releaseRuntime!: () => void;
+		const runtimeGate = new Promise<void>((resolve) => {
+			releaseRuntime = resolve;
+		});
+		let runtimeFinished!: () => void;
+		const finished = new Promise<void>((resolve) => {
+			runtimeFinished = resolve;
+		});
+		const app = buildApp(store, {
+			async invoke() {
+				return {
+					async *[Symbol.asyncIterator]() {
+						const events = successfulClaudeEvents();
+						try {
+							for (const event of events.slice(0, 3)) yield event;
+							await runtimeGate;
+							for (const event of events.slice(3)) yield event;
+						} finally {
+							runtimeFinished();
+						}
+					},
+				};
+			},
+		});
+
+		const response = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(input()),
+		});
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("expected response body");
+		let responseText = "";
+		const decoder = new TextDecoder();
+		while (!responseText.includes("A direct ")) {
+			const { done, value } = await reader.read();
+			if (done) throw new Error("response ended before partial text");
+			responseText += decoder.decode(value, { stream: true });
+		}
+
+		await reader.cancel();
+		releaseRuntime();
+		await finished;
+		expect(await listPersistedMessages(tdb)).toEqual([
+			{
+				id: "user-message-1",
+				role: "user",
+				parts: [{ type: "text", text: "Tell me something" }],
+			},
+		]);
 	});
 
 	it("keeps the initial title and advances activity for each later User message", async () => {
@@ -640,6 +746,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(responseText).toContain(
 			'"type":"error","errorText":"Response failed"',
 		);
+		expect(responseText).not.toContain('"type":"finish"');
 		expect(responseText).not.toContain("private");
 		expect(await listPersistedMessages(tdb)).toEqual([
 			{
