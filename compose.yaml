@@ -72,7 +72,7 @@ services:
       KB_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_kb
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api}
-      OPENROUTER_DEFAULT_MODEL: ${OPENROUTER_DEFAULT_MODEL:-anthropic/claude-sonnet-4}
+      OPENROUTER_DEFAULT_MODEL: ${OPENROUTER_DEFAULT_MODEL:-anthropic/claude-sonnet-5}
       E2B_API_KEY: ${E2B_API_KEY:?Set E2B_API_KEY}
       WORKER_E2B_TEMPLATE: ${WORKER_E2B_TEMPLATE:-mymemo-agent-sandbox}
       REDIS_URL: redis://127.0.0.1:6379

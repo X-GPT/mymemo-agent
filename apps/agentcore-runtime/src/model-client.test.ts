@@ -10,7 +10,7 @@ import { buildModelClientConfig } from "./model-client";
 const openrouter = {
 	apiKey: "sk-or-secret",
 	baseUrl: "https://openrouter.ai/api",
-	defaultModel: "anthropic/claude-sonnet-4",
+	defaultModel: "anthropic/claude-sonnet-5",
 };
 
 describe("buildModelClientConfig — trusted Runtime model path", () => {
@@ -33,7 +33,7 @@ describe("buildModelClientConfig — trusted Runtime model path", () => {
 
 	it("carries the one allowed default model (v1: no fallback)", () => {
 		const config = buildModelClientConfig(openrouter);
-		expect(config.model).toBe("anthropic/claude-sonnet-4");
+		expect(config.model).toBe("anthropic/claude-sonnet-5");
 	});
 
 	it("stays valid for the direct-Anthropic contingency via env flip", () => {

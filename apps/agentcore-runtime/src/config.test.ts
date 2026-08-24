@@ -19,7 +19,7 @@ function bootstrapEnv(): Record<string, string | undefined> {
 		REDIS_URL_SECRET_ARN:
 			"arn:aws:secretsmanager:us-west-2:123456789012:secret:redis-AbCdEf",
 		OPENROUTER_BASE_URL: "https://openrouter.ai/api",
-		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
+		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-5",
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 		ARTIFACT_BUCKET: "private-artifacts",
 		RDS_CA_BUNDLE_PATH: "/etc/ssl/certs/rds-global-bundle.pem",

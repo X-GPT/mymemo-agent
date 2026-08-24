@@ -69,7 +69,7 @@ describe("agent deployment behavior", () => {
 				KB_DATABASE_URL: "postgresql://kb:kb@db.example.com:5432/mymemo_kb",
 				OPENROUTER_API_KEY: "openrouter-test-key",
 				OPENROUTER_BASE_URL: "https://openrouter.ai/api",
-				OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
+				OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-5",
 				WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 			}),
 		).not.toThrow();

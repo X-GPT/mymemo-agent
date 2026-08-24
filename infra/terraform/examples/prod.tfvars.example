@@ -30,7 +30,7 @@ agentcore_dispatch_publisher_image     = "123456789012.dkr.ecr.us-east-1.amazona
 runtime_image_digest                   = "sha256:REPLACE_WITH_64_HEX_CHARACTERS"
 consumer_lambda_package                = "/absolute/path/to/consumer.zip"
 
-openrouter_default_model            = "anthropic/claude-sonnet-4"
+openrouter_default_model            = "anthropic/claude-sonnet-5"
 
 # SNS topics must already have confirmed incident subscriptions.
 # alarm_action_arns = ["arn:aws:sns:us-east-1:123456789012:mymemo-prod-alarms"]
