@@ -6,16 +6,14 @@ import {
 	expect,
 	it,
 } from "bun:test";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { conversations } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
+import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { Hono } from "hono";
 import type { AppEnv } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
-import type {
-	AgentQueryRequest,
-	AgentRuntimeInvoker,
-	ClaudeAgentEvent,
-} from "./agent-query";
+import type { AgentRuntimeInvoker } from "./agent-query";
 import { createAiChatRoutes } from "./ai-chat.route";
 import type { ChatMessageStore } from "./chat-message-store";
 import { PostgresChatMessageStore } from "./postgres-chat-message-store";
@@ -50,19 +48,28 @@ function parseAiSdkSse(text: string): unknown[] {
 		.map((data) => (data === "[DONE]" ? data : JSON.parse(data)));
 }
 
-function streamEvent(
-	event: Extract<ClaudeAgentEvent, { type: "stream_event" }>["event"],
-): ClaudeAgentEvent {
+function streamEvent(event: Record<string, unknown>): SDKMessage {
 	return {
 		type: "stream_event",
 		event,
 		parent_tool_use_id: null,
 		uuid: crypto.randomUUID(),
 		session_id: "agent-session-1",
-	};
+	} as unknown as SDKMessage;
 }
 
-function successfulClaudeEvents(): ClaudeAgentEvent[] {
+function resultEvent(overrides: Record<string, unknown> = {}): SDKMessage {
+	return {
+		type: "result",
+		subtype: "success",
+		is_error: false,
+		result: "provider-only terminal echo",
+		session_id: "agent-session-1",
+		...overrides,
+	} as SDKMessage;
+}
+
+function successfulClaudeEvents(): SDKMessage[] {
 	return [
 		streamEvent({
 			type: "message_start",
@@ -85,13 +92,7 @@ function successfulClaudeEvents(): ClaudeAgentEvent[] {
 		}),
 		streamEvent({ type: "content_block_stop", index: 0 }),
 		streamEvent({ type: "message_stop" }),
-		{
-			type: "result",
-			subtype: "success",
-			is_error: false,
-			result: "provider-only terminal echo",
-			session_id: "agent-session-1",
-		},
+		resultEvent(),
 	];
 }
 
@@ -566,13 +567,12 @@ describe("injected Agent-query POST /api/chat", () => {
 				async invoke() {
 					return [
 						...successfulClaudeEvents().slice(0, -1),
-						{
-							type: "result",
+						resultEvent({
 							subtype: "error_during_execution",
 							is_error: true,
 							errors: ["private provider terminal error"],
 							session_id: "private-session-id",
-						},
+						}),
 					];
 				},
 			}),
@@ -582,7 +582,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			invoker: () => ({
 				async invoke() {
 					return [
-						successfulClaudeEvents()[0],
+						successfulClaudeEvents()[0] as SDKMessage,
 						streamEvent({
 							type: "content_block_start",
 							index: 0,

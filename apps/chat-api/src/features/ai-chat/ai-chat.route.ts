@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EventType } from "@ag-ui/core";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { sValidator as zValidator } from "@hono/standard-validator";
 import {
 	isTerminalRunStatus,
@@ -32,7 +33,7 @@ import {
 	ConversationArchivedError,
 	ConversationNotFoundError,
 } from "@/features/run-store/run-store";
-import type { AgentRuntimeInvoker, ClaudeAgentEvent } from "./agent-query";
+import type { AgentRuntimeInvoker } from "./agent-query";
 import type { ChatMessage, ChatMessageStore } from "./chat-message-store";
 
 const app = new Hono<AppEnv>();
@@ -239,7 +240,7 @@ class ClaudeTranslationError extends Error {}
 
 async function writeClaudeMessageStream(
 	writer: UIMessageStreamWriter,
-	events: AsyncIterable<unknown> | Iterable<unknown>,
+	events: AsyncIterable<SDKMessage> | Iterable<SDKMessage>,
 	messageId: string,
 ): Promise<string> {
 	const textPartId = `${messageId}-text`;
@@ -252,7 +253,7 @@ async function writeClaudeMessageStream(
 	writer.write({ type: "start", messageId });
 
 	for await (const value of events) {
-		const message = value as ClaudeAgentEvent;
+		const message = value;
 		if (message?.type === "result") {
 			if (
 				terminal ||
