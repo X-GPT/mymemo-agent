@@ -386,34 +386,35 @@ async function handleAgentQueryChat(
  */
 export function createAiChatRoutes(queryDeps?: AgentQueryChatDeps) {
 	const routes = new Hono<AppEnv>();
+	const limitBody = bodyLimit({
+		maxSize: MAX_REQUEST_BODY_BYTES,
+		onError: (c) => c.json({ error: "Request body too large" }, 413),
+	});
+	if (queryDeps) {
+		routes.post(
+			"/",
+			limitBody,
+			zValidator("json", AgentQueryChatBody, (result, c) => {
+				if (!result.success) {
+					return c.json({ error: "Invalid AI SDK chat input" }, 400);
+				}
+			}),
+			requireInternalIdentity,
+			(c) => handleAgentQueryChat(c, c.req.valid("json"), queryDeps),
+		);
+		return routes;
+	}
+
 	routes.post(
 		"/",
-		bodyLimit({
-			maxSize: MAX_REQUEST_BODY_BYTES,
-			onError: (c) => c.json({ error: "Request body too large" }, 413),
-		}),
-		zValidator("json", z.unknown(), (result, c) => {
+		limitBody,
+		zValidator("json", AiChatBody, (result, c) => {
 			if (!result.success) {
 				return c.json({ error: "Invalid AI SDK chat input" }, 400);
 			}
 		}),
 		requireInternalIdentity,
-		async (c) => {
-			const input = c.req.valid("json");
-			if (queryDeps) {
-				const parsed = AgentQueryChatBody.safeParse(input);
-				if (!parsed.success) {
-					return c.json({ error: "Invalid AI SDK chat input" }, 400);
-				}
-				return handleAgentQueryChat(c, parsed.data, queryDeps);
-			}
-
-			const parsed = AiChatBody.safeParse(input);
-			if (!parsed.success) {
-				return c.json({ error: "Invalid AI SDK chat input" }, 400);
-			}
-			return handleRunBackedChat(c, parsed.data);
-		},
+		(c) => handleRunBackedChat(c, c.req.valid("json")),
 	);
 	return routes;
 }
