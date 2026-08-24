@@ -719,7 +719,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 	}
 
-	it("omits the Assistant and exposes only a generic error when completion persistence fails", async () => {
+	it("reports onEnd persistence failure without finish or an Assistant", async () => {
 		const postgresStore = new PostgresChatMessageStore(tdb.db);
 		const store: MessageStore = {
 			ownedConversationExists: (ref) =>
