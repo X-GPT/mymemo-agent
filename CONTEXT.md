@@ -183,6 +183,13 @@ map to MyMemo-issued stable identities. Conversation listing, lifecycle, Scope,
 authorization, history paging, and artifacts remain MyMemo resource concerns.
 _Avoid_: Conversation API, Assistant Cloud
 
+**AI SDK agent surface**:
+An additive, AI SDK-compatible data plane through which a client submits a
+message to an existing Conversation and receives that Run's live response. It
+shares the same Run admission and execution authority as the AG-UI agent
+surface rather than defining a second execution path.
+_Avoid_: messaging layer, AI SDK runtime
+
 **Assistant text delta**:
 A bounded, provisional fragment of Assistant text appended to the Run's Live
 Stream before the provider response completes. It is never copied into Postgres

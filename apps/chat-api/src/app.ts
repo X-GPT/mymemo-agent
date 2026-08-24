@@ -3,6 +3,7 @@ import { requestId } from "hono/request-id";
 import { pinoLogger } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import { type AppDeps, type AppEnv, createDeps } from "./deps";
+import aiChatRoutes from "./features/ai-chat/ai-chat.route";
 import artifactRoutes from "./features/artifacts/artifacts.route";
 import conversationHistoryRoutes from "./features/conversation-history/conversation-history.route";
 import conversationsRoutes from "./features/conversations/conversations.route";
@@ -25,6 +26,7 @@ export function createApp(
 
 	app.get("/", (c) => c.text("Hello Hono!"));
 	app.get("/health", (c) => c.json({ status: "ok" }));
+	app.route("/api/chat", aiChatRoutes);
 	app.route("/v1/conversations", conversationsRoutes);
 	app.route("/v1/conversations", conversationHistoryRoutes);
 	app.route("/v1/conversations", artifactRoutes);
