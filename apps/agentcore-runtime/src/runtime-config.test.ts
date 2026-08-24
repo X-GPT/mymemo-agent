@@ -12,7 +12,7 @@ function baseEnv(): Record<string, string | undefined> {
 		KB_DATABASE_URL: "postgresql://r:r@localhost:5432/mymemo_kb",
 		OPENROUTER_API_KEY: "sk-or-test",
 		OPENROUTER_BASE_URL: "https://openrouter.ai/api",
-		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-4",
+		OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-5",
 		REDIS_URL: "rediss://default:secret@redis.internal:6379",
 		E2B_API_KEY: "e2b-test",
 		WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
@@ -70,7 +70,7 @@ describe("loadRuntimeConfigFromEnv — required settings", () => {
 		const config = loadRuntimeConfigFromEnv(baseEnv());
 		expect(config.openrouter.apiKey).toBe("sk-or-test");
 		expect(config.openrouter.baseUrl).toBe("https://openrouter.ai/api");
-		expect(config.openrouter.defaultModel).toBe("anthropic/claude-sonnet-4");
+		expect(config.openrouter.defaultModel).toBe("anthropic/claude-sonnet-5");
 	});
 });
 

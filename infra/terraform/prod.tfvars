@@ -24,7 +24,7 @@ assign_public_ip = true
 # fck-nat 1.4.0, published by AWS account 568608671756 for us-west-2 ARM64.
 fck_nat_ami_id = "ami-0d1db1251d2b64626"
 
-openrouter_default_model = "anthropic/claude-sonnet-4"
+openrouter_default_model = "anthropic/claude-sonnet-5"
 
 # Established account alarm channel used by the shared staging infrastructure.
 alarm_action_arns = ["arn:aws:sns:us-west-2:637423444544:mymemo-staging-alarms"]

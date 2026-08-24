@@ -66,7 +66,7 @@ if entrypoint_output="$(
     -e OPENROUTER_API_KEY_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:openrouter-AbCdEf \
     -e E2B_API_KEY_SECRET_ARN=arn:aws:secretsmanager:us-west-2:123456789012:secret:e2b-AbCdEf \
     -e OPENROUTER_BASE_URL=https://openrouter.ai/api \
-    -e OPENROUTER_DEFAULT_MODEL=anthropic/claude-sonnet-4 \
+    -e OPENROUTER_DEFAULT_MODEL=anthropic/claude-sonnet-5 \
     -e WORKER_E2B_TEMPLATE=mymemo-agent-sandbox \
     -e ARTIFACT_BUCKET=private-artifacts \
     "$image" 2>&1
