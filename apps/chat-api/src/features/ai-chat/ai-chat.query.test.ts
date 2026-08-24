@@ -120,13 +120,14 @@ function buildApp(
 	},
 ) {
 	const app = new Hono<AppEnv>();
+	let messageId = 0;
 	app.route(
 		"/api/chat",
 		createAiChatRoutes({
 			messageStore: store,
 			runtimeInvoker,
 			exposureGate,
-			createMessageId: () => "assistant-message-1",
+			createMessageId: () => `assistant-message-${++messageId}`,
 		}),
 	);
 	return app;
@@ -639,7 +640,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 	}
 
-	it("reports onEnd persistence failure without finish or an Assistant", async () => {
+	it("leaves only the User when onEnd persistence fails", async () => {
 		const postgresStore = new PostgresChatMessageStore(tdb.db);
 		const store: MessageStore = {
 			ownedConversationExists: (ref) =>
@@ -661,13 +662,8 @@ describe("injected Agent-query POST /api/chat", () => {
 			headers: identityHeaders,
 			body: JSON.stringify(input()),
 		});
-		const responseText = await response.text();
 
-		expect(responseText).toContain(
-			'"type":"error","errorText":"Response failed"',
-		);
-		expect(responseText).not.toContain('"type":"finish"');
-		expect(responseText).not.toContain("private");
+		await expect(response.text()).rejects.toThrow();
 		expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
 	});
 });

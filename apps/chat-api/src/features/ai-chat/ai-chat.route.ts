@@ -16,7 +16,6 @@ import {
 	createUIMessageStream,
 	createUIMessageStreamResponse,
 	safeValidateUIMessages,
-	type UIMessageChunk,
 	type UIMessageStreamWriter,
 } from "ai";
 import { type Context, Hono } from "hono";
@@ -328,41 +327,6 @@ async function writeClaudeMessageStream(
 	}
 }
 
-/**
- * AI SDK 7 forwards `finish` before awaiting `onEnd`. Delay that one chunk so
- * persistence failure cannot look successful, and expose only the generic error.
- */
-function waitForOnEndBeforeFinish(
-	stream: ReadableStream<UIMessageChunk>,
-): ReadableStream<UIMessageChunk> {
-	const reader = stream.getReader();
-	let finishChunk: UIMessageChunk | undefined;
-	return new ReadableStream({
-		async pull(controller) {
-			try {
-				for (;;) {
-					const { done, value } = await reader.read();
-					if (done) {
-						if (finishChunk) controller.enqueue(finishChunk);
-						controller.close();
-						return;
-					}
-					if (value.type === "finish") {
-						finishChunk = value;
-						continue;
-					}
-					controller.enqueue(value);
-					return;
-				}
-			} catch {
-				controller.enqueue({ type: "error", errorText: "Response failed" });
-				controller.close();
-			}
-		},
-		cancel: (reason) => reader.cancel(reason),
-	});
-}
-
 async function handleAgentQueryChat(
 	c: Context<AppEnv>,
 	body: z.infer<typeof AgentQueryChatBody>,
@@ -412,9 +376,7 @@ async function handleAgentQueryChat(
 			writer.write({ type: "finish", finishReason: "stop" });
 		},
 	});
-	return createUIMessageStreamResponse({
-		stream: waitForOnEndBeforeFinish(stream),
-	});
+	return createUIMessageStreamResponse({ stream });
 }
 
 /**
