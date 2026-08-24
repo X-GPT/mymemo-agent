@@ -1,7 +1,7 @@
 import type { Database } from "@mymemo/agent-db/client";
 import { conversationMessages, conversations } from "@mymemo/agent-db/schema";
 import type { UIMessage } from "ai";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 export type ChatMessage = UIMessage<unknown, never, never>;
@@ -99,23 +99,5 @@ export class PostgresChatMessageStore {
 			role: message.role,
 			parts: message.parts,
 		});
-	}
-
-	async listMessages(ref: ConversationRef): Promise<ChatMessage[]> {
-		const rows = await this.db
-			.select()
-			.from(conversationMessages)
-			.where(
-				and(
-					eq(conversationMessages.userId, ref.userId),
-					eq(conversationMessages.conversationId, ref.conversationId),
-				),
-			)
-			.orderBy(asc(conversationMessages.sequence));
-		return rows.map((row) => ({
-			id: row.messageId,
-			role: row.role as ChatMessage["role"],
-			parts: row.parts as ChatMessage["parts"],
-		}));
 	}
 }

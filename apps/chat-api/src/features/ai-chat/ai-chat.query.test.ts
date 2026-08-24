@@ -7,9 +7,10 @@ import {
 	it,
 } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { conversations } from "@mymemo/agent-db/schema";
+import { conversationMessages, conversations } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
+import { asc } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AppEnv } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
@@ -47,6 +48,18 @@ function parseAiSdkSse(text: string): unknown[] {
 		.split("\n\n")
 		.map((block) => block.slice("data: ".length))
 		.map((data) => (data === "[DONE]" ? data : JSON.parse(data)));
+}
+
+async function listPersistedMessages(tdb: TestDb) {
+	const rows = await tdb.db
+		.select({
+			id: conversationMessages.messageId,
+			role: conversationMessages.role,
+			parts: conversationMessages.parts,
+		})
+		.from(conversationMessages)
+		.orderBy(asc(conversationMessages.sequence));
+	return rows;
 }
 
 function streamEvent(event: Record<string, unknown>): SDKMessage {
@@ -148,12 +161,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		const runtimeInvoker = {
 			async invoke(request: AgentQueryRequest) {
 				requests.push(request);
-				expect(
-					await store.listMessages({
-						userId: "member-1",
-						conversationId: "conversation-1",
-					}),
-				).toEqual([
+				expect(await listPersistedMessages(tdb)).toEqual([
 					{
 						id: "user-message-1",
 						role: "user",
@@ -200,12 +208,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			{ type: "finish", finishReason: "stop" },
 			"[DONE]",
 		]);
-		expect(
-			await store.listMessages({
-				userId: "member-1",
-				conversationId: "conversation-1",
-			}),
-		).toEqual([
+		expect(await listPersistedMessages(tdb)).toEqual([
 			{
 				id: "user-message-1",
 				role: "user",
@@ -350,12 +353,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			});
 		}
 		expect(invocations).toBe(0);
-		expect(
-			await store.listMessages({
-				userId: "member-1",
-				conversationId: "conversation-1",
-			}),
-		).toEqual([]);
+		expect(await listPersistedMessages(tdb)).toEqual([]);
 	});
 
 	it("keeps missing and foreign Conversations owner-private", async () => {
@@ -388,12 +386,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			});
 		}
 		expect(invocations).toBe(0);
-		expect(
-			await store.listMessages({
-				userId: "member-1",
-				conversationId: "conversation-1",
-			}),
-		).toEqual([]);
+		expect(await listPersistedMessages(tdb)).toEqual([]);
 
 		const deniedApp = buildApp(
 			store,
@@ -438,12 +431,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(response.status).toBe(400);
 		expect(await response.json()).toEqual({ error: "Unsupported model" });
 		expect(invocations).toBe(0);
-		expect(
-			await store.listMessages({
-				userId: "member-1",
-				conversationId: "conversation-1",
-			}),
-		).toEqual([]);
+		expect(await listPersistedMessages(tdb)).toEqual([]);
 	});
 
 	it("applies the new-work exposure gate before persistence", async () => {
@@ -473,12 +461,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(response.status).toBe(403);
 		expect(await response.json()).toEqual({ error: "Agent is not enabled" });
 		expect(invocations).toBe(0);
-		expect(
-			await store.listMessages({
-				userId: "member-1",
-				conversationId: "conversation-1",
-			}),
-		).toEqual([]);
+		expect(await listPersistedMessages(tdb)).toEqual([]);
 	});
 
 	it("rejects a duplicate User message id without reinvoking or changing activity", async () => {
@@ -620,12 +603,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			expect(responseText).not.toContain("Tool");
 			expect(responseText).not.toContain("session-id");
 			expect(responseText).not.toContain("Tell me something");
-			expect(
-				await store.listMessages({
-					userId: "member-1",
-					conversationId: "conversation-1",
-				}),
-			).toEqual([
+			expect(await listPersistedMessages(tdb)).toEqual([
 				{
 					id: "user-message-1",
 					role: "user",
@@ -663,12 +641,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			'"type":"error","errorText":"Response failed"',
 		);
 		expect(responseText).not.toContain("private");
-		expect(
-			await postgresStore.listMessages({
-				userId: "member-1",
-				conversationId: "conversation-1",
-			}),
-		).toEqual([
+		expect(await listPersistedMessages(tdb)).toEqual([
 			{
 				id: "user-message-1",
 				role: "user",
