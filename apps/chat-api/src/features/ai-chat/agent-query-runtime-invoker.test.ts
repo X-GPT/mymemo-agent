@@ -1,6 +1,4 @@
 import { expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { createBedrockAgentQueryRuntimeInvoker } from "./agent-query-runtime-invoker";
 
@@ -63,20 +61,4 @@ it("invokes the Conversation-bound Runtime and parses split NDJSON chunks", asyn
 		{ type: "result", session_id: "agent-session-2" },
 	]);
 	expect(destroyed).toBe(true);
-});
-
-it("composes Agent queries only in the non-production local entrypoint", () => {
-	const production = readFileSync(
-		join(import.meta.dir, "../../index.ts"),
-		"utf8",
-	);
-	const local = readFileSync(
-		join(import.meta.dir, "../../../local/index.ts"),
-		"utf8",
-	);
-
-	expect(production).not.toContain("createAiChatRoutes");
-	expect(production).not.toContain("AGENT_QUERY_RUNTIME_ARN");
-	expect(local).toContain("createAiChatRoutes");
-	expect(local).toContain("AGENT_QUERY_RUNTIME_ARN");
 });

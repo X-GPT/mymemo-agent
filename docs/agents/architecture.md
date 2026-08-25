@@ -32,7 +32,7 @@ selection, persisted runtime discriminator, or fallback execution path. See
 Run-serving guide](agentcore-runtime.md).
 
 Every Run execution mutation is fenced by live Conversation Ownership. The
-local-only Agent-query path instead uses Run-free Response authority over the
+staged Agent-query path instead uses Run-free Response authority over the
 same Conversation epoch/deadline state; the grants cannot overlap. The
 maintenance service terminalizes started Runs after a lapsed Ownership lease,
 leaves unstarted queued Runs for a later Dispatch retry, taints the Workspace

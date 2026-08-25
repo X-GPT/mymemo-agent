@@ -367,9 +367,13 @@ async function handleAgentQueryChat(
 	});
 }
 
-export function createAiChatRoutes(queryDeps: AgentQueryChatDeps) {
+export function createAiChatRoutes(injectedDeps?: AgentQueryChatDeps) {
 	const routes = new Hono<AppEnv>();
 	routes.get("/:conversationId", requireInternalIdentity, async (c) => {
+		const queryDeps = injectedDeps ?? c.var.deps.agentQueryChatDeps;
+		if (!queryDeps) {
+			return c.json({ error: "Direct response unavailable" }, 503);
+		}
 		const conversationId = ConversationIdParam.safeParse(
 			c.req.param("conversationId"),
 		);
@@ -386,6 +390,10 @@ export function createAiChatRoutes(queryDeps: AgentQueryChatDeps) {
 		return c.json(history.messages);
 	});
 	routes.get("/:conversationId/stream", requireInternalIdentity, async (c) => {
+		const queryDeps = injectedDeps ?? c.var.deps.agentQueryChatDeps;
+		if (!queryDeps) {
+			return c.json({ error: "Direct response unavailable" }, 503);
+		}
 		const conversationId = ConversationIdParam.safeParse(
 			c.req.param("conversationId"),
 		);
@@ -433,7 +441,15 @@ export function createAiChatRoutes(queryDeps: AgentQueryChatDeps) {
 			}
 		}),
 		requireInternalIdentity,
-		(c) => handleAgentQueryChat(c, c.req.valid("json"), queryDeps),
+		(c) => {
+			const queryDeps = injectedDeps ?? c.var.deps.agentQueryChatDeps;
+			if (!queryDeps) {
+				return c.json({ error: "Direct response unavailable" }, 503);
+			}
+			return handleAgentQueryChat(c, c.req.valid("json"), queryDeps);
+		},
 	);
 	return routes;
 }
+
+export default createAiChatRoutes();

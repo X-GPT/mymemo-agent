@@ -1,3 +1,4 @@
+import { BedrockAgentCoreClient } from "@aws-sdk/client-bedrock-agentcore";
 import { createDatabase } from "@mymemo/agent-db/client";
 import {
 	createLiveStreamTelemetry,
@@ -7,6 +8,8 @@ import {
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
+import { createBedrockAgentQueryRuntimeInvoker } from "./features/ai-chat/agent-query-runtime-invoker";
+import type { AgentQueryChatDeps } from "./features/ai-chat/ai-chat.route";
 import { PostgresChatMessageStore } from "./features/ai-chat/postgres-chat-message-store";
 import { createAiChatResumableStreams } from "./features/ai-chat/resumable-streams";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
@@ -57,10 +60,8 @@ export interface AppDeps {
 	 * parsed and before any write. Fails closed.
 	 */
 	exposureGate: ExposureGate;
-	/** Direct-response persistence over the shared writable database. */
-	chatMessageStore: PostgresChatMessageStore;
-	/** Standard Redis-backed AI SDK response resumption. */
-	resumableStreams: ReturnType<typeof createAiChatResumableStreams>;
+	/** Complete direct-response dependencies when its Runtime is configured. */
+	agentQueryChatDeps: AgentQueryChatDeps | null;
 }
 
 /** Hono environment: pino logger vars plus request-scoped dependencies and identity. */
@@ -92,6 +93,8 @@ export function createDeps(
 		database,
 	);
 	const runStore = new PostgresRunStore(database);
+	const chatMessageStore = new PostgresChatMessageStore(database);
+	const resumableStreams = createAiChatResumableStreams();
 	const liveStreamRelay = createRedisLiveStreamRelay({
 		url: config.redisUrl,
 		deployment: "current",
@@ -104,8 +107,19 @@ export function createDeps(
 		conversationStore,
 		conversationHistoryStore,
 		runStore,
-		chatMessageStore: new PostgresChatMessageStore(database),
-		resumableStreams: createAiChatResumableStreams(),
+		agentQueryChatDeps: config.agentQueryRuntimeArn
+			? {
+					messageStore: chatMessageStore,
+					exposureGate,
+					resumableStreams,
+					runtimeInvoker: createBedrockAgentQueryRuntimeInvoker({
+						client: new BedrockAgentCoreClient({
+							region: config.artifactRegion,
+						}),
+						agentRuntimeArn: config.agentQueryRuntimeArn,
+					}),
+				}
+			: null,
 		liveStreamRelay,
 		liveStreamTelemetry,
 		closeLiveResources: () => liveStreamRelay.close(),

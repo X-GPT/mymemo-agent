@@ -52,6 +52,8 @@ export interface ApiConfig {
 	statsigServerSecret: string;
 	/** Required authenticated TLS Redis secret for the Live Stream relay. */
 	redisUrl: string;
+	/** Optional direct Agent-query Runtime; omitted until the production hard swap. */
+	agentQueryRuntimeArn?: string;
 }
 
 /**
@@ -87,6 +89,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		artifactBucket,
 		artifactRegion,
 		statsigServerSecret,
+		agentQueryRuntimeArn: env.AGENT_QUERY_RUNTIME_ARN?.trim() || undefined,
 		redisUrl: resolveLiveStreamRedisUrl(env.REDIS_URL, {
 			allowInsecureLoopback:
 				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",

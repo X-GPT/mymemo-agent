@@ -142,6 +142,12 @@ describe("loadApiConfigFromEnv — split-runtime core", () => {
 	it("returns a config typed as ApiConfig with the expected core fields", () => {
 		const config: ApiConfig = loadApiConfigFromEnv(baseEnv());
 		expect(config.logLevel).toBe("info");
+		expect(config.agentQueryRuntimeArn).toBeUndefined();
+		const env = baseEnv();
+		env.AGENT_QUERY_RUNTIME_ARN = " arn:aws:bedrock-agentcore:runtime ";
+		expect(loadApiConfigFromEnv(env).agentQueryRuntimeArn).toBe(
+			"arn:aws:bedrock-agentcore:runtime",
+		);
 	});
 
 	it("does not require GATEWAY_PUBLIC_URL", () => {

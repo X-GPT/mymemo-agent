@@ -208,9 +208,8 @@ An additive, AI SDK-compatible data plane through which a client submits a
 message to an existing Conversation and receives a live response. The
 replacement Agent-query path is deliberately Run-free: it uses Response
 authority over the shared Conversation epoch/deadline and does not fabricate a
-Run or Run audit identity. It and its canonical message store remain
-test-seam-only until the production composition and authority cut over
-together.
+Run or Run audit identity. Its route may be mounted while the Agent-query
+Runtime remains unconfigured; callers and authority cut over together.
 _Avoid_: messaging layer, AI SDK runtime
 
 **Assistant text delta**:

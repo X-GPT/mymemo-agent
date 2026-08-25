@@ -29,7 +29,8 @@ Archive and Permanent deletion reject either live authority; rename does not.
 Response authority does not adopt Run lifecycle semantics. Producer death
 leaves no retry, Reclamation, or Run debt: writes stop at the last confirmed
 Response deadline, after which a later admission may advance the epoch. The
-Agent-query path remains outside production composition until the hard swap.
+route may be mounted before the hard swap, but its Agent-query Runtime remains
+outside production configuration.
 
 ## Considered options
 

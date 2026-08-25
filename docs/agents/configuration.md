@@ -50,8 +50,9 @@ Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one ex
 
 The non-production synchronous Runtime requires `AGENT_DATABASE_URL`,
 `E2B_API_KEY`, and `WORKER_E2B_TEMPLATE`. `PORT` defaults to `8080` and
-`LOG_LEVEL` to `info`. Local chat-api mounts this path only when
-`AGENT_QUERY_RUNTIME_ARN` is set.
+`LOG_LEVEL` to `info`. Chat API mounts the staged route in every composition;
+`AGENT_QUERY_RUNTIME_ARN` enables execution through this Runtime. Without it,
+the route returns `503` before admission.
 
 ## Chat API
 
@@ -67,6 +68,7 @@ Optional:
 
 - `LOG_LEVEL` (default `info`)
 - `PORT` (default `3000`)
+- `AGENT_QUERY_RUNTIME_ARN`: enables the staged direct-response Runtime; production omits it until the hard swap
 
 chat-api has no AgentCore dispatch queue or SSM parameter configuration. Admission ends after the transactional Postgres outbox write; publisher and consumer processes own queue delivery and the dispatch kill switch.
 
