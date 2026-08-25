@@ -8,6 +8,7 @@ import {
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import { PostgresChatMessageStore } from "./features/ai-chat/postgres-chat-message-store";
+import { createAiChatResumableStreams } from "./features/ai-chat/resumable-streams";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
@@ -56,6 +57,10 @@ export interface AppDeps {
 	 * parsed and before any write. Fails closed.
 	 */
 	exposureGate: ExposureGate;
+	/** Direct-response persistence over the shared writable database. */
+	chatMessageStore: PostgresChatMessageStore;
+	/** Standard Redis-backed AI SDK response resumption. */
+	resumableStreams: ReturnType<typeof createAiChatResumableStreams>;
 }
 
 /** Hono environment: pino logger vars plus request-scoped dependencies and identity. */
@@ -79,7 +84,7 @@ export function createDeps(
 			region: config.artifactRegion,
 		},
 	),
-): AppDeps & { chatMessageStore: PostgresChatMessageStore } {
+): AppDeps {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
 	const conversationStore = new PostgresConversationStore(database);
@@ -100,6 +105,7 @@ export function createDeps(
 		conversationHistoryStore,
 		runStore,
 		chatMessageStore: new PostgresChatMessageStore(database),
+		resumableStreams: createAiChatResumableStreams(),
 		liveStreamRelay,
 		liveStreamTelemetry,
 		closeLiveResources: () => liveStreamRelay.close(),

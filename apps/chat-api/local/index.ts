@@ -6,7 +6,6 @@ import { loadApiConfigFromEnv } from "../src/config/env";
 import { createDeps } from "../src/deps";
 import { createBedrockAgentQueryRuntimeInvoker } from "../src/features/ai-chat/agent-query-runtime-invoker";
 import { createAiChatRoutes } from "../src/features/ai-chat/ai-chat.route";
-import { createAiChatResumableStreams } from "../src/features/ai-chat/resumable-streams";
 import { createS3ArtifactDownloadSigner } from "../src/features/artifacts/s3-artifact-download-signer";
 
 const config = loadApiConfigFromEnv({
@@ -42,7 +41,7 @@ if (agentQueryRuntimeArn) {
 		createAiChatRoutes({
 			messageStore: deps.chatMessageStore,
 			exposureGate: deps.exposureGate,
-			resumableStreams: createAiChatResumableStreams(),
+			resumableStreams: deps.resumableStreams,
 			runtimeInvoker: createBedrockAgentQueryRuntimeInvoker({
 				client: new BedrockAgentCoreClient({ region: config.artifactRegion }),
 				agentRuntimeArn: agentQueryRuntimeArn,
