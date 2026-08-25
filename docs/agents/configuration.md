@@ -50,8 +50,12 @@ Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one ex
 
 The non-production synchronous Runtime requires `AGENT_DATABASE_URL`,
 `E2B_API_KEY`, and `WORKER_E2B_TEMPLATE`. `PORT` defaults to `8080` and
-`LOG_LEVEL` to `info`. Local chat-api mounts this path only when
-`AGENT_QUERY_RUNTIME_ARN` is set.
+`LOG_LEVEL` to `info`. Local Compose also requires `OPENROUTER_API_KEY`;
+`OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api`. Compose passes
+these values to the Claude Agent SDK as `ANTHROPIC_AUTH_TOKEN` and
+`ANTHROPIC_BASE_URL`, with `ANTHROPIC_API_KEY` empty. It runs the Runtime on
+loopback port `4510`; local chat-api defaults `AGENT_QUERY_RUNTIME_URL` to that
+address and invokes its `/invocations` endpoint over HTTP.
 
 ## Chat API
 

@@ -7,6 +7,7 @@ import {
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
+import type { ChatMessageStore } from "./features/ai-chat/chat-message-store";
 import { PostgresChatMessageStore } from "./features/ai-chat/postgres-chat-message-store";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
@@ -34,6 +35,8 @@ import {
  */
 export interface AppDeps {
 	config: ApiConfig;
+	/** Canonical AI SDK Conversation message persistence. */
+	chatMessageStore: ChatMessageStore;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
 	artifactMetadataStore: ArtifactMetadataStore;
 	/** Creates short-lived direct-download URLs after ownership authorization. */
@@ -79,7 +82,7 @@ export function createDeps(
 			region: config.artifactRegion,
 		},
 	),
-): AppDeps & { chatMessageStore: PostgresChatMessageStore } {
+): AppDeps {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
 	const conversationStore = new PostgresConversationStore(database);

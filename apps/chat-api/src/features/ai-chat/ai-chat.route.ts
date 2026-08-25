@@ -11,6 +11,7 @@ import type { AgentQueryRequest } from "@mymemo/agent-query";
 import {
 	createUIMessageStream,
 	createUIMessageStreamResponse,
+	type UIMessage,
 	type UIMessageStreamWriter,
 } from "ai";
 import { type Context, Hono } from "hono";
@@ -23,11 +24,6 @@ import {
 	RunIdParam,
 } from "@/features/conversations/conversations.schema";
 import { requireInternalIdentity } from "@/features/conversations/internal-identity";
-import type { ExposureGate } from "@/features/exposure-gate";
-import type {
-	ChatMessage,
-	PostgresChatMessageStore,
-} from "./postgres-chat-message-store";
 
 const MAX_MESSAGE_LENGTH = 50_000;
 export const AI_CHAT_MODELS = ["anthropic/claude-sonnet-5"] as const;
@@ -48,24 +44,14 @@ const AgentQueryChatBody = z.strictObject({
 	trigger: z.literal("submit-message"),
 });
 
-export type AgentQueryChatDeps = {
-	messageStore: Pick<
-		PostgresChatMessageStore,
-		| "ownedConversationExists"
-		| "admitUserMessage"
-		| "persistAssistantMessageAndSession"
-	>;
-	runtimeInvoker: {
-		invoke(
-			request: AgentQueryRequest,
-		): Promise<AsyncIterable<SDKMessage> | Iterable<SDKMessage>>;
-	};
-	exposureGate: ExposureGate;
-	createMessageId?: () => string;
+export type AgentQueryRuntimeInvoker = {
+	invoke(
+		request: AgentQueryRequest,
+	): Promise<AsyncIterable<SDKMessage> | Iterable<SDKMessage>>;
 };
 
 async function writeClaudeMessageStream(
-	writer: UIMessageStreamWriter<ChatMessage>,
+	writer: UIMessageStreamWriter<UIMessage>,
 	events: AsyncIterable<SDKMessage> | Iterable<SDKMessage>,
 	messageId: string,
 ): Promise<string> {
@@ -227,7 +213,7 @@ async function writeClaudeMessageStream(
 async function handleAgentQueryChat(
 	c: Context<AppEnv>,
 	body: z.infer<typeof AgentQueryChatBody>,
-	deps: AgentQueryChatDeps,
+	runtimeInvoker: AgentQueryRuntimeInvoker,
 ) {
 	if (!(AI_CHAT_MODELS as readonly string[]).includes(body.model)) {
 		return c.json({ error: "Unsupported model" }, 400);
@@ -236,15 +222,18 @@ async function handleAgentQueryChat(
 		userId: c.var.identity.memberCode,
 		conversationId: body.id,
 	};
-	if (!(await deps.messageStore.ownedConversationExists(ref))) {
+	if (!(await c.var.deps.chatMessageStore.ownedConversationExists(ref))) {
 		return c.json({ error: "Conversation not found" }, 404);
 	}
-	if (!(await deps.exposureGate.isAgentEnabled(c.var.identity))) {
+	if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 		return c.json({ error: "Agent is not enabled" }, 403);
 	}
 
-	const userMessage = body.messages[0] as ChatMessage;
-	const admission = await deps.messageStore.admitUserMessage(ref, userMessage);
+	const userMessage = body.messages[0] as UIMessage;
+	const admission = await c.var.deps.chatMessageStore.admitUserMessage(
+		ref,
+		userMessage,
+	);
 	switch (admission.outcome) {
 		case "not_found":
 			return c.json({ error: "Conversation not found" }, 404);
@@ -254,21 +243,21 @@ async function handleAgentQueryChat(
 			return c.json({ error: "Message id was already used" }, 409);
 	}
 
-	const assistantMessageId = (deps.createMessageId ?? randomUUID)();
+	const assistantMessageId = randomUUID();
 	let agentSessionId: string | undefined;
-	const stream = createUIMessageStream<ChatMessage>({
+	const stream = createUIMessageStream<UIMessage>({
 		onError: () => "Response failed",
 		async onEnd({ finishReason, isAborted, responseMessage }) {
 			if (finishReason !== "stop" || isAborted) return;
 			if (!agentSessionId) throw new Error("Agent session was not completed");
-			await deps.messageStore.persistAssistantMessageAndSession(
+			await c.var.deps.chatMessageStore.persistAssistantMessageAndSession(
 				ref,
 				responseMessage,
 				agentSessionId,
 			);
 		},
 		async execute({ writer }) {
-			const events = await deps.runtimeInvoker.invoke({
+			const events = await runtimeInvoker.invoke({
 				version: 1,
 				conversationId: body.id,
 				conversationEpoch: admission.conversationEpoch,
@@ -289,7 +278,7 @@ async function handleAgentQueryChat(
 	return createUIMessageStreamResponse({ stream });
 }
 
-export function createAiChatRoutes(queryDeps: AgentQueryChatDeps) {
+export function createAiChatRoutes(runtimeInvoker: AgentQueryRuntimeInvoker) {
 	const routes = new Hono<AppEnv>();
 	routes.post(
 		"/",
@@ -303,7 +292,7 @@ export function createAiChatRoutes(queryDeps: AgentQueryChatDeps) {
 			}
 		}),
 		requireInternalIdentity,
-		(c) => handleAgentQueryChat(c, c.req.valid("json"), queryDeps),
+		(c) => handleAgentQueryChat(c, c.req.valid("json"), runtimeInvoker),
 	);
 	return routes;
 }

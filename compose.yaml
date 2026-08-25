@@ -8,6 +8,7 @@
 #                   AND the read-only mymemo_kb (seeded for the retained doc path)
 #   migrate       — one-shot: applies the @mymemo/agent-db migrations, then exits
 #   chat-api      — creates Conversations, admits Runs, and attaches SSE
+#   agent-query-runtime — serves local synchronous /api/chat responses over HTTP
 #   agentcore-runtime — acquires one exact Dispatch and serves its Run
 #   dispatch-bridge — polls the durable outbox and invokes the local Runtime
 #   redis         — disposable Redis 7 for real relay contract testing
@@ -51,8 +52,38 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      agent-query-runtime:
+        condition: service_healthy
       artifact-bucket:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  agent-query-runtime:
+    build:
+      context: .
+      dockerfile: apps/agent-query-runtime/Dockerfile
+    network_mode: "service:redis"
+    environment:
+      AGENT_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_agent
+      ANTHROPIC_API_KEY: ""
+      ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY}
+      ANTHROPIC_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api}
+      E2B_API_KEY: ${E2B_API_KEY:?Set E2B_API_KEY}
+      LOG_LEVEL: info
+      PORT: "4510"
+      WORKER_E2B_TEMPLATE: ${WORKER_E2B_TEMPLATE:-mymemo-agent-sandbox}
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:4510/ping');process.exit(r.ok?0:1)"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   agentcore-runtime:

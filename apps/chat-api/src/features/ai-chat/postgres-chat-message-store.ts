@@ -7,18 +7,12 @@ import {
 import type { UIMessage } from "ai";
 import { and, eq, sql } from "drizzle-orm";
 import type { ConversationRef } from "@/features/conversation-store/conversation-store";
+import type {
+	ChatMessageStore,
+	UserMessageAdmission,
+} from "./chat-message-store";
 
-export type ChatMessage = UIMessage<unknown, never, never>;
-
-type UserMessageAdmission =
-	| {
-			outcome: "admitted";
-			conversationEpoch: number;
-			agentSessionId?: string;
-	  }
-	| { outcome: "not_found" | "archived" | "duplicate" };
-
-export class PostgresChatMessageStore {
+export class PostgresChatMessageStore implements ChatMessageStore {
 	constructor(private readonly db: Database) {}
 
 	async ownedConversationExists(ref: ConversationRef): Promise<boolean> {
@@ -37,7 +31,7 @@ export class PostgresChatMessageStore {
 
 	async admitUserMessage(
 		ref: ConversationRef,
-		message: ChatMessage,
+		message: UIMessage,
 	): Promise<UserMessageAdmission> {
 		return await this.db.transaction(async (tx) => {
 			const [conversation] = await tx
@@ -111,7 +105,7 @@ export class PostgresChatMessageStore {
 
 	async persistAssistantMessageAndSession(
 		ref: ConversationRef,
-		message: ChatMessage,
+		message: UIMessage,
 		agentSessionId: string,
 	): Promise<void> {
 		await this.db.transaction(async (tx) => {

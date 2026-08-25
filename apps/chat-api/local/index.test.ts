@@ -2,9 +2,13 @@ import { expect, it } from "bun:test";
 import { resolve } from "node:path";
 import { findFreePort } from "../../../packages/test-support/redis-test-server";
 
-it("starts without the Compose-only artifact endpoint", async () => {
+it("starts without Compose-only endpoints", async () => {
 	const port = await findFreePort();
-	const { LOCAL_ARTIFACT_ENDPOINT: _, ...processEnv } = Bun.env;
+	const {
+		AGENT_QUERY_RUNTIME_URL: _,
+		LOCAL_ARTIFACT_ENDPOINT: __,
+		...processEnv
+	} = Bun.env;
 	const child = Bun.spawn([process.execPath, "run", "local/index.ts"], {
 		cwd: resolve(import.meta.dir, ".."),
 		env: {
