@@ -124,6 +124,15 @@ function successfulMessages(): SDKMessage[] {
 	];
 }
 
+function queryMessages(
+	messages: Iterable<SDKMessage> | AsyncIterable<SDKMessage>,
+) {
+	const stream = (async function* () {
+		yield* messages;
+	})();
+	return Object.assign(stream, { async interrupt() {} });
+}
+
 function request(
 	body: Record<string, unknown> = {},
 	runtimeSessionId = conversationId,
@@ -165,8 +174,8 @@ function dependencies(
 		},
 	};
 	return {
-		async *query() {
-			yield* messages;
+		query() {
+			return queryMessages(messages);
 		},
 		createSessionStore: () => sessionStore,
 		async prepareWorkspace() {
@@ -193,9 +202,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 		const messages = successfulMessages();
 		const handle = createAgentQueryRequestHandler({
 			...dependencies(messages),
-			async *query(input) {
+			query(input) {
 				queries.push(input);
-				yield* messages;
+				return queryMessages(messages);
 			},
 			async prepareWorkingDirectory(path) {
 				workingDirectories.push(path);
@@ -244,9 +253,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 		const options: Options[] = [];
 		const response = await createAgentQueryRequestHandler({
 			...dependencies(),
-			async *query(input) {
+			query(input) {
 				options.push(input.options);
-				yield* successfulMessages();
+				return queryMessages(successfulMessages());
 			},
 			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {},
@@ -282,15 +291,19 @@ describe("Agent-query Runtime HTTP boundary", () => {
 		const response = await createAgentQueryRequestHandler({
 			...deps,
 			createSessionStore: () => sessionStore,
-			async *query(input) {
-				await input.options.sessionStore?.append(
-					{
-						projectKey: "-workspace-conversations-conversation",
-						sessionId: "agent-session-1",
-					},
-					[{ type: "user", uuid: "entry-1" } as never],
+			query(input) {
+				return queryMessages(
+					(async function* () {
+						await input.options.sessionStore?.append(
+							{
+								projectKey: "-workspace-conversations-conversation",
+								sessionId: "agent-session-1",
+							},
+							[{ type: "user", uuid: "entry-1" } as never],
+						);
+						yield* successfulMessages();
+					})(),
 				);
-				yield* successfulMessages();
 			},
 		})(request());
 
@@ -451,9 +464,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 		let queries = 0;
 		const handle = createAgentQueryRequestHandler({
 			...dependencies(),
-			async *query() {
+			query() {
 				queries++;
-				yield* successfulMessages();
+				return queryMessages(successfulMessages());
 			},
 			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {
@@ -489,9 +502,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 		let queries = 0;
 		const response = await createAgentQueryRequestHandler({
 			...dependencies(),
-			async *query() {
+			query() {
 				queries++;
-				yield* successfulMessages();
+				return queryMessages(successfulMessages());
 			},
 			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {
@@ -510,9 +523,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 		let queries = 0;
 		const response = await createAgentQueryRequestHandler({
 			...dependencies(),
-			async *query() {
+			query() {
 				queries++;
-				yield* successfulMessages();
+				return queryMessages(successfulMessages());
 			},
 			async prepareWorkingDirectory() {
 				throw new Error("workspace unavailable");
@@ -608,11 +621,15 @@ describe("Agent-query Runtime HTTP boundary", () => {
 	it("truncates the transport when Claude fails after streaming starts", async () => {
 		const response = await createAgentQueryRequestHandler({
 			...dependencies(),
-			async *query() {
-				for (const message of successfulMessages().slice(1, 4)) {
-					yield message;
-				}
-				throw new Error("transport failed");
+			query() {
+				return queryMessages(
+					(async function* () {
+						for (const message of successfulMessages().slice(1, 4)) {
+							yield message;
+						}
+						throw new Error("transport failed");
+					})(),
+				);
 			},
 			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {},

@@ -99,19 +99,24 @@ describe("Agent-query Workspace continuity", () => {
 			logger: { warn() {} },
 		});
 		const response = await createAgentQueryRequestHandler({
-			async *query() {
-				yield { type: "system", subtype: "init" } as SDKMessage;
-				await Bun.sleep(10);
-				if (!activeFileClient) throw new Error("Workspace file client missing");
-				await runWriteFileTool(
-					{ path: "draft.md", content: "partial work" },
-					{
-						client: activeFileClient,
-						workspaceRoot: "/home/user",
-						limits: DEFAULT_FILE_TOOL_LIMITS,
-					},
-				);
-				throw new Error("response failed");
+			query() {
+				const stream = (async function* () {
+					yield { type: "system", subtype: "init" } as SDKMessage;
+					await Bun.sleep(10);
+					if (!activeFileClient) {
+						throw new Error("Workspace file client missing");
+					}
+					await runWriteFileTool(
+						{ path: "draft.md", content: "partial work" },
+						{
+							client: activeFileClient,
+							workspaceRoot: "/home/user",
+							limits: DEFAULT_FILE_TOOL_LIMITS,
+						},
+					);
+					throw new Error("response failed");
+				})();
+				return Object.assign(stream, { async interrupt() {} });
 			},
 			createSessionStore: (conversation) =>
 				createAgentQuerySessionStore(tdb.db, conversation),

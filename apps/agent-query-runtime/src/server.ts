@@ -61,7 +61,7 @@ export type AgentQueryRuntimeDependencies = {
 	query(input: {
 		prompt: string;
 		options: Options;
-	}): AsyncIterable<SDKMessage> & { interrupt?(): Promise<unknown> };
+	}): AsyncIterable<SDKMessage> & { interrupt(): Promise<unknown> };
 	createSessionStore(input: {
 		conversationId: string;
 		conversationEpoch: number;
@@ -133,7 +133,7 @@ async function parseRequest(request: Request): Promise<AgentQueryRequest> {
 }
 
 function createNdjsonStream(
-	messages: AsyncIterable<SDKMessage> & { interrupt?(): Promise<unknown> },
+	messages: AsyncIterable<SDKMessage> & { interrupt(): Promise<unknown> },
 	sessionStore: AgentQuerySessionStore,
 	workspace: AgentQueryWorkspace,
 ) {
@@ -142,8 +142,8 @@ function createNdjsonStream(
 		async start(controller) {
 			let interruption: Promise<unknown> | undefined;
 			const interrupt = () => {
-				interruption ??= messages.interrupt?.().catch(() => {});
-				return interruption ?? Promise.resolve();
+				interruption ??= messages.interrupt().catch(() => {});
+				return interruption;
 			};
 			workspace.signal.addEventListener("abort", interrupt, { once: true });
 			if (workspace.signal.aborted) void interrupt();

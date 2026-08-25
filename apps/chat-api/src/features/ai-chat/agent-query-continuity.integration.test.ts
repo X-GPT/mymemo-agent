@@ -157,7 +157,7 @@ describe("non-production Agent-query continuity", () => {
 			query({ options }: { options: Options }) {
 				resumes.push(options.resume);
 				const sessionId = `agent-session-${++queryCount}`;
-				return (async function* () {
+				const stream = (async function* () {
 					await options.sessionStore?.append(
 						{
 							projectKey: "-workspace-conversations-conversation-1",
@@ -172,6 +172,7 @@ describe("non-production Agent-query continuity", () => {
 					);
 					yield* claudeMessages(sessionId);
 				})();
+				return Object.assign(stream, { async interrupt() {} });
 			},
 		});
 		const app = new Hono<AppEnv>();
