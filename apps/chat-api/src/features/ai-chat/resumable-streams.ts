@@ -1,19 +1,41 @@
+import { createClient } from "redis";
 import { createResumableStreamContext } from "resumable-stream";
 
-type Context = ReturnType<typeof createResumableStreamContext>;
-
-export function createAiChatResumableStreams(context?: Context) {
+export function createAiChatResumableStreams(redisUrl: string) {
+	let publisher: ReturnType<typeof createClient> | undefined;
+	let subscriber: ReturnType<typeof createClient> | undefined;
+	let context:
+		| Promise<ReturnType<typeof createResumableStreamContext>>
+		| undefined;
 	const getContext = () => {
-		context ??= createResumableStreamContext({
-			keyPrefix: "mymemo:ai-chat",
-			waitUntil: null,
-		});
+		context ??= (async () => {
+			publisher = createClient({ url: redisUrl });
+			subscriber = createClient({ url: redisUrl });
+			publisher.on("error", () => {});
+			subscriber.on("error", () => {});
+			await Promise.all([publisher.connect(), subscriber.connect()]);
+			return createResumableStreamContext({
+				keyPrefix: "mymemo:ai-chat",
+				waitUntil: null,
+				publisher,
+				subscriber,
+			});
+		})();
 		return context;
 	};
 	return {
 		async create(streamId: string, stream: ReadableStream<string>) {
-			await getContext().createNewResumableStream(streamId, () => stream);
+			await (await getContext()).createNewResumableStream(
+				streamId,
+				() => stream,
+			);
 		},
-		resume: (streamId: string) => getContext().resumeExistingStream(streamId),
+		async resume(streamId: string) {
+			return (await getContext()).resumeExistingStream(streamId);
+		},
+		close() {
+			publisher?.destroy();
+			subscriber?.destroy();
+		},
 	};
 }

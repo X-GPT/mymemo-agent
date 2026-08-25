@@ -87,7 +87,7 @@ export function createDeps(
 	artifactDownloadSigner: ArtifactDownloadSigner = createS3ArtifactDownloadSigner(
 		{
 			bucket: config.artifactBucket,
-			region: config.artifactRegion,
+			region: config.awsRegion,
 		},
 	),
 ): AppDeps {
@@ -99,7 +99,7 @@ export function createDeps(
 	);
 	const runStore = new PostgresRunStore(database);
 	const chatMessageStore = new PostgresChatMessageStore(database);
-	const resumableStreams = createAiChatResumableStreams();
+	const resumableStreams = createAiChatResumableStreams(config.redisUrl);
 	const liveStreamRelay = createRedisLiveStreamRelay({
 		url: config.redisUrl,
 		deployment: "current",
@@ -117,14 +117,17 @@ export function createDeps(
 		agentQueryRuntimeInvoker: config.agentQueryRuntimeArn
 			? createBedrockAgentQueryRuntimeInvoker({
 					client: new BedrockAgentCoreClient({
-						region: config.artifactRegion,
+						region: config.awsRegion,
 					}),
 					agentRuntimeArn: config.agentQueryRuntimeArn,
 				})
 			: null,
 		liveStreamRelay,
 		liveStreamTelemetry,
-		closeLiveResources: () => liveStreamRelay.close(),
+		closeLiveResources: async () => {
+			resumableStreams.close();
+			await liveStreamRelay.close();
+		},
 		exposureGate,
 	};
 }

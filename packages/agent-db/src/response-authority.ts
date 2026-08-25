@@ -13,19 +13,6 @@ export type ConversationResponseAuthority = {
 	userId?: string;
 };
 
-function liveResponseAuthorityConditions(
-	authority: ConversationResponseAuthority,
-) {
-	return and(
-		authority.userId === undefined
-			? undefined
-			: eq(conversations.userId, authority.userId),
-		eq(conversations.conversationId, authority.conversationId),
-		eq(conversations.epoch, authority.epoch),
-		sql`${conversations.ownerUntil} > ${conversationOwnershipClock()}`,
-	);
-}
-
 function responseAuthorityConditions(authority: ConversationResponseAuthority) {
 	return and(
 		authority.userId === undefined
@@ -33,6 +20,15 @@ function responseAuthorityConditions(authority: ConversationResponseAuthority) {
 			: eq(conversations.userId, authority.userId),
 		eq(conversations.conversationId, authority.conversationId),
 		eq(conversations.epoch, authority.epoch),
+	);
+}
+
+function liveResponseAuthorityConditions(
+	authority: ConversationResponseAuthority,
+) {
+	return and(
+		responseAuthorityConditions(authority),
+		sql`${conversations.ownerUntil} > ${conversationOwnershipClock()}`,
 	);
 }
 

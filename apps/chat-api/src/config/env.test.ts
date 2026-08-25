@@ -52,7 +52,7 @@ describe("loadApiConfigFromEnv — Downloadable artifact storage", () => {
 	it("exposes the validated bucket and region to trusted chat-api composition", () => {
 		const config = loadApiConfigFromEnv(baseEnv());
 		expect(config.artifactBucket).toBe("mymemo-agent-test-artifacts");
-		expect(config.artifactRegion).toBe("us-west-2");
+		expect(config.awsRegion).toBe("us-west-2");
 	});
 });
 

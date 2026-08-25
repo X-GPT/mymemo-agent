@@ -31,8 +31,8 @@ export interface ApiConfig {
 	logLevel: string;
 	/** Private S3 bucket holding durable Downloadable artifact objects. */
 	artifactBucket: string;
-	/** AWS region containing the private Downloadable artifact bucket. */
-	artifactRegion: string;
+	/** AWS region containing chat-api's S3 and AgentCore resources. */
+	awsRegion: string;
 	/**
 	 * Writable connection to chat-api's own Postgres (`mymemo_agent`), distinct
 	 * from the gateway's/worker's read-only KB. Backs the conversation registry
@@ -77,8 +77,8 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 
 	const artifactBucket = env.ARTIFACT_BUCKET?.trim();
 	assert(artifactBucket, "ARTIFACT_BUCKET is required");
-	const artifactRegion = env.AWS_REGION?.trim();
-	assert(artifactRegion, "AWS_REGION is required");
+	const awsRegion = env.AWS_REGION?.trim();
+	assert(awsRegion, "AWS_REGION is required");
 
 	const statsigServerSecret = env.STATSIG_SERVER_SECRET?.trim();
 	assert(statsigServerSecret, "STATSIG_SERVER_SECRET is required");
@@ -87,7 +87,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		logLevel: env.LOG_LEVEL || "info",
 		databaseUrl,
 		artifactBucket,
-		artifactRegion,
+		awsRegion,
 		statsigServerSecret,
 		agentQueryRuntimeArn: env.AGENT_QUERY_RUNTIME_ARN?.trim() || undefined,
 		redisUrl: resolveLiveStreamRedisUrl(env.REDIS_URL, {

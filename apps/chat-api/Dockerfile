@@ -22,7 +22,8 @@ RUN cd /temp/dev && bun install --frozen-lockfile
 # filter, bun installs every workspace member's prod deps into the hoisted root
 # node_modules — chat-api would ship agentcore-runtime's ~459MB Claude Agent SDK
 # (plus e2b) that it never imports. --filter=chat-api keeps only the reachable
-# closure (chat-api + agent-db + live-text), cutting node_modules ~660MB → ~145MB.
+# closure (chat-api + agent-db + agent-query + live-text), cutting node_modules
+# ~660MB → ~145MB.
 COPY --from=manifests /usr/src/app /temp/prod
 RUN cd /temp/prod && bun install --frozen-lockfile --production --filter=chat-api
 
@@ -33,6 +34,7 @@ FROM base AS prerelease
 COPY --from=install /temp/dev/node_modules node_modules
 COPY apps/chat-api/ apps/chat-api/
 COPY packages/agent-db/ packages/agent-db/
+COPY packages/agent-query/ packages/agent-query/
 COPY packages/live-text/ packages/live-text/
 COPY package.json .
 
@@ -42,6 +44,7 @@ FROM base AS local
 COPY --from=install /temp/prod/node_modules node_modules
 COPY --from=prerelease /usr/src/app/apps/chat-api apps/chat-api
 COPY --from=prerelease /usr/src/app/packages/agent-db packages/agent-db
+COPY --from=prerelease /usr/src/app/packages/agent-query packages/agent-query
 COPY --from=prerelease /usr/src/app/packages/live-text packages/live-text
 COPY --from=prerelease /usr/src/app/package.json .
 WORKDIR /usr/src/app/apps/chat-api
@@ -61,6 +64,7 @@ COPY --from=prerelease /usr/src/app/apps/chat-api/tsconfig.json apps/chat-api/
 # not needed at runtime — and its `src/` so chat-api's `@mymemo/agent-db` imports
 # resolve through the workspace symlink in node_modules.
 COPY --from=prerelease /usr/src/app/packages/agent-db packages/agent-db
+COPY --from=prerelease /usr/src/app/packages/agent-query packages/agent-query
 COPY --from=prerelease /usr/src/app/packages/live-text packages/live-text
 COPY --from=prerelease /usr/src/app/package.json .
 

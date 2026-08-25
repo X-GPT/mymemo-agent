@@ -16,7 +16,7 @@ const deps = createDeps(
 	createLiveStreamTelemetry("chat-api", logger),
 	{ isAgentEnabled: async () => true },
 	createS3ArtifactDownloadSigner(
-		{ bucket: config.artifactBucket, region: config.artifactRegion },
+		{ bucket: config.artifactBucket, region: config.awsRegion },
 		{ endpoint: artifactEndpoint },
 	),
 );
