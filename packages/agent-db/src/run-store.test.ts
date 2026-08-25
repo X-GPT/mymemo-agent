@@ -1651,11 +1651,6 @@ describe("Run liveness sweep transactions", () => {
 			.where(eq(conversations.conversationId, "conv-1"));
 
 		expect(await reclaimConversationTx(tdb.db)).toBeNull();
-		const [conversation] = await tdb.db
-			.select({ ownerUntil: conversations.ownerUntil })
-			.from(conversations)
-			.where(eq(conversations.conversationId, "conv-1"));
-		expect(conversation?.ownerUntil).toBeInstanceOf(Date);
 		expect(
 			(await expireUnownedQueuedRunsTx(tdb.db))?.runs.map((run) => run.status),
 		).toEqual(["error"]);

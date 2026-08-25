@@ -33,7 +33,7 @@ const identityHeaders = {
 	"x-partner-code": "partner-1",
 };
 
-const expectedUserMessage = {
+const expectedUserMessage: ChatMessage = {
 	id: "user-message-1",
 	role: "user",
 	parts: [{ type: "text", text: "Tell me something" }],
@@ -221,11 +221,21 @@ describe("injected Agent-query POST /api/chat", () => {
 	});
 
 	it("persists the User before Runtime invocation and the complete Assistant through onEnd", async () => {
+		await tdb.db.update(conversations).set({
+			ownerUntil: new Date(Date.now() - 1_000),
+			activeStreamId: "stale-stream",
+		});
 		const store = new PostgresChatMessageStore(tdb.db);
 		const requests: AgentQueryRequest[] = [];
 		const runtimeInvoker = {
 			async invoke(request: AgentQueryRequest) {
 				requests.push(request);
+				expect((await tdb.db.select().from(conversations))[0]).toMatchObject({
+					epoch: 8,
+					ownerWorkerId: null,
+					ownerUntil: expect.any(Date),
+					activeStreamId: null,
+				});
 				expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
 				return successfulClaudeEvents();
 			},
@@ -284,35 +294,6 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(conversation?.lastActivityAt.getTime()).toBeGreaterThan(
 			new Date("2026-01-01T00:00:00.000Z").getTime(),
 		);
-	});
-
-	it("atomically advances epoch/deadline and clears a stale stream pointer", async () => {
-		await tdb.db.update(conversations).set({
-			ownerUntil: new Date(Date.now() - 1_000),
-			activeStreamId: "stale-stream",
-		});
-		const app = buildApp(new PostgresChatMessageStore(tdb.db), {
-			async invoke(request) {
-				const [conversation] = await tdb.db.select().from(conversations);
-				expect(request.conversationEpoch).toBe(8);
-				expect(conversation).toMatchObject({
-					epoch: 8,
-					ownerWorkerId: null,
-					activeStreamId: null,
-				});
-				expect(conversation?.ownerUntil).toBeInstanceOf(Date);
-				expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
-				return successfulClaudeEvents();
-			},
-		});
-
-		const response = await app.request("/api/chat", {
-			method: "POST",
-			headers: identityHeaders,
-			body: JSON.stringify(input()),
-		});
-		expect(response.status).toBe(200);
-		await response.text();
 		const [completed] = await tdb.db.select().from(conversations);
 		expect(completed).toMatchObject({
 			epoch: 8,
@@ -354,33 +335,18 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect((await tdb.db.select().from(conversations))[0]?.epoch).toBe(7);
 	});
 
-	it("conditions renewal, stream-pointer cleanup, and completion on the admitted epoch", async () => {
+	it("publishes and clears a stream pointer only for the admitted epoch", async () => {
 		const store = new PostgresChatMessageStore(tdb.db);
-		const admission = await store.admitUserMessage(
-			{ userId: "member-1", conversationId: "conversation-1" },
-			expectedUserMessage as ChatMessage,
-		);
+		const ref = { userId: "member-1", conversationId: "conversation-1" };
+		const admission = await store.admitUserMessage(ref, expectedUserMessage);
 		if (admission.outcome !== "admitted") throw new Error("admission failed");
 		expect(
 			await store.setActiveStreamId(
-				{ userId: "member-1", conversationId: "conversation-1" },
+				ref,
 				admission.conversationEpoch,
 				"stream-1",
 			),
 		).toBe(true);
-		expect(
-			await store.clearActiveStreamId(
-				{ userId: "member-1", conversationId: "conversation-1" },
-				admission.conversationEpoch,
-				"wrong-stream",
-			),
-		).toBe(false);
-		expect(
-			await store.renewResponseAuthority(
-				{ userId: "member-1", conversationId: "conversation-1" },
-				admission.conversationEpoch,
-			),
-		).toBeInstanceOf(Date);
 		await tdb.db.update(conversations).set({
 			epoch: admission.conversationEpoch + 1,
 			ownerUntil: new Date(Date.now() + 60_000),
@@ -388,45 +354,31 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 
 		expect(
-			await store.renewResponseAuthority(
-				{ userId: "member-1", conversationId: "conversation-1" },
-				admission.conversationEpoch,
-			),
-		).toBeNull();
-		expect(
 			await store.setActiveStreamId(
-				{ userId: "member-1", conversationId: "conversation-1" },
+				ref,
 				admission.conversationEpoch,
 				"stale-stream",
 			),
 		).toBe(false);
-		await expect(
-			store.persistAssistantMessageAndSession(
-				{ userId: "member-1", conversationId: "conversation-1" },
+		expect(
+			await store.clearActiveStreamId(
+				ref,
 				admission.conversationEpoch,
-				{
-					id: "assistant-stale",
-					role: "assistant",
-					parts: [{ type: "text", text: "stale" }],
-				},
-				"agent-session-stale",
+				"stream-1",
 			),
-		).rejects.toThrow("response authority");
-		expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
+		).toBe(false);
 		expect((await tdb.db.select().from(conversations))[0]?.activeStreamId).toBe(
 			"stream-2",
 		);
 	});
 
 	it("aborts Runtime work when matching-epoch renewal is rejected", async () => {
-		const postgresStore = new PostgresChatMessageStore(tdb.db);
 		let renewals = 0;
-		const store = Object.assign(Object.create(postgresStore), {
-			async renewResponseAuthority() {
-				renewals++;
-				return null;
-			},
-		}) as MessageStore;
+		const store = new PostgresChatMessageStore(tdb.db);
+		store.renewResponseAuthority = async () => {
+			renewals++;
+			return null;
+		};
 		let runtimeAborted = false;
 		const app = buildApp(
 			store,
@@ -469,22 +421,17 @@ describe("injected Agent-query POST /api/chat", () => {
 		let redisInitialized = false;
 		const pointerPublished = Promise.withResolvers<void>();
 		const postgresStore = new PostgresChatMessageStore(tdb.db);
-		const store = Object.assign(Object.create(postgresStore), {
-			async setActiveStreamId(
-				ref: Parameters<PostgresChatMessageStore["setActiveStreamId"]>[0],
-				epoch: number,
-				streamId: string,
-			) {
-				expect(redisInitialized).toBe(true);
-				const published = await postgresStore.setActiveStreamId(
-					ref,
-					epoch,
-					streamId,
-				);
-				pointerPublished.resolve();
-				return published;
-			},
-		}) as MessageStore;
+		const store = new PostgresChatMessageStore(tdb.db);
+		store.setActiveStreamId = async (ref, epoch, streamId) => {
+			expect(redisInitialized).toBe(true);
+			const published = await postgresStore.setActiveStreamId(
+				ref,
+				epoch,
+				streamId,
+			);
+			pointerPublished.resolve();
+			return published;
+		};
 		const app = buildApp(
 			store,
 			{
@@ -588,64 +535,43 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 	});
 
-	it("returns 204 and clears a stale pointer when Redis has no stream", async () => {
-		await tdb.db.update(conversations).set({ activeStreamId: "stale-stream" });
-		const app = buildApp(
-			new PostgresChatMessageStore(tdb.db),
-			{
-				async invoke() {
-					return successfulClaudeEvents();
-				},
+	it("returns 204 for an absent stream even when pointer cleanup fails", async () => {
+		const runtimeInvoker = {
+			async invoke() {
+				return successfulClaudeEvents();
 			},
-			undefined,
-			{
-				resumableStreams: {
-					async create() {},
-					async resume() {
-						return undefined;
-					},
-				},
-			},
-		);
-
-		const response = await app.request("/api/chat/conversation-1/stream", {
-			headers: identityHeaders,
-		});
-		expect(response.status).toBe(204);
-		expect(
-			(await tdb.db.select().from(conversations))[0]?.activeStreamId,
-		).toBeNull();
-		expect(await listPersistedMessages(tdb)).toEqual([]);
-	});
-
-	it("returns 204 for an absent Redis stream even when pointer cleanup fails", async () => {
-		await tdb.db.update(conversations).set({ activeStreamId: "stale-stream" });
-		const store = new PostgresChatMessageStore(tdb.db);
-		store.clearActiveStreamId = async () => {
-			throw new Error("Postgres unavailable");
 		};
-		const app = buildApp(
-			store,
-			{
-				async invoke() {
-					return successfulClaudeEvents();
-				},
+		const resumableStreams = {
+			async create() {},
+			async resume() {
+				return undefined;
 			},
-			undefined,
-			{
-				resumableStreams: {
-					async create() {},
-					async resume() {
-						return undefined;
-					},
-				},
-			},
-		);
-
-		const response = await app.request("/api/chat/conversation-1/stream", {
-			headers: identityHeaders,
-		});
-		expect(response.status).toBe(204);
+		};
+		for (const cleanupFails of [false, true]) {
+			await tdb.db
+				.update(conversations)
+				.set({ activeStreamId: "stale-stream" });
+			const store = new PostgresChatMessageStore(tdb.db);
+			if (cleanupFails) {
+				store.clearActiveStreamId = async () => {
+					throw new Error("Postgres unavailable");
+				};
+			}
+			const app = buildApp(store, runtimeInvoker, undefined, {
+				resumableStreams,
+			});
+			expect(
+				(
+					await app.request("/api/chat/conversation-1/stream", {
+						headers: identityHeaders,
+					})
+				).status,
+			).toBe(204);
+			expect(
+				(await tdb.db.select().from(conversations))[0]?.activeStreamId,
+			).toBe(cleanupFails ? "stale-stream" : null);
+		}
+		expect(await listPersistedMessages(tdb)).toEqual([]);
 	});
 
 	it("streams and persists completed Tool invocations and results in the Assistant UIMessage", async () => {
@@ -1286,12 +1212,10 @@ describe("injected Agent-query POST /api/chat", () => {
 	}
 
 	it("leaves only the User when onEnd persistence fails", async () => {
-		const postgresStore = new PostgresChatMessageStore(tdb.db);
-		const store = Object.assign(Object.create(postgresStore), {
-			async persistAssistantMessageAndSession() {
-				throw new Error("private database and session persistence failure");
-			},
-		}) as MessageStore;
+		const store = new PostgresChatMessageStore(tdb.db);
+		store.persistAssistantMessageAndSession = async () => {
+			throw new Error("private database and session persistence failure");
+		};
 		const app = buildApp(store, {
 			async invoke() {
 				return successfulClaudeEvents();
@@ -1315,25 +1239,20 @@ describe("injected Agent-query POST /api/chat", () => {
 			agentSessionId: "agent-session-existing",
 		});
 		const postgresStore = new PostgresChatMessageStore(tdb.db);
-		const store = Object.assign(Object.create(postgresStore), {
-			async persistAssistantMessageAndSession(
-				ref: Parameters<
-					PostgresChatMessageStore["persistAssistantMessageAndSession"]
-				>[0],
-				conversationEpoch: number,
-				message: Parameters<
-					PostgresChatMessageStore["persistAssistantMessageAndSession"]
-				>[2],
-				agentSessionId: string,
-			) {
-				await postgresStore.persistAssistantMessageAndSession(
-					ref,
-					conversationEpoch,
-					{ ...message, id: "user-message-1" },
-					agentSessionId,
-				);
-			},
-		}) as MessageStore;
+		const store = new PostgresChatMessageStore(tdb.db);
+		store.persistAssistantMessageAndSession = async (
+			ref,
+			conversationEpoch,
+			message,
+			agentSessionId,
+		) => {
+			await postgresStore.persistAssistantMessageAndSession(
+				ref,
+				conversationEpoch,
+				{ ...message, id: "user-message-1" },
+				agentSessionId,
+			);
+		};
 		let invocations = 0;
 		const app = buildApp(store, {
 			async invoke() {

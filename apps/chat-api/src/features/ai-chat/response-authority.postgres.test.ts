@@ -13,12 +13,11 @@ import { conversationExecutionAuthorityDeadline } from "@mymemo/agent-db/convers
 import { publishAgentQueryWorkspaceTx } from "@mymemo/agent-db/runtime-store";
 import {
 	agentSessions,
-	conversationMessages,
 	conversationRuntime,
 	conversations,
 } from "@mymemo/agent-db/schema";
 import { appendAgentQuerySessionEntriesTx } from "@mymemo/agent-db/session-store";
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { AppEnv } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
@@ -45,15 +44,13 @@ function userMessage(id: string): ChatMessage {
 }
 
 function buildApp(responseGate: Promise<void>) {
-	const app = new Hono<AppEnv>();
-	let id = 0;
-	app.route(
+	return new Hono<AppEnv>().route(
 		"/api/chat",
 		createAiChatRoutes({
 			messageStore: messages,
 			runtimeInvoker: {
 				async invoke() {
-					return (async function* (): AsyncGenerator<SDKMessage> {
+					return (async function* () {
 						await responseGate;
 						yield { type: "result" } as SDKMessage;
 					})();
@@ -64,11 +61,8 @@ function buildApp(responseGate: Promise<void>) {
 					return true;
 				},
 			},
-			createMessageId: () => `assistant-${++id}`,
-			createStreamId: () => `stream-${++id}`,
 		}),
 	);
-	return app;
 }
 
 function post(app: Hono<AppEnv>, messageId: string) {
@@ -118,6 +112,20 @@ async function seed() {
 	});
 }
 
+async function admit() {
+	const admission = await messages.admitUserMessage(ref, userMessage("user-a"));
+	if (admission.outcome !== "admitted") throw new Error("admission failed");
+	return admission;
+}
+
+async function readConversation() {
+	const [conversation] = await db
+		.select()
+		.from(conversations)
+		.where(eq(conversations.userId, USER_ID));
+	return conversation;
+}
+
 describe.skipIf(!RUN)(
 	"Agent-query response authority against real Postgres",
 	() => {
@@ -146,25 +154,10 @@ describe.skipIf(!RUN)(
 			]);
 
 			expect(responses.map(({ status }) => status).sort()).toEqual([200, 409]);
-			expect(
-				await db
-					.select({ id: conversationMessages.messageId })
-					.from(conversationMessages)
-					.where(eq(conversationMessages.userId, USER_ID)),
-			).toHaveLength(1);
-			expect(
-				(
-					await db
-						.select()
-						.from(conversations)
-						.where(
-							and(
-								eq(conversations.userId, USER_ID),
-								eq(conversations.conversationId, CONVERSATION_ID),
-							),
-						)
-				)[0]?.epoch,
-			).toBe(1);
+			expect(await messages.listMessages(ref)).toMatchObject({
+				messages: [{ role: "user" }],
+			});
+			expect((await readConversation())?.epoch).toBe(1);
 			await releaseResponses(gate, responses);
 		});
 
@@ -204,11 +197,7 @@ describe.skipIf(!RUN)(
 		});
 
 		it("does not let renewal revive a superseded epoch", async () => {
-			const admission = await messages.admitUserMessage(
-				ref,
-				userMessage("user-a"),
-			);
-			if (admission.outcome !== "admitted") throw new Error("admission failed");
+			const admission = await admit();
 
 			await Promise.all([
 				messages.renewResponseAuthority(ref, admission.conversationEpoch),
@@ -226,11 +215,15 @@ describe.skipIf(!RUN)(
 		});
 
 		it("commits only matching-epoch completion", async () => {
-			const admission = await messages.admitUserMessage(
-				ref,
-				userMessage("user-a"),
-			);
-			if (admission.outcome !== "admitted") throw new Error("admission failed");
+			const admission = await admit();
+			await expect(
+				messages.persistAssistantMessageAndSession(
+					ref,
+					admission.conversationEpoch + 1,
+					{ ...userMessage("stale-assistant"), role: "assistant" },
+					"stale-session",
+				),
+			).rejects.toThrow("response authority");
 			await messages.persistAssistantMessageAndSession(
 				ref,
 				admission.conversationEpoch,
@@ -241,33 +234,17 @@ describe.skipIf(!RUN)(
 				},
 				"agent-session-a",
 			);
-			expect(
-				await db
-					.select({ role: conversationMessages.role })
-					.from(conversationMessages)
-					.where(eq(conversationMessages.userId, USER_ID)),
-			).toHaveLength(2);
-			expect(
-				(
-					await db
-						.select()
-						.from(conversations)
-						.where(
-							and(
-								eq(conversations.userId, USER_ID),
-								eq(conversations.conversationId, CONVERSATION_ID),
-							),
-						)
-				)[0],
-			).toMatchObject({ ownerUntil: null, activeStreamId: null });
+			expect(await messages.listMessages(ref)).toMatchObject({
+				messages: [{ role: "user" }, { role: "assistant" }],
+			});
+			expect(await readConversation()).toMatchObject({
+				ownerUntil: null,
+				activeStreamId: null,
+			});
 		});
 
 		it("rejects stale SessionStore and Workspace mutations", async () => {
-			const admission = await messages.admitUserMessage(
-				ref,
-				userMessage("user-a"),
-			);
-			if (admission.outcome !== "admitted") throw new Error("admission failed");
+			const admission = await admit();
 			await db
 				.update(conversations)
 				.set({

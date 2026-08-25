@@ -316,6 +316,12 @@ describe("acquireAgentCoreDispatchTx", () => {
 
 	it("blocks Ownership and live Response authority but acquires after Response expiry", async () => {
 		await admitRunWithDispatch();
+		const acquire = () =>
+			acquireAgentCoreDispatchTx(tdb.db, {
+				dispatch,
+				workerId: "agentcore-boot/invocation-2",
+				now: new Date("2026-08-14T16:01:00.000Z"),
+			});
 		await tdb.db
 			.update(conversations)
 			.set({
@@ -324,41 +330,23 @@ describe("acquireAgentCoreDispatchTx", () => {
 			})
 			.where(eq(conversations.conversationId, exact.conversationId));
 
-		await expect(
-			acquireAgentCoreDispatchTx(tdb.db, {
-				dispatch,
-				workerId: "agentcore-boot/invocation-2",
-				now: new Date("2026-08-14T16:01:00.000Z"),
-			}),
-		).resolves.toEqual({ disposition: "temporarily_unavailable" });
+		await expect(acquire()).resolves.toEqual({
+			disposition: "temporarily_unavailable",
+		});
+
+		await tdb.db.update(conversations).set({
+			ownerWorkerId: null,
+			ownerUntil: new Date("2026-08-14T16:01:30.000Z"),
+			activeStreamId: "stale-response-stream",
+		});
+		await expect(acquire()).resolves.toEqual({
+			disposition: "temporarily_unavailable",
+		});
 
 		await tdb.db
 			.update(conversations)
-			.set({
-				ownerWorkerId: null,
-				ownerUntil: new Date("2026-08-14T16:01:30.000Z"),
-				activeStreamId: "stale-response-stream",
-			})
-			.where(eq(conversations.conversationId, exact.conversationId));
-		await expect(
-			acquireAgentCoreDispatchTx(tdb.db, {
-				dispatch,
-				workerId: "agentcore-boot/invocation-2",
-				now: new Date("2026-08-14T16:01:00.000Z"),
-			}),
-		).resolves.toEqual({ disposition: "temporarily_unavailable" });
-
-		await tdb.db
-			.update(conversations)
-			.set({ ownerUntil: new Date("2026-08-14T16:00:59.000Z") })
-			.where(eq(conversations.conversationId, exact.conversationId));
-		await expect(
-			acquireAgentCoreDispatchTx(tdb.db, {
-				dispatch,
-				workerId: "agentcore-boot/invocation-2",
-				now: new Date("2026-08-14T16:01:00.000Z"),
-			}),
-		).resolves.toMatchObject({
+			.set({ ownerUntil: new Date("2026-08-14T16:00:59.000Z") });
+		await expect(acquire()).resolves.toMatchObject({
 			disposition: "acquired",
 			workerId: "agentcore-boot/invocation-2",
 		});
