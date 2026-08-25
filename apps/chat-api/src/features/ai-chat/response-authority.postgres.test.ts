@@ -176,7 +176,7 @@ describe.skipIf(!RUN)(
 				conversationStore.update(ref, { archived: true }),
 			]);
 			if (response.status === 200) {
-				expect(archived).toEqual({ outcome: "active_run" });
+				expect(archived).toEqual({ outcome: "active_work" });
 			} else {
 				expect(response.status).toBe(409);
 				expect(archived).toMatchObject({ outcome: "updated" });
@@ -195,7 +195,7 @@ describe.skipIf(!RUN)(
 				conversationStore.deletePermanently(ref),
 			]);
 			if (response.status === 200) {
-				expect(deleted).toEqual({ outcome: "active_run" });
+				expect(deleted).toEqual({ outcome: "active_work" });
 			} else {
 				expect(response.status).toBe(404);
 				expect(deleted).toEqual({ outcome: "deleted" });

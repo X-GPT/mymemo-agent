@@ -52,8 +52,9 @@ and Tool work, the Runtime verifies the matching live Conversation response
 epoch/deadline. Database errors never extend its last confirmed deadline.
 SessionStore and Workspace/runtime-state mutations carry the same fence;
 same-epoch duplicate invocations are suppressed, while a newer epoch must stop
-and settle prior local work before replacement. Production must not mount this
-path before the hard swap.
+and settle prior local work before replacement. The shared Chat API may mount
+the staged route, but production must not configure this Runtime or switch
+callers and execution authority before the hard swap.
 
 `src/sdk/start-run-query.ts` must:
 

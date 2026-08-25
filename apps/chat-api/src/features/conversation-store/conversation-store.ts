@@ -73,11 +73,11 @@ export interface ConversationListPage {
 
 export type ConversationUpdateResult =
 	| { outcome: "updated"; conversation: ConversationRecord }
-	| { outcome: "not_found" | "active_run" };
+	| { outcome: "not_found" | "active_work" };
 
 export type ConversationDeleteResult =
 	| { outcome: "deleted" }
-	| { outcome: "not_found" | "active_run" };
+	| { outcome: "not_found" | "active_work" };
 
 /**
  * Persistence seam for the conversation registry, keyed by `{userId,

@@ -560,7 +560,7 @@ app.patch(
 		if (result.outcome !== "updated") {
 			return result.outcome === "not_found"
 				? c.json({ error: "Conversation not found" }, 404)
-				: c.json({ error: "Conversation has an active Run" }, 409);
+				: c.json({ error: "Conversation has active work" }, 409);
 		}
 		return c.json(toConversationSummary(result.conversation));
 	},
@@ -584,8 +584,8 @@ app.delete(
 		if (result.outcome === "not_found") {
 			return c.json({ error: "Conversation not found" }, 404);
 		}
-		if (result.outcome === "active_run") {
-			return c.json({ error: "Conversation has an active Run" }, 409);
+		if (result.outcome === "active_work") {
+			return c.json({ error: "Conversation has active work" }, 409);
 		}
 		return c.body(null, 204);
 	},

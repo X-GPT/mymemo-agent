@@ -11,8 +11,10 @@ A Conversation is the durable container, a Run serves one submitted message, and
 The shared app mounts `POST /api/chat`. It stores canonical `UIMessage` rows and the opaque current
 Agent-session id together, then supplies only that id—not public message
 history—to the next `AgentQueryRequest`. Admission locks the Conversation,
-rejects only a live response deadline, advances its epoch/deadline, and stores
-the User message atomically. `GET /api/chat/:conversationId` returns canonical
+rejects any live execution-authority deadline (Conversation Ownership or
+Response authority) but not a stale `activeStreamId`, advances its
+epoch/deadline, and stores the User message atomically. `GET
+/api/chat/:conversationId` returns canonical
 ordered `UIMessage[]`; `GET /api/chat/:conversationId/stream` owner-authorizes
 and resumes the Conversation's standard Redis-backed AI SDK stream. Redis
 failure affects resumption only. Without `AGENT_QUERY_RUNTIME_ARN`, the staged

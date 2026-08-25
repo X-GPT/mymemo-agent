@@ -339,7 +339,7 @@ describe("PostgresRunStore", () => {
 				{ userId: "user-1", conversationId: "conv-1" },
 				{ archived: true },
 			),
-		).resolves.toEqual({ outcome: "active_run" });
+		).resolves.toEqual({ outcome: "active_work" });
 	});
 
 	it("serializes permanent deletion racing admission", async () => {
@@ -367,7 +367,7 @@ describe("PostgresRunStore", () => {
 			return;
 		}
 
-		expect(deletionResult.value).toEqual({ outcome: "active_run" });
+		expect(deletionResult.value).toEqual({ outcome: "active_work" });
 		expect(admissionResult.status).toBe("fulfilled");
 		expect(await tdb.db.select().from(runs)).toHaveLength(1);
 	});

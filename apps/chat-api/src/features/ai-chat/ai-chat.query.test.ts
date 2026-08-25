@@ -322,7 +322,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 	});
 
-	it("rejects a live response deadline before any new-work side effect", async () => {
+	it("rejects a live execution-authority deadline before any new-work side effect", async () => {
 		await tdb.db
 			.update(conversations)
 			.set({ ownerUntil: new Date(Date.now() + 60_000) });

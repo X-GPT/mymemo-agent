@@ -166,13 +166,13 @@ describe("PostgresConversationStore", () => {
 				{ userId: "user-1", conversationId: "conv-1" },
 				{ archived: true },
 			),
-		).resolves.toEqual({ outcome: "active_run" });
+		).resolves.toEqual({ outcome: "active_work" });
 		await expect(
 			store.deletePermanently({
 				userId: "user-1",
 				conversationId: "conv-1",
 			}),
-		).resolves.toEqual({ outcome: "active_run" });
+		).resolves.toEqual({ outcome: "active_work" });
 	});
 
 	it("allows rename but rejects Archive and Permanent deletion before the response deadline", async () => {
@@ -194,13 +194,13 @@ describe("PostgresConversationStore", () => {
 				{ userId: "user-1", conversationId: "conv-1" },
 				{ archived: true },
 			),
-		).resolves.toEqual({ outcome: "active_run" });
+		).resolves.toEqual({ outcome: "active_work" });
 		await expect(
 			store.deletePermanently({
 				userId: "user-1",
 				conversationId: "conv-1",
 			}),
-		).resolves.toEqual({ outcome: "active_run" });
+		).resolves.toEqual({ outcome: "active_work" });
 	});
 
 	it("Permanent deletion cascades Run history and leaves external cleanup state recoverable", async () => {

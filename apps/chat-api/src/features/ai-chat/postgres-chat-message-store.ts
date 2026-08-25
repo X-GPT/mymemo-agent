@@ -62,7 +62,7 @@ export class PostgresChatMessageStore {
 			const [conversation] = await tx
 				.select({
 					...getTableColumns(conversations),
-					responseActive: sql<boolean>`${conversations.ownerUntil} > now()`,
+					executionAuthorityActive: sql<boolean>`${conversations.ownerUntil} > now()`,
 				})
 				.from(conversations)
 				.where(
@@ -73,7 +73,9 @@ export class PostgresChatMessageStore {
 				)
 				.for("update");
 			if (!conversation) return { outcome: "not_found" };
-			if (conversation.responseActive) return { outcome: "conflict" };
+			if (conversation.executionAuthorityActive) {
+				return { outcome: "conflict" };
+			}
 			if (conversation.archivedAt !== null) {
 				return { outcome: "archived" };
 			}
