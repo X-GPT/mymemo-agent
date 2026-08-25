@@ -65,6 +65,7 @@ export type ResponseAuthorityVerifier = (authority: {
 
 export type AgentQueryRuntimeDependencies = {
 	query(input: { prompt: string; options: Options }): AsyncIterable<SDKMessage>;
+	prepareWorkingDirectory(path: string): Promise<void>;
 	verifyResponseAuthority: ResponseAuthorityVerifier;
 };
 
@@ -204,15 +205,18 @@ export function createAgentQueryRequestHandler(
 				conversationId: input.conversationId,
 				conversationEpoch: input.conversationEpoch,
 			});
+			const cwd = `/workspace/conversations/${input.conversationId}`;
+			await dependencies.prepareWorkingDirectory(cwd);
 			const messages = dependencies.query({
 				prompt: input.prompt,
 				options: {
 					allowedTools: [],
 					model: input.model,
 					includePartialMessages: true,
-					cwd: `/workspace/conversations/${input.conversationId}`,
+					cwd,
 					permissionMode: "dontAsk",
 					settingSources: [],
+					thinking: { type: "disabled" },
 					tools: [],
 					...(input.agentSessionId ? { resume: input.agentSessionId } : {}),
 				},

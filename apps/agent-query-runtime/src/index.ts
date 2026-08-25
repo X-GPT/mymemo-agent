@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createAgentQueryServerOptions } from "./server";
 
@@ -10,6 +11,9 @@ Bun.serve(
 	createAgentQueryServerOptions(
 		{
 			query,
+			async prepareWorkingDirectory(path) {
+				await mkdir(path, { recursive: true });
+			},
 			// Production Postgres epoch/deadline enforcement is composed in #565;
 			// this Runtime remains outside production until then.
 			async verifyResponseAuthority() {},

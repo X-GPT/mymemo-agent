@@ -113,6 +113,7 @@ function dependencies(
 		async *query() {
 			yield* messages;
 		},
+		async prepareWorkingDirectory() {},
 		async verifyResponseAuthority() {},
 	};
 }
@@ -124,11 +125,15 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 			conversationId: string;
 			conversationEpoch: number;
 		}> = [];
+		const workingDirectories: string[] = [];
 		const messages = successfulMessages();
 		const handle = createAgentQueryRequestHandler({
 			async *query(input) {
 				queries.push(input);
 				yield* messages;
+			},
+			async prepareWorkingDirectory(path) {
+				workingDirectories.push(path);
 			},
 			async verifyResponseAuthority(authority) {
 				authorities.push(authority);
@@ -157,12 +162,16 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 					cwd: `/workspace/conversations/${conversationId}`,
 					permissionMode: "dontAsk",
 					settingSources: [],
+					thinking: { type: "disabled" },
 					tools: [],
 					resume: "opaque-agent-session",
 				},
 			},
 		]);
 		expect(authorities).toEqual([{ conversationId, conversationEpoch: 7 }]);
+		expect(workingDirectories).toEqual([
+			`/workspace/conversations/${conversationId}`,
+		]);
 	});
 
 	it("starts a fresh Agent session when the opaque session id is absent", async () => {
@@ -172,6 +181,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 				options.push(input.options);
 				yield* successfulMessages();
 			},
+			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {},
 		})(request());
 
@@ -189,6 +199,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 				queries++;
 				yield* successfulMessages();
 			},
+			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {
 				verifications++;
 			},
@@ -225,9 +236,30 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 				queries++;
 				yield* successfulMessages();
 			},
+			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {
 				throw new Error("stale response authority");
 			},
+		})(request());
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({
+			error: "AgentCore invocation failed",
+		});
+		expect(queries).toBe(0);
+	});
+
+	it("rejects working-directory preparation failure before starting Claude", async () => {
+		let queries = 0;
+		const response = await createAgentQueryRequestHandler({
+			async *query() {
+				queries++;
+				yield* successfulMessages();
+			},
+			async prepareWorkingDirectory() {
+				throw new Error("workspace unavailable");
+			},
+			async verifyResponseAuthority() {},
 		})(request());
 
 		expect(response.status).toBe(503);
@@ -251,7 +283,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 		expect(lines.some((line) => line.type === "error")).toBe(false);
 	});
 
-	it("truncates the response rather than forwarding unsupported Claude content", async () => {
+	it("truncates unexpected non-text content disabled by the query options", async () => {
 		const hidden = [
 			streamEvent({
 				type: "message_start",
@@ -307,6 +339,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 			query() {
 				throw new Error("Claude unavailable");
 			},
+			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {},
 		})(request());
 
@@ -324,6 +357,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 				}
 				throw new Error("transport failed");
 			},
+			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {},
 		})(request());
 		const reader = response.body?.getReader();
