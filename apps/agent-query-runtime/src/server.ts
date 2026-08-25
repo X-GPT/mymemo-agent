@@ -24,6 +24,40 @@ const agentQueryRequest = z.strictObject({
 	agentSessionId: z.string().min(1).max(2_048).optional(),
 });
 
+const resultBase = z
+	.object({
+		type: z.literal("result"),
+		duration_ms: z.number().nonnegative(),
+		duration_api_ms: z.number().nonnegative(),
+		is_error: z.boolean(),
+		num_turns: z.number().int().nonnegative(),
+		stop_reason: z.string().nullable(),
+		total_cost_usd: z.number().nonnegative(),
+		usage: z.record(z.string(), z.unknown()),
+		modelUsage: z.record(z.string(), z.unknown()),
+		permission_denials: z.array(z.unknown()),
+		uuid: z.string().min(1),
+		session_id: z.string().min(1),
+	})
+	.passthrough();
+const resultMessage = z.discriminatedUnion("subtype", [
+	resultBase.extend({
+		subtype: z.literal("success"),
+		is_error: z.literal(false),
+		result: z.string(),
+	}),
+	resultBase.extend({
+		subtype: z.enum([
+			"error_during_execution",
+			"error_max_turns",
+			"error_max_budget_usd",
+			"error_max_structured_output_retries",
+		]),
+		is_error: z.literal(true),
+		errors: z.array(z.string()),
+	}),
+]);
+
 export type ResponseAuthorityVerifier = (authority: {
 	conversationId: string;
 	conversationEpoch: number;
@@ -82,55 +116,52 @@ async function parseRequest(request: Request): Promise<AgentQueryRequest> {
 	return parsed.data;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
-function isControlledTextEvent(message: SDKMessage): boolean {
-	if (message.type !== "stream_event" || !isRecord(message.event)) return false;
-	const event = message.event;
-	switch (event.type) {
-		case "message_start":
-		case "message_stop":
-		case "content_block_stop":
-			return true;
-		case "content_block_start":
-			return (
-				isRecord(event.content_block) && event.content_block.type === "text"
-			);
-		case "content_block_delta":
-			return isRecord(event.delta) && event.delta.type === "text_delta";
-		default:
-			return false;
-	}
-}
-
-function isValidResult(message: SDKMessage): boolean {
-	return (
-		message.type === "result" &&
-		typeof message.session_id === "string" &&
-		message.session_id.length > 0 &&
-		typeof message.subtype === "string" &&
-		typeof message.is_error === "boolean"
-	);
-}
-
 function createNdjsonStream(messages: AsyncIterable<SDKMessage>) {
 	const encoder = new TextEncoder();
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
+			const write = (message: SDKMessage) => {
+				controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
+			};
 			try {
 				for await (const message of messages) {
 					if (message.type === "result") {
-						if (!isValidResult(message)) {
+						const result = resultMessage.safeParse(message);
+						if (!result.success) {
 							throw new Error("invalid terminal Claude result");
 						}
-						controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
+						write(message);
 						controller.close();
 						return;
 					}
-					if (isControlledTextEvent(message)) {
-						controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
+					if (message.type !== "stream_event") {
+						continue;
+					}
+
+					switch (message.event.type) {
+						case "message_start":
+						case "content_block_stop":
+						case "message_stop":
+							write(message);
+							break;
+						case "content_block_start":
+							if (
+								message.event.index !== 0 ||
+								message.event.content_block.type !== "text"
+							) {
+								throw new Error("unsupported Claude content block");
+							}
+							write(message);
+							break;
+						case "content_block_delta":
+							if (
+								message.event.index !== 0 ||
+								message.event.delta.type !== "text_delta"
+							) {
+								throw new Error("unsupported Claude content delta");
+							}
+							write(message);
+							break;
 					}
 				}
 				throw new Error("Claude stream ended before its terminal result");
@@ -149,13 +180,6 @@ export function createAgentQueryRequestHandler(
 	dependencies: AgentQueryRuntimeDependencies,
 ) {
 	return async (request: Request): Promise<Response> => {
-		const { pathname } = new URL(request.url);
-		if (pathname === "/ping") {
-			if (request.method !== "GET") return jsonError("method not allowed", 405);
-			return Response.json({ status: "Healthy" });
-		}
-		if (pathname !== "/invocations") return jsonError("not found", 404);
-		if (request.method !== "POST") return jsonError("method not allowed", 405);
 		if (!request.headers.get("content-type")?.startsWith("application/json")) {
 			return jsonError("content type must be application/json", 415);
 		}
@@ -183,9 +207,13 @@ export function createAgentQueryRequestHandler(
 			const messages = dependencies.query({
 				prompt: input.prompt,
 				options: {
+					allowedTools: [],
 					model: input.model,
 					includePartialMessages: true,
 					cwd: `/workspace/conversations/${input.conversationId}`,
+					permissionMode: "dontAsk",
+					settingSources: [],
+					tools: [],
 					...(input.agentSessionId ? { resume: input.agentSessionId } : {}),
 				},
 			});
@@ -199,5 +227,25 @@ export function createAgentQueryRequestHandler(
 			}
 			return jsonError("AgentCore invocation failed", 503);
 		}
+	};
+}
+
+export function createAgentQueryServerOptions(
+	dependencies: AgentQueryRuntimeDependencies,
+	port = 8080,
+) {
+	return {
+		hostname: "0.0.0.0",
+		port,
+		idleTimeout: 0,
+		routes: {
+			"/ping": {
+				GET: () => Response.json({ status: "Healthy" }),
+			},
+			"/invocations": {
+				POST: createAgentQueryRequestHandler(dependencies),
+			},
+		},
+		fetch: () => jsonError("not found", 404),
 	};
 }

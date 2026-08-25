@@ -1,6 +1,7 @@
 {
 	"name": "agent-query-runtime",
 	"scripts": {
+		"start": "bun run src/index.ts",
 		"test": "bun test",
 		"format": "biome format --write",
 		"lint": "biome lint --write",

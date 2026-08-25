@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { workspaceImportGraph } from "@mymemo/test-support/import-graph";
@@ -6,6 +7,7 @@ import {
 	AGENTCORE_RUNTIME_SESSION_HEADER,
 	type AgentQueryRuntimeDependencies,
 	createAgentQueryRequestHandler,
+	createAgentQueryServerOptions,
 } from "./server";
 
 const conversationId = "0198b5a2-0d2b-7b64-9f65-4c9d49045111";
@@ -24,11 +26,40 @@ function resultEvent(overrides: Record<string, unknown> = {}): SDKMessage {
 	return {
 		type: "result",
 		subtype: "success",
+		duration_ms: 100,
+		duration_api_ms: 80,
 		is_error: false,
+		num_turns: 1,
 		result: "provider-only terminal echo",
+		stop_reason: "end_turn",
+		total_cost_usd: 0.01,
+		usage: {},
+		modelUsage: {},
+		permission_denials: [],
+		uuid: crypto.randomUUID(),
 		session_id: "agent-session-1",
 		...overrides,
-	} as SDKMessage;
+	} as unknown as SDKMessage;
+}
+
+function errorResultEvent(overrides: Record<string, unknown> = {}): SDKMessage {
+	return {
+		type: "result",
+		subtype: "error_during_execution",
+		duration_ms: 100,
+		duration_api_ms: 80,
+		is_error: true,
+		num_turns: 1,
+		stop_reason: null,
+		total_cost_usd: 0.01,
+		usage: {},
+		modelUsage: {},
+		permission_denials: [],
+		errors: ["private provider failure"],
+		uuid: crypto.randomUUID(),
+		session_id: "agent-session-1",
+		...overrides,
+	} as unknown as SDKMessage;
 }
 
 function successfulMessages(): SDKMessage[] {
@@ -115,14 +146,18 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 			.split("\n")
 			.map((line) => JSON.parse(line));
 		expect(lines).toEqual(messages.slice(1));
-		expect(lines.at(-1)).toEqual(resultEvent());
+		expect(lines.at(-1)).toEqual(messages.at(-1));
 		expect(queries).toEqual([
 			{
 				prompt: "Tell me something",
 				options: {
+					allowedTools: [],
 					model: "anthropic/claude-sonnet-5",
 					includePartialMessages: true,
 					cwd: `/workspace/conversations/${conversationId}`,
+					permissionMode: "dontAsk",
+					settingSources: [],
+					tools: [],
 					resume: "opaque-agent-session",
 				},
 			},
@@ -203,11 +238,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 	});
 
 	it("streams a terminal Claude failure without inventing an error event", async () => {
-		const failure = resultEvent({
-			subtype: "error_during_execution",
-			is_error: true,
-			errors: ["private provider failure"],
-		});
+		const failure = errorResultEvent();
 		const response = await createAgentQueryRequestHandler(
 			dependencies([...successfulMessages().slice(0, -1), failure]),
 		)(request());
@@ -218,6 +249,57 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 			.map((line) => JSON.parse(line));
 		expect(lines.at(-1)).toEqual(failure);
 		expect(lines.some((line) => line.type === "error")).toBe(false);
+	});
+
+	it("truncates the response rather than forwarding unsupported Claude content", async () => {
+		const hidden = [
+			streamEvent({
+				type: "message_start",
+				message: { id: "provider-tool-message", content: [] },
+			}),
+			streamEvent({
+				type: "content_block_start",
+				index: 0,
+				content_block: {
+					type: "tool_use",
+					id: "private-tool-use",
+					name: "PrivateTool",
+					input: {},
+				},
+			}),
+			streamEvent({
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "input_json_delta", partial_json: "{}" },
+			}),
+			streamEvent({ type: "content_block_stop", index: 0 }),
+			streamEvent({ type: "message_stop" }),
+		];
+		const response = await createAgentQueryRequestHandler(
+			dependencies([...hidden, ...successfulMessages()]),
+		)(request());
+
+		await expect(response.text()).rejects.toThrow(
+			"unsupported Claude content block",
+		);
+	});
+
+	it("truncates invalid or contradictory terminal Claude results", async () => {
+		const invalidResults = [
+			resultEvent({ subtype: "unknown_result" }),
+			resultEvent({ is_error: true }),
+			resultEvent({ duration_ms: undefined }),
+			resultEvent({ subtype: "error_during_execution", errors: [] }),
+		];
+
+		for (const result of invalidResults) {
+			const response = await createAgentQueryRequestHandler(
+				dependencies([...successfulMessages().slice(0, -1), result]),
+			)(request());
+			await expect(response.text()).rejects.toThrow(
+				"invalid terminal Claude result",
+			);
+		}
 	});
 
 	it("rejects a Claude startup failure without a second error protocol", async () => {
@@ -237,7 +319,9 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 	it("truncates the transport when Claude fails after streaming starts", async () => {
 		const response = await createAgentQueryRequestHandler({
 			async *query() {
-				yield successfulMessages()[1] as SDKMessage;
+				for (const message of successfulMessages().slice(1, 4)) {
+					yield message;
+				}
 				throw new Error("transport failed");
 			},
 			async verifyResponseAuthority() {},
@@ -245,17 +329,22 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("expected response body");
 
-		const first = await reader.read();
-		expect(new TextDecoder().decode(first.value)).toContain("message_start");
-		await expect(reader.read()).rejects.toThrow("transport failed");
+		let received = "";
+		const decoder = new TextDecoder();
+		const drain = (async () => {
+			for (;;) {
+				const part = await reader.read();
+				if (part.done) return;
+				received += decoder.decode(part.value, { stream: true });
+			}
+		})();
+		await expect(drain).rejects.toThrow("transport failed");
+		expect(received).toContain("message_start");
 	});
 
-	it("imports no Run, Dispatch, queue, outbox, or background-execution control path", () => {
+	it("provides a Bun.serve image without importing Run or background-execution controls", () => {
 		const root = join(import.meta.dir, "../../..");
-		const graph = workspaceImportGraph(
-			root,
-			join(import.meta.dir, "server.ts"),
-		);
+		const graph = workspaceImportGraph(root, join(import.meta.dir, "index.ts"));
 		for (const path of graph) {
 			for (const forbidden of [
 				"/run-store",
@@ -269,5 +358,26 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 				expect(path).not.toContain(forbidden);
 			}
 		}
+
+		const entrypoint = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
+		const dockerfile = readFileSync(
+			join(import.meta.dir, "../Dockerfile"),
+			"utf8",
+		);
+		expect(entrypoint).toContain("Bun.serve(");
+		expect(entrypoint).toContain(
+			'import { query } from "@anthropic-ai/claude-agent-sdk"',
+		);
+		expect(dockerfile).toContain('ENTRYPOINT [ "bun", "run", "src/index.ts" ]');
+	});
+
+	it("disables Bun's idle timeout for a long direct response", () => {
+		const options = createAgentQueryServerOptions(dependencies(), 4510);
+
+		expect(options.hostname).toBe("0.0.0.0");
+		expect(options.port).toBe(4510);
+		expect(options.idleTimeout).toBe(0);
+		expect(options.routes).toHaveProperty("/ping");
+		expect(options.routes).toHaveProperty("/invocations");
 	});
 });
