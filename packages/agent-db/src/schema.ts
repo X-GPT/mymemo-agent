@@ -30,10 +30,11 @@ import {
  * per-conversation isolation a database invariant. This row replaces the old
  * `sandbox_leases` warm-pointer role only; unlike the lease it grants **no
  * active execution ownership** — that lives exclusively on the Conversation.
- * Sandbox and taint mutations use the runtime-store helpers; Agent-session
- * pointer updates compose through run-store's terminal transaction. Both paths
- * fence on the live Conversation Ownership epoch, so a superseded Runtime
- * invocation cannot overwrite pointers a later Durable acquisition relies on.
+ * Run sandbox/taint mutations and terminal Agent-session pointer updates fence
+ * on live Conversation Ownership. The Run-free Agent-query Workspace and
+ * completion paths instead fence on live Response authority. Both validate the
+ * Conversation epoch and its Ownership lease or Response deadline, so a stale
+ * Runtime invocation cannot overwrite a later authority grant's pointers.
  */
 export const conversationRuntime = pgTable(
 	"conversation_runtime",
@@ -54,9 +55,10 @@ export const conversationRuntime = pgTable(
 		 * the main-session id the bound SessionStore proves through a successful
 		 * non-empty transcript mirror. NULL until that evidence exists — a Run with
 		 * no pointer starts a fresh Agent session. The first value and every later
-		 * advance are published ONLY in the same ownership-fenced transaction as
-		 * `done` or `interrupted`; recovery and a Run that observed `mirror_error`
-		 * leave it unchanged.
+		 * advance are published either with a Run's terminal Outcome in its
+		 * Ownership-fenced transaction or with a direct response's Assistant message
+		 * in its Response-authority-fenced completion transaction. Recovery and any
+		 * execution that observed `mirror_error` leave it unchanged.
 		 */
 		agentSessionId: text("agent_session_id"),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -124,23 +126,20 @@ export const conversations = pgTable(
 		/** Non-null while the Conversation is archived. */
 		archivedAt: timestamp("archived_at", { withTimezone: true }),
 		/**
-		 * The Runtime mode holding current execution authority. Provenance for log
-		 * correlation only — the epoch/deadline carry safety. NULL while idle.
+		 * The current execution authority's provenance label. It carries no safety
+		 * weight — the Conversation epoch/deadline carry safety. NULL while idle.
 		 */
 		ownerWorkerId: text("owner_worker_id"),
-		/** Deadline of the current Run Ownership or direct response; NULL while idle. */
+		/** Current Ownership lease or Response deadline; NULL while idle. */
 		ownerUntil: timestamp("owner_until", { withTimezone: true }),
 		/** Redis-backed AI SDK stream currently resumable by the browser. */
 		activeStreamId: text("active_stream_id"),
 		/**
-		 * Execution epoch (ADR-0015): incremented by every Durable acquisition and
-		 * direct-response admission, so it names one attempt. Fenced writes validate a
-		 * matching epoch
-		 * **and** a live `owner_until` — the two conjuncts cover different
-		 * failures, the epoch a lease superseded by another acquisition and the
-		 * deadline one that merely lapsed with no successor. A token is necessary
-		 * rather than redundant because a Conversation is acquired many times
-		 * across its life by different Runtime invocations.
+		 * Conversation epoch (ADR-0015, ADR-0033): incremented by every Durable
+		 * acquisition or direct-response admission, so it identifies one execution-
+		 * authority grant. Fenced writes validate both a matching epoch and a live
+		 * `owner_until`; the epoch rejects a superseded grant and the deadline rejects
+		 * one that lapsed without a successor.
 		 */
 		epoch: integer("epoch").notNull().default(0),
 	},
@@ -524,12 +523,11 @@ export const agentSessions = pgTable(
 		/** The opaque JSONL transcript line, round-tripped as-is. */
 		entry: jsonb("entry").notNull(),
 		/**
-		 * The Ownership epoch of the Durable acquisition that mirrored this entry — provenance,
-		 * not a fence. Resume stays pointer-driven and never consults it; it
-		 * exists so "which acquisition wrote this transcript" is answerable when a
-		 * dead Runtime invocation's transcript is newest. Current appends stamp the
-		 * Ownership epoch; the column stays nullable for entries mirrored before
-		 * Conversation Ownership.
+		 * The Conversation epoch of the Durable acquisition or direct-response
+		 * admission that mirrored this entry — provenance, not a fence. Resume stays
+		 * pointer-driven and never consults it; it exists so "which authority grant
+		 * wrote this transcript" is answerable when a dead Runtime invocation's
+		 * transcript is newest. The column stays nullable for older entries.
 		 */
 		epoch: integer("epoch"),
 		createdAt: timestamp("created_at", { withTimezone: true })
