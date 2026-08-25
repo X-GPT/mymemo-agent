@@ -58,7 +58,9 @@ export const conversationRuntime = pgTable(
 		 * advance are published either with a Run's terminal Outcome in its
 		 * Ownership-fenced transaction or with a direct response's Assistant message
 		 * in its Response-authority-fenced completion transaction. Recovery and any
-		 * execution that observed `mirror_error` leave it unchanged.
+		 * Run that observed `mirror_error` leave it unchanged. A direct response logs
+		 * and ignores `mirror_error`, but can advance it only with main-session mirror
+		 * evidence.
 		 */
 		agentSessionId: text("agent_session_id"),
 		createdAt: timestamp("created_at", { withTimezone: true })

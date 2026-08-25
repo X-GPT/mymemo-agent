@@ -46,8 +46,9 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 The non-production `agent-query-runtime` reuses the same E2B provisioner,
 renewal loop, and bounded file tools for synchronous Agent queries. `Bash`
 remains excluded because this path has no durable Run/audit identity.
-SessionStore failure aborts Workspace tools and interrupts Claude before a
-terminal result can escape. Before Claude starts and periodically during Claude
+Unlike Runs, this path logs and ignores `mirror_error`, drains the SDK iterator,
+and emits only its latest terminal result; completion still requires evidence
+for the mirrored main session. Before Claude starts and periodically during Claude
 and Tool work, the Runtime verifies the matching live Conversation response
 epoch/deadline. Database errors never extend its last confirmed deadline.
 SessionStore and Workspace/runtime-state mutations carry the same fence;
