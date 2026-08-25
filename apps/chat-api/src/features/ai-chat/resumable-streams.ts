@@ -31,7 +31,19 @@ export function createAiChatResumableStreams(redisUrl: string) {
 			);
 		},
 		async resume(streamId: string) {
-			return (await getContext()).resumeExistingStream(streamId);
+			try {
+				return await (await getContext()).resumeExistingStream(streamId);
+			} catch (error) {
+				// resumable-stream uses this ack timeout when its Redis sentinel
+				// survived the producer. Redis itself is healthy; the stream is gone.
+				if (
+					error instanceof Error &&
+					error.message === "Timeout waiting for ack"
+				) {
+					return undefined;
+				}
+				throw error;
+			}
 		},
 		close() {
 			publisher?.destroy();

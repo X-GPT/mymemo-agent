@@ -17,9 +17,10 @@ epoch/deadline, and stores the User message atomically. `GET
 /api/chat/:conversationId` returns canonical
 ordered `UIMessage[]`; `GET /api/chat/:conversationId/stream` owner-authorizes
 and resumes the Conversation's standard Redis-backed AI SDK stream. Redis
-failure affects resumption only. Without `AGENT_QUERY_RUNTIME_ARN`, the staged
-POST returns `503` before admission; production does not configure that Runtime
-before the hard swap.
+failure affects resumption only; a missing, completed, or dead-producer stream
+returns `204`, while an actual Redis failure returns `503`. Without
+`AGENT_QUERY_RUNTIME_ARN`, the staged POST returns `503` before admission;
+production does not configure that Runtime before the hard swap.
 
 ### Create a Conversation
 

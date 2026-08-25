@@ -41,3 +41,14 @@ it("creates, discovers, appends, resumes, and completes a Redis-backed stream", 
 	expect(await streams.resume("missing-stream")).toBeUndefined();
 	streams.close();
 });
+
+it("treats a dead producer's surviving sentinel as an absent stream", async () => {
+	if (!redis) throw new Error("Redis test server did not start");
+	const producer = createAiChatResumableStreams(redis.url);
+	await producer.create("dead-stream", new ReadableStream<string>());
+	producer.close();
+
+	const consumer = createAiChatResumableStreams(redis.url);
+	expect(await consumer.resume("dead-stream")).toBeUndefined();
+	consumer.close();
+});
