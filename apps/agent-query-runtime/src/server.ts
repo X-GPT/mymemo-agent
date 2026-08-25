@@ -5,6 +5,7 @@ import {
 	watchResponseAuthority,
 } from "@mymemo/agent-query";
 import { z } from "zod";
+import type { RuntimeLogger } from "../../agentcore-runtime/src/logger";
 import type { AgentQuerySessionStore } from "./session-store";
 
 export const AGENTCORE_RUNTIME_SESSION_HEADER =
@@ -75,6 +76,7 @@ export type AgentQueryRuntimeDependencies = {
 		dispose(): void;
 	}>;
 	verifyResponseAuthority(authority: AgentQueryAuthority): Promise<Date | null>;
+	logger: Pick<RuntimeLogger, "warn">;
 	authorityCheckIntervalMs?: number;
 	replacementCleanupMs?: number;
 };
@@ -134,6 +136,7 @@ function createNdjsonStream(
 		ReturnType<AgentQueryRuntimeDependencies["prepareWorkspace"]>
 	>,
 	stopWork: () => Promise<void>,
+	logger: Pick<RuntimeLogger, "warn">,
 	authority: {
 		signal: AbortSignal;
 		stop(): void;
@@ -152,6 +155,7 @@ function createNdjsonStream(
 				controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
 			};
 			try {
+				let terminal: { message: SDKMessage; sessionId: string } | undefined;
 				for await (const message of messages) {
 					if (authority.signal.aborted) {
 						throw authority.signal.reason instanceof Error
@@ -165,7 +169,11 @@ function createNdjsonStream(
 					}
 					if (message.type === "system") {
 						if (message.subtype === "mirror_error") {
-							throw new Error("Claude session mirror failed");
+							logger.warn({
+								message: "Claude session mirror failed",
+								error: message.error,
+								sessionId: message.session_id,
+							});
 						}
 						continue;
 					}
@@ -174,19 +182,8 @@ function createNdjsonStream(
 						if (!result.success) {
 							throw new Error("invalid terminal Claude result");
 						}
-						if (sessionStore.mirroredMainSessionId() !== message.session_id) {
-							throw new Error(
-								"terminal Claude result has no persisted transcript",
-							);
-						}
-						write(message);
-						controller.close();
-						workspace.signal.removeEventListener("abort", interrupt);
-						authority.signal.removeEventListener("abort", interrupt);
-						authority.stop();
-						workspace.dispose();
-						onSettled();
-						return;
+						terminal = { message, sessionId: result.data.session_id };
+						continue;
 					}
 					if (
 						message.type === "stream_event" ||
@@ -196,7 +193,19 @@ function createNdjsonStream(
 						write(message);
 					}
 				}
-				throw new Error("Claude stream ended before its terminal result");
+				if (!terminal) {
+					throw new Error("Claude stream ended before its terminal result");
+				}
+				if (sessionStore.mirroredMainSessionId() !== terminal.sessionId) {
+					throw new Error("terminal Claude result has no persisted transcript");
+				}
+				write(terminal.message);
+				controller.close();
+				workspace.signal.removeEventListener("abort", interrupt);
+				authority.signal.removeEventListener("abort", interrupt);
+				authority.stop();
+				workspace.dispose();
+				onSettled();
 			} catch (error) {
 				workspace.signal.removeEventListener("abort", interrupt);
 				authority.signal.removeEventListener("abort", interrupt);
@@ -410,6 +419,7 @@ export function createAgentQueryRequestHandler(
 					sessionStore,
 					workspace,
 					() => stopWork(),
+					dependencies.logger,
 					authority,
 					settle,
 				),

@@ -100,6 +100,7 @@ describe("Agent-query Workspace continuity", () => {
 			logger: { warn() {} },
 		});
 		const response = await createAgentQueryRequestHandler({
+			logger: { warn() {} },
 			query() {
 				const stream = (async function* () {
 					yield { type: "system", subtype: "init" } as SDKMessage;

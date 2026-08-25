@@ -178,6 +178,7 @@ function dependencies(
 		},
 	};
 	return {
+		logger: { warn() {} },
 		query() {
 			return queryMessages(messages);
 		},
@@ -354,17 +355,17 @@ describe("Agent-query Runtime HTTP boundary", () => {
 		);
 	});
 
-	it("stops Claude and Workspace work when SessionStore persistence fails", async () => {
+	it("logs mirror errors and emits only the latest result after the iterator ends", async () => {
 		let stopped = 0;
 		let disposed = 0;
 		let interrupted = 0;
+		const warnings: Record<string, unknown>[] = [];
 		const deps = dependencies();
 		const response = await createAgentQueryRequestHandler({
 			...deps,
+			logger: { warn: (warning) => warnings.push(warning) },
 			createSessionStore: () => ({
-				async append() {
-					throw new Error("session persistence failed");
-				},
+				async append() {},
 				async load() {
 					return null;
 				},
@@ -376,7 +377,7 @@ describe("Agent-query Runtime HTTP boundary", () => {
 				},
 				async delete() {},
 				mirroredMainSessionId() {
-					return null;
+					return "agent-session-1";
 				},
 			}),
 			async prepareWorkspace() {
@@ -391,24 +392,18 @@ describe("Agent-query Runtime HTTP boundary", () => {
 					},
 				};
 			},
-			query(input) {
+			query() {
 				const messages = (async function* () {
-					try {
-						await input.options.sessionStore?.append(
-							{ projectKey: "project", sessionId: "agent-session-1" },
-							[{ type: "user", uuid: "entry-1" } as never],
-						);
-					} catch {
-						yield {
-							type: "system",
-							subtype: "mirror_error",
-							error: "private persistence failure",
-							key: { projectKey: "project", sessionId: "agent-session-1" },
-							uuid: crypto.randomUUID(),
-							session_id: "agent-session-1",
-						} as SDKMessage;
-					}
 					yield* successfulMessages();
+					yield {
+						type: "system",
+						subtype: "mirror_error",
+						error: "private persistence failure",
+						key: { projectKey: "project", sessionId: "agent-session-1" },
+						uuid: crypto.randomUUID(),
+						session_id: "agent-session-1",
+					} as SDKMessage;
+					yield resultEvent({ uuid: "latest-result" });
 				})();
 				return Object.assign(messages, {
 					async interrupt() {
@@ -418,13 +413,24 @@ describe("Agent-query Runtime HTTP boundary", () => {
 			},
 		})(request());
 
-		await expect(response.text()).rejects.toThrow(
-			"Claude session mirror failed",
-		);
+		const lines = (await response.text())
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(lines.filter((line) => line.type === "result")).toEqual([
+			expect.objectContaining({ uuid: "latest-result" }),
+		]);
+		expect(warnings).toEqual([
+			{
+				message: "Claude session mirror failed",
+				error: "private persistence failure",
+				sessionId: "agent-session-1",
+			},
+		]);
 		expect({ stopped, disposed, interrupted }).toEqual({
-			stopped: 1,
+			stopped: 0,
 			disposed: 1,
-			interrupted: 1,
+			interrupted: 0,
 		});
 	});
 

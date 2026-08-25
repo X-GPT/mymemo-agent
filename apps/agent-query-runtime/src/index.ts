@@ -38,6 +38,7 @@ Bun.serve(
 	createAgentQueryServerOptions(
 		{
 			query,
+			logger,
 			createSessionStore: (owner) => createAgentQuerySessionStore(db, owner),
 			async prepareWorkingDirectory(path) {
 				await mkdir(path, { recursive: true });

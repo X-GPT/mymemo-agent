@@ -149,6 +149,7 @@ describe("non-production Agent-query continuity", () => {
 		const resumes: Array<string | undefined> = [];
 		let queryCount = 0;
 		const runtimeHandler = createAgentQueryRequestHandler({
+			logger: { warn() {} },
 			createSessionStore: (owner) =>
 				createAgentQuerySessionStore(tdb.db, owner),
 			async prepareWorkingDirectory() {},
