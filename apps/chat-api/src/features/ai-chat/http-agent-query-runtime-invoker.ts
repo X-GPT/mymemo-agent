@@ -1,6 +1,12 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 
+export type AgentQueryRuntimeInvoker = {
+	invoke(
+		request: AgentQueryRequest,
+	): Promise<AsyncIterable<SDKMessage> | Iterable<SDKMessage>>;
+};
+
 async function* parseNdjson(
 	body: ReadableStream<Uint8Array>,
 ): AsyncIterable<SDKMessage> {

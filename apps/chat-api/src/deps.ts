@@ -8,6 +8,7 @@ import {
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import type { ChatMessageStore } from "./features/ai-chat/chat-message-store";
+import type { AgentQueryRuntimeInvoker } from "./features/ai-chat/http-agent-query-runtime-invoker";
 import { PostgresChatMessageStore } from "./features/ai-chat/postgres-chat-message-store";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
@@ -27,6 +28,8 @@ import {
 	type RunStore,
 } from "./features/run-store/run-store";
 
+export type { AgentQueryRuntimeInvoker };
+
 /**
  * Application dependencies, built once from a validated `ApiConfig` at the
  * composition root (`createApp`) and injected down the request path instead of
@@ -35,6 +38,8 @@ import {
  */
 export interface AppDeps {
 	config: ApiConfig;
+	/** Staged Agent-query Runtime boundary. */
+	agentQueryRuntimeInvoker: AgentQueryRuntimeInvoker;
 	/** Canonical AI SDK Conversation message persistence. */
 	chatMessageStore: ChatMessageStore;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
@@ -68,6 +73,7 @@ export type AppEnv = PinoEnv & {
 
 export function createDeps(
 	config: ApiConfig,
+	agentQueryRuntimeInvoker: AgentQueryRuntimeInvoker,
 	liveStreamTelemetry: LiveStreamTelemetry = createLiveStreamTelemetry(
 		"chat-api",
 		{
@@ -97,6 +103,7 @@ export function createDeps(
 	});
 	return {
 		config,
+		agentQueryRuntimeInvoker,
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
 		conversationStore,

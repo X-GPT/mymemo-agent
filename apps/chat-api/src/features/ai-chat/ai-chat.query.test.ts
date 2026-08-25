@@ -16,12 +16,9 @@ import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { asc } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AppDeps, AppEnv } from "@/deps";
+import type { AgentQueryRuntimeInvoker, AppDeps, AppEnv } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
-import {
-	type AgentQueryRuntimeInvoker,
-	createAiChatRoutes,
-} from "./ai-chat.route";
+import aiChatRoutes from "./ai-chat.route";
 import { PostgresChatMessageStore } from "./postgres-chat-message-store";
 
 type MessageStore = AppDeps["chatMessageStore"];
@@ -185,10 +182,11 @@ function buildApp(
 		c.set("deps", {
 			chatMessageStore: store,
 			exposureGate,
+			agentQueryRuntimeInvoker: runtimeInvoker,
 		} as unknown as AppDeps);
 		await next();
 	});
-	app.route("/api/chat", createAiChatRoutes(runtimeInvoker));
+	app.route("/api/chat", aiChatRoutes);
 	return app;
 }
 
