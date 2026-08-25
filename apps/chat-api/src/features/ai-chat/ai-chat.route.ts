@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { sValidator as zValidator } from "@hono/standard-validator";
+import type { PublicToolName } from "@mymemo/agent-db/run-events";
+import {
+	projectToolResult,
+	projectToolUse,
+	publicToolName,
+} from "@mymemo/agent-db/tool-event-projection";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import {
 	createUIMessageStream,
@@ -70,6 +76,10 @@ async function writeClaudeMessageStream(
 	let textId: string | undefined;
 	let terminal = false;
 	let agentSessionId: string | undefined;
+	const toolInvocations = new Map<
+		string,
+		{ tool: PublicToolName; toolCallId: string }
+	>();
 	writer.write({ type: "start", messageId });
 
 	for await (const message of events) {
@@ -143,11 +153,19 @@ async function writeClaudeMessageStream(
 			}
 			for (const block of message.message.content) {
 				if (block.type === "tool_use") {
+					const tool = publicToolName(block.name);
+					if (tool === null || toolInvocations.has(block.id)) {
+						throw new Error("invalid Claude Tool invocation");
+					}
+					const projected = projectToolUse(tool, block.input);
+					if (!projected.ok) throw new Error("unsafe Claude Tool invocation");
+					const toolCallId = randomUUID();
+					toolInvocations.set(block.id, { tool, toolCallId });
 					writer.write({
 						type: "tool-input-available",
-						toolCallId: block.id,
-						toolName: block.name,
-						input: block.input,
+						toolCallId,
+						toolName: tool,
+						input: projected.payload.arguments,
 						dynamic: true,
 					});
 					wrotePart = true;
@@ -166,25 +184,41 @@ async function writeClaudeMessageStream(
 			if (block.type !== "tool_result") {
 				throw new Error("invalid Claude Tool result");
 			}
-			if (block.is_error) {
+			const invocation = toolInvocations.get(block.tool_use_id);
+			if (!invocation) throw new Error("unmatched Claude Tool result");
+			toolInvocations.delete(block.tool_use_id);
+			const projected = projectToolResult(
+				invocation.tool,
+				block.content,
+				block.is_error === true,
+			);
+			if (!projected.ok) throw new Error("unsafe Claude Tool result");
+			if (projected.payload.isError) {
 				writer.write({
 					type: "tool-output-error",
-					toolCallId: block.tool_use_id,
+					toolCallId: invocation.toolCallId,
 					errorText: "Tool failed",
 					dynamic: true,
 				});
 			} else {
 				writer.write({
 					type: "tool-output-available",
-					toolCallId: block.tool_use_id,
-					output: block.content,
+					toolCallId: invocation.toolCallId,
+					output: projected.payload.result,
 					dynamic: true,
 				});
 			}
 		}
 	}
 
-	if (!terminal || !agentSessionId || !wrotePart || messageOpen || textId) {
+	if (
+		!terminal ||
+		!agentSessionId ||
+		!wrotePart ||
+		messageOpen ||
+		textId ||
+		toolInvocations.size > 0
+	) {
 		throw new Error("Claude stream ended before completion");
 	}
 	return agentSessionId;

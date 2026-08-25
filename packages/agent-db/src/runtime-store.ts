@@ -102,21 +102,6 @@ export async function publishAgentQueryWorkspaceTx(
 		});
 }
 
-export async function markAgentQueryWorkspaceTaintedTx(
-	db: Database,
-	input: { userId: string; conversationId: string },
-): Promise<void> {
-	await db
-		.update(conversationRuntime)
-		.set({ sandboxTainted: true, updatedAt: sql`now()` })
-		.where(
-			and(
-				eq(conversationRuntime.userId, input.userId),
-				eq(conversationRuntime.conversationId, input.conversationId),
-			),
-		);
-}
-
 /**
  * Create the conversation's runtime row (empty pointers). The fence
  * is checked `FOR SHARE` in the same transaction as the insert, so Reclamation

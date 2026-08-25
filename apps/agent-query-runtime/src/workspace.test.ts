@@ -7,7 +7,11 @@ import {
 	it,
 } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { conversationRuntime, conversations } from "@mymemo/agent-db/schema";
+import {
+	conversationRuntime,
+	conversations,
+	orphanSandboxes,
+} from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type {
 	ProvisionedSandbox,
@@ -38,6 +42,7 @@ describe("Agent-query Workspace continuity", () => {
 	});
 
 	beforeEach(async () => {
+		await tdb.db.delete(orphanSandboxes);
 		await tdb.db.delete(conversationRuntime);
 		await tdb.db.delete(conversations);
 		await tdb.db.insert(conversations).values({
@@ -91,7 +96,7 @@ describe("Agent-query Workspace continuity", () => {
 			db: tdb.db,
 			provisioner,
 			sandboxIdleMs: 2,
-			logger: { info() {}, warn() {} },
+			logger: { warn() {} },
 		});
 		const response = await createAgentQueryRequestHandler({
 			async *query() {
@@ -167,8 +172,98 @@ describe("Agent-query Workspace continuity", () => {
 		expect(second.queryOptions.allowedTools).toContain(
 			"mcp__mymemo-executor__Write",
 		);
+		expect(second.queryOptions.allowedTools).not.toContain(
+			"mcp__mymemo-executor__Bash",
+		);
 		await second.stop();
 		expect(second.signal.aborted).toBe(true);
 		second.dispose();
+	});
+
+	it("records the prior Workspace when a fresh sandbox replaces it", async () => {
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "member-1",
+			conversationId: "conversation-1",
+			sandboxId: "sandbox-old",
+			sandboxTainted: true,
+		});
+		const workspace = await createAgentQueryWorkspacePreparer({
+			db: tdb.db,
+			provisioner: {
+				async provisionForRun() {
+					return {
+						sandboxId: "sandbox-new",
+						isNew: true,
+						workspaceRoot: "/home/user",
+						fileClient: {},
+						commandClient: {},
+						artifactWorkspace: {},
+						async renew() {},
+						dispose() {},
+					} as ProvisionedSandbox;
+				},
+			},
+			sandboxIdleMs: 300_000,
+			logger: { warn() {} },
+		})({ conversationId: "conversation-1", conversationEpoch: 7 });
+
+		expect(await tdb.db.select().from(orphanSandboxes)).toEqual([
+			expect.objectContaining({
+				sandboxId: "sandbox-old",
+				runId: "agent-query",
+				reason: "tainted Agent-query Workspace replaced",
+			}),
+		]);
+		workspace.dispose();
+	});
+
+	it("records a fresh Workspace when publication fails", async () => {
+		const db = new Proxy(tdb.db, {
+			get(target, property) {
+				if (property === "insert") {
+					return (table: unknown) => {
+						if (table === conversationRuntime) {
+							throw new Error("publication failed");
+						}
+						return Reflect.apply(target.insert, target, [table]);
+					};
+				}
+				const value = Reflect.get(target, property, target);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		}) as TestDb["db"];
+		const prepareWorkspace = createAgentQueryWorkspacePreparer({
+			db,
+			provisioner: {
+				async provisionForRun() {
+					return {
+						sandboxId: "sandbox-new",
+						isNew: true,
+						workspaceRoot: "/home/user",
+						fileClient: {},
+						commandClient: {},
+						artifactWorkspace: {},
+						async renew() {},
+						dispose() {},
+					} as ProvisionedSandbox;
+				},
+			},
+			sandboxIdleMs: 300_000,
+			logger: { warn() {} },
+		});
+
+		await expect(
+			prepareWorkspace({
+				conversationId: "conversation-1",
+				conversationEpoch: 7,
+			}),
+		).rejects.toThrow("publication failed");
+		expect(await tdb.db.select().from(orphanSandboxes)).toEqual([
+			expect.objectContaining({
+				sandboxId: "sandbox-new",
+				runId: "agent-query",
+				reason: "Agent-query Workspace publication failed",
+			}),
+		]);
 	});
 });

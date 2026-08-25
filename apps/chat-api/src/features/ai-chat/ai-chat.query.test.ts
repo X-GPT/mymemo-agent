@@ -320,7 +320,10 @@ describe("injected Agent-query POST /api/chat", () => {
 					streamEvent({ type: "content_block_stop", index: 0 }),
 					streamEvent({ type: "message_stop" }),
 					toolResultMessage("tool-use-1", [
-						{ type: "text", text: '{"bytesWritten":5}' },
+						{
+							type: "text",
+							text: '{"path":"notes.md","bytesWritten":5}',
+						},
 					]),
 					...textMessages("Done.", "Done."),
 					resultEvent(),
@@ -337,6 +340,7 @@ describe("injected Agent-query POST /api/chat", () => {
 
 		expect(responseText).toContain('"type":"tool-input-available"');
 		expect(responseText).toContain('"type":"tool-output-available"');
+		expect(responseText).not.toContain("tool-use-1");
 		expect(await listPersistedMessages(tdb)).toEqual([
 			expectedUserMessage,
 			{
@@ -346,11 +350,17 @@ describe("injected Agent-query POST /api/chat", () => {
 					{ type: "text", text: "I will write the file.", state: "done" },
 					{
 						type: "dynamic-tool",
-						toolName: "mcp__mymemo-executor__Write",
-						toolCallId: "tool-use-1",
+						toolName: "Write",
+						toolCallId: expect.stringMatching(
+							/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+						),
 						state: "output-available",
-						input: { path: "notes.md", content: "hello" },
-						output: [{ type: "text", text: '{"bytesWritten":5}' }],
+						input: {
+							path: "notes.md",
+							content: "hello",
+							contentBytes: 5,
+						},
+						output: { path: "notes.md", bytesWritten: 5 },
 					},
 					{ type: "text", text: "Done.", state: "done" },
 				],
@@ -385,13 +395,20 @@ describe("injected Agent-query POST /api/chat", () => {
 
 		expect(responseText).toContain('"type":"tool-output-error"');
 		expect(responseText).not.toContain("private failure");
+		expect(responseText).not.toContain("tool-use-1");
 		expect((await listPersistedMessages(tdb))[1]?.parts).toEqual([
 			{
 				type: "dynamic-tool",
-				toolName: "mcp__mymemo-executor__Write",
-				toolCallId: "tool-use-1",
+				toolName: "Write",
+				toolCallId: expect.stringMatching(
+					/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+				),
 				state: "output-error",
-				input: { path: "notes.md", content: "hello" },
+				input: {
+					path: "notes.md",
+					content: "hello",
+					contentBytes: 5,
+				},
 				errorText: "Tool failed",
 			},
 		]);

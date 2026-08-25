@@ -1,6 +1,4 @@
 import {
-	createSdkMcpServer,
-	type McpSdkServerConfigWithInstance,
 	type SdkMcpToolDefinition,
 	tool,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -33,16 +31,16 @@ export function toCallToolResult(result: {
 }
 
 export const EXECUTOR_SERVER_NAME = "mymemo-executor";
-export const WORKSPACE_EXECUTOR_TOOL_NAMES = [
+export const WORKSPACE_FILE_TOOL_NAMES = [
 	"Read",
 	"Write",
 	"Edit",
 	"Grep",
+] as const;
+export const WORKSPACE_EXECUTOR_TOOL_NAMES = [
+	...WORKSPACE_FILE_TOOL_NAMES,
 	"Bash",
 ] as const;
-export const WORKSPACE_ALLOWED_TOOLS = WORKSPACE_EXECUTOR_TOOL_NAMES.map(
-	(name) => `mcp__${EXECUTOR_SERVER_NAME}__${name}`,
-);
 
 export interface WorkspaceToolDeps {
 	binding: RunBinding;
@@ -56,7 +54,11 @@ export interface WorkspaceToolDeps {
 	recordCommandAudit(event: CommandAuditEvent): Promise<void>;
 }
 
-export function buildWorkspaceTools(deps: WorkspaceToolDeps) {
+export function buildWorkspaceFileTools(deps: {
+	workspaceRoot: string;
+	fileClient: SandboxFileClient;
+	fileLimits: FileToolLimits;
+}) {
 	const fileContext = {
 		client: deps.fileClient,
 		workspaceRoot: deps.workspaceRoot,
@@ -101,6 +103,12 @@ export function buildWorkspaceTools(deps: WorkspaceToolDeps) {
 			async (input) =>
 				toCallToolResult(await runGrepFileTool(input, fileContext)),
 		),
+	];
+}
+
+export function buildWorkspaceTools(deps: WorkspaceToolDeps) {
+	return [
+		...buildWorkspaceFileTools(deps),
 		tool(
 			"Bash",
 			"Run a foreground shell command in the Workspace and return its output.",
@@ -123,14 +131,4 @@ export function buildWorkspaceTools(deps: WorkspaceToolDeps) {
 				),
 		),
 	];
-}
-
-export function createWorkspaceMcpServer(
-	deps: WorkspaceToolDeps,
-): McpSdkServerConfigWithInstance {
-	return createSdkMcpServer({
-		name: EXECUTOR_SERVER_NAME,
-		tools: buildWorkspaceTools(deps),
-		alwaysLoad: true,
-	});
 }

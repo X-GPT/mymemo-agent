@@ -152,6 +152,9 @@
     "packages/agent-db": {
       "name": "@mymemo/agent-db",
       "version": "0.1.0",
+      "dependencies": {
+        "zod": "4.3.6",
+      },
       "devDependencies": {
         "@biomejs/biome": "^2.3.11",
         "@electric-sql/pglite": "^0.5.3",

@@ -129,7 +129,7 @@ describe("non-production Agent-query continuity", () => {
 		const prepareWorkspace = createAgentQueryWorkspacePreparer({
 			db: tdb.db,
 			sandboxIdleMs: 300_000,
-			logger: { info() {}, warn() {} },
+			logger: { warn() {} },
 			provisioner: {
 				async provisionForRun(input) {
 					provisions.push(input);

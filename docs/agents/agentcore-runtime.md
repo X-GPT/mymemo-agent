@@ -44,7 +44,8 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 ## Query and sandbox startup
 
 The non-production `agent-query-runtime` reuses the same E2B provisioner,
-renewal loop, and bounded file/Bash tools for synchronous Agent queries.
+renewal loop, and bounded file tools for synchronous Agent queries. Run-bound
+`Bash` auditing remains deferred to #565.
 SessionStore failure aborts Workspace tools and interrupts Claude before a
 terminal result can escape. Its persistence is deliberately unfenced until
 #565 composes response admission, authority renewal, and mutation fencing;
