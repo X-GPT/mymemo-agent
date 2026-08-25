@@ -370,17 +370,15 @@ async function handleAgentQueryChat(
 export function createAiChatRoutes(injectedDeps?: AgentQueryChatDeps) {
 	const routes = new Hono<AppEnv>();
 	routes.get("/:conversationId", requireInternalIdentity, async (c) => {
-		const queryDeps = injectedDeps ?? c.var.deps.agentQueryChatDeps;
-		if (!queryDeps) {
-			return c.json({ error: "Direct response unavailable" }, 503);
-		}
+		const messageStore =
+			injectedDeps?.messageStore ?? c.var.deps.chatMessageStore;
 		const conversationId = ConversationIdParam.safeParse(
 			c.req.param("conversationId"),
 		);
 		if (!conversationId.success) {
 			return c.json({ error: "Invalid Conversation id" }, 400);
 		}
-		const history = await queryDeps.messageStore.listMessages({
+		const history = await messageStore.listMessages({
 			userId: c.var.identity.memberCode,
 			conversationId: conversationId.data,
 		});
@@ -390,10 +388,11 @@ export function createAiChatRoutes(injectedDeps?: AgentQueryChatDeps) {
 		return c.json(history.messages);
 	});
 	routes.get("/:conversationId/stream", requireInternalIdentity, async (c) => {
-		const queryDeps = injectedDeps ?? c.var.deps.agentQueryChatDeps;
-		if (!queryDeps) {
-			return c.json({ error: "Direct response unavailable" }, 503);
-		}
+		const messageStore =
+			injectedDeps?.messageStore ?? c.var.deps.chatMessageStore;
+		const resumableStreams = injectedDeps
+			? injectedDeps.resumableStreams
+			: c.var.deps.resumableStreams;
 		const conversationId = ConversationIdParam.safeParse(
 			c.req.param("conversationId"),
 		);
@@ -404,21 +403,21 @@ export function createAiChatRoutes(injectedDeps?: AgentQueryChatDeps) {
 			userId: c.var.identity.memberCode,
 			conversationId: conversationId.data,
 		};
-		const active = await queryDeps.messageStore.getActiveStream(ref);
+		const active = await messageStore.getActiveStream(ref);
 		if (active.outcome === "not_found") {
 			return c.json({ error: "Conversation not found" }, 404);
 		}
-		if (!active.activeStreamId || !queryDeps.resumableStreams) {
+		if (!active.activeStreamId || !resumableStreams) {
 			return c.body(null, 204);
 		}
 		let stream: ReadableStream<string> | null | undefined;
 		try {
-			stream = await queryDeps.resumableStreams.resume(active.activeStreamId);
+			stream = await resumableStreams.resume(active.activeStreamId);
 		} catch {
 			return c.json({ error: "Response resumption unavailable" }, 503);
 		}
 		if (!stream) {
-			await queryDeps.messageStore
+			await messageStore
 				.clearActiveStreamId(
 					ref,
 					active.conversationEpoch,
@@ -442,11 +441,19 @@ export function createAiChatRoutes(injectedDeps?: AgentQueryChatDeps) {
 		}),
 		requireInternalIdentity,
 		(c) => {
-			const queryDeps = injectedDeps ?? c.var.deps.agentQueryChatDeps;
-			if (!queryDeps) {
+			if (injectedDeps) {
+				return handleAgentQueryChat(c, c.req.valid("json"), injectedDeps);
+			}
+			const runtimeInvoker = c.var.deps.agentQueryRuntimeInvoker;
+			if (!runtimeInvoker) {
 				return c.json({ error: "Direct response unavailable" }, 503);
 			}
-			return handleAgentQueryChat(c, c.req.valid("json"), queryDeps);
+			return handleAgentQueryChat(c, c.req.valid("json"), {
+				messageStore: c.var.deps.chatMessageStore,
+				runtimeInvoker,
+				exposureGate: c.var.deps.exposureGate,
+				resumableStreams: c.var.deps.resumableStreams,
+			});
 		},
 	);
 	return routes;

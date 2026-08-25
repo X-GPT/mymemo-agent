@@ -52,7 +52,7 @@ The non-production synchronous Runtime requires `AGENT_DATABASE_URL`,
 `E2B_API_KEY`, and `WORKER_E2B_TEMPLATE`. `PORT` defaults to `8080` and
 `LOG_LEVEL` to `info`. Chat API mounts the staged route in every composition;
 `AGENT_QUERY_RUNTIME_ARN` enables execution through this Runtime. Without it,
-the route returns `503` before admission.
+the direct-response POST returns `503` before admission.
 
 ## Chat API
 

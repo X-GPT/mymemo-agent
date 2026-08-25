@@ -40,15 +40,26 @@ it("starts without the Compose-only artifact endpoint", async () => {
 			child.exitCode === null ? "" : await new Response(child.stderr).text();
 		expect(stderr).not.toContain("LOCAL_ARTIFACT_ENDPOINT is required");
 		expect(healthy).toBe(true);
-		const directChat = await fetch(
-			`http://127.0.0.1:${port}/api/chat/00000000-0000-4000-8000-000000000000`,
-			{
-				headers: {
-					"x-member-code": "member-1",
-					"x-partner-code": "partner-1",
-				},
+		const directChat = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-member-code": "member-1",
+				"x-partner-code": "partner-1",
 			},
-		);
+			body: JSON.stringify({
+				id: "00000000-0000-4000-8000-000000000000",
+				messages: [
+					{
+						id: "00000000-0000-4000-8000-000000000001",
+						role: "user",
+						parts: [{ type: "text", text: "hello" }],
+					},
+				],
+				model: "anthropic/claude-sonnet-5",
+				trigger: "submit-message",
+			}),
+		});
 		expect(directChat.status).toBe(503);
 	} finally {
 		if (child.exitCode === null) child.kill();

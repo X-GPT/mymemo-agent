@@ -16,7 +16,7 @@ the User message atomically. `GET /api/chat/:conversationId` returns canonical
 ordered `UIMessage[]`; `GET /api/chat/:conversationId/stream` owner-authorizes
 and resumes the Conversation's standard Redis-backed AI SDK stream. Redis
 failure affects resumption only. Without `AGENT_QUERY_RUNTIME_ARN`, the staged
-route returns `503` before admission; production does not configure that Runtime
+POST returns `503` before admission; production does not configure that Runtime
 before the hard swap.
 
 ### Create a Conversation
