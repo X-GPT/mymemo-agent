@@ -1,8 +1,8 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
-	conversationOwnershipClock,
-	conversationOwnershipLeaseDeadline,
+	conversationExecutionAuthorityDeadline,
+	liveConversationExecutionAuthorityState,
 } from "./conversation-ownership";
 import { conversations } from "./schema";
 
@@ -28,7 +28,7 @@ function liveResponseAuthorityConditions(
 ) {
 	return and(
 		responseAuthorityConditions(authority),
-		sql`${conversations.ownerUntil} > ${conversationOwnershipClock()}`,
+		liveConversationExecutionAuthorityState(),
 	);
 }
 
@@ -49,7 +49,7 @@ export async function renewConversationResponseAuthorityTx(
 ): Promise<Date | null> {
 	const [row] = await db
 		.update(conversations)
-		.set({ ownerUntil: conversationOwnershipLeaseDeadline() })
+		.set({ ownerUntil: conversationExecutionAuthorityDeadline() })
 		.where(liveResponseAuthorityConditions(authority))
 		.returning({ deadline: conversations.ownerUntil });
 	return row?.deadline ?? null;

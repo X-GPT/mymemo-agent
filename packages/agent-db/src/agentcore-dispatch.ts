@@ -2,8 +2,8 @@ import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
-	conversationOwnershipClock,
-	conversationOwnershipLeaseDeadline,
+	conversationExecutionAuthorityClock,
+	conversationExecutionAuthorityDeadline,
 	liveConversationOwnershipState,
 } from "./conversation-ownership";
 import {
@@ -343,7 +343,7 @@ export async function acquireAgentCoreDispatchTx(
 			.set({
 				epoch,
 				ownerWorkerId: input.workerId,
-				ownerUntil: conversationOwnershipLeaseDeadline(input.now),
+				ownerUntil: conversationExecutionAuthorityDeadline(input.now),
 			})
 			.where(
 				and(
@@ -356,7 +356,7 @@ export async function acquireAgentCoreDispatchTx(
 			.set({
 				status: "running",
 				executedByWorkerId: input.workerId,
-				updatedAt: conversationOwnershipClock(input.now),
+				updatedAt: conversationExecutionAuthorityClock(input.now),
 			})
 			.where(eq(runs.runId, input.dispatch.runId));
 

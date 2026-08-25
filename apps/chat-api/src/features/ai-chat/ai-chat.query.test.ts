@@ -341,7 +341,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 		expect(response.status).toBe(409);
 		expect(await response.json()).toEqual({
-			error: "A response is already active",
+			error: "Conversation has active work",
 		});
 		expect(invocations).toBe(0);
 		expect(await listPersistedMessages(tdb)).toEqual([]);

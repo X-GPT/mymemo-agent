@@ -4,24 +4,24 @@ import { conversations } from "./schema";
 
 /** Ownership is Conversation-scoped; no Run-scoped lease exists. */
 
-/**
- * How far ahead acquisition or renewal pushes `owner_until`: a 60s hold renewed
- * on the Runtime's 15s heartbeat, allowing four missed renewals before the
- * Conversation becomes reclaimable.
- */
-export const CONVERSATION_OWNERSHIP_LEASE_MS = 60_000;
+/** Shared duration for Conversation Ownership and Response authority. */
+export const CONVERSATION_EXECUTION_AUTHORITY_MS = 60_000;
 
-export function conversationOwnershipClock(now?: Date) {
+export function conversationExecutionAuthorityClock(now?: Date) {
 	return now ? sql`${now}::timestamptz` : sql`now()`;
 }
 
-export function conversationOwnershipLeaseDeadline(now?: Date) {
-	return sql`${conversationOwnershipClock(now)} + (${CONVERSATION_OWNERSHIP_LEASE_MS} * interval '1 millisecond')`;
+export function conversationExecutionAuthorityDeadline(now?: Date) {
+	return sql`${conversationExecutionAuthorityClock(now)} + (${CONVERSATION_EXECUTION_AUTHORITY_MS} * interval '1 millisecond')`;
+}
+
+export function liveConversationExecutionAuthorityState(now?: Date) {
+	return sql<boolean>`${conversations.ownerUntil} > ${conversationExecutionAuthorityClock(now)}`;
 }
 
 export function liveConversationOwnershipState(now?: Date) {
 	return sql<boolean>`${conversations.ownerWorkerId} is not null
-		and ${conversations.ownerUntil} > ${conversationOwnershipClock(now)}`;
+		and ${liveConversationExecutionAuthorityState(now)}`;
 }
 
 /** Fenced-write authority; worker identity is provenance, not authority. */
@@ -71,7 +71,7 @@ export async function renewConversationLeaseTx(
 ): Promise<Date | null> {
 	const [renewed] = await db
 		.update(conversations)
-		.set({ ownerUntil: conversationOwnershipLeaseDeadline() })
+		.set({ ownerUntil: conversationExecutionAuthorityDeadline() })
 		.where(liveConversationOwnershipConditions(owner))
 		.returning({ ownerUntil: conversations.ownerUntil });
 	return renewed?.ownerUntil ?? null;

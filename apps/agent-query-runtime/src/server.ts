@@ -1,5 +1,6 @@
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
+	type AgentQueryAuthority,
 	type AgentQueryRequest,
 	watchResponseAuthority,
 } from "@mymemo/agent-query";
@@ -65,24 +66,15 @@ export type AgentQueryRuntimeDependencies = {
 		prompt: string;
 		options: Options;
 	}): AsyncIterable<SDKMessage> & { interrupt(): Promise<unknown> };
-	createSessionStore(input: {
-		conversationId: string;
-		conversationEpoch: number;
-	}): AgentQuerySessionStore;
+	createSessionStore(input: AgentQueryAuthority): AgentQuerySessionStore;
 	prepareWorkingDirectory(path: string): Promise<void>;
-	prepareWorkspace(input: {
-		conversationId: string;
-		conversationEpoch: number;
-	}): Promise<{
+	prepareWorkspace(input: AgentQueryAuthority): Promise<{
 		signal: AbortSignal;
 		queryOptions: Pick<Options, "allowedTools" | "mcpServers">;
 		stop(): Promise<void>;
 		dispose(): void;
 	}>;
-	verifyResponseAuthority(authority: {
-		conversationId: string;
-		conversationEpoch: number;
-	}): Promise<Date | null>;
+	verifyResponseAuthority(authority: AgentQueryAuthority): Promise<Date | null>;
 	authorityCheckIntervalMs?: number;
 	replacementCleanupMs?: number;
 };

@@ -1,4 +1,5 @@
 import type { Database } from "@mymemo/agent-db/client";
+import { liveConversationExecutionAuthorityState } from "@mymemo/agent-db/conversation-ownership";
 import {
 	ACTIVE_RUN_STATUSES,
 	conversations,
@@ -139,7 +140,7 @@ export class PostgresConversationStore implements ConversationStore {
 			const [conversation] = await tx
 				.select({
 					...getTableColumns(conversations),
-					executionAuthorityActive: sql<boolean>`${conversations.ownerUntil} > now()`,
+					executionAuthorityActive: liveConversationExecutionAuthorityState(),
 				})
 				.from(conversations)
 				.where(
@@ -195,7 +196,7 @@ export class PostgresConversationStore implements ConversationStore {
 			const [conversation] = await tx
 				.select({
 					conversationId: conversations.conversationId,
-					executionAuthorityActive: sql<boolean>`${conversations.ownerUntil} > now()`,
+					executionAuthorityActive: liveConversationExecutionAuthorityState(),
 				})
 				.from(conversations)
 				.where(

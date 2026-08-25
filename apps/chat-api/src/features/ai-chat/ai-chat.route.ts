@@ -270,7 +270,7 @@ async function handleAgentQueryChat(
 		case "archived":
 			return c.json({ error: "Conversation is archived" }, 409);
 		case "conflict":
-			return c.json({ error: "A response is already active" }, 409);
+			return c.json({ error: "Conversation has active work" }, 409);
 		case "duplicate":
 			return c.json({ error: "Message id was already used" }, 409);
 	}

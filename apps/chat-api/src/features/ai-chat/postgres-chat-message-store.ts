@@ -1,5 +1,8 @@
 import type { Database } from "@mymemo/agent-db/client";
-import { conversationOwnershipLeaseDeadline } from "@mymemo/agent-db/conversation-ownership";
+import {
+	conversationExecutionAuthorityDeadline,
+	liveConversationExecutionAuthorityState,
+} from "@mymemo/agent-db/conversation-ownership";
 import {
 	clearConversationResponseAuthorityTx,
 	lockLiveConversationResponseAuthorityTx,
@@ -62,7 +65,7 @@ export class PostgresChatMessageStore {
 			const [conversation] = await tx
 				.select({
 					...getTableColumns(conversations),
-					executionAuthorityActive: sql<boolean>`${conversations.ownerUntil} > now()`,
+					executionAuthorityActive: liveConversationExecutionAuthorityState(),
 				})
 				.from(conversations)
 				.where(
@@ -109,7 +112,7 @@ export class PostgresChatMessageStore {
 				.set({
 					epoch: sql`${conversations.epoch} + 1`,
 					ownerWorkerId: "agent-query",
-					ownerUntil: conversationOwnershipLeaseDeadline(),
+					ownerUntil: conversationExecutionAuthorityDeadline(),
 					activeStreamId: null,
 					title: sql`coalesce(${conversations.title}, ${prompt.text})`,
 					lastActivityAt: sql`now()`,
@@ -229,7 +232,7 @@ export class PostgresChatMessageStore {
 					eq(conversations.userId, ref.userId),
 					eq(conversations.conversationId, ref.conversationId),
 					eq(conversations.epoch, conversationEpoch),
-					sql`${conversations.ownerUntil} > now()`,
+					liveConversationExecutionAuthorityState(),
 				),
 			)
 			.returning({ conversationId: conversations.conversationId });

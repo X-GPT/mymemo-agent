@@ -9,7 +9,7 @@ import {
 } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase, type Database } from "@mymemo/agent-db/client";
-import { conversationOwnershipLeaseDeadline } from "@mymemo/agent-db/conversation-ownership";
+import { conversationExecutionAuthorityDeadline } from "@mymemo/agent-db/conversation-ownership";
 import { publishAgentQueryWorkspaceTx } from "@mymemo/agent-db/runtime-store";
 import {
 	agentSessions,
@@ -216,7 +216,7 @@ describe.skipIf(!RUN)(
 					.update(conversations)
 					.set({
 						epoch: sql`${conversations.epoch} + 1`,
-						ownerUntil: conversationOwnershipLeaseDeadline(),
+						ownerUntil: conversationExecutionAuthorityDeadline(),
 					})
 					.where(eq(conversations.userId, USER_ID)),
 			]);
@@ -272,7 +272,7 @@ describe.skipIf(!RUN)(
 				.update(conversations)
 				.set({
 					epoch: admission.conversationEpoch + 1,
-					ownerUntil: conversationOwnershipLeaseDeadline(),
+					ownerUntil: conversationExecutionAuthorityDeadline(),
 				})
 				.where(eq(conversations.userId, USER_ID));
 

@@ -5,6 +5,7 @@ import {
 	publishAgentQueryWorkspaceTx,
 	recordOrphanSandboxTx,
 } from "@mymemo/agent-db/runtime-store";
+import type { AgentQueryAuthority } from "@mymemo/agent-query";
 import type { SandboxProvisioner } from "../../agentcore-runtime/src/e2b/sandbox-provisioner";
 import { DEFAULT_FILE_TOOL_LIMITS } from "../../agentcore-runtime/src/file-tools/file-tools";
 import { toMessage } from "../../agentcore-runtime/src/logger";
@@ -26,10 +27,7 @@ export function createAgentQueryWorkspacePreparer(deps: {
 		warn(value: Record<string, unknown>): void;
 	};
 }) {
-	return async (conversation: {
-		conversationId: string;
-		conversationEpoch: number;
-	}) => {
+	return async (conversation: AgentQueryAuthority) => {
 		const workspaceState = await loadAgentQueryWorkspaceTx(
 			deps.db,
 			conversation.conversationId,

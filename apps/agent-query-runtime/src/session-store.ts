@@ -12,10 +12,11 @@ import {
 	listAgentSessionsTx,
 	loadAgentSessionEntriesTx,
 } from "@mymemo/agent-db/session-store";
+import type { AgentQueryAuthority } from "@mymemo/agent-query";
 
 export function createAgentQuerySessionStore(
 	db: Database,
-	conversation: { conversationId: string; conversationEpoch: number },
+	conversation: AgentQueryAuthority,
 ) {
 	let mirroredMainSessionId: string | null = null;
 	const ref = (key: SessionKey) => ({

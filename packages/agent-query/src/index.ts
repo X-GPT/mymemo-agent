@@ -8,6 +8,11 @@ export type AgentQueryRequest = {
 	agentSessionId?: string;
 };
 
+export type AgentQueryAuthority = Pick<
+	AgentQueryRequest,
+	"conversationId" | "conversationEpoch"
+>;
+
 /** Stop response work when its last database-confirmed deadline lapses. */
 export function watchResponseAuthority(input: {
 	initialDeadline: Date;
