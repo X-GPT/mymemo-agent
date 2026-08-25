@@ -25,7 +25,7 @@ import type {
 	ProvisionedSandbox,
 	ProvisionForRunInput,
 } from "../../../../agentcore-runtime/src/e2b/sandbox-provisioner";
-import { createAiChatRoutes } from "./ai-chat.route";
+import aiChatRoutes from "./ai-chat.route";
 import { PostgresChatMessageStore } from "./postgres-chat-message-store";
 
 const headers = {
@@ -184,31 +184,29 @@ describe("non-production Agent-query continuity", () => {
 						return true;
 					},
 				},
+				agentQueryRuntimeInvoker: {
+					async invoke(input: AgentQueryRequest) {
+						const response = await runtimeHandler(
+							new Request("http://runtime/invocations", {
+								method: "POST",
+								headers: {
+									"content-type": "application/json",
+									[AGENTCORE_RUNTIME_SESSION_HEADER]: input.conversationId,
+								},
+								body: JSON.stringify(input),
+							}),
+						);
+						if (!response.ok) throw new Error("Runtime invocation failed");
+						return (await response.text())
+							.trim()
+							.split("\n")
+							.map((line) => JSON.parse(line) as SDKMessage);
+					},
+				},
 			} as unknown as AppDeps);
 			await next();
 		});
-		app.route(
-			"/api/chat",
-			createAiChatRoutes({
-				async invoke(input: AgentQueryRequest) {
-					const response = await runtimeHandler(
-						new Request("http://runtime/invocations", {
-							method: "POST",
-							headers: {
-								"content-type": "application/json",
-								[AGENTCORE_RUNTIME_SESSION_HEADER]: input.conversationId,
-							},
-							body: JSON.stringify(input),
-						}),
-					);
-					if (!response.ok) throw new Error("Runtime invocation failed");
-					return (await response.text())
-						.trim()
-						.split("\n")
-						.map((line) => JSON.parse(line) as SDKMessage);
-				},
-			}),
-		);
+		app.route("/api/chat", aiChatRoutes);
 
 		for (const [messageId, prompt] of [
 			["user-1", "Start"],

@@ -7,7 +7,6 @@ import {
 	projectToolUse,
 	publicToolName,
 } from "@mymemo/agent-db/tool-event-projection";
-import type { AgentQueryRequest } from "@mymemo/agent-query";
 import {
 	createUIMessageStream,
 	createUIMessageStreamResponse,
@@ -43,12 +42,6 @@ const AgentQueryChatBody = z.strictObject({
 	model: z.string(),
 	trigger: z.literal("submit-message"),
 });
-
-export type AgentQueryRuntimeInvoker = {
-	invoke(
-		request: AgentQueryRequest,
-	): Promise<AsyncIterable<SDKMessage> | Iterable<SDKMessage>>;
-};
 
 async function writeClaudeMessageStream(
 	writer: UIMessageStreamWriter<UIMessage>,
@@ -213,11 +206,11 @@ async function writeClaudeMessageStream(
 async function handleAgentQueryChat(
 	c: Context<AppEnv>,
 	body: z.infer<typeof AgentQueryChatBody>,
-	runtimeInvoker: AgentQueryRuntimeInvoker,
 ) {
 	if (!(AI_CHAT_MODELS as readonly string[]).includes(body.model)) {
 		return c.json({ error: "Unsupported model" }, 400);
 	}
+	const runtimeInvoker = c.var.deps.agentQueryRuntimeInvoker;
 	const ref = {
 		userId: c.var.identity.memberCode,
 		conversationId: body.id,
@@ -278,21 +271,20 @@ async function handleAgentQueryChat(
 	return createUIMessageStreamResponse({ stream });
 }
 
-export function createAiChatRoutes(runtimeInvoker: AgentQueryRuntimeInvoker) {
-	const routes = new Hono<AppEnv>();
-	routes.post(
-		"/",
-		bodyLimit({
-			maxSize: MAX_REQUEST_BODY_BYTES,
-			onError: (c) => c.json({ error: "Request body too large" }, 413),
-		}),
-		zValidator("json", AgentQueryChatBody, (result, c) => {
-			if (!result.success) {
-				return c.json({ error: "Invalid AI SDK chat input" }, 400);
-			}
-		}),
-		requireInternalIdentity,
-		(c) => handleAgentQueryChat(c, c.req.valid("json"), runtimeInvoker),
-	);
-	return routes;
-}
+const routes = new Hono<AppEnv>();
+routes.post(
+	"/",
+	bodyLimit({
+		maxSize: MAX_REQUEST_BODY_BYTES,
+		onError: (c) => c.json({ error: "Request body too large" }, 413),
+	}),
+	zValidator("json", AgentQueryChatBody, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid AI SDK chat input" }, 400);
+		}
+	}),
+	requireInternalIdentity,
+	(c) => handleAgentQueryChat(c, c.req.valid("json")),
+);
+
+export default routes;

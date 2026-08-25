@@ -3,7 +3,7 @@ import pino from "pino";
 import { createApp } from "../src/app";
 import { loadApiConfigFromEnv } from "../src/config/env";
 import { createDeps } from "../src/deps";
-import { createAiChatRoutes } from "../src/features/ai-chat/ai-chat.route";
+import aiChatRoutes from "../src/features/ai-chat/ai-chat.route";
 import { createHttpAgentQueryRuntimeInvoker } from "../src/features/ai-chat/http-agent-query-runtime-invoker";
 import { createS3ArtifactDownloadSigner } from "../src/features/artifacts/s3-artifact-download-signer";
 
@@ -17,6 +17,7 @@ const agentQueryRuntimeUrl =
 const logger = pino({ level: config.logLevel });
 const deps = createDeps(
 	config,
+	createHttpAgentQueryRuntimeInvoker({ runtimeUrl: agentQueryRuntimeUrl }),
 	createLiveStreamTelemetry("chat-api", logger),
 	{ isAgentEnabled: async () => true },
 	createS3ArtifactDownloadSigner(
@@ -35,11 +36,6 @@ process.once("SIGINT", () => void close());
 process.once("SIGTERM", () => void close());
 
 const app = createApp(config, deps);
-app.route(
-	"/api/chat",
-	createAiChatRoutes(
-		createHttpAgentQueryRuntimeInvoker({ runtimeUrl: agentQueryRuntimeUrl }),
-	),
-);
+app.route("/api/chat", aiChatRoutes);
 
 export default app;
