@@ -9,6 +9,14 @@ export interface FileToolLimits {
 	commandTimeoutMs: number;
 }
 
+export const DEFAULT_FILE_TOOL_LIMITS: FileToolLimits = {
+	readMaxBytes: 65_536,
+	readMaxLines: 2_000,
+	grepMaxResults: 100,
+	commandMaxOutputBytes: 65_536,
+	commandTimeoutMs: 30_000,
+};
+
 export interface SandboxFileRead {
 	path: string;
 	maxBytes: number;

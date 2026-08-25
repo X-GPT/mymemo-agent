@@ -9,11 +9,12 @@ TTL machinery — is superseded by
 [ADR-0014](./0014-producer-buffered-live-stream-over-pubsub.md); every
 non-transport decision here remains in force.
 
-Issue #560 stages a replacement AI SDK Agent-query path. Issue #562 introduces
-its canonical Conversation message store only behind an injected test seam;
-production composition still uses the Run and Run-event authority described
-below. The production authority changes must explicitly supersede this decision
-when the staged path is composed.
+Issue #560 stages a replacement AI SDK Agent-query path. Issues #562–#564 keep
+its canonical Conversation message store, synchronous Runtime invocation,
+Postgres-backed Agent session, and reusable Workspace tools in test and local
+composition only; production composition still uses the Run and Run-event
+authority described below. The production authority changes must explicitly
+supersede this decision when the staged path is composed.
 
 MyMemo exposes a plug-compatible AG-UI data plane rather than only borrowing AG-UI-shaped event names. A Run endpoint accepts the standard `RunAgentInput` body and returns a standard AG-UI `BaseEvent` stream; active-Run reconnect emits the same event vocabulary from a per-Run Redis Stream. MyMemo also supplies the persistence, replay, interruption, and history endpoints that AG-UI leaves to the server implementation. The surface advertises resumability only after its sequence and replay contract is implemented and verified.
 

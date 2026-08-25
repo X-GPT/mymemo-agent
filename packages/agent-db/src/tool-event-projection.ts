@@ -1,11 +1,12 @@
+import { z } from "zod";
 import type {
 	PublicToolName,
 	ToolResultPayload,
 	ToolUsePayload,
-} from "@mymemo/agent-db/run-events";
-import { z } from "zod";
-import { PRESENT_UI_TOOL_NAME } from "../present-ui-tool";
-import { EXECUTOR_SERVER_NAME } from "./run-tools";
+} from "./run-events";
+
+const EXECUTOR_SERVER_NAME = "mymemo-executor";
+const PRESENT_UI_TOOL_NAME = "PresentUI";
 
 /**
  * The explicit per-tool client projection (ADR-0009). This pure module is the

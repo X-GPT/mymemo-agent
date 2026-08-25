@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { allowlistedExecutorToolNames } from "@mymemo/agent-db/tool-event-projection";
 import Ajv from "ajv";
 import type {
 	CommandAuditEvent,
@@ -20,7 +21,6 @@ import {
 	EXECUTOR_SERVER_NAME,
 	type RunToolDeps,
 } from "./run-tools";
-import { allowlistedExecutorToolNames } from "./tool-event-projection";
 
 const BINDING: RunBinding = {
 	userId: "user-1",

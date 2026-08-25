@@ -11,6 +11,7 @@
 		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",
+		"./tool-event-projection": "./src/tool-event-projection.ts",
 		"./runtime-store": "./src/runtime-store.ts",
 		"./session-store": "./src/session-store.ts",
 		"./testing": "./src/testing.ts",
@@ -22,6 +23,9 @@
 		"format": "biome format --write",
 		"lint": "biome lint --write",
 		"check": "biome check --write"
+	},
+	"dependencies": {
+		"zod": "4.3.6"
 	},
 	"peerDependencies": {
 		"drizzle-orm": "^0.45.2",

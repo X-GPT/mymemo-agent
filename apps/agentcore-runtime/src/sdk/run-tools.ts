@@ -5,25 +5,11 @@ import {
 	tool,
 } from "@anthropic-ai/claude-agent-sdk";
 import { type ZodRawShape, z } from "zod";
-import {
-	type BashToolLimits,
-	type CommandAuditEvent,
-	runBashTool,
-	type SandboxCommandClient,
-} from "../bash-tool/bash-tool";
 import type { ScopedDocumentQueryClient } from "../documents/client";
 import { runListDocumentsTool } from "../documents/list-documents-tool";
 import { runLoadDocumentsTool } from "../documents/load-documents-tool";
 import type { FrozenConversationScope } from "../documents/scope";
 import { runSearchDocumentsTool } from "../documents/search-documents-tool";
-import {
-	type FileToolLimits,
-	runEditFileTool,
-	runGrepFileTool,
-	runReadFileTool,
-	runWriteFileTool,
-	type SandboxFileClient,
-} from "../file-tools/file-tools";
 import {
 	PRESENT_UI_TOOL_DESCRIPTION,
 	PRESENT_UI_TOOL_NAME,
@@ -31,41 +17,20 @@ import {
 } from "../present-ui-tool";
 import type { RunBinding } from "../sandbox-env";
 import { UI_NODE_ROOT_SCHEMA } from "../ui-payload-validator";
-
-/**
- * The MCP tool-result shape an SDK tool handler must resolve to, derived from
- * the SDK's own tool-definition type so we never import `@modelcontextprotocol`
- * directly (it is a transitive dependency, not a declared one).
- */
-type CallToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
-
-/** The result shape every executor tool implementation already returns. */
-interface ExecutorToolResult {
-	content: { type: "text"; text: string }[];
-	isError?: true;
-}
-
-/**
- * Adapt an executor tool result to the SDK's `CallToolResult`. A fresh object
- * literal is required so it satisfies `CallToolResult`'s index signature; the
- * executor result types carry none.
- */
-function toCallToolResult(result: ExecutorToolResult): CallToolResult {
-	return result.isError
-		? { content: result.content, isError: true }
-		: { content: result.content };
-}
+import {
+	buildWorkspaceTools,
+	EXECUTOR_SERVER_NAME,
+	toCallToolResult,
+	WORKSPACE_EXECUTOR_TOOL_NAMES,
+	type WorkspaceToolDeps,
+} from "./workspace-tools";
 
 /** The in-process MCP server name every executor tool is exposed under. */
-export const EXECUTOR_SERVER_NAME = "mymemo-executor";
+export { EXECUTOR_SERVER_NAME } from "./workspace-tools";
 
 /** The short names of the executor tools {@link buildRunTools} builds. */
 const EXECUTOR_TOOL_NAMES = [
-	"Read",
-	"Write",
-	"Edit",
-	"Grep",
-	"Bash",
+	...WORKSPACE_EXECUTOR_TOOL_NAMES,
 	"ListDocuments",
 	"SearchDocuments",
 	"LoadDocuments",
@@ -79,7 +44,7 @@ const EXECUTOR_TOOL_NAMES = [
  * and MCP-handler regression tests and by the exact Zod version in package.json.
  */
 function modelSchemaWithRawRuntime<T extends z.ZodType>(modelSchema: T) {
-	const runtimeSchema = z.object({}).passthrough();
+	const runtimeSchema = z.looseObject({});
 	runtimeSchema._zod.toJSONSchema = () => {
 		const { $schema: _schema, ...jsonSchema } = z.toJSONSchema(modelSchema, {
 			target: "draft-7",
@@ -112,18 +77,9 @@ export const EXECUTOR_ALLOWED_TOOLS: readonly string[] =
  * model takes is attributed to the exact `{userId, conversationId, runId,
  * sandboxId}` that caused it (plan Task 7.2).
  */
-export interface RunToolDeps {
-	binding: RunBinding;
-	/** Absolute sandbox workspace root; all file/shell paths resolve under it. */
-	workspaceRoot: string;
-	/** Fires on interruption/ownership-loss/shutdown; a running Bash command is killed. */
-	signal: AbortSignal;
-	fileClient: SandboxFileClient;
-	commandClient: SandboxCommandClient;
+export interface RunToolDeps extends WorkspaceToolDeps {
 	documentClient: ScopedDocumentQueryClient;
 	documentScope: FrozenConversationScope;
-	fileLimits: FileToolLimits;
-	bashLimits: BashToolLimits;
 	documentSearchMaxResults: number;
 	documentListMaxResults: number;
 	documentLoad: {
@@ -131,8 +87,6 @@ export interface RunToolDeps {
 		perDocumentMaxBytes: number;
 		perCallMaxBytes: number;
 	};
-	markSandboxTainted(reason: string): Promise<void>;
-	recordCommandAudit(event: CommandAuditEvent): Promise<void>;
 }
 
 /** The document-access binding is the run binding minus the sandbox id: document
@@ -153,72 +107,8 @@ function documentBinding(binding: RunBinding) {
  */
 // biome-ignore lint/suspicious/noExplicitAny: a per-run tool set is heterogeneous by construction; the SDK's own CreateSdkMcpServerOptions.tools is likewise Array<SdkMcpToolDefinition<any>>.
 export function buildRunTools(deps: RunToolDeps): SdkMcpToolDefinition<any>[] {
-	const fileContext = {
-		client: deps.fileClient,
-		workspaceRoot: deps.workspaceRoot,
-		limits: deps.fileLimits,
-	};
-
 	return [
-		tool(
-			"Read",
-			"Read a UTF-8 text file from the run workspace, with optional line offset/limit.",
-			{
-				path: z.string(),
-				offset: z.number().optional(),
-				limit: z.number().optional(),
-			},
-			async (input) =>
-				toCallToolResult(await runReadFileTool(input, fileContext)),
-		),
-		tool(
-			"Write",
-			"Create or overwrite a file in the run workspace with the given content.",
-			{ path: z.string(), content: z.string() },
-			async (input) =>
-				toCallToolResult(await runWriteFileTool(input, fileContext)),
-		),
-		tool(
-			"Edit",
-			"Replace every occurrence of oldText with newText in a workspace file.",
-			{ path: z.string(), oldText: z.string(), newText: z.string() },
-			async (input) =>
-				toCallToolResult(await runEditFileTool(input, fileContext)),
-		),
-		tool(
-			"Grep",
-			"Search file contents in the run workspace for a pattern.",
-			{
-				pattern: z.string(),
-				path: z.string().optional(),
-				include: z.string().optional(),
-				caseSensitive: z.boolean().optional(),
-				maxResults: z.number().optional(),
-			},
-			async (input) =>
-				toCallToolResult(await runGrepFileTool(input, fileContext)),
-		),
-		tool(
-			"Bash",
-			"Run a foreground shell command in the run workspace and return its output.",
-			{
-				command: z.string(),
-				cwd: z.string().optional(),
-				timeoutMs: z.number().optional(),
-			},
-			async (input) =>
-				toCallToolResult(
-					await runBashTool(input, {
-						client: deps.commandClient,
-						workspaceRoot: deps.workspaceRoot,
-						binding: deps.binding,
-						limits: deps.bashLimits,
-						signal: deps.signal,
-						markSandboxTainted: deps.markSandboxTainted,
-						recordCommandAudit: deps.recordCommandAudit,
-					}),
-				),
-		),
+		...buildWorkspaceTools(deps),
 		tool(
 			"ListDocuments",
 			"Count and browse the searchable documents in this conversation's scope, newest first.",

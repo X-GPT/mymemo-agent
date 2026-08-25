@@ -10,7 +10,7 @@ import { agentSessions, conversations } from "./schema";
 
 /**
  * SDK-free persistence helpers over `agent_sessions`, used by the worker's
- * Claude Agent SDK `SessionStore` adapter (ADR-0005, Task 7.3). Append and
+ * Claude Agent SDK `SessionStore` adapter (ADR-0005, Task 7.3). Run append and
  * SDK-requested delete transactions validate and lock the Conversation's live
  * Ownership fence `FOR SHARE` *before* the mutation: a rejected fence writes
  * nothing at all, and the lock then holds ownership stable through commit, so
@@ -20,12 +20,14 @@ import { agentSessions, conversations } from "./schema";
  * instance; the adapter that imports SDK types lives in agentcore-runtime and
  * delegates here.
  *
- * Mutations take `conversationId` only from their Conversation owner — the stable
+ * Run mutations take `conversationId` only from their Conversation owner — the stable
  * identity the adapter binds each call to — plus the SDK's `(sessionId,
  * subpath)`. `projectKey` is stored for fidelity with the SDK's cwd-derived key
  * but is never a lookup key: conversation id is 1:1 with a conversation's
  * transcripts and does not depend on reconstructing the SDK's cwd→key
- * sanitization.
+ * sanitization. The `AgentQuery` variants reuse this canonical SQL without an
+ * Ownership fence and remain outside production until #565 adds response
+ * authority.
  */
 
 /**
@@ -90,24 +92,58 @@ export async function appendAgentSessionEntriesTx(
 		await assertConversationOwnershipForNoop(db, owner, "session append");
 		return;
 	}
-	const subpath = normalizeSubpath(ref.subpath);
 	await db.transaction(async (tx) => {
 		await lockLiveConversationOwnershipTx(tx, owner, "session append");
-		await tx
-			.insert(agentSessions)
-			.values(
-				entries.map((entry) => ({
-					conversationId: owner.conversationId,
-					epoch: owner.epoch,
-					projectKey: ref.projectKey,
-					sessionId: ref.sessionId,
-					subpath,
-					uuid: typeof entry.uuid === "string" ? entry.uuid : null,
-					entry,
-				})),
-			)
-			.onConflictDoNothing();
+		await insertAgentSessionEntriesTx(
+			tx,
+			owner.conversationId,
+			owner.epoch,
+			ref,
+			entries,
+		);
 	});
+}
+
+export async function appendAgentQuerySessionEntriesTx(
+	db: Database,
+	input: {
+		conversationId: string;
+		conversationEpoch: number;
+		ref: AgentSessionRef;
+		entries: AgentSessionEntry[];
+	},
+): Promise<void> {
+	await insertAgentSessionEntriesTx(
+		db,
+		input.conversationId,
+		input.conversationEpoch,
+		input.ref,
+		input.entries,
+	);
+}
+
+async function insertAgentSessionEntriesTx(
+	db: Pick<Database, "insert">,
+	conversationId: string,
+	epoch: number,
+	ref: AgentSessionRef,
+	entries: AgentSessionEntry[],
+): Promise<void> {
+	if (entries.length === 0) return;
+	await db
+		.insert(agentSessions)
+		.values(
+			entries.map((entry) => ({
+				conversationId,
+				epoch,
+				projectKey: ref.projectKey,
+				sessionId: ref.sessionId,
+				subpath: normalizeSubpath(ref.subpath),
+				uuid: typeof entry.uuid === "string" ? entry.uuid : null,
+				entry,
+			})),
+		)
+		.onConflictDoNothing();
 }
 
 /**
@@ -199,10 +235,28 @@ export async function deleteAgentSessionTx(
 	const { owner, ref } = input;
 	await db.transaction(async (tx) => {
 		await lockLiveConversationOwnershipTx(tx, owner, "session delete");
-		await tx
-			.delete(agentSessions)
-			.where(transcriptWhere(owner.conversationId, ref.sessionId, ref.subpath));
+		await deleteAgentSessionRowsTx(tx, owner.conversationId, ref);
 	});
+}
+
+export async function deleteAgentQuerySessionTx(
+	db: Database,
+	input: {
+		conversationId: string;
+		ref: { sessionId: string; subpath?: string };
+	},
+): Promise<void> {
+	await deleteAgentSessionRowsTx(db, input.conversationId, input.ref);
+}
+
+async function deleteAgentSessionRowsTx(
+	db: Pick<Database, "delete">,
+	conversationId: string,
+	ref: { sessionId: string; subpath?: string },
+): Promise<void> {
+	await db
+		.delete(agentSessions)
+		.where(transcriptWhere(conversationId, ref.sessionId, ref.subpath));
 }
 
 /**

@@ -1,5 +1,9 @@
 import type { Database } from "@mymemo/agent-db/client";
-import { conversationMessages, conversations } from "@mymemo/agent-db/schema";
+import {
+	conversationMessages,
+	conversationRuntime,
+	conversations,
+} from "@mymemo/agent-db/schema";
 import type { UIMessage } from "ai";
 import { and, eq, sql } from "drizzle-orm";
 import type { ConversationRef } from "@/features/conversation-store/conversation-store";
@@ -7,7 +11,11 @@ import type { ConversationRef } from "@/features/conversation-store/conversation
 export type ChatMessage = UIMessage<unknown, never, never>;
 
 type UserMessageAdmission =
-	| { outcome: "admitted"; conversationEpoch: number }
+	| {
+			outcome: "admitted";
+			conversationEpoch: number;
+			agentSessionId?: string;
+	  }
 	| { outcome: "not_found" | "archived" | "duplicate" };
 
 export class PostgresChatMessageStore {
@@ -67,7 +75,7 @@ export class PostgresChatMessageStore {
 			});
 			const prompt = message.parts[0];
 			if (!prompt || prompt.type !== "text") {
-				throw new Error("direct User message must contain one text part");
+				throw new Error("Agent-query User message must contain one text part");
 			}
 			await tx
 				.update(conversations)
@@ -81,23 +89,53 @@ export class PostgresChatMessageStore {
 						eq(conversations.conversationId, ref.conversationId),
 					),
 				);
+			const [runtime] = await tx
+				.select({ agentSessionId: conversationRuntime.agentSessionId })
+				.from(conversationRuntime)
+				.where(
+					and(
+						eq(conversationRuntime.userId, ref.userId),
+						eq(conversationRuntime.conversationId, ref.conversationId),
+					),
+				)
+				.limit(1);
 			return {
 				outcome: "admitted",
 				conversationEpoch: conversation.epoch,
+				...(runtime?.agentSessionId
+					? { agentSessionId: runtime.agentSessionId }
+					: {}),
 			};
 		});
 	}
 
-	async persistAssistantMessage(
+	async persistAssistantMessageAndSession(
 		ref: ConversationRef,
 		message: ChatMessage,
+		agentSessionId: string,
 	): Promise<void> {
-		await this.db.insert(conversationMessages).values({
-			userId: ref.userId,
-			conversationId: ref.conversationId,
-			messageId: message.id,
-			role: message.role,
-			parts: message.parts,
+		await this.db.transaction(async (tx) => {
+			await tx.insert(conversationMessages).values({
+				userId: ref.userId,
+				conversationId: ref.conversationId,
+				messageId: message.id,
+				role: message.role,
+				parts: message.parts,
+			});
+			await tx
+				.insert(conversationRuntime)
+				.values({
+					userId: ref.userId,
+					conversationId: ref.conversationId,
+					agentSessionId,
+				})
+				.onConflictDoUpdate({
+					target: [
+						conversationRuntime.userId,
+						conversationRuntime.conversationId,
+					],
+					set: { agentSessionId, updatedAt: sql`now()` },
+				});
 		});
 	}
 }

@@ -1,6 +1,7 @@
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { z } from "zod";
+import type { AgentQuerySessionStore } from "./session-store";
 
 export const AGENTCORE_RUNTIME_SESSION_HEADER =
 	"x-amzn-bedrock-agentcore-runtime-session-id";
@@ -24,22 +25,20 @@ const agentQueryRequest = z.strictObject({
 	agentSessionId: z.string().min(1).max(2_048).optional(),
 });
 
-const resultBase = z
-	.object({
-		type: z.literal("result"),
-		duration_ms: z.number().nonnegative(),
-		duration_api_ms: z.number().nonnegative(),
-		is_error: z.boolean(),
-		num_turns: z.number().int().nonnegative(),
-		stop_reason: z.string().nullable(),
-		total_cost_usd: z.number().nonnegative(),
-		usage: z.record(z.string(), z.unknown()),
-		modelUsage: z.record(z.string(), z.unknown()),
-		permission_denials: z.array(z.unknown()),
-		uuid: z.string().min(1),
-		session_id: z.string().min(1),
-	})
-	.passthrough();
+const resultBase = z.looseObject({
+	type: z.literal("result"),
+	duration_ms: z.number().nonnegative(),
+	duration_api_ms: z.number().nonnegative(),
+	is_error: z.boolean(),
+	num_turns: z.number().int().nonnegative(),
+	stop_reason: z.string().nullable(),
+	total_cost_usd: z.number().nonnegative(),
+	usage: z.record(z.string(), z.unknown()),
+	modelUsage: z.record(z.string(), z.unknown()),
+	permission_denials: z.array(z.unknown()),
+	uuid: z.string().min(1),
+	session_id: z.string().min(1),
+});
 const resultMessage = z.discriminatedUnion("subtype", [
 	resultBase.extend({
 		subtype: z.literal("success"),
@@ -58,15 +57,29 @@ const resultMessage = z.discriminatedUnion("subtype", [
 	}),
 ]);
 
-export type ResponseAuthorityVerifier = (authority: {
-	conversationId: string;
-	conversationEpoch: number;
-}) => Promise<void>;
-
 export type AgentQueryRuntimeDependencies = {
-	query(input: { prompt: string; options: Options }): AsyncIterable<SDKMessage>;
+	query(input: {
+		prompt: string;
+		options: Options;
+	}): AsyncIterable<SDKMessage> & { interrupt(): Promise<unknown> };
+	createSessionStore(input: {
+		conversationId: string;
+		conversationEpoch: number;
+	}): AgentQuerySessionStore;
 	prepareWorkingDirectory(path: string): Promise<void>;
-	verifyResponseAuthority: ResponseAuthorityVerifier;
+	prepareWorkspace(input: {
+		conversationId: string;
+		conversationEpoch: number;
+	}): Promise<{
+		signal: AbortSignal;
+		queryOptions: Pick<Options, "allowedTools" | "mcpServers">;
+		stop(): Promise<void>;
+		dispose(): void;
+	}>;
+	verifyResponseAuthority(authority: {
+		conversationId: string;
+		conversationEpoch: number;
+	}): Promise<void>;
 };
 
 class InvalidInvocationError extends Error {
@@ -117,60 +130,89 @@ async function parseRequest(request: Request): Promise<AgentQueryRequest> {
 	return parsed.data;
 }
 
-function createNdjsonStream(messages: AsyncIterable<SDKMessage>) {
+function createNdjsonStream(
+	messages: AsyncIterable<SDKMessage> & { interrupt(): Promise<unknown> },
+	sessionStore: AgentQuerySessionStore,
+	workspace: Awaited<
+		ReturnType<AgentQueryRuntimeDependencies["prepareWorkspace"]>
+	>,
+) {
 	const encoder = new TextEncoder();
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
+			let interruption: Promise<unknown> | undefined;
+			const interrupt = () => {
+				interruption ??= messages.interrupt().catch(() => {});
+				return interruption;
+			};
+			workspace.signal.addEventListener("abort", interrupt, { once: true });
+			if (workspace.signal.aborted) void interrupt();
 			const write = (message: SDKMessage) => {
 				controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
 			};
 			try {
 				for await (const message of messages) {
+					if (workspace.signal.aborted) {
+						throw workspace.signal.reason instanceof Error
+							? workspace.signal.reason
+							: new Error("Workspace failed");
+					}
+					if (message.type === "system") {
+						if (message.subtype === "mirror_error") {
+							throw new Error("Claude session mirror failed");
+						}
+						continue;
+					}
 					if (message.type === "result") {
 						const result = resultMessage.safeParse(message);
 						if (!result.success) {
 							throw new Error("invalid terminal Claude result");
 						}
+						if (sessionStore.mirroredMainSessionId() !== message.session_id) {
+							throw new Error(
+								"terminal Claude result has no persisted transcript",
+							);
+						}
 						write(message);
 						controller.close();
+						workspace.signal.removeEventListener("abort", interrupt);
+						workspace.dispose();
 						return;
 					}
-					if (message.type !== "stream_event") {
-						continue;
-					}
-
-					switch (message.event.type) {
-						case "message_start":
-						case "content_block_stop":
-						case "message_stop":
-							write(message);
-							break;
-						case "content_block_start":
-							if (
-								message.event.index !== 0 ||
-								message.event.content_block.type !== "text"
-							) {
-								throw new Error("unsupported Claude content block");
-							}
-							write(message);
-							break;
-						case "content_block_delta":
-							if (
-								message.event.index !== 0 ||
-								message.event.delta.type !== "text_delta"
-							) {
-								throw new Error("unsupported Claude content delta");
-							}
-							write(message);
-							break;
+					if (
+						message.type === "stream_event" ||
+						message.type === "assistant" ||
+						isCurrentToolResultMessage(message)
+					) {
+						write(message);
 					}
 				}
 				throw new Error("Claude stream ended before its terminal result");
 			} catch (error) {
+				workspace.signal.removeEventListener("abort", interrupt);
+				await Promise.allSettled([workspace.stop(), interrupt()]);
+				workspace.dispose();
 				controller.error(error);
 			}
 		},
 	});
+}
+
+function isCurrentToolResultMessage(message: SDKMessage): boolean {
+	if (
+		message.type !== "user" ||
+		("isReplay" in message && message.isReplay === true) ||
+		!Array.isArray(message.message.content) ||
+		message.message.content.length === 0
+	) {
+		return false;
+	}
+	return message.message.content.every(
+		(block) =>
+			typeof block === "object" &&
+			block !== null &&
+			block.type === "tool_result",
+	);
 }
 
 function jsonError(message: string, status: number): Response {
@@ -207,24 +249,41 @@ export function createAgentQueryRequestHandler(
 			});
 			const cwd = `/workspace/conversations/${input.conversationId}`;
 			await dependencies.prepareWorkingDirectory(cwd);
-			const messages = dependencies.query({
-				prompt: input.prompt,
-				options: {
-					allowedTools: [],
-					model: input.model,
-					includePartialMessages: true,
-					cwd,
-					permissionMode: "dontAsk",
-					settingSources: [],
-					thinking: { type: "disabled" },
-					tools: [],
-					...(input.agentSessionId ? { resume: input.agentSessionId } : {}),
+			const binding = {
+				conversationId: input.conversationId,
+				conversationEpoch: input.conversationEpoch,
+			};
+			const sessionStore = dependencies.createSessionStore(binding);
+			const workspace = await dependencies.prepareWorkspace(binding);
+			let messages: ReturnType<AgentQueryRuntimeDependencies["query"]>;
+			try {
+				messages = dependencies.query({
+					prompt: input.prompt,
+					options: {
+						...workspace.queryOptions,
+						model: input.model,
+						includePartialMessages: true,
+						cwd,
+						permissionMode: "dontAsk",
+						sessionStore,
+						settingSources: [],
+						thinking: { type: "disabled" },
+						tools: [],
+						...(input.agentSessionId ? { resume: input.agentSessionId } : {}),
+					},
+				});
+			} catch (error) {
+				await workspace.stop().catch(() => {});
+				workspace.dispose();
+				throw error;
+			}
+			return new Response(
+				createNdjsonStream(messages, sessionStore, workspace),
+				{
+					status: 200,
+					headers: { "content-type": "application/x-ndjson" },
 				},
-			});
-			return new Response(createNdjsonStream(messages), {
-				status: 200,
-				headers: { "content-type": "application/x-ndjson" },
-			});
+			);
 		} catch (error) {
 			if (error instanceof InvalidInvocationError) {
 				return jsonError(error.message, 400);

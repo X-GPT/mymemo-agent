@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { sValidator as zValidator } from "@hono/standard-validator";
+import type { PublicToolName } from "@mymemo/agent-db/run-events";
+import {
+	projectToolResult,
+	projectToolUse,
+	publicToolName,
+} from "@mymemo/agent-db/tool-event-projection";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import {
 	createUIMessageStream,
@@ -45,7 +51,9 @@ const AgentQueryChatBody = z.strictObject({
 export type AgentQueryChatDeps = {
 	messageStore: Pick<
 		PostgresChatMessageStore,
-		"ownedConversationExists" | "admitUserMessage" | "persistAssistantMessage"
+		| "ownedConversationExists"
+		| "admitUserMessage"
+		| "persistAssistantMessageAndSession"
 	>;
 	runtimeInvoker: {
 		invoke(
@@ -60,96 +68,160 @@ async function writeClaudeMessageStream(
 	writer: UIMessageStreamWriter<ChatMessage>,
 	events: AsyncIterable<SDKMessage> | Iterable<SDKMessage>,
 	messageId: string,
-): Promise<void> {
-	const textPartId = `${messageId}-text`;
-	let text = "";
-	let messageStarted = false;
-	let messageStopped = false;
-	let textOpen = false;
-	let textClosed = false;
+): Promise<string> {
+	let textPartIndex = 0;
+	let wrotePart = false;
+	let messageOpen = false;
+	let textIndex: number | undefined;
+	let textId: string | undefined;
 	let terminal = false;
+	let agentSessionId: string | undefined;
+	const toolInvocations = new Map<
+		string,
+		{ tool: PublicToolName; toolCallId: string }
+	>();
 	writer.write({ type: "start", messageId });
 
-	for await (const value of events) {
-		const message = value;
-		if (message?.type === "result") {
+	for await (const message of events) {
+		if (message.type === "result") {
 			if (
 				terminal ||
 				message.subtype !== "success" ||
 				message.is_error ||
 				typeof message.session_id !== "string" ||
-				message.session_id.length === 0 ||
-				!messageStopped
+				message.session_id.length === 0
 			) {
 				throw new Error("invalid terminal Claude result");
 			}
 			terminal = true;
+			agentSessionId = message.session_id;
 			continue;
 		}
-		if (message?.type !== "stream_event" || terminal) {
+		if (terminal) {
 			throw new Error("invalid Claude event");
 		}
-
-		const event = message.event;
-		switch (event.type) {
-			case "message_start":
-				if (messageStarted || event.message.id.length === 0) {
-					throw new Error("invalid Claude message start");
+		if (message.type === "stream_event") {
+			const event = message.event;
+			switch (event.type) {
+				case "message_start":
+					if (messageOpen || event.message.id.length === 0) {
+						throw new Error("invalid Claude message start");
+					}
+					messageOpen = true;
+					break;
+				case "content_block_start":
+					if (!messageOpen) throw new Error("invalid Claude content start");
+					if (event.content_block.type === "text") {
+						if (textId) throw new Error("overlapping Claude text blocks");
+						textIndex = event.index;
+						textId = `${messageId}-text-${textPartIndex++}`;
+						writer.write({ type: "text-start", id: textId });
+					}
+					break;
+				case "content_block_delta":
+					if (event.delta.type === "text_delta") {
+						if (event.index !== textIndex || !textId) {
+							throw new Error("invalid Claude text delta");
+						}
+						writer.write({
+							type: "text-delta",
+							id: textId,
+							delta: event.delta.text,
+						});
+						if (event.delta.text.length > 0) wrotePart = true;
+					}
+					break;
+				case "content_block_stop":
+					if (event.index === textIndex && textId) {
+						writer.write({ type: "text-end", id: textId });
+						textIndex = undefined;
+						textId = undefined;
+					}
+					break;
+				case "message_stop":
+					if (!messageOpen || textId) {
+						throw new Error("invalid Claude message stop");
+					}
+					messageOpen = false;
+					break;
+			}
+			continue;
+		}
+		if (message.type === "assistant") {
+			if (message.error || message.aborted) {
+				throw new Error("Claude Assistant message failed");
+			}
+			for (const block of message.message.content) {
+				if (block.type === "tool_use") {
+					const tool = publicToolName(block.name);
+					if (tool === null || toolInvocations.has(block.id)) {
+						throw new Error("invalid Claude Tool invocation");
+					}
+					const projected = projectToolUse(tool, block.input);
+					if (!projected.ok) throw new Error("unsafe Claude Tool invocation");
+					const toolCallId = randomUUID();
+					toolInvocations.set(block.id, { tool, toolCallId });
+					writer.write({
+						type: "tool-input-available",
+						toolCallId,
+						toolName: tool,
+						input: projected.payload.arguments,
+						dynamic: true,
+					});
+					wrotePart = true;
 				}
-				messageStarted = true;
-				break;
-			case "message_stop":
-				if (!messageStarted || !textClosed || messageStopped) {
-					throw new Error("invalid Claude message stop");
-				}
-				messageStopped = true;
-				break;
-			case "content_block_start":
-				if (
-					!messageStarted ||
-					messageStopped ||
-					event.index !== 0 ||
-					event.content_block.type !== "text" ||
-					textOpen ||
-					textClosed
-				) {
-					throw new Error("unsupported Claude content block");
-				}
-				textOpen = true;
-				writer.write({ type: "text-start", id: textPartId });
-				break;
-			case "content_block_delta":
-				if (
-					event.index !== 0 ||
-					event.delta.type !== "text_delta" ||
-					typeof event.delta.text !== "string" ||
-					!textOpen
-				) {
-					throw new Error("invalid Claude text delta");
-				}
-				text += event.delta.text;
+			}
+			continue;
+		}
+		if (
+			message.type !== "user" ||
+			("isReplay" in message && message.isReplay === true) ||
+			!Array.isArray(message.message.content)
+		) {
+			throw new Error("invalid Claude event");
+		}
+		for (const block of message.message.content) {
+			if (block.type !== "tool_result") {
+				throw new Error("invalid Claude Tool result");
+			}
+			const invocation = toolInvocations.get(block.tool_use_id);
+			if (!invocation) throw new Error("unmatched Claude Tool result");
+			toolInvocations.delete(block.tool_use_id);
+			const projected = projectToolResult(
+				invocation.tool,
+				block.content,
+				block.is_error === true,
+			);
+			if (!projected.ok) throw new Error("unsafe Claude Tool result");
+			if (projected.payload.isError) {
 				writer.write({
-					type: "text-delta",
-					id: textPartId,
-					delta: event.delta.text,
+					type: "tool-output-error",
+					toolCallId: invocation.toolCallId,
+					errorText: "Tool failed",
+					dynamic: true,
 				});
-				break;
-			case "content_block_stop":
-				if (event.index !== 0 || !textOpen) {
-					throw new Error("invalid Claude text end");
-				}
-				textOpen = false;
-				textClosed = true;
-				writer.write({ type: "text-end", id: textPartId });
-				break;
-			default:
-				throw new Error("unsupported Claude event");
+			} else {
+				writer.write({
+					type: "tool-output-available",
+					toolCallId: invocation.toolCallId,
+					output: projected.payload.result,
+					dynamic: true,
+				});
+			}
 		}
 	}
 
-	if (!terminal || !messageStopped || text.length === 0) {
+	if (
+		!terminal ||
+		!agentSessionId ||
+		!wrotePart ||
+		messageOpen ||
+		textId ||
+		toolInvocations.size > 0
+	) {
 		throw new Error("Claude stream ended before completion");
 	}
+	return agentSessionId;
 }
 
 async function handleAgentQueryChat(
@@ -183,11 +255,17 @@ async function handleAgentQueryChat(
 	}
 
 	const assistantMessageId = (deps.createMessageId ?? randomUUID)();
+	let agentSessionId: string | undefined;
 	const stream = createUIMessageStream<ChatMessage>({
 		onError: () => "Response failed",
 		async onEnd({ finishReason, isAborted, responseMessage }) {
 			if (finishReason !== "stop" || isAborted) return;
-			await deps.messageStore.persistAssistantMessage(ref, responseMessage);
+			if (!agentSessionId) throw new Error("Agent session was not completed");
+			await deps.messageStore.persistAssistantMessageAndSession(
+				ref,
+				responseMessage,
+				agentSessionId,
+			);
 		},
 		async execute({ writer }) {
 			const events = await deps.runtimeInvoker.invoke({
@@ -196,8 +274,15 @@ async function handleAgentQueryChat(
 				conversationEpoch: admission.conversationEpoch,
 				prompt: body.messages[0].parts[0].text,
 				model: body.model,
+				...(admission.agentSessionId
+					? { agentSessionId: admission.agentSessionId }
+					: {}),
 			});
-			await writeClaudeMessageStream(writer, events, assistantMessageId);
+			agentSessionId = await writeClaudeMessageStream(
+				writer,
+				events,
+				assistantMessageId,
+			);
 			writer.write({ type: "finish", finishReason: "stop" });
 		},
 	});

@@ -7,7 +7,7 @@ import {
 	lockLiveConversationOwnershipTx,
 	rejectConversationOwnership,
 } from "./conversation-ownership";
-import { conversationRuntime, orphanSandboxes } from "./schema";
+import { conversationRuntime, conversations, orphanSandboxes } from "./schema";
 
 /**
  * Narrow transaction helpers over `conversation_runtime` and
@@ -17,14 +17,16 @@ import { conversationRuntime, orphanSandboxes } from "./schema";
  * lives in one place over one `pg` driver. Sandbox/taint helpers live here;
  * Agent-session pointer publication is composed by run-store with the terminal
  * Outcome.
- * The table grants no execution ownership of its own: every mutation is fenced
+ * The table grants no execution ownership of its own: every Run mutation is fenced
  * on the Conversation's live Ownership fence. Every update carries that fence
  * as an `EXISTS` subquery inside the same statement that performs the write,
  * and row creation checks the same predicate `FOR SHARE` in its transaction —
  * so a Runtime invocation whose Ownership lapses or is superseded cannot
  * overwrite pointers a later Durable acquisition relies on. The two deliberate exceptions are
  * orphan recording and Reclamation taint, which exist precisely for the
- * ownership-already-lost path.
+ * ownership-already-lost path. The staged `AgentQuery` Workspace helpers are
+ * deliberately unfenced and non-production until #565 composes response
+ * authority.
  *
  * `interrupt_requested` is inside the fence (mirroring the run-store
  * interruption append class): command cleanup while an interruption stops
@@ -52,6 +54,52 @@ export async function loadConversationRuntimeTx(
 		)
 		.limit(1);
 	return row ?? null;
+}
+
+export async function loadAgentQueryWorkspaceTx(
+	db: Database,
+	conversationId: string,
+): Promise<{
+	userId: string;
+	sandboxId: string | null;
+	sandboxTainted: boolean;
+}> {
+	const [conversation] = await db
+		.select({ userId: conversations.userId })
+		.from(conversations)
+		.where(eq(conversations.conversationId, conversationId));
+	if (!conversation) throw new Error("Conversation not found");
+	const runtime = await loadConversationRuntimeTx(db, {
+		userId: conversation.userId,
+		conversationId,
+	});
+	return {
+		userId: conversation.userId,
+		sandboxId: runtime?.sandboxId ?? null,
+		sandboxTainted: runtime?.sandboxTainted ?? false,
+	};
+}
+
+export async function publishAgentQueryWorkspaceTx(
+	db: Database,
+	input: { userId: string; conversationId: string; sandboxId: string },
+): Promise<void> {
+	await db
+		.insert(conversationRuntime)
+		.values({
+			userId: input.userId,
+			conversationId: input.conversationId,
+			sandboxId: input.sandboxId,
+			sandboxTainted: false,
+		})
+		.onConflictDoUpdate({
+			target: [conversationRuntime.userId, conversationRuntime.conversationId],
+			set: {
+				sandboxId: input.sandboxId,
+				sandboxTainted: false,
+				updatedAt: sql`now()`,
+			},
+		});
 }
 
 /**
