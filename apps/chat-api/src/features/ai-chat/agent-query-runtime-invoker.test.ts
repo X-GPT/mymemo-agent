@@ -66,7 +66,6 @@ it("invokes the Conversation-bound Runtime and parses split NDJSON chunks", asyn
 });
 
 it("composes Agent queries only in the non-production local entrypoint", () => {
-	const app = readFileSync(join(import.meta.dir, "../../app.ts"), "utf8");
 	const production = readFileSync(
 		join(import.meta.dir, "../../index.ts"),
 		"utf8",
@@ -76,7 +75,8 @@ it("composes Agent queries only in the non-production local entrypoint", () => {
 		"utf8",
 	);
 
-	expect(app).toContain("createAiChatRoutes(agentQueryChatDeps)");
+	expect(production).not.toContain("createAiChatRoutes");
 	expect(production).not.toContain("AGENT_QUERY_RUNTIME_ARN");
+	expect(local).toContain("createAiChatRoutes");
 	expect(local).toContain("AGENT_QUERY_RUNTIME_ARN");
 });

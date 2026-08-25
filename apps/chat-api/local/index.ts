@@ -5,6 +5,7 @@ import { createApp } from "../src/app";
 import { loadApiConfigFromEnv } from "../src/config/env";
 import { createDeps } from "../src/deps";
 import { createBedrockAgentQueryRuntimeInvoker } from "../src/features/ai-chat/agent-query-runtime-invoker";
+import { createAiChatRoutes } from "../src/features/ai-chat/ai-chat.route";
 import { createAiChatResumableStreams } from "../src/features/ai-chat/resumable-streams";
 import { createS3ArtifactDownloadSigner } from "../src/features/artifacts/s3-artifact-download-signer";
 
@@ -33,21 +34,21 @@ async function close(): Promise<void> {
 process.once("SIGINT", () => void close());
 process.once("SIGTERM", () => void close());
 
+const app = createApp(config, deps);
 const agentQueryRuntimeArn = Bun.env.AGENT_QUERY_RUNTIME_ARN?.trim();
-const app = createApp(
-	config,
-	deps,
-	agentQueryRuntimeArn
-		? {
-				messageStore: deps.chatMessageStore,
-				exposureGate: deps.exposureGate,
-				resumableStreams: createAiChatResumableStreams(),
-				runtimeInvoker: createBedrockAgentQueryRuntimeInvoker({
-					client: new BedrockAgentCoreClient({ region: config.artifactRegion }),
-					agentRuntimeArn: agentQueryRuntimeArn,
-				}),
-			}
-		: undefined,
-);
+if (agentQueryRuntimeArn) {
+	app.route(
+		"/api/chat",
+		createAiChatRoutes({
+			messageStore: deps.chatMessageStore,
+			exposureGate: deps.exposureGate,
+			resumableStreams: createAiChatResumableStreams(),
+			runtimeInvoker: createBedrockAgentQueryRuntimeInvoker({
+				client: new BedrockAgentCoreClient({ region: config.artifactRegion }),
+				agentRuntimeArn: agentQueryRuntimeArn,
+			}),
+		}),
+	);
+}
 
 export default app;
