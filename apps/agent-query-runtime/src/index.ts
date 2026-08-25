@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
+import { verifyConversationResponseAuthorityTx } from "@mymemo/agent-db/response-authority";
 import pino from "pino";
 import { createE2bSandboxProvisioner } from "../../agentcore-runtime/src/e2b/sandbox-provisioner";
 import { createAgentQueryServerOptions } from "./server";
@@ -42,9 +43,11 @@ Bun.serve(
 				await mkdir(path, { recursive: true });
 			},
 			prepareWorkspace,
-			// Production Postgres epoch/deadline enforcement is composed in #565;
-			// this Runtime remains outside production until then.
-			async verifyResponseAuthority() {},
+			verifyResponseAuthority: (authority) =>
+				verifyConversationResponseAuthorityTx(db, {
+					conversationId: authority.conversationId,
+					epoch: authority.conversationEpoch,
+				}),
 		},
 		port,
 	),

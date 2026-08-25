@@ -175,6 +175,34 @@ describe("PostgresConversationStore", () => {
 		).resolves.toEqual({ outcome: "active_run" });
 	});
 
+	it("allows rename but rejects Archive and Permanent deletion before the response deadline", async () => {
+		await store.create(collectionConversation);
+		await tdb.db.update(conversations).set({
+			epoch: 1,
+			ownerWorkerId: "agent-query",
+			ownerUntil: new Date(Date.now() + 60_000),
+		});
+
+		await expect(
+			store.update(
+				{ userId: "user-1", conversationId: "conv-1" },
+				{ title: "Renamed while responding" },
+			),
+		).resolves.toMatchObject({ outcome: "updated" });
+		await expect(
+			store.update(
+				{ userId: "user-1", conversationId: "conv-1" },
+				{ archived: true },
+			),
+		).resolves.toEqual({ outcome: "active_run" });
+		await expect(
+			store.deletePermanently({
+				userId: "user-1",
+				conversationId: "conv-1",
+			}),
+		).resolves.toEqual({ outcome: "active_run" });
+	});
+
 	it("Permanent deletion cascades Run history and leaves external cleanup state recoverable", async () => {
 		await store.create(collectionConversation);
 		await tdb.db.insert(conversationRuntime).values({

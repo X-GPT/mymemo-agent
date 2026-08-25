@@ -6,6 +6,7 @@ import {
 	lockLiveConversationOwnershipTx,
 	rejectConversationOwnership,
 } from "./conversation-ownership";
+import { lockLiveConversationResponseAuthorityTx } from "./response-authority";
 import { agentSessions, conversations } from "./schema";
 
 /**
@@ -25,9 +26,8 @@ import { agentSessions, conversations } from "./schema";
  * subpath)`. `projectKey` is stored for fidelity with the SDK's cwd-derived key
  * but is never a lookup key: conversation id is 1:1 with a conversation's
  * transcripts and does not depend on reconstructing the SDK's cwd→key
- * sanitization. The `AgentQuery` variants reuse this canonical SQL without an
- * Ownership fence and remain outside production until #565 adds response
- * authority.
+ * sanitization. The `AgentQuery` variants reuse this canonical SQL while
+ * locking the matching live Conversation response epoch/deadline.
  */
 
 /**
@@ -113,13 +113,19 @@ export async function appendAgentQuerySessionEntriesTx(
 		entries: AgentSessionEntry[];
 	},
 ): Promise<void> {
-	await insertAgentSessionEntriesTx(
-		db,
-		input.conversationId,
-		input.conversationEpoch,
-		input.ref,
-		input.entries,
-	);
+	await db.transaction(async (tx) => {
+		await lockLiveConversationResponseAuthorityTx(tx, {
+			conversationId: input.conversationId,
+			epoch: input.conversationEpoch,
+		});
+		await insertAgentSessionEntriesTx(
+			tx,
+			input.conversationId,
+			input.conversationEpoch,
+			input.ref,
+			input.entries,
+		);
+	});
 }
 
 async function insertAgentSessionEntriesTx(
@@ -243,10 +249,17 @@ export async function deleteAgentQuerySessionTx(
 	db: Database,
 	input: {
 		conversationId: string;
+		conversationEpoch: number;
 		ref: { sessionId: string; subpath?: string };
 	},
 ): Promise<void> {
-	await deleteAgentSessionRowsTx(db, input.conversationId, input.ref);
+	await db.transaction(async (tx) => {
+		await lockLiveConversationResponseAuthorityTx(tx, {
+			conversationId: input.conversationId,
+			epoch: input.conversationEpoch,
+		});
+		await deleteAgentSessionRowsTx(tx, input.conversationId, input.ref);
+	});
 }
 
 async function deleteAgentSessionRowsTx(

@@ -124,16 +124,17 @@ export const conversations = pgTable(
 		/** Non-null while the Conversation is archived. */
 		archivedAt: timestamp("archived_at", { withTimezone: true }),
 		/**
-		 * The Runtime invocation holding current Conversation Ownership. Provenance
-		 * for log correlation only — it carries no safety weight, because an epoch
-		 * names exactly one Durable acquisition. NULL while unowned.
+		 * The Runtime mode holding current execution authority. Provenance for log
+		 * correlation only — the epoch/deadline carry safety. NULL while idle.
 		 */
 		ownerWorkerId: text("owner_worker_id"),
-		/** Deadline of the current Ownership lease; NULL while unowned. */
+		/** Deadline of the current Run Ownership or direct response; NULL while idle. */
 		ownerUntil: timestamp("owner_until", { withTimezone: true }),
+		/** Redis-backed AI SDK stream currently resumable by the browser. */
+		activeStreamId: text("active_stream_id"),
 		/**
-		 * Ownership epoch (ADR-0015): incremented by every Durable acquisition, so
-		 * it names one acquisition of this Conversation. Fenced writes validate a
+		 * Execution epoch (ADR-0015): incremented by every Durable acquisition and
+		 * direct-response admission, so it names one attempt. Fenced writes validate a
 		 * matching epoch
 		 * **and** a live `owner_until` — the two conjuncts cover different
 		 * failures, the epoch a lease superseded by another acquisition and the

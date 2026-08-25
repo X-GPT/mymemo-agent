@@ -13,6 +13,10 @@ import type { AgentQuerySessionStore } from "./session-store";
 
 const conversationId = "0198b5a2-0d2b-7b64-9f65-4c9d49045111";
 
+function responseDeadline() {
+	return new Date(Date.now() + 60_000);
+}
+
 function streamEvent(event: Record<string, unknown>): SDKMessage {
 	return {
 		type: "stream_event",
@@ -187,7 +191,9 @@ function dependencies(
 			};
 		},
 		async prepareWorkingDirectory() {},
-		async verifyResponseAuthority() {},
+		async verifyResponseAuthority() {
+			return responseDeadline();
+		},
 	};
 }
 
@@ -211,6 +217,7 @@ describe("Agent-query Runtime HTTP boundary", () => {
 			},
 			async verifyResponseAuthority(authority) {
 				authorities.push(authority);
+				return responseDeadline();
 			},
 		});
 
@@ -258,7 +265,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 				return queryMessages(successfulMessages());
 			},
 			async prepareWorkingDirectory() {},
-			async verifyResponseAuthority() {},
+			async verifyResponseAuthority() {
+				return responseDeadline();
+			},
 		})(request());
 
 		expect(response.status).toBe(200);
@@ -471,6 +480,7 @@ describe("Agent-query Runtime HTTP boundary", () => {
 			async prepareWorkingDirectory() {},
 			async verifyResponseAuthority() {
 				verifications++;
+				return responseDeadline();
 			},
 		});
 		const invalidRequests = [
@@ -530,7 +540,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 			async prepareWorkingDirectory() {
 				throw new Error("workspace unavailable");
 			},
-			async verifyResponseAuthority() {},
+			async verifyResponseAuthority() {
+				return responseDeadline();
+			},
 		})(request());
 
 		expect(response.status).toBe(503);
@@ -609,7 +621,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 				throw new Error("Claude unavailable");
 			},
 			async prepareWorkingDirectory() {},
-			async verifyResponseAuthority() {},
+			async verifyResponseAuthority() {
+				return responseDeadline();
+			},
 		})(request());
 
 		expect(response.status).toBe(503);
@@ -632,7 +646,9 @@ describe("Agent-query Runtime HTTP boundary", () => {
 				);
 			},
 			async prepareWorkingDirectory() {},
-			async verifyResponseAuthority() {},
+			async verifyResponseAuthority() {
+				return responseDeadline();
+			},
 		})(request());
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("expected response body");
@@ -648,6 +664,129 @@ describe("Agent-query Runtime HTTP boundary", () => {
 		})();
 		await expect(drain).rejects.toThrow("transport failed");
 		expect(received).toContain('"type":"stream_event"');
+	});
+
+	it("stops no later than the last confirmed deadline during database failure", async () => {
+		const stopped = Promise.withResolvers<void>();
+		let verifications = 0;
+		let interruptions = 0;
+		const handle = createAgentQueryRequestHandler({
+			...dependencies(),
+			authorityCheckIntervalMs: 1,
+			async verifyResponseAuthority() {
+				verifications++;
+				if (verifications === 1) return new Date(Date.now() + 25);
+				throw new Error("Postgres unavailable");
+			},
+			query() {
+				const stream = (async function* () {
+					await stopped.promise;
+					yield* successfulMessages();
+				})();
+				return Object.assign(stream, {
+					async interrupt() {
+						interruptions++;
+						stopped.resolve();
+					},
+				});
+			},
+		});
+
+		const response = await handle(request());
+		await expect(response.text()).rejects.toThrow("Response authority lost");
+		expect(verifications).toBeGreaterThan(1);
+		expect(interruptions).toBe(1);
+	});
+
+	it("suppresses a same-epoch duplicate without starting another Claude query", async () => {
+		const release = Promise.withResolvers<void>();
+		let queries = 0;
+		const handle = createAgentQueryRequestHandler({
+			...dependencies(),
+			query() {
+				queries++;
+				const stream = (async function* () {
+					await release.promise;
+					yield* successfulMessages();
+				})();
+				return Object.assign(stream, { async interrupt() {} });
+			},
+		});
+
+		const first = await handle(request());
+		const firstText = first.text();
+		const duplicate = await handle(request());
+		expect(duplicate.status).toBe(409);
+		expect(queries).toBe(1);
+		release.resolve();
+		await firstText;
+		const completedDuplicate = await handle(request());
+		expect(completedDuplicate.status).toBe(409);
+		expect(queries).toBe(1);
+	});
+
+	it("settles an older local invocation before starting a newer epoch", async () => {
+		const releaseFirst = Promise.withResolvers<void>();
+		let queries = 0;
+		let interruptions = 0;
+		const handle = createAgentQueryRequestHandler({
+			...dependencies(),
+			query() {
+				queries++;
+				if (queries > 1) return queryMessages(successfulMessages());
+				const stream = (async function* () {
+					await releaseFirst.promise;
+					yield* successfulMessages();
+				})();
+				return Object.assign(stream, {
+					async interrupt() {
+						interruptions++;
+						releaseFirst.resolve();
+					},
+				});
+			},
+		});
+
+		const first = await handle(request());
+		const firstText = first.text();
+		const replacement = await handle(request({ conversationEpoch: 8 }));
+		expect(replacement.status).toBe(200);
+		expect(await replacement.text()).toContain('"type":"result"');
+		await expect(firstText).rejects.toThrow("Response authority lost");
+		expect(interruptions).toBe(1);
+		expect(queries).toBe(2);
+	});
+
+	it("returns 503 when prior-work cleanup cannot be proved in time", async () => {
+		const release = Promise.withResolvers<void>();
+		let queries = 0;
+		const handle = createAgentQueryRequestHandler({
+			...dependencies(),
+			replacementCleanupMs: 5,
+			query() {
+				queries++;
+				const stream = (async function* () {
+					await release.promise;
+					yield* successfulMessages();
+				})();
+				return Object.assign(stream, {
+					async interrupt() {
+						await release.promise;
+					},
+				});
+			},
+		});
+
+		const first = await handle(request());
+		const firstText = first.text().catch(() => "stopped");
+		const replacement = await handle(request({ conversationEpoch: 8 }));
+		expect(replacement.status).toBe(503);
+		expect(await replacement.json()).toEqual({
+			error: "Prior Agent query did not stop",
+		});
+		expect(queries).toBe(1);
+		release.resolve();
+		await firstText;
 	});
 
 	it("provides a Bun.serve image without importing Run or background-execution controls", () => {

@@ -356,6 +356,20 @@ describe("buildRunTools — file tools operate in the run workspace", () => {
 
 		expect(ctx.fileClient.writes).toHaveLength(1);
 	});
+
+	it("does not start a file mutation after the execution signal aborts", async () => {
+		const controller = new AbortController();
+		controller.abort(new Error("authority lost"));
+		const ctx = buildDeps({ signal: controller.signal });
+
+		await expect(
+			toolsByName(ctx.deps).Write?.handler(
+				{ path: "notes.txt", content: "stale" },
+				{},
+			),
+		).rejects.toThrow("authority lost");
+		expect(ctx.fileClient.writes).toHaveLength(0);
+	});
 });
 
 describe("buildRunTools — the run signal cancels active commands", () => {

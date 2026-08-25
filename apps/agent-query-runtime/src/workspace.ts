@@ -44,7 +44,7 @@ export function createAgentQueryWorkspacePreparer(deps: {
 			try {
 				await publishAgentQueryWorkspaceTx(deps.db, {
 					userId: workspaceState.userId,
-					conversationId: conversation.conversationId,
+					...conversation,
 					sandboxId: workspace.sandboxId,
 				});
 			} catch (error) {
@@ -116,6 +116,7 @@ export function createAgentQueryWorkspacePreparer(deps: {
 							workspaceRoot: workspace.workspaceRoot,
 							fileClient: workspace.fileClient,
 							fileLimits: DEFAULT_FILE_TOOL_LIMITS,
+							signal: controller.signal,
 						}),
 					}),
 				},

@@ -58,6 +58,7 @@ export function buildWorkspaceFileTools(deps: {
 	workspaceRoot: string;
 	fileClient: SandboxFileClient;
 	fileLimits: FileToolLimits;
+	signal?: AbortSignal;
 }) {
 	const fileContext = {
 		client: deps.fileClient,
@@ -73,22 +74,28 @@ export function buildWorkspaceFileTools(deps: {
 				offset: z.number().optional(),
 				limit: z.number().optional(),
 			},
-			async (input) =>
-				toCallToolResult(await runReadFileTool(input, fileContext)),
+			async (input) => {
+				deps.signal?.throwIfAborted();
+				return toCallToolResult(await runReadFileTool(input, fileContext));
+			},
 		),
 		tool(
 			"Write",
 			"Create or overwrite a file in the Workspace with the given content.",
 			{ path: z.string(), content: z.string() },
-			async (input) =>
-				toCallToolResult(await runWriteFileTool(input, fileContext)),
+			async (input) => {
+				deps.signal?.throwIfAborted();
+				return toCallToolResult(await runWriteFileTool(input, fileContext));
+			},
 		),
 		tool(
 			"Edit",
 			"Replace every occurrence of oldText with newText in a Workspace file.",
 			{ path: z.string(), oldText: z.string(), newText: z.string() },
-			async (input) =>
-				toCallToolResult(await runEditFileTool(input, fileContext)),
+			async (input) => {
+				deps.signal?.throwIfAborted();
+				return toCallToolResult(await runEditFileTool(input, fileContext));
+			},
 		),
 		tool(
 			"Grep",
@@ -100,8 +107,10 @@ export function buildWorkspaceFileTools(deps: {
 				caseSensitive: z.boolean().optional(),
 				maxResults: z.number().optional(),
 			},
-			async (input) =>
-				toCallToolResult(await runGrepFileTool(input, fileContext)),
+			async (input) => {
+				deps.signal?.throwIfAborted();
+				return toCallToolResult(await runGrepFileTool(input, fileContext));
+			},
 		),
 	];
 }

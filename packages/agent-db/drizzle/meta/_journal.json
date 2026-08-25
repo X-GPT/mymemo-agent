@@ -197,6 +197,13 @@
       "when": 1787609618911,
       "tag": "0027_petite_major_mapleleaf",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1787631179089,
+      "tag": "0028_flashy_supernaut",
+      "breakpoints": true
     }
   ]
 }

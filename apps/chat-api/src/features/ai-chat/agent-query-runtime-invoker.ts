@@ -44,13 +44,17 @@ async function* parseNdjson(response: unknown): AsyncIterable<SDKMessage> {
 
 export function createBedrockAgentQueryRuntimeInvoker(options: {
 	client: {
-		send(command: InvokeAgentRuntimeCommand): Promise<{ response?: unknown }>;
+		send(
+			command: InvokeAgentRuntimeCommand,
+			options?: { abortSignal?: AbortSignal },
+		): Promise<{ response?: unknown }>;
 	};
 	agentRuntimeArn: string;
 }) {
 	return {
 		async invoke(
 			request: AgentQueryRequest,
+			signal?: AbortSignal,
 		): Promise<AsyncIterable<SDKMessage>> {
 			const result = await options.client.send(
 				new InvokeAgentRuntimeCommand({
@@ -61,6 +65,7 @@ export function createBedrockAgentQueryRuntimeInvoker(options: {
 					accept: "application/x-ndjson",
 					qualifier: "DEFAULT",
 				}),
+				{ abortSignal: signal },
 			);
 			return parseNdjson(result.response);
 		},

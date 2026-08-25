@@ -153,7 +153,9 @@ describe("non-production Agent-query continuity", () => {
 				createAgentQuerySessionStore(tdb.db, owner),
 			async prepareWorkingDirectory() {},
 			prepareWorkspace,
-			async verifyResponseAuthority() {},
+			async verifyResponseAuthority() {
+				return new Date(Date.now() + 60_000);
+			},
 			query({ options }: { options: Options }) {
 				resumes.push(options.resume);
 				const sessionId = `agent-session-${++queryCount}`;

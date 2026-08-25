@@ -137,7 +137,10 @@ export class PostgresConversationStore implements ConversationStore {
 	): Promise<ConversationUpdateResult> {
 		return await this.db.transaction(async (tx) => {
 			const [conversation] = await tx
-				.select()
+				.select({
+					...getTableColumns(conversations),
+					responseActive: sql<boolean>`${conversations.ownerUntil} > now()`,
+				})
 				.from(conversations)
 				.where(
 					and(
@@ -148,7 +151,10 @@ export class PostgresConversationStore implements ConversationStore {
 				.for("update");
 			if (!conversation) return { outcome: "not_found" };
 
-			if (changes.archived !== undefined && (await hasActiveRun(tx, ref))) {
+			if (
+				changes.archived !== undefined &&
+				(conversation.responseActive || (await hasActiveRun(tx, ref)))
+			) {
 				return { outcome: "active_run" };
 			}
 
@@ -187,7 +193,10 @@ export class PostgresConversationStore implements ConversationStore {
 	): Promise<ConversationDeleteResult> {
 		return await this.db.transaction(async (tx) => {
 			const [conversation] = await tx
-				.select({ conversationId: conversations.conversationId })
+				.select({
+					conversationId: conversations.conversationId,
+					responseActive: sql<boolean>`${conversations.ownerUntil} > now()`,
+				})
 				.from(conversations)
 				.where(
 					and(
@@ -197,7 +206,9 @@ export class PostgresConversationStore implements ConversationStore {
 				)
 				.for("update");
 			if (!conversation) return { outcome: "not_found" };
-			if (await hasActiveRun(tx, ref)) return { outcome: "active_run" };
+			if (conversation.responseActive || (await hasActiveRun(tx, ref))) {
+				return { outcome: "active_run" };
+			}
 
 			await tx
 				.delete(conversations)

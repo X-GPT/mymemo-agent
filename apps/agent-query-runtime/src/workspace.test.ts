@@ -50,6 +50,8 @@ describe("Agent-query Workspace continuity", () => {
 			conversationId: "conversation-1",
 			scope: "general",
 			epoch: 7,
+			ownerWorkerId: "agent-query",
+			ownerUntil: new Date(Date.now() + 60_000),
 		});
 	});
 
@@ -122,7 +124,9 @@ describe("Agent-query Workspace continuity", () => {
 				createAgentQuerySessionStore(tdb.db, conversation),
 			async prepareWorkingDirectory() {},
 			prepareWorkspace,
-			async verifyResponseAuthority() {},
+			async verifyResponseAuthority() {
+				return new Date(Date.now() + 60_000);
+			},
 		})(
 			new Request("http://runtime/invocations", {
 				method: "POST",
@@ -223,22 +227,9 @@ describe("Agent-query Workspace continuity", () => {
 	});
 
 	it("records a fresh Workspace when publication fails", async () => {
-		const db = new Proxy(tdb.db, {
-			get(target, property) {
-				if (property === "insert") {
-					return (table: unknown) => {
-						if (table === conversationRuntime) {
-							throw new Error("publication failed");
-						}
-						return Reflect.apply(target.insert, target, [table]);
-					};
-				}
-				const value = Reflect.get(target, property, target);
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		}) as TestDb["db"];
+		await tdb.db.update(conversations).set({ epoch: 8 });
 		const prepareWorkspace = createAgentQueryWorkspacePreparer({
-			db,
+			db: tdb.db,
 			provisioner: {
 				async provisionForRun() {
 					return {
@@ -262,7 +253,7 @@ describe("Agent-query Workspace continuity", () => {
 				conversationId: "conversation-1",
 				conversationEpoch: 7,
 			}),
-		).rejects.toThrow("publication failed");
+		).rejects.toThrow("response authority");
 		expect(await tdb.db.select().from(orphanSandboxes)).toEqual([
 			expect.objectContaining({
 				sandboxId: "sandbox-new",

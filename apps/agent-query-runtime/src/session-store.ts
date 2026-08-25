@@ -53,7 +53,7 @@ export function createAgentQuerySessionStore(
 		},
 		async delete(key) {
 			await deleteAgentQuerySessionTx(db, {
-				conversationId: conversation.conversationId,
+				...conversation,
 				ref: { sessionId: key.sessionId, subpath: key.subpath },
 			});
 			if (

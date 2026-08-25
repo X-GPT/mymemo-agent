@@ -44,12 +44,16 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 ## Query and sandbox startup
 
 The non-production `agent-query-runtime` reuses the same E2B provisioner,
-renewal loop, and bounded file tools for synchronous Agent queries. Run-bound
-`Bash` auditing remains deferred to #565.
+renewal loop, and bounded file tools for synchronous Agent queries. `Bash`
+remains excluded because this path has no durable Run/audit identity.
 SessionStore failure aborts Workspace tools and interrupts Claude before a
-terminal result can escape. Its persistence is deliberately unfenced until
-#565 composes response admission, authority renewal, and mutation fencing;
-production must not mount this path before then.
+terminal result can escape. Before Claude starts and periodically during Claude
+and Tool work, the Runtime verifies the matching live Conversation response
+epoch/deadline. Database errors never extend its last confirmed deadline.
+SessionStore and Workspace/runtime-state mutations carry the same fence;
+same-epoch duplicate invocations are suppressed, while a newer epoch must stop
+and settle prior local work before replacement. Production must not mount this
+path before the hard swap.
 
 `src/sdk/start-run-query.ts` must:
 

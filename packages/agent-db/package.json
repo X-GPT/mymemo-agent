@@ -9,6 +9,7 @@
 		"./client": "./src/client.ts",
 		"./database-url": "./src/database-url.ts",
 		"./conversation-ownership": "./src/conversation-ownership.ts",
+		"./response-authority": "./src/response-authority.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",
 		"./tool-event-projection": "./src/tool-event-projection.ts",

@@ -11,6 +11,7 @@ import type { AgentQueryRequest } from "@mymemo/agent-query";
 import {
 	createUIMessageStream,
 	createUIMessageStreamResponse,
+	UI_MESSAGE_STREAM_HEADERS,
 	type UIMessageStreamWriter,
 } from "ai";
 import { type Context, Hono } from "hono";
@@ -53,16 +54,70 @@ export type AgentQueryChatDeps = {
 		PostgresChatMessageStore,
 		| "ownedConversationExists"
 		| "admitUserMessage"
+		| "clearActiveStreamId"
+		| "clearResponseAuthority"
+		| "getActiveStream"
+		| "listMessages"
 		| "persistAssistantMessageAndSession"
+		| "renewResponseAuthority"
 	>;
 	runtimeInvoker: {
 		invoke(
 			request: AgentQueryRequest,
+			signal?: AbortSignal,
 		): Promise<AsyncIterable<SDKMessage> | Iterable<SDKMessage>>;
 	};
 	exposureGate: ExposureGate;
+	resumableStreams?: {
+		create(streamId: string, stream: ReadableStream<string>): Promise<void>;
+		resume(
+			streamId: string,
+		): Promise<ReadableStream<string> | null | undefined>;
+	};
 	createMessageId?: () => string;
+	createStreamId?: () => string;
+	responseRenewIntervalMs?: number;
 };
+
+function startResponseRenewal(input: {
+	deadline: Date;
+	intervalMs: number;
+	renew(): Promise<Date | null>;
+	onLost(): void;
+}) {
+	let stopped = false;
+	let renewing = false;
+	let deadlineTimer: ReturnType<typeof setTimeout>;
+	const scheduleDeadline = (deadline: Date) => {
+		clearTimeout(deadlineTimer);
+		deadlineTimer = setTimeout(
+			input.onLost,
+			Math.max(0, deadline.getTime() - Date.now()),
+		);
+	};
+	scheduleDeadline(input.deadline);
+	const interval = setInterval(async () => {
+		if (stopped || renewing) return;
+		renewing = true;
+		try {
+			const deadline = await input.renew();
+			if (stopped) return;
+			if (deadline) scheduleDeadline(deadline);
+			else input.onLost();
+		} catch {
+			// Keep only the last exact database deadline; its timer remains active.
+		} finally {
+			renewing = false;
+		}
+	}, input.intervalMs);
+	return {
+		stop() {
+			stopped = true;
+			clearInterval(interval);
+			clearTimeout(deadlineTimer);
+		},
+	};
+}
 
 async function writeClaudeMessageStream(
 	writer: UIMessageStreamWriter<ChatMessage>,
@@ -244,40 +299,81 @@ async function handleAgentQueryChat(
 	}
 
 	const userMessage = body.messages[0] as ChatMessage;
-	const admission = await deps.messageStore.admitUserMessage(ref, userMessage);
+	const activeStreamId = (deps.createStreamId ?? randomUUID)();
+	const admission = await deps.messageStore.admitUserMessage(
+		ref,
+		userMessage,
+		activeStreamId,
+	);
 	switch (admission.outcome) {
 		case "not_found":
 			return c.json({ error: "Conversation not found" }, 404);
 		case "archived":
 			return c.json({ error: "Conversation is archived" }, 409);
+		case "conflict":
+			return c.json({ error: "A response is already active" }, 409);
 		case "duplicate":
 			return c.json({ error: "Message id was already used" }, 409);
 	}
 
 	const assistantMessageId = (deps.createMessageId ?? randomUUID)();
 	let agentSessionId: string | undefined;
+	let renewal: ReturnType<typeof startResponseRenewal> | undefined;
+	const runtimeAbort = new AbortController();
 	const stream = createUIMessageStream<ChatMessage>({
 		onError: () => "Response failed",
 		async onEnd({ finishReason, isAborted, responseMessage }) {
-			if (finishReason !== "stop" || isAborted) return;
-			if (!agentSessionId) throw new Error("Agent session was not completed");
-			await deps.messageStore.persistAssistantMessageAndSession(
-				ref,
-				responseMessage,
-				agentSessionId,
-			);
+			try {
+				if (finishReason !== "stop" || isAborted) {
+					await deps.messageStore.clearResponseAuthority(
+						ref,
+						admission.conversationEpoch,
+					);
+					return;
+				}
+				if (!agentSessionId) throw new Error("Agent session was not completed");
+				try {
+					await deps.messageStore.persistAssistantMessageAndSession(
+						ref,
+						admission.conversationEpoch,
+						responseMessage,
+						agentSessionId,
+					);
+				} catch (error) {
+					await deps.messageStore.clearResponseAuthority(
+						ref,
+						admission.conversationEpoch,
+					);
+					throw error;
+				}
+			} finally {
+				renewal?.stop();
+			}
 		},
 		async execute({ writer }) {
-			const events = await deps.runtimeInvoker.invoke({
-				version: 1,
-				conversationId: body.id,
-				conversationEpoch: admission.conversationEpoch,
-				prompt: body.messages[0].parts[0].text,
-				model: body.model,
-				...(admission.agentSessionId
-					? { agentSessionId: admission.agentSessionId }
-					: {}),
+			renewal = startResponseRenewal({
+				deadline: admission.responseDeadline,
+				intervalMs: deps.responseRenewIntervalMs ?? 15_000,
+				renew: () =>
+					deps.messageStore.renewResponseAuthority(
+						ref,
+						admission.conversationEpoch,
+					),
+				onLost: () => runtimeAbort.abort(new Error("response authority lost")),
 			});
+			const events = await deps.runtimeInvoker.invoke(
+				{
+					version: 1,
+					conversationId: body.id,
+					conversationEpoch: admission.conversationEpoch,
+					prompt: body.messages[0].parts[0].text,
+					model: body.model,
+					...(admission.agentSessionId
+						? { agentSessionId: admission.agentSessionId }
+						: {}),
+				},
+				runtimeAbort.signal,
+			);
 			agentSessionId = await writeClaudeMessageStream(
 				writer,
 				events,
@@ -286,11 +382,80 @@ async function handleAgentQueryChat(
 			writer.write({ type: "finish", finishReason: "stop" });
 		},
 	});
-	return createUIMessageStreamResponse({ stream });
+	return createUIMessageStreamResponse({
+		stream,
+		consumeSseStream: deps.resumableStreams
+			? async ({ stream: sseStream }) => {
+					try {
+						await deps.resumableStreams?.create(activeStreamId, sseStream);
+					} catch {
+						await Promise.allSettled([
+							deps.messageStore.clearActiveStreamId(
+								ref,
+								admission.conversationEpoch,
+								activeStreamId,
+							),
+							sseStream.cancel(),
+						]);
+					}
+				}
+			: undefined,
+	});
 }
 
 export function createAiChatRoutes(queryDeps: AgentQueryChatDeps) {
 	const routes = new Hono<AppEnv>();
+	routes.get("/:conversationId", requireInternalIdentity, async (c) => {
+		const conversationId = ConversationIdParam.safeParse(
+			c.req.param("conversationId"),
+		);
+		if (!conversationId.success) {
+			return c.json({ error: "Invalid Conversation id" }, 400);
+		}
+		const history = await queryDeps.messageStore.listMessages({
+			userId: c.var.identity.memberCode,
+			conversationId: conversationId.data,
+		});
+		if (history.outcome === "not_found") {
+			return c.json({ error: "Conversation not found" }, 404);
+		}
+		return c.json(history.messages);
+	});
+	routes.get("/:conversationId/stream", requireInternalIdentity, async (c) => {
+		const conversationId = ConversationIdParam.safeParse(
+			c.req.param("conversationId"),
+		);
+		if (!conversationId.success) {
+			return c.json({ error: "Invalid Conversation id" }, 400);
+		}
+		const ref = {
+			userId: c.var.identity.memberCode,
+			conversationId: conversationId.data,
+		};
+		const active = await queryDeps.messageStore.getActiveStream(ref);
+		if (active.outcome === "not_found") {
+			return c.json({ error: "Conversation not found" }, 404);
+		}
+		if (!active.activeStreamId || !queryDeps.resumableStreams) {
+			return c.body(null, 204);
+		}
+		try {
+			const stream = await queryDeps.resumableStreams.resume(
+				active.activeStreamId,
+			);
+			if (!stream) {
+				await queryDeps.messageStore.clearActiveStreamId(
+					ref,
+					active.conversationEpoch,
+					active.activeStreamId,
+				);
+				return c.body(null, 204);
+			}
+			return new Response(stream, { headers: UI_MESSAGE_STREAM_HEADERS });
+		} catch {
+			return c.json({ error: "Response resumption unavailable" }, 503);
+		}
+	});
 	routes.post(
 		"/",
 		bodyLimit({

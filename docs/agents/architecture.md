@@ -12,7 +12,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | `apps/agentcore-dispatch-publisher` | Dedicated AgentCore Dispatch publication app. Runs as one ECS task, separate from chat-api and AgentCore Runtime. |
 | `apps/agentcore-dispatch-consumer` | AgentCore dispatch consumer Lambda and shared dispatch-boundary modules. Its production composition validates strict content-free SQS envelopes, invokes the Runtime, and returns partial-batch acknowledgements; the Runtime composes exact acquisition directly. |
 | `apps/agentcore-runtime` | Sole production execution runtime. The Linux ARM64 image exposes `/ping` and `/invocations`, exactly acquires one dispatched Run, and owns its Run-serving behavior. |
-| `apps/agent-query-runtime` | Non-production synchronous Agent-query Runtime boundary. It validates one query, resumes its Postgres-backed Agent session and E2B Workspace, invokes Claude once, and streams controlled native text, completed Assistant/Tool-result, and terminal SDK messages as NDJSON without Run or Dispatch control logic. |
+| `apps/agent-query-runtime` | Non-production synchronous Agent-query Runtime boundary. It validates one fenced Conversation response, resumes its Postgres-backed Agent session and E2B Workspace, invokes Claude once, and streams controlled native text, completed Assistant/Tool-result, and terminal SDK messages as NDJSON without Run or Dispatch control logic. |
 | `apps/agentcore-local-dispatch-bridge` | Development-only outbox poller that composes the shared publisher and consumer contracts against a local AgentCore Runtime. It is absent from production startup paths and images. |
 | `packages/agent-db` | Shared writable `mymemo_agent` data layer: schema, migrations, Run and Conversation Ownership transactions, runtime pointers, session transcripts, artifact metadata, and PGlite test support. |
 | `packages/agentcore-dispatch` | Production-neutral AgentCore Dispatch publication behavior, strict envelope serialization, and separately importable SQS and SSM adapters. |
@@ -61,7 +61,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `packages/agent-db/src/conversation-ownership.ts` | Live Ownership renew, release, and mutation fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |
 | `packages/agent-db/src/runtime-store.ts` | Runtime Workspace pointers, taint, Agent session pointers, and orphan ledger; Run mutations are Ownership-fenced |
-| `packages/agent-db/src/session-store.ts` | SDK transcript persistence; Run mutations are Ownership-fenced and staged Agent-query mutations remain non-production until #565 |
+| `packages/agent-db/src/session-store.ts` | SDK transcript persistence fenced by Run Ownership or direct-response authority |
 | `packages/agent-db/src/artifact-store.ts` | Object ledger and atomic current-artifact/Outcome commit |
 | `packages/agent-db/src/run-events.ts` | Canonical `run_events.type` vocabulary |
 | `packages/agent-db/drizzle/` | Shared database migrations |

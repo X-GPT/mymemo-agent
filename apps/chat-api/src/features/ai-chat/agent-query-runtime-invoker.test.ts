@@ -14,6 +14,7 @@ it("invokes the Conversation-bound Runtime and parses split NDJSON chunks", asyn
 		agentSessionId: "agent-session-1",
 	};
 	let commandInput: Record<string, unknown> | undefined;
+	let commandSignal: AbortSignal | undefined;
 	let destroyed = false;
 	const response = Object.assign(
 		(async function* () {
@@ -32,15 +33,17 @@ it("invokes the Conversation-bound Runtime and parses split NDJSON chunks", asyn
 		agentRuntimeArn:
 			"arn:aws:bedrock-agentcore:us-west-2:123:runtime/agent-query",
 		client: {
-			async send(command) {
+			async send(command, options) {
 				commandInput = command.input as Record<string, unknown>;
+				commandSignal = options?.abortSignal;
 				return { response };
 			},
 		},
 	});
 
+	const controller = new AbortController();
 	const messages: unknown[] = [];
-	for await (const message of await invoker.invoke(request))
+	for await (const message of await invoker.invoke(request, controller.signal))
 		messages.push(message);
 
 	expect(commandInput).toMatchObject({
@@ -51,6 +54,7 @@ it("invokes the Conversation-bound Runtime and parses split NDJSON chunks", asyn
 		accept: "application/x-ndjson",
 		qualifier: "DEFAULT",
 	});
+	expect(commandSignal).toBe(controller.signal);
 	expect(
 		JSON.parse(new TextDecoder().decode(commandInput?.payload as Uint8Array)),
 	).toEqual(request);
