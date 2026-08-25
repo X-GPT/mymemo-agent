@@ -43,6 +43,12 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 
 ## Query and sandbox startup
 
+The non-production `agent-query-runtime` reuses the same E2B provisioner and
+bounded file/Bash tool implementations for direct responses. Its Conversation
+epoch guards transcript and Workspace-pointer writes until the production
+response-authority fence replaces that staged guard. SessionStore failure aborts
+the Workspace tools and interrupts Claude before a terminal result can escape.
+
 `src/sdk/start-run-query.ts` must:
 
 - Read `run_started` through shared `loadRunStartedTx`, deriving a plain-string prompt and the frozen Scope for Searchable documents with fail-closed parsing.

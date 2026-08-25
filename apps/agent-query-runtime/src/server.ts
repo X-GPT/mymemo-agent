@@ -1,6 +1,7 @@
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { z } from "zod";
+import type { DirectResponseSessionStore } from "./session-store";
 
 export const AGENTCORE_RUNTIME_SESSION_HEADER =
 	"x-amzn-bedrock-agentcore-runtime-session-id";
@@ -24,22 +25,20 @@ const agentQueryRequest = z.strictObject({
 	agentSessionId: z.string().min(1).max(2_048).optional(),
 });
 
-const resultBase = z
-	.object({
-		type: z.literal("result"),
-		duration_ms: z.number().nonnegative(),
-		duration_api_ms: z.number().nonnegative(),
-		is_error: z.boolean(),
-		num_turns: z.number().int().nonnegative(),
-		stop_reason: z.string().nullable(),
-		total_cost_usd: z.number().nonnegative(),
-		usage: z.record(z.string(), z.unknown()),
-		modelUsage: z.record(z.string(), z.unknown()),
-		permission_denials: z.array(z.unknown()),
-		uuid: z.string().min(1),
-		session_id: z.string().min(1),
-	})
-	.passthrough();
+const resultBase = z.looseObject({
+	type: z.literal("result"),
+	duration_ms: z.number().nonnegative(),
+	duration_api_ms: z.number().nonnegative(),
+	is_error: z.boolean(),
+	num_turns: z.number().int().nonnegative(),
+	stop_reason: z.string().nullable(),
+	total_cost_usd: z.number().nonnegative(),
+	usage: z.record(z.string(), z.unknown()),
+	modelUsage: z.record(z.string(), z.unknown()),
+	permission_denials: z.array(z.unknown()),
+	uuid: z.string().min(1),
+	session_id: z.string().min(1),
+});
 const resultMessage = z.discriminatedUnion("subtype", [
 	resultBase.extend({
 		subtype: z.literal("success"),
@@ -64,9 +63,26 @@ export type ResponseAuthorityVerifier = (authority: {
 }) => Promise<void>;
 
 export type AgentQueryRuntimeDependencies = {
-	query(input: { prompt: string; options: Options }): AsyncIterable<SDKMessage>;
+	query(input: {
+		prompt: string;
+		options: Options;
+	}): AsyncIterable<SDKMessage> & { interrupt?(): Promise<unknown> };
+	createSessionStore(input: {
+		conversationId: string;
+		conversationEpoch: number;
+	}): DirectResponseSessionStore;
 	prepareWorkingDirectory(path: string): Promise<void>;
+	prepareWorkspace(input: {
+		conversationId: string;
+		conversationEpoch: number;
+	}): Promise<AgentQueryWorkspace>;
 	verifyResponseAuthority: ResponseAuthorityVerifier;
+};
+
+export type AgentQueryWorkspace = {
+	queryOptions: Pick<Options, "allowedTools" | "mcpServers">;
+	stop(): Promise<void>;
+	dispose(): void;
 };
 
 class InvalidInvocationError extends Error {
@@ -117,10 +133,16 @@ async function parseRequest(request: Request): Promise<AgentQueryRequest> {
 	return parsed.data;
 }
 
-function createNdjsonStream(messages: AsyncIterable<SDKMessage>) {
+function createNdjsonStream(
+	messages: AsyncIterable<SDKMessage> & { interrupt?(): Promise<unknown> },
+	sessionStore: DirectResponseSessionStore,
+	workspace: AgentQueryWorkspace,
+) {
 	const encoder = new TextEncoder();
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
+			let pendingMessageStart: SDKMessage | undefined;
+			let forwardText = false;
 			const write = (message: SDKMessage) => {
 				controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
 			};
@@ -131,8 +153,14 @@ function createNdjsonStream(messages: AsyncIterable<SDKMessage>) {
 						if (!result.success) {
 							throw new Error("invalid terminal Claude result");
 						}
+						if (sessionStore.mirroredMainSessionId() !== message.session_id) {
+							throw new Error(
+								"terminal Claude result has no persisted transcript",
+							);
+						}
 						write(message);
 						controller.close();
+						workspace.dispose();
 						return;
 					}
 					if (message.type !== "stream_event") {
@@ -141,32 +169,51 @@ function createNdjsonStream(messages: AsyncIterable<SDKMessage>) {
 
 					switch (message.event.type) {
 						case "message_start":
-						case "content_block_stop":
-						case "message_stop":
-							write(message);
+							pendingMessageStart = message;
+							forwardText = false;
 							break;
 						case "content_block_start":
-							if (
-								message.event.index !== 0 ||
-								message.event.content_block.type !== "text"
-							) {
-								throw new Error("unsupported Claude content block");
+							forwardText = Boolean(
+								pendingMessageStart &&
+									message.event.index === 0 &&
+									message.event.content_block.type === "text",
+							);
+							if (forwardText && pendingMessageStart) {
+								write(pendingMessageStart);
+								write(message);
 							}
-							write(message);
+							pendingMessageStart = undefined;
 							break;
 						case "content_block_delta":
 							if (
+								!forwardText ||
 								message.event.index !== 0 ||
 								message.event.delta.type !== "text_delta"
 							) {
-								throw new Error("unsupported Claude content delta");
+								break;
 							}
 							write(message);
+							break;
+						case "content_block_stop":
+							if (forwardText && message.event.index === 0) {
+								write(message);
+							}
+							break;
+						case "message_stop":
+							if (forwardText) {
+								write(message);
+							}
+							forwardText = false;
 							break;
 					}
 				}
 				throw new Error("Claude stream ended before its terminal result");
 			} catch (error) {
+				await Promise.allSettled([
+					workspace.stop(),
+					messages.interrupt?.() ?? Promise.resolve(),
+				]);
+				workspace.dispose();
 				controller.error(error);
 			}
 		},
@@ -207,24 +254,41 @@ export function createAgentQueryRequestHandler(
 			});
 			const cwd = `/workspace/conversations/${input.conversationId}`;
 			await dependencies.prepareWorkingDirectory(cwd);
-			const messages = dependencies.query({
-				prompt: input.prompt,
-				options: {
-					allowedTools: [],
-					model: input.model,
-					includePartialMessages: true,
-					cwd,
-					permissionMode: "dontAsk",
-					settingSources: [],
-					thinking: { type: "disabled" },
-					tools: [],
-					...(input.agentSessionId ? { resume: input.agentSessionId } : {}),
+			const binding = {
+				conversationId: input.conversationId,
+				conversationEpoch: input.conversationEpoch,
+			};
+			const sessionStore = dependencies.createSessionStore(binding);
+			const workspace = await dependencies.prepareWorkspace(binding);
+			let messages: ReturnType<AgentQueryRuntimeDependencies["query"]>;
+			try {
+				messages = dependencies.query({
+					prompt: input.prompt,
+					options: {
+						...workspace.queryOptions,
+						model: input.model,
+						includePartialMessages: true,
+						cwd,
+						permissionMode: "dontAsk",
+						sessionStore,
+						settingSources: [],
+						thinking: { type: "disabled" },
+						tools: [],
+						...(input.agentSessionId ? { resume: input.agentSessionId } : {}),
+					},
+				});
+			} catch (error) {
+				await workspace.stop().catch(() => {});
+				workspace.dispose();
+				throw error;
+			}
+			return new Response(
+				createNdjsonStream(messages, sessionStore, workspace),
+				{
+					status: 200,
+					headers: { "content-type": "application/x-ndjson" },
 				},
-			});
-			return new Response(createNdjsonStream(messages), {
-				status: 200,
-				headers: { "content-type": "application/x-ndjson" },
-			});
+			);
 		} catch (error) {
 			if (error instanceof InvalidInvocationError) {
 				return jsonError(error.message, 400);

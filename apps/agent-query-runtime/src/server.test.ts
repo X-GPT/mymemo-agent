@@ -9,6 +9,7 @@ import {
 	createAgentQueryRequestHandler,
 	createAgentQueryServerOptions,
 } from "./server";
+import type { DirectResponseSessionStore } from "./session-store";
 
 const conversationId = "0198b5a2-0d2b-7b64-9f65-4c9d49045111";
 
@@ -109,9 +110,33 @@ function request(
 function dependencies(
 	messages: SDKMessage[] = successfulMessages(),
 ): AgentQueryRuntimeDependencies {
+	const sessionStore: DirectResponseSessionStore = {
+		async append() {},
+		async load() {
+			return null;
+		},
+		async listSessions() {
+			return [];
+		},
+		async listSubkeys() {
+			return [];
+		},
+		async delete() {},
+		mirroredMainSessionId() {
+			return "agent-session-1";
+		},
+	};
 	return {
 		async *query() {
 			yield* messages;
+		},
+		createSessionStore: () => sessionStore,
+		async prepareWorkspace() {
+			return {
+				queryOptions: { allowedTools: [], mcpServers: {} },
+				async stop() {},
+				dispose() {},
+			};
 		},
 		async prepareWorkingDirectory() {},
 		async verifyResponseAuthority() {},
@@ -128,6 +153,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 		const workingDirectories: string[] = [];
 		const messages = successfulMessages();
 		const handle = createAgentQueryRequestHandler({
+			...dependencies(messages),
 			async *query(input) {
 				queries.push(input);
 				yield* messages;
@@ -152,22 +178,23 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 			.map((line) => JSON.parse(line));
 		expect(lines).toEqual(messages.slice(1));
 		expect(lines.at(-1)).toEqual(messages.at(-1));
-		expect(queries).toEqual([
-			{
-				prompt: "Tell me something",
-				options: {
-					allowedTools: [],
-					model: "anthropic/claude-sonnet-5",
-					includePartialMessages: true,
-					cwd: `/workspace/conversations/${conversationId}`,
-					permissionMode: "dontAsk",
-					settingSources: [],
-					thinking: { type: "disabled" },
-					tools: [],
-					resume: "opaque-agent-session",
-				},
+		expect(queries).toHaveLength(1);
+		expect(queries[0]).toMatchObject({
+			prompt: "Tell me something",
+			options: {
+				allowedTools: [],
+				mcpServers: {},
+				model: "anthropic/claude-sonnet-5",
+				includePartialMessages: true,
+				cwd: `/workspace/conversations/${conversationId}`,
+				permissionMode: "dontAsk",
+				settingSources: [],
+				thinking: { type: "disabled" },
+				tools: [],
+				resume: "opaque-agent-session",
 			},
-		]);
+		});
+		expect(queries[0]?.options.sessionStore).toBeDefined();
 		expect(authorities).toEqual([{ conversationId, conversationEpoch: 7 }]);
 		expect(workingDirectories).toEqual([
 			`/workspace/conversations/${conversationId}`,
@@ -177,6 +204,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 	it("starts a fresh Agent session when the opaque session id is absent", async () => {
 		const options: Options[] = [];
 		const response = await createAgentQueryRequestHandler({
+			...dependencies(),
 			async *query(input) {
 				options.push(input.options);
 				yield* successfulMessages();
@@ -191,10 +219,145 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 		expect(options[0]).not.toHaveProperty("resume");
 	});
 
+	it("binds the Postgres SessionStore and gates the terminal result on mirror evidence", async () => {
+		let mirroredSessionId: string | null = null;
+		const sessionStore = {
+			async append(key: { sessionId: string }) {
+				mirroredSessionId = key.sessionId;
+			},
+			async load() {
+				return null;
+			},
+			async listSessions() {
+				return [];
+			},
+			async listSubkeys() {
+				return [];
+			},
+			async delete() {},
+			mirroredMainSessionId() {
+				return mirroredSessionId;
+			},
+		} as DirectResponseSessionStore;
+		const deps = dependencies();
+		const response = await createAgentQueryRequestHandler({
+			...deps,
+			createSessionStore: () => sessionStore,
+			async *query(input) {
+				await input.options.sessionStore?.append(
+					{
+						projectKey: "-workspace-conversations-conversation",
+						sessionId: "agent-session-1",
+					},
+					[{ type: "user", uuid: "entry-1" } as never],
+				);
+				yield* successfulMessages();
+			},
+		})(request());
+
+		const lines = (await response.text())
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(lines.at(-1)).toMatchObject({
+			type: "result",
+			session_id: "agent-session-1",
+		});
+		expect(sessionStore.mirroredMainSessionId()).toBe("agent-session-1");
+	});
+
+	it("does not forward a terminal result without persisted transcript evidence", async () => {
+		const deps = dependencies();
+		const response = await createAgentQueryRequestHandler({
+			...deps,
+			createSessionStore: () => ({
+				async append() {},
+				async load() {
+					return null;
+				},
+				async listSessions() {
+					return [];
+				},
+				async listSubkeys() {
+					return [];
+				},
+				async delete() {},
+				mirroredMainSessionId() {
+					return null;
+				},
+			}),
+		})(request());
+
+		await expect(response.text()).rejects.toThrow(
+			"terminal Claude result has no persisted transcript",
+		);
+	});
+
+	it("stops Claude and Workspace work when SessionStore persistence fails", async () => {
+		let stopped = 0;
+		let disposed = 0;
+		let interrupted = 0;
+		const deps = dependencies();
+		const response = await createAgentQueryRequestHandler({
+			...deps,
+			createSessionStore: () => ({
+				async append() {
+					throw new Error("session persistence failed");
+				},
+				async load() {
+					return null;
+				},
+				async listSessions() {
+					return [];
+				},
+				async listSubkeys() {
+					return [];
+				},
+				async delete() {},
+				mirroredMainSessionId() {
+					return null;
+				},
+			}),
+			async prepareWorkspace() {
+				return {
+					queryOptions: { allowedTools: [], mcpServers: {} },
+					async stop() {
+						stopped++;
+					},
+					dispose() {
+						disposed++;
+					},
+				};
+			},
+			query(input) {
+				const messages = (async function* () {
+					await input.options.sessionStore?.append(
+						{ projectKey: "project", sessionId: "agent-session-1" },
+						[{ type: "user", uuid: "entry-1" } as never],
+					);
+					yield* successfulMessages();
+				})();
+				return Object.assign(messages, {
+					async interrupt() {
+						interrupted++;
+					},
+				});
+			},
+		})(request());
+
+		await expect(response.text()).rejects.toThrow("session persistence failed");
+		expect({ stopped, disposed, interrupted }).toEqual({
+			stopped: 1,
+			disposed: 1,
+			interrupted: 1,
+		});
+	});
+
 	it("strictly rejects invalid envelopes and Runtime session identities before authority or query work", async () => {
 		let verifications = 0;
 		let queries = 0;
 		const handle = createAgentQueryRequestHandler({
+			...dependencies(),
 			async *query() {
 				queries++;
 				yield* successfulMessages();
@@ -232,6 +395,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 	it("rejects an authority-verifier failure before starting Claude", async () => {
 		let queries = 0;
 		const response = await createAgentQueryRequestHandler({
+			...dependencies(),
 			async *query() {
 				queries++;
 				yield* successfulMessages();
@@ -252,6 +416,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 	it("rejects working-directory preparation failure before starting Claude", async () => {
 		let queries = 0;
 		const response = await createAgentQueryRequestHandler({
+			...dependencies(),
 			async *query() {
 				queries++;
 				yield* successfulMessages();
@@ -283,7 +448,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 		expect(lines.some((line) => line.type === "error")).toBe(false);
 	});
 
-	it("truncates unexpected non-text content disabled by the query options", async () => {
+	it("keeps private Tool envelopes out of the controlled text stream", async () => {
 		const hidden = [
 			streamEvent({
 				type: "message_start",
@@ -307,13 +472,19 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 			streamEvent({ type: "content_block_stop", index: 0 }),
 			streamEvent({ type: "message_stop" }),
 		];
+		const visible = successfulMessages();
 		const response = await createAgentQueryRequestHandler(
-			dependencies([...hidden, ...successfulMessages()]),
+			dependencies([...hidden, ...visible]),
 		)(request());
 
-		await expect(response.text()).rejects.toThrow(
-			"unsupported Claude content block",
-		);
+		const text = await response.text();
+		const lines = text
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(lines).toEqual(visible.slice(1));
+		expect(text).not.toContain("PrivateTool");
+		expect(text).not.toContain("private-tool-use");
 	});
 
 	it("truncates invalid or contradictory terminal Claude results", async () => {
@@ -336,6 +507,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 
 	it("rejects a Claude startup failure without a second error protocol", async () => {
 		const response = await createAgentQueryRequestHandler({
+			...dependencies(),
 			query() {
 				throw new Error("Claude unavailable");
 			},
@@ -351,6 +523,7 @@ describe("direct-response AgentCore Runtime HTTP boundary", () => {
 
 	it("truncates the transport when Claude fails after streaming starts", async () => {
 		const response = await createAgentQueryRequestHandler({
+			...dependencies(),
 			async *query() {
 				for (const message of successfulMessages().slice(1, 4)) {
 					yield message;

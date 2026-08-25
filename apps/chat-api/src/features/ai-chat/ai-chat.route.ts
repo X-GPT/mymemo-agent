@@ -45,7 +45,9 @@ const AgentQueryChatBody = z.strictObject({
 export type AgentQueryChatDeps = {
 	messageStore: Pick<
 		PostgresChatMessageStore,
-		"ownedConversationExists" | "admitUserMessage" | "persistAssistantMessage"
+		| "ownedConversationExists"
+		| "admitUserMessage"
+		| "persistAssistantMessageAndSession"
 	>;
 	runtimeInvoker: {
 		invoke(
@@ -60,7 +62,7 @@ async function writeClaudeMessageStream(
 	writer: UIMessageStreamWriter<ChatMessage>,
 	events: AsyncIterable<SDKMessage> | Iterable<SDKMessage>,
 	messageId: string,
-): Promise<void> {
+): Promise<string> {
 	const textPartId = `${messageId}-text`;
 	let text = "";
 	let messageStarted = false;
@@ -68,6 +70,7 @@ async function writeClaudeMessageStream(
 	let textOpen = false;
 	let textClosed = false;
 	let terminal = false;
+	let agentSessionId: string | undefined;
 	writer.write({ type: "start", messageId });
 
 	for await (const value of events) {
@@ -84,6 +87,7 @@ async function writeClaudeMessageStream(
 				throw new Error("invalid terminal Claude result");
 			}
 			terminal = true;
+			agentSessionId = message.session_id;
 			continue;
 		}
 		if (message?.type !== "stream_event" || terminal) {
@@ -147,9 +151,10 @@ async function writeClaudeMessageStream(
 		}
 	}
 
-	if (!terminal || !messageStopped || text.length === 0) {
+	if (!terminal || !agentSessionId || !messageStopped || text.length === 0) {
 		throw new Error("Claude stream ended before completion");
 	}
+	return agentSessionId;
 }
 
 async function handleAgentQueryChat(
@@ -183,11 +188,17 @@ async function handleAgentQueryChat(
 	}
 
 	const assistantMessageId = (deps.createMessageId ?? randomUUID)();
+	let agentSessionId: string | undefined;
 	const stream = createUIMessageStream<ChatMessage>({
 		onError: () => "Response failed",
 		async onEnd({ finishReason, isAborted, responseMessage }) {
 			if (finishReason !== "stop" || isAborted) return;
-			await deps.messageStore.persistAssistantMessage(ref, responseMessage);
+			if (!agentSessionId) throw new Error("Agent session was not completed");
+			await deps.messageStore.persistAssistantMessageAndSession(
+				ref,
+				responseMessage,
+				agentSessionId,
+			);
 		},
 		async execute({ writer }) {
 			const events = await deps.runtimeInvoker.invoke({
@@ -196,8 +207,15 @@ async function handleAgentQueryChat(
 				conversationEpoch: admission.conversationEpoch,
 				prompt: body.messages[0].parts[0].text,
 				model: body.model,
+				...(admission.agentSessionId
+					? { agentSessionId: admission.agentSessionId }
+					: {}),
 			});
-			await writeClaudeMessageStream(writer, events, assistantMessageId);
+			agentSessionId = await writeClaudeMessageStream(
+				writer,
+				events,
+				assistantMessageId,
+			);
 			writer.write({ type: "finish", finishReason: "stop" });
 		},
 	});

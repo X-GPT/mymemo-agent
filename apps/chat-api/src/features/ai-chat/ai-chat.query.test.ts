@@ -7,7 +7,11 @@ import {
 	it,
 } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { conversationMessages, conversations } from "@mymemo/agent-db/schema";
+import {
+	conversationMessages,
+	conversationRuntime,
+	conversations,
+} from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { asc } from "drizzle-orm";
@@ -145,6 +149,7 @@ describe("injected Agent-query POST /api/chat", () => {
 	});
 
 	beforeEach(async () => {
+		await tdb.db.delete(conversationRuntime);
 		await tdb.db.delete(conversations);
 		await tdb.db.insert(conversations).values({
 			userId: "member-1",
@@ -220,6 +225,89 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(conversation?.lastActivityAt.getTime()).toBeGreaterThan(
 			new Date("2026-01-01T00:00:00.000Z").getTime(),
 		);
+	});
+
+	it("continues the stored opaque Agent session across sequential responses", async () => {
+		const requests: AgentQueryRequest[] = [];
+		const app = buildApp(new PostgresChatMessageStore(tdb.db), {
+			async invoke(request) {
+				requests.push(request);
+				return successfulClaudeEvents().map((event) =>
+					event.type === "result"
+						? resultEvent({ session_id: `agent-session-${requests.length}` })
+						: event,
+				);
+			},
+		});
+
+		const first = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(input()),
+		});
+		await first.text();
+		const second = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(
+				input({
+					messages: [
+						{
+							id: "user-message-2",
+							role: "user",
+							parts: [{ type: "text", text: "Continue" }],
+						},
+					],
+				}),
+			),
+		});
+		await second.text();
+
+		expect(requests[0]).not.toHaveProperty("agentSessionId");
+		expect(requests[1]).toMatchObject({
+			prompt: "Continue",
+			agentSessionId: "agent-session-1",
+		});
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("agent-session-2");
+	});
+
+	it("does not reconstruct Agent context from public UIMessage history", async () => {
+		await tdb.db.insert(conversationMessages).values([
+			{
+				userId: "member-1",
+				conversationId: "conversation-1",
+				messageId: "old-user",
+				role: "user",
+				parts: [{ type: "text", text: "private old prompt" }],
+			},
+			{
+				userId: "member-1",
+				conversationId: "conversation-1",
+				messageId: "old-assistant",
+				role: "assistant",
+				parts: [{ type: "text", text: "private old answer", state: "done" }],
+			},
+		]);
+		let runtimeRequest: AgentQueryRequest | undefined;
+		const app = buildApp(new PostgresChatMessageStore(tdb.db), {
+			async invoke(request) {
+				runtimeRequest = request;
+				return successfulClaudeEvents();
+			},
+		});
+
+		const response = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(input()),
+		});
+		await response.text();
+
+		expect(runtimeRequest).toMatchObject({ prompt: "Tell me something" });
+		expect(runtimeRequest).not.toHaveProperty("messages");
+		expect(runtimeRequest).not.toHaveProperty("agentSessionId");
 	});
 
 	it("does not persist a partial Assistant when the client aborts", async () => {
@@ -647,7 +735,7 @@ describe("injected Agent-query POST /api/chat", () => {
 				postgresStore.ownedConversationExists(ref),
 			admitUserMessage: (ref, message) =>
 				postgresStore.admitUserMessage(ref, message),
-			async persistAssistantMessage() {
+			async persistAssistantMessageAndSession() {
 				throw new Error("private database and session persistence failure");
 			},
 		};
@@ -665,5 +753,50 @@ describe("injected Agent-query POST /api/chat", () => {
 
 		await expect(response.text()).rejects.toThrow();
 		expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
+	});
+
+	it("rolls back the Agent-session mapping when Assistant persistence fails", async () => {
+		await tdb.db.insert(conversationRuntime).values({
+			userId: "member-1",
+			conversationId: "conversation-1",
+			agentSessionId: "agent-session-existing",
+		});
+		const postgresStore = new PostgresChatMessageStore(tdb.db);
+		const store: MessageStore = {
+			ownedConversationExists: (ref) =>
+				postgresStore.ownedConversationExists(ref),
+			admitUserMessage: (ref, message) =>
+				postgresStore.admitUserMessage(ref, message),
+			async persistAssistantMessageAndSession(ref, message, agentSessionId) {
+				await postgresStore.persistAssistantMessageAndSession(
+					ref,
+					{ ...message, id: "user-message-1" },
+					agentSessionId,
+				);
+			},
+		};
+		let invocations = 0;
+		const app = buildApp(store, {
+			async invoke() {
+				invocations++;
+				return successfulClaudeEvents().map((event) =>
+					event.type === "result"
+						? resultEvent({ session_id: "agent-session-uncommitted" })
+						: event,
+				);
+			},
+		});
+
+		const response = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(input()),
+		});
+
+		await expect(response.text()).rejects.toThrow();
+		expect(invocations).toBe(1);
+		expect(
+			(await tdb.db.select().from(conversationRuntime))[0]?.agentSessionId,
+		).toBe("agent-session-existing");
 	});
 });

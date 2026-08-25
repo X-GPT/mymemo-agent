@@ -6,6 +6,14 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 ## Routes and invariants
 
+### Staged AI SDK direct response
+
+The local-only composition may mount `POST /api/chat` with the real AgentCore
+Runtime invoker. It stores canonical `UIMessage` rows and the opaque current
+Agent-session id together, then supplies only that id—not public message
+history—to the next `AgentQueryRequest`. Production composition does not mount
+this path before the response-authority cutover.
+
 ### Create a Conversation
 
 `POST /v1/conversations` accepts the strict `CreateConversationBody` (`.strict()`) with optional `collectionId` and `summaryId`. It validates the body, resolves trusted identity, checks exposure admission, then persists the frozen Scope. Runtime selection is not public input and no runtime gate is consulted.

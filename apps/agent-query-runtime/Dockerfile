@@ -21,6 +21,8 @@ FROM base AS release
 COPY --from=install /temp/prod/node_modules node_modules
 COPY apps/agent-query-runtime/src apps/agent-query-runtime/src
 COPY apps/agent-query-runtime/package.json apps/agent-query-runtime/
+COPY apps/agentcore-runtime/src apps/agentcore-runtime/src
+COPY packages/agent-db packages/agent-db
 COPY packages/agent-query packages/agent-query
 COPY package.json ./
 RUN mkdir -p /workspace/conversations && chown -R bun:bun /workspace

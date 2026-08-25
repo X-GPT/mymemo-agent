@@ -7,6 +7,7 @@ import {
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
+import { PostgresChatMessageStore } from "./features/ai-chat/postgres-chat-message-store";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
@@ -78,7 +79,7 @@ export function createDeps(
 			region: config.artifactRegion,
 		},
 	),
-): AppDeps {
+): AppDeps & { chatMessageStore: PostgresChatMessageStore } {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
 	const conversationStore = new PostgresConversationStore(database);
@@ -98,6 +99,7 @@ export function createDeps(
 		conversationStore,
 		conversationHistoryStore,
 		runStore,
+		chatMessageStore: new PostgresChatMessageStore(database),
 		liveStreamRelay,
 		liveStreamTelemetry,
 		closeLiveResources: () => liveStreamRelay.close(),
