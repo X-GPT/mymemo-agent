@@ -1,5 +1,8 @@
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentQueryRequest } from "@mymemo/agent-query";
+import {
+	type AgentQueryRequest,
+	watchResponseAuthority,
+} from "@mymemo/agent-query";
 import { z } from "zod";
 import type { AgentQuerySessionStore } from "./session-store";
 
@@ -215,49 +218,6 @@ function createNdjsonStream(
 	});
 }
 
-function monitorResponseAuthority(input: {
-	initialDeadline: Date;
-	intervalMs: number;
-	verify(): Promise<Date | null>;
-}) {
-	const controller = new AbortController();
-	let stopped = false;
-	let verifying = false;
-	let deadlineTimer: ReturnType<typeof setTimeout>;
-	const lose = () => controller.abort(new Error("Response authority lost"));
-	const scheduleDeadline = (deadline: Date) => {
-		clearTimeout(deadlineTimer);
-		deadlineTimer = setTimeout(
-			lose,
-			Math.max(0, deadline.getTime() - Date.now()),
-		);
-	};
-	scheduleDeadline(input.initialDeadline);
-	const interval = setInterval(async () => {
-		if (stopped || verifying) return;
-		verifying = true;
-		try {
-			const deadline = await input.verify();
-			if (stopped) return;
-			if (deadline) scheduleDeadline(deadline);
-			else lose();
-		} catch {
-			// A database error cannot extend the last confirmed deadline.
-		} finally {
-			verifying = false;
-		}
-	}, input.intervalMs);
-	return {
-		signal: controller.signal,
-		revoke: lose,
-		stop() {
-			stopped = true;
-			clearInterval(interval);
-			clearTimeout(deadlineTimer);
-		},
-	};
-}
-
 type ActiveInvocation = {
 	epoch: number;
 	stop(): Promise<void>;
@@ -376,7 +336,7 @@ export function createAgentQueryRequestHandler(
 				return jsonError("Agent query authority is stale", 503);
 			}
 
-			const authority = monitorResponseAuthority({
+			const authority = watchResponseAuthority({
 				initialDeadline: deadline,
 				intervalMs: dependencies.authorityCheckIntervalMs ?? 15_000,
 				verify: () => dependencies.verifyResponseAuthority(binding),

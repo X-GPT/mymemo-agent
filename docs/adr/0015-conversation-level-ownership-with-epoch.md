@@ -6,6 +6,11 @@ Amended by [ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md):
 AgentCore exact acquisition replaces the Fargate Claim and snapshot drain below.
 The Conversation-scoped epoch/lease fence and lost-lease abandonment remain.
 
+Amended by [ADR-0033](./0033-share-conversation-epoch-with-response-authority.md):
+the Conversation epoch/deadline columns may also grant Run-free Response
+authority. References below that say every epoch identifies a Claim or Durable
+acquisition apply specifically to the Run-serving lane.
+
 Every resource a Run's execution writes is already Conversation-scoped —
 `conversation_runtime` keyed `(user_id, conversation_id)`, `agent_sessions`
 keyed `conversation_id`, `conversation_artifacts`, and the E2B sandbox

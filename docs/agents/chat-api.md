@@ -29,7 +29,7 @@ Return `201 { conversationId, title, scope, createdAt, lastActivityAt, archivedA
 
 ### Manage Conversations
 
-`GET /v1/conversations` lists either the regular or archived partition with title search and activity-keyset pagination as `{ conversations, nextCursor }`. `PATCH /v1/conversations/:conversationId` renames or archives/unarchives while serializing Archive transitions with Run admission. `DELETE /v1/conversations/:conversationId` rejects active Runs and permanently deletes durable Conversation data.
+`GET /v1/conversations` lists either the regular or archived partition with title search and activity-keyset pagination as `{ conversations, nextCursor }`. `PATCH /v1/conversations/:conversationId` renames or archives/unarchives while serializing Archive transitions with Run admission and direct-response admission. `DELETE /v1/conversations/:conversationId` rejects active Runs or live Response authority and permanently deletes durable Conversation data.
 
 All operations are owner-scoped. Missing and foreign Conversations both return `404`. These management routes bypass the new-work exposure gate.
 

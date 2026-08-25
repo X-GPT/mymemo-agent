@@ -26,13 +26,14 @@ _Avoid_: metadata update, Run completion
 **Archive**:
 A reversible lifecycle change that removes a Conversation from the default
 Conversation list and prevents it from receiving new messages, without deleting
-the Conversation or its history.
+the Conversation or its history. It is rejected while a Run is active or
+Response authority is live.
 _Avoid_: delete, close
 
 **Permanent deletion**:
 The irreversible end of a Conversation that removes it and makes its history
-and Downloadable artifacts inaccessible. A Conversation with an active Run
-cannot be permanently deleted.
+and Downloadable artifacts inaccessible. A Conversation with an active Run or
+live Response authority cannot be permanently deleted.
 _Avoid_: Archive, soft delete
 
 **Scope**:
@@ -111,7 +112,7 @@ _Avoid_: cancellation, Conversation termination, HITL interrupt
 **Conversation Ownership**:
 The exclusive execution authority over one Conversation, established by
 Durable acquisition, held under an Ownership lease and epoch, and recovered by
-Reclamation. It is the single authority every execution write is fenced on.
+Reclamation. It is the authority every Run execution write is fenced on.
 _Avoid_: lock, worker assignment, run ownership
 
 **Ownership lease**:
@@ -121,10 +122,29 @@ heartbeat. Once it lapses or is superseded, that holder's writes are rejected.
 _Avoid_: run lease, sandbox lease (the decommissioned prototype concept)
 
 **Ownership epoch**:
-The per-Conversation number identifying one Durable acquisition, increasing
-with every acquisition. It names the holder in every fenced write, so a
-superseded holder is rejected even while it still believes it holds the lease.
+The Conversation epoch value identifying one Durable acquisition while a Run
+holds Conversation Ownership. It names the holder in every Run-fenced write.
 _Avoid_: fencing token, version, generation
+
+**Conversation epoch**:
+The per-Conversation number identifying one execution-authority grant,
+increasing for every Durable acquisition or direct-response admission. Every
+fenced write combines it with the grant's live database deadline, so a
+superseded or expired holder is rejected.
+_Avoid_: version, generation
+
+**Response authority**:
+The Run-free, time-bounded execution authority used only by the replacement AI
+SDK Agent-query path. Admission advances the Conversation epoch and establishes
+the exact Response deadline; Chat API, Runtime, SessionStore, and Workspace
+writes must all prove both values. It expires without Run recovery or retry.
+_Avoid_: Conversation Ownership, Run, response lock
+
+**Response deadline**:
+The database-authored expiry of one Response authority grant, stored in the
+same Conversation deadline column as an Ownership lease but never extended by
+an unconfirmed database operation.
+_Avoid_: client timeout, cached lease
 
 **Reclamation**:
 Terminalizing the started Runs of a Conversation whose Ownership lease lapsed
@@ -185,11 +205,12 @@ _Avoid_: Conversation API, Assistant Cloud
 
 **AI SDK agent surface**:
 An additive, AI SDK-compatible data plane through which a client submits a
-message to an existing Conversation and receives that Run's live response. It
-shares the same Run admission and execution authority as the AG-UI agent
-surface rather than defining a second execution path. Issue #560's replacement
-Agent-query path and canonical message store remain test-seam-only until the
-production composition and authority cut over together.
+message to an existing Conversation and receives a live response. The
+replacement Agent-query path is deliberately Run-free: it uses Response
+authority over the shared Conversation epoch/deadline and does not fabricate a
+Run or Run audit identity. It and its canonical message store remain
+test-seam-only until the production composition and authority cut over
+together.
 _Avoid_: messaging layer, AI SDK runtime
 
 **Assistant text delta**:

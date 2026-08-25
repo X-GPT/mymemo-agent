@@ -572,6 +572,36 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(await listPersistedMessages(tdb)).toEqual([]);
 	});
 
+	it("returns 204 for an absent Redis stream even when pointer cleanup fails", async () => {
+		await tdb.db.update(conversations).set({ activeStreamId: "stale-stream" });
+		const store = new PostgresChatMessageStore(tdb.db);
+		store.clearActiveStreamId = async () => {
+			throw new Error("Postgres unavailable");
+		};
+		const app = buildApp(
+			store,
+			{
+				async invoke() {
+					return successfulClaudeEvents();
+				},
+			},
+			undefined,
+			{
+				resumableStreams: {
+					async create() {},
+					async resume() {
+						return undefined;
+					},
+				},
+			},
+		);
+
+		const response = await app.request("/api/chat/conversation-1/stream", {
+			headers: identityHeaders,
+		});
+		expect(response.status).toBe(204);
+	});
+
 	it("streams and persists completed Tool invocations and results in the Assistant UIMessage", async () => {
 		const store = new PostgresChatMessageStore(tdb.db);
 		const app = buildApp(store, {

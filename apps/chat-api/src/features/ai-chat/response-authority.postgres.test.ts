@@ -7,6 +7,7 @@ import {
 	it,
 	setDefaultTimeout,
 } from "bun:test";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase, type Database } from "@mymemo/agent-db/client";
 import { conversationOwnershipLeaseDeadline } from "@mymemo/agent-db/conversation-ownership";
 import { publishAgentQueryWorkspaceTx } from "@mymemo/agent-db/runtime-store";
@@ -18,14 +19,17 @@ import {
 } from "@mymemo/agent-db/schema";
 import { appendAgentQuerySessionEntriesTx } from "@mymemo/agent-db/session-store";
 import { and, eq, sql } from "drizzle-orm";
+import { Hono } from "hono";
+import type { AppEnv } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
+import { createAiChatRoutes } from "./ai-chat.route";
 import {
 	type ChatMessage,
 	PostgresChatMessageStore,
 } from "./postgres-chat-message-store";
 
 const DB_URL = process.env.AGENT_DATABASE_URL ?? "";
-const RUN = DB_URL !== "";
+const RUN = process.env.RUN_AGENT_QUERY_POSTGRES_TESTS === "true";
 const USER_ID = `agent-query-authority-${crypto.randomUUID()}`;
 const CONVERSATION_ID = `${USER_ID}-conversation`;
 const ref = { userId: USER_ID, conversationId: CONVERSATION_ID };
@@ -38,6 +42,62 @@ let conversationStore: PostgresConversationStore;
 
 function userMessage(id: string): ChatMessage {
 	return { id, role: "user", parts: [{ type: "text", text: id }] };
+}
+
+function buildApp(responseGate: Promise<void>) {
+	const app = new Hono<AppEnv>();
+	let id = 0;
+	app.route(
+		"/api/chat",
+		createAiChatRoutes({
+			messageStore: messages,
+			runtimeInvoker: {
+				async invoke() {
+					return (async function* (): AsyncGenerator<SDKMessage> {
+						await responseGate;
+						yield { type: "result" } as SDKMessage;
+					})();
+				},
+			},
+			exposureGate: {
+				async isAgentEnabled() {
+					return true;
+				},
+			},
+			createMessageId: () => `assistant-${++id}`,
+			createStreamId: () => `stream-${++id}`,
+		}),
+	);
+	return app;
+}
+
+function post(app: Hono<AppEnv>, messageId: string) {
+	return app.request("/api/chat", {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"x-member-code": USER_ID,
+			"x-partner-code": "partner",
+		},
+		body: JSON.stringify({
+			id: CONVERSATION_ID,
+			messages: [userMessage(messageId)],
+			model: "anthropic/claude-sonnet-5",
+			trigger: "submit-message",
+		}),
+	});
+}
+
+async function releaseResponses(
+	gate: PromiseWithResolvers<void>,
+	responses: Response[],
+) {
+	gate.resolve();
+	await Promise.all(
+		responses
+			.filter(({ status }) => status === 200)
+			.map((response) => response.text()),
+	);
 }
 
 async function cleanup() {
@@ -77,16 +137,15 @@ describe.skipIf(!RUN)(
 			await db.$client.end();
 		});
 
-		it("serializes concurrent admissions to one User message and one epoch", async () => {
-			const admissions = await Promise.all([
-				messages.admitUserMessage(ref, userMessage("user-a"), "stream-a"),
-				messages.admitUserMessage(ref, userMessage("user-b"), "stream-b"),
+		it("serializes mounted POST-vs-POST admission", async () => {
+			const gate = Promise.withResolvers<void>();
+			const app = buildApp(gate.promise);
+			const responses = await Promise.all([
+				post(app, "user-a"),
+				post(app, "user-b"),
 			]);
 
-			expect(admissions.map(({ outcome }) => outcome).sort()).toEqual([
-				"admitted",
-				"conflict",
-			]);
+			expect(responses.map(({ status }) => status).sort()).toEqual([200, 409]);
 			expect(
 				await db
 					.select({ id: conversationMessages.messageId })
@@ -106,20 +165,42 @@ describe.skipIf(!RUN)(
 						)
 				)[0]?.epoch,
 			).toBe(1);
+			await releaseResponses(gate, responses);
 		});
 
-		it("rejects Archive and Permanent deletion while allowing rename", async () => {
-			await messages.admitUserMessage(ref, userMessage("user-a"), "stream-a");
-
+		it("serializes mounted POST-vs-Archive while allowing rename", async () => {
+			const gate = Promise.withResolvers<void>();
+			const app = buildApp(gate.promise);
+			const [response, archived] = await Promise.all([
+				post(app, "user-a"),
+				conversationStore.update(ref, { archived: true }),
+			]);
+			if (response.status === 200) {
+				expect(archived).toEqual({ outcome: "active_run" });
+			} else {
+				expect(response.status).toBe(409);
+				expect(archived).toMatchObject({ outcome: "updated" });
+			}
 			await expect(
 				conversationStore.update(ref, { title: "Renamed" }),
 			).resolves.toMatchObject({ outcome: "updated" });
-			const [archived, deleted] = await Promise.all([
-				conversationStore.update(ref, { archived: true }),
+			await releaseResponses(gate, [response]);
+		});
+
+		it("serializes mounted POST-vs-Permanent deletion", async () => {
+			const gate = Promise.withResolvers<void>();
+			const app = buildApp(gate.promise);
+			const [response, deleted] = await Promise.all([
+				post(app, "user-a"),
 				conversationStore.deletePermanently(ref),
 			]);
-			expect(archived).toEqual({ outcome: "active_run" });
-			expect(deleted).toEqual({ outcome: "active_run" });
+			if (response.status === 200) {
+				expect(deleted).toEqual({ outcome: "active_run" });
+			} else {
+				expect(response.status).toBe(404);
+				expect(deleted).toEqual({ outcome: "deleted" });
+			}
+			await releaseResponses(gate, [response]);
 		});
 
 		it("does not let renewal revive a superseded epoch", async () => {

@@ -7,7 +7,10 @@ import {
 	projectToolUse,
 	publicToolName,
 } from "@mymemo/agent-db/tool-event-projection";
-import type { AgentQueryRequest } from "@mymemo/agent-query";
+import {
+	type AgentQueryRequest,
+	watchResponseAuthority,
+} from "@mymemo/agent-query";
 import {
 	createUIMessageStream,
 	createUIMessageStreamResponse,
@@ -78,46 +81,6 @@ export type AgentQueryChatDeps = {
 	createStreamId?: () => string;
 	responseRenewIntervalMs?: number;
 };
-
-function startResponseRenewal(input: {
-	deadline: Date;
-	intervalMs: number;
-	renew(): Promise<Date | null>;
-	onLost(): void;
-}) {
-	let stopped = false;
-	let renewing = false;
-	let deadlineTimer: ReturnType<typeof setTimeout>;
-	const scheduleDeadline = (deadline: Date) => {
-		clearTimeout(deadlineTimer);
-		deadlineTimer = setTimeout(
-			input.onLost,
-			Math.max(0, deadline.getTime() - Date.now()),
-		);
-	};
-	scheduleDeadline(input.deadline);
-	const interval = setInterval(async () => {
-		if (stopped || renewing) return;
-		renewing = true;
-		try {
-			const deadline = await input.renew();
-			if (stopped) return;
-			if (deadline) scheduleDeadline(deadline);
-			else input.onLost();
-		} catch {
-			// Keep only the last exact database deadline; its timer remains active.
-		} finally {
-			renewing = false;
-		}
-	}, input.intervalMs);
-	return {
-		stop() {
-			stopped = true;
-			clearInterval(interval);
-			clearTimeout(deadlineTimer);
-		},
-	};
-}
 
 async function writeClaudeMessageStream(
 	writer: UIMessageStreamWriter<ChatMessage>,
@@ -318,8 +281,7 @@ async function handleAgentQueryChat(
 
 	const assistantMessageId = (deps.createMessageId ?? randomUUID)();
 	let agentSessionId: string | undefined;
-	let renewal: ReturnType<typeof startResponseRenewal> | undefined;
-	const runtimeAbort = new AbortController();
+	let renewal: ReturnType<typeof watchResponseAuthority> | undefined;
 	const stream = createUIMessageStream<ChatMessage>({
 		onError: () => "Response failed",
 		async onEnd({ finishReason, isAborted, responseMessage }) {
@@ -351,15 +313,14 @@ async function handleAgentQueryChat(
 			}
 		},
 		async execute({ writer }) {
-			renewal = startResponseRenewal({
-				deadline: admission.responseDeadline,
+			renewal = watchResponseAuthority({
+				initialDeadline: admission.responseDeadline,
 				intervalMs: deps.responseRenewIntervalMs ?? 15_000,
-				renew: () =>
+				verify: () =>
 					deps.messageStore.renewResponseAuthority(
 						ref,
 						admission.conversationEpoch,
 					),
-				onLost: () => runtimeAbort.abort(new Error("response authority lost")),
 			});
 			const events = await deps.runtimeInvoker.invoke(
 				{
@@ -372,7 +333,7 @@ async function handleAgentQueryChat(
 						? { agentSessionId: admission.agentSessionId }
 						: {}),
 				},
-				runtimeAbort.signal,
+				renewal.signal,
 			);
 			agentSessionId = await writeClaudeMessageStream(
 				writer,
@@ -439,22 +400,23 @@ export function createAiChatRoutes(queryDeps: AgentQueryChatDeps) {
 		if (!active.activeStreamId || !queryDeps.resumableStreams) {
 			return c.body(null, 204);
 		}
+		let stream: ReadableStream<string> | null | undefined;
 		try {
-			const stream = await queryDeps.resumableStreams.resume(
-				active.activeStreamId,
-			);
-			if (!stream) {
-				await queryDeps.messageStore.clearActiveStreamId(
-					ref,
-					active.conversationEpoch,
-					active.activeStreamId,
-				);
-				return c.body(null, 204);
-			}
-			return new Response(stream, { headers: UI_MESSAGE_STREAM_HEADERS });
+			stream = await queryDeps.resumableStreams.resume(active.activeStreamId);
 		} catch {
 			return c.json({ error: "Response resumption unavailable" }, 503);
 		}
+		if (!stream) {
+			await queryDeps.messageStore
+				.clearActiveStreamId(
+					ref,
+					active.conversationEpoch,
+					active.activeStreamId,
+				)
+				.catch(() => false);
+			return c.body(null, 204);
+		}
+		return new Response(stream, { headers: UI_MESSAGE_STREAM_HEADERS });
 	});
 	routes.post(
 		"/",

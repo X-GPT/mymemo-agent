@@ -119,6 +119,8 @@ jobs:
       # The AgentCore publisher/acquisition races use the same migrated
       # real-Postgres service as the surrounding integration suites.
       - run: bun test packages/agent-db/src/agentcore-dispatch.postgres.test.ts
+      # Direct-response admission and lifecycle races require real row locks.
+      - run: RUN_AGENT_QUERY_POSTGRES_TESTS=true bun test apps/chat-api/src/features/ai-chat/response-authority.postgres.test.ts
       # The dedicated publisher task's session lock must exclude a rolling-
       # deploy overlap and release when its database backend dies.
       - run: RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS=true bun test apps/agentcore-dispatch-publisher/src/publisher-loop.postgres.test.ts
