@@ -207,7 +207,6 @@ describe.skipIf(!RUN)(
 			const admission = await messages.admitUserMessage(
 				ref,
 				userMessage("user-a"),
-				"stream-a",
 			);
 			if (admission.outcome !== "admitted") throw new Error("admission failed");
 
@@ -230,7 +229,6 @@ describe.skipIf(!RUN)(
 			const admission = await messages.admitUserMessage(
 				ref,
 				userMessage("user-a"),
-				"stream-a",
 			);
 			if (admission.outcome !== "admitted") throw new Error("admission failed");
 			await messages.persistAssistantMessageAndSession(
@@ -268,7 +266,6 @@ describe.skipIf(!RUN)(
 			const admission = await messages.admitUserMessage(
 				ref,
 				userMessage("user-a"),
-				"stream-a",
 			);
 			if (admission.outcome !== "admitted") throw new Error("admission failed");
 			await db

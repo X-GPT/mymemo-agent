@@ -57,7 +57,6 @@ export class PostgresChatMessageStore {
 	async admitUserMessage(
 		ref: ConversationRef,
 		message: ChatMessage,
-		activeStreamId: string,
 	): Promise<UserMessageAdmission> {
 		return await this.db.transaction(async (tx) => {
 			const [conversation] = await tx
@@ -109,7 +108,7 @@ export class PostgresChatMessageStore {
 					epoch: sql`${conversations.epoch} + 1`,
 					ownerWorkerId: "agent-query",
 					ownerUntil: conversationOwnershipLeaseDeadline(),
-					activeStreamId,
+					activeStreamId: null,
 					title: sql`coalesce(${conversations.title}, ${prompt.text})`,
 					lastActivityAt: sql`now()`,
 				})
@@ -213,6 +212,26 @@ export class PostgresChatMessageStore {
 			...ref,
 			epoch: conversationEpoch,
 		});
+	}
+
+	async setActiveStreamId(
+		ref: ConversationRef,
+		conversationEpoch: number,
+		activeStreamId: string,
+	): Promise<boolean> {
+		const rows = await this.db
+			.update(conversations)
+			.set({ activeStreamId })
+			.where(
+				and(
+					eq(conversations.userId, ref.userId),
+					eq(conversations.conversationId, ref.conversationId),
+					eq(conversations.epoch, conversationEpoch),
+					sql`${conversations.ownerUntil} > now()`,
+				),
+			)
+			.returning({ conversationId: conversations.conversationId });
+		return rows.length > 0;
 	}
 
 	async clearActiveStreamId(

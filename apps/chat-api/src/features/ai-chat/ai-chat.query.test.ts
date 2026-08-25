@@ -286,7 +286,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		);
 	});
 
-	it("atomically advances epoch/deadline and replaces a stale stream pointer", async () => {
+	it("atomically advances epoch/deadline and clears a stale stream pointer", async () => {
 		await tdb.db.update(conversations).set({
 			ownerUntil: new Date(Date.now() - 1_000),
 			activeStreamId: "stale-stream",
@@ -298,7 +298,7 @@ describe("injected Agent-query POST /api/chat", () => {
 				expect(conversation).toMatchObject({
 					epoch: 8,
 					ownerWorkerId: "agent-query",
-					activeStreamId: "stream-1",
+					activeStreamId: null,
 				});
 				expect(conversation?.ownerUntil).toBeInstanceOf(Date);
 				expect(await listPersistedMessages(tdb)).toEqual([expectedUserMessage]);
@@ -353,9 +353,15 @@ describe("injected Agent-query POST /api/chat", () => {
 		const admission = await store.admitUserMessage(
 			{ userId: "member-1", conversationId: "conversation-1" },
 			expectedUserMessage as ChatMessage,
-			"stream-1",
 		);
 		if (admission.outcome !== "admitted") throw new Error("admission failed");
+		expect(
+			await store.setActiveStreamId(
+				{ userId: "member-1", conversationId: "conversation-1" },
+				admission.conversationEpoch,
+				"stream-1",
+			),
+		).toBe(true);
 		expect(
 			await store.clearActiveStreamId(
 				{ userId: "member-1", conversationId: "conversation-1" },
@@ -381,6 +387,13 @@ describe("injected Agent-query POST /api/chat", () => {
 				admission.conversationEpoch,
 			),
 		).toBeNull();
+		expect(
+			await store.setActiveStreamId(
+				{ userId: "member-1", conversationId: "conversation-1" },
+				admission.conversationEpoch,
+				"stale-stream",
+			),
+		).toBe(false);
 		await expect(
 			store.persistAssistantMessageAndSession(
 				{ userId: "member-1", conversationId: "conversation-1" },
@@ -447,8 +460,27 @@ describe("injected Agent-query POST /api/chat", () => {
 
 	it("serves canonical history and resumes the active AI SDK stream", async () => {
 		let resumable: ReadableStream<string> | undefined;
+		let redisInitialized = false;
+		const pointerPublished = Promise.withResolvers<void>();
+		const postgresStore = new PostgresChatMessageStore(tdb.db);
+		const store = Object.assign(Object.create(postgresStore), {
+			async setActiveStreamId(
+				ref: Parameters<PostgresChatMessageStore["setActiveStreamId"]>[0],
+				epoch: number,
+				streamId: string,
+			) {
+				expect(redisInitialized).toBe(true);
+				const published = await postgresStore.setActiveStreamId(
+					ref,
+					epoch,
+					streamId,
+				);
+				pointerPublished.resolve();
+				return published;
+			},
+		}) as MessageStore;
 		const app = buildApp(
-			new PostgresChatMessageStore(tdb.db),
+			store,
 			{
 				async invoke() {
 					return successfulClaudeEvents();
@@ -458,7 +490,11 @@ describe("injected Agent-query POST /api/chat", () => {
 			{
 				resumableStreams: {
 					async create(_streamId, stream) {
+						expect(
+							(await tdb.db.select().from(conversations))[0]?.activeStreamId,
+						).toBeNull();
 						resumable = stream;
+						redisInitialized = true;
 					},
 					async resume() {
 						return resumable;
@@ -479,6 +515,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			headers: identityHeaders,
 			body: JSON.stringify(input()),
 		});
+		await pointerPublished.promise;
 		const resumed = await app.request("/api/chat/conversation-1/stream", {
 			headers: identityHeaders,
 		});
@@ -529,6 +566,9 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(response.status).toBe(200);
 		expect(await response.text()).toContain('"finishReason":"stop"');
 		expect(await listPersistedMessages(tdb)).toHaveLength(2);
+		expect(
+			(await tdb.db.select().from(conversations))[0]?.activeStreamId,
+		).toBeNull();
 
 		await tdb.db
 			.update(conversations)

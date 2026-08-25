@@ -36,7 +36,7 @@ it("creates, discovers, appends, resumes, and completes a Redis-backed stream", 
 		publisher,
 		subscriber,
 	});
-	const streams = createAiChatResumableStreams(() => context);
+	const streams = createAiChatResumableStreams(context);
 	const release = Promise.withResolvers<void>();
 	const source = new ReadableStream<string>({
 		start(controller) {
@@ -63,25 +63,4 @@ it("creates, discovers, appends, resumes, and completes a Redis-backed stream", 
 
 	publisher.destroy();
 	subscriber.destroy();
-});
-
-it("recreates its context after an operation failure", async () => {
-	let attempts = 0;
-	const streams = createAiChatResumableStreams(
-		() =>
-			({
-				async createNewResumableStream() {
-					attempts++;
-					if (attempts === 1) throw new Error("Redis unavailable");
-					return new ReadableStream<string>();
-				},
-			}) as unknown as ReturnType<typeof createResumableStreamContext>,
-	);
-	const source = new ReadableStream<string>();
-
-	await expect(streams.create("stream-1", source)).rejects.toThrow(
-		"Redis unavailable",
-	);
-	await expect(streams.create("stream-1", source)).resolves.toBeUndefined();
-	expect(attempts).toBe(2);
 });

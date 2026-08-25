@@ -7,15 +7,11 @@ import {
 import { conversations } from "./schema";
 
 /** Direct-response authority reuses the Conversation epoch/deadline without a Run. */
-export interface ConversationResponseAuthority {
+export type ConversationResponseAuthority = {
 	conversationId: string;
 	epoch: number;
 	userId?: string;
-}
-
-export class ConversationResponseAuthorityError extends Error {
-	override name = "ConversationResponseAuthorityError" as const;
-}
+};
 
 function liveResponseAuthorityConditions(
 	authority: ConversationResponseAuthority,
@@ -73,7 +69,7 @@ export async function lockLiveConversationResponseAuthorityTx(
 		.where(liveResponseAuthorityConditions(authority))
 		.for("share");
 	if (!row?.deadline) {
-		throw new ConversationResponseAuthorityError(
+		throw new Error(
 			`response authority for conversation ${authority.conversationId} is stale or expired`,
 		);
 	}

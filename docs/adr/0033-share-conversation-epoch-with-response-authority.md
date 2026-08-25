@@ -19,9 +19,11 @@ has no safety weight.
 
 Direct-response admission locks the authorized Conversation row, rejects any
 still-live deadline before new-work side effects, advances the epoch, stores its
-Response deadline and active stream pointer, and appends the User message in one
-transaction. Successful completion atomically persists the Assistant message
-and Agent-session pointer and conditionally clears the matching authority.
+Response deadline, clears any stale stream pointer, and appends the User message
+in one transaction. After Redis initializes the resumable stream, Chat API
+publishes its pointer only while the same epoch/deadline remains live.
+Successful completion atomically persists the Assistant message and
+Agent-session pointer and conditionally clears the matching authority.
 Archive and Permanent deletion reject either live authority; rename does not.
 
 Response authority does not adopt Run lifecycle semantics. Producer death

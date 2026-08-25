@@ -63,6 +63,7 @@ export type AgentQueryChatDeps = {
 		| "listMessages"
 		| "persistAssistantMessageAndSession"
 		| "renewResponseAuthority"
+		| "setActiveStreamId"
 	>;
 	runtimeInvoker: {
 		invoke(
@@ -262,12 +263,7 @@ async function handleAgentQueryChat(
 	}
 
 	const userMessage = body.messages[0] as ChatMessage;
-	const activeStreamId = (deps.createStreamId ?? randomUUID)();
-	const admission = await deps.messageStore.admitUserMessage(
-		ref,
-		userMessage,
-		activeStreamId,
-	);
+	const admission = await deps.messageStore.admitUserMessage(ref, userMessage);
 	switch (admission.outcome) {
 		case "not_found":
 			return c.json({ error: "Conversation not found" }, 404);
@@ -279,6 +275,7 @@ async function handleAgentQueryChat(
 			return c.json({ error: "Message id was already used" }, 409);
 	}
 
+	const activeStreamId = (deps.createStreamId ?? randomUUID)();
 	const assistantMessageId = (deps.createMessageId ?? randomUUID)();
 	let agentSessionId: string | undefined;
 	let renewal: ReturnType<typeof watchResponseAuthority> | undefined;
@@ -343,12 +340,18 @@ async function handleAgentQueryChat(
 			writer.write({ type: "finish", finishReason: "stop" });
 		},
 	});
+	const resumableStreams = deps.resumableStreams;
 	return createUIMessageStreamResponse({
 		stream,
-		consumeSseStream: deps.resumableStreams
+		consumeSseStream: resumableStreams
 			? async ({ stream: sseStream }) => {
 					try {
-						await deps.resumableStreams?.create(activeStreamId, sseStream);
+						await resumableStreams.create(activeStreamId, sseStream);
+						await deps.messageStore.setActiveStreamId(
+							ref,
+							admission.conversationEpoch,
+							activeStreamId,
+						);
 					} catch {
 						await Promise.allSettled([
 							deps.messageStore.clearActiveStreamId(
