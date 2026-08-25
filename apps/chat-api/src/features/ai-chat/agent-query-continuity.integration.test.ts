@@ -14,7 +14,7 @@ import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { asc } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AppEnv } from "@/deps";
+import type { AppDeps, AppEnv } from "@/deps";
 import {
 	AGENTCORE_RUNTIME_SESSION_HEADER,
 	createAgentQueryRequestHandler,
@@ -176,35 +176,36 @@ describe("non-production Agent-query continuity", () => {
 			},
 		});
 		const app = new Hono<AppEnv>();
-		let assistantId = 0;
-		app.route(
-			"/api/chat",
-			createAiChatRoutes({
-				messageStore: new PostgresChatMessageStore(tdb.db),
+		app.use("*", async (c, next) => {
+			c.set("deps", {
+				chatMessageStore: new PostgresChatMessageStore(tdb.db),
 				exposureGate: {
 					async isAgentEnabled() {
 						return true;
 					},
 				},
-				createMessageId: () => `assistant-${++assistantId}`,
-				runtimeInvoker: {
-					async invoke(input: AgentQueryRequest) {
-						const response = await runtimeHandler(
-							new Request("http://runtime/invocations", {
-								method: "POST",
-								headers: {
-									"content-type": "application/json",
-									[AGENTCORE_RUNTIME_SESSION_HEADER]: input.conversationId,
-								},
-								body: JSON.stringify(input),
-							}),
-						);
-						if (!response.ok) throw new Error("Runtime invocation failed");
-						return (await response.text())
-							.trim()
-							.split("\n")
-							.map((line) => JSON.parse(line) as SDKMessage);
-					},
+			} as unknown as AppDeps);
+			await next();
+		});
+		app.route(
+			"/api/chat",
+			createAiChatRoutes({
+				async invoke(input: AgentQueryRequest) {
+					const response = await runtimeHandler(
+						new Request("http://runtime/invocations", {
+							method: "POST",
+							headers: {
+								"content-type": "application/json",
+								[AGENTCORE_RUNTIME_SESSION_HEADER]: input.conversationId,
+							},
+							body: JSON.stringify(input),
+						}),
+					);
+					if (!response.ok) throw new Error("Runtime invocation failed");
+					return (await response.text())
+						.trim()
+						.split("\n")
+						.map((line) => JSON.parse(line) as SDKMessage);
 				},
 			}),
 		);

@@ -8,11 +8,11 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 ### Staged synchronous Agent query
 
-The local-only composition may mount `POST /api/chat` with the real AgentCore
-Runtime invoker. It stores canonical `UIMessage` rows and the opaque current
-Agent-session id together, then supplies only that id—not public message
-history—to the next `AgentQueryRequest`. Production composition does not mount
-this path before the response-authority cutover.
+The local-only composition may mount `POST /api/chat` with the non-production
+Agent-query Runtime HTTP adapter. It stores canonical `UIMessage` rows and the
+opaque current Agent-session id together, then supplies only that id—not public
+message history—to the next `AgentQueryRequest`. Production composition does
+not mount this path before the response-authority cutover.
 
 ### Create a Conversation
 

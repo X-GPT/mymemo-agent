@@ -16,13 +16,19 @@ import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { asc } from "drizzle-orm";
 import { Hono } from "hono";
-import type { AppEnv } from "@/deps";
+import type { AppDeps, AppEnv } from "@/deps";
 import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
-import { type AgentQueryChatDeps, createAiChatRoutes } from "./ai-chat.route";
+import {
+	type AgentQueryRuntimeInvoker,
+	createAiChatRoutes,
+} from "./ai-chat.route";
 import { PostgresChatMessageStore } from "./postgres-chat-message-store";
 
-type MessageStore = AgentQueryChatDeps["messageStore"];
-type RuntimeInvoker = AgentQueryChatDeps["runtimeInvoker"];
+type MessageStore = AppDeps["chatMessageStore"];
+type RuntimeInvoker = AgentQueryRuntimeInvoker;
+
+const UUID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const identityHeaders = {
 	"content-type": "application/json",
@@ -175,16 +181,14 @@ function buildApp(
 	},
 ) {
 	const app = new Hono<AppEnv>();
-	let messageId = 0;
-	app.route(
-		"/api/chat",
-		createAiChatRoutes({
-			messageStore: store,
-			runtimeInvoker,
+	app.use("*", async (c, next) => {
+		c.set("deps", {
+			chatMessageStore: store,
 			exposureGate,
-			createMessageId: () => `assistant-message-${++messageId}`,
-		}),
-	);
+		} as unknown as AppDeps);
+		await next();
+	});
+	app.route("/api/chat", createAiChatRoutes(runtimeInvoker));
 	return app;
 }
 
@@ -242,27 +246,30 @@ describe("injected Agent-query POST /api/chat", () => {
 				model: "anthropic/claude-sonnet-5",
 			},
 		]);
-		expect(parseAiSdkSse(await response.text())).toEqual([
-			{ type: "start", messageId: "assistant-message-1" },
-			{ type: "text-start", id: "assistant-message-1-text-0" },
+		const chunks = parseAiSdkSse(await response.text());
+		const assistantMessageId = (chunks[0] as { messageId: string }).messageId;
+		expect(assistantMessageId).toMatch(UUID_PATTERN);
+		expect(chunks).toEqual([
+			{ type: "start", messageId: assistantMessageId },
+			{ type: "text-start", id: `${assistantMessageId}-text-0` },
 			{
 				type: "text-delta",
-				id: "assistant-message-1-text-0",
+				id: `${assistantMessageId}-text-0`,
 				delta: "A direct ",
 			},
 			{
 				type: "text-delta",
-				id: "assistant-message-1-text-0",
+				id: `${assistantMessageId}-text-0`,
 				delta: "answer.",
 			},
-			{ type: "text-end", id: "assistant-message-1-text-0" },
+			{ type: "text-end", id: `${assistantMessageId}-text-0` },
 			{ type: "finish", finishReason: "stop" },
 			"[DONE]",
 		]);
 		expect(await listPersistedMessages(tdb)).toEqual([
 			expectedUserMessage,
 			{
-				id: "assistant-message-1",
+				id: assistantMessageId,
 				role: "assistant",
 				parts: [{ type: "text", text: "A direct answer.", state: "done" }],
 			},
@@ -344,16 +351,14 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(await listPersistedMessages(tdb)).toEqual([
 			expectedUserMessage,
 			{
-				id: "assistant-message-1",
+				id: expect.stringMatching(UUID_PATTERN),
 				role: "assistant",
 				parts: [
 					{ type: "text", text: "I will write the file.", state: "done" },
 					{
 						type: "dynamic-tool",
 						toolName: "Write",
-						toolCallId: expect.stringMatching(
-							/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-						),
+						toolCallId: expect.stringMatching(UUID_PATTERN),
 						state: "output-available",
 						input: {
 							path: "notes.md",
@@ -400,9 +405,7 @@ describe("injected Agent-query POST /api/chat", () => {
 			{
 				type: "dynamic-tool",
 				toolName: "Write",
-				toolCallId: expect.stringMatching(
-					/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-				),
+				toolCallId: expect.stringMatching(UUID_PATTERN),
 				state: "output-error",
 				input: {
 					path: "notes.md",

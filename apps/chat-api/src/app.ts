@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { requestId } from "hono/request-id";
 import { pinoLogger } from "hono-pino";
 import type { ApiConfig } from "./config/env";
-import { type AppDeps, type AppEnv, createDeps } from "./deps";
+import type { AppDeps, AppEnv } from "./deps";
 import artifactRoutes from "./features/artifacts/artifacts.route";
 import conversationHistoryRoutes from "./features/conversation-history/conversation-history.route";
 import conversationsRoutes from "./features/conversations/conversations.route";
@@ -11,10 +11,7 @@ import conversationsRoutes from "./features/conversations/conversations.route";
  * Build the app from a validated config. Dependencies are injectable so route
  * tests do not construct production database, AWS, Redis, or Statsig clients.
  */
-export function createApp(
-	config: ApiConfig,
-	deps: AppDeps = createDeps(config),
-) {
+export function createApp(config: ApiConfig, deps: AppDeps) {
 	const app = new Hono<AppEnv>();
 	app.use(requestId());
 	app.use(pinoLogger({ pino: { level: config.logLevel } }));
