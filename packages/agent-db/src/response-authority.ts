@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	conversationExecutionAuthorityDeadline,
@@ -20,6 +20,7 @@ function responseAuthorityConditions(authority: ConversationResponseAuthority) {
 			: eq(conversations.userId, authority.userId),
 		eq(conversations.conversationId, authority.conversationId),
 		eq(conversations.epoch, authority.epoch),
+		isNull(conversations.ownerWorkerId),
 	);
 }
 

@@ -1638,6 +1638,29 @@ describe("Run liveness sweep transactions", () => {
 		});
 	});
 
+	it("does not reclaim expired Response authority", async () => {
+		await queueRun("run-waiting", "conv-1");
+		await ageRunsPastQueueTimeout("run-waiting");
+		await tdb.db
+			.update(conversations)
+			.set({
+				ownerWorkerId: null,
+				ownerUntil: sql`now() - interval '1 second'`,
+				epoch: 1,
+			})
+			.where(eq(conversations.conversationId, "conv-1"));
+
+		expect(await reclaimConversationTx(tdb.db)).toBeNull();
+		const [conversation] = await tdb.db
+			.select({ ownerUntil: conversations.ownerUntil })
+			.from(conversations)
+			.where(eq(conversations.conversationId, "conv-1"));
+		expect(conversation?.ownerUntil).toBeInstanceOf(Date);
+		expect(
+			(await expireUnownedQueuedRunsTx(tdb.db))?.runs.map((run) => run.status),
+		).toEqual(["error"]);
+	});
+
 	it("Reclamation closes a Run after a crash left an incomplete Tool prefix", async () => {
 		await acquireRun("run-1", "conv-1", "worker-1");
 		await appendSingleRunEvent(tdb.db, {

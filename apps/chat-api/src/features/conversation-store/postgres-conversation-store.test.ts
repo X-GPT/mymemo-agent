@@ -179,7 +179,7 @@ describe("PostgresConversationStore", () => {
 		await store.create(collectionConversation);
 		await tdb.db.update(conversations).set({
 			epoch: 1,
-			ownerWorkerId: "agent-query",
+			ownerWorkerId: null,
 			ownerUntil: new Date(Date.now() + 60_000),
 		});
 

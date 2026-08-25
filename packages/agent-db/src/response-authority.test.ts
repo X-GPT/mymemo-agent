@@ -25,7 +25,6 @@ describe("Conversation response authority", () => {
 			conversationId: "conversation-1",
 			scope: "general",
 			epoch: 7,
-			ownerWorkerId: "agent-query",
 			ownerUntil: new Date(Date.now() + 30_000),
 			activeStreamId: "stream-1",
 		});
@@ -58,6 +57,14 @@ describe("Conversation response authority", () => {
 				epoch: 6,
 			}),
 		).toBe(false);
+		await tdb.db.update(conversations).set({ ownerWorkerId: "run-owner" });
+		expect(
+			await verifyConversationResponseAuthorityTx(tdb.db, authority),
+		).toBeNull();
+		expect(await clearConversationResponseAuthorityTx(tdb.db, authority)).toBe(
+			false,
+		);
+		await tdb.db.update(conversations).set({ ownerWorkerId: null });
 		expect(await clearConversationResponseAuthorityTx(tdb.db, authority)).toBe(
 			true,
 		);
@@ -72,7 +79,6 @@ describe("Conversation response authority", () => {
 			conversationId: "conversation-expired",
 			scope: "general",
 			epoch: 3,
-			ownerWorkerId: "agent-query",
 			ownerUntil: new Date(Date.now() - 1_000),
 		});
 		const authority = { conversationId: "conversation-expired", epoch: 3 };

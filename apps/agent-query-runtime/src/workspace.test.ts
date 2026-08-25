@@ -50,7 +50,6 @@ describe("Agent-query Workspace continuity", () => {
 			conversationId: "conversation-1",
 			scope: "general",
 			epoch: 7,
-			ownerWorkerId: "agent-query",
 			ownerUntil: new Date(Date.now() + 60_000),
 		});
 	});

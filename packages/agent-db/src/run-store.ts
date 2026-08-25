@@ -1,4 +1,14 @@
-import { and, eq, inArray, isNull, ne, or, type SQL, sql } from "drizzle-orm";
+import {
+	and,
+	eq,
+	inArray,
+	isNotNull,
+	isNull,
+	ne,
+	or,
+	type SQL,
+	sql,
+} from "drizzle-orm";
 import type { Database, DbTx } from "./client";
 import {
 	type ConversationOwner,
@@ -999,7 +1009,12 @@ export async function reclaimConversationTx(
 				conversationId: conversations.conversationId,
 			})
 			.from(conversations)
-			.where(sql`${conversations.ownerUntil} <= now()`)
+			.where(
+				and(
+					isNotNull(conversations.ownerWorkerId),
+					sql`${conversations.ownerUntil} <= now()`,
+				),
+			)
 			.for("update", { skipLocked: true })
 			.limit(1);
 		if (!candidate) return null;
@@ -1095,7 +1110,8 @@ export async function expireUnownedQueuedRunsTx(
 			 where r.status = 'queued'
 			   and greatest(r.created_at, r.updated_at) <= now() -
 			     interval '${sql.raw(String(AGENTCORE_UNOWNED_QUEUE_TIMEOUT_MS))} milliseconds'
-			   and c.owner_until is null
+			   and c.owner_worker_id is null
+			   and (c.owner_until is null or c.owner_until <= now())
 			 order by r.created_at
 			   for update of c skip locked
 			 limit 1

@@ -4,6 +4,7 @@ import {
 	type ConversationOwner,
 	conversationExecutionAuthorityClock,
 	conversationExecutionAuthorityDeadline,
+	liveConversationExecutionAuthorityState,
 	liveConversationOwnershipState,
 } from "./conversation-ownership";
 import {
@@ -245,7 +246,9 @@ export async function acquireAgentCoreDispatchTx(
 				conversationId: conversations.conversationId,
 				epoch: conversations.epoch,
 				ownerWorkerId: conversations.ownerWorkerId,
-				ownerUntil: conversations.ownerUntil,
+				hasLiveExecutionAuthority: liveConversationExecutionAuthorityState(
+					input.now,
+				),
 				hasLiveOwnership: liveConversationOwnershipState(input.now),
 			})
 			.from(conversations)
@@ -312,7 +315,7 @@ export async function acquireAgentCoreDispatchTx(
 			run.status === "interrupt_requested" ||
 			(run.status === "queued" &&
 				(conversation.ownerWorkerId !== null ||
-					conversation.ownerUntil !== null))
+					conversation.hasLiveExecutionAuthority))
 		) {
 			return { disposition: "temporarily_unavailable" };
 		}
@@ -344,6 +347,7 @@ export async function acquireAgentCoreDispatchTx(
 				epoch,
 				ownerWorkerId: input.workerId,
 				ownerUntil: conversationExecutionAuthorityDeadline(input.now),
+				activeStreamId: null,
 			})
 			.where(
 				and(

@@ -126,8 +126,8 @@ export const conversations = pgTable(
 		/** Non-null while the Conversation is archived. */
 		archivedAt: timestamp("archived_at", { withTimezone: true }),
 		/**
-		 * The current execution authority's provenance label. It carries no safety
-		 * weight — the Conversation epoch/deadline carry safety. NULL while idle.
+		 * Run owner provenance. NULL for Response authority and while idle; fencing
+		 * trusts the Conversation epoch/deadline, never this identity.
 		 */
 		ownerWorkerId: text("owner_worker_id"),
 		/** Current Ownership lease or Response deadline; NULL while idle. */
@@ -158,10 +158,8 @@ export const conversations = pgTable(
 		index("conversations_archived_activity_idx")
 			.on(t.userId, t.lastActivityAt, t.conversationId)
 			.where(sql`${t.archivedAt} is not null`),
-		// Reclamation candidates: Conversations still holding an Ownership lease,
-		// which is where a lapsed one is found. Partial on the deadline because
-		// unowned Conversations are the overwhelming majority and none of them is
-		// ever a candidate.
+		// Deadline scans. Reclamation additionally requires a non-null Run owner;
+		// direct Response deadlines use this index but never enter Reclamation.
 		index("conversations_reclamation_idx")
 			.on(t.ownerUntil)
 			.where(sql`${t.ownerUntil} is not null`),

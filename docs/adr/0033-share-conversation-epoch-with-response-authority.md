@@ -14,11 +14,12 @@ both kinds of execution-authority grant. Durable acquisition grants Conversation
 Ownership for a Run. Direct-response admission grants Run-free Response
 authority. Both advance the epoch, use the database-authored
 `owner_until` deadline, and require `(conversation_id, epoch, owner_until >
-now())` for every execution mutation. `owner_worker_id` remains provenance and
-has no safety weight.
+now())` for every execution mutation. `owner_worker_id` names only a Run owner
+and is null for Response authority; fencing never trusts that identity.
 
-Direct-response admission locks the authorized Conversation row, rejects any
-still-live deadline before new-work side effects, advances the epoch, stores its
+Direct-response admission locks the authorized Conversation row, rejects Run
+Ownership or a still-live Response deadline before new-work side effects,
+advances the epoch, stores its
 Response deadline, clears any stale stream pointer, and appends the User message
 in one transaction. After Redis initializes the resumable stream, Chat API
 publishes its pointer only while the same epoch/deadline remains live.

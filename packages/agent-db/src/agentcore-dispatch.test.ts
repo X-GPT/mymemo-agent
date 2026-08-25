@@ -314,7 +314,7 @@ describe("acquireAgentCoreDispatchTx", () => {
 		).resolves.toEqual({ disposition: "terminal", status: "interrupted" });
 	});
 
-	it("returns temporarily_unavailable for any existing Ownership", async () => {
+	it("blocks Ownership and live Response authority but acquires after Response expiry", async () => {
 		await admitRunWithDispatch();
 		await tdb.db
 			.update(conversations)
@@ -331,6 +331,40 @@ describe("acquireAgentCoreDispatchTx", () => {
 				now: new Date("2026-08-14T16:01:00.000Z"),
 			}),
 		).resolves.toEqual({ disposition: "temporarily_unavailable" });
+
+		await tdb.db
+			.update(conversations)
+			.set({
+				ownerWorkerId: null,
+				ownerUntil: new Date("2026-08-14T16:01:30.000Z"),
+				activeStreamId: "stale-response-stream",
+			})
+			.where(eq(conversations.conversationId, exact.conversationId));
+		await expect(
+			acquireAgentCoreDispatchTx(tdb.db, {
+				dispatch,
+				workerId: "agentcore-boot/invocation-2",
+				now: new Date("2026-08-14T16:01:00.000Z"),
+			}),
+		).resolves.toEqual({ disposition: "temporarily_unavailable" });
+
+		await tdb.db
+			.update(conversations)
+			.set({ ownerUntil: new Date("2026-08-14T16:00:59.000Z") })
+			.where(eq(conversations.conversationId, exact.conversationId));
+		await expect(
+			acquireAgentCoreDispatchTx(tdb.db, {
+				dispatch,
+				workerId: "agentcore-boot/invocation-2",
+				now: new Date("2026-08-14T16:01:00.000Z"),
+			}),
+		).resolves.toMatchObject({
+			disposition: "acquired",
+			workerId: "agentcore-boot/invocation-2",
+		});
+		expect(
+			(await tdb.db.select().from(conversations))[0]?.activeStreamId,
+		).toBeNull();
 	});
 
 	it("returns invalid_dispatch for identity or Runtime-session mismatches", async () => {

@@ -14,7 +14,7 @@ import {
 	conversations,
 } from "@mymemo/agent-db/schema";
 import type { UIMessage } from "ai";
-import { and, eq, getTableColumns, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, isNull, sql } from "drizzle-orm";
 import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 export type ChatMessage = UIMessage<unknown, never, never>;
@@ -76,7 +76,10 @@ export class PostgresChatMessageStore {
 				)
 				.for("update");
 			if (!conversation) return { outcome: "not_found" };
-			if (conversation.executionAuthorityActive) {
+			if (
+				conversation.ownerWorkerId !== null ||
+				conversation.executionAuthorityActive
+			) {
 				return { outcome: "conflict" };
 			}
 			if (conversation.archivedAt !== null) {
@@ -111,7 +114,7 @@ export class PostgresChatMessageStore {
 				.update(conversations)
 				.set({
 					epoch: sql`${conversations.epoch} + 1`,
-					ownerWorkerId: "agent-query",
+					ownerWorkerId: null,
 					ownerUntil: conversationExecutionAuthorityDeadline(),
 					activeStreamId: null,
 					title: sql`coalesce(${conversations.title}, ${prompt.text})`,
@@ -232,6 +235,7 @@ export class PostgresChatMessageStore {
 					eq(conversations.userId, ref.userId),
 					eq(conversations.conversationId, ref.conversationId),
 					eq(conversations.epoch, conversationEpoch),
+					isNull(conversations.ownerWorkerId),
 					liveConversationExecutionAuthorityState(),
 				),
 			)

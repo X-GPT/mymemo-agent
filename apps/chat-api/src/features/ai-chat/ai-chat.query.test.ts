@@ -297,7 +297,7 @@ describe("injected Agent-query POST /api/chat", () => {
 				expect(request.conversationEpoch).toBe(8);
 				expect(conversation).toMatchObject({
 					epoch: 8,
-					ownerWorkerId: "agent-query",
+					ownerWorkerId: null,
 					activeStreamId: null,
 				});
 				expect(conversation?.ownerUntil).toBeInstanceOf(Date);
@@ -322,10 +322,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 	});
 
-	it("rejects a live execution-authority deadline before any new-work side effect", async () => {
-		await tdb.db
-			.update(conversations)
-			.set({ ownerUntil: new Date(Date.now() + 60_000) });
+	it("rejects live Response authority and lapsed Ownership before any new-work side effect", async () => {
 		let invocations = 0;
 		const app = buildApp(new PostgresChatMessageStore(tdb.db), {
 			async invoke() {
@@ -334,15 +331,24 @@ describe("injected Agent-query POST /api/chat", () => {
 			},
 		});
 
-		const response = await app.request("/api/chat", {
-			method: "POST",
-			headers: identityHeaders,
-			body: JSON.stringify(input()),
-		});
-		expect(response.status).toBe(409);
-		expect(await response.json()).toEqual({
-			error: "Conversation has active work",
-		});
+		for (const authority of [
+			{ ownerWorkerId: null, ownerUntil: new Date(Date.now() + 60_000) },
+			{
+				ownerWorkerId: "lapsed-owner",
+				ownerUntil: new Date(Date.now() - 1_000),
+			},
+		]) {
+			await tdb.db.update(conversations).set(authority);
+			const response = await app.request("/api/chat", {
+				method: "POST",
+				headers: identityHeaders,
+				body: JSON.stringify(input()),
+			});
+			expect(response.status).toBe(409);
+			expect(await response.json()).toEqual({
+				error: "Conversation has active work",
+			});
+		}
 		expect(invocations).toBe(0);
 		expect(await listPersistedMessages(tdb)).toEqual([]);
 		expect((await tdb.db.select().from(conversations))[0]?.epoch).toBe(7);
