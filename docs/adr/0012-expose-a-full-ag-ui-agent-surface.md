@@ -10,7 +10,7 @@ TTL machinery — is superseded by
 non-transport decision here remains in force.
 
 Issue #560 stages a replacement AI SDK Agent-query path. Issues #562–#564 keep
-its canonical Conversation message store, direct Runtime invocation,
+its canonical Conversation message store, synchronous Runtime invocation,
 Postgres-backed Agent session, and reusable Workspace tools in test and local
 composition only; production composition still uses the Run and Run-event
 authority described below. The production authority changes must explicitly

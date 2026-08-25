@@ -5,26 +5,18 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Database } from "@mymemo/agent-db/client";
 import {
-	appendDirectResponseAgentSessionEntriesTx,
-	type DirectResponseOwner,
-	deleteDirectResponseAgentSessionTx,
-	listDirectResponseAgentSessionSubkeysTx,
-	listDirectResponseAgentSessionsTx,
-	loadDirectResponseAgentSessionEntriesTx,
-} from "@mymemo/agent-db/direct-response";
+	appendAgentQuerySessionEntriesTx,
+	deleteAgentQuerySessionTx,
+	isMainAgentSessionRef,
+	listAgentSessionSubkeysTx,
+	listAgentSessionsTx,
+	loadAgentSessionEntriesTx,
+} from "@mymemo/agent-db/session-store";
 
-export interface DirectResponseSessionStore extends SessionStore {
-	mirroredMainSessionId(): string | null;
-}
-
-function isMainSession(key: Pick<SessionKey, "subpath">): boolean {
-	return (key.subpath ?? "") === "";
-}
-
-export function createDirectResponseSessionStore(
+export function createAgentQuerySessionStore(
 	db: Database,
-	owner: DirectResponseOwner,
-): DirectResponseSessionStore {
+	conversation: { conversationId: string; conversationEpoch: number },
+) {
 	let mirroredMainSessionId: string | null = null;
 	const ref = (key: SessionKey) => ({
 		projectKey: key.projectKey,
@@ -33,41 +25,50 @@ export function createDirectResponseSessionStore(
 	});
 	return {
 		async append(key, entries) {
-			await appendDirectResponseAgentSessionEntriesTx(db, {
-				owner,
+			await appendAgentQuerySessionEntriesTx(db, {
+				...conversation,
 				ref: ref(key),
 				entries,
 			});
-			if (entries.length > 0 && isMainSession(key)) {
+			if (entries.length > 0 && isMainAgentSessionRef(key)) {
 				mirroredMainSessionId = key.sessionId;
 			}
 		},
 		async load(key) {
-			return (await loadDirectResponseAgentSessionEntriesTx(db, {
-				conversationId: owner.conversationId,
+			return (await loadAgentSessionEntriesTx(db, {
+				conversationId: conversation.conversationId,
 				...ref(key),
 			})) as SessionStoreEntry[] | null;
 		},
 		async listSessions() {
-			return await listDirectResponseAgentSessionsTx(db, owner.conversationId);
+			return listAgentSessionsTx(db, {
+				conversationId: conversation.conversationId,
+			});
 		},
 		async listSubkeys(key) {
-			return await listDirectResponseAgentSessionSubkeysTx(db, {
-				conversationId: owner.conversationId,
+			return listAgentSessionSubkeysTx(db, {
+				conversationId: conversation.conversationId,
 				sessionId: key.sessionId,
 			});
 		},
 		async delete(key) {
-			await deleteDirectResponseAgentSessionTx(db, {
-				owner,
+			await deleteAgentQuerySessionTx(db, {
+				conversationId: conversation.conversationId,
 				ref: { sessionId: key.sessionId, subpath: key.subpath },
 			});
-			if (isMainSession(key) && mirroredMainSessionId === key.sessionId) {
+			if (
+				isMainAgentSessionRef(key) &&
+				mirroredMainSessionId === key.sessionId
+			) {
 				mirroredMainSessionId = null;
 			}
 		},
 		mirroredMainSessionId() {
 			return mirroredMainSessionId;
 		},
-	};
+	} satisfies SessionStore & { mirroredMainSessionId(): string | null };
 }
+
+export type AgentQuerySessionStore = ReturnType<
+	typeof createAgentQuerySessionStore
+>;

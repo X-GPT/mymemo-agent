@@ -20,33 +20,10 @@ import { UI_NODE_ROOT_SCHEMA } from "../ui-payload-validator";
 import {
 	buildWorkspaceTools,
 	EXECUTOR_SERVER_NAME,
+	toCallToolResult,
 	WORKSPACE_EXECUTOR_TOOL_NAMES,
 	type WorkspaceToolDeps,
 } from "./workspace-tools";
-
-/**
- * The MCP tool-result shape an SDK tool handler must resolve to, derived from
- * the SDK's own tool-definition type so we never import `@modelcontextprotocol`
- * directly (it is a transitive dependency, not a declared one).
- */
-type CallToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
-
-/** The result shape every executor tool implementation already returns. */
-interface ExecutorToolResult {
-	content: { type: "text"; text: string }[];
-	isError?: true;
-}
-
-/**
- * Adapt an executor tool result to the SDK's `CallToolResult`. A fresh object
- * literal is required so it satisfies `CallToolResult`'s index signature; the
- * executor result types carry none.
- */
-function toCallToolResult(result: ExecutorToolResult): CallToolResult {
-	return result.isError
-		? { content: result.content, isError: true }
-		: { content: result.content };
-}
 
 /** The in-process MCP server name every executor tool is exposed under. */
 export { EXECUTOR_SERVER_NAME } from "./workspace-tools";

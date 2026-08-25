@@ -29,7 +29,8 @@ it("invokes the Conversation-bound Runtime and parses split NDJSON chunks", asyn
 		},
 	);
 	const invoker = createBedrockAgentQueryRuntimeInvoker({
-		agentRuntimeArn: "arn:aws:bedrock-agentcore:us-west-2:123:runtime/direct",
+		agentRuntimeArn:
+			"arn:aws:bedrock-agentcore:us-west-2:123:runtime/agent-query",
 		client: {
 			async send(command) {
 				commandInput = command.input as Record<string, unknown>;
@@ -43,7 +44,8 @@ it("invokes the Conversation-bound Runtime and parses split NDJSON chunks", asyn
 		messages.push(message);
 
 	expect(commandInput).toMatchObject({
-		agentRuntimeArn: "arn:aws:bedrock-agentcore:us-west-2:123:runtime/direct",
+		agentRuntimeArn:
+			"arn:aws:bedrock-agentcore:us-west-2:123:runtime/agent-query",
 		runtimeSessionId: "conversation-1",
 		contentType: "application/json",
 		accept: "application/x-ndjson",
@@ -59,7 +61,7 @@ it("invokes the Conversation-bound Runtime and parses split NDJSON chunks", asyn
 	expect(destroyed).toBe(true);
 });
 
-it("composes direct Agent queries only in the non-production local entrypoint", () => {
+it("composes Agent queries only in the non-production local entrypoint", () => {
 	const production = readFileSync(
 		join(import.meta.dir, "../../index.ts"),
 		"utf8",

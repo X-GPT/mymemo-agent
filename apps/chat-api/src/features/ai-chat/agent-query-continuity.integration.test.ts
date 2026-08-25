@@ -19,8 +19,8 @@ import {
 	AGENTCORE_RUNTIME_SESSION_HEADER,
 	createAgentQueryRequestHandler,
 } from "../../../../agent-query-runtime/src/server";
-import { createDirectResponseSessionStore } from "../../../../agent-query-runtime/src/session-store";
-import { createDirectResponseWorkspacePreparer } from "../../../../agent-query-runtime/src/workspace";
+import { createAgentQuerySessionStore } from "../../../../agent-query-runtime/src/session-store";
+import { createAgentQueryWorkspacePreparer } from "../../../../agent-query-runtime/src/workspace";
 import type {
 	ProvisionedSandbox,
 	ProvisionForRunInput,
@@ -46,6 +46,7 @@ function body(messageId: string, prompt: string) {
 }
 
 function claudeMessages(sessionId: string): SDKMessage[] {
+	const providerMessageId = crypto.randomUUID();
 	const stream = (event: Record<string, unknown>) =>
 		({
 			type: "stream_event",
@@ -57,7 +58,7 @@ function claudeMessages(sessionId: string): SDKMessage[] {
 	return [
 		stream({
 			type: "message_start",
-			message: { id: crypto.randomUUID(), content: [] },
+			message: { id: providerMessageId, content: [] },
 		}),
 		stream({
 			type: "content_block_start",
@@ -69,6 +70,22 @@ function claudeMessages(sessionId: string): SDKMessage[] {
 			index: 0,
 			delta: { type: "text_delta", text: "continued" },
 		}),
+		{
+			type: "assistant",
+			message: {
+				id: providerMessageId,
+				type: "message",
+				role: "assistant",
+				content: [{ type: "text", text: "continued" }],
+				model: "claude-sonnet-5",
+				stop_reason: "end_turn",
+				stop_sequence: null,
+				usage: { input_tokens: 1, output_tokens: 1 },
+			},
+			parent_tool_use_id: null,
+			uuid: crypto.randomUUID(),
+			session_id: sessionId,
+		} as unknown as SDKMessage,
 		stream({ type: "content_block_stop", index: 0 }),
 		stream({ type: "message_stop" }),
 		{
@@ -90,7 +107,7 @@ function claudeMessages(sessionId: string): SDKMessage[] {
 	];
 }
 
-describe("non-production direct-response composition", () => {
+describe("non-production Agent-query continuity", () => {
 	let tdb: TestDb;
 
 	beforeAll(async () => {
@@ -109,8 +126,9 @@ describe("non-production direct-response composition", () => {
 			epoch: 7,
 		});
 		const provisions: ProvisionForRunInput[] = [];
-		const prepareWorkspace = createDirectResponseWorkspacePreparer({
+		const prepareWorkspace = createAgentQueryWorkspacePreparer({
 			db: tdb.db,
+			sandboxIdleMs: 300_000,
 			logger: { info() {}, warn() {} },
 			provisioner: {
 				async provisionForRun(input) {
@@ -132,7 +150,7 @@ describe("non-production direct-response composition", () => {
 		let queryCount = 0;
 		const runtimeHandler = createAgentQueryRequestHandler({
 			createSessionStore: (owner) =>
-				createDirectResponseSessionStore(tdb.db, owner),
+				createAgentQuerySessionStore(tdb.db, owner),
 			async prepareWorkingDirectory() {},
 			prepareWorkspace,
 			async verifyResponseAuthority() {},

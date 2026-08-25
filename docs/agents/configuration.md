@@ -46,6 +46,13 @@ it with a latest-image lookup.
 
 Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one execution.
 
+## Agent-query Runtime
+
+The non-production synchronous Runtime requires `AGENT_DATABASE_URL`,
+`E2B_API_KEY`, and `WORKER_E2B_TEMPLATE`. `PORT` defaults to `8080` and
+`LOG_LEVEL` to `info`. Local chat-api mounts this path only when
+`AGENT_QUERY_RUNTIME_ARN` is set.
+
 ## Chat API
 
 Required:

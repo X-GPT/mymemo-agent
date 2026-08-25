@@ -8,7 +8,6 @@
 		"./artifact-store": "./src/artifact-store.ts",
 		"./client": "./src/client.ts",
 		"./database-url": "./src/database-url.ts",
-		"./direct-response": "./src/direct-response.ts",
 		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",

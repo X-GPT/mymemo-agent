@@ -6,15 +6,27 @@ import {
 	expect,
 	it,
 } from "bun:test";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { conversationRuntime, conversations } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
 import type {
 	ProvisionedSandbox,
 	ProvisionForRunInput,
 } from "../../agentcore-runtime/src/e2b/sandbox-provisioner";
-import { createDirectResponseWorkspacePreparer } from "./workspace";
+import {
+	DEFAULT_FILE_TOOL_LIMITS,
+	runReadFileTool,
+	runWriteFileTool,
+	type SandboxFileClient,
+} from "../../agentcore-runtime/src/file-tools/file-tools";
+import {
+	AGENTCORE_RUNTIME_SESSION_HEADER,
+	createAgentQueryRequestHandler,
+} from "./server";
+import { createAgentQuerySessionStore } from "./session-store";
+import { createAgentQueryWorkspacePreparer } from "./workspace";
 
-describe("direct-response Workspace continuity", () => {
+describe("Agent-query Workspace continuity", () => {
 	let tdb: TestDb;
 
 	beforeAll(async () => {
@@ -36,42 +48,102 @@ describe("direct-response Workspace continuity", () => {
 		});
 	});
 
-	it("reuses the persisted E2B Workspace across sequential responses", async () => {
+	it("renews work and preserves a tool-written partial file after response failure", async () => {
 		const provisions: ProvisionForRunInput[] = [];
-		const workspaceFiles = new Map<string, string>();
+		const filesBySandbox = new Map<string, Map<string, string>>();
+		let activeFileClient: SandboxFileClient | undefined;
+		let renewals = 0;
 		const provisioner = {
 			async provisionForRun(input: ProvisionForRunInput) {
 				provisions.push(input);
 				const sandboxId = input.sandboxId ?? "sandbox-1";
+				const files =
+					filesBySandbox.get(sandboxId) ?? new Map<string, string>();
+				filesBySandbox.set(sandboxId, files);
+				activeFileClient = {
+					async readFile({ path }) {
+						const content = files.get(path);
+						if (content === undefined) throw new Error("file not found");
+						return content;
+					},
+					async writeFile({ path, content }) {
+						files.set(path, content);
+					},
+					async runCommand() {
+						return { exitCode: 0, stdout: "", stderr: "", truncated: false };
+					},
+				};
 				return {
 					sandboxId,
 					isNew: input.sandboxId === null,
 					workspaceRoot: "/home/user",
-					fileClient: {},
+					fileClient: activeFileClient,
 					commandClient: {},
 					artifactWorkspace: {},
-					async renew() {},
+					async renew() {
+						renewals++;
+					},
 					dispose() {},
 				} as ProvisionedSandbox;
 			},
 		};
-		const prepareWorkspace = createDirectResponseWorkspacePreparer({
+		const prepareWorkspace = createAgentQueryWorkspacePreparer({
 			db: tdb.db,
 			provisioner,
+			sandboxIdleMs: 2,
 			logger: { info() {}, warn() {} },
 		});
+		const response = await createAgentQueryRequestHandler({
+			async *query() {
+				yield { type: "system", subtype: "init" } as SDKMessage;
+				await Bun.sleep(10);
+				if (!activeFileClient) throw new Error("Workspace file client missing");
+				await runWriteFileTool(
+					{ path: "draft.md", content: "partial work" },
+					{
+						client: activeFileClient,
+						workspaceRoot: "/home/user",
+						limits: DEFAULT_FILE_TOOL_LIMITS,
+					},
+				);
+				throw new Error("response failed");
+			},
+			createSessionStore: (conversation) =>
+				createAgentQuerySessionStore(tdb.db, conversation),
+			async prepareWorkingDirectory() {},
+			prepareWorkspace,
+			async verifyResponseAuthority() {},
+		})(
+			new Request("http://runtime/invocations", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					[AGENTCORE_RUNTIME_SESSION_HEADER]: "conversation-1",
+				},
+				body: JSON.stringify({
+					version: 1,
+					conversationId: "conversation-1",
+					conversationEpoch: 7,
+					prompt: "write a draft",
+					model: "anthropic/claude-sonnet-5",
+				}),
+			}),
+		);
+		await expect(response.text()).rejects.toThrow("response failed");
 
-		const first = await prepareWorkspace({
-			conversationId: "conversation-1",
-			conversationEpoch: 7,
-		});
-		workspaceFiles.set("draft.md", "partial work");
-		await first.stop();
-		first.dispose();
 		const second = await prepareWorkspace({
 			conversationId: "conversation-1",
 			conversationEpoch: 7,
 		});
+		if (!activeFileClient) throw new Error("Workspace file client missing");
+		const read = await runReadFileTool(
+			{ path: "draft.md" },
+			{
+				client: activeFileClient,
+				workspaceRoot: "/home/user",
+				limits: DEFAULT_FILE_TOOL_LIMITS,
+			},
+		);
 
 		expect(provisions).toEqual([
 			{
@@ -87,13 +159,16 @@ describe("direct-response Workspace continuity", () => {
 				sandboxTainted: false,
 			},
 		]);
-		expect(workspaceFiles.get("draft.md")).toBe("partial work");
+		expect(read.content[0]?.text).toContain("partial work");
+		expect(renewals).toBeGreaterThan(0);
 		expect(
 			(await tdb.db.select().from(conversationRuntime))[0]?.sandboxId,
 		).toBe("sandbox-1");
 		expect(second.queryOptions.allowedTools).toContain(
 			"mcp__mymemo-executor__Write",
 		);
+		await second.stop();
+		expect(second.signal.aborted).toBe(true);
 		second.dispose();
 	});
 });

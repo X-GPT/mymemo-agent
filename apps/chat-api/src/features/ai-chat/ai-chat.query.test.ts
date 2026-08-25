@@ -76,6 +76,77 @@ function streamEvent(event: Record<string, unknown>): SDKMessage {
 	} as unknown as SDKMessage;
 }
 
+function textMessages(completeText: string, ...deltas: string[]): SDKMessage[] {
+	const providerMessageId = crypto.randomUUID();
+	return [
+		streamEvent({
+			type: "message_start",
+			message: { id: providerMessageId, content: [] },
+		}),
+		streamEvent({
+			type: "content_block_start",
+			index: 0,
+			content_block: { type: "text", text: "" },
+		}),
+		...deltas.map((text) =>
+			streamEvent({
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "text_delta", text },
+			}),
+		),
+		assistantMessage([{ type: "text", text: completeText }], providerMessageId),
+		streamEvent({ type: "content_block_stop", index: 0 }),
+		streamEvent({ type: "message_stop" }),
+	];
+}
+
+function assistantMessage(
+	content: unknown[],
+	providerMessageId: string = crypto.randomUUID(),
+): SDKMessage {
+	return {
+		type: "assistant",
+		message: {
+			id: providerMessageId,
+			type: "message",
+			role: "assistant",
+			content,
+			model: "claude-sonnet-5",
+			stop_reason: "end_turn",
+			stop_sequence: null,
+			usage: { input_tokens: 1, output_tokens: 1 },
+		},
+		parent_tool_use_id: null,
+		uuid: crypto.randomUUID(),
+		session_id: "agent-session-1",
+	} as unknown as SDKMessage;
+}
+
+function toolResultMessage(
+	toolUseId: string,
+	content: unknown,
+	isError = false,
+): SDKMessage {
+	return {
+		type: "user",
+		message: {
+			role: "user",
+			content: [
+				{
+					type: "tool_result",
+					tool_use_id: toolUseId,
+					content,
+					...(isError ? { is_error: true } : {}),
+				},
+			],
+		},
+		parent_tool_use_id: null,
+		uuid: crypto.randomUUID(),
+		session_id: "agent-session-1",
+	} as unknown as SDKMessage;
+}
+
 function resultEvent(overrides: Record<string, unknown> = {}): SDKMessage {
 	return {
 		type: "result",
@@ -89,27 +160,7 @@ function resultEvent(overrides: Record<string, unknown> = {}): SDKMessage {
 
 function successfulClaudeEvents(): SDKMessage[] {
 	return [
-		streamEvent({
-			type: "message_start",
-			message: { id: "provider-message-1", content: [] },
-		}),
-		streamEvent({
-			type: "content_block_start",
-			index: 0,
-			content_block: { type: "text", text: "" },
-		}),
-		streamEvent({
-			type: "content_block_delta",
-			index: 0,
-			delta: { type: "text_delta", text: "A direct " },
-		}),
-		streamEvent({
-			type: "content_block_delta",
-			index: 0,
-			delta: { type: "text_delta", text: "answer." },
-		}),
-		streamEvent({ type: "content_block_stop", index: 0 }),
-		streamEvent({ type: "message_stop" }),
+		...textMessages("A direct answer.", "A direct ", "answer."),
 		resultEvent(),
 	];
 }
@@ -161,7 +212,7 @@ describe("injected Agent-query POST /api/chat", () => {
 		});
 	});
 
-	it("persists the User before direct invocation and the complete Assistant through onEnd", async () => {
+	it("persists the User before Runtime invocation and the complete Assistant through onEnd", async () => {
 		const store = new PostgresChatMessageStore(tdb.db);
 		const requests: AgentQueryRequest[] = [];
 		const runtimeInvoker = {
@@ -193,18 +244,18 @@ describe("injected Agent-query POST /api/chat", () => {
 		]);
 		expect(parseAiSdkSse(await response.text())).toEqual([
 			{ type: "start", messageId: "assistant-message-1" },
-			{ type: "text-start", id: "assistant-message-1-text" },
+			{ type: "text-start", id: "assistant-message-1-text-0" },
 			{
 				type: "text-delta",
-				id: "assistant-message-1-text",
+				id: "assistant-message-1-text-0",
 				delta: "A direct ",
 			},
 			{
 				type: "text-delta",
-				id: "assistant-message-1-text",
+				id: "assistant-message-1-text-0",
 				delta: "answer.",
 			},
-			{ type: "text-end", id: "assistant-message-1-text" },
+			{ type: "text-end", id: "assistant-message-1-text-0" },
 			{ type: "finish", finishReason: "stop" },
 			"[DONE]",
 		]);
@@ -225,6 +276,125 @@ describe("injected Agent-query POST /api/chat", () => {
 		expect(conversation?.lastActivityAt.getTime()).toBeGreaterThan(
 			new Date("2026-01-01T00:00:00.000Z").getTime(),
 		);
+	});
+
+	it("streams and persists completed Tool invocations and results in the Assistant UIMessage", async () => {
+		const store = new PostgresChatMessageStore(tdb.db);
+		const app = buildApp(store, {
+			async invoke() {
+				return [
+					...textMessages("I will write the file.", "I will write the file."),
+					streamEvent({
+						type: "message_start",
+						message: { id: "provider-tool-message", content: [] },
+					}),
+					streamEvent({
+						type: "content_block_start",
+						index: 0,
+						content_block: {
+							type: "tool_use",
+							id: "tool-use-1",
+							name: "mcp__mymemo-executor__Write",
+							input: {},
+						},
+					}),
+					streamEvent({
+						type: "content_block_delta",
+						index: 0,
+						delta: {
+							type: "input_json_delta",
+							partial_json: '{"path":"notes.md","content":"hello"}',
+						},
+					}),
+					assistantMessage(
+						[
+							{
+								type: "tool_use",
+								id: "tool-use-1",
+								name: "mcp__mymemo-executor__Write",
+								input: { path: "notes.md", content: "hello" },
+							},
+						],
+						"provider-tool-message",
+					),
+					streamEvent({ type: "content_block_stop", index: 0 }),
+					streamEvent({ type: "message_stop" }),
+					toolResultMessage("tool-use-1", [
+						{ type: "text", text: '{"bytesWritten":5}' },
+					]),
+					...textMessages("Done.", "Done."),
+					resultEvent(),
+				];
+			},
+		});
+
+		const response = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(input()),
+		});
+		const responseText = await response.text();
+
+		expect(responseText).toContain('"type":"tool-input-available"');
+		expect(responseText).toContain('"type":"tool-output-available"');
+		expect(await listPersistedMessages(tdb)).toEqual([
+			expectedUserMessage,
+			{
+				id: "assistant-message-1",
+				role: "assistant",
+				parts: [
+					{ type: "text", text: "I will write the file.", state: "done" },
+					{
+						type: "dynamic-tool",
+						toolName: "mcp__mymemo-executor__Write",
+						toolCallId: "tool-use-1",
+						state: "output-available",
+						input: { path: "notes.md", content: "hello" },
+						output: [{ type: "text", text: '{"bytesWritten":5}' }],
+					},
+					{ type: "text", text: "Done.", state: "done" },
+				],
+			},
+		]);
+	});
+
+	it("redacts an errored Tool result in the Assistant UIMessage", async () => {
+		const app = buildApp(new PostgresChatMessageStore(tdb.db), {
+			async invoke() {
+				return [
+					assistantMessage([
+						{
+							type: "tool_use",
+							id: "tool-use-1",
+							name: "mcp__mymemo-executor__Write",
+							input: { path: "notes.md", content: "hello" },
+						},
+					]),
+					toolResultMessage("tool-use-1", "private failure", true),
+					resultEvent(),
+				];
+			},
+		});
+
+		const response = await app.request("/api/chat", {
+			method: "POST",
+			headers: identityHeaders,
+			body: JSON.stringify(input()),
+		});
+		const responseText = await response.text();
+
+		expect(responseText).toContain('"type":"tool-output-error"');
+		expect(responseText).not.toContain("private failure");
+		expect((await listPersistedMessages(tdb))[1]?.parts).toEqual([
+			{
+				type: "dynamic-tool",
+				toolName: "mcp__mymemo-executor__Write",
+				toolCallId: "tool-use-1",
+				state: "output-error",
+				input: { path: "notes.md", content: "hello" },
+				errorText: "Tool failed",
+			},
+		]);
 	});
 
 	it("continues the stored opaque Agent session across sequential responses", async () => {
@@ -320,9 +490,9 @@ describe("injected Agent-query POST /api/chat", () => {
 					async *[Symbol.asyncIterator]() {
 						const events = successfulClaudeEvents();
 						try {
-							for (const event of events.slice(0, 3)) yield event;
+							for (const event of events.slice(0, 4)) yield event;
 							await runtimeGate.promise;
-							for (const event of events.slice(3)) yield event;
+							for (const event of events.slice(4)) yield event;
 						} finally {
 							runtimeFinished.resolve();
 						}

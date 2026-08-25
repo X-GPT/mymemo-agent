@@ -1,7 +1,7 @@
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 import { z } from "zod";
-import type { DirectResponseSessionStore } from "./session-store";
+import type { AgentQuerySessionStore } from "./session-store";
 
 export const AGENTCORE_RUNTIME_SESSION_HEADER =
 	"x-amzn-bedrock-agentcore-runtime-session-id";
@@ -57,11 +57,6 @@ const resultMessage = z.discriminatedUnion("subtype", [
 	}),
 ]);
 
-export type ResponseAuthorityVerifier = (authority: {
-	conversationId: string;
-	conversationEpoch: number;
-}) => Promise<void>;
-
 export type AgentQueryRuntimeDependencies = {
 	query(input: {
 		prompt: string;
@@ -70,16 +65,20 @@ export type AgentQueryRuntimeDependencies = {
 	createSessionStore(input: {
 		conversationId: string;
 		conversationEpoch: number;
-	}): DirectResponseSessionStore;
+	}): AgentQuerySessionStore;
 	prepareWorkingDirectory(path: string): Promise<void>;
 	prepareWorkspace(input: {
 		conversationId: string;
 		conversationEpoch: number;
 	}): Promise<AgentQueryWorkspace>;
-	verifyResponseAuthority: ResponseAuthorityVerifier;
+	verifyResponseAuthority(authority: {
+		conversationId: string;
+		conversationEpoch: number;
+	}): Promise<void>;
 };
 
 export type AgentQueryWorkspace = {
+	signal: AbortSignal;
 	queryOptions: Pick<Options, "allowedTools" | "mcpServers">;
 	stop(): Promise<void>;
 	dispose(): void;
@@ -135,19 +134,35 @@ async function parseRequest(request: Request): Promise<AgentQueryRequest> {
 
 function createNdjsonStream(
 	messages: AsyncIterable<SDKMessage> & { interrupt?(): Promise<unknown> },
-	sessionStore: DirectResponseSessionStore,
+	sessionStore: AgentQuerySessionStore,
 	workspace: AgentQueryWorkspace,
 ) {
 	const encoder = new TextEncoder();
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
-			let pendingMessageStart: SDKMessage | undefined;
-			let forwardText = false;
+			let interruption: Promise<unknown> | undefined;
+			const interrupt = () => {
+				interruption ??= messages.interrupt?.().catch(() => {});
+				return interruption ?? Promise.resolve();
+			};
+			workspace.signal.addEventListener("abort", interrupt, { once: true });
+			if (workspace.signal.aborted) void interrupt();
 			const write = (message: SDKMessage) => {
 				controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
 			};
 			try {
 				for await (const message of messages) {
+					if (workspace.signal.aborted) {
+						throw workspace.signal.reason instanceof Error
+							? workspace.signal.reason
+							: new Error("Workspace failed");
+					}
+					if (message.type === "system") {
+						if (message.subtype === "mirror_error") {
+							throw new Error("Claude session mirror failed");
+						}
+						continue;
+					}
 					if (message.type === "result") {
 						const result = resultMessage.safeParse(message);
 						if (!result.success) {
@@ -160,64 +175,44 @@ function createNdjsonStream(
 						}
 						write(message);
 						controller.close();
+						workspace.signal.removeEventListener("abort", interrupt);
 						workspace.dispose();
 						return;
 					}
-					if (message.type !== "stream_event") {
-						continue;
-					}
-
-					switch (message.event.type) {
-						case "message_start":
-							pendingMessageStart = message;
-							forwardText = false;
-							break;
-						case "content_block_start":
-							forwardText = Boolean(
-								pendingMessageStart &&
-									message.event.index === 0 &&
-									message.event.content_block.type === "text",
-							);
-							if (forwardText && pendingMessageStart) {
-								write(pendingMessageStart);
-								write(message);
-							}
-							pendingMessageStart = undefined;
-							break;
-						case "content_block_delta":
-							if (
-								!forwardText ||
-								message.event.index !== 0 ||
-								message.event.delta.type !== "text_delta"
-							) {
-								break;
-							}
-							write(message);
-							break;
-						case "content_block_stop":
-							if (forwardText && message.event.index === 0) {
-								write(message);
-							}
-							break;
-						case "message_stop":
-							if (forwardText) {
-								write(message);
-							}
-							forwardText = false;
-							break;
+					if (
+						message.type === "stream_event" ||
+						message.type === "assistant" ||
+						isCurrentToolResultMessage(message)
+					) {
+						write(message);
 					}
 				}
 				throw new Error("Claude stream ended before its terminal result");
 			} catch (error) {
-				await Promise.allSettled([
-					workspace.stop(),
-					messages.interrupt?.() ?? Promise.resolve(),
-				]);
+				workspace.signal.removeEventListener("abort", interrupt);
+				await Promise.allSettled([workspace.stop(), interrupt()]);
 				workspace.dispose();
 				controller.error(error);
 			}
 		},
 	});
+}
+
+function isCurrentToolResultMessage(message: SDKMessage): boolean {
+	if (
+		message.type !== "user" ||
+		("isReplay" in message && message.isReplay === true) ||
+		!Array.isArray(message.message.content) ||
+		message.message.content.length === 0
+	) {
+		return false;
+	}
+	return message.message.content.every(
+		(block) =>
+			typeof block === "object" &&
+			block !== null &&
+			block.type === "tool_result",
+	);
 }
 
 function jsonError(message: string, status: number): Response {

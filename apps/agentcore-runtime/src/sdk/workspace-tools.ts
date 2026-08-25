@@ -23,12 +23,10 @@ import type { RunBinding } from "../sandbox-env";
 
 type CallToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
 
-interface ExecutorToolResult {
+export function toCallToolResult(result: {
 	content: { type: "text"; text: string }[];
 	isError?: true;
-}
-
-function toCallToolResult(result: ExecutorToolResult): CallToolResult {
+}): CallToolResult {
 	return result.isError
 		? { content: result.content, isError: true }
 		: { content: result.content };
@@ -42,10 +40,9 @@ export const WORKSPACE_EXECUTOR_TOOL_NAMES = [
 	"Grep",
 	"Bash",
 ] as const;
-export const WORKSPACE_ALLOWED_TOOLS: readonly string[] =
-	WORKSPACE_EXECUTOR_TOOL_NAMES.map(
-		(name) => `mcp__${EXECUTOR_SERVER_NAME}__${name}`,
-	);
+export const WORKSPACE_ALLOWED_TOOLS = WORKSPACE_EXECUTOR_TOOL_NAMES.map(
+	(name) => `mcp__${EXECUTOR_SERVER_NAME}__${name}`,
+);
 
 export interface WorkspaceToolDeps {
 	binding: RunBinding;
@@ -68,7 +65,7 @@ export function buildWorkspaceTools(deps: WorkspaceToolDeps) {
 	return [
 		tool(
 			"Read",
-			"Read a UTF-8 text file from the run workspace, with optional line offset/limit.",
+			"Read a UTF-8 text file from the Workspace, with optional line offset/limit.",
 			{
 				path: z.string(),
 				offset: z.number().optional(),
@@ -79,21 +76,21 @@ export function buildWorkspaceTools(deps: WorkspaceToolDeps) {
 		),
 		tool(
 			"Write",
-			"Create or overwrite a file in the run workspace with the given content.",
+			"Create or overwrite a file in the Workspace with the given content.",
 			{ path: z.string(), content: z.string() },
 			async (input) =>
 				toCallToolResult(await runWriteFileTool(input, fileContext)),
 		),
 		tool(
 			"Edit",
-			"Replace every occurrence of oldText with newText in a workspace file.",
+			"Replace every occurrence of oldText with newText in a Workspace file.",
 			{ path: z.string(), oldText: z.string(), newText: z.string() },
 			async (input) =>
 				toCallToolResult(await runEditFileTool(input, fileContext)),
 		),
 		tool(
 			"Grep",
-			"Search file contents in the run workspace for a pattern.",
+			"Search file contents in the Workspace for a pattern.",
 			{
 				pattern: z.string(),
 				path: z.string().optional(),
@@ -106,7 +103,7 @@ export function buildWorkspaceTools(deps: WorkspaceToolDeps) {
 		),
 		tool(
 			"Bash",
-			"Run a foreground shell command in the run workspace and return its output.",
+			"Run a foreground shell command in the Workspace and return its output.",
 			{
 				command: z.string(),
 				cwd: z.string().optional(),

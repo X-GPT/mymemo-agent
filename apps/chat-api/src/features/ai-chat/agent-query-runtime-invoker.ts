@@ -2,10 +2,6 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { InvokeAgentRuntimeCommand } from "@aws-sdk/client-bedrock-agentcore";
 import type { AgentQueryRequest } from "@mymemo/agent-query";
 
-interface AgentCoreCommandClient {
-	send(command: InvokeAgentRuntimeCommand): Promise<{ response?: unknown }>;
-}
-
 function asByteStream(value: unknown): AsyncIterable<Uint8Array> {
 	if (
 		typeof value !== "object" ||
@@ -47,7 +43,9 @@ async function* parseNdjson(response: unknown): AsyncIterable<SDKMessage> {
 }
 
 export function createBedrockAgentQueryRuntimeInvoker(options: {
-	client: AgentCoreCommandClient;
+	client: {
+		send(command: InvokeAgentRuntimeCommand): Promise<{ response?: unknown }>;
+	};
 	agentRuntimeArn: string;
 }) {
 	return {

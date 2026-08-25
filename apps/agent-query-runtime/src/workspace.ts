@@ -1,16 +1,13 @@
 import type { Database } from "@mymemo/agent-db/client";
 import {
-	type DirectResponseOwner,
-	loadDirectResponseWorkspaceTx,
-	markDirectResponseWorkspaceTaintedTx,
-	publishDirectResponseWorkspaceTx,
-} from "@mymemo/agent-db/direct-response";
-import {
-	type BashToolLimits,
-	DEFAULT_BASH_TOOL_LIMITS,
-} from "../../agentcore-runtime/src/bash-tool/bash-tool";
+	loadAgentQueryWorkspaceTx,
+	markAgentQueryWorkspaceTaintedTx,
+	publishAgentQueryWorkspaceTx,
+} from "@mymemo/agent-db/runtime-store";
+import { DEFAULT_BASH_TOOL_LIMITS } from "../../agentcore-runtime/src/bash-tool/bash-tool";
 import type { SandboxProvisioner } from "../../agentcore-runtime/src/e2b/sandbox-provisioner";
-import type { FileToolLimits } from "../../agentcore-runtime/src/file-tools/file-tools";
+import { DEFAULT_FILE_TOOL_LIMITS } from "../../agentcore-runtime/src/file-tools/file-tools";
+import { startSandboxRenewal } from "../../agentcore-runtime/src/sdk/sandbox-renewal";
 import {
 	createWorkspaceMcpServer,
 	EXECUTOR_SERVER_NAME,
@@ -18,70 +15,84 @@ import {
 } from "../../agentcore-runtime/src/sdk/workspace-tools";
 import type { AgentQueryWorkspace } from "./server";
 
-export const DIRECT_RESPONSE_FILE_LIMITS: FileToolLimits = {
-	readMaxBytes: 65_536,
-	readMaxLines: 2_000,
-	grepMaxResults: 100,
-	commandMaxOutputBytes: 65_536,
-	commandTimeoutMs: 30_000,
-};
-
-type Logger = {
-	info(value: Record<string, unknown>): void;
-	warn(value: Record<string, unknown>): void;
-};
-
-export function createDirectResponseWorkspacePreparer(deps: {
+export function createAgentQueryWorkspacePreparer(deps: {
 	db: Database;
 	provisioner: SandboxProvisioner;
-	logger: Logger;
-	fileLimits?: FileToolLimits;
-	bashLimits?: BashToolLimits;
+	sandboxIdleMs: number;
+	logger: {
+		info(value: Record<string, unknown>): void;
+		warn(value: Record<string, unknown>): void;
+	};
 }) {
-	return async (owner: DirectResponseOwner): Promise<AgentQueryWorkspace> => {
-		const current = await loadDirectResponseWorkspaceTx(deps.db, owner);
+	return async (conversation: {
+		conversationId: string;
+		conversationEpoch: number;
+	}): Promise<AgentQueryWorkspace> => {
+		const workspaceState = await loadAgentQueryWorkspaceTx(
+			deps.db,
+			conversation.conversationId,
+		);
 		const workspace = await deps.provisioner.provisionForRun({
-			userId: current.userId,
-			conversationId: owner.conversationId,
-			sandboxId: current.sandboxId,
-			sandboxTainted: current.sandboxTainted,
+			userId: workspaceState.userId,
+			conversationId: conversation.conversationId,
+			sandboxId: workspaceState.sandboxId,
+			sandboxTainted: workspaceState.sandboxTainted,
 		});
 		if (workspace.isNew) {
-			await publishDirectResponseWorkspaceTx(deps.db, {
-				...owner,
-				userId: current.userId,
-				sandboxId: workspace.sandboxId,
-			});
+			try {
+				await publishAgentQueryWorkspaceTx(deps.db, {
+					userId: workspaceState.userId,
+					conversationId: conversation.conversationId,
+					sandboxId: workspace.sandboxId,
+				});
+			} catch (error) {
+				workspace.dispose();
+				throw error;
+			}
 		}
 
 		const controller = new AbortController();
-		const binding = {
-			userId: current.userId,
-			conversationId: owner.conversationId,
-			runId: `direct-response-${owner.conversationEpoch}`,
+		const renewal = startSandboxRenewal({
+			renew: () => workspace.renew(),
+			intervalMs: Math.max(1, Math.floor(deps.sandboxIdleMs / 2)),
+			onFailure(error) {
+				deps.logger.warn({
+					message: "Agent-query Workspace renewal failed",
+					conversationId: conversation.conversationId,
+					sandboxId: workspace.sandboxId,
+				});
+				controller.abort(error);
+			},
+		});
+		// The reused Bash audit shape calls this field runId; no durable Run exists.
+		const auditBinding = {
+			userId: workspaceState.userId,
+			conversationId: conversation.conversationId,
+			runId: `agent-query-${conversation.conversationEpoch}`,
 			sandboxId: workspace.sandboxId,
 		};
 		return {
+			signal: controller.signal,
 			queryOptions: {
 				allowedTools: [...WORKSPACE_ALLOWED_TOOLS],
 				mcpServers: {
 					[EXECUTOR_SERVER_NAME]: createWorkspaceMcpServer({
-						binding,
+						binding: auditBinding,
 						workspaceRoot: workspace.workspaceRoot,
 						signal: controller.signal,
 						fileClient: workspace.fileClient,
 						commandClient: workspace.commandClient,
-						fileLimits: deps.fileLimits ?? DIRECT_RESPONSE_FILE_LIMITS,
-						bashLimits: deps.bashLimits ?? DEFAULT_BASH_TOOL_LIMITS,
+						fileLimits: DEFAULT_FILE_TOOL_LIMITS,
+						bashLimits: DEFAULT_BASH_TOOL_LIMITS,
 						async markSandboxTainted(reason) {
 							deps.logger.warn({
-								message: "marking direct-response Workspace tainted",
-								...binding,
+								message: "marking Agent-query Workspace tainted",
+								...auditBinding,
 								reason,
 							});
-							await markDirectResponseWorkspaceTaintedTx(deps.db, {
-								...owner,
-								userId: current.userId,
+							await markAgentQueryWorkspaceTaintedTx(deps.db, {
+								userId: workspaceState.userId,
+								conversationId: conversation.conversationId,
 							});
 						},
 						async recordCommandAudit(event) {
@@ -92,8 +103,10 @@ export function createDirectResponseWorkspacePreparer(deps: {
 			},
 			async stop() {
 				controller.abort();
+				renewal.stop();
 			},
 			dispose() {
+				renewal.stop();
 				workspace.dispose();
 			},
 		};

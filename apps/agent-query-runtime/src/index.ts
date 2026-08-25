@@ -4,8 +4,8 @@ import { createDatabase } from "@mymemo/agent-db/client";
 import pino from "pino";
 import { createE2bSandboxProvisioner } from "../../agentcore-runtime/src/e2b/sandbox-provisioner";
 import { createAgentQueryServerOptions } from "./server";
-import { createDirectResponseSessionStore } from "./session-store";
-import { createDirectResponseWorkspacePreparer } from "./workspace";
+import { createAgentQuerySessionStore } from "./session-store";
+import { createAgentQueryWorkspacePreparer } from "./workspace";
 
 const SANDBOX_IDLE_MS = 300_000;
 
@@ -21,9 +21,10 @@ if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
 }
 const logger = pino({ level: Bun.env.LOG_LEVEL ?? "info" });
 const db = createDatabase(requireEnv("AGENT_DATABASE_URL"));
-const prepareWorkspace = createDirectResponseWorkspacePreparer({
+const prepareWorkspace = createAgentQueryWorkspacePreparer({
 	db,
 	logger,
+	sandboxIdleMs: SANDBOX_IDLE_MS,
 	provisioner: createE2bSandboxProvisioner({
 		apiKey: requireEnv("E2B_API_KEY"),
 		template: requireEnv("WORKER_E2B_TEMPLATE"),
@@ -36,8 +37,7 @@ Bun.serve(
 	createAgentQueryServerOptions(
 		{
 			query,
-			createSessionStore: (owner) =>
-				createDirectResponseSessionStore(db, owner),
+			createSessionStore: (owner) => createAgentQuerySessionStore(db, owner),
 			async prepareWorkingDirectory(path) {
 				await mkdir(path, { recursive: true });
 			},

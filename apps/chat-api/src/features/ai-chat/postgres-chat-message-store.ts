@@ -75,7 +75,7 @@ export class PostgresChatMessageStore {
 			});
 			const prompt = message.parts[0];
 			if (!prompt || prompt.type !== "text") {
-				throw new Error("direct User message must contain one text part");
+				throw new Error("Agent-query User message must contain one text part");
 			}
 			await tx
 				.update(conversations)
