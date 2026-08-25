@@ -14,7 +14,6 @@ import {
 	EXECUTOR_SERVER_NAME,
 	WORKSPACE_FILE_TOOL_NAMES,
 } from "../../agentcore-runtime/src/sdk/workspace-tools";
-import type { AgentQueryWorkspace } from "./server";
 
 const ORPHAN_RUN_ID = "agent-query";
 const WORKER_ID = "agent-query-runtime";
@@ -30,7 +29,7 @@ export function createAgentQueryWorkspacePreparer(deps: {
 	return async (conversation: {
 		conversationId: string;
 		conversationEpoch: number;
-	}): Promise<AgentQueryWorkspace> => {
+	}) => {
 		const workspaceState = await loadAgentQueryWorkspaceTx(
 			deps.db,
 			conversation.conversationId,

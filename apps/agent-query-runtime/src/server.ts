@@ -70,18 +70,16 @@ export type AgentQueryRuntimeDependencies = {
 	prepareWorkspace(input: {
 		conversationId: string;
 		conversationEpoch: number;
-	}): Promise<AgentQueryWorkspace>;
+	}): Promise<{
+		signal: AbortSignal;
+		queryOptions: Pick<Options, "allowedTools" | "mcpServers">;
+		stop(): Promise<void>;
+		dispose(): void;
+	}>;
 	verifyResponseAuthority(authority: {
 		conversationId: string;
 		conversationEpoch: number;
 	}): Promise<void>;
-};
-
-export type AgentQueryWorkspace = {
-	signal: AbortSignal;
-	queryOptions: Pick<Options, "allowedTools" | "mcpServers">;
-	stop(): Promise<void>;
-	dispose(): void;
 };
 
 class InvalidInvocationError extends Error {
@@ -135,7 +133,9 @@ async function parseRequest(request: Request): Promise<AgentQueryRequest> {
 function createNdjsonStream(
 	messages: AsyncIterable<SDKMessage> & { interrupt(): Promise<unknown> },
 	sessionStore: AgentQuerySessionStore,
-	workspace: AgentQueryWorkspace,
+	workspace: Awaited<
+		ReturnType<AgentQueryRuntimeDependencies["prepareWorkspace"]>
+	>,
 ) {
 	const encoder = new TextEncoder();
 	return new ReadableStream<Uint8Array>({
