@@ -163,6 +163,7 @@ function verifyQueryRuntimeConfiguration(imageDigest: string) {
 		"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-prod-query-runtime";
 	const environmentVariables = {
 		AWS_REGION: "us-west-2",
+		ARTIFACT_BUCKET: "mymemo-agent-prod-artifacts",
 		OPENROUTER_API_KEY_SECRET_ARN: "arn:openrouter",
 		OPENROUTER_BASE_URL: "https://openrouter.ai/api",
 		PORT: "8080",

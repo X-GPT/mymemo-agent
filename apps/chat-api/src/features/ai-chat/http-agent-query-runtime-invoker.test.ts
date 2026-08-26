@@ -9,6 +9,7 @@ type AgentQueryRequest = Parameters<AgentQueryRuntimeInvoker>[0];
 it("invokes the Conversation-bound local Runtime and preserves its response", async () => {
 	const request: AgentQueryRequest = {
 		conversationId: "conversation-1",
+		runId: "response-1",
 		model: "anthropic/claude-sonnet-5",
 		prompt: "hello",
 	};
@@ -32,6 +33,7 @@ it("invokes the Conversation-bound local Runtime and preserves its response", as
 					"x-amzn-bedrock-agentcore-runtime-session-id": "conversation-1",
 				},
 				body: JSON.stringify({
+					runId: "response-1",
 					model: "anthropic/claude-sonnet-5",
 					prompt: "hello",
 				}),
@@ -52,6 +54,7 @@ it("rejects a Runtime response outside the stream-or-error contract", async () =
 		await expect(
 			createHttpAgentQueryRuntimeInvoker("http://agent-query-runtime:4510")({
 				conversationId: "conversation-1",
+				runId: "response-1",
 				model: "anthropic/claude-sonnet-5",
 				prompt: "hello",
 			}),

@@ -405,19 +405,49 @@ jobs:
           record_dir="${RUNNER_TEMP}/agentcore-deployment"
           scripts/deploy/inspect_agentcore.sh | tee "${record_dir}/deployment-inspection.json"
           query_runtime_arn="$(terraform -chdir=infra/terraform output -raw agent_query_runtime_arn)"
-          query_smoke_file="${record_dir}/query-runtime-smoke.ndjson"
+          query_runtime_session_id="query-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${DEPLOY_SHA}"
+          query_passphrase="MYMEMO_AGENT_SESSION_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          first_query_smoke_file="${record_dir}/query-runtime-smoke-first.ndjson"
+          first_query_payload="$(jq -cn \
+            --arg runId "query-smoke-first-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --arg passphrase "${query_passphrase}" \
+            '{runId:$runId,model:"anthropic/claude-sonnet-5",prompt:("Remember this exact passphrase for my next message: " + $passphrase + ". Reply with exactly REMEMBERED.")}')"
           aws bedrock-agentcore invoke-agent-runtime \
             --region "${AWS_REGION}" \
             --agent-runtime-arn "${query_runtime_arn}" \
             --qualifier DEFAULT \
-            --runtime-session-id "query-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${DEPLOY_SHA}" \
+            --runtime-session-id "${query_runtime_session_id}" \
             --content-type application/json \
             --accept application/x-ndjson \
             --cli-binary-format raw-in-base64-out \
             --cli-read-timeout 300 \
-            --payload '{"model":"anthropic/claude-sonnet-5","prompt":"Reply with exactly MYMEMO_AGENT_QUERY_RUNTIME_OK."}' \
-            "${query_smoke_file}"
-          jq -s -e 'any(.[]; .type == "result" and .subtype == "success" and .is_error == false)' "${query_smoke_file}" >/dev/null
+            --payload "${first_query_payload}" \
+            "${first_query_smoke_file}"
+          jq -s -e 'any(.[]; .type == "result" and .subtype == "success" and .is_error == false)' "${first_query_smoke_file}" >/dev/null
+          aws bedrock-agentcore stop-runtime-session \
+            --region "${AWS_REGION}" \
+            --agent-runtime-arn "${query_runtime_arn}" \
+            --qualifier DEFAULT \
+            --runtime-session-id "${query_runtime_session_id}" >/dev/null
+          second_query_smoke_file="${record_dir}/query-runtime-smoke-second.ndjson"
+          second_query_payload="$(jq -cn \
+            --arg runId "query-smoke-second-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            '{runId:$runId,model:"anthropic/claude-sonnet-5",prompt:"Reply with only the exact passphrase I asked you to remember in my previous message."}')"
+          aws bedrock-agentcore invoke-agent-runtime \
+            --region "${AWS_REGION}" \
+            --agent-runtime-arn "${query_runtime_arn}" \
+            --qualifier DEFAULT \
+            --runtime-session-id "${query_runtime_session_id}" \
+            --content-type application/json \
+            --accept application/x-ndjson \
+            --cli-binary-format raw-in-base64-out \
+            --cli-read-timeout 300 \
+            --payload "${second_query_payload}" \
+            "${second_query_smoke_file}"
+          jq -s -e \
+            --arg passphrase "${query_passphrase}" \
+            'any(.[]; .type == "assistant" and (tostring | contains($passphrase))) and any(.[]; .type == "result" and .subtype == "success" and .is_error == false)' \
+            "${second_query_smoke_file}" >/dev/null
           jq -n \
             --arg commit "${DEPLOY_SHA}" \
             --arg runtimeImageDigest "${DEPLOYED_RUNTIME_IMAGE_DIGEST}" \

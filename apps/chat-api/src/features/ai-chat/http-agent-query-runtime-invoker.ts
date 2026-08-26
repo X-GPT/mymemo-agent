@@ -1,5 +1,6 @@
 export type AgentQueryRuntimeInvoker = (request: {
 	conversationId: string;
+	runId: string;
 	model: "anthropic/claude-sonnet-5";
 	prompt: string;
 }) => Promise<Response>;
@@ -17,7 +18,11 @@ export function createHttpAgentQueryRuntimeInvoker(
 				accept: "application/x-ndjson, application/json",
 				"x-amzn-bedrock-agentcore-runtime-session-id": request.conversationId,
 			},
-			body: JSON.stringify({ model: request.model, prompt: request.prompt }),
+			body: JSON.stringify({
+				runId: request.runId,
+				model: request.model,
+				prompt: request.prompt,
+			}),
 		});
 		const contentType = response.headers.get("content-type") ?? "";
 		if (

@@ -28,9 +28,11 @@ chat-api must not hold OpenRouter, KB, or E2B credentials. It admits Runs, serve
 The production AgentCore Runtime alone owns product Run model traffic, scoped
 Searchable document access, E2B execution, relay production, and Downloadable
 artifact publication. The separately deployed, gate-closed Agent-query Runtime
-may read only the OpenRouter secret and make no-tool model calls for deployment
-and local E2E verification; chat-api does not invoke it in production. It
-receives no database, E2B, Searchable document, Redis, or artifact credentials.
+may read the OpenRouter secret, make no-tool model calls, and get or put opaque
+session state only under the private bucket's `agent-sessions/` prefix for
+deployment and local E2E verification; chat-api does not invoke it in
+production. It receives no database, E2B, Searchable document, Redis, or
+Downloadable artifact authority.
 Its resolved OpenRouter credential is passed only to the Claude subprocess
 through the SDK's per-query environment and is not written into the Runtime
 process environment.

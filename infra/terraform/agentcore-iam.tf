@@ -207,6 +207,15 @@ data "aws_iam_policy_document" "query_runtime" {
   }
 
   statement {
+    sid = "ReadWriteAgentSessions"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+    ]
+    resources = ["${aws_s3_bucket.artifacts.arn}/agent-sessions/*"]
+  }
+
+  statement {
     sid = "ManageRuntimeLogGroup"
     actions = [
       "logs:CreateLogGroup",

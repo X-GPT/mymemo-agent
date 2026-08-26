@@ -73,6 +73,7 @@ it("returns the owned Conversation Runtime stream unchanged", async () => {
 	expect(invocations).toEqual([
 		{
 			conversationId: "conversation-1",
+			runId: "response-1",
 			model: "anthropic/claude-sonnet-5",
 			prompt: "Hello",
 		},
@@ -122,7 +123,7 @@ it.each([
 	const app = makeApp({
 		conversationStore: {
 			get: async () => conversation as never,
-			} as unknown as AppDeps["conversationStore"],
+		} as unknown as AppDeps["conversationStore"],
 		exposureGate: {
 			isAgentEnabled: async () => {
 				gateChecks++;

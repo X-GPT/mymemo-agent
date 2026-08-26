@@ -49,10 +49,11 @@ Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one ex
 ## Agent-query verification Runtime
 
 The gate-closed `agent-query-runtime` deployment requires `AWS_REGION`,
-`OPENROUTER_API_KEY_SECRET_ARN`, and `OPENROUTER_BASE_URL`; it resolves only the
-secret's `AWSCURRENT` value at boot. Terraform deploys its digest-pinned ARM64
-image with public egress and a dedicated role that can read only that model
-secret. `PORT` defaults to `8080`. Local Compose instead requires
+`ARTIFACT_BUCKET`, `OPENROUTER_API_KEY_SECRET_ARN`, and `OPENROUTER_BASE_URL`;
+it resolves only the secret's `AWSCURRENT` value at boot. Terraform deploys its
+digest-pinned ARM64 image with public egress and a dedicated role that can read
+only that model secret plus get and put objects under the bucket's
+`agent-sessions/` prefix. `PORT` defaults to `8080`. Local Compose instead requires
 `OPENROUTER_API_KEY`;
 `OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api`. Compose passes
 these values to the Claude Agent SDK as `ANTHROPIC_AUTH_TOKEN` and

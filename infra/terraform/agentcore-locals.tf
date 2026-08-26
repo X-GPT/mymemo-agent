@@ -53,6 +53,7 @@ locals {
 
   query_runtime_environment = {
     AWS_REGION                    = var.aws_region
+    ARTIFACT_BUCKET               = aws_s3_bucket.artifacts.bucket
     OPENROUTER_API_KEY_SECRET_ARN = local.openrouter_api_key_secret_arn
     OPENROUTER_BASE_URL           = var.openrouter_base_url
     PORT                          = "8080"

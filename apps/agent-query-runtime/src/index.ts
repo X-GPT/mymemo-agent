@@ -1,8 +1,25 @@
+import { S3Client } from "@aws-sdk/client-s3";
+import { createS3DetachedSessionStore } from "./detached-session-store";
 import { resolveClaudeEnvironment } from "./openrouter";
 import { createResponseStream } from "./response-execution";
 import { createResponseInvocationHandler } from "./server";
 
 const claudeEnvironment = await resolveClaudeEnvironment(Bun.env);
+const artifactBucket = Bun.env.ARTIFACT_BUCKET?.trim();
+if (!artifactBucket) throw new Error("ARTIFACT_BUCKET is required");
+const awsRegion = Bun.env.AWS_REGION?.trim();
+if (!awsRegion) throw new Error("AWS_REGION is required");
+const localArtifactEndpoint = Bun.env.LOCAL_ARTIFACT_ENDPOINT?.trim();
+const s3 = new S3Client({
+	region: awsRegion,
+	...(localArtifactEndpoint
+		? { endpoint: localArtifactEndpoint, forcePathStyle: true }
+		: {}),
+});
+const objectStore = createS3DetachedSessionStore({
+	bucket: artifactBucket,
+	client: s3,
+});
 
 const port = Number(Bun.env.PORT ?? 8080);
 if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
@@ -28,6 +45,7 @@ const server = Bun.serve({
 			POST: createResponseInvocationHandler((request) => {
 				if (shuttingDown) throw new Error("Runtime is shutting down");
 				return createResponseStream(request, {
+					objectStore,
 					environment: { ...Bun.env, ...claudeEnvironment },
 				});
 			}),
@@ -39,6 +57,7 @@ async function close() {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	await server.stop(true);
+	s3.destroy();
 	process.exit(0);
 }
 process.once("SIGINT", () => void close());

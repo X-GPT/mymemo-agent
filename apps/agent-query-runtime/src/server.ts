@@ -9,12 +9,18 @@ const conversationIdSchema = z
 	.max(128)
 	.regex(/^[A-Za-z0-9_-]+$/);
 const requestSchema = z.strictObject({
+	runId: z
+		.string()
+		.min(1)
+		.max(128)
+		.regex(/^[A-Za-z0-9_-]+$/),
 	model: z.literal("anthropic/claude-sonnet-5"),
 	prompt: z.string().min(1).max(50_000),
 });
 
 export type ResponseInvocation = {
 	conversationId: string;
+	runId: string;
 	model: "anthropic/claude-sonnet-5";
 	prompt: string;
 };
@@ -51,6 +57,7 @@ export function createResponseInvocationHandler(
 			return new Response(
 				invoke({
 					conversationId: conversationId.data,
+					runId: parsed.data.runId,
 					model: parsed.data.model,
 					prompt: parsed.data.prompt,
 				}),
