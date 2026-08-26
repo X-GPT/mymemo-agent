@@ -13,10 +13,8 @@ const productionConfig = loadApiConfigFromEnv(Bun.env);
 const productionLogger = pino({ level: productionConfig.logLevel });
 const productionDeps = createDeps(
 	productionConfig,
-	{
-		async invoke(): Promise<never> {
-			throw new Error("Agent-query Runtime is not enabled in production");
-		},
+	async (): Promise<never> => {
+		throw new Error("Agent-query Runtime is not enabled in production");
 	},
 	createLiveStreamTelemetry("chat-api", productionLogger),
 );

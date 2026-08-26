@@ -53,6 +53,7 @@ jobs:
       agent_maintenance_image: ${{ steps.images.outputs.agent_maintenance_image }}
       agentcore_dispatch_publisher_image: ${{ steps.images.outputs.agentcore_dispatch_publisher_image }}
       runtime_image_digest: ${{ steps.agentcore_runtime_image.outputs.runtime_image_digest }}
+      agent_query_runtime_image_digest: ${{ steps.agent_query_runtime_image.outputs.agent_query_runtime_image_digest }}
       first_deploy: ${{ steps.agent_deploy_state.outputs.first_deploy }}
     steps:
       - name: Validate production apply confirmation
@@ -153,10 +154,12 @@ jobs:
           agent_maintenance_repository_url="$(terraform -chdir=infra/ecr output -raw agent_maintenance_ecr_repository_url)"
           agentcore_dispatch_publisher_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_dispatch_publisher_ecr_repository_url)"
           agentcore_runtime_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_runtime_ecr_repository_url)"
+          agent_query_runtime_repository_url="$(terraform -chdir=infra/ecr output -raw agent_query_runtime_ecr_repository_url)"
           printf 'chat_api_image=%s:%s\n' "${chat_api_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agent_maintenance_image=%s:%s\n' "${agent_maintenance_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agentcore_dispatch_publisher_image=%s:%s\n' "${agentcore_dispatch_publisher_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
           printf 'agentcore_runtime_repository_url=%s\n' "${agentcore_runtime_repository_url}" >> "${GITHUB_OUTPUT}"
+          printf 'agent_query_runtime_repository_url=%s\n' "${agent_query_runtime_repository_url}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
@@ -205,6 +208,38 @@ jobs:
           printf 'TF_VAR_runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_ENV}"
           printf 'runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_OUTPUT}"
 
+      - name: Build, verify, and push the ARM64 Agent-query Runtime image
+        id: agent_query_runtime_image
+        run: |
+          repository_uri="${{ steps.images.outputs.agent_query_runtime_repository_url }}"
+          repository_name="${repository_uri#*/}"
+          docker buildx build \
+            --platform linux/arm64 \
+            --load \
+            --file apps/agent-query-runtime/Dockerfile \
+            --tag mymemo-agent-query-runtime:verified \
+            .
+          docker run --rm \
+            --platform linux/arm64 \
+            --network none \
+            --entrypoint bun \
+            mymemo-agent-query-runtime:verified \
+            test src/server.test.ts src/response-execution.test.ts src/openrouter.test.ts
+          docker tag mymemo-agent-query-runtime:verified "${repository_uri}:${IMAGE_TAG}"
+          docker push "${repository_uri}:${IMAGE_TAG}"
+          agent_query_runtime_image_digest="$(aws ecr describe-images \
+            --region "${AWS_REGION}" \
+            --repository-name "${repository_name}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+          if [[ ! "${agent_query_runtime_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ECR returned an invalid Agent-query Runtime image digest." >&2
+            exit 1
+          fi
+          printf 'TF_VAR_agent_query_runtime_image_digest=%s\n' "${agent_query_runtime_image_digest}" >> "${GITHUB_ENV}"
+          printf 'agent_query_runtime_image_digest=%s\n' "${agent_query_runtime_image_digest}" >> "${GITHUB_OUTPUT}"
+
       - name: Package the AgentCore consumer Lambda
         run: |
           ca_bundle="${RUNNER_TEMP}/rds-global-bundle.pem"
@@ -241,7 +276,9 @@ jobs:
       AGENT_MAINTENANCE_IMAGE: ${{ needs.plan.outputs.agent_maintenance_image }}
       AGENTCORE_DISPATCH_PUBLISHER_IMAGE: ${{ needs.plan.outputs.agentcore_dispatch_publisher_image }}
       TF_VAR_runtime_image_digest: ${{ needs.plan.outputs.runtime_image_digest }}
+      TF_VAR_agent_query_runtime_image_digest: ${{ needs.plan.outputs.agent_query_runtime_image_digest }}
       EXPECTED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.runtime_image_digest }}
+      EXPECTED_AGENT_QUERY_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.agent_query_runtime_image_digest }}
       FIRST_DEPLOY: ${{ needs.plan.outputs.first_deploy }}
       CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
     steps:
@@ -356,20 +393,38 @@ jobs:
         run: scripts/deploy/terraform_prod_in_place_apply.sh
 
       - name: Enforce AgentCore MMDSv2 and wait for the DEFAULT endpoint
-        run: scripts/deploy/enforce_agentcore_mmdsv2.sh "${RUNNER_TEMP}/agentcore-deployment/runtime-readiness.json"
+        run: |
+          scripts/deploy/enforce_agentcore_mmdsv2.sh "${RUNNER_TEMP}/agentcore-deployment/runtime-readiness.json"
+          scripts/deploy/enforce_agentcore_mmdsv2.sh "${RUNNER_TEMP}/agentcore-deployment/query-runtime-readiness.json" agent_query_runtime_id
 
-      - name: Verify AgentCore deployment and unchanged Dispatch control
+      - name: Verify AgentCore deployment, query invocation, and unchanged Dispatch control
         env:
           DEPLOYED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.runtime_image_digest }}
+          DEPLOYED_AGENT_QUERY_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.agent_query_runtime_image_digest }}
         run: |
           record_dir="${RUNNER_TEMP}/agentcore-deployment"
           scripts/deploy/inspect_agentcore.sh | tee "${record_dir}/deployment-inspection.json"
+          query_runtime_arn="$(terraform -chdir=infra/terraform output -raw agent_query_runtime_arn)"
+          query_smoke_file="${record_dir}/query-runtime-smoke.ndjson"
+          aws bedrock-agentcore invoke-agent-runtime \
+            --region "${AWS_REGION}" \
+            --agent-runtime-arn "${query_runtime_arn}" \
+            --qualifier DEFAULT \
+            --runtime-session-id "query-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${DEPLOY_SHA}" \
+            --content-type application/json \
+            --accept application/x-ndjson \
+            --cli-binary-format raw-in-base64-out \
+            --cli-read-timeout 300 \
+            --payload '{"model":"anthropic/claude-sonnet-5","prompt":"Reply with exactly MYMEMO_AGENT_QUERY_RUNTIME_OK."}' \
+            "${query_smoke_file}"
+          jq -s -e 'any(.[]; .type == "result" and .subtype == "success" and .is_error == false)' "${query_smoke_file}" >/dev/null
           jq -n \
             --arg commit "${DEPLOY_SHA}" \
             --arg runtimeImageDigest "${DEPLOYED_RUNTIME_IMAGE_DIGEST}" \
+            --arg agentQueryRuntimeImageDigest "${DEPLOYED_AGENT_QUERY_RUNTIME_IMAGE_DIGEST}" \
             --arg dispatchValue "${EXPECTED_DISPATCH_VALUE}" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
+            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,agentQueryRuntimeImageDigest:$agentQueryRuntimeImageDigest,dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
             > "${record_dir}/deployment-record.json"
 
       - name: Roll ECS services

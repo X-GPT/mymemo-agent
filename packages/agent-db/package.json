@@ -11,6 +11,7 @@
 		"./conversation-ownership": "./src/conversation-ownership.ts",
 		"./run-store": "./src/run-store.ts",
 		"./run-events": "./src/run-events.ts",
+		"./conversation-message-store": "./src/conversation-message-store.ts",
 		"./tool-event-projection": "./src/tool-event-projection.ts",
 		"./runtime-store": "./src/runtime-store.ts",
 		"./session-store": "./src/session-store.ts",

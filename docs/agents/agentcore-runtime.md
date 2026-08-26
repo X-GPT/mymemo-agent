@@ -43,13 +43,13 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 
 ## Query and sandbox startup
 
-The non-production `agent-query-runtime` reuses the same E2B provisioner,
-renewal loop, and bounded file tools for synchronous Agent queries. Run-bound
-`Bash` auditing remains deferred to #565.
-SessionStore failure aborts Workspace tools and interrupts Claude before a
-terminal result can escape. Its persistence is deliberately unfenced until
-#565 composes response admission, authority renewal, and mutation fencing;
-production must not mount this path before then.
+The gate-closed `agent-query-runtime` exposes no E2B Workspace, built-in
+tools, or MCP tools. Each Response starts a fresh Claude SDK query with session
+persistence disabled. Distinct requests may execute concurrently; Chat API
+admits their User messages before invocation.
+The Runtime emits ordered raw Claude SDK messages; Chat API owns their AI SDK
+projection and complete Assistant-message commit. Terraform deploys this
+verification Runtime, but production chat-api does not mount its path.
 
 `src/sdk/start-run-query.ts` must:
 

@@ -1,5 +1,10 @@
 import { createDatabase } from "@mymemo/agent-db/client";
 import {
+	admitConversationMessageTx,
+	type AdmitConversationMessageResult,
+	appendAssistantMessageTx,
+} from "@mymemo/agent-db/conversation-message-store";
+import {
 	createLiveStreamTelemetry,
 	createRedisLiveStreamRelay,
 	type LiveStreamRelay,
@@ -7,9 +12,7 @@ import {
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
-import type { ChatMessageStore } from "./features/ai-chat/chat-message-store";
 import type { AgentQueryRuntimeInvoker } from "./features/ai-chat/http-agent-query-runtime-invoker";
-import { PostgresChatMessageStore } from "./features/ai-chat/postgres-chat-message-store";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
@@ -40,8 +43,20 @@ export interface AppDeps {
 	config: ApiConfig;
 	/** Staged Agent-query Runtime boundary. */
 	agentQueryRuntimeInvoker: AgentQueryRuntimeInvoker;
-	/** Canonical AI SDK Conversation message persistence. */
-	chatMessageStore: ChatMessageStore;
+	/** Admits one staged User message before Runtime invocation. */
+	admitUserMessage(input: {
+		userId: string;
+		conversationId: string;
+		messageId: string;
+		parts: [{ type: "text"; text: string }];
+	}): Promise<AdmitConversationMessageResult>;
+	/** Commits one complete staged Assistant message. */
+	appendAssistantMessage(input: {
+		userId: string;
+		conversationId: string;
+		messageId: string;
+		parts: unknown;
+	}): Promise<void>;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
 	artifactMetadataStore: ArtifactMetadataStore;
 	/** Creates short-lived direct-download URLs after ownership authorization. */
@@ -104,12 +119,14 @@ export function createDeps(
 	return {
 		config,
 		agentQueryRuntimeInvoker,
+		admitUserMessage: (input) => admitConversationMessageTx(database, input),
+		appendAssistantMessage: (input) =>
+			appendAssistantMessageTx(database, input),
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
 		conversationStore,
 		conversationHistoryStore,
 		runStore,
-		chatMessageStore: new PostgresChatMessageStore(database),
 		liveStreamRelay,
 		liveStreamTelemetry,
 		closeLiveResources: () => liveStreamRelay.close(),

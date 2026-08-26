@@ -1,69 +1,61 @@
 import { expect, it, spyOn } from "bun:test";
-import type { AgentQueryRequest } from "@mymemo/agent-query";
-import { createHttpAgentQueryRuntimeInvoker } from "./http-agent-query-runtime-invoker";
+import {
+	type AgentQueryRuntimeInvoker,
+	createHttpAgentQueryRuntimeInvoker,
+} from "./http-agent-query-runtime-invoker";
 
-it("invokes the Conversation-bound local Runtime and parses split NDJSON chunks", async () => {
+type AgentQueryRequest = Parameters<AgentQueryRuntimeInvoker>[0];
+
+it("invokes the Conversation-bound local Runtime and preserves its response", async () => {
 	const request: AgentQueryRequest = {
-		version: 1,
 		conversationId: "conversation-1",
-		conversationEpoch: 7,
-		prompt: "Continue",
 		model: "anthropic/claude-sonnet-5",
-		agentSessionId: "agent-session-1",
+		prompt: "hello",
 	};
-	let received:
-		| { url: string; headers: Headers; body: AgentQueryRequest }
-		| undefined;
-	const encoder = new TextEncoder();
-	const fetchImplementation = async (
-		input: Parameters<typeof fetch>[0],
-		init?: Parameters<typeof fetch>[1],
-	) => {
-		received = {
-			url: String(input),
-			headers: new Headers(init?.headers),
-			body: JSON.parse(String(init?.body)) as AgentQueryRequest,
-		};
-		return new Response(
-			new ReadableStream<Uint8Array>({
-				start(controller) {
-					controller.enqueue(
-						encoder.encode('{"type":"stream_event"}\n{"type"'),
-					);
-					controller.enqueue(
-						encoder.encode(':"result","session_id":"agent-session-2"}\n'),
-					);
-					controller.close();
-				},
-			}),
-			{ headers: { "content-type": "application/x-ndjson" } },
-		);
-	};
-	const fetchMock = spyOn(globalThis, "fetch").mockImplementation(
-		fetchImplementation as unknown as typeof fetch,
+	const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(
+		new Response('{"type":"result"}\n', {
+			headers: { "content-type": "application/x-ndjson" },
+		}),
 	);
 
 	try {
-		const invoker = createHttpAgentQueryRuntimeInvoker({
-			runtimeUrl: "http://agent-query-runtime:4510",
-		});
-		const messages: unknown[] = [];
-		for await (const message of await invoker.invoke(request)) {
-			messages.push(message);
-		}
+		const response = await createHttpAgentQueryRuntimeInvoker(
+			"http://agent-query-runtime:4510",
+		)(request);
+		expect(fetchMock).toHaveBeenCalledWith(
+			new URL("http://agent-query-runtime:4510/invocations"),
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					accept: "application/x-ndjson, application/json",
+					"x-amzn-bedrock-agentcore-runtime-session-id": "conversation-1",
+				},
+				body: JSON.stringify({
+					model: "anthropic/claude-sonnet-5",
+					prompt: "hello",
+				}),
+			},
+		);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe('{"type":"result"}\n');
+	} finally {
+		fetchMock.mockRestore();
+	}
+});
 
-		if (!received) throw new Error("expected local Runtime request");
-		expect(received.url).toBe("http://agent-query-runtime:4510/invocations");
-		expect(received.headers.get("content-type")).toBe("application/json");
-		expect(received.headers.get("accept")).toBe("application/x-ndjson");
-		expect(
-			received.headers.get("x-amzn-bedrock-agentcore-runtime-session-id"),
-		).toBe("conversation-1");
-		expect(received.body).toEqual(request);
-		expect(messages).toEqual([
-			{ type: "stream_event" },
-			{ type: "result", session_id: "agent-session-2" },
-		]);
+it("rejects a Runtime response outside the stream-or-error contract", async () => {
+	const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(
+		Response.json({ outcome: "done" }),
+	);
+	try {
+		await expect(
+			createHttpAgentQueryRuntimeInvoker("http://agent-query-runtime:4510")({
+				conversationId: "conversation-1",
+				model: "anthropic/claude-sonnet-5",
+				prompt: "hello",
+			}),
+		).rejects.toThrow("Agent-query Runtime returned an invalid response");
 	} finally {
 		fetchMock.mockRestore();
 	}
