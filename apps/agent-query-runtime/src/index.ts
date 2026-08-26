@@ -15,7 +15,7 @@ const server = Bun.serve({
 	hostname: "0.0.0.0",
 	port,
 	idleTimeout: 0,
-	maxRequestBodySize: 256 * 1024,
+	maxRequestBodySize: 512 * 1024,
 	routes: {
 		"/ping": {
 			GET: () =>
