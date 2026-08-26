@@ -216,6 +216,18 @@ data "aws_iam_policy_document" "query_runtime" {
   }
 
   statement {
+    sid       = "ListAgentSessions"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.artifacts.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["agent-sessions/*"]
+    }
+  }
+
+  statement {
     sid = "ManageRuntimeLogGroup"
     actions = [
       "logs:CreateLogGroup",

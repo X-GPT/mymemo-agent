@@ -3,6 +3,14 @@
 	"Statement": [
 		{
 			"Effect": "Allow",
+			"Action": "s3:ListBucket",
+			"Resource": "arn:aws:s3:::mymemo-agent-local-artifacts",
+			"Condition": {
+				"StringLike": { "s3:prefix": ["agent-sessions/*"] }
+			}
+		},
+		{
+			"Effect": "Allow",
 			"Action": ["s3:GetObject", "s3:PutObject"],
 			"Resource": "arn:aws:s3:::mymemo-agent-local-artifacts/agent-sessions/*"
 		}

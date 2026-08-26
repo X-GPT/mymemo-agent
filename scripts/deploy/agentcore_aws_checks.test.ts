@@ -131,6 +131,33 @@ verify_agentcore_dispatch_wiring us-west-2 "$TF_OUTPUT" "$EXPECTED_DISPATCH_VALU
 	});
 }
 
+function verifyCurrentSecrets(versions: Record<string, unknown>[]) {
+	const script = `
+set -euo pipefail
+source "${checksPath}"
+aws() {
+  case "$*" in
+    *"secretsmanager list-secret-version-ids"*)
+      if [[ "$*" == *"--query"* ]]; then exit 96; fi
+      printf '%s\n' "$VERSIONS"
+      ;;
+    *) exit 97 ;;
+  esac
+}
+verify_agentcore_current_secrets us-west-2 "$TF_OUTPUT"
+`;
+	return spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			TF_OUTPUT: JSON.stringify({
+				runtime_secret_arns: { value: ["arn:secret:database"] },
+			}),
+			VERSIONS: JSON.stringify({ Versions: versions }),
+		},
+	});
+}
+
 function verifyConsumerRuntimeAuthority(simulation: Record<string, unknown>) {
 	const script = `
 set -euo pipefail
@@ -471,6 +498,25 @@ describe("production AgentCore dispatch wiring", () => {
 		const wiring = expectedWiring();
 		mutate(wiring);
 		expect(verify(wiring).status).not.toBe(0);
+	});
+});
+
+describe("production AgentCore current secrets", () => {
+	it("accepts a current version alongside stage-less deprecated versions", () => {
+		const result = verifyCurrentSecrets([
+			{ VersionId: "deprecated" },
+			{ VersionId: "current", VersionStages: ["AWSCURRENT"] },
+		]);
+		expect(result.status, result.stderr).toBe(0);
+	});
+
+	it("rejects a secret without a current version", () => {
+		expect(
+			verifyCurrentSecrets([
+				{ VersionId: "deprecated" },
+				{ VersionId: "previous", VersionStages: ["AWSPREVIOUS"] },
+			]).status,
+		).not.toBe(0);
 	});
 });
 

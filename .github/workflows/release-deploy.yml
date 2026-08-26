@@ -402,6 +402,7 @@ jobs:
           DEPLOYED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.runtime_image_digest }}
           DEPLOYED_AGENT_QUERY_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.agent_query_runtime_image_digest }}
         run: |
+          set -o pipefail
           record_dir="${RUNNER_TEMP}/agentcore-deployment"
           scripts/deploy/inspect_agentcore.sh | tee "${record_dir}/deployment-inspection.json"
           query_runtime_arn="$(terraform -chdir=infra/terraform output -raw agent_query_runtime_arn)"
