@@ -218,6 +218,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     actions = [
       "bedrock-agentcore:CreateAgentRuntime",
       "bedrock-agentcore:CreateAgentRuntimeEndpoint",
+      "bedrock-agentcore:CreateWorkloadIdentity",
       "bedrock-agentcore:DeleteAgentRuntime",
       "bedrock-agentcore:GetAgentRuntime",
       "bedrock-agentcore:GetAgentRuntimeEndpoint",
