@@ -44,11 +44,14 @@ A qualifying `done` or `interrupted` terminal transaction publishes `conversatio
 ## Query and sandbox startup
 
 The gate-closed `agent-query-runtime` exposes no E2B Workspace, built-in
-tools, or MCP tools. Each verification request starts a fresh Claude SDK query
-with session persistence disabled. Distinct requests may execute concurrently.
-The Runtime emits raw Claude SDK messages as NDJSON, which the local Chat API
-returns unchanged without admission or persistence. Terraform deploys this
-verification Runtime, but production chat-api does not mount its path.
+tools, or MCP tools. Each verification request hydrates a fresh in-memory
+Claude SessionStore from opaque state under the private S3 `agent-sessions/`
+prefix, fully drains one query, then detaches and unconditionally overwrites
+that Conversation's object. Distinct requests may execute concurrently and do
+not coordinate their overwrites. The Runtime emits raw Claude SDK messages as
+NDJSON, which the local Chat API returns unchanged without admission. Terraform
+deploys this verification Runtime, but production chat-api does not mount its
+path.
 
 `src/sdk/start-run-query.ts` must:
 

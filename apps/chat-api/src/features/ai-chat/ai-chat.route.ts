@@ -61,6 +61,7 @@ routes.post(
 		}
 		return c.var.deps.agentQueryRuntimeInvoker({
 			conversationId: body.id,
+			runId: message.id,
 			model: body.model,
 			prompt: message.parts[0].text,
 		});

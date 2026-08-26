@@ -232,8 +232,11 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
-    sid       = "VerifyAgentQueryRuntime"
-    actions   = ["bedrock-agentcore:InvokeAgentRuntime"]
+    sid = "VerifyAgentQueryRuntime"
+    actions = [
+      "bedrock-agentcore:InvokeAgentRuntime",
+      "bedrock-agentcore:StopRuntimeSession",
+    ]
     resources = ["arn:aws:bedrock-agentcore:${var.aws_region}:${var.aws_account_id}:runtime/mymemo_agent_query_prod-*"]
   }
 

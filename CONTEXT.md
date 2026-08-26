@@ -296,8 +296,10 @@ _Avoid_: fetch (the prototype path's word for content-into-context)
 The internal, Runtime-owned Claude SDK transcript that carries a Conversation's
 model-side memory across Runs, including a successfully preserved interrupted
 Run even when its provisional response is absent from Conversation history. It
-is never client-facing or stored in the Workspace. Verification queries do not
-use Agent session continuity.
+is never client-facing or stored in the Workspace. The staged verification path
+keeps its separate opaque Agent session under
+`agent-sessions/<conversationId>` and replaces that detached snapshot after each
+fully drained invocation.
 _Avoid_: chat history (that is the user-visible record in run events)
 
 **Session mirror evidence**:

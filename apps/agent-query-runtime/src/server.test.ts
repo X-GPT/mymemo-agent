@@ -6,10 +6,12 @@ import {
 
 const invocation: ResponseInvocation = {
 	conversationId: "conversation-1",
+	runId: "response-1",
 	model: "anthropic/claude-sonnet-5",
 	prompt: "hello",
 };
 const body = JSON.stringify({
+	runId: invocation.runId,
 	model: invocation.model,
 	prompt: invocation.prompt,
 });
