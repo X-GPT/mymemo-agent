@@ -18,8 +18,8 @@ verify_agentcore_current_secrets() {
       --region "${region}" \
       --secret-id "${secret_arn}" \
       --include-deprecated \
-      --query 'Versions[?contains(VersionStages, `AWSCURRENT`)].VersionId' \
-      --output text | grep -q .
+      --output json \
+      | jq -e 'any(.Versions[]?; ((.VersionStages // []) | index("AWSCURRENT")) != null)' >/dev/null
   done < <(jq -r '.runtime_secret_arns.value[]' <<<"${terraform_output}")
 }
 

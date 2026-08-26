@@ -26,9 +26,11 @@ describe("agent-query Runtime infrastructure", () => {
 		expect(queryRuntimeEnvironment).toContain("aws_s3_bucket.artifacts.bucket");
 		expect(queryRuntimePolicy).toContain('"s3:GetObject"');
 		expect(queryRuntimePolicy).toContain('"s3:PutObject"');
+		expect(queryRuntimePolicy).toContain('"s3:ListBucket"');
+		expect(queryRuntimePolicy).toContain('variable = "s3:prefix"');
+		expect(queryRuntimePolicy).toContain('values   = ["agent-sessions/*"]');
 		expect(queryRuntimePolicy).toContain("/agent-sessions/*");
 		expect(queryRuntimePolicy).not.toContain("/objects/*");
-		expect(queryRuntimePolicy).not.toContain("s3:ListBucket");
 		expect(queryRuntimePolicy).not.toContain("s3:DeleteObject");
 		expect(queryRuntimePolicy).not.toContain("s3:AbortMultipartUpload");
 	});
@@ -54,11 +56,36 @@ describe("agent-query Runtime infrastructure", () => {
 		expect(localPolicy.Statement).toEqual([
 			{
 				Effect: "Allow",
+				Action: "s3:ListBucket",
+				Resource: "arn:aws:s3:::mymemo-agent-local-artifacts",
+				Condition: {
+					StringLike: { "s3:prefix": ["agent-sessions/*"] },
+				},
+			},
+			{
+				Effect: "Allow",
 				Action: ["s3:GetObject", "s3:PutObject"],
 				Resource: "arn:aws:s3:::mymemo-agent-local-artifacts/agent-sessions/*",
 			},
 		]);
 		expect(verifyRuntime).toContain("bedrock-agentcore:InvokeAgentRuntime");
 		expect(verifyRuntime).toContain("bedrock-agentcore:StopRuntimeSession");
+	});
+
+	it("does not hide AgentCore inspection failures behind tee", () => {
+		const release = readFileSync(
+			".github/workflows/release-deploy.yml",
+			"utf8",
+		);
+		const verification = section(
+			release,
+			"- name: Verify AgentCore deployment, query invocation, and unchanged Dispatch control",
+			"- name: Roll ECS services",
+		);
+
+		expect(verification).toContain("set -o pipefail");
+		expect(verification.indexOf("set -o pipefail")).toBeLessThan(
+			verification.indexOf("scripts/deploy/inspect_agentcore.sh | tee"),
+		);
 	});
 });
