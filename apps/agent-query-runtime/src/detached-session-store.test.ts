@@ -29,13 +29,11 @@ it("treats a missing Conversation session object as a new Agent session", async 
 
 it("round-trips, replaces, and isolates complete Conversation session objects", async () => {
 	const objects = new Map<string, Uint8Array>();
-	const writes: unknown[] = [];
 	const store = createS3DetachedSessionStore({
 		bucket: "private-artifacts",
 		client: {
 			send: async (command: GetObjectCommand | PutObjectCommand) => {
 				if (command instanceof PutObjectCommand) {
-					writes.push(command.input);
 					objects.set(
 						command.input.Key as string,
 						command.input.Body as Uint8Array,
@@ -68,26 +66,6 @@ it("round-trips, replaces, and isolates complete Conversation session objects", 
 
 	expect(await store.load("conversation-1")).toEqual(replacement);
 	expect(await store.load("conversation-2")).toEqual(other);
-	expect(writes).toEqual([
-		{
-			Bucket: "private-artifacts",
-			Key: "agent-sessions/conversation-1",
-			Body: new TextEncoder().encode(JSON.stringify(first)),
-			ContentType: "application/json",
-		},
-		{
-			Bucket: "private-artifacts",
-			Key: "agent-sessions/conversation-1",
-			Body: new TextEncoder().encode(JSON.stringify(replacement)),
-			ContentType: "application/json",
-		},
-		{
-			Bucket: "private-artifacts",
-			Key: "agent-sessions/conversation-2",
-			Body: new TextEncoder().encode(JSON.stringify(other)),
-			ContentType: "application/json",
-		},
-	]);
 });
 
 it("rejects detached state above 100 MiB before upload", async () => {

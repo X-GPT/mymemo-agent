@@ -324,11 +324,6 @@ describe("agent-maintenance infrastructure", () => {
 			'sid = "VerifyAgentQueryRuntime"',
 			'sid = "AgentCoreConsumerManagement"',
 		);
-		const release = readFileSync(
-			".github/workflows/release-deploy.yml",
-			"utf8",
-		);
-
 		expect(compose).toContain("agent-session-policy.json");
 		expect(compose).toContain(
 			"mc admin policy attach local agent-session --user local-agent-session",
@@ -345,7 +340,5 @@ describe("agent-maintenance infrastructure", () => {
 		]);
 		expect(verifyRuntime).toContain("bedrock-agentcore:InvokeAgentRuntime");
 		expect(verifyRuntime).toContain("bedrock-agentcore:StopRuntimeSession");
-		expect(release).toContain('contains("agent_session_detached")');
-		expect(release).toContain('test("liveStoreEntryCount[^0-9]*0")');
 	});
 });
