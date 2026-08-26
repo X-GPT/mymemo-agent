@@ -9,6 +9,21 @@ import type { DetachedSessionStore } from "./detached-session-store";
 import { createResponseStream } from "./response-execution";
 import { createResponseInvocationHandler } from "./server";
 
+function invocationRequest(runId: string, prompt: string) {
+	return new Request("http://runtime/invocations", {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"x-amzn-bedrock-agentcore-runtime-session-id": "conversation-1",
+		},
+		body: JSON.stringify({
+			runId,
+			model: "anthropic/claude-sonnet-5",
+			prompt,
+		}),
+	});
+}
+
 it("runs a fresh no-tool query and streams raw SDK messages", async () => {
 	const message = {
 		type: "system",
@@ -121,21 +136,7 @@ it("continues through detached state only after fully draining each isolated inv
 		handler: ReturnType<typeof makeHandler>,
 		runId: string,
 		prompt: string,
-	) =>
-		handler(
-			new Request("http://runtime/invocations", {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					"x-amzn-bedrock-agentcore-runtime-session-id": "conversation-1",
-				},
-				body: JSON.stringify({
-					runId,
-					model: "anthropic/claude-sonnet-5",
-					prompt,
-				}),
-			}),
-		);
+	) => handler(invocationRequest(runId, prompt));
 
 	const first = await invoke(makeHandler(), "response-1", "remember blue");
 	const firstBody = await first.text();
@@ -196,20 +197,9 @@ it("persists one complete snapshot from overlapping same-Conversation invocation
 		}),
 	);
 	const invoke = (runId: string, prompt: string) =>
-		handler(
-			new Request("http://runtime/invocations", {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					"x-amzn-bedrock-agentcore-runtime-session-id": "conversation-1",
-				},
-				body: JSON.stringify({
-					runId,
-					model: "anthropic/claude-sonnet-5",
-					prompt,
-				}),
-			}),
-		).then((response) => response.text());
+		handler(invocationRequest(runId, prompt)).then((response) =>
+			response.text(),
+		);
 
 	await Promise.all([
 		invoke("response-1", "sibling one"),
