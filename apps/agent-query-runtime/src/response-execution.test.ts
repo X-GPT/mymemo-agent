@@ -25,7 +25,7 @@ it("runs a fresh no-tool query and streams raw SDK messages", async () => {
 			prompt: "hello",
 		},
 		{
-			detachedSessionStore: {
+			sessionStateStore: {
 				load: async () => null,
 				save: async (_conversationId, state) => {
 					savedState = state;
@@ -64,7 +64,7 @@ it("runs a fresh no-tool query and streams raw SDK messages", async () => {
 it("continues through detached state only after fully draining each isolated invocation", async () => {
 	let detachedState: unknown | null = null;
 	const operations: string[] = [];
-	const detachedSessionStore: DetachedSessionStore = {
+	const sessionStateStore: DetachedSessionStore = {
 		async load(conversationId) {
 			operations.push(`load:${conversationId}`);
 			return structuredClone(detachedState);
@@ -111,7 +111,7 @@ it("continues through detached state only after fully draining each isolated inv
 	const makeHandler = () =>
 		createResponseInvocationHandler((request) =>
 			createResponseStream(request, {
-				detachedSessionStore,
+				sessionStateStore,
 				query: fakeQuery,
 				prepareWorkingDirectory: async () => {},
 				environment: {},
@@ -161,7 +161,7 @@ it("continues through detached state only after fully draining each isolated inv
 it("persists one complete snapshot from overlapping same-Conversation invocations", async () => {
 	const snapshots: unknown[] = [];
 	let retained: unknown | null = null;
-	const detachedSessionStore: DetachedSessionStore = {
+	const sessionStateStore: DetachedSessionStore = {
 		load: async () => null,
 		async save(_conversationId, state) {
 			const snapshot = structuredClone(state);
@@ -189,7 +189,7 @@ it("persists one complete snapshot from overlapping same-Conversation invocation
 	}) as unknown as typeof query;
 	const handler = createResponseInvocationHandler((request) =>
 		createResponseStream(request, {
-			detachedSessionStore,
+			sessionStateStore,
 			query: fakeQuery,
 			prepareWorkingDirectory: async () => {},
 			environment: {},
