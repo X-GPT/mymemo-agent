@@ -25,9 +25,7 @@ import { agentSessions, conversations } from "./schema";
  * subpath)`. `projectKey` is stored for fidelity with the SDK's cwd-derived key
  * but is never a lookup key: conversation id is 1:1 with a conversation's
  * transcripts and does not depend on reconstructing the SDK's cwd→key
- * sanitization. The `AgentQuery` variants reuse this canonical SQL without an
- * Ownership fence and remain outside production until #565 adds response
- * authority.
+ * sanitization.
  */
 
 /**
@@ -102,24 +100,6 @@ export async function appendAgentSessionEntriesTx(
 			entries,
 		);
 	});
-}
-
-export async function appendAgentQuerySessionEntriesTx(
-	db: Database,
-	input: {
-		conversationId: string;
-		conversationEpoch: number;
-		ref: AgentSessionRef;
-		entries: AgentSessionEntry[];
-	},
-): Promise<void> {
-	await insertAgentSessionEntriesTx(
-		db,
-		input.conversationId,
-		input.conversationEpoch,
-		input.ref,
-		input.entries,
-	);
 }
 
 async function insertAgentSessionEntriesTx(
@@ -237,16 +217,6 @@ export async function deleteAgentSessionTx(
 		await lockLiveConversationOwnershipTx(tx, owner, "session delete");
 		await deleteAgentSessionRowsTx(tx, owner.conversationId, ref);
 	});
-}
-
-export async function deleteAgentQuerySessionTx(
-	db: Database,
-	input: {
-		conversationId: string;
-		ref: { sessionId: string; subpath?: string };
-	},
-): Promise<void> {
-	await deleteAgentSessionRowsTx(db, input.conversationId, input.ref);
 }
 
 async function deleteAgentSessionRowsTx(

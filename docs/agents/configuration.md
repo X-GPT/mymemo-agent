@@ -46,16 +46,20 @@ it with a latest-image lookup.
 
 Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one execution.
 
-## Agent-query Runtime
+## Agent-query verification Runtime
 
-The non-production synchronous Runtime requires `AGENT_DATABASE_URL`,
-`E2B_API_KEY`, and `WORKER_E2B_TEMPLATE`. `PORT` defaults to `8080` and
-`LOG_LEVEL` to `info`. Local Compose also requires `OPENROUTER_API_KEY`;
+The gate-closed `agent-query-runtime` deployment requires `AWS_REGION`,
+`OPENROUTER_API_KEY_SECRET_ARN`, and `OPENROUTER_BASE_URL`; it resolves only the
+secret's `AWSCURRENT` value at boot. Terraform deploys its digest-pinned ARM64
+image with public egress and a dedicated role that can read only that model
+secret. `PORT` defaults to `8080`. Local Compose instead requires
+`OPENROUTER_API_KEY`;
 `OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api`. Compose passes
 these values to the Claude Agent SDK as `ANTHROPIC_AUTH_TOKEN` and
 `ANTHROPIC_BASE_URL`, with `ANTHROPIC_API_KEY` empty. It runs the Runtime on
 loopback port `4510`; local chat-api defaults `AGENT_QUERY_RUNTIME_URL` to that
-address and invokes its `/invocations` endpoint over HTTP.
+address and invokes its `/invocations` endpoint over HTTP. Production chat-api
+does not invoke the verification Runtime.
 
 ## Chat API
 

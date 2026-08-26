@@ -17,7 +17,7 @@ const agentQueryRuntimeUrl =
 const logger = pino({ level: config.logLevel });
 const deps = createDeps(
 	config,
-	createHttpAgentQueryRuntimeInvoker({ runtimeUrl: agentQueryRuntimeUrl }),
+	createHttpAgentQueryRuntimeInvoker(agentQueryRuntimeUrl),
 	createLiveStreamTelemetry("chat-api", logger),
 	{ isAgentEnabled: async () => true },
 	createS3ArtifactDownloadSigner(

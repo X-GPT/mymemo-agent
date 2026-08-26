@@ -230,6 +230,12 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
+    sid       = "VerifyAgentQueryRuntime"
+    actions   = ["bedrock-agentcore:InvokeAgentRuntime"]
+    resources = ["arn:aws:bedrock-agentcore:${var.aws_region}:${var.aws_account_id}:runtime/mymemo_agent_query_prod-*"]
+  }
+
+  statement {
     sid = "AgentCoreConsumerManagement"
     actions = [
       "lambda:CreateFunction",

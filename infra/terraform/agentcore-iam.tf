@@ -150,6 +150,129 @@ resource "aws_iam_role_policy" "runtime" {
   policy = data.aws_iam_policy_document.runtime.json
 }
 
+data "aws_iam_policy_document" "query_runtime_trust" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["bedrock-agentcore.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.aws_account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:bedrock-agentcore:${var.aws_region}:${var.aws_account_id}:runtime/mymemo_agent_query_${var.environment}-*"]
+    }
+  }
+}
+
+resource "aws_iam_role" "query_runtime" {
+  name               = "${local.agentcore_name_prefix}-query-runtime"
+  assume_role_policy = data.aws_iam_policy_document.query_runtime_trust.json
+}
+
+data "aws_iam_policy_document" "query_runtime" {
+  statement {
+    sid = "PullFromQueryRuntimeRepoOnly"
+    actions = [
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = [data.aws_ecr_repository.agent_query_runtime.arn]
+  }
+
+  statement {
+    sid       = "EcrAuthorization"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "ReadCurrentOpenRouterSecret"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [local.openrouter_api_key_secret_arn]
+
+    condition {
+      test     = "ForAnyValue:StringEquals"
+      variable = "secretsmanager:VersionStage"
+      values   = ["AWSCURRENT"]
+    }
+  }
+
+  statement {
+    sid = "ManageRuntimeLogGroup"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:DescribeLogStreams",
+    ]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agent_query_${var.environment}-*"]
+  }
+
+  statement {
+    sid       = "ConfigureRuntimeLogPolicy"
+    actions   = ["logs:PutResourcePolicy"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agent_query_${var.environment}-*"]
+  }
+
+  statement {
+    sid       = "DiscoverRuntimeLogGroups"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:*"]
+  }
+
+  statement {
+    sid = "WriteRuntimeLogs"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = ["arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/bedrock-agentcore/runtimes/mymemo_agent_query_${var.environment}-*:log-stream:*"]
+  }
+
+  statement {
+    sid = "RuntimeTracing"
+    actions = [
+      "xray:GetSamplingRules",
+      "xray:GetSamplingTargets",
+      "xray:PutTelemetryRecords",
+      "xray:PutTraceSegments",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "RuntimeMetrics"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["bedrock-agentcore"]
+    }
+  }
+
+  statement {
+    sid       = "DenyUserDelegatedAgentCoreInvocation"
+    effect    = "Deny"
+    actions   = ["bedrock-agentcore:InvokeAgentRuntimeForUser"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "query_runtime" {
+  name   = "${local.agentcore_name_prefix}-query-runtime"
+  role   = aws_iam_role.query_runtime.id
+  policy = data.aws_iam_policy_document.query_runtime.json
+}
+
 resource "aws_iam_role" "consumer" {
   name               = "${local.agentcore_name_prefix}-consumer"
   assume_role_policy = data.aws_iam_policy_document.lambda_trust.json

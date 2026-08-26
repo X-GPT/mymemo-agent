@@ -25,8 +25,15 @@ Treat the E2B sandbox as untrusted because it runs prompt-injectable file and Ba
 
 chat-api must not hold OpenRouter, KB, or E2B credentials. It admits Runs, serves history and artifact metadata, attaches clients to Live Streams, and signs read-only artifact URLs.
 
-The AgentCore Runtime alone owns model traffic, scoped Searchable document
-access, E2B execution, relay production, and Downloadable artifact publication.
+The production AgentCore Runtime alone owns product Run model traffic, scoped
+Searchable document access, E2B execution, relay production, and Downloadable
+artifact publication. The separately deployed, gate-closed Agent-query Runtime
+may read only the OpenRouter secret and make no-tool model calls for deployment
+and local E2E verification; chat-api does not invoke it in production. It
+receives no database, E2B, Searchable document, Redis, or artifact credentials.
+Its resolved OpenRouter credential is passed only to the Claude subprocess
+through the SDK's per-query environment and is not written into the Runtime
+process environment.
 Its KB credential is read-only and separate from the writable `mymemo_agent`
 credential. The maintenance service receives only writable agent DB, E2B
 cleanup, and artifact-delete authority; it cannot serve Runs.

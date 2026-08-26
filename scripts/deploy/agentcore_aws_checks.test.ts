@@ -156,6 +156,71 @@ verify_agentcore_consumer_runtime_authority us-west-2 "$TF_OUTPUT"
 	});
 }
 
+function verifyQueryRuntimeConfiguration(imageDigest: string) {
+	const expectedDigest = `sha256:${"a".repeat(64)}`;
+	const runtimeId = "mymemo_agent_query_prod-runtime";
+	const roleArn =
+		"arn:aws:iam::637423444544:role/mymemo-agent-agentcore-prod-query-runtime";
+	const environmentVariables = {
+		AWS_REGION: "us-west-2",
+		OPENROUTER_API_KEY_SECRET_ARN: "arn:openrouter",
+		OPENROUTER_BASE_URL: "https://openrouter.ai/api",
+		PORT: "8080",
+	};
+	const runtime = {
+		agentRuntimeArn: `arn:aws:bedrock-agentcore:us-west-2:637423444544:runtime/${runtimeId}`,
+		agentRuntimeVersion: "2",
+		status: "READY",
+		roleArn,
+		environmentVariables,
+		metadataConfiguration: { requireMMDSV2: true },
+		networkConfiguration: { networkMode: "PUBLIC" },
+		protocolConfiguration: { serverProtocol: "HTTP" },
+		agentRuntimeArtifact: {
+			containerConfiguration: {
+				containerUri: `637423444544.dkr.ecr.us-west-2.amazonaws.com/mymemo/agent-query-runtime@${imageDigest}`,
+			},
+		},
+		lifecycleConfiguration: {
+			idleRuntimeSessionTimeout: 900,
+			maxLifetime: 3600,
+		},
+	};
+	const endpoint = { name: "DEFAULT", status: "READY", liveVersion: "2" };
+	const script = `
+set -euo pipefail
+source "${checksPath}"
+aws() {
+  case "$*" in
+    *"get-agent-runtime-endpoint"*) printf '%s\\n' "$ENDPOINT" ;;
+    *"get-agent-runtime"*) printf '%s\\n' "$RUNTIME" ;;
+    *) exit 97 ;;
+  esac
+}
+verify_agentcore_runtime_configuration us-west-2 "$TF_OUTPUT" "$EXPECTED_DIGEST" agent_query_runtime_id agent_query_runtime_security_configuration
+`;
+	return spawnSync("bash", ["-c", script], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			TF_OUTPUT: JSON.stringify({
+				agent_query_runtime_id: { value: runtimeId },
+				agent_query_runtime_security_configuration: {
+					value: {
+						role_arn: roleArn,
+						environment_variables: environmentVariables,
+						network_mode: "PUBLIC",
+						idle_runtime_session_timeout: 900,
+					},
+				},
+			}),
+			EXPECTED_DIGEST: expectedDigest,
+			RUNTIME: JSON.stringify(runtime),
+			ENDPOINT: JSON.stringify(endpoint),
+		},
+	});
+}
+
 function verifyAlarms(liveConfigurations: Record<string, AlarmConfiguration>) {
 	const alarms = Object.entries(liveConfigurations).map(
 		([AlarmName, configuration]) => ({
@@ -440,6 +505,16 @@ describe("production AgentCore consumer Runtime authority", () => {
 		simulation.EvaluationResults[0].ResourceSpecificResults[0].EvalResourceDecision =
 			"implicitDeny";
 		expect(verifyConsumerRuntimeAuthority(simulation).status).not.toBe(0);
+	});
+});
+
+describe("Agent-query Runtime live configuration", () => {
+	it("accepts only the deployed public Runtime image", () => {
+		const expectedDigest = `sha256:${"a".repeat(64)}`;
+		expect(verifyQueryRuntimeConfiguration(expectedDigest).status).toBe(0);
+		expect(
+			verifyQueryRuntimeConfiguration(`sha256:${"b".repeat(64)}`).status,
+		).not.toBe(0);
 	});
 });
 

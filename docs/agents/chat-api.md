@@ -6,13 +6,14 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 ## Routes and invariants
 
-### Staged synchronous Agent query
+### Staged query verification path
 
-The local-only composition may mount `POST /api/chat` with the non-production
-Agent-query Runtime HTTP adapter. It stores canonical `UIMessage` rows and the
-opaque current Agent-session id together, then supplies only that id—not public
-message history—to the next `AgentQueryRequest`. Production composition does
-not mount this path before the response-authority cutover.
+The local-only composition mounts `POST /api/chat` as an owner-scoped proxy to
+the Agent-query Runtime. After strict request, identity, Conversation ownership,
+Archive, and exposure checks, Chat API returns the Runtime's raw Claude SDK
+NDJSON response unchanged. The path performs no admission or persistence and
+provides no retry, history, or continuity; every request starts an independent
+no-tool query. Production composition does not mount this path.
 
 ### Create a Conversation
 

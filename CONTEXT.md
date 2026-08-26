@@ -187,9 +187,8 @@ _Avoid_: Conversation API, Assistant Cloud
 An additive, AI SDK-compatible data plane through which a client submits a
 message to an existing Conversation and receives that Run's live response. It
 shares the same Run admission and execution authority as the AG-UI agent
-surface rather than defining a second execution path. Issue #560's replacement
-Agent-query path and canonical message store remain test-seam-only until the
-production composition and authority cut over together.
+surface rather than defining a second execution path. The staged `/api/chat`
+query verification path is not this surface; it returns raw Claude SDK NDJSON.
 _Avoid_: messaging layer, AI SDK runtime
 
 **Assistant text delta**:
@@ -297,7 +296,8 @@ _Avoid_: fetch (the prototype path's word for content-into-context)
 The internal, Runtime-owned Claude SDK transcript that carries a Conversation's
 model-side memory across Runs, including a successfully preserved interrupted
 Run even when its provisional response is absent from Conversation history. It
-is never client-facing or stored in the Workspace.
+is never client-facing or stored in the Workspace. Verification queries do not
+use Agent session continuity.
 _Avoid_: chat history (that is the user-visible record in run events)
 
 **Session mirror evidence**:

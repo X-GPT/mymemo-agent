@@ -46,3 +46,25 @@ resource "aws_ecr_repository" "agentcore_runtime" {
     prevent_destroy = true
   }
 }
+
+resource "aws_ecr_repository" "agent_query_runtime" {
+  name                 = "mymemo/agent-query-runtime"
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = false
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  tags = {
+    Environment = "prod"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

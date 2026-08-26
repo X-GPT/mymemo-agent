@@ -28,6 +28,7 @@ chat_api_image                         = "123456789012.dkr.ecr.us-east-1.amazona
 agent_maintenance_image                = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-maintenance:REPLACE_WITH_GIT_SHA"
 agentcore_dispatch_publisher_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agentcore-dispatch-publisher:REPLACE_WITH_GIT_SHA"
 runtime_image_digest                   = "sha256:REPLACE_WITH_64_HEX_CHARACTERS"
+agent_query_runtime_image_digest       = "sha256:REPLACE_WITH_64_HEX_CHARACTERS"
 consumer_lambda_package                = "/absolute/path/to/consumer.zip"
 
 openrouter_default_model            = "anthropic/claude-sonnet-5"

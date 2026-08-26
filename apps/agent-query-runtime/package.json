@@ -9,16 +9,11 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "0.3.233",
-		"@mymemo/agent-db": "workspace:*",
-		"@mymemo/agent-query": "workspace:*",
-		"e2b": "^2.14.0",
-		"pino": "^9.14.0",
+		"@aws-sdk/client-secrets-manager": "^3.1110.0",
 		"zod": "4.3.6"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.11",
-		"@electric-sql/pglite": "^0.5.3",
-		"@mymemo/test-support": "workspace:*",
 		"@types/bun": "^1.3.11"
 	},
 	"type": "module"

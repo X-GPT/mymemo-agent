@@ -1,60 +1,44 @@
-import { mkdir } from "node:fs/promises";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { createDatabase } from "@mymemo/agent-db/client";
-import pino from "pino";
-import { createE2bSandboxProvisioner } from "../../agentcore-runtime/src/e2b/sandbox-provisioner";
-import { createAgentQueryServerOptions } from "./server";
-import { createAgentQuerySessionStore } from "./session-store";
-import { createAgentQueryWorkspacePreparer } from "./workspace";
+import { resolveClaudeEnvironment } from "./openrouter";
+import { createResponseStream } from "./response-execution";
+import { createResponseInvocationHandler } from "./server";
 
-const SANDBOX_IDLE_MS = 300_000;
-
-function requireEnv(name: string): string {
-	const value = Bun.env[name]?.trim();
-	if (!value) throw new Error(`${name} is required`);
-	return value;
-}
+const claudeEnvironment = await resolveClaudeEnvironment(Bun.env);
 
 const port = Number(Bun.env.PORT ?? 8080);
 if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
 	throw new Error("PORT must be an integer between 1 and 65535");
 }
-const logger = pino({ level: Bun.env.LOG_LEVEL ?? "info" });
-const db = createDatabase(requireEnv("AGENT_DATABASE_URL"));
-const prepareWorkspace = createAgentQueryWorkspacePreparer({
-	db,
-	logger,
-	sandboxIdleMs: SANDBOX_IDLE_MS,
-	provisioner: createE2bSandboxProvisioner({
-		apiKey: requireEnv("E2B_API_KEY"),
-		template: requireEnv("WORKER_E2B_TEMPLATE"),
-		sandboxIdleMs: SANDBOX_IDLE_MS,
-		logger,
-	}),
-});
-
-Bun.serve(
-	createAgentQueryServerOptions(
-		{
-			query,
-			createSessionStore: (owner) => createAgentQuerySessionStore(db, owner),
-			async prepareWorkingDirectory(path) {
-				await mkdir(path, { recursive: true });
-			},
-			prepareWorkspace,
-			// Production Postgres epoch/deadline enforcement is composed in #565;
-			// this Runtime remains outside production until then.
-			async verifyResponseAuthority() {},
-		},
-		port,
-	),
-);
 
 let shuttingDown = false;
+
+const server = Bun.serve({
+	hostname: "0.0.0.0",
+	port,
+	idleTimeout: 0,
+	maxRequestBodySize: 512 * 1024,
+	routes: {
+		"/ping": {
+			GET: () =>
+				Response.json(
+					{ status: shuttingDown ? "Unhealthy" : "Healthy" },
+					{ status: shuttingDown ? 503 : 200 },
+				),
+		},
+		"/invocations": {
+			POST: createResponseInvocationHandler((request) => {
+				if (shuttingDown) throw new Error("Runtime is shutting down");
+				return createResponseStream(request, {
+					environment: { ...Bun.env, ...claudeEnvironment },
+				});
+			}),
+		},
+	},
+});
+
 async function close() {
 	if (shuttingDown) return;
 	shuttingDown = true;
-	await db.$client.end().catch(() => {});
+	await server.stop(true);
 	process.exit(0);
 }
 process.once("SIGINT", () => void close());
