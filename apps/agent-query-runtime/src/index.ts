@@ -16,7 +16,7 @@ const s3 = new S3Client({
 		? { endpoint: localArtifactEndpoint, forcePathStyle: true }
 		: {}),
 });
-const objectStore = createS3DetachedSessionStore({
+const detachedSessionStore = createS3DetachedSessionStore({
 	bucket,
 	client: s3,
 });
@@ -45,7 +45,7 @@ const server = Bun.serve({
 			POST: createResponseInvocationHandler((request) => {
 				if (shuttingDown) throw new Error("Runtime is shutting down");
 				return createResponseStream(request, {
-					objectStore,
+					detachedSessionStore,
 					environment: { ...Bun.env, ...claudeEnvironment },
 				});
 			}),

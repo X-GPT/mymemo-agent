@@ -167,7 +167,7 @@ export function createResponseStream(
 		prompt: string;
 	},
 	options: {
-		objectStore: DetachedSessionStore;
+		detachedSessionStore: DetachedSessionStore;
 		environment?: Record<string, string | undefined>;
 		query?: typeof sdkQuery;
 		prepareWorkingDirectory?: (path: string) => Promise<void>;
@@ -183,7 +183,9 @@ export function createResponseStream(
 	return new ReadableStream<Uint8Array>({
 		async start(controller) {
 			try {
-				const state = await options.objectStore.load(input.conversationId);
+				const state = await options.detachedSessionStore.load(
+					input.conversationId,
+				);
 				const cwd = `/workspace/conversations/${input.conversationId}`;
 				await prepareWorkingDirectory(cwd);
 				const session = await createSession(
@@ -201,7 +203,10 @@ export function createResponseStream(
 				})) {
 					controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
 				}
-				await options.objectStore.save(input.conversationId, session.detach());
+				await options.detachedSessionStore.save(
+					input.conversationId,
+					session.detach(),
+				);
 				controller.close();
 			} catch (error) {
 				controller.error(error);

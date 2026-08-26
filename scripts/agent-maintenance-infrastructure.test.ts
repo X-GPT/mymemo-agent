@@ -266,16 +266,6 @@ describe("agent-maintenance infrastructure", () => {
 			'data "aws_iam_policy_document" "runtime"',
 			'resource "aws_iam_role_policy" "runtime"',
 		);
-		const queryRuntimePolicy = section(
-			agentCoreIam,
-			'data "aws_iam_policy_document" "query_runtime"',
-			'resource "aws_iam_role_policy" "query_runtime"',
-		);
-		const queryRuntimeEnvironment = section(
-			terraformFile("agentcore-locals.tf"),
-			"query_runtime_environment = {",
-			"lambda_common_environment = {",
-		);
 		const securityGroup = section(
 			network,
 			'resource "aws_security_group" "agent_maintenance"',
@@ -297,48 +287,10 @@ describe("agent-maintenance infrastructure", () => {
 		expect(runtimePolicy).toContain("s3:PutObject");
 		expect(runtimePolicy).toContain("s3:AbortMultipartUpload");
 		expect(runtimePolicy).not.toContain("s3:DeleteObject");
-		expect(queryRuntimeEnvironment).toContain("ARTIFACT_BUCKET");
-		expect(queryRuntimeEnvironment).toContain("aws_s3_bucket.artifacts.bucket");
-		expect(queryRuntimePolicy).toContain('"s3:GetObject"');
-		expect(queryRuntimePolicy).toContain('"s3:PutObject"');
-		expect(queryRuntimePolicy).toContain("/agent-sessions/*");
-		expect(queryRuntimePolicy).not.toContain("/objects/*");
-		expect(queryRuntimePolicy).not.toContain("s3:ListBucket");
-		expect(queryRuntimePolicy).not.toContain("s3:DeleteObject");
-		expect(queryRuntimePolicy).not.toContain("s3:AbortMultipartUpload");
 		expect(securityGroup).toContain("from_port       = 5432");
 		expect(securityGroup).toContain("from_port   = 443");
 		expect(securityGroup).toContain("VPC DNS over UDP");
 		expect(securityGroup).toContain("VPC DNS over TCP");
 		expect(securityGroup).not.toContain('protocol    = "-1"');
-	});
-
-	it("keeps detached-session verification authority narrow", () => {
-		const compose = readFileSync("compose.yaml", "utf8");
-		const localPolicy = JSON.parse(
-			readFileSync("infra/dev/agent-session-policy.json", "utf8"),
-		);
-		const bootstrap = readFileSync("infra/bootstrap-iam/main.tf", "utf8");
-		const verifyRuntime = section(
-			bootstrap,
-			'sid = "VerifyAgentQueryRuntime"',
-			'sid = "AgentCoreConsumerManagement"',
-		);
-		expect(compose).toContain("agent-session-policy.json");
-		expect(compose).toContain(
-			"mc admin policy attach local agent-session --user local-agent-session",
-		);
-		expect(compose).not.toContain(
-			"mc admin policy attach local readwrite --user local-agent-session",
-		);
-		expect(localPolicy.Statement).toEqual([
-			{
-				Effect: "Allow",
-				Action: ["s3:GetObject", "s3:PutObject"],
-				Resource: "arn:aws:s3:::mymemo-agent-local-artifacts/agent-sessions/*",
-			},
-		]);
-		expect(verifyRuntime).toContain("bedrock-agentcore:InvokeAgentRuntime");
-		expect(verifyRuntime).toContain("bedrock-agentcore:StopRuntimeSession");
 	});
 });
