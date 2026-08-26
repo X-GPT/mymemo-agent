@@ -70,96 +70,91 @@ class InvocationSessionStore extends InMemorySessionStore {
 	}
 
 	detach(sessionId: string): DetachedState {
-		const state = JSON.parse(
-			JSON.stringify({
-				version: 1,
-				sessionId,
-				transcripts: [...this.#keys.values()]
-					.filter((key) => key.sessionId === sessionId)
-					.map((key) => ({ key, entries: this.getEntries(key) })),
-			}),
-		) as DetachedState;
+		const state: DetachedState = structuredClone({
+			version: 1,
+			sessionId,
+			transcripts: [...this.#keys.values()]
+				.filter((key) => key.sessionId === sessionId)
+				.map((key) => ({ key, entries: this.getEntries(key) })),
+		});
 		this.clear();
 		this.#keys.clear();
 		return state;
 	}
 }
 
-function createAgent(options: {
-	query: typeof sdkQuery;
-	environment: Record<string, string | undefined>;
-}) {
-	return {
-		async createSession(input: {
-			conversationId: string;
-			runId: string;
-			state: unknown | null;
-		}) {
-			const state =
-				input.state === null ? null : detachedStateSchema.parse(input.state);
-			const store = new InvocationSessionStore();
-			if (state) await store.hydrate(state);
-			const configDirectory = await mkdtemp(
-				join(tmpdir(), `mymemo-agent-query-${input.runId}-`),
-			);
-			let drained = false;
-			let sessionId = state?.sessionId;
+async function createSession(
+	input: {
+		conversationId: string;
+		runId: string;
+		state: unknown | null;
+	},
+	options: {
+		query: typeof sdkQuery;
+		environment: Record<string, string | undefined>;
+	},
+) {
+	const state =
+		input.state === null ? null : detachedStateSchema.parse(input.state);
+	const store = new InvocationSessionStore();
+	if (state) await store.hydrate(state);
+	const configDirectory = await mkdtemp(
+		join(tmpdir(), `mymemo-agent-query-${input.runId}-`),
+	);
+	let drained = false;
+	let sessionId = state?.sessionId;
 
-			return {
-				async *stream(turn: { model: string; prompt: string; cwd: string }) {
-					try {
-						const query = options.query({
-							prompt: turn.prompt,
-							options: {
-								env: {
-									...options.environment,
-									CLAUDE_CONFIG_DIR: configDirectory,
-								},
-								model: turn.model,
-								includePartialMessages: true,
-								cwd: turn.cwd,
-								permissionMode: "dontAsk",
-								sessionStore: store,
-								settingSources: [],
-								thinking: { type: "disabled" },
-								tools: [],
-								...(sessionId ? { resume: sessionId } : {}),
-							},
-						});
-						for await (const message of query) {
-							if ("session_id" in message && message.session_id) {
-								sessionId = message.session_id;
-							}
-							yield message;
-						}
-						drained = true;
-					} finally {
-						await rm(configDirectory, { recursive: true, force: true });
+	return {
+		async *stream(turn: { model: string; prompt: string; cwd: string }) {
+			try {
+				const query = options.query({
+					prompt: turn.prompt,
+					options: {
+						env: {
+							...options.environment,
+							CLAUDE_CONFIG_DIR: configDirectory,
+						},
+						model: turn.model,
+						includePartialMessages: true,
+						cwd: turn.cwd,
+						permissionMode: "dontAsk",
+						sessionStore: store,
+						settingSources: [],
+						thinking: { type: "disabled" },
+						tools: [],
+						...(sessionId ? { resume: sessionId } : {}),
+					},
+				});
+				for await (const message of query) {
+					if ("session_id" in message && message.session_id) {
+						sessionId = message.session_id;
 					}
-				},
-				detach() {
-					if (!drained || !sessionId) {
-						throw new Error(
-							`Cannot detach Agent session for ${input.runId} before full drain`,
-						);
-					}
-					const state = store.detach(sessionId);
-					if (store.size !== 0) {
-						throw new Error(
-							`Agent session store did not clear for ${input.runId}`,
-						);
-					}
-					console.info(
-						JSON.stringify({
-							event: "agent_session_detached",
-							conversationId: input.conversationId,
-							runId: input.runId,
-							liveStoreEntryCount: store.size,
-						}),
-					);
-					return state;
-				},
-			};
+					yield message;
+				}
+				drained = true;
+			} finally {
+				await rm(configDirectory, { recursive: true, force: true });
+			}
+		},
+		detach() {
+			if (!drained || !sessionId) {
+				throw new Error(
+					`Cannot detach Agent session for ${input.runId} before full drain`,
+				);
+			}
+			const state = store.detach(sessionId);
+			if (store.size !== 0) {
+				throw new Error(`Agent session store did not clear for ${input.runId}`);
+			}
+			console.info(
+				JSON.stringify({
+					event: "agent_session_detached",
+					conversationId: input.conversationId,
+					runId: input.runId,
+					liveStoreEntryCount: store.size,
+				}),
+			);
+			return state;
 		},
 	};
 }
@@ -191,14 +186,14 @@ export function createResponseStream(
 				const state = await options.objectStore.load(input.conversationId);
 				const cwd = `/workspace/conversations/${input.conversationId}`;
 				await prepareWorkingDirectory(cwd);
-				const session = await createAgent({
-					query,
-					environment: options.environment ?? Bun.env,
-				}).createSession({
-					conversationId: input.conversationId,
-					runId: input.runId,
-					state,
-				});
+				const session = await createSession(
+					{
+						conversationId: input.conversationId,
+						runId: input.runId,
+						state,
+					},
+					{ query, environment: options.environment ?? Bun.env },
+				);
 				for await (const message of session.stream({
 					model: input.model,
 					prompt: input.prompt,

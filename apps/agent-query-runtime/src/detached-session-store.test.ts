@@ -1,5 +1,9 @@
 import { expect, it } from "bun:test";
-import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+	GetObjectCommand,
+	NoSuchKey,
+	PutObjectCommand,
+} from "@aws-sdk/client-s3";
 import {
 	createS3DetachedSessionStore,
 	MAX_DETACHED_SESSION_BYTES,
@@ -15,9 +19,7 @@ it("treats a missing Conversation session object as a new Agent session", async 
 					Bucket: "private-artifacts",
 					Key: "agent-sessions/conversation-1",
 				});
-				throw Object.assign(new Error("missing"), {
-					$metadata: { httpStatusCode: 404 },
-				});
+				throw new NoSuchKey({ $metadata: {}, message: "missing" });
 			},
 		} as never,
 	});
@@ -43,9 +45,7 @@ it("round-trips, replaces, and isolates complete Conversation session objects", 
 				if (command instanceof GetObjectCommand) {
 					const body = objects.get(command.input.Key as string);
 					if (!body) {
-						throw Object.assign(new Error("missing"), {
-							$metadata: { httpStatusCode: 404 },
-						});
+						throw new NoSuchKey({ $metadata: {}, message: "missing" });
 					}
 					return {
 						Body: {

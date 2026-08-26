@@ -1,5 +1,6 @@
 import {
 	GetObjectCommand,
+	NoSuchKey,
 	PutObjectCommand,
 	type S3Client,
 } from "@aws-sdk/client-s3";
@@ -27,15 +28,7 @@ export function createS3DetachedSessionStore(config: {
 				if (!response.Body) throw new Error("Agent session object has no body");
 				return JSON.parse(await response.Body.transformToString());
 			} catch (error) {
-				if (
-					typeof error === "object" &&
-					error !== null &&
-					"$metadata" in error &&
-					(error.$metadata as { httpStatusCode?: number }).httpStatusCode ===
-						404
-				) {
-					return null;
-				}
+				if (error instanceof NoSuchKey) return null;
 				throw error;
 			}
 		},

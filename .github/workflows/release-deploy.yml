@@ -416,17 +416,19 @@ jobs:
             --arg runId "${first_query_run_id}" \
             --arg passphrase "${query_passphrase}" \
             '{runId:$runId,model:"anthropic/claude-sonnet-5",prompt:("Remember this exact passphrase for my next message: " + $passphrase + ". Reply with exactly REMEMBERED.")}')"
-          aws bedrock-agentcore invoke-agent-runtime \
-            --region "${AWS_REGION}" \
-            --agent-runtime-arn "${query_runtime_arn}" \
-            --qualifier DEFAULT \
-            --runtime-session-id "${query_runtime_session_id}" \
-            --content-type application/json \
-            --accept application/x-ndjson \
-            --cli-binary-format raw-in-base64-out \
-            --cli-read-timeout 300 \
-            --payload "${first_query_payload}" \
-            "${first_query_smoke_file}"
+          invoke_query() {
+            aws bedrock-agentcore invoke-agent-runtime \
+              --region "${AWS_REGION}" \
+              --agent-runtime-arn "${query_runtime_arn}" \
+              --qualifier DEFAULT \
+              --runtime-session-id "${query_runtime_session_id}" \
+              --content-type application/json \
+              --accept application/x-ndjson \
+              --cli-binary-format raw-in-base64-out \
+              --cli-read-timeout 300 \
+              --payload "$1" "$2"
+          }
+          invoke_query "${first_query_payload}" "${first_query_smoke_file}"
           jq -s -e 'any(.[]; .type == "result" and .subtype == "success" and .is_error == false)' "${first_query_smoke_file}" >/dev/null
           detached_observed=false
           for _ in $(seq 1 12); do
@@ -454,17 +456,7 @@ jobs:
           second_query_payload="$(jq -cn \
             --arg runId "query-smoke-second-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             '{runId:$runId,model:"anthropic/claude-sonnet-5",prompt:"Reply with only the exact passphrase I asked you to remember in my previous message."}')"
-          aws bedrock-agentcore invoke-agent-runtime \
-            --region "${AWS_REGION}" \
-            --agent-runtime-arn "${query_runtime_arn}" \
-            --qualifier DEFAULT \
-            --runtime-session-id "${query_runtime_session_id}" \
-            --content-type application/json \
-            --accept application/x-ndjson \
-            --cli-binary-format raw-in-base64-out \
-            --cli-read-timeout 300 \
-            --payload "${second_query_payload}" \
-            "${second_query_smoke_file}"
+          invoke_query "${second_query_payload}" "${second_query_smoke_file}"
           jq -s -e \
             --arg passphrase "${query_passphrase}" \
             'any(.[]; .type == "assistant" and (tostring | contains($passphrase))) and any(.[]; .type == "result" and .subtype == "success" and .is_error == false)' \

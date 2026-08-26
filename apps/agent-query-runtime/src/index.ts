@@ -5,8 +5,8 @@ import { createResponseStream } from "./response-execution";
 import { createResponseInvocationHandler } from "./server";
 
 const claudeEnvironment = await resolveClaudeEnvironment(Bun.env);
-const artifactBucket = Bun.env.ARTIFACT_BUCKET?.trim();
-if (!artifactBucket) throw new Error("ARTIFACT_BUCKET is required");
+const bucket = Bun.env.ARTIFACT_BUCKET?.trim();
+if (!bucket) throw new Error("ARTIFACT_BUCKET is required");
 const awsRegion = Bun.env.AWS_REGION?.trim();
 if (!awsRegion) throw new Error("AWS_REGION is required");
 const localArtifactEndpoint = Bun.env.LOCAL_ARTIFACT_ENDPOINT?.trim();
@@ -17,7 +17,7 @@ const s3 = new S3Client({
 		: {}),
 });
 const objectStore = createS3DetachedSessionStore({
-	bucket: artifactBucket,
+	bucket,
 	client: s3,
 });
 
