@@ -178,6 +178,8 @@ services:
     image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     network_mode: "service:redis"
     entrypoint: ["/bin/sh", "-c"]
+    volumes:
+      - ./infra/dev/agent-session-policy.json:/config/agent-session-policy.json:ro
     command:
       - >-
         mc alias set local http://127.0.0.1:9000 local-artifact-admin local-artifact-admin-secret
@@ -187,7 +189,8 @@ services:
         && mc admin user add local local-artifact-writer local-artifact-writer-secret
         && mc admin policy attach local writeonly --user local-artifact-writer
         && mc admin user add local local-agent-session local-agent-session-secret
-        && mc admin policy attach local readwrite --user local-agent-session
+        && mc admin policy create local agent-session /config/agent-session-policy.json
+        && mc admin policy attach local agent-session --user local-agent-session
     depends_on:
       artifact-store:
         condition: service_healthy

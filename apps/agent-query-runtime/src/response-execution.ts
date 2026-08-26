@@ -143,7 +143,21 @@ function createAgent(options: {
 							`Cannot detach Agent session for ${input.runId} before full drain`,
 						);
 					}
-					return store.detach(sessionId);
+					const state = store.detach(sessionId);
+					if (store.size !== 0) {
+						throw new Error(
+							`Agent session store did not clear for ${input.runId}`,
+						);
+					}
+					console.info(
+						JSON.stringify({
+							event: "agent_session_detached",
+							conversationId: input.conversationId,
+							runId: input.runId,
+							liveStoreEntryCount: store.size,
+						}),
+					);
+					return state;
 				},
 			};
 		},

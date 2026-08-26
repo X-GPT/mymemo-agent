@@ -11,9 +11,13 @@ A Conversation is the durable container, a Run serves one submitted message, and
 The local-only composition mounts `POST /api/chat` as an owner-scoped proxy to
 the Agent-query Runtime. After strict request, identity, Conversation ownership,
 Archive, and exposure checks, Chat API returns the Runtime's raw Claude SDK
-NDJSON response unchanged. The path performs no admission or persistence and
-provides no retry, history, or continuity; every request starts an independent
-no-tool query. Production composition does not mount this path.
+NDJSON response unchanged. The path provides no retry or history. Chat API
+itself performs no admission or persistence; it forwards the accepted
+User-message id as the
+Runtime `runId`; the Runtime gives each invocation a fresh in-memory
+SessionStore, then replaces the Conversation's opaque detached Agent session at
+`agent-sessions/<conversationId>` after fully draining the query and clearing
+the live store. Production composition does not mount this path.
 
 ### Create a Conversation
 

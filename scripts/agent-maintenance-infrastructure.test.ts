@@ -312,4 +312,40 @@ describe("agent-maintenance infrastructure", () => {
 		expect(securityGroup).toContain("VPC DNS over TCP");
 		expect(securityGroup).not.toContain('protocol    = "-1"');
 	});
+
+	it("keeps detached-session verification authority narrow", () => {
+		const compose = readFileSync("compose.yaml", "utf8");
+		const localPolicy = JSON.parse(
+			readFileSync("infra/dev/agent-session-policy.json", "utf8"),
+		);
+		const bootstrap = readFileSync("infra/bootstrap-iam/main.tf", "utf8");
+		const verifyRuntime = section(
+			bootstrap,
+			'sid = "VerifyAgentQueryRuntime"',
+			'sid = "AgentCoreConsumerManagement"',
+		);
+		const release = readFileSync(
+			".github/workflows/release-deploy.yml",
+			"utf8",
+		);
+
+		expect(compose).toContain("agent-session-policy.json");
+		expect(compose).toContain(
+			"mc admin policy attach local agent-session --user local-agent-session",
+		);
+		expect(compose).not.toContain(
+			"mc admin policy attach local readwrite --user local-agent-session",
+		);
+		expect(localPolicy.Statement).toEqual([
+			{
+				Effect: "Allow",
+				Action: ["s3:GetObject", "s3:PutObject"],
+				Resource: "arn:aws:s3:::mymemo-agent-local-artifacts/agent-sessions/*",
+			},
+		]);
+		expect(verifyRuntime).toContain("bedrock-agentcore:InvokeAgentRuntime");
+		expect(verifyRuntime).toContain("bedrock-agentcore:StopRuntimeSession");
+		expect(release).toContain('contains("agent_session_detached")');
+		expect(release).toContain('test("liveStoreEntryCount[^0-9]*0")');
+	});
 });

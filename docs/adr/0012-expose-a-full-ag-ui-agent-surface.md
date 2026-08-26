@@ -11,10 +11,13 @@ non-transport decision here remains in force.
 
 Amended (2026-08-25) by the Agent-query verification release: this replaces the
 staged-path assumptions recorded for Issues #560 and #562–#564. The local-only
-path now starts a fresh no-tool query with SDK session persistence disabled and
-returns raw Claude SDK messages as NDJSON without admission, message
-persistence, retry, history, or continuity. Production composition does not
-mount this path and continues to use the Run and Run-event authority below.
+path returns raw Claude SDK messages as NDJSON without admission, message
+persistence, retry, or history. Issue #565 further amends that verification
+path: Chat API forwards the accepted User-message id as `runId`, while the
+Runtime uses a fresh live SessionStore per invocation and S3-backed opaque
+detached Agent-session continuity per Conversation. This exception does not
+change the production Run and Run-event authority below; production composition
+still does not mount the verification path.
 
 MyMemo exposes a plug-compatible AG-UI data plane rather than only borrowing AG-UI-shaped event names. A Run endpoint accepts the standard `RunAgentInput` body and returns a standard AG-UI `BaseEvent` stream; active-Run reconnect emits the same event vocabulary from a per-Run Redis Stream. MyMemo also supplies the persistence, replay, interruption, and history endpoints that AG-UI leaves to the server implementation. The surface advertises resumability only after its sequence and replay contract is implemented and verified.
 
