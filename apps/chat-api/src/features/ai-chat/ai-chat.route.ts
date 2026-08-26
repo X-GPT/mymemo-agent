@@ -9,7 +9,6 @@ import {
 	RunIdParam,
 } from "@/features/conversations/conversations.schema";
 import { requireInternalIdentity } from "@/features/conversations/internal-identity";
-import { toAiSdkResponse } from "./response-stream";
 
 const chatBody = z.strictObject({
 	id: ConversationIdParam,
@@ -45,39 +44,26 @@ routes.post(
 	}),
 	requireInternalIdentity,
 	async (c) => {
+		const body = c.req.valid("json");
+		const message = body.messages[0];
+		const conversation = await c.var.deps.conversationStore.get({
+			userId: c.var.identity.memberCode,
+			conversationId: body.id,
+		});
+		if (!conversation) {
+			return c.json({ error: "Conversation not found" }, 404);
+		}
+		if (conversation.archivedAt !== null) {
+			return c.json({ error: "Conversation is archived" }, 409);
+		}
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
-		const body = c.req.valid("json");
-		const message = body.messages[0];
-		const admission = await c.var.deps.admitUserMessage({
-			userId: c.var.identity.memberCode,
-			conversationId: body.id,
-			messageId: message.id,
-			parts: message.parts,
-		});
-		if (admission.outcome === "not_found") {
-			return c.json({ error: "Conversation not found" }, 404);
-		}
-		if (admission.outcome === "archived") {
-			return c.json({ error: "Conversation is archived" }, 409);
-		}
-		if (admission.outcome === "conflict") {
-			return c.json({ error: "Message id conflict" }, 409);
-		}
-		const upstream = await c.var.deps.agentQueryRuntimeInvoker({
+		return c.var.deps.agentQueryRuntimeInvoker({
 			conversationId: body.id,
 			model: body.model,
 			prompt: message.parts[0].text,
 		});
-		return toAiSdkResponse(upstream, ({ messageId, parts }) =>
-			c.var.deps.appendAssistantMessage({
-				userId: c.var.identity.memberCode,
-				conversationId: body.id,
-				messageId,
-				parts,
-			}),
-		);
 	},
 );
 

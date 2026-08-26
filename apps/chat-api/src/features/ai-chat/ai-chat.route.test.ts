@@ -23,24 +23,7 @@ const requestBody = {
 	model: "anthropic/claude-sonnet-5",
 	trigger: "submit-message",
 };
-
-const rawClaudeStream = [
-	{
-		type: "stream_event",
-		event: {
-			type: "content_block_delta",
-			delta: { type: "text_delta", text: "Hello" },
-		},
-	},
-	{
-		type: "result",
-		subtype: "success",
-		is_error: false,
-		session_id: "session-1",
-	},
-]
-	.map((message) => JSON.stringify(message))
-	.join("\n");
+const rawClaudeStream = '{"type":"result","subtype":"success"}\n';
 
 function makeApp(deps: Partial<AppDeps>) {
 	const app = new Hono<AppEnv>();
@@ -52,25 +35,20 @@ function makeApp(deps: Partial<AppDeps>) {
 	return app;
 }
 
-it("proxies a query request to the Conversation Runtime", async () => {
+it("returns the owned Conversation Runtime stream unchanged", async () => {
 	const invocations: AgentQueryRequest[] = [];
-	const admitted: unknown[] = [];
-	const completed: unknown[] = [];
-	const order: string[] = [];
+	const lookups: unknown[] = [];
 	const app = makeApp({
+		conversationStore: {
+			get: async (input: unknown) => {
+				lookups.push(input);
+				return { archivedAt: null } as never;
+			},
+		} as unknown as AppDeps["conversationStore"],
 		exposureGate: { isAgentEnabled: async () => true },
-		admitUserMessage: async (message: unknown) => {
-			order.push("admit");
-			admitted.push(message);
-			return { outcome: "admitted" };
-		},
-		appendAssistantMessage: async (message: unknown) => {
-			completed.push(message);
-		},
-		agentQueryRuntimeInvoker: async (request: AgentQueryRequest) => {
-			order.push("invoke");
+		agentQueryRuntimeInvoker: async (request) => {
 			invocations.push(request);
-			return new Response(`${rawClaudeStream}\n`, {
+			return new Response(rawClaudeStream, {
 				headers: {
 					"content-type": "application/x-ndjson",
 					"x-runtime-header": "preserved",
@@ -84,26 +62,13 @@ it("proxies a query request to the Conversation Runtime", async () => {
 		headers,
 		body: JSON.stringify(requestBody),
 	});
+
 	expect(response.status).toBe(200);
-	expect(response.headers.get("content-type")).toBe("text/event-stream");
+	expect(response.headers.get("content-type")).toBe("application/x-ndjson");
 	expect(response.headers.get("x-runtime-header")).toBe("preserved");
-	expect(await response.text()).toContain("data: [DONE]");
-	expect(admitted).toEqual([
-		{
-			userId: "member-1",
-			conversationId: "conversation-1",
-			messageId: "response-1",
-			parts: [{ type: "text", text: "Hello" }],
-		},
-	]);
-	expect(order).toEqual(["admit", "invoke"]);
-	expect(completed).toEqual([
-		{
-			userId: "member-1",
-			conversationId: "conversation-1",
-			messageId: expect.any(String),
-			parts: [{ type: "text", text: "Hello", state: "done" }],
-		},
+	expect(await response.text()).toBe(rawClaudeStream);
+	expect(lookups).toEqual([
+		{ userId: "member-1", conversationId: "conversation-1" },
 	]);
 	expect(invocations).toEqual([
 		{
@@ -114,15 +79,13 @@ it("proxies a query request to the Conversation Runtime", async () => {
 	]);
 });
 
-it("rejects invalid and exposure-disabled requests before admission", async () => {
-	let admissions = 0;
+it("rejects invalid and exposure-disabled requests before invocation", async () => {
 	let invocations = 0;
 	const app = makeApp({
+		conversationStore: {
+			get: async () => ({ archivedAt: null }) as never,
+		} as unknown as AppDeps["conversationStore"],
 		exposureGate: { isAgentEnabled: async () => false },
-		admitUserMessage: async () => {
-			admissions++;
-			return { outcome: "admitted" };
-		},
 		agentQueryRuntimeInvoker: async () => {
 			invocations++;
 			return new Response();
@@ -147,33 +110,38 @@ it("rejects invalid and exposure-disabled requests before admission", async () =
 			})
 		).status,
 	).toBe(403);
-	expect(admissions).toBe(0);
 	expect(invocations).toBe(0);
 });
 
-it("returns User-message admission failures without invoking the Runtime", async () => {
-	for (const [outcome, status, error] of [
-		["not_found", 404, "Conversation not found"],
-		["archived", 409, "Conversation is archived"],
-		["conflict", 409, "Message id conflict"],
-	] as const) {
-		let invocations = 0;
-		const app = makeApp({
-			exposureGate: { isAgentEnabled: async () => true },
-			admitUserMessage: async () => ({ outcome }),
-			agentQueryRuntimeInvoker: async () => {
-				invocations++;
-				return new Response();
+it.each([
+	[null, 404, "Conversation not found"],
+	[{ archivedAt: new Date() }, 409, "Conversation is archived"],
+] as const)("rejects a missing or archived Conversation before invocation", async (conversation, status, error) => {
+	let gateChecks = 0;
+	let invocations = 0;
+	const app = makeApp({
+		conversationStore: {
+			get: async () => conversation as never,
+			} as unknown as AppDeps["conversationStore"],
+		exposureGate: {
+			isAgentEnabled: async () => {
+				gateChecks++;
+				return true;
 			},
-		});
+		},
+		agentQueryRuntimeInvoker: async () => {
+			invocations++;
+			return new Response();
+		},
+	});
 
-		const response = await app.request("/api/chat", {
-			method: "POST",
-			headers,
-			body: JSON.stringify(requestBody),
-		});
-		expect(response.status).toBe(status);
-		expect(await response.json()).toEqual({ error });
-		expect(invocations).toBe(0);
-	}
+	const response = await app.request("/api/chat", {
+		method: "POST",
+		headers,
+		body: JSON.stringify(requestBody),
+	});
+	expect(response.status).toBe(status);
+	expect(await response.json()).toEqual({ error });
+	expect(gateChecks).toBe(0);
+	expect(invocations).toBe(0);
 });

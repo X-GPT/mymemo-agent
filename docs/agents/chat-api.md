@@ -6,16 +6,14 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 ## Routes and invariants
 
-### Staged Response path
+### Staged query verification path
 
-The local-only composition mounts the AI SDK Response proxy through the
-non-production Agent-query Runtime HTTP adapter. Chat API admits the User
-message before invoking that Runtime, then projects its raw Claude SDK messages
-to the AI SDK client protocol and commits the complete Assistant message before
-emitting completion. Each Response starts a fresh no-tool Claude SDK query.
-Production composition does not mount this path. A User-message id is accepted
-once; reusing it is a conflict. Distinct User-message ids may execute
-concurrently in the verification slice.
+The local-only composition mounts `POST /api/chat` as an owner-scoped proxy to
+the Agent-query Runtime. After strict request, identity, Conversation ownership,
+Archive, and exposure checks, Chat API returns the Runtime's raw Claude SDK
+NDJSON response unchanged. The path performs no admission or persistence and
+provides no retry, history, or continuity; every request starts an independent
+no-tool query. Production composition does not mount this path.
 
 ### Create a Conversation
 

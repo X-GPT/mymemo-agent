@@ -16,7 +16,6 @@ chat-api imports the shared client and schema directly. Its migration entrypoint
 - `src/run-store.ts`: fenced Run start, event append, terminalization, interruption, Live Stream marker writes, executing-Run observation, expiration, and Reclamation
 - `src/runtime-store.ts`: fenced Run sandbox/taint mutations, in-transaction Agent session pointer updates, Reclamation tainting, and the orphan-sandbox ledger
 - `src/session-store.ts`: Ownership-fenced production Run append/delete operations, transcript reads, and administrative Conversation transcript deletion
-- `src/conversation-message-store.ts`: atomic staged User-message admission, message-id conflict checks, and complete Assistant-message append
 - `src/artifact-store.ts`: pre-upload object ledger and fence-first atomic artifact-pointer/current-metadata/`run_done` commit
 - `src/testing.ts`: PGlite harness and shared seed helpers
 

@@ -26,12 +26,12 @@ _Avoid_: metadata update, Run completion
 **Archive**:
 A reversible lifecycle change that removes a Conversation from the default
 Conversation list and prevents it from receiving new messages, without deleting
-the Conversation or its history. It is rejected while a Run is active.
+the Conversation or its history.
 _Avoid_: delete, close
 
 **Permanent deletion**:
 The irreversible end of a Conversation that removes it and makes its history
-and Downloadable artifacts inaccessible. A Conversation with an Active Run
+and Downloadable artifacts inaccessible. A Conversation with an active Run
 cannot be permanently deleted.
 _Avoid_: Archive, soft delete
 
@@ -100,12 +100,6 @@ A Run that has been admitted but has not yet reached its Outcome. A Conversation
 may hold only a bounded number of them at once; a submission past that bound is
 refused rather than accepted and delayed.
 _Avoid_: pending run, in-flight run, queued run (that is one status among several)
-
-**Response**:
-One execution serving a User message through the AI SDK agent surface.
-The User-message id admits it once; reusing that identity is a conflict. A
-Response is not a Run, Agent session, or Runtime invocation.
-_Avoid_: Run, request, Runtime invocation
 
 **Run interruption**:
 A user-requested end to one queued or running Run that leaves its Conversation,
@@ -190,26 +184,28 @@ authorization, history paging, and artifacts remain MyMemo resource concerns.
 _Avoid_: Conversation API, Assistant Cloud
 
 **AI SDK agent surface**:
-The AI SDK-compatible data plane through which a client submits a message to an
-existing Conversation and receives a live Response. It does not fabricate a
-Run or Run audit identity.
+An additive, AI SDK-compatible data plane through which a client submits a
+message to an existing Conversation and receives that Run's live response. It
+shares the same Run admission and execution authority as the AG-UI agent
+surface rather than defining a second execution path. The staged `/api/chat`
+query verification path is not this surface; it returns raw Claude SDK NDJSON.
 _Avoid_: messaging layer, AI SDK runtime
 
 **Assistant text delta**:
-A bounded, provisional fragment of Assistant text emitted before the provider
-response completes. It is never copied into Postgres as a delta row and may
-disappear when its provisional stream ends.
+A bounded, provisional fragment of Assistant text appended to the Run's Live
+Stream before the provider response completes. It is never copied into Postgres
+as a delta row and may disappear when the Live Stream ends.
 _Avoid_: Run event, durable message, token
 
 **Assistant message**:
-One model-authored provider response within an execution, identified by a stable,
+One model-authored provider response within a run, identified by a stable,
 opaque, MyMemo-issued message id regardless of how many content blocks carry
-it. Assistant text remains provisional until the provider response completes;
-the complete message is then committed to Postgres before its completion event.
-A textless response exposes its identity through its Tool invocations or its
-durable generative UI payloads. If its execution is cancelled, interrupted, or
-fails before completion, its provisional text does not enter permanent
-Conversation history.
+it. Assistant text remains provisional in the Live Stream until the provider
+response completes; the complete message is then committed to Postgres before
+its completion event is appended to the Live Stream. A textless response
+exposes its identity through its Tool invocations or its durable generative UI
+payloads. If its Run is interrupted or fails before completion, its provisional
+text does not enter permanent Conversation history.
 _Avoid_: token stream
 
 **Tool invocation**:
@@ -300,8 +296,8 @@ _Avoid_: fetch (the prototype path's word for content-into-context)
 The internal, Runtime-owned Claude SDK transcript that carries a Conversation's
 model-side memory across Runs, including a successfully preserved interrupted
 Run even when its provisional response is absent from Conversation history. It
-is never client-facing or stored in the Workspace. Responses do not use Agent
-session continuity.
+is never client-facing or stored in the Workspace. Verification queries do not
+use Agent session continuity.
 _Avoid_: chat history (that is the user-visible record in run events)
 
 **Session mirror evidence**:

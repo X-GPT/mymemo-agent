@@ -1,10 +1,5 @@
 import { createDatabase } from "@mymemo/agent-db/client";
 import {
-	admitConversationMessageTx,
-	type AdmitConversationMessageResult,
-	appendAssistantMessageTx,
-} from "@mymemo/agent-db/conversation-message-store";
-import {
 	createLiveStreamTelemetry,
 	createRedisLiveStreamRelay,
 	type LiveStreamRelay,
@@ -43,20 +38,6 @@ export interface AppDeps {
 	config: ApiConfig;
 	/** Staged Agent-query Runtime boundary. */
 	agentQueryRuntimeInvoker: AgentQueryRuntimeInvoker;
-	/** Admits one staged User message before Runtime invocation. */
-	admitUserMessage(input: {
-		userId: string;
-		conversationId: string;
-		messageId: string;
-		parts: [{ type: "text"; text: string }];
-	}): Promise<AdmitConversationMessageResult>;
-	/** Commits one complete staged Assistant message. */
-	appendAssistantMessage(input: {
-		userId: string;
-		conversationId: string;
-		messageId: string;
-		parts: unknown;
-	}): Promise<void>;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
 	artifactMetadataStore: ArtifactMetadataStore;
 	/** Creates short-lived direct-download URLs after ownership authorization. */
@@ -119,9 +100,6 @@ export function createDeps(
 	return {
 		config,
 		agentQueryRuntimeInvoker,
-		admitUserMessage: (input) => admitConversationMessageTx(database, input),
-		appendAssistantMessage: (input) =>
-			appendAssistantMessageTx(database, input),
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
 		conversationStore,
