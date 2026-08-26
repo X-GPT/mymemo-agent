@@ -217,6 +217,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     sid = "AgentCoreRuntimeManagement"
     actions = [
       "bedrock-agentcore:CreateAgentRuntime",
+      "bedrock-agentcore:CreateAgentRuntimeEndpoint",
       "bedrock-agentcore:DeleteAgentRuntime",
       "bedrock-agentcore:GetAgentRuntime",
       "bedrock-agentcore:GetAgentRuntimeEndpoint",
