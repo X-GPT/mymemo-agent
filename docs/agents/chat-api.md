@@ -6,18 +6,27 @@ A Conversation is the durable container, a Run serves one submitted message, and
 
 ## Routes and invariants
 
-### Staged query verification path
+### Harness-hosted AI SDK chat path
 
-The local-only composition mounts `POST /api/chat` as an owner-scoped proxy to
-the Agent-query Runtime. After strict request, identity, Conversation ownership,
-Archive, and exposure checks, Chat API returns the Runtime's raw Claude SDK
-NDJSON response unchanged. The path provides no retry or history. Chat API
-itself performs no admission or persistence; it forwards the accepted
-User-message id as the
-Runtime `runId`; the Runtime gives each invocation a fresh in-memory
-SessionStore, then replaces the Conversation's opaque detached Agent session at
-`agent-sessions/<conversationId>` after fully draining the query and clearing
-the live store. Production composition does not mount this path.
+The local-only composition mounts `POST /api/chat`. It accepts the strict
+`useChat` body (`id`, one User message with one text part, `model`, `trigger`)
+and, after identity, Conversation ownership (`404`), Archive (`409`), and
+exposure (`403`) checks, runs one turn of Claude Code with its built-in tools
+inside a Harness sandbox (see [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)).
+`HarnessAgent` runs in the chat-api process; the sandbox is a fresh Vercel
+Sandbox whose harness `sessionId` is the Conversation id. The response is the
+AI SDK UI message stream (`toUIMessageStreamResponse()`): text arrives as it is
+produced and built-in tool activity appears as `tool-input-available` /
+`tool-output-available` parts. The request abort signal is passed to the turn.
+The session is destroyed once the stream has been drained, cancelled, or
+failed, and also when the turn fails to start. There is no admission, Run,
+history, retry, or continuity between messages yet: the fresh-sandbox-per-turn
+lifecycle is the first slice of [#595](https://github.com/X-GPT/mymemo-agent/issues/595)
+and is superseded by ADR-0033's persistent Harness sandbox (resume pointer,
+`stop()` per turn, `409` on overlapping turns) in the follow-up tickets. The
+adapter runs the configured `OPENROUTER_DEFAULT_MODEL`; the request `model`
+literal is validated, not forwarded. Production composition does not mount this
+path; its `harnessChatAgent` throws.
 
 ### Create a Conversation
 

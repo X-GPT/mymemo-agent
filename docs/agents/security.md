@@ -23,19 +23,18 @@ Reconnect, interruption, history, artifact access, and Conversation management f
 
 Treat the E2B sandbox as untrusted because it runs prompt-injectable file and Bash operations. Do not place provider, database, Searchable document, Redis, AWS, or E2B credentials in the sandbox environment.
 
-chat-api must not hold OpenRouter, KB, or E2B credentials. It admits Runs, serves history and artifact metadata, attaches clients to Live Streams, and signs read-only artifact URLs.
+chat-api must not hold KB or E2B credentials. It admits Runs, serves history and artifact metadata, attaches clients to Live Streams, and signs read-only artifact URLs. For the local-only AI SDK chat path it additionally holds the Vercel token triple and the OpenRouter credential; the production `ApiConfig` never reads either.
 
 The production AgentCore Runtime alone owns product Run model traffic, scoped
 Searchable document access, E2B execution, relay production, and Downloadable
-artifact publication. The separately deployed, gate-closed Agent-query Runtime
-may read the OpenRouter secret, make no-tool model calls, and get or put opaque
-session state only under the private bucket's `agent-sessions/` prefix for
-deployment and local E2E verification; chat-api does not invoke it in
-production. It receives no database, E2B, Searchable document, Redis, or
-Downloadable artifact authority.
-Its resolved OpenRouter credential is passed only to the Claude subprocess
-through the SDK's per-query environment and is not written into the Runtime
-process environment.
-Its KB credential is read-only and separate from the writable `mymemo_agent`
-credential. The maintenance service receives only writable agent DB, E2B
+artifact publication. On the AI SDK chat path (`POST /api/chat`, local
+composition only) the Harness sandbox is the trust boundary: Claude Code and
+its built-in tools run inside a Vercel Sandbox that holds no MyMemo secret. The
+model credential is brokered — the adapter replaces it with a placeholder
+before it reaches the sandbox and the Vercel firewall injects the real bearer
+only on requests to the OpenRouter host — so prompt-injected Bash can spend
+model credit against that host but cannot read the key. The sandbox receives no
+database, E2B, Searchable document, Redis, or Downloadable artifact authority.
+The AgentCore Runtime's KB credential is read-only and separate from the
+writable `mymemo_agent` credential. The maintenance service receives only writable agent DB, E2B
 cleanup, and artifact-delete authority; it cannot serve Runs.

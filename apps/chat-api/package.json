@@ -10,6 +10,9 @@
 	},
 	"dependencies": {
 		"@ag-ui/core": "^0.0.57",
+		"@ai-sdk/harness": "1.0.91",
+		"@ai-sdk/harness-claude-code": "1.0.94",
+		"@ai-sdk/sandbox-vercel": "1.0.91",
 		"@aws-sdk/client-s3": "^3.883.0",
 		"@aws-sdk/s3-request-presigner": "^3.883.0",
 		"@hono/standard-validator": "^0.1.5",

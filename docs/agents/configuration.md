@@ -46,21 +46,26 @@ it with a latest-image lookup.
 
 Runtime shutdown grace is fixed at 30 seconds and concurrency is fixed at one execution.
 
-## Agent-query verification Runtime
+## Harness-hosted AI SDK chat (local chat-api only)
 
-The gate-closed `agent-query-runtime` deployment requires `AWS_REGION`,
-`ARTIFACT_BUCKET`, `OPENROUTER_API_KEY_SECRET_ARN`, and `OPENROUTER_BASE_URL`;
-it resolves only the secret's `AWSCURRENT` value at boot. Terraform deploys its
-digest-pinned ARM64 image with public egress and a dedicated role that can read
-only that model secret plus get and put objects under the bucket's
-`agent-sessions/` prefix. `PORT` defaults to `8080`. Local Compose instead requires
-`OPENROUTER_API_KEY`;
-`OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api`. Compose passes
-these values to the Claude Agent SDK as `ANTHROPIC_AUTH_TOKEN` and
-`ANTHROPIC_BASE_URL`, with `ANTHROPIC_API_KEY` empty. It runs the Runtime on
-loopback port `4510`; local chat-api defaults `AGENT_QUERY_RUNTIME_URL` to that
-address and invokes its `/invocations` endpoint over HTTP. Production chat-api
-does not invoke the verification Runtime.
+The local composition (`apps/chat-api/local/index.ts`) reads these through
+`loadHarnessConfigFromEnv`; the production `ApiConfig` never reads them.
+
+Required:
+
+- `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`: passed explicitly to `createVercelSandbox`; `@vercel/sandbox` does not read them from the environment
+- `OPENROUTER_API_KEY`: set in the chat-api process as `ANTHROPIC_AUTH_TOKEN` for the Claude Code adapter (`auth: 'direct'`); the sandbox receives only the brokered placeholder
+
+Optional:
+
+- `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`): set as `ANTHROPIC_BASE_URL`
+- `OPENROUTER_DEFAULT_MODEL` (default `anthropic/claude-sonnet-5`): model the Claude Code adapter runs; the request `model` literal is validated but the adapter is configured once at boot
+- `HARNESS_SANDBOX_TIMEOUT_MS` (default `600000`): maximum wall-clock lifetime of one sandbox session
+- `HARNESS_SANDBOX_REGION` (default `iad1`): Vercel region; snapshots are region-bound
+
+Compose requires the Vercel triple and `OPENROUTER_API_KEY` for the `chat-api`
+service. The `agent-query-runtime` service remains in Compose until its
+retirement ticket but chat-api no longer invokes it.
 
 ## Chat API
 

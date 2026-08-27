@@ -417,6 +417,12 @@ describe.skipIf(!RUN)("AgentCore integration (real Postgres and Redis)", () => {
 				LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
 				PORT: String(chatPort),
 				LOG_LEVEL: "warn",
+				// The local composition builds the Harness agent at boot; these are
+				// never dialled because this suite does not post to /api/chat.
+				OPENROUTER_API_KEY: "integration-openrouter-key",
+				VERCEL_PROJECT_ID: "prj_integration",
+				VERCEL_TEAM_ID: "team_integration",
+				VERCEL_TOKEN: "integration-vercel-token",
 			},
 			stdout: "inherit",
 			stderr: "inherit",

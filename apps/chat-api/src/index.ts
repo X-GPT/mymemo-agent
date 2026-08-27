@@ -2,7 +2,7 @@ import { createLiveStreamTelemetry } from "@mymemo/live-text";
 import pino from "pino";
 import { createApp } from "./app";
 import { loadApiConfigFromEnv } from "./config/env";
-import { createDeps } from "./deps";
+import { createDeps, type HarnessChatAgent } from "./deps";
 
 export { createApp } from "./app";
 
@@ -11,11 +11,15 @@ export { createApp } from "./app";
 // is required at boot, while runtime reachability remains outside health.
 const productionConfig = loadApiConfigFromEnv(Bun.env);
 const productionLogger = pino({ level: productionConfig.logLevel });
+const harnessDisabled = async (): Promise<never> => {
+	throw new Error("Harness chat is not enabled in production");
+};
 const productionDeps = createDeps(
 	productionConfig,
-	async (): Promise<never> => {
-		throw new Error("Agent-query Runtime is not enabled in production");
-	},
+	{
+		createSession: harnessDisabled,
+		stream: harnessDisabled,
+	} as unknown as HarnessChatAgent,
 	createLiveStreamTelemetry("chat-api", productionLogger),
 );
 const productionApp = createApp(productionConfig, productionDeps);

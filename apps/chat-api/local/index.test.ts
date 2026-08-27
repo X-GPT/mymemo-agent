@@ -4,11 +4,7 @@ import { findFreePort } from "../../../packages/test-support/redis-test-server";
 
 it("starts without Compose-only endpoints", async () => {
 	const port = await findFreePort();
-	const {
-		AGENT_QUERY_RUNTIME_URL: _,
-		LOCAL_ARTIFACT_ENDPOINT: __,
-		...processEnv
-	} = Bun.env;
+	const { LOCAL_ARTIFACT_ENDPOINT: _, ...processEnv } = Bun.env;
 	const child = Bun.spawn([process.execPath, "run", "local/index.ts"], {
 		cwd: resolve(import.meta.dir, ".."),
 		env: {
@@ -18,8 +14,12 @@ it("starts without Compose-only endpoints", async () => {
 			AWS_REGION: "us-west-2",
 			DB_SSL: "disable",
 			LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
+			OPENROUTER_API_KEY: "test-openrouter-key",
 			PORT: String(port),
 			REDIS_URL: "redis://127.0.0.1:9",
+			VERCEL_PROJECT_ID: "prj_test",
+			VERCEL_TEAM_ID: "team_test",
+			VERCEL_TOKEN: "test-vercel-token",
 		},
 		stdout: "ignore",
 		stderr: "pipe",

@@ -57,7 +57,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/agentcore-runtime/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |
 | `apps/agentcore-runtime/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |
 | `apps/agent-query-runtime/src/` | Concurrent query invocation and raw Claude SDK streaming |
-| `apps/chat-api/src/features/ai-chat/` | Local-only owner-scoped proxy for the raw verification stream |
+| `apps/chat-api/src/features/ai-chat/` | Local-only Harness-hosted AI SDK chat route: one Claude Code turn per message in a Vercel Sandbox, streamed as the UI message stream |
 | `packages/agentcore-dispatch/src/` | Shared AgentCore Dispatch publisher policy, envelope serialization, and isolated SQS/SSM adapters |
 | `packages/agent-db/src/conversation-ownership.ts` | Live Ownership renew, release, and mutation fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |

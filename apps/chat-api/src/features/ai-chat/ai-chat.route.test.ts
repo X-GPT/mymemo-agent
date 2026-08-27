@@ -2,15 +2,14 @@ import { expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AppDeps, AppEnv } from "@/deps";
 import aiChatRoutes from "./ai-chat.route";
-import type { AgentQueryRuntimeInvoker } from "./http-agent-query-runtime-invoker";
-
-type AgentQueryRequest = Parameters<AgentQueryRuntimeInvoker>[0];
+import type { HarnessChatAgent } from "./harness-chat-agent";
 
 const headers = {
 	"content-type": "application/json",
 	"x-member-code": "member-1",
 	"x-partner-code": "partner-1",
 };
+
 const requestBody = {
 	id: "conversation-1",
 	messages: [
@@ -23,7 +22,45 @@ const requestBody = {
 	model: "anthropic/claude-sonnet-5",
 	trigger: "submit-message",
 };
-const rawClaudeStream = '{"type":"result","subtype":"success"}\n';
+
+const uiMessageStream =
+	'data: {"type":"text-delta","id":"t1","delta":"Hi"}\n\ndata: [DONE]\n\n';
+
+/** Fake agent that records the lifecycle and streams a canned UI message stream. */
+function fakeAgent() {
+	const events: unknown[] = [];
+	const created = {
+		destroy: async () => {
+			events.push("destroy");
+		},
+	};
+	const fake = {
+		createSession: async (options: { sessionId: string }) => {
+			events.push({ createSession: options });
+			return created;
+		},
+		stream: async ({
+			session,
+			...options
+		}: {
+			session: unknown;
+			prompt: string;
+			abortSignal?: AbortSignal;
+		}) => {
+			events.push({ stream: options, sameSession: session === created });
+			return {
+				toUIMessageStreamResponse: () =>
+					new Response(uiMessageStream, {
+						headers: {
+							"content-type": "text/event-stream",
+							"x-vercel-ai-ui-message-stream": "v1",
+						},
+					}),
+			};
+		},
+	};
+	return { agent: fake as unknown as HarnessChatAgent, events, fake };
+}
 
 function makeApp(deps: Partial<AppDeps>) {
 	const app = new Hono<AppEnv>();
@@ -35,8 +72,12 @@ function makeApp(deps: Partial<AppDeps>) {
 	return app;
 }
 
-it("returns the owned Conversation Runtime stream unchanged", async () => {
-	const invocations: AgentQueryRequest[] = [];
+const ownedConversation = {
+	get: async () => ({ archivedAt: null }) as never,
+} as unknown as AppDeps["conversationStore"];
+
+it("runs one Harness turn in a session named after the Conversation and destroys it after the stream", async () => {
+	const { agent, events } = fakeAgent();
 	const lookups: unknown[] = [];
 	const app = makeApp({
 		conversationStore: {
@@ -46,15 +87,7 @@ it("returns the owned Conversation Runtime stream unchanged", async () => {
 			},
 		} as unknown as AppDeps["conversationStore"],
 		exposureGate: { isAgentEnabled: async () => true },
-		agentQueryRuntimeInvoker: async (request) => {
-			invocations.push(request);
-			return new Response(rawClaudeStream, {
-				headers: {
-					"content-type": "application/x-ndjson",
-					"x-runtime-header": "preserved",
-				},
-			});
-		},
+		harnessChatAgent: agent,
 	});
 
 	const response = await app.request("/api/chat", {
@@ -64,33 +97,67 @@ it("returns the owned Conversation Runtime stream unchanged", async () => {
 	});
 
 	expect(response.status).toBe(200);
-	expect(response.headers.get("content-type")).toBe("application/x-ndjson");
-	expect(response.headers.get("x-runtime-header")).toBe("preserved");
-	expect(await response.text()).toBe(rawClaudeStream);
+	expect(response.headers.get("content-type")).toBe("text/event-stream");
+	expect(response.headers.get("x-vercel-ai-ui-message-stream")).toBe("v1");
 	expect(lookups).toEqual([
 		{ userId: "member-1", conversationId: "conversation-1" },
 	]);
-	expect(invocations).toEqual([
+	// The session is not destroyed until the client has drained the stream.
+	expect(events).toEqual([
 		{
-			conversationId: "conversation-1",
-			runId: "response-1",
-			model: "anthropic/claude-sonnet-5",
-			prompt: "Hello",
+			createSession: { sessionId: "conversation-1" },
+		},
+		{
+			stream: { prompt: "Hello", abortSignal: expect.any(AbortSignal) },
+			sameSession: true,
 		},
 	]);
+	expect(await response.text()).toBe(uiMessageStream);
+	expect(events.at(-1)).toBe("destroy");
 });
 
-it("rejects invalid and exposure-disabled requests before invocation", async () => {
-	let invocations = 0;
+it("destroys the session when the client cancels the stream", async () => {
+	const { agent, events } = fakeAgent();
 	const app = makeApp({
-		conversationStore: {
-			get: async () => ({ archivedAt: null }) as never,
-		} as unknown as AppDeps["conversationStore"],
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		harnessChatAgent: agent,
+	});
+	const response = await app.request("/api/chat", {
+		method: "POST",
+		headers,
+		body: JSON.stringify(requestBody),
+	});
+	expect(events).not.toContain("destroy");
+	await response.body?.cancel();
+	expect(events.at(-1)).toBe("destroy");
+});
+
+it("destroys the session when the turn fails to start", async () => {
+	const { agent, events, fake } = fakeAgent();
+	fake.stream = async () => {
+		throw new Error("bridge unavailable");
+	};
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		harnessChatAgent: agent,
+	});
+	const response = await app.request("/api/chat", {
+		method: "POST",
+		headers,
+		body: JSON.stringify(requestBody),
+	});
+	expect(response.status).toBe(500);
+	expect(events.at(-1)).toBe("destroy");
+});
+
+it("rejects invalid and exposure-disabled requests before creating a session", async () => {
+	const { agent, events } = fakeAgent();
+	const app = makeApp({
+		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => false },
-		agentQueryRuntimeInvoker: async () => {
-			invocations++;
-			return new Response();
-		},
+		harnessChatAgent: agent,
 	});
 
 	expect(
@@ -111,15 +178,15 @@ it("rejects invalid and exposure-disabled requests before invocation", async () 
 			})
 		).status,
 	).toBe(403);
-	expect(invocations).toBe(0);
+	expect(events).toEqual([]);
 });
 
 it.each([
 	[null, 404, "Conversation not found"],
 	[{ archivedAt: new Date() }, 409, "Conversation is archived"],
-] as const)("rejects a missing or archived Conversation before invocation", async (conversation, status, error) => {
+] as const)("rejects a missing or archived Conversation before creating a session", async (conversation, status, error) => {
+	const { agent, events } = fakeAgent();
 	let gateChecks = 0;
-	let invocations = 0;
 	const app = makeApp({
 		conversationStore: {
 			get: async () => conversation as never,
@@ -130,10 +197,7 @@ it.each([
 				return true;
 			},
 		},
-		agentQueryRuntimeInvoker: async () => {
-			invocations++;
-			return new Response();
-		},
+		harnessChatAgent: agent,
 	});
 
 	const response = await app.request("/api/chat", {
@@ -141,8 +205,9 @@ it.each([
 		headers,
 		body: JSON.stringify(requestBody),
 	});
+
 	expect(response.status).toBe(status);
 	expect(await response.json()).toEqual({ error });
 	expect(gateChecks).toBe(0);
-	expect(invocations).toBe(0);
+	expect(events).toEqual([]);
 });
