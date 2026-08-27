@@ -238,16 +238,14 @@ verify_agentcore_runtime_configuration() {
   local region="$1"
   local terraform_output="$2"
   local expected_digest="$3"
-  local runtime_id_output="${4:-agent_runtime_id}"
-  local security_configuration_output="${5:-runtime_security_configuration}"
   local runtime_id
   local expected_security_configuration
   local runtime
   local runtime_version
   local endpoint
 
-  runtime_id="$(jq -r --arg key "${runtime_id_output}" '.[$key].value' <<<"${terraform_output}")"
-  expected_security_configuration="$(jq -c --arg key "${security_configuration_output}" '.[$key].value' <<<"${terraform_output}")"
+  runtime_id="$(jq -r '.agent_runtime_id.value' <<<"${terraform_output}")"
+  expected_security_configuration="$(jq -c '.runtime_security_configuration.value' <<<"${terraform_output}")"
   runtime="$(agentcore_aws bedrock-agentcore-control get-agent-runtime \
     --region "${region}" \
     --agent-runtime-id "${runtime_id}")"

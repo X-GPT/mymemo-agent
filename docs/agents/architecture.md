@@ -40,13 +40,9 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 
 ### AI chat
 
-The AI SDK chat feature is the Harness-hosted route in chat-api. Each message
-runs one Claude Code turn inside a persistent Vercel Sandbox owned by the
-Conversation; Postgres keeps only the opaque resume pointer. The route admits
-no Runs, publishes no Dispatch, and is not served by AgentCore. There is one
-implementation and no fallback. See
-[ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)
-and [the Chat API guide](chat-api.md).
+The AI SDK chat feature (`POST /api/chat`) is the Harness-hosted route in
+chat-api: one Claude Code turn per message in a persistent Vercel Sandbox per
+Conversation, with no Runs, no Dispatch, and no AgentCore. See [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md).
 
 ## Module map
 
