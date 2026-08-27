@@ -38,12 +38,6 @@ The AgentCore Runtime keeps each active Run's standard AG-UI Live Stream backlog
 
 Workspace persistence, Agent session continuity, Searchable document loading, and Downloadable artifact publication belong to the trusted runtime. Follow [the Runtime guide](agentcore-runtime.md) for their detailed invariants.
 
-### AI chat
-
-The AI SDK chat feature (`POST /api/chat`) is the Harness-hosted route in
-chat-api: one Claude Code turn per message in a persistent Vercel Sandbox per
-Conversation, with no Runs, no Dispatch, and no AgentCore. See [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md).
-
 ## Module map
 
 | Path | Purpose |
