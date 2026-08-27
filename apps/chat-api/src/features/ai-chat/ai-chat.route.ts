@@ -71,6 +71,16 @@ function cleanupAfterStream(
 	return new Response(body, response);
 }
 
+/**
+ * Conversation ids with a Harness turn in flight. Checked and set in one
+ * synchronous step so two requests can never share a sandbox; released only
+ * after `session.stop()` settles. In-process by design for the single-process
+ * local composition.
+ * ponytail: process-local set; a leased marker on conversation_runtime once
+ * chat-api runs more than one process.
+ */
+const activeTurns = new Set<string>();
+
 const routes = new Hono<AppEnv>();
 const limit = bodyLimit({
 	maxSize: MAX_REQUEST_BODY_BYTES,
@@ -102,26 +112,37 @@ routes.post(
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
+		if (activeTurns.has(body.id)) {
+			return c.json({ error: "Conversation has an active response" }, 409);
+		}
+		activeTurns.add(body.id);
 		const agent = c.var.deps.harnessChatAgent;
 		const ref = { userId: c.var.identity.memberCode, conversationId: body.id };
-		const resumeFrom = await c.var.deps.harnessResumeStateStore.load(ref);
 		let session: Awaited<ReturnType<typeof agent.createSession>>;
 		try {
-			session = await agent.createSession({
-				sessionId: body.id,
-				resumeFrom: resumeFrom ?? undefined,
-			});
+			const resumeFrom = await c.var.deps.harnessResumeStateStore.load(ref);
+			try {
+				session = await agent.createSession({
+					sessionId: body.id,
+					resumeFrom: resumeFrom ?? undefined,
+				});
+			} catch (error) {
+				if (!resumeFrom) throw error;
+				// Snapshot expired or sandbox gone: start a fresh thread under the same
+				// id rather than block the user. The stale pointer is overwritten below.
+				c.var.logger.warn(
+					{ err: error, conversationId: body.id },
+					"harness session resume failed; starting a fresh session",
+				);
+				session = await agent.createSession({ sessionId: body.id });
+			}
 		} catch (error) {
-			if (!resumeFrom) throw error;
-			// Snapshot expired or sandbox gone: start a fresh thread under the same
-			// id rather than block the user. The stale pointer is overwritten below.
-			c.var.logger.warn(
-				{ err: error, conversationId: body.id },
-				"harness session resume failed; starting a fresh session",
-			);
-			session = await agent.createSession({ sessionId: body.id });
+			activeTurns.delete(body.id);
+			throw error;
 		}
 		// Snapshot the sandbox and remember how to resume it; the pointer is opaque.
+		// The slot is released only once the stop has settled, so a resume can
+		// never overlap it.
 		const stop = async () => {
 			try {
 				const state = await session.stop();
@@ -131,6 +152,8 @@ routes.post(
 					{ err: error, conversationId: body.id },
 					"harness session stop failed",
 				);
+			} finally {
+				activeTurns.delete(body.id);
 			}
 		};
 		let result: Awaited<ReturnType<typeof agent.stream>>;
