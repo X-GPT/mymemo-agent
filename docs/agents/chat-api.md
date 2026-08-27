@@ -20,8 +20,13 @@ produced and built-in tool activity appears as `tool-input-available` /
 `tool-output-available` parts. The request abort signal is passed to the turn.
 The session is destroyed once the stream has been drained, cancelled, or
 failed, and also when the turn fails to start. There is no admission, Run,
-history, retry, or continuity between messages yet. Production composition does
-not mount this path; its `harnessChatAgent` throws.
+history, retry, or continuity between messages yet: the fresh-sandbox-per-turn
+lifecycle is the first slice of [#595](https://github.com/X-GPT/mymemo-agent/issues/595)
+and is superseded by ADR-0033's persistent Harness sandbox (resume pointer,
+`stop()` per turn, `409` on overlapping turns) in the follow-up tickets. The
+adapter runs the configured `OPENROUTER_DEFAULT_MODEL`; the request `model`
+literal is validated, not forwarded. Production composition does not mount this
+path; its `harnessChatAgent` throws.
 
 ### Create a Conversation
 
