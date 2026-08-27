@@ -2,7 +2,7 @@ import { createLiveStreamTelemetry } from "@mymemo/live-text";
 import pino from "pino";
 import { createApp } from "./app";
 import { loadApiConfigFromEnv } from "./config/env";
-import { createDeps } from "./deps";
+import { createDeps, type HarnessChatAgent } from "./deps";
 
 export { createApp } from "./app";
 
@@ -16,7 +16,10 @@ const harnessDisabled = async (): Promise<never> => {
 };
 const productionDeps = createDeps(
 	productionConfig,
-	{ createSession: harnessDisabled, stream: harnessDisabled },
+	{
+		createSession: harnessDisabled,
+		stream: harnessDisabled,
+	} as unknown as HarnessChatAgent,
 	createLiveStreamTelemetry("chat-api", productionLogger),
 );
 const productionApp = createApp(productionConfig, productionDeps);

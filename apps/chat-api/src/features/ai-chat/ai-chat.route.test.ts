@@ -29,8 +29,8 @@ const uiMessageStream =
 /** Fake agent that records the lifecycle and streams a canned UI message stream. */
 function fakeAgent() {
 	const events: unknown[] = [];
-	const agent: HarnessChatAgent = {
-		createSession: async (options) => {
+	const agent = {
+		createSession: async (options: { sessionId: string }) => {
 			events.push({ createSession: options });
 			return {
 				destroy: async () => {
@@ -38,7 +38,14 @@ function fakeAgent() {
 				},
 			};
 		},
-		stream: async ({ session, ...options }) => {
+		stream: async ({
+			session,
+			...options
+		}: {
+			session: unknown;
+			prompt: string;
+			abortSignal?: AbortSignal;
+		}) => {
 			events.push({ stream: options, sameSession: session !== undefined });
 			return {
 				toUIMessageStreamResponse: () =>
@@ -51,7 +58,7 @@ function fakeAgent() {
 			};
 		},
 	};
-	return { agent, events };
+	return { agent: agent as unknown as HarnessChatAgent, events, fake: agent };
 }
 
 function makeApp(deps: Partial<AppDeps>) {
@@ -126,8 +133,8 @@ it("destroys the session when the client cancels the stream", async () => {
 });
 
 it("destroys the session when the turn fails to start", async () => {
-	const { agent, events } = fakeAgent();
-	agent.stream = async () => {
+	const { agent, events, fake } = fakeAgent();
+	fake.stream = async () => {
 		throw new Error("bridge unavailable");
 	};
 	const app = makeApp({
