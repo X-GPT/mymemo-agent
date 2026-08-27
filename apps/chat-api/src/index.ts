@@ -13,8 +13,13 @@ const productionConfig = loadApiConfigFromEnv(Bun.env);
 const productionLogger = pino({ level: productionConfig.logLevel });
 const productionDeps = createDeps(
 	productionConfig,
-	async (): Promise<never> => {
-		throw new Error("Agent-query Runtime is not enabled in production");
+	{
+		createSession: async () => {
+			throw new Error("Harness chat is not enabled in production");
+		},
+		stream: async () => {
+			throw new Error("Harness chat is not enabled in production");
+		},
 	},
 	createLiveStreamTelemetry("chat-api", productionLogger),
 );

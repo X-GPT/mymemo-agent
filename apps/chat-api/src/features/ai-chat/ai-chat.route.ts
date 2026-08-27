@@ -28,6 +28,47 @@ const chatBody = z.strictObject({
 	trigger: z.literal("submit-message"),
 });
 
+/**
+ * Forward `response` unchanged and run `cleanup` once its body has been fully
+ * read, cancelled, or failed — the Harness sandbox must not outlive the turn.
+ */
+function cleanupAfterStream(
+	response: Response,
+	cleanup: () => Promise<void>,
+): Response {
+	if (!response.body) return response;
+	const reader = response.body.getReader();
+	let finished = false;
+	const finish = async () => {
+		if (finished) return;
+		finished = true;
+		await cleanup();
+	};
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			let chunk: Awaited<ReturnType<typeof reader.read>>;
+			try {
+				chunk = await reader.read();
+			} catch (error) {
+				controller.error(error);
+				await finish();
+				return;
+			}
+			if (chunk.done) {
+				controller.close();
+				await finish();
+			} else {
+				controller.enqueue(chunk.value);
+			}
+		},
+		async cancel(reason) {
+			await reader.cancel(reason).catch(() => {});
+			await finish();
+		},
+	});
+	return new Response(body, response);
+}
+
 const routes = new Hono<AppEnv>();
 const limit = bodyLimit({
 	maxSize: MAX_REQUEST_BODY_BYTES,
@@ -59,12 +100,30 @@ routes.post(
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
-		return c.var.deps.agentQueryRuntimeInvoker({
-			conversationId: body.id,
-			runId: message.id,
+		const agent = c.var.deps.harnessChatAgent;
+		const session = await agent.createSession({
+			sessionId: body.id,
 			model: body.model,
-			prompt: message.parts[0].text,
 		});
+		const destroy = () =>
+			session.destroy().catch((error: unknown) => {
+				c.var.logger.warn(
+					{ err: error, conversationId: body.id },
+					"harness session destroy failed",
+				);
+			});
+		let result: Awaited<ReturnType<typeof agent.stream>>;
+		try {
+			result = await agent.stream({
+				session,
+				prompt: message.parts[0].text,
+				abortSignal: c.req.raw.signal,
+			});
+		} catch (error) {
+			await destroy();
+			throw error;
+		}
+		return cleanupAfterStream(result.toUIMessageStreamResponse(), destroy);
 	},
 );
 

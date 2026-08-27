@@ -2,9 +2,10 @@ import { createLiveStreamTelemetry } from "@mymemo/live-text";
 import pino from "pino";
 import { createApp } from "../src/app";
 import { loadApiConfigFromEnv } from "../src/config/env";
+import { loadHarnessConfigFromEnv } from "../src/config/harness-env";
 import { createDeps } from "../src/deps";
 import aiChatRoutes from "../src/features/ai-chat/ai-chat.route";
-import { createHttpAgentQueryRuntimeInvoker } from "../src/features/ai-chat/http-agent-query-runtime-invoker";
+import { createHarnessChatAgent } from "../src/features/ai-chat/harness-chat-agent";
 import { createS3ArtifactDownloadSigner } from "../src/features/artifacts/s3-artifact-download-signer";
 
 const config = loadApiConfigFromEnv({
@@ -12,12 +13,10 @@ const config = loadApiConfigFromEnv({
 	STATSIG_SERVER_SECRET: "unused-by-local-composition",
 });
 const artifactEndpoint = Bun.env.LOCAL_ARTIFACT_ENDPOINT?.trim();
-const agentQueryRuntimeUrl =
-	Bun.env.AGENT_QUERY_RUNTIME_URL?.trim() || "http://127.0.0.1:4510";
 const logger = pino({ level: config.logLevel });
 const deps = createDeps(
 	config,
-	createHttpAgentQueryRuntimeInvoker(agentQueryRuntimeUrl),
+	createHarnessChatAgent(loadHarnessConfigFromEnv(Bun.env)),
 	createLiveStreamTelemetry("chat-api", logger),
 	{ isAgentEnabled: async () => true },
 	createS3ArtifactDownloadSigner(

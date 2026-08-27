@@ -7,7 +7,7 @@ import {
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
-import type { AgentQueryRuntimeInvoker } from "./features/ai-chat/http-agent-query-runtime-invoker";
+import type { HarnessChatAgent } from "./features/ai-chat/harness-chat-agent";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
@@ -26,7 +26,7 @@ import {
 	type RunStore,
 } from "./features/run-store/run-store";
 
-export type { AgentQueryRuntimeInvoker };
+export type { HarnessChatAgent };
 
 /**
  * Application dependencies, built once from a validated `ApiConfig` at the
@@ -36,8 +36,8 @@ export type { AgentQueryRuntimeInvoker };
  */
 export interface AppDeps {
 	config: ApiConfig;
-	/** Staged Agent-query Runtime boundary. */
-	agentQueryRuntimeInvoker: AgentQueryRuntimeInvoker;
+	/** Harness-hosted AI SDK chat turn (local composition only). */
+	harnessChatAgent: HarnessChatAgent;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
 	artifactMetadataStore: ArtifactMetadataStore;
 	/** Creates short-lived direct-download URLs after ownership authorization. */
@@ -69,7 +69,7 @@ export type AppEnv = PinoEnv & {
 
 export function createDeps(
 	config: ApiConfig,
-	agentQueryRuntimeInvoker: AgentQueryRuntimeInvoker,
+	harnessChatAgent: HarnessChatAgent,
 	liveStreamTelemetry: LiveStreamTelemetry = createLiveStreamTelemetry(
 		"chat-api",
 		{
@@ -99,7 +99,7 @@ export function createDeps(
 	});
 	return {
 		config,
-		agentQueryRuntimeInvoker,
+		harnessChatAgent,
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
 		conversationStore,

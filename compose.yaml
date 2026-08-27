@@ -7,8 +7,11 @@
 #   postgres      — the writable mymemo_agent DB (conversations/runs/run_events)
 #                   AND the read-only mymemo_kb (seeded for the retained doc path)
 #   migrate       — one-shot: applies the @mymemo/agent-db migrations, then exits
-#   chat-api      — creates Conversations, admits Runs, and attaches SSE
-#   agent-query-runtime — serves local synchronous /api/chat responses over HTTP
+#   chat-api      — creates Conversations, admits Runs, attaches SSE, and runs
+#                   /api/chat turns in a Vercel Sandbox through HarnessAgent
+#                   (needs VERCEL_TOKEN/VERCEL_TEAM_ID/VERCEL_PROJECT_ID and
+#                   OPENROUTER_API_KEY exported)
+#   agent-query-runtime — retired Agent-query Runtime; chat-api no longer calls it
 #   agentcore-runtime — acquires one exact Dispatch and serves its Run
 #   dispatch-bridge — polls the durable outbox and invokes the local Runtime
 #   redis         — disposable Redis 7 for real relay contract testing
@@ -45,14 +48,22 @@ services:
       LOG_LEVEL: info
       REDIS_URL: redis://127.0.0.1:6379
       LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true"
+      # Harness-hosted /api/chat: chat-api holds the Vercel triple and the
+      # OpenRouter credential; the sandbox only ever sees a brokered placeholder.
+      VERCEL_TOKEN: ${VERCEL_TOKEN:?Set VERCEL_TOKEN}
+      VERCEL_TEAM_ID: ${VERCEL_TEAM_ID:?Set VERCEL_TEAM_ID}
+      VERCEL_PROJECT_ID: ${VERCEL_PROJECT_ID:?Set VERCEL_PROJECT_ID}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api}
+      OPENROUTER_DEFAULT_MODEL: ${OPENROUTER_DEFAULT_MODEL:-anthropic/claude-sonnet-5}
+      HARNESS_SANDBOX_TIMEOUT_MS: ${HARNESS_SANDBOX_TIMEOUT_MS:-600000}
+      HARNESS_SANDBOX_REGION: ${HARNESS_SANDBOX_REGION:-iad1}
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
       redis:
-        condition: service_healthy
-      agent-query-runtime:
         condition: service_healthy
       artifact-bucket:
         condition: service_completed_successfully
