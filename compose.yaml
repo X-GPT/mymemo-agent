@@ -11,7 +11,8 @@
 #                   /api/chat turns in a Vercel Sandbox through HarnessAgent
 #                   (needs VERCEL_TOKEN/VERCEL_TEAM_ID/VERCEL_PROJECT_ID and
 #                   OPENROUTER_API_KEY exported)
-#   agent-query-runtime — retired Agent-query Runtime; chat-api no longer calls it
+#   agent-query-runtime — Agent-query Runtime; chat-api no longer calls it, kept
+#                   running until its retirement ticket
 #   agentcore-runtime — acquires one exact Dispatch and serves its Run
 #   dispatch-bridge — polls the durable outbox and invokes the local Runtime
 #   redis         — disposable Redis 7 for real relay contract testing

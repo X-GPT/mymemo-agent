@@ -20,6 +20,9 @@ const BRIDGE_PORT = 4000;
 export function createHarnessChatAgent(config: HarnessConfig) {
 	process.env.ANTHROPIC_BASE_URL = config.OPENROUTER_BASE_URL;
 	process.env.ANTHROPIC_AUTH_TOKEN = config.OPENROUTER_API_KEY;
+	// Load-bearing: the adapter resolves `ANTHROPIC_API_KEY ?? apiKeyHelper`, so
+	// an empty string (non-nullish) stops a developer's ~/.claude/settings.json
+	// helper key from being brokered into the sandbox.
 	process.env.ANTHROPIC_API_KEY = "";
 	return new HarnessAgent({
 		harness: createClaudeCode({

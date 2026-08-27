@@ -29,14 +29,15 @@ const uiMessageStream =
 /** Fake agent that records the lifecycle and streams a canned UI message stream. */
 function fakeAgent() {
 	const events: unknown[] = [];
-	const agent = {
+	const created = {
+		destroy: async () => {
+			events.push("destroy");
+		},
+	};
+	const fake = {
 		createSession: async (options: { sessionId: string }) => {
 			events.push({ createSession: options });
-			return {
-				destroy: async () => {
-					events.push("destroy");
-				},
-			};
+			return created;
 		},
 		stream: async ({
 			session,
@@ -46,7 +47,7 @@ function fakeAgent() {
 			prompt: string;
 			abortSignal?: AbortSignal;
 		}) => {
-			events.push({ stream: options, sameSession: session !== undefined });
+			events.push({ stream: options, sameSession: session === created });
 			return {
 				toUIMessageStreamResponse: () =>
 					new Response(uiMessageStream, {
@@ -58,7 +59,7 @@ function fakeAgent() {
 			};
 		},
 	};
-	return { agent: agent as unknown as HarnessChatAgent, events, fake: agent };
+	return { agent: fake as unknown as HarnessChatAgent, events, fake };
 }
 
 function makeApp(deps: Partial<AppDeps>) {
