@@ -118,11 +118,10 @@ routes.post(
 		activeTurns.add(body.id);
 		const agent = c.var.deps.harnessChatAgent;
 		const ref = { userId: c.var.identity.memberCode, conversationId: body.id };
-		let session: Awaited<ReturnType<typeof agent.createSession>>;
-		try {
+		const createSession = async () => {
 			const resumeFrom = await c.var.deps.harnessResumeStateStore.load(ref);
 			try {
-				session = await agent.createSession({
+				return await agent.createSession({
 					sessionId: body.id,
 					resumeFrom: resumeFrom ?? undefined,
 				});
@@ -134,15 +133,14 @@ routes.post(
 					{ err: error, conversationId: body.id },
 					"harness session resume failed; starting a fresh session",
 				);
-				session = await agent.createSession({ sessionId: body.id });
+				return agent.createSession({ sessionId: body.id });
 			}
-		} catch (error) {
+		};
+		const session = await createSession().catch((error) => {
 			activeTurns.delete(body.id);
 			throw error;
-		}
+		});
 		// Snapshot the sandbox and remember how to resume it; the pointer is opaque.
-		// The slot is released only once the stop has settled, so a resume can
-		// never overlap it.
 		const stop = async () => {
 			try {
 				const state = await session.stop();
