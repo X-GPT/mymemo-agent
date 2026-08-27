@@ -31,7 +31,7 @@ const stoppedState = { type: "resume-session", data: { after: "turn" } };
 
 /** In-memory resume pointer store, optionally pre-seeded for conversation-1. */
 function fakeResumeStore(initial: unknown = null) {
-	const saved: unknown[] = [];
+	const saved: { ref: unknown; state: unknown }[] = [];
 	const store = {
 		load: async () => initial,
 		save: async (ref: unknown, state: unknown) => {
@@ -219,9 +219,7 @@ it("starts a fresh session for the same id and logs when resuming throws", async
 		},
 	]);
 	// The stale pointer is replaced by the fresh session's.
-	expect(saved.map((s) => (s as { state: unknown }).state)).toEqual([
-		stoppedState,
-	]);
+	expect(saved.map((s) => s.state)).toEqual([stoppedState]);
 });
 
 it("stops the session when the client cancels the stream", async () => {
