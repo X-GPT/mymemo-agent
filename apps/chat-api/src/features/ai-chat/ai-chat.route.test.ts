@@ -247,7 +247,7 @@ it("passes the request's own abort signal to the turn", async () => {
 		harnessChatAgent: agent,
 	});
 	const controller = new AbortController();
-	await app.request(
+	const response = await app.request(
 		new Request("http://localhost/api/chat", {
 			method: "POST",
 			headers,
@@ -257,6 +257,7 @@ it("passes the request's own abort signal to the turn", async () => {
 	);
 	const streamEvent = events[1] as { stream: { abortSignal?: AbortSignal } };
 	expect(streamEvent.stream.abortSignal).toBe(controller.signal);
+	await response.body?.cancel();
 });
 
 it("ends an aborted turn cleanly with the abort part and still stops the session", async () => {
@@ -360,6 +361,83 @@ it("hides the cause of a mid-stream failure from the client, logs it, and stops 
 			msg: "harness turn failed while streaming",
 		},
 	]);
+});
+
+it("refuses a second turn on the same Conversation until the first has been stopped", async () => {
+	const { agent, events, fake } = fakeAgent();
+	// conversation-1's stop() hangs until released; other sessions stop at once.
+	const releases: (() => void)[] = [];
+	const releaseStop = () => releases.shift()?.();
+	let gated = true;
+	fake.createSession = async ({ sessionId }) => ({
+		stop: async () => {
+			if (gated && sessionId === requestBody.id) {
+				await new Promise<void>((resolve) => releases.push(resolve));
+			}
+			events.push("stop");
+			return stoppedState;
+		},
+	});
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		harnessChatAgent: agent,
+	});
+	const post = (id = requestBody.id) =>
+		app.request("/api/chat", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ ...requestBody, id }),
+		});
+
+	const first = await post();
+	expect(first.status).toBe(200);
+	const second = await post();
+	expect(second.status).toBe(409);
+	expect(await second.json()).toEqual({
+		error: "Conversation has an active response",
+	});
+	// Other Conversations are unaffected.
+	const other = await post("conversation-2");
+	expect(other.status).toBe(200);
+	await other.body?.cancel();
+	// Rejected before any sandbox work: one session per admitted turn.
+	expect(
+		events.filter((e) => typeof e === "object" && "stream" in (e as object)),
+	).toHaveLength(2);
+
+	// Draining the stream is not enough: the slot is held until stop() settles.
+	const drained = first.text();
+	await Bun.sleep(0);
+	expect(releases).toHaveLength(1); // stop() is pending
+	expect((await post()).status).toBe(409);
+	releaseStop();
+	await drained;
+	expect(events.at(-1)).toBe("stop");
+	gated = false;
+	const third = await post();
+	expect(third.status).toBe(200);
+	await third.body?.cancel();
+});
+
+it("releases the slot when the session cannot be created", async () => {
+	const { agent, fake } = fakeAgent();
+	fake.createSession = async () => {
+		throw new Error("sandbox unavailable");
+	};
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		harnessChatAgent: agent,
+	});
+	const post = () =>
+		app.request("/api/chat", {
+			method: "POST",
+			headers,
+			body: JSON.stringify(requestBody),
+		});
+	expect((await post()).status).toBe(500);
+	expect((await post()).status).toBe(500);
 });
 
 it("rejects invalid and exposure-disabled requests before creating a session", async () => {

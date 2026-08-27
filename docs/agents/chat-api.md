@@ -33,9 +33,20 @@ aborts Claude Code in the sandbox, the stream ends with the AI SDK `abort`
 part, and no error reaches the client. A turn that fails to start returns the
 generic `500`; a turn that fails while streaming ends with the AI SDK `error`
 part carrying only the generic `"An error occurred."` text. Failure details
-are logged by chat-api and never sent to the client. There is no admission,
-Run, history, or retry yet, and overlapping turns are not rejected: those are
-follow-up slices of [#595](https://github.com/X-GPT/mymemo-agent/issues/595).
+are logged by chat-api and never sent to the client.
+
+Two messages cannot drive one Conversation's sandbox at once. While a turn is
+in flight, a second `POST /api/chat` for the same Conversation returns
+`409 { error: "Conversation has an active response" }` and the first turn is
+unaffected; other Conversations are unaffected. The guard is a process-local set
+of Conversation ids in `ai-chat.route.ts`, checked and set in one synchronous
+step before any sandbox work and released only after `session.stop()` has
+settled — also on abort and on failure — so a resume can never overlap a stop.
+It is correct only for the single-process local composition; the production
+replacement (a leased marker on `conversation_runtime`) is deferred.
+
+There is no admission, Run, history, or retry yet: those are follow-up slices
+of [#595](https://github.com/X-GPT/mymemo-agent/issues/595).
 The adapter runs the configured `OPENROUTER_DEFAULT_MODEL`; the request `model`
 literal is validated, not forwarded. Production composition does not mount this
 path; its `harnessChatAgent` throws.
