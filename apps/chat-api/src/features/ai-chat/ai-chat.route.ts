@@ -107,11 +107,10 @@ routes.post(
 		const resumeFrom = await c.var.deps.harnessResumeStateStore.load(ref);
 		let session: Awaited<ReturnType<typeof agent.createSession>>;
 		try {
-			session = await agent.createSession(
-				resumeFrom
-					? { sessionId: body.id, resumeFrom }
-					: { sessionId: body.id },
-			);
+			session = await agent.createSession({
+				sessionId: body.id,
+				resumeFrom: resumeFrom ?? undefined,
+			});
 		} catch (error) {
 			if (!resumeFrom) throw error;
 			// Snapshot expired or sandbox gone: start a fresh thread under the same

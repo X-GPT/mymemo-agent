@@ -39,8 +39,7 @@ export class PostgresHarnessResumeStateStore
 					eq(conversationRuntime.userId, ref.userId),
 					eq(conversationRuntime.conversationId, ref.conversationId),
 				),
-			)
-			.limit(1);
+			);
 		return (row?.state as HarnessAgentResumeSessionState | undefined) ?? null;
 	}
 

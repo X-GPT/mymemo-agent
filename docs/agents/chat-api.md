@@ -19,19 +19,13 @@ response is the AI SDK UI message stream (`toUIMessageStreamResponse()`): text
 arrives as it is produced and built-in tool activity appears as
 `tool-input-available` / `tool-output-available` parts.
 
-Continuity between messages is the sandbox snapshot. A turn loads the
-Conversation's **resume pointer** (`conversation_runtime.harness_resume_state`,
-the opaque value the previous turn's `session.stop()` returned) and calls
-`createSession({ sessionId, resumeFrom })`; without one it creates a fresh
-session for the same id. After every turn — drained, stopped, cancelled, or
-failed — the route calls `session.stop()` so Vercel snapshots the sandbox, and
-stores the returned pointer. chat-api never interprets the pointer and it never
-appears in the stream. If resuming throws (snapshot expired or sandbox gone),
-the route logs `harness session resume failed; starting a fresh session` and
-creates a fresh session for the same id: the user gets a response on a new
-thread. Retention is Vercel's default (30-day snapshot expiry, one snapshot
-kept); there is no deletion hook or sweep. Permanent deletion of a Conversation
-nulls its pointer and leaves the sandbox to expire.
+Continuity between messages is the sandbox snapshot: after every turn —
+drained, cancelled, or failed — the route calls `session.stop()` and stores the
+returned opaque pointer in `conversation_runtime.harness_resume_state`; the
+next turn passes it back as `createSession({ sessionId, resumeFrom })`. If
+resuming throws, the route logs `harness session resume failed; starting a
+fresh session` and starts a fresh session for the same id. Permanent deletion
+nulls the pointer; retention and the rest of the lifecycle are ADR-0033's.
 
 Stop is best-effort and has no endpoint or durable record: the request's own
 abort signal is passed to the turn, so `useChat().stop()` or a disconnect
