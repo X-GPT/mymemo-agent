@@ -6,7 +6,7 @@ import type { HarnessConfig } from "@/config/harness-env";
 /** The `HarnessAgent` the route drives; tests inject a cast fake. */
 export type HarnessChatAgent = ReturnType<typeof createHarnessChatAgent>;
 
-/** Port inside the sandbox the Claude Code bridge listens on. */
+/** Port inside the sandbox the Claude Code bridge listens on (adapter uses `ports[0]`; any free port works). */
 const BRIDGE_PORT = 4000;
 
 /**
@@ -20,14 +20,15 @@ const BRIDGE_PORT = 4000;
 export function createHarnessChatAgent(config: HarnessConfig) {
 	process.env.ANTHROPIC_BASE_URL = config.OPENROUTER_BASE_URL;
 	process.env.ANTHROPIC_AUTH_TOKEN = config.OPENROUTER_API_KEY;
-	// Load-bearing: the adapter resolves `ANTHROPIC_API_KEY ?? apiKeyHelper`, so
-	// an empty string (non-nullish) stops a developer's ~/.claude/settings.json
-	// helper key from being brokered into the sandbox.
+	// Load-bearing: the adapter forwards a non-empty `ANTHROPIC_API_KEY` from
+	// this process alongside the auth token, so a real key exported in the shell
+	// would be brokered into the sandbox too. Empty means "none".
 	process.env.ANTHROPIC_API_KEY = "";
 	return new HarnessAgent({
 		harness: createClaudeCode({
 			auth: "direct",
 			model: config.OPENROUTER_DEFAULT_MODEL,
+			// First slice runs without extended thinking; revisit with stage 2.
 			thinking: { type: "disabled" },
 		}),
 		sandbox: createVercelSandbox({
