@@ -20,26 +20,6 @@ output "agent_runtime_arn" {
   value       = aws_bedrockagentcore_agent_runtime.runtime.agent_runtime_arn
 }
 
-output "agent_query_runtime_repository_url" {
-  description = "Resolved immutable ECR repository used by the Agent-query Runtime."
-  value       = data.aws_ecr_repository.agent_query_runtime.repository_url
-}
-
-output "agent_query_runtime_image_digest" {
-  description = "Exact deployed Agent-query Runtime image digest."
-  value       = var.agent_query_runtime_image_digest
-}
-
-output "agent_query_runtime_id" {
-  description = "Resolved Agent-query Runtime identifier."
-  value       = aws_bedrockagentcore_agent_runtime.query.agent_runtime_id
-}
-
-output "agent_query_runtime_arn" {
-  description = "Resolved Agent-query Runtime ARN."
-  value       = aws_bedrockagentcore_agent_runtime.query.agent_runtime_arn
-}
-
 output "runtime_security_configuration" {
   description = "Exact non-secret Runtime security configuration verified against the live service."
   value = {
@@ -48,16 +28,6 @@ output "runtime_security_configuration" {
     network_mode                 = "VPC"
     subnet_ids                   = sort(values(aws_subnet.private)[*].id)
     security_group_ids           = sort(local.runtime_security_group_ids)
-    idle_runtime_session_timeout = 900
-  }
-}
-
-output "agent_query_runtime_security_configuration" {
-  description = "Exact non-secret Agent-query Runtime configuration verified against the live service."
-  value = {
-    role_arn                     = aws_iam_role.query_runtime.arn
-    environment_variables        = local.query_runtime_environment
-    network_mode                 = "PUBLIC"
     idle_runtime_session_timeout = 900
   }
 }

@@ -15,6 +15,12 @@ reading it with this release. The public Conversation shape dropped the field,
 and the schema and application domain model removed the discriminator.
 AgentCore behavior is now an invariant rather than stored compatibility data.
 
+Amended (2026-08-27) by [ADR-0033](0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md):
+AgentCore remains the sole execution runtime for Runs. The AI SDK chat path
+(`POST /api/chat`) has no Runs and is not served by AgentCore; it runs in a
+Vercel Sandbox through HarnessAgent, and the gate-closed Agent-query Runtime
+that briefly served it on AgentCore is retired.
+
 AgentCore is the sole supported execution runtime. Production's remaining
 Fargate Conversations were permanently deleted before this decision, so there
 is no legacy execution or migration path to preserve. Conversation creation

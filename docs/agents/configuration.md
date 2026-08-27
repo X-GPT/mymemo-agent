@@ -64,8 +64,7 @@ Optional:
 - `HARNESS_SANDBOX_REGION` (default `iad1`): Vercel region; snapshots are region-bound
 
 Compose requires the Vercel triple and `OPENROUTER_API_KEY` for the `chat-api`
-service. The `agent-query-runtime` service remains in Compose until its
-retirement ticket but chat-api no longer invokes it.
+service.
 
 ## Chat API
 

@@ -4,7 +4,6 @@ set -euo pipefail
 terraform_dir="infra/terraform"
 region="${AWS_REGION:?AWS_REGION is required}"
 expected_digest="${EXPECTED_RUNTIME_IMAGE_DIGEST:?EXPECTED_RUNTIME_IMAGE_DIGEST is required}"
-expected_query_digest="${EXPECTED_AGENT_QUERY_RUNTIME_IMAGE_DIGEST:?EXPECTED_AGENT_QUERY_RUNTIME_IMAGE_DIGEST is required}"
 expected_dispatch_value="${EXPECTED_DISPATCH_VALUE:?EXPECTED_DISPATCH_VALUE is required}"
 source "scripts/deploy/agentcore_aws_checks.sh"
 
@@ -28,10 +27,6 @@ runtime_configuration="$(verify_agentcore_runtime_configuration "${region}" "${t
 runtime="$(jq -c '.runtime' <<<"${runtime_configuration}")"
 runtime_version="$(jq -r '.agentRuntimeVersion' <<<"${runtime}")"
 endpoint="$(jq -c '.endpoint' <<<"${runtime_configuration}")"
-query_runtime_configuration="$(verify_agentcore_runtime_configuration "${region}" "${tf_output}" "${expected_query_digest}" agent_query_runtime_id agent_query_runtime_security_configuration)"
-query_runtime="$(jq -c '.runtime' <<<"${query_runtime_configuration}")"
-query_runtime_version="$(jq -r '.agentRuntimeVersion' <<<"${query_runtime}")"
-query_endpoint="$(jq -c '.endpoint' <<<"${query_runtime_configuration}")"
 verify_agentcore_consumer_runtime_authority "${region}" "${tf_output}"
 
 verify_agentcore_current_secrets "${region}" "${tf_output}"
@@ -40,4 +35,4 @@ verify_agentcore_alarms "${region}" "${tf_output}"
 dispatch_enabled=false
 [[ "${expected_dispatch_value}" == "enabled" ]] && dispatch_enabled=true
 
-jq -n --arg runtimeArn "${runtime_arn}" --arg runtimeVersion "${runtime_version}" --arg endpointArn "$(jq -r '.agentRuntimeEndpointArn' <<<"${endpoint}")" --arg imageDigest "${expected_digest}" --arg queryRuntimeArn "$(jq -r '.agentRuntimeArn' <<<"${query_runtime}")" --arg queryRuntimeVersion "${query_runtime_version}" --arg queryEndpointArn "$(jq -r '.agentRuntimeEndpointArn' <<<"${query_endpoint}")" --arg queryImageDigest "${expected_query_digest}" --arg dispatchValue "${expected_dispatch_value}" --argjson dispatchEnabled "${dispatch_enabled}" --argjson queueDepth "${queue_depth}" --argjson queueInFlight "${queue_in_flight}" --argjson queueDelayed "${queue_delayed}" --argjson dlqDepth "${dlq_depth}" '{status:"ready", runtimeArn:$runtimeArn, runtimeVersion:$runtimeVersion, endpointName:"DEFAULT", endpointArn:$endpointArn, imageDigest:$imageDigest, queryRuntimeArn:$queryRuntimeArn, queryRuntimeVersion:$queryRuntimeVersion, queryEndpointArn:$queryEndpointArn, queryImageDigest:$queryImageDigest, dispatchValue:$dispatchValue, dispatchEnabled:$dispatchEnabled, consumerEnabled:true, queueDepth:$queueDepth, queueInFlight:$queueInFlight, queueDelayed:$queueDelayed, dlqDepth:$dlqDepth}'
+jq -n --arg runtimeArn "${runtime_arn}" --arg runtimeVersion "${runtime_version}" --arg endpointArn "$(jq -r '.agentRuntimeEndpointArn' <<<"${endpoint}")" --arg imageDigest "${expected_digest}" --arg dispatchValue "${expected_dispatch_value}" --argjson dispatchEnabled "${dispatch_enabled}" --argjson queueDepth "${queue_depth}" --argjson queueInFlight "${queue_in_flight}" --argjson queueDelayed "${queue_delayed}" --argjson dlqDepth "${dlq_depth}" '{status:"ready", runtimeArn:$runtimeArn, runtimeVersion:$runtimeVersion, endpointName:"DEFAULT", endpointArn:$endpointArn, imageDigest:$imageDigest, dispatchValue:$dispatchValue, dispatchEnabled:$dispatchEnabled, consumerEnabled:true, queueDepth:$queueDepth, queueInFlight:$queueInFlight, queueDelayed:$queueDelayed, dlqDepth:$dlqDepth}'

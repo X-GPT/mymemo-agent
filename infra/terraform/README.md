@@ -27,8 +27,7 @@ the direct remote-state output is absent and the fallback input is present.
 
 - ECR repositories for `mymemo-agent-chat-api`,
   `mymemo-agent-maintenance`, `mymemo-agentcore-dispatch-publisher`, and
-  `mymemo/agentcore-runtime` and `mymemo/agent-query-runtime` in the
-  separate `infra/ecr` Terraform root
+  `mymemo/agentcore-runtime` in the separate `infra/ecr` Terraform root
 - dedicated RDS Postgres instance for writable agent state
 - EC2 Instance Connect Endpoint and private EC2 bridge for operator access to
   the agent and KB databases
@@ -48,8 +47,6 @@ the direct remote-state output is absent and the fallback input is present.
   control, and the batch-size-one consumer Lambda
 - digest-pinned ARM64 AgentCore Runtime, private subnets, one pinned fck-nat
   Auto Scaling group per availability zone, workload IAM, and Dispatch alarms
-- digest-pinned, gate-closed Agent-query verification Runtime with public
-  egress and a model-secret-only workload role
 
 The AgentCore Runtime, consumer, and dedicated Dispatch publisher share this
 state because they ship on the same compatibility cycle as the ECS services and
@@ -162,8 +159,7 @@ AWS_PROFILE=mymemo terraform -chdir=infra/bootstrap-iam apply -var-file=prod.tfv
 That creates `mymemo-agent-github-actions-deploy`, trusted only by the
 `X-GPT/mymemo-agent` GitHub environment named `prod`. Run this bootstrap locally
 with an admin AWS profile before the first GitHub Actions deploy.
-Reapply it once after changes to this root; the release workflow uses its
-narrow Agent-query Runtime invocation permission for the deployed smoke check.
+Reapply it once after changes to this root.
 
 Terraform-owned production inputs live in checked-in
 `infra/terraform/prod.tfvars`. The GitHub Actions workflow sources
@@ -171,9 +167,8 @@ Terraform-owned production inputs live in checked-in
 and smoke-test inputs, then generates `infra/terraform/generated.auto.tfvars`
 with release-specific Terraform values: AWS region and the three immutable ECS
 image URIs. The Runtime repository URL comes from the separately applied ECR
-root; its digest, the Agent-query Runtime digest, and the consumer package path
-are supplied through Terraform environment variables by the same workflow. The
-plan step uses both:
+root; its digest and the consumer package path are supplied through Terraform
+environment variables by the same workflow. The plan step uses both:
 
 ```sh
 terraform -chdir=infra/terraform plan -var-file=prod.tfvars -var-file=generated.auto.tfvars

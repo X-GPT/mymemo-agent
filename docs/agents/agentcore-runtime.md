@@ -41,17 +41,7 @@ The Runtime mirrors the SDK transcript to Postgres through `src/sdk/session-stor
 
 A qualifying `done` or `interrupted` terminal transaction publishes `conversation_runtime.agent_session_id` atomically with the Outcome. A `mirror_error` stops Tool and E2B work; a still-running Run ends as `error`, while an already-committed interruption remains `interrupted`. That turn must not establish or advance the resume pointer. Conversation deletion removes its transcripts during cleanup. See [ADR-0005](../adr/0005-conversation-continuity-postgres-session-store.md).
 
-## Query and sandbox startup
-
-The gate-closed `agent-query-runtime` exposes no E2B Workspace, built-in
-tools, or MCP tools. Each verification request hydrates a fresh in-memory
-Claude SessionStore from opaque state under the private S3 `agent-sessions/`
-prefix, fully drains one query, then detaches and unconditionally overwrites
-that Conversation's object. Distinct requests may execute concurrently and do
-not coordinate their overwrites. The Runtime emits raw Claude SDK messages as
-NDJSON, which the local Chat API returns unchanged without admission. Terraform
-deploys this verification Runtime, but production chat-api does not mount its
-path.
+## Sandbox startup
 
 `src/sdk/start-run-query.ts` must:
 
