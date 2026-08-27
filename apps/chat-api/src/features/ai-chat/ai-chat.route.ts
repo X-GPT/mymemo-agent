@@ -30,7 +30,7 @@ const chatBody = z.strictObject({
 
 /**
  * Forward `response` unchanged and run `cleanup` once its body has been fully
- * read, cancelled, or failed — the Harness sandbox must not outlive the turn.
+ * read, cancelled, or failed — the Harness sandbox must not run on past the turn.
  * Hand-rolled because Bun 1.3 honours neither `TransformStream.cancel` nor
  * `finally` in an async-generator body when the client cancels.
  */
@@ -103,14 +103,36 @@ routes.post(
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
 		const agent = c.var.deps.harnessChatAgent;
-		const session = await agent.createSession({ sessionId: body.id });
-		const destroy = () =>
-			session.destroy().catch((error: unknown) => {
+		const ref = { userId: c.var.identity.memberCode, conversationId: body.id };
+		const resumeFrom = await c.var.deps.harnessResumeStateStore.load(ref);
+		let session: Awaited<ReturnType<typeof agent.createSession>>;
+		try {
+			session = await agent.createSession({
+				sessionId: body.id,
+				resumeFrom: resumeFrom ?? undefined,
+			});
+		} catch (error) {
+			if (!resumeFrom) throw error;
+			// Snapshot expired or sandbox gone: start a fresh thread under the same
+			// id rather than block the user. The stale pointer is overwritten below.
+			c.var.logger.warn(
+				{ err: error, conversationId: body.id },
+				"harness session resume failed; starting a fresh session",
+			);
+			session = await agent.createSession({ sessionId: body.id });
+		}
+		// Snapshot the sandbox and remember how to resume it; the pointer is opaque.
+		const stop = async () => {
+			try {
+				const state = await session.stop();
+				await c.var.deps.harnessResumeStateStore.save(ref, state);
+			} catch (error) {
 				c.var.logger.warn(
 					{ err: error, conversationId: body.id },
-					"harness session destroy failed",
+					"harness session stop failed",
 				);
-			});
+			}
+		};
 		let result: Awaited<ReturnType<typeof agent.stream>>;
 		try {
 			result = await agent.stream({
@@ -123,7 +145,7 @@ routes.post(
 				{ err: error, conversationId: body.id },
 				"harness turn failed to start",
 			);
-			await destroy();
+			await stop();
 			throw error;
 		}
 		return cleanupAfterStream(
@@ -137,7 +159,7 @@ routes.post(
 					return "An error occurred.";
 				},
 			}),
-			destroy,
+			stop,
 		);
 	},
 );

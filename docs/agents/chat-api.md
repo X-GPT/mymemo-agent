@@ -13,11 +13,19 @@ The local-only composition mounts `POST /api/chat`. It accepts the strict
 and, after identity, Conversation ownership (`404`), Archive (`409`), and
 exposure (`403`) checks, runs one turn of Claude Code with its built-in tools
 inside a Harness sandbox (see [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)).
-`HarnessAgent` runs in the chat-api process; the sandbox is a fresh Vercel
-Sandbox whose harness `sessionId` is the Conversation id. The response is the
-AI SDK UI message stream (`toUIMessageStreamResponse()`): text arrives as it is
-produced and built-in tool activity appears as `tool-input-available` /
-`tool-output-available` parts.
+`HarnessAgent` runs in the chat-api process; each Conversation owns one
+persistent Vercel Sandbox whose harness `sessionId` is the Conversation id. The
+response is the AI SDK UI message stream (`toUIMessageStreamResponse()`): text
+arrives as it is produced and built-in tool activity appears as
+`tool-input-available` / `tool-output-available` parts.
+
+Continuity between messages is the sandbox snapshot: after every turn —
+drained, cancelled, or failed — the route calls `session.stop()` and stores the
+returned opaque pointer in `conversation_runtime.harness_resume_state`; the
+next turn passes it back as `createSession({ sessionId, resumeFrom })`. If
+resuming throws, the route logs `harness session resume failed; starting a
+fresh session` and starts a fresh session for the same id. Permanent deletion
+nulls the pointer; retention and the rest of the lifecycle are ADR-0033's.
 
 Stop is best-effort and has no endpoint or durable record: the request's own
 abort signal is passed to the turn, so `useChat().stop()` or a disconnect
@@ -25,16 +33,24 @@ aborts Claude Code in the sandbox, the stream ends with the AI SDK `abort`
 part, and no error reaches the client. A turn that fails to start returns the
 generic `500`; a turn that fails while streaming ends with the AI SDK `error`
 part carrying only the generic `"An error occurred."` text. Failure details
-are logged by chat-api and never sent to the client. In every case — drained,
-stopped, cancelled, failed — the session is destroyed so the sandbox does not
-run on to its timeout. There is no admission, Run,
-history, retry, or continuity between messages yet: the fresh-sandbox-per-turn
-lifecycle is the first slice of [#595](https://github.com/X-GPT/mymemo-agent/issues/595)
-and is superseded by ADR-0033's persistent Harness sandbox (resume pointer,
-`stop()` per turn, `409` on overlapping turns) in the follow-up tickets. The
-adapter runs the configured `OPENROUTER_DEFAULT_MODEL`; the request `model`
+are logged by chat-api and never sent to the client. There is no admission,
+Run, history, or retry yet, and overlapping turns are not rejected: those are
+follow-up slices of [#595](https://github.com/X-GPT/mymemo-agent/issues/595).
+The adapter runs the configured `OPENROUTER_DEFAULT_MODEL`; the request `model`
 literal is validated, not forwarded. Production composition does not mount this
 path; its `harnessChatAgent` throws.
+
+Local two-turn recall check (real harness; needs the Compose stack with the
+Vercel triple and `OPENROUTER_API_KEY` exported):
+
+```sh
+H='-H content-type:application/json -H x-member-code:m1 -H x-partner-code:p1'
+ID=$(curl -s -X POST localhost:3000/v1/conversations $H -d '{}' | jq -r .conversationId)
+turn() { curl -sN -X POST localhost:3000/api/chat $H -d "{\"id\":\"$ID\",\"model\":\"anthropic/claude-sonnet-5\",\"trigger\":\"submit-message\",\"messages\":[{\"id\":\"$2\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"$1\"}]}]}"; }
+turn "Remember the word pelican." 11111111-1111-4111-8111-111111111111
+docker compose restart chat-api
+turn "Which word did I ask you to remember?" 22222222-2222-4222-8222-222222222222   # answer mentions pelican
+```
 
 ### Create a Conversation
 

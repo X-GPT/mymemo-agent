@@ -95,6 +95,14 @@ describe("migration", () => {
 			await columnExists("conversation_runtime", "workspace_checkpoint_status"),
 		).toBe(false);
 	});
+
+	it("adds the nullable Harness resume pointer to conversation_runtime", async () => {
+		// ADR-0033: the AI SDK chat path stores `session.stop()`'s opaque return
+		// value per Conversation; the sandbox snapshot holds the memory itself.
+		expect(
+			await columnExists("conversation_runtime", "harness_resume_state"),
+		).toBe(true);
+	});
 });
 
 /** The identity every fenced helper is keyed by in these tests. */

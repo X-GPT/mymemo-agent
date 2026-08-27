@@ -1,6 +1,7 @@
 import type { Database } from "@mymemo/agent-db/client";
 import {
 	ACTIVE_RUN_STATUSES,
+	conversationRuntime,
 	conversations,
 	runs,
 } from "@mymemo/agent-db/schema";
@@ -199,6 +200,17 @@ export class PostgresConversationStore implements ConversationStore {
 			if (!conversation) return { outcome: "not_found" };
 			if (await hasActiveRun(tx, ref)) return { outcome: "active_run" };
 
+			// The runtime row outlives the Conversation so cleanup can still find
+			// its E2B sandbox; only the Harness resume pointer dies with it here.
+			await tx
+				.update(conversationRuntime)
+				.set({ harnessResumeState: null })
+				.where(
+					and(
+						eq(conversationRuntime.userId, ref.userId),
+						eq(conversationRuntime.conversationId, ref.conversationId),
+					),
+				);
 			await tx
 				.delete(conversations)
 				.where(

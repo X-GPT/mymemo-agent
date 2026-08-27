@@ -26,16 +26,38 @@ const requestBody = {
 const uiMessageStream =
 	'data: {"type":"text-delta","id":"t1","delta":"Hi"}\n\ndata: [DONE]\n\n';
 
+/** What the fake session's `stop()` returns; opaque to the route. */
+const stoppedState = { type: "resume-session", data: { after: "turn" } };
+
+/** In-memory resume pointer store, optionally pre-seeded for conversation-1. */
+function fakeResumeStore(initial: unknown = null) {
+	const saved: { ref: unknown; state: unknown }[] = [];
+	const store = {
+		load: async () => initial,
+		save: async (ref: unknown, state: unknown) => {
+			saved.push({ ref, state });
+		},
+	};
+	return {
+		store: store as unknown as AppDeps["harnessResumeStateStore"],
+		saved,
+	};
+}
+
 /** Fake agent that records the lifecycle and streams a canned UI message stream. */
 function fakeAgent() {
 	const events: unknown[] = [];
 	const created = {
-		destroy: async () => {
-			events.push("destroy");
+		stop: async () => {
+			events.push("stop");
+			return stoppedState;
 		},
 	};
 	const fake = {
-		createSession: async (options: { sessionId: string }) => {
+		createSession: async (options: {
+			sessionId: string;
+			resumeFrom?: unknown;
+		}) => {
 			events.push({ createSession: options });
 			return created;
 		},
@@ -78,7 +100,10 @@ const logger = {
 function makeApp(deps: Partial<AppDeps>) {
 	const app = new Hono<AppEnv>();
 	app.use("*", async (c, next) => {
-		c.set("deps", deps as AppDeps);
+		c.set("deps", {
+			harnessResumeStateStore: fakeResumeStore().store,
+			...deps,
+		} as AppDeps);
 		c.set("logger", logger as never);
 		await next();
 	});
@@ -90,8 +115,9 @@ const ownedConversation = {
 	get: async () => ({ archivedAt: null }) as never,
 } as unknown as AppDeps["conversationStore"];
 
-it("runs one Harness turn in a session named after the Conversation and destroys it after the stream", async () => {
+it("runs one Harness turn in a session named after the Conversation and stops it after the stream", async () => {
 	const { agent, events } = fakeAgent();
+	const { store, saved } = fakeResumeStore();
 	const lookups: unknown[] = [];
 	const app = makeApp({
 		conversationStore: {
@@ -102,6 +128,7 @@ it("runs one Harness turn in a session named after the Conversation and destroys
 		} as unknown as AppDeps["conversationStore"],
 		exposureGate: { isAgentEnabled: async () => true },
 		harnessChatAgent: agent,
+		harnessResumeStateStore: store,
 	});
 
 	const response = await app.request("/api/chat", {
@@ -116,7 +143,7 @@ it("runs one Harness turn in a session named after the Conversation and destroys
 	expect(lookups).toEqual([
 		{ userId: "member-1", conversationId: "conversation-1" },
 	]);
-	// The session is not destroyed until the client has drained the stream.
+	// The session is not stopped until the client has drained the stream.
 	expect(events).toEqual([
 		{
 			createSession: { sessionId: "conversation-1" },
@@ -126,11 +153,76 @@ it("runs one Harness turn in a session named after the Conversation and destroys
 			sameSession: true,
 		},
 	]);
+	// The pointer never appears in the stream; it is stored after `stop()`.
 	expect(await response.text()).toBe(uiMessageStream);
-	expect(events.at(-1)).toBe("destroy");
+	expect(events.at(-1)).toBe("stop");
+	expect(saved).toEqual([
+		{
+			ref: { userId: "member-1", conversationId: "conversation-1" },
+			state: stoppedState,
+		},
+	]);
 });
 
-it("destroys the session when the client cancels the stream", async () => {
+it("resumes the Conversation's session from the stored pointer", async () => {
+	const { agent, events } = fakeAgent();
+	const pointer = { type: "resume-session", data: { from: "before" } };
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		harnessChatAgent: agent,
+		harnessResumeStateStore: fakeResumeStore(pointer).store,
+	});
+	const response = await app.request("/api/chat", {
+		method: "POST",
+		headers,
+		body: JSON.stringify(requestBody),
+	});
+	expect(response.status).toBe(200);
+	expect(events[0]).toEqual({
+		createSession: { sessionId: "conversation-1", resumeFrom: pointer },
+	});
+	expect(await response.text()).not.toContain("before");
+});
+
+it("starts a fresh session for the same id and logs when resuming throws", async () => {
+	const { agent, events, fake } = fakeAgent();
+	const createSession = fake.createSession;
+	fake.createSession = async (options) => {
+		if (options.resumeFrom) throw new Error("snapshot expired");
+		return createSession(options);
+	};
+	const { store, saved } = fakeResumeStore({
+		type: "resume-session",
+		data: {},
+	});
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		harnessChatAgent: agent,
+		harnessResumeStateStore: store,
+	});
+	logged.length = 0;
+	const response = await app.request("/api/chat", {
+		method: "POST",
+		headers,
+		body: JSON.stringify(requestBody),
+	});
+	expect(response.status).toBe(200);
+	expect(await response.text()).toBe(uiMessageStream);
+	expect(events[0]).toEqual({ createSession: { sessionId: "conversation-1" } });
+	expect(logged).toEqual([
+		{
+			level: "warn",
+			obj: { err: expect.any(Error), conversationId: "conversation-1" },
+			msg: "harness session resume failed; starting a fresh session",
+		},
+	]);
+	// The stale pointer is replaced by the fresh session's.
+	expect(saved.map((s) => s.state)).toEqual([stoppedState]);
+});
+
+it("stops the session when the client cancels the stream", async () => {
 	const { agent, events } = fakeAgent();
 	const app = makeApp({
 		conversationStore: ownedConversation,
@@ -142,9 +234,9 @@ it("destroys the session when the client cancels the stream", async () => {
 		headers,
 		body: JSON.stringify(requestBody),
 	});
-	expect(events).not.toContain("destroy");
+	expect(events).not.toContain("stop");
 	await response.body?.cancel();
-	expect(events.at(-1)).toBe("destroy");
+	expect(events.at(-1)).toBe("stop");
 });
 
 it("passes the request's own abort signal to the turn", async () => {
@@ -167,7 +259,7 @@ it("passes the request's own abort signal to the turn", async () => {
 	expect(streamEvent.stream.abortSignal).toBe(controller.signal);
 });
 
-it("ends an aborted turn cleanly with the abort part and still destroys the session", async () => {
+it("ends an aborted turn cleanly with the abort part and still stops the session", async () => {
 	const { agent, events, fake } = fakeAgent();
 	const controller = new AbortController();
 	// Mirrors HarnessAgent: on abort the turn settles with a final `abort` part.
@@ -201,10 +293,10 @@ it("ends an aborted turn cleanly with the abort part and still destroys the sess
 	const text = response.text();
 	controller.abort();
 	expect(await text).toContain('{"type":"abort"}');
-	expect(events.at(-1)).toBe("destroy");
+	expect(events.at(-1)).toBe("stop");
 });
 
-it("destroys the session and logs when the turn fails to start", async () => {
+it("stops the session and logs when the turn fails to start", async () => {
 	const { agent, events, fake } = fakeAgent();
 	fake.stream = async () => {
 		throw new Error("bridge unavailable");
@@ -222,7 +314,7 @@ it("destroys the session and logs when the turn fails to start", async () => {
 	});
 	expect(response.status).toBe(500);
 	expect(await response.text()).not.toContain("bridge unavailable");
-	expect(events.at(-1)).toBe("destroy");
+	expect(events.at(-1)).toBe("stop");
 	expect(logged).toEqual([
 		{
 			level: "error",
@@ -232,7 +324,7 @@ it("destroys the session and logs when the turn fails to start", async () => {
 	]);
 });
 
-it("hides the cause of a mid-stream failure from the client, logs it, and destroys the session", async () => {
+it("hides the cause of a mid-stream failure from the client, logs it, and stops the session", async () => {
 	const { agent, events, fake } = fakeAgent();
 	// Mirrors the AI SDK: a failing turn becomes an `error` part whose text is `onError`'s return.
 	fake.stream = async () => ({
@@ -260,7 +352,7 @@ it("hides the cause of a mid-stream failure from the client, logs it, and destro
 	const text = await response.text();
 	expect(text).toContain('"errorText":"An error occurred."');
 	expect(text).not.toContain("model exploded");
-	expect(events.at(-1)).toBe("destroy");
+	expect(events.at(-1)).toBe("stop");
 	expect(logged).toEqual([
 		{
 			level: "error",
