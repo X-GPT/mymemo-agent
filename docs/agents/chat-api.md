@@ -17,9 +17,17 @@ inside a Harness sandbox (see [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-i
 Sandbox whose harness `sessionId` is the Conversation id. The response is the
 AI SDK UI message stream (`toUIMessageStreamResponse()`): text arrives as it is
 produced and built-in tool activity appears as `tool-input-available` /
-`tool-output-available` parts. The request abort signal is passed to the turn.
-The session is destroyed once the stream has been drained, cancelled, or
-failed, and also when the turn fails to start. There is no admission, Run,
+`tool-output-available` parts.
+
+Stop is best-effort and has no endpoint or durable record: the request's own
+abort signal is passed to the turn, so `useChat().stop()` or a disconnect
+aborts Claude Code in the sandbox, the stream ends with the AI SDK `abort`
+part, and no error reaches the client. A turn that fails to start returns the
+generic `500`; a turn that fails while streaming ends with the AI SDK `error`
+part carrying only the generic `"An error occurred."` text. Failure details
+are logged by chat-api and never sent to the client. In every case — drained,
+stopped, cancelled, failed — the session is destroyed so the sandbox does not
+run on to its timeout. There is no admission, Run,
 history, retry, or continuity between messages yet: the fresh-sandbox-per-turn
 lifecycle is the first slice of [#595](https://github.com/X-GPT/mymemo-agent/issues/595)
 and is superseded by ADR-0033's persistent Harness sandbox (resume pointer,

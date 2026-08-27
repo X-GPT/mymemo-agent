@@ -119,10 +119,26 @@ routes.post(
 				abortSignal: c.req.raw.signal,
 			});
 		} catch (error) {
+			c.var.logger.error(
+				{ err: error, conversationId: body.id },
+				"harness turn failed to start",
+			);
 			await destroy();
 			throw error;
 		}
-		return cleanupAfterStream(result.toUIMessageStreamResponse(), destroy);
+		return cleanupAfterStream(
+			result.toUIMessageStreamResponse({
+				// Details stay in the log; the client only ever sees the generic text.
+				onError: (error) => {
+					c.var.logger.error(
+						{ err: error, conversationId: body.id },
+						"harness turn failed while streaming",
+					);
+					return "An error occurred.";
+				},
+			}),
+			destroy,
+		);
 	},
 );
 
