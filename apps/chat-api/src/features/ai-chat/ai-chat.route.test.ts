@@ -49,6 +49,7 @@ function fakeAgent() {
 		}) => {
 			events.push({ stream: options, sameSession: session === created });
 			return {
+				// Typed so the mid-stream failure test can override it with a real `onError`.
 				toUIMessageStreamResponse: (_options: {
 					onError: (error: unknown) => string;
 				}) => streamResponse(uiMessageStream),

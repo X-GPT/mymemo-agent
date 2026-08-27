@@ -27,8 +27,7 @@ generic `500`; a turn that fails while streaming ends with the AI SDK `error`
 part carrying only the generic `"An error occurred."` text. Failure details
 are logged by chat-api and never sent to the client. In every case — drained,
 stopped, cancelled, failed — the session is destroyed so the sandbox does not
-run on to its timeout. The `/v1` Interrupt route is unrelated to this path.
-There is no admission, Run,
+run on to its timeout. There is no admission, Run,
 history, retry, or continuity between messages yet: the fresh-sandbox-per-turn
 lifecycle is the first slice of [#595](https://github.com/X-GPT/mymemo-agent/issues/595)
 and is superseded by ADR-0033's persistent Harness sandbox (resume pointer,
