@@ -91,8 +91,10 @@ Claude Code and Codex require using real network sandbox like `@ai-sdk/sandbox-v
 - `Sandbox.create()` parameters (the SDK type is aliased directly, minus `onResume`), plus
   `name` to override the auto-derived template name. So `runtime`, `image`, `source`, `env`,
   `ports`, `timeout`, `resources.vcpus`, `region`, `failoverRegions`, `networkPolicy`,
-  `persistent`, `snapshotExpiration`, `keepLastSnapshots`, `tags`, `mounts`, `fetch`, and the
+  `persistent`, `snapshotExpiration`, `keepLastSnapshots`, `tags`, `fetch`, and the
   credential fields `token`/`teamId`/`projectId` all pass straight through
+  (there is no `mounts` option in `@vercel/sandbox` 3.1.0; an earlier revision of
+  this note listed one in error)
   ([SDK reference, `Sandbox.create`](https://vercel.com/docs/sandbox/sdk-reference#sandbox.create)).
 
 Provider-imposed defaults
