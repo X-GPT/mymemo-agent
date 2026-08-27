@@ -9,8 +9,8 @@ export interface HarnessConfig {
 	/** Model credential set on the chat-api process for the Claude Code adapter. */
 	openrouterApiKey: string;
 	openrouterBaseUrl: string;
-	/** Model the adapter is warmed with at composition. */
-	defaultModel: string;
+	/** Model the Claude Code adapter runs (`OPENROUTER_DEFAULT_MODEL`). */
+	model: string;
 	/** Maximum wall-clock lifetime of one Harness sandbox session. */
 	sandboxTimeoutMs: number;
 	/** Vercel region; snapshots are region-bound, so this is project-level. */
@@ -40,8 +40,7 @@ export function loadHarnessConfigFromEnv(env: Env): HarnessConfig {
 		openrouterApiKey: required(env, "OPENROUTER_API_KEY"),
 		openrouterBaseUrl:
 			env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api",
-		defaultModel:
-			env.OPENROUTER_DEFAULT_MODEL?.trim() || "anthropic/claude-sonnet-5",
+		model: env.OPENROUTER_DEFAULT_MODEL?.trim() || "anthropic/claude-sonnet-5",
 		sandboxTimeoutMs,
 		sandboxRegion: env.HARNESS_SANDBOX_REGION?.trim() || "iad1",
 	};

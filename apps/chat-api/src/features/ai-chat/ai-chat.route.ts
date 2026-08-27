@@ -31,6 +31,8 @@ const chatBody = z.strictObject({
 /**
  * Forward `response` unchanged and run `cleanup` once its body has been fully
  * read, cancelled, or failed — the Harness sandbox must not outlive the turn.
+ * Hand-rolled because Bun 1.3 honours neither `TransformStream.cancel` nor
+ * `finally` in an async-generator body when the client cancels.
  */
 function cleanupAfterStream(
 	response: Response,
@@ -101,10 +103,7 @@ routes.post(
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
 		const agent = c.var.deps.harnessChatAgent;
-		const session = await agent.createSession({
-			sessionId: body.id,
-			model: body.model,
-		});
+		const session = await agent.createSession({ sessionId: body.id });
 		const destroy = () =>
 			session.destroy().catch((error: unknown) => {
 				c.var.logger.warn(

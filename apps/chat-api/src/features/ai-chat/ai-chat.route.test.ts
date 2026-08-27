@@ -97,10 +97,7 @@ it("runs one Harness turn in a session named after the Conversation and destroys
 	// The session is not destroyed until the client has drained the stream.
 	expect(events).toEqual([
 		{
-			createSession: {
-				sessionId: "conversation-1",
-				model: "anthropic/claude-sonnet-5",
-			},
+			createSession: { sessionId: "conversation-1" },
 		},
 		{
 			stream: { prompt: "Hello", abortSignal: expect.any(AbortSignal) },

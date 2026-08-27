@@ -13,7 +13,7 @@ it("applies the documented defaults", () => {
 		vercel: { token: "vercel-token", teamId: "team_1", projectId: "prj_1" },
 		openrouterApiKey: "sk-or-test",
 		openrouterBaseUrl: "https://openrouter.ai/api",
-		defaultModel: "anthropic/claude-sonnet-5",
+		model: "anthropic/claude-sonnet-5",
 		sandboxTimeoutMs: 600_000,
 		sandboxRegion: "iad1",
 	});
@@ -28,7 +28,7 @@ it("reads the overrides", () => {
 		HARNESS_SANDBOX_REGION: "sfo1",
 	});
 	expect(config.openrouterBaseUrl).toBe("https://openrouter.test/api");
-	expect(config.defaultModel).toBe("anthropic/claude-sonnet-4");
+	expect(config.model).toBe("anthropic/claude-sonnet-4");
 	expect(config.sandboxTimeoutMs).toBe(120_000);
 	expect(config.sandboxRegion).toBe("sfo1");
 });

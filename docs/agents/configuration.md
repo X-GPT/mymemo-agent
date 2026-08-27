@@ -59,7 +59,7 @@ Required:
 Optional:
 
 - `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`): set as `ANTHROPIC_BASE_URL`
-- `OPENROUTER_DEFAULT_MODEL` (default `anthropic/claude-sonnet-5`): model the adapter is warmed with at boot; each request's `model` selects the adapter for its turn
+- `OPENROUTER_DEFAULT_MODEL` (default `anthropic/claude-sonnet-5`): model the Claude Code adapter runs; the request `model` literal is validated but the adapter is configured once at boot
 - `HARNESS_SANDBOX_TIMEOUT_MS` (default `600000`): maximum wall-clock lifetime of one sandbox session
 - `HARNESS_SANDBOX_REGION` (default `iad1`): Vercel region; snapshots are region-bound
 

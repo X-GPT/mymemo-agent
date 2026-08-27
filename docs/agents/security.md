@@ -35,9 +35,6 @@ before it reaches the sandbox and the Vercel firewall injects the real bearer
 only on requests to the OpenRouter host — so prompt-injected Bash can spend
 model credit against that host but cannot read the key. The sandbox receives no
 database, E2B, Searchable document, Redis, or Downloadable artifact authority.
-Its resolved OpenRouter credential is passed only to the Claude subprocess
-through the SDK's per-query environment and is not written into the Runtime
-process environment.
 Its KB credential is read-only and separate from the writable `mymemo_agent`
 credential. The maintenance service receives only writable agent DB, E2B
 cleanup, and artifact-delete authority; it cannot serve Runs.
