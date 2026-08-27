@@ -11,8 +11,6 @@
 #                   /api/chat turns in a Vercel Sandbox through HarnessAgent
 #                   (needs VERCEL_TOKEN/VERCEL_TEAM_ID/VERCEL_PROJECT_ID and
 #                   OPENROUTER_API_KEY exported)
-#   agent-query-runtime — Agent-query Runtime; chat-api no longer calls it, kept
-#                   running until its retirement ticket
 #   agentcore-runtime — acquires one exact Dispatch and serves its Run
 #   dispatch-bridge — polls the durable outbox and invokes the local Runtime
 #   redis         — disposable Redis 7 for real relay contract testing
@@ -68,29 +66,6 @@ services:
         condition: service_healthy
       artifact-bucket:
         condition: service_completed_successfully
-    restart: unless-stopped
-
-  agent-query-runtime:
-    build:
-      context: .
-      dockerfile: apps/agent-query-runtime/Dockerfile
-    network_mode: "service:redis"
-    environment:
-      <<: *runtime-environment
-      ANTHROPIC_API_KEY: ""
-      ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY}
-      ANTHROPIC_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api}
-      AWS_ACCESS_KEY_ID: "local-agent-session"
-      AWS_SECRET_ACCESS_KEY: "local-agent-session-secret"
-      PORT: "4510"
-    healthcheck:
-      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:4510/ping');process.exit(r.ok?0:1)"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-    depends_on:
-      redis:
-        condition: service_healthy
     restart: unless-stopped
 
   agentcore-runtime:
@@ -190,8 +165,6 @@ services:
     image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     network_mode: "service:redis"
     entrypoint: ["/bin/sh", "-c"]
-    volumes:
-      - ./infra/dev/agent-session-policy.json:/config/agent-session-policy.json:ro
     command:
       - >-
         mc alias set local http://127.0.0.1:9000 local-artifact-admin local-artifact-admin-secret
@@ -200,9 +173,6 @@ services:
         && mc admin policy attach local readonly --user local-artifact-reader
         && mc admin user add local local-artifact-writer local-artifact-writer-secret
         && mc admin policy attach local writeonly --user local-artifact-writer
-        && mc admin user add local local-agent-session local-agent-session-secret
-        && mc admin policy create local agent-session /config/agent-session-policy.json
-        && mc admin policy attach local agent-session --user local-agent-session
     depends_on:
       artifact-store:
         condition: service_healthy

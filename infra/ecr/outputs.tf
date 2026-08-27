@@ -17,8 +17,3 @@ output "agentcore_runtime_ecr_repository_url" {
   description = "ECR repository URL for AgentCore Runtime images."
   value       = aws_ecr_repository.agentcore_runtime.repository_url
 }
-
-output "agent_query_runtime_ecr_repository_url" {
-  description = "ECR repository URL for Agent-query Runtime images."
-  value       = aws_ecr_repository.agent_query_runtime.repository_url
-}

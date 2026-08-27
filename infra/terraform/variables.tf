@@ -72,16 +72,6 @@ variable "runtime_image_digest" {
   }
 }
 
-variable "agent_query_runtime_image_digest" {
-  description = "Verified Linux ARM64 Agent-query Runtime image digest (sha256:...). Tags are never deployed."
-  type        = string
-
-  validation {
-    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.agent_query_runtime_image_digest))
-    error_message = "agent_query_runtime_image_digest must be an exact sha256 image digest."
-  }
-}
-
 variable "consumer_lambda_package" {
   description = "Path to the verified AgentCore dispatch consumer Lambda deployment package."
   type        = string

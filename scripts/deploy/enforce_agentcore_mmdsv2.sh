@@ -4,10 +4,9 @@ set -euo pipefail
 terraform_dir="infra/terraform"
 region="${AWS_REGION:?AWS_REGION is required}"
 evidence_path="${1:-}"
-runtime_output="${2:-agent_runtime_id}"
 source "scripts/deploy/agentcore_aws_checks.sh"
 
-runtime_id="$(terraform -chdir="${terraform_dir}" output -raw "${runtime_output}")"
+runtime_id="$(terraform -chdir="${terraform_dir}" output -raw agent_runtime_id)"
 runtime="$(agentcore_aws bedrock-agentcore-control get-agent-runtime \
   --region "${region}" \
   --agent-runtime-id "${runtime_id}")"

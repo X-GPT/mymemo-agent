@@ -12,7 +12,6 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | `apps/agentcore-dispatch-publisher` | Dedicated AgentCore Dispatch publication app. Runs as one ECS task, separate from chat-api and AgentCore Runtime. |
 | `apps/agentcore-dispatch-consumer` | AgentCore dispatch consumer Lambda and shared dispatch-boundary modules. Its production composition validates strict content-free SQS envelopes, invokes the Runtime, and returns partial-batch acknowledgements; the Runtime composes exact acquisition directly. |
 | `apps/agentcore-runtime` | Sole production execution runtime. The Linux ARM64 image exposes `/ping` and `/invocations`, exactly acquires one dispatched Run, and owns its Run-serving behavior. |
-| `apps/agent-query-runtime` | Gate-closed query verification Runtime. Its separately deployed AgentCore Runtime executes no-tool Claude sessions, persists opaque detached session state under the private S3 `agent-sessions/` prefix, and streams raw SDK messages without admission, E2B, Run, or Dispatch control logic. Distinct requests may execute concurrently in this slice. |
 | `apps/agentcore-local-dispatch-bridge` | Development-only outbox poller that composes the shared publisher and consumer contracts against a local AgentCore Runtime. It is absent from production startup paths and images. |
 | `packages/agent-db` | Shared writable `mymemo_agent` data layer: schema, migrations, Run and Conversation Ownership transactions, runtime pointers, session transcripts, artifact metadata, and PGlite test support. |
 | `packages/agentcore-dispatch` | Production-neutral AgentCore Dispatch publication behavior, strict envelope serialization, and separately importable SQS and SSM adapters. |
@@ -56,8 +55,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/agentcore-runtime/src/run-serving.ts` | Serving behavior for an already-running Run |
 | `apps/agentcore-runtime/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |
 | `apps/agentcore-runtime/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |
-| `apps/agent-query-runtime/src/` | Concurrent query invocation and raw Claude SDK streaming |
-| `apps/chat-api/src/features/ai-chat/` | Local-only Harness-hosted AI SDK chat route: one Claude Code turn per message in a Vercel Sandbox, streamed as the UI message stream |
+| `apps/chat-api/src/features/ai-chat/` | Harness-hosted AI SDK chat route (`POST /api/chat`, local composition only): one Claude Code turn per message in a persistent Vercel Sandbox per Conversation, streamed as the UI message stream |
 | `packages/agentcore-dispatch/src/` | Shared AgentCore Dispatch publisher policy, envelope serialization, and isolated SQS/SSM adapters |
 | `packages/agent-db/src/conversation-ownership.ts` | Live Ownership renew, release, and mutation fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |
