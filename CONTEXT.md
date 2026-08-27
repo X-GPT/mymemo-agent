@@ -187,9 +187,15 @@ _Avoid_: Conversation API, Assistant Cloud
 An additive, AI SDK-compatible data plane through which a client submits a
 message to an existing Conversation and receives that Run's live response. It
 shares the same Run admission and execution authority as the AG-UI agent
-surface rather than defining a second execution path. The staged `/api/chat`
-query verification path is not this surface; it returns raw Claude SDK NDJSON.
+surface rather than defining a second execution path. On the Harness path it is
+served from the Conversation's Harness sandbox rather than by a Run.
 _Avoid_: messaging layer, AI SDK runtime
+
+**Harness sandbox**:
+The persistent Vercel Sandbox, named from the Conversation id, that hosts Claude
+Code and carries the Conversation's model-side memory across turns on the AI SDK
+chat path. It is neither the Workspace nor the Execution runtime.
+_Avoid_: sandbox (ambiguous with E2B), Runtime session, Agent session
 
 **Assistant text delta**:
 A bounded, provisional fragment of Assistant text appended to the Run's Live
@@ -296,10 +302,8 @@ _Avoid_: fetch (the prototype path's word for content-into-context)
 The internal, Runtime-owned Claude SDK transcript that carries a Conversation's
 model-side memory across Runs, including a successfully preserved interrupted
 Run even when its provisional response is absent from Conversation history. It
-is never client-facing or stored in the Workspace. The staged verification path
-keeps its separate opaque Agent session under
-`agent-sessions/<conversationId>` and replaces that detached snapshot after each
-fully drained invocation.
+is never client-facing or stored in the Workspace. On the AI SDK chat path the
+Agent session lives inside the Conversation's Harness sandbox.
 _Avoid_: chat history (that is the user-visible record in run events)
 
 **Session mirror evidence**:
