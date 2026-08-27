@@ -181,6 +181,7 @@ describe("PostgresConversationStore", () => {
 			userId: "user-1",
 			conversationId: "conv-1",
 			sandboxId: "sandbox-1",
+			harnessResumeState: { type: "resume-session", data: {} },
 		});
 		await tdb.db.insert(agentSessions).values({
 			conversationId: "conv-1",
@@ -232,7 +233,13 @@ describe("PostgresConversationStore", () => {
 		expect(await tdb.db.select().from(runs)).toHaveLength(0);
 		expect(await tdb.db.select().from(runEvents)).toHaveLength(0);
 		expect(await tdb.db.select().from(conversationArtifacts)).toHaveLength(0);
-		expect(await tdb.db.select().from(conversationRuntime)).toHaveLength(1);
+		// The runtime row survives for E2B cleanup; the Harness pointer does not.
+		expect(await tdb.db.select().from(conversationRuntime)).toEqual([
+			expect.objectContaining({
+				sandboxId: "sandbox-1",
+				harnessResumeState: null,
+			}),
+		]);
 		expect(await tdb.db.select().from(agentSessions)).toHaveLength(1);
 		expect(await tdb.db.select().from(artifactObjects)).toHaveLength(1);
 	});

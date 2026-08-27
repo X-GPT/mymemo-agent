@@ -59,6 +59,13 @@ export const conversationRuntime = pgTable(
 		 * leave it unchanged.
 		 */
 		agentSessionId: text("agent_session_id"),
+		/**
+		 * Opaque Harness resume pointer (ADR-0033): the value `session.stop()`
+		 * returned after the Conversation's last AI SDK chat turn, replayed as
+		 * `createSession({ resumeFrom })` on the next. Never interpreted here;
+		 * NULL until the first turn stops, and after Permanent deletion.
+		 */
+		harnessResumeState: jsonb("harness_resume_state"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),

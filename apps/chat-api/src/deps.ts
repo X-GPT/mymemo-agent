@@ -8,6 +8,10 @@ import {
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import type { HarnessChatAgent } from "./features/ai-chat/harness-chat-agent";
+import {
+	type HarnessResumeStateStore,
+	PostgresHarnessResumeStateStore,
+} from "./features/ai-chat/harness-resume-state-store";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
@@ -38,6 +42,8 @@ export interface AppDeps {
 	config: ApiConfig;
 	/** Harness-hosted AI SDK chat turn (local composition only). */
 	harnessChatAgent: HarnessChatAgent;
+	/** Per-Conversation opaque Harness resume pointer (local composition only). */
+	harnessResumeStateStore: HarnessResumeStateStore;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
 	artifactMetadataStore: ArtifactMetadataStore;
 	/** Creates short-lived direct-download URLs after ownership authorization. */
@@ -100,6 +106,7 @@ export function createDeps(
 	return {
 		config,
 		harnessChatAgent,
+		harnessResumeStateStore: new PostgresHarnessResumeStateStore(database),
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
 		conversationStore,
