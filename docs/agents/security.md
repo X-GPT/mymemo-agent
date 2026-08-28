@@ -28,12 +28,16 @@ chat-api must not hold KB or E2B credentials. It admits Runs, serves history and
 The production AgentCore Runtime alone owns product Run model traffic, scoped
 Searchable document access, E2B execution, relay production, and Downloadable
 artifact publication. On the AI SDK chat path (`POST /api/chat`, local
-composition only) the Harness sandbox is the trust boundary: Claude Code and
-its built-in tools run inside a Vercel Sandbox that holds no MyMemo secret. The
-model credential is brokered — the adapter replaces it with a placeholder
-before it reaches the sandbox and the Vercel firewall injects the real bearer
-only on requests to the OpenRouter host — so prompt-injected Bash can spend
-model credit against that host but cannot read the key. The sandbox receives no
+composition only) the Harness sandbox is the trust boundary: Claude Code runs
+inside a Vercel Sandbox with every built-in tool disabled (`activeTools` names
+only the chat-api-hosted Harness tools), and the sandbox holds no MyMemo
+secret. The model credential is brokered — the adapter replaces it with a
+placeholder before it reaches the sandbox and the Vercel firewall injects the
+real bearer only on requests to the OpenRouter host. With no built-in tool
+there is no model-directed route to the sandbox's environment or filesystem;
+the placeholder is present in the sandbox's process environment and in the
+bridge's on-disk start config, readable by Vercel project members and by
+nothing the model can call. The sandbox receives no
 database, E2B, Searchable document, Redis, or Downloadable artifact authority.
 The AgentCore Runtime's KB credential is read-only and separate from the
 writable `mymemo_agent` credential. The maintenance service receives only writable agent DB, E2B

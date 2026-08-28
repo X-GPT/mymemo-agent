@@ -55,7 +55,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/agentcore-runtime/src/run-serving.ts` | Serving behavior for an already-running Run |
 | `apps/agentcore-runtime/src/sdk/` | SDK query wiring, transcript mirroring, tools, and AG-UI event projection |
 | `apps/agentcore-runtime/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |
-| `apps/chat-api/src/features/ai-chat/` | Harness-hosted AI SDK chat route (`POST /api/chat`, local composition only): one Claude Code turn per message in a persistent Vercel Sandbox per Conversation, streamed as the UI message stream |
+| `apps/chat-api/src/features/ai-chat/` | Harness-hosted AI SDK chat route (`POST /api/chat`, local composition only): one Claude Code turn per message on a per-turn `HarnessAgent` whose `activeTools` is the Harness tool-name list in `tools/` (so every built-in is off), in a persistent Vercel Sandbox per Conversation, streamed as the UI message stream |
 | `packages/agentcore-dispatch/src/` | Shared AgentCore Dispatch publisher policy, envelope serialization, and isolated SQS/SSM adapters |
 | `packages/agent-db/src/conversation-ownership.ts` | Live Ownership renew, release, and mutation fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |

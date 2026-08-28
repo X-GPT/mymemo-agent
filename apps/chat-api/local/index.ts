@@ -5,7 +5,7 @@ import { loadApiConfigFromEnv } from "../src/config/env";
 import { loadHarnessConfigFromEnv } from "../src/config/harness-env";
 import { createDeps } from "../src/deps";
 import aiChatRoutes from "../src/features/ai-chat/ai-chat.route";
-import { createHarnessChatAgent } from "../src/features/ai-chat/harness-chat-agent";
+import { createHarnessChatAgentFactory } from "../src/features/ai-chat/harness-chat-agent";
 import { createS3ArtifactDownloadSigner } from "../src/features/artifacts/s3-artifact-download-signer";
 
 const config = loadApiConfigFromEnv({
@@ -16,7 +16,7 @@ const artifactEndpoint = Bun.env.LOCAL_ARTIFACT_ENDPOINT?.trim();
 const logger = pino({ level: config.logLevel });
 const deps = createDeps(
 	config,
-	createHarnessChatAgent(loadHarnessConfigFromEnv(Bun.env)),
+	createHarnessChatAgentFactory(loadHarnessConfigFromEnv(Bun.env)),
 	createLiveStreamTelemetry("chat-api", logger),
 	{ isAgentEnabled: async () => true },
 	createS3ArtifactDownloadSigner(

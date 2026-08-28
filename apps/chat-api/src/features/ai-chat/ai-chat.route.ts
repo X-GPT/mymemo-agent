@@ -112,11 +112,13 @@ routes.post(
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
+		// One agent per turn, built before the slot is taken: a constructor throw
+		// holds no slot, and the sandbox is untouched until `createSession`.
+		const agent = c.var.deps.createHarnessChatAgent({});
 		if (activeTurns.has(body.id)) {
 			return c.json({ error: "Conversation has an active response" }, 409);
 		}
 		activeTurns.add(body.id);
-		const agent = c.var.deps.harnessChatAgent;
 		const ref = { userId: c.var.identity.memberCode, conversationId: body.id };
 		const createSession = async () => {
 			const resumeFrom = await c.var.deps.harnessResumeStateStore.load(ref);

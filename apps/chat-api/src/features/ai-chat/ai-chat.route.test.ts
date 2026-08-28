@@ -2,7 +2,8 @@ import { expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AppDeps, AppEnv } from "@/deps";
 import aiChatRoutes from "./ai-chat.route";
-import type { HarnessChatAgent } from "./harness-chat-agent";
+import type { HarnessChatAgentFactory } from "./harness-chat-agent";
+import { HARNESS_TOOL_NAMES } from "./tools/harness-tools";
 
 const headers = {
 	"content-type": "application/json",
@@ -44,9 +45,13 @@ function fakeResumeStore(initial: unknown = null) {
 	};
 }
 
-/** Fake agent that records the lifecycle and streams a canned UI message stream. */
+/**
+ * Fake agent factory: records the tool set of every agent it builds, and the
+ * agent records the lifecycle and streams a canned UI message stream.
+ */
 function fakeAgent() {
 	const events: unknown[] = [];
+	const toolSets: object[] = [];
 	const created = {
 		stop: async () => {
 			events.push("stop");
@@ -78,7 +83,19 @@ function fakeAgent() {
 			};
 		},
 	};
-	return { agent: fake as unknown as HarnessChatAgent, events, fake };
+	const factory: HarnessChatAgentFactory = (tools) => {
+		toolSets.push(tools);
+		return fake as never;
+	};
+	return { factory, events, fake, toolSets };
+}
+
+/** The JSON parts of a UI message stream body, `[DONE]` excluded. */
+function streamParts(body: string): Record<string, unknown>[] {
+	return body
+		.split("\n\n")
+		.filter((line) => line.startsWith("data: {"))
+		.map((line) => JSON.parse(line.slice("data: ".length)));
 }
 
 function streamResponse(body: ConstructorParameters<typeof Response>[0]) {
@@ -116,7 +133,7 @@ const ownedConversation = {
 } as unknown as AppDeps["conversationStore"];
 
 it("runs one Harness turn in a session named after the Conversation and stops it after the stream", async () => {
-	const { agent, events } = fakeAgent();
+	const { factory, events } = fakeAgent();
 	const { store, saved } = fakeResumeStore();
 	const lookups: unknown[] = [];
 	const app = makeApp({
@@ -127,7 +144,7 @@ it("runs one Harness turn in a session named after the Conversation and stops it
 			},
 		} as unknown as AppDeps["conversationStore"],
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 		harnessResumeStateStore: store,
 	});
 
@@ -164,13 +181,94 @@ it("runs one Harness turn in a session named after the Conversation and stops it
 	]);
 });
 
+it("builds one agent per turn from the factory with the turn's tool set", async () => {
+	const { factory, toolSets } = fakeAgent();
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		createHarnessChatAgent: factory,
+	});
+	for (const id of ["conversation-1", "conversation-2"]) {
+		const response = await app.request("/api/chat", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ ...requestBody, id }),
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+	}
+	// Every user tool the turn offers is in the exported name list; the factory
+	// activates exactly those names, so no built-in is ever callable.
+	expect(toolSets.map((tools) => Object.keys(tools))).toEqual([
+		[...HARNESS_TOOL_NAMES],
+		[...HARNESS_TOOL_NAMES],
+	]);
+});
+
+it("forwards the stream unchanged: reasoning parts pass, and no built-in tool part can reach the client", async () => {
+	const { factory, fake } = fakeAgent();
+	// What the configured harness emits: reasoning, text, and the two synthetic
+	// dynamic parts the bridge reports itself. A user tool arrives with
+	// `providerExecuted: false`; nothing else carries `providerExecuted: true`.
+	const parts = [
+		{ type: "reasoning-start", id: "r1" },
+		{ type: "reasoning-delta", id: "r1", delta: "thinking" },
+		{ type: "reasoning-end", id: "r1" },
+		{
+			type: "tool-input-available",
+			toolCallId: "c1",
+			toolName: "compaction",
+			dynamic: true,
+			providerExecuted: true,
+			input: {},
+		},
+		{
+			type: "tool-input-available",
+			toolCallId: "f1",
+			toolName: "fileChange",
+			dynamic: true,
+			providerExecuted: true,
+			input: { path: "notes.md" },
+		},
+		{ type: "text-delta", id: "t1", delta: "I cannot run commands." },
+	];
+	fake.stream = async () => ({
+		toUIMessageStreamResponse: () =>
+			streamResponse(
+				`${parts.map((p) => `data: ${JSON.stringify(p)}\n\n`).join("")}data: [DONE]\n\n`,
+			),
+	});
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		createHarnessChatAgent: factory,
+	});
+	const response = await app.request("/api/chat", {
+		method: "POST",
+		headers,
+		body: JSON.stringify(requestBody),
+	});
+	const received = streamParts(await response.text());
+	expect(received).toEqual(parts);
+	// The built-in invariant: a provider-executed tool part is only ever one
+	// of the two synthetic dynamic parts.
+	const providerExecuted = received.filter(
+		(p) => String(p.type).startsWith("tool-") && p.providerExecuted === true,
+	);
+	expect(providerExecuted).toHaveLength(2);
+	for (const part of providerExecuted) {
+		expect(part.dynamic).toBe(true);
+		expect(["compaction", "fileChange"]).toContain(String(part.toolName));
+	}
+});
+
 it("resumes the Conversation's session from the stored pointer", async () => {
-	const { agent, events } = fakeAgent();
+	const { factory, events } = fakeAgent();
 	const pointer = { type: "resume-session", data: { from: "before" } };
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 		harnessResumeStateStore: fakeResumeStore(pointer).store,
 	});
 	const response = await app.request("/api/chat", {
@@ -186,7 +284,7 @@ it("resumes the Conversation's session from the stored pointer", async () => {
 });
 
 it("starts a fresh session for the same id and logs when resuming throws", async () => {
-	const { agent, events, fake } = fakeAgent();
+	const { factory, events, fake } = fakeAgent();
 	const createSession = fake.createSession;
 	fake.createSession = async (options) => {
 		if (options.resumeFrom) throw new Error("snapshot expired");
@@ -199,7 +297,7 @@ it("starts a fresh session for the same id and logs when resuming throws", async
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 		harnessResumeStateStore: store,
 	});
 	logged.length = 0;
@@ -223,11 +321,11 @@ it("starts a fresh session for the same id and logs when resuming throws", async
 });
 
 it("stops the session when the client cancels the stream", async () => {
-	const { agent, events } = fakeAgent();
+	const { factory, events } = fakeAgent();
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 	const response = await app.request("/api/chat", {
 		method: "POST",
@@ -240,11 +338,11 @@ it("stops the session when the client cancels the stream", async () => {
 });
 
 it("passes the request's own abort signal to the turn", async () => {
-	const { agent, events } = fakeAgent();
+	const { factory, events } = fakeAgent();
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 	const controller = new AbortController();
 	const response = await app.request(
@@ -261,7 +359,7 @@ it("passes the request's own abort signal to the turn", async () => {
 });
 
 it("ends an aborted turn cleanly with the abort part and still stops the session", async () => {
-	const { agent, events, fake } = fakeAgent();
+	const { factory, events, fake } = fakeAgent();
 	const controller = new AbortController();
 	// Mirrors HarnessAgent: on abort the turn settles with a final `abort` part.
 	fake.stream = async ({ abortSignal }) => ({
@@ -280,7 +378,7 @@ it("ends an aborted turn cleanly with the abort part and still stops the session
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 	const response = await app.request(
 		new Request("http://localhost/api/chat", {
@@ -298,14 +396,14 @@ it("ends an aborted turn cleanly with the abort part and still stops the session
 });
 
 it("stops the session and logs when the turn fails to start", async () => {
-	const { agent, events, fake } = fakeAgent();
+	const { factory, events, fake } = fakeAgent();
 	fake.stream = async () => {
 		throw new Error("bridge unavailable");
 	};
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 	logged.length = 0;
 	const response = await app.request("/api/chat", {
@@ -326,7 +424,7 @@ it("stops the session and logs when the turn fails to start", async () => {
 });
 
 it("hides the cause of a mid-stream failure from the client, logs it, and stops the session", async () => {
-	const { agent, events, fake } = fakeAgent();
+	const { factory, events, fake } = fakeAgent();
 	// Mirrors the AI SDK: a failing turn becomes an `error` part whose text is `onError`'s return.
 	fake.stream = async () => ({
 		toUIMessageStreamResponse: (options: {
@@ -341,7 +439,7 @@ it("hides the cause of a mid-stream failure from the client, logs it, and stops 
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 	logged.length = 0;
 	const response = await app.request("/api/chat", {
@@ -364,7 +462,7 @@ it("hides the cause of a mid-stream failure from the client, logs it, and stops 
 });
 
 it("refuses a second turn on the same Conversation until the first has been stopped", async () => {
-	const { agent, events, fake } = fakeAgent();
+	const { factory, events, fake } = fakeAgent();
 	// conversation-1's stop() hangs until released; other sessions stop at once.
 	const releases: (() => void)[] = [];
 	const releaseStop = () => releases.shift()?.();
@@ -381,7 +479,7 @@ it("refuses a second turn on the same Conversation until the first has been stop
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 	const post = (id = requestBody.id) =>
 		app.request("/api/chat", {
@@ -421,14 +519,14 @@ it("refuses a second turn on the same Conversation until the first has been stop
 });
 
 it("releases the slot when the session cannot be created", async () => {
-	const { agent, fake } = fakeAgent();
+	const { factory, fake } = fakeAgent();
 	fake.createSession = async () => {
 		throw new Error("sandbox unavailable");
 	};
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 	const post = () =>
 		app.request("/api/chat", {
@@ -441,11 +539,11 @@ it("releases the slot when the session cannot be created", async () => {
 });
 
 it("rejects invalid and exposure-disabled requests before creating a session", async () => {
-	const { agent, events } = fakeAgent();
+	const { factory, events } = fakeAgent();
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => false },
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 
 	expect(
@@ -473,7 +571,7 @@ it.each([
 	[null, 404, "Conversation not found"],
 	[{ archivedAt: new Date() }, 409, "Conversation is archived"],
 ] as const)("rejects a missing or archived Conversation before creating a session", async (conversation, status, error) => {
-	const { agent, events } = fakeAgent();
+	const { factory, events } = fakeAgent();
 	let gateChecks = 0;
 	const app = makeApp({
 		conversationStore: {
@@ -485,7 +583,7 @@ it.each([
 				return true;
 			},
 		},
-		harnessChatAgent: agent,
+		createHarnessChatAgent: factory,
 	});
 
 	const response = await app.request("/api/chat", {
