@@ -63,9 +63,7 @@ function fakeRuntimeStore(
 function fakeWorkspace(events: unknown[] = []) {
 	const attach: AppDeps["attachHarnessWorkspace"] = async (input) => {
 		events.push({ attach: input });
-		return input.sandboxId === null
-			? { sandbox: { sandboxId: "sbx-new" }, isNew: true }
-			: { sandbox: { sandboxId: input.sandboxId }, isNew: false };
+		return { sandboxId: input.sandboxId ?? "sbx-new" };
 	};
 	return attach;
 }

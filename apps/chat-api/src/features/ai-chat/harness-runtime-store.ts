@@ -1,7 +1,7 @@
 import type { HarnessAgentResumeSessionState } from "@ai-sdk/harness/agent";
 import type { Database } from "@mymemo/agent-db/client";
+import { loadConversationRuntimeTx } from "@mymemo/agent-db/runtime-store";
 import { conversationRuntime } from "@mymemo/agent-db/schema";
-import { and, eq } from "drizzle-orm";
 import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 /** The two `conversation_runtime` pointers a Harness turn reads and writes. */
@@ -36,22 +36,11 @@ export class PostgresHarnessRuntimeStore implements HarnessRuntimeStore {
 	constructor(private readonly db: Database) {}
 
 	async load(ref: ConversationRef): Promise<HarnessRuntime> {
-		const [row] = await this.db
-			.select({
-				sandboxId: conversationRuntime.sandboxId,
-				resumeState: conversationRuntime.harnessResumeState,
-			})
-			.from(conversationRuntime)
-			.where(
-				and(
-					eq(conversationRuntime.userId, ref.userId),
-					eq(conversationRuntime.conversationId, ref.conversationId),
-				),
-			);
+		const row = await loadConversationRuntimeTx(this.db, ref);
 		return {
 			sandboxId: row?.sandboxId ?? null,
 			resumeState:
-				(row?.resumeState as HarnessAgentResumeSessionState | undefined) ??
+				(row?.harnessResumeState as HarnessAgentResumeSessionState | null) ??
 				null,
 		};
 	}

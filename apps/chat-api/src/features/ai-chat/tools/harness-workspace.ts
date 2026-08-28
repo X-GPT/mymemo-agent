@@ -24,17 +24,14 @@ export interface E2bSandboxFactory {
 	): Promise<HarnessWorkspaceSandbox>;
 }
 
-export interface HarnessWorkspace {
-	sandbox: HarnessWorkspaceSandbox;
-	/** `true` when a fresh sandbox was created — the pointer was unset or
-	 * connecting failed — so the caller must repoint the Conversation. */
-	isNew: boolean;
-}
-
-/** Attach one Harness turn to the Conversation's Workspace given its current pointer. */
+/**
+ * Attach one Harness turn to the Conversation's Workspace given its current
+ * pointer. A returned `sandboxId` other than the one passed is a fresh sandbox
+ * the caller must repoint the Conversation to.
+ */
 export type AttachHarnessWorkspace = (
 	input: ConversationRef & { sandboxId: string | null },
-) => Promise<HarnessWorkspace>;
+) => Promise<HarnessWorkspaceSandbox>;
 
 const e2bSandboxFactory: E2bSandboxFactory = {
 	connect: (sandboxId, options) => Sandbox.connect(sandboxId, options),
@@ -63,8 +60,7 @@ export function createHarnessWorkspaceAttacher(
 	return async ({ userId, conversationId, sandboxId }) => {
 		if (sandboxId !== null) {
 			try {
-				const sandbox = await factory.connect(sandboxId, { apiKey, timeoutMs });
-				return { sandbox, isNew: false };
+				return await factory.connect(sandboxId, { apiKey, timeoutMs });
 			} catch (error) {
 				logger.warn(
 					{ err: error, conversationId, sandboxId },
@@ -72,12 +68,11 @@ export function createHarnessWorkspaceAttacher(
 				);
 			}
 		}
-		const sandbox = await factory.create(config.WORKER_E2B_TEMPLATE, {
+		return factory.create(config.WORKER_E2B_TEMPLATE, {
 			apiKey,
 			timeoutMs,
 			lifecycle: { onTimeout: "pause" },
 			metadata: { userId, conversationId },
 		});
-		return { sandbox, isNew: true };
 	};
 }

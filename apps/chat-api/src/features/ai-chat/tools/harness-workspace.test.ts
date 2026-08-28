@@ -37,8 +37,7 @@ function fakeE2b(connectError?: Error) {
 it("connects to the recorded sandbox, passing the idle window once", async () => {
 	const { attach, calls, warnings } = fakeE2b();
 	expect(await attach({ ...ref, sandboxId: "sbx-1" })).toEqual({
-		sandbox: { sandboxId: "sbx-1" },
-		isNew: false,
+		sandboxId: "sbx-1",
 	});
 	expect(calls).toEqual([
 		{ connect: ["sbx-1", { apiKey: "e2b-key", timeoutMs: 600_000 }] },
@@ -49,8 +48,7 @@ it("connects to the recorded sandbox, passing the idle window once", async () =>
 it("creates a fresh sandbox from the pinned template when the Conversation has none", async () => {
 	const { attach, calls } = fakeE2b();
 	expect(await attach({ ...ref, sandboxId: null })).toEqual({
-		sandbox: { sandboxId: "sbx-new" },
-		isNew: true,
+		sandboxId: "sbx-new",
 	});
 	expect(calls).toEqual([
 		{
@@ -70,8 +68,7 @@ it("creates a fresh sandbox from the pinned template when the Conversation has n
 it("creates a fresh sandbox and warns when connecting to the recorded one throws", async () => {
 	const { attach, calls, warnings } = fakeE2b(new Error("sandbox gone"));
 	expect(await attach({ ...ref, sandboxId: "sbx-1" })).toEqual({
-		sandbox: { sandboxId: "sbx-new" },
-		isNew: true,
+		sandboxId: "sbx-new",
 	});
 	expect(calls.map((c) => Object.keys(c as object)[0])).toEqual([
 		"connect",

@@ -110,33 +110,29 @@ routes.post(
 		if (await c.var.deps.runStore.hasActiveRun(ref)) {
 			return c.json({ error: "Conversation has an active Run" }, 409);
 		}
+		// One agent per turn, built before the slot is taken: a constructor throw
+		// holds no slot, and the sandbox is untouched until `createSession`.
+		const agent = c.var.deps.createHarnessChatAgent({});
 		if (activeHarnessTurns.has(body.id)) {
 			return c.json({ error: "Conversation has an active response" }, 409);
 		}
 		activeHarnessTurns.add(body.id);
-		const start = async () => {
+		const createSession = async () => {
 			// Read fresh every turn: a Run may have replaced the sandbox in between.
 			const runtime = await c.var.deps.harnessRuntimeStore.load(ref);
-			const workspace = await c.var.deps.attachHarnessWorkspace({
+			const sandbox = await c.var.deps.attachHarnessWorkspace({
 				...ref,
 				sandboxId: runtime.sandboxId,
 			});
-			if (workspace.isNew) {
+			if (sandbox.sandboxId !== runtime.sandboxId) {
 				await c.var.deps.harnessRuntimeStore.saveSandboxId(
 					ref,
-					workspace.sandbox.sandboxId,
+					sandbox.sandboxId,
 				);
 			}
-			// One agent per turn; its tools close over this turn's Workspace once
-			// they land, so it is built after the attach.
-			const agent = c.var.deps.createHarnessChatAgent({});
 			const resumeFrom = runtime.resumeState ?? undefined;
 			try {
-				const session = await agent.createSession({
-					sessionId: body.id,
-					resumeFrom,
-				});
-				return { agent, session };
+				return await agent.createSession({ sessionId: body.id, resumeFrom });
 			} catch (error) {
 				if (!resumeFrom) throw error;
 				// Snapshot expired or sandbox gone: start a fresh thread under the same
@@ -145,13 +141,10 @@ routes.post(
 					{ err: error, conversationId: body.id },
 					"harness session resume failed; starting a fresh session",
 				);
-				return {
-					agent,
-					session: await agent.createSession({ sessionId: body.id }),
-				};
+				return agent.createSession({ sessionId: body.id });
 			}
 		};
-		const { agent, session } = await start().catch((error) => {
+		const session = await createSession().catch((error) => {
 			activeHarnessTurns.delete(body.id);
 			throw error;
 		});
