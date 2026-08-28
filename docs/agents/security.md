@@ -30,8 +30,8 @@ Searchable document access, E2B execution, relay production, and Downloadable
 artifact publication. On the AI SDK chat path (`POST /api/chat`, local
 composition only) the Harness sandbox is the trust boundary: Claude Code runs
 inside a Vercel Sandbox with `Read`, `Write`, `Edit`, and `Grep` enabled and
-every other built-in disabled (`activeTools` names those four common names
-plus the chat-api-hosted Harness tools); the sandbox holds no MyMemo secret.
+every other built-in disabled; its other tools are the chat-api-hosted
+Harness tools; the sandbox holds no MyMemo secret.
 The model credential is brokered — the adapter replaces it with a placeholder
 before it reaches the sandbox and the Vercel firewall injects the real bearer
 only on requests to the OpenRouter host. The file tools reach the whole

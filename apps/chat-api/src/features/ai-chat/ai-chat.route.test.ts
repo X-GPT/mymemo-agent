@@ -197,7 +197,6 @@ it("builds one agent per turn from the factory with the turn's tool set", async 
 		expect(response.status).toBe(200);
 		await response.text();
 	}
-	// Every user tool the turn offers is in the exported name list.
 	expect(toolSets.map((tools) => Object.keys(tools))).toEqual([
 		[...HARNESS_TOOL_NAMES],
 		[...HARNESS_TOOL_NAMES],
