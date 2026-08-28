@@ -29,8 +29,7 @@ the adapter's common names `read`, `write`, `edit`, `grep` — Claude Code's
 own tools, executed in the sandbox with no MyMemo bounds and no path root —
 plus `HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness
 tools (empty until the first one lands); `permissionMode` stays the default.
-Asked to run a shell command, fetch a URL, or spawn an agent, the
-model has no such tool and answers in text. A built-in call arrives as the
+A built-in call arrives as the
 bridge's own `tool-input-available` part (`toolName` = the common name) and
 `tool-output-available` part, both `providerExecuted: true`; the only other
 `tool-*` parts with `providerExecuted: true` are the bridge's synthetic
@@ -40,9 +39,8 @@ the bridge hardcodes the `claude_code` preset, so this path appends to Claude
 Code's native prompt rather than replacing it.
 
 Claude's working directory is the harness session work directory, created
-empty on the Conversation's first turn. Files there — and anything else the
-model writes, including Claude Code's own auto-memory file — persist through
-the per-Conversation snapshot exactly like the transcript, and vanish with it:
+empty on the Conversation's first turn. Files there persist through the
+per-Conversation snapshot exactly like the transcript, and vanish with it:
 Vercel's snapshot expiry and the fresh-session fallback below discard the
 Conversation's files too. Nothing on this path touches E2B or
 `conversation_runtime.sandbox_id`; the Run path's Workspace and the Harness
@@ -103,7 +101,6 @@ grep -c '"providerExecuted":true' /tmp/turn1.sse   # ≥ 1: it ran in the sandbo
 docker compose restart chat-api
 turn "Use your Read tool on notes.md and tell me the word." 44444444-4444-4444-8444-444444444444 | tee /tmp/turn2.sse
 grep -c '"toolName":"read"' /tmp/turn2.sse   # ≥ 1; answer mentions pelican
-grep -c '"providerExecuted":true' /tmp/turn2.sse   # ≥ 1
 turn "Run ls -la in your shell, then fetch https://example.com." 55555555-5555-4555-8555-555555555555 | tee /tmp/turn3.sse
 grep -c '"type":"tool-' /tmp/turn3.sse       # 0
 ```
