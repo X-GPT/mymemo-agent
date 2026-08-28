@@ -636,8 +636,9 @@ app.post(
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
 		// A Harness turn holds the Conversation's Workspace until it stops; the
-		// chat route refuses symmetrically while a Run is Active.
-		if (activeHarnessTurns.has(conversationId)) {
+		// chat route refuses symmetrically while a Run is Active. Reattaching to
+		// an existing Run admits nothing new, so it passes.
+		if (existingRun === null && activeHarnessTurns.has(conversationId)) {
 			return c.json({ error: "Conversation has an active response" }, 409);
 		}
 

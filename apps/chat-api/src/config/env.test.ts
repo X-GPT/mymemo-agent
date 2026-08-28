@@ -79,6 +79,11 @@ describe("production `ApiConfig` excludes path-specific secrets", () => {
 		env.WORKER_E2B_TEMPLATE = "template-should-be-ignored";
 		env.LLM_TOKEN_SECRET = "llm-token-secret";
 		env.GATEWAY_PUBLIC_URL = "https://gateway.test";
+		env.VERCEL_TOKEN = "vercel-token-should-be-ignored";
+		env.VERCEL_TEAM_ID = "team_should_be_ignored";
+		env.VERCEL_PROJECT_ID = "prj_should_be_ignored";
+		env.HARNESS_SANDBOX_TIMEOUT_MS = "424242";
+		env.HARNESS_SANDBOX_REGION = "region-should-be-ignored";
 		const config = loadApiConfigFromEnv(env);
 		const serialized = JSON.stringify(config);
 		expect(serialized).not.toContain("sk-or-should-be-ignored");
@@ -88,6 +93,10 @@ describe("production `ApiConfig` excludes path-specific secrets", () => {
 		expect(serialized).not.toContain("template-should-be-ignored");
 		expect(serialized).not.toContain("llm-token-secret");
 		expect(serialized).not.toContain("gateway.test");
+		expect(serialized).not.toContain("should_be_ignored");
+		expect(serialized).not.toContain("vercel-token-should-be-ignored");
+		expect(serialized).not.toContain("424242");
+		expect(serialized).not.toContain("region-should-be-ignored");
 		// And there is no openrouter/kb field by name.
 		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
 			"openrouterApiKey",

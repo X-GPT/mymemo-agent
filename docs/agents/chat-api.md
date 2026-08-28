@@ -58,9 +58,12 @@ connect/create as `HARNESS_SANDBOX_TIMEOUT_MS`. Nothing on this path takes
 Conversation Ownership, renews the sandbox, records an orphan, or reads or
 writes `sandbox_tainted`. Consequences: a sandbox created but not recorded (a
 DB failure between create and upsert) idle-pauses on its own with no orphan
-record, and a stop whose process-tree kill could not be confirmed reconnects
-to the same sandbox on the next turn. A Run replacing the sandbox between turns
-needs no handling — the row is read fresh every turn. The Workspace handle is
+record; a stop whose process-tree kill could not be confirmed reconnects to
+the same sandbox on the next turn; and a Harness repoint leaves
+`sandbox_tainted` as it was, so a sandbox this path created after a tainted
+one still reads as tainted to the next Run, which replaces it again (accepted
+here; a production-readiness decision). A Run replacing the sandbox between
+turns needs no handling — the row is read fresh every turn. The Workspace handle is
 the Harness tools'; until they land nothing uses it.
 
 Stop is best-effort and has no endpoint or durable record: the request's own
@@ -82,9 +85,11 @@ never overlap a stop. A Run and a Harness turn refuse each other through the
 same set: `POST /api/chat` returns `409 { error: "Conversation has an active
 Run" }` while the Conversation has an Active Run, and Run admission returns
 `409 { error: "Conversation has an active response" }` while a Harness turn is
-in flight, so two executors never drive one Workspace. Both guards are correct
-only for the single-process local composition; the production replacement (a
-leased marker on `conversation_runtime`) is deferred.
+in flight, so a Run and a Harness turn do not drive one Workspace at once —
+up to the await between each guard's check and its own admission, which is
+accepted. Both guards are correct only for the single-process local
+composition; the production replacement (a leased marker on
+`conversation_runtime`) is deferred.
 
 There is no admission, Run, history, or retry yet: those are follow-up slices
 of [#595](https://github.com/X-GPT/mymemo-agent/issues/595).

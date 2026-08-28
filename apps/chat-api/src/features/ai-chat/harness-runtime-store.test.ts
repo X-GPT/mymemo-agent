@@ -36,7 +36,13 @@ it("round-trips both pointers verbatim on one runtime row, each save leaving the
 		sandboxId: "sbx-2",
 		harnessResumeState: state(2),
 	});
-	expect(await tdb.db.select().from(conversationRuntime)).toHaveLength(1);
+	// One row, and the Run path's columns are never touched: no taint write.
+	const rows = await tdb.db.select().from(conversationRuntime);
+	expect(rows).toHaveLength(1);
+	expect(rows[0]).toMatchObject({
+		sandboxTainted: false,
+		agentSessionId: null,
+	});
 	expect(
 		await store.load({ userId: "user-2", conversationId: "conv-1" }),
 	).toEqual(empty);
