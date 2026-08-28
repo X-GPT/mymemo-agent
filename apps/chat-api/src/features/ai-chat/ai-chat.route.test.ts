@@ -206,7 +206,6 @@ it("builds one agent per turn from the factory with the turn's tool set", async 
 
 it("forwards the stream unchanged: reasoning and sandbox-executed built-in parts reach the client as emitted", async () => {
 	const { factory, fake } = fakeAgent();
-	// Reasoning, one sandbox-executed built-in, the bridge's two synthetic parts, then text.
 	const parts = [
 		{ type: "reasoning-start", id: "r1" },
 		{ type: "reasoning-delta", id: "r1", delta: "thinking" },
