@@ -31,8 +31,8 @@ plus `HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness
 tools (empty until the first one lands); `permissionMode` stays the default.
 Asked to run a shell command, fetch a URL, or spawn an agent, the
 model has no such tool and answers in text. A built-in call arrives as the
-bridge's own `tool-input-available` / `tool-output-available` pair with
-`toolName` = the common name and `providerExecuted: true`; the only other
+bridge's own `tool-input-available` part (`toolName` = the common name) and
+`tool-output-available` part, both `providerExecuted: true`; the only other
 `tool-*` parts with `providerExecuted: true` are the bridge's synthetic
 `compaction` and `fileChange` parts (`dynamic: true`). The appended `instructions` (`HARNESS_INSTRUCTIONS`) name the four tools on
 the working directory plus the Harness tools by short name, and nothing else;
@@ -99,9 +99,11 @@ web requests yield text only:
 ```sh
 turn "Use your Write tool to create notes.md containing the word pelican." 33333333-3333-4333-8333-333333333333 | tee /tmp/turn1.sse
 grep -c '"toolName":"write"' /tmp/turn1.sse  # ≥ 1
+grep -c '"providerExecuted":true' /tmp/turn1.sse   # ≥ 1: it ran in the sandbox
 docker compose restart chat-api
 turn "Use your Read tool on notes.md and tell me the word." 44444444-4444-4444-8444-444444444444 | tee /tmp/turn2.sse
 grep -c '"toolName":"read"' /tmp/turn2.sse   # ≥ 1; answer mentions pelican
+grep -c '"providerExecuted":true' /tmp/turn2.sse   # ≥ 1
 turn "Run ls -la in your shell, then fetch https://example.com." 55555555-5555-4555-8555-555555555555 | tee /tmp/turn3.sse
 grep -c '"type":"tool-' /tmp/turn3.sse       # 0
 ```
