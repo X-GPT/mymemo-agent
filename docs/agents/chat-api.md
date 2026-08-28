@@ -94,6 +94,7 @@ web requests yield text only:
 ```sh
 turn "Use your Write tool to create notes.md containing the word pelican." 33333333-3333-4333-8333-333333333333 | tee /tmp/turn1.sse
 grep '"toolName":"write"' /tmp/turn1.sse | grep -c '"providerExecuted":true'   # ≥ 1: it ran in the sandbox
+sleep 10   # stop() saves the resume pointer after the stream drains; restarting sooner loses it
 docker compose restart chat-api
 turn "Use your Read tool on notes.md and tell me the word." 44444444-4444-4444-8444-444444444444 | tee /tmp/turn2.sse
 grep -c '"toolName":"read"' /tmp/turn2.sse   # ≥ 1; answer mentions pelican
