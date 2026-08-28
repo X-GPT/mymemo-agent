@@ -85,7 +85,8 @@ never overlap a stop. A Run and a Harness turn refuse each other through the
 same set: `POST /api/chat` returns `409 { error: "Conversation has an active
 Run" }` while the Conversation has an Active Run, and Run admission returns
 `409 { error: "Conversation has an active response" }` while a Harness turn is
-in flight, so a Run and a Harness turn do not drive one Workspace at once —
+in flight (an exact retry of an existing Run admits nothing new and passes),
+so a Run and a Harness turn do not drive one Workspace at once —
 up to the await between each guard's check and its own admission, which is
 accepted. Both guards are correct only for the single-process local
 composition; the production replacement (a leased marker on
@@ -95,7 +96,7 @@ There is no admission, Run, history, or retry yet: those are follow-up slices
 of [#595](https://github.com/X-GPT/mymemo-agent/issues/595).
 The adapter runs the configured `OPENROUTER_DEFAULT_MODEL`; the request `model`
 literal is validated, not forwarded. Production composition does not mount this
-path; its `createHarnessChatAgent` throws.
+path; its `createHarnessChatAgent` and `attachHarnessWorkspace` throw.
 
 Local two-turn recall and Workspace-reuse check (real harness; needs the
 Compose stack with the Vercel triple, `OPENROUTER_API_KEY`, and `E2B_API_KEY`

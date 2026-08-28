@@ -101,7 +101,7 @@ routes.post(
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
-		// A Run and a Harness turn never drive one Workspace: a turn refuses while
+		// A Run and a Harness turn do not drive one Workspace at once: a turn refuses while
 		// the Conversation has an Active Run, and Run admission refuses while a
 		// turn is in flight (`activeHarnessTurns`).
 		if (await c.var.deps.runStore.hasActiveRun(ref)) {

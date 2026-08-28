@@ -69,52 +69,18 @@ describe("production `ApiConfig` excludes path-specific secrets", () => {
 		expect(() => loadApiConfigFromEnv(env)).not.toThrow();
 	});
 
-	it("never surfaces path-specific secrets on the config object", () => {
-		const env = baseEnv();
-		env.OPENROUTER_API_KEY = "sk-or-should-be-ignored";
-		env.OPENROUTER_BASE_URL = "https://openrouter.test";
-		env.OPENROUTER_DEFAULT_MODEL = "anthropic/claude";
-		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
-		env.E2B_API_KEY = "e2b-should-be-ignored";
-		env.WORKER_E2B_TEMPLATE = "template-should-be-ignored";
-		env.LLM_TOKEN_SECRET = "llm-token-secret";
-		env.GATEWAY_PUBLIC_URL = "https://gateway.test";
-		env.VERCEL_TOKEN = "vercel-token-should-be-ignored";
-		env.VERCEL_TEAM_ID = "team_should_be_ignored";
-		env.VERCEL_PROJECT_ID = "prj_should_be_ignored";
-		env.HARNESS_SANDBOX_TIMEOUT_MS = "424242";
-		env.HARNESS_SANDBOX_REGION = "region-should-be-ignored";
-		const config = loadApiConfigFromEnv(env);
-		const serialized = JSON.stringify(config);
-		expect(serialized).not.toContain("sk-or-should-be-ignored");
-		expect(serialized).not.toContain("openrouter.test");
-		expect(serialized).not.toContain("mymemo_kb");
-		expect(serialized).not.toContain("e2b-should-be-ignored");
-		expect(serialized).not.toContain("template-should-be-ignored");
-		expect(serialized).not.toContain("llm-token-secret");
-		expect(serialized).not.toContain("gateway.test");
-		expect(serialized).not.toContain("should_be_ignored");
-		expect(serialized).not.toContain("vercel-token-should-be-ignored");
-		expect(serialized).not.toContain("424242");
-		expect(serialized).not.toContain("region-should-be-ignored");
-		// And there is no openrouter/kb field by name.
-		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
-			"openrouterApiKey",
-		);
-		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
-			"kbDatabaseUrl",
-		);
-	});
-
-	it("ignores AgentCore queue and SSM dispatch configuration", () => {
-		const env = baseEnv();
-		env.AGENTCORE_DISPATCH_QUEUE_URL =
-			"https://sqs.us-west-2.amazonaws.com/123/dispatch";
-		env.AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = "/mymemo/dispatch/enabled";
-
-		const serialized = JSON.stringify(loadApiConfigFromEnv(env));
-		expect(serialized).not.toContain("sqs.us-west-2.amazonaws.com");
-		expect(serialized).not.toContain("/mymemo/dispatch/enabled");
+	// The loader builds a literal with exactly these fields, so nothing else in
+	// the environment (Runtime, Harness, dispatch, legacy) can surface on it;
+	// adding a field is a deliberate act that touches this list.
+	it("carries exactly the six production fields", () => {
+		expect(Object.keys(loadApiConfigFromEnv(baseEnv())).sort()).toEqual([
+			"artifactBucket",
+			"artifactRegion",
+			"databaseUrl",
+			"logLevel",
+			"redisUrl",
+			"statsigServerSecret",
+		]);
 	});
 });
 
@@ -131,20 +97,6 @@ describe("loadApiConfigFromEnv — Statsig exposure config", () => {
 		const config = loadApiConfigFromEnv(baseEnv());
 		expect(config.statsigServerSecret).toBe("secret-statsig");
 	});
-	it("ignores legacy prototype provider settings", () => {
-		const env = baseEnv();
-		env.SANDBOX_PROVIDER = "e2b";
-		env.E2B_TEMPLATE = "legacy-template";
-		env.LOCAL_SANDBOX_DAEMON_URL = "http://sandbox:8080";
-		const config = loadApiConfigFromEnv(env);
-		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
-			"sandboxProvider",
-		);
-		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
-			"e2bTemplate",
-		);
-	});
-
 	it("returns a config typed as ApiConfig with the expected core fields", () => {
 		const config: ApiConfig = loadApiConfigFromEnv(baseEnv());
 		expect(config.databaseUrl).toContain("mymemo_agent");

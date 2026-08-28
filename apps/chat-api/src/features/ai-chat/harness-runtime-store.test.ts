@@ -23,6 +23,8 @@ it("round-trips both pointers verbatim on one runtime row, each save leaving the
 	expect(await store.load(ref)).toEqual(empty);
 	// Either pointer creates the row; neither overwrites the other.
 	await store.save(ref, { sandboxId: "sbx-1" });
+	// A Run-path taint set in between must survive every later save untouched.
+	await tdb.db.update(conversationRuntime).set({ sandboxTainted: true });
 	expect(await store.load(ref)).toEqual({ ...empty, sandboxId: "sbx-1" });
 	await store.save(ref, { harnessResumeState: state(1) });
 	expect(await store.load(ref)).toEqual({
@@ -39,10 +41,7 @@ it("round-trips both pointers verbatim on one runtime row, each save leaving the
 	// One row, and the Run path's columns are never touched: no taint write.
 	const rows = await tdb.db.select().from(conversationRuntime);
 	expect(rows).toHaveLength(1);
-	expect(rows[0]).toMatchObject({
-		sandboxTainted: false,
-		agentSessionId: null,
-	});
+	expect(rows[0]).toMatchObject({ sandboxTainted: true, agentSessionId: null });
 	expect(
 		await store.load({ userId: "user-2", conversationId: "conv-1" }),
 	).toEqual(empty);

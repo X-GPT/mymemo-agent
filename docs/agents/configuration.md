@@ -55,7 +55,7 @@ Required:
 
 - `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`: passed explicitly to `createVercelSandbox`; `@vercel/sandbox` does not read them from the environment
 - `OPENROUTER_API_KEY`: set in the chat-api process as `ANTHROPIC_AUTH_TOKEN` for the Claude Code adapter (`auth: 'direct'`); the sandbox receives only the brokered placeholder
-- `E2B_API_KEY` (secret): each Harness turn attaches to the Conversation's E2B Workspace from the chat-api process (connect-or-create on `conversation_runtime.sandbox_id`); the Runtime's variable name, so Compose exports it once
+- `E2B_API_KEY`: each Harness turn attaches to the Conversation's E2B Workspace from the chat-api process (connect-or-create on `conversation_runtime.sandbox_id`); the Runtime's variable name, so Compose exports it once
 
 Optional:
 
