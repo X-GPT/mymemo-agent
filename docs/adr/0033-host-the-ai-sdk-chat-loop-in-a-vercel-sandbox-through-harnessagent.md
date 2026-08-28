@@ -1,7 +1,8 @@
 # Host the AI SDK chat loop in a Vercel Sandbox through HarnessAgent
 
 Status: accepted (2026-08-27); amended for stage 2 (2026-08-27, see
-[Stage 2 amendment](#stage-2-amendment-2026-08-27)). Supersedes the
+[Stage 2 amendment](#stage-2-amendment-2026-08-27)); stage 2 revised
+(2026-08-28, see [Stage 2 revision](#stage-2-revision-2026-08-28)). Supersedes the
 AgentCore-hosted Agent-query Runtime design of issue #560 for the AI SDK chat
 path. Amends ADR-0001 and ADR-0031 for that path only; the production Run path
 is unchanged.
@@ -58,10 +59,9 @@ amendment below.
 - Overlapping turns on one Conversation are refused (`409`) rather than raced,
   because two callers cannot share one running bridge.
 - The *Workspace* and *Execution runtime* glossary entries still describe the
-  production Run path. After stage 2 the AI SDK chat path shares the
-  Conversation's Workspace but still has no Execution runtime — a *Harness
-  turn* is not a Run; rewording the glossary is deferred to production
-  readiness.
+  production Run path. The AI SDK chat path has neither: its files live in the
+  Harness sandbox (see the stage 2 revision) and a *Harness turn* is not a
+  Run; rewording the glossary is deferred to production readiness.
 
 ## Stage 2 amendment (2026-08-27)
 
@@ -102,6 +102,53 @@ chat path), specified in issue #615, and verified live on issue #612.
   **Harness turn** serves each message; overlap with a Run on the same
   Conversation is refused symmetrically (`409`) in-process, as stage 1 already
   assumed for the single-process local composition.
+
+## Stage 2 revision (2026-08-28)
+
+Decided on issue #626 (Drop Bash and E2B from stage 2: run the file tools
+inside the Harness sandbox?); spec #615 rewritten to match.
+
+The amendment above kept a second sandbox for one reason: `Bash`.
+Prompt-injectable shell had to run away from the brokered placeholder. With
+`Bash` dropped from the chat path's catalog, that reason is gone, and so is
+E2B on this path. What changes against the amendment:
+
+- **Four built-ins are re-enabled; every other one stays off.** `Read`,
+  `Write`, `Edit`, and `Grep` are Claude Code's own tools, executed inside the
+  Harness sandbox: `activeTools` names the adapter's common names `read`,
+  `write`, `edit`, `grep` next to the document tools, which the bridge turns
+  into Agent SDK `tools: [Read, Write, Edit, Grep]` and `disallowedTools` for
+  the other 23 public names. `permissionMode` stays `allow-all`; the bridge
+  runs the SDK in `default` mode with a `canUseTool` that allows active
+  natives without approval and auto-denies the inactive ones. Files live in
+  the harness session work directory and persist through the per-Conversation
+  snapshot like the transcript; an unresumable sandbox now loses them too.
+- **Only the document tools execute in chat-api.** `ListDocuments`,
+  `SearchDocuments`, and `LoadDocuments` remain `HarnessAgent` user tools
+  against the read-only KB; `LoadDocuments` writes the documents into the
+  sandbox through the `experimental_sandbox` session, which is that sandbox's
+  restricted view and no longer discarded. chat-api's local-only
+  `HarnessConfig` gains `KB_DATABASE_URL` only — no `E2B_API_KEY`, no `e2b`
+  dependency.
+- **No Workspace attachment and no cross-path refusal.** Nothing on the chat
+  path reads or writes `conversation_runtime.sandbox_id`; the two paths share
+  no filesystem, so a Harness turn and a Run on one Conversation are not
+  serialized. The *Harness turn* term stands.
+- **The credential story is stage 1's, not "no built-in, no reach".** The file
+  tools have no path root: the model can read the bridge's on-disk start
+  config (placeholder and prompt) and the transcript, and — because the bridge
+  leaves the Agent SDK's `settingSources` unset, which loads user, project,
+  and local settings — a prompt-injected `Write` of a `.claude/settings.json`
+  hook runs shell in the sandbox on a later turn. That is exactly the
+  blast radius this record accepted for stage 1: a shell in a sandbox that
+  holds no MyMemo secret, whose placeholder the Vercel firewall honours only
+  from inside. It is accepted on the same grounds and stated in
+  `docs/agents/security.md`; closing it is production readiness.
+
+Rejected: chat-api user tools over the restricted sandbox session, rooted at
+a directory that is not Claude's cwd — it keeps every built-in off and closes
+the hook route, for roughly the handler code the amendment already planned.
+The zero-handler path was chosen.
 
 Why an amendment rather than a new ADR: this record already named stage 2 as
 its second half, and stage 2 confirms that shape — it adds one consequence,
