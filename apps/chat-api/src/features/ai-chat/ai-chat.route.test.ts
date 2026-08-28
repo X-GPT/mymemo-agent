@@ -84,7 +84,7 @@ function fakeAgent() {
 		},
 	};
 	const factory: HarnessChatAgentFactory = (tools) => {
-		toolSets.push(tools);
+		toolSets.push(tools ?? {});
 		return fake as never;
 	};
 	return { factory, events, fake, toolSets };
@@ -250,7 +250,6 @@ it("forwards the stream unchanged: reasoning parts pass, and no built-in tool pa
 	});
 	const received = streamParts(await response.text());
 	expect(received).toEqual(parts);
-	expect(received.map((p) => p.type)).toContain("reasoning-delta");
 	// The built-in invariant: a provider-executed tool part is only ever one
 	// of the two synthetic dynamic parts.
 	const providerExecuted = received.filter(

@@ -8,11 +8,6 @@ import { HARNESS_TOOL_NAMES } from "./tools/harness-tools";
 export type HarnessChatAgentFactory = ReturnType<
 	typeof createHarnessChatAgentFactory
 >;
-/** The `HarnessAgent` the route drives for one turn. */
-export type HarnessChatAgent = ReturnType<HarnessChatAgentFactory>;
-
-/** The turn's user-tool set, keyed by `HARNESS_TOOL_NAMES`. */
-type HarnessToolSet = NonNullable<HarnessAgentSettings["tools"]>;
 
 /**
  * Appended to Claude Code's native system prompt (the bridge hardcodes the
@@ -49,11 +44,8 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 	const harness = createClaudeCode({
 		auth: "direct",
 		model: config.OPENROUTER_DEFAULT_MODEL,
-		// Thinking stays at the adapter default (adaptive, summarized): the
-		// model's reasoning reaches the client as `reasoning-*` parts.
-		// Route-independent guarantee that no user tool is deferred toward the
-		// CLI's ToolSearch, even though the OpenRouter base URL already
-		// suppresses deferred tools.
+		// Adapter-default thinking: reasoning reaches the client as `reasoning-*`
+		// parts. Tool search off so no user tool is deferred to the CLI's ToolSearch.
 		env: { ENABLE_TOOL_SEARCH: "false" },
 	});
 	const sandbox = createVercelSandbox({
@@ -66,7 +58,8 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 		region: config.HARNESS_SANDBOX_REGION,
 		keepLastSnapshots: { count: 1 },
 	});
-	return (tools: HarnessToolSet) =>
+	// `tools` is this turn's user-tool set, keyed by `HARNESS_TOOL_NAMES`.
+	return (tools: HarnessAgentSettings["tools"]) =>
 		new HarnessAgent({
 			harness,
 			sandbox,

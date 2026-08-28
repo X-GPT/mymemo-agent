@@ -30,8 +30,6 @@ import {
 	type RunStore,
 } from "./features/run-store/run-store";
 
-export type { HarnessChatAgentFactory };
-
 /**
  * Application dependencies, built once from a validated `ApiConfig` at the
  * composition root (`createApp`) and injected down the request path instead of
