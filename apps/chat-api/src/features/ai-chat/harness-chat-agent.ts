@@ -20,8 +20,8 @@ export const HARNESS_INSTRUCTIONS =
 	"tool list, which you call by their short names. Nothing else exists: no shell, no web access, no " +
 	"sub-agents, and no other built-in tool your other instructions mention. Work in your working " +
 	"directory with relative paths; files you create there persist between messages of this " +
-	"conversation. Never write a tool call out as text and never invent a tool's output. If no tool " +
-	"can do what is asked, say plainly that you cannot do it in this conversation.\n\n" +
+	"conversation. If no tool can do what is asked, say plainly that you cannot do it in this " +
+	"conversation.\n\n" +
 	"Keep responses concise.";
 
 /** Port inside the sandbox the Claude Code bridge listens on (adapter uses `ports[0]`; any free port works). */

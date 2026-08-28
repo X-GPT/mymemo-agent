@@ -31,9 +31,8 @@ A built-in call arrives as the bridge's own `tool-*` parts (`toolName` = the
 common name, `providerExecuted: true`); the only other `tool-*` parts with
 `providerExecuted: true` are the bridge's synthetic `compaction` and
 `fileChange` parts (`dynamic: true`). The appended `instructions`
-(`HARNESS_INSTRUCTIONS`) name the four tools on the working directory plus the
-Harness tools by short name, and nothing else; the bridge hardcodes the
-`claude_code` preset, so this path appends to Claude
+(`HARNESS_INSTRUCTIONS`) tell the model which tools are real here; the bridge
+hardcodes the `claude_code` preset, so this path appends to Claude
 Code's native prompt rather than replacing it.
 
 Claude's working directory is the harness session work directory, created
