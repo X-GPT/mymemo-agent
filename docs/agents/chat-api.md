@@ -28,15 +28,13 @@ thinking at the adapter default) and the Vercel sandbox provider. The agent's
 the adapter's common names `read`, `write`, `edit`, `grep` — Claude Code's
 own tools, executed in the sandbox with no MyMemo bounds and no path root —
 plus `HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness
-tools (empty until the first one lands); `permissionMode` stays the default
-(the bridge mapping is in ADR-0033). Asked to run a shell command, fetch a URL, or spawn an agent, the
+tools (empty until the first one lands); `permissionMode` stays the default.
+Asked to run a shell command, fetch a URL, or spawn an agent, the
 model has no such tool and answers in text. A built-in call arrives as the
 bridge's own `tool-input-available` / `tool-output-available` pair with
 `toolName` = the common name and `providerExecuted: true`; the only other
 `tool-*` parts with `providerExecuted: true` are the bridge's synthetic
-`compaction` and `fileChange` parts (`dynamic: true`). There is no runtime
-interception — the guarantee is the configuration, pinned by the route test.
-The appended `instructions` (`HARNESS_INSTRUCTIONS`) name the four tools on
+`compaction` and `fileChange` parts (`dynamic: true`). The appended `instructions` (`HARNESS_INSTRUCTIONS`) name the four tools on
 the working directory plus the Harness tools by short name, and nothing else;
 the bridge hardcodes the `claude_code` preset, so this path appends to Claude
 Code's native prompt rather than replacing it.
@@ -95,10 +93,8 @@ docker compose restart chat-api
 turn "Which word did I ask you to remember?" 22222222-2222-4222-8222-222222222222   # answer mentions pelican
 ```
 
-Local two-turn file check (same stack and `turn` helper): turn 1 writes a file
-in the sandbox, chat-api restarts, and turn 2 reads it back — proving the
-built-ins run in the sandbox and files persist across turns and a restart.
-A request for shell or web work yields text only, with no tool part:
+Local two-turn file check (same stack and `turn` helper); turn 3 shows shell or
+web requests yield text only:
 
 ```sh
 turn "Use your Write tool to create notes.md containing the word pelican." 33333333-3333-4333-8333-333333333333 | tee /tmp/turn1.sse
@@ -108,7 +104,6 @@ turn "Use your Read tool on notes.md and tell me the word." 44444444-4444-4444-8
 grep -c '"toolName":"read"' /tmp/turn2.sse   # ≥ 1; answer mentions pelican
 turn "Run ls -la in your shell, then fetch https://example.com." 55555555-5555-4555-8555-555555555555 | tee /tmp/turn3.sse
 grep -c '"type":"tool-' /tmp/turn3.sse       # 0
-grep -o '"type":"reasoning-[a-z]*"' /tmp/turn3.sse | sort -u   # reasoning-start, reasoning-delta, reasoning-end
 ```
 
 ### Create a Conversation

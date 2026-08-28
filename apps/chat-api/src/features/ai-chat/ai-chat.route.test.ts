@@ -209,10 +209,7 @@ it("builds one agent per turn from the factory with the turn's tool set", async 
 
 it("forwards the stream unchanged: reasoning parts pass, and only the four built-ins run in the sandbox", async () => {
 	const { factory, fake } = fakeAgent();
-	// What the configured harness emits: reasoning, text, a sandbox-executed
-	// built-in as the bridge's own input/output pair, and the two synthetic
-	// dynamic parts the bridge reports itself. A user tool arrives with
-	// `providerExecuted: false`; nothing else carries `providerExecuted: true`.
+	// Reasoning, one sandbox-executed built-in, the bridge's two synthetic parts, then text.
 	const parts = [
 		{ type: "reasoning-start", id: "r1" },
 		{ type: "reasoning-delta", id: "r1", delta: "thinking" },
