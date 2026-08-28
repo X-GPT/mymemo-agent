@@ -14,9 +14,7 @@ export type HarnessChatAgentFactory = ReturnType<
  * `claude_code` preset, so this path can only append — ADR-0033). That preset
  * still describes every Claude Code tool, so the model must be told which
  * ones are real here: seen live, with nothing listed it can write a tool call
- * out as text and invent the result. The first paragraph is MyMemo's role
- * line from the Runtime's `MYMEMO_SYSTEM_PROMPT` (accepted drift: a wording
- * change there is applied here too).
+ * out as text and invent the result.
  */
 export const HARNESS_INSTRUCTIONS =
 	"You are MyMemo's agent. You answer the user's questions and do file-backed work on their behalf.\n\n" +
@@ -70,11 +68,7 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 			harness,
 			sandbox,
 			tools,
-			// The four built-ins plus the user-tool names: the bridge turns this
-			// into Agent SDK `tools: [Read, Write, Edit, Grep]` plus
-			// `disallowedTools` for every other native name, and — under the
-			// default `allow-all` permissionMode — allows the active natives
-			// without approval and auto-denies any request for an inactive one.
+			// Four built-ins + user-tool names; the bridge disallows every other native and auto-denies it (ADR-0033).
 			activeTools: HARNESS_ACTIVE_TOOLS,
 			instructions: HARNESS_INSTRUCTIONS,
 		});

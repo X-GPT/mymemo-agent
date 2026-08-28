@@ -28,11 +28,8 @@ thinking at the adapter default) and the Vercel sandbox provider. The agent's
 the adapter's common names `read`, `write`, `edit`, `grep` — Claude Code's
 own tools, executed in the sandbox with no MyMemo bounds and no path root —
 plus `HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness
-tools (empty until the first one lands). The bridge turns that into Agent SDK
-`tools: [Read, Write, Edit, Grep]` and `disallowedTools` for every other
-native; `permissionMode` stays the default `allow-all`, so the active
-built-ins run without approval and any request for an inactive one is
-auto-denied. Asked to run a shell command, fetch a URL, or spawn an agent, the
+tools (empty until the first one lands); `permissionMode` stays the default
+(the bridge mapping is in ADR-0033). Asked to run a shell command, fetch a URL, or spawn an agent, the
 model has no such tool and answers in text. A built-in call arrives as the
 bridge's own `tool-input-available` / `tool-output-available` pair with
 `toolName` = the common name and `providerExecuted: true`; the only other
