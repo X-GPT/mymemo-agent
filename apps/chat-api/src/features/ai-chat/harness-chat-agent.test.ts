@@ -7,6 +7,7 @@ import {
 } from "./harness-chat-agent";
 import {
 	HARNESS_ACTIVE_TOOLS,
+	HARNESS_BUILTIN_TOOLS,
 	HARNESS_TOOL_NAMES,
 } from "./tools/harness-tools";
 
@@ -74,7 +75,7 @@ it("configures the Claude Code adapter once, with only Read, Write, Edit, and Gr
 	]);
 	expect(first.builtinToolFiltering).toEqual({
 		mode: "allow",
-		toolNames: ["read", "write", "edit", "grep"],
+		toolNames: [...HARNESS_BUILTIN_TOOLS],
 	});
 	expect(first.settings.instructions).toBe(HARNESS_INSTRUCTIONS);
 	expect(process.env.ANTHROPIC_API_KEY).toBe("");
