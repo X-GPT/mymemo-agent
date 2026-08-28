@@ -37,8 +37,10 @@ before it reaches the sandbox and the Vercel firewall injects the real bearer
 only on requests to the OpenRouter host. The file tools reach the whole
 sandbox filesystem — including the bridge's on-disk start config with the
 brokered placeholder, and the Claude settings files whose hooks run shell on a
-later turn — so the sandbox, not the tool list, is the boundary, as in stage 1;
-the placeholder is honoured only from inside it (ADR-0033). Every tool input
+later turn — so the sandbox, not the tool list, is the boundary. That shell
+route is accepted on stage 1's grounds: the sandbox holds no MyMemo secret and
+the placeholder is honoured only from inside it; closing it is production
+readiness (ADR-0033). Every tool input
 and output is persisted verbatim in the sandbox's Claude transcript and
 therefore in the per-Conversation Vercel snapshot. The sandbox receives no
 database, E2B, Searchable document, Redis, or Downloadable artifact authority.

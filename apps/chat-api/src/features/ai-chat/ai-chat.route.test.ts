@@ -3,10 +3,7 @@ import { Hono } from "hono";
 import type { AppDeps, AppEnv } from "@/deps";
 import aiChatRoutes from "./ai-chat.route";
 import type { HarnessChatAgentFactory } from "./harness-chat-agent";
-import {
-	HARNESS_BUILTIN_TOOLS,
-	HARNESS_TOOL_NAMES,
-} from "./tools/harness-tools";
+import { HARNESS_TOOL_NAMES } from "./tools/harness-tools";
 
 const headers = {
 	"content-type": "application/json",
@@ -255,17 +252,7 @@ it("forwards the stream unchanged: reasoning and sandbox-executed built-in parts
 		headers,
 		body: JSON.stringify(requestBody),
 	});
-	const received = streamParts(await response.text());
-	expect(received).toEqual(parts);
-	// Provider-executed parts are only the enabled built-ins or the bridge's synthetic parts.
-	const providerExecuted = received.filter(
-		(p) => String(p.type).startsWith("tool-") && p.providerExecuted === true,
-	);
-	for (const part of providerExecuted) {
-		expect([...HARNESS_BUILTIN_TOOLS, "compaction", "fileChange"]).toContain(
-			String(part.toolName),
-		);
-	}
+	expect(streamParts(await response.text())).toEqual(parts);
 });
 
 it("resumes the Conversation's session from the stored pointer", async () => {

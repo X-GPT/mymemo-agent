@@ -27,13 +27,13 @@ thinking at the adapter default) and the Vercel sandbox provider. The agent's
 the adapter's common names `read`, `write`, `edit`, `grep` plus
 `HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness
 tools (empty until the first one lands); `permissionMode` stays the default.
-A built-in call arrives as the
-bridge's own `tool-input-available` part (`toolName` = the common name) and
-`tool-output-available` part, both `providerExecuted: true`; the only other
-`tool-*` parts with `providerExecuted: true` are the bridge's synthetic
-`compaction` and `fileChange` parts (`dynamic: true`). The appended `instructions` (`HARNESS_INSTRUCTIONS`) name the four tools on
-the working directory plus the Harness tools by short name, and nothing else;
-the bridge hardcodes the `claude_code` preset, so this path appends to Claude
+A built-in call arrives as the bridge's own `tool-*` parts (`toolName` = the
+common name, `providerExecuted: true`); the only other `tool-*` parts with
+`providerExecuted: true` are the bridge's synthetic `compaction` and
+`fileChange` parts (`dynamic: true`). The appended `instructions`
+(`HARNESS_INSTRUCTIONS`) name the four tools on the working directory plus the
+Harness tools by short name, and nothing else; the bridge hardcodes the
+`claude_code` preset, so this path appends to Claude
 Code's native prompt rather than replacing it.
 
 Claude's working directory is the harness session work directory, created
@@ -94,8 +94,7 @@ web requests yield text only:
 
 ```sh
 turn "Use your Write tool to create notes.md containing the word pelican." 33333333-3333-4333-8333-333333333333 | tee /tmp/turn1.sse
-grep -c '"toolName":"write"' /tmp/turn1.sse  # ≥ 1
-grep -c '"providerExecuted":true' /tmp/turn1.sse   # ≥ 1: it ran in the sandbox
+grep '"toolName":"write"' /tmp/turn1.sse | grep -c '"providerExecuted":true'   # ≥ 1: it ran in the sandbox
 docker compose restart chat-api
 turn "Use your Read tool on notes.md and tell me the word." 44444444-4444-4444-8444-444444444444 | tee /tmp/turn2.sse
 grep -c '"toolName":"read"' /tmp/turn2.sse   # ≥ 1; answer mentions pelican
