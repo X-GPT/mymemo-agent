@@ -31,11 +31,6 @@ export type AttachHarnessWorkspace = (
 	input: ConversationRef & { sandboxId: string | null },
 ) => Promise<HarnessWorkspaceSandbox>;
 
-const e2bSandboxFactory: E2bSandboxFactory = {
-	connect: (sandboxId, options) => Sandbox.connect(sandboxId, options),
-	create: (template, options) => Sandbox.create(template, options),
-};
-
 /**
  * Connect-or-create against the Conversation's existing E2B Workspace without
  * a Run (ADR-0033 stage 2): pointer set → connect (auto-resumes a paused
@@ -55,7 +50,7 @@ export function createHarnessWorkspaceAttacher(
 		"E2B_API_KEY" | "WORKER_E2B_TEMPLATE" | "HARNESS_SANDBOX_TIMEOUT_MS"
 	>,
 	logger: { warn(obj: object, msg: string): void },
-	factory: E2bSandboxFactory = e2bSandboxFactory,
+	factory: E2bSandboxFactory = Sandbox,
 ): AttachHarnessWorkspace {
 	return async ({ userId, conversationId, sandboxId }) => {
 		if (sandboxId !== null) {

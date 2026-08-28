@@ -15,31 +15,29 @@ beforeAll(async () => {
 afterAll(() => tdb.close());
 
 const ref = { userId: "user-1", conversationId: "conv-1" };
+const empty = { sandboxId: null, harnessResumeState: null };
 const state = (n: number): HarnessAgentResumeSessionState =>
 	({ type: "resume-session", data: { turn: n } }) as never;
 
 it("round-trips both pointers verbatim on one runtime row, each save leaving the other intact", async () => {
-	expect(await store.load(ref)).toEqual({ sandboxId: null, resumeState: null });
+	expect(await store.load(ref)).toEqual(empty);
 	// Either pointer creates the row; neither overwrites the other.
-	await store.saveSandboxId(ref, "sbx-1");
+	await store.save(ref, { sandboxId: "sbx-1" });
+	expect(await store.load(ref)).toEqual({ ...empty, sandboxId: "sbx-1" });
+	await store.save(ref, { harnessResumeState: state(1) });
 	expect(await store.load(ref)).toEqual({
 		sandboxId: "sbx-1",
-		resumeState: null,
-	});
-	await store.saveResumeState(ref, state(1));
-	expect(await store.load(ref)).toEqual({
-		sandboxId: "sbx-1",
-		resumeState: state(1),
+		harnessResumeState: state(1),
 	});
 	// A later turn replaces each pointer on the existing row.
-	await store.saveResumeState(ref, state(2));
-	await store.saveSandboxId(ref, "sbx-2");
+	await store.save(ref, { harnessResumeState: state(2) });
+	await store.save(ref, { sandboxId: "sbx-2" });
 	expect(await store.load(ref)).toEqual({
 		sandboxId: "sbx-2",
-		resumeState: state(2),
+		harnessResumeState: state(2),
 	});
 	expect(await tdb.db.select().from(conversationRuntime)).toHaveLength(1);
 	expect(
 		await store.load({ userId: "user-2", conversationId: "conv-1" }),
-	).toEqual({ sandboxId: null, resumeState: null });
+	).toEqual(empty);
 });

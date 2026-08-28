@@ -122,11 +122,10 @@ routes.post(
 				sandboxId: runtime.sandboxId,
 			});
 			// Idempotent upsert: a fresh sandbox is recorded, a reused one rewritten.
-			await c.var.deps.harnessRuntimeStore.saveSandboxId(
-				ref,
-				sandbox.sandboxId,
-			);
-			const resumeFrom = runtime.resumeState ?? undefined;
+			await c.var.deps.harnessRuntimeStore.save(ref, {
+				sandboxId: sandbox.sandboxId,
+			});
+			const resumeFrom = runtime.harnessResumeState ?? undefined;
 			try {
 				return await agent.createSession({ sessionId: body.id, resumeFrom });
 			} catch (error) {
@@ -147,8 +146,8 @@ routes.post(
 		// Snapshot the sandbox and remember how to resume it; the pointer is opaque.
 		const stop = async () => {
 			try {
-				const state = await session.stop();
-				await c.var.deps.harnessRuntimeStore.saveResumeState(ref, state);
+				const harnessResumeState = await session.stop();
+				await c.var.deps.harnessRuntimeStore.save(ref, { harnessResumeState });
 			} catch (error) {
 				c.var.logger.warn(
 					{ err: error, conversationId: body.id },

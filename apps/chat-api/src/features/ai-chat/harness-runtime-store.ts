@@ -14,16 +14,12 @@ export interface HarnessRuntime {
 	 * `createSession({ resumeFrom })`. chat-api never reads inside it — the
 	 * Conversation's memory is the sandbox snapshot, not this value.
 	 */
-	resumeState: HarnessAgentResumeSessionState | null;
+	harnessResumeState: HarnessAgentResumeSessionState | null;
 }
 
 export interface HarnessRuntimeStore {
 	load(ref: ConversationRef): Promise<HarnessRuntime>;
-	saveResumeState(
-		ref: ConversationRef,
-		state: HarnessAgentResumeSessionState,
-	): Promise<void>;
-	saveSandboxId(ref: ConversationRef, sandboxId: string): Promise<void>;
+	save(ref: ConversationRef, patch: Partial<HarnessRuntime>): Promise<void>;
 }
 
 /**
@@ -39,36 +35,25 @@ export class PostgresHarnessRuntimeStore implements HarnessRuntimeStore {
 		const row = await loadConversationRuntimeTx(this.db, ref);
 		return {
 			sandboxId: row?.sandboxId ?? null,
-			resumeState:
+			harnessResumeState:
 				(row?.harnessResumeState as HarnessAgentResumeSessionState | null) ??
 				null,
 		};
 	}
 
-	saveResumeState(
+	async save(
 		ref: ConversationRef,
-		state: HarnessAgentResumeSessionState,
-	): Promise<void> {
-		return this.upsert(ref, { harnessResumeState: state });
-	}
-
-	saveSandboxId(ref: ConversationRef, sandboxId: string): Promise<void> {
-		return this.upsert(ref, { sandboxId });
-	}
-
-	private async upsert(
-		ref: ConversationRef,
-		values: Partial<typeof conversationRuntime.$inferInsert>,
+		patch: Partial<HarnessRuntime>,
 	): Promise<void> {
 		await this.db
 			.insert(conversationRuntime)
-			.values({ ...ref, ...values })
+			.values({ ...ref, ...patch })
 			.onConflictDoUpdate({
 				target: [
 					conversationRuntime.userId,
 					conversationRuntime.conversationId,
 				],
-				set: { ...values, updatedAt: new Date() },
+				set: { ...patch, updatedAt: new Date() },
 			});
 	}
 }

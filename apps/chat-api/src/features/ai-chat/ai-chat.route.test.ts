@@ -33,31 +33,23 @@ const stoppedState = { type: "resume-session", data: { after: "turn" } };
 /**
  * In-memory Harness runtime store, optionally pre-seeded for conversation-1.
  * Defaults to a recorded sandbox so the fake attach connects rather than
- * creates; `saved` collects resume pointers and `pointed` sandbox ids.
+ * creates; `saved` collects every patch in order.
  */
 function fakeRuntimeStore({
 	sandboxId = "sbx-1",
-	resumeState = null,
+	harnessResumeState = null,
 }: {
 	sandboxId?: string | null;
-	resumeState?: unknown;
+	harnessResumeState?: unknown;
 } = {}) {
-	const saved: { ref: unknown; state: unknown }[] = [];
-	const pointed: { ref: unknown; sandboxId: string }[] = [];
+	const saved: { ref: unknown; patch: unknown }[] = [];
 	const store = {
-		load: async () => ({ sandboxId, resumeState }),
-		saveResumeState: async (ref: unknown, state: unknown) => {
-			saved.push({ ref, state });
-		},
-		saveSandboxId: async (ref: unknown, sandboxId: string) => {
-			pointed.push({ ref, sandboxId });
+		load: async () => ({ sandboxId, harnessResumeState }),
+		save: async (ref: unknown, patch: unknown) => {
+			saved.push({ ref, patch });
 		},
 	};
-	return {
-		store: store as unknown as AppDeps["harnessRuntimeStore"],
-		saved,
-		pointed,
-	};
+	return { store: store as unknown as AppDeps["harnessRuntimeStore"], saved };
 }
 
 /** Fake Workspace attach: connects to a recorded sandbox, creates `sbx-new` otherwise. */
@@ -205,10 +197,8 @@ it("runs one Harness turn in a session named after the Conversation and stops it
 	expect(await response.text()).toBe(uiMessageStream);
 	expect(events.at(-1)).toBe("stop");
 	expect(saved).toEqual([
-		{
-			ref: { userId: "member-1", conversationId: "conversation-1" },
-			state: stoppedState,
-		},
+		{ ref: ownedRef, patch: { sandboxId: "sbx-1" } },
+		{ ref: ownedRef, patch: { harnessResumeState: stoppedState } },
 	]);
 });
 
@@ -298,7 +288,7 @@ it.each([
 	[null, "sbx-new"],
 ])("attaches the Conversation's Workspace (pointer %p) before the session and records the sandbox it attached", async (sandboxId, attached) => {
 	const { factory, events } = fakeAgent();
-	const { store, pointed } = fakeRuntimeStore({ sandboxId });
+	const { store, saved } = fakeRuntimeStore({ sandboxId });
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
@@ -318,7 +308,7 @@ it.each([
 		{ attach: { ...ownedRef, sandboxId } },
 		{ createSession: { sessionId: "conversation-1" } },
 	]);
-	expect(pointed).toEqual([{ ref: ownedRef, sandboxId: attached }]);
+	expect(saved[0]).toEqual({ ref: ownedRef, patch: { sandboxId: attached } });
 });
 
 it("refuses a turn while the Conversation has an Active Run, holding no slot", async () => {
@@ -376,7 +366,8 @@ it("resumes the Conversation's session from the stored pointer", async () => {
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
 		createHarnessChatAgent: factory,
-		harnessRuntimeStore: fakeRuntimeStore({ resumeState: pointer }).store,
+		harnessRuntimeStore: fakeRuntimeStore({ harnessResumeState: pointer })
+			.store,
 	});
 	const response = await app.request("/api/chat", {
 		method: "POST",
@@ -398,7 +389,7 @@ it("starts a fresh session for the same id and logs when resuming throws", async
 		return createSession(options);
 	};
 	const { store, saved } = fakeRuntimeStore({
-		resumeState: { type: "resume-session", data: {} },
+		harnessResumeState: { type: "resume-session", data: {} },
 	});
 	const app = makeApp({
 		conversationStore: ownedConversation,
@@ -423,7 +414,10 @@ it("starts a fresh session for the same id and logs when resuming throws", async
 		},
 	]);
 	// The stale pointer is replaced by the fresh session's.
-	expect(saved.map((s) => s.state)).toEqual([stoppedState]);
+	expect(saved.at(-1)).toEqual({
+		ref: ownedRef,
+		patch: { harnessResumeState: stoppedState },
+	});
 });
 
 it("stops the session when the client cancels the stream", async () => {
