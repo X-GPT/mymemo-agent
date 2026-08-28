@@ -36,18 +36,16 @@ afterAll(() => {
 });
 
 /** `HarnessAgent` keeps its settings private; read them for the pin. */
-function inspect(agent: object) {
-	return agent as unknown as {
-		settings: Record<string, unknown>;
-		builtinToolFiltering: unknown;
-	};
-}
+type Inspected = {
+	settings: Record<string, unknown>;
+	builtinToolFiltering: unknown;
+};
 
 it("configures the Claude Code adapter once, with built-ins off and tool search disabled", () => {
 	const createAgent = createHarnessChatAgentFactory(config);
 	const tools = {};
-	const first = inspect(createAgent(tools));
-	const second = inspect(createAgent({}));
+	const first = createAgent(tools) as unknown as Inspected;
+	const second = createAgent({}) as unknown as Inspected;
 
 	// Built once at composition, shared by every turn's agent.
 	expect(createClaudeCode).toHaveBeenCalledTimes(1);
@@ -66,7 +64,6 @@ it("configures the Claude Code adapter once, with built-ins off and tool search 
 	expect(first.settings.tools).toBe(tools);
 	expect(first.settings.activeTools).toBe(HARNESS_TOOL_NAMES);
 	expect(first.builtinToolFiltering).toEqual({ mode: "allow", toolNames: [] });
-	expect(first.settings.permissionMode).toBe("allow-all");
 	expect(first.settings.instructions).toBe(HARNESS_INSTRUCTIONS);
 	expect(process.env.ANTHROPIC_API_KEY).toBe("");
 });

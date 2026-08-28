@@ -84,7 +84,7 @@ function fakeAgent() {
 		},
 	};
 	const factory: HarnessChatAgentFactory = (tools) => {
-		toolSets.push(tools ?? {});
+		toolSets.push(tools);
 		return fake as never;
 	};
 	return { factory, events, fake, toolSets };

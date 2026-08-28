@@ -59,7 +59,7 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 		keepLastSnapshots: { count: 1 },
 	});
 	// `tools` is this turn's user-tool set, keyed by `HARNESS_TOOL_NAMES`.
-	return (tools: HarnessAgentSettings["tools"]) =>
+	return (tools: NonNullable<HarnessAgentSettings["tools"]>) =>
 		new HarnessAgent({
 			harness,
 			sandbox,
@@ -68,9 +68,8 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 			// `tools: []` plus `disallowedTools` for every native name, and the
 			// agent auto-denies any approval request outside the list.
 			activeTools: HARNESS_TOOL_NAMES,
-			// Changes nothing for user tools; a stricter mode would only add
-			// ask-rules for built-ins that are already absent.
-			permissionMode: "allow-all",
+			// `permissionMode` stays at the default `allow-all`: a stricter mode
+			// would only add ask-rules for built-ins that are already absent.
 			instructions: HARNESS_INSTRUCTIONS,
 		});
 }
