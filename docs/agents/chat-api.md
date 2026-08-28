@@ -44,6 +44,24 @@ resuming throws, the route logs `harness session resume failed; starting a
 fresh session` and starts a fresh session for the same id. Permanent deletion
 nulls the pointer; retention and the rest of the lifecycle are ADR-0033's.
 
+Each Harness turn also attaches to the Conversation's E2B **Workspace**
+without a Run (ADR-0033 stage 2). Before the session is created the route reads
+`conversation_runtime` fresh and runs connect-or-create
+(`ai-chat/tools/harness-workspace.ts`): `sandbox_id` set → `Sandbox.connect`,
+which auto-resumes a paused sandbox; unset, or connect throws → `Sandbox.create`
+from `WORKER_E2B_TEMPLATE` with `lifecycle.onTimeout = 'pause'` and
+`{ userId, conversationId }` metadata, then `sandbox_id` is repointed with the
+same unfenced `(user_id, conversation_id)` upsert as the resume pointer
+(`harness-runtime-store.ts` holds both). The idle window is granted once at
+connect/create as `HARNESS_SANDBOX_TIMEOUT_MS`. Nothing on this path takes
+Conversation Ownership, renews the sandbox, records an orphan, or reads or
+writes `sandbox_tainted`. Consequences: a sandbox created but not recorded (a
+DB failure between create and upsert) idle-pauses on its own with no orphan
+record, and a stop whose process-tree kill could not be confirmed reconnects
+to the same sandbox on the next turn. A Run replacing the sandbox between turns
+needs no handling — the row is read fresh every turn. The Workspace handle is
+the Harness tools'; until they land nothing uses it.
+
 Stop is best-effort and has no endpoint or durable record: the request's own
 abort signal is passed to the turn, so `useChat().stop()` or a disconnect
 aborts Claude Code in the sandbox, the stream ends with the AI SDK `abort`
@@ -56,11 +74,16 @@ Two messages cannot drive one Conversation's sandbox at once. While a turn is
 in flight, a second `POST /api/chat` for the same Conversation returns
 `409 { error: "Conversation has an active response" }` and the first turn is
 unaffected; other Conversations are unaffected. The guard is a process-local set
-of Conversation ids in `ai-chat.route.ts`, checked and set in one synchronous
-step before any sandbox work and released only after `session.stop()` has
-settled — also on abort and on failure — so a resume can never overlap a stop.
-It is correct only for the single-process local composition; the production
-replacement (a leased marker on `conversation_runtime`) is deferred.
+of Conversation ids (`ai-chat/harness-turns.ts`), checked and set in one
+synchronous step before any sandbox work and released only after
+`session.stop()` has settled — also on abort and on failure — so a resume can
+never overlap a stop. A Run and a Harness turn refuse each other through the
+same set: `POST /api/chat` returns `409 { error: "Conversation has an active
+Run" }` while the Conversation has an Active Run, and Run admission returns
+`409 { error: "Conversation has an active response" }` while a Harness turn is
+in flight, so two executors never drive one Workspace. Both guards are correct
+only for the single-process local composition; the production replacement (a
+leased marker on `conversation_runtime`) is deferred.
 
 There is no admission, Run, history, or retry yet: those are follow-up slices
 of [#595](https://github.com/X-GPT/mymemo-agent/issues/595).
@@ -68,16 +91,18 @@ The adapter runs the configured `OPENROUTER_DEFAULT_MODEL`; the request `model`
 literal is validated, not forwarded. Production composition does not mount this
 path; its `createHarnessChatAgent` throws.
 
-Local two-turn recall check (real harness; needs the Compose stack with the
-Vercel triple and `OPENROUTER_API_KEY` exported):
+Local two-turn recall and Workspace-reuse check (real harness; needs the
+Compose stack with the Vercel triple, `OPENROUTER_API_KEY`, and `E2B_API_KEY`
+exported):
 
 ```sh
 H='-H content-type:application/json -H x-member-code:m1 -H x-partner-code:p1'
 ID=$(curl -s -X POST localhost:3000/v1/conversations $H -d '{}' | jq -r .conversationId)
 turn() { curl -sN -X POST localhost:3000/api/chat $H -d "{\"id\":\"$ID\",\"model\":\"anthropic/claude-sonnet-5\",\"trigger\":\"submit-message\",\"messages\":[{\"id\":\"$2\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"$1\"}]}]}"; }
-turn "Remember the word pelican." 11111111-1111-4111-8111-111111111111
+sbx() { docker compose exec -T postgres psql -U mymemo -d mymemo_agent -Atc "select sandbox_id from conversation_runtime where conversation_id = '$ID'"; }
+turn "Remember the word pelican." 11111111-1111-4111-8111-111111111111; sbx
 docker compose restart chat-api
-turn "Which word did I ask you to remember?" 22222222-2222-4222-8222-222222222222   # answer mentions pelican
+turn "Which word did I ask you to remember?" 22222222-2222-4222-8222-222222222222; sbx   # answer mentions pelican; same sandbox_id
 ```
 
 Local built-ins-off check (same stack and `turn` helper): a request for shell

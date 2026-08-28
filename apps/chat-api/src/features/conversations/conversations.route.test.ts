@@ -19,6 +19,7 @@ import {
 import { eq, sql } from "drizzle-orm";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
+import { activeHarnessTurns } from "@/features/ai-chat/harness-turns";
 import type {
 	ConversationRecord,
 	ConversationStore,
@@ -145,6 +146,9 @@ function fakeRunStore() {
 		async admitRun() {
 			throw new Error("AG-UI admission is not used by this test");
 		},
+		async hasActiveRun() {
+			return false;
+		},
 		async getRun({ userId, conversationId, runId }) {
 			const owner = runOwners.get(runId);
 			if (
@@ -208,6 +212,9 @@ function transactionalAdmissionFake(
 	const admittedRuns = new Map<string, RunRecord>();
 	const dispatchRunIds = new Set<string>();
 	const runStore: RunStore = {
+		async hasActiveRun() {
+			return false;
+		},
 		async getRun({ userId, conversationId, runId }) {
 			const run = admittedRuns.get(runId);
 			return run?.userId === userId && run.conversationId === conversationId
@@ -1118,6 +1125,28 @@ describe("POST /v1/conversations/:id/runs", () => {
 		]);
 		await producer.close();
 		await relay.close();
+	});
+
+	it("refuses admission while a Harness turn is in flight on the Conversation", async () => {
+		const { store } = fakeStore([existing]);
+		// The default fake admission throws, so only the guard can answer 409.
+		activeHarnessTurns.add("conv-1");
+		try {
+			const response = await buildApp(store).request(
+				"/v1/conversations/conv-1/runs",
+				{
+					method: "POST",
+					headers: identityHeaders,
+					body: JSON.stringify(agUiRunInput()),
+				},
+			);
+			expect(response.status).toBe(409);
+			expect(await response.json()).toEqual({
+				error: "Conversation has an active response",
+			});
+		} finally {
+			activeHarnessTurns.delete("conv-1");
+		}
 	});
 
 	it("admits the final plain-text User message and streams standard AG-UI events", async () => {

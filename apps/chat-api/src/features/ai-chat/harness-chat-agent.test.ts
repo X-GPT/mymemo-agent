@@ -16,6 +16,8 @@ const config: HarnessConfig = {
 	OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-5",
 	HARNESS_SANDBOX_TIMEOUT_MS: 600_000,
 	HARNESS_SANDBOX_REGION: "iad1",
+	E2B_API_KEY: "test-e2b-key",
+	WORKER_E2B_TEMPLATE: "mymemo-agent-sandbox",
 };
 
 // Pass-through spy on the adapter constructor; restored with the env below.

@@ -30,20 +30,49 @@ const uiMessageStream =
 /** What the fake session's `stop()` returns; opaque to the route. */
 const stoppedState = { type: "resume-session", data: { after: "turn" } };
 
-/** In-memory resume pointer store, optionally pre-seeded for conversation-1. */
-function fakeResumeStore(initial: unknown = null) {
+/**
+ * In-memory Harness runtime store, optionally pre-seeded for conversation-1.
+ * Defaults to a recorded sandbox so the fake attach connects rather than
+ * creates; `saved` collects resume pointers and `pointed` sandbox ids.
+ */
+function fakeRuntimeStore(
+	initial: { sandboxId?: string | null; resumeState?: unknown } = {},
+) {
 	const saved: { ref: unknown; state: unknown }[] = [];
+	const pointed: { ref: unknown; sandboxId: string }[] = [];
 	const store = {
-		load: async () => initial,
-		save: async (ref: unknown, state: unknown) => {
+		load: async () => ({
+			sandboxId: initial.sandboxId === undefined ? "sbx-1" : initial.sandboxId,
+			resumeState: initial.resumeState ?? null,
+		}),
+		saveResumeState: async (ref: unknown, state: unknown) => {
 			saved.push({ ref, state });
+		},
+		saveSandboxId: async (ref: unknown, sandboxId: string) => {
+			pointed.push({ ref, sandboxId });
 		},
 	};
 	return {
-		store: store as unknown as AppDeps["harnessResumeStateStore"],
+		store: store as unknown as AppDeps["harnessRuntimeStore"],
 		saved,
+		pointed,
 	};
 }
+
+/** Fake Workspace attach: connects to a recorded sandbox, creates `sbx-new` otherwise. */
+function fakeWorkspace(events: unknown[] = []) {
+	const attach: AppDeps["attachHarnessWorkspace"] = async (input) => {
+		events.push({ attach: input });
+		return input.sandboxId === null
+			? { sandbox: { sandboxId: "sbx-new" }, isNew: true }
+			: { sandbox: { sandboxId: input.sandboxId }, isNew: false };
+	};
+	return attach;
+}
+
+const noActiveRun = {
+	hasActiveRun: async () => false,
+} as unknown as AppDeps["runStore"];
 
 /**
  * Fake agent factory: records the tool set of every agent it builds, and the
@@ -118,7 +147,9 @@ function makeApp(deps: Partial<AppDeps>) {
 	const app = new Hono<AppEnv>();
 	app.use("*", async (c, next) => {
 		c.set("deps", {
-			harnessResumeStateStore: fakeResumeStore().store,
+			harnessRuntimeStore: fakeRuntimeStore().store,
+			attachHarnessWorkspace: fakeWorkspace(),
+			runStore: noActiveRun,
 			...deps,
 		} as AppDeps);
 		c.set("logger", logger as never);
@@ -131,10 +162,11 @@ function makeApp(deps: Partial<AppDeps>) {
 const ownedConversation = {
 	get: async () => ({ archivedAt: null }) as never,
 } as unknown as AppDeps["conversationStore"];
+const ownedRef = { userId: "member-1", conversationId: "conversation-1" };
 
 it("runs one Harness turn in a session named after the Conversation and stops it after the stream", async () => {
 	const { factory, events } = fakeAgent();
-	const { store, saved } = fakeResumeStore();
+	const { store, saved } = fakeRuntimeStore();
 	const lookups: unknown[] = [];
 	const app = makeApp({
 		conversationStore: {
@@ -145,7 +177,7 @@ it("runs one Harness turn in a session named after the Conversation and stops it
 		} as unknown as AppDeps["conversationStore"],
 		exposureGate: { isAgentEnabled: async () => true },
 		createHarnessChatAgent: factory,
-		harnessResumeStateStore: store,
+		harnessRuntimeStore: store,
 	});
 
 	const response = await app.request("/api/chat", {
@@ -262,6 +294,82 @@ it("forwards the stream unchanged: reasoning parts pass, and no built-in tool pa
 	}
 });
 
+it.each([
+	["sbx-1", []],
+	[null, [{ ref: ownedRef, sandboxId: "sbx-new" }]],
+] as const)("attaches the Conversation's Workspace (pointer %p) before the session and repoints only a fresh sandbox", async (sandboxId, repointed) => {
+	const { factory, events } = fakeAgent();
+	const { store, pointed } = fakeRuntimeStore({ sandboxId });
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		createHarnessChatAgent: factory,
+		harnessRuntimeStore: store,
+		attachHarnessWorkspace: fakeWorkspace(events),
+	});
+	const response = await app.request("/api/chat", {
+		method: "POST",
+		headers,
+		body: JSON.stringify(requestBody),
+	});
+	expect(response.status).toBe(200);
+	await response.text();
+	// The row is read and the Workspace attached before any Harness session work.
+	expect(events.slice(0, 2)).toEqual([
+		{ attach: { ...ownedRef, sandboxId } },
+		{ createSession: { sessionId: "conversation-1" } },
+	]);
+	expect(pointed).toEqual([...repointed]);
+});
+
+it("refuses a turn while the Conversation has an Active Run, holding no slot", async () => {
+	const { factory, events } = fakeAgent();
+	let active = true;
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		createHarnessChatAgent: factory,
+		runStore: { hasActiveRun: async () => active } as never,
+	});
+	const post = () =>
+		app.request("/api/chat", {
+			method: "POST",
+			headers,
+			body: JSON.stringify(requestBody),
+		});
+	const refused = await post();
+	expect(refused.status).toBe(409);
+	expect(await refused.json()).toEqual({
+		error: "Conversation has an active Run",
+	});
+	expect(events).toEqual([]);
+	active = false;
+	const admitted = await post();
+	expect(admitted.status).toBe(200);
+	await admitted.body?.cancel();
+});
+
+it("releases the slot when the Workspace cannot be attached", async () => {
+	const { factory, events } = fakeAgent();
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		createHarnessChatAgent: factory,
+		attachHarnessWorkspace: async () => {
+			throw new Error("e2b unavailable");
+		},
+	});
+	const post = () =>
+		app.request("/api/chat", {
+			method: "POST",
+			headers,
+			body: JSON.stringify(requestBody),
+		});
+	expect((await post()).status).toBe(500);
+	expect((await post()).status).toBe(500);
+	expect(events).toEqual([]);
+});
+
 it("resumes the Conversation's session from the stored pointer", async () => {
 	const { factory, events } = fakeAgent();
 	const pointer = { type: "resume-session", data: { from: "before" } };
@@ -269,7 +377,7 @@ it("resumes the Conversation's session from the stored pointer", async () => {
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
 		createHarnessChatAgent: factory,
-		harnessResumeStateStore: fakeResumeStore(pointer).store,
+		harnessRuntimeStore: fakeRuntimeStore({ resumeState: pointer }).store,
 	});
 	const response = await app.request("/api/chat", {
 		method: "POST",
@@ -290,15 +398,14 @@ it("starts a fresh session for the same id and logs when resuming throws", async
 		if (options.resumeFrom) throw new Error("snapshot expired");
 		return createSession(options);
 	};
-	const { store, saved } = fakeResumeStore({
-		type: "resume-session",
-		data: {},
+	const { store, saved } = fakeRuntimeStore({
+		resumeState: { type: "resume-session", data: {} },
 	});
 	const app = makeApp({
 		conversationStore: ownedConversation,
 		exposureGate: { isAgentEnabled: async () => true },
 		createHarnessChatAgent: factory,
-		harnessResumeStateStore: store,
+		harnessRuntimeStore: store,
 	});
 	logged.length = 0;
 	const response = await app.request("/api/chat", {

@@ -114,6 +114,19 @@ describe("PostgresRunStore", () => {
 		});
 	});
 
+	it("reports an Active Run for its owner until it reaches a terminal status", async () => {
+		const ref = { userId: "user-1", conversationId: "conv-1" };
+		expect(await store.hasActiveRun(ref)).toBe(false);
+		await store.admitRun(runInput("run-active", "hello"));
+		expect(await store.hasActiveRun(ref)).toBe(true);
+		expect(await store.hasActiveRun({ ...ref, userId: "user-2" })).toBe(false);
+		await tdb.db
+			.update(runs)
+			.set({ status: "done" })
+			.where(eq(runs.runId, "run-active"));
+		expect(await store.hasActiveRun(ref)).toBe(false);
+	});
+
 	it("records one dispatch with a newly admitted AgentCore Run", async () => {
 		await expect(
 			store.admitRun(runInput("run-agentcore", "hello AgentCore")),

@@ -30,6 +30,10 @@ const harnessEnv = z.object({
 		.default(600_000),
 	// Vercel region; snapshots are region-bound, so this is project-level.
 	HARNESS_SANDBOX_REGION: z.string().trim().min(1).default("iad1"),
+	// The Conversation's E2B Workspace, attached per Harness turn without a Run.
+	// The Runtime's variable names, so Compose exports each secret once.
+	E2B_API_KEY: z.string().trim().min(1),
+	WORKER_E2B_TEMPLATE: z.string().trim().min(1).default("mymemo-agent-sandbox"),
 });
 
 export type HarnessConfig = z.infer<typeof harnessEnv>;

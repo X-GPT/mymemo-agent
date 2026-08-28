@@ -23,7 +23,7 @@ Reconnect, interruption, history, artifact access, and Conversation management f
 
 Treat the E2B sandbox as untrusted because it runs prompt-injectable file and Bash operations. Do not place provider, database, Searchable document, Redis, AWS, or E2B credentials in the sandbox environment.
 
-chat-api must not hold KB or E2B credentials. It admits Runs, serves history and artifact metadata, attaches clients to Live Streams, and signs read-only artifact URLs. For the local-only AI SDK chat path it additionally holds the Vercel token triple and the OpenRouter credential; the production `ApiConfig` never reads either.
+The production chat-api holds no KB or E2B credential. It admits Runs, serves history and artifact metadata, attaches clients to Live Streams, and signs read-only artifact URLs. For the local-only AI SDK chat path it additionally holds the Vercel token triple, the OpenRouter credential, and the E2B credential — each Harness turn attaches to the Conversation's Workspace from the chat-api process — and the production `ApiConfig` never reads any of them; `env.test.ts` pins that.
 
 The production AgentCore Runtime alone owns product Run model traffic, scoped
 Searchable document access, E2B execution, relay production, and Downloadable

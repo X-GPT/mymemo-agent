@@ -110,6 +110,9 @@ describe("admitAgUiRun", () => {
 				calls.push(input);
 				return { outcome: "not_found" };
 			},
+			async hasActiveRun() {
+				return false;
+			},
 			async getRun() {
 				return null;
 			},

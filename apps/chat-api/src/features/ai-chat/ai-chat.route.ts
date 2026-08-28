@@ -9,6 +9,7 @@ import {
 	RunIdParam,
 } from "@/features/conversations/conversations.schema";
 import { requireInternalIdentity } from "@/features/conversations/internal-identity";
+import { activeHarnessTurns } from "./harness-turns";
 
 const chatBody = z.strictObject({
 	id: ConversationIdParam,
@@ -71,16 +72,6 @@ function cleanupAfterStream(
 	return new Response(body, response);
 }
 
-/**
- * Conversation ids with a Harness turn in flight. Checked and set in one
- * synchronous step so two requests can never share a sandbox; released only
- * after `session.stop()` settles. In-process by design for the single-process
- * local composition.
- * ponytail: process-local set; a leased marker on conversation_runtime once
- * chat-api runs more than one process.
- */
-const activeTurns = new Set<string>();
-
 const routes = new Hono<AppEnv>();
 const limit = bodyLimit({
 	maxSize: MAX_REQUEST_BODY_BYTES,
@@ -112,21 +103,40 @@ routes.post(
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
-		// One agent per turn, built before the slot is taken: a constructor throw
-		// holds no slot, and the sandbox is untouched until `createSession`.
-		const agent = c.var.deps.createHarnessChatAgent({});
-		if (activeTurns.has(body.id)) {
+		const ref = { userId: c.var.identity.memberCode, conversationId: body.id };
+		// A Run and a Harness turn never drive one Workspace: a turn refuses while
+		// the Conversation has an Active Run, and Run admission refuses while a
+		// turn is in flight (`activeHarnessTurns`).
+		if (await c.var.deps.runStore.hasActiveRun(ref)) {
+			return c.json({ error: "Conversation has an active Run" }, 409);
+		}
+		if (activeHarnessTurns.has(body.id)) {
 			return c.json({ error: "Conversation has an active response" }, 409);
 		}
-		activeTurns.add(body.id);
-		const ref = { userId: c.var.identity.memberCode, conversationId: body.id };
-		const createSession = async () => {
-			const resumeFrom = await c.var.deps.harnessResumeStateStore.load(ref);
+		activeHarnessTurns.add(body.id);
+		const start = async () => {
+			// Read fresh every turn: a Run may have replaced the sandbox in between.
+			const runtime = await c.var.deps.harnessRuntimeStore.load(ref);
+			const workspace = await c.var.deps.attachHarnessWorkspace({
+				...ref,
+				sandboxId: runtime.sandboxId,
+			});
+			if (workspace.isNew) {
+				await c.var.deps.harnessRuntimeStore.saveSandboxId(
+					ref,
+					workspace.sandbox.sandboxId,
+				);
+			}
+			// One agent per turn; its tools close over this turn's Workspace once
+			// they land, so it is built after the attach.
+			const agent = c.var.deps.createHarnessChatAgent({});
+			const resumeFrom = runtime.resumeState ?? undefined;
 			try {
-				return await agent.createSession({
+				const session = await agent.createSession({
 					sessionId: body.id,
-					resumeFrom: resumeFrom ?? undefined,
+					resumeFrom,
 				});
+				return { agent, session };
 			} catch (error) {
 				if (!resumeFrom) throw error;
 				// Snapshot expired or sandbox gone: start a fresh thread under the same
@@ -135,25 +145,28 @@ routes.post(
 					{ err: error, conversationId: body.id },
 					"harness session resume failed; starting a fresh session",
 				);
-				return agent.createSession({ sessionId: body.id });
+				return {
+					agent,
+					session: await agent.createSession({ sessionId: body.id }),
+				};
 			}
 		};
-		const session = await createSession().catch((error) => {
-			activeTurns.delete(body.id);
+		const { agent, session } = await start().catch((error) => {
+			activeHarnessTurns.delete(body.id);
 			throw error;
 		});
 		// Snapshot the sandbox and remember how to resume it; the pointer is opaque.
 		const stop = async () => {
 			try {
 				const state = await session.stop();
-				await c.var.deps.harnessResumeStateStore.save(ref, state);
+				await c.var.deps.harnessRuntimeStore.saveResumeState(ref, state);
 			} catch (error) {
 				c.var.logger.warn(
 					{ err: error, conversationId: body.id },
 					"harness session stop failed",
 				);
 			} finally {
-				activeTurns.delete(body.id);
+				activeHarnessTurns.delete(body.id);
 			}
 		};
 		let result: Awaited<ReturnType<typeof agent.stream>>;

@@ -14,6 +14,7 @@ import { bodyLimit } from "hono/body-limit";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
+import { activeHarnessTurns } from "@/features/ai-chat/harness-turns";
 import {
 	ActiveRunExistsError,
 	ConversationArchivedError,
@@ -633,6 +634,11 @@ app.post(
 			!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))
 		) {
 			return c.json({ error: "Agent is not enabled" }, 403);
+		}
+		// A Harness turn holds the Conversation's Workspace until it stops; the
+		// chat route refuses symmetrically while a Run is Active.
+		if (activeHarnessTurns.has(conversationId)) {
+			return c.json({ error: "Conversation has an active response" }, 409);
 		}
 
 		let admittedRun: RunRecord;

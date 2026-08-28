@@ -10,8 +10,12 @@ import {
 	requestRunInterruptionTx,
 	toRunRecord,
 } from "@mymemo/agent-db/run-store";
-import { conversations, runs } from "@mymemo/agent-db/schema";
-import { and, eq, sql } from "drizzle-orm";
+import {
+	ACTIVE_RUN_STATUSES,
+	conversations,
+	runs,
+} from "@mymemo/agent-db/schema";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 /**
@@ -70,6 +74,27 @@ export interface RunStore {
 		conversationId: string;
 		runId: string;
 	}): Promise<RunInterruptionResult>;
+	/** Whether the Conversation has a queued/running/interrupt_requested Run. */
+	hasActiveRun(ref: ConversationRef): Promise<boolean>;
+}
+
+/** Unlocked Active Run probe; admission's own count under the row lock stays the authority. */
+export async function hasActiveRun(
+	db: Pick<Database, "select">,
+	ref: ConversationRef,
+): Promise<boolean> {
+	const rows = await db
+		.select({ runId: runs.runId })
+		.from(runs)
+		.where(
+			and(
+				eq(runs.userId, ref.userId),
+				eq(runs.conversationId, ref.conversationId),
+				inArray(runs.status, ACTIVE_RUN_STATUSES),
+			),
+		)
+		.limit(1);
+	return rows.length > 0;
 }
 
 /** Admit a canonical AG-UI Run while holding the same Conversation row lock as
@@ -173,5 +198,9 @@ export class PostgresRunStore implements RunStore {
 		runId: string;
 	}): Promise<RunInterruptionResult> {
 		return requestRunInterruptionTx(this.db, input);
+	}
+
+	hasActiveRun(ref: ConversationRef): Promise<boolean> {
+		return hasActiveRun(this.db, ref);
 	}
 }

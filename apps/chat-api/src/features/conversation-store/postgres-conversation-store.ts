@@ -1,22 +1,17 @@
 import type { Database } from "@mymemo/agent-db/client";
-import {
-	ACTIVE_RUN_STATUSES,
-	conversationRuntime,
-	conversations,
-	runs,
-} from "@mymemo/agent-db/schema";
+import { conversationRuntime, conversations } from "@mymemo/agent-db/schema";
 import {
 	and,
 	desc,
 	eq,
 	getTableColumns,
-	inArray,
 	isNotNull,
 	isNull,
 	lt,
 	or,
 	sql,
 } from "drizzle-orm";
+import { hasActiveRun } from "@/features/run-store/run-store";
 import type {
 	ConversationCreateInput,
 	ConversationDeleteResult,
@@ -31,7 +26,6 @@ import type {
 } from "./conversation-store";
 
 type ConversationRow = typeof conversations.$inferSelect;
-type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 function toConversationRecord(row: ConversationRow): ConversationRecord {
 	return { ...row, scope: row.scope as ConversationScope };
@@ -222,22 +216,4 @@ export class PostgresConversationStore implements ConversationStore {
 			return { outcome: "deleted" };
 		});
 	}
-}
-
-async function hasActiveRun(
-	db: DbTransaction,
-	ref: ConversationRef,
-): Promise<boolean> {
-	const rows = await db
-		.select({ runId: runs.runId })
-		.from(runs)
-		.where(
-			and(
-				eq(runs.userId, ref.userId),
-				eq(runs.conversationId, ref.conversationId),
-				inArray(runs.status, ACTIVE_RUN_STATUSES),
-			),
-		)
-		.limit(1);
-	return rows.length > 0;
 }

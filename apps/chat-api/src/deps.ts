@@ -9,9 +9,10 @@ import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import type { HarnessChatAgentFactory } from "./features/ai-chat/harness-chat-agent";
 import {
-	type HarnessResumeStateStore,
-	PostgresHarnessResumeStateStore,
-} from "./features/ai-chat/harness-resume-state-store";
+	type HarnessRuntimeStore,
+	PostgresHarnessRuntimeStore,
+} from "./features/ai-chat/harness-runtime-store";
+import type { AttachHarnessWorkspace } from "./features/ai-chat/tools/harness-workspace";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
@@ -40,8 +41,10 @@ export interface AppDeps {
 	config: ApiConfig;
 	/** Builds the `HarnessAgent` for one Harness turn (local composition only). */
 	createHarnessChatAgent: HarnessChatAgentFactory;
-	/** Per-Conversation opaque Harness resume pointer (local composition only). */
-	harnessResumeStateStore: HarnessResumeStateStore;
+	/** Connects a Harness turn to the Conversation's E2B Workspace (local composition only). */
+	attachHarnessWorkspace: AttachHarnessWorkspace;
+	/** Per-Conversation Harness pointers: Workspace sandbox id and opaque resume state (local composition only). */
+	harnessRuntimeStore: HarnessRuntimeStore;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
 	artifactMetadataStore: ArtifactMetadataStore;
 	/** Creates short-lived direct-download URLs after ownership authorization. */
@@ -73,7 +76,7 @@ export type AppEnv = PinoEnv & {
 
 export function createDeps(
 	config: ApiConfig,
-	createHarnessChatAgent: HarnessChatAgentFactory,
+	harness: Pick<AppDeps, "createHarnessChatAgent" | "attachHarnessWorkspace">,
 	liveStreamTelemetry: LiveStreamTelemetry = createLiveStreamTelemetry(
 		"chat-api",
 		{
@@ -103,8 +106,8 @@ export function createDeps(
 	});
 	return {
 		config,
-		createHarnessChatAgent,
-		harnessResumeStateStore: new PostgresHarnessResumeStateStore(database),
+		...harness,
+		harnessRuntimeStore: new PostgresHarnessRuntimeStore(database),
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
 		conversationStore,

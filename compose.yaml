@@ -8,9 +8,10 @@
 #                   AND the read-only mymemo_kb (seeded for the retained doc path)
 #   migrate       — one-shot: applies the @mymemo/agent-db migrations, then exits
 #   chat-api      — creates Conversations, admits Runs, attaches SSE, and runs
-#                   /api/chat turns in a Vercel Sandbox through HarnessAgent
-#                   (needs VERCEL_TOKEN/VERCEL_TEAM_ID/VERCEL_PROJECT_ID and
-#                   OPENROUTER_API_KEY exported)
+#                   /api/chat turns in a Vercel Sandbox through HarnessAgent,
+#                   attached to the Conversation's E2B Workspace (needs
+#                   VERCEL_TOKEN/VERCEL_TEAM_ID/VERCEL_PROJECT_ID,
+#                   OPENROUTER_API_KEY, and E2B_API_KEY exported)
 #   agentcore-runtime — acquires one exact Dispatch and serves its Run
 #   dispatch-bridge — polls the durable outbox and invokes the local Runtime
 #   redis         — disposable Redis 7 for real relay contract testing
@@ -57,6 +58,10 @@ services:
       OPENROUTER_DEFAULT_MODEL: ${OPENROUTER_DEFAULT_MODEL:-anthropic/claude-sonnet-5}
       HARNESS_SANDBOX_TIMEOUT_MS: ${HARNESS_SANDBOX_TIMEOUT_MS:-600000}
       HARNESS_SANDBOX_REGION: ${HARNESS_SANDBOX_REGION:-iad1}
+      # Each Harness turn attaches to the Conversation's E2B Workspace from the
+      # chat-api process; the Runtime's variable names, exported once.
+      E2B_API_KEY: ${E2B_API_KEY:?Set E2B_API_KEY}
+      WORKER_E2B_TEMPLATE: ${WORKER_E2B_TEMPLATE:-mymemo-agent-sandbox}
     depends_on:
       postgres:
         condition: service_healthy

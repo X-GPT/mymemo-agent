@@ -11,11 +11,12 @@ export { createApp } from "./app";
 // is required at boot, while runtime reachability remains outside health.
 const productionConfig = loadApiConfigFromEnv(Bun.env);
 const productionLogger = pino({ level: productionConfig.logLevel });
+const noHarness = () => {
+	throw new Error("Harness chat is not enabled in production");
+};
 const productionDeps = createDeps(
 	productionConfig,
-	() => {
-		throw new Error("Harness chat is not enabled in production");
-	},
+	{ createHarnessChatAgent: noHarness, attachHarnessWorkspace: noHarness },
 	createLiveStreamTelemetry("chat-api", productionLogger),
 );
 const productionApp = createApp(productionConfig, productionDeps);

@@ -118,6 +118,7 @@
         "@mymemo/live-text": "workspace:*",
         "@statsig/statsig-node-core": "^0.19.8",
         "drizzle-orm": "^0.45.2",
+        "e2b": "^2.14.0",
         "hono": "^4.10.1",
         "hono-pino": "^0.10.3",
         "pg": "^8.22.0",

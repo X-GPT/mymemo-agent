@@ -13,6 +13,7 @@ it("starts without Compose-only endpoints", async () => {
 			ARTIFACT_BUCKET: "test-artifacts",
 			AWS_REGION: "us-west-2",
 			DB_SSL: "disable",
+			E2B_API_KEY: "test-e2b-key",
 			LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
 			OPENROUTER_API_KEY: "test-openrouter-key",
 			PORT: String(port),

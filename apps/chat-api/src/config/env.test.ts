@@ -3,8 +3,9 @@ import { type ApiConfig, loadApiConfigFromEnv } from "./env";
 
 /**
  * Split-runtime env ownership (MYM-45). `chat-api` owns the writable agent DB
- * and the Statsig exposure config; it must NOT require or read the worker-only
- * secrets (OpenRouter, KB). These tests pin that boundary.
+ * and the Statsig exposure config; the production `ApiConfig` must NOT require
+ * or read the path-specific secrets — the Runtime's (OpenRouter, KB, E2B) or
+ * the local-only Harness path's (`harness-env.ts`). These tests pin that boundary.
  */
 
 /** A minimal env that loads cleanly. */
@@ -56,24 +57,26 @@ describe("loadApiConfigFromEnv — Downloadable artifact storage", () => {
 	});
 });
 
-describe("loadApiConfigFromEnv — worker-secret boundary", () => {
-	it("boots without any worker-only secret present", () => {
+describe("production `ApiConfig` excludes path-specific secrets", () => {
+	it("boots without any path-specific secret present", () => {
 		const env = baseEnv();
 		// None of these are set; chat-api must not require them.
 		expect(env.OPENROUTER_API_KEY).toBeUndefined();
 		expect(env.KB_DATABASE_URL).toBeUndefined();
 		expect(env.E2B_API_KEY).toBeUndefined();
+		expect(env.WORKER_E2B_TEMPLATE).toBeUndefined();
 		expect(env.LLM_TOKEN_SECRET).toBeUndefined();
 		expect(() => loadApiConfigFromEnv(env)).not.toThrow();
 	});
 
-	it("never surfaces worker-only secrets on the config object", () => {
+	it("never surfaces path-specific secrets on the config object", () => {
 		const env = baseEnv();
 		env.OPENROUTER_API_KEY = "sk-or-should-be-ignored";
 		env.OPENROUTER_BASE_URL = "https://openrouter.test";
 		env.OPENROUTER_DEFAULT_MODEL = "anthropic/claude";
 		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
 		env.E2B_API_KEY = "e2b-should-be-ignored";
+		env.WORKER_E2B_TEMPLATE = "template-should-be-ignored";
 		env.LLM_TOKEN_SECRET = "llm-token-secret";
 		env.GATEWAY_PUBLIC_URL = "https://gateway.test";
 		const config = loadApiConfigFromEnv(env);
@@ -82,6 +85,7 @@ describe("loadApiConfigFromEnv — worker-secret boundary", () => {
 		expect(serialized).not.toContain("openrouter.test");
 		expect(serialized).not.toContain("mymemo_kb");
 		expect(serialized).not.toContain("e2b-should-be-ignored");
+		expect(serialized).not.toContain("template-should-be-ignored");
 		expect(serialized).not.toContain("llm-token-secret");
 		expect(serialized).not.toContain("gateway.test");
 		// And there is no openrouter/kb field by name.

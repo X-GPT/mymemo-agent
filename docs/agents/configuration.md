@@ -55,16 +55,18 @@ Required:
 
 - `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`: passed explicitly to `createVercelSandbox`; `@vercel/sandbox` does not read them from the environment
 - `OPENROUTER_API_KEY`: set in the chat-api process as `ANTHROPIC_AUTH_TOKEN` for the Claude Code adapter (`auth: 'direct'`); the sandbox receives only the brokered placeholder
+- `E2B_API_KEY` (secret): each Harness turn attaches to the Conversation's E2B Workspace from the chat-api process (connect-or-create on `conversation_runtime.sandbox_id`); the Runtime's variable name, so Compose exports it once
 
 Optional:
 
 - `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`): set as `ANTHROPIC_BASE_URL`
 - `OPENROUTER_DEFAULT_MODEL` (default `anthropic/claude-sonnet-5`): model the Claude Code adapter runs; the request `model` literal is validated but the adapter is configured once at boot
-- `HARNESS_SANDBOX_TIMEOUT_MS` (default `600000`): maximum wall-clock lifetime of one sandbox session
+- `HARNESS_SANDBOX_TIMEOUT_MS` (default `600000`): maximum wall-clock lifetime of one sandbox session, and the idle window granted once to the E2B Workspace at connect/create
 - `HARNESS_SANDBOX_REGION` (default `iad1`): Vercel region; snapshots are region-bound
+- `WORKER_E2B_TEMPLATE` (default `mymemo-agent-sandbox`): E2B template a fresh Workspace is created from
 
-Compose requires the Vercel triple and `OPENROUTER_API_KEY` for the `chat-api`
-service.
+Compose requires the Vercel triple, `OPENROUTER_API_KEY`, and `E2B_API_KEY`
+for the `chat-api` service.
 
 ## Chat API
 
