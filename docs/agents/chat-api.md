@@ -25,10 +25,11 @@ once over the Claude Code adapter (`auth: 'direct'`, `ENABLE_TOOL_SEARCH=false`,
 thinking at the adapter default) and the Vercel sandbox provider. The agent's
 `activeTools` is `HARNESS_ACTIVE_TOOLS` (`ai-chat/tools/harness-tools.ts`):
 the adapter's common names `read`, `write`, `edit`, `grep` plus
-`HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness
-tools (empty until the first one lands). A built-in call arrives as the bridge's own `tool-*` parts (`toolName` = the
-common name, `providerExecuted: true`); the only other `tool-*` parts with
-`providerExecuted: true` are the bridge's synthetic `compaction` and
+`HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness tools
+(empty until the first one lands). A built-in call arrives as the bridge's own
+`tool-*` parts (`toolName` = the common name, `providerExecuted: true`); the
+only other `tool-*` parts with `providerExecuted: true` are the bridge's
+synthetic `compaction` and
 `fileChange` parts (`dynamic: true`). The appended `instructions`
 (`HARNESS_INSTRUCTIONS`) tell the model which tools are real here; the bridge
 hardcodes the `claude_code` preset, so this path appends to Claude

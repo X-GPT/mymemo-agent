@@ -77,6 +77,7 @@ it("configures the Claude Code adapter once, with only Read, Write, Edit, and Gr
 		mode: "allow",
 		toolNames: [...HARNESS_BUILTIN_TOOLS],
 	});
+	expect(first.settings.permissionMode).toBeUndefined();
 	expect(first.settings.instructions).toBe(HARNESS_INSTRUCTIONS);
 	expect(process.env.ANTHROPIC_API_KEY).toBe("");
 });

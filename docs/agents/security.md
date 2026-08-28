@@ -31,13 +31,14 @@ artifact publication. On the AI SDK chat path (`POST /api/chat`, local
 composition only) the Harness sandbox is the trust boundary: Claude Code runs
 inside a Vercel Sandbox with `Read`, `Write`, `Edit`, and `Grep` enabled and
 every other built-in disabled; its other tools are the chat-api-hosted
-Harness tools; the sandbox holds no MyMemo secret.
-The model credential is brokered — the adapter replaces it with a placeholder
-before it reaches the sandbox and the Vercel firewall injects the real bearer
-only on requests to the OpenRouter host. The file tools reach the whole
-sandbox filesystem — including the bridge's on-disk start config with the
-brokered placeholder, and the Claude settings files whose hooks run shell on a
-later turn — so the sandbox, not the tool list, is the boundary; the route is
+Harness tools; the sandbox holds no MyMemo secret. The model credential is
+brokered — the adapter replaces it with a placeholder before it reaches the
+sandbox and the Vercel firewall injects the real bearer only on requests to
+the OpenRouter host. The file tools reach the whole sandbox filesystem —
+including the bridge's on-disk start config with the brokered placeholder,
+and the Claude settings files, which the bridge leaves loaded (`settingSources`
+unset) so a written `hooks` command runs shell in the next turn's fresh Claude
+process — so the sandbox, not the tool list, is the boundary; the route is
 accepted on stage 1's grounds (the placeholder is honoured only from inside
 it) and closing it is production readiness (ADR-0033). Every tool input
 and output is persisted verbatim in the sandbox's Claude transcript and
