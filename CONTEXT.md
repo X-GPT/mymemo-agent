@@ -197,6 +197,14 @@ Code and carries the Conversation's model-side memory across turns on the AI SDK
 chat path. It is neither the Workspace nor the Execution runtime.
 _Avoid_: sandbox (ambiguous with E2B), Runtime session, Agent session
 
+**Harness turn**:
+One request-scoped execution of Claude Code in the Conversation's Harness
+sandbox serving one user message on the AI SDK chat path. It is not a Run:
+never admitted, ordered, persisted, reclaimed, or given an Outcome. Each turn
+mints a UUID that appears in logs, in the Harness tool binding, and as
+`document_access_events.run_id`; there is no table for it.
+_Avoid_: Run, Agent session, request (ambiguous with the HTTP request)
+
 **Assistant text delta**:
 A bounded, provisional fragment of Assistant text appended to the Run's Live
 Stream before the provider response completes. It is never copied into Postgres
