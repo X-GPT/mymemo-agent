@@ -58,29 +58,42 @@ describe("loadApiConfigFromEnv — Downloadable artifact storage", () => {
 });
 
 describe("production `ApiConfig` excludes path-specific secrets", () => {
-	it("boots without any path-specific secret present", () => {
-		const env = baseEnv();
-		// None of these are set; chat-api must not require them.
-		expect(env.OPENROUTER_API_KEY).toBeUndefined();
-		expect(env.KB_DATABASE_URL).toBeUndefined();
-		expect(env.E2B_API_KEY).toBeUndefined();
-		expect(env.WORKER_E2B_TEMPLATE).toBeUndefined();
-		expect(env.LLM_TOKEN_SECRET).toBeUndefined();
-		expect(() => loadApiConfigFromEnv(env)).not.toThrow();
-	});
+	/** Every Runtime and Harness-path variable, planted so a leak would show. */
+	const pathSpecific = Object.fromEntries(
+		[
+			"OPENROUTER_API_KEY",
+			"OPENROUTER_BASE_URL",
+			"OPENROUTER_DEFAULT_MODEL",
+			"KB_DATABASE_URL",
+			"E2B_API_KEY",
+			"WORKER_E2B_TEMPLATE",
+			"LLM_TOKEN_SECRET",
+			"VERCEL_TOKEN",
+			"VERCEL_TEAM_ID",
+			"VERCEL_PROJECT_ID",
+			"HARNESS_SANDBOX_TIMEOUT_MS",
+			"HARNESS_SANDBOX_REGION",
+		].map((name) => [name, `${name}-planted`]),
+	);
 
-	// The loader builds a literal with exactly these fields, so nothing else in
-	// the environment (Runtime, Harness, dispatch, legacy) can surface on it;
-	// adding a field is a deliberate act that touches this list.
-	it("carries exactly the six production fields", () => {
-		expect(Object.keys(loadApiConfigFromEnv(baseEnv())).sort()).toEqual([
+	// The loader builds a literal with exactly these fields, so no planted value
+	// can surface on it, and `baseEnv()` alone loads, so none is required.
+	// Adding a field is a deliberate act that touches this list.
+	it("boots without them and carries exactly the six production fields", () => {
+		const keys = (env: Record<string, string | undefined>) =>
+			Object.keys(loadApiConfigFromEnv(env)).sort();
+		const production = [
 			"artifactBucket",
 			"artifactRegion",
 			"databaseUrl",
 			"logLevel",
 			"redisUrl",
 			"statsigServerSecret",
-		]);
+		];
+		expect(keys(baseEnv())).toEqual(production);
+		const planted = loadApiConfigFromEnv({ ...baseEnv(), ...pathSpecific });
+		expect(Object.keys(planted).sort()).toEqual(production);
+		expect(JSON.stringify(planted)).not.toContain("-planted");
 	});
 });
 

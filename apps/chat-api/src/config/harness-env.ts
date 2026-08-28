@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * Configuration for the Harness-hosted AI SDK chat route. Read only by the
  * local composition (`local/index.ts`); production `ApiConfig` deliberately
- * never carries the Vercel triple or the OpenRouter credential.
+ * never carries the Vercel triple, the OpenRouter credential, or the E2B one.
  */
 const harnessEnv = z.object({
 	// Explicit Vercel Sandbox credentials; `@vercel/sandbox` does not read env.

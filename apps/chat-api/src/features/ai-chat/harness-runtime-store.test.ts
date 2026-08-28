@@ -21,7 +21,7 @@ const state = (n: number): HarnessAgentResumeSessionState =>
 
 it("round-trips both pointers verbatim on one runtime row, each save leaving the other intact", async () => {
 	expect(await store.load(ref)).toEqual(empty);
-	// Either pointer creates the row; neither overwrites the other.
+	// The first save creates the row; neither pointer overwrites the other.
 	await store.save(ref, { sandboxId: "sbx-1" });
 	// A Run-path taint set in between must survive every later save untouched.
 	await tdb.db.update(conversationRuntime).set({ sandboxTainted: true });

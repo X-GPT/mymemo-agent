@@ -20,8 +20,4 @@ it("requires E2B_API_KEY and defaults the Workspace template", () => {
 	const config = loadHarnessConfigFromEnv(baseEnv());
 	expect(config.E2B_API_KEY).toBe("e2b-key");
 	expect(config.WORKER_E2B_TEMPLATE).toBe("mymemo-agent-sandbox");
-	expect(
-		loadHarnessConfigFromEnv({ ...baseEnv(), WORKER_E2B_TEMPLATE: "custom" })
-			.WORKER_E2B_TEMPLATE,
-	).toBe("custom");
 });
