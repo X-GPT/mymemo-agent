@@ -11,13 +11,28 @@ A Conversation is the durable container, a Run serves one submitted message, and
 The local-only composition mounts `POST /api/chat`. It accepts the strict
 `useChat` body (`id`, one User message with one text part, `model`, `trigger`)
 and, after identity, Conversation ownership (`404`), Archive (`409`), and
-exposure (`403`) checks, runs one turn of Claude Code with its built-in tools
-inside a Harness sandbox (see [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)).
+exposure (`403`) checks, runs one turn of Claude Code with every built-in tool
+disabled inside a Harness sandbox (see [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)).
 `HarnessAgent` runs in the chat-api process; each Conversation owns one
 persistent Vercel Sandbox whose harness `sessionId` is the Conversation id. The
-response is the AI SDK UI message stream (`toUIMessageStreamResponse()`): text
-arrives as it is produced and built-in tool activity appears as
-`tool-input-available` / `tool-output-available` parts.
+response is the AI SDK UI message stream (`toUIMessageStreamResponse()`),
+forwarded unchanged: text arrives as it is produced and the model's reasoning
+as `reasoning-start` / `reasoning-delta` / `reasoning-end` parts.
+
+The route builds one `HarnessAgent` per turn through
+`deps.createHarnessChatAgent(tools)`, a factory the local composition creates
+once over the Claude Code adapter (`auth: 'direct'`, `ENABLE_TOOL_SEARCH=false`,
+thinking at the adapter default) and the Vercel sandbox provider. The agent's
+`activeTools` is `HARNESS_TOOL_NAMES` (`ai-chat/tools/harness-tools.ts`) — the
+short names of the chat-api-hosted Harness tools, and nothing else — so no
+Claude built-in is callable in the sandbox; the list is empty until the first
+Harness tool lands. Asked to run a command or read a file, the model refuses
+in text. The only `tool-*` parts with `providerExecuted: true` are the bridge's
+own synthetic `compaction` and `fileChange` parts (`dynamic: true`). The
+appended `instructions` (`HARNESS_INSTRUCTIONS`) tell the model it has no
+filesystem, memory directory, or built-in tools of its own; the bridge
+hardcodes the `claude_code` preset, so this path appends to Claude Code's
+native prompt rather than replacing it.
 
 Continuity between messages is the sandbox snapshot: after every turn —
 drained, cancelled, or failed — the route calls `session.stop()` and stores the
@@ -49,7 +64,7 @@ There is no admission, Run, history, or retry yet: those are follow-up slices
 of [#595](https://github.com/X-GPT/mymemo-agent/issues/595).
 The adapter runs the configured `OPENROUTER_DEFAULT_MODEL`; the request `model`
 literal is validated, not forwarded. Production composition does not mount this
-path; its `harnessChatAgent` throws.
+path; its `createHarnessChatAgent` throws.
 
 Local two-turn recall check (real harness; needs the Compose stack with the
 Vercel triple and `OPENROUTER_API_KEY` exported):
@@ -61,6 +76,16 @@ turn() { curl -sN -X POST localhost:3000/api/chat $H -d "{\"id\":\"$ID\",\"model
 turn "Remember the word pelican." 11111111-1111-4111-8111-111111111111
 docker compose restart chat-api
 turn "Which word did I ask you to remember?" 22222222-2222-4222-8222-222222222222   # answer mentions pelican
+```
+
+Local built-ins-off check (same stack and `turn` helper): a request for shell
+or file work yields a text refusal with no `tool-*` part of any kind, and the
+model's reasoning arrives as `reasoning-*` parts:
+
+```sh
+turn "Run ls -la in your shell and show me the output, then read /etc/hostname." 33333333-3333-4333-8333-333333333333 | tee /tmp/turn.sse
+grep -c '"type":"tool-' /tmp/turn.sse        # 0
+grep -o '"type":"reasoning-[a-z]*"' /tmp/turn.sse | sort -u   # reasoning-start, reasoning-delta, reasoning-end
 ```
 
 ### Create a Conversation

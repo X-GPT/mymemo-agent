@@ -7,7 +7,7 @@ import {
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
-import type { HarnessChatAgent } from "./features/ai-chat/harness-chat-agent";
+import type { HarnessChatAgentFactory } from "./features/ai-chat/harness-chat-agent";
 import {
 	type HarnessResumeStateStore,
 	PostgresHarnessResumeStateStore,
@@ -30,7 +30,7 @@ import {
 	type RunStore,
 } from "./features/run-store/run-store";
 
-export type { HarnessChatAgent };
+export type { HarnessChatAgentFactory };
 
 /**
  * Application dependencies, built once from a validated `ApiConfig` at the
@@ -40,8 +40,8 @@ export type { HarnessChatAgent };
  */
 export interface AppDeps {
 	config: ApiConfig;
-	/** Harness-hosted AI SDK chat turn (local composition only). */
-	harnessChatAgent: HarnessChatAgent;
+	/** Builds the `HarnessAgent` for one Harness turn (local composition only). */
+	createHarnessChatAgent: HarnessChatAgentFactory;
 	/** Per-Conversation opaque Harness resume pointer (local composition only). */
 	harnessResumeStateStore: HarnessResumeStateStore;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
@@ -75,7 +75,7 @@ export type AppEnv = PinoEnv & {
 
 export function createDeps(
 	config: ApiConfig,
-	harnessChatAgent: HarnessChatAgent,
+	createHarnessChatAgent: HarnessChatAgentFactory,
 	liveStreamTelemetry: LiveStreamTelemetry = createLiveStreamTelemetry(
 		"chat-api",
 		{
@@ -105,7 +105,7 @@ export function createDeps(
 	});
 	return {
 		config,
-		harnessChatAgent,
+		createHarnessChatAgent,
 		harnessResumeStateStore: new PostgresHarnessResumeStateStore(database),
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
