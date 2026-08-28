@@ -12,8 +12,7 @@ The local-only composition mounts `POST /api/chat`. It accepts the strict
 `useChat` body (`id`, one User message with one text part, `model`, `trigger`)
 and, after identity, Conversation ownership (`404`), Archive (`409`), and
 exposure (`403`) checks, runs one turn of Claude Code inside a Harness sandbox
-with `Read`, `Write`, `Edit`, and `Grep` enabled and every other built-in
-disabled (see [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)).
+(see [ADR-0033](../adr/0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)).
 `HarnessAgent` runs in the chat-api process; each Conversation owns one
 persistent Vercel Sandbox whose harness `sessionId` is the Conversation id. The
 response is the AI SDK UI message stream (`toUIMessageStreamResponse()`),
@@ -25,9 +24,8 @@ The route builds one `HarnessAgent` per turn through
 once over the Claude Code adapter (`auth: 'direct'`, `ENABLE_TOOL_SEARCH=false`,
 thinking at the adapter default) and the Vercel sandbox provider. The agent's
 `activeTools` is `HARNESS_ACTIVE_TOOLS` (`ai-chat/tools/harness-tools.ts`):
-the adapter's common names `read`, `write`, `edit`, `grep` — Claude Code's
-own tools, executed in the sandbox with no MyMemo bounds and no path root —
-plus `HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness
+the adapter's common names `read`, `write`, `edit`, `grep` plus
+`HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness
 tools (empty until the first one lands); `permissionMode` stays the default.
 A built-in call arrives as the
 bridge's own `tool-input-available` part (`toolName` = the common name) and

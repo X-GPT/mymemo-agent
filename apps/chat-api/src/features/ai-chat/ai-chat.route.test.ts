@@ -257,8 +257,7 @@ it("forwards the stream unchanged: reasoning and sandbox-executed built-in parts
 	});
 	const received = streamParts(await response.text());
 	expect(received).toEqual(parts);
-	// The built-in invariant: a provider-executed tool part is only ever one of
-	// the four enabled built-ins or the two synthetic dynamic parts.
+	// Provider-executed parts are only the enabled built-ins or the bridge's synthetic parts.
 	const providerExecuted = received.filter(
 		(p) => String(p.type).startsWith("tool-") && p.providerExecuted === true,
 	);

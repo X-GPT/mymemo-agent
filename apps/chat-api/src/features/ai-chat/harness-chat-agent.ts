@@ -10,10 +10,9 @@ export type HarnessChatAgentFactory = ReturnType<
 >;
 
 /**
- * Appended to Claude Code's native system prompt (the bridge hardcodes the
- * `claude_code` preset, so this path can only append — ADR-0033). That preset
- * still describes every Claude Code tool, so the model must be told which
- * ones are real here.
+ * Appended to Claude Code's native prompt (the bridge hardcodes the `claude_code`
+ * preset — ADR-0033), which still describes every Claude Code tool, so the
+ * model is told which are real here.
  */
 export const HARNESS_INSTRUCTIONS =
 	"You are MyMemo's agent. You answer the user's questions and do file-backed work on their behalf.\n\n" +
