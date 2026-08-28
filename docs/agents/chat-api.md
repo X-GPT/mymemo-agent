@@ -79,7 +79,7 @@ turn "Which word did I ask you to remember?" 22222222-2222-4222-8222-22222222222
 ```
 
 Local built-ins-off check (same stack and `turn` helper): a request for shell
-or file work yields a text refusal with no `tool-*` part of any kind, and the
+or file work produces no `tool-*` part of any kind, nothing executes, and the
 model's reasoning arrives as `reasoning-*` parts:
 
 ```sh
@@ -87,6 +87,14 @@ turn "Run ls -la in your shell and show me the output, then read /etc/hostname."
 grep -c '"type":"tool-' /tmp/turn.sse        # 0
 grep -o '"type":"reasoning-[a-z]*"' /tmp/turn.sse | sort -u   # reasoning-start, reasoning-delta, reasoning-end
 ```
+
+The text is usually a refusal ("I don't have access to shell commands … in
+this session"), but not always: with no tool listed, the `claude_code` preset's
+own tool guidance sometimes leads the model to narrate a tool call as text
+(`<bash>ls -la</bash>`) and invent its output — seen in one of two runs even
+with `HARNESS_INSTRUCTIONS` forbidding it. That is model text, not a tool part,
+and the pinned guarantee is the stream shape above; the refusal is expected to
+settle once a real Harness tool is listed, as it did on the #612 spike.
 
 ### Create a Conversation
 

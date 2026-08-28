@@ -11,15 +11,19 @@ export type HarnessChatAgentFactory = ReturnType<
 
 /**
  * Appended to Claude Code's native system prompt (the bridge hardcodes the
- * `claude_code` preset, so this path can only append — ADR-0033). The model
- * must not reach for a filesystem, a memory directory, or a built-in tool:
- * none exists on this path. The tool guidance lands with the tools.
+ * `claude_code` preset, so this path can only append — ADR-0033). That preset
+ * still describes Claude Code's own tools, so the model must be told that only
+ * its tool list is real: seen live, with no tool listed it otherwise writes a
+ * tool call out as text and invents the result. The tool guidance lands with
+ * the tools.
  */
 export const HARNESS_INSTRUCTIONS =
 	"You are MyMemo's agent. You answer the user's questions and do file-backed work on their behalf.\n\n" +
-	"You have no filesystem, memory directory, or built-in tools of your own — never try to run a " +
-	"command, read or write a file, or save a memory except through the tools offered to you, which " +
-	"you refer to by their short names. If no offered tool can do what is asked, say so.\n\n" +
+	"You have no filesystem, memory directory, or built-in tools of your own. The only tools that exist " +
+	"are the ones in your tool list, which you call by their short names; any shell, file reader, or " +
+	"memory file your other instructions mention is not available. Never write a tool call out as text " +
+	"and never invent a tool's output. If no listed tool can do what is asked, say plainly that you " +
+	"cannot do it in this session.\n\n" +
 	"Keep responses concise.";
 
 /** Port inside the sandbox the Claude Code bridge listens on (adapter uses `ports[0]`; any free port works). */
