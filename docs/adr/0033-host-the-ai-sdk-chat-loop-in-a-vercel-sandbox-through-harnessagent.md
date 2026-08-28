@@ -76,7 +76,10 @@ chat path), specified in issue #615, and verified live on issue #612.
   transcript. No model-directed route reaches its environment or filesystem;
   the brokered placeholder remains the one credential-shaped value there (in
   the process environment and the bridge's on-disk start config), readable by
-  Vercel project members and by nothing the model can call.
+  Vercel project members and by nothing the model can call. Unlike the Run
+  path, which replaces the `claude_code` system-prompt preset (ADR-0006),
+  this path can only append to it — the bridge hardcodes the preset — so
+  MyMemo's instructions ride behind Claude Code's native prompt.
 - **MyMemo's tools execute in chat-api.** The Workspace tools (`Read`,
   `Write`, `Edit`, `Grep`, `Bash`) and document tools (`ListDocuments`,
   `SearchDocuments`, `LoadDocuments`) are `HarnessAgent` user tools whose
