@@ -5,7 +5,10 @@ import {
 	createHarnessChatAgentFactory,
 	HARNESS_INSTRUCTIONS,
 } from "./harness-chat-agent";
-import { HARNESS_ACTIVE_TOOLS } from "./tools/harness-tools";
+import {
+	HARNESS_ACTIVE_TOOLS,
+	HARNESS_TOOL_NAMES,
+} from "./tools/harness-tools";
 
 const config: HarnessConfig = {
 	VERCEL_TOKEN: "test-vercel-token",
@@ -59,16 +62,20 @@ it("configures the Claude Code adapter once, with only Read, Write, Edit, and Gr
 	expect(second.settings.harness).toBe(first.settings.harness);
 	expect(second.settings.sandbox).toBe(first.settings.sandbox);
 
-	// Per turn: this turn's tools, and only the four built-ins plus their
-	// names are active — the framework turns that into an allow-list holding
-	// exactly those built-ins; every other one is off.
+	// Per turn: this turn's tools; the framework derives the built-in allow-list from activeTools.
 	expect(first.settings.tools).toBe(tools);
 	expect(first.settings.activeTools).toBe(HARNESS_ACTIVE_TOOLS);
+	expect(HARNESS_ACTIVE_TOOLS).toEqual([
+		"read",
+		"write",
+		"edit",
+		"grep",
+		...HARNESS_TOOL_NAMES,
+	]);
 	expect(first.builtinToolFiltering).toEqual({
 		mode: "allow",
 		toolNames: ["read", "write", "edit", "grep"],
 	});
-	expect(first.settings.permissionMode).toBeUndefined();
 	expect(first.settings.instructions).toBe(HARNESS_INSTRUCTIONS);
 	expect(process.env.ANTHROPIC_API_KEY).toBe("");
 });

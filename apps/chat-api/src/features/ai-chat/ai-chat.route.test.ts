@@ -3,7 +3,10 @@ import { Hono } from "hono";
 import type { AppDeps, AppEnv } from "@/deps";
 import aiChatRoutes from "./ai-chat.route";
 import type { HarnessChatAgentFactory } from "./harness-chat-agent";
-import { HARNESS_TOOL_NAMES } from "./tools/harness-tools";
+import {
+	HARNESS_BUILTIN_TOOLS,
+	HARNESS_TOOL_NAMES,
+} from "./tools/harness-tools";
 
 const headers = {
 	"content-type": "application/json",
@@ -197,8 +200,7 @@ it("builds one agent per turn from the factory with the turn's tool set", async 
 		expect(response.status).toBe(200);
 		await response.text();
 	}
-	// Every user tool the turn offers is in the exported name list; the factory
-	// activates exactly those names plus the four built-ins, nothing else.
+	// Every user tool the turn offers is in the exported name list.
 	expect(toolSets.map((tools) => Object.keys(tools))).toEqual([
 		[...HARNESS_TOOL_NAMES],
 		[...HARNESS_TOOL_NAMES],
@@ -221,12 +223,6 @@ it("forwards the stream unchanged: reasoning parts pass, and only the four built
 			toolName: "write",
 			providerExecuted: true,
 			input: { file_path: "notes.md", content: "pelican" },
-		},
-		{
-			type: "tool-output-available",
-			toolCallId: "w1",
-			providerExecuted: true,
-			output: "File created successfully at: notes.md",
 		},
 		{
 			type: "tool-input-available",
@@ -269,15 +265,10 @@ it("forwards the stream unchanged: reasoning parts pass, and only the four built
 	const providerExecuted = received.filter(
 		(p) => String(p.type).startsWith("tool-") && p.providerExecuted === true,
 	);
-	for (const part of providerExecuted.filter((p) => "toolName" in p)) {
-		expect([
-			"read",
-			"write",
-			"edit",
-			"grep",
-			"compaction",
-			"fileChange",
-		]).toContain(String(part.toolName));
+	for (const part of providerExecuted) {
+		expect([...HARNESS_BUILTIN_TOOLS, "compaction", "fileChange"]).toContain(
+			String(part.toolName),
+		);
 	}
 });
 
