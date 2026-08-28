@@ -112,9 +112,8 @@ routes.post(
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
-		// One agent per turn over the composition-time providers, closing over
-		// this turn's user-tool set (none yet). Pure and synchronous: nothing
-		// touches the sandbox until `createSession`, and a throw here holds no slot.
+		// One agent per turn, built before the slot is taken: a constructor throw
+		// holds no slot, and the sandbox is untouched until `createSession`.
 		const agent = c.var.deps.createHarnessChatAgent({});
 		if (activeTurns.has(body.id)) {
 			return c.json({ error: "Conversation has an active response" }, 409);

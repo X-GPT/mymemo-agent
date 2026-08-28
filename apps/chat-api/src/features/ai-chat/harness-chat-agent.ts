@@ -68,8 +68,7 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 			// `tools: []` plus `disallowedTools` for every native name, and the
 			// agent auto-denies any approval request outside the list.
 			activeTools: HARNESS_TOOL_NAMES,
-			// `permissionMode` stays at the default `allow-all`: a stricter mode
-			// would only add ask-rules for built-ins that are already absent.
+			// Default permissionMode; ask-rules would only cover built-ins that are already absent.
 			instructions: HARNESS_INSTRUCTIONS,
 		});
 }
