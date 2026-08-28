@@ -90,10 +90,8 @@ routes.post(
 	async (c) => {
 		const body = c.req.valid("json");
 		const message = body.messages[0];
-		const conversation = await c.var.deps.conversationStore.get({
-			userId: c.var.identity.memberCode,
-			conversationId: body.id,
-		});
+		const ref = { userId: c.var.identity.memberCode, conversationId: body.id };
+		const conversation = await c.var.deps.conversationStore.get(ref);
 		if (!conversation) {
 			return c.json({ error: "Conversation not found" }, 404);
 		}
@@ -103,7 +101,6 @@ routes.post(
 		if (!(await c.var.deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
-		const ref = { userId: c.var.identity.memberCode, conversationId: body.id };
 		// A Run and a Harness turn never drive one Workspace: a turn refuses while
 		// the Conversation has an Active Run, and Run admission refuses while a
 		// turn is in flight (`activeHarnessTurns`).
@@ -124,12 +121,11 @@ routes.post(
 				...ref,
 				sandboxId: runtime.sandboxId,
 			});
-			if (sandbox.sandboxId !== runtime.sandboxId) {
-				await c.var.deps.harnessRuntimeStore.saveSandboxId(
-					ref,
-					sandbox.sandboxId,
-				);
-			}
+			// Idempotent upsert: a fresh sandbox is recorded, a reused one rewritten.
+			await c.var.deps.harnessRuntimeStore.saveSandboxId(
+				ref,
+				sandbox.sandboxId,
+			);
 			const resumeFrom = runtime.resumeState ?? undefined;
 			try {
 				return await agent.createSession({ sessionId: body.id, resumeFrom });

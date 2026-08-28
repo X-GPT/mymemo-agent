@@ -35,16 +35,17 @@ const stoppedState = { type: "resume-session", data: { after: "turn" } };
  * Defaults to a recorded sandbox so the fake attach connects rather than
  * creates; `saved` collects resume pointers and `pointed` sandbox ids.
  */
-function fakeRuntimeStore(
-	initial: { sandboxId?: string | null; resumeState?: unknown } = {},
-) {
+function fakeRuntimeStore({
+	sandboxId = "sbx-1",
+	resumeState = null,
+}: {
+	sandboxId?: string | null;
+	resumeState?: unknown;
+} = {}) {
 	const saved: { ref: unknown; state: unknown }[] = [];
 	const pointed: { ref: unknown; sandboxId: string }[] = [];
 	const store = {
-		load: async () => ({
-			sandboxId: initial.sandboxId === undefined ? "sbx-1" : initial.sandboxId,
-			resumeState: initial.resumeState ?? null,
-		}),
+		load: async () => ({ sandboxId, resumeState }),
 		saveResumeState: async (ref: unknown, state: unknown) => {
 			saved.push({ ref, state });
 		},
@@ -293,9 +294,9 @@ it("forwards the stream unchanged: reasoning parts pass, and no built-in tool pa
 });
 
 it.each([
-	["sbx-1", []],
-	[null, [{ ref: ownedRef, sandboxId: "sbx-new" }]],
-] as const)("attaches the Conversation's Workspace (pointer %p) before the session and repoints only a fresh sandbox", async (sandboxId, repointed) => {
+	["sbx-1", "sbx-1"],
+	[null, "sbx-new"],
+])("attaches the Conversation's Workspace (pointer %p) before the session and records the sandbox it attached", async (sandboxId, attached) => {
 	const { factory, events } = fakeAgent();
 	const { store, pointed } = fakeRuntimeStore({ sandboxId });
 	const app = makeApp({
@@ -317,7 +318,7 @@ it.each([
 		{ attach: { ...ownedRef, sandboxId } },
 		{ createSession: { sessionId: "conversation-1" } },
 	]);
-	expect(pointed).toEqual([...repointed]);
+	expect(pointed).toEqual([{ ref: ownedRef, sandboxId: attached }]);
 });
 
 it("refuses a turn while the Conversation has an Active Run, holding no slot", async () => {

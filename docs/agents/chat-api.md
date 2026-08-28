@@ -50,9 +50,10 @@ without a Run (ADR-0033 stage 2). Before the session is created the route reads
 (`ai-chat/tools/harness-workspace.ts`): `sandbox_id` set → `Sandbox.connect`,
 which auto-resumes a paused sandbox; unset, or connect throws → `Sandbox.create`
 from `WORKER_E2B_TEMPLATE` with `lifecycle.onTimeout = 'pause'` and
-`{ userId, conversationId }` metadata, then `sandbox_id` is repointed with the
-same unfenced `(user_id, conversation_id)` upsert as the resume pointer
-(`harness-runtime-store.ts` holds both). The idle window is granted once at
+`{ userId, conversationId }` metadata. The attached id is then written to
+`sandbox_id` with the same unfenced `(user_id, conversation_id)` upsert as the
+resume pointer (`harness-runtime-store.ts` holds both), which repoints the row
+after a create and is a no-op after a connect. The idle window is granted once at
 connect/create as `HARNESS_SANDBOX_TIMEOUT_MS`. Nothing on this path takes
 Conversation Ownership, renews the sandbox, records an orphan, or reads or
 writes `sandbox_tainted`. Consequences: a sandbox created but not recorded (a

@@ -3,9 +3,7 @@ import type { HarnessConfig } from "@/config/harness-env";
 import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 /** The E2B handle a Harness turn's tools run against; widens as the tools land. */
-export interface HarnessWorkspaceSandbox {
-	readonly sandboxId: string;
-}
+export type HarnessWorkspaceSandbox = Pick<Sandbox, "sandboxId">;
 
 /** The slice of the `e2b` SDK the attacher uses; tests inject a fake. */
 export interface E2bSandboxFactory {
@@ -26,8 +24,8 @@ export interface E2bSandboxFactory {
 
 /**
  * Attach one Harness turn to the Conversation's Workspace given its current
- * pointer. A returned `sandboxId` other than the one passed is a fresh sandbox
- * the caller must repoint the Conversation to.
+ * pointer; the caller records the returned `sandboxId`, which differs from the
+ * one passed when a fresh sandbox was created.
  */
 export type AttachHarnessWorkspace = (
 	input: ConversationRef & { sandboxId: string | null },
@@ -48,15 +46,17 @@ const e2bSandboxFactory: E2bSandboxFactory = {
  * idle-pauses on its own.
  */
 export function createHarnessWorkspaceAttacher(
-	config: Pick<
+	{
+		E2B_API_KEY: apiKey,
+		WORKER_E2B_TEMPLATE: template,
+		HARNESS_SANDBOX_TIMEOUT_MS: timeoutMs,
+	}: Pick<
 		HarnessConfig,
 		"E2B_API_KEY" | "WORKER_E2B_TEMPLATE" | "HARNESS_SANDBOX_TIMEOUT_MS"
 	>,
 	logger: { warn(obj: object, msg: string): void },
 	factory: E2bSandboxFactory = e2bSandboxFactory,
 ): AttachHarnessWorkspace {
-	const apiKey = config.E2B_API_KEY;
-	const timeoutMs = config.HARNESS_SANDBOX_TIMEOUT_MS;
 	return async ({ userId, conversationId, sandboxId }) => {
 		if (sandboxId !== null) {
 			try {
@@ -68,7 +68,7 @@ export function createHarnessWorkspaceAttacher(
 				);
 			}
 		}
-		return factory.create(config.WORKER_E2B_TEMPLATE, {
+		return factory.create(template, {
 			apiKey,
 			timeoutMs,
 			lifecycle: { onTimeout: "pause" },
