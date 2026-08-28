@@ -197,23 +197,25 @@ it("builds one agent per turn from the factory with the turn's tool set", async 
 		expect(response.status).toBe(200);
 		await response.text();
 	}
-	// Every user tool the turn offers is in the exported name list; the factory
-	// activates exactly those names, so no built-in is ever callable.
 	expect(toolSets.map((tools) => Object.keys(tools))).toEqual([
 		[...HARNESS_TOOL_NAMES],
 		[...HARNESS_TOOL_NAMES],
 	]);
 });
 
-it("forwards the stream unchanged: reasoning parts pass, and no built-in tool part can reach the client", async () => {
+it("forwards the stream unchanged: reasoning and sandbox-executed built-in parts reach the client as emitted", async () => {
 	const { factory, fake } = fakeAgent();
-	// What the configured harness emits: reasoning, text, and the two synthetic
-	// dynamic parts the bridge reports itself. A user tool arrives with
-	// `providerExecuted: false`; nothing else carries `providerExecuted: true`.
 	const parts = [
 		{ type: "reasoning-start", id: "r1" },
 		{ type: "reasoning-delta", id: "r1", delta: "thinking" },
 		{ type: "reasoning-end", id: "r1" },
+		{
+			type: "tool-input-available",
+			toolCallId: "w1",
+			toolName: "write",
+			providerExecuted: true,
+			input: { file_path: "notes.md", content: "pelican" },
+		},
 		{
 			type: "tool-input-available",
 			toolCallId: "c1",
@@ -230,7 +232,7 @@ it("forwards the stream unchanged: reasoning parts pass, and no built-in tool pa
 			providerExecuted: true,
 			input: { path: "notes.md" },
 		},
-		{ type: "text-delta", id: "t1", delta: "I cannot run commands." },
+		{ type: "text-delta", id: "t1", delta: "Saved; I cannot run commands." },
 	];
 	fake.stream = async () => ({
 		toUIMessageStreamResponse: () =>
@@ -248,18 +250,7 @@ it("forwards the stream unchanged: reasoning parts pass, and no built-in tool pa
 		headers,
 		body: JSON.stringify(requestBody),
 	});
-	const received = streamParts(await response.text());
-	expect(received).toEqual(parts);
-	// The built-in invariant: a provider-executed tool part is only ever one
-	// of the two synthetic dynamic parts.
-	const providerExecuted = received.filter(
-		(p) => String(p.type).startsWith("tool-") && p.providerExecuted === true,
-	);
-	expect(providerExecuted).toHaveLength(2);
-	for (const part of providerExecuted) {
-		expect(part.dynamic).toBe(true);
-		expect(["compaction", "fileChange"]).toContain(String(part.toolName));
-	}
+	expect(streamParts(await response.text())).toEqual(parts);
 });
 
 it("resumes the Conversation's session from the stored pointer", async () => {

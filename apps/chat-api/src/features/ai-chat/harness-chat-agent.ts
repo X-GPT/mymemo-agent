@@ -2,7 +2,7 @@ import { HarnessAgent, type HarnessAgentSettings } from "@ai-sdk/harness/agent";
 import { createClaudeCode } from "@ai-sdk/harness-claude-code";
 import { createVercelSandbox } from "@ai-sdk/sandbox-vercel";
 import type { HarnessConfig } from "@/config/harness-env";
-import { HARNESS_TOOL_NAMES } from "./tools/harness-tools";
+import { HARNESS_ACTIVE_TOOLS } from "./tools/harness-tools";
 
 /** Builds the `HarnessAgent` for one turn over that turn's user-tool set; tests inject a cast fake. */
 export type HarnessChatAgentFactory = ReturnType<
@@ -10,20 +10,18 @@ export type HarnessChatAgentFactory = ReturnType<
 >;
 
 /**
- * Appended to Claude Code's native system prompt (the bridge hardcodes the
- * `claude_code` preset, so this path can only append — ADR-0033). That preset
- * still describes Claude Code's own tools, so the model must be told that only
- * its tool list is real: seen live, with no tool listed it can write a tool
- * call out as text and invent the result, and this reduces but does not
- * remove that. The tool guidance lands with the tools.
+ * Appended to Claude Code's native prompt (the bridge hardcodes the `claude_code`
+ * preset — ADR-0033), which still describes every Claude Code tool, so the
+ * model is told which are real here.
  */
 export const HARNESS_INSTRUCTIONS =
 	"You are MyMemo's agent. You answer the user's questions and do file-backed work on their behalf.\n\n" +
-	"You have no filesystem, memory directory, or built-in tools of your own. The only tools that exist " +
-	"are the ones in your tool list, which you call by their short names; any shell, file reader, or " +
-	"memory file your other instructions mention is not available. Never write a tool call out as text " +
-	"and never invent a tool's output. If no listed tool can do what is asked, say plainly that you " +
-	"cannot do it in this conversation.\n\n" +
+	"Your tools are Read, Write, Edit, and Grep on your working directory, plus the MyMemo tools in your " +
+	"tool list, which you call by their short names. Nothing else exists: no shell, no web access, no " +
+	"sub-agents, and no other built-in tool your other instructions mention. Work in your working " +
+	"directory with relative paths; files you create there persist between messages of this " +
+	"conversation. If no tool can do what is asked, say plainly that you cannot do it in this " +
+	"conversation.\n\n" +
 	"Keep responses concise.";
 
 /** Port inside the sandbox the Claude Code bridge listens on (adapter uses `ports[0]`; any free port works). */
@@ -68,11 +66,7 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 			harness,
 			sandbox,
 			tools,
-			// User-tool names only: the bridge turns this into Agent SDK
-			// `tools: []` plus `disallowedTools` for every native name, and the
-			// agent auto-denies any approval request outside the list.
-			activeTools: HARNESS_TOOL_NAMES,
-			// Default permissionMode; ask-rules would only cover built-ins that are already absent.
+			activeTools: HARNESS_ACTIVE_TOOLS,
 			instructions: HARNESS_INSTRUCTIONS,
 		});
 }
