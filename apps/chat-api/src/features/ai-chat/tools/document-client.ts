@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import type { Logger } from "pino";
 import type { ConversationRecord } from "@/features/conversation-store/conversation-store";
 import type { DocumentAccessLog } from "./document-access-log";
 
@@ -118,10 +119,7 @@ export interface ScopedDocumentClient {
 	fetch(documentId: string): Promise<FetchedDocument>;
 }
 
-export interface HarnessToolLogger {
-	info(obj: object, msg: string): void;
-	error(obj: object, msg: string): void;
-}
+export type HarnessToolLogger = Pick<Logger, "info" | "error">;
 
 /**
  * Scope mapping (the platform's compat layer): workspace_id = the user's
