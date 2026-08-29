@@ -1,4 +1,5 @@
 import path from "node:path/posix";
+import { z } from "zod";
 import type {
 	DocumentListCursor,
 	ScopedDocumentClient,
@@ -38,6 +39,11 @@ function fail(text: string): ToolFailure {
 
 const CURSOR_VERSION = 1;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
+const Cursor = z.object({
+	version: z.literal(CURSOR_VERSION),
+	createdAt: z.iso.datetime(),
+	sourceAssetId: z.string().min(1),
+});
 
 function encodeCursor(cursor: DocumentListCursor): string {
 	return Buffer.from(
@@ -52,25 +58,10 @@ function decodeCursor(cursor: string): DocumentListCursor | null {
 	try {
 		const decoded = Buffer.from(cursor, "base64url");
 		if (decoded.toString("base64url") !== cursor) return null;
-		const parsed: unknown = JSON.parse(decoded.toString("utf8"));
-		if (
-			typeof parsed !== "object" ||
-			parsed === null ||
-			!("version" in parsed) ||
-			parsed.version !== CURSOR_VERSION ||
-			!("createdAt" in parsed) ||
-			typeof parsed.createdAt !== "string" ||
-			!Number.isFinite(Date.parse(parsed.createdAt)) ||
-			!("sourceAssetId" in parsed) ||
-			typeof parsed.sourceAssetId !== "string" ||
-			parsed.sourceAssetId.length === 0
-		) {
-			return null;
-		}
-		return {
-			createdAt: new Date(parsed.createdAt).toISOString(),
-			sourceAssetId: parsed.sourceAssetId,
-		};
+		const parsed = Cursor.safeParse(JSON.parse(decoded.toString("utf8")));
+		if (!parsed.success) return null;
+		const { createdAt, sourceAssetId } = parsed.data;
+		return { createdAt: new Date(createdAt).toISOString(), sourceAssetId };
 	} catch {
 		return null;
 	}
@@ -160,17 +151,15 @@ function takeUtf8Bytes(
 	text: string,
 	maxBytes: number,
 ): { text: string; truncated: boolean } {
-	if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-		return { text, truncated: false };
-	}
-	let bytes = 0;
-	let output = "";
-	for (const char of text) {
-		bytes += Buffer.byteLength(char, "utf8");
-		if (bytes > maxBytes) break;
-		output += char;
-	}
-	return { text: output, truncated: true };
+	const bytes = Buffer.from(text, "utf8");
+	if (bytes.length <= maxBytes) return { text, truncated: false };
+	// `stream: true` drops a trailing partial code point instead of emitting U+FFFD.
+	return {
+		text: new TextDecoder().decode(bytes.subarray(0, maxBytes), {
+			stream: true,
+		}),
+		truncated: true,
+	};
 }
 
 /**
