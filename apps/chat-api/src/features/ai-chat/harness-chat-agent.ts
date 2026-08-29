@@ -1,10 +1,30 @@
-import { HarnessAgent, type HarnessAgentSettings } from "@ai-sdk/harness/agent";
+import { HarnessAgent } from "@ai-sdk/harness/agent";
 import { createClaudeCode } from "@ai-sdk/harness-claude-code";
 import { createVercelSandbox } from "@ai-sdk/sandbox-vercel";
 import type { HarnessConfig } from "@/config/harness-env";
-import { HARNESS_ACTIVE_TOOLS } from "./tools/harness-tools";
+import type { DocumentAccessLog } from "./tools/document-access-log";
+import {
+	createKbDb,
+	createScopedDocumentClient,
+	type DocumentClientLogger,
+	type FrozenScope,
+	type HarnessToolBinding,
+} from "./tools/document-client";
+import {
+	createHarnessTools,
+	HARNESS_ACTIVE_TOOLS,
+	type HarnessToolLogger,
+} from "./tools/harness-tools";
 
-/** Builds the `HarnessAgent` for one turn over that turn's user-tool set; tests inject a cast fake. */
+/** What one Harness turn binds its document tools to. */
+export interface HarnessTurn {
+	binding: HarnessToolBinding;
+	scope: FrozenScope;
+	audit: DocumentAccessLog;
+	logger: HarnessToolLogger & DocumentClientLogger;
+}
+
+/** Builds the `HarnessAgent` for one turn over that turn's document tools; tests inject a cast fake. */
 export type HarnessChatAgentFactory = ReturnType<
 	typeof createHarnessChatAgentFactory
 >;
@@ -28,9 +48,9 @@ export const HARNESS_INSTRUCTIONS =
 const BRIDGE_PORT = 4000;
 
 /**
- * Composition-time Claude Code adapter and Vercel Sandbox provider, shared by
- * every turn; the returned factory builds one `HarnessAgent` per turn over
- * that turn's tools. The adapter with `auth: 'direct'` reads
+ * Composition-time Claude Code adapter, Vercel Sandbox provider, and read-only
+ * KB pool, shared by every turn; the returned factory builds one `HarnessAgent`
+ * per turn over that turn's document tools. The adapter with `auth: 'direct'` reads
  * `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` from this process and brokers
  * them: the sandbox only ever sees a placeholder that the Vercel firewall
  * swaps for the real bearer on requests to that host. `auto` would instead
@@ -60,13 +80,21 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 		region: config.HARNESS_SANDBOX_REGION,
 		keepLastSnapshots: { count: 1 },
 	});
-	// `tools` is this turn's user-tool set, keyed by `HARNESS_TOOL_NAMES`.
-	return (tools: NonNullable<HarnessAgentSettings["tools"]>) =>
-		new HarnessAgent({
+	const kb = createKbDb(config.KB_DATABASE_URL);
+	return (turn: HarnessTurn) => {
+		const { tools, onSession } = createHarnessTools({
+			client: createScopedDocumentClient({ kb, ...turn }),
+			binding: turn.binding,
+			logger: turn.logger,
+		});
+		return new HarnessAgent({
 			harness,
 			sandbox,
 			tools,
 			activeTools: HARNESS_ACTIVE_TOOLS,
 			instructions: HARNESS_INSTRUCTIONS,
+			// Tells LoadDocuments the session work directory (fresh and resumed).
+			sandboxConfig: { onSession },
 		});
+	};
 }

@@ -55,6 +55,7 @@ Required:
 
 - `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`: passed explicitly to `createVercelSandbox`; `@vercel/sandbox` does not read them from the environment
 - `OPENROUTER_API_KEY`: set in the chat-api process as `ANTHROPIC_AUTH_TOKEN` for the Claude Code adapter (`auth: 'direct'`); the sandbox receives only the brokered placeholder
+- `KB_DATABASE_URL`: secret; the read-only `mymemo_kb` URL the document tools (`ListDocuments`, `SearchDocuments`, `LoadDocuments`) query in the chat-api process, passed to `pg` as-is. The Compose `chat-api` service exports it inline.
 
 Optional:
 
@@ -64,7 +65,7 @@ Optional:
 - `HARNESS_SANDBOX_REGION` (default `iad1`): Vercel region; snapshots are region-bound
 
 Compose requires the Vercel triple and `OPENROUTER_API_KEY` for the `chat-api`
-service.
+service and sets `KB_DATABASE_URL` inline.
 
 ## Chat API
 

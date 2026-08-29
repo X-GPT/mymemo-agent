@@ -23,7 +23,7 @@ Reconnect, interruption, history, artifact access, and Conversation management f
 
 Treat the E2B sandbox as untrusted because it runs prompt-injectable file and Bash operations. Do not place provider, database, Searchable document, Redis, AWS, or E2B credentials in the sandbox environment.
 
-chat-api must not hold KB or E2B credentials. It admits Runs, serves history and artifact metadata, attaches clients to Live Streams, and signs read-only artifact URLs. For the local-only AI SDK chat path it additionally holds the Vercel token triple and the OpenRouter credential; the production `ApiConfig` never reads either.
+chat-api's production `ApiConfig` must not hold KB or E2B credentials. It admits Runs, serves history and artifact metadata, attaches clients to Live Streams, and signs read-only artifact URLs. The one exception is the local-only `HarnessConfig` for the AI SDK chat path, which additionally holds the Vercel token triple, the OpenRouter credential, and the read-only `KB_DATABASE_URL`, because chat-api executes the document tools itself; only `apps/chat-api/src/features/ai-chat/tools/` touches the KB, and chat-api holds no E2B credential. `env.test.ts` pins that the production `ApiConfig` never reads any of them.
 
 The production AgentCore Runtime alone owns product Run model traffic, scoped
 Searchable document access, E2B execution, relay production, and Downloadable
@@ -31,7 +31,9 @@ artifact publication. On the AI SDK chat path (`POST /api/chat`, local
 composition only) the Harness sandbox is the trust boundary: Claude Code runs
 inside a Vercel Sandbox with `Read`, `Write`, `Edit`, and `Grep` enabled and
 every other built-in disabled; its other tools are the chat-api-hosted
-Harness tools; the sandbox holds no MyMemo secret. The model credential is
+document tools (`ListDocuments`, `SearchDocuments`, `LoadDocuments`), which
+run in the chat-api process against the read-only KB and write documents into
+the sandbox through its session; the sandbox holds no MyMemo secret. The model credential is
 brokered — the adapter replaces it with a placeholder before it reaches the
 sandbox and the Vercel firewall injects the real bearer only on requests to
 the OpenRouter host. The file tools reach the whole sandbox filesystem —

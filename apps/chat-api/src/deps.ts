@@ -12,6 +12,10 @@ import {
 	type HarnessResumeStateStore,
 	PostgresHarnessResumeStateStore,
 } from "./features/ai-chat/harness-resume-state-store";
+import {
+	type DocumentAccessLog,
+	PostgresDocumentAccessLog,
+} from "./features/ai-chat/tools/document-access-log";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
@@ -42,6 +46,8 @@ export interface AppDeps {
 	createHarnessChatAgent: HarnessChatAgentFactory;
 	/** Per-Conversation opaque Harness resume pointer (local composition only). */
 	harnessResumeStateStore: HarnessResumeStateStore;
+	/** `document_access_events` rows for the Harness document tools (local composition only). */
+	documentAccessLog: DocumentAccessLog;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
 	artifactMetadataStore: ArtifactMetadataStore;
 	/** Creates short-lived direct-download URLs after ownership authorization. */
@@ -105,6 +111,7 @@ export function createDeps(
 		config,
 		createHarnessChatAgent,
 		harnessResumeStateStore: new PostgresHarnessResumeStateStore(database),
+		documentAccessLog: new PostgresDocumentAccessLog(database),
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
 		conversationStore,

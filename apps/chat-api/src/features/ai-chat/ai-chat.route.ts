@@ -9,6 +9,7 @@ import {
 	RunIdParam,
 } from "@/features/conversations/conversations.schema";
 import { requireInternalIdentity } from "@/features/conversations/internal-identity";
+import { parseFrozenScope } from "./tools/document-client";
 
 const chatBody = z.strictObject({
 	id: ConversationIdParam,
@@ -113,8 +114,18 @@ routes.post(
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
 		// One agent per turn, built before the slot is taken: a constructor throw
-		// holds no slot, and the sandbox is untouched until `createSession`.
-		const agent = c.var.deps.createHarnessChatAgent({});
+		// holds no slot, and the sandbox is untouched until `createSession`. The
+		// Harness turn id attributes this turn's document access in the audit log.
+		const agent = c.var.deps.createHarnessChatAgent({
+			binding: {
+				userId: c.var.identity.memberCode,
+				conversationId: body.id,
+				turnId: crypto.randomUUID(),
+			},
+			scope: parseFrozenScope(conversation),
+			audit: c.var.deps.documentAccessLog,
+			logger: c.var.logger,
+		});
 		if (activeTurns.has(body.id)) {
 			return c.json({ error: "Conversation has an active response" }, 409);
 		}

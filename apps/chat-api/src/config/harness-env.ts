@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * Configuration for the Harness-hosted AI SDK chat route. Read only by the
  * local composition (`local/index.ts`); production `ApiConfig` deliberately
- * never carries the Vercel triple or the OpenRouter credential.
+ * never carries the Vercel triple, the OpenRouter credential, or the KB URL.
  */
 const harnessEnv = z.object({
 	// Explicit Vercel Sandbox credentials; `@vercel/sandbox` does not read env.
@@ -22,6 +22,8 @@ const harnessEnv = z.object({
 		.trim()
 		.min(1)
 		.default("anthropic/claude-sonnet-5"),
+	// Read-only KB the document tools query in this process (ADR-0033 stage 2).
+	KB_DATABASE_URL: z.string().trim().min(1),
 	// Maximum wall-clock lifetime of one Harness sandbox session.
 	HARNESS_SANDBOX_TIMEOUT_MS: z.coerce
 		.number()

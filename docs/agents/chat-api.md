@@ -20,26 +20,57 @@ forwarded unchanged: text arrives as it is produced and the model's reasoning
 as `reasoning-start` / `reasoning-delta` / `reasoning-end` parts.
 
 The route builds one `HarnessAgent` per turn through
-`deps.createHarnessChatAgent(tools)`, a factory the local composition creates
+`deps.createHarnessChatAgent(turn)`, a factory the local composition creates
 once over the Claude Code adapter (`auth: 'direct'`, `ENABLE_TOOL_SEARCH=false`,
-thinking at the adapter default) and the Vercel sandbox provider. The agent's
-`activeTools` is `HARNESS_ACTIVE_TOOLS` (`ai-chat/tools/harness-tools.ts`):
-the adapter's common names `read`, `write`, `edit`, `grep` plus
-`HARNESS_TOOL_NAMES`, the short names of the chat-api-hosted Harness tools
-(empty until the first one lands). A built-in call arrives as the bridge's own
-`tool-*` parts (`toolName` = the common name, `providerExecuted: true`); the
-only other `tool-*` parts with `providerExecuted: true` are the bridge's
-synthetic `compaction` and
-`fileChange` parts (`dynamic: true`). The appended `instructions`
-(`HARNESS_INSTRUCTIONS`) tell the model which tools are real here; the bridge
-hardcodes the `claude_code` preset, so this path appends to Claude
-Code's native prompt rather than replacing it.
+thinking at the adapter default), the Vercel sandbox provider, and a read-only
+`pg` pool on `KB_DATABASE_URL`. The turn carries the *Harness turn* id (a UUID
+minted per request), the owner and Conversation ids, the Conversation's frozen
+Scope from its row, and the audit log. The agent's `activeTools` is
+`HARNESS_ACTIVE_TOOLS` (`ai-chat/tools/harness-tools.ts`): the adapter's
+common names `read`, `write`, `edit`, `grep` plus `HARNESS_TOOL_NAMES` —
+`ListDocuments`, `SearchDocuments`, `LoadDocuments`, the document tools
+chat-api executes itself. The appended `instructions` (`HARNESS_INSTRUCTIONS`)
+tell the model which tools are real here; the bridge hardcodes the
+`claude_code` preset, so this path appends to Claude Code's native prompt
+rather than replacing it.
+
+Tool calls arrive in two shapes. A built-in call arrives as the bridge's own
+`tool-*` parts (`toolName` = the common name, `providerExecuted: true`, input
+and result as Claude Code produced them; a built-in failure is Claude Code's
+own error result); the only other `tool-*` parts with `providerExecuted: true`
+are the bridge's synthetic `compaction` and `fileChange` parts (`dynamic:
+true`). A document tool arrives as one `tool-input-available` and one
+`tool-output-available` per call with `toolName` = the short name and
+`providerExecuted: false`. A failed document tool is an ordinary
+`tool-output-available` whose `output` is `{ error: "Error: …" }` — never a
+`tool-output-error` or a stream error — so the turn continues and the model
+can react; the route's `onError` scrubber is not on that path.
+
+The document tools mirror the Run path's (`apps/agentcore-runtime/src/documents/`)
+in description, schema, scope rules, and caps, which are code constants: 20
+documents per `ListDocuments` page, 8 `SearchDocuments` results, 10 documents
+per `LoadDocuments` call at 256 KiB each and 1 MiB per call. Scope is the
+Conversation's frozen Scope, applied server-side before every query. Every
+call appends one `document_access_events` row through chat-api's writable
+agent-DB connection with `run_id` = the Harness turn id, and logs one info
+line with the turn binding. `LoadDocuments` materializes each document to
+`<work directory>/.mymemo/docs/<id>.md` through the restricted sandbox
+session handed to `execute()` (`experimental_sandbox`; absolute paths, since
+relative-path handling on the session is implementation-defined) and returns
+the paths and byte counts, so the model can `Read` or `Grep` the file;
+`ListDocuments` and `SearchDocuments` never touch the session. Tool outputs
+are bounded only by those caps — every tool input and output, built-in or
+document, is persisted verbatim in the sandbox's Claude transcript and
+therefore in the snapshot. The two document-tool implementations are
+deliberately separate (decided on #610); a boundary fix lands twice.
 
 Claude's working directory is the harness session work directory, created
-empty on the Conversation's first turn. Files there persist through the
-per-Conversation snapshot exactly like the transcript, and vanish with it:
-Vercel's snapshot expiry and the fresh-session fallback below discard the
-Conversation's files too. Nothing on this path touches E2B or
+empty on the Conversation's first turn; the agent's `sandboxConfig.onSession`
+hook hands its absolute path to `LoadDocuments` on fresh and resumed
+sessions. Files there persist through the per-Conversation snapshot exactly
+like the transcript, and vanish with it: Vercel's snapshot expiry and the
+fresh-session fallback below discard the Conversation's files and cached
+documents too. Nothing on this path touches E2B or
 `conversation_runtime.sandbox_id`; the Run path's Workspace and the Harness
 sandbox share no filesystem, so a Harness turn and a Run on one Conversation
 are not serialized against each other.
@@ -88,16 +119,22 @@ docker compose restart chat-api
 turn "Which word did I ask you to remember?" 22222222-2222-4222-8222-222222222222   # answer mentions pelican
 ```
 
-Local two-turn file check (same stack and `turn` helper); turn 3 shows shell or
-web requests yield text only:
+Local two-turn file and document check (same stack and `turn` helper, with
+`x-member-code:demo-member` — the member `apps/agentcore-runtime/db/init.sql`
+seeds the KB for); turn 3 shows shell or web requests yield text only:
 
 ```sh
-turn "Use your Write tool to create notes.md containing the word pelican." 33333333-3333-4333-8333-333333333333 | tee /tmp/turn1.sse
+turn "Use your Write tool to create notes.md containing the word pelican, then use SearchDocuments to find a document about anything." 33333333-3333-4333-8333-333333333333 | tee /tmp/turn1.sse
 grep '"toolName":"write"' /tmp/turn1.sse | grep -c '"providerExecuted":true'   # ≥ 1: it ran in the sandbox
+grep -c '"toolName":"SearchDocuments"' /tmp/turn1.sse                          # ≥ 1: executed by chat-api
 sleep 10   # stop() saves the resume pointer after the stream drains; restarting sooner loses it
 docker compose restart chat-api
-turn "Use your Read tool on notes.md and tell me the word." 44444444-4444-4444-8444-444444444444 | tee /tmp/turn2.sse
-grep -c '"toolName":"read"' /tmp/turn2.sse   # ≥ 1; answer mentions pelican
+turn "Use your Read tool on notes.md and tell me the word. Then SearchDocuments again, LoadDocuments one result, and Grep the file it returns for its title." 44444444-4444-4444-8444-444444444444 | tee /tmp/turn2.sse
+grep -c '"toolName":"read"' /tmp/turn2.sse                                      # ≥ 1; answer mentions pelican
+grep -o '"toolName":"LoadDocuments"' /tmp/turn2.sse | head -1                   # present
+grep -o '\.mymemo/docs/[^"]*\.md' /tmp/turn2.sse | head -1                      # the materialized path
+grep -c '"toolName":"grep"' /tmp/turn2.sse                                      # ≥ 1: the cached copy was grepped in the sandbox
+docker compose exec postgres psql -U mymemo -d mymemo_agent -c "select run_id, operation, result_count from document_access_events order by id"   # one row per call
 turn "Run ls -la in your shell, then fetch https://example.com." 55555555-5555-4555-8555-555555555555 | tee /tmp/turn3.sse
 grep -c '"type":"tool-' /tmp/turn3.sse       # 0
 ```

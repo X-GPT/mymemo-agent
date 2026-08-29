@@ -2,8 +2,10 @@ import { expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { AppDeps, AppEnv } from "@/deps";
 import aiChatRoutes from "./ai-chat.route";
-import type { HarnessChatAgentFactory } from "./harness-chat-agent";
-import { HARNESS_TOOL_NAMES } from "./tools/harness-tools";
+import type {
+	HarnessChatAgentFactory,
+	HarnessTurn,
+} from "./harness-chat-agent";
 
 const headers = {
 	"content-type": "application/json",
@@ -46,12 +48,12 @@ function fakeResumeStore(initial: unknown = null) {
 }
 
 /**
- * Fake agent factory: records the tool set of every agent it builds, and the
+ * Fake agent factory: records the turn of every agent it builds, and the
  * agent records the lifecycle and streams a canned UI message stream.
  */
 function fakeAgent() {
 	const events: unknown[] = [];
-	const toolSets: object[] = [];
+	const turns: HarnessTurn[] = [];
 	const created = {
 		stop: async () => {
 			events.push("stop");
@@ -83,11 +85,11 @@ function fakeAgent() {
 			};
 		},
 	};
-	const factory: HarnessChatAgentFactory = (tools) => {
-		toolSets.push(tools);
+	const factory: HarnessChatAgentFactory = (turn) => {
+		turns.push(turn);
 		return fake as never;
 	};
-	return { factory, events, fake, toolSets };
+	return { factory, events, fake, turns };
 }
 
 /** The JSON parts of a UI message stream body, `[DONE]` excluded. */
@@ -114,11 +116,16 @@ const logger = {
 	warn: (obj: unknown, msg: string) => logged.push({ level: "warn", obj, msg }),
 };
 
+const documentAccessLog: AppDeps["documentAccessLog"] = {
+	record: async () => {},
+};
+
 function makeApp(deps: Partial<AppDeps>) {
 	const app = new Hono<AppEnv>();
 	app.use("*", async (c, next) => {
 		c.set("deps", {
 			harnessResumeStateStore: fakeResumeStore().store,
+			documentAccessLog,
 			...deps,
 		} as AppDeps);
 		c.set("logger", logger as never);
@@ -128,8 +135,15 @@ function makeApp(deps: Partial<AppDeps>) {
 	return app;
 }
 
+const conversationRow = {
+	archivedAt: null,
+	scope: "general",
+	collectionId: null,
+	summaryId: null,
+};
+
 const ownedConversation = {
-	get: async () => ({ archivedAt: null }) as never,
+	get: async () => conversationRow as never,
 } as unknown as AppDeps["conversationStore"];
 
 it("runs one Harness turn in a session named after the Conversation and stops it after the stream", async () => {
@@ -140,7 +154,7 @@ it("runs one Harness turn in a session named after the Conversation and stops it
 		conversationStore: {
 			get: async (input: unknown) => {
 				lookups.push(input);
-				return { archivedAt: null } as never;
+				return conversationRow as never;
 			},
 		} as unknown as AppDeps["conversationStore"],
 		exposureGate: { isAgentEnabled: async () => true },
@@ -181,10 +195,17 @@ it("runs one Harness turn in a session named after the Conversation and stops it
 	]);
 });
 
-it("builds one agent per turn from the factory with the turn's tool set", async () => {
-	const { factory, toolSets } = fakeAgent();
+it("builds one agent per turn, bound to a fresh Harness turn id and the Conversation's frozen scope", async () => {
+	const { factory, turns } = fakeAgent();
 	const app = makeApp({
-		conversationStore: ownedConversation,
+		conversationStore: {
+			get: async ({ conversationId }: { conversationId: string }) =>
+				({
+					...conversationRow,
+					scope: conversationId === "conversation-2" ? "collection" : "general",
+					collectionId: conversationId === "conversation-2" ? "coll-7" : null,
+				}) as never,
+		} as unknown as AppDeps["conversationStore"],
 		exposureGate: { isAgentEnabled: async () => true },
 		createHarnessChatAgent: factory,
 	});
@@ -197,13 +218,30 @@ it("builds one agent per turn from the factory with the turn's tool set", async 
 		expect(response.status).toBe(200);
 		await response.text();
 	}
-	expect(toolSets.map((tools) => Object.keys(tools))).toEqual([
-		[...HARNESS_TOOL_NAMES],
-		[...HARNESS_TOOL_NAMES],
+	expect(turns.map(({ binding, scope }) => ({ binding, scope }))).toEqual([
+		{
+			binding: {
+				userId: "member-1",
+				conversationId: "conversation-1",
+				turnId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+			},
+			scope: { type: "general" },
+		},
+		{
+			binding: {
+				userId: "member-1",
+				conversationId: "conversation-2",
+				turnId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+			},
+			scope: { type: "collection", collectionId: "coll-7" },
+		},
 	]);
+	expect(turns[0]?.binding.turnId).not.toBe(turns[1]?.binding.turnId);
+	expect(turns[0]?.audit).toBe(documentAccessLog);
+	expect(turns[0]?.logger).toBe(logger as never);
 });
 
-it("forwards the stream unchanged: reasoning and sandbox-executed built-in parts reach the client as emitted", async () => {
+it("forwards the stream unchanged: reasoning, sandbox-executed built-in parts, and document-tool parts reach the client as emitted", async () => {
 	const { factory, fake } = fakeAgent();
 	const parts = [
 		{ type: "reasoning-start", id: "r1" },
@@ -215,6 +253,20 @@ it("forwards the stream unchanged: reasoning and sandbox-executed built-in parts
 			toolName: "write",
 			providerExecuted: true,
 			input: { file_path: "notes.md", content: "pelican" },
+		},
+		{
+			type: "tool-input-available",
+			toolCallId: "s1",
+			toolName: "SearchDocuments",
+			providerExecuted: false,
+			input: { query: "pelican" },
+		},
+		{
+			type: "tool-output-available",
+			toolCallId: "s1",
+			output: {
+				error: "Error: SearchDocuments failed: document search failed",
+			},
 		},
 		{
 			type: "tool-input-available",
@@ -560,7 +612,11 @@ it("rejects invalid and exposure-disabled requests before creating a session", a
 
 it.each([
 	[null, 404, "Conversation not found"],
-	[{ archivedAt: new Date() }, 409, "Conversation is archived"],
+	[
+		{ ...conversationRow, archivedAt: new Date() },
+		409,
+		"Conversation is archived",
+	],
 ] as const)("rejects a missing or archived Conversation before creating a session", async (conversation, status, error) => {
 	const { factory, events } = fakeAgent();
 	let gateChecks = 0;

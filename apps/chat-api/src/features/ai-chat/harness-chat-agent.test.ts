@@ -4,6 +4,7 @@ import type { HarnessConfig } from "@/config/harness-env";
 import {
 	createHarnessChatAgentFactory,
 	HARNESS_INSTRUCTIONS,
+	type HarnessTurn,
 } from "./harness-chat-agent";
 import {
 	HARNESS_ACTIVE_TOOLS,
@@ -18,6 +19,7 @@ const config: HarnessConfig = {
 	OPENROUTER_API_KEY: "test-openrouter-key",
 	OPENROUTER_BASE_URL: "https://openrouter.example",
 	OPENROUTER_DEFAULT_MODEL: "anthropic/claude-sonnet-5",
+	KB_DATABASE_URL: "postgresql://kb:kb@localhost:5432/mymemo_kb",
 	HARNESS_SANDBOX_TIMEOUT_MS: 600_000,
 	HARNESS_SANDBOX_REGION: "iad1",
 };
@@ -41,15 +43,23 @@ afterAll(() => {
 
 /** `HarnessAgent` keeps its settings private; read them for the pin. */
 type Inspected = {
-	settings: Record<string, unknown>;
+	settings: Record<string, unknown> & {
+		sandboxConfig?: { onSession?: unknown };
+	};
 	builtinToolFiltering: unknown;
+};
+
+const turn: HarnessTurn = {
+	binding: { userId: "member-1", conversationId: "conv-1", turnId: "turn-1" },
+	scope: { type: "general" },
+	audit: { record: async () => {} },
+	logger: { info() {}, error() {} },
 };
 
 it("configures the Claude Code adapter once, with only Read, Write, Edit, and Grep on and tool search disabled", () => {
 	const createAgent = createHarnessChatAgentFactory(config);
-	const tools = {};
-	const first = createAgent(tools) as unknown as Inspected;
-	const second = createAgent({}) as unknown as Inspected;
+	const first = createAgent(turn) as unknown as Inspected;
+	const second = createAgent(turn) as unknown as Inspected;
 
 	// Built once at composition, shared by every turn's agent.
 	expect(createClaudeCode).toHaveBeenCalledTimes(1);
@@ -63,8 +73,13 @@ it("configures the Claude Code adapter once, with only Read, Write, Edit, and Gr
 	expect(second.settings.harness).toBe(first.settings.harness);
 	expect(second.settings.sandbox).toBe(first.settings.sandbox);
 
-	// Per turn: this turn's tools; the framework derives the built-in allow-list from activeTools.
-	expect(first.settings.tools).toBe(tools);
+	// Per turn: this turn's document tools, told the work directory through
+	// `onSession`; the framework derives the built-in allow-list from activeTools.
+	expect(Object.keys(first.settings.tools as object)).toEqual([
+		...HARNESS_TOOL_NAMES,
+	]);
+	expect(first.settings.tools).not.toBe(second.settings.tools);
+	expect(first.settings.sandboxConfig?.onSession).toBeFunction();
 	expect(first.settings.activeTools).toBe(HARNESS_ACTIVE_TOOLS);
 	expect(HARNESS_ACTIVE_TOOLS).toEqual([
 		"read",
