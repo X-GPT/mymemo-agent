@@ -2,16 +2,18 @@ import type { HarnessAgentSandboxConfig } from "@ai-sdk/harness/agent";
 import { z } from "zod";
 import type {
 	HarnessToolBinding,
+	HarnessToolLogger,
 	ScopedDocumentClient,
 } from "./document-client";
 import {
+	type ListDocumentsInput,
+	type LoadDocumentsInput,
 	listDocuments,
 	loadDocuments,
+	type SearchDocumentsInput,
 	searchDocuments,
 	type ToolFailure,
 } from "./document-tools";
-
-export type { HarnessToolBinding } from "./document-client";
 
 /** Short names of the Harness user tools — executed by chat-api on the AI SDK chat path. */
 export const HARNESS_TOOL_NAMES = [
@@ -37,19 +39,6 @@ export type HarnessSandboxSession = Parameters<OnSession>[0]["session"];
 interface ExecuteOptions {
 	abortSignal?: AbortSignal;
 	experimental_sandbox?: HarnessSandboxSession;
-}
-
-export interface HarnessToolLogger {
-	info(obj: object, msg: string): void;
-}
-
-export type HarnessTools = ReturnType<typeof buildTools>;
-
-/** One turn's user tools plus the hook that tells them the session work directory. */
-export interface HarnessTurnTools {
-	tools: HarnessTools;
-	/** For `sandboxConfig.onSession`: runs for fresh and resumed sessions before the turn. */
-	onSession: OnSession;
 }
 
 /** Plain JSON resolves; a handler failure rejects so the model gets an `is_error` result. */
@@ -79,10 +68,7 @@ function buildTools(
 				limit: z.number().optional(),
 				cursor: z.string().optional(),
 			}),
-			execute: (
-				input: { limit?: number; cursor?: string },
-				_options: ExecuteOptions,
-			) => {
+			execute: (input: ListDocumentsInput, _options: ExecuteOptions) => {
 				log("ListDocuments");
 				return unwrap(listDocuments(input, deps.client));
 			},
@@ -94,10 +80,7 @@ function buildTools(
 				query: z.string(),
 				maxResults: z.number().optional(),
 			}),
-			execute: (
-				input: { query: string; maxResults?: number },
-				_options: ExecuteOptions,
-			) => {
+			execute: (input: SearchDocumentsInput, _options: ExecuteOptions) => {
 				log("SearchDocuments");
 				return unwrap(searchDocuments(input, deps.client));
 			},
@@ -107,7 +90,7 @@ function buildTools(
 				"Materialize scoped MyMemo documents as files under .mymemo/docs in your working directory and return their paths, so you can Read or Grep them.",
 			inputSchema: z.object({ documentIds: z.array(z.string()) }),
 			execute: (
-				input: { documentIds: string[] },
+				input: LoadDocumentsInput,
 				{ abortSignal, experimental_sandbox }: ExecuteOptions,
 			) => {
 				log("LoadDocuments");
@@ -135,14 +118,11 @@ function buildTools(
  * client and binding (`messages` is never read). `LoadDocuments` writes
  * through the session it is handed; the other two never touch it.
  */
-export function createHarnessTools(
-	deps: Parameters<typeof buildTools>[0],
-): HarnessTurnTools {
+export function createHarnessTools(deps: Parameters<typeof buildTools>[0]) {
 	let workDir: string | undefined;
-	return {
-		tools: buildTools(deps, () => workDir),
-		onSession: async ({ sessionWorkDir }) => {
-			workDir = sessionWorkDir;
-		},
+	// For `sandboxConfig.onSession`: runs for fresh and resumed sessions before the turn.
+	const onSession: OnSession = async ({ sessionWorkDir }) => {
+		workDir = sessionWorkDir;
 	};
+	return { tools: buildTools(deps, () => workDir), onSession };
 }

@@ -14,7 +14,7 @@ const binding = {
 	conversationId: "conv-1",
 	turnId: "turn-1",
 };
-const logger = { info() {} };
+const logger = { info() {}, error() {} };
 
 function client(overrides: Partial<ScopedDocumentClient> = {}) {
 	return {

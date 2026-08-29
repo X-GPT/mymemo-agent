@@ -70,8 +70,6 @@ export function createKbDb(kbDatabaseUrl: string): KbDb {
 export class DocumentAccessError extends Error {}
 
 const OUT_OF_SCOPE = "document is not available in this conversation's scope";
-const DEFAULT_SEARCH_LIMIT = 8;
-const MAX_SEARCH_LIMIT = 20;
 // Matches the Run path's server-side clip so one document cannot dump
 // hundreds of KB into the turn.
 const MAX_DOCUMENT_CHARS = 50_000;
@@ -115,12 +113,13 @@ export interface ScopedDocumentClient {
 		limit: number;
 		after: DocumentListCursor | null;
 	}): Promise<DocumentListPage>;
-	search(input: { query: string; maxResults?: number }): Promise<SearchHit[]>;
+	search(input: { query: string; maxResults: number }): Promise<SearchHit[]>;
 	/** Unknown and out-of-scope ids fail with one uniform message. */
 	fetch(documentId: string): Promise<FetchedDocument>;
 }
 
-export interface DocumentClientLogger {
+export interface HarnessToolLogger {
+	info(obj: object, msg: string): void;
 	error(obj: object, msg: string): void;
 }
 
@@ -404,7 +403,7 @@ async function resolveDocumentId(
 export function createScopedDocumentClient(deps: {
 	kb: KbDb;
 	audit: DocumentAccessLog;
-	logger: DocumentClientLogger;
+	logger: HarnessToolLogger;
 	binding: HarnessToolBinding;
 	scope: FrozenScope;
 }): ScopedDocumentClient {
@@ -501,10 +500,7 @@ export function createScopedDocumentClient(deps: {
 					workspaceId: binding.userId,
 					query,
 					...narrow,
-					limit:
-						maxResults === undefined
-							? DEFAULT_SEARCH_LIMIT
-							: Math.min(MAX_SEARCH_LIMIT, Math.max(1, Math.floor(maxResults))),
+					limit: maxResults,
 				});
 				await audit(
 					"search",

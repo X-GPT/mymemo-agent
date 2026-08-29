@@ -6,14 +6,13 @@ import type { DocumentAccessLog } from "./tools/document-access-log";
 import {
 	createKbDb,
 	createScopedDocumentClient,
-	type DocumentClientLogger,
 	type FrozenScope,
 	type HarnessToolBinding,
+	type HarnessToolLogger,
 } from "./tools/document-client";
 import {
 	createHarnessTools,
 	HARNESS_ACTIVE_TOOLS,
-	type HarnessToolLogger,
 } from "./tools/harness-tools";
 
 /** What one Harness turn binds its document tools to. */
@@ -21,7 +20,7 @@ export interface HarnessTurn {
 	binding: HarnessToolBinding;
 	scope: FrozenScope;
 	audit: DocumentAccessLog;
-	logger: HarnessToolLogger & DocumentClientLogger;
+	logger: HarnessToolLogger;
 }
 
 /** Builds the `HarnessAgent` for one turn over that turn's document tools; tests inject a cast fake. */

@@ -4,6 +4,7 @@ import {
 	createScopedDocumentClient,
 	DocumentAccessError,
 	type FrozenScope,
+	type HarnessToolLogger,
 	type KbDb,
 	parseFrozenScope,
 } from "./document-client";
@@ -39,7 +40,7 @@ const OUT_OF_SCOPE = "document is not available in this conversation's scope";
 function makeClient(
 	scope: FrozenScope,
 	respond?: (text: string) => unknown[],
-	logger: { error(obj: object, msg: string): void } = { error() {} },
+	logger: HarnessToolLogger = { info() {}, error() {} },
 ) {
 	const kb = fakeKb(respond);
 	const audits: DocumentAccessEvent[] = [];
@@ -100,7 +101,7 @@ describe("parseFrozenScope", () => {
 describe("scope filtering", () => {
 	it("general: pins the user's workspace with no narrowing filter", async () => {
 		const { client, calls } = makeClient({ type: "general" });
-		await client.search({ query: "hello" });
+		await client.search({ query: "hello", maxResults: 8 });
 		await client.list({ limit: 5, after: null });
 		const search = calls.find(isSearch);
 		expect(search?.params).toEqual(["member-1", "hello", 8]);
@@ -126,7 +127,7 @@ describe("scope filtering", () => {
 							]
 						: [],
 		);
-		await client.search({ query: "hello" });
+		await client.search({ query: "hello", maxResults: 8 });
 		await client.list({
 			limit: 5,
 			after: { createdAt: "2026-07-10T12:00:00.000Z", sourceAssetId: "a1" },
@@ -175,7 +176,7 @@ describe("scope filtering", () => {
 							]
 						: [],
 		);
-		await client.search({ query: "hello" });
+		await client.search({ query: "hello", maxResults: 8 });
 		expect(calls.find(isResolve)?.params).toEqual(["12345", "member-1"]);
 		const search = calls.find(isSearch);
 		expect(search?.text).toContain("document_id IN");
@@ -191,7 +192,7 @@ describe("scope filtering", () => {
 			type: "document",
 			summaryId: "not-numeric",
 		});
-		expect(await client.search({ query: "hello" })).toEqual([]);
+		expect(await client.search({ query: "hello", maxResults: 8 })).toEqual([]);
 		expect(await client.list({ limit: 5, after: null })).toEqual({
 			total: 0,
 			documents: [],
@@ -253,7 +254,7 @@ describe("audit", () => {
 									]
 								: [],
 		);
-		await client.search({ query: "hello" });
+		await client.search({ query: "hello", maxResults: 8 });
 		await client.list({ limit: 20, after: null });
 		await client.fetch("d1");
 		const common = {
@@ -302,13 +303,14 @@ describe("bounded errors", () => {
 				throw leaky;
 			},
 			{
+				info() {},
 				error: (obj: object) => {
 					logged.push(obj);
 				},
 			},
 		);
 		const failures: [Promise<unknown>, string][] = [
-			[client.search({ query: "x" }), "document search failed"],
+			[client.search({ query: "x", maxResults: 8 }), "document search failed"],
 			[client.list({ limit: 1, after: null }), "document list failed"],
 			[client.fetch("d1"), "document fetch failed"],
 		];
@@ -330,23 +332,12 @@ describe("bounded errors", () => {
 					throw leaky;
 				},
 			},
-			logger: { error() {} },
+			logger: { info() {}, error() {} },
 			binding,
 			scope: { type: "general" },
 		});
-		await expect(client.search({ query: "x" })).rejects.toThrow(
+		await expect(client.search({ query: "x", maxResults: 8 })).rejects.toThrow(
 			"document search failed",
 		);
-	});
-
-	it("clamps maxResults into [1, 20] with 8 as the default", async () => {
-		const limit = async (maxResults?: number) => {
-			const { client, calls } = makeClient({ type: "general" });
-			await client.search({ query: "x", maxResults });
-			return calls.find(isSearch)?.params.at(-1);
-		};
-		expect(await limit()).toBe(8);
-		expect(await limit(500)).toBe(20);
-		expect(await limit(0)).toBe(1);
 	});
 });
