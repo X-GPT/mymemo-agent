@@ -96,7 +96,7 @@ export function createHarnessTools(deps: {
 			description:
 				"Materialize scoped MyMemo documents as files under .mymemo/docs in your working directory and return their paths, so you can Read or Grep them.",
 			inputSchema: z.object({ documentIds: z.array(z.string()) }),
-			execute: (
+			execute: async (
 				input: LoadDocumentsInput,
 				{ abortSignal, experimental_sandbox }: ExecuteOptions,
 			) => {

@@ -51,9 +51,10 @@ in description, schema, scope rules, and caps, which are code constants: 20
 documents per `ListDocuments` page, 8 `SearchDocuments` results, 10 documents
 per `LoadDocuments` call at 256 KiB each and 1 MiB per call. Scope is the
 Conversation's frozen Scope, applied server-side before every query. Every
-call appends one `document_access_events` row through chat-api's writable
-agent-DB connection with `run_id` = the Harness turn id, and logs one info
-line with the turn binding. `LoadDocuments` materializes each document to
+list, search, and per-document load appends one `document_access_events` row
+through chat-api's writable agent-DB connection with `run_id` = the Harness
+turn id (as on the Run path, a ten-document `LoadDocuments` call writes ten
+rows), and every call logs one info line with the turn binding. `LoadDocuments` materializes each document to
 `<work directory>/.mymemo/docs/<id>.md` through the restricted sandbox
 session handed to `execute()` (`experimental_sandbox`; absolute paths, since
 relative-path handling on the session is implementation-defined) and returns

@@ -95,6 +95,13 @@ describe("parseFrozenScope", () => {
 				summaryId: null,
 			}),
 		).toThrow(/document/);
+		expect(() =>
+			parseFrozenScope({
+				scope: "everything",
+				collectionId: null,
+				summaryId: null,
+			}),
+		).toThrow(/unknown/);
 	});
 });
 

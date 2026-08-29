@@ -24,7 +24,9 @@ export type FrozenScope =
 
 /** Fails closed: a scoped row missing its id is rejected, never widened. */
 export function parseFrozenScope(
-	row: Pick<ConversationRecord, "scope" | "collectionId" | "summaryId">,
+	row: Pick<ConversationRecord, "collectionId" | "summaryId"> & {
+		scope: string;
+	},
 ): FrozenScope {
 	switch (row.scope) {
 		case "general":
@@ -39,6 +41,8 @@ export function parseFrozenScope(
 				throw new Error("conversation scope is invalid: document without id");
 			}
 			return { type: "document", summaryId: row.summaryId };
+		default:
+			throw new Error("conversation scope is invalid: unknown scope type");
 	}
 }
 
@@ -58,6 +62,9 @@ export function createKbDb(kbDatabaseUrl: string): KbDb {
 		statement_timeout: 5_000,
 		query_timeout: 10_000,
 	});
+	// An idle client's error is an EventEmitter `error`; unhandled, it would
+	// take the long-lived chat-api process down. The next query surfaces it.
+	pool.on("error", () => {});
 	return {
 		query: async <T>(text: string, params: unknown[] = []) =>
 			(await pool.query(text, params)).rows as T[],
