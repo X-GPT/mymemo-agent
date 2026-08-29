@@ -56,7 +56,7 @@ describe("loadApiConfigFromEnv — Downloadable artifact storage", () => {
 	});
 });
 
-describe("loadApiConfigFromEnv — worker-secret boundary", () => {
+describe("loadApiConfigFromEnv — production `ApiConfig` excludes path-specific secrets", () => {
 	it("boots without any worker-only secret present", () => {
 		const env = baseEnv();
 		// None of these are set; chat-api must not require them.

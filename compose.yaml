@@ -57,6 +57,8 @@ services:
       OPENROUTER_DEFAULT_MODEL: ${OPENROUTER_DEFAULT_MODEL:-anthropic/claude-sonnet-5}
       HARNESS_SANDBOX_TIMEOUT_MS: ${HARNESS_SANDBOX_TIMEOUT_MS:-600000}
       HARNESS_SANDBOX_REGION: ${HARNESS_SANDBOX_REGION:-iad1}
+      # The Harness document tools run in chat-api against the read-only KB.
+      KB_DATABASE_URL: postgresql://mymemo:mymemo@postgres:5432/mymemo_kb
     depends_on:
       postgres:
         condition: service_healthy

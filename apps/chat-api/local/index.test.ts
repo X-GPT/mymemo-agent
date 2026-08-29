@@ -13,6 +13,7 @@ it("starts without Compose-only endpoints", async () => {
 			ARTIFACT_BUCKET: "test-artifacts",
 			AWS_REGION: "us-west-2",
 			DB_SSL: "disable",
+			KB_DATABASE_URL: "postgresql://kb:kb@127.0.0.1:9/mymemo_kb",
 			LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS: "true",
 			OPENROUTER_API_KEY: "test-openrouter-key",
 			PORT: String(port),
