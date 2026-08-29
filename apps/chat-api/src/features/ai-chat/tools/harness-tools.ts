@@ -50,17 +50,24 @@ async function unwrap<T>(result: Promise<T | ToolFailure>): Promise<T> {
 	return value;
 }
 
-function buildTools(
-	deps: {
-		client: ScopedDocumentClient;
-		binding: HarnessToolBinding;
-		logger: HarnessToolLogger;
-	},
-	workDir: () => string | undefined,
-) {
+/**
+ * The document tools for one Harness turn, closed over that turn's scoped
+ * client and binding (`messages` is never read). `LoadDocuments` writes
+ * through the session it is handed; the other two never touch it.
+ */
+export function createHarnessTools(deps: {
+	client: ScopedDocumentClient;
+	binding: HarnessToolBinding;
+	logger: HarnessToolLogger;
+}) {
+	let workDir: string | undefined;
+	// For `sandboxConfig.onSession`: runs for fresh and resumed sessions before the turn.
+	const onSession: OnSession = async ({ sessionWorkDir }) => {
+		workDir = sessionWorkDir;
+	};
 	const log = (tool: (typeof HARNESS_TOOL_NAMES)[number]) =>
 		deps.logger.info({ ...deps.binding, tool }, "harness document tool call");
-	return {
+	const tools = {
 		ListDocuments: {
 			description:
 				"Count and browse the searchable documents in this conversation's scope, newest first.",
@@ -68,7 +75,7 @@ function buildTools(
 				limit: z.number().optional(),
 				cursor: z.string().optional(),
 			}),
-			execute: (input: ListDocumentsInput, _options: ExecuteOptions) => {
+			execute: (input: ListDocumentsInput) => {
 				log("ListDocuments");
 				return unwrap(listDocuments(input, deps.client));
 			},
@@ -80,7 +87,7 @@ function buildTools(
 				query: z.string(),
 				maxResults: z.number().optional(),
 			}),
-			execute: (input: SearchDocumentsInput, _options: ExecuteOptions) => {
+			execute: (input: SearchDocumentsInput) => {
 				log("SearchDocuments");
 				return unwrap(searchDocuments(input, deps.client));
 			},
@@ -94,8 +101,7 @@ function buildTools(
 				{ abortSignal, experimental_sandbox }: ExecuteOptions,
 			) => {
 				log("LoadDocuments");
-				const dir = workDir();
-				if (!experimental_sandbox || !dir) {
+				if (!experimental_sandbox || !workDir) {
 					throw new Error(
 						"LoadDocuments failed: no sandbox session for this turn",
 					);
@@ -104,25 +110,12 @@ function buildTools(
 					loadDocuments(input, {
 						client: deps.client,
 						sandbox: experimental_sandbox,
-						workDir: dir,
+						workDir,
 						abortSignal,
 					}),
 				);
 			},
 		},
 	};
-}
-
-/**
- * The document tools for one Harness turn, closed over that turn's scoped
- * client and binding (`messages` is never read). `LoadDocuments` writes
- * through the session it is handed; the other two never touch it.
- */
-export function createHarnessTools(deps: Parameters<typeof buildTools>[0]) {
-	let workDir: string | undefined;
-	// For `sandboxConfig.onSession`: runs for fresh and resumed sessions before the turn.
-	const onSession: OnSession = async ({ sessionWorkDir }) => {
-		workDir = sessionWorkDir;
-	};
-	return { tools: buildTools(deps, () => workDir), onSession };
+	return { tools, onSession };
 }

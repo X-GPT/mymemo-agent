@@ -79,13 +79,13 @@ it("execute resolves the handler's plain JSON and rejects with a failure's text"
 		logger,
 	});
 	await expect(
-		tools.SearchDocuments.execute({ query: "revenue" }, call),
+		tools.SearchDocuments.execute({ query: "revenue" }),
 	).resolves.toEqual({
 		passages: [{ passageId: "p1", documentId: "d1", title: "A", snippet: "s" }],
 	});
-	await expect(
-		tools.SearchDocuments.execute({ query: "   " }, call),
-	).rejects.toThrow("SearchDocuments requires a non-empty query.");
+	await expect(tools.SearchDocuments.execute({ query: "   " })).rejects.toThrow(
+		"SearchDocuments requires a non-empty query.",
+	);
 });
 
 it("LoadDocuments writes every document through the session it is handed, under the session work directory", async () => {
@@ -118,14 +118,18 @@ it("LoadDocuments writes every document through the session it is handed, under 
 
 it("ListDocuments and SearchDocuments complete when handed a session whose methods throw", async () => {
 	const { tools } = createHarnessTools({ client: client(), binding, logger });
+	// Their signatures take no options; the bridge passes them regardless.
+	type Loose = (input: object, options: object) => Promise<unknown>;
+	const run = (tool: { execute: (input: never) => Promise<unknown> }) =>
+		(tool.execute as unknown as Loose).bind(tool);
 	const options = { ...call, experimental_sandbox: session() };
-	await expect(tools.ListDocuments.execute({}, options)).resolves.toEqual({
+	await expect(run(tools.ListDocuments)({}, options)).resolves.toEqual({
 		total: 0,
 		documents: [],
 		nextCursor: null,
 	});
 	await expect(
-		tools.SearchDocuments.execute({ query: "x" }, options),
+		run(tools.SearchDocuments)({ query: "x" }, options),
 	).resolves.toEqual({
 		passages: [],
 		message: "No MyMemo document passages matched the query.",
