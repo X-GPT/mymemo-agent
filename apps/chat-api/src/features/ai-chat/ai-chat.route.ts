@@ -159,8 +159,8 @@ routes.post(
 				const state = await session.stop();
 				// Except when it carries `continueFrom`: `stop()` suspended a turn it
 				// still considered running, and that pointer addresses a bridge the
-				// same call kills. Keep the previous one — a healthy pointer carries no
-				// state, and the sandbox is found by session id.
+				// same call kills. Keep the previous one — it locates the same sandbox
+				// by session id, so only the stopped turn's tail is lost.
 				if (state.continueFrom === undefined) {
 					await c.var.deps.harnessResumeStateStore.save(ref, state);
 				}
