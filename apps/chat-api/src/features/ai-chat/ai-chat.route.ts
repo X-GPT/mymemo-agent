@@ -157,13 +157,10 @@ routes.post(
 		const stop = async () => {
 			try {
 				const state = await session.stop();
-				// Except when it carries `continueFrom`: stopping a turn the framework
-				// still considers running suspends it instead, and that pointer
-				// addresses a bridge the same call kills a line later — resuming from
-				// it builds a suspended session that refuses the next prompt, wedging
-				// the Conversation for good. Keeping the previous pointer costs only
-				// the stopped turn's tail: a healthy pointer carries no state, and the
-				// sandbox is found by session id.
+				// Except when it carries `continueFrom`: `stop()` suspended a turn it
+				// still considered running, and that pointer addresses a bridge the
+				// same call kills. Keep the previous one — a healthy pointer carries no
+				// state, and the sandbox is found by session id.
 				if (state.continueFrom === undefined) {
 					await c.var.deps.harnessResumeStateStore.save(ref, state);
 				}

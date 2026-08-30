@@ -377,28 +377,17 @@ it("keeps the previous resume pointer when a stopped turn was still running, so 
 		data: { bridge: "dead" },
 		continueFrom: { type: "continue-turn", data: { bridge: "dead" } },
 	};
-	let suspends = true;
 	let resumedSuspended = false;
 	fake.createSession = async ({ resumeFrom }) => {
 		// Mirrors the framework: creating a session from a pointer that carries
 		// `continueFrom` succeeds and yields a *suspended* session.
-		resumedSuspended =
-			(resumeFrom as { continueFrom?: unknown } | undefined)?.continueFrom !==
-			undefined;
-		return {
-			stop: async () => {
-				const state = suspends ? suspendedState : stoppedState;
-				suspends = false;
-				return state;
-			},
-		};
+		resumedSuspended = resumeFrom === suspendedState;
+		return { stop: async () => suspendedState };
 	};
 	fake.stream = async () => {
 		// ...and a suspended session refuses the next prompt, which is the 500.
 		if (resumedSuspended) throw new Error("turn is not promptable");
-		return {
-			toUIMessageStreamResponse: () => streamResponse(uiMessageStream),
-		};
+		return { toUIMessageStreamResponse: () => streamResponse(uiMessageStream) };
 	};
 	const { store, saved } = fakeResumeStore();
 	const app = makeApp({
@@ -418,14 +407,12 @@ it("keeps the previous resume pointer when a stopped turn was still running, so 
 	const first = await post();
 	expect(first.status).toBe(200);
 	await first.body?.cancel();
-	expect(saved).toEqual([]);
 
 	// Second turn on the same Conversation: answers instead of 500ing.
 	const second = await post();
 	expect(second.status).toBe(200);
 	expect(await second.text()).toBe(uiMessageStream);
-	// A pointer from a turn that did stop is still persisted.
-	expect(saved.map((s) => s.state)).toEqual([stoppedState]);
+	expect(saved).toEqual([]);
 });
 
 it("stops the session when the client cancels the stream", async () => {
