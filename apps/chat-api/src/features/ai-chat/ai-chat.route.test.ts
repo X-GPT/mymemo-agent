@@ -30,13 +30,17 @@ const uiMessageStream =
 	'data: {"type":"text-delta","id":"t1","delta":"Hi"}\n\ndata: [DONE]\n\n';
 
 /** What the fake session's `stop()` returns; opaque to the route. */
-const stoppedState = { type: "resume-session", data: { after: "turn" } };
+const stoppedState: { type: string; data: unknown; continueFrom?: unknown } = {
+	type: "resume-session",
+	data: { after: "turn" },
+};
 
 /** In-memory resume pointer store, optionally pre-seeded for conversation-1. */
 function fakeResumeStore(initial: unknown = null) {
 	const saved: { ref: unknown; state: unknown }[] = [];
 	const store = {
-		load: async () => initial,
+		// Reads back the last save, so a later turn sees what an earlier one left.
+		load: async () => saved.at(-1)?.state ?? initial,
 		save: async (ref: unknown, state: unknown) => {
 			saved.push({ ref, state });
 		},
@@ -360,6 +364,67 @@ it("starts a fresh session for the same id and logs when resuming throws", async
 		},
 	]);
 	// The stale pointer is replaced by the fresh session's.
+	expect(saved.map((s) => s.state)).toEqual([stoppedState]);
+});
+
+it("keeps the previous resume pointer when a stopped turn was still running, so the Conversation answers the next message", async () => {
+	const { factory, fake } = fakeAgent();
+	// What `stop()` returns when the framework still considers the turn running —
+	// a host tool in flight when the client disconnects. It carries bridge
+	// coordinates for a bridge the same call then kills.
+	const suspendedState = {
+		type: "resume-session",
+		data: { bridge: "dead" },
+		continueFrom: { type: "continue-turn", data: { bridge: "dead" } },
+	};
+	let suspends = true;
+	let resumedSuspended = false;
+	fake.createSession = async ({ resumeFrom }) => {
+		// Mirrors the framework: creating a session from a pointer that carries
+		// `continueFrom` succeeds and yields a *suspended* session.
+		resumedSuspended =
+			(resumeFrom as { continueFrom?: unknown } | undefined)?.continueFrom !==
+			undefined;
+		return {
+			stop: async () => {
+				const state = suspends ? suspendedState : stoppedState;
+				suspends = false;
+				return state;
+			},
+		};
+	};
+	fake.stream = async () => {
+		// ...and a suspended session refuses the next prompt, which is the 500.
+		if (resumedSuspended) throw new Error("turn is not promptable");
+		return {
+			toUIMessageStreamResponse: () => streamResponse(uiMessageStream),
+		};
+	};
+	const { store, saved } = fakeResumeStore();
+	const app = makeApp({
+		conversationStore: ownedConversation,
+		exposureGate: { isAgentEnabled: async () => true },
+		createHarnessChatAgent: factory,
+		harnessResumeStateStore: store,
+	});
+	const post = () =>
+		app.request("/api/chat", {
+			method: "POST",
+			headers,
+			body: JSON.stringify(requestBody),
+		});
+
+	// First turn: the client stops it while a document tool is still running.
+	const first = await post();
+	expect(first.status).toBe(200);
+	await first.body?.cancel();
+	expect(saved).toEqual([]);
+
+	// Second turn on the same Conversation: answers instead of 500ing.
+	const second = await post();
+	expect(second.status).toBe(200);
+	expect(await second.text()).toBe(uiMessageStream);
+	// A pointer from a turn that did stop is still persisted.
 	expect(saved.map((s) => s.state)).toEqual([stoppedState]);
 });
 
