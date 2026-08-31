@@ -176,10 +176,30 @@ export const conversations = pgTable(
 );
 
 /**
- * Canonical AI SDK messages for the direct-response expansion path. The
- * browser-facing representation is stored intact as role plus parts; the
- * monotonically increasing sequence supplies deterministic Conversation order.
- * This table is not read by the production Run/AG-UI path before cutover.
+ * The Turn statuses that are an Outcome — the Turn is finished and will never
+ * change again (spec #654's at-most-once invariant). Deliberately separate from
+ * {@link TERMINAL_RUN_STATUSES} even though the words match: the Run machinery
+ * retires wholesale after v2 cutover and the Turn queue must not couple to it.
+ */
+export const TERMINAL_TURN_STATUSES = ["done", "error", "interrupted"] as const;
+
+/** Every legal `conversation_messages.status` for a user-role (Turn) row. */
+export const ALL_TURN_STATUSES = [
+	"queued",
+	"processing",
+	...TERMINAL_TURN_STATUSES,
+] as const;
+
+/**
+ * Canonical AI SDK messages, doubling as the /v2 Turn queue (ADR-0034,
+ * spec #654). The browser-facing representation is stored intact as role plus
+ * parts; the monotonically increasing sequence supplies deterministic
+ * Conversation order. A user-role row IS the Turn record: its status carries
+ * the `queued → processing → done|error|interrupted` lifecycle and the primary
+ * key is the enqueue idempotency key. Assistant rows carry no Turn semantics —
+ * the status check pins their lifecycle columns to NULL at the database so no
+ * writer can forge a Turn out of an assistant message. Turn mutations go
+ * through `turn-store.ts`. Not read by the production Run/AG-UI path.
  */
 export const conversationMessages = pgTable(
 	"conversation_messages",
@@ -190,6 +210,12 @@ export const conversationMessages = pgTable(
 		messageId: text("message_id").notNull(),
 		role: text("role").notNull(),
 		parts: jsonb("parts").notNull(),
+		/** Turn lifecycle; NULL exactly when the row is not a Turn (assistant). */
+		status: text("status"),
+		/** Stamped by the queued→processing claim; NULL until then. */
+		startedAt: timestamp("started_at", { withTimezone: true }),
+		/** Stamped once by terminalization (or queued-cancel); never cleared. */
+		finishedAt: timestamp("finished_at", { withTimezone: true }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -204,6 +230,15 @@ export const conversationMessages = pgTable(
 		check(
 			"conversation_messages_role_check",
 			sql`${t.role} in ('user', 'assistant')`,
+		),
+		// "Turn semantics apply to user-role rows only" as a database invariant:
+		// a user row always has a legal Turn status, any other row never has one.
+		check(
+			"conversation_messages_turn_status_check",
+			// The explicit `is not null` matters: `null in (...)` is NULL, and a
+			// NULL check verdict passes, which would let a user row slip in with no
+			// Turn status at all.
+			sql`(${t.role} = 'user' and ${t.status} is not null and ${t.status} in (${statusList(ALL_TURN_STATUSES)})) or (${t.role} <> 'user' and ${t.status} is null)`,
 		),
 		index("conversation_messages_order_idx").on(
 			t.userId,

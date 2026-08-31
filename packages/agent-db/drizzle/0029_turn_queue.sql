@@ -1,0 +1,4 @@
+ALTER TABLE "conversation_messages" ADD COLUMN "status" text;--> statement-breakpoint
+ALTER TABLE "conversation_messages" ADD COLUMN "started_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "conversation_messages" ADD COLUMN "finished_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "conversation_messages" ADD CONSTRAINT "conversation_messages_turn_status_check" CHECK (("conversation_messages"."role" = 'user' and "conversation_messages"."status" is not null and "conversation_messages"."status" in ('queued', 'processing', 'done', 'error', 'interrupted')) or ("conversation_messages"."role" <> 'user' and "conversation_messages"."status" is null));
