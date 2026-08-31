@@ -5,6 +5,7 @@ import type { AppDeps } from "@/deps";
 import type { ConversationStore } from "@/features/conversation-store/conversation-store";
 import { PostgresConversationStore } from "@/features/conversation-store/postgres-conversation-store";
 import type { ExposureGate } from "@/features/exposure-gate";
+import type { ConversationSummary } from "./conversations.controller";
 import type { InternalIdentity } from "./conversations.schema";
 
 const { createApp } = await import("@/app");
@@ -50,26 +51,17 @@ const identityHeaders = {
 	"x-partner-code": "partner-1",
 };
 
-interface SummaryBody {
-	conversationId: string;
-	title: string | null;
-	scope: string;
-	createdAt: string;
-	lastActivityAt: string;
-	archivedAt: string | null;
-}
-
 async function createV2Conversation(
 	app: ReturnType<typeof buildApp>,
 	body: Record<string, unknown> = {},
-): Promise<SummaryBody> {
+): Promise<ConversationSummary> {
 	const res = await app.request("/v2/conversations", {
 		method: "POST",
 		headers: identityHeaders,
 		body: JSON.stringify(body),
 	});
 	expect(res.status).toBe(201);
-	return (await res.json()) as SummaryBody;
+	return (await res.json()) as ConversationSummary;
 }
 
 describe("POST /v2/conversations", () => {
@@ -141,20 +133,22 @@ describe("GET/PATCH/DELETE /v2/conversations", () => {
 				body: JSON.stringify({ archived: true }),
 			});
 			expect(archive.status).toBe(200);
-			expect(((await archive.json()) as SummaryBody).archivedAt).not.toBeNull();
+			expect(
+				((await archive.json()) as ConversationSummary).archivedAt,
+			).not.toBeNull();
 
 			const regular = await app.request("/v2/conversations", {
 				headers: identityHeaders,
 			});
 			expect(
-				((await regular.json()) as { conversations: SummaryBody[] })
+				((await regular.json()) as { conversations: ConversationSummary[] })
 					.conversations,
 			).toHaveLength(0);
 			const archived = await app.request("/v2/conversations?archived=true", {
 				headers: identityHeaders,
 			});
 			expect(
-				((await archived.json()) as { conversations: SummaryBody[] })
+				((await archived.json()) as { conversations: ConversationSummary[] })
 					.conversations,
 			).toHaveLength(1);
 
@@ -175,7 +169,7 @@ describe("GET/PATCH/DELETE /v2/conversations", () => {
 				},
 			);
 			expect(unarchive.status).toBe(200);
-			const back = (await unarchive.json()) as SummaryBody;
+			const back = (await unarchive.json()) as ConversationSummary;
 			expect(back).toMatchObject({
 				title: "renamed while archived",
 				archivedAt: null,
@@ -256,7 +250,7 @@ describe("v2 surface boundaries", () => {
 				body: JSON.stringify({ summaryId: "sum-1" }),
 			});
 			expect(res.status).toBe(201);
-			const created = (await res.json()) as SummaryBody;
+			const created = (await res.json()) as ConversationSummary;
 			expect(created.scope).toBe("document");
 
 			const viaV2 = await app.request(
