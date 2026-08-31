@@ -35,11 +35,9 @@ export function mintGatewayToken(options: {
 	conversationId: string;
 	secret: string;
 	ttlSeconds?: number;
-	/** Epoch milliseconds; defaults to the wall clock. */
-	now?: number;
 }): Promise<string> {
 	const exp =
-		Math.floor((options.now ?? Date.now()) / 1000) +
+		Math.floor(Date.now() / 1000) +
 		(options.ttlSeconds ?? DEFAULT_GATEWAY_TOKEN_TTL_SECONDS);
 	return sign(
 		{

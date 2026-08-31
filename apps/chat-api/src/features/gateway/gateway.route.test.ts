@@ -62,8 +62,7 @@ const VALID_TOKEN = await mintGatewayToken({
 const EXPIRED_TOKEN = await mintGatewayToken({
 	conversationId: CONVERSATION_ID,
 	secret: SECRET,
-	ttlSeconds: 1,
-	now: 0,
+	ttlSeconds: -60,
 });
 const WRONG_SECRET_TOKEN = await mintGatewayToken({
 	conversationId: CONVERSATION_ID,

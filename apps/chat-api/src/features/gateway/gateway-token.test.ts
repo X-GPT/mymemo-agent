@@ -21,8 +21,7 @@ describe("gateway token mint/verify", () => {
 		const token = await mintGatewayToken({
 			conversationId: CONVERSATION_ID,
 			secret: SECRET,
-			ttlSeconds: 60,
-			now: 0,
+			ttlSeconds: -60,
 		});
 		const verdict = await verifyGatewayToken(token, {
 			secret: SECRET,
