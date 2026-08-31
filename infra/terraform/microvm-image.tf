@@ -32,7 +32,7 @@ data "aws_iam_policy_document" "microvm_image_build" {
 
   # Build logs land under /aws/lambda-microvms/<image-name> (hyphenated —
   # verified live on the #646 probe; the tutorial's /aws/lambda/microvms/...
-  # spelling is kept as a fallback in case the platform changes it back).
+  # spelling is wrong).
   statement {
     sid = "BuildLogs"
     actions = [
@@ -43,8 +43,6 @@ data "aws_iam_policy_document" "microvm_image_build" {
     resources = [
       "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda-microvms/${local.microvm_image_name}*",
       "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda-microvms/${local.microvm_image_name}*:*",
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/microvms/${local.microvm_image_name}*",
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda/microvms/${local.microvm_image_name}*:*",
     ]
   }
 }

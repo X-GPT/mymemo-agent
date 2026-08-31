@@ -13,12 +13,11 @@
 #  - run/create can throw a transient 502 — retried once.
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-set -a
-# shellcheck source=/dev/null
-source "${repo_root}/infra/deploy/prod.env"
-set +a
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+# shellcheck source=scripts/deploy/lib/load_config.sh
+source "${script_dir}/lib/load_config.sh"
+load_deploy_config
 : "${AWS_REGION:?AWS_REGION is required}"
 : "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID is required}"
 

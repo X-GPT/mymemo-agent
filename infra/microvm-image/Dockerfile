@@ -17,10 +17,10 @@ RUN dnf install -y bash git nodejs22 nodejs22-npm shadow-utils bubblewrap socat 
 RUN npm install -g @anthropic-ai/claude-agent-sdk@0.3.251 @anthropic-ai/claude-code@2.1.251
 
 # Managed policy tier: root-owned so the non-root runtime user can neither
-# replace it nor merge drop-ins in (the directory matters as much as the file).
-# Deny rules use Edit(...) — Write(...) entries are inert (the CLI warns they
-# are "not matched by file permission checks — only Edit").
-RUN mkdir -p /etc/claude-code && chown root:root /etc/claude-code && chmod 0755 /etc/claude-code
+# replace it nor merge drop-ins in (the directory matters as much as the file;
+# COPY creates it root:root 0755). Deny rules use Edit(...) — Write(...)
+# entries are inert (the CLI warns they are "not matched by file permission
+# checks — only Edit").
 COPY --chown=root:root --chmod=0644 managed-settings.json /etc/claude-code/managed-settings.json
 
 # Non-root runtime user: the policy tier's protection assumes the agent cannot
