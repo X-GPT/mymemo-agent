@@ -21,8 +21,8 @@ load_deploy_config
 : "${AWS_REGION:?AWS_REGION is required}"
 : "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID is required}"
 
-image_name="${MICROVM_IMAGE_NAME:-mymemo-agent-prod-microvm}"
-bucket="${MICROVM_ARTIFACT_BUCKET:-mymemo-agent-prod-artifacts}"
+image_name="mymemo-agent-prod-microvm"
+bucket="mymemo-agent-prod-artifacts"
 build_role_arn="arn:aws:iam::${AWS_ACCOUNT_ID}:role/mymemo-agent-prod-microvm-image-build"
 base_image_arn="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
 image_arn="arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:microvm-image:${image_name}"

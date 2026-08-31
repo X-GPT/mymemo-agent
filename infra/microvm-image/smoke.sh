@@ -47,5 +47,4 @@ else
 	r policy-dir PASS "/etc/claude-code not writable by $(whoami)"
 fi
 
-if [ "$fail" = 0 ]; then r done PASS "smoke complete"; else r done FAIL "smoke complete"; fi
 exit "$fail"

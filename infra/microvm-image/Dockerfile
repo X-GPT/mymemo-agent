@@ -30,7 +30,6 @@ COPY --chown=root:root --chmod=0755 server.mjs /opt/microvm/server.mjs
 COPY --chown=root:root --chmod=0755 smoke.sh /opt/microvm/smoke.sh
 
 ENV CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
-EXPOSE 8080
 USER developer
 WORKDIR /home/developer/workspace
 ENTRYPOINT ["node", "/opt/microvm/server.mjs"]
