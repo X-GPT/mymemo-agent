@@ -342,6 +342,27 @@ resource "aws_iam_role_policy" "microvm_execution_checkpoints" {
   policy = data.aws_iam_policy_document.microvm_execution_checkpoints.json
 }
 
+# --- Gateway token signing secret -------------------------------------------
+# HMAC key for per-Conversation gateway tokens (minted at VM launch, verified
+# on every /v2/gateway request — both in chat-api, so the value is internal
+# and fully Terraform-generated; no manual creation step).
+
+resource "random_password" "gateway_token" {
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "gateway_token" {
+  name                    = "${local.common_name}-GATEWAY_TOKEN_SECRET"
+  description             = "HMAC signing key for per-Conversation /v2 gateway tokens"
+  recovery_window_in_days = 7
+}
+
+resource "aws_secretsmanager_secret_version" "gateway_token" {
+  secret_id     = aws_secretsmanager_secret.gateway_token.id
+  secret_string = random_password.gateway_token.result
+}
+
 # --- chat-api control-plane grants ------------------------------------------
 # Exactly the named control-plane actions plus the checkpoint-deletion S3
 # scope; chat-api never reads or writes checkpoint content (data plane stays

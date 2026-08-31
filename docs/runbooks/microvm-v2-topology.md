@@ -20,6 +20,9 @@ egress connector, the checkpoint bucket, and the IAM roles/grants — are in
      --secret-string '<key>'
    ```
 
+   `GATEWAY_TOKEN_SECRET` needs no such step: it is internal to chat-api
+   (mint and verify both happen there), so Terraform generates and stores it.
+
 2. **`terraform apply`.** One pass creates everything: subnets and route
    tables, the security group and its ingress counterparts on the agent DB /
    KB DB / Redis / ALB groups, the connector operator role, the connector,

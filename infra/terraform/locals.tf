@@ -82,6 +82,7 @@ locals {
     { name = "STATSIG_SERVER_SECRET", valueFrom = local.statsig_server_secret_arn },
     # The /v2 gateway route injects this key; it never reaches a MicroVM.
     { name = "OPENROUTER_API_KEY", valueFrom = local.openrouter_api_key_secret_arn },
+    { name = "GATEWAY_TOKEN_SECRET", valueFrom = aws_secretsmanager_secret.gateway_token.arn },
   ], local.live_redis_url_secret, local.agent_db_password_secret)
 
   agent_maintenance_environment = concat([
