@@ -26,9 +26,7 @@ else
 fi
 
 # Pinned versions (the spec's exact pins, not ranges).
-# Read the manifest with fs — the SDK's exports map refuses
-# require("…/package.json").
-v=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).version)' "$(npm root -g)/@anthropic-ai/claude-agent-sdk/package.json" 2>/dev/null)
+v=$(node -p 'require(process.argv[1]).version' "$(npm root -g)/@anthropic-ai/claude-agent-sdk/package.json" 2>/dev/null)
 if [ "$v" = "$SDK_VERSION" ]; then r sdk-pinned PASS "$v"; else r sdk-pinned FAIL "want $SDK_VERSION got ${v:-none}"; fi
 c=$(claude --version 2>/dev/null | head -1)
 case "$c" in
