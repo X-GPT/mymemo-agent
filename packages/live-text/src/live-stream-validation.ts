@@ -2,8 +2,6 @@ export const LIVE_STREAM_RUN_ID_MAX_LENGTH = 128;
 export const LIVE_STREAM_DEPLOYMENT_MAX_LENGTH = 64;
 export const LIVE_STREAM_PATH_SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-const LIVE_STREAM_TURN_ID_MAX_LENGTH = 128;
-
 function validatePathSafeIdentifier(
 	value: string,
 	maxLength: number,
@@ -29,7 +27,7 @@ export function validateLiveStreamRunId(value: string): void {
 export function validateLiveStreamTurnId(value: string): void {
 	validatePathSafeIdentifier(
 		value,
-		LIVE_STREAM_TURN_ID_MAX_LENGTH,
+		LIVE_STREAM_RUN_ID_MAX_LENGTH,
 		"turnId must be a path-safe Turn identifier",
 	);
 }

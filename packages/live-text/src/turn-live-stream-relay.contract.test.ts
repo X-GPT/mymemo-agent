@@ -22,14 +22,14 @@ afterAll(async () => {
 });
 
 turnLiveStreamRelayContract("in-memory", {
-	async create(options) {
+	create(options) {
 		return createInMemoryTurnLiveStreamRelay(options);
 	},
 });
 
 let redisDeployment = 0;
 turnLiveStreamRelayContract("Redis", {
-	async create(options) {
+	create(options) {
 		redisDeployment += 1;
 		return createRedisTurnLiveStreamRelay({
 			...options,

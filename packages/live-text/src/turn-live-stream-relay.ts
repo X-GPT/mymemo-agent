@@ -22,8 +22,6 @@ import {
  * subscriber recovers from durable history, never from this lane.
  */
 
-export const TURN_LIVE_STREAM_MAX_EVENT_BYTES = LIVE_STREAM_MAX_EVENT_BYTES;
-
 export const TURN_OUTCOMES = ["done", "error", "interrupted"] as const;
 export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
 
@@ -192,15 +190,10 @@ class TransportTurnLiveStreamPublisher implements TurnLiveStreamPublisher {
 		this.#onClose = onClose;
 	}
 
-	publish(chunk: Uint8Array): Promise<void> {
-		let chunkType: string;
-		try {
-			chunkType = parseUiMessageChunkType(chunk);
-			if (chunk.byteLength > TURN_LIVE_STREAM_MAX_EVENT_BYTES) {
-				throw new LiveStreamRelayError("event_too_large");
-			}
-		} catch (error) {
-			return Promise.reject(error);
+	async publish(chunk: Uint8Array): Promise<void> {
+		const chunkType = parseUiMessageChunkType(chunk);
+		if (chunk.byteLength > LIVE_STREAM_MAX_EVENT_BYTES) {
+			throw new LiveStreamRelayError("event_too_large");
 		}
 		return this.#publish(EVENT_DECODER.decode(chunk), chunkType);
 	}
