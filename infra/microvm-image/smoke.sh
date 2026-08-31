@@ -14,7 +14,12 @@ r() {
 
 # bubblewrap namespace smoke — sandbox-mode Bash rides on this. Proven at
 # DEFAULT capabilities by the #646 probe; re-proven here on every image.
-if bwrap --unshare-all --ro-bind / / --dev /dev true 2>/dev/null; then
+# SKIP_BWRAP=1: CI runs this in a Docker container whose seccomp blocks
+# namespace creation — presence is still checkable, the real namespace check
+# runs in-VM.
+if [ "${SKIP_BWRAP:-0}" = 1 ]; then
+	if command -v bwrap >/dev/null; then r bwrap-present PASS; else r bwrap-present FAIL "bubblewrap missing"; fi
+elif bwrap --unshare-all --ro-bind / / --dev /dev true 2>/dev/null; then
 	r bwrap PASS "bubblewrap can create namespaces"
 else
 	r bwrap FAIL "bwrap failed — sandbox-mode Bash unavailable"

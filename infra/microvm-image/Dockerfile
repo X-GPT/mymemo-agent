@@ -26,8 +26,8 @@ COPY --chown=root:root --chmod=0644 managed-settings.json /etc/claude-code/manag
 # Non-root runtime user: the policy tier's protection assumes the agent cannot
 # write /etc.
 RUN useradd -m -u 1000 developer
-COPY --chown=root:root --chmod=0755 server.mjs /opt/microvm/server.mjs
-COPY --chown=root:root --chmod=0755 smoke.sh /opt/microvm/smoke.sh
+COPY --chown=root:root --chmod=0644 server.mjs /opt/microvm/server.mjs
+COPY --chown=root:root --chmod=0644 smoke.sh /opt/microvm/smoke.sh
 
 ENV CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 USER developer

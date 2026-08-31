@@ -59,9 +59,7 @@ jobs:
       - name: Load deploy config
         run: |
           set -euo pipefail
-          set -a
           source infra/deploy/prod.env
-          set +a
           {
             printf 'AWS_REGION=%s\n' "${AWS_REGION}"
             printf 'AWS_ACCOUNT_ID=%s\n' "${AWS_ACCOUNT_ID}"
