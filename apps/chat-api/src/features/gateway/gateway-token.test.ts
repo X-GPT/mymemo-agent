@@ -5,12 +5,12 @@ const SECRET = "test-gateway-signing-secret";
 const CONVERSATION_ID = "11111111-2222-4333-8444-555555555555";
 
 describe("gateway token mint/verify", () => {
-	it("round-trips a validly minted token", () => {
-		const token = mintGatewayToken({
+	it("round-trips a validly minted token", async () => {
+		const token = await mintGatewayToken({
 			conversationId: CONVERSATION_ID,
 			secret: SECRET,
 		});
-		const verdict = verifyGatewayToken(token, {
+		const verdict = await verifyGatewayToken(token, {
 			secret: SECRET,
 			conversationId: CONVERSATION_ID,
 		});
@@ -20,59 +20,58 @@ describe("gateway token mint/verify", () => {
 		});
 	});
 
-	it("rejects an expired token", () => {
-		const token = mintGatewayToken({
+	it("rejects an expired token", async () => {
+		const token = await mintGatewayToken({
 			conversationId: CONVERSATION_ID,
 			secret: SECRET,
 			ttlSeconds: 60,
 			now: 0,
 		});
-		const verdict = verifyGatewayToken(token, {
+		const verdict = await verifyGatewayToken(token, {
 			secret: SECRET,
 			conversationId: CONVERSATION_ID,
-			now: 61_000,
 		});
 		expect(verdict).toEqual({ ok: false, reason: "expired" });
 	});
 
-	it("rejects a token minted for another Conversation", () => {
-		const token = mintGatewayToken({
+	it("rejects a token minted for another Conversation", async () => {
+		const token = await mintGatewayToken({
 			conversationId: "99999999-2222-4333-8444-555555555555",
 			secret: SECRET,
 		});
-		const verdict = verifyGatewayToken(token, {
+		const verdict = await verifyGatewayToken(token, {
 			secret: SECRET,
 			conversationId: CONVERSATION_ID,
 		});
 		expect(verdict).toEqual({ ok: false, reason: "wrong-conversation" });
 	});
 
-	it("rejects a tampered payload and a wrong secret", () => {
-		const token = mintGatewayToken({
+	it("rejects a tampered payload and a wrong secret", async () => {
+		const token = await mintGatewayToken({
 			conversationId: CONVERSATION_ID,
 			secret: SECRET,
 		});
-		const [prefix, payload, signature] = token.split(".");
+		const [header, , signature] = token.split(".");
 		const forged = Buffer.from(
 			JSON.stringify({ conversationId: CONVERSATION_ID, exp: 9999999999 }),
 		).toString("base64url");
 		expect(
-			verifyGatewayToken(`${prefix}.${forged}.${signature}`, {
+			await verifyGatewayToken(`${header}.${forged}.${signature}`, {
 				secret: SECRET,
 				conversationId: CONVERSATION_ID,
 			}),
 		).toEqual({ ok: false, reason: "bad-signature" });
 		expect(
-			verifyGatewayToken(`${prefix}.${payload}.${signature}`, {
+			await verifyGatewayToken(token, {
 				secret: "another-secret",
 				conversationId: CONVERSATION_ID,
 			}),
 		).toEqual({ ok: false, reason: "bad-signature" });
 	});
 
-	it("rejects garbage without throwing", () => {
-		for (const junk of ["", "Bearer", "a.b", "mmgw1.!!!.???"]) {
-			const verdict = verifyGatewayToken(junk, {
+	it("rejects garbage without throwing", async () => {
+		for (const junk of ["", "Bearer", "a.b", "a.!!!.???"]) {
+			const verdict = await verifyGatewayToken(junk, {
 				secret: SECRET,
 				conversationId: CONVERSATION_ID,
 			});
@@ -80,8 +79,8 @@ describe("gateway token mint/verify", () => {
 		}
 	});
 
-	it("mints a payload that fits runHookPayload (≤ 4 KB) with room to spare", () => {
-		const token = mintGatewayToken({
+	it("mints a payload that fits runHookPayload (≤ 4 KB) with room to spare", async () => {
+		const token = await mintGatewayToken({
 			conversationId: CONVERSATION_ID,
 			secret: SECRET,
 		});
@@ -89,8 +88,8 @@ describe("gateway token mint/verify", () => {
 		expect(Buffer.byteLength(token)).toBeLessThan(512);
 	});
 
-	it("carries only conversationId and exp — no field can smuggle a provider key to the VM", () => {
-		const token = mintGatewayToken({
+	it("carries only conversationId and exp — no field can smuggle a provider key to the VM", async () => {
+		const token = await mintGatewayToken({
 			conversationId: CONVERSATION_ID,
 			secret: SECRET,
 		});

@@ -55,9 +55,24 @@ function fakeUpstream(response: () => Response) {
 	return { calls, fetchImpl };
 }
 
-function validToken(conversationId = CONVERSATION_ID): string {
-	return mintGatewayToken({ conversationId, secret: SECRET });
-}
+const VALID_TOKEN = await mintGatewayToken({
+	conversationId: CONVERSATION_ID,
+	secret: SECRET,
+});
+const EXPIRED_TOKEN = await mintGatewayToken({
+	conversationId: CONVERSATION_ID,
+	secret: SECRET,
+	ttlSeconds: 1,
+	now: 0,
+});
+const WRONG_SECRET_TOKEN = await mintGatewayToken({
+	conversationId: CONVERSATION_ID,
+	secret: "other",
+});
+const WRONG_CONVERSATION_TOKEN = await mintGatewayToken({
+	conversationId: "99999999-2222-4333-8444-555555555555",
+	secret: SECRET,
+});
 
 const SSE_BODY = [
 	`data: {"type":"message_start","message":{"model":"anthropic/claude-sonnet-5","usage":{"input_tokens":12}}}`,
@@ -85,7 +100,7 @@ describe("POST /v2/gateway/:conversationId/*", () => {
 			{
 				method: "POST",
 				headers: {
-					authorization: `Bearer ${validToken()}`,
+					authorization: `Bearer ${VALID_TOKEN}`,
 					"content-type": "application/json",
 					"anthropic-version": "2023-06-01",
 					"x-api-key": "placeholder-should-not-forward",
@@ -129,7 +144,7 @@ describe("POST /v2/gateway/:conversationId/*", () => {
 			`/v2/gateway/${CONVERSATION_ID}/v1/messages`,
 			{
 				method: "POST",
-				headers: { authorization: `Bearer ${validToken()}` },
+				headers: { authorization: `Bearer ${VALID_TOKEN}` },
 				body: "{}",
 			},
 		);
@@ -164,7 +179,7 @@ describe("POST /v2/gateway/:conversationId/*", () => {
 			`/v2/gateway/${CONVERSATION_ID}/v1/messages`,
 			{
 				method: "POST",
-				headers: { authorization: `Bearer ${validToken()}` },
+				headers: { authorization: `Bearer ${VALID_TOKEN}` },
 				body: "{}",
 			},
 		);
@@ -181,23 +196,9 @@ describe("POST /v2/gateway/:conversationId/*", () => {
 	it.each([
 		["missing", undefined],
 		["garbage", "Bearer not-a-token"],
-		[
-			"expired",
-			`Bearer ${mintGatewayToken({
-				conversationId: CONVERSATION_ID,
-				secret: SECRET,
-				ttlSeconds: 1,
-				now: 0,
-			})}`,
-		],
-		[
-			"wrong-secret",
-			`Bearer ${mintGatewayToken({ conversationId: CONVERSATION_ID, secret: "other" })}`,
-		],
-		[
-			"wrong-conversation",
-			`Bearer ${mintGatewayToken({ conversationId: "99999999-2222-4333-8444-555555555555", secret: SECRET })}`,
-		],
+		["expired", `Bearer ${EXPIRED_TOKEN}`],
+		["wrong-secret", `Bearer ${WRONG_SECRET_TOKEN}`],
+		["wrong-conversation", `Bearer ${WRONG_CONVERSATION_TOKEN}`],
 	])("rejects a %s token with 401 and never calls upstream", async (_name, authorization) => {
 		const { calls, fetchImpl } = fakeUpstream(() => new Response("nope"));
 		const app = makeApp(gatewayConfig(), fetchImpl);
@@ -231,7 +232,7 @@ describe("POST /v2/gateway/:conversationId/*", () => {
 			`/v2/gateway/${CONVERSATION_ID}/v1/messages`,
 			{
 				method: "POST",
-				headers: { authorization: `Bearer ${validToken()}` },
+				headers: { authorization: `Bearer ${VALID_TOKEN}` },
 				body: "{}",
 			},
 		);
@@ -254,7 +255,7 @@ describe("POST /v2/gateway/:conversationId/*", () => {
 			`/v2/gateway/${CONVERSATION_ID}/v1/messages`,
 			{
 				method: "POST",
-				headers: { authorization: `Bearer ${validToken()}` },
+				headers: { authorization: `Bearer ${VALID_TOKEN}` },
 				body: "{}",
 			},
 		);

@@ -1,15 +1,17 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { sign, verify } from "hono/jwt";
+import {
+	JwtTokenExpired,
+	JwtTokenSignatureMismatched,
+} from "hono/utils/jwt/types";
 
 /**
  * Per-Conversation gateway tokens (ADR-0034, #659). chat-api mints one at VM
  * launch and delivers it via `runHookPayload`; the in-VM SDK presents it as its
  * API-key placeholder, and the /v2 gateway route verifies it statelessly before
- * injecting the real OpenRouter credential. The token carries only
- * `{ conversationId, exp }` — never a provider secret — so nothing VM-bound
- * ever holds a real credential.
+ * injecting the real OpenRouter credential. The token is an HS256 JWT carrying
+ * only `{ conversationId, exp }` — never a provider secret — so nothing
+ * VM-bound ever holds a real credential.
  */
-
-const TOKEN_PREFIX = "mmgw1";
 
 /**
  * Default lifetime: the platform's 8 h MicroVM `maximum-duration-in-seconds`
@@ -24,10 +26,6 @@ export interface GatewayTokenClaims {
 	exp: number;
 }
 
-function sign(payload: string, secret: string): string {
-	return createHmac("sha256", secret).update(payload).digest("base64url");
-}
-
 /**
  * Mint a per-Conversation gateway token. Called by orchestration at
  * `RunMicrovm`; the result must fit inside the ≤ 4 KB `runHookPayload`
@@ -39,14 +37,17 @@ export function mintGatewayToken(options: {
 	ttlSeconds?: number;
 	/** Epoch milliseconds; defaults to the wall clock. */
 	now?: number;
-}): string {
+}): Promise<string> {
 	const exp =
 		Math.floor((options.now ?? Date.now()) / 1000) +
 		(options.ttlSeconds ?? DEFAULT_GATEWAY_TOKEN_TTL_SECONDS);
-	const payload = Buffer.from(
-		JSON.stringify({ conversationId: options.conversationId, exp }),
-	).toString("base64url");
-	return `${TOKEN_PREFIX}.${payload}.${sign(payload, options.secret)}`;
+	return sign(
+		{
+			conversationId: options.conversationId,
+			exp,
+		} satisfies GatewayTokenClaims,
+		options.secret,
+	);
 }
 
 export type GatewayTokenVerdict =
@@ -58,57 +59,36 @@ export type GatewayTokenVerdict =
 
 /**
  * Statelessly verify a gateway token against the Conversation the request
- * claims to act for. The signature is checked before the payload is parsed so
- * unauthenticated input never reaches JSON.parse, and every failure is
- * reported by reason for logging — callers should answer all of them with the
- * same opaque 401.
+ * claims to act for. Every failure is reported by reason for logging — callers
+ * should answer all of them with the same opaque 401.
  */
-export function verifyGatewayToken(
+export async function verifyGatewayToken(
 	token: string,
-	options: {
-		secret: string;
-		conversationId: string;
-		/** Epoch milliseconds; defaults to the wall clock. */
-		now?: number;
-	},
-): GatewayTokenVerdict {
-	const [prefix, payload, signature, ...rest] = token.split(".");
-	if (
-		prefix !== TOKEN_PREFIX ||
-		payload === undefined ||
-		signature === undefined ||
-		rest.length > 0
-	) {
-		return { ok: false, reason: "malformed" };
-	}
-	const expected = Buffer.from(sign(payload, options.secret));
-	const presented = Buffer.from(signature);
-	if (
-		presented.length !== expected.length ||
-		!timingSafeEqual(presented, expected)
-	) {
-		return { ok: false, reason: "bad-signature" };
-	}
-	let claims: unknown;
+	options: { secret: string; conversationId: string },
+): Promise<GatewayTokenVerdict> {
+	let payload: Record<string, unknown>;
 	try {
-		claims = JSON.parse(Buffer.from(payload, "base64url").toString());
-	} catch {
+		payload = await verify(token, options.secret, "HS256");
+	} catch (error) {
+		if (error instanceof JwtTokenExpired) {
+			return { ok: false, reason: "expired" };
+		}
+		if (error instanceof JwtTokenSignatureMismatched) {
+			return { ok: false, reason: "bad-signature" };
+		}
 		return { ok: false, reason: "malformed" };
 	}
 	if (
-		typeof claims !== "object" ||
-		claims === null ||
-		typeof (claims as GatewayTokenClaims).conversationId !== "string" ||
-		typeof (claims as GatewayTokenClaims).exp !== "number"
+		typeof payload.conversationId !== "string" ||
+		typeof payload.exp !== "number"
 	) {
 		return { ok: false, reason: "malformed" };
 	}
-	const parsed = claims as GatewayTokenClaims;
-	if (parsed.exp * 1000 <= (options.now ?? Date.now())) {
-		return { ok: false, reason: "expired" };
-	}
-	if (parsed.conversationId !== options.conversationId) {
+	if (payload.conversationId !== options.conversationId) {
 		return { ok: false, reason: "wrong-conversation" };
 	}
-	return { ok: true, claims: parsed };
+	return {
+		ok: true,
+		claims: { conversationId: payload.conversationId, exp: payload.exp },
+	};
 }

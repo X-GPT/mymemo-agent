@@ -151,7 +151,7 @@ routes.all("/:conversationId/*", async (c) => {
 		/^Bearer\s+/i,
 		"",
 	);
-	const verdict = verifyGatewayToken(token, {
+	const verdict = await verifyGatewayToken(token, {
 		secret: config.gatewayTokenSecret,
 		conversationId,
 	});
