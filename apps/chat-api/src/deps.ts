@@ -70,6 +70,12 @@ export interface AppDeps {
 	 * parsed and before any write. Fails closed.
 	 */
 	exposureGate: ExposureGate;
+	/**
+	 * Upstream HTTP client for the /v2 model gateway. Injectable so route tests
+	 * exercise token validation, credential injection, and streaming without a
+	 * network or a real OpenRouter key.
+	 */
+	gatewayUpstreamFetch: typeof fetch;
 }
 
 /** Hono environment: pino logger vars plus request-scoped dependencies and identity. */
@@ -121,5 +127,6 @@ export function createDeps(
 		liveStreamTelemetry,
 		closeLiveResources: () => liveStreamRelay.close(),
 		exposureGate,
+		gatewayUpstreamFetch: fetch,
 	};
 }

@@ -7,6 +7,7 @@ import artifactRoutes from "./features/artifacts/artifacts.route";
 import conversationHistoryRoutes from "./features/conversation-history/conversation-history.route";
 import conversationLifecycleRoutes from "./features/conversations/conversation-lifecycle.route";
 import conversationsRoutes from "./features/conversations/conversations.route";
+import gatewayRoutes from "./features/gateway/gateway.route";
 
 /**
  * Build the app from a validated config. Dependencies are injectable so route
@@ -30,6 +31,7 @@ export function createApp(config: ApiConfig, deps: AppDeps) {
 	// v2 carries the lifecycle routes with v1 semantics (#657); the Run,
 	// history, and artifact routes stay v1-only.
 	app.route("/v2/conversations", conversationLifecycleRoutes);
+	app.route("/v2/gateway", gatewayRoutes);
 
 	return app;
 }
