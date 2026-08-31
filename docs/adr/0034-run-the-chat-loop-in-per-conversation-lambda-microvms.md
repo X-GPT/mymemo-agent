@@ -1,0 +1,78 @@
+# Run the chat loop in per-Conversation Lambda MicroVMs behind a process trust boundary
+
+Status: accepted
+
+Supersedes [ADR-0031](0031-make-agentcore-the-sole-execution-runtime.md) (AgentCore
+as sole execution runtime) and [ADR-0033](0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)
+(the Vercel/Harness chat path, abandoned before production mounting). Repeals
+[ADR-0001](0001-split-runtime-trust-boundary.md)'s split runtime a second way — see below.
+Decided on [wayfinder map #644](https://github.com/X-GPT/mymemo-agent/issues/644);
+the buildable contract is [Spec #654](https://github.com/X-GPT/mymemo-agent/issues/654).
+
+MyMemo chat (`/v2/*`) runs on **one persistent AWS Lambda MicroVM per Conversation**
+(Firecracker isolation, AWS-mandated single-tenant), hosting a **trusted MyMemo
+in-VM server** that runs the Claude Agent SDK loop, serves the document tools as
+in-process MCP, drains work from Postgres, publishes the stream over Redis, and
+checkpoints state to S3 — while the **untrusted Claude Code CLI it spawns** is
+confined by OS-sandboxed Bash (bubblewrap, network deny-all), cwd-scoped file
+tools, a root-owned managed-settings policy tier baked into the image, and a
+**credential-free environment**.
+
+## The trust boundary
+
+ADR-0001 saw a dichotomy: run the loop inside the untrusted sandbox (and maintain
+compensating machinery — gateway, per-turn token minting, per-token audience
+separation — forever), or split the loop into a trusted service. Cheap
+per-Conversation microVMs create a third structure ADR-0001 didn't have:
+
+- **The microVM is the tenant boundary.** One Conversation per VM, never shared.
+- **A process boundary inside the VM is the trust boundary.** All data-plane
+  credentials (agent DB, KB DB, Redis) live only in the trusted server process;
+  the CLI's env carries none, so prompt-injected Bash and file tools have nothing
+  to exfiltrate — and egress is locked at the network layer regardless (VPC
+  egress connector, no-NAT subnets, security groups allowing only RDS, Redis, and
+  the gateway; full-routing verified live).
+- **The compensating machinery ADR-0001 feared shrinks to one gateway for the
+  model key** — a streaming route in chat-api that validates a per-Conversation
+  token (delivered via `runHookPayload`) and injects the OpenRouter credential.
+  DB/KB/Redis credentials never enter the untrusted surface, so they need no
+  brokering at all. ADR-0001's "fallbacks must preserve the split" constraint is
+  retired: the split is no longer the safety mechanism; the microVM plus the
+  process boundary is.
+
+## Considered options
+
+- **Keep AgentCore + E2B (ADR-0031)** — rejected again: the split's operational
+  weight (dispatch pipeline, ownership fencing, reclamation, two runtimes) exists
+  to compensate for boundaries the microVM provides natively.
+- **The Vercel/Harness path (ADR-0033)** — abandoned: the bridge made
+  `settingSources`/`canUseTool` unreachable, inbound was ungoverned, egress could
+  not be locked below two public hosts, and MyMemo could not pin its own SDK.
+  In-VM, MyMemo owns the `query()` call, the platform authenticates inbound (JWE
+  per-VM tokens), and egress lockdown is measured.
+- **Restore the split runtime in-VM** (host tools outside, every built-in off) —
+  rejected a fourth time; the process boundary delivers the same credential
+  isolation without amputating the toolset.
+
+## Measured facts this decision rests on (probe #646, egress probe #651)
+
+Unprivileged user namespaces and bubblewrap work in the guest kernel at default
+capabilities (no `--additional-os-capabilities`); the root-owned policy tier is
+non-writable by the non-root agent; suspend/resume preserves `~/.claude` and the
+workspace; the authenticated per-VM endpoint streams SSE; a no-NAT VPC egress
+connector kills internet egress (full routing, not split routing).
+
+## Consequences
+
+- chat-api gains MicroVM **control-plane** IAM (`RunMicrovm`, auth-token minting,
+  `TerminateMicrovm`, scoped S3) and the OpenRouter secret — a deliberate
+  revision of the rule keeping provider credentials out of chat-api. It gains no
+  data-plane credential reachable from the untrusted surface.
+- The Run domain model retires: Turns (the user-message row's status lifecycle)
+  replace Runs; serialization is the VM's single drain loop, not admission
+  machinery. `CONTEXT.md` carries the surgery.
+- Preconditions are named in Spec #654 and gated: the pre-cutover verification
+  checklist (egress positive control, IMDS block, model-driven confinement,
+  gateway behavior) must pass in staging before cutover.
+- AgentCore Runtime, E2B, the dispatch pipeline, agent-maintenance, and the
+  Harness/`ai-chat` code retire wholesale after cutover, as their own effort.

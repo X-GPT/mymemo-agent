@@ -1,8 +1,9 @@
 # MyMemo Agent
 
-The MyMemo agent runtime: a chat service where a trusted agent loop works
-over a user's knowledge-base documents and workspace files, with untrusted
-code execution isolated in a per-conversation sandbox.
+The MyMemo agent runtime: a chat service where each Conversation is served by
+its own AWS Lambda MicroVM running the Claude Agent SDK, with the untrusted
+model-driven tools confined inside the VM by an OS sandbox and a process trust
+boundary. Decided on ADR-0034; built to Spec #654.
 
 ## Language
 
@@ -21,18 +22,20 @@ _Avoid_: summary, generated response
 The most recent successfully admitted user message, or Conversation creation
 when no message has been admitted. It determines list recency; rename and
 Archive are not Conversation activity.
-_Avoid_: metadata update, Run completion
+_Avoid_: metadata update, Turn completion
 
 **Archive**:
 A reversible lifecycle change that removes a Conversation from the default
 Conversation list and prevents it from receiving new messages, without deleting
-the Conversation or its history.
+the Conversation or its history. Archiving triggers no orchestration: the
+Conversation's VM winds down on its own idle policy.
 _Avoid_: delete, close
 
 **Permanent deletion**:
 The irreversible end of a Conversation that removes it and makes its history
-and Downloadable artifacts inaccessible. A Conversation with an active Run
-cannot be permanently deleted.
+inaccessible. A Conversation with a processing Turn cannot be permanently
+deleted. The deleting transaction also records the cleanup of the
+Conversation's VM and Checkpoint, which completes asynchronously.
 _Avoid_: Archive, soft delete
 
 **Scope**:
@@ -41,213 +44,128 @@ The set of documents a conversation may access — `general`, `collection`, or
 _Avoid_: permissions, access level
 
 **Execution runtime**:
-The trusted runtime that executes a Conversation's Runs. AgentCore is the only
-supported execution runtime; there is no runtime reassignment or Fargate
-fallback path.
-_Avoid_: Run target, worker preference, routing hint
+The per-Conversation AWS Lambda MicroVM that serves a Conversation's Turns —
+one VM per Conversation, never shared across tenants, persistent across turns
+via the platform's suspend/resume, replaced by rehydration from the Checkpoint.
+_Avoid_: AgentCore (retired), worker, sandbox (the OS sandbox confines Bash
+inside the VM; the VM is the runtime)
 
-**AgentCore dispatch**:
-An at-least-once request for AgentCore to acquire one exact Run from a
-Conversation. Repeated delivery never creates another Run.
-_Avoid_: Run retry, job, invocation attempt
+**In-VM server**:
+The trusted MyMemo process inside the Execution runtime. It alone holds the
+data-plane credentials (agent DB, KB DB, Redis), runs the Claude Agent SDK
+`query()`, serves the document tools as in-process MCP, drains Turns from
+Postgres, publishes the Live Stream, checkpoints state, and answers the
+lifecycle hooks. The Claude Code CLI it spawns receives a credential-free
+environment; that process boundary is the trust boundary.
+_Avoid_: bridge (the Harness-era word), agent loop (ambiguous)
 
-**Dispatch publication**:
-The committed record that one AgentCore dispatch envelope reached the queue.
-It states nothing about whether the Run was acquired or executed; Run state
-answers that.
-_Avoid_: delivery, dispatch sent, Run started
+**Turn**:
+The processing of one admitted user message by the Conversation's In-VM
+server: statuses `queued → processing → done | error | interrupted`, carried
+on the user-message row itself — the row is the Turn record. A Turn executes
+at most once and is never re-run; the VM's single drain loop is the
+serializer, so Turns run one at a time in submission order with no separate
+admission machinery. A second submission while one is processing simply
+queues.
+_Avoid_: Run (the v1 term), request, job
 
-**Dispatch publisher**:
-The trusted control-plane actor that turns pending AgentCore dispatch outbox
-records into queue envelopes. It never acquires Conversation Ownership or
-executes Runs.
-_Avoid_: dispatch worker, Run executor, execution runtime
-
-**Durable acquisition**:
-The committed, atomic transition in which one AgentCore Runtime invocation
-obtains live Conversation Ownership, advances its Ownership epoch, and starts
-its exact dispatched queued Run. A later Run requires a separate Runtime
-invocation rather than being drained from a global queue snapshot. Runtime entry
-or an HTTP response alone is not acquisition.
-_Avoid_: Claim, container start, invocation acceptance, queue acknowledgement,
-job reservation, run claim
-
-**Dispatch disposition**:
-The typed result of evaluating an AgentCore dispatch against durable Run and
-Ownership state, determining whether delivery is acknowledged or retried.
-_Avoid_: duplicate-or-missing, HTTP status, Run Outcome
-
-**Acquisition receipt**:
-The versioned, machine-readable proof that an AgentCore dispatch reached one
-specific Dispatch disposition. It is emitted only after the disposition's
-durable facts commit and contains no user or secret content.
-_Avoid_: AG-UI event, HTTP success, log line
-
-**Runtime session**:
-The AgentCore compute-lifecycle identity used to reconnect or stop the compute
-serving a Conversation. It is not the Claude Agent session and does not own
-Run ordering or continuity.
-_Avoid_: Agent session, Conversation, worker id
-
-**Run**:
-One backend execution attempt serving a user message. A Conversation's Runs are
-executed one at a time in submission order, and a Run executes at most once —
-never requeued or automatically retried.
-_Avoid_: job, task, attempt
-
-**Active Run**:
-A Run that has been admitted but has not yet reached its Outcome. A Conversation
-may hold only a bounded number of them at once; a submission past that bound is
-refused rather than accepted and delayed.
-_Avoid_: pending run, in-flight run, queued run (that is one status among several)
-
-**Run interruption**:
-A user-requested end to one queued or running Run that leaves its Conversation,
-Agent session, and Workspace available for later Runs, and its Conversation's
-other active Runs unaffected. Once accepted before another Outcome, interruption
-wins the Run's Outcome and prevents Downloadable artifact publication.
-_Avoid_: cancellation, Conversation termination, HITL interrupt
-
-**Conversation Ownership**:
-The exclusive execution authority over one Conversation, established by
-Durable acquisition, held under an Ownership lease and epoch, and recovered by
-Reclamation. It is the single authority every execution write is fenced on.
-_Avoid_: lock, worker assignment, run ownership
-
-**Ownership lease**:
-The time-bounded, exclusive write authority over one Conversation and every
-resource scoped to it, obtained by Durable acquisition and kept alive by
-heartbeat. Once it lapses or is superseded, that holder's writes are rejected.
-_Avoid_: run lease, sandbox lease (the decommissioned prototype concept)
-
-**Ownership epoch**:
-The per-Conversation number identifying one Durable acquisition, increasing
-with every acquisition. It names the holder in every fenced write, so a
-superseded holder is rejected even while it still believes it holds the lease.
-_Avoid_: fencing token, version, generation
-
-**Reclamation**:
-Terminalizing the started Runs of a Conversation whose Ownership lease lapsed
-without release, so a Conversation whose Runtime invocation vanished cannot
-hold executing Runs that never reach an Outcome. Never-started queued Runs
-remain for the next Dispatch attempt. Distinct from Recovering, which is a
-client behavior.
-_Avoid_: recovery (that word is the client-side term), stale-run recovery
-
-**Run event**:
-One record in a Run's durable, ordered Postgres event log — the source of truth
-for its completed Assistant messages, Tool activity, Outcome, and permanent
-Conversation history. A Run event may also be published to the Run's Live
-Stream after it commits, but Assistant text deltas are Live Stream entries and
-not Run events.
-
-**Live Stream**:
-The temporary, ordered sequence of standard AG-UI events for one active Run,
-buffered in the producing Runtime process's memory and relayed event-by-event
-over Redis pub/sub. No stream content is stored in Redis: a reader attaches by
-requesting the full backlog from the living producer, and every reconnect
-rebuilds the active Run from that backlog. The Live Stream ends with the Run's
-Outcome and dies with its producer; after either, permanent Conversation history
-is the only source.
-_Avoid_: Live preview, retained stream, replay cursor, Conversation history
-
-**Reconnecting**:
-Re-attaching to a usable Live Stream after a transient transport interruption,
-rebuilding the active Run from its full backlog.
-_Avoid_: Recovering, resuming after a cursor
-
-**Recovering**:
-Waiting for permanent Conversation history after a Live Stream becomes
-unusable, then replacing the Run's provisional client state with that durable
-projection.
-_Avoid_: Reconnecting, Reclamation (that is the maintenance-side term)
-
-**Conversation history**:
-The durable, user-visible record of submitted messages, Assistant messages,
-Tool activity, and Outcomes across a Conversation. It lasts as long as the
-Conversation and excludes provisional Live Stream text and the internal Agent session. On the
-public agent surface it is represented as AG-UI messages grouped by Run, with
-the Run's AG-UI terminal event kept alongside those messages rather than
-inventing an Outcome message. An interrupted Run retains every Run event
-committed before interruption; its provisional open response is excluded. A
-queued interruption retains the submitted User message even when no Runtime
-invocation delivered it to Claude.
-_Avoid_: thread history, Agent session, transcript
-
-**AG-UI agent surface**:
-The interoperable data plane through which a client starts a Run with
-`RunAgentInput` and receives standard AG-UI events. Its `threadId` names a
-MyMemo Conversation, its client-generated `runId` becomes the canonical Run
-identity and idempotency key on admission, and its `messageId` and `toolCallId`
-map to MyMemo-issued stable identities. Conversation listing, lifecycle, Scope,
-authorization, history paging, and artifacts remain MyMemo resource concerns.
-_Avoid_: Conversation API, Assistant Cloud
-
-**AI SDK agent surface**:
-An additive, AI SDK-compatible data plane through which a client submits a
-message to an existing Conversation and receives that Run's live response. It
-shares the same Run admission and execution authority as the AG-UI agent
-surface rather than defining a second execution path. On the Harness path it is
-served from the Conversation's Harness sandbox rather than by a Run.
-_Avoid_: messaging layer, AI SDK runtime
-
-**Harness sandbox**:
-The persistent Vercel Sandbox, named from the Conversation id, that hosts Claude
-Code and carries the Conversation's model-side memory across turns on the AI SDK
-chat path. It is neither the Workspace nor the Execution runtime.
-_Avoid_: sandbox (ambiguous with E2B), Runtime session, Agent session
-
-**Harness turn**:
-One request-scoped execution of Claude Code in the Conversation's Harness
-sandbox serving one user message on the AI SDK chat path. It is not a Run:
-never admitted, ordered, persisted, reclaimed, or given an Outcome. Each turn
-mints a UUID that appears in logs, in the Harness tool binding, and as
-`document_access_events.run_id`; there is no table for it.
-_Avoid_: Run, Agent session, request (ambiguous with the HTTP request)
-
-**Assistant text delta**:
-A bounded, provisional fragment of Assistant text appended to the Run's Live
-Stream before the provider response completes. It is never copied into Postgres
-as a delta row and may disappear when the Live Stream ends.
-_Avoid_: Run event, durable message, token
-
-**Assistant message**:
-One model-authored provider response within a run, identified by a stable,
-opaque, MyMemo-issued message id regardless of how many content blocks carry
-it. Assistant text remains provisional in the Live Stream until the provider
-response completes; the complete message is then committed to Postgres before
-its completion event is appended to the Live Stream. A textless response
-exposes its identity through its Tool invocations or its durable generative UI
-payloads. If its Run is interrupted or fails before completion, its provisional
-text does not enter permanent Conversation history.
-_Avoid_: token stream
-
-**Tool invocation**:
-One agent request to execute a model-facing tool, recorded as a durable run
-event and identified in the user-visible history by a stable, opaque,
-MyMemo-issued Tool invocation id, the tool name, and a bounded, client-safe
-projection of its arguments. It also carries the id of its owning Assistant
-message. Its result is recorded as a separate chronological item rather than
-updating the invocation.
-_Avoid_: tool call
-
-**Tool result**:
-The bounded, client-safe projection of returned content or an error indication
-from a tool invocation, recorded as an append-only durable run event in the
-user-visible history and linked to its Tool invocation by the same stable,
-opaque, MyMemo-issued id. Content is exposed only as a capped,
-non-authoritative preview, even when a short source happens to fit completely.
-An invocation has no result when the run terminates before the tool returns. An
-interruption does not fabricate a failure result for such an invocation. An
-error result does not end the run; the agent may continue after inspecting it.
-_Avoid_: tool response
+**Nudge**:
+The idempotent authenticated call from chat-api to the In-VM server meaning
+"consult Postgres now". It wakes a suspended VM, triggers draining, and may
+carry the one command — `{interrupt: messageId}` — targeting the processing
+or a queued Turn. It carries no message content; the work bus is Postgres.
+_Avoid_: dispatch, invoke
 
 **Outcome**:
-The single way a Run ends: `done`, `error`, or `interrupted`. One word per
-outcome at every layer — status `done`, run event `run_done`, client frame
-`done`; likewise `error`/`run_error` and
-`interrupted`/`run_interrupted`/`RUN_INTERRUPTED`.
+The single way a Turn ends: `done`, `error`, or `interrupted`, recorded as the
+user-message row's terminal status. One word per outcome at every layer.
 _Avoid_: completed, failed, finished, succeeded
+
+**Interruption**:
+A user request to stop the currently processing Turn, delivered as the nudge's
+interrupt command and applied via the SDK's `interrupt()`. It targets one Turn
+by message id, never flushes queued Turns, and wins the Turn's Outcome once
+accepted. Intent is ephemeral — a lost interrupt is retried by the user, and
+the durable fact is the Turn's `interrupted` status. Client disconnect never
+interrupts.
+_Avoid_: cancellation, abort (the SDK-internal mechanism), Run interruption
+
+**Live Stream**:
+The per-Turn sequence of UIMessage events published by the In-VM server over
+Redis pub/sub and relayed by any chat-api task to the submitting client's SSE
+response, scoped to that client's own Turn. Text deltas exist only here;
+completed messages commit to Postgres before their completion event is
+published. There is no backlog protocol and no mid-Turn re-attach: the Live
+Stream dies with its Turn, and a disconnected client Recovers from durable
+history.
+_Avoid_: retained stream, replay cursor, Conversation history
+
+**Assistant text delta**:
+A bounded, provisional fragment of Assistant text on the Turn's Live Stream
+before the provider response completes. Never persisted as a delta row; may
+disappear when the Live Stream ends.
+_Avoid_: durable message, token
+
+**Recovering**:
+Replacing a Turn's provisional client state with the durable history after its
+Live Stream becomes unusable. The only post-disconnect story; nothing
+re-attaches mid-Turn.
+_Avoid_: Reconnecting (the deleted v1 concept), resuming
+
+**Conversation history**:
+The durable, user-visible record of a Conversation: the UIMessage rows of
+`conversation_messages`, read in `sequence` order with cursor paging, each
+user message carrying its Turn status as metadata. An interrupted or error
+Turn retains exactly what durably completed — tool steps and finished
+Assistant messages, never provisional text, no fabricated failure results.
+_Avoid_: thread history, Agent session, transcript, Run history
+
+**Assistant message**:
+One model-authored provider response within a Turn, written by the In-VM
+server at its completion boundary — committed to Postgres before its
+completion event reaches the Live Stream.
+_Avoid_: token stream
+
+**Agent session**:
+The Claude SDK transcript carrying a Conversation's model-side memory across
+Turns. Stage 1: it lives in the VM's `~/.claude`, survives suspend/resume, and
+is preserved across VM replacement by the Checkpoint. Stage 2 (named
+follow-on): its source of truth moves to the Postgres SessionStore.
+_Avoid_: chat history, workspace
+
+**Workspace**:
+The Conversation's working directory on its VM's disk — where the confined
+file tools and sandboxed Bash act (cwd-scoped). It survives suspend/resume
+natively and VM replacement via the Checkpoint. Not the Agent session, and not
+durable beyond the Checkpoint.
+_Avoid_: sandbox, E2B (retired)
+
+**Checkpoint**:
+The Conversation's durable state bundle — the Agent session (`~/.claude`) and
+the Workspace — written to the Conversation's S3 prefix by the In-VM server on
+the suspend and terminate hooks, and restored on boot before the VM serves.
+The suspend-time Checkpoint is the durable one and is always complete:
+terminating a suspended VM fires no hook. Rehydration (a fresh VM restoring
+the Checkpoint) is how Conversations survive the platform's 8-hour cap and how
+image upgrades land.
+_Avoid_: snapshot (the platform's suspend artifact), backup
+
+**Gateway**:
+The streaming passthrough route in chat-api that is the VM's single door to
+the internet. It validates the per-Conversation token (delivered to the VM via
+`runHookPayload`, used by the SDK as its API-key placeholder), injects the
+real provider credential, forwards unbuffered, and logs per-Conversation
+usage. The provider key never enters the VM; VM egress is network-locked to
+RDS, Redis, and this route.
+_Avoid_: proxy service (it is a route, not a deployable), firewall
+
+**v2 chat surface**:
+The client data plane: `POST /v2/conversations/:id/messages` submits a
+UIMessage and streams the Turn's UIMessage events; `GET` reads history;
+`POST …/interrupt` stops the processing Turn. The resource is the
+Conversation; there is no client-visible Turn admission and no 409 — queueing
+falls out of the schema.
+_Avoid_: AI SDK agent surface (the v1-era name), AG-UI (retired with v1)
 
 **Searchable document**:
 An immutable item in the MyMemo knowledge base whose identity is stable across
@@ -276,28 +194,11 @@ An indexed chunk of a searchable document — the search and citation unit. A
 passage points at its searchable document.
 _Avoid_: chunk, excerpt
 
-**Workspace**:
-The conversation's sandbox filesystem (E2B `/home/user`) where the model's
-file and shell tools act. It *is* the paused E2B sandbox between turns —
-persistence is best-effort: reconnect restores it, but a lost sandbox starts
-the next turn empty. Run interruption preserves its current contents rather
-than rolling them back, so stopping a command may leave partial edits for a
-later Run to inspect or repair. Not the Runtime-side query cwd (that is only a
-stable projectKey anchor), and not durable like the Agent session.
-_Avoid_: sandbox (that is the runtime; the workspace is its filesystem)
-
-**Downloadable artifact**:
-A file deliberately published from a conversation's workspace for durable,
-user-visible listing and download, identified by its conversation-relative
-artifact path. Publishing that path again replaces the artifact; ordinary
-workspace files and the docs cache are not downloadable artifacts merely
-because they exist.
-_Avoid_: created file, attachment
-
 **Docs cache**:
-The reserved directory in a conversation's sandbox workspace where loaded
-searchable-document content is materialized. Reconstructible from the KB,
-persists across turns, never user work, dies with the conversation.
+The reserved directory in a Conversation's Workspace where loaded
+searchable-document content is materialized by the document tools.
+Reconstructible from the KB, carried by the Checkpoint, never user work, dies
+with the Conversation.
 _Avoid_: document store, workspace docs
 
 **Load**:
@@ -306,28 +207,34 @@ disk-only, with a metadata-only result. Re-loading a searchable document
 refreshes its cached copy.
 _Avoid_: fetch (the prototype path's word for content-into-context)
 
-**Agent session**:
-The internal, Runtime-owned Claude SDK transcript that carries a Conversation's
-model-side memory across Runs, including a successfully preserved interrupted
-Run even when its provisional response is absent from Conversation history. It
-is never client-facing or stored in the Workspace. On the AI SDK chat path the
-Agent session lives inside the Conversation's Harness sandbox.
-_Avoid_: chat history (that is the user-visible record in run events)
+## v1 language (historical — describes the Run path still serving production; retires with it at teardown)
 
-**Session mirror evidence**:
-A Run-local fact established only when its bound SessionStore successfully
-persists a non-empty batch for the main Agent session and has not subsequently
-observed that session's deletion. It can establish or advance the Conversation's
-resume pointer only in a qualifying `done` or `interrupted` terminal transaction.
-An SDK initialization id and subagent-only mirrors do not count, and a
-`mirror_error` disqualifies the Run's evidence.
-_Avoid_: SDK result id, initialization id, transcript contents
+One-line gists; full definitions live in git history at this file's pre-v2
+revisions. Never use these terms for v2 work.
 
-**Split runtime**:
-The architecture in which the agent loop runs in the trusted AgentCore Runtime
-while untrusted filesystem and shell execution stays in E2B.
-
-**Prototype path**:
-The superseded daemon-based architecture — agent loop inside the sandbox,
-gateway, per-turn tokens, sandbox leases. Decommissioned by hard swap; never
-a fallback.
+- **Run / Active Run / Run interruption / Run event**: the v1 execution model —
+  admitted, ordered backend attempts with a durable Postgres event log.
+  Replaced by Turns on the user-message row.
+- **AG-UI agent surface**: the v1 client data plane (RunAgentInput / AG-UI
+  events). Replaced by the v2 chat surface.
+- **AgentCore dispatch / Dispatch publication / Dispatch publisher / Dispatch
+  disposition / Acquisition receipt / Durable acquisition / Runtime session**:
+  the v1 dispatch pipeline delivering Runs to AgentCore. Retired; v2 has no
+  dispatch — the VM pulls from Postgres.
+- **Conversation Ownership / Ownership lease / Ownership epoch / Reclamation**:
+  v1's exclusive-execution fencing and crash recovery. Replaced by the
+  one-VM-per-Conversation tenancy, the transactional launch claim, and the
+  boot-time Turn sweep.
+- **Reconnecting**: v1's mid-Run Live-Stream re-attach with backlog. Deleted in
+  v2 — Recovering is the only post-disconnect story.
+- **Session mirror evidence**: v1's SessionStore mirroring proof. Returns, in
+  new form, with stage 2.
+- **Harness sandbox / Harness turn**: the abandoned Vercel/Harness chat path
+  (never production-mounted).
+- **Downloadable artifact**: v1's published workspace files and routes. Not
+  carried to v2.0; workspace files persist in the Checkpoint; publication may
+  return as an additive follow-on.
+- **Split runtime**: ADR-0001's trusted-loop/untrusted-execution split across
+  services. Repealed a second way by ADR-0034's in-VM process boundary.
+- **Prototype path**: the pre-split daemon architecture. Decommissioned long
+  before v2; never a fallback.
