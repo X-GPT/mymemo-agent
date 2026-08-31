@@ -52,6 +52,17 @@ variable "private_subnet_cidrs" {
   }
 }
 
+variable "microvm_private_subnet_cidrs" {
+  description = "Two non-overlapping CIDRs reserved for the no-NAT MicroVM egress connector subnets."
+  type        = list(string)
+  default     = ["172.31.82.0/24", "172.31.83.0/24"]
+
+  validation {
+    condition     = length(var.microvm_private_subnet_cidrs) == 2 && length(distinct(var.microvm_private_subnet_cidrs)) == 2
+    error_message = "Exactly two distinct MicroVM private subnet CIDRs are required."
+  }
+}
+
 variable "fck_nat_ami_id" {
   description = "Reviewed immutable ARM64 fck-nat AMI ID for the deployment region."
   type        = string

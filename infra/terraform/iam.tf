@@ -29,6 +29,7 @@ data "aws_iam_policy_document" "read_secrets" {
       local.agent_db_password_base_secret_arn,
       local.statsig_server_secret_arn,
       local.live_redis_url_secret_arn,
+      local.openrouter_api_key_secret_arn,
     ]
   }
 }

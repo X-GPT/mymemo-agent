@@ -156,3 +156,18 @@ output "shared_infra" {
     ecs_cluster_arn = local.shared_ecs_cluster_arn
   }
 }
+
+output "microvm_egress_connector_arn" {
+  description = "VPC egress network connector MicroVM Conversations run behind."
+  value       = aws_lambdacore_network_connector.microvm_egress.arn
+}
+
+output "microvm_checkpoint_bucket" {
+  description = "S3 bucket holding per-Conversation MicroVM checkpoints."
+  value       = aws_s3_bucket.microvm_checkpoints.bucket
+}
+
+output "microvm_execution_role_arn" {
+  description = "Execution role chat-api passes at RunMicrovm, scoped to conversations/*."
+  value       = aws_iam_role.microvm_execution.arn
+}
