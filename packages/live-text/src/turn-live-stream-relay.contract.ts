@@ -159,7 +159,6 @@ export function turnLiveStreamRelayContract(
 		});
 
 		it("rejects malformed, reserved-type, and oversize chunks without failing the stream", async () => {
-			expect(TURN_LIVE_STREAM_MAX_EVENT_BYTES).toBe(32 * 1_024);
 			const relay = await factory.create();
 			try {
 				const publisher = relay.openPublisher("turn-1");

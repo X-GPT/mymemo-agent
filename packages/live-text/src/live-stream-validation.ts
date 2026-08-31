@@ -2,7 +2,7 @@ export const LIVE_STREAM_RUN_ID_MAX_LENGTH = 128;
 export const LIVE_STREAM_DEPLOYMENT_MAX_LENGTH = 64;
 export const LIVE_STREAM_PATH_SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-export const LIVE_STREAM_TURN_ID_MAX_LENGTH = 128;
+const LIVE_STREAM_TURN_ID_MAX_LENGTH = 128;
 
 function validatePathSafeIdentifier(
 	value: string,

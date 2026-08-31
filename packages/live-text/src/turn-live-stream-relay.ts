@@ -1,11 +1,10 @@
 import { z } from "zod";
 import { createInMemoryRelayTransport } from "./in-memory-live-stream-relay";
-import { LiveStreamRelayError } from "./live-stream-events";
 import {
-	AsyncQueue,
-	type LiveStreamRelayTransport,
-	type LiveStreamSubscription,
-} from "./live-stream-relay";
+	LIVE_STREAM_MAX_EVENT_BYTES,
+	LiveStreamRelayError,
+} from "./live-stream-events";
+import { AsyncQueue, type LiveStreamRelayTransport } from "./live-stream-relay";
 import {
 	validateLiveStreamDeployment,
 	validateLiveStreamTurnId,
@@ -23,7 +22,7 @@ import {
  * subscriber recovers from durable history, never from this lane.
  */
 
-export const TURN_LIVE_STREAM_MAX_EVENT_BYTES = 32 * 1_024;
+export const TURN_LIVE_STREAM_MAX_EVENT_BYTES = LIVE_STREAM_MAX_EVENT_BYTES;
 
 export const TURN_OUTCOMES = ["done", "error", "interrupted"] as const;
 export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
@@ -86,12 +85,11 @@ export interface TurnLiveStreamRelayOptions {
 const EVENT_ENCODER = new TextEncoder();
 const EVENT_DECODER = new TextDecoder("utf-8", { fatal: true });
 
-export class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
+class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 	readonly #transport: LiveStreamRelayTransport;
 	readonly #channelPrefix: string;
 	readonly #testHooks: TurnLiveStreamRelayOptions["testHooks"];
 	readonly #publishers = new Set<TransportTurnLiveStreamPublisher>();
-	readonly #subscriptions = new Set<LiveStreamSubscription>();
 	#closed = false;
 
 	constructor(
@@ -146,12 +144,10 @@ export class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 			},
 			() => queue.fail(new LiveStreamRelayError("relay_failed")),
 		);
-		this.#subscriptions.add(subscription);
 		const abort = () => queue.end();
 		signal.addEventListener("abort", abort, { once: true });
 		return queue.iterate(async () => {
 			signal.removeEventListener("abort", abort);
-			this.#subscriptions.delete(subscription);
 			await subscription.close();
 		});
 	}
@@ -162,10 +158,6 @@ export class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 		await Promise.all(
 			[...this.#publishers].map((publisher) => publisher.close()),
 		);
-		await Promise.allSettled(
-			[...this.#subscriptions].map((subscription) => subscription.close()),
-		);
-		this.#subscriptions.clear();
 		await this.#transport.close();
 	}
 
@@ -214,11 +206,10 @@ class TransportTurnLiveStreamPublisher implements TurnLiveStreamPublisher {
 	}
 
 	publishOutcome(outcome: TurnOutcome): Promise<void> {
-		const event: TurnOutcomeEvent = TurnOutcomeEventSchema.parse({
-			type: TURN_OUTCOME_EVENT_TYPE,
-			outcome,
-		});
-		return this.#publish(JSON.stringify(event), TURN_OUTCOME_EVENT_TYPE);
+		return this.#publish(
+			JSON.stringify({ type: TURN_OUTCOME_EVENT_TYPE, outcome }),
+			TURN_OUTCOME_EVENT_TYPE,
+		);
 	}
 
 	#publish(serialized: string, chunkType: string): Promise<void> {
