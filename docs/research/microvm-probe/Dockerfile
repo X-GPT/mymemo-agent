@@ -5,9 +5,10 @@
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
 # bubblewrap = sandbox-mode Bash's filesystem isolation; socat = proxy relay;
-# nodejs22 runs the SDK; ripgrep backs Grep; iproute/bind-utils/nc for the egress probe.
-RUN dnf install -y bash git nodejs22 nodejs22-npm python3.12 \
-      bubblewrap socat ripgrep iproute bind-utils nmap-ncat util-linux \
+# nodejs22 runs the SDK; shadow-utils provides useradd; iproute/bind-utils/nc for egress.
+# (ripgrep dropped: not in AL2023 repos — it fails the whole dnf line; Claude Code ships its own rg.)
+RUN dnf install -y bash git nodejs22 nodejs22-npm python3.12 shadow-utils \
+      bubblewrap socat iproute bind-utils nmap-ncat util-linux \
  && dnf clean all
 
 # Pin the SDK version the map chose.

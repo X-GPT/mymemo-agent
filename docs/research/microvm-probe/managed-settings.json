@@ -2,12 +2,12 @@
   "permissions": {
     "deny": [
       "Read(~/.claude/.credentials.json)",
-      "Write(~/.claude/**)",      "Edit(~/.claude/**)",
-      "Write(~/.claude.json)",    "Edit(~/.claude.json)",
-      "Write(~/.claude.json.backup)", "Edit(~/.claude.json.backup)",
-      "Write(.claude/**)",        "Edit(.claude/**)",
-      "Write(.mcp.json)",         "Edit(.mcp.json)",
-      "Write(//etc/claude-code/**)", "Edit(//etc/claude-code/**)"
+      "Edit(~/.claude/**)",
+      "Edit(~/.claude.json)",
+      "Edit(~/.claude.json.backup)",
+      "Edit(.claude/**)",
+      "Edit(.mcp.json)",
+      "Edit(//etc/claude-code/**)"
     ],
     "disableBypassPermissionsMode": "disable"
   },

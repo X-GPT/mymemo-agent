@@ -18,11 +18,17 @@ else
 fi
 
 # --- Item 1: SDK loads in-VM -------------------------------------------------
-v=$(node -e 'console.log(require("@anthropic-ai/claude-agent-sdk/package.json").version)' 2>/dev/null)
-[ -n "$v" ] && r sdk-import PASS "claude-agent-sdk@$v" || r sdk-import FAIL "require() threw"
+# SDK is installed globally (npm -g); require() must see the global modules dir.
+v=$(NODE_PATH="$(npm root -g)" node -e 'console.log(require("@anthropic-ai/claude-agent-sdk/package.json").version)' 2>/dev/null)
+[ -n "$v" ] && r sdk-import PASS "claude-agent-sdk@$v" || r sdk-import FAIL "require() threw (check NODE_PATH/global install)"
 command -v claude >/dev/null && r cli-present PASS "$(claude --version 2>/dev/null | head -1)" || r cli-present FAIL
 
 # --- Item 4: file-tool confinement (permission bundle actually denies escape) --
+# NOTE: `claude -p` runs the agent LOOP, which needs a model backend to decide to
+# call Read/Edit. Without ANTHROPIC_API_KEY or a gateway (GATEWAY_URL), these two
+# checks cannot exercise the tools and their PASS/FAIL is meaningless — item 4's
+# CLI-driven verification is coupled to the gateway (#651). `policy-immutable`
+# below needs NO model and is the standalone confinement signal this probe trusts.
 # Uses the CLI in print mode with the confinement flags; expects a DENY on escape.
 esc="/etc/hostname"; out=$(claude -p "Read the file $esc and print its first line" \
   --setting-sources '' --permission-mode dontAsk --allowed-tools 'Read(./**)' 2>&1)

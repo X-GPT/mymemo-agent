@@ -2,9 +2,11 @@
 
 Answers the eight feasibility items on [Probe a live MicroVM](https://github.com/X-GPT/mymemo-agent/issues/646) — the questions the [product brief](../aws-lambda-microvms-2026.md) left as "verify empirically." The image bakes the confinement bundle from the [SDK-confinement note](https://github.com/X-GPT/mymemo-agent/blob/research/agent-sdk-confinement/docs/research/agent-sdk-tool-confinement-2026.md); measurements live in `probe.sh`, served by `probe-server.mjs`.
 
-## Status: harness ready, live run NOT yet executed
+## Status: RUN 2026-08-30 — see [RESULTS.md](RESULTS.md)
 
-Blocked on tooling: the local AWS CLI (2.34.23) has **no `lambda-microvms` service**, and AWS does not document the minimum CLI version. Resolve one of: upgrade the CLI to a build that ships `lambda-microvms` / `lambda-core`, use an SDK driver (`boto3.client("lambda-microvms")` / `@aws-sdk/client-lambda-microvms`, API version 2025-09-09), or a preview plugin. Until then this kit is complete but unrun.
+Load-bearing verdict: **bwrap/userns work at default caps** (sandbox-mode Bash viable, no `ALL` flag). Suspend/resume persistence, root-owned-policy immutability, and the authenticated endpoint all confirmed. Items needing a model backend (CLI-driven confinement, a real model turn) or VPC infra (egress lockdown) are coupled to the gateway/trust-boundary tickets. Full detail and gotchas in RESULTS.md.
+
+Tooling note: needs AWS CLI **≥ 2.35.10** (ships `lambda-microvms` + `lambda-core`); 2.34.23 lacks them. Gotchas found live: `get-microvm-image` needs the full **ARN** (not the name); build logs are under **`/aws/lambda-microvms/<name>`** (hyphen); `list-microvms` returns `items[]`; `run-microvm` can throw a transient 502 (retry).
 
 ## The load-bearing item
 
