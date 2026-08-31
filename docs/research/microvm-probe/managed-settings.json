@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(~/.claude/.credentials.json)",
+      "Write(~/.claude/**)",      "Edit(~/.claude/**)",
+      "Write(~/.claude.json)",    "Edit(~/.claude.json)",
+      "Write(~/.claude.json.backup)", "Edit(~/.claude.json.backup)",
+      "Write(.claude/**)",        "Edit(.claude/**)",
+      "Write(.mcp.json)",         "Edit(.mcp.json)",
+      "Write(//etc/claude-code/**)", "Edit(//etc/claude-code/**)"
+    ],
+    "disableBypassPermissionsMode": "disable"
+  },
+  "allowManagedMcpServersOnly": true,
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false
+  }
+}
