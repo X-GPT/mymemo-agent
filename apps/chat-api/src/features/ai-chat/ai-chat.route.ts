@@ -1,11 +1,10 @@
 import { sValidator as zValidator } from "@hono/standard-validator";
 import { Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import {
 	ConversationIdParam,
-	MAX_REQUEST_BODY_BYTES,
+	conversationBodyLimit,
 	RunIdParam,
 } from "@/features/conversations/conversations.schema";
 import { requireInternalIdentity } from "@/features/conversations/internal-identity";
@@ -83,14 +82,10 @@ function cleanupAfterStream(
 const activeTurns = new Set<string>();
 
 const routes = new Hono<AppEnv>();
-const limit = bodyLimit({
-	maxSize: MAX_REQUEST_BODY_BYTES,
-	onError: (c) => c.json({ error: "Request body too large" }, 413),
-});
 
 routes.post(
 	"/",
-	limit,
+	conversationBodyLimit,
 	zValidator("json", chatBody, (result, c) => {
 		if (!result.success) {
 			return c.json({ error: "Invalid AI SDK chat input" }, 400);

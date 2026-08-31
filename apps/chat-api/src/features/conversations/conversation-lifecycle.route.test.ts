@@ -122,8 +122,7 @@ describe("GET/PATCH/DELETE /v2/conversations", () => {
 		const tdb = await createTestDatabase();
 		try {
 			const store = new PostgresConversationStore(tdb.db);
-			const createApp2 = buildApp(store);
-			const { conversationId } = await createV2Conversation(createApp2);
+			const { conversationId } = await createV2Conversation(buildApp(store));
 			// Reads, renames, archives, and deletes bypass the exposure gate.
 			const app = buildApp(store, gateThatFailsIfConsulted());
 
