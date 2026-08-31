@@ -45,24 +45,9 @@ egress connector, the checkpoint bucket, and the IAM roles/grants — are in
    + `TerminateMicrovm` cycle under the chat-api task role before relying on
    them, and tighten if the policy simulator shows drift.
 
-## What this topology asserts
-
-- **Egress lockdown is routing + SGs, no Network Firewall**: the connector's
-  subnets have route tables with only the implicit VPC-local route (no NAT,
-  no IGW), and the `-microvm-vm` security group's egress reaches exactly the
-  agent Postgres, the KB Postgres, the Redis relay, VPC DNS, and port 80 on
-  the internal ALB (the gateway route). Verified live on map #644: this
-  configuration kills internet egress with full routing.
-- **The checkpoint bucket never expires objects.** Idle Conversations
-  rehydrate lazily after arbitrary gaps, so lifecycle rules only abort stale
-  multipart uploads and transition `conversations/` objects to
-  Standard-IA after 30 days. Deletion is explicit via the `pending_cleanup`
-  outbox.
-- **chat-api holds control-plane authority only**: RunMicrovm / auth-token
-  minting / TerminateMicrovm, checkpoint *deletion* under `conversations/*`,
-  and `iam:PassRole` for the VM execution role. Checkpoint read/write stays
-  with the VM execution role. Suspend/Resume are absent by design — the
-  platform idle policy owns them.
+What the topology asserts (egress lockdown shape, checkpoint retention, the
+control-plane/data-plane IAM split) is documented in the comments in
+`infra/terraform/microvm.tf` itself.
 
 ## Pre-cutover gate
 
