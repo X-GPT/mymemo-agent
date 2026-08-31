@@ -9,23 +9,16 @@ export interface TurnLiveStreamRelayContractFactory {
 	create(options?: TurnLiveStreamRelayOptions): TurnLiveStreamRelay;
 }
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-function chunk(value: unknown): Uint8Array {
-	return encoder.encode(JSON.stringify(value));
-}
-
-function textDelta(delta: string): Uint8Array {
-	return chunk({ type: "text-delta", id: "text-1", delta });
+function textDelta(delta: string): unknown {
+	return { type: "text-delta", id: "text-1", delta };
 }
 
 const FINISH = { type: "finish" } as const;
 
-async function collect(events: AsyncIterable<Uint8Array>): Promise<unknown[]> {
+async function collect(events: AsyncIterable<string>): Promise<unknown[]> {
 	const collected: unknown[] = [];
-	for await (const encoded of events) {
-		collected.push(JSON.parse(decoder.decode(encoded)));
+	for await (const message of events) {
+		collected.push(JSON.parse(message));
 	}
 	return collected;
 }
@@ -53,13 +46,10 @@ export function turnLiveStreamRelayContract(
 					type: "finish",
 					messageMetadata: { turnStatus: "done" },
 				};
-				await publisher.publish(chunk(finish));
+				await publisher.publish(finish);
 				await publisher.close();
 
-				expect(await collecting).toEqual([
-					...deltas.map((delta) => JSON.parse(decoder.decode(delta))),
-					finish,
-				]);
+				expect(await collecting).toEqual([...deltas, finish]);
 			} finally {
 				await relay.close();
 			}
@@ -79,11 +69,11 @@ export function turnLiveStreamRelayContract(
 						new AbortController().signal,
 					);
 					const collecting = collect(events);
-					await publisher.publish(chunk({ type: "start-step" }));
-					await publisher.publish(chunk({ type: "finish-step" }));
-					await publisher.publish(chunk({ type: "start-step" }));
-					await publisher.publish(chunk({ type: "finish-step" }));
-					await publisher.publish(chunk(terminal));
+					await publisher.publish({ type: "start-step" });
+					await publisher.publish({ type: "finish-step" });
+					await publisher.publish({ type: "start-step" });
+					await publisher.publish({ type: "finish-step" });
+					await publisher.publish(terminal);
 					await publisher.close();
 					expect(await collecting).toEqual([
 						{ type: "start-step" },
@@ -111,13 +101,10 @@ export function turnLiveStreamRelayContract(
 				);
 				const collecting = collect(events);
 				await publisher.publish(textDelta("seen"));
-				await publisher.publish(chunk(FINISH));
+				await publisher.publish(FINISH);
 				await publisher.close();
 
-				expect(await collecting).toEqual([
-					{ type: "text-delta", id: "text-1", delta: "seen" },
-					FINISH,
-				]);
+				expect(await collecting).toEqual([textDelta("seen"), FINISH]);
 			} finally {
 				await relay.close();
 			}
@@ -128,7 +115,7 @@ export function turnLiveStreamRelayContract(
 			try {
 				const publisher = relay.openPublisher("turn-1");
 				await publisher.publish(textDelta("gone"));
-				await publisher.publish(chunk(FINISH));
+				await publisher.publish(FINISH);
 				await publisher.close();
 
 				const subscriber = new AbortController();
@@ -157,10 +144,10 @@ export function turnLiveStreamRelayContract(
 				expect(await abortedCollecting).toEqual([]);
 
 				await publisher.publish(textDelta("after-abort"));
-				await publisher.publish(chunk(FINISH));
+				await publisher.publish(FINISH);
 				await publisher.close();
 				expect(await stayingCollecting).toEqual([
-					{ type: "text-delta", id: "text-1", delta: "after-abort" },
+					textDelta("after-abort"),
 					FINISH,
 				]);
 			} finally {
@@ -178,37 +165,28 @@ export function turnLiveStreamRelayContract(
 				);
 				const collecting = collect(events);
 
-				await expect(
-					publisher.publish(encoder.encode("not json")),
-				).rejects.toMatchObject({ code: "invalid_event" });
-				await expect(publisher.publish(chunk(["a"]))).rejects.toMatchObject({
+				await expect(publisher.publish("not a chunk")).rejects.toMatchObject({
+					code: "invalid_event",
+				});
+				await expect(publisher.publish(["a"])).rejects.toMatchObject({
 					code: "invalid_event",
 				});
 				// A custom chunk type is not part of the stock grammar.
 				await expect(
-					publisher.publish(chunk({ type: "turn-outcome", outcome: "done" })),
+					publisher.publish({ type: "turn-outcome", outcome: "done" }),
 				).rejects.toMatchObject({ code: "invalid_event" });
 				// A known type with a malformed shape fails the grammar too.
 				await expect(
-					publisher.publish(chunk({ type: "text-delta", delta: "no id" })),
+					publisher.publish({ type: "text-delta", delta: "no id" }),
 				).rejects.toMatchObject({ code: "invalid_event" });
 				await expect(
-					publisher.publish(
-						chunk({
-							type: "text-delta",
-							id: "text-1",
-							delta: "x".repeat(LIVE_STREAM_MAX_EVENT_BYTES),
-						}),
-					),
+					publisher.publish(textDelta("x".repeat(LIVE_STREAM_MAX_EVENT_BYTES))),
 				).rejects.toMatchObject({ code: "event_too_large" });
 
 				await publisher.publish(textDelta("still-alive"));
-				await publisher.publish(chunk(FINISH));
+				await publisher.publish(FINISH);
 				await publisher.close();
-				expect(await collecting).toEqual([
-					{ type: "text-delta", id: "text-1", delta: "still-alive" },
-					FINISH,
-				]);
+				expect(await collecting).toEqual([textDelta("still-alive"), FINISH]);
 			} finally {
 				await relay.close();
 			}
@@ -224,8 +202,8 @@ export function turnLiveStreamRelayContract(
 				);
 				const collecting = collect(events);
 				const dataChunk = { type: "data-widget", data: { kind: "chart" } };
-				await publisher.publish(chunk(dataChunk));
-				await publisher.publish(chunk(FINISH));
+				await publisher.publish(dataChunk);
+				await publisher.publish(FINISH);
 				await publisher.close();
 				expect(await collecting).toEqual([dataChunk, FINISH]);
 			} finally {
@@ -238,12 +216,12 @@ export function turnLiveStreamRelayContract(
 			try {
 				const publisher = relay.openPublisher("turn-1");
 				await publisher.publish(textDelta("hello"));
-				await publisher.publish(chunk(FINISH));
+				await publisher.publish(FINISH);
 				await expect(
 					publisher.publish(textDelta("late")),
 				).rejects.toMatchObject({ code: "terminal_already_published" });
 				await expect(
-					publisher.publish(chunk({ type: "abort" })),
+					publisher.publish({ type: "abort" }),
 				).rejects.toMatchObject({ code: "terminal_already_published" });
 				await publisher.close();
 				await expect(
@@ -275,9 +253,9 @@ export function turnLiveStreamRelayContract(
 					publisher.publish(textDelta("will-fail")),
 				).rejects.toMatchObject({ code: "relay_failed" });
 				await expect(
-					publisher.publish(chunk({ type: "text-start", id: "text-1" })),
+					publisher.publish({ type: "text-start", id: "text-1" }),
 				).rejects.toMatchObject({ code: "producer_failed" });
-				await expect(publisher.publish(chunk(FINISH))).rejects.toMatchObject({
+				await expect(publisher.publish(FINISH)).rejects.toMatchObject({
 					code: "producer_failed",
 				});
 				expect(await subscriberFailure).toMatchObject({ code: "relay_failed" });

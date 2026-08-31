@@ -31,13 +31,8 @@ import {
 /** The stock chunk types that end a Turn's Live Stream — exactly one per
  * Turn. `finish-step` closes a provider call inside the Turn, never the
  * subscription. */
-export const TURN_TERMINAL_CHUNK_TYPES = ["finish", "abort", "error"] as const;
-export type TurnTerminalChunkType = (typeof TURN_TERMINAL_CHUNK_TYPES)[number];
-
-export function isTurnTerminalChunkType(
-	type: string,
-): type is TurnTerminalChunkType {
-	return (TURN_TERMINAL_CHUNK_TYPES as readonly string[]).includes(type);
+function isTerminalChunkType(type: unknown): boolean {
+	return type === "finish" || type === "abort" || type === "error";
 }
 
 /** Relay control signal for a died stream; not a UIMessage chunk (the stock
@@ -45,25 +40,26 @@ export function isTurnTerminalChunkType(
 const TURN_RELAY_FAILED_EVENT_TYPE = "turn-relay-failed" as const;
 
 export interface TurnLiveStreamPublisher {
-	/** Publish one serialized UIMessage chunk. Chunks validate against the
-	 * stock AI SDK v7 `UIMessageChunk` grammar; unknown or custom chunk types,
+	/** Publish one UIMessage chunk value. Chunks validate against the stock
+	 * AI SDK v7 `UIMessageChunk` grammar; unknown or custom chunk types,
 	 * malformed chunks, and oversize chunks are rejected without failing the
 	 * stream. A terminal chunk (`finish` | `abort` | `error`) latches the
 	 * publisher — exactly one per Turn. */
-	publish(chunk: Uint8Array): Promise<void>;
+	publish(chunk: unknown): Promise<void>;
 	close(): Promise<void>;
 }
 
 export interface TurnLiveStreamRelay {
 	openPublisher(turnId: string): TurnLiveStreamPublisher;
-	/** Subscribe to a Turn's live chunks. Delivery starts at subscription
-	 * time — there is no backlog; earlier chunks are simply missed. The
-	 * iteration ends after the Turn's terminal chunk (`finish` | `abort` |
-	 * `error`), or when `signal` aborts. */
+	/** Subscribe to a Turn's live chunks, each a serialized UIMessage chunk
+	 * ready for SSE framing. Delivery starts at subscription time — there is
+	 * no backlog; earlier chunks are simply missed. The iteration ends after
+	 * the Turn's terminal chunk (`finish` | `abort` | `error`), or when
+	 * `signal` aborts. */
 	subscribe(
 		turnId: string,
 		signal: AbortSignal,
-	): Promise<AsyncIterable<Uint8Array>>;
+	): Promise<AsyncIterable<string>>;
 	close(): Promise<void>;
 }
 
@@ -72,9 +68,6 @@ export interface TurnLiveStreamRelayOptions {
 		failPublishWhen?: (chunkType: string) => boolean;
 	};
 }
-
-const EVENT_ENCODER = new TextEncoder();
-const EVENT_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 	readonly #transport: LiveStreamRelayTransport;
@@ -109,10 +102,10 @@ class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 	async subscribe(
 		turnId: string,
 		signal: AbortSignal,
-	): Promise<AsyncIterable<Uint8Array>> {
+	): Promise<AsyncIterable<string>> {
 		this.#assertOpen();
 		validateLiveStreamTurnId(turnId);
-		const queue = new AsyncQueue<Uint8Array>();
+		const queue = new AsyncQueue<string>();
 		if (signal.aborted) {
 			queue.end();
 			return queue.iterate(async () => {});
@@ -130,10 +123,8 @@ class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 					queue.fail(new LiveStreamRelayError("relay_failed"));
 					return;
 				}
-				queue.push(EVENT_ENCODER.encode(message));
-				if (typeof type === "string" && isTurnTerminalChunkType(type)) {
-					queue.end();
-				}
+				queue.push(message);
+				if (isTerminalChunkType(type)) queue.end();
 			},
 			() => queue.fail(new LiveStreamRelayError("relay_failed")),
 		);
@@ -185,25 +176,25 @@ class TransportTurnLiveStreamPublisher implements TurnLiveStreamPublisher {
 		this.#onClose = onClose;
 	}
 
-	async publish(chunk: Uint8Array): Promise<void> {
-		let serialized: string;
-		let value: unknown;
-		try {
-			serialized = EVENT_DECODER.decode(chunk);
-			value = JSON.parse(serialized);
-		} catch {
-			throw new LiveStreamRelayError("invalid_event");
-		}
-		if (chunk.byteLength > LIVE_STREAM_MAX_EVENT_BYTES) {
-			throw new LiveStreamRelayError("event_too_large");
-		}
+	async publish(chunk: unknown): Promise<void> {
 		const publish = this.#publishTail.then(async () => {
 			if (this.#closed) throw new LiveStreamRelayError("producer_closed");
 			if (this.#failed) throw new LiveStreamRelayError("producer_failed");
 			if (this.#terminalPublished) {
 				throw new LiveStreamRelayError("terminal_already_published");
 			}
-			const validated = await validateUiMessageChunk(value);
+			const validated = await validateUiMessageChunk(chunk);
+			// Serialize the caller's value, not the schema output, so validation
+			// can never alter what goes over the wire.
+			let serialized: string;
+			try {
+				serialized = JSON.stringify(chunk);
+			} catch {
+				throw new LiveStreamRelayError("invalid_event");
+			}
+			if (Buffer.byteLength(serialized) > LIVE_STREAM_MAX_EVENT_BYTES) {
+				throw new LiveStreamRelayError("event_too_large");
+			}
 			try {
 				if (this.#testHooks?.failPublishWhen?.(validated.type)) {
 					throw new Error("injected Turn Live Stream publish failure");
@@ -213,7 +204,7 @@ class TransportTurnLiveStreamPublisher implements TurnLiveStreamPublisher {
 				this.#fail();
 				throw new LiveStreamRelayError("relay_failed");
 			}
-			if (isTurnTerminalChunkType(validated.type)) {
+			if (isTerminalChunkType(validated.type)) {
 				this.#terminalPublished = true;
 			}
 		});
