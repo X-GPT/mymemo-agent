@@ -1,10 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { LIVE_STREAM_MAX_EVENT_BYTES } from "./live-stream-events";
-import {
-	parseTurnOutcomeEvent,
-	TURN_OUTCOME_EVENT_TYPE,
-	type TurnLiveStreamRelay,
-	type TurnLiveStreamRelayOptions,
+import type {
+	TurnLiveStreamRelay,
+	TurnLiveStreamRelayOptions,
 } from "./turn-live-stream-relay";
 
 export interface TurnLiveStreamRelayContractFactory {
@@ -22,6 +20,8 @@ function textDelta(delta: string): Uint8Array {
 	return chunk({ type: "text-delta", id: "text-1", delta });
 }
 
+const FINISH = { type: "finish" } as const;
+
 async function collect(events: AsyncIterable<Uint8Array>): Promise<unknown[]> {
 	const collected: unknown[] = [];
 	for await (const encoded of events) {
@@ -35,7 +35,7 @@ export function turnLiveStreamRelayContract(
 	factory: TurnLiveStreamRelayContractFactory,
 ): void {
 	describe(`${name} Turn Live Stream relay`, () => {
-		it("delivers UIMessage chunks in order and ends after the Outcome event", async () => {
+		it("delivers UIMessage chunks in order and ends after the terminal chunk", async () => {
 			const relay = factory.create();
 			try {
 				const publisher = relay.openPublisher("turn-1");
@@ -49,26 +49,28 @@ export function turnLiveStreamRelayContract(
 					textDelta(`delta-${index + 1}`),
 				);
 				await Promise.all(deltas.map((delta) => publisher.publish(delta)));
-				await publisher.publishOutcome("done");
+				const finish = {
+					type: "finish",
+					messageMetadata: { turnStatus: "done" },
+				};
+				await publisher.publish(chunk(finish));
 				await publisher.close();
 
-				const received = await collecting;
-				expect(received).toEqual([
+				expect(await collecting).toEqual([
 					...deltas.map((delta) => JSON.parse(decoder.decode(delta))),
-					{ type: TURN_OUTCOME_EVENT_TYPE, outcome: "done" },
+					finish,
 				]);
-				const last = received.at(-1);
-				expect(parseTurnOutcomeEvent(chunk(last))).toEqual({
-					type: TURN_OUTCOME_EVENT_TYPE,
-					outcome: "done",
-				});
 			} finally {
 				await relay.close();
 			}
 		});
 
-		it("delivers each Outcome of the triad as the terminal event", async () => {
-			for (const outcome of ["done", "error", "interrupted"] as const) {
+		it("terminates on each of finish, abort, and error — but never finish-step", async () => {
+			for (const terminal of [
+				FINISH,
+				{ type: "abort" },
+				{ type: "error", errorText: "boom" },
+			]) {
 				const relay = factory.create();
 				try {
 					const publisher = relay.openPublisher("turn-1");
@@ -77,10 +79,18 @@ export function turnLiveStreamRelayContract(
 						new AbortController().signal,
 					);
 					const collecting = collect(events);
-					await publisher.publishOutcome(outcome);
+					await publisher.publish(chunk({ type: "start-step" }));
+					await publisher.publish(chunk({ type: "finish-step" }));
+					await publisher.publish(chunk({ type: "start-step" }));
+					await publisher.publish(chunk({ type: "finish-step" }));
+					await publisher.publish(chunk(terminal));
 					await publisher.close();
 					expect(await collecting).toEqual([
-						{ type: TURN_OUTCOME_EVENT_TYPE, outcome },
+						{ type: "start-step" },
+						{ type: "finish-step" },
+						{ type: "start-step" },
+						{ type: "finish-step" },
+						terminal,
 					]);
 				} finally {
 					await relay.close();
@@ -88,7 +98,7 @@ export function turnLiveStreamRelayContract(
 			}
 		});
 
-		it("has no backlog: a late subscriber misses earlier events", async () => {
+		it("has no backlog: a late subscriber misses earlier chunks", async () => {
 			const relay = factory.create();
 			try {
 				const publisher = relay.openPublisher("turn-1");
@@ -101,12 +111,12 @@ export function turnLiveStreamRelayContract(
 				);
 				const collecting = collect(events);
 				await publisher.publish(textDelta("seen"));
-				await publisher.publishOutcome("done");
+				await publisher.publish(chunk(FINISH));
 				await publisher.close();
 
 				expect(await collecting).toEqual([
 					{ type: "text-delta", id: "text-1", delta: "seen" },
-					{ type: TURN_OUTCOME_EVENT_TYPE, outcome: "done" },
+					FINISH,
 				]);
 			} finally {
 				await relay.close();
@@ -118,7 +128,7 @@ export function turnLiveStreamRelayContract(
 			try {
 				const publisher = relay.openPublisher("turn-1");
 				await publisher.publish(textDelta("gone"));
-				await publisher.publishOutcome("done");
+				await publisher.publish(chunk(FINISH));
 				await publisher.close();
 
 				const subscriber = new AbortController();
@@ -147,18 +157,18 @@ export function turnLiveStreamRelayContract(
 				expect(await abortedCollecting).toEqual([]);
 
 				await publisher.publish(textDelta("after-abort"));
-				await publisher.publishOutcome("done");
+				await publisher.publish(chunk(FINISH));
 				await publisher.close();
 				expect(await stayingCollecting).toEqual([
 					{ type: "text-delta", id: "text-1", delta: "after-abort" },
-					{ type: TURN_OUTCOME_EVENT_TYPE, outcome: "done" },
+					FINISH,
 				]);
 			} finally {
 				await relay.close();
 			}
 		});
 
-		it("rejects malformed, reserved-type, and oversize chunks without failing the stream", async () => {
+		it("rejects chunks outside the stock v7 grammar and oversize chunks without failing the stream", async () => {
 			const relay = factory.create();
 			try {
 				const publisher = relay.openPublisher("turn-1");
@@ -174,11 +184,13 @@ export function turnLiveStreamRelayContract(
 				await expect(publisher.publish(chunk(["a"]))).rejects.toMatchObject({
 					code: "invalid_event",
 				});
+				// A custom chunk type is not part of the stock grammar.
 				await expect(
-					publisher.publish(chunk({ delta: "no type" })),
+					publisher.publish(chunk({ type: "turn-outcome", outcome: "done" })),
 				).rejects.toMatchObject({ code: "invalid_event" });
+				// A known type with a malformed shape fails the grammar too.
 				await expect(
-					publisher.publish(chunk({ type: TURN_OUTCOME_EVENT_TYPE })),
+					publisher.publish(chunk({ type: "text-delta", delta: "no id" })),
 				).rejects.toMatchObject({ code: "invalid_event" });
 				await expect(
 					publisher.publish(
@@ -191,29 +203,48 @@ export function turnLiveStreamRelayContract(
 				).rejects.toMatchObject({ code: "event_too_large" });
 
 				await publisher.publish(textDelta("still-alive"));
-				await publisher.publishOutcome("done");
+				await publisher.publish(chunk(FINISH));
 				await publisher.close();
 				expect(await collecting).toEqual([
 					{ type: "text-delta", id: "text-1", delta: "still-alive" },
-					{ type: TURN_OUTCOME_EVENT_TYPE, outcome: "done" },
+					FINISH,
 				]);
 			} finally {
 				await relay.close();
 			}
 		});
 
-		it("publishes exactly one Outcome as the publisher's final event", async () => {
+		it("accepts data-* chunks as payload", async () => {
+			const relay = factory.create();
+			try {
+				const publisher = relay.openPublisher("turn-1");
+				const events = await relay.subscribe(
+					"turn-1",
+					new AbortController().signal,
+				);
+				const collecting = collect(events);
+				const dataChunk = { type: "data-widget", data: { kind: "chart" } };
+				await publisher.publish(chunk(dataChunk));
+				await publisher.publish(chunk(FINISH));
+				await publisher.close();
+				expect(await collecting).toEqual([dataChunk, FINISH]);
+			} finally {
+				await relay.close();
+			}
+		});
+
+		it("publishes exactly one terminal chunk as the publisher's final chunk", async () => {
 			const relay = factory.create();
 			try {
 				const publisher = relay.openPublisher("turn-1");
 				await publisher.publish(textDelta("hello"));
-				await publisher.publishOutcome("done");
+				await publisher.publish(chunk(FINISH));
 				await expect(
 					publisher.publish(textDelta("late")),
 				).rejects.toMatchObject({ code: "terminal_already_published" });
-				await expect(publisher.publishOutcome("done")).rejects.toMatchObject({
-					code: "terminal_already_published",
-				});
+				await expect(
+					publisher.publish(chunk({ type: "abort" })),
+				).rejects.toMatchObject({ code: "terminal_already_published" });
 				await publisher.close();
 				await expect(
 					publisher.publish(textDelta("closed")),
@@ -246,7 +277,7 @@ export function turnLiveStreamRelayContract(
 				await expect(
 					publisher.publish(chunk({ type: "text-start", id: "text-1" })),
 				).rejects.toMatchObject({ code: "producer_failed" });
-				await expect(publisher.publishOutcome("done")).rejects.toMatchObject({
+				await expect(publisher.publish(chunk(FINISH))).rejects.toMatchObject({
 					code: "producer_failed",
 				});
 				expect(await subscriberFailure).toMatchObject({ code: "relay_failed" });
@@ -256,7 +287,7 @@ export function turnLiveStreamRelayContract(
 			}
 		});
 
-		it("fails subscribers when the publisher closes without an Outcome", async () => {
+		it("fails subscribers when the publisher closes without a terminal chunk", async () => {
 			const relay = factory.create();
 			try {
 				const publisher = relay.openPublisher("turn-1");

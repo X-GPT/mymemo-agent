@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { type UIMessageChunk, uiMessageChunkSchema } from "ai";
 import { createInMemoryRelayTransport } from "./in-memory-live-stream-relay";
 import {
 	LIVE_STREAM_MAX_EVENT_BYTES,
@@ -15,58 +15,51 @@ import {
 } from "./redis-live-stream-relay";
 
 /**
- * The v2 Live Stream lane (spec #654): a Turn's UIMessage events published
- * over the payload-agnostic relay transport on a per-Turn channel. Pure
- * pub/sub — deliberately no producer-buffered backlog and no request/reply
- * re-attach. The Live Stream dies with its Turn; a late or disconnected
- * subscriber recovers from durable history, never from this lane.
+ * The v2 Live Stream lane (spec #654, chunk contract amended on #658): a
+ * Turn's UIMessage chunks published over the payload-agnostic relay transport
+ * on a per-Turn channel. The payload grammar is the stock AI SDK v7
+ * `UIMessageChunk` vocabulary (`ai@7.0.83`) — no custom chunk types; one
+ * assistant UIMessage per Turn, so the stock terminal chunks ARE the Turn's
+ * Outcome: `finish` (done), `abort` (interrupted), `error` (error). The lane
+ * carries the JSON chunk payloads only; the SSE envelope is the HTTP
+ * response's job (#667). Pure pub/sub — deliberately no producer-buffered
+ * backlog and no request/reply re-attach. The Live Stream dies with its Turn;
+ * a late or disconnected subscriber recovers from durable history, never from
+ * this lane.
  */
 
-export const TURN_OUTCOMES = ["done", "error", "interrupted"] as const;
-export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
+/** The stock chunk types that end a Turn's Live Stream — exactly one per
+ * Turn. `finish-step` closes a provider call inside the Turn, never the
+ * subscription. */
+export const TURN_TERMINAL_CHUNK_TYPES = ["finish", "abort", "error"] as const;
+export type TurnTerminalChunkType = (typeof TURN_TERMINAL_CHUNK_TYPES)[number];
 
-/** The Turn's terminal event on the Live Stream. Publish-side only via
- * `publishOutcome`; a UIMessage chunk may not claim this type. */
-export const TURN_OUTCOME_EVENT_TYPE = "turn-outcome" as const;
-const TURN_RELAY_FAILED_EVENT_TYPE = "turn-relay-failed" as const;
-
-const TurnOutcomeEventSchema = z
-	.object({
-		type: z.literal(TURN_OUTCOME_EVENT_TYPE),
-		outcome: z.enum(TURN_OUTCOMES),
-	})
-	.strict();
-
-export type TurnOutcomeEvent = z.infer<typeof TurnOutcomeEventSchema>;
-
-/** Recognize the Turn's Outcome event among subscribed Live Stream events. */
-export function parseTurnOutcomeEvent(
-	chunk: Uint8Array,
-): TurnOutcomeEvent | undefined {
-	try {
-		return TurnOutcomeEventSchema.parse(
-			JSON.parse(EVENT_DECODER.decode(chunk)),
-		);
-	} catch {
-		return undefined;
-	}
+export function isTurnTerminalChunkType(
+	type: string,
+): type is TurnTerminalChunkType {
+	return (TURN_TERMINAL_CHUNK_TYPES as readonly string[]).includes(type);
 }
 
+/** Relay control signal for a died stream; not a UIMessage chunk (the stock
+ * grammar rejects it at publish, so the payload namespace stays clean). */
+const TURN_RELAY_FAILED_EVENT_TYPE = "turn-relay-failed" as const;
+
 export interface TurnLiveStreamPublisher {
-	/** Publish one serialized UIMessage chunk (a JSON object with a string
-	 * `type`). Oversize or malformed chunks are rejected without failing the
-	 * stream. */
+	/** Publish one serialized UIMessage chunk. Chunks validate against the
+	 * stock AI SDK v7 `UIMessageChunk` grammar; unknown or custom chunk types,
+	 * malformed chunks, and oversize chunks are rejected without failing the
+	 * stream. A terminal chunk (`finish` | `abort` | `error`) latches the
+	 * publisher — exactly one per Turn. */
 	publish(chunk: Uint8Array): Promise<void>;
-	/** Publish the Turn's Outcome event — the stream's single terminal. */
-	publishOutcome(outcome: TurnOutcome): Promise<void>;
 	close(): Promise<void>;
 }
 
 export interface TurnLiveStreamRelay {
 	openPublisher(turnId: string): TurnLiveStreamPublisher;
-	/** Subscribe to a Turn's live events. Delivery starts at subscription
-	 * time — there is no backlog; earlier events are simply missed. The
-	 * iteration ends after the Outcome event, or when `signal` aborts. */
+	/** Subscribe to a Turn's live chunks. Delivery starts at subscription
+	 * time — there is no backlog; earlier chunks are simply missed. The
+	 * iteration ends after the Turn's terminal chunk (`finish` | `abort` |
+	 * `error`), or when `signal` aborts. */
 	subscribe(
 		turnId: string,
 		signal: AbortSignal,
@@ -138,7 +131,9 @@ class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 					return;
 				}
 				queue.push(EVENT_ENCODER.encode(message));
-				if (type === TURN_OUTCOME_EVENT_TYPE) queue.end();
+				if (typeof type === "string" && isTurnTerminalChunkType(type)) {
+					queue.end();
+				}
 			},
 			() => queue.fail(new LiveStreamRelayError("relay_failed")),
 		);
@@ -176,7 +171,7 @@ class TransportTurnLiveStreamPublisher implements TurnLiveStreamPublisher {
 	#publishTail = Promise.resolve();
 	#closed = false;
 	#failed = false;
-	#outcomePublished = false;
+	#terminalPublished = false;
 
 	constructor(
 		transport: LiveStreamRelayTransport,
@@ -191,29 +186,26 @@ class TransportTurnLiveStreamPublisher implements TurnLiveStreamPublisher {
 	}
 
 	async publish(chunk: Uint8Array): Promise<void> {
-		const chunkType = parseUiMessageChunkType(chunk);
+		let serialized: string;
+		let value: unknown;
+		try {
+			serialized = EVENT_DECODER.decode(chunk);
+			value = JSON.parse(serialized);
+		} catch {
+			throw new LiveStreamRelayError("invalid_event");
+		}
 		if (chunk.byteLength > LIVE_STREAM_MAX_EVENT_BYTES) {
 			throw new LiveStreamRelayError("event_too_large");
 		}
-		return this.#publish(EVENT_DECODER.decode(chunk), chunkType);
-	}
-
-	publishOutcome(outcome: TurnOutcome): Promise<void> {
-		return this.#publish(
-			JSON.stringify({ type: TURN_OUTCOME_EVENT_TYPE, outcome }),
-			TURN_OUTCOME_EVENT_TYPE,
-		);
-	}
-
-	#publish(serialized: string, chunkType: string): Promise<void> {
 		const publish = this.#publishTail.then(async () => {
 			if (this.#closed) throw new LiveStreamRelayError("producer_closed");
 			if (this.#failed) throw new LiveStreamRelayError("producer_failed");
-			if (this.#outcomePublished) {
+			if (this.#terminalPublished) {
 				throw new LiveStreamRelayError("terminal_already_published");
 			}
+			const validated = await validateUiMessageChunk(value);
 			try {
-				if (this.#testHooks?.failPublishWhen?.(chunkType)) {
+				if (this.#testHooks?.failPublishWhen?.(validated.type)) {
 					throw new Error("injected Turn Live Stream publish failure");
 				}
 				await this.#transport.publish(this.#channel, serialized);
@@ -221,8 +213,8 @@ class TransportTurnLiveStreamPublisher implements TurnLiveStreamPublisher {
 				this.#fail();
 				throw new LiveStreamRelayError("relay_failed");
 			}
-			if (chunkType === TURN_OUTCOME_EVENT_TYPE) {
-				this.#outcomePublished = true;
+			if (isTurnTerminalChunkType(validated.type)) {
+				this.#terminalPublished = true;
 			}
 		});
 		this.#publishTail = publish.catch(() => {});
@@ -245,35 +237,18 @@ class TransportTurnLiveStreamPublisher implements TurnLiveStreamPublisher {
 
 	async close(): Promise<void> {
 		if (this.#closed) return;
-		if (!this.#outcomePublished && !this.#failed) this.#fail();
+		if (!this.#terminalPublished && !this.#failed) this.#fail();
 		this.#closed = true;
 		await this.#publishTail;
 		this.#onClose();
 	}
 }
 
-/** A publishable UIMessage chunk is a JSON object with a non-empty string
- * `type` that does not claim one of this lane's reserved control types. */
-function parseUiMessageChunkType(chunk: Uint8Array): string {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(EVENT_DECODER.decode(chunk));
-	} catch {
-		throw new LiveStreamRelayError("invalid_event");
-	}
-	if (
-		typeof parsed !== "object" ||
-		parsed === null ||
-		Array.isArray(parsed) ||
-		!("type" in parsed) ||
-		typeof parsed.type !== "string" ||
-		parsed.type.length === 0 ||
-		parsed.type === TURN_OUTCOME_EVENT_TYPE ||
-		parsed.type === TURN_RELAY_FAILED_EVENT_TYPE
-	) {
-		throw new LiveStreamRelayError("invalid_event");
-	}
-	return parsed.type;
+/** Validate one parsed chunk against the stock AI SDK v7 grammar. */
+async function validateUiMessageChunk(value: unknown): Promise<UIMessageChunk> {
+	const result = await uiMessageChunkSchema().validate?.(value);
+	if (!result?.success) throw new LiveStreamRelayError("invalid_event");
+	return result.value;
 }
 
 export function createInMemoryTurnLiveStreamRelay(
