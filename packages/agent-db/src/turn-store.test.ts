@@ -47,6 +47,13 @@ function turnIdentity(messageId: string) {
 	return { userId: USER_ID, conversationId: CONVERSATION_ID, messageId };
 }
 
+async function claim() {
+	return await claimNextTurnTx(db, {
+		userId: USER_ID,
+		conversationId: CONVERSATION_ID,
+	});
+}
+
 async function enqueue(messageId: string) {
 	return await enqueueTurnTx(db, {
 		...turnIdentity(messageId),
@@ -82,10 +89,7 @@ describe("enqueueTurnTx", () => {
 
 	it("reports a duplicate client message id as a no-op and leaves the row untouched", async () => {
 		await enqueue("m1");
-		await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		await claim();
 
 		const duplicate = await enqueueTurnTx(db, {
 			...turnIdentity("m1"),
@@ -101,22 +105,14 @@ describe("enqueueTurnTx", () => {
 
 describe("claimNextTurnTx", () => {
 	it("returns null when nothing is queued", async () => {
-		expect(
-			await claimNextTurnTx(db, {
-				userId: USER_ID,
-				conversationId: CONVERSATION_ID,
-			}),
-		).toBeNull();
+		expect(await claim()).toBeNull();
 	});
 
 	it("claims the lowest-sequence queued Turn and stamps started_at", async () => {
 		await enqueue("m1");
 		await enqueue("m2");
 
-		const claimed = await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		const claimed = await claim();
 
 		expect(claimed?.messageId).toBe("m1");
 		expect(claimed?.status).toBe("processing");
@@ -127,32 +123,18 @@ describe("claimNextTurnTx", () => {
 	it("claims nothing while a Turn is processing", async () => {
 		await enqueue("m1");
 		await enqueue("m2");
-		await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		await claim();
 
-		expect(
-			await claimNextTurnTx(db, {
-				userId: USER_ID,
-				conversationId: CONVERSATION_ID,
-			}),
-		).toBeNull();
+		expect(await claim()).toBeNull();
 	});
 
 	it("claims the next Turn once the previous one terminalizes", async () => {
 		await enqueue("m1");
 		await enqueue("m2");
-		await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		await claim();
 		await terminalizeTurnTx(db, { ...turnIdentity("m1"), outcome: "done" });
 
-		const claimed = await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		const claimed = await claim();
 		expect(claimed?.messageId).toBe("m2");
 	});
 
@@ -161,10 +143,7 @@ describe("claimNextTurnTx", () => {
 		await enqueue("m2");
 		await cancelQueuedTurnTx(db, turnIdentity("m1"));
 
-		const claimed = await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		const claimed = await claim();
 		expect(claimed?.messageId).toBe("m2");
 	});
 });
@@ -176,10 +155,7 @@ describe("terminalizeTurnTx", () => {
 		"interrupted",
 	] as TurnOutcome[])("moves a processing Turn to %s with finished_at", async (outcome) => {
 		await enqueue("m1");
-		await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		await claim();
 
 		expect(
 			await terminalizeTurnTx(db, { ...turnIdentity("m1"), outcome }),
@@ -191,10 +167,7 @@ describe("terminalizeTurnTx", () => {
 
 	it("never transitions a terminal Turn again", async () => {
 		await enqueue("m1");
-		await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		await claim();
 		await terminalizeTurnTx(db, { ...turnIdentity("m1"), outcome: "done" });
 
 		expect(
@@ -217,10 +190,7 @@ describe("sweepStaleProcessingTurnsTx", () => {
 	it("terminalizes stale processing Turns as interrupted and leaves queued ones", async () => {
 		await enqueue("m1");
 		await enqueue("m2");
-		await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		await claim();
 
 		const swept = await sweepStaleProcessingTurnsTx(db, {
 			userId: USER_ID,
@@ -235,10 +205,7 @@ describe("sweepStaleProcessingTurnsTx", () => {
 
 	it("sweeps nothing on a repeat pass — interrupted Turns are terminal", async () => {
 		await enqueue("m1");
-		await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		await claim();
 		await sweepStaleProcessingTurnsTx(db, {
 			userId: USER_ID,
 			conversationId: CONVERSATION_ID,
@@ -267,10 +234,7 @@ describe("cancelQueuedTurnTx", () => {
 
 	it("refuses a processing Turn", async () => {
 		await enqueue("m1");
-		await claimNextTurnTx(db, {
-			userId: USER_ID,
-			conversationId: CONVERSATION_ID,
-		});
+		await claim();
 
 		expect(await cancelQueuedTurnTx(db, turnIdentity("m1"))).toBe(false);
 		expect((await loadTurn("m1")).status).toBe("processing");

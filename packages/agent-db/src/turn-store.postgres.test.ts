@@ -58,10 +58,7 @@ async function ownTurnStatuses(): Promise<Array<[string, string | null]>> {
 				eq(conversationMessages.conversationId, CONVERSATION_ID),
 			),
 		);
-	return rows.map(({ messageId, status }): [string, string | null] => [
-		messageId,
-		status,
-	]);
+	return rows.map((r) => [r.messageId, r.status] as [string, string | null]);
 }
 
 describe.skipIf(!RUN)("Turn queue against real Postgres", () => {
