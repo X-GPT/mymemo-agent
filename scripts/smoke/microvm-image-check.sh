@@ -25,7 +25,7 @@ docker run --rm --platform linux/arm64 --network none --entrypoint bash "$image"
 
 	node --version | grep -q "^v22\." || { echo "node is $(node --version), want v22"; exit 1; }
 
-	sdk="$(NODE_PATH="$(npm root -g)" node -e "console.log(require(\"@anthropic-ai/claude-agent-sdk/package.json\").version)")"
+	sdk="$(node -e "console.log(JSON.parse(require(\"fs\").readFileSync(process.argv[1], \"utf8\")).version)" "$(npm root -g)/@anthropic-ai/claude-agent-sdk/package.json")"
 	[ "$sdk" = "0.3.251" ] || { echo "SDK pinned to $sdk, want 0.3.251"; exit 1; }
 
 	cli="$(claude --version | head -1)"
@@ -41,7 +41,7 @@ docker run --rm --platform linux/arm64 --network none --entrypoint bash "$image"
 	[ "$own" = "root:root 644" ] || { echo "managed settings are $own, want root:root 644"; exit 1; }
 	dirown="$(stat -c "%U:%G %a" /etc/claude-code)"
 	[ "$dirown" = "root:root 755" ] || { echo "/etc/claude-code is $dirown, want root:root 755"; exit 1; }
-	if echo x > /etc/claude-code/managed-settings.json 2>/dev/null; then
+	if (echo x > /etc/claude-code/managed-settings.json) 2>/dev/null; then
 		echo "runtime user overwrote the managed settings"; exit 1
 	fi
 

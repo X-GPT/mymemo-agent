@@ -21,7 +21,9 @@ else
 fi
 
 # Pinned versions (the spec's exact pins, not ranges).
-v=$(NODE_PATH="$(npm root -g)" node -e 'console.log(require("@anthropic-ai/claude-agent-sdk/package.json").version)' 2>/dev/null)
+# Read the manifest with fs — the SDK's exports map refuses
+# require("…/package.json").
+v=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).version)' "$(npm root -g)/@anthropic-ai/claude-agent-sdk/package.json" 2>/dev/null)
 if [ "$v" = "$SDK_VERSION" ]; then r sdk-pinned PASS "$v"; else r sdk-pinned FAIL "want $SDK_VERSION got ${v:-none}"; fi
 c=$(claude --version 2>/dev/null | head -1)
 case "$c" in
@@ -33,7 +35,7 @@ esac
 # the directory too, or drop-ins merge in.
 own=$(stat -c '%U:%G %a' /etc/claude-code/managed-settings.json 2>/dev/null)
 if [ "$own" = "root:root 644" ]; then r policy-owner PASS "$own"; else r policy-owner FAIL "${own:-missing}"; fi
-if echo x >/etc/claude-code/managed-settings.json 2>/dev/null; then
+if (echo x >/etc/claude-code/managed-settings.json) 2>/dev/null; then
 	r policy-immutable FAIL "runtime user overwrote the policy file"
 else
 	r policy-immutable PASS "policy file not writable by $(whoami)"
