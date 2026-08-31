@@ -71,7 +71,7 @@ async function loadTurn(messageId: string) {
 
 describe("enqueueTurnTx", () => {
 	it("admits a user message as a queued Turn", async () => {
-		expect(await enqueue("m1")).toEqual({ enqueued: true });
+		expect(await enqueue("m1")).toBe(true);
 
 		const turn = await loadTurn("m1");
 		expect(turn.role).toBe("user");
@@ -92,7 +92,7 @@ describe("enqueueTurnTx", () => {
 			parts: [{ type: "text", text: "replacement" }],
 		});
 
-		expect(duplicate).toEqual({ enqueued: false });
+		expect(duplicate).toBe(false);
 		const turn = await loadTurn("m1");
 		expect(turn.status).toBe("processing");
 		expect(turn.parts).toEqual([{ type: "text", text: "m1" }]);

@@ -20,35 +20,15 @@ import {
 export type TurnStatus = (typeof ALL_TURN_STATUSES)[number];
 export type TurnOutcome = (typeof TERMINAL_TURN_STATUSES)[number];
 
-export interface TurnRecord {
-	sequence: number;
-	userId: string;
-	conversationId: string;
-	messageId: string;
-	parts: unknown;
-	status: TurnStatus;
-	startedAt: Date | null;
-	finishedAt: Date | null;
-	createdAt: Date;
-}
-
-type TurnRow = typeof conversationMessages.$inferSelect;
-
-function toTurnRecord(row: TurnRow): TurnRecord {
-	return {
-		sequence: row.sequence,
-		userId: row.userId,
-		conversationId: row.conversationId,
-		messageId: row.messageId,
-		parts: row.parts,
-		// The turn-status check constrains user rows to the Turn lifecycle, so a
-		// user-role row's status is a TurnStatus by database invariant.
-		status: row.status as TurnStatus,
-		startedAt: row.startedAt,
-		finishedAt: row.finishedAt,
-		createdAt: row.createdAt,
-	};
-}
+/**
+ * A user-role row narrowed to the Turn lifecycle: the turn-status check
+ * constrains user rows to a legal Turn status, so the narrowing holds by
+ * database invariant.
+ */
+export type TurnRecord = Omit<
+	typeof conversationMessages.$inferSelect,
+	"status"
+> & { status: TurnStatus };
 
 function turnKey(input: {
 	userId: string;
@@ -71,8 +51,8 @@ function conversationTurns(input: { userId: string; conversationId: string }) {
 }
 
 /**
- * Admit a user message as a `queued` Turn. Re-inserting the same client
- * message id is a reported no-op — the table's primary key is the idempotency
+ * Admit a user message as a `queued` Turn. Returns false for a re-insert of
+ * the same client message id — the table's primary key is the idempotency
  * authority, and the duplicate leaves the existing row (parts and Turn status
  * alike) untouched.
  */
@@ -84,13 +64,13 @@ export async function enqueueTurnTx(
 		messageId: string;
 		parts: unknown;
 	},
-): Promise<{ enqueued: boolean }> {
+): Promise<boolean> {
 	const inserted = await db
 		.insert(conversationMessages)
 		.values({ ...input, role: "user", status: "queued" })
 		.onConflictDoNothing()
 		.returning({ sequence: conversationMessages.sequence });
-	return { enqueued: inserted.length > 0 };
+	return inserted.length > 0;
 }
 
 /**
@@ -105,7 +85,7 @@ export async function enqueueTurnTx(
  */
 export async function claimNextTurnTx(
 	db: Database,
-	input: { userId: string; conversationId: string; now?: Date },
+	input: { userId: string; conversationId: string },
 ): Promise<TurnRecord | null> {
 	return await db.transaction(async (tx) => {
 		const [conversation] = await tx
@@ -147,10 +127,12 @@ export async function claimNextTurnTx(
 
 		const [claimed] = await tx
 			.update(conversationMessages)
-			.set({ status: "processing", startedAt: input.now ?? new Date() })
+			.set({ status: "processing", startedAt: new Date() })
 			.where(and(turnKey(next), eq(conversationMessages.status, "queued")))
 			.returning();
-		return claimed ? toTurnRecord(claimed) : null;
+		return claimed
+			? { ...claimed, status: claimed.status as TurnStatus }
+			: null;
 	});
 }
 
@@ -167,12 +149,11 @@ export async function terminalizeTurnTx(
 		conversationId: string;
 		messageId: string;
 		outcome: TurnOutcome;
-		now?: Date;
 	},
 ): Promise<boolean> {
 	const terminalized = await db
 		.update(conversationMessages)
-		.set({ status: input.outcome, finishedAt: input.now ?? new Date() })
+		.set({ status: input.outcome, finishedAt: new Date() })
 		.where(and(turnKey(input), eq(conversationMessages.status, "processing")))
 		.returning({ messageId: conversationMessages.messageId });
 	return terminalized.length > 0;
@@ -186,11 +167,11 @@ export async function terminalizeTurnTx(
  */
 export async function sweepStaleProcessingTurnsTx(
 	db: Database,
-	input: { userId: string; conversationId: string; now?: Date },
+	input: { userId: string; conversationId: string },
 ): Promise<string[]> {
 	const swept = await db
 		.update(conversationMessages)
-		.set({ status: "interrupted", finishedAt: input.now ?? new Date() })
+		.set({ status: "interrupted", finishedAt: new Date() })
 		.where(
 			and(
 				conversationTurns(input),
@@ -208,16 +189,11 @@ export async function sweepStaleProcessingTurnsTx(
  */
 export async function cancelQueuedTurnTx(
 	db: Database,
-	input: {
-		userId: string;
-		conversationId: string;
-		messageId: string;
-		now?: Date;
-	},
+	input: { userId: string; conversationId: string; messageId: string },
 ): Promise<boolean> {
 	const cancelled = await db
 		.update(conversationMessages)
-		.set({ status: "interrupted", finishedAt: input.now ?? new Date() })
+		.set({ status: "interrupted", finishedAt: new Date() })
 		.where(and(turnKey(input), eq(conversationMessages.status, "queued")))
 		.returning({ messageId: conversationMessages.messageId });
 	return cancelled.length > 0;
