@@ -2,9 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { type ApiConfig, loadApiConfigFromEnv } from "./env";
 
 /**
- * Split-runtime env ownership (MYM-45). `chat-api` owns the writable agent DB
- * and the Statsig exposure config; it must NOT require or read the worker-only
- * secrets (OpenRouter, KB). These tests pin that boundary.
+ * Split-runtime env ownership (MYM-45), revised by ADR-0034: `chat-api` owns
+ * the writable agent DB, the Statsig exposure config, and — for the /v2 model
+ * gateway — the OpenRouter credential. It must still NOT require or read the
+ * remaining worker-only secrets (KB, E2B). These tests pin that boundary.
  */
 
 /** A minimal env that loads cleanly. */
@@ -56,38 +57,40 @@ describe("loadApiConfigFromEnv — Downloadable artifact storage", () => {
 	});
 });
 
-describe("loadApiConfigFromEnv — production `ApiConfig` excludes path-specific secrets", () => {
-	it("boots without any worker-only secret present", () => {
+describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
+	it("boots without the gateway secrets; the gateway route degrades, not the boot", () => {
 		const env = baseEnv();
-		// None of these are set; chat-api must not require them.
 		expect(env.OPENROUTER_API_KEY).toBeUndefined();
-		expect(env.KB_DATABASE_URL).toBeUndefined();
-		expect(env.E2B_API_KEY).toBeUndefined();
-		expect(env.LLM_TOKEN_SECRET).toBeUndefined();
-		expect(() => loadApiConfigFromEnv(env)).not.toThrow();
+		expect(env.GATEWAY_TOKEN_SECRET).toBeUndefined();
+		const config = loadApiConfigFromEnv(env);
+		expect(config.openrouterApiKey).toBeUndefined();
+		expect(config.gatewayTokenSecret).toBeUndefined();
+		expect(config.openrouterBaseUrl).toBe("https://openrouter.ai/api");
 	});
 
-	it("never surfaces worker-only secrets on the config object", () => {
+	it("reads the OpenRouter credential and gateway token secret for the /v2 gateway", () => {
 		const env = baseEnv();
-		env.OPENROUTER_API_KEY = "sk-or-should-be-ignored";
-		env.OPENROUTER_BASE_URL = "https://openrouter.test";
-		env.OPENROUTER_DEFAULT_MODEL = "anthropic/claude";
+		env.OPENROUTER_API_KEY = "sk-or-gateway-key";
+		env.OPENROUTER_BASE_URL = "https://openrouter.test/api";
+		env.GATEWAY_TOKEN_SECRET = "gateway-signing-secret";
+		const config = loadApiConfigFromEnv(env);
+		expect(config.openrouterApiKey).toBe("sk-or-gateway-key");
+		expect(config.openrouterBaseUrl).toBe("https://openrouter.test/api");
+		expect(config.gatewayTokenSecret).toBe("gateway-signing-secret");
+	});
+
+	it("still never reads the remaining worker-only secrets (KB, E2B)", () => {
+		const env = baseEnv();
 		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
 		env.E2B_API_KEY = "e2b-should-be-ignored";
 		env.LLM_TOKEN_SECRET = "llm-token-secret";
 		env.GATEWAY_PUBLIC_URL = "https://gateway.test";
 		const config = loadApiConfigFromEnv(env);
 		const serialized = JSON.stringify(config);
-		expect(serialized).not.toContain("sk-or-should-be-ignored");
-		expect(serialized).not.toContain("openrouter.test");
 		expect(serialized).not.toContain("mymemo_kb");
 		expect(serialized).not.toContain("e2b-should-be-ignored");
 		expect(serialized).not.toContain("llm-token-secret");
 		expect(serialized).not.toContain("gateway.test");
-		// And there is no openrouter/kb field by name.
-		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
-			"openrouterApiKey",
-		);
 		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
 			"kbDatabaseUrl",
 		);
