@@ -10,6 +10,7 @@ export type {
 export * from "./live-stream-telemetry";
 export * from "./live-stream-validation";
 export * from "./redis-live-stream-relay";
+export * from "./turn-live-stream-relay";
 
 /** Validate the required Redis Live Stream secret without connecting at boot. */
 export function resolveLiveStreamRedisUrl(

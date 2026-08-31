@@ -184,20 +184,32 @@ class RedisRelayTransport implements LiveStreamRelayTransport {
 	}
 }
 
+export interface RedisRelayTransportOptions {
+	/** See {@link RedisLiveStreamRelayOptions.url}. */
+	url: string;
+	operationTimeoutMs?: number;
+	testClientName?: string;
+}
+
+export function createRedisRelayTransport(
+	options: RedisRelayTransportOptions,
+): LiveStreamRelayTransport {
+	return new RedisRelayTransport(
+		options.url,
+		requirePositiveInteger(
+			options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+			"operationTimeoutMs",
+		),
+		options.testClientName,
+	);
+}
+
 export function createRedisLiveStreamRelay(
 	options: RedisLiveStreamRelayOptions,
 ): LiveStreamRelay {
 	validateLiveStreamDeployment(options.deployment);
-	const operationTimeoutMs = requirePositiveInteger(
-		options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
-		"operationTimeoutMs",
-	);
 	return new ProducerBufferedLiveStreamRelay(
-		new RedisRelayTransport(
-			options.url,
-			operationTimeoutMs,
-			options.testClientName,
-		),
+		createRedisRelayTransport(options),
 		`${options.deployment}:mymemo:agui`,
 		options,
 	);

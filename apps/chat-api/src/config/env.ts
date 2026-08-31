@@ -52,12 +52,30 @@ export interface ApiConfig {
 	statsigServerSecret: string;
 	/** Required authenticated TLS Redis secret for the Live Stream relay. */
 	redisUrl: string;
+	/**
+	 * OpenRouter credential for the /v2 model gateway — ADR-0034's deliberate
+	 * revision of the rule that kept provider credentials out of chat-api. Held
+	 * in chat-api env only and injected on gateway-forwarded requests; never
+	 * delivered to a VM, image, or Checkpoint. Optional until the Terraform
+	 * secret wiring lands: while absent the gateway route answers 503 and every
+	 * other surface serves normally.
+	 */
+	openrouterApiKey?: string;
+	/** Upstream base URL the gateway forwards to. */
+	openrouterBaseUrl: string;
+	/**
+	 * HMAC secret for per-Conversation gateway tokens. Mint (at VM launch) and
+	 * verify (on every gateway request) both live in chat-api, so the secret
+	 * never leaves this process. Optional alongside `openrouterApiKey`.
+	 */
+	gatewayTokenSecret?: string;
 }
 
 /**
  * Parse + validate the environment into a typed config. Pure: env in, config
- * out. Worker-only secrets (OpenRouter, KB, E2B, model credentials) are
- * intentionally not read here.
+ * out. Worker-only secrets (KB, E2B) are intentionally not read here; the
+ * OpenRouter credential is read for the /v2 gateway (ADR-0034) and nothing
+ * else.
  */
 export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	// The conversation registry is the primary surface and cannot work without a
@@ -91,5 +109,9 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 			allowInsecureLoopback:
 				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
 		}),
+		openrouterApiKey: env.OPENROUTER_API_KEY?.trim() || undefined,
+		openrouterBaseUrl:
+			env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api",
+		gatewayTokenSecret: env.GATEWAY_TOKEN_SECRET?.trim() || undefined,
 	};
 }

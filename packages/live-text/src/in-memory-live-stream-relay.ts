@@ -47,6 +47,10 @@ class InMemoryRelayTransport implements LiveStreamRelayTransport {
 	}
 }
 
+export function createInMemoryRelayTransport(): LiveStreamRelayTransport {
+	return new InMemoryRelayTransport();
+}
+
 export function createInMemoryLiveStreamRelay(
 	options: LiveStreamRelayOptions = {},
 ): LiveStreamRelay {

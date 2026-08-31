@@ -551,7 +551,7 @@ class BufferedLiveStreamProducer implements LiveStreamProducer {
 	}
 }
 
-class AsyncQueue<T> {
+export class AsyncQueue<T> {
 	readonly #values: T[] = [];
 	readonly #waiters: Array<() => void> = [];
 	#ended = false;
