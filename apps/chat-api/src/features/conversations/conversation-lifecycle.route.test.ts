@@ -10,8 +10,11 @@ import type { InternalIdentity } from "./conversations.schema";
 const { createApp } = await import("@/app");
 
 // The /v2/conversations resource carries v1 semantics (#657): same handlers,
-// mounted a second time. These tests exercise the v2 mount; the shared handler
-// behavior is covered in depth by conversations.route.test.ts.
+// mounted a second time. conversations.route.test.ts covers the shared
+// handlers in depth; this file covers only what #657's acceptance criteria
+// require of the v2 mount itself — frozen Scope for the three shapes,
+// exposure-gated creation with gate bypass elsewhere, the Archive round-trip,
+// v1 permanent deletion, and the absence of every other v1 route under /v2.
 
 /** Gate that records the identity it saw and returns a fixed decision. */
 function recordingGate(decision: boolean) {
@@ -116,21 +119,6 @@ describe("POST /v2/conversations", () => {
 			expect(seen).toEqual([
 				{ memberCode: "member-1", partnerCode: "partner-1" },
 			]);
-		} finally {
-			await tdb.close();
-		}
-	});
-
-	it("rejects missing identity headers with 401", async () => {
-		const tdb = await createTestDatabase();
-		try {
-			const app = buildApp(new PostgresConversationStore(tdb.db));
-			const res = await app.request("/v2/conversations", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({}),
-			});
-			expect(res.status).toBe(401);
 		} finally {
 			await tdb.close();
 		}

@@ -10,7 +10,6 @@ import {
 	type LiveStreamReason,
 } from "@mymemo/live-text";
 import { type Context, Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
@@ -21,8 +20,9 @@ import {
 } from "@/features/run-store/run-store";
 import { admitAgUiRun } from "./conversations.controller";
 import {
+	conversationBodyLimit,
 	ConversationIdParam,
-	MAX_REQUEST_BODY_BYTES,
+	ConversationPath,
 	RunAgentInputBody,
 	RunIdParam,
 } from "./conversations.schema";
@@ -30,12 +30,6 @@ import { requireInternalIdentity } from "./internal-identity";
 
 const app = new Hono<AppEnv>();
 
-/** Request-body cap for Run admission. */
-const conversationBodyLimit = bodyLimit({
-	maxSize: MAX_REQUEST_BODY_BYTES,
-	onError: (c) => c.json({ error: "Request body too large" }, 413),
-});
-const ConversationPath = z.object({ conversationId: ConversationIdParam });
 const RunPath = z.object({
 	conversationId: ConversationIdParam,
 	runId: RunIdParam,

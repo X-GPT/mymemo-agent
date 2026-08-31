@@ -1,19 +1,17 @@
 import { sValidator as zValidator } from "@hono/standard-validator";
 import { Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
-import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import {
 	createConversation,
 	toConversationSummary,
 } from "./conversations.controller";
 import {
-	ConversationIdParam,
+	conversationBodyLimit,
 	ConversationListQuery,
+	ConversationPath,
 	CreateConversationBody,
 	decodeConversationListCursor,
 	encodeConversationListCursor,
-	MAX_REQUEST_BODY_BYTES,
 	UpdateConversationBody,
 } from "./conversations.schema";
 import { requireInternalIdentity } from "./internal-identity";
@@ -24,13 +22,6 @@ import { requireInternalIdentity } from "./internal-identity";
  * identical semantics (#657); the Run routes stay v1-only.
  */
 const app = new Hono<AppEnv>();
-
-/** Shared request-body cap for both conversation write endpoints. */
-const conversationBodyLimit = bodyLimit({
-	maxSize: MAX_REQUEST_BODY_BYTES,
-	onError: (c) => c.json({ error: "Request body too large" }, 413),
-});
-const ConversationPath = z.object({ conversationId: ConversationIdParam });
 
 // GET / — list one owned Archive partition using stable activity keyset
 // pagination. Search is evaluated by Postgres before paging.
