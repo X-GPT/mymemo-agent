@@ -13,6 +13,7 @@
 		"./run-events": "./src/run-events.ts",
 		"./tool-event-projection": "./src/tool-event-projection.ts",
 		"./runtime-store": "./src/runtime-store.ts",
+		"./turn-store": "./src/turn-store.ts",
 		"./session-store": "./src/session-store.ts",
 		"./testing": "./src/testing.ts",
 		"./migrations": "./src/migrations.ts"
