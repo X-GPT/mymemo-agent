@@ -154,6 +154,8 @@ Return `201 { conversationId, title, scope, createdAt, lastActivityAt, archivedA
 
 All operations are owner-scoped. Missing and foreign Conversations both return `404`. These management routes bypass the new-work exposure gate.
 
+The four lifecycle routes above (create, list, rename/Archive, permanent delete) also serve at `/v2/conversations` with identical semantics: one shared router (`conversation-lifecycle.route.ts`) is mounted under both prefixes. The Run, history, and artifact routes stay v1-only; the v2 data plane and the outbox-based deletion upgrade are separate tickets under spec #654.
+
 ### Admit and stream a Run
 
 `POST /v1/conversations/:conversationId/runs` strictly validates one standard `RunAgentInput` and requires `threadId` to equal the owned Conversation id. Reject client Tools, state, and forwarded authority.

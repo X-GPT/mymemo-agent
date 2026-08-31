@@ -1,4 +1,5 @@
 import { RunAgentInputSchema } from "@ag-ui/core";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import type { ConversationListPosition } from "@/features/conversation-store/conversation-store";
 
@@ -20,6 +21,16 @@ export const ConversationIdParam = z
 	.max(MAX_CONVERSATION_ID_LENGTH)
 	.regex(CONVERSATION_ID_PATTERN);
 export const RunIdParam = ConversationIdParam;
+
+export const ConversationPath = z.object({
+	conversationId: ConversationIdParam,
+});
+
+/** Shared request-body cap for the conversation write endpoints. */
+export const conversationBodyLimit = bodyLimit({
+	maxSize: MAX_REQUEST_BODY_BYTES,
+	onError: (c) => c.json({ error: "Request body too large" }, 413),
+});
 
 const EmptyClientObject = z.object({}).strict();
 const PlainTextUserMessage = z
