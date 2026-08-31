@@ -14,10 +14,7 @@ describe("gateway token mint/verify", () => {
 			secret: SECRET,
 			conversationId: CONVERSATION_ID,
 		});
-		expect(verdict).toEqual({
-			ok: true,
-			claims: { conversationId: CONVERSATION_ID, exp: expect.any(Number) },
-		});
+		expect(verdict).toEqual({ ok: true });
 	});
 
 	it("rejects an expired token", async () => {

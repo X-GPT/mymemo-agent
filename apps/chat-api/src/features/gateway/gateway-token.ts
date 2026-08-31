@@ -51,7 +51,7 @@ export function mintGatewayToken(options: {
 }
 
 export type GatewayTokenVerdict =
-	| { ok: true; claims: GatewayTokenClaims }
+	| { ok: true }
 	| {
 			ok: false;
 			reason: "malformed" | "bad-signature" | "expired" | "wrong-conversation";
@@ -78,17 +78,11 @@ export async function verifyGatewayToken(
 		}
 		return { ok: false, reason: "malformed" };
 	}
-	if (
-		typeof payload.conversationId !== "string" ||
-		typeof payload.exp !== "number"
-	) {
+	if (typeof payload.exp !== "number") {
 		return { ok: false, reason: "malformed" };
 	}
 	if (payload.conversationId !== options.conversationId) {
 		return { ok: false, reason: "wrong-conversation" };
 	}
-	return {
-		ok: true,
-		claims: { conversationId: payload.conversationId, exp: payload.exp },
-	};
+	return { ok: true };
 }
