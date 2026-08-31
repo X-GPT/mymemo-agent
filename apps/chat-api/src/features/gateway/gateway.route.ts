@@ -91,7 +91,9 @@ function createUsageCollector(contentType: string | null) {
  * collector, logging one attribution line when the body settles. Hand-rolled
  * reader loop for the same reason as `cleanupAfterStream` in ai-chat.route.ts:
  * Bun 1.3 honours neither `TransformStream.cancel` nor `finally` in an
- * async-generator body when the client cancels.
+ * async-generator body when the client cancels. Deliberately not shared with
+ * that helper — the ai-chat path retires wholesale at v2 cutover (ADR-0034)
+ * and must not become a dependency of the surviving code.
  */
 function observeStream(
 	upstream: Response,
@@ -164,10 +166,10 @@ routes.all("/:conversationId/*", async (c) => {
 	}
 
 	const url = new URL(c.req.url);
-	const upstreamUrl =
-		config.openrouterBaseUrl +
-		url.pathname.slice(`/v2/gateway/${conversationId}`.length) +
-		url.search;
+	const requestPath = url.pathname.slice(
+		`/v2/gateway/${conversationId}`.length,
+	);
+	const upstreamUrl = config.openrouterBaseUrl + requestPath + url.search;
 	const headers = new Headers(c.req.raw.headers);
 	for (const name of STRIPPED_HEADERS) headers.delete(name);
 	headers.set("authorization", `Bearer ${config.openrouterApiKey}`);
@@ -185,9 +187,6 @@ routes.all("/:conversationId/*", async (c) => {
 				: await c.req.arrayBuffer(),
 	});
 
-	const requestPath = url.pathname.slice(
-		`/v2/gateway/${conversationId}`.length,
-	);
 	const collector = createUsageCollector(upstream.headers.get("content-type"));
 	const body = observeStream(upstream, collector, (outcome, found) => {
 		// The per-Conversation attribution feed (#545): one line per model call.
