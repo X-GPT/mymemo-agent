@@ -47,8 +47,7 @@ _Avoid_: permissions, access level
 The per-Conversation AWS Lambda MicroVM that serves a Conversation's Turns —
 one VM per Conversation, never shared across tenants, persistent across turns
 via the platform's suspend/resume, replaced by rehydration from the Checkpoint.
-_Avoid_: AgentCore (retired), worker, sandbox (the VM is the runtime; the OS
-sandbox is a CLI mechanism, and with no shell it confines nothing)
+_Avoid_: AgentCore (retired), worker, sandbox (the VM is the runtime)
 
 **In-VM server**:
 The trusted MyMemo process inside the Execution runtime. It alone holds the

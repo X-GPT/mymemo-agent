@@ -45,7 +45,7 @@ export interface InVmConfig {
 	 */
 	userId: string;
 	conversationId: string;
-	/** The Workspace — the cwd the confined file tools and sandboxed Bash act in. */
+	/** The Workspace — the cwd the confined file tools act in. */
 	workspaceDir: string;
 	/**
 	 * Model access for the trusted process: locally a direct provider base

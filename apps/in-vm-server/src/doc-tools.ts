@@ -86,7 +86,7 @@ function toCallToolResult(result: object | ToolFailure): CallToolResult {
 
 /**
  * Local-FS writer for the Workspace docs cache. The Workspace is writable by
- * the untrusted CLI (cwd-scoped Edit, sandboxed Bash), so this trusted-process
+ * the untrusted CLI (cwd-scoped Edit), so this trusted-process
  * write must not follow a planted symlink out of the Workspace: the resolved
  * parent is pinned inside the Workspace root after mkdir, and the leaf is
  * replaced then created with O_EXCL (`wx`), which never follows a symlink — a

@@ -14,9 +14,8 @@ MyMemo chat (`/v2/*`) runs on **one persistent AWS Lambda MicroVM per Conversati
 in-VM server** that runs the Claude Agent SDK loop, serves the document tools as
 in-process MCP, drains work from Postgres, publishes the stream over Redis, and
 checkpoints state to S3 — while the **untrusted Claude Code CLI it spawns** is
-confined by OS-sandboxed Bash (bubblewrap, network deny-all), cwd-scoped file
-tools, a root-owned managed-settings policy tier baked into the image, and a
-**credential-free environment**.
+confined by cwd-scoped file tools, a root-owned managed-settings policy tier
+baked into the image, and a **credential-free environment**.
 
 ## The trust boundary
 
@@ -103,19 +102,12 @@ plus unbounded model spend on the gateway token and a DNS exfiltration path.
 rejected on the same grounds: its own documentation says it considerably
 weakens isolation.
 
-What is unchanged: the microVM remains the tenant boundary, the process
-boundary remains the trust boundary, and the file tools remain cwd-scoped. The
-agent's tools are those file tools plus the in-process document tools, which
-is what the product needs; the shell arrived as a Claude Code default rather
-than a requirement, and it is not missed.
-
-Everything that existed to serve the shell goes with it: the image ships no
-bubblewrap and no socat, the smoke script checks neither, and the SDK options
-carry no `sandbox` settings, since nothing dispatches commands to a sandbox.
+The tenant and trust boundaries are unchanged; the agent's tools are the
+cwd-scoped file tools plus the in-process document tools. Everything that
+existed to serve the shell goes with it: the image ships no bubblewrap and no
+socat, the smoke script checks neither, and the SDK options carry no `sandbox`
+settings, since nothing dispatches commands to a sandbox.
 
 Re-introducing a shell is not scheduled work. It would mean restoring the
 sandbox bundle and redoing this security case — not deleting one line from
-`disallowedTools`. The mechanism to beat is documented above: bubblewrap must
-be able to mount `/proc` (untested candidate: image-level
-`--additional-os-capabilities ALL`), with `bwrap --unshare-all --ro-bind / /
---proc /proc --dev /dev true` as the one-line probe.
+`disallowedTools`.
