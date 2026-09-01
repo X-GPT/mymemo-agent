@@ -51,15 +51,15 @@ per-Conversation microVMs create a third structure ADR-0001 didn't have:
   per-VM tokens), and egress lockdown is measured.
 - **Restore the split runtime in-VM** (host tools outside, every built-in off) —
   rejected a fourth time; the process boundary delivers the same credential
-  isolation without amputating the toolset.
+  isolation without amputating the toolset (the shell aside — see the
+  amendment).
 
 ## Measured facts this decision rests on (probe #646, egress probe #651)
 
 The root-owned policy tier is non-writable by the non-root agent;
 suspend/resume preserves `~/.claude` and the workspace; the authenticated
 per-VM endpoint streams SSE; a no-NAT VPC egress connector kills internet
-egress (full routing, not split routing). A fifth fact — bubblewrap at default
-capabilities — was wrong; see the amendment.
+egress (full routing, not split routing).
 
 ## Consequences
 
