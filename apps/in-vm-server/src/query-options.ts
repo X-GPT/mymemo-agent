@@ -97,14 +97,14 @@ export function buildTurnQueryOptions(input: {
 			"Glob",
 			...DOC_TOOLS_ALLOWED_TOOLS,
 		],
-		// Bash is DENIED, not merely unlisted (ADR-0034 amendment). Sandbox-mode
+		// Bash is DENIED, not merely unlisted, and there are no sandbox settings
+		// because nothing dispatches commands (ADR-0034 amendment). Sandbox-mode
 		// Bash cannot start in the MicroVM — bwrap cannot mount /proc there —
 		// and running it unsandboxed would hand the untrusted surface the VM's
 		// network: IMDS (hence the execution role's cross-Conversation
 		// checkpoint scope), the gateway token's model spend, and a DNS exfil
-		// path. The agent's tools are the cwd-scoped file tools and the
-		// in-process doc tools; a shell is not a product requirement, and
-		// re-introducing one means redoing that security case first.
+		// path. Re-introducing a shell means restoring the sandbox bundle and
+		// making that security case again, not deleting one line here.
 		// BashOutput/KillShell manage background shells and go with it.
 		// WebFetch/WebSearch are in-process network tools that bypass the
 		// sandbox proxy entirely; the VM's egress firewall is the production
@@ -116,24 +116,6 @@ export function buildTurnQueryOptions(input: {
 			"WebFetch",
 			"WebSearch",
 		],
-		// Inert while Bash is denied — kept so that re-enabling the shell
-		// fails closed instead of silently running unsandboxed (#645).
-		sandbox: {
-			enabled: true,
-			// Never silently run commands unsandboxed — the single most
-			// load-bearing key in the bundle.
-			failIfUnavailable: true,
-			// The model cannot route around a sandbox denial with
-			// dangerouslyDisableSandbox.
-			allowUnsandboxedCommands: false,
-			autoAllowBashIfSandboxed: true,
-			// Network deny-all: empty allowlist + deterministic deny (no
-			// prompting) closes IMDS and RDS-at-IP from any sandboxed command.
-			network: {
-				allowedDomains: [],
-				strictAllowlist: true,
-			},
-		},
 		model: input.model.model,
 		env: buildCliEnv(input.processEnv, input.model),
 	};

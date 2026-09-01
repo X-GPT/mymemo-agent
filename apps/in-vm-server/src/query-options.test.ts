@@ -129,16 +129,6 @@ describe("buildTurnQueryOptions", () => {
 		expect(options.mcpServers?.[DOC_TOOLS_SERVER_NAME]).toBe(docToolsServer);
 	});
 
-	it("keeps the fail-closed sandbox bundle so re-enabling a shell cannot run unsandboxed", () => {
-		expect(options.sandbox).toEqual({
-			enabled: true,
-			failIfUnavailable: true,
-			allowUnsandboxedCommands: false,
-			autoAllowBashIfSandboxed: true,
-			network: { allowedDomains: [], strictAllowlist: true },
-		});
-	});
-
 	it("hands the spawned CLI the credential-free env", () => {
 		expect(options.env).toEqual(buildCliEnv(trustedProcessEnv(), MODEL));
 		expect(options.env?.AGENT_DATABASE_URL).toBeUndefined();

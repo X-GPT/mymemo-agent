@@ -109,13 +109,13 @@ agent's tools are those file tools plus the in-process document tools, which
 is what the product needs; the shell arrived as a Claude Code default rather
 than a requirement, and it is not missed.
 
-The image therefore ships no bubblewrap and no socat, and the smoke script
-checks neither. The fail-closed sandbox settings do stay in the SDK bundle —
-inert while nothing dispatches to the sandbox, but the guard that makes a
-future shell fail closed instead of running unconfined.
+Everything that existed to serve the shell goes with it: the image ships no
+bubblewrap and no socat, the smoke script checks neither, and the SDK options
+carry no `sandbox` settings, since nothing dispatches commands to a sandbox.
 
-Re-introducing a shell is not scheduled work. It would mean redoing this
-security case, and the mechanism to beat is documented above: bubblewrap must
+Re-introducing a shell is not scheduled work. It would mean restoring the
+sandbox bundle and redoing this security case — not deleting one line from
+`disallowedTools`. The mechanism to beat is documented above: bubblewrap must
 be able to mount `/proc` (untested candidate: image-level
 `--additional-os-capabilities ALL`), with `bwrap --unshare-all --ro-bind / /
 --proc /proc --dev /dev true` as the one-line probe.
