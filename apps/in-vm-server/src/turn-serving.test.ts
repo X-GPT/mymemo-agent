@@ -120,7 +120,10 @@ function collectLiveChunks(
 	relay: TurnLiveStreamRelay,
 ): Promise<UIMessageChunk[]> & { ready: Promise<void> } {
 	const controller = new AbortController();
-	const subscribed = relay.subscribe(TURN_ID, controller.signal);
+	const subscribed = relay.subscribe(
+		{ conversationId: CONVERSATION_ID, messageId: TURN_ID },
+		controller.signal,
+	);
 	const collected = (async () => {
 		const chunks: UIMessageChunk[] = [];
 		for await (const serialized of await subscribed) {

@@ -6,8 +6,10 @@ import {
 import {
 	createLiveStreamTelemetry,
 	createRedisLiveStreamRelay,
+	createRedisTurnLiveStreamRelay,
 	type LiveStreamRelay,
 	type LiveStreamTelemetry,
+	type TurnLiveStreamRelay,
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
@@ -58,12 +60,20 @@ export interface AppDeps {
 	conversationStore: ConversationStore;
 	/** Permanent AG-UI Conversation-history projection over Postgres Runs. */
 	conversationHistoryStore: ConversationHistoryStore;
-	/** /v2 UIMessage history over `conversation_messages` (read-only here; the In-VM server is the sole writer). */
+	/** /v2 UIMessage history over `conversation_messages` plus the `queued` Turn INSERT — chat-api's only write; the In-VM server owns every status transition. */
 	conversationMessagesStore: ConversationMessagesStore;
 	/** Durable split-runtime run queue and event log. */
 	runStore: RunStore;
 	/** Producer-buffered per-Run relay used by initial and reconnect SSE. */
 	liveStreamRelay: LiveStreamRelay;
+	/** The v2 per-Turn UIMessage lane (#658) the message POST subscribes to. */
+	turnLiveStreamRelay: TurnLiveStreamRelay;
+	/**
+	 * Ensure-VM + nudge for one Conversation (#667). Undefined = not configured,
+	 * so the v2 message POST answers 503. Today a dev-mode stub over
+	 * `IN_VM_SERVER_URL`; the orchestration ticket replaces it.
+	 */
+	nudgeInVmServer?: () => Promise<void>;
 	/** Cardinality-safe, payload-free Live Stream relay observability. */
 	liveStreamTelemetry: LiveStreamTelemetry;
 	/** Close the lazy Redis relay clients during service shutdown. */
@@ -117,6 +127,10 @@ export function createDeps(
 		deployment: "current",
 		telemetry: liveStreamTelemetry,
 	});
+	const turnLiveStreamRelay = createRedisTurnLiveStreamRelay({
+		url: config.redisUrl,
+		deployment: "current",
+	});
 	return {
 		config,
 		createHarnessChatAgent,
@@ -129,8 +143,35 @@ export function createDeps(
 		conversationMessagesStore: new PostgresConversationMessagesStore(database),
 		runStore,
 		liveStreamRelay,
+		turnLiveStreamRelay,
+		// ponytail: one config-provided In-VM server, nudged by URL; the
+		// orchestration ticket swaps in per-Conversation MicroVM launch here.
+		nudgeInVmServer: config.inVmServerUrl
+			? async () => {
+					const response = await fetch(
+						new URL("/nudge", config.inVmServerUrl),
+						{
+							method: "POST",
+							// A real MicroVM endpoint authenticates with the platform's
+							// per-VM token and routes by port (the image listens on 8080).
+							headers: config.inVmServerAuthToken
+								? {
+										"x-aws-proxy-auth": config.inVmServerAuthToken,
+										"x-aws-proxy-port": "8080",
+									}
+								: {},
+							signal: AbortSignal.timeout(5_000),
+						},
+					);
+					if (!response.ok) {
+						throw new Error(`nudge answered ${response.status}`);
+					}
+				}
+			: undefined,
 		liveStreamTelemetry,
-		closeLiveResources: () => liveStreamRelay.close(),
+		closeLiveResources: async () => {
+			await Promise.all([liveStreamRelay.close(), turnLiveStreamRelay.close()]);
+		},
 		exposureGate,
 		gatewayUpstreamFetch: fetch,
 	};

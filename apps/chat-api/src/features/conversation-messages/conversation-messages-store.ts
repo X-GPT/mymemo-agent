@@ -54,4 +54,31 @@ export interface ConversationMessagesStore {
 	getPage(
 		input: ConversationMessagesPageInput,
 	): Promise<ConversationMessagesPage | null>;
+	/**
+	 * The /v2 submission write (ticket #667) — chat-api's only write to
+	 * `conversation_messages`; the In-VM server owns every status transition.
+	 * Admits a user message as a `queued` Turn under the Conversation row lock,
+	 * so an Archive cannot slip between the check and the insert (the row lock
+	 * is the one `PATCH` takes). Missing and foreign Conversations look
+	 * identical.
+	 */
+	enqueueTurn(input: TurnRef & { parts: unknown }): Promise<EnqueueTurnResult>;
+	/** The Turn's current status, or null when no such Turn exists. */
+	getTurnStatus(ref: TurnRef): Promise<TurnStatus | null>;
 }
+
+export interface TurnRef {
+	userId: string;
+	conversationId: string;
+	messageId: string;
+}
+
+export type EnqueueTurnResult =
+	/** The row was inserted as a `queued` Turn. */
+	| { outcome: "queued" }
+	/** The client message id already names a Turn; nothing changed. */
+	| { outcome: "duplicate"; status: TurnStatus }
+	/** The client message id already names an assistant message (ids are visible in history). */
+	| { outcome: "not_a_turn" }
+	| { outcome: "not_found" }
+	| { outcome: "archived" };

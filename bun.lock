@@ -118,6 +118,7 @@
         "@mymemo/document-tools": "workspace:*",
         "@mymemo/live-text": "workspace:*",
         "@statsig/statsig-node-core": "^0.19.8",
+        "ai": "7.0.83",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.10.1",
         "hono-pino": "^0.10.3",

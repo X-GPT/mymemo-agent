@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ConversationListPosition } from "@/features/conversation-store/conversation-store";
 
 const MAX_IDENTIFIER_LENGTH = 256;
-const MAX_MESSAGE_LENGTH = 50_000;
+export const MAX_MESSAGE_LENGTH = 50_000;
 const MAX_LIST_CURSOR_LENGTH = 2_048;
 
 export const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;

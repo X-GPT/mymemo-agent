@@ -84,6 +84,8 @@ Optional:
 - `OPENROUTER_API_KEY`: secret; the real model credential the `/v2/gateway` route injects on forwarded requests (ADR-0034). Never delivered to a VM, image, or Checkpoint. While unset the gateway route answers 503.
 - `GATEWAY_TOKEN_SECRET`: secret; HMAC key for per-Conversation gateway tokens (minted at VM launch, verified on every gateway request — both in chat-api). While unset the gateway route answers 503.
 - `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`): upstream the gateway forwards to
+- `IN_VM_SERVER_URL`: dev-mode Ensure-VM stub (#667) — the base URL of one locally running In-VM server that `POST /v2/conversations/:id/messages` nudges. The orchestration ticket replaces it with per-Conversation MicroVM launch. While unset the v2 message POST answers 503.
+- `IN_VM_SERVER_AUTH_TOKEN`: with `IN_VM_SERVER_URL` pointing at a real MicroVM endpoint, the platform's per-VM auth token (`CreateMicrovmAuthToken`), sent on the nudge as `X-aws-proxy-auth` with `X-aws-proxy-port: 8080`; unset for a plain local In-VM server
 
 chat-api has no AgentCore dispatch queue or SSM parameter configuration. Admission ends after the transactional Postgres outbox write; publisher and consumer processes own queue delivery and the dispatch kill switch.
 

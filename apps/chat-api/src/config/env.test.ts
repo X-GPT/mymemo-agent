@@ -79,6 +79,16 @@ describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
 		expect(config.gatewayTokenSecret).toBe("gateway-signing-secret");
 	});
 
+	it("reads the dev-mode In-VM server URL for the v2 message POST", () => {
+		expect(loadApiConfigFromEnv(baseEnv()).inVmServerUrl).toBeUndefined();
+		const env = baseEnv();
+		env.IN_VM_SERVER_URL = "http://127.0.0.1:8080";
+		env.IN_VM_SERVER_AUTH_TOKEN = "per-vm-token";
+		const config = loadApiConfigFromEnv(env);
+		expect(config.inVmServerUrl).toBe("http://127.0.0.1:8080");
+		expect(config.inVmServerAuthToken).toBe("per-vm-token");
+	});
+
 	it("still never reads the remaining worker-only secrets (KB, E2B)", () => {
 		const env = baseEnv();
 		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";

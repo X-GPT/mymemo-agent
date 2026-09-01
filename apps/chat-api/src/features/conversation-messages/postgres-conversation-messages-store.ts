@@ -1,12 +1,14 @@
-import type { Database } from "@mymemo/agent-db/client";
+import type { Database, DbTx } from "@mymemo/agent-db/client";
 import { conversationMessages, conversations } from "@mymemo/agent-db/schema";
-import type { TurnStatus } from "@mymemo/agent-db/turn-store";
+import { enqueueTurnTx, type TurnStatus } from "@mymemo/agent-db/turn-store";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type {
 	ConversationMessagesPage,
 	ConversationMessagesPageInput,
 	ConversationMessagesStore,
 	ConversationUiMessage,
+	EnqueueTurnResult,
+	TurnRef,
 } from "./conversation-messages-store";
 
 export class PostgresConversationMessagesStore
@@ -57,6 +59,53 @@ export class PostgresConversationMessagesStore
 			nextCursor: hasOlder ? (page[0]?.sequence ?? null) : null,
 		};
 	}
+
+	async enqueueTurn(
+		input: TurnRef & { parts: unknown },
+	): Promise<EnqueueTurnResult> {
+		return await this.db.transaction(async (tx) => {
+			const [conversation] = await tx
+				.select({ archivedAt: conversations.archivedAt })
+				.from(conversations)
+				.where(
+					and(
+						eq(conversations.userId, input.userId),
+						eq(conversations.conversationId, input.conversationId),
+					),
+				)
+				.for("update");
+			if (!conversation) return { outcome: "not_found" };
+			if (conversation.archivedAt !== null) return { outcome: "archived" };
+			if (await enqueueTurnTx(tx, input)) return { outcome: "queued" };
+			const status = await selectTurnStatus(tx, input);
+			return status === null
+				? { outcome: "not_a_turn" }
+				: { outcome: "duplicate", status };
+		});
+	}
+
+	getTurnStatus(ref: TurnRef): Promise<TurnStatus | null> {
+		return selectTurnStatus(this.db, ref);
+	}
+}
+
+async function selectTurnStatus(
+	db: Database | DbTx,
+	ref: TurnRef,
+): Promise<TurnStatus | null> {
+	const [row] = await db
+		.select({ status: conversationMessages.status })
+		.from(conversationMessages)
+		.where(
+			and(
+				eq(conversationMessages.userId, ref.userId),
+				eq(conversationMessages.conversationId, ref.conversationId),
+				eq(conversationMessages.messageId, ref.messageId),
+			),
+		);
+	// The turn-status check pins an assistant row's status to NULL and a user
+	// row's to a TurnStatus, so the column alone says whether this is a Turn.
+	return (row?.status as TurnStatus | undefined) ?? null;
 }
 
 function toUiMessage(
