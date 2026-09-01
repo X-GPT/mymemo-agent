@@ -21,7 +21,7 @@ const deps: TurnServingDeps = {
 	relay,
 	userId: config.userId,
 	conversationId: config.conversationId,
-	query: ({ prompt, options }) => query({ prompt, options }),
+	query,
 	queryOptions: buildTurnQueryOptions({
 		workspaceDir: config.workspaceDir,
 		model: config.model,
