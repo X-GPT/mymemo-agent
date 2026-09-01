@@ -44,8 +44,11 @@ export type MapperAction =
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
+/** A streaming text/thinking block whose deltas need an id to ride on. Tool
+ * and unknown blocks are never registered — their chunks key on the tool call
+ * id, and delta/stop events for an unregistered index are simply ignored. */
 interface OpenBlock {
-	kind: "text" | "reasoning" | "tool" | "opaque";
+	kind: "text" | "reasoning";
 	chunkId: string;
 }
 
@@ -69,14 +72,11 @@ function chunk(chunk: UIMessageChunk): MapperAction {
 	return { kind: "chunk", chunk };
 }
 
-/** Render a tool_result's content for an errorText field. */
+/** Render a tool_result's content for an errorText field. The content came
+ * off the SDK's JSON wire, so it always stringifies. */
 function toErrorText(content: unknown): string {
 	if (typeof content === "string") return content;
-	try {
-		return JSON.stringify(content) ?? "tool failed";
-	} catch {
-		return "tool failed";
-	}
+	return JSON.stringify(content) ?? "tool failed";
 }
 
 export class TurnStreamMapper {
@@ -127,21 +127,23 @@ export class TurnStreamMapper {
 			}
 			case "content_block_start": {
 				const step = this.#requireStep("content_block_start");
-				const block = this.#openBlock(event.content_block);
-				step.blocks.set(event.index, block);
-				if (block.kind === "text") {
-					return [chunk({ type: "text-start", id: block.chunkId })];
+				const contentBlock = event.content_block;
+				if (contentBlock.type === "text") {
+					const chunkId = `blk_${this.#nextChunkId++}`;
+					step.blocks.set(event.index, { kind: "text", chunkId });
+					return [chunk({ type: "text-start", id: chunkId })];
 				}
-				if (block.kind === "reasoning") {
-					return [chunk({ type: "reasoning-start", id: block.chunkId })];
+				if (contentBlock.type === "thinking") {
+					const chunkId = `blk_${this.#nextChunkId++}`;
+					step.blocks.set(event.index, { kind: "reasoning", chunkId });
+					return [chunk({ type: "reasoning-start", id: chunkId })];
 				}
-				if (block.kind === "tool") {
-					const cb = event.content_block as { id: string; name: string };
+				if (contentBlock.type === "tool_use") {
 					return [
 						chunk({
 							type: "tool-input-start",
-							toolCallId: cb.id,
-							toolName: cb.name,
+							toolCallId: contentBlock.id,
+							toolName: contentBlock.name,
 						}),
 					];
 				}
@@ -177,10 +179,7 @@ export class TurnStreamMapper {
 				if (block.kind === "text") {
 					return [chunk({ type: "text-end", id: block.chunkId })];
 				}
-				if (block.kind === "reasoning") {
-					return [chunk({ type: "reasoning-end", id: block.chunkId })];
-				}
-				return [];
+				return [chunk({ type: "reasoning-end", id: block.chunkId })];
 			}
 			case "message_stop": {
 				const step = this.#requireStep("message_stop");
@@ -311,20 +310,6 @@ export class TurnStreamMapper {
 				chunk: { type: "error", errorText },
 			},
 		];
-	}
-
-	#openBlock(contentBlock: { type: string }): OpenBlock {
-		const chunkId = `blk_${this.#nextChunkId++}`;
-		switch (contentBlock.type) {
-			case "text":
-				return { kind: "text", chunkId };
-			case "thinking":
-				return { kind: "reasoning", chunkId };
-			case "tool_use":
-				return { kind: "tool", chunkId };
-			default:
-				return { kind: "opaque", chunkId };
-		}
 	}
 
 	#requireStep(eventName: string): {

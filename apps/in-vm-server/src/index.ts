@@ -30,12 +30,10 @@ const deps: TurnServingDeps = {
 	logger,
 };
 
-const app = createApp({
-	nudge: () => {
-		void serveOneTurn(deps).catch((error) => {
-			logger.error({ error: String(error) }, "serveOneTurn failed");
-		});
-	},
+const app = createApp(() => {
+	void serveOneTurn(deps).catch((error) => {
+		logger.error({ error: String(error) }, "serveOneTurn failed");
+	});
 });
 
 let shuttingDown = false;
