@@ -219,13 +219,8 @@ app.post(
 			c.header(name, value);
 		}
 		return streamSSE(c, async (stream) => {
-			let clientGone = false;
-			const disconnect = () => {
-				clientGone = true;
-				readAbort.abort();
-			};
-			stream.onAbort(disconnect);
-			const gone = () => clientGone || c.req.raw.signal.aborted;
+			stream.onAbort(() => readAbort.abort());
+			const gone = () => stream.aborted || c.req.raw.signal.aborted;
 			// One tick does both: the SSE comment keepalive, and the terminal
 			// watch that ends a stream whose publisher died without a terminal
 			// chunk (the In-VM server restarts, sweeping the Turn `interrupted`).
@@ -242,7 +237,7 @@ app.post(
 							return;
 						}
 					} catch {
-						disconnect();
+						stream.abort();
 						return;
 					}
 					tick();

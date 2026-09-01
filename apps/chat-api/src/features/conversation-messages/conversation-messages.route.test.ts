@@ -233,7 +233,6 @@ function fakeInVmServer(
 	options: { chunkDelayMs?: number; sync?: boolean } = {},
 ) {
 	const served: string[] = [];
-	let nudges = 0;
 	let draining: Promise<void> | null = null;
 	const drain = async () => {
 		let turnId = store.claimNext();
@@ -253,11 +252,9 @@ function fakeInVmServer(
 	};
 	return {
 		served,
-		get nudges() {
-			return nudges;
-		},
+		nudges: 0,
 		async nudge() {
-			nudges += 1;
+			this.nudges += 1;
 			if (options.sync) {
 				await drain();
 				return;
@@ -275,11 +272,14 @@ function fakeInVmServer(
 }
 
 function submitApp(
-	overrides: Partial<AppDeps> & { store?: FakeTurnStore } = {},
+	overrides: Partial<AppDeps> & {
+		store?: FakeTurnStore;
+		vm?: Parameters<typeof fakeInVmServer>[2];
+	} = {},
 ) {
 	const store = overrides.store ?? new FakeTurnStore();
 	const relay = createInMemoryTurnLiveStreamRelay();
-	const vm = fakeInVmServer(relay, store);
+	const vm = fakeInVmServer(relay, store, overrides.vm);
 	const deps = {
 		conversationMessagesStore: store,
 		turnLiveStreamRelay: relay,
@@ -379,14 +379,7 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 	});
 
 	it("subscribes before nudging, so chunks published during the nudge itself are not lost", async () => {
-		const store = new FakeTurnStore();
-		const relay = createInMemoryTurnLiveStreamRelay();
-		const vm = fakeInVmServer(relay, store, { sync: true });
-		const { app } = submitApp({
-			store,
-			turnLiveStreamRelay: relay,
-			nudgeInVmServer: () => vm.nudge(),
-		});
+		const { app } = submitApp({ vm: { sync: true } });
 
 		const response = await app.request(
 			MESSAGES_URL,
@@ -402,15 +395,8 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 	});
 
 	it("two rapid POSTs: no 409; the second holds with silent keepalives, then streams only its own Turn", async () => {
-		const store = new FakeTurnStore();
-		const relay = createInMemoryTurnLiveStreamRelay();
 		// The first Turn outlasts one keepalive interval.
-		const vm = fakeInVmServer(relay, store, { chunkDelayMs: 900 });
-		const { app } = submitApp({
-			store,
-			turnLiveStreamRelay: relay,
-			nudgeInVmServer: () => vm.nudge(),
-		});
+		const { app, vm } = submitApp({ vm: { chunkDelayMs: 900 } });
 
 		const first = await app.request(
 			MESSAGES_URL,
@@ -479,14 +465,7 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 	});
 
 	it("client disconnect mid-stream leaves the Turn running to its Outcome", async () => {
-		const store = new FakeTurnStore();
-		const relay = createInMemoryTurnLiveStreamRelay();
-		const vm = fakeInVmServer(relay, store, { chunkDelayMs: 20 });
-		const { app } = submitApp({
-			store,
-			turnLiveStreamRelay: relay,
-			nudgeInVmServer: () => vm.nudge(),
-		});
+		const { app, store, vm } = submitApp({ vm: { chunkDelayMs: 20 } });
 		const client = new AbortController();
 
 		const response = await app.request(MESSAGES_URL, {
