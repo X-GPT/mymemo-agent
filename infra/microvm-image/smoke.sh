@@ -18,17 +18,34 @@ r() {
 	if [ "$2" = FAIL ]; then fail=1; fi
 }
 
-# bubblewrap namespace smoke — sandbox-mode Bash rides on this. Proven at
-# DEFAULT capabilities by the #646 probe; re-proven here on every image.
+# bubblewrap smoke — sandbox-mode Bash rides on this. Two checks, because
+# namespace creation alone is NOT the bar: Claude Code's sandbox also mounts a
+# fresh /proc, and mounting procfs inside a user namespace is refused
+# ("Operation not permitted") whenever the host's /proc is not "fully visible"
+# — the masked-/proc rule that also bites unprivileged containers.
+#
+# Live on #666: the namespace-only check below PASSED on a real VM while every
+# Bash tool call failed with `bwrap: Can't mount proc on /newroot/proc`. The
+# #646 probe carried the same gap, which is how the spec came to record
+# "bwrap works at default caps". Never drop the proc check — it is the one
+# that speaks for the tool the agent actually runs.
+#
 # SKIP_BWRAP=1: CI runs this in a Docker container whose seccomp blocks
-# namespace creation — presence is still checkable, the real namespace check
-# runs in-VM.
+# namespace creation — presence is still checkable, the real checks run in-VM.
 if [ "${SKIP_BWRAP:-0}" = 1 ]; then
 	if command -v bwrap >/dev/null; then r bwrap-present PASS; else r bwrap-present FAIL "bubblewrap missing"; fi
-elif bwrap --unshare-all --ro-bind / / --dev /dev true 2>/dev/null; then
-	r bwrap PASS "bubblewrap can create namespaces"
 else
-	r bwrap FAIL "bwrap failed — sandbox-mode Bash unavailable"
+	if bwrap --unshare-all --ro-bind / / --dev /dev true 2>/dev/null; then
+		r bwrap-namespaces PASS "bubblewrap can create namespaces"
+	else
+		r bwrap-namespaces FAIL "bwrap cannot create namespaces"
+	fi
+	# The decisive check: the same shape Claude Code's Bash sandbox uses.
+	if err=$(bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev true 2>&1); then
+		r bwrap-proc PASS "bubblewrap can mount /proc — sandbox-mode Bash usable"
+	else
+		r bwrap-proc FAIL "sandbox-mode Bash unusable: ${err}"
+	fi
 fi
 
 # Pinned versions (the spec's exact pins, not ranges) on the serving install.

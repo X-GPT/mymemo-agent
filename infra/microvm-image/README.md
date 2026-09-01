@@ -1,6 +1,8 @@
 # MicroVM image — the In-VM server on the platform
 
-The production MicroVM image for the per-Conversation VM ([spec #654](https://github.com/X-GPT/mymemo-agent/issues/654)). #661 proved the platform recipe with a placeholder server; #666 bakes the real In-VM server (`apps/in-vm-server`) as the entrypoint. Derived from the #646 probe kit (`docs/research/microvm-probe` on the `research/microvm-probe` branch), whose live run proved the recipe: bubblewrap creates namespaces at DEFAULT capabilities — no `--additional-os-capabilities ALL`.
+The production MicroVM image for the per-Conversation VM ([spec #654](https://github.com/X-GPT/mymemo-agent/issues/654)). #661 proved the platform recipe with a placeholder server; #666 bakes the real In-VM server (`apps/in-vm-server`) as the entrypoint. Derived from the #646 probe kit (`docs/research/microvm-probe` on the `research/microvm-probe` branch).
+
+> **Known gap — sandbox-mode Bash does not work in the VM yet.** At default capabilities bubblewrap creates namespaces but **cannot mount `/proc`**, so every Bash tool call fails with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted`. Proven live on #666 with a real Turn. The #646 probe's "bwrap PASS at default caps" only exercised namespace creation, never the proc mount the real sandbox performs. Nothing runs unsandboxed as a result — the failure is closed, not open — but the Bash tool is unusable until this is resolved (`--additional-os-capabilities ALL` is the untested candidate). `smoke.sh` now checks both.
 
 ## Boot model
 
@@ -71,4 +73,4 @@ aws lambda-microvms terminate-microvm --region $REGION --microvm-identifier "$VM
 
 - Orchestration (claim/ensure VM, token minting at `RunMicrovm`, nudge from chat-api) — the orchestration ticket; this runbook drives the same contract by hand.
 - Checkpoint/rehydrate and the graceful-drain `/suspend` gate — #670; until then the platform snapshot preserves state across suspend/resume.
-- `--additional-os-capabilities` — deliberately omitted; default caps are proven sufficient.
+- `--additional-os-capabilities` — currently omitted. No longer "proven sufficient": it is the leading candidate fix for the `/proc`-mount failure above, and testing it is a named follow-up.
