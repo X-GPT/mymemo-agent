@@ -55,15 +55,11 @@ per-Conversation microVMs create a third structure ADR-0001 didn't have:
 
 ## Measured facts this decision rests on (probe #646, egress probe #651)
 
-> The first claim below did not survive contact: bubblewrap creates namespaces
-> at default capabilities but cannot mount `/proc`, so sandbox-mode Bash never
-> runs. See the amendment at the end.
-
-Unprivileged user namespaces and bubblewrap work in the guest kernel at default
-capabilities (no `--additional-os-capabilities`); the root-owned policy tier is
-non-writable by the non-root agent; suspend/resume preserves `~/.claude` and the
-workspace; the authenticated per-VM endpoint streams SSE; a no-NAT VPC egress
-connector kills internet egress (full routing, not split routing).
+The root-owned policy tier is non-writable by the non-root agent;
+suspend/resume preserves `~/.claude` and the workspace; the authenticated
+per-VM endpoint streams SSE; a no-NAT VPC egress connector kills internet
+egress (full routing, not split routing). A fifth "fact" — bubblewrap working
+at default capabilities — was wrong; see the amendment.
 
 ## Consequences
 

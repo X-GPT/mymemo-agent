@@ -145,7 +145,7 @@ _Avoid_: chat history, workspace
 
 **Workspace**:
 The Conversation's working directory on its VM's disk — where the confined
-file tools act (cwd-scoped; there is no shell). It survives suspend/resume
+file tools act (cwd-scoped). It survives suspend/resume
 natively and VM replacement via the Checkpoint. Not the Agent session, and not
 durable beyond the Checkpoint.
 _Avoid_: sandbox, E2B (retired)

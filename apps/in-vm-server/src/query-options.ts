@@ -97,8 +97,7 @@ export function buildTurnQueryOptions(input: {
 			"Glob",
 			...DOC_TOOLS_ALLOWED_TOOLS,
 		],
-		// Bash/BashOutput/KillShell: there is no shell in the VM, and hence no
-		// sandbox settings anywhere in this bundle (ADR-0034 amendment).
+		// No shell in the VM — denied, not merely unlisted (ADR-0034 amendment).
 		// WebFetch/WebSearch: in-process network tools; the VM's egress firewall
 		// is the production backstop, denied here so local runs match.
 		disallowedTools: [
