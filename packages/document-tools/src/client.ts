@@ -4,9 +4,9 @@ import type { DocumentAccessLog } from "./access-log";
 /**
  * Scoped access to the read-only KB, shared by chat-api's Harness chat path
  * and the trusted In-VM server (#665). A fresh, smaller copy of the Runtime's
- * `documents/` module: same SQL, same scope rules, same audit row, bound once
- * per turn instead of per call. Drift between the two is accepted (decided on
- * #610); a boundary fix lands twice.
+ * `documents/` module: same SQL, same scope rules, same audit row, bound to
+ * one turn's binding at construction. Drift between the two is accepted
+ * (decided on #610); a boundary fix lands twice.
  */
 
 /** Identifies one turn's document access for the audit ledger. */

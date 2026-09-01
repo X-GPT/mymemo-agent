@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
 	createSdkMcpServer,
@@ -84,13 +84,29 @@ function toCallToolResult(result: object | ToolFailure): CallToolResult {
 	return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 }
 
-/** Plain local-FS writer: inside the VM the Workspace is this process's own disk. */
-const localDocsCacheWriter: DocsCacheWriter = {
-	async writeTextFile({ path: filePath, content }) {
-		await mkdir(path.dirname(filePath), { recursive: true });
-		await writeFile(filePath, content, "utf8");
-	},
-};
+/**
+ * Local-FS writer for the Workspace docs cache. The Workspace is writable by
+ * the untrusted CLI (cwd-scoped Edit, sandboxed Bash), so this trusted-process
+ * write must not follow a planted symlink out of the Workspace: the resolved
+ * parent is pinned inside the Workspace root after mkdir, and the leaf is
+ * replaced then created with O_EXCL (`wx`), which never follows a symlink — a
+ * re-planted leaf fails the call closed instead of writing elsewhere.
+ */
+function createLocalDocsCacheWriter(workspaceDir: string): DocsCacheWriter {
+	return {
+		async writeTextFile({ path: filePath, content }) {
+			await mkdir(path.dirname(filePath), { recursive: true });
+			const realDir = await realpath(path.dirname(filePath));
+			const realRoot = await realpath(workspaceDir);
+			if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) {
+				throw new Error("docs cache path escapes the Workspace");
+			}
+			const resolved = path.join(realDir, path.basename(filePath));
+			await rm(resolved, { force: true });
+			await writeFile(resolved, content, { encoding: "utf8", flag: "wx" });
+		},
+	};
+}
 
 /**
  * Build the model-facing document tools, each resolving the Conversation's
@@ -195,7 +211,7 @@ export function buildDocTools(deps: DocToolsDeps): SdkMcpToolDefinition<any>[] {
 				withClient("LoadDocuments", (client) =>
 					loadDocuments(input, {
 						client,
-						sandbox: localDocsCacheWriter,
+						sandbox: createLocalDocsCacheWriter(deps.workspaceDir),
 						workDir: deps.workspaceDir,
 					}),
 				),

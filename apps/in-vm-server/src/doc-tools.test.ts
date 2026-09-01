@@ -6,7 +6,15 @@ import {
 	expect,
 	it,
 } from "bun:test";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import {
+	lstat,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	stat,
+	symlink,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { conversations, documentAccessEvents } from "@mymemo/agent-db/schema";
@@ -255,6 +263,47 @@ describe("LoadDocuments — the Workspace docs cache", () => {
 			"load",
 			"load",
 		]);
+	});
+
+	// The Workspace is writable by the untrusted CLI, so the trusted write must
+	// not follow a symlink the model planted (ADR-0034 process boundary).
+	it("refuses to write through a planted directory symlink out of the Workspace", async () => {
+		await seedConversation();
+		const outside = await mkdtemp(path.join(os.tmpdir(), "in-vm-outside-"));
+		await mkdir(path.join(workspaceDir, ".mymemo"), { recursive: true });
+		await symlink(outside, path.join(workspaceDir, DOCS_CACHE_DIRNAME));
+		const kb = kbWithDocument(() => "must not land outside");
+		const { deps } = makeDeps({ kb: kb.db });
+		const result = await call(deps, "LoadDocuments", { documentIds: ["d1"] });
+		expect(JSON.parse(result.content[0]?.text ?? "")).toEqual({
+			loaded: [],
+			errors: [
+				{
+					documentId: "d1",
+					error:
+						"failed to cache document: docs cache path escapes the Workspace",
+				},
+			],
+		});
+		expect(await readdir(outside)).toEqual([]);
+	});
+
+	it("replaces a planted leaf symlink instead of writing through it", async () => {
+		await seedConversation();
+		const outside = await mkdtemp(path.join(os.tmpdir(), "in-vm-outside-"));
+		const target = path.join(outside, "target.md");
+		await Bun.write(target, "untouched");
+		const cacheDir = path.join(workspaceDir, DOCS_CACHE_DIRNAME);
+		await mkdir(cacheDir, { recursive: true });
+		await symlink(target, path.join(cacheDir, "d1.md"));
+		const kb = kbWithDocument(() => "cached body");
+		const { deps } = makeDeps({ kb: kb.db });
+		const result = await call(deps, "LoadDocuments", { documentIds: ["d1"] });
+		expect(result.isError).toBeUndefined();
+		expect(await readFile(target, "utf8")).toBe("untouched");
+		const cachePath = path.join(cacheDir, "d1.md");
+		expect((await lstat(cachePath)).isSymbolicLink()).toBe(false);
+		expect(await readFile(cachePath, "utf8")).toBe("cached body");
 	});
 
 	it("rejects an out-of-scope document: uniform error, no file, no audit row", async () => {
