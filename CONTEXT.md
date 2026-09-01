@@ -93,9 +93,10 @@ _Avoid_: cancellation, abort (the SDK-internal mechanism), Run interruption
 **Live Stream**:
 The per-Turn sequence of UIMessage events published by the In-VM server over
 Redis pub/sub and relayed by any chat-api task to the submitting client's SSE
-response, scoped to that client's own Turn. Text deltas exist only here;
-completed messages commit to Postgres before their completion event is
-published. There is no backlog protocol and no mid-Turn re-attach: the Live
+response, scoped to that client's own Turn. Text deltas exist only here; a
+Step's parts commit to Postgres before its completion chunk, and the Turn's
+terminal chunk follows the final commit. There is no backlog protocol and no
+mid-Turn re-attach: the Live
 Stream dies with its Turn, and a disconnected client Recovers from durable
 history.
 _Avoid_: retained stream, replay cursor, Conversation history
@@ -121,10 +122,19 @@ Assistant messages, never provisional text, no fabricated failure results.
 _Avoid_: thread history, Agent session, transcript, Run history
 
 **Assistant message**:
-One model-authored provider response within a Turn, written by the In-VM
-server at its completion boundary — committed to Postgres before its
-completion event reaches the Live Stream.
-_Avoid_: token stream
+The Turn's single model-authored UIMessage, accumulating every provider
+response as Steps (step boundaries and tool parts embedded as parts).
+Maintained by the In-VM server as one row, upserted at each Step's completion
+boundary; its final commit precedes the Turn's terminal chunk on the Live
+Stream.
+_Avoid_: provider response (that is a Step), token stream
+
+**Step**:
+One provider call within a Turn, delimited on the Live Stream by
+`start-step`/`finish-step` and embedded in the Assistant message as parts. The
+durability boundary: a Step's parts commit before its completion chunk
+publishes; an interrupted or error Turn retains exactly its completed Steps.
+_Avoid_: turn (a Turn spans Steps), message
 
 **Agent session**:
 The Claude SDK transcript carrying a Conversation's model-side memory across
