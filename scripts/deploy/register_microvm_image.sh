@@ -77,14 +77,16 @@ fi
 
 echo "Polling ${image_arn} until the build lands (logs: ${build_log_group})"
 for _ in $(seq 1 60); do
+	# The platform's transient 502s hit reads too (bit the poll live on #666
+	# after a successful update) — treat a failed poll as "still building".
 	state="$(aws lambda-microvms get-microvm-image --region "${AWS_REGION}" \
-		--image-identifier "${image_arn}" --query state --output text)"
+		--image-identifier "${image_arn}" --query state --output text 2>/dev/null || echo TRANSIENT)"
 	case "${state}" in
 	CREATED | UPDATED)
 		echo "MicroVM image ${image_name} is ${state}."
 		exit 0
 		;;
-	CREATING | UPDATING)
+	CREATING | UPDATING | TRANSIENT)
 		sleep 20
 		;;
 	*)
