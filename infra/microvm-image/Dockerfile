@@ -1,9 +1,7 @@
 # Production MicroVM image for the per-Conversation VM (spec #654). #661
 # proved the platform recipe with a placeholder server; #666 bakes the real
 # In-VM server (apps/in-vm-server) as the entrypoint. Derived from the #646
-# probe kit (docs/research/microvm-probe on the research/microvm-probe
-# branch), which proved this recipe live: AL2023 base at DEFAULT capabilities
-# — bubblewrap creates namespaces with no ALL flag.
+# probe kit (docs/research/microvm-probe on the research/microvm-probe branch).
 #
 # Build context: assembled by scripts/deploy/stage_microvm_image_context.sh —
 # this file plus app/ (the pruned Bun workspace). The image boots the server
@@ -11,12 +9,12 @@
 # configuration arrives at run time via the /run hook's runHookPayload.
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
-# bubblewrap backs sandbox-mode Bash; socat relays the egress proxy; nodejs22
-# runs smoke checks and stays available to agent Bash; shadow-utils provides
-# useradd. dnf installs are all-or-nothing: one unavailable package fails the
-# whole line (ripgrep is absent from AL2023 repos and must stay off this list
-# — Claude Code ships its own rg).
-RUN dnf install -y bash git nodejs22 nodejs22-npm shadow-utils bubblewrap socat util-linux \
+# No bubblewrap or socat: they exist only to sandbox shell commands, and there
+# is no shell — the Bash tool is denied (ADR-0034 amendment).
+# nodejs22 runs the smoke checks; shadow-utils provides useradd. dnf installs
+# are all-or-nothing: one unavailable package fails the whole line (ripgrep is
+# absent from AL2023 repos anyway — Claude Code ships its own rg).
+RUN dnf install -y bash git nodejs22 nodejs22-npm shadow-utils util-linux \
  && dnf clean all
 
 # Bun runs the In-VM server (the CI-pinned version). The Claude Agent SDK and

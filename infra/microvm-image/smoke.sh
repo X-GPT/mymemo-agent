@@ -18,19 +18,10 @@ r() {
 	if [ "$2" = FAIL ]; then fail=1; fi
 }
 
-# bubblewrap namespace smoke — sandbox-mode Bash rides on this. Proven at
-# DEFAULT capabilities by the #646 probe; re-proven here on every image.
-# SKIP_BWRAP=1: CI runs this in a Docker container whose seccomp blocks
-# namespace creation — presence is still checkable, the real namespace check
-# runs in-VM.
-if [ "${SKIP_BWRAP:-0}" = 1 ]; then
-	if command -v bwrap >/dev/null; then r bwrap-present PASS; else r bwrap-present FAIL "bubblewrap missing"; fi
-elif bwrap --unshare-all --ro-bind / / --dev /dev true 2>/dev/null; then
-	r bwrap PASS "bubblewrap can create namespaces"
-else
-	r bwrap FAIL "bwrap failed — sandbox-mode Bash unavailable"
-fi
-
+# No bubblewrap check, and no bubblewrap: the Bash tool is denied, so the
+# sandbox confines nothing (ADR-0034 amendment). The old namespace-only check
+# was worse than nothing — it reported `bwrap PASS` on a VM where every Bash
+# call died on the /proc mount it never tested.
 # Pinned versions (the spec's exact pins, not ranges) on the serving install.
 v=$(node -p 'require(process.argv[1]).version' "$SDK_DIR/package.json" 2>/dev/null)
 if [ "$v" = "$SDK_VERSION" ]; then r sdk-pinned PASS "$v"; else r sdk-pinned FAIL "want $SDK_VERSION got ${v:-none}"; fi
@@ -64,7 +55,7 @@ else
 	r policy-dir PASS "/etc/claude-code not writable by $(whoami)"
 fi
 
-# The Workspace must be writable by the runtime user (file tools + Bash cwd);
+# The Workspace must be writable by the runtime user (the file tools' cwd);
 # the server install must not be.
 if touch /home/developer/workspace/.smoke 2>/dev/null; then
 	rm -f /home/developer/workspace/.smoke

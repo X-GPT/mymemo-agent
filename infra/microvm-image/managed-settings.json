@@ -11,10 +11,5 @@
 		],
 		"disableBypassPermissionsMode": "disable"
 	},
-	"allowManagedMcpServersOnly": true,
-	"sandbox": {
-		"enabled": true,
-		"failIfUnavailable": true,
-		"allowUnsandboxedCommands": false
-	}
+	"allowManagedMcpServersOnly": true
 }

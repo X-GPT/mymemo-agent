@@ -1,6 +1,8 @@
 # MicroVM image — the In-VM server on the platform
 
-The production MicroVM image for the per-Conversation VM ([spec #654](https://github.com/X-GPT/mymemo-agent/issues/654)). #661 proved the platform recipe with a placeholder server; #666 bakes the real In-VM server (`apps/in-vm-server`) as the entrypoint. Derived from the #646 probe kit (`docs/research/microvm-probe` on the `research/microvm-probe` branch), whose live run proved the recipe: bubblewrap creates namespaces at DEFAULT capabilities — no `--additional-os-capabilities ALL`.
+The production MicroVM image for the per-Conversation VM ([spec #654](https://github.com/X-GPT/mymemo-agent/issues/654)). #661 proved the platform recipe with a placeholder server; #666 bakes the real In-VM server (`apps/in-vm-server`) as the entrypoint. Derived from the #646 probe kit (`docs/research/microvm-probe` on the `research/microvm-probe` branch).
+
+> **There is no shell in the VM.** `Bash`/`BashOutput`/`KillShell` are denied in `query-options.ts` (ADR-0034 amendment), so the image carries no bubblewrap, no socat, and no sandbox check. Why: sandbox-mode Bash cannot start here — bubblewrap creates namespaces but cannot mount `/proc`, and every Bash call died on that (proven live on #666 with a real Turn; #646's "bwrap PASS at default caps" only exercised namespace creation, never the proc mount the real sandbox performs). Running the shell unsandboxed was rejected — it would hand the untrusted surface the VM's network, and with it IMDS. The agent's tools are the cwd-scoped file tools and the in-process document tools.
 
 ## Boot model
 
@@ -56,7 +58,7 @@ TOKEN=$(aws lambda-microvms create-microvm-auth-token --region $REGION \
   --query 'authToken."X-aws-proxy-auth"' --output text)
 curl -sS "https://$ENDPOINT/health" -H "X-aws-proxy-auth: $TOKEN" -H "X-aws-proxy-port: 8080"
 curl -sS "https://$ENDPOINT/smoke"  -H "X-aws-proxy-auth: $TOKEN" -H "X-aws-proxy-port: 8080"
-# expect every RESULT line PASS (bwrap namespaces, pinned versions, policy tier)
+# expect every RESULT line PASS (pinned versions, policy tier, writability)
 
 # 4. Queue a Turn (a queued user row in conversation_messages) and nudge; the
 #    server claims it, serves it through the gateway, and lands durable
@@ -71,4 +73,4 @@ aws lambda-microvms terminate-microvm --region $REGION --microvm-identifier "$VM
 
 - Orchestration (claim/ensure VM, token minting at `RunMicrovm`, nudge from chat-api) — the orchestration ticket; this runbook drives the same contract by hand.
 - Checkpoint/rehydrate and the graceful-drain `/suspend` gate — #670; until then the platform snapshot preserves state across suspend/resume.
-- `--additional-os-capabilities` — deliberately omitted; default caps are proven sufficient.
+- `--additional-os-capabilities` — omitted; nothing in the image needs elevated capabilities now that there is no sandbox to construct.
