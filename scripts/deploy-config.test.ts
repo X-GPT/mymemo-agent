@@ -9,6 +9,29 @@ import { loadApiConfigFromEnv } from "../apps/chat-api/src/config/env";
 const root = process.cwd();
 
 describe("agent deployment behavior", () => {
+	it("grants the deploy role control-plane access for MicroVM infrastructure", () => {
+		const policy = readFileSync("infra/bootstrap-iam/main.tf", "utf8");
+
+		for (const required of [
+			"ec2:AssociateRouteTable",
+			"ec2:CreateRouteTable",
+			"ec2:CreateSubnet",
+			"ec2:DeleteRouteTable",
+			"ec2:DeleteSubnet",
+			"ec2:DisassociateRouteTable",
+			"ec2:ModifySubnetAttribute",
+			"ec2:ReplaceRouteTableAssociation",
+			"lambda:CreateNetworkConnector",
+			"lambda:DeleteNetworkConnector",
+			"lambda:GetNetworkConnector",
+			"lambda:ListNetworkConnectors",
+			"lambda:UpdateNetworkConnector",
+			"var.checkpoint_bucket_name",
+		]) {
+			expect(policy).toContain(required);
+		}
+	});
+
 	it("writes a Terraform-formatted generated image overlay", () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "mymemo-deploy-tfvars-"));
 		const generatedTfvars = join(tempDir, "generated.auto.tfvars");
