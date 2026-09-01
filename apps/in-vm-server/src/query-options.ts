@@ -97,13 +97,15 @@ export function buildTurnQueryOptions(input: {
 			"Glob",
 			...DOC_TOOLS_ALLOWED_TOOLS,
 		],
-		// Bash is DENIED, not merely unlisted (#692). Sandbox-mode Bash cannot
-		// start in the MicroVM — bwrap cannot mount /proc there — and running
-		// it unsandboxed would hand the untrusted surface the VM's network:
-		// IMDS (hence the execution role's cross-Conversation checkpoint
-		// scope), the gateway token's model spend, and a DNS exfil path. The
-		// shell returns when #692 resolves, not before. BashOutput/KillShell
-		// manage background shells and go with it.
+		// Bash is DENIED, not merely unlisted (ADR-0034 amendment). Sandbox-mode
+		// Bash cannot start in the MicroVM — bwrap cannot mount /proc there —
+		// and running it unsandboxed would hand the untrusted surface the VM's
+		// network: IMDS (hence the execution role's cross-Conversation
+		// checkpoint scope), the gateway token's model spend, and a DNS exfil
+		// path. The agent's tools are the cwd-scoped file tools and the
+		// in-process doc tools; a shell is not a product requirement, and
+		// re-introducing one means redoing that security case first.
+		// BashOutput/KillShell manage background shells and go with it.
 		// WebFetch/WebSearch are in-process network tools that bypass the
 		// sandbox proxy entirely; the VM's egress firewall is the production
 		// backstop, but deny them at the source so local runs match.

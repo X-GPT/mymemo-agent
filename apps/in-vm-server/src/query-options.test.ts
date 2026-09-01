@@ -111,7 +111,7 @@ describe("buildTurnQueryOptions", () => {
 		]);
 	});
 
-	it("denies the shell outright while #692 is open — allowlist omission is not enough", () => {
+	it("denies the shell outright — allowlist omission is not enough", () => {
 		expect(options.allowedTools).not.toContain("Bash");
 		expect(options.disallowedTools).toEqual([
 			"Bash",

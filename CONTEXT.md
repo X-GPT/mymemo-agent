@@ -48,8 +48,7 @@ The per-Conversation AWS Lambda MicroVM that serves a Conversation's Turns —
 one VM per Conversation, never shared across tenants, persistent across turns
 via the platform's suspend/resume, replaced by rehydration from the Checkpoint.
 _Avoid_: AgentCore (retired), worker, sandbox (the VM is the runtime; the OS
-sandbox is a CLI mechanism, and with the shell denied it confines nothing today
-— #692)
+sandbox is a CLI mechanism, and with no shell it confines nothing)
 
 **In-VM server**:
 The trusted MyMemo process inside the Execution runtime. It alone holds the
@@ -147,7 +146,7 @@ _Avoid_: chat history, workspace
 
 **Workspace**:
 The Conversation's working directory on its VM's disk — where the confined
-file tools act (cwd-scoped; there is no shell — #692). It survives suspend/resume
+file tools act (cwd-scoped; there is no shell). It survives suspend/resume
 natively and VM replacement via the Checkpoint. Not the Agent session, and not
 durable beyond the Checkpoint.
 _Avoid_: sandbox, E2B (retired)

@@ -84,8 +84,7 @@ connector kills internet egress (full routing, not split routing).
 ## Amendment 2026-09-01 — no shell in the VM
 
 This ADR assumed OS-sandboxed Bash as one of the CLI's confinement mechanisms.
-That assumption was false, and the shell is now denied outright
-([#692](https://github.com/X-GPT/mymemo-agent/issues/692)).
+That assumption was false, and the shell is now denied outright.
 
 Sandbox-mode Bash cannot start in a Lambda MicroVM: bubblewrap creates
 namespaces but cannot mount `/proc`, which Claude Code's sandbox does when it
@@ -106,7 +105,17 @@ weakens isolation.
 
 What is unchanged: the microVM remains the tenant boundary, the process
 boundary remains the trust boundary, and the file tools remain cwd-scoped. The
-fail-closed sandbox settings stay in the bundle so that re-enabling a shell
-fails closed rather than silently running unconfined. The shell returns only
-when #692 resolves — the leading candidate being image-level
-`--additional-os-capabilities ALL`, untested at the time of writing.
+agent's tools are those file tools plus the in-process document tools, which
+is what the product needs; the shell arrived as a Claude Code default rather
+than a requirement, and it is not missed.
+
+The image therefore ships no bubblewrap and no socat, and the smoke script
+checks neither. The fail-closed sandbox settings do stay in the SDK bundle —
+inert while nothing dispatches to the sandbox, but the guard that makes a
+future shell fail closed instead of running unconfined.
+
+Re-introducing a shell is not scheduled work. It would mean redoing this
+security case, and the mechanism to beat is documented above: bubblewrap must
+be able to mount `/proc` (untested candidate: image-level
+`--additional-os-capabilities ALL`), with `bwrap --unshare-all --ro-bind / /
+--proc /proc --dev /dev true` as the one-line probe.
