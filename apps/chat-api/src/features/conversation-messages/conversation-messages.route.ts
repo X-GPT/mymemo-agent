@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { sValidator as zValidator } from "@hono/standard-validator";
 import { TERMINAL_TURN_STATUSES } from "@mymemo/agent-db/schema";
 import type { TurnStatus } from "@mymemo/agent-db/turn-store";
@@ -207,10 +208,7 @@ app.post(
 			// The row is durable and the In-VM server's interval self-heal
 			// consults Postgres on its own; stream on rather than fail the Turn.
 			logger.warn(
-				{
-					...ref,
-					error: error instanceof Error ? error.message : String(error),
-				},
+				{ ...ref, err: error },
 				"nudge failed; the queued Turn waits for the In-VM server",
 			);
 		}
@@ -224,19 +222,21 @@ app.post(
 			// One tick does both: the SSE comment keepalive, and the terminal
 			// watch that ends a stream whose publisher died without a terminal
 			// chunk (the In-VM server restarts, sweeping the Turn `interrupted`).
-			// Ticks chain rather than overlap. The In-VM server commits the
+			// Ticks chain rather than overlap, and the abortable delay ends the
+			// loop the moment the read signal fires. The In-VM server commits the
 			// Outcome BEFORE publishing the terminal chunk, so one terminal read
 			// may be that window; two consecutive reads mean the chunk is not
 			// coming.
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			let terminalReads = 0;
-			const tick = () => {
-				timer = setTimeout(async () => {
-					if (readSignal.aborted) return;
+			void (async () => {
+				let terminalReads = 0;
+				for (;;) {
 					try {
+						await delay(LIVE_STREAM_KEEPALIVE_MS, undefined, {
+							signal: readSignal,
+						});
 						await stream.write(": ping\n\n");
 					} catch {
-						stream.abort();
+						if (!readSignal.aborted) stream.abort();
 						return;
 					}
 					try {
@@ -254,17 +254,12 @@ app.post(
 						// A failed read is retried next tick; the Live Stream itself is
 						// unaffected, so the response stays open.
 						logger.warn(
-							{
-								...ref,
-								error: error instanceof Error ? error.message : String(error),
-							},
+							{ ...ref, err: error },
 							"v2 terminal watch read failed",
 						);
 					}
-					if (!readSignal.aborted) tick();
-				}, LIVE_STREAM_KEEPALIVE_MS);
-			};
-			tick();
+				}
+			})();
 			try {
 				for await (const chunk of chunks) {
 					await stream.write(`data: ${chunk}\n\n`);
@@ -282,7 +277,6 @@ app.post(
 					);
 				}
 			} finally {
-				clearTimeout(timer);
 				readAbort.abort();
 			}
 		});
