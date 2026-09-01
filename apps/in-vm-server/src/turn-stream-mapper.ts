@@ -68,8 +68,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function chunk(chunk: UIMessageChunk): MapperAction {
-	return { kind: "chunk", chunk };
+function chunk(value: UIMessageChunk): MapperAction {
+	return { kind: "chunk", chunk: value };
 }
 
 /** Render a tool_result's content for an errorText field. The content came
@@ -290,7 +290,10 @@ export class TurnStreamMapper {
 		this.#terminalSeen = true;
 		// A Step in flight when the Turn dies is never persisted.
 		this.#currentStep = null;
-		if (message.subtype === "success") {
+		// A "success" result still ends the Turn `error` when the turn died on
+		// an API error: the SDK signals that as subtype "success" with
+		// `is_error: true` and the error text in `result` (sdk.d.ts, 0.3.251).
+		if (message.subtype === "success" && !message.is_error) {
 			return [
 				{
 					kind: "terminal",
@@ -301,7 +304,11 @@ export class TurnStreamMapper {
 			];
 		}
 		const errorText =
-			message.errors.length > 0 ? message.errors.join("; ") : message.subtype;
+			message.subtype === "success"
+				? message.result || "the turn ended on an API error"
+				: message.errors.length > 0
+					? message.errors.join("; ")
+					: message.subtype;
 		return [
 			{
 				kind: "terminal",

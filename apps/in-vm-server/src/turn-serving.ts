@@ -36,7 +36,6 @@ export type TurnQueryFn = (params: {
 }) => AsyncIterable<SDKMessage>;
 
 export interface TurnLogger {
-	info(payload: object, message?: string): void;
 	warn(payload: object, message?: string): void;
 	error(payload: object, message?: string): void;
 }

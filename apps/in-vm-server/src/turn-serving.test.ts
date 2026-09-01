@@ -53,7 +53,7 @@ beforeEach(async () => {
 	});
 });
 
-const silentLogger = { info() {}, warn() {}, error() {} };
+const silentLogger = { warn() {}, error() {} };
 const SENTINEL_OPTIONS = { model: "sentinel" } as Options;
 
 async function enqueue(text = "hello world", messageId = TURN_ID) {

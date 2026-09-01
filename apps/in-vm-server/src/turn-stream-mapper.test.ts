@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
 	assistantMessage,
+	resultApiError,
 	resultError,
 	resultSuccess,
 	streamEvent,
@@ -237,6 +238,23 @@ describe("TurnStreamMapper — the terminal", () => {
 					{ type: "text", text: "committed", state: "done" },
 				],
 				chunk: { type: "error", errorText: "API refused; again" },
+			},
+		]);
+	});
+
+	it("maps an API-error result — subtype success, is_error — to error", () => {
+		const mapper = new TurnStreamMapper();
+		acceptAll(mapper, textStep("committed"));
+		const actions = mapper.accept(resultApiError("overloaded_error"));
+		expect(actions).toEqual([
+			{
+				kind: "terminal",
+				outcome: "error",
+				parts: [
+					{ type: "step-start" },
+					{ type: "text", text: "committed", state: "done" },
+				],
+				chunk: { type: "error", errorText: "overloaded_error" },
 			},
 		]);
 	});

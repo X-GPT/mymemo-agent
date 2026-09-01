@@ -56,7 +56,23 @@ export function toolResultMessage(
 }
 
 export function resultSuccess(): SDKMessage {
-	return { type: "result", subtype: "success" } as unknown as SDKMessage;
+	return {
+		type: "result",
+		subtype: "success",
+		is_error: false,
+		result: "",
+	} as unknown as SDKMessage;
+}
+
+/** A turn that died on an API error: the SDK reports it as subtype "success"
+ * with `is_error: true` and the error text in `result`. */
+export function resultApiError(errorText: string): SDKMessage {
+	return {
+		type: "result",
+		subtype: "success",
+		is_error: true,
+		result: errorText,
+	} as unknown as SDKMessage;
 }
 
 export function resultError(errors: string[] = []): SDKMessage {
