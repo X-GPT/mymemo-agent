@@ -117,15 +117,9 @@ async function allTerminal(expected: Record<string, string>) {
 	await until(
 		async () => {
 			const statuses = await turnStatuses();
-			return Object.entries(expected).every(([id, status]) => {
-				const actual = statuses[id];
-				return (
-					actual === status &&
-					actual !== "queued" &&
-					actual !== "processing" &&
-					actual !== undefined
-				);
-			});
+			return Object.entries(expected).every(
+				([id, status]) => statuses[id] === status,
+			);
 		},
 		`turns to reach ${JSON.stringify(expected)}`,
 	);

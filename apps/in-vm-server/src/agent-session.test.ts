@@ -47,14 +47,6 @@ function fakeSessionQuery(
 	return { fn, calls };
 }
 
-async function collect(
-	iterable: AsyncIterable<SDKMessage>,
-): Promise<SDKMessage[]> {
-	const out: SDKMessage[] = [];
-	for await (const message of iterable) out.push(message);
-	return out;
-}
-
 describe("createAgentSession — one long-lived query() across Turns", () => {
 	it("serves consecutive Turn windows from a single underlying query", async () => {
 		const { fn, calls } = fakeSessionQuery((prompt) => [
@@ -66,10 +58,10 @@ describe("createAgentSession — one long-lived query() across Turns", () => {
 			options: SENTINEL_OPTIONS,
 		});
 
-		const first = await collect(
+		const first = await Array.fromAsync(
 			turnQuery({ prompt: "one", options: SENTINEL_OPTIONS }),
 		);
-		const second = await collect(
+		const second = await Array.fromAsync(
 			turnQuery({ prompt: "two", options: SENTINEL_OPTIONS }),
 		);
 
@@ -98,10 +90,12 @@ describe("createAgentSession — one long-lived query() across Turns", () => {
 		});
 
 		await expect(
-			collect(turnQuery({ prompt: "doomed", options: SENTINEL_OPTIONS })),
+			Array.fromAsync(
+				turnQuery({ prompt: "doomed", options: SENTINEL_OPTIONS }),
+			),
 		).rejects.toThrow("the CLI process died");
 
-		const next = await collect(
+		const next = await Array.fromAsync(
 			turnQuery({ prompt: "recovered", options: SENTINEL_OPTIONS }),
 		);
 		expect(next.at(-1)?.type).toBe("result");
@@ -120,12 +114,12 @@ describe("createAgentSession — one long-lived query() across Turns", () => {
 
 		// The window ends result-less — serveOneTurn turns that into a
 		// protocol error; here we just observe the truncation.
-		const truncated = await collect(
+		const truncated = await Array.fromAsync(
 			turnQuery({ prompt: "cut off", options: SENTINEL_OPTIONS }),
 		);
 		expect(truncated.every((message) => message.type !== "result")).toBe(true);
 
-		const next = await collect(
+		const next = await Array.fromAsync(
 			turnQuery({ prompt: "after restart", options: SENTINEL_OPTIONS }),
 		);
 		expect(next.at(-1)?.type).toBe("result");
@@ -157,7 +151,7 @@ describe("createAgentSession — one long-lived query() across Turns", () => {
 		// the next window to read this Turn's tail.
 		expect(calls[0]?.closed).toBe(true);
 
-		const next = await collect(
+		const next = await Array.fromAsync(
 			turnQuery({ prompt: "fresh", options: SENTINEL_OPTIONS }),
 		);
 		expect(next.at(-1)?.type).toBe("result");
