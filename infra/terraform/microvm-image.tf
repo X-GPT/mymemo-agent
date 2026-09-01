@@ -3,10 +3,8 @@
 # owns the build role Lambda assumes during that build (code-artifact read +
 # build logs, per the Lambda MicroVMs security guide).
 
-locals {
-  microvm_image_name = "${local.common_name}-microvm"
-}
-
+# The image carries the same name as the VM infra prefix (local.microvm_name,
+# microvm.tf); register_microvm_image.sh hardcodes the same value.
 data "aws_iam_policy_document" "microvm_image_build_assume" {
   statement {
     actions = ["sts:AssumeRole", "sts:TagSession"]
@@ -41,8 +39,8 @@ data "aws_iam_policy_document" "microvm_image_build" {
       "logs:PutLogEvents",
     ]
     resources = [
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda-microvms/${local.microvm_image_name}*",
-      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda-microvms/${local.microvm_image_name}*:*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda-microvms/${local.microvm_name}*",
+      "arn:aws:logs:${var.aws_region}:${var.aws_account_id}:log-group:/aws/lambda-microvms/${local.microvm_name}*:*",
     ]
   }
 }
