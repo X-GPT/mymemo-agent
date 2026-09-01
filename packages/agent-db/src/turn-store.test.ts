@@ -17,6 +17,7 @@ import {
 	sweepStaleProcessingTurnsTx,
 	type TurnOutcome,
 	terminalizeTurnTx,
+	upsertAssistantMessageTx,
 } from "./turn-store";
 
 const USER_ID = "turn-user";
@@ -238,6 +239,77 @@ describe("cancelQueuedTurnTx", () => {
 
 		expect(await cancelQueuedTurnTx(db, turnIdentity("m1"))).toBe(false);
 		expect((await loadTurn("m1")).status).toBe("processing");
+	});
+});
+
+describe("upsertAssistantMessageTx", () => {
+	const assistant = () => turnIdentity("assistant-1");
+
+	async function loadAssistantRow() {
+		const [row] = await db
+			.select()
+			.from(conversationMessages)
+			.where(
+				and(
+					eq(conversationMessages.userId, USER_ID),
+					eq(conversationMessages.messageId, "assistant-1"),
+				),
+			);
+		if (!row) throw new Error("assistant row not found");
+		return row;
+	}
+
+	it("inserts the assistant row with no Turn status", async () => {
+		await upsertAssistantMessageTx(db, {
+			...assistant(),
+			parts: [{ type: "step-start" }],
+		});
+
+		const row = await loadAssistantRow();
+		expect(row.role).toBe("assistant");
+		expect(row.status).toBeNull();
+		expect(row.parts).toEqual([{ type: "step-start" }]);
+	});
+
+	it("replaces the parts wholesale on a later Step boundary", async () => {
+		await upsertAssistantMessageTx(db, {
+			...assistant(),
+			parts: [{ type: "step-start" }],
+		});
+		await upsertAssistantMessageTx(db, {
+			...assistant(),
+			parts: [
+				{ type: "step-start" },
+				{ type: "text", text: "hello", state: "done" },
+			],
+		});
+
+		const row = await loadAssistantRow();
+		expect(row.parts).toEqual([
+			{ type: "step-start" },
+			{ type: "text", text: "hello", state: "done" },
+		]);
+	});
+
+	it("keeps the row's sequence stable across upserts", async () => {
+		await upsertAssistantMessageTx(db, { ...assistant(), parts: [] });
+		const first = await loadAssistantRow();
+		await upsertAssistantMessageTx(db, {
+			...assistant(),
+			parts: [{ type: "step-start" }],
+		});
+		expect((await loadAssistantRow()).sequence).toBe(first.sequence);
+	});
+
+	it("leaves the user Turn row untouched", async () => {
+		await enqueue("m1");
+		await upsertAssistantMessageTx(db, {
+			...turnIdentity("m1-assistant"),
+			parts: [],
+		});
+		const turn = await loadTurn("m1");
+		expect(turn.status).toBe("queued");
+		expect(turn.parts).toEqual([{ type: "text", text: "m1" }]);
 	});
 });
 

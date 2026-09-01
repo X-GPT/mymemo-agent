@@ -183,6 +183,36 @@ export async function sweepStaleProcessingTurnsTx(
 }
 
 /**
+ * Maintain the Turn's single assistant UIMessage row: insert it on the first
+ * Step's completion boundary, replace its parts wholesale on every later one
+ * (the In-VM server holds the authoritative parts in memory, so the durable row
+ * is always a full snapshot, never a merge). Assistant rows carry no Turn
+ * status — the schema check pins it NULL — and the caller commits this row
+ * BEFORE publishing the Step's completion chunk on the Live Stream.
+ */
+export async function upsertAssistantMessageTx(
+	db: Database,
+	input: {
+		userId: string;
+		conversationId: string;
+		messageId: string;
+		parts: unknown;
+	},
+): Promise<void> {
+	await db
+		.insert(conversationMessages)
+		.values({ ...input, role: "assistant" })
+		.onConflictDoUpdate({
+			target: [
+				conversationMessages.userId,
+				conversationMessages.conversationId,
+				conversationMessages.messageId,
+			],
+			set: { parts: input.parts },
+		});
+}
+
+/**
  * Cancel a `queued` Turn directly to `interrupted` without it ever running —
  * `started_at` stays NULL. A Turn already claimed (or already terminal)
  * matches nothing and the call reports false.

@@ -19,7 +19,7 @@ chat-api imports the shared client and schema directly. Its migration entrypoint
 - `src/runtime-store.ts`: fenced Run sandbox/taint mutations, in-transaction Agent session pointer updates, Reclamation tainting, and the orphan-sandbox ledger
 - `src/session-store.ts`: Ownership-fenced production Run append/delete operations, transcript reads, and administrative Conversation transcript deletion
 - `src/artifact-store.ts`: pre-upload object ledger and fence-first atomic artifact-pointer/current-metadata/`run_done` commit
-- `src/turn-store.ts`: /v2 Turn-queue primitives on `conversation_messages` (enqueue, one-in-flight claim, at-most-once terminalization, boot sweep, queued-cancel)
+- `src/turn-store.ts`: /v2 Turn-queue primitives on `conversation_messages` (enqueue, one-in-flight claim, at-most-once terminalization, boot sweep, queued-cancel) and the Turn's single assistant-row upsert
 - `src/testing.ts`: PGlite harness and shared seed helpers
 
 chat-api's `PostgresRunStore` composes shared admission inside the Conversation lifecycle lock. The new Run, its `run_started` event, and its Run-keyed dispatch outbox row share that transaction; exact retries insert nothing. Run-store operations compose runtime pointer publication into qualifying terminal transactions through the same live Ownership fence.
