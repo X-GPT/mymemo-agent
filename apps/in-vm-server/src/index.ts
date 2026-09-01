@@ -94,6 +94,10 @@ const app = createApp({
 			logger.warn({ microvmId }, "run hook repeated; already configured");
 			return;
 		}
+		// Log before configuring: the platform's runTimeoutInSeconds terminates
+		// the VM if configure outlasts it, and this line is then the only
+		// in-VM evidence the hook arrived (learned live on #666).
+		logger.info({ microvmId }, "run hook received; configuring");
 		// A configure failure throws into Hono's 500 — the non-200 run hook
 		// keeps the platform from ever routing traffic to this VM.
 		await configure({
