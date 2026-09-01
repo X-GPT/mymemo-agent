@@ -13,6 +13,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | `apps/agentcore-dispatch-consumer` | AgentCore dispatch consumer Lambda and shared dispatch-boundary modules. Its production composition validates strict content-free SQS envelopes, invokes the Runtime, and returns partial-batch acknowledgements; the Runtime composes exact acquisition directly. |
 | `apps/agentcore-runtime` | Sole production execution runtime. The Linux ARM64 image exposes `/ping` and `/invocations`, exactly acquires one dispatched Run, and owns its Run-serving behavior. |
 | `apps/agentcore-local-dispatch-bridge` | Development-only outbox poller that composes the shared publisher and consumer contracts against a local AgentCore Runtime. It is absent from production startup paths and images. |
+| `apps/in-vm-server` | The trusted In-VM server for /v2 (spec #654): claims queued Turns from Postgres, runs the confined Claude Agent SDK `query()`, maintains the Turn's single assistant UIMessage row commit-before-publish, publishes the v2 Turn Live Stream lane, and serves nudge + health. Runs locally against Postgres + Redis until #666 bakes it into the MicroVM image. |
 | `packages/agent-db` | Shared writable `mymemo_agent` data layer: schema, migrations, Run and Conversation Ownership transactions, runtime pointers, session transcripts, artifact metadata, and PGlite test support. |
 | `packages/agentcore-dispatch` | Production-neutral AgentCore Dispatch publication behavior, strict envelope serialization, and separately importable SQS and SSM adapters. |
 | `packages/live-text` | Redis configuration, event validation, and producer-buffered in-memory/Redis Live Stream relay implementations. |
@@ -57,6 +58,9 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/agentcore-runtime/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |
 | `apps/chat-api/src/features/ai-chat/` | Harness-hosted AI SDK chat route (`POST /api/chat`, local composition only): one Claude Code turn per message on a per-turn `HarnessAgent` with `Read`/`Write`/`Edit`/`Grep` and no other built-in (`activeTools` is `HARNESS_ACTIVE_TOOLS` in `tools/`) in a persistent Vercel Sandbox per Conversation, executing MyMemo's document tools in-process against the read-only KB, streamed as the UI message stream |
 | `apps/chat-api/src/features/ai-chat/tools/` | The Harness document tools (`ListDocuments`, `SearchDocuments`, `LoadDocuments`): scoped read-only KB access, one `document_access_events` row per call keyed by the Harness turn id, and materialization into the sandbox through the session `LoadDocuments` is handed |
+| `apps/in-vm-server/src/turn-serving.ts` | One-Turn drain: claim → confined SDK `query()` → per-Step assistant-row upsert (commit-before-publish) → Outcome terminalization |
+| `apps/in-vm-server/src/turn-stream-mapper.ts` | Claude SDK stream → stock AI SDK v7 UIMessage chunks and durable parts (one assistant UIMessage per Turn, Steps inside) |
+| `apps/in-vm-server/src/query-options.ts` | The #645 confinement bundle and the credential-free CLI env allowlist |
 | `packages/agentcore-dispatch/src/` | Shared AgentCore Dispatch publisher policy, envelope serialization, and isolated SQS/SSM adapters |
 | `packages/agent-db/src/conversation-ownership.ts` | Live Ownership renew, release, and mutation fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |

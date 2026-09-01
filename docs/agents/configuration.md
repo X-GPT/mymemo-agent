@@ -92,6 +92,27 @@ The local Compose target starts `apps/chat-api/local/index.ts`, which injects an
 - `DB_SSL` (default on; `disable` only for local non-TLS Postgres)
 - `LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS` (default off): when exactly `true`, allow unauthenticated `redis://` only for `localhost`, `127.0.0.1`, or `[::1]` in integration tests
 
+## In-VM server
+
+The trusted In-VM server (`apps/in-vm-server`, spec #654) serves one
+Conversation per process. It runs locally against Postgres + Redis until #666
+bakes it into the MicroVM image and delivers boot configuration via
+`runHookPayload`.
+
+Required:
+
+- `AGENT_DATABASE_URL`: writable `mymemo_agent` database; `DB_PASSWORD` and `DB_SSL` follow the shared database conventions
+- `REDIS_URL`: authenticated `rediss://` URL for the v2 Turn Live Stream lane; `LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS` is the same loopback-only escape hatch as chat-api's
+- `MYMEMO_USER_ID`, `MYMEMO_CONVERSATION_ID`: the Conversation this VM serves
+- `WORKSPACE_DIR`: the Workspace — the cwd the confined file tools and sandboxed Bash act in
+- `MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL`: model access held by the trusted process — locally a direct provider base URL/key; in production the chat-api `/v2/gateway` URL and the per-Conversation gateway token, with no design change
+
+Optional: `PORT` (default `8080`), `LOG_LEVEL` (default `info`).
+
+The spawned Claude Code CLI never receives the process environment: it gets
+the credential-free allowlist built in `src/query-options.ts`, so no
+data-plane secret can reach the untrusted surface.
+
 ## AgentCore dispatch publisher
 
 The dedicated publisher ECS task requires only:
