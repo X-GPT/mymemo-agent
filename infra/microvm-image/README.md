@@ -73,4 +73,4 @@ aws lambda-microvms terminate-microvm --region $REGION --microvm-identifier "$VM
 
 - Orchestration (claim/ensure VM, token minting at `RunMicrovm`, nudge from chat-api) — the orchestration ticket; this runbook drives the same contract by hand.
 - Checkpoint/rehydrate and the graceful-drain `/suspend` gate — #670; until then the platform snapshot preserves state across suspend/resume.
-- `--additional-os-capabilities` — currently omitted. No longer "proven sufficient": it is the leading candidate fix for the `/proc`-mount failure above, and testing it is a named follow-up.
+- `--additional-os-capabilities` — omitted; nothing in the image needs elevated capabilities now that there is no sandbox to construct.
