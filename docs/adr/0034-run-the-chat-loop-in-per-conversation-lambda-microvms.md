@@ -97,7 +97,8 @@ weakens isolation.
 
 Everything that existed to serve the shell goes with it: the `sandbox` settings
 leave the SDK options here, and the image drops bubblewrap, socat, the bwrap
-smoke check, and the policy tier's own `sandbox` block (PR #691, which must
-land with or before this change — until it does, the image still configures a
-sandbox for a shell that cannot be invoked). Restoring a shell means restoring
-all of it and remaking this security case.
+smoke check, and the policy tier's own `sandbox` block (PR #691, landing with
+this change or after it — never before, since removing bubblewrap while the
+shell is still allowed would leave the tool demanding a sandbox that cannot be
+built). Restoring a shell means restoring all of it and remaking this security
+case.
