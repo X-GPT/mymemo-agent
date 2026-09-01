@@ -117,8 +117,9 @@ _Avoid_: Reconnecting (the deleted v1 concept), resuming
 The durable, user-visible record of a Conversation: the UIMessage rows of
 `conversation_messages`, read in `sequence` order with cursor paging, each
 user message carrying its Turn status as metadata. An interrupted or error
-Turn retains exactly what durably completed — tool steps and finished
-Assistant messages, never provisional text, no fabricated failure results.
+Turn retains exactly what durably completed — the completed Steps of the
+Turn's Assistant message, never provisional text, no fabricated failure
+results.
 _Avoid_: thread history, Agent session, transcript, Run history
 
 **Assistant message**:
