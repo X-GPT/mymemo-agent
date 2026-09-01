@@ -54,7 +54,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   }
 
   statement {
-    sid = "ArtifactBucketManagement"
+    sid = "AgentBucketManagement"
     actions = [
       "s3:CreateBucket",
       "s3:DeleteBucket",
@@ -73,7 +73,10 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "s3:PutEncryptionConfiguration",
       "s3:PutLifecycleConfiguration",
     ]
-    resources = ["arn:aws:s3:::${var.artifact_bucket_name}"]
+    resources = [
+      "arn:aws:s3:::${var.artifact_bucket_name}",
+      "arn:aws:s3:::${var.checkpoint_bucket_name}",
+    ]
   }
 
   statement {
@@ -106,28 +109,36 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "autoscaling:*",
       "cloudwatch:*",
       "ec2:AllocateAddress",
+      "ec2:AssociateRouteTable",
       "ec2:AuthorizeSecurityGroupEgress",
       "ec2:AuthorizeSecurityGroupIngress",
       "ec2:CreateInstanceConnectEndpoint",
       "ec2:CreateLaunchTemplate",
       "ec2:CreateLaunchTemplateVersion",
       "ec2:CreateNetworkInterface",
+      "ec2:CreateRouteTable",
       "ec2:CreateSecurityGroup",
+      "ec2:CreateSubnet",
       "ec2:CreateTags",
       "ec2:DeleteInstanceConnectEndpoint",
       "ec2:DeleteLaunchTemplate",
       "ec2:DeleteLaunchTemplateVersions",
       "ec2:DeleteNatGateway",
       "ec2:DeleteNetworkInterface",
+      "ec2:DeleteRouteTable",
       "ec2:DeleteSecurityGroup",
+      "ec2:DeleteSubnet",
       "ec2:DeleteTags",
       "ec2:Describe*",
       "ec2:DisassociateAddress",
+      "ec2:DisassociateRouteTable",
       "ec2:ModifyInstanceAttribute",
       "ec2:ModifyInstanceConnectEndpoint",
       "ec2:ModifyNetworkInterfaceAttribute",
+      "ec2:ModifySubnetAttribute",
       "ec2:ReleaseAddress",
       "ec2:ReplaceRoute",
+      "ec2:ReplaceRouteTableAssociation",
       "ec2:RevokeSecurityGroupEgress",
       "ec2:RevokeSecurityGroupIngress",
       "ec2:RunInstances",
@@ -148,6 +159,21 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "secretsmanager:PutSecretValue",
       "secretsmanager:TagResource",
       "secretsmanager:UpdateSecret",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "MicrovmNetworkConnectorManagement"
+    actions = [
+      "lambda:CreateNetworkConnector",
+      "lambda:DeleteNetworkConnector",
+      "lambda:GetNetworkConnector",
+      "lambda:ListNetworkConnectors",
+      "lambda:ListTags",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:UpdateNetworkConnector",
     ]
     resources = ["*"]
   }

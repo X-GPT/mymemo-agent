@@ -46,6 +46,12 @@ variable "artifact_bucket_name" {
   default     = "mymemo-agent-prod-artifacts"
 }
 
+variable "checkpoint_bucket_name" {
+  description = "S3 bucket managed by the deploy role for MicroVM Checkpoints."
+  type        = string
+  default     = "mymemo-agent-prod-microvm-checkpoints"
+}
+
 variable "tags" {
   description = "Tags applied to bootstrap IAM resources."
   type        = map(string)
