@@ -51,8 +51,7 @@ per-Conversation microVMs create a third structure ADR-0001 didn't have:
   per-VM tokens), and egress lockdown is measured.
 - **Restore the split runtime in-VM** (host tools outside, every built-in off) —
   rejected a fourth time; the process boundary delivers the same credential
-  isolation without amputating the toolset (the shell aside — see the
-  amendment).
+  isolation without amputating the toolset (the shell aside).
 
 ## Measured facts this decision rests on (probe #646, egress probe #651)
 
@@ -81,9 +80,8 @@ egress (full routing, not split routing).
 Sandbox-mode Bash cannot start in a Lambda MicroVM: bubblewrap creates
 namespaces but cannot mount `/proc`, which Claude Code's sandbox does when it
 builds its nested seccomp layer, so every Bash call fails at sandbox setup.
-Proven live on #666 with a real Turn. The evidence that put "bubblewrap works
-at default capabilities" in this ADR came from a probe that only exercised
-namespace creation, never the proc mount.
+Proven live on #666 with a real Turn. The #646 probe this ADR relied on only
+exercised namespace creation, never the proc mount.
 
 `Bash`, `BashOutput`, and `KillShell` therefore sit in `disallowedTools` in
 `apps/in-vm-server/src/query-options.ts`. Running the shell unsandboxed was
