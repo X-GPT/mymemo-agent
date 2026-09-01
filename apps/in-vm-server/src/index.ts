@@ -2,10 +2,12 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
 import { createRedisTurnLiveStreamRelay } from "@mymemo/live-text";
 import pino from "pino";
+import { createAgentSession } from "./agent-session";
 import { createApp } from "./app";
 import { loadInVmConfigFromEnv } from "./config";
+import { startDrainLoop } from "./drain-loop";
 import { buildTurnQueryOptions } from "./query-options";
-import { serveOneTurn, type TurnServingDeps } from "./turn-serving";
+import type { TurnServingDeps } from "./turn-serving";
 
 // Entrypoint: the only place that reads the environment. One VM serves one
 // Conversation; `bun run src/index.ts` serves this default export locally
@@ -16,25 +18,26 @@ const relay = createRedisTurnLiveStreamRelay({
 	url: config.redisUrl,
 	deployment: "current",
 });
+const queryOptions = buildTurnQueryOptions({
+	workspaceDir: config.workspaceDir,
+	model: config.model,
+	processEnv: Bun.env,
+});
 const deps: TurnServingDeps = {
 	db: createDatabase(config.databaseUrl),
 	relay,
 	userId: config.userId,
 	conversationId: config.conversationId,
-	query,
-	queryOptions: buildTurnQueryOptions({
-		workspaceDir: config.workspaceDir,
-		model: config.model,
-		processEnv: Bun.env,
-	}),
+	// ONE long-lived query() carries the Agent session across Turns (#664).
+	query: createAgentSession({ query, options: queryOptions }),
+	queryOptions,
 	logger,
 };
 
-const app = createApp(() => {
-	void serveOneTurn(deps).catch((error) => {
-		logger.error({ error: String(error) }, "serveOneTurn failed");
-	});
-});
+// Boot sweep + claim on start live inside the loop, so queued rows resume
+// draining after a restart without a nudge.
+const loop = startDrainLoop(deps);
+const app = createApp(loop.nudge);
 
 let shuttingDown = false;
 async function shutdown(): Promise<void> {
