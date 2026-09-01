@@ -69,6 +69,13 @@ export interface ApiConfig {
 	 * never leaves this process. Optional alongside `openrouterApiKey`.
 	 */
 	gatewayTokenSecret?: string;
+	/**
+	 * Dev-mode Ensure-VM stub (ticket #667): the base URL of one locally
+	 * running In-VM server that `POST /v2/conversations/:id/messages` nudges.
+	 * The orchestration ticket replaces it with per-Conversation MicroVM
+	 * launch. While unset the v2 message POST answers 503.
+	 */
+	inVmServerUrl?: string;
 }
 
 /**
@@ -113,5 +120,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		openrouterBaseUrl:
 			env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api",
 		gatewayTokenSecret: env.GATEWAY_TOKEN_SECRET?.trim() || undefined,
+		inVmServerUrl:
+			env.IN_VM_SERVER_URL?.trim().replace(/\/+$/, "") || undefined,
 	};
 }

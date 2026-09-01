@@ -186,3 +186,71 @@ describe("PostgresConversationMessagesStore", () => {
 		);
 	});
 });
+
+describe("PostgresConversationMessagesStore Turn submission", () => {
+	const ref = {
+		userId: "member-1",
+		conversationId: "conversation-1",
+		messageId: "turn-1",
+	};
+	const parts = [{ type: "text", text: "hi" }];
+
+	it("queues a new Turn once; a re-POST is a duplicate that changes nothing", async () => {
+		expect(await store.enqueueTurn({ ...ref, parts })).toEqual({
+			outcome: "queued",
+		});
+		expect(await store.getTurnStatus(ref)).toBe("queued");
+
+		expect(
+			await store.enqueueTurn({
+				...ref,
+				parts: [{ type: "text", text: "changed" }],
+			}),
+		).toEqual({ outcome: "duplicate", status: "queued" });
+		const page = await getPage();
+		expect(page?.messages).toEqual([
+			{
+				id: "turn-1",
+				role: "user",
+				parts,
+				metadata: { status: "queued", startedAt: null, finishedAt: null },
+			},
+		]);
+
+		await tdb.db
+			.update(conversationMessages)
+			.set({ status: "done", finishedAt: new Date() });
+		expect(await store.enqueueTurn({ ...ref, parts })).toEqual({
+			outcome: "duplicate",
+			status: "done",
+		});
+	});
+
+	it("refuses an archived Conversation without writing", async () => {
+		await tdb.db
+			.update(conversations)
+			.set({ archivedAt: new Date("2026-08-30T00:00:00.000Z") });
+		expect(await store.enqueueTurn({ ...ref, parts })).toEqual({
+			outcome: "archived",
+		});
+		expect(await store.getTurnStatus(ref)).toBeNull();
+	});
+
+	it("reports missing and foreign Conversations identically", async () => {
+		expect(
+			await store.enqueueTurn({ ...ref, conversationId: "nope", parts }),
+		).toEqual({ outcome: "not_found" });
+		expect(
+			await store.enqueueTurn({ ...ref, userId: "member-2", parts }),
+		).toEqual({ outcome: "not_found" });
+	});
+
+	it("getTurnStatus ignores assistant rows", async () => {
+		await tdb.db
+			.insert(conversationMessages)
+			.values(assistantRow(1, "assistant-1", []));
+		expect(
+			await store.getTurnStatus({ ...ref, messageId: "assistant-1" }),
+		).toBeNull();
+	});
+});

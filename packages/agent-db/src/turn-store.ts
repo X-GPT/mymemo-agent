@@ -1,5 +1,5 @@
 import { and, asc, eq } from "drizzle-orm";
-import type { Database } from "./client";
+import type { Database, DbTx } from "./client";
 import {
 	type ALL_TURN_STATUSES,
 	conversationMessages,
@@ -57,7 +57,7 @@ function conversationTurns(input: { userId: string; conversationId: string }) {
  * alike) untouched.
  */
 export async function enqueueTurnTx(
-	db: Database,
+	db: Database | DbTx,
 	input: {
 		userId: string;
 		conversationId: string;

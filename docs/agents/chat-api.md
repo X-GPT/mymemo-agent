@@ -163,6 +163,70 @@ The four lifecycle routes above (create, list, rename/Archive, permanent delete)
 
 `GET /v2/conversations/:conversationId/messages` returns the durable UIMessage history over `conversation_messages` in ascending `sequence`, paged backwards from the newest page as `{ messages, nextCursor }` (`?limit` defaults to 50 and clamps to 100; `?before=<sequence>` is the cursor `nextCursor` hands back). A user message carries its Turn `status`/`startedAt`/`finishedAt` as UIMessage `metadata`; a Turn's single assistant message returns its stored parts verbatim (step and tool parts included) — an interrupted or error Turn shows exactly its completed Steps by the In-VM writer's commit-before-publish invariant. chat-api only reads here. Owner-scoped: missing and foreign Conversations return `404`; an empty history — every pre-v2 Conversation included — is an empty page; archived Conversations stay readable; the read bypasses the new-work exposure gate (v1 precedent).
 
+### Submit a v2 message
+
+`POST /v2/conversations/:conversationId/messages` submits one UIMessage and
+answers with the stock AI SDK v7 UI Message Stream scoped to that message's
+own Turn (spec #654, #667). The body is the stock `useChat` /
+`DefaultChatTransport` request, `.strict()`: `id` (must equal the path
+Conversation id), `trigger: "submit-message"`, and `messages`, of which only
+the final one is submitted — it must be a user UIMessage with only text parts
+(each ≤ 50,000 characters), and its client `id` becomes the Turn id, so it is
+held to the path-safe Conversation-id shape (it names the Live Stream
+channel). Earlier messages are the client's history and validation input, not
+new durable history. `regenerate-message`, files, and message metadata are
+rejected with `400`.
+
+Order of operations: identity → `503` while no In-VM server is configured
+(`IN_VM_SERVER_URL`, the dev-mode Ensure-VM stub) → exposure gate (`403`,
+before any write, on every submission) → the `queued` INSERT under the
+Conversation row lock (`404` for missing or foreign, `409` for an archived
+Conversation — the lock is the one `PATCH` archive takes, so no message slips
+in beside an Archive) → subscribe to the Turn's Live Stream lane → nudge →
+relay. Subscribing before nudging is what makes early chunks unlosable: the
+v2 lane keeps no backlog. That INSERT is chat-api's only write to
+`conversation_messages`; the In-VM server owns every status transition. There
+is no `409` for concurrency: a second POST is simply the next queued row, and
+its response holds with silent SSE comment keepalives (`: ping`, every 5 s)
+while queued predecessors drain, then carries only its own Turn's chunks.
+
+The response is `200 text/event-stream` with the `x-vercel-ai-ui-message-stream: v1`
+header, each chunk as one `data:` frame exactly as the In-VM server published
+it (stock `UIMessageChunk` grammar, one assistant UIMessage per Turn), and a
+`data: [DONE]` terminator after the Turn's terminal chunk (`finish` | `abort`
+| `error` — the Outcome). A stock `useChat` needs no custom transport.
+The keepalive tick doubles as a terminal watch: if the Turn is durably
+terminal but no terminal chunk arrived (the publisher died; a restarted VM
+sweeps it `interrupted`), the stream ends with `[DONE]` and no synthesized
+chunk. A relay failure mid-stream closes the response without `[DONE]` and
+without synthesizing anything; a subscribe failure answers `503` after a
+best-effort nudge so the queued Turn still runs. A nudge failure is logged
+and the response streams on — the row is durable and the In-VM server's
+interval self-heal consults Postgres on its own. In every case the client
+Recovers from durable history.
+
+A re-POST of the same client message id creates no second Turn (the primary
+key is the idempotency authority; the row's parts and status stay as they
+were). If that Turn is still `queued` or `processing` the response attaches
+to its Live Stream and nudges — chunks published before the re-POST are
+missed, there being no backlog. If the Turn already reached its Outcome the
+Live Stream is gone and the response is `410 { error: "Turn already ended",
+recovery: "history" }`, the v1 history-recovery signal.
+
+Client disconnect never interrupts a Turn: chat-api drops its subscription
+and nothing else; the Turn runs to its Outcome and the durable history has
+it.
+
+Local check (a locally running In-VM server on `IN_VM_SERVER_URL`, the
+Compose Postgres + Redis, and chat-api with the same identity):
+
+```sh
+H='-H content-type:application/json -H x-member-code:m1 -H x-partner-code:p1'
+ID=$(curl -s -X POST localhost:3000/v2/conversations $H -d '{}' | jq -r .conversationId)   # the In-VM server's MYMEMO_CONVERSATION_ID
+curl -sN -X POST localhost:3000/v2/conversations/$ID/messages $H -d "{\"id\":\"$ID\",\"trigger\":\"submit-message\",\"messages\":[{\"id\":\"m1\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"Say pelican.\"}]}]}"
+curl -s localhost:3000/v2/conversations/$ID/messages $H | jq '.messages[-1]'   # the streamed assistant message, durably
+```
+
 ### Admit and stream a Run
 
 `POST /v1/conversations/:conversationId/runs` strictly validates one standard `RunAgentInput` and requires `threadId` to equal the owned Conversation id. Reject client Tools, state, and forwarded authority.

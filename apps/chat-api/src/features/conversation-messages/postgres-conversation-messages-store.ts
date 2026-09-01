@@ -1,16 +1,19 @@
-import type { Database } from "@mymemo/agent-db/client";
+import type { Database, DbTx } from "@mymemo/agent-db/client";
 import { conversationMessages, conversations } from "@mymemo/agent-db/schema";
-import type { TurnStatus } from "@mymemo/agent-db/turn-store";
+import { enqueueTurnTx, type TurnStatus } from "@mymemo/agent-db/turn-store";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type {
 	ConversationMessagesPage,
 	ConversationMessagesPageInput,
 	ConversationMessagesStore,
 	ConversationUiMessage,
+	EnqueueTurnResult,
+	TurnRef,
+	TurnSubmissionStore,
 } from "./conversation-messages-store";
 
 export class PostgresConversationMessagesStore
-	implements ConversationMessagesStore
+	implements ConversationMessagesStore, TurnSubmissionStore
 {
 	constructor(private readonly db: Database) {}
 
@@ -57,6 +60,54 @@ export class PostgresConversationMessagesStore
 			nextCursor: hasOlder ? (page[0]?.sequence ?? null) : null,
 		};
 	}
+
+	async enqueueTurn(
+		input: TurnRef & { parts: unknown },
+	): Promise<EnqueueTurnResult> {
+		return await this.db.transaction(async (tx) => {
+			const [conversation] = await tx
+				.select({ archivedAt: conversations.archivedAt })
+				.from(conversations)
+				.where(
+					and(
+						eq(conversations.userId, input.userId),
+						eq(conversations.conversationId, input.conversationId),
+					),
+				)
+				.for("update");
+			if (!conversation) return { outcome: "not_found" };
+			if (conversation.archivedAt !== null) return { outcome: "archived" };
+			if (await enqueueTurnTx(tx, input)) return { outcome: "queued" };
+			const status = await selectTurnStatus(tx, input);
+			if (status === null) {
+				throw new Error(`duplicate message ${input.messageId} is not a Turn`);
+			}
+			return { outcome: "duplicate", status };
+		});
+	}
+
+	getTurnStatus(ref: TurnRef): Promise<TurnStatus | null> {
+		return selectTurnStatus(this.db, ref);
+	}
+}
+
+async function selectTurnStatus(
+	db: Database | DbTx,
+	ref: TurnRef,
+): Promise<TurnStatus | null> {
+	const [row] = await db
+		.select({ status: conversationMessages.status })
+		.from(conversationMessages)
+		.where(
+			and(
+				eq(conversationMessages.userId, ref.userId),
+				eq(conversationMessages.conversationId, ref.conversationId),
+				eq(conversationMessages.messageId, ref.messageId),
+				eq(conversationMessages.role, "user"),
+			),
+		);
+	// The turn-status check makes a user row's status a non-null TurnStatus.
+	return row ? (row.status as TurnStatus) : null;
 }
 
 function toUiMessage(
