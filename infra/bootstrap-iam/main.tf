@@ -431,6 +431,15 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["*"]
   }
 
+  # The image build runs on the AWS-managed INTERNET_EGRESS connector (dnf/npm
+  # need egress) and CreateMicrovmImage passes it implicitly — denied live
+  # without PassNetworkConnector on the aws-owned connector namespace.
+  statement {
+    sid       = "MicrovmImagePassManagedConnector"
+    actions   = ["lambda:PassNetworkConnector"]
+    resources = ["arn:aws:lambda:${var.aws_region}:aws:network-connector:*"]
+  }
+
   statement {
     sid = "MicrovmImageArtifactObjects"
     actions = [
