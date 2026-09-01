@@ -409,6 +409,29 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     ]
   }
 
+  # MicroVM image registration (ticket #661): the main-push workflow zips the
+  # image directory into the artifact bucket and drives create/update/get on
+  # the MicroVM image. iam:PassRole for the build role is already granted by
+  # AgentIamManagement (mymemo-agent-* roles).
+  statement {
+    sid = "MicrovmImageRegistration"
+    actions = [
+      "lambda:CreateMicrovmImage",
+      "lambda:GetMicrovmImage",
+      "lambda:UpdateMicrovmImage",
+    ]
+    resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:microvm-image:mymemo-agent-*"]
+  }
+
+  statement {
+    sid = "MicrovmImageArtifactObjects"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+    ]
+    resources = ["arn:aws:s3:::${var.artifact_bucket_name}/microvm-images/*"]
+  }
+
   statement {
     sid       = "CreateServiceLinkedRoles"
     actions   = ["iam:CreateServiceLinkedRole"]
