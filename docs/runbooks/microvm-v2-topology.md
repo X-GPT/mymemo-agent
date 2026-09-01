@@ -23,12 +23,18 @@ egress connector, the checkpoint bucket, and the IAM roles/grants — are in
    `GATEWAY_TOKEN_SECRET` needs no such step: it is internal to chat-api
    (mint and verify both happen there), so Terraform generates and stores it.
 
-2. **`terraform apply`.** One pass creates everything: subnets and route
+2. **Apply — dispatch the Release deploy workflow.** There is no staging
+   target and no local apply lane: run the "Release deploy" GitHub Action
+   from `main` (typed confirmation input), which plans and applies the
+   unified stack via OIDC. One pass creates everything: subnets and route
    tables, the security group and its ingress counterparts on the agent DB /
    KB DB / Redis / ALB groups, the connector operator role, the connector,
    the checkpoint bucket, the VM execution role, and the chat-api task-role
-   and execution-role grants. There is no intra-stack ordering to manage —
-   Terraform's dependency graph handles it.
+   and execution-role grants (the ECS roll in the same run delivers the new
+   chat-api secrets). There is no intra-stack ordering to manage —
+   Terraform's dependency graph handles it — and the v2 resources are
+   additive and inert until cutover, so the first apply doubles as the
+   spec's pre-cutover verification bed.
 
 3. **Quota bumps** (Service Quotas console or CLI, deliberately not Terraform
    resources — they are account-level requests reviewed by AWS, not
@@ -41,7 +47,7 @@ egress connector, the checkpoint bucket, and the IAM roles/grants — are in
      suspended VMs count against this quota — ask AWS support with the
      request.
 
-4. **First-apply verification** (staging): the MicroVM IAM action names
+4. **First-apply verification** (pre-cutover): the MicroVM IAM action names
    (`lambda:RunMicrovm`, `lambda:CreateMicrovmAuthToken`,
    `lambda:TerminateMicrovm`) and ARN shapes follow the GA security
    documentation; confirm with a live `RunMicrovm` + `CreateMicrovmAuthToken`
@@ -54,7 +60,7 @@ control-plane/data-plane IAM split) is documented in the comments in
 
 ## Pre-cutover gate
 
-After applying to staging, run the spec #654 verification gate (egress
+After the first apply, run the spec #654 verification gate (egress
 positive + negative controls, IMDS block, DNS through the connector, a real
 turn through the gateway) before any production cutover. That gate belongs to
 the gateway/trust-boundary tickets; this runbook only stands up the topology
