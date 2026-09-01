@@ -86,7 +86,11 @@ Proven live on #666 with a real Turn. The measured fact above came from the
 #646 probe, which only exercised namespace creation, never the proc mount.
 
 `Bash`, `BashOutput`, and `KillShell` therefore sit in `disallowedTools` in
-`apps/in-vm-server/src/query-options.ts`. Running the shell unsandboxed was
+`apps/in-vm-server/src/query-options.ts`. What actually closes the shell — and
+every other tool the SDK ships — is `permissionMode: "dontAsk"` against an
+exact allowlist: anything not named there is denied, so a tool added to
+`allowedTools` is admitted no matter what the deny list says. The denials are
+defence in depth and a statement of intent. Running the shell unsandboxed was
 rejected: the untrusted surface would inherit the VM's network, and with it
 IMDS — hence the execution role's `conversations/*` checkpoint scope, whose
 residual this ADR accepted *because* the process boundary contained it —

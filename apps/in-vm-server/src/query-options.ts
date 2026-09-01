@@ -97,7 +97,8 @@ export function buildTurnQueryOptions(input: {
 			"Glob",
 			...DOC_TOOLS_ALLOWED_TOOLS,
 		],
-		// No shell in the VM — denied, not merely unlisted (ADR-0034 amendment).
+		// No shell in the VM (ADR-0034 amendment). The allowlist above is what
+		// enforces that; these are defence in depth.
 		// WebFetch/WebSearch: in-process network tools; the VM's egress firewall
 		// is the production backstop, denied here so local runs match.
 		disallowedTools: [
