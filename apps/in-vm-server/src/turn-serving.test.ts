@@ -82,6 +82,7 @@ function makeDeps(overrides: Partial<TurnServingDeps>): TurnServingDeps {
 		conversationId: CONVERSATION_ID,
 		query: scriptedQuery([...textStep("hi"), resultSuccess()]),
 		queryOptions: SENTINEL_OPTIONS,
+		currentTurn: { turnId: null },
 		logger: silentLogger,
 		...overrides,
 	};

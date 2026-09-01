@@ -51,7 +51,7 @@ export interface TurnServingDeps {
 	queryOptions: Options;
 	/** Shared with the in-process document tools (#665): which Turn is in
 	 * flight, so their audit rows carry the exact Turn id. */
-	currentTurn?: CurrentTurn;
+	currentTurn: CurrentTurn;
 	logger: TurnLogger;
 }
 
@@ -82,7 +82,7 @@ export async function serveOneTurn(
 	const claimed = await claimNextTurnTx(db, { userId, conversationId });
 	if (!claimed) return null;
 
-	if (deps.currentTurn) deps.currentTurn.turnId = claimed.messageId;
+	deps.currentTurn.turnId = claimed.messageId;
 	const turnKey = { userId, conversationId, messageId: claimed.messageId };
 	const assistantMessageId = randomUUID();
 	const publisher = deps.relay.openPublisher(claimed.messageId);
@@ -162,7 +162,7 @@ export async function serveOneTurn(
 		await publish({ type: "error", errorText: "The Turn ended in error." });
 		return "error";
 	} finally {
-		if (deps.currentTurn) deps.currentTurn.turnId = null;
+		deps.currentTurn.turnId = null;
 		await publisher.close().catch(() => {});
 	}
 }
