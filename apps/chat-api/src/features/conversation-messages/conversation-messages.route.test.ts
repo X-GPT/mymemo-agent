@@ -186,6 +186,9 @@ class FakeTurnStore implements ConversationMessagesStore {
 			return { outcome: "not_found" };
 		}
 		if (this.archived) return { outcome: "archived" };
+		if (input.messageId.startsWith("assistant-")) {
+			return { outcome: "not_a_turn" };
+		}
 		const existing = this.rows.get(input.messageId);
 		if (existing) return { outcome: "duplicate", status: existing.status };
 		this.rows.set(input.messageId, { status: "queued", parts: input.parts });
@@ -468,6 +471,17 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 		]);
 		expect(store.rows.size).toBe(2);
 		expect(vm.nudges).toBe(1);
+
+		// An id copied from an assistant message in history is a 409, not a 500.
+		const taken = await app.request(
+			MESSAGES_URL,
+			submitBody(userMessage("assistant-turn-done")),
+		);
+		expect(taken.status).toBe(409);
+		expect(await taken.json()).toEqual({
+			error: "Message id names an assistant message",
+		});
+		expect(vm.nudges).toBe(1);
 	});
 
 	it("client disconnect mid-stream leaves the Turn running to its Outcome", async () => {
@@ -511,7 +525,7 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 		if (row) row.status = "interrupted";
 
 		const { data, pings } = parseSse(await response.text());
-		expect(pings).toBeGreaterThanOrEqual(1);
+		expect(pings).toBeGreaterThanOrEqual(2);
 		expect(data).toEqual(["[DONE]"]);
 	});
 

@@ -213,7 +213,9 @@ were). If that Turn is still `queued` or `processing` the response attaches
 to its Live Stream and nudges — chunks published before the re-POST are
 missed, there being no backlog. If the Turn already reached its Outcome the
 Live Stream is gone and the response is `410 { error: "Turn already ended",
-recovery: "history" }`, the v1 history-recovery signal.
+recovery: "history" }`, the v1 history-recovery signal. A client id that
+names an assistant message instead (those ids are visible in history) is
+`409`; nothing is written.
 
 Client disconnect never interrupts a Turn: chat-api drops its subscription
 and nothing else; the Turn runs to its Outcome and the durable history has

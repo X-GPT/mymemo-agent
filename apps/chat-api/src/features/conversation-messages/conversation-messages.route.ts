@@ -119,7 +119,7 @@ app.get(
  * SDK v7 UI Message Stream scoped to this Turn: silent keepalives while queued
  * predecessors drain, then only this Turn's chunks, ending at its terminal
  * chunk. There is no 409 for concurrency — a second POST is the next queued
- * row — and chat-api never cancels anything: a client disconnect leaves the
+ * row — and chat-api never interrupts anything: a client disconnect leaves the
  * Turn running to its Outcome.
  */
 app.post(
@@ -173,6 +173,9 @@ app.post(
 		}
 		if (admitted.outcome === "archived") {
 			return c.json({ error: "Conversation is archived" }, 409);
+		}
+		if (admitted.outcome === "not_a_turn") {
+			return c.json({ error: "Message id names an assistant message" }, 409);
 		}
 		if (
 			admitted.outcome === "duplicate" &&
@@ -229,20 +232,34 @@ app.post(
 			let terminalReads = 0;
 			const tick = () => {
 				timer = setTimeout(async () => {
+					if (readSignal.aborted) return;
 					try {
 						await stream.write(": ping\n\n");
+					} catch {
+						stream.abort();
+						return;
+					}
+					try {
 						const status =
 							await deps.conversationMessagesStore.getTurnStatus(ref);
-						if (status === null || isTerminalTurnStatus(status)) {
-							terminalReads += 1;
-						}
+						terminalReads =
+							status === null || isTerminalTurnStatus(status)
+								? terminalReads + 1
+								: 0;
 						if (terminalReads >= 2) {
 							readAbort.abort();
 							return;
 						}
-					} catch {
-						stream.abort();
-						return;
+					} catch (error) {
+						// A failed read is retried next tick; the Live Stream itself is
+						// unaffected, so the response stays open.
+						logger.warn(
+							{
+								...ref,
+								error: error instanceof Error ? error.message : String(error),
+							},
+							"v2 terminal watch read failed",
+						);
 					}
 					if (!readSignal.aborted) tick();
 				}, LIVE_STREAM_KEEPALIVE_MS);

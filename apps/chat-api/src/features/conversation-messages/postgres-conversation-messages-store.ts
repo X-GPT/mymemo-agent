@@ -78,10 +78,9 @@ export class PostgresConversationMessagesStore
 			if (conversation.archivedAt !== null) return { outcome: "archived" };
 			if (await enqueueTurnTx(tx, input)) return { outcome: "queued" };
 			const status = await selectTurnStatus(tx, input);
-			if (status === null) {
-				throw new Error(`duplicate message ${input.messageId} is not a Turn`);
-			}
-			return { outcome: "duplicate", status };
+			return status === null
+				? { outcome: "not_a_turn" }
+				: { outcome: "duplicate", status };
 		});
 	}
 

@@ -236,6 +236,15 @@ describe("PostgresConversationMessagesStore Turn submission", () => {
 		expect(await store.getTurnStatus(ref)).toBeNull();
 	});
 
+	it("refuses a message id that already names an assistant message", async () => {
+		await tdb.db
+			.insert(conversationMessages)
+			.values(assistantRow(1, "assistant-1", []));
+		expect(
+			await store.enqueueTurn({ ...ref, messageId: "assistant-1", parts }),
+		).toEqual({ outcome: "not_a_turn" });
+	});
+
 	it("reports missing and foreign Conversations identically", async () => {
 		expect(
 			await store.enqueueTurn({ ...ref, conversationId: "nope", parts }),

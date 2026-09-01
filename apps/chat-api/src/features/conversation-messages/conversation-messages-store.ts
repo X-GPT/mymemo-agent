@@ -78,5 +78,7 @@ export type EnqueueTurnResult =
 	| { outcome: "queued" }
 	/** The client message id already names a Turn; nothing changed. */
 	| { outcome: "duplicate"; status: TurnStatus }
+	/** The client message id already names an assistant message (ids are visible in history). */
+	| { outcome: "not_a_turn" }
 	| { outcome: "not_found" }
 	| { outcome: "archived" };
