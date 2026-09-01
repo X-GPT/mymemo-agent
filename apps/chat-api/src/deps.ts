@@ -152,6 +152,14 @@ export function createDeps(
 						new URL("/nudge", config.inVmServerUrl),
 						{
 							method: "POST",
+							// A real MicroVM endpoint authenticates with the platform's
+							// per-VM token and routes by port (the image listens on 8080).
+							headers: config.inVmServerAuthToken
+								? {
+										"x-aws-proxy-auth": config.inVmServerAuthToken,
+										"x-aws-proxy-port": "8080",
+									}
+								: {},
 							signal: AbortSignal.timeout(5_000),
 						},
 					);

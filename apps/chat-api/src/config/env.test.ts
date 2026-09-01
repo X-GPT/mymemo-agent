@@ -83,9 +83,10 @@ describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
 		expect(loadApiConfigFromEnv(baseEnv()).inVmServerUrl).toBeUndefined();
 		const env = baseEnv();
 		env.IN_VM_SERVER_URL = "http://127.0.0.1:8080";
-		expect(loadApiConfigFromEnv(env).inVmServerUrl).toBe(
-			"http://127.0.0.1:8080",
-		);
+		env.IN_VM_SERVER_AUTH_TOKEN = "per-vm-token";
+		const config = loadApiConfigFromEnv(env);
+		expect(config.inVmServerUrl).toBe("http://127.0.0.1:8080");
+		expect(config.inVmServerAuthToken).toBe("per-vm-token");
 	});
 
 	it("still never reads the remaining worker-only secrets (KB, E2B)", () => {

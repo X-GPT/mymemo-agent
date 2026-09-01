@@ -76,6 +76,12 @@ export interface ApiConfig {
 	 * launch. While unset the v2 message POST answers 503.
 	 */
 	inVmServerUrl?: string;
+	/**
+	 * With `inVmServerUrl` pointing at a real MicroVM endpoint: the platform's
+	 * per-VM auth token (`CreateMicrovmAuthToken`), sent as `X-aws-proxy-auth`
+	 * on the nudge. Unset for a plain local In-VM server.
+	 */
+	inVmServerAuthToken?: string;
 }
 
 /**
@@ -121,5 +127,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 			env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api",
 		gatewayTokenSecret: env.GATEWAY_TOKEN_SECRET?.trim() || undefined,
 		inVmServerUrl: env.IN_VM_SERVER_URL?.trim() || undefined,
+		inVmServerAuthToken: env.IN_VM_SERVER_AUTH_TOKEN?.trim() || undefined,
 	};
 }
