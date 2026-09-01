@@ -11,6 +11,16 @@ resource "aws_security_group" "alb" {
     security_groups = local.trusted_caller_security_group_ids
   }
 
+  # Inline because this security group already declares inline ingress; a
+  # standalone rule would be removed on the next apply.
+  ingress {
+    description     = "Gateway calls from MicroVM Conversations via the egress connector"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.microvm_vm.id]
+  }
+
   egress {
     description = "Forward requests to chat-api tasks"
     from_port   = var.chat_api_port
