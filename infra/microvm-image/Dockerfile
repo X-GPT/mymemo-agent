@@ -11,11 +11,14 @@
 # configuration arrives at run time via the /run hook's runHookPayload.
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
-# bubblewrap backs sandbox-mode Bash; socat relays the egress proxy; nodejs22
-# runs smoke checks and stays available to agent Bash; shadow-utils provides
-# useradd. dnf installs are all-or-nothing: one unavailable package fails the
-# whole line (ripgrep is absent from AL2023 repos and must stay off this list
-# — Claude Code ships its own rg).
+# bubblewrap + socat back sandbox-mode Bash, which is denied today (#692) —
+# they stay because `failIfUnavailable: true` is still in the settings bundle
+# and we have not tested what the CLI does at startup when bwrap is absent;
+# removing them could turn a denied tool into a dead session. Drop them with
+# #692, whichever way it lands. nodejs22 runs the smoke checks; shadow-utils
+# provides useradd. dnf installs are all-or-nothing: one unavailable package
+# fails the whole line (ripgrep is absent from AL2023 repos and must stay off
+# this list — Claude Code ships its own rg).
 RUN dnf install -y bash git nodejs22 nodejs22-npm shadow-utils bubblewrap socat util-linux \
  && dnf clean all
 

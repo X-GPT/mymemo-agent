@@ -18,38 +18,12 @@ r() {
 	if [ "$2" = FAIL ]; then fail=1; fi
 }
 
-# Sandbox readiness probe for #692 — INFO, deliberately NOT a gate. The Bash
-# tool is denied outright in query-options.ts, so nothing in the image depends
-# on bubblewrap today and a red line here would only train people to ignore
-# smoke output.
-#
-# What it reports: namespace creation succeeds in the MicroVM, but Claude
-# Code's sandbox ALSO mounts a fresh /proc, and mounting procfs inside a user
-# namespace is refused whenever the host's /proc is not "fully visible" — the
-# masked-/proc rule that bites unprivileged containers. Live on #666 the
-# namespace-only check passed while every Bash call died on the proc mount;
-# #646's probe carried the same gap, which is how "bwrap works at default
-# caps" reached the spec. When `bwrap-proc` reports OK — e.g. after trying
-# `--additional-os-capabilities ALL` — #692 can lift the shell denial.
-#
-# SKIP_BWRAP=1: CI runs this in a Docker container whose seccomp blocks
-# namespace creation, so the probe would say nothing about the real VM.
-if [ "${SKIP_BWRAP:-0}" = 1 ]; then
-	if command -v bwrap >/dev/null; then r bwrap-present INFO "installed"; else r bwrap-present INFO "not installed"; fi
-else
-	if bwrap --unshare-all --ro-bind / / --dev /dev true 2>/dev/null; then
-		r bwrap-namespaces INFO "OK — can create namespaces"
-	else
-		r bwrap-namespaces INFO "unavailable"
-	fi
-	# The decisive shape: what Claude Code's Bash sandbox actually does.
-	if err=$(bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev true 2>&1); then
-		r bwrap-proc INFO "OK — can mount /proc; #692 may lift the shell denial"
-	else
-		r bwrap-proc INFO "still blocked (#692): ${err}"
-	fi
-fi
-
+# No bubblewrap check: the Bash tool is denied (#692/#693), so the sandbox
+# confines nothing and testing it would assert a capability the image does not
+# use. Its old namespace-only check was worse than nothing — it reported
+# `bwrap PASS` on a VM where every Bash call died on the /proc mount. When
+# #692 is worked, the command to run is one line:
+#   bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev true
 # Pinned versions (the spec's exact pins, not ranges) on the serving install.
 v=$(node -p 'require(process.argv[1]).version' "$SDK_DIR/package.json" 2>/dev/null)
 if [ "$v" = "$SDK_VERSION" ]; then r sdk-pinned PASS "$v"; else r sdk-pinned FAIL "want $SDK_VERSION got ${v:-none}"; fi

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Offline contract check for the production MicroVM image (#661/#666). The
 # version pins, policy-tier ownership, and writability assertions live in the
-# image's own /opt/microvm/smoke.sh — run here with SKIP_BWRAP=1 because the
-# CI runner's Docker seccomp blocks namespace creation (the real bwrap check
-# runs in-VM). The boot check proves the baked In-VM server actually starts
+# image's own /opt/microvm/smoke.sh. The boot check proves the baked In-VM
+# server actually starts
 # unconfigured and answers the image-build /ready hook — the exact state
 # create-microvm-image snapshots — so a broken install fails the PR, not the
 # registration.
@@ -24,7 +23,7 @@ fi
 
 # One emulated container run, as the image's default (non-root) user with
 # networking off.
-docker run --rm --platform linux/arm64 --network none -e SKIP_BWRAP=1 \
+docker run --rm --platform linux/arm64 --network none \
 	--entrypoint bash "$image" -euo pipefail -c '
 	[ "$(whoami)" = developer ] || { echo "runtime user is $(whoami), want developer"; exit 1; }
 	node --version | grep -q "^v22\." || { echo "node is $(node --version), want v22"; exit 1; }
