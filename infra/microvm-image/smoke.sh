@@ -18,33 +18,35 @@ r() {
 	if [ "$2" = FAIL ]; then fail=1; fi
 }
 
-# bubblewrap smoke — sandbox-mode Bash rides on this. Two checks, because
-# namespace creation alone is NOT the bar: Claude Code's sandbox also mounts a
-# fresh /proc, and mounting procfs inside a user namespace is refused
-# ("Operation not permitted") whenever the host's /proc is not "fully visible"
-# — the masked-/proc rule that also bites unprivileged containers.
+# Sandbox readiness probe for #692 — INFO, deliberately NOT a gate. The Bash
+# tool is denied outright in query-options.ts, so nothing in the image depends
+# on bubblewrap today and a red line here would only train people to ignore
+# smoke output.
 #
-# Live on #666: the namespace-only check below PASSED on a real VM while every
-# Bash tool call failed with `bwrap: Can't mount proc on /newroot/proc`. The
-# #646 probe carried the same gap, which is how the spec came to record
-# "bwrap works at default caps". Never drop the proc check — it is the one
-# that speaks for the tool the agent actually runs.
+# What it reports: namespace creation succeeds in the MicroVM, but Claude
+# Code's sandbox ALSO mounts a fresh /proc, and mounting procfs inside a user
+# namespace is refused whenever the host's /proc is not "fully visible" — the
+# masked-/proc rule that bites unprivileged containers. Live on #666 the
+# namespace-only check passed while every Bash call died on the proc mount;
+# #646's probe carried the same gap, which is how "bwrap works at default
+# caps" reached the spec. When `bwrap-proc` reports OK — e.g. after trying
+# `--additional-os-capabilities ALL` — #692 can lift the shell denial.
 #
 # SKIP_BWRAP=1: CI runs this in a Docker container whose seccomp blocks
-# namespace creation — presence is still checkable, the real checks run in-VM.
+# namespace creation, so the probe would say nothing about the real VM.
 if [ "${SKIP_BWRAP:-0}" = 1 ]; then
-	if command -v bwrap >/dev/null; then r bwrap-present PASS; else r bwrap-present FAIL "bubblewrap missing"; fi
+	if command -v bwrap >/dev/null; then r bwrap-present INFO "installed"; else r bwrap-present INFO "not installed"; fi
 else
 	if bwrap --unshare-all --ro-bind / / --dev /dev true 2>/dev/null; then
-		r bwrap-namespaces PASS "bubblewrap can create namespaces"
+		r bwrap-namespaces INFO "OK — can create namespaces"
 	else
-		r bwrap-namespaces FAIL "bwrap cannot create namespaces"
+		r bwrap-namespaces INFO "unavailable"
 	fi
-	# The decisive check: the same shape Claude Code's Bash sandbox uses.
+	# The decisive shape: what Claude Code's Bash sandbox actually does.
 	if err=$(bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev true 2>&1); then
-		r bwrap-proc PASS "bubblewrap can mount /proc — sandbox-mode Bash usable"
+		r bwrap-proc INFO "OK — can mount /proc; #692 may lift the shell denial"
 	else
-		r bwrap-proc FAIL "sandbox-mode Bash unusable: ${err}"
+		r bwrap-proc INFO "still blocked (#692): ${err}"
 	fi
 fi
 
@@ -81,7 +83,7 @@ else
 	r policy-dir PASS "/etc/claude-code not writable by $(whoami)"
 fi
 
-# The Workspace must be writable by the runtime user (file tools + Bash cwd);
+# The Workspace must be writable by the runtime user (the file tools' cwd);
 # the server install must not be.
 if touch /home/developer/workspace/.smoke 2>/dev/null; then
 	rm -f /home/developer/workspace/.smoke

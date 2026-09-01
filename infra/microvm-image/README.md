@@ -2,7 +2,7 @@
 
 The production MicroVM image for the per-Conversation VM ([spec #654](https://github.com/X-GPT/mymemo-agent/issues/654)). #661 proved the platform recipe with a placeholder server; #666 bakes the real In-VM server (`apps/in-vm-server`) as the entrypoint. Derived from the #646 probe kit (`docs/research/microvm-probe` on the `research/microvm-probe` branch).
 
-> **Known gap — sandbox-mode Bash does not work in the VM yet.** At default capabilities bubblewrap creates namespaces but **cannot mount `/proc`**, so every Bash tool call fails with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted`. Proven live on #666 with a real Turn. The #646 probe's "bwrap PASS at default caps" only exercised namespace creation, never the proc mount the real sandbox performs. Nothing runs unsandboxed as a result — the failure is closed, not open — but the Bash tool is unusable until this is resolved (`--additional-os-capabilities ALL` is the untested candidate). `smoke.sh` now checks both.
+> **There is no shell in the VM.** At default capabilities bubblewrap creates namespaces but **cannot mount `/proc`**, so sandbox-mode Bash cannot start — every call fails with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted` (proven live on #666 with a real Turn; #646's "bwrap PASS at default caps" only exercised namespace creation, never the proc mount the real sandbox performs). Rather than run the shell unsandboxed, `Bash`/`BashOutput`/`KillShell` are denied in `query-options.ts` (#692, ADR-0034 amendment). `smoke.sh` reports both bubblewrap facts as **INFO** — a readiness probe for lifting that denial, not a gate, since nothing in the image depends on bubblewrap while the shell is denied.
 
 ## Boot model
 
