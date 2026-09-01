@@ -48,6 +48,7 @@ echo "${rds_bundle_sha256}  ${context}/rds-global-bundle.pem" | shasum -a 256 -c
 
 cp -R "${repo_root}/apps/in-vm-server/src" "${context}/app/apps/in-vm-server/"
 cp -R "${repo_root}/packages/agent-db/src" "${context}/app/packages/agent-db/"
+cp -R "${repo_root}/packages/document-tools/src" "${context}/app/packages/document-tools/"
 cp -R "${repo_root}/packages/live-text/src" "${context}/app/packages/live-text/"
 
 echo "MicroVM image context staged at ${context}"

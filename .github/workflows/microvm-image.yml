@@ -19,6 +19,7 @@ on:
       - infra/microvm-image/**
       - apps/in-vm-server/**
       - packages/agent-db/**
+      - packages/document-tools/**
       - packages/live-text/**
       - bun.lock
       - scripts/deploy/stage_microvm_image_context.sh
@@ -30,6 +31,7 @@ on:
       - infra/microvm-image/**
       - apps/in-vm-server/**
       - packages/agent-db/**
+      - packages/document-tools/**
       - packages/live-text/**
       - bun.lock
       - scripts/deploy/stage_microvm_image_context.sh
