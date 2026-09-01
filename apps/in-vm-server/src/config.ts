@@ -2,7 +2,7 @@ import { resolveDatabaseUrl } from "@mymemo/agent-db/database-url";
 import { resolveLiveStreamRedisUrl } from "@mymemo/live-text";
 
 /** Subset of the process environment the In-VM server reads. */
-type Env = Record<string, string | undefined>;
+export type Env = Record<string, string | undefined>;
 
 /**
  * Assert a config invariant, throwing an Error whose message survives
@@ -14,25 +14,28 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 /**
- * Typed, validated configuration for the trusted In-VM server (spec #654,
- * ticket #662). Built once from the environment at the entrypoint and injected
- * down, so no other module reads global env. The data-plane credentials here
- * (agent DB, Redis) live in this trusted process only — they are never placed
- * in the spawned CLI's environment (see `query-options.ts`).
+ * Typed, validated configuration for the trusted In-VM server's Turn serving
+ * (spec #654, ticket #662). Locally it is built from the environment at the
+ * entrypoint; in the MicroVM it is built when the platform `/run` lifecycle
+ * hook delivers `runHookPayload` (#666) — either way it is injected down, so
+ * no other module reads global env. The data-plane credentials here (agent DB,
+ * Redis) live in this trusted process only — they are never placed in the
+ * spawned CLI's environment (see `query-options.ts`).
+ *
+ * The HTTP listener's own settings (`PORT`, `LOG_LEVEL`) are deliberately not
+ * here: the server must listen before any Conversation is assigned (the image
+ * build's `/ready` hook fires with no configuration at all), so the entrypoint
+ * reads them straight from the image-level environment.
  */
 export interface InVmConfig {
-	/** pino log level. */
-	logLevel: string;
-	/** HTTP port for the nudge + health endpoints. */
-	port: number;
 	/** Writable connection to the agent Postgres (`mymemo_agent`) — the work bus. */
 	databaseUrl: string;
 	/** Redis connection for the v2 Turn Live Stream lane. */
 	redisUrl: string;
 	/**
 	 * The Conversation this VM serves — one VM per Conversation. Locally these
-	 * are plain env vars; in production (#666) they arrive via `runHookPayload`
-	 * at VM boot, with no design change here.
+	 * are plain env vars; in production they arrive via `runHookPayload` at VM
+	 * boot, with no design change here.
 	 */
 	userId: string;
 	conversationId: string;
@@ -77,15 +80,7 @@ export function loadInVmConfigFromEnv(env: Env): InVmConfig {
 	const model = env.MODEL?.trim();
 	assert(model, "MODEL is required");
 
-	const port = env.PORT === undefined ? 8080 : Number(env.PORT);
-	assert(
-		Number.isSafeInteger(port) && port > 0,
-		"PORT must be a positive integer",
-	);
-
 	return {
-		logLevel: env.LOG_LEVEL || "info",
-		port,
 		databaseUrl,
 		redisUrl: resolveLiveStreamRedisUrl(env.REDIS_URL, {
 			allowInsecureLoopback:
@@ -96,4 +91,37 @@ export function loadInVmConfigFromEnv(env: Env): InVmConfig {
 		workspaceDir,
 		model: { baseUrl: modelBaseUrl, apiKey: modelApiKey, model },
 	};
+}
+
+/**
+ * Parse the `runHookPayload` string the platform delivers to the `/run`
+ * lifecycle hook (#666) into env-shaped overrides for `loadInVmConfigFromEnv`.
+ * The payload is a JSON object whose keys are exactly the env names documented
+ * for this server (AGENT_DATABASE_URL, REDIS_URL, MYMEMO_USER_ID, …), so local
+ * env delivery and production payload delivery share one contract and one
+ * validator. Fails loudly on anything else — a malformed payload must fail the
+ * run hook, not boot a half-configured VM.
+ */
+export function envFromRunHookPayload(payload: unknown): Env {
+	assert(
+		typeof payload === "string" && payload.length > 0,
+		"runHookPayload is required and must be a string",
+	);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(payload);
+	} catch {
+		throw new Error("runHookPayload is not valid JSON");
+	}
+	assert(
+		typeof parsed === "object" && parsed !== null && !Array.isArray(parsed),
+		"runHookPayload must be a JSON object of env-shaped keys",
+	);
+	for (const [key, value] of Object.entries(parsed)) {
+		assert(
+			typeof value === "string",
+			`runHookPayload value for ${key} must be a string`,
+		);
+	}
+	return parsed as Env;
 }

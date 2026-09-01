@@ -56,9 +56,16 @@ export function buildTurnQueryOptions(input: {
 	workspaceDir: string;
 	model: InVmConfig["model"];
 	processEnv: Record<string, string | undefined>;
+	/**
+	 * The exec-verified native CLI binary (see `claude-code-executable.ts`) —
+	 * explicit because the SDK's musl-first Linux default cannot execute on the
+	 * glibc MicroVM image.
+	 */
+	pathToClaudeCodeExecutable: string;
 }): Options {
 	return {
 		cwd: input.workspaceDir,
+		pathToClaudeCodeExecutable: input.pathToClaudeCodeExecutable,
 		// Provider envelope boundaries are the durable Step contract, so partial
 		// SDK stream events are required for live text/reasoning deltas.
 		includePartialMessages: true,

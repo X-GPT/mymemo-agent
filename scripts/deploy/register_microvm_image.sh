@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Register the production MicroVM image (ticket #661, spec #654).
+# Register the production MicroVM image (tickets #661/#666, spec #654).
 #
-# Zips infra/microvm-image, uploads it to the artifacts bucket, then creates
-# (first run) or updates (every later run) the MicroVM image and polls until
-# the build lands. Run on main by .github/workflows/microvm-image.yml with the
-# deploy role; hand-runnable with an operator profile:
+# Stages the build context (scripts/deploy/stage_microvm_image_context.sh:
+# the image directory plus the pruned In-VM server workspace), zips it,
+# uploads it to the artifacts bucket, then creates (first run) or updates
+# (every later run) the MicroVM image and polls until the build lands. Run on
+# main by .github/workflows/microvm-image.yml with the deploy role;
+# hand-runnable with an operator profile:
 #   AWS_PROFILE=mymemo scripts/deploy/register_microvm_image.sh
+# MICROVM_IMAGE_NAME overrides the image name for a scratch pre-merge
+# verification build (delete it with delete-microvm-image afterwards).
 #
 # Platform corrections baked in (verified live on the #646 probe):
 #  - get-microvm-image needs the full image ARN, not the bare name;
@@ -21,7 +25,7 @@ load_deploy_config
 : "${AWS_REGION:?AWS_REGION is required}"
 : "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID is required}"
 
-image_name="mymemo-agent-prod-microvm"
+image_name="${MICROVM_IMAGE_NAME:-mymemo-agent-prod-microvm}"
 bucket="mymemo-agent-prod-artifacts"
 build_role_arn="arn:aws:iam::${AWS_ACCOUNT_ID}:role/mymemo-agent-prod-microvm-image-build"
 base_image_arn="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
@@ -33,7 +37,8 @@ key="microvm-images/app-${sha}.zip"
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
-(cd "${repo_root}/infra/microvm-image" && zip -q "${workdir}/app.zip" Dockerfile managed-settings.json server.mjs smoke.sh)
+"${script_dir}/stage_microvm_image_context.sh" "${workdir}/context"
+(cd "${workdir}/context" && zip -qr "${workdir}/app.zip" .)
 aws s3 cp --region "${AWS_REGION}" "${workdir}/app.zip" "s3://${bucket}/${key}"
 
 # Both create and update take the same build inputs; update refuses to build
@@ -46,7 +51,7 @@ build_args=(
 	--build-role-arn "${build_role_arn}"
 	--cpu-configurations architecture=ARM_64
 	--hooks 'port=8080,microvmHooks={run=ENABLED,resume=ENABLED,suspend=ENABLED,terminate=ENABLED},microvmImageHooks={ready=ENABLED,readyTimeoutInSeconds=300}'
-	--description "mymemo-agent ${sha} (#661 image skeleton)"
+	--description "mymemo-agent ${sha} (In-VM server)"
 )
 
 register() {

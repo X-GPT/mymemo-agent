@@ -1,10 +1,11 @@
 name: MicroVM image
 
-# The production MicroVM image pipeline (ticket #661, spec #654).
+# The production MicroVM image pipeline (tickets #661/#666, spec #654).
 #
 # Pull requests get the offline contract check: an ARM64 docker build of the
-# image directory plus scripts/smoke/microvm-image-check.sh (pinned versions,
-# root-owned managed settings, non-root user). Pushes to main register the
+# staged context (image directory + the pruned In-VM server workspace) plus
+# scripts/smoke/microvm-image-check.sh (pinned versions, root-owned managed
+# settings, non-root user, unconfigured server boot). Pushes to main register the
 # image with Lambda MicroVMs via create/update-microvm-image and wait for the
 # build to land — the deploy role's OIDC trust is pinned to refs/heads/main.
 #
@@ -16,12 +17,22 @@ on:
   pull_request:
     paths:
       - infra/microvm-image/**
+      - apps/in-vm-server/**
+      - packages/agent-db/**
+      - packages/live-text/**
+      - bun.lock
+      - scripts/deploy/stage_microvm_image_context.sh
       - scripts/smoke/microvm-image-check.sh
       - .github/workflows/microvm-image.yml
   push:
     branches: [main]
     paths:
       - infra/microvm-image/**
+      - apps/in-vm-server/**
+      - packages/agent-db/**
+      - packages/live-text/**
+      - bun.lock
+      - scripts/deploy/stage_microvm_image_context.sh
       - scripts/deploy/register_microvm_image.sh
       - .github/workflows/microvm-image.yml
 
@@ -38,10 +49,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
+      - name: Stage the image build context
+        run: scripts/deploy/stage_microvm_image_context.sh build-context
       - name: Build ARM64 MicroVM image
         uses: docker/build-push-action@v6
         with:
-          context: infra/microvm-image
+          context: build-context
           platforms: linux/arm64
           load: true
           tags: mymemo-microvm:image-check
