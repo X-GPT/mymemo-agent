@@ -55,7 +55,9 @@ per-Conversation microVMs create a third structure ADR-0001 didn't have:
 
 ## Measured facts this decision rests on (probe #646, egress probe #651)
 
-The root-owned policy tier is non-writable by the non-root agent;
+Unprivileged user namespaces and bubblewrap work in the guest kernel at default
+capabilities (no `--additional-os-capabilities`) — **corrected: see the
+amendment**; the root-owned policy tier is non-writable by the non-root agent;
 suspend/resume preserves `~/.claude` and the workspace; the authenticated
 per-VM endpoint streams SSE; a no-NAT VPC egress connector kills internet
 egress (full routing, not split routing).
@@ -80,8 +82,8 @@ egress (full routing, not split routing).
 Sandbox-mode Bash cannot start in a Lambda MicroVM: bubblewrap creates
 namespaces but cannot mount `/proc`, which Claude Code's sandbox does when it
 builds its nested seccomp layer, so every Bash call fails at sandbox setup.
-Proven live on #666 with a real Turn. The #646 probe this ADR relied on only
-exercised namespace creation, never the proc mount.
+Proven live on #666 with a real Turn. The measured fact above came from the
+#646 probe, which only exercised namespace creation, never the proc mount.
 
 `Bash`, `BashOutput`, and `KillShell` therefore sit in `disallowedTools` in
 `apps/in-vm-server/src/query-options.ts`. Running the shell unsandboxed was
@@ -93,7 +95,9 @@ plus unbounded model spend on the gateway token and a DNS exfiltration path.
 rejected on the same grounds: its own documentation says it considerably
 weakens isolation.
 
-Everything that existed to serve the shell goes with it — no bubblewrap or
-socat in the image, no bwrap smoke check, and no `sandbox` settings in the SDK
-options or the managed-settings policy tier — so restoring a shell means
-restoring all of it and remaking this security case.
+Everything that existed to serve the shell goes with it: the `sandbox` settings
+leave the SDK options here, and the image drops bubblewrap, socat, the bwrap
+smoke check, and the policy tier's own `sandbox` block (PR #691, which must
+land with or before this change — until it does, the image still configures a
+sandbox for a shell that cannot be invoked). Restoring a shell means restoring
+all of it and remaking this security case.
