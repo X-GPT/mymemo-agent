@@ -1,5 +1,9 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type {
+	McpSdkServerConfigWithInstance,
+	Options,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { InVmConfig } from "./config";
+import { DOC_TOOLS_ALLOWED_TOOLS, DOC_TOOLS_SERVER_NAME } from "./doc-tools";
 
 /**
  * The confinement settings bundle for the In-VM `query()` (spec #654; the
@@ -62,6 +66,8 @@ export function buildTurnQueryOptions(input: {
 	 * glibc MicroVM image.
 	 */
 	pathToClaudeCodeExecutable: string;
+	/** The in-process document tools (#665), built once per configuration. */
+	docToolsServer: McpSdkServerConfigWithInstance;
 }): Options {
 	return {
 		cwd: input.workspaceDir,
@@ -72,16 +78,26 @@ export function buildTurnQueryOptions(input: {
 		// No user/project/local settings, hooks, skills, or CLAUDE.md — the
 		// managed policy tier baked into the image (#661) is still read.
 		settingSources: [],
-		// Only MCP servers passed via `mcpServers` (none yet; #665 adds the doc
-		// tools) — ignores .mcp.json, ~/.claude.json and plugin config.
+		// Only MCP servers passed via `mcpServers` (exactly the in-process doc
+		// tools below) — ignores .mcp.json, ~/.claude.json and plugin config.
 		strictMcpConfig: true,
+		// The document tools execute in this trusted process (#665); the CLI
+		// sees only the tool surface, never the KB credential behind it.
+		mcpServers: { [DOC_TOOLS_SERVER_NAME]: input.docToolsServer },
 		// Unresolved permission requests are terminal denials; canUseTool never
 		// fires. Confinement is the scoped allows below, not a callback.
 		permissionMode: "dontAsk",
 		// Scoped allows, never bare Read/Edit — a bare entry would auto-approve
 		// the whole tool anywhere on disk. Read(./**) best-effort covers
 		// Grep/Glob; Edit(./**) covers Write and NotebookEdit.
-		allowedTools: ["Read(./**)", "Edit(./**)", "Grep", "Glob", "Bash"],
+		allowedTools: [
+			"Read(./**)",
+			"Edit(./**)",
+			"Grep",
+			"Glob",
+			"Bash",
+			...DOC_TOOLS_ALLOWED_TOOLS,
+		],
 		// In-process network tools bypass the Bash sandbox's proxy; the VM's
 		// egress firewall is the production backstop, but deny them at the
 		// source so local runs are confined the same way.

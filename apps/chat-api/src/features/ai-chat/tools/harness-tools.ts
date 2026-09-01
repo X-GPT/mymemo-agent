@@ -1,11 +1,12 @@
 import type { HarnessAgentSandboxConfig } from "@ai-sdk/harness/agent";
-import { z } from "zod";
 import type {
-	HarnessToolBinding,
-	HarnessToolLogger,
+	DocumentToolBinding,
+	DocumentToolLogger,
 	ScopedDocumentClient,
-} from "./document-client";
+} from "@mymemo/document-tools/client";
 import {
+	DOCUMENT_TOOL_DESCRIPTIONS,
+	DOCUMENT_TOOL_NAMES,
 	type ListDocumentsInput,
 	type LoadDocumentsInput,
 	listDocuments,
@@ -13,14 +14,11 @@ import {
 	type SearchDocumentsInput,
 	searchDocuments,
 	type ToolFailure,
-} from "./document-tools";
+} from "@mymemo/document-tools/tools";
+import { z } from "zod";
 
 /** Short names of the Harness user tools — executed by chat-api on the AI SDK chat path. */
-export const HARNESS_TOOL_NAMES = [
-	"ListDocuments",
-	"SearchDocuments",
-	"LoadDocuments",
-] as const;
+export const HARNESS_TOOL_NAMES = DOCUMENT_TOOL_NAMES;
 
 /** Claude Code built-ins on in the Harness sandbox, by adapter common name (ADR-0033 stage 2). */
 export const HARNESS_BUILTIN_TOOLS = ["read", "write", "edit", "grep"] as const;
@@ -57,8 +55,8 @@ async function unwrap<T>(result: Promise<T | ToolFailure>): Promise<T> {
  */
 export function createHarnessTools(deps: {
 	client: ScopedDocumentClient;
-	binding: HarnessToolBinding;
-	logger: HarnessToolLogger;
+	binding: DocumentToolBinding;
+	logger: DocumentToolLogger;
 }) {
 	let workDir: string | undefined;
 	// For `sandboxConfig.onSession`: runs for fresh and resumed sessions before the turn.
@@ -69,8 +67,7 @@ export function createHarnessTools(deps: {
 		deps.logger.info({ ...deps.binding, tool }, "harness document tool call");
 	const tools = {
 		ListDocuments: {
-			description:
-				"Count and browse the searchable documents in this conversation's scope, newest first.",
+			description: DOCUMENT_TOOL_DESCRIPTIONS.ListDocuments,
 			inputSchema: z.object({
 				limit: z.number().optional(),
 				cursor: z.string().optional(),
@@ -81,8 +78,7 @@ export function createHarnessTools(deps: {
 			},
 		},
 		SearchDocuments: {
-			description:
-				"Search the MyMemo knowledge base within this conversation's scope for relevant passages.",
+			description: DOCUMENT_TOOL_DESCRIPTIONS.SearchDocuments,
 			inputSchema: z.object({
 				query: z.string(),
 				maxResults: z.number().optional(),
@@ -93,8 +89,7 @@ export function createHarnessTools(deps: {
 			},
 		},
 		LoadDocuments: {
-			description:
-				"Materialize scoped MyMemo documents as files under .mymemo/docs in your working directory and return their paths, so you can Read or Grep them.",
+			description: DOCUMENT_TOOL_DESCRIPTIONS.LoadDocuments,
 			inputSchema: z.object({ documentIds: z.array(z.string()) }),
 			execute: async (
 				input: LoadDocumentsInput,

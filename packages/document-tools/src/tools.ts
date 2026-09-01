@@ -1,15 +1,33 @@
 import path from "node:path/posix";
 import { z } from "zod";
-import type {
-	DocumentListCursor,
-	ScopedDocumentClient,
-} from "./document-client";
+import type { DocumentListCursor, ScopedDocumentClient } from "./client";
 
 /**
  * The three document-tool handlers, bounded by code constants that mirror the
  * Run path (`apps/agentcore-runtime/src/documents/`). Each returns the plain
- * JSON the model sees, or `{ isError, text }`, which `execute()` throws.
+ * JSON the model sees, or `{ isError, text }`, which the caller maps to its
+ * framework's error shape (throw on the Harness path, an MCP error result on
+ * the In-VM path).
  */
+
+/** The tool names both consumers pin to, so the catalogs cannot drift. */
+export const DOCUMENT_TOOL_NAMES = [
+	"ListDocuments",
+	"SearchDocuments",
+	"LoadDocuments",
+] as const;
+
+export type DocumentToolName = (typeof DOCUMENT_TOOL_NAMES)[number];
+
+/** One model-facing description per tool, shared so the wording cannot drift. */
+export const DOCUMENT_TOOL_DESCRIPTIONS: Record<DocumentToolName, string> = {
+	ListDocuments:
+		"Count and browse the searchable documents in this conversation's scope, newest first.",
+	SearchDocuments:
+		"Search the MyMemo knowledge base within this conversation's scope for relevant passages.",
+	LoadDocuments:
+		"Materialize scoped MyMemo documents as files under .mymemo/docs in your working directory and return their paths, so you can Read or Grep them.",
+};
 
 export const DOCUMENT_TOOL_LIMITS = {
 	listMaxResults: 20,
@@ -21,7 +39,7 @@ export const DOCUMENT_TOOL_LIMITS = {
 	},
 } as const;
 
-/** Materialized documents live here under the session work directory. */
+/** Materialized documents live here under the work directory. */
 export const DOCS_CACHE_DIRNAME = ".mymemo/docs";
 
 /** Appended to a cached file whose content was clipped, so the marker is on disk too. */
@@ -134,7 +152,7 @@ export interface LoadDocumentsInput {
 	documentIds: string[];
 }
 
-/** The write-only seam LoadDocuments needs from the Harness sandbox session. */
+/** The write-only seam LoadDocuments materializes cached documents through. */
 export interface DocsCacheWriter {
 	writeTextFile(options: {
 		path: string;
@@ -164,7 +182,7 @@ function takeUtf8Bytes(
 
 /**
  * Materialize scope-checked documents to `<workDir>/.mymemo/docs/<id>.md`
- * through the sandbox session, so the model can `Read` and `Grep` them. The
+ * through the handed writer, so the model can `Read` and `Grep` them. The
  * result carries paths and byte counts only, never a document body.
  */
 export async function loadDocuments(
@@ -172,7 +190,7 @@ export async function loadDocuments(
 	context: {
 		client: ScopedDocumentClient;
 		sandbox: DocsCacheWriter;
-		/** Absolute session work directory. */
+		/** Absolute work directory. */
 		workDir: string;
 		abortSignal?: AbortSignal;
 	},

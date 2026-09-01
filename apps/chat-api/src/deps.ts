@@ -1,5 +1,9 @@
 import { createDatabase } from "@mymemo/agent-db/client";
 import {
+	type DocumentAccessLog,
+	PostgresDocumentAccessLog,
+} from "@mymemo/document-tools/access-log";
+import {
 	createLiveStreamTelemetry,
 	createRedisLiveStreamRelay,
 	type LiveStreamRelay,
@@ -12,10 +16,6 @@ import {
 	type HarnessResumeStateStore,
 	PostgresHarnessResumeStateStore,
 } from "./features/ai-chat/harness-resume-state-store";
-import {
-	type DocumentAccessLog,
-	PostgresDocumentAccessLog,
-} from "./features/ai-chat/tools/document-access-log";
 import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-download-signer";
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-	DocumentAccessError,
-	type ScopedDocumentClient,
-} from "./document-client";
+import { DocumentAccessError, type ScopedDocumentClient } from "./client";
 import {
 	DOCS_CACHE_DIRNAME,
 	DOCUMENT_TOOL_LIMITS,
@@ -10,7 +7,7 @@ import {
 	listDocuments,
 	loadDocuments,
 	searchDocuments,
-} from "./document-tools";
+} from "./tools";
 
 /** A scoped client that records every call; `overrides` replace the defaults. */
 function client(overrides: Partial<ScopedDocumentClient> = {}) {

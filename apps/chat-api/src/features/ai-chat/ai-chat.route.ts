@@ -1,4 +1,5 @@
 import { sValidator as zValidator } from "@hono/standard-validator";
+import { parseFrozenScope } from "@mymemo/document-tools/client";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
@@ -8,7 +9,6 @@ import {
 	RunIdParam,
 } from "@/features/conversations/conversations.schema";
 import { requireInternalIdentity } from "@/features/conversations/internal-identity";
-import { parseFrozenScope } from "./tools/document-client";
 
 const chatBody = z.strictObject({
 	id: ConversationIdParam,

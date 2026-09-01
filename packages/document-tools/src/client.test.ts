@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import type { DocumentAccessEvent } from "./document-access-log";
+import type { DocumentAccessEvent } from "./access-log";
 import {
 	createScopedDocumentClient,
 	DocumentAccessError,
+	type DocumentToolLogger,
 	type FrozenScope,
-	type HarnessToolLogger,
 	type KbDb,
 	parseFrozenScope,
-} from "./document-client";
+} from "./client";
 
 interface Call {
 	text: string;
@@ -40,7 +40,7 @@ const OUT_OF_SCOPE = "document is not available in this conversation's scope";
 function makeClient(
 	scope: FrozenScope,
 	respond?: (text: string) => unknown[],
-	logger: HarnessToolLogger = { info() {}, error() {} },
+	logger: DocumentToolLogger = { info() {}, error() {} },
 ) {
 	const kb = fakeKb(respond);
 	const audits: DocumentAccessEvent[] = [];

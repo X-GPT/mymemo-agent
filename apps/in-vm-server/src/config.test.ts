@@ -5,6 +5,7 @@ import { envFromRunHookPayload, loadInVmConfigFromEnv } from "./config";
 function baseEnv(): Record<string, string | undefined> {
 	return {
 		AGENT_DATABASE_URL: "postgresql://u:p@localhost:5432/mymemo_agent",
+		KB_DATABASE_URL: "postgresql://reader:p@localhost:5432/mymemo_kb",
 		DB_SSL: "disable",
 		REDIS_URL: "rediss://default:secret@redis.internal:6379",
 		MYMEMO_USER_ID: "user-1",
@@ -19,6 +20,9 @@ function baseEnv(): Record<string, string | undefined> {
 describe("loadInVmConfigFromEnv", () => {
 	it("loads a full config with defaults", () => {
 		const config = loadInVmConfigFromEnv(baseEnv());
+		expect(config.kbDatabaseUrl).toBe(
+			"postgresql://reader:p@localhost:5432/mymemo_kb",
+		);
 		expect(config.userId).toBe("user-1");
 		expect(config.conversationId).toBe("conversation-1");
 		expect(config.workspaceDir).toBe("/workspace");
@@ -31,6 +35,7 @@ describe("loadInVmConfigFromEnv", () => {
 
 	it.each([
 		"AGENT_DATABASE_URL",
+		"KB_DATABASE_URL",
 		"MYMEMO_USER_ID",
 		"MYMEMO_CONVERSATION_ID",
 		"WORKSPACE_DIR",

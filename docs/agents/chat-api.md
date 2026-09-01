@@ -62,8 +62,11 @@ the paths and byte counts, so the model can `Read` or `Grep` the file;
 `ListDocuments` and `SearchDocuments` never touch the session. Tool outputs
 are bounded only by those caps — every tool input and output, built-in or
 document, is persisted verbatim in the sandbox's Claude transcript and
-therefore in the snapshot. The two document-tool implementations are
-deliberately separate (decided on #610); a boundary fix lands twice.
+therefore in the snapshot. The chat path's handlers, scoped KB client, and
+audit writer live in the shared `@mymemo/document-tools` package (#665), also
+consumed by the v2 In-VM server; `ai-chat/tools/` keeps only the Harness
+`ToolSet` adapter. That shared implementation remains deliberately separate
+from the Run path's (decided on #610); a boundary fix lands twice.
 
 Claude's working directory is the harness session work directory, created
 empty on the Conversation's first turn; the agent's `sandboxConfig.onSession`

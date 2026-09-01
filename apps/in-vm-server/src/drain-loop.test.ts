@@ -82,6 +82,7 @@ function makeDeps(query: TurnQueryFn): TurnServingDeps {
 		conversationId: CONVERSATION_ID,
 		query,
 		queryOptions: SENTINEL_OPTIONS,
+		currentTurn: { turnId: null },
 		logger: silentLogger,
 	};
 }

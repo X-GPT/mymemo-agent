@@ -9,6 +9,7 @@ import {
 } from "@mymemo/agent-db/turn-store";
 import type { TurnLiveStreamRelay } from "@mymemo/live-text";
 import type { UIMessageChunk } from "ai";
+import type { CurrentTurn } from "./doc-tools";
 import {
 	TurnStreamMapper,
 	TurnStreamProtocolError,
@@ -48,6 +49,9 @@ export interface TurnServingDeps {
 	query: TurnQueryFn;
 	/** The confinement bundle — static per VM (one Conversation, one cwd). */
 	queryOptions: Options;
+	/** Shared with the in-process document tools (#665): which Turn is in
+	 * flight, so their audit rows carry the exact Turn id. */
+	currentTurn: CurrentTurn;
 	logger: TurnLogger;
 }
 
@@ -78,6 +82,7 @@ export async function serveOneTurn(
 	const claimed = await claimNextTurnTx(db, { userId, conversationId });
 	if (!claimed) return null;
 
+	deps.currentTurn.turnId = claimed.messageId;
 	const turnKey = { userId, conversationId, messageId: claimed.messageId };
 	const assistantMessageId = randomUUID();
 	const publisher = deps.relay.openPublisher(claimed.messageId);
@@ -157,6 +162,7 @@ export async function serveOneTurn(
 		await publish({ type: "error", errorText: "The Turn ended in error." });
 		return "error";
 	} finally {
+		deps.currentTurn.turnId = null;
 		await publisher.close().catch(() => {});
 	}
 }

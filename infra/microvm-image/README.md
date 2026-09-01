@@ -29,6 +29,7 @@ CONNECTOR_ARN=$(aws lambda-microvms list-network-connectors --region $REGION \
 PAYLOAD=$(cat <<'JSON'
 {"MYMEMO_USER_ID":"<user>","MYMEMO_CONVERSATION_ID":"<conversation>",
  "AGENT_DATABASE_URL":"postgresql://…/mymemo_agent","DB_SSL":"require",
+ "KB_DATABASE_URL":"postgresql://…/mymemo_kb",
  "REDIS_URL":"rediss://…",
  "MODEL_BASE_URL":"http://<internal-alb-dns>/v2/gateway/<conversation>",
  "MODEL_API_KEY":"<gateway-token>","MODEL":"<model-id>"}

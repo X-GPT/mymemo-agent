@@ -82,6 +82,7 @@ function makeDeps(overrides: Partial<TurnServingDeps>): TurnServingDeps {
 		conversationId: CONVERSATION_ID,
 		query: scriptedQuery([...textStep("hi"), resultSuccess()]),
 		queryOptions: SENTINEL_OPTIONS,
+		currentTurn: { turnId: null },
 		logger: silentLogger,
 		...overrides,
 	};
@@ -441,5 +442,37 @@ describe("promptFromParts", () => {
 	it("returns empty for non-arrays and textless parts", () => {
 		expect(promptFromParts(null)).toBe("");
 		expect(promptFromParts([{ type: "file", url: "x" }])).toBe("");
+	});
+});
+
+describe("serveOneTurn — the in-flight Turn ref for the doc tools (#665)", () => {
+	it("exposes the claimed Turn id while the query runs and clears it after", async () => {
+		await enqueue();
+		const currentTurn = { turnId: null as string | null };
+		const seenDuringQuery: (string | null)[] = [];
+		const deps = makeDeps({
+			currentTurn,
+			query: () =>
+				(async function* () {
+					seenDuringQuery.push(currentTurn.turnId);
+					yield* [...textStep("hi"), resultSuccess()];
+				})(),
+		});
+		expect(await serveOneTurn(deps)).toBe("done");
+		expect(seenDuringQuery).toEqual([TURN_ID]);
+		expect(currentTurn.turnId).toBeNull();
+	});
+
+	it("clears the ref when the Turn fails", async () => {
+		await enqueue();
+		const currentTurn = { turnId: null as string | null };
+		const deps = makeDeps({
+			currentTurn,
+			query: () => {
+				throw new Error("model exploded");
+			},
+		});
+		expect(await serveOneTurn(deps)).toBe("error");
+		expect(currentTurn.turnId).toBeNull();
 	});
 });

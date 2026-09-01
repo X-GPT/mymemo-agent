@@ -33,6 +33,7 @@ FROM base AS prerelease
 COPY --from=install /temp/dev/node_modules node_modules
 COPY apps/chat-api/ apps/chat-api/
 COPY packages/agent-db/ packages/agent-db/
+COPY packages/document-tools/ packages/document-tools/
 COPY packages/live-text/ packages/live-text/
 COPY package.json .
 
@@ -42,6 +43,7 @@ FROM base AS local
 COPY --from=install /temp/prod/node_modules node_modules
 COPY --from=prerelease /usr/src/app/apps/chat-api apps/chat-api
 COPY --from=prerelease /usr/src/app/packages/agent-db packages/agent-db
+COPY --from=prerelease /usr/src/app/packages/document-tools packages/document-tools
 COPY --from=prerelease /usr/src/app/packages/live-text packages/live-text
 COPY --from=prerelease /usr/src/app/package.json .
 WORKDIR /usr/src/app/apps/chat-api
@@ -61,6 +63,9 @@ COPY --from=prerelease /usr/src/app/apps/chat-api/tsconfig.json apps/chat-api/
 # not needed at runtime — and its `src/` so chat-api's `@mymemo/agent-db` imports
 # resolve through the workspace symlink in node_modules.
 COPY --from=prerelease /usr/src/app/packages/agent-db packages/agent-db
+# The shared document tools (`@mymemo/document-tools`), imported by deps.ts at
+# boot; resolves through the workspace symlink like agent-db above.
+COPY --from=prerelease /usr/src/app/packages/document-tools packages/document-tools
 COPY --from=prerelease /usr/src/app/packages/live-text packages/live-text
 COPY --from=prerelease /usr/src/app/package.json .
 

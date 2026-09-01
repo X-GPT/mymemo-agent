@@ -10,7 +10,7 @@ The package exposes concurrency-critical operations including `acquireAgentCoreD
 
 chat-api imports the shared client and schema directly. Its migration entrypoint imports `MIGRATIONS_DIR` from `@mymemo/agent-db/migrations` and applies `packages/agent-db/drizzle/`.
 
-`document_access_events.run_id` holds a Run id (the Run path's document tools) or a Harness turn id (chat-api's document tools on the AI SDK chat path).
+`document_access_events.run_id` holds a Run id (the Run path's document tools), a Harness turn id (chat-api's document tools on the AI SDK chat path), or a v2 Turn's user-message id (the In-VM server's in-process document tools).
 
 ## Store boundaries
 

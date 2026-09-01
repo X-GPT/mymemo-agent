@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import { documentAccessEvents } from "@mymemo/agent-db/schema";
 import { createTestDatabase, type TestDb } from "@mymemo/agent-db/testing";
-import { PostgresDocumentAccessLog } from "./document-access-log";
+import { PostgresDocumentAccessLog } from "./access-log";
 
 let tdb: TestDb;
 beforeAll(async () => {

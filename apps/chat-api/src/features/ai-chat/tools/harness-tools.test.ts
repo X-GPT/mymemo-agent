@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test";
-import type { ScopedDocumentClient } from "./document-client";
-import { DOCS_CACHE_DIRNAME } from "./document-tools";
+import type { ScopedDocumentClient } from "@mymemo/document-tools/client";
+import { DOCS_CACHE_DIRNAME } from "@mymemo/document-tools/tools";
 import {
 	createHarnessTools,
 	HARNESS_ACTIVE_TOOLS,
