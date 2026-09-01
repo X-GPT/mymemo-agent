@@ -18,12 +18,10 @@ r() {
 	if [ "$2" = FAIL ]; then fail=1; fi
 }
 
-# No bubblewrap check: the Bash tool is denied (#692/#693), so the sandbox
-# confines nothing and testing it would assert a capability the image does not
-# use. Its old namespace-only check was worse than nothing — it reported
-# `bwrap PASS` on a VM where every Bash call died on the /proc mount. When
-# #692 is worked, the command to run is one line:
-#   bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev true
+# No bubblewrap check, and no bubblewrap: the Bash tool is denied, so the
+# sandbox confines nothing (ADR-0034 amendment). The old namespace-only check
+# was worse than nothing — it reported `bwrap PASS` on a VM where every Bash
+# call died on the /proc mount it never tested.
 # Pinned versions (the spec's exact pins, not ranges) on the serving install.
 v=$(node -p 'require(process.argv[1]).version' "$SDK_DIR/package.json" 2>/dev/null)
 if [ "$v" = "$SDK_VERSION" ]; then r sdk-pinned PASS "$v"; else r sdk-pinned FAIL "want $SDK_VERSION got ${v:-none}"; fi

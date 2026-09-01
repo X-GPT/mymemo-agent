@@ -2,7 +2,7 @@
 
 The production MicroVM image for the per-Conversation VM ([spec #654](https://github.com/X-GPT/mymemo-agent/issues/654)). #661 proved the platform recipe with a placeholder server; #666 bakes the real In-VM server (`apps/in-vm-server`) as the entrypoint. Derived from the #646 probe kit (`docs/research/microvm-probe` on the `research/microvm-probe` branch).
 
-> **There is no shell in the VM.** At default capabilities bubblewrap creates namespaces but **cannot mount `/proc`**, so sandbox-mode Bash cannot start — every call fails with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted` (proven live on #666 with a real Turn; #646's "bwrap PASS at default caps" only exercised namespace creation, never the proc mount the real sandbox performs). Rather than run the shell unsandboxed, `Bash`/`BashOutput`/`KillShell` are denied in `query-options.ts` (#692, ADR-0034 amendment). `smoke.sh` no longer checks bubblewrap at all: with no shell, the sandbox confines nothing, and the old namespace-only check was worse than nothing — it reported `bwrap PASS` on a VM where every Bash call died. The packages stay only because `failIfUnavailable` is still in the settings bundle and the CLI's startup behaviour without `bwrap` is untested.
+> **There is no shell in the VM.** `Bash`/`BashOutput`/`KillShell` are denied in `query-options.ts` (ADR-0034 amendment), so the image carries no bubblewrap, no socat, and no sandbox check. Why: sandbox-mode Bash cannot start here — bubblewrap creates namespaces but cannot mount `/proc`, and every Bash call died on that (proven live on #666 with a real Turn; #646's "bwrap PASS at default caps" only exercised namespace creation, never the proc mount the real sandbox performs). Running the shell unsandboxed was rejected — it would hand the untrusted surface the VM's network, and with it IMDS. The agent's tools are the cwd-scoped file tools and the in-process document tools.
 
 ## Boot model
 
@@ -58,7 +58,7 @@ TOKEN=$(aws lambda-microvms create-microvm-auth-token --region $REGION \
   --query 'authToken."X-aws-proxy-auth"' --output text)
 curl -sS "https://$ENDPOINT/health" -H "X-aws-proxy-auth: $TOKEN" -H "X-aws-proxy-port: 8080"
 curl -sS "https://$ENDPOINT/smoke"  -H "X-aws-proxy-auth: $TOKEN" -H "X-aws-proxy-port: 8080"
-# expect every RESULT line PASS (bwrap namespaces, pinned versions, policy tier)
+# expect every RESULT line PASS (pinned versions, policy tier, writability)
 
 # 4. Queue a Turn (a queued user row in conversation_messages) and nudge; the
 #    server claims it, serves it through the gateway, and lands durable

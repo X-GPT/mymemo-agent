@@ -27,7 +27,6 @@ docker run --rm --platform linux/arm64 --network none \
 	--entrypoint bash "$image" -euo pipefail -c '
 	[ "$(whoami)" = developer ] || { echo "runtime user is $(whoami), want developer"; exit 1; }
 	node --version | grep -q "^v22\." || { echo "node is $(node --version), want v22"; exit 1; }
-	command -v socat >/dev/null || { echo "socat missing"; exit 1; }
 	command -v git >/dev/null || { echo "git missing"; exit 1; }
 	bash /opt/microvm/smoke.sh
 
