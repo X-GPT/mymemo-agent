@@ -91,6 +91,12 @@ function toCallToolResult(result: object | ToolFailure): CallToolResult {
  * parent is pinned inside the Workspace root after mkdir, and the leaf is
  * replaced then created with O_EXCL (`wx`), which never follows a symlink — a
  * re-planted leaf fails the call closed instead of writing elsewhere.
+ *
+ * Known ceilings (accepted): Node exposes no openat, so a directory swapped in
+ * between the realpath check and the open can win a race — but O_EXCL caps
+ * that win at creating a NEW file, never truncating or overwriting one; and
+ * `mkdir` runs before the check, so a dangling planted symlink can cause an
+ * empty directory at its target before the write is refused.
  */
 function createLocalDocsCacheWriter(workspaceDir: string): DocsCacheWriter {
 	return {
