@@ -105,12 +105,21 @@ describe("buildTurnQueryOptions", () => {
 			"Edit(./**)",
 			"Grep",
 			"Glob",
-			"Bash",
 			`mcp__${DOC_TOOLS_SERVER_NAME}__ListDocuments`,
 			`mcp__${DOC_TOOLS_SERVER_NAME}__SearchDocuments`,
 			`mcp__${DOC_TOOLS_SERVER_NAME}__LoadDocuments`,
 		]);
-		expect(options.disallowedTools).toEqual(["WebFetch", "WebSearch"]);
+	});
+
+	it("denies the shell outright while #692 is open — allowlist omission is not enough", () => {
+		expect(options.allowedTools).not.toContain("Bash");
+		expect(options.disallowedTools).toEqual([
+			"Bash",
+			"BashOutput",
+			"KillShell",
+			"WebFetch",
+			"WebSearch",
+		]);
 	});
 
 	it("exposes exactly the in-process doc-tools MCP server", () => {
@@ -120,7 +129,7 @@ describe("buildTurnQueryOptions", () => {
 		expect(options.mcpServers?.[DOC_TOOLS_SERVER_NAME]).toBe(docToolsServer);
 	});
 
-	it("enforces OS-sandboxed Bash with network deny-all, failing closed", () => {
+	it("keeps the fail-closed sandbox bundle so re-enabling a shell cannot run unsandboxed", () => {
 		expect(options.sandbox).toEqual({
 			enabled: true,
 			failIfUnavailable: true,

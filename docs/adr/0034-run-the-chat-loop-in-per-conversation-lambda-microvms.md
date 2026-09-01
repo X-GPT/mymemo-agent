@@ -1,6 +1,6 @@
 # Run the chat loop in per-Conversation Lambda MicroVMs behind a process trust boundary
 
-Status: accepted
+Status: accepted (amended 2026-09-01 — see [Amendment: no shell](#amendment-2026-09-01--no-shell-in-the-vm))
 
 Supersedes [ADR-0031](0031-make-agentcore-the-sole-execution-runtime.md) (AgentCore
 as sole execution runtime) and [ADR-0033](0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)
@@ -56,6 +56,10 @@ per-Conversation microVMs create a third structure ADR-0001 didn't have:
 
 ## Measured facts this decision rests on (probe #646, egress probe #651)
 
+> The first claim below did not survive contact: bubblewrap creates namespaces
+> at default capabilities but cannot mount `/proc`, so sandbox-mode Bash never
+> runs. See the amendment at the end.
+
 Unprivileged user namespaces and bubblewrap work in the guest kernel at default
 capabilities (no `--additional-os-capabilities`); the root-owned policy tier is
 non-writable by the non-root agent; suspend/resume preserves `~/.claude` and the
@@ -76,3 +80,33 @@ connector kills internet egress (full routing, not split routing).
   gateway behavior) must pass in staging before cutover.
 - AgentCore Runtime, E2B, the dispatch pipeline, agent-maintenance, and the
   Harness/`ai-chat` code retire wholesale after cutover, as their own effort.
+
+## Amendment 2026-09-01 — no shell in the VM
+
+This ADR assumed OS-sandboxed Bash as one of the CLI's confinement mechanisms.
+That assumption was false, and the shell is now denied outright
+([#692](https://github.com/X-GPT/mymemo-agent/issues/692)).
+
+Sandbox-mode Bash cannot start in a Lambda MicroVM: bubblewrap creates
+namespaces but cannot mount `/proc`, which Claude Code's sandbox does when it
+builds its nested seccomp layer, so every Bash call fails at sandbox setup.
+Proven live on #666 with a real Turn. The evidence that put "bubblewrap works
+at default capabilities" in this ADR came from a probe that only exercised
+namespace creation, never the proc mount.
+
+`Bash`, `BashOutput`, and `KillShell` therefore sit in `disallowedTools` in
+`apps/in-vm-server/src/query-options.ts`. Running the shell unsandboxed was
+rejected: the untrusted surface would inherit the VM's network, and with it
+IMDS — hence the execution role's `conversations/*` checkpoint scope, whose
+residual this ADR accepted *because* the process boundary contained it —
+plus unbounded model spend on the gateway token and a DNS exfiltration path.
+`enableWeakerNestedSandbox` (sandbox-runtime's Docker-compatible mode) was
+rejected on the same grounds: its own documentation says it considerably
+weakens isolation.
+
+What is unchanged: the microVM remains the tenant boundary, the process
+boundary remains the trust boundary, and the file tools remain cwd-scoped. The
+fail-closed sandbox settings stay in the bundle so that re-enabling a shell
+fails closed rather than silently running unconfined. The shell returns only
+when #692 resolves — the leading candidate being image-level
+`--additional-os-capabilities ALL`, untested at the time of writing.

@@ -95,24 +95,38 @@ export function buildTurnQueryOptions(input: {
 			"Edit(./**)",
 			"Grep",
 			"Glob",
-			"Bash",
 			...DOC_TOOLS_ALLOWED_TOOLS,
 		],
-		// In-process network tools bypass the Bash sandbox's proxy; the VM's
-		// egress firewall is the production backstop, but deny them at the
-		// source so local runs are confined the same way.
-		disallowedTools: ["WebFetch", "WebSearch"],
+		// Bash is DENIED, not merely unlisted (#692). Sandbox-mode Bash cannot
+		// start in the MicroVM — bwrap cannot mount /proc there — and running
+		// it unsandboxed would hand the untrusted surface the VM's network:
+		// IMDS (hence the execution role's cross-Conversation checkpoint
+		// scope), the gateway token's model spend, and a DNS exfil path. The
+		// shell returns when #692 resolves, not before. BashOutput/KillShell
+		// manage background shells and go with it.
+		// WebFetch/WebSearch are in-process network tools that bypass the
+		// sandbox proxy entirely; the VM's egress firewall is the production
+		// backstop, but deny them at the source so local runs match.
+		disallowedTools: [
+			"Bash",
+			"BashOutput",
+			"KillShell",
+			"WebFetch",
+			"WebSearch",
+		],
+		// Inert while Bash is denied — kept so that re-enabling the shell
+		// fails closed instead of silently running unsandboxed (#645).
 		sandbox: {
 			enabled: true,
 			// Never silently run commands unsandboxed — the single most
-			// load-bearing key in the bundle (#645).
+			// load-bearing key in the bundle.
 			failIfUnavailable: true,
 			// The model cannot route around a sandbox denial with
 			// dangerouslyDisableSandbox.
 			allowUnsandboxedCommands: false,
 			autoAllowBashIfSandboxed: true,
-			// Network deny-all for Bash: empty allowlist + deterministic deny
-			// (no prompting) closes IMDS and RDS-at-IP from the sandbox.
+			// Network deny-all: empty allowlist + deterministic deny (no
+			// prompting) closes IMDS and RDS-at-IP from any sandboxed command.
 			network: {
 				allowedDomains: [],
 				strictAllowlist: true,
