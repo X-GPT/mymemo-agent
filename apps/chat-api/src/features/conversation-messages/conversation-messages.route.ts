@@ -1,4 +1,5 @@
 import { sValidator as zValidator } from "@hono/standard-validator";
+import { TERMINAL_TURN_STATUSES } from "@mymemo/agent-db/schema";
 import type { TurnStatus } from "@mymemo/agent-db/turn-store";
 import { classifyLiveStreamFailure } from "@mymemo/live-text";
 import { UI_MESSAGE_STREAM_HEADERS } from "ai";
@@ -8,6 +9,7 @@ import { z } from "zod";
 import type { AppEnv } from "@/deps";
 import {
 	ConversationIdParam,
+	ConversationPath,
 	conversationBodyLimit,
 	MAX_MESSAGE_LENGTH,
 } from "@/features/conversations/conversations.schema";
@@ -47,7 +49,7 @@ const SubmitMessageBody = z
 	.strict();
 
 function isTerminalTurnStatus(status: TurnStatus): boolean {
-	return status === "done" || status === "error" || status === "interrupted";
+	return (TERMINAL_TURN_STATUSES as readonly TurnStatus[]).includes(status);
 }
 
 // An over-large limit clamps to the cap instead of erroring (the #663 read
@@ -123,15 +125,11 @@ app.get(
 app.post(
 	"/:conversationId/messages",
 	conversationBodyLimit,
-	zValidator(
-		"param",
-		z.object({ conversationId: ConversationIdParam }),
-		(result, c) => {
-			if (!result.success) {
-				return c.json({ error: "Invalid conversation id" }, 400);
-			}
-		},
-	),
+	zValidator("param", ConversationPath, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid conversation id" }, 400);
+		}
+	}),
 	zValidator("json", SubmitMessageBody, (result, c) => {
 		if (!result.success) {
 			return c.json(
@@ -200,11 +198,11 @@ app.post(
 				"v2 Live Stream subscribe failed",
 			);
 			// The Turn is durably queued; let it run so history has it.
-			await nudge(ref).catch(() => {});
+			await nudge().catch(() => {});
 			return c.json({ error: "Live stream temporarily unavailable" }, 503);
 		}
 		try {
-			await nudge(ref);
+			await nudge();
 		} catch (error) {
 			// The row is durable and the In-VM server's interval self-heal
 			// consults Postgres on its own; stream on rather than fail the Turn.

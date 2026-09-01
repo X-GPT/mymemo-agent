@@ -76,10 +76,7 @@ export interface AppDeps {
 	 * so the v2 message POST answers 503. Today a dev-mode stub over
 	 * `IN_VM_SERVER_URL`; the orchestration ticket replaces it.
 	 */
-	nudgeInVmServer?: (ref: {
-		userId: string;
-		conversationId: string;
-	}) => Promise<void>;
+	nudgeInVmServer?: () => Promise<void>;
 	/** Cardinality-safe, payload-free Live Stream relay observability. */
 	liveStreamTelemetry: LiveStreamTelemetry;
 	/** Close the lazy Redis relay clients during service shutdown. */
@@ -137,7 +134,6 @@ export function createDeps(
 		url: config.redisUrl,
 		deployment: "current",
 	});
-	const inVmServerUrl = config.inVmServerUrl;
 	return {
 		config,
 		createHarnessChatAgent,
@@ -153,9 +149,9 @@ export function createDeps(
 		turnLiveStreamRelay,
 		// ponytail: one config-provided In-VM server, nudged by URL; the
 		// orchestration ticket swaps in per-Conversation MicroVM launch here.
-		nudgeInVmServer: inVmServerUrl
+		nudgeInVmServer: config.inVmServerUrl
 			? async () => {
-					const response = await fetch(`${inVmServerUrl}/nudge`, {
+					const response = await fetch(`${config.inVmServerUrl}/nudge`, {
 						method: "POST",
 					});
 					if (!response.ok) {

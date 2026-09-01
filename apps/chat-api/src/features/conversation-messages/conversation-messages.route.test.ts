@@ -353,7 +353,8 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 		const transport = new DefaultChatTransport({
 			api: MESSAGES_URL,
 			headers: identityHeaders,
-			fetch: (input, init) => app.request(input, init),
+			// Bun's `fetch` type also carries `preconnect`; the transport only calls.
+			fetch: ((input, init) => app.request(input, init)) as typeof fetch,
 		});
 
 		const stream = await transport.sendMessages({
