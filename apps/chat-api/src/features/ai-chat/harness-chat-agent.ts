@@ -1,15 +1,15 @@
 import { HarnessAgent } from "@ai-sdk/harness/agent";
 import { createClaudeCode } from "@ai-sdk/harness-claude-code";
 import { createVercelSandbox } from "@ai-sdk/sandbox-vercel";
-import type { HarnessConfig } from "@/config/harness-env";
-import type { DocumentAccessLog } from "./tools/document-access-log";
+import type { DocumentAccessLog } from "@mymemo/document-tools/access-log";
 import {
 	createKbDb,
 	createScopedDocumentClient,
+	type DocumentToolBinding,
+	type DocumentToolLogger,
 	type FrozenScope,
-	type HarnessToolBinding,
-	type HarnessToolLogger,
-} from "./tools/document-client";
+} from "@mymemo/document-tools/client";
+import type { HarnessConfig } from "@/config/harness-env";
 import {
 	createHarnessTools,
 	HARNESS_ACTIVE_TOOLS,
@@ -17,10 +17,10 @@ import {
 
 /** What one Harness turn binds its document tools to. */
 export interface HarnessTurn {
-	binding: HarnessToolBinding;
+	binding: DocumentToolBinding;
 	scope: FrozenScope;
 	audit: DocumentAccessLog;
-	logger: HarnessToolLogger;
+	logger: DocumentToolLogger;
 }
 
 /** Builds the `HarnessAgent` for one turn over that turn's document tools; tests inject a cast fake. */

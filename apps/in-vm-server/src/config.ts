@@ -30,6 +30,12 @@ function assert(condition: unknown, message: string): asserts condition {
 export interface InVmConfig {
 	/** Writable connection to the agent Postgres (`mymemo_agent`) — the work bus. */
 	databaseUrl: string;
+	/**
+	 * Read-only connection to the KB Postgres (`mymemo_kb`) for the in-process
+	 * document tools (#665). Held by this trusted process only — the CLI env
+	 * allowlist can never carry it.
+	 */
+	kbDatabaseUrl: string;
 	/** Redis connection for the v2 Turn Live Stream lane. */
 	redisUrl: string;
 	/**
@@ -65,6 +71,9 @@ export function loadInVmConfigFromEnv(env: Env): InVmConfig {
 	);
 	assert(databaseUrl, "AGENT_DATABASE_URL is required");
 
+	const kbDatabaseUrl = env.KB_DATABASE_URL?.trim();
+	assert(kbDatabaseUrl, "KB_DATABASE_URL is required");
+
 	const userId = env.MYMEMO_USER_ID?.trim();
 	assert(userId, "MYMEMO_USER_ID is required");
 	const conversationId = env.MYMEMO_CONVERSATION_ID?.trim();
@@ -82,6 +91,7 @@ export function loadInVmConfigFromEnv(env: Env): InVmConfig {
 
 	return {
 		databaseUrl,
+		kbDatabaseUrl,
 		redisUrl: resolveLiveStreamRedisUrl(env.REDIS_URL, {
 			allowInsecureLoopback:
 				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",

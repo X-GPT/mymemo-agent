@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
+import { DOC_TOOLS_SERVER_NAME } from "./doc-tools";
 import { buildCliEnv, buildTurnQueryOptions } from "./query-options";
 
 /**
@@ -74,11 +76,15 @@ describe("buildCliEnv", () => {
 });
 
 describe("buildTurnQueryOptions", () => {
+	// Identity-only stub: the allowedTools ↔ built-tools drift pin lives in
+	// doc-tools.test.ts ("the allowlist pin").
+	const docToolsServer = {} as McpSdkServerConfigWithInstance;
 	const options = buildTurnQueryOptions({
 		workspaceDir: "/workspace/conversation-1",
 		model: MODEL,
 		processEnv: trustedProcessEnv(),
 		pathToClaudeCodeExecutable: "/deps/sdk-linux-arm64/claude",
+		docToolsServer,
 	});
 
 	it("pins the confinement settings bundle", () => {
@@ -100,8 +106,18 @@ describe("buildTurnQueryOptions", () => {
 			"Grep",
 			"Glob",
 			"Bash",
+			`mcp__${DOC_TOOLS_SERVER_NAME}__ListDocuments`,
+			`mcp__${DOC_TOOLS_SERVER_NAME}__SearchDocuments`,
+			`mcp__${DOC_TOOLS_SERVER_NAME}__LoadDocuments`,
 		]);
 		expect(options.disallowedTools).toEqual(["WebFetch", "WebSearch"]);
+	});
+
+	it("exposes exactly the in-process doc-tools MCP server", () => {
+		expect(Object.keys(options.mcpServers ?? {})).toEqual([
+			DOC_TOOLS_SERVER_NAME,
+		]);
+		expect(options.mcpServers?.[DOC_TOOLS_SERVER_NAME]).toBe(docToolsServer);
 	});
 
 	it("enforces OS-sandboxed Bash with network deny-all, failing closed", () => {
@@ -117,6 +133,9 @@ describe("buildTurnQueryOptions", () => {
 	it("hands the spawned CLI the credential-free env", () => {
 		expect(options.env).toEqual(buildCliEnv(trustedProcessEnv(), MODEL));
 		expect(options.env?.AGENT_DATABASE_URL).toBeUndefined();
+		// #665: the doc tools run in the trusted process; the KB credential can
+		// never reach the spawned CLI.
+		expect(options.env?.KB_DATABASE_URL).toBeUndefined();
 		expect(options.env?.REDIS_URL).toBeUndefined();
 	});
 });

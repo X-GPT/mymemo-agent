@@ -1,6 +1,8 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
 import { sweepStaleProcessingTurnsTx } from "@mymemo/agent-db/turn-store";
+import { PostgresDocumentAccessLog } from "@mymemo/document-tools/access-log";
+import { createKbDb } from "@mymemo/document-tools/client";
 import type { TurnLiveStreamRelay } from "@mymemo/live-text";
 import { createRedisTurnLiveStreamRelay } from "@mymemo/live-text";
 import pino from "pino";
@@ -12,6 +14,7 @@ import {
 	envFromRunHookPayload,
 	loadInVmConfigFromEnv,
 } from "./config";
+import { type CurrentTurn, createDocToolsServer } from "./doc-tools";
 import { type DrainLoopHandle, startDrainLoop } from "./drain-loop";
 import { buildTurnQueryOptions } from "./query-options";
 import type { TurnServingDeps } from "./turn-serving";
@@ -48,20 +51,33 @@ async function configure(env: Env): Promise<void> {
 		url: config.redisUrl,
 		deployment: "current",
 	});
+	const db = createDatabase(config.databaseUrl);
+	const currentTurn: CurrentTurn = { turnId: null };
 	const queryOptions = buildTurnQueryOptions({
 		workspaceDir: config.workspaceDir,
 		model: config.model,
 		processEnv,
 		pathToClaudeCodeExecutable: resolveAndVerifyClaudeCodeExecutable(),
+		docToolsServer: createDocToolsServer({
+			db,
+			kb: createKbDb(config.kbDatabaseUrl),
+			audit: new PostgresDocumentAccessLog(db),
+			logger,
+			userId: config.userId,
+			conversationId: config.conversationId,
+			workspaceDir: config.workspaceDir,
+			currentTurn,
+		}),
 	});
 	const deps: TurnServingDeps = {
-		db: createDatabase(config.databaseUrl),
+		db,
 		relay,
 		userId: config.userId,
 		conversationId: config.conversationId,
 		// ONE long-lived query() carries the Agent session across Turns (#664).
 		query: createAgentSession({ query, options: queryOptions }),
 		queryOptions,
+		currentTurn,
 		logger,
 	};
 	// One awaited sweep before the loop starts: stale `processing` Turns are

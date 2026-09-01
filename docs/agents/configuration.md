@@ -109,6 +109,7 @@ process only.
 Required:
 
 - `AGENT_DATABASE_URL`: writable `mymemo_agent` database; `DB_PASSWORD` and `DB_SSL` follow the shared database conventions
+- `KB_DATABASE_URL`: read-only `mymemo_kb` database for the in-process document tools (#665); held by the trusted process only, never the spawned CLI
 - `REDIS_URL`: authenticated `rediss://` URL for the v2 Turn Live Stream lane; `LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS` is the same loopback-only escape hatch as chat-api's
 - `MYMEMO_USER_ID`, `MYMEMO_CONVERSATION_ID`: the Conversation this VM serves
 - `WORKSPACE_DIR`: the Workspace — the cwd the confined file tools and sandboxed Bash act in

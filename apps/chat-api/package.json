@@ -17,6 +17,7 @@
 		"@aws-sdk/s3-request-presigner": "^3.883.0",
 		"@hono/standard-validator": "^0.1.5",
 		"@mymemo/agent-db": "workspace:*",
+		"@mymemo/document-tools": "workspace:*",
 		"@mymemo/live-text": "workspace:*",
 		"@statsig/statsig-node-core": "^0.19.8",
 		"drizzle-orm": "^0.45.2",

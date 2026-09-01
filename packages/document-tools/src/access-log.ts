@@ -3,7 +3,8 @@ import { documentAccessEvents } from "@mymemo/agent-db/schema";
 
 /** One `document_access_events` row: a list, search, or load on this path. */
 export interface DocumentAccessEvent {
-	/** Stored in `run_id`: the Harness turn id (a Run id on the Run path). */
+	/** Stored in `run_id`: the Harness turn id or the v2 Turn's user-message id
+	 * (a Run id on the Run path). */
 	turnId: string;
 	conversationId: string;
 	userId: string;
@@ -20,7 +21,7 @@ export interface DocumentAccessLog {
 	record(event: DocumentAccessEvent): Promise<void>;
 }
 
-/** Appends through chat-api's writable agent-DB connection. */
+/** Appends through the caller's writable agent-DB connection. */
 export class PostgresDocumentAccessLog implements DocumentAccessLog {
 	constructor(private readonly db: Database) {}
 

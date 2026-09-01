@@ -1,19 +1,19 @@
 import { Pool } from "pg";
-import type { Logger } from "pino";
-import type { ConversationRecord } from "@/features/conversation-store/conversation-store";
-import type { DocumentAccessLog } from "./document-access-log";
+import type { DocumentAccessLog } from "./access-log";
 
 /**
- * The chat path's scoped access to the read-only KB (ADR-0033 stage 2). A
- * fresh, smaller copy of the Runtime's `documents/` module: same SQL, same
- * scope rules, same audit row, bound once per Harness turn instead of per
- * call. Drift between the two is accepted; a boundary fix lands twice.
+ * Scoped access to the read-only KB, shared by chat-api's Harness chat path
+ * and the trusted In-VM server (#665). A fresh, smaller copy of the Runtime's
+ * `documents/` module: same SQL, same scope rules, same audit row, bound once
+ * per turn instead of per call. Drift between the two is accepted (decided on
+ * #610); a boundary fix lands twice.
  */
 
-/** Identifies one Harness turn's document access for the audit ledger. */
-export interface HarnessToolBinding {
+/** Identifies one turn's document access for the audit ledger. */
+export interface DocumentToolBinding {
 	userId: string;
 	conversationId: string;
+	/** The Harness turn id, or the v2 Turn's user-message id. */
 	turnId: string;
 }
 
@@ -23,11 +23,11 @@ export type FrozenScope =
 	| { type: "document"; summaryId: string };
 
 /** Fails closed: a scoped row missing its id is rejected, never widened. */
-export function parseFrozenScope(
-	row: Pick<ConversationRecord, "collectionId" | "summaryId"> & {
-		scope: string;
-	},
-): FrozenScope {
+export function parseFrozenScope(row: {
+	scope: string;
+	collectionId: string | null;
+	summaryId: string | null;
+}): FrozenScope {
 	switch (row.scope) {
 		case "general":
 			return { type: "general" };
@@ -63,7 +63,7 @@ export function createKbDb(kbDatabaseUrl: string): KbDb {
 		query_timeout: 10_000,
 	});
 	// An idle client's error is an EventEmitter `error`; unhandled, it would
-	// take the long-lived chat-api process down. The next query surfaces it.
+	// take the long-lived host process down. The next query surfaces it.
 	pool.on("error", () => {});
 	return {
 		query: async <T>(text: string, params: unknown[] = []) =>
@@ -126,7 +126,11 @@ export interface ScopedDocumentClient {
 	fetch(documentId: string): Promise<FetchedDocument>;
 }
 
-export type HarnessToolLogger = Pick<Logger, "info" | "error">;
+/** Structural so pino (and any compatible logger) satisfies it without a dependency here. */
+export interface DocumentToolLogger {
+	info(obj: object, msg?: string): void;
+	error(obj: object, msg?: string): void;
+}
 
 /**
  * Scope mapping (the platform's compat layer): workspace_id = the user's
@@ -401,15 +405,15 @@ async function resolveDocumentId(
 }
 
 /**
- * The client for one Harness turn: the frozen scope is applied server-side
- * before every query — the input carries no filter a caller could widen — and
- * every call appends one audit row with the turn's binding.
+ * The client for one turn: the frozen scope is applied server-side before
+ * every query — the input carries no filter a caller could widen — and every
+ * call appends one audit row with the turn's binding.
  */
 export function createScopedDocumentClient(deps: {
 	kb: KbDb;
 	audit: DocumentAccessLog;
-	logger: HarnessToolLogger;
-	binding: HarnessToolBinding;
+	logger: DocumentToolLogger;
+	binding: DocumentToolBinding;
 	scope: FrozenScope;
 }): ScopedDocumentClient {
 	const { kb, binding, scope } = deps;
@@ -463,7 +467,7 @@ export function createScopedDocumentClient(deps: {
 		if (error instanceof DocumentAccessError) return error;
 		deps.logger.error(
 			{ err: error, ...binding },
-			`harness document tool: ${failureMessage}`,
+			`document tool: ${failureMessage}`,
 		);
 		return new DocumentAccessError(failureMessage);
 	}
