@@ -5,6 +5,7 @@ import type { ApiConfig } from "./config/env";
 import type { AppDeps, AppEnv } from "./deps";
 import artifactRoutes from "./features/artifacts/artifacts.route";
 import conversationHistoryRoutes from "./features/conversation-history/conversation-history.route";
+import conversationMessagesRoutes from "./features/conversation-messages/conversation-messages.route";
 import conversationLifecycleRoutes from "./features/conversations/conversation-lifecycle.route";
 import conversationsRoutes from "./features/conversations/conversations.route";
 import gatewayRoutes from "./features/gateway/gateway.route";
@@ -28,9 +29,10 @@ export function createApp(config: ApiConfig, deps: AppDeps) {
 	app.route("/v1/conversations", conversationsRoutes);
 	app.route("/v1/conversations", conversationHistoryRoutes);
 	app.route("/v1/conversations", artifactRoutes);
-	// v2 carries the lifecycle routes with v1 semantics (#657); the Run,
-	// history, and artifact routes stay v1-only.
+	// v2 carries the lifecycle routes with v1 semantics (#657); the Run and
+	// artifact routes stay v1-only. v2 history is its own UIMessage read (#663).
 	app.route("/v2/conversations", conversationLifecycleRoutes);
+	app.route("/v2/conversations", conversationMessagesRoutes);
 	app.route("/v2/gateway", gatewayRoutes);
 
 	return app;

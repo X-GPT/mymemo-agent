@@ -22,6 +22,8 @@ import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-art
 import { createS3ArtifactDownloadSigner } from "./features/artifacts/s3-artifact-download-signer";
 import type { ConversationHistoryStore } from "./features/conversation-history/conversation-history-store";
 import { PostgresConversationHistoryStore } from "./features/conversation-history/postgres-conversation-history-store";
+import type { ConversationMessagesStore } from "./features/conversation-messages/conversation-messages-store";
+import { PostgresConversationMessagesStore } from "./features/conversation-messages/postgres-conversation-messages-store";
 import type { ConversationStore } from "./features/conversation-store/conversation-store";
 import { PostgresConversationStore } from "./features/conversation-store/postgres-conversation-store";
 import type { InternalIdentity } from "./features/conversations/conversations.schema";
@@ -56,6 +58,8 @@ export interface AppDeps {
 	conversationStore: ConversationStore;
 	/** Permanent AG-UI Conversation-history projection over Postgres Runs. */
 	conversationHistoryStore: ConversationHistoryStore;
+	/** /v2 UIMessage history over `conversation_messages` (read-only here; the In-VM server is the sole writer). */
+	conversationMessagesStore: ConversationMessagesStore;
 	/** Durable split-runtime run queue and event log. */
 	runStore: RunStore;
 	/** Producer-buffered per-Run relay used by initial and reconnect SSE. */
@@ -122,6 +126,7 @@ export function createDeps(
 		artifactDownloadSigner,
 		conversationStore,
 		conversationHistoryStore,
+		conversationMessagesStore: new PostgresConversationMessagesStore(database),
 		runStore,
 		liveStreamRelay,
 		liveStreamTelemetry,

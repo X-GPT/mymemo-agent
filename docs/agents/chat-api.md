@@ -154,7 +154,11 @@ Return `201 { conversationId, title, scope, createdAt, lastActivityAt, archivedA
 
 All operations are owner-scoped. Missing and foreign Conversations both return `404`. These management routes bypass the new-work exposure gate.
 
-The four lifecycle routes above (create, list, rename/Archive, permanent delete) also serve at `/v2/conversations` with identical semantics: one shared router (`conversation-lifecycle.route.ts`) is mounted under both prefixes. The Run, history, and artifact routes stay v1-only; the v2 data plane and the outbox-based deletion upgrade are separate tickets under spec #654.
+The four lifecycle routes above (create, list, rename/Archive, permanent delete) also serve at `/v2/conversations` with identical semantics: one shared router (`conversation-lifecycle.route.ts`) is mounted under both prefixes. The Run and artifact routes stay v1-only; the rest of the v2 data plane and the outbox-based deletion upgrade are separate tickets under spec #654.
+
+### Read v2 history
+
+`GET /v2/conversations/:conversationId/messages` returns the durable UIMessage history over `conversation_messages` in ascending `sequence`, paged backwards from the newest page as `{ messages, nextCursor }` (`?limit` defaults to 50 and clamps to 100; `?before=<sequence>` is the cursor `nextCursor` hands back). A user message carries its Turn `status`/`startedAt`/`finishedAt` as UIMessage `metadata`; a Turn's single assistant message returns its stored parts verbatim (step and tool parts included) — an interrupted or error Turn shows exactly its completed Steps by the In-VM writer's commit-before-publish invariant. chat-api only reads here. Owner-scoped: missing and foreign Conversations return `404`; an empty history — every pre-v2 Conversation included — is an empty page; archived Conversations stay readable; the read bypasses the new-work exposure gate (v1 precedent).
 
 ### Admit and stream a Run
 
