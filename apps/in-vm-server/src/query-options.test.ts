@@ -99,18 +99,23 @@ describe("buildTurnQueryOptions", () => {
 		expect(options.model).toBe(MODEL.model);
 	});
 
-	it("scopes the file tools to the cwd — never a bare Read/Edit allow", () => {
+	it("scopes the file tools to the cwd and denies the shell outright", () => {
 		expect(options.allowedTools).toEqual([
 			"Read(./**)",
 			"Edit(./**)",
 			"Grep",
 			"Glob",
-			"Bash",
 			`mcp__${DOC_TOOLS_SERVER_NAME}__ListDocuments`,
 			`mcp__${DOC_TOOLS_SERVER_NAME}__SearchDocuments`,
 			`mcp__${DOC_TOOLS_SERVER_NAME}__LoadDocuments`,
 		]);
-		expect(options.disallowedTools).toEqual(["WebFetch", "WebSearch"]);
+		expect(options.disallowedTools).toEqual([
+			"Bash",
+			"BashOutput",
+			"KillShell",
+			"WebFetch",
+			"WebSearch",
+		]);
 	});
 
 	it("exposes exactly the in-process doc-tools MCP server", () => {
@@ -118,16 +123,6 @@ describe("buildTurnQueryOptions", () => {
 			DOC_TOOLS_SERVER_NAME,
 		]);
 		expect(options.mcpServers?.[DOC_TOOLS_SERVER_NAME]).toBe(docToolsServer);
-	});
-
-	it("enforces OS-sandboxed Bash with network deny-all, failing closed", () => {
-		expect(options.sandbox).toEqual({
-			enabled: true,
-			failIfUnavailable: true,
-			allowUnsandboxedCommands: false,
-			autoAllowBashIfSandboxed: true,
-			network: { allowedDomains: [], strictAllowlist: true },
-		});
 	});
 
 	it("hands the spawned CLI the credential-free env", () => {

@@ -112,7 +112,7 @@ Required:
 - `KB_DATABASE_URL`: read-only `mymemo_kb` database for the in-process document tools (#665); held by the trusted process only, never the spawned CLI
 - `REDIS_URL`: authenticated `rediss://` URL for the v2 Turn Live Stream lane; `LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS` is the same loopback-only escape hatch as chat-api's
 - `MYMEMO_USER_ID`, `MYMEMO_CONVERSATION_ID`: the Conversation this VM serves
-- `WORKSPACE_DIR`: the Workspace — the cwd the confined file tools and sandboxed Bash act in
+- `WORKSPACE_DIR`: the Workspace — the cwd the confined file tools act in
 - `MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL`: model access held by the trusted process — locally a direct provider base URL/key; in production the chat-api `/v2/gateway` URL and the per-Conversation gateway token, with no design change
 
 Optional: `PORT` (default `8080`), `LOG_LEVEL` (default `info`) — listener

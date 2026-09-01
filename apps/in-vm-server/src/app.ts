@@ -31,9 +31,8 @@ export interface AppHandlers {
 	run: (body: { microvmId?: string; runHookPayload?: string }) => Promise<void>;
 	/**
 	 * In-VM acceptance checks (`GET /smoke`, image runs only): the baked
-	 * `smoke.sh` — bwrap namespaces, pinned versions, policy-tier ownership.
-	 * Content-free diagnostics behind the JWE-authenticated endpoint; absent
-	 * locally, where the route does not register.
+	 * `smoke.sh`. Content-free diagnostics behind the JWE-authenticated
+	 * endpoint; absent locally, where the route does not register.
 	 */
 	smokeScriptPath?: string;
 }

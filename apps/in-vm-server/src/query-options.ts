@@ -95,29 +95,19 @@ export function buildTurnQueryOptions(input: {
 			"Edit(./**)",
 			"Grep",
 			"Glob",
-			"Bash",
 			...DOC_TOOLS_ALLOWED_TOOLS,
 		],
-		// In-process network tools bypass the Bash sandbox's proxy; the VM's
-		// egress firewall is the production backstop, but deny them at the
-		// source so local runs are confined the same way.
-		disallowedTools: ["WebFetch", "WebSearch"],
-		sandbox: {
-			enabled: true,
-			// Never silently run commands unsandboxed — the single most
-			// load-bearing key in the bundle (#645).
-			failIfUnavailable: true,
-			// The model cannot route around a sandbox denial with
-			// dangerouslyDisableSandbox.
-			allowUnsandboxedCommands: false,
-			autoAllowBashIfSandboxed: true,
-			// Network deny-all for Bash: empty allowlist + deterministic deny
-			// (no prompting) closes IMDS and RDS-at-IP from the sandbox.
-			network: {
-				allowedDomains: [],
-				strictAllowlist: true,
-			},
-		},
+		// No shell in the VM (ADR-0034 amendment). The allowlist above is what
+		// enforces that; these are defence in depth.
+		// WebFetch/WebSearch: in-process network tools; the VM's egress firewall
+		// is the production backstop, denied here so local runs match.
+		disallowedTools: [
+			"Bash",
+			"BashOutput",
+			"KillShell",
+			"WebFetch",
+			"WebSearch",
+		],
 		model: input.model.model,
 		env: buildCliEnv(input.processEnv, input.model),
 	};

@@ -1,6 +1,6 @@
 # Run the chat loop in per-Conversation Lambda MicroVMs behind a process trust boundary
 
-Status: accepted
+Status: accepted (amended 2026-09-01 — see [Amendment: no shell](#amendment-2026-09-01--no-shell-in-the-vm))
 
 Supersedes [ADR-0031](0031-make-agentcore-the-sole-execution-runtime.md) (AgentCore
 as sole execution runtime) and [ADR-0033](0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)
@@ -14,9 +14,8 @@ MyMemo chat (`/v2/*`) runs on **one persistent AWS Lambda MicroVM per Conversati
 in-VM server** that runs the Claude Agent SDK loop, serves the document tools as
 in-process MCP, drains work from Postgres, publishes the stream over Redis, and
 checkpoints state to S3 — while the **untrusted Claude Code CLI it spawns** is
-confined by OS-sandboxed Bash (bubblewrap, network deny-all), cwd-scoped file
-tools, a root-owned managed-settings policy tier baked into the image, and a
-**credential-free environment**.
+confined by cwd-scoped file tools, a root-owned managed-settings policy tier
+baked into the image, and a **credential-free environment**.
 
 ## The trust boundary
 
@@ -28,8 +27,8 @@ per-Conversation microVMs create a third structure ADR-0001 didn't have:
 - **The microVM is the tenant boundary.** One Conversation per VM, never shared.
 - **A process boundary inside the VM is the trust boundary.** All data-plane
   credentials (agent DB, KB DB, Redis) live only in the trusted server process;
-  the CLI's env carries none, so prompt-injected Bash and file tools have nothing
-  to exfiltrate — and egress is locked at the network layer regardless (VPC
+  the CLI's env carries none, so prompt-injected file tools have nothing to
+  exfiltrate — and egress is locked at the network layer regardless (VPC
   egress connector, no-NAT subnets, security groups allowing only RDS, Redis, and
   the gateway; full-routing verified live).
 - **The compensating machinery ADR-0001 feared shrinks to one gateway for the
@@ -52,15 +51,16 @@ per-Conversation microVMs create a third structure ADR-0001 didn't have:
   per-VM tokens), and egress lockdown is measured.
 - **Restore the split runtime in-VM** (host tools outside, every built-in off) —
   rejected a fourth time; the process boundary delivers the same credential
-  isolation without amputating the toolset.
+  isolation without amputating the toolset (the shell aside).
 
 ## Measured facts this decision rests on (probe #646, egress probe #651)
 
 Unprivileged user namespaces and bubblewrap work in the guest kernel at default
-capabilities (no `--additional-os-capabilities`); the root-owned policy tier is
-non-writable by the non-root agent; suspend/resume preserves `~/.claude` and the
-workspace; the authenticated per-VM endpoint streams SSE; a no-NAT VPC egress
-connector kills internet egress (full routing, not split routing).
+capabilities (no `--additional-os-capabilities`) — **corrected: see the
+amendment**; the root-owned policy tier is non-writable by the non-root agent;
+suspend/resume preserves `~/.claude` and the workspace; the authenticated
+per-VM endpoint streams SSE; a no-NAT VPC egress connector kills internet
+egress (full routing, not split routing).
 
 ## Consequences
 
@@ -76,3 +76,32 @@ connector kills internet egress (full routing, not split routing).
   gateway behavior) must pass in staging before cutover.
 - AgentCore Runtime, E2B, the dispatch pipeline, agent-maintenance, and the
   Harness/`ai-chat` code retire wholesale after cutover, as their own effort.
+
+## Amendment 2026-09-01 — no shell in the VM
+
+Sandbox-mode Bash cannot start in a Lambda MicroVM: bubblewrap creates
+namespaces but cannot mount `/proc`, which Claude Code's sandbox does when it
+builds its nested seccomp layer, so every Bash call fails at sandbox setup.
+Proven live on #666 with a real Turn. The measured fact above came from the
+#646 probe, which only exercised namespace creation, never the proc mount.
+
+`Bash`, `BashOutput`, and `KillShell` therefore sit in `disallowedTools` in
+`apps/in-vm-server/src/query-options.ts`. What closes the shell — and every
+other tool the SDK ships — is `permissionMode: "dontAsk"` against an exact
+allowlist: anything not named there is denied. The denials are defence in
+depth. Running the shell unsandboxed was
+rejected: the untrusted surface would inherit the VM's network, and with it
+IMDS — hence the execution role's `conversations/*` checkpoint scope, whose
+residual this ADR accepted *because* the process boundary contained it —
+plus unbounded model spend on the gateway token and a DNS exfiltration path.
+`enableWeakerNestedSandbox` (sandbox-runtime's Docker-compatible mode) was
+rejected on the same grounds: its own documentation says it considerably
+weakens isolation.
+
+Everything that existed to serve the shell goes with it: the `sandbox` settings
+leave the SDK options here, and the image drops bubblewrap, socat, the bwrap
+smoke check, and the policy tier's own `sandbox` block (PR #691, landing with
+this change or after it — never before, since removing bubblewrap while the
+shell is still allowed would leave the tool demanding a sandbox that cannot be
+built). Restoring a shell means restoring all of it and remaking this security
+case.
