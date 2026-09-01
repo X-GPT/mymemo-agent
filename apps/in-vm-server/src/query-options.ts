@@ -97,12 +97,10 @@ export function buildTurnQueryOptions(input: {
 			"Glob",
 			...DOC_TOOLS_ALLOWED_TOOLS,
 		],
-		// Bash is DENIED, not merely unlisted, and there are no sandbox settings
-		// because nothing dispatches commands (ADR-0034 amendment: bwrap cannot
-		// mount /proc in the MicroVM, and unsandboxed means the VM's network).
-		// BashOutput/KillShell manage background shells and go with it.
-		// WebFetch/WebSearch are in-process network tools: the VM's egress
-		// firewall is the production backstop, denied here so local runs match.
+		// Bash/BashOutput/KillShell: there is no shell in the VM, and hence no
+		// sandbox settings anywhere in this bundle (ADR-0034 amendment).
+		// WebFetch/WebSearch: in-process network tools; the VM's egress firewall
+		// is the production backstop, denied here so local runs match.
 		disallowedTools: [
 			"Bash",
 			"BashOutput",

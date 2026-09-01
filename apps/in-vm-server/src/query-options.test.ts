@@ -99,7 +99,7 @@ describe("buildTurnQueryOptions", () => {
 		expect(options.model).toBe(MODEL.model);
 	});
 
-	it("scopes the file tools to the cwd — never a bare Read/Edit allow", () => {
+	it("scopes the file tools to the cwd and denies the shell outright", () => {
 		expect(options.allowedTools).toEqual([
 			"Read(./**)",
 			"Edit(./**)",
@@ -109,9 +109,7 @@ describe("buildTurnQueryOptions", () => {
 			`mcp__${DOC_TOOLS_SERVER_NAME}__SearchDocuments`,
 			`mcp__${DOC_TOOLS_SERVER_NAME}__LoadDocuments`,
 		]);
-	});
-
-	it("denies the shell outright — allowlist omission is not enough", () => {
+		// Denied, not merely unlisted — omission and denial read differently.
 		expect(options.disallowedTools).toEqual([
 			"Bash",
 			"BashOutput",

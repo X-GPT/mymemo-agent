@@ -27,7 +27,7 @@ per-Conversation microVMs create a third structure ADR-0001 didn't have:
 - **The microVM is the tenant boundary.** One Conversation per VM, never shared.
 - **A process boundary inside the VM is the trust boundary.** All data-plane
   credentials (agent DB, KB DB, Redis) live only in the trusted server process;
-  the CLI's env carries none, so prompt-injected Bash and file tools have nothing
+  the CLI's env carries none, so prompt-injected file tools have nothing
   to exfiltrate — and egress is locked at the network layer regardless (VPC
   egress connector, no-NAT subnets, security groups allowing only RDS, Redis, and
   the gateway; full-routing verified live).
@@ -105,9 +105,7 @@ weakens isolation.
 The tenant and trust boundaries are unchanged; the agent's tools are the
 cwd-scoped file tools plus the in-process document tools. Everything that
 existed to serve the shell goes with it: the image ships no bubblewrap and no
-socat, the smoke script checks neither, and the SDK options carry no `sandbox`
-settings, since nothing dispatches commands to a sandbox.
-
-Re-introducing a shell is not scheduled work. It would mean restoring the
-sandbox bundle and redoing this security case — not deleting one line from
-`disallowedTools`.
+socat, the smoke script checks neither, and no `sandbox` settings remain in
+the SDK options or the managed-settings policy tier. Restoring a shell means
+restoring all of that and remaking this security case, not deleting one line
+from `disallowedTools`.
