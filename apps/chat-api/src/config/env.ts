@@ -120,7 +120,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		openrouterBaseUrl:
 			env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api",
 		gatewayTokenSecret: env.GATEWAY_TOKEN_SECRET?.trim() || undefined,
-		inVmServerUrl:
-			env.IN_VM_SERVER_URL?.trim().replace(/\/+$/, "") || undefined,
+		inVmServerUrl: env.IN_VM_SERVER_URL?.trim() || undefined,
 	};
 }

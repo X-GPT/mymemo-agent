@@ -9,11 +9,10 @@ import type {
 	ConversationUiMessage,
 	EnqueueTurnResult,
 	TurnRef,
-	TurnSubmissionStore,
 } from "./conversation-messages-store";
 
 export class PostgresConversationMessagesStore
-	implements ConversationMessagesStore, TurnSubmissionStore
+	implements ConversationMessagesStore
 {
 	constructor(private readonly db: Database) {}
 

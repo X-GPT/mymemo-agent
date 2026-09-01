@@ -18,7 +18,6 @@ import type {
 	ConversationMessagesStore,
 	EnqueueTurnResult,
 	TurnRef,
-	TurnSubmissionStore,
 } from "./conversation-messages-store";
 
 const { createApp } = await import("@/app");
@@ -28,7 +27,7 @@ const identityHeaders = {
 	"x-partner-code": "partner-1",
 };
 
-function appWith(store: ConversationMessagesStore) {
+function appWith(store: Pick<ConversationMessagesStore, "getPage">) {
 	const deps = {
 		conversationMessagesStore: store,
 		exposureGate: {
@@ -171,7 +170,7 @@ const CONVERSATION_ID = "conversation-1";
 const MESSAGES_URL = `/v2/conversations/${CONVERSATION_ID}/messages`;
 
 /** The queue as chat-api sees it: rows keyed by message id, insertion-ordered. */
-class FakeTurnStore implements ConversationMessagesStore, TurnSubmissionStore {
+class FakeTurnStore implements ConversationMessagesStore {
 	readonly rows = new Map<string, { status: TurnStatus; parts: unknown }>();
 	archived = false;
 	exists = true;

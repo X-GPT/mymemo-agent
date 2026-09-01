@@ -79,10 +79,10 @@ describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
 		expect(config.gatewayTokenSecret).toBe("gateway-signing-secret");
 	});
 
-	it("reads the dev-mode In-VM server URL for the v2 message POST, trailing slash dropped", () => {
+	it("reads the dev-mode In-VM server URL for the v2 message POST", () => {
 		expect(loadApiConfigFromEnv(baseEnv()).inVmServerUrl).toBeUndefined();
 		const env = baseEnv();
-		env.IN_VM_SERVER_URL = "http://127.0.0.1:8080/";
+		env.IN_VM_SERVER_URL = "http://127.0.0.1:8080";
 		expect(loadApiConfigFromEnv(env).inVmServerUrl).toBe(
 			"http://127.0.0.1:8080",
 		);
