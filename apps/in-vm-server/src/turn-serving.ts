@@ -85,7 +85,10 @@ export async function serveOneTurn(
 	deps.currentTurn.turnId = claimed.messageId;
 	const turnKey = { userId, conversationId, messageId: claimed.messageId };
 	const assistantMessageId = randomUUID();
-	const publisher = deps.relay.openPublisher(claimed.messageId);
+	const publisher = deps.relay.openPublisher({
+		conversationId,
+		messageId: claimed.messageId,
+	});
 	const publish = async (chunk: UIMessageChunk): Promise<void> => {
 		try {
 			await publisher.publish(chunk);

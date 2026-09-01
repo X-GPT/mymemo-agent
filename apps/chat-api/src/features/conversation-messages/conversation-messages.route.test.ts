@@ -237,7 +237,10 @@ function fakeInVmServer(
 	const drain = async () => {
 		let turnId = store.claimNext();
 		while (turnId) {
-			const publisher = relay.openPublisher(turnId);
+			const publisher = relay.openPublisher({
+				conversationId: CONVERSATION_ID,
+				messageId: turnId,
+			});
 			for (const chunk of scriptedChunks(turnId)) {
 				await publisher.publish(chunk);
 				if (options.chunkDelayMs) await delay(options.chunkDelayMs);
@@ -449,7 +452,10 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 		expect(attached.status).toBe(200);
 		// The In-VM server is mid-Turn; only what it publishes from now on
 		// arrives (no backlog), and the nudge was a harmless no-op.
-		const publisher = relay.openPublisher("turn-live");
+		const publisher = relay.openPublisher({
+			conversationId: CONVERSATION_ID,
+			messageId: "turn-live",
+		});
 		await publisher.publish({ type: "text-delta", id: "t1", delta: "late" });
 		const row = store.rows.get("turn-live");
 		if (row) row.status = "done";

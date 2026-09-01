@@ -14,6 +14,7 @@ function textDelta(delta: string): unknown {
 }
 
 const FINISH = { type: "finish" } as const;
+const TURN = { conversationId: "conversation-1", messageId: "turn-1" };
 
 async function collect(events: AsyncIterable<string>): Promise<unknown[]> {
 	const collected: unknown[] = [];
@@ -28,12 +29,37 @@ export function turnLiveStreamRelayContract(
 	factory: TurnLiveStreamRelayContractFactory,
 ): void {
 	describe(`${name} Turn Live Stream relay`, () => {
+		it("keys the channel on Conversation id + message id, so a reused message id in another Conversation is a separate stream", async () => {
+			const relay = factory.create();
+			try {
+				const other = { ...TURN, conversationId: "conversation-2" };
+				const mine = collect(
+					await relay.subscribe(TURN, new AbortController().signal),
+				);
+				const theirs = collect(
+					await relay.subscribe(other, new AbortController().signal),
+				);
+				const publisher = relay.openPublisher(other);
+				await publisher.publish(textDelta("not yours"));
+				await publisher.publish(FINISH);
+				await publisher.close();
+				expect(await theirs).toEqual([textDelta("not yours"), FINISH]);
+
+				const ours = relay.openPublisher(TURN);
+				await ours.publish(FINISH);
+				await ours.close();
+				expect(await mine).toEqual([FINISH]);
+			} finally {
+				await relay.close();
+			}
+		});
+
 		it("delivers UIMessage chunks in order and ends after the terminal chunk", async () => {
 			const relay = factory.create();
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				const events = await relay.subscribe(
-					"turn-1",
+					TURN,
 					new AbortController().signal,
 				);
 				const collecting = collect(events);
@@ -63,9 +89,9 @@ export function turnLiveStreamRelayContract(
 			]) {
 				const relay = factory.create();
 				try {
-					const publisher = relay.openPublisher("turn-1");
+					const publisher = relay.openPublisher(TURN);
 					const events = await relay.subscribe(
-						"turn-1",
+						TURN,
 						new AbortController().signal,
 					);
 					const collecting = collect(events);
@@ -91,12 +117,12 @@ export function turnLiveStreamRelayContract(
 		it("has no backlog: a late subscriber misses earlier chunks", async () => {
 			const relay = factory.create();
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				await publisher.publish(textDelta("missed-1"));
 				await publisher.publish(textDelta("missed-2"));
 
 				const events = await relay.subscribe(
-					"turn-1",
+					TURN,
 					new AbortController().signal,
 				);
 				const collecting = collect(events);
@@ -113,13 +139,13 @@ export function turnLiveStreamRelayContract(
 		it("has no re-attach: after the Turn ends a subscriber sees nothing", async () => {
 			const relay = factory.create();
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				await publisher.publish(textDelta("gone"));
 				await publisher.publish(FINISH);
 				await publisher.close();
 
 				const subscriber = new AbortController();
-				const events = await relay.subscribe("turn-1", subscriber.signal);
+				const events = await relay.subscribe(TURN, subscriber.signal);
 				const collecting = collect(events);
 				setTimeout(() => subscriber.abort(), 50);
 				expect(await collecting).toEqual([]);
@@ -131,11 +157,11 @@ export function turnLiveStreamRelayContract(
 		it("ends an aborted subscriber without disturbing another", async () => {
 			const relay = factory.create();
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				const aborting = new AbortController();
 				const [abortedEvents, stayingEvents] = await Promise.all([
-					relay.subscribe("turn-1", aborting.signal),
-					relay.subscribe("turn-1", new AbortController().signal),
+					relay.subscribe(TURN, aborting.signal),
+					relay.subscribe(TURN, new AbortController().signal),
 				]);
 				const abortedCollecting = collect(abortedEvents);
 				const stayingCollecting = collect(stayingEvents);
@@ -158,9 +184,9 @@ export function turnLiveStreamRelayContract(
 		it("rejects chunks outside the stock v7 grammar and oversize chunks without failing the stream", async () => {
 			const relay = factory.create();
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				const events = await relay.subscribe(
-					"turn-1",
+					TURN,
 					new AbortController().signal,
 				);
 				const collecting = collect(events);
@@ -195,9 +221,9 @@ export function turnLiveStreamRelayContract(
 		it("accepts data-* chunks as payload", async () => {
 			const relay = factory.create();
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				const events = await relay.subscribe(
-					"turn-1",
+					TURN,
 					new AbortController().signal,
 				);
 				const collecting = collect(events);
@@ -214,7 +240,7 @@ export function turnLiveStreamRelayContract(
 		it("publishes exactly one terminal chunk as the publisher's final chunk", async () => {
 			const relay = factory.create();
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				await publisher.publish(textDelta("hello"));
 				await publisher.publish(FINISH);
 				await expect(
@@ -239,9 +265,9 @@ export function turnLiveStreamRelayContract(
 				},
 			});
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				const events = await relay.subscribe(
-					"turn-1",
+					TURN,
 					new AbortController().signal,
 				);
 				const subscriberFailure = collect(events).then(
@@ -268,9 +294,9 @@ export function turnLiveStreamRelayContract(
 		it("fails subscribers when the publisher closes without a terminal chunk", async () => {
 			const relay = factory.create();
 			try {
-				const publisher = relay.openPublisher("turn-1");
+				const publisher = relay.openPublisher(TURN);
 				const events = await relay.subscribe(
-					"turn-1",
+					TURN,
 					new AbortController().signal,
 				);
 				const subscriberFailure = collect(events).then(
@@ -288,11 +314,11 @@ export function turnLiveStreamRelayContract(
 		it("refuses new publishers and subscribers after the relay closes", async () => {
 			const relay = factory.create();
 			await relay.close();
-			expect(() => relay.openPublisher("turn-1")).toThrow(
+			expect(() => relay.openPublisher(TURN)).toThrow(
 				expect.objectContaining({ code: "relay_closed" }),
 			);
 			await expect(
-				relay.subscribe("turn-1", new AbortController().signal),
+				relay.subscribe(TURN, new AbortController().signal),
 			).rejects.toMatchObject({ code: "relay_closed" });
 		});
 	});

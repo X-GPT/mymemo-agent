@@ -102,11 +102,11 @@ async function selectTurnStatus(
 				eq(conversationMessages.userId, ref.userId),
 				eq(conversationMessages.conversationId, ref.conversationId),
 				eq(conversationMessages.messageId, ref.messageId),
-				eq(conversationMessages.role, "user"),
 			),
 		);
-	// The turn-status check makes a user row's status a non-null TurnStatus.
-	return row ? (row.status as TurnStatus) : null;
+	// The turn-status check pins an assistant row's status to NULL and a user
+	// row's to a TurnStatus, so the column alone says whether this is a Turn.
+	return (row?.status as TurnStatus | undefined) ?? null;
 }
 
 function toUiMessage(

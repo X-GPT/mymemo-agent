@@ -6,8 +6,9 @@ import {
 } from "./live-stream-events";
 import { AsyncQueue, type LiveStreamRelayTransport } from "./live-stream-relay";
 import {
+	type LiveStreamTurnKey,
 	validateLiveStreamDeployment,
-	validateLiveStreamTurnId,
+	validateLiveStreamTurnKey,
 } from "./live-stream-validation";
 import {
 	createRedisRelayTransport,
@@ -17,7 +18,9 @@ import {
 /**
  * The v2 Live Stream lane (spec #654, chunk contract amended on #658): a
  * Turn's UIMessage chunks published over the payload-agnostic relay transport
- * on a per-Turn channel. The payload grammar is the stock AI SDK v7
+ * on a per-Turn channel keyed on Conversation id + message id (the message id
+ * is client-chosen and unique only within its Conversation — #694 review).
+ * The payload grammar is the stock AI SDK v7
  * `UIMessageChunk` vocabulary (`ai@7.0.83`) — no custom chunk types; one
  * assistant UIMessage per Turn, so the stock terminal chunks ARE the Turn's
  * Outcome: `finish` (done), `abort` (interrupted), `error` (error). The lane
@@ -50,14 +53,14 @@ export interface TurnLiveStreamPublisher {
 }
 
 export interface TurnLiveStreamRelay {
-	openPublisher(turnId: string): TurnLiveStreamPublisher;
+	openPublisher(turn: LiveStreamTurnKey): TurnLiveStreamPublisher;
 	/** Subscribe to a Turn's live chunks, each a serialized UIMessage chunk
 	 * ready for SSE framing. Delivery starts at subscription time — there is
 	 * no backlog; earlier chunks are simply missed. The iteration ends after
 	 * the Turn's terminal chunk (`finish` | `abort` | `error`), or when
 	 * `signal` aborts. */
 	subscribe(
-		turnId: string,
+		turn: LiveStreamTurnKey,
 		signal: AbortSignal,
 	): Promise<AsyncIterable<string>>;
 	close(): Promise<void>;
@@ -86,12 +89,12 @@ class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 		this.#testHooks = options.testHooks;
 	}
 
-	openPublisher(turnId: string): TurnLiveStreamPublisher {
+	openPublisher(turn: LiveStreamTurnKey): TurnLiveStreamPublisher {
 		this.#assertOpen();
-		validateLiveStreamTurnId(turnId);
+		validateLiveStreamTurnKey(turn);
 		const publisher = new TransportTurnLiveStreamPublisher(
 			this.#transport,
-			this.#channel(turnId),
+			this.#channel(turn),
 			this.#testHooks,
 			() => this.#publishers.delete(publisher),
 		);
@@ -100,18 +103,18 @@ class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 	}
 
 	async subscribe(
-		turnId: string,
+		turn: LiveStreamTurnKey,
 		signal: AbortSignal,
 	): Promise<AsyncIterable<string>> {
 		this.#assertOpen();
-		validateLiveStreamTurnId(turnId);
+		validateLiveStreamTurnKey(turn);
 		const queue = new AsyncQueue<string>();
 		if (signal.aborted) {
 			queue.end();
 			return queue.iterate(async () => {});
 		}
 		const subscription = await this.#transport.subscribe(
-			this.#channel(turnId),
+			this.#channel(turn),
 			(message) => {
 				let type: unknown;
 				try {
@@ -149,8 +152,8 @@ class PubSubTurnLiveStreamRelay implements TurnLiveStreamRelay {
 		if (this.#closed) throw new LiveStreamRelayError("relay_closed");
 	}
 
-	#channel(turnId: string): string {
-		return `${this.#channelPrefix}:{${turnId}}:live`;
+	#channel(turn: LiveStreamTurnKey): string {
+		return `${this.#channelPrefix}:{${turn.conversationId}}:${turn.messageId}:live`;
 	}
 }
 

@@ -152,6 +152,7 @@ export function createDeps(
 						new URL("/nudge", config.inVmServerUrl),
 						{
 							method: "POST",
+							signal: AbortSignal.timeout(5_000),
 						},
 					);
 					if (!response.ok) {

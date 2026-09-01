@@ -24,11 +24,26 @@ export function validateLiveStreamRunId(value: string): void {
 	);
 }
 
-export function validateLiveStreamTurnId(value: string): void {
+/**
+ * A Turn's Live Stream identity. The message id is client-chosen and only
+ * unique within its Conversation (the table's primary key), so the
+ * Conversation id must be part of the channel — never the message id alone.
+ */
+export interface LiveStreamTurnKey {
+	conversationId: string;
+	messageId: string;
+}
+
+export function validateLiveStreamTurnKey(key: LiveStreamTurnKey): void {
 	validatePathSafeIdentifier(
-		value,
+		key.conversationId,
 		LIVE_STREAM_RUN_ID_MAX_LENGTH,
-		"turnId must be a path-safe Turn identifier",
+		"conversationId must be a path-safe Conversation identifier",
+	);
+	validatePathSafeIdentifier(
+		key.messageId,
+		LIVE_STREAM_RUN_ID_MAX_LENGTH,
+		"messageId must be a path-safe Turn identifier",
 	);
 }
 

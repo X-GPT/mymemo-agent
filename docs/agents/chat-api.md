@@ -182,9 +182,10 @@ Order of operations: identity → `503` while no In-VM server is configured
 before any write, on every submission) → the `queued` INSERT under the
 Conversation row lock (`404` for missing or foreign, `409` for an archived
 Conversation — the lock is the one `PATCH` archive takes, so no message slips
-in beside an Archive) → subscribe to the Turn's Live Stream lane → nudge →
-relay. Subscribing before nudging is what makes early chunks unlosable: the
-v2 lane keeps no backlog. That INSERT is chat-api's only write to
+in beside an Archive) → subscribe to the Turn's Live Stream lane (keyed on
+Conversation id + message id: the message id is client-chosen and unique only
+within its Conversation) → nudge → relay. Subscribing before nudging is what
+makes early chunks unlosable: the v2 lane keeps no backlog. That INSERT is chat-api's only write to
 `conversation_messages`; the In-VM server owns every status transition. There
 is no `409` for concurrency: a second POST is simply the next queued row, and
 its response holds with silent SSE comment keepalives (`: ping`, every 5 s)
@@ -195,10 +196,11 @@ header, each chunk as one `data:` frame exactly as the In-VM server published
 it (stock `UIMessageChunk` grammar, one assistant UIMessage per Turn), and a
 `data: [DONE]` terminator after the Turn's terminal chunk (`finish` | `abort`
 | `error` — the Outcome). A stock `useChat` needs no custom transport.
-The keepalive tick doubles as a terminal watch: if the Turn is durably
-terminal but no terminal chunk arrived (the publisher died; a restarted VM
-sweeps it `interrupted`), the stream ends with `[DONE]` and no synthesized
-chunk. A relay failure mid-stream closes the response without `[DONE]` and
+The keepalive tick doubles as a terminal watch: if two consecutive ticks find
+the Turn durably terminal with no terminal chunk arrived (the publisher died;
+a restarted VM sweeps it `interrupted` — one such read may only be the window
+between the In-VM server's Outcome commit and its terminal publish), the
+stream ends with `[DONE]` and no synthesized chunk. A relay failure mid-stream closes the response without `[DONE]` and
 without synthesizing anything; a subscribe failure answers `503` after a
 best-effort nudge so the queued Turn still runs. A nudge failure is logged
 and the response streams on — the row is durable and the In-VM server's

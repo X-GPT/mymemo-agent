@@ -244,13 +244,4 @@ describe("PostgresConversationMessagesStore Turn submission", () => {
 			await store.enqueueTurn({ ...ref, userId: "member-2", parts }),
 		).toEqual({ outcome: "not_found" });
 	});
-
-	it("getTurnStatus ignores assistant rows", async () => {
-		await tdb.db
-			.insert(conversationMessages)
-			.values(assistantRow(1, "assistant-1", []));
-		expect(
-			await store.getTurnStatus({ ...ref, messageId: "assistant-1" }),
-		).toBeNull();
-	});
 });

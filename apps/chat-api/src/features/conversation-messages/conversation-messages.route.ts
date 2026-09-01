@@ -188,10 +188,7 @@ app.post(
 		const readSignal = AbortSignal.any([c.req.raw.signal, readAbort.signal]);
 		let chunks: AsyncIterable<string>;
 		try {
-			chunks = await deps.turnLiveStreamRelay.subscribe(
-				ref.messageId,
-				readSignal,
-			);
+			chunks = await deps.turnLiveStreamRelay.subscribe(ref, readSignal);
 		} catch (error) {
 			logger.error(
 				{ ...ref, reason: classifyLiveStreamFailure(error) },
@@ -224,8 +221,12 @@ app.post(
 			// One tick does both: the SSE comment keepalive, and the terminal
 			// watch that ends a stream whose publisher died without a terminal
 			// chunk (the In-VM server restarts, sweeping the Turn `interrupted`).
-			// Ticks chain rather than overlap.
+			// Ticks chain rather than overlap. The In-VM server commits the
+			// Outcome BEFORE publishing the terminal chunk, so one terminal read
+			// may be that window; two consecutive reads mean the chunk is not
+			// coming.
 			let timer: ReturnType<typeof setTimeout> | undefined;
+			let terminalReads = 0;
 			const tick = () => {
 				timer = setTimeout(async () => {
 					try {
@@ -233,6 +234,9 @@ app.post(
 						const status =
 							await deps.conversationMessagesStore.getTurnStatus(ref);
 						if (status === null || isTerminalTurnStatus(status)) {
+							terminalReads += 1;
+						}
+						if (terminalReads >= 2) {
 							readAbort.abort();
 							return;
 						}
@@ -240,7 +244,7 @@ app.post(
 						stream.abort();
 						return;
 					}
-					tick();
+					if (!readSignal.aborted) tick();
 				}, LIVE_STREAM_KEEPALIVE_MS);
 			};
 			tick();
