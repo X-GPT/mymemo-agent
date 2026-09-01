@@ -95,10 +95,6 @@ export class TurnStreamMapper {
 		return this.#committedParts;
 	}
 
-	get terminalSeen(): boolean {
-		return this.#terminalSeen;
-	}
-
 	accept(message: SDKMessage): MapperAction[] {
 		if (this.#terminalSeen) return [];
 		switch (message.type) {

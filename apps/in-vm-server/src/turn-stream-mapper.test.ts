@@ -208,7 +208,6 @@ describe("TurnStreamMapper — the terminal", () => {
 				chunk: { type: "finish", messageMetadata: { status: "done" } },
 			},
 		]);
-		expect(mapper.terminalSeen).toBe(true);
 	});
 
 	it("maps an error result to error, discarding the Step in flight", () => {

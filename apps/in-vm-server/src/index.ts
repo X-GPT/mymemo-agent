@@ -7,8 +7,6 @@ import { loadInVmConfigFromEnv } from "./config";
 import { buildTurnQueryOptions } from "./query-options";
 import { serveOneTurn, type TurnServingDeps } from "./turn-serving";
 
-export { createApp } from "./app";
-
 // Entrypoint: the only place that reads the environment. One VM serves one
 // Conversation; `bun run src/index.ts` serves this default export locally
 // (ticket #662 — #666 bakes the server into the MicroVM image).

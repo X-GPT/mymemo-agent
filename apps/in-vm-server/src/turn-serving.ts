@@ -50,8 +50,6 @@ export interface TurnServingDeps {
 	/** The confinement bundle — static per VM (one Conversation, one cwd). */
 	queryOptions: Options;
 	logger: TurnLogger;
-	/** Seam for deterministic assistant row ids under test. */
-	createAssistantMessageId?: () => string;
 }
 
 /** Extract the prompt from the Turn's stored user UIMessage parts. */
@@ -82,7 +80,7 @@ export async function serveOneTurn(
 	if (!claimed) return null;
 
 	const turnKey = { userId, conversationId, messageId: claimed.messageId };
-	const assistantMessageId = (deps.createAssistantMessageId ?? randomUUID)();
+	const assistantMessageId = randomUUID();
 	const publisher = deps.relay.openPublisher(claimed.messageId);
 	const publish = async (chunk: UIMessageChunk): Promise<void> => {
 		try {
