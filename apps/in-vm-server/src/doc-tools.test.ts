@@ -188,6 +188,21 @@ describe("frozen Scope resolution", () => {
 			{ runId: "turn-1", operation: "search", scopeType: "collection" },
 		]);
 	});
+
+	it("pins a document Conversation's queries to its resolved summary document", async () => {
+		await seedConversation({ scope: "document", summaryId: "1001" });
+		const kb = fakeKb((text) =>
+			text.includes("content_asset") ? [{ kb_document_id: "kb-9" }] : [],
+		);
+		const { deps } = makeDeps({ kb: kb.db });
+		await call(deps, "SearchDocuments", { query: "hello" });
+		const search = kb.calls.find((c) => c.text.includes("ts_rank_cd"));
+		expect(search?.text).toContain("document_id IN");
+		expect(search?.params).toContain("kb-9");
+		expect(await auditRows()).toEqual([
+			{ runId: "turn-1", operation: "search", scopeType: "document" },
+		]);
+	});
 });
 
 describe("LoadDocuments — the Workspace docs cache", () => {
