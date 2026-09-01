@@ -78,9 +78,6 @@ capabilities — was wrong; see the amendment.
 
 ## Amendment 2026-09-01 — no shell in the VM
 
-This ADR assumed OS-sandboxed Bash as one of the CLI's confinement mechanisms.
-That assumption was false, and the shell is now denied outright.
-
 Sandbox-mode Bash cannot start in a Lambda MicroVM: bubblewrap creates
 namespaces but cannot mount `/proc`, which Claude Code's sandbox does when it
 builds its nested seccomp layer, so every Bash call fails at sandbox setup.
@@ -98,9 +95,7 @@ plus unbounded model spend on the gateway token and a DNS exfiltration path.
 rejected on the same grounds: its own documentation says it considerably
 weakens isolation.
 
-The tenant and trust boundaries are unchanged; the agent's tools are the
-cwd-scoped file tools plus the in-process document tools. Everything that
-existed to serve the shell goes with it — no bubblewrap or socat in the image,
-no bwrap smoke check, and no `sandbox` settings in the SDK options or the
-managed-settings policy tier — so restoring a shell means restoring all of it
-and remaking this security case.
+Everything that existed to serve the shell goes with it — no bubblewrap or
+socat in the image, no bwrap smoke check, and no `sandbox` settings in the SDK
+options or the managed-settings policy tier — so restoring a shell means
+restoring all of it and remaking this security case.

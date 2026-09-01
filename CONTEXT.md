@@ -2,8 +2,8 @@
 
 The MyMemo agent runtime: a chat service where each Conversation is served by
 its own AWS Lambda MicroVM running the Claude Agent SDK, with the untrusted
-model-driven tools confined inside the VM by an OS sandbox and a process trust
-boundary. Decided on ADR-0034; built to Spec #654.
+model-driven tools confined inside the VM by a process trust boundary.
+Decided on ADR-0034; built to Spec #654.
 
 ## Language
 
