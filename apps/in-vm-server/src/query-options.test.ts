@@ -109,7 +109,6 @@ describe("buildTurnQueryOptions", () => {
 			`mcp__${DOC_TOOLS_SERVER_NAME}__SearchDocuments`,
 			`mcp__${DOC_TOOLS_SERVER_NAME}__LoadDocuments`,
 		]);
-		// Denied, not merely unlisted — omission and denial read differently.
 		expect(options.disallowedTools).toEqual([
 			"Bash",
 			"BashOutput",
