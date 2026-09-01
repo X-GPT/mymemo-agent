@@ -416,11 +416,19 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   statement {
     sid = "MicrovmImageRegistration"
     actions = [
-      "lambda:CreateMicrovmImage",
       "lambda:GetMicrovmImage",
       "lambda:UpdateMicrovmImage",
     ]
     resources = ["arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:microvm-image:mymemo-agent-*"]
+  }
+
+  # CreateMicrovmImage authorizes against resource "*" — the image does not
+  # exist yet at create time (proven live: the ARN-scoped grant was denied
+  # with "on resource: *").
+  statement {
+    sid       = "MicrovmImageCreation"
+    actions   = ["lambda:CreateMicrovmImage"]
+    resources = ["*"]
   }
 
   statement {
