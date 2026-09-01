@@ -95,9 +95,16 @@ The local Compose target starts `apps/chat-api/local/index.ts`, which injects an
 ## In-VM server
 
 The trusted In-VM server (`apps/in-vm-server`, spec #654) serves one
-Conversation per process. It runs locally against Postgres + Redis until #666
-bakes it into the MicroVM image and delivers boot configuration via
-`runHookPayload`.
+Conversation per process. One configuration contract, two delivery modes:
+locally the values below are plain env vars and the server configures at
+startup (selected by `MYMEMO_CONVERSATION_ID` being present); in the MicroVM
+image (#666) the server boots unconfigured and the platform `/run` lifecycle
+hook delivers a `runHookPayload` — a JSON object of exactly these env names —
+which configures Turn serving before the platform routes any traffic. The
+image bakes only shared, non-secret environment (`WORKSPACE_DIR`,
+`SMOKE_SCRIPT`, `NODE_EXTRA_CA_CERTS`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY`);
+everything per-Conversation or secret rides the payload into the trusted
+process only.
 
 Required:
 
@@ -107,7 +114,9 @@ Required:
 - `WORKSPACE_DIR`: the Workspace — the cwd the confined file tools and sandboxed Bash act in
 - `MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL`: model access held by the trusted process — locally a direct provider base URL/key; in production the chat-api `/v2/gateway` URL and the per-Conversation gateway token, with no design change
 
-Optional: `PORT` (default `8080`), `LOG_LEVEL` (default `info`).
+Optional: `PORT` (default `8080`), `LOG_LEVEL` (default `info`) — listener
+settings read from the plain environment at process start (never the payload:
+the listener is already bound when `/run` arrives).
 
 The spawned Claude Code CLI never receives the process environment: it gets
 the credential-free allowlist built in `src/query-options.ts`, so no

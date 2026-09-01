@@ -78,10 +78,14 @@ describe("buildTurnQueryOptions", () => {
 		workspaceDir: "/workspace/conversation-1",
 		model: MODEL,
 		processEnv: trustedProcessEnv(),
+		pathToClaudeCodeExecutable: "/deps/sdk-linux-arm64/claude",
 	});
 
 	it("pins the confinement settings bundle", () => {
 		expect(options.cwd).toBe("/workspace/conversation-1");
+		expect(options.pathToClaudeCodeExecutable).toBe(
+			"/deps/sdk-linux-arm64/claude",
+		);
 		expect(options.settingSources).toEqual([]);
 		expect(options.strictMcpConfig).toBe(true);
 		expect(options.permissionMode).toBe("dontAsk");

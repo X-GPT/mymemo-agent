@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { loadInVmConfigFromEnv } from "./config";
+import { envFromRunHookPayload, loadInVmConfigFromEnv } from "./config";
 
 /** A minimal env that loads cleanly. */
 function baseEnv(): Record<string, string | undefined> {
@@ -27,8 +27,6 @@ describe("loadInVmConfigFromEnv", () => {
 			apiKey: "sk-test",
 			model: "anthropic/claude-sonnet-5",
 		});
-		expect(config.port).toBe(8080);
-		expect(config.logLevel).toBe("info");
 	});
 
 	it.each([
@@ -68,10 +66,23 @@ describe("loadInVmConfigFromEnv", () => {
 		env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS = "true";
 		expect(loadInVmConfigFromEnv(env).redisUrl).toBe("redis://127.0.0.1:6379");
 	});
+});
 
-	it("rejects a non-numeric PORT", () => {
-		const env = baseEnv();
-		env.PORT = "eighty";
-		expect(() => loadInVmConfigFromEnv(env)).toThrow(/PORT/);
+describe("envFromRunHookPayload", () => {
+	it("parses a JSON object of env-shaped keys, loadable by loadInVmConfigFromEnv", () => {
+		const payload = JSON.stringify(baseEnv());
+		const config = loadInVmConfigFromEnv(envFromRunHookPayload(payload));
+		expect(config.conversationId).toBe("conversation-1");
+	});
+
+	it.each([
+		[undefined, /runHookPayload is required/],
+		["", /runHookPayload is required/],
+		["not json", /not valid JSON/],
+		['"a string"', /JSON object/],
+		["[1,2]", /JSON object/],
+		['{"PORT":8080}', /must be a string/],
+	] as const)("rejects %p", (payload, message) => {
+		expect(() => envFromRunHookPayload(payload)).toThrow(message);
 	});
 });
