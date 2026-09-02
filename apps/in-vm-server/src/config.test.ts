@@ -9,7 +9,7 @@ function baseEnv(): Record<string, string | undefined> {
 		DB_SSL: "disable",
 		REDIS_URL: "rediss://default:secret@redis.internal:6379",
 		MYMEMO_USER_ID: "user-1",
-		MYMEMO_CONVERSATION_ID: "conversation-1",
+		MYMEMO_CONVERSATION_ID: "11111111-2222-4333-8444-555555555555",
 		WORKSPACE_DIR: "/workspace",
 		MODEL_BASE_URL: "https://openrouter.ai/api",
 		MODEL_API_KEY: "sk-test",
@@ -24,7 +24,7 @@ describe("loadInVmConfigFromEnv", () => {
 			"postgresql://reader:p@localhost:5432/mymemo_kb",
 		);
 		expect(config.userId).toBe("user-1");
-		expect(config.conversationId).toBe("conversation-1");
+		expect(config.conversationId).toBe("11111111-2222-4333-8444-555555555555");
 		expect(config.workspaceDir).toBe("/workspace");
 		expect(config.model).toEqual({
 			baseUrl: "https://openrouter.ai/api",
@@ -64,6 +64,12 @@ describe("loadInVmConfigFromEnv", () => {
 		);
 	});
 
+	it("refuses a Conversation id that is not a UUID — it doubles as the SDK session id", () => {
+		const env = baseEnv();
+		env.MYMEMO_CONVERSATION_ID = "local-conversation";
+		expect(() => loadInVmConfigFromEnv(env)).toThrow(/must be a UUID/);
+	});
+
 	it("refuses an insecure Redis URL unless the local escape hatch is set", () => {
 		const env = baseEnv();
 		env.REDIS_URL = "redis://127.0.0.1:6379";
@@ -77,7 +83,7 @@ describe("envFromRunHookPayload", () => {
 	it("parses a JSON object of env-shaped keys, loadable by loadInVmConfigFromEnv", () => {
 		const payload = JSON.stringify(baseEnv());
 		const config = loadInVmConfigFromEnv(envFromRunHookPayload(payload));
-		expect(config.conversationId).toBe("conversation-1");
+		expect(config.conversationId).toBe("11111111-2222-4333-8444-555555555555");
 	});
 
 	it.each([

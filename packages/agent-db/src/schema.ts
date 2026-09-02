@@ -264,8 +264,9 @@ export const ALL_VM_STATES = ["launching", "running", "terminated"] as const;
  * `claim_token` the claim minted so a launcher whose claim went stale and was
  * re-claimed can neither record nor release over the newer claimant. Written
  * by chat-api only (`apps/chat-api/src/features/conversation-vm/`).
- * `checkpoint_pointer` is the Checkpoint ticket's (#670) slot; nothing writes
- * it yet.
+ * `checkpoint_pointer` (#670) is the S3 key of the latest durable Checkpoint,
+ * moved by chat-api's `/v2/checkpoint` route guarded on `microvm_id`, and
+ * kept across terminate/re-claim so a rehydrate finds it.
  */
 export const conversationVm = pgTable(
 	"conversation_vm",
@@ -285,6 +286,7 @@ export const conversationVm = pgTable(
 		lastActivityAt: timestamp("last_activity_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
+		/** S3 key of the latest durable Checkpoint (`conversations/<id>/<uuid>.tar.gz`); NULL before the first. */
 		checkpointPointer: text("checkpoint_pointer"),
 	},
 	(t) => [

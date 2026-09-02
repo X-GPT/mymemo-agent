@@ -198,14 +198,14 @@ chat-api drives the Conversation's MicroVM inline in the POST handler
 (`features/conversation-vm/`); there is no orchestrator service and nothing
 runs in the background. `conversation_vm` (one row per Conversation: VM id,
 endpoint, image version, `launching | running | terminated`, last activity,
-the Checkpoint pointer slot) is both the registry and the **transactional
+the Checkpoint pointer) is both the registry and the **transactional
 launch claim**: one upsert inserts a fresh `launching` row or re-claims a
 `terminated` one (lazy rehydrate) or a `launching` one older than 2 minutes
 (the claimant died mid-launch), and returns a claim token to exactly one
 caller. That caller alone mints the per-Conversation gateway token, composes the
 `runHookPayload` (Conversation identity, agent DB, KB, and Redis URLs, the
-`/v2/gateway/<conversation>` model URL on `GATEWAY_BASE_URL`, the token, the
-model — ≤ 16 KB), calls `RunMicrovm` (AWS SDK adaptive retry, 5 attempts, the
+`/v2/gateway/<conversation>` model URL and the `/v2/checkpoint/<conversation>`
+door on `GATEWAY_BASE_URL`, the token, the model — ≤ 16 KB), calls `RunMicrovm` (AWS SDK adaptive retry, 5 attempts, the
 egress connector, the managed ingress connector, the execution role, idle
 policy 900 s / 3600 s / auto-resume, 8 h maximum duration), and records the
 VM as `running` — a write fenced on its claim token, as is the release below,
@@ -328,6 +328,55 @@ sleep 3; curl -s -i -X POST localhost:3000/v2/conversations/$ID/interrupt $H   #
 curl -s localhost:3000/v2/conversations/$ID/messages $H | jq '[.messages[] | select(.role=="user")][-1].metadata.status'   # "interrupted"
 curl -s -i -X POST localhost:3000/v2/conversations/$ID/interrupt $H   # 204: nothing processing
 ```
+
+### Checkpoint a v2 Conversation
+
+Durability across VM replacement (spec #654, #670). A Conversation's VM is
+disposable — the platform's 8 h cap, an urgent image upgrade, and a failed
+boot all end it, and the next message lazily rehydrates onto a fresh one.
+What makes that invisible is the **Checkpoint**: the Agent session
+(`~/.claude`, where the CLI keeps its transcripts, minus the `debug` and
+`shell-snapshots` scratch) and the Workspace, packed by the In-VM server as
+one gzipped tar (`apps/in-vm-server/src/checkpoint.ts`).
+
+It is **brokered through chat-api** (`features/checkpoint/`; why not S3
+directly: [ADR-0034, amendment 2026-09-02](../adr/0034-run-the-chat-loop-in-per-conversation-lambda-microvms.md#amendment-2026-09-02--checkpoints-brokered-through-chat-api)).
+`PUT /v2/checkpoint/:conversationId` (Content-Length required, 32 MiB cap — what the restore budget moves at the platform's low-end bandwidth,
+`x-mymemo-microvm-id` = the VM) stores it under
+`conversations/<conversationId>/<uuid>.tar.gz` and moves
+`conversation_vm.checkpoint_pointer`, guarded on the VM id — `409` for a VM
+the row no longer names; `GET` streams the pointed object, `204` with none,
+`404` for a dangling pointer. Both take the per-Conversation gateway token
+(now `{ conversationId, userId, exp }`), `401` opaque, `503` while MicroVM
+orchestration is not configured.
+
+In the VM the lifecycle hooks drive it. **`/suspend` is a graceful-drain
+gate**: the drain loop is paused (no new claim), the hook holds while a Turn
+is processing, and once the loop is parked with nothing in flight the full
+Checkpoint is packed and `PUT`; only then does the hook answer 200, since the
+platform snapshots right after and a suspended VM's termination fires no
+hook. A failed `PUT` answers 500 and lifts the pause, so a VM the platform
+keeps running keeps serving. **`/resume`** lifts the pause. **`/run`**
+restores before anything else — the `GET`, the unpack into HOME and the
+Workspace, then the boot sweep and the drain loop — so the VM is never ready
+with stale state, and a restore that fails fails the launch (the client's
+re-POST rehydrates again). Both hooks are registered with the platform's
+60 s maximum (`scripts/deploy/register_microvm_image.sh`); a Turn that
+outruns the suspend budget is snapshotted mid-Turn by the platform, and its
+hold settles only at the next suspend — a Checkpoint is never taken with a
+Turn in flight (what the platform does with a timed-out suspend hook is
+unverified — the first thing the real-topology pass establishes). A suspend
+that finds a Turn still `queued` once the Checkpoint lands — one that
+arrived during the hold, or was waiting behind the Turn in flight — answers
+500 and lifts the pause, rather than strand that Turn until the next
+message. A running VM's terminate writes no Checkpoint: the suspend-time
+one is the durable one.
+
+The Agent session id is the Conversation id (a UUID; the In-VM config
+asserts it), so a restored transcript is `resume`d and the rehydrated VM's
+first model call replays the earlier Turns — see
+`apps/in-vm-server/src/agent-session.ts`. No local check: the hooks fire
+only in the MicroVM.
 
 ### Admit and stream a Run
 

@@ -34,6 +34,15 @@ export interface AppHandlers {
 	 */
 	run: (body: { microvmId?: string; runHookPayload?: string }) => Promise<void>;
 	/**
+	 * The `/suspend` lifecycle hook (#670): the graceful-drain gate. Holds
+	 * while a Turn is processing, then writes the full Checkpoint; 200 only
+	 * once it landed, since the platform snapshots right after and a
+	 * suspended VM's termination fires no hook.
+	 */
+	suspend: () => Promise<void>;
+	/** The `/resume` lifecycle hook: lift the drain gate. */
+	resume: () => Promise<void>;
+	/**
 	 * In-VM acceptance checks (`GET /smoke`, image runs only): the baked
 	 * `smoke.sh`. Content-free diagnostics behind the JWE-authenticated
 	 * endpoint; absent locally, where the route does not register.
@@ -69,14 +78,17 @@ export function createApp(handlers: AppHandlers) {
 		return c.text("ok");
 	});
 
-	// ready gates the image build snapshot; resume/suspend/terminate bracket
-	// the lifecycle. 200 = proceed. (validate is not enabled at registration —
-	// see register_microvm_image.sh --hooks.) The graceful-drain suspend gate
-	// and checkpointing land with the lifecycle ticket (#670) — until then the
-	// snapshot itself preserves all state these hooks would flush.
-	app.post(`${HOOKS_BASE}/:hook{ready|resume|suspend|terminate}`, (c) =>
-		c.text("ok"),
-	);
+	// suspend/resume bracket the idle policy's snapshot; a failed suspend
+	// throws into Hono's 500 so the platform never snapshots a VM whose
+	// Checkpoint did not land.
+	app.post(`${HOOKS_BASE}/:hook{suspend|resume}`, async (c) => {
+		await handlers[c.req.param("hook") as "suspend" | "resume"]();
+		return c.text("ok");
+	});
+	// ready gates the image build snapshot; terminate is informational.
+	// 200 = proceed. (validate is not enabled at registration — see
+	// register_microvm_image.sh --hooks.)
+	app.post(`${HOOKS_BASE}/:hook{ready|terminate}`, (c) => c.text("ok"));
 
 	if (handlers.smokeScriptPath) {
 		const smokeScriptPath = handlers.smokeScriptPath;

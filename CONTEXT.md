@@ -152,8 +152,10 @@ _Avoid_: sandbox, E2B (retired)
 
 **Checkpoint**:
 The Conversation's durable state bundle — the Agent session (`~/.claude`) and
-the Workspace — written to the Conversation's S3 prefix by the In-VM server on
-the suspend and terminate hooks, and restored on boot before the VM serves.
+the Workspace — handed by the In-VM server to chat-api's `/v2/checkpoint`
+door on the suspend hook (the VM has no path to S3; chat-api writes the
+Conversation's S3 prefix and moves the pointer), and restored on boot before
+the VM serves.
 The suspend-time Checkpoint is the durable one and is always complete:
 terminating a suspended VM fires no hook. Rehydration (a fresh VM restoring
 the Checkpoint) is how Conversations survive the platform's 8-hour cap and how

@@ -89,6 +89,7 @@ describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
 		env.MICROVM_EGRESS_CONNECTOR_ARN =
 			"arn:aws:lambda:us-west-2:123:network-connector:egress";
 		env.MICROVM_EXECUTION_ROLE_ARN = "arn:aws:iam::123:role/exec";
+		env.MICROVM_CHECKPOINT_BUCKET = "checkpoints";
 		env.GATEWAY_BASE_URL = "http://alb.internal/";
 		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
 		env.GATEWAY_TOKEN_SECRET = "gateway-signing-secret";
@@ -98,6 +99,7 @@ describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
 			egressConnectorArn:
 				"arn:aws:lambda:us-west-2:123:network-connector:egress",
 			executionRoleArn: "arn:aws:iam::123:role/exec",
+			checkpointBucket: "checkpoints",
 			gatewayBaseUrl: "http://alb.internal",
 			kbDatabaseUrl: "postgresql://kb:kb@localhost:5432/mymemo_kb",
 			model: "anthropic/claude-sonnet-5",
@@ -114,6 +116,7 @@ describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
 		for (const name of [
 			"MICROVM_EGRESS_CONNECTOR_ARN",
 			"MICROVM_EXECUTION_ROLE_ARN",
+			"MICROVM_CHECKPOINT_BUCKET",
 			"GATEWAY_BASE_URL",
 			"KB_DATABASE_URL",
 			"GATEWAY_TOKEN_SECRET",

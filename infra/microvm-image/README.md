@@ -6,7 +6,7 @@ The production MicroVM image for the per-Conversation VM ([spec #654](https://gi
 
 ## Boot model
 
-The image snapshots the server **unconfigured**: it listens, answers the build's `/ready` hook, and refuses `/nudge` with 503. At `run-microvm` the platform POSTs `/aws/lambda-microvms/runtime/v1/run` with the `runHookPayload` — a JSON object of the same env keys the server reads locally (see [configuration](../../docs/agents/configuration.md)) — and the server configures Turn serving, runs the boot sweep, exec-verifies the CLI binary, and only then returns 200. The platform gates all endpoint traffic until `/run` returns, so a nudge can never reach an unconfigured VM.
+The image snapshots the server **unconfigured**: it listens, answers the build's `/ready` hook, and refuses `/nudge` with 503. At `run-microvm` the platform POSTs `/aws/lambda-microvms/runtime/v1/run` with the `runHookPayload` — a JSON object of the same env keys the server reads locally (see [configuration](../../docs/agents/configuration.md)) — and the server configures Turn serving, restores the Conversation's Checkpoint through chat-api's `/v2/checkpoint` door (#670), runs the boot sweep, exec-verifies the CLI binary, and only then returns 200. `/suspend` is the graceful-drain gate: it holds while a Turn is processing, writes the full Checkpoint (`~/.claude` + the Workspace, packed with the image's `tar`) through the same door, and answers 200 only once it landed; both hooks are registered at the platform's 60 s maximum. The platform gates all endpoint traffic until `/run` returns, so a nudge can never reach an unconfigured VM.
 
 ## Pipeline
 
@@ -34,6 +34,7 @@ PAYLOAD=$(cat <<'JSON'
  "KB_DATABASE_URL":"postgresql://…/mymemo_kb",
  "REDIS_URL":"rediss://…",
  "MODEL_BASE_URL":"http://<internal-alb-dns>/v2/gateway/<conversation>",
+ "CHECKPOINT_URL":"http://<internal-alb-dns>/v2/checkpoint/<conversation>",
  "MODEL_API_KEY":"<gateway-token>","MODEL":"<model-id>"}
 JSON
 )
@@ -65,12 +66,18 @@ curl -sS "https://$ENDPOINT/smoke"  -H "X-aws-proxy-auth: $TOKEN" -H "X-aws-prox
 #    history + the Live Stream.
 curl -sS -X POST "https://$ENDPOINT/nudge" -H "X-aws-proxy-auth: $TOKEN" -H "X-aws-proxy-port: 8080"
 
-# 5. Always terminate
+# 5. Checkpoint (#670): suspend, then confirm the pointer moved and the object
+#    exists; terminate the suspended VM and let the next nudge rehydrate.
+aws lambda-microvms suspend-microvm --region $REGION --microvm-identifier "$VM"
+# conversation_vm.checkpoint_pointer now names conversations/<conversation>/<uuid>.tar.gz
+aws s3 ls "s3://$(terraform -chdir=infra/terraform output -raw microvm_checkpoint_bucket)/conversations/<conversation>/"
+
+# 6. Always terminate
 aws lambda-microvms terminate-microvm --region $REGION --microvm-identifier "$VM"
 ```
 
 ## What stays out (by design)
 
 - Orchestration lives in chat-api (`apps/chat-api/src/features/conversation-vm/`, #669): the `conversation_vm` launch claim, `RunMicrovm` with the minted gateway token in `runHookPayload`, the per-nudge auth token, lazy rehydrate. This runbook drives the same contract by hand for spot-checks.
-- Checkpoint/rehydrate and the graceful-drain `/suspend` gate — #670; until then the platform snapshot preserves state across suspend/resume.
+- S3 access from the VM: the VM has no network path to S3, so the Checkpoint is brokered through chat-api (#670); the execution role carries no policy.
 - `--additional-os-capabilities` — omitted; nothing in the image needs elevated capabilities now that there is no sandbox to construct.

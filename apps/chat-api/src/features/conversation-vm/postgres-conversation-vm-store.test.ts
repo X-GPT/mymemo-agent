@@ -133,4 +133,49 @@ describe("PostgresConversationVmStore — the transactional launch claim", () =>
 			store.claimLaunch({ ...ref, conversationId: "missing" }),
 		).rejects.toThrow();
 	});
+
+	it("moves the Checkpoint pointer only for the VM the row names, returning the previous key", async () => {
+		await store.recordLaunched(ref, await claim(), vm);
+		expect(await store.getCheckpointPointer(ref)).toBeNull();
+
+		expect(
+			await store.swapCheckpointPointer(ref, {
+				microvmId: vm.microvmId,
+				key: "conversations/conversation-1/one.tar.gz",
+			}),
+		).toEqual({ previous: null });
+		expect(
+			await store.swapCheckpointPointer(ref, {
+				microvmId: vm.microvmId,
+				key: "conversations/conversation-1/two.tar.gz",
+			}),
+		).toEqual({ previous: "conversations/conversation-1/one.tar.gz" });
+		expect(await store.getCheckpointPointer(ref)).toBe(
+			"conversations/conversation-1/two.tar.gz",
+		);
+
+		// A retired VM (the row now names another) cannot fork the lineage.
+		expect(
+			await store.swapCheckpointPointer(ref, {
+				microvmId: "microvm-stale",
+				key: "conversations/conversation-1/three.tar.gz",
+			}),
+		).toBeNull();
+		expect(await store.getCheckpointPointer(ref)).toBe(
+			"conversations/conversation-1/two.tar.gz",
+		);
+	});
+
+	it("keeps the Checkpoint pointer across terminate and re-claim, so a rehydrate finds it", async () => {
+		await store.recordLaunched(ref, await claim(), vm);
+		await store.swapCheckpointPointer(ref, {
+			microvmId: vm.microvmId,
+			key: "conversations/conversation-1/one.tar.gz",
+		});
+		await store.markTerminated(ref, { microvmId: vm.microvmId });
+		await claim();
+		expect(await store.getCheckpointPointer(ref)).toBe(
+			"conversations/conversation-1/one.tar.gz",
+		);
+	});
 });

@@ -4,6 +4,7 @@ import { pinoLogger } from "hono-pino";
 import type { ApiConfig } from "./config/env";
 import type { AppDeps, AppEnv } from "./deps";
 import artifactRoutes from "./features/artifacts/artifacts.route";
+import checkpointRoutes from "./features/checkpoint/checkpoint.route";
 import conversationHistoryRoutes from "./features/conversation-history/conversation-history.route";
 import conversationMessagesRoutes from "./features/conversation-messages/conversation-messages.route";
 import conversationLifecycleRoutes from "./features/conversations/conversation-lifecycle.route";
@@ -34,6 +35,7 @@ export function createApp(config: ApiConfig, deps: AppDeps) {
 	app.route("/v2/conversations", conversationLifecycleRoutes);
 	app.route("/v2/conversations", conversationMessagesRoutes);
 	app.route("/v2/gateway", gatewayRoutes);
+	app.route("/v2/checkpoint", checkpointRoutes);
 
 	return app;
 }

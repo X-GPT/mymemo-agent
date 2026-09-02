@@ -57,6 +57,12 @@ export interface InVmConfig {
 		apiKey: string;
 		model: string;
 	};
+	/**
+	 * chat-api's `/v2/checkpoint/<conversation>` door (#670), delivered via
+	 * `runHookPayload`; the gateway token above authenticates it. Absent
+	 * locally, where no lifecycle hook ever fires.
+	 */
+	checkpointUrl?: string;
 }
 
 /** Parse + validate the environment into a typed config. Pure: env in, config out. */
@@ -78,6 +84,14 @@ export function loadInVmConfigFromEnv(env: Env): InVmConfig {
 	assert(userId, "MYMEMO_USER_ID is required");
 	const conversationId = env.MYMEMO_CONVERSATION_ID?.trim();
 	assert(conversationId, "MYMEMO_CONVERSATION_ID is required");
+	// The Conversation id is also the Agent session id (#670), which the SDK
+	// requires to be a UUID — chat-api mints them with crypto.randomUUID().
+	assert(
+		/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+			conversationId,
+		),
+		"MYMEMO_CONVERSATION_ID must be a UUID",
+	);
 
 	const workspaceDir = env.WORKSPACE_DIR?.trim();
 	assert(workspaceDir, "WORKSPACE_DIR is required");
@@ -100,6 +114,7 @@ export function loadInVmConfigFromEnv(env: Env): InVmConfig {
 		conversationId,
 		workspaceDir,
 		model: { baseUrl: modelBaseUrl, apiKey: modelApiKey, model },
+		checkpointUrl: env.CHECKPOINT_URL?.trim() || undefined,
 	};
 }
 

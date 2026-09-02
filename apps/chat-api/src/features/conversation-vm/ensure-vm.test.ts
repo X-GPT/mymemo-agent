@@ -67,6 +67,15 @@ class FakeVmStore implements ConversationVmStore {
 			this.row = { ...this.row, state: "terminated" };
 		}
 	}
+
+	// The Checkpoint pointer is the checkpoint route's concern (#670).
+	async getCheckpointPointer() {
+		return null;
+	}
+
+	async swapCheckpointPointer() {
+		return null;
+	}
 }
 
 function fakeControlPlane(
@@ -143,6 +152,7 @@ function ensureWith(
 			imageArn: "arn:image",
 			egressConnectorArn: "arn:egress",
 			executionRoleArn: "arn:role",
+			checkpointBucket: "checkpoints",
 			agentDatabaseUrl: "postgresql://agent:pw@db.internal/mymemo_agent",
 			kbDatabaseUrl: "postgresql://kb:pw@db.internal/mymemo_kb",
 			redisUrl: "rediss://:pw@redis.internal:6379",
@@ -175,13 +185,14 @@ describe("Ensure-VM (#669)", () => {
 			REDIS_URL: "rediss://:pw@redis.internal:6379",
 			MODEL_BASE_URL: "http://alb.internal/v2/gateway/conv-1",
 			MODEL: "anthropic/claude-sonnet-5",
+			CHECKPOINT_URL: "http://alb.internal/v2/checkpoint/conv-1",
 		});
 		expect(
 			await verifyGatewayToken(payload.MODEL_API_KEY, {
 				secret: SECRET,
 				conversationId: "conv-1",
 			}),
-		).toEqual({ ok: true });
+		).toEqual({ ok: true, userId: "member-1" });
 		expect(store.row).toMatchObject({
 			state: "running",
 			microvmId: "microvm-1",

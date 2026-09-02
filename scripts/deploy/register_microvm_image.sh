@@ -52,9 +52,12 @@ build_args=(
 	--cpu-configurations architecture=ARM_64
 	# runTimeoutInSeconds=60 (the platform max): the default is a few seconds,
 	# and the /run hook deliberately configures before answering 200 — CLI
-	# exec-verify + boot sweep through a cold connector ENI. Proven necessary
-	# live: an unset timeout terminated the VM ~3s after launch (#666).
-	--hooks 'port=8080,microvmHooks={run=ENABLED,runTimeoutInSeconds=60,resume=ENABLED,suspend=ENABLED,terminate=ENABLED},microvmImageHooks={ready=ENABLED,readyTimeoutInSeconds=300}'
+	# exec-verify + Checkpoint restore + boot sweep through a cold connector
+	# ENI. Proven necessary live: an unset timeout terminated the VM ~3s after
+	# launch (#666). suspendTimeoutInSeconds=60 for the same reason: the
+	# /suspend hook drains the Turn in flight and writes the Checkpoint before
+	# answering (#670).
+	--hooks 'port=8080,microvmHooks={run=ENABLED,runTimeoutInSeconds=60,resume=ENABLED,suspend=ENABLED,suspendTimeoutInSeconds=60,terminate=ENABLED},microvmImageHooks={ready=ENABLED,readyTimeoutInSeconds=300}'
 	--description "mymemo-agent ${sha} (In-VM server)"
 )
 

@@ -213,6 +213,24 @@ export async function upsertAssistantMessageTx(
 }
 
 /**
+ * Whether any Turn is still `queued` — the suspend hook's strand check
+ * (#670): a VM must not snapshot away with work behind it.
+ */
+export async function hasQueuedTurnsTx(
+	db: Database,
+	input: { userId: string; conversationId: string },
+): Promise<boolean> {
+	const [queued] = await db
+		.select({ messageId: conversationMessages.messageId })
+		.from(conversationMessages)
+		.where(
+			and(conversationTurns(input), eq(conversationMessages.status, "queued")),
+		)
+		.limit(1);
+	return queued !== undefined;
+}
+
+/**
  * Cancel a `queued` Turn directly to `interrupted` without it ever running —
  * `started_at` stays NULL. A Turn already claimed (or already terminal)
  * matches nothing and the call reports false.

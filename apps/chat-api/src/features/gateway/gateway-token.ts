@@ -9,8 +9,10 @@ import {
  * launch and delivers it via `runHookPayload`; the in-VM SDK presents it as its
  * API-key placeholder, and the /v2 gateway route verifies it statelessly before
  * injecting the real OpenRouter credential. The token is an HS256 JWT carrying
- * only `{ conversationId, exp }` — never a provider secret — so nothing
- * VM-bound ever holds a real credential.
+ * only `{ conversationId, userId, exp }` — never a provider secret — so nothing
+ * VM-bound ever holds a real credential. The Checkpoint route (#670) verifies
+ * the same token; its `userId` is what lets chat-api address the
+ * Conversation's `conversation_vm` row by primary key.
  */
 
 /**
@@ -22,6 +24,8 @@ export const DEFAULT_GATEWAY_TOKEN_TTL_SECONDS = 9 * 3600;
 
 export interface GatewayTokenClaims {
 	conversationId: string;
+	/** The Conversation's owner — the other half of its primary key. */
+	userId: string;
 	/** Expiry, Unix epoch seconds. */
 	exp: number;
 }
@@ -33,6 +37,7 @@ export interface GatewayTokenClaims {
  */
 export function mintGatewayToken(options: {
 	conversationId: string;
+	userId: string;
 	secret: string;
 	ttlSeconds?: number;
 }): Promise<string> {
@@ -42,6 +47,7 @@ export function mintGatewayToken(options: {
 	return sign(
 		{
 			conversationId: options.conversationId,
+			userId: options.userId,
 			exp,
 		} satisfies GatewayTokenClaims,
 		options.secret,
@@ -49,7 +55,7 @@ export function mintGatewayToken(options: {
 }
 
 export type GatewayTokenVerdict =
-	| { ok: true }
+	| { ok: true; userId: string }
 	| {
 			ok: false;
 			reason: "malformed" | "bad-signature" | "expired" | "wrong-conversation";
@@ -76,11 +82,11 @@ export async function verifyGatewayToken(
 		}
 		return { ok: false, reason: "malformed" };
 	}
-	if (typeof payload.exp !== "number") {
+	if (typeof payload.exp !== "number" || typeof payload.userId !== "string") {
 		return { ok: false, reason: "malformed" };
 	}
 	if (payload.conversationId !== options.conversationId) {
 		return { ok: false, reason: "wrong-conversation" };
 	}
-	return { ok: true };
+	return { ok: true, userId: payload.userId };
 }

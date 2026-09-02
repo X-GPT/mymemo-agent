@@ -84,7 +84,7 @@ Optional:
 - `OPENROUTER_API_KEY`: secret; the real model credential the `/v2/gateway` route injects on forwarded requests (ADR-0034). Never delivered to a VM, image, or Checkpoint. While unset the gateway route answers 503.
 - `GATEWAY_TOKEN_SECRET`: secret; HMAC key for per-Conversation gateway tokens (minted at VM launch, verified on every gateway request — both in chat-api). While unset the gateway route answers 503.
 - `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`): upstream the gateway forwards to
-- `MICROVM_IMAGE_ARN`: enables /v2 MicroVM orchestration (#669) — the registered MicroVM image `RunMicrovm` launches. While unset the v2 message POST and interrupt answer 503. When set, all of the following are required: `MICROVM_EGRESS_CONNECTOR_ARN` (the VPC egress connector), `MICROVM_EXECUTION_ROLE_ARN` (passed at `RunMicrovm`), `GATEWAY_BASE_URL` (chat-api's own origin as a VM reaches it — the internal ALB; the payload's `MODEL_BASE_URL` is its `/v2/gateway/<conversation>` route), `KB_DATABASE_URL` (secret; read solely to ride the `runHookPayload` into the VM's trusted process for the in-process document tools — chat-api never opens it), and `GATEWAY_TOKEN_SECRET`. The idle policy (900 s idle / 3600 s suspended / auto-resume) and the 8 h maximum duration are fixed in code.
+- `MICROVM_IMAGE_ARN`: enables /v2 MicroVM orchestration (#669) — the registered MicroVM image `RunMicrovm` launches. While unset the v2 message POST and interrupt answer 503. When set, all of the following are required: `MICROVM_EGRESS_CONNECTOR_ARN` (the VPC egress connector), `MICROVM_EXECUTION_ROLE_ARN` (passed at `RunMicrovm`; the role carries no policy), `MICROVM_CHECKPOINT_BUCKET` (the S3 bucket the `/v2/checkpoint` route streams Checkpoints to, under `conversations/<id>/`, #670), `GATEWAY_BASE_URL` (chat-api's own origin as a VM reaches it — the internal ALB; the payload's `MODEL_BASE_URL` is its `/v2/gateway/<conversation>` route and `CHECKPOINT_URL` its `/v2/checkpoint/<conversation>` route), `KB_DATABASE_URL` (secret; read solely to ride the `runHookPayload` into the VM's trusted process for the in-process document tools — chat-api never opens it), and `GATEWAY_TOKEN_SECRET`. The idle policy (900 s idle / 3600 s suspended / auto-resume) and the 8 h maximum duration are fixed in code.
 - `OPENROUTER_DEFAULT_MODEL` (default `anthropic/claude-sonnet-5`): the model id the In-VM server runs, delivered in the `runHookPayload`
 - `MICROVM_IMAGE_UPGRADE_URGENT` (default off): when exactly `true`, a VM whose recorded image version is not the image's latest active version is terminated and rehydrated at its next nudge instead of auto-resuming
 - `IN_VM_SERVER_URL` (local composition only, read by `apps/chat-api/local/index.ts`): the base URL of one hand-started In-VM server to nudge (and to send the interrupt command to) instead of orchestrating a MicroVM
@@ -119,9 +119,15 @@ Required:
 - `WORKSPACE_DIR`: the Workspace — the cwd the confined file tools act in
 - `MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL`: model access held by the trusted process — locally a direct provider base URL/key; in production the chat-api `/v2/gateway` URL and the per-Conversation gateway token, with no design change
 
+Production only (payload-delivered): `CHECKPOINT_URL`, chat-api's
+`/v2/checkpoint/<conversation>` door (#670), authenticated with the same
+gateway token; the `/suspend` hook writes the Checkpoint through it and the
+`/run` hook restores from it. Absent locally, where no lifecycle hook fires.
+
 Optional: `PORT` (default `8080`), `LOG_LEVEL` (default `info`) — listener
 settings read from the plain environment at process start (never the payload:
-the listener is already bound when `/run` arrives).
+the listener is already bound when `/run` arrives). `HOME` (image-level) is
+where the Agent session lives (`~/.claude`) and is part of the Checkpoint.
 
 The spawned Claude Code CLI never receives the process environment: it gets
 the credential-free allowlist built in `src/query-options.ts`, so no

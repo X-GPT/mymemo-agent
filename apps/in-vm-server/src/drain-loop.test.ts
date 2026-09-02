@@ -401,3 +401,95 @@ describe("drain loop — the interrupt command (#668)", () => {
 		await allTerminal({ "turn-1": "interrupted" });
 	});
 });
+
+describe("drain loop — the suspend hook's graceful-drain gate (#670)", () => {
+	/** A Turn whose stream parks until `release` is called. */
+	function gatedTurn(served: string[]) {
+		const gate = Promise.withResolvers<void>();
+		const query = scriptedTurnQuery(served, async (prompt) => {
+			await gate.promise;
+			return [...textStep(`echo:${prompt}`), resultSuccess()];
+		});
+		return { query, release: gate.resolve };
+	}
+
+	it("pause holds new claims while a Turn is in flight and settles at its terminal; resume drains the rest", async () => {
+		const served: string[] = [];
+		const gated = gatedTurn(served);
+		loop = startDrainLoop({
+			...makeDeps(gated.query),
+			selfHealIntervalMs: NEVER_MS,
+		});
+		await enqueue("one", "t1");
+		await enqueue("two", "t2");
+		loop.nudge();
+		await until(async () => served.length === 1, "t1 to be claimed");
+
+		let settled = false;
+		const paused = loop.pause().then(() => {
+			settled = true;
+		});
+		await Bun.sleep(50);
+		expect(settled).toBe(false);
+
+		gated.release();
+		await paused;
+		expect(await turnStatuses()).toEqual({ t1: "done", t2: "queued" });
+		// A nudge while paused claims nothing.
+		loop.nudge();
+		await Bun.sleep(50);
+		expect(served).toEqual(["one"]);
+
+		loop.resume();
+		await allTerminal({ t1: "done", t2: "done" });
+	});
+
+	it("pause on an idle loop settles at once, and a Turn queued meanwhile waits for resume", async () => {
+		const served: string[] = [];
+		loop = startDrainLoop({
+			...makeDeps(
+				scriptedTurnQuery(served, (prompt) => [
+					...textStep(`echo:${prompt}`),
+					resultSuccess(),
+				]),
+			),
+			selfHealIntervalMs: NEVER_MS,
+		});
+		await loop.pause();
+		await enqueue("one", "t1");
+		loop.nudge();
+		await Bun.sleep(50);
+		expect(await turnStatuses()).toEqual({ t1: "queued" });
+		loop.resume();
+		await allTerminal({ t1: "done" });
+	});
+
+	it("a pause outlived by resume settles only at the next hold, never mid-Turn; pause is reentrant", async () => {
+		const served: string[] = [];
+		const gated = gatedTurn(served);
+		loop = startDrainLoop({
+			...makeDeps(gated.query),
+			selfHealIntervalMs: NEVER_MS,
+		});
+		await enqueue("one", "t1");
+		loop.nudge();
+		await until(async () => served.length === 1, "t1 to be claimed");
+		const first = loop.pause();
+		const second = loop.pause();
+		loop.resume();
+		let settled = false;
+		void first.then(() => {
+			settled = true;
+		});
+		await Bun.sleep(50);
+		// Resumed, but the Turn is still in flight: no consistent moment yet.
+		expect(settled).toBe(false);
+		gated.release();
+		await allTerminal({ t1: "done" });
+		await Bun.sleep(50);
+		// The loop is open again, so the hold has no consistent moment to settle.
+		expect(settled).toBe(false);
+		await loop.pause();
+		await Promise.all([first, second]);
+	});
+});

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type {
 	Options,
 	SDKMessage,
@@ -20,8 +21,14 @@ import type { InterruptibleStream, TurnQueryFn } from "./turn-serving";
  * A session that breaks — the underlying stream throws, ends, or a Turn
  * window is abandoned before its `result` (a protocol violation or
  * persistence failure inside the caller) — is retired, and the next Turn
- * lazily starts a fresh `query()`. Model-side memory resets with it: the
- * guarantee is process-lifetime and best-effort, never durable.
+ * lazily starts a fresh `query()`.
+ *
+ * Durability (#670) comes from pinning the session id to the Conversation
+ * id (a UUID, which the SDK requires — `config.ts` asserts it): a (re)start
+ * creates the session under that id, or resumes it when its transcript is on
+ * disk — after a Checkpoint restore on a fresh VM, or
+ * after a retired session within one process — so model-side memory
+ * follows the Conversation rather than the process.
  */
 
 /** The streaming-input SDK `query()` as a seam: production passes the real
@@ -43,10 +50,21 @@ export function createAgentSession(deps: {
 	/** The confinement bundle, fixed when a session starts. The per-call
 	 * options `serveOneTurn` passes are the same object and are ignored. */
 	options: Options;
+	/** The pinned session id and whether its transcript exists right now.
+	 * Unset: an SDK-generated id, process-lifetime only. */
+	session?: { id: string; hasTranscript: () => boolean };
 }): TurnQueryFn {
 	let live: LiveSession | null = null;
 
 	function start(): LiveSession {
+		const options = deps.session
+			? {
+					...deps.options,
+					...(deps.session.hasTranscript()
+						? { resume: deps.session.id }
+						: { sessionId: deps.session.id }),
+				}
+			: deps.options;
 		// The prompt channel: at most one message is ever buffered (the DB
 		// gate admits one Turn at a time), but buffering makes push safe even
 		// before the SDK first pulls.
@@ -62,7 +80,7 @@ export function createAgentSession(deps: {
 					});
 			}
 		}
-		const stream = deps.query({ prompt: prompts(), options: deps.options });
+		const stream = deps.query({ prompt: prompts(), options });
 		return {
 			push(message) {
 				queue.push(message);
@@ -111,4 +129,17 @@ export function createAgentSession(deps: {
 		// whatever the session is generating right now, which is this window.
 		return Object.assign(window, { interrupt: () => session.interrupt() });
 	};
+}
+
+/**
+ * Whether the CLI holds a transcript for `sessionId` under `<claudeDir>/
+ * projects/<cwd key>/` — the file `resume` loads. Globbed across project
+ * keys so this never has to reproduce the CLI's cwd-to-key derivation.
+ */
+export function hasTranscript(claudeDir: string, sessionId: string): boolean {
+	if (!existsSync(claudeDir)) return false;
+	const matches = new Bun.Glob(`projects/*/${sessionId}.jsonl`).scanSync({
+		cwd: claudeDir,
+	});
+	return !matches.next().done;
 }
