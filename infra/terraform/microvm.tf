@@ -417,16 +417,14 @@ data "aws_iam_policy_document" "chat_api_microvm_control_plane" {
     }
   }
 
+  # Scoped to the one execution role and nothing else. No `iam:PassedToService`
+  # condition: with `lambda.amazonaws.com` the live RunMicrovm under this role
+  # was denied ("not authorized to perform: iam:PassRole", #669 verification),
+  # so the MicroVM control plane does not present that service key.
   statement {
     sid       = "PassMicrovmExecutionRole"
     actions   = ["iam:PassRole"]
     resources = [aws_iam_role.microvm_execution.arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values   = ["lambda.amazonaws.com"]
-    }
   }
 }
 
