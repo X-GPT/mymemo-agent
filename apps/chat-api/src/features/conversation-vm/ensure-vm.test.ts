@@ -23,6 +23,9 @@ class FakeVmStore implements ConversationVmStore {
 	row: ConversationVmRow | null = null;
 	readonly calls: string[] = [];
 
+	/** The token of the live claim; a re-claim mints a new one (the fence). */
+	claimToken = "";
+
 	async claimLaunch() {
 		this.calls.push("claimLaunch");
 		if (!this.row || this.row.state === "terminated") {
@@ -32,23 +35,30 @@ class FakeVmStore implements ConversationVmStore {
 				imageVersion: null,
 				state: "launching",
 			};
-			return "claimed" as const;
+			this.claimToken = `claim-${this.calls.length}`;
+			return this.claimToken;
 		}
 		return { ...this.row };
 	}
 
 	async recordLaunched(
 		_ref: ConversationRef,
+		claimToken: string,
 		vm: { microvmId: string; endpoint: string; imageVersion: string },
 	) {
 		this.calls.push("recordLaunched");
-		if (!this.row) throw new Error("no claim");
+		if (this.row?.state !== "launching" || claimToken !== this.claimToken) {
+			return false;
+		}
 		this.row = { ...this.row, ...vm, state: "running" };
+		return true;
 	}
 
-	async releaseClaim() {
+	async releaseClaim(_ref: ConversationRef, claimToken: string) {
 		this.calls.push("releaseClaim");
-		if (this.row) this.row = { ...this.row, state: "terminated" };
+		if (this.row?.state === "launching" && claimToken === this.claimToken) {
+			this.row = { ...this.row, state: "terminated" };
+		}
 	}
 
 	async markTerminated(_ref: ConversationRef, options: { microvmId: string }) {
@@ -214,6 +224,29 @@ describe("Ensure-VM (#669)", () => {
 		const again = ensureWith({ store });
 		await again.ensureVm(ref);
 		expect(store.row?.state).toBe("running");
+	});
+
+	it("terminates its own VM instead of recording when the claim was re-claimed mid-launch", async () => {
+		const store = new FakeVmStore();
+		const controlPlane = fakeControlPlane({
+			async run({ runHookPayload }) {
+				controlPlane.runs.push(runHookPayload);
+				// The launch outlasted the stale window: another caller re-claimed.
+				store.claimToken = "claim-newer";
+				return {
+					microvmId: "microvm-slow",
+					endpoint: "slow.example",
+					imageVersion: "7",
+				};
+			},
+		});
+		const { ensureVm } = ensureWith({ store, controlPlane });
+
+		await ensureVm(ref);
+
+		expect(controlPlane.terminated).toEqual(["microvm-slow"]);
+		expect(store.row).toMatchObject({ state: "launching", microvmId: null });
+		expect(store.calls).toEqual(["claimLaunch", "recordLaunched"]);
 	});
 
 	it("does nothing while another caller's fresh launching claim is in flight", async () => {

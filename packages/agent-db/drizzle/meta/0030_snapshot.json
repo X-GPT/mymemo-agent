@@ -1,5 +1,5 @@
 {
-  "id": "3de78b63-b52b-4bde-bfd3-44056ad05bfe",
+  "id": "69bdb68e-bbb7-4bd2-97e3-ccc8c6d0d634",
   "prevId": "c3c14236-c4b2-4285-b4e2-47a76fe9b4f5",
   "version": "7",
   "dialect": "postgresql",
@@ -740,6 +740,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "claim_token": {
+          "name": "claim_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "last_activity_at": {
           "name": "last_activity_at",

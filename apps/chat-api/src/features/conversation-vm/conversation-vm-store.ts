@@ -21,20 +21,26 @@ export interface ConversationVmRow {
 
 export interface ConversationVmStore {
 	/**
-	 * The launch claim: `"claimed"` when this caller now owns a `launching` row
-	 * (a fresh Conversation, a rehydrate from `terminated`, or a `launching`
-	 * claim older than two minutes whose claimant died mid-launch); otherwise
-	 * the row the Conversation already holds, which the caller must not launch
-	 * for.
+	 * The launch claim: a claim token when this caller now owns a `launching`
+	 * row (a fresh Conversation, a rehydrate from `terminated`, or a
+	 * `launching` claim older than two minutes whose claimant went quiet);
+	 * otherwise the row the Conversation already holds, which the caller must
+	 * not launch for. The token fences the two writes below, so a launcher
+	 * whose claim was re-claimed while it was still launching cannot record
+	 * over, or release, the newer claimant.
 	 */
-	claimLaunch(ref: ConversationRef): Promise<"claimed" | ConversationVmRow>;
-	/** Record the `RunMicrovm` result: `launching` → `running` in one write. */
+	claimLaunch(ref: ConversationRef): Promise<string | ConversationVmRow>;
+	/**
+	 * Record the `RunMicrovm` result: `launching` → `running` in one write.
+	 * False when the claim was superseded — the caller must retire its VM.
+	 */
 	recordLaunched(
 		ref: ConversationRef,
+		claimToken: string,
 		vm: { microvmId: string; endpoint: string; imageVersion: string },
-	): Promise<void>;
-	/** A launch that failed: hand the claim back (`launching` → `terminated`). */
-	releaseClaim(ref: ConversationRef): Promise<void>;
+	): Promise<boolean>;
+	/** A launch that failed: hand this claim back (`launching` → `terminated`). */
+	releaseClaim(ref: ConversationRef, claimToken: string): Promise<void>;
 	/**
 	 * The VM is gone or being retired (8 h cap, failed boot, urgent upgrade):
 	 * `running` → `terminated`, guarded on `microvmId` so a newer VM is never

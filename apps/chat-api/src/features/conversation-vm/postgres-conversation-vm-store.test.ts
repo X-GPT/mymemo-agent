@@ -40,28 +40,43 @@ async function row() {
 	return found;
 }
 
+/** Claim, asserting this caller won; returns the claim token. */
+async function claim(): Promise<string> {
+	const result = await store.claimLaunch(ref);
+	if (typeof result !== "string") throw new Error("expected to win the claim");
+	return result;
+}
+
+async function ageClaim() {
+	await tdb.db
+		.update(conversationVm)
+		.set({ lastActivityAt: sql`now() - interval '3 minutes'` });
+}
+
 describe("PostgresConversationVmStore — the transactional launch claim", () => {
 	it("claims a fresh Conversation once; the second claimant sees the launching row", async () => {
-		expect(await store.claimLaunch(ref)).toBe("claimed");
-		const second = await store.claimLaunch(ref);
-		expect(second).toMatchObject({ state: "launching", microvmId: null });
+		await claim();
+		expect(await store.claimLaunch(ref)).toMatchObject({
+			state: "launching",
+			microvmId: null,
+		});
 	});
 
 	it("records the launch as running and hands later claimants the VM", async () => {
-		await store.claimLaunch(ref);
-		await store.recordLaunched(ref, vm);
+		const token = await claim();
+		expect(await store.recordLaunched(ref, token, vm)).toBe(true);
 		expect(await store.claimLaunch(ref)).toMatchObject({
 			state: "running",
 			...vm,
 		});
+		expect((await row())?.claimToken).toBeNull();
 	});
 
 	it("re-claims a terminated row (rehydrate) and clears the old VM", async () => {
-		await store.claimLaunch(ref);
-		await store.recordLaunched(ref, vm);
+		await store.recordLaunched(ref, await claim(), vm);
 		await store.markTerminated(ref, { microvmId: vm.microvmId });
 		expect((await row())?.state).toBe("terminated");
-		expect(await store.claimLaunch(ref)).toBe("claimed");
+		await claim();
 		expect(await row()).toMatchObject({
 			state: "launching",
 			microvmId: null,
@@ -71,26 +86,44 @@ describe("PostgresConversationVmStore — the transactional launch claim", () =>
 	});
 
 	it("re-claims a stale launching claim but not a fresh one", async () => {
-		await store.claimLaunch(ref);
-		expect(await store.claimLaunch(ref)).not.toBe("claimed");
-		await tdb.db
-			.update(conversationVm)
-			.set({ lastActivityAt: sql`now() - interval '3 minutes'` });
-		expect(await store.claimLaunch(ref)).toBe("claimed");
+		await claim();
+		expect(typeof (await store.claimLaunch(ref))).not.toBe("string");
+		await ageClaim();
+		await claim();
 		// The re-claim is a fresh claim: the next caller waits again.
-		expect(await store.claimLaunch(ref)).not.toBe("claimed");
+		expect(typeof (await store.claimLaunch(ref))).not.toBe("string");
+	});
+
+	it("fences record and release on the claim token: a superseded launcher cannot touch the newer claim", async () => {
+		const stale = await claim();
+		await ageClaim();
+		const fresh = await claim();
+
+		expect(await store.recordLaunched(ref, stale, vm)).toBe(false);
+		await store.releaseClaim(ref, stale);
+		expect(await row()).toMatchObject({
+			state: "launching",
+			claimToken: fresh,
+			microvmId: null,
+		});
+
+		expect(
+			await store.recordLaunched(ref, fresh, { ...vm, microvmId: "microvm-2" }),
+		).toBe(true);
+		expect(await row()).toMatchObject({
+			state: "running",
+			microvmId: "microvm-2",
+		});
 	});
 
 	it("releaseClaim hands a failed launch back immediately", async () => {
-		await store.claimLaunch(ref);
-		await store.releaseClaim(ref);
+		await store.releaseClaim(ref, await claim());
 		expect((await row())?.state).toBe("terminated");
-		expect(await store.claimLaunch(ref)).toBe("claimed");
+		await claim();
 	});
 
 	it("markTerminated is guarded on the VM id, so a newer VM survives a stale report", async () => {
-		await store.claimLaunch(ref);
-		await store.recordLaunched(ref, vm);
+		await store.recordLaunched(ref, await claim(), vm);
 		await store.markTerminated(ref, { microvmId: "microvm-old" });
 		expect((await row())?.state).toBe("running");
 	});

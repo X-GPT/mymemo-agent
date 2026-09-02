@@ -52,12 +52,12 @@ export function createEnsureVm({
 }: EnsureVmDeps): EnsureVm {
 	return (ref, logger) => {
 		/** This caller owns the `launching` claim: mint, launch, record. */
-		async function launch(): Promise<void> {
+		async function launch(claimToken: string): Promise<void> {
 			const gatewayToken = await mintGatewayToken({
 				conversationId: ref.conversationId,
 				secret: config.gatewayTokenSecret,
 			});
-			// The platform caps the payload at 4 KB; its own validation rejects
+			// The platform caps the payload (16 KB); its own validation rejects
 			// an oversize one into the catch below.
 			const vm = await controlPlane
 				.run({
@@ -78,7 +78,7 @@ export function createEnsureVm({
 					// succeeded on the platform but failed to answer leaves an orphan
 					// the idle policy winds down — accepted; the orphan sweeper is
 					// deferred.
-					await store.releaseClaim(ref).catch((releaseError) => {
+					await store.releaseClaim(ref, claimToken).catch((releaseError) => {
 						logger.error(
 							{ ...ref, err: releaseError },
 							"VM claim release failed",
@@ -90,7 +90,19 @@ export function createEnsureVm({
 					);
 					throw new VmUnavailableError(error);
 				});
-			await store.recordLaunched(ref, vm);
+			if (!(await store.recordLaunched(ref, claimToken, vm))) {
+				// This claim went stale (the launch outlasted the two-minute window)
+				// and another caller re-claimed and launched: theirs serves the
+				// queue, so retire ours instead of leaving two VMs draining it.
+				logger.warn({ ...ref, ...vm }, "launch superseded; terminating");
+				await controlPlane.terminate(vm.microvmId).catch((error) => {
+					logger.error(
+						{ ...ref, ...vm, err: error },
+						"terminate of the superseded VM failed; orphan",
+					);
+				});
+				return;
+			}
 			logger.info({ ...ref, ...vm }, "MicroVM launched");
 			// No nudge: the In-VM server's drain loop starts inside the /run hook and
 			// consumes the queue itself, and the platform holds endpoint traffic
@@ -142,7 +154,7 @@ export function createEnsureVm({
 
 		async function ensure(rehydrated: boolean) {
 			const claim = await store.claimLaunch(ref);
-			if (claim === "claimed") return launch();
+			if (typeof claim === "string") return launch(claim);
 			// Another caller holds a fresh `launching` claim: its VM's boot drains
 			// the queue, this Turn included. (`terminated` here means that launch
 			// just failed between the claim and the read; the client's idempotent

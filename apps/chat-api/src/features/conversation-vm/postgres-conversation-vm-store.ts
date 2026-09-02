@@ -11,9 +11,8 @@ import type {
 export class PostgresConversationVmStore implements ConversationVmStore {
 	constructor(private readonly db: Database) {}
 
-	async claimLaunch(
-		ref: ConversationRef,
-	): Promise<"claimed" | ConversationVmRow> {
+	async claimLaunch(ref: ConversationRef): Promise<string | ConversationVmRow> {
+		const claimToken = crypto.randomUUID();
 		// One statement is the whole claim. The insert wins a fresh Conversation;
 		// on conflict the update re-claims only a `terminated` row (rehydrate) or
 		// a `launching` one whose claimant went quiet (chat-api died mid-launch).
@@ -22,11 +21,12 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 		// claim, which the WHERE refuses — exactly one row comes back.
 		const claimed = await this.db
 			.insert(conversationVm)
-			.values({ ...ref, state: "launching" })
+			.values({ ...ref, state: "launching", claimToken })
 			.onConflictDoUpdate({
 				target: [conversationVm.userId, conversationVm.conversationId],
 				set: {
 					state: "launching",
+					claimToken,
 					microvmId: null,
 					endpoint: null,
 					imageVersion: null,
@@ -35,7 +35,7 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 				setWhere: sql`${conversationVm.state} = 'terminated' or (${conversationVm.state} = 'launching' and ${conversationVm.lastActivityAt} < now() - interval '2 minutes')`,
 			})
 			.returning({ userId: conversationVm.userId });
-		if (claimed.length > 0) return "claimed";
+		if (claimed.length > 0) return claimToken;
 		const [row] = await this.db
 			.select({
 				microvmId: conversationVm.microvmId,
@@ -55,19 +55,27 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 
 	async recordLaunched(
 		ref: ConversationRef,
+		claimToken: string,
 		vm: { microvmId: string; endpoint: string; imageVersion: string },
-	): Promise<void> {
-		await this.db
+	): Promise<boolean> {
+		const recorded = await this.db
 			.update(conversationVm)
-			.set({ ...vm, state: "running", lastActivityAt: sql`now()` })
-			.where(and(this.owned(ref), eq(conversationVm.state, "launching")));
+			.set({
+				...vm,
+				state: "running",
+				claimToken: null,
+				lastActivityAt: sql`now()`,
+			})
+			.where(this.claimed(ref, claimToken))
+			.returning({ userId: conversationVm.userId });
+		return recorded.length > 0;
 	}
 
-	async releaseClaim(ref: ConversationRef): Promise<void> {
+	async releaseClaim(ref: ConversationRef, claimToken: string): Promise<void> {
 		await this.db
 			.update(conversationVm)
-			.set({ state: "terminated" })
-			.where(and(this.owned(ref), eq(conversationVm.state, "launching")));
+			.set({ state: "terminated", claimToken: null })
+			.where(this.claimed(ref, claimToken));
 	}
 
 	async markTerminated(
@@ -84,6 +92,15 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 					eq(conversationVm.microvmId, options.microvmId),
 				),
 			);
+	}
+
+	/** This caller's own `launching` claim — the fence for record and release. */
+	private claimed(ref: ConversationRef, claimToken: string) {
+		return and(
+			this.owned(ref),
+			eq(conversationVm.state, "launching"),
+			eq(conversationVm.claimToken, claimToken),
+		);
 	}
 
 	private owned(ref: ConversationRef) {

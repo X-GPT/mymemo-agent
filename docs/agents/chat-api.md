@@ -201,14 +201,17 @@ endpoint, image version, `launching | running | terminated`, last activity,
 the Checkpoint pointer slot) is both the registry and the **transactional
 launch claim**: one upsert inserts a fresh `launching` row or re-claims a
 `terminated` one (lazy rehydrate) or a `launching` one older than 2 minutes
-(the claimant died mid-launch), and returns a row to exactly one caller. That
-caller alone mints the per-Conversation gateway token, composes the
+(the claimant died mid-launch), and returns a claim token to exactly one
+caller. That caller alone mints the per-Conversation gateway token, composes the
 `runHookPayload` (Conversation identity, agent DB, KB, and Redis URLs, the
 `/v2/gateway/<conversation>` model URL on `GATEWAY_BASE_URL`, the token, the
-model — ≤ 4 KB), calls `RunMicrovm` (AWS SDK adaptive retry, 5 attempts, the
+model — ≤ 16 KB), calls `RunMicrovm` (AWS SDK adaptive retry, 5 attempts, the
 egress connector, the managed ingress connector, the execution role, idle
 policy 900 s / 3600 s / auto-resume, 8 h maximum duration), and records the
-VM as `running`. It does not nudge: the In-VM server's drain loop starts
+VM as `running` — a write fenced on its claim token, as is the release below,
+so a launcher whose claim outlived the stale window and was re-claimed
+cannot record over the newer claimant; it terminates the VM it just launched
+instead. It does not nudge: the In-VM server's drain loop starts
 inside the `/run` hook and consumes the queue itself. A launch that fails
 after retries releases the claim (`terminated`, immediately re-claimable) and
 answers `503` with `Retry-After: 5`; the Turn is durable, so the client's

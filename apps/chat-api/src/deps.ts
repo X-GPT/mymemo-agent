@@ -154,6 +154,7 @@ export function createDeps(
 			? createEnsureVm({
 					store: new PostgresConversationVmStore(database),
 					controlPlane: createLambdaMicrovmControlPlane({
+						// AWS_REGION — the one region everything in this stack shares.
 						region: config.artifactRegion,
 						...config.microvm,
 					}),

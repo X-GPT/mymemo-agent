@@ -5,6 +5,7 @@ CREATE TABLE "conversation_vm" (
 	"endpoint" text,
 	"image_version" text,
 	"state" text NOT NULL,
+	"claim_token" text,
 	"last_activity_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"checkpoint_pointer" text,
 	CONSTRAINT "conversation_vm_user_id_conversation_id_pk" PRIMARY KEY("user_id","conversation_id"),

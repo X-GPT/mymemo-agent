@@ -260,9 +260,12 @@ export const ALL_VM_STATES = ["launching", "running", "terminated"] as const;
  * mid-launch), returns a row to exactly one caller — the only caller allowed
  * to invoke `RunMicrovm`, which the platform cannot make idempotent per
  * Conversation. `launching` rows never carry a `microvm_id`; recording the
- * launch flips the row to `running` in the same write. Written by chat-api
- * only (`apps/chat-api/src/features/conversation-vm/`). `checkpoint_pointer`
- * is the Checkpoint ticket's (#670) slot; nothing writes it yet.
+ * launch flips the row to `running` in the same write, fenced on the
+ * `claim_token` the claim minted so a launcher whose claim went stale and was
+ * re-claimed can neither record nor release over the newer claimant. Written
+ * by chat-api only (`apps/chat-api/src/features/conversation-vm/`).
+ * `checkpoint_pointer` is the Checkpoint ticket's (#670) slot; nothing writes
+ * it yet.
  */
 export const conversationVm = pgTable(
 	"conversation_vm",
@@ -276,6 +279,8 @@ export const conversationVm = pgTable(
 		/** The image version `RunMicrovm` answered with — what a rehydrate upgrades. */
 		imageVersion: text("image_version"),
 		state: text("state").notNull(),
+		/** The launch claim's fence: minted by the claim, matched by the launch record and release. */
+		claimToken: text("claim_token"),
 		/** Claim time while `launching` (the stale-claim window); launch time while `running`. */
 		lastActivityAt: timestamp("last_activity_at", { withTimezone: true })
 			.notNull()

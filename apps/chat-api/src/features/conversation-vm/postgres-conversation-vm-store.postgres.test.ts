@@ -51,15 +51,16 @@ describe.skipIf(!RUN)("conversation_vm launch claim under concurrency", () => {
 		const results = await Promise.all(
 			Array.from({ length: 12 }, () => store.claimLaunch(ref)),
 		);
-		expect(results.filter((r) => r === "claimed")).toHaveLength(1);
-		for (const lost of results.filter((r) => r !== "claimed")) {
+		expect(results.filter((r) => typeof r === "string")).toHaveLength(1);
+		for (const lost of results.filter((r) => typeof r !== "string")) {
 			expect(lost).toMatchObject({ state: "launching", microvmId: null });
 		}
 	});
 
 	it("gives exactly one of many concurrent rehydrators the re-claim", async () => {
-		await store.claimLaunch(ref);
-		await store.recordLaunched(ref, {
+		const token = await store.claimLaunch(ref);
+		if (typeof token !== "string") throw new Error("expected the claim");
+		await store.recordLaunched(ref, token, {
 			microvmId: "microvm-old",
 			endpoint: "old.example",
 			imageVersion: "1",
@@ -68,6 +69,6 @@ describe.skipIf(!RUN)("conversation_vm launch claim under concurrency", () => {
 		const results = await Promise.all(
 			Array.from({ length: 12 }, () => store.claimLaunch(ref)),
 		);
-		expect(results.filter((r) => r === "claimed")).toHaveLength(1);
+		expect(results.filter((r) => typeof r === "string")).toHaveLength(1);
 	});
 });

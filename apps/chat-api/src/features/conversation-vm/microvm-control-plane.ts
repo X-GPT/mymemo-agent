@@ -99,7 +99,6 @@ export function createLambdaMicrovmControlPlane(
 				new CreateMicrovmAuthTokenCommand({
 					microvmIdentifier: microvmId,
 					expirationInMinutes: 5, // every nudge mints its own token
-
 					allowedPorts: [{ port: IN_VM_SERVER_PORT }],
 				}),
 			);
