@@ -12,6 +12,7 @@ import {
 	type TurnLiveStreamRelay,
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
+import pino from "pino";
 import type { ApiConfig } from "./config/env";
 import type { HarnessChatAgentFactory } from "./features/ai-chat/harness-chat-agent";
 import {
@@ -28,6 +29,12 @@ import type { ConversationMessagesStore } from "./features/conversation-messages
 import { PostgresConversationMessagesStore } from "./features/conversation-messages/postgres-conversation-messages-store";
 import type { ConversationStore } from "./features/conversation-store/conversation-store";
 import { PostgresConversationStore } from "./features/conversation-store/postgres-conversation-store";
+import {
+	createEnsureVm,
+	type EnsureVm,
+} from "./features/conversation-vm/ensure-vm";
+import { createLambdaMicrovmControlPlane } from "./features/conversation-vm/microvm-control-plane";
+import { PostgresConversationVmStore } from "./features/conversation-vm/postgres-conversation-vm-store";
 import type { InternalIdentity } from "./features/conversations/conversations.schema";
 import {
 	createExposureGate,
@@ -69,11 +76,11 @@ export interface AppDeps {
 	/** The v2 per-Turn UIMessage lane (#658) the message POST subscribes to. */
 	turnLiveStreamRelay: TurnLiveStreamRelay;
 	/**
-	 * Ensure-VM + nudge for one Conversation (#667). Undefined = not configured,
-	 * so the v2 message POST answers 503. Today a dev-mode stub over
-	 * `IN_VM_SERVER_URL`; the orchestration ticket replaces it.
+	 * Ensure-VM for one Conversation (#669): claim, launch or rehydrate the
+	 * Conversation's MicroVM, and nudge it. Undefined = MicroVM orchestration
+	 * is not configured, so the v2 message POST answers 503.
 	 */
-	nudgeInVmServer?: () => Promise<void>;
+	ensureVm?: EnsureVm;
 	/** Cardinality-safe, payload-free Live Stream relay observability. */
 	liveStreamTelemetry: LiveStreamTelemetry;
 	/** Close the lazy Redis relay clients during service shutdown. */
@@ -144,30 +151,29 @@ export function createDeps(
 		runStore,
 		liveStreamRelay,
 		turnLiveStreamRelay,
-		// ponytail: one config-provided In-VM server, nudged by URL; the
-		// orchestration ticket swaps in per-Conversation MicroVM launch here.
-		nudgeInVmServer: config.inVmServerUrl
-			? async () => {
-					const response = await fetch(
-						new URL("/nudge", config.inVmServerUrl),
-						{
-							method: "POST",
-							// A real MicroVM endpoint authenticates with the platform's
-							// per-VM token and routes by port (the image listens on 8080).
-							headers: config.inVmServerAuthToken
-								? {
-										"x-aws-proxy-auth": config.inVmServerAuthToken,
-										"x-aws-proxy-port": "8080",
-									}
-								: {},
-							signal: AbortSignal.timeout(5_000),
+		ensureVm:
+			config.microvm && config.gatewayTokenSecret
+				? createEnsureVm({
+						store: new PostgresConversationVmStore(database),
+						controlPlane: createLambdaMicrovmControlPlane({
+							region: config.artifactRegion,
+							imageArn: config.microvm.imageArn,
+							egressConnectorArn: config.microvm.egressConnectorArn,
+							executionRoleArn: config.microvm.executionRoleArn,
+						}),
+						payload: {
+							agentDatabaseUrl: config.databaseUrl,
+							kbDatabaseUrl: config.microvm.kbDatabaseUrl,
+							redisUrl: config.redisUrl,
+							gatewayBaseUrl: config.microvm.gatewayBaseUrl,
+							model: config.microvm.model,
 						},
-					);
-					if (!response.ok) {
-						throw new Error(`nudge answered ${response.status}`);
-					}
-				}
-			: undefined,
+						gatewayTokenSecret: config.gatewayTokenSecret,
+						upgradeUrgent: config.microvm.upgradeUrgent,
+						fetch,
+						logger: pino({ level: config.logLevel }),
+					})
+				: undefined,
 		liveStreamTelemetry,
 		closeLiveResources: async () => {
 			await Promise.all([liveStreamRelay.close(), turnLiveStreamRelay.close()]);

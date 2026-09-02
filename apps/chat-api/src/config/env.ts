@@ -70,25 +70,47 @@ export interface ApiConfig {
 	 */
 	gatewayTokenSecret?: string;
 	/**
-	 * Dev-mode Ensure-VM stub (ticket #667): the base URL of one locally
-	 * running In-VM server that `POST /v2/conversations/:id/messages` nudges.
-	 * The orchestration ticket replaces it with per-Conversation MicroVM
-	 * launch. While unset the v2 message POST answers 503.
+	 * Per-Conversation MicroVM orchestration (ADR-0034, #669). Present when
+	 * `MICROVM_IMAGE_ARN` is set, in which case every other field is required
+	 * and `gatewayTokenSecret` must be set too — the VM's only model access is
+	 * the gateway token the launch mints. While absent the v2 message POST
+	 * answers 503 and every other surface serves normally.
 	 */
-	inVmServerUrl?: string;
+	microvm?: MicrovmConfig;
+}
+
+export interface MicrovmConfig {
+	/** The registered MicroVM image (`MICROVM_IMAGE_ARN`). */
+	imageArn: string;
+	/** The VPC egress connector VMs run behind (`MICROVM_EGRESS_CONNECTOR_ARN`). */
+	egressConnectorArn: string;
+	/** The execution role passed at `RunMicrovm` (`MICROVM_EXECUTION_ROLE_ARN`). */
+	executionRoleArn: string;
 	/**
-	 * With `inVmServerUrl` pointing at a real MicroVM endpoint: the platform's
-	 * per-VM auth token (`CreateMicrovmAuthToken`), sent as `X-aws-proxy-auth`
-	 * on the nudge. Unset for a plain local In-VM server.
+	 * chat-api's own origin as the VM reaches it (`GATEWAY_BASE_URL`, the
+	 * internal ALB); the payload's `MODEL_BASE_URL` is its `/v2/gateway` route.
 	 */
-	inVmServerAuthToken?: string;
+	gatewayBaseUrl: string;
+	/**
+	 * Read-only `mymemo_kb` URL (`KB_DATABASE_URL`) — read here solely to ride
+	 * the `runHookPayload` into the trusted in-VM process for its document
+	 * tools; chat-api itself never opens it.
+	 */
+	kbDatabaseUrl: string;
+	/** Model id the In-VM server runs (`OPENROUTER_DEFAULT_MODEL`). */
+	model: string;
+	/**
+	 * `MICROVM_IMAGE_UPGRADE_URGENT=true`: a VM on a stale image is terminated
+	 * and rehydrated at its next nudge instead of auto-resuming (#650).
+	 */
+	upgradeUrgent: boolean;
 }
 
 /**
  * Parse + validate the environment into a typed config. Pure: env in, config
- * out. Worker-only secrets (KB, E2B) are intentionally not read here; the
- * OpenRouter credential is read for the /v2 gateway (ADR-0034) and nothing
- * else.
+ * out. The E2B secret is never read here; the OpenRouter credential is read
+ * for the /v2 gateway (ADR-0034) and the KB URL only to hand to a MicroVM's
+ * trusted process at launch — neither for chat-api's own use.
  */
 export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	// The conversation registry is the primary surface and cannot work without a
@@ -112,6 +134,43 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	const statsigServerSecret = env.STATSIG_SERVER_SECRET?.trim();
 	assert(statsigServerSecret, "STATSIG_SERVER_SECRET is required");
 
+	const gatewayTokenSecret = env.GATEWAY_TOKEN_SECRET?.trim() || undefined;
+	let microvm: MicrovmConfig | undefined;
+	const imageArn = env.MICROVM_IMAGE_ARN?.trim();
+	if (imageArn) {
+		const egressConnectorArn = env.MICROVM_EGRESS_CONNECTOR_ARN?.trim();
+		assert(
+			egressConnectorArn,
+			"MICROVM_EGRESS_CONNECTOR_ARN is required with MICROVM_IMAGE_ARN",
+		);
+		const executionRoleArn = env.MICROVM_EXECUTION_ROLE_ARN?.trim();
+		assert(
+			executionRoleArn,
+			"MICROVM_EXECUTION_ROLE_ARN is required with MICROVM_IMAGE_ARN",
+		);
+		const gatewayBaseUrl = env.GATEWAY_BASE_URL?.trim().replace(/\/+$/, "");
+		assert(
+			gatewayBaseUrl,
+			"GATEWAY_BASE_URL is required with MICROVM_IMAGE_ARN",
+		);
+		const kbDatabaseUrl = env.KB_DATABASE_URL?.trim();
+		assert(kbDatabaseUrl, "KB_DATABASE_URL is required with MICROVM_IMAGE_ARN");
+		assert(
+			gatewayTokenSecret,
+			"GATEWAY_TOKEN_SECRET is required with MICROVM_IMAGE_ARN",
+		);
+		microvm = {
+			imageArn,
+			egressConnectorArn,
+			executionRoleArn,
+			gatewayBaseUrl,
+			kbDatabaseUrl,
+			model:
+				env.OPENROUTER_DEFAULT_MODEL?.trim() || "anthropic/claude-sonnet-5",
+			upgradeUrgent: env.MICROVM_IMAGE_UPGRADE_URGENT === "true",
+		};
+	}
+
 	return {
 		logLevel: env.LOG_LEVEL || "info",
 		databaseUrl,
@@ -125,8 +184,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		openrouterApiKey: env.OPENROUTER_API_KEY?.trim() || undefined,
 		openrouterBaseUrl:
 			env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api",
-		gatewayTokenSecret: env.GATEWAY_TOKEN_SECRET?.trim() || undefined,
-		inVmServerUrl: env.IN_VM_SERVER_URL?.trim() || undefined,
-		inVmServerAuthToken: env.IN_VM_SERVER_AUTH_TOKEN?.trim() || undefined,
+		gatewayTokenSecret,
+		microvm,
 	};
 }

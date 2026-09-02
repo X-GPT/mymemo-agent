@@ -104,17 +104,22 @@ describe("agent-maintenance infrastructure", () => {
 
 		// OPENROUTER moved from forbidden to required for chat-api: the /v2
 		// gateway route injects the key in-process (spec #654, ticket #660).
-		for (const forbidden of ["E2B", "KB_DATABASE_URL"]) {
-			expect(chatApi).not.toContain(forbidden);
-			expect(chatApiSecretPolicy).not.toContain(forbidden);
+		// KB_DATABASE_URL followed for MicroVM orchestration (#669): chat-api
+		// places it in the runHookPayload for the VM's trusted process and never
+		// opens it itself. E2B stays forbidden everywhere; the migration task
+		// gets neither.
+		expect(chatApi).not.toContain("E2B");
+		expect(chatApiSecretPolicy).not.toContain("E2B");
+		for (const forbidden of ["E2B", "KB_DATABASE_URL", "OPENROUTER"]) {
 			expect(migrationSecretPolicy).not.toContain(forbidden);
 		}
-		expect(migrationSecretPolicy).not.toContain("OPENROUTER");
+		expect(chatApi).toContain("KB_DATABASE_URL");
 		for (const required of [
 			"agent_db_password_base_secret_arn",
 			"statsig_server_secret_arn",
 			"live_redis_url_secret_arn",
 			"openrouter_api_key_secret_arn",
+			"kb_database_url_secret_arn",
 		]) {
 			expect(chatApiSecretPolicy).toContain(required);
 		}

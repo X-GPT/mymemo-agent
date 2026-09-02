@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { AppEnv } from "@/deps";
+import { VmUnavailableError } from "@/features/conversation-vm/ensure-vm";
 import {
 	ConversationIdParam,
 	ConversationPath,
@@ -154,8 +155,10 @@ app.post(
 			);
 		}
 		const { deps, logger } = c.var;
-		const nudge = deps.nudgeInVmServer;
-		if (!nudge) return c.json({ error: "v2 messaging is not configured" }, 503);
+		const ensureVm = deps.ensureVm;
+		if (!ensureVm) {
+			return c.json({ error: "v2 messaging is not configured" }, 503);
+		}
 		if (!(await deps.exposureGate.isAgentEnabled(c.var.identity))) {
 			return c.json({ error: "Agent is not enabled" }, 403);
 		}
@@ -186,8 +189,9 @@ app.post(
 			return c.json({ error: "Turn already ended", recovery: "history" }, 410);
 		}
 
-		// Subscribe before nudging: the lane keeps no backlog, so this ordering
-		// is what makes early chunks unlosable.
+		// Subscribe before Ensure-VM: the lane keeps no backlog, and a cold VM
+		// drains the queue the moment it boots, so this ordering is what makes
+		// early chunks unlosable.
 		const readAbort = new AbortController();
 		const readSignal = AbortSignal.any([c.req.raw.signal, readAbort.signal]);
 		let chunks: AsyncIterable<string>;
@@ -199,18 +203,22 @@ app.post(
 				"v2 Live Stream subscribe failed",
 			);
 			// The Turn is durably queued; let it run so history has it.
-			await nudge().catch(() => {});
+			await ensureVm(ref).catch(() => {});
 			return c.json({ error: "Live stream temporarily unavailable" }, 503);
 		}
 		try {
-			await nudge();
+			// Claim, launch or rehydrate, nudge. A nudge failure is absorbed
+			// inside (the row is durable and the In-VM server's interval
+			// self-heal consults Postgres on its own); only a launch this
+			// request owned and lost after retries surfaces.
+			await ensureVm(ref);
 		} catch (error) {
-			// The row is durable and the In-VM server's interval self-heal
-			// consults Postgres on its own; stream on rather than fail the Turn.
-			logger.warn(
-				{ ...ref, err: error },
-				"nudge failed; the queued Turn waits for the In-VM server",
-			);
+			readAbort.abort();
+			if (error instanceof VmUnavailableError) {
+				c.header("Retry-After", "5");
+				return c.json({ error: "Conversation VM unavailable; retry" }, 503);
+			}
+			throw error;
 		}
 
 		for (const [name, value] of Object.entries(UI_MESSAGE_STREAM_HEADERS)) {

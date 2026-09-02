@@ -13,6 +13,7 @@ import {
 } from "ai";
 import type { ApiConfig } from "@/config/env";
 import type { AppDeps } from "@/deps";
+import { VmUnavailableError } from "@/features/conversation-vm/ensure-vm";
 import type {
 	ConversationMessagesPageInput,
 	ConversationMessagesStore,
@@ -289,7 +290,7 @@ function submitApp(
 	const deps = {
 		conversationMessagesStore: store,
 		turnLiveStreamRelay: relay,
-		nudgeInVmServer: () => vm.nudge(),
+		ensureVm: () => vm.nudge(),
 		exposureGate: { isAgentEnabled: async () => true },
 		...overrides,
 	} as unknown as AppDeps;
@@ -509,7 +510,7 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 		const { app } = submitApp({
 			store,
 			// A nudge that never publishes: the VM died after claiming.
-			nudgeInVmServer: async () => {
+			ensureVm: async () => {
 				const row = store.rows.get("turn-1");
 				if (row) row.status = "processing";
 			},
@@ -564,8 +565,8 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 		expect(vm.nudges).toBe(0);
 	});
 
-	it("answers 503 without writing while no In-VM server is configured", async () => {
-		const { app, store } = submitApp({ nudgeInVmServer: undefined });
+	it("answers 503 without writing while MicroVM orchestration is not configured", async () => {
+		const { app, store } = submitApp({ ensureVm: undefined });
 
 		const response = await app.request(
 			MESSAGES_URL,
@@ -574,6 +575,49 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 
 		expect(response.status).toBe(503);
 		expect(store.rows.size).toBe(0);
+	});
+
+	it("answers a retryable 503 after the queued INSERT when the VM launch fails after retries", async () => {
+		const { app, store, relay } = submitApp({
+			ensureVm: async () => {
+				throw new VmUnavailableError({ cause: new Error("502 ×5") });
+			},
+		});
+
+		const response = await app.request(
+			MESSAGES_URL,
+			submitBody(userMessage("turn-1")),
+		);
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("retry-after")).toBe("5");
+		expect(await response.json()).toEqual({
+			error: "Conversation VM unavailable; retry",
+		});
+		// The Turn is durable (the retry is a no-op re-POST) and the abandoned
+		// subscription is gone: a publish now has no listener.
+		expect(store.rows.get("turn-1")?.status).toBe("queued");
+		const publisher = relay.openPublisher({
+			conversationId: CONVERSATION_ID,
+			messageId: "turn-1",
+		});
+		await publisher.publish({ type: "finish" });
+		await publisher.close();
+	});
+
+	it("propagates a non-retryable Ensure-VM failure as a 500", async () => {
+		const { app } = submitApp({
+			ensureVm: async () => {
+				throw new Error("registry unreachable");
+			},
+		});
+
+		const response = await app.request(
+			MESSAGES_URL,
+			submitBody(userMessage("turn-1")),
+		);
+
+		expect(response.status).toBe(500);
 	});
 
 	it("rejects bodies that are not one submitted user text UIMessage for this Conversation", async () => {

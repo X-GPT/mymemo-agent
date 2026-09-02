@@ -367,19 +367,35 @@ resource "aws_secretsmanager_secret_version" "gateway_token" {
 # Exactly the named control-plane actions plus the checkpoint-deletion S3
 # scope; chat-api never reads or writes checkpoint content (data plane stays
 # with the VM execution role). Suspend/Resume are deliberately absent — the
-# platform idle policy owns them.
+# platform idle policy owns them. The two reads (#669): GetMicrovm is the
+# reactive at-cap check behind a failed nudge, GetMicrovmImage the
+# urgent-upgrade staleness check.
 
 data "aws_iam_policy_document" "chat_api_microvm_control_plane" {
   statement {
     sid = "MicrovmControlPlane"
     actions = [
       "lambda:RunMicrovm",
+      "lambda:GetMicrovm",
+      "lambda:GetMicrovmImage",
       "lambda:CreateMicrovmAuthToken",
       "lambda:TerminateMicrovm",
     ]
     resources = [
       "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:microvm:*",
       "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:microvm-image:*",
+    ]
+  }
+
+  # RunMicrovm passes the VPC egress connector and the AWS-managed ingress
+  # connector (the JWE-authenticated endpoint); passing either needs this,
+  # exactly as the image build needed it for INTERNET_EGRESS (#683).
+  statement {
+    sid     = "PassMicrovmNetworkConnectors"
+    actions = ["lambda:PassNetworkConnector"]
+    resources = [
+      aws_lambdacore_network_connector.microvm_egress.arn,
+      "arn:aws:lambda:${var.aws_region}:aws:network-connector:*",
     ]
   }
 

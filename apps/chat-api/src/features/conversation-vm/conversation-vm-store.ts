@@ -1,0 +1,62 @@
+/**
+ * The per-Conversation MicroVM registry and its transactional launch claim
+ * (spec #654, ticket #669) over `conversation_vm`. Every write here is what
+ * makes "one VM per Conversation" true under concurrent POSTs: the platform
+ * cannot make `RunMicrovm` idempotent per Conversation, so the claim row is
+ * the lock, and exactly one claimant launches.
+ */
+
+export interface ConversationRef {
+	userId: string;
+	conversationId: string;
+}
+
+export type ConversationVmState = "launching" | "running" | "terminated";
+
+export interface ConversationVmRow {
+	/** NULL while `launching`. */
+	microvmId: string | null;
+	endpoint: string | null;
+	imageVersion: string | null;
+	state: ConversationVmState;
+	lastActivityAt: Date;
+}
+
+export interface ConversationVmStore {
+	/**
+	 * The launch claim: `"claimed"` when this caller now owns a `launching` row
+	 * (a fresh Conversation, a rehydrate from `terminated`, or a stale
+	 * `launching` claim older than `staleLaunchAfterMs`); otherwise the row the
+	 * Conversation already holds, which the caller must not launch for.
+	 */
+	claimLaunch(
+		ref: ConversationRef,
+		options: { staleLaunchAfterMs: number },
+	): Promise<"claimed" | ConversationVmRow>;
+	/**
+	 * The urgent-upgrade claim: flip the `running` row holding exactly
+	 * `microvmId` back to `launching`. True for the one caller that wins and
+	 * must terminate the old VM and launch; false when the row moved on.
+	 */
+	claimUpgrade(
+		ref: ConversationRef,
+		options: { microvmId: string },
+	): Promise<boolean>;
+	/** Record the `RunMicrovm` result: `launching` → `running` in one write. */
+	recordLaunched(
+		ref: ConversationRef,
+		vm: { microvmId: string; endpoint: string; imageVersion: string },
+	): Promise<void>;
+	/** A launch that failed: hand the claim back (`launching` → `terminated`). */
+	releaseClaim(ref: ConversationRef): Promise<void>;
+	/**
+	 * The platform ended the VM (8 h cap, failed boot): `running` →
+	 * `terminated`, guarded on `microvmId` so a newer VM is never clobbered.
+	 */
+	markTerminated(
+		ref: ConversationRef,
+		options: { microvmId: string },
+	): Promise<void>;
+	/** A successful nudge: stamp `last_activity_at`. */
+	touchActivity(ref: ConversationRef): Promise<void>;
+}
