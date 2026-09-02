@@ -291,4 +291,43 @@ app.post(
 	},
 );
 
+/**
+ * `POST /:conversationId/interrupt` (mounted at `/v2/conversations`) — stop
+ * the `processing` Turn (spec #654, ticket #668; "Interrupt a v2 Turn" in
+ * docs/agents/chat-api.md). Like v1 interruption, no exposure gate.
+ */
+app.post(
+	"/:conversationId/interrupt",
+	zValidator("param", ConversationPath, (result, c) => {
+		if (!result.success) {
+			return c.json({ error: "Invalid conversation id" }, 400);
+		}
+	}),
+	requireInternalIdentity,
+	async (c) => {
+		const { deps, logger } = c.var;
+		const ensureVm = deps.ensureVm;
+		if (!ensureVm) {
+			return c.json({ error: "v2 messaging is not configured" }, 503);
+		}
+		const ref = {
+			userId: c.var.identity.memberCode,
+			conversationId: c.req.valid("param").conversationId,
+		};
+		const found = await deps.conversationMessagesStore.findProcessingTurn(ref);
+		if (!found) return c.json({ error: "Conversation not found" }, 404);
+		if (found.messageId === null) return c.body(null, 204);
+		try {
+			await ensureVm(ref, logger, { interrupt: found.messageId });
+		} catch (error) {
+			if (error instanceof VmUnavailableError) {
+				c.header("Retry-After", "5");
+				return c.json({ error: "Conversation VM unavailable; retry" }, 503);
+			}
+			throw error;
+		}
+		return c.json({ messageId: found.messageId }, 202);
+	},
+);
+
 export default app;

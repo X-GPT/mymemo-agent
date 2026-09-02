@@ -200,6 +200,16 @@ class FakeTurnStore implements ConversationMessagesStore {
 		return this.rows.get(ref.messageId)?.status ?? null;
 	}
 
+	async findProcessingTurn(input: {
+		conversationId: string;
+	}): Promise<{ messageId: string | null } | null> {
+		if (!this.exists || input.conversationId !== CONVERSATION_ID) return null;
+		for (const [id, row] of this.rows) {
+			if (row.status === "processing") return { messageId: id };
+		}
+		return { messageId: null };
+	}
+
 	/** The In-VM server's claim: lowest queued row while nothing is processing. */
 	claimNext(): string | null {
 		for (const row of this.rows.values()) {
@@ -260,8 +270,15 @@ function fakeInVmServer(
 	return {
 		served,
 		nudges: 0,
-		async nudge() {
+		commands: [] as unknown[],
+		async nudge(command?: { interrupt: string }) {
 			this.nudges += 1;
+			if (command) {
+				// The command's application is the In-VM server's business
+				// (its own tests); chat-api only has to deliver it.
+				this.commands.push(command);
+				return;
+			}
 			if (options.sync) {
 				await drain();
 				return;
@@ -290,7 +307,11 @@ function submitApp(
 	const deps = {
 		conversationMessagesStore: store,
 		turnLiveStreamRelay: relay,
-		ensureVm: () => vm.nudge(),
+		ensureVm: (
+			_ref: unknown,
+			_logger: unknown,
+			command?: { interrupt: string },
+		) => vm.nudge(command),
 		exposureGate: { isAgentEnabled: async () => true },
 		...overrides,
 	} as unknown as AppDeps;
@@ -640,5 +661,79 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 			expect(response.status).toBe(400);
 		}
 		expect(store.rows.size).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// POST /interrupt — stop the processing Turn (#668)
+// ---------------------------------------------------------------------------
+
+const INTERRUPT_URL = `/v2/conversations/${CONVERSATION_ID}/interrupt`;
+const interruptRequest = { method: "POST", headers: identityHeaders };
+
+describe("POST /v2/conversations/:conversationId/interrupt", () => {
+	it("sends the processing Turn's id as the nudge's interrupt command, writing nothing", async () => {
+		const { app, store, vm } = submitApp({
+			exposureGate: {
+				async isAgentEnabled() {
+					throw new Error("interruption must not consult exposure");
+				},
+			},
+		});
+		store.rows.set("turn-1", { status: "done", parts: [] });
+		store.rows.set("turn-2", { status: "processing", parts: [] });
+		store.rows.set("turn-3", { status: "queued", parts: [] });
+
+		const response = await app.request(INTERRUPT_URL, interruptRequest);
+
+		expect(response.status).toBe(202);
+		expect(await response.json()).toEqual({ messageId: "turn-2" });
+		expect(vm.commands).toEqual([{ interrupt: "turn-2" }]);
+		// No durable interrupt state: the rows are exactly as they were.
+		expect([...store.rows.values()].map((row) => row.status)).toEqual([
+			"done",
+			"processing",
+			"queued",
+		]);
+	});
+
+	it("answers 204 with no side effects when nothing is processing", async () => {
+		const { app, store, vm } = submitApp();
+		store.rows.set("turn-1", { status: "queued", parts: [] });
+
+		const response = await app.request(INTERRUPT_URL, interruptRequest);
+
+		expect(response.status).toBe(204);
+		expect(vm.nudges).toBe(0);
+		expect(store.rows.get("turn-1")?.status).toBe("queued");
+	});
+
+	it("a launch this request owned and lost answers the retryable 503; the Turn's row is untouched", async () => {
+		const { app, store } = submitApp({
+			ensureVm: async () => {
+				throw new VmUnavailableError(new Error("502 ×5"));
+			},
+		});
+		store.rows.set("turn-1", { status: "processing", parts: [] });
+
+		const response = await app.request(INTERRUPT_URL, interruptRequest);
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("retry-after")).toBe("5");
+		expect(store.rows.get("turn-1")?.status).toBe("processing");
+	});
+
+	it("missing or foreign Conversation is 404; no In-VM server configured is 503", async () => {
+		const { app, store } = submitApp();
+		store.exists = false;
+		expect((await app.request(INTERRUPT_URL, interruptRequest)).status).toBe(
+			404,
+		);
+
+		const unconfigured = submitApp({ ensureVm: undefined });
+		unconfigured.store.rows.set("turn-1", { status: "processing", parts: [] });
+		expect(
+			(await unconfigured.app.request(INTERRUPT_URL, interruptRequest)).status,
+		).toBe(503);
 	});
 });

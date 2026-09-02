@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 
 /**
  * The In-VM server's HTTP surface (spec #654): nudge + health for callers, and
@@ -7,21 +8,24 @@ import { Hono } from "hono";
  * (`X-aws-proxy-auth`) — the proxy is the authentication boundary, so the
  * routes themselves carry no auth.
  *
- * Nudge means "consult Postgres now" — the fire-and-forget `nudge` callback
- * starts draining if a Turn is queued and none is in flight; it carries no
- * message content and returns immediately, and idempotency lives in the DB's
- * one-in-flight claim gate, so any number of nudges are safe. Before the
- * `/run` hook configures the server it answers 503 — the platform holds
- * external traffic until `/run` returns 200, so a real caller can never see
- * that state.
+ * Nudge means "consult Postgres now" — the `nudge` callback rings the drain
+ * loop's doorbell (draining starts if a Turn is queued and none is in
+ * flight); it carries no message content, and idempotency lives in the DB's
+ * one-in-flight claim gate, so any number of nudges are safe. The body may
+ * carry the nudge's one command, `{interrupt: messageId}` (#668), which is
+ * applied before answering so a failed apply answers non-2xx (Ensure-VM logs
+ * it; a Turn still running is the user's retry signal). Before the `/run`
+ * hook configures the server it answers 503 — the platform holds external
+ * traffic until `/run` returns 200, so a real caller can never see that state.
  */
 
 /** Base path the platform POSTs lifecycle hooks to (OpenAPI 2025-12-03). */
 const HOOKS_BASE = "/aws/lambda-microvms/runtime/v1";
 
 export interface AppHandlers {
-	/** Fire-and-forget drain trigger. False = the server is not configured yet. */
-	nudge: () => boolean;
+	/** Drain trigger, applying the optional interrupt command. False = the
+	 * server is not configured yet. */
+	nudge: (command?: NudgeCommand) => Promise<boolean>;
 	/**
 	 * The `/run` lifecycle hook: configure the server for its Conversation from
 	 * `runHookPayload`. The platform gates all endpoint traffic until this
@@ -37,14 +41,25 @@ export interface AppHandlers {
 	smokeScriptPath?: string;
 }
 
+const NudgeCommand = z.object({ interrupt: z.string().min(1) }).strict();
+export type NudgeCommand = z.infer<typeof NudgeCommand>;
+
 export function createApp(handlers: AppHandlers) {
 	const app = new Hono();
 
-	app.post("/nudge", (c) =>
-		handlers.nudge()
+	app.post("/nudge", async (c) => {
+		// An empty body is a plain nudge; anything else must be the command.
+		const text = await c.req.text();
+		let command: NudgeCommand | undefined;
+		try {
+			command = text.trim() ? NudgeCommand.parse(JSON.parse(text)) : undefined;
+		} catch {
+			return c.json({ error: "invalid nudge command" }, 400);
+		}
+		return (await handlers.nudge(command))
 			? c.json({ status: "accepted" }, 202)
-			: c.json({ error: "not configured" }, 503),
-	);
+			: c.json({ error: "not configured" }, 503);
+	});
 	app.get("/health", (c) => c.json({ status: "ok" }));
 
 	app.post(`${HOOKS_BASE}/run`, async (c) => {

@@ -17,6 +17,7 @@ import {
 import type { UIMessageChunk } from "ai";
 import { and, eq } from "drizzle-orm";
 import {
+	assistantMessage,
 	resultError,
 	resultSuccess,
 	streamEvent,
@@ -138,7 +139,7 @@ function collectLiveChunks(
 describe("serveOneTurn — the idempotent nudge no-op", () => {
 	it("returns null when nothing is queued", async () => {
 		const deps = makeDeps({});
-		expect(await serveOneTurn(deps)).toBeNull();
+		expect(await serveOneTurn(deps, new EventTarget())).toBeNull();
 	});
 
 	it("returns null while a Turn is already processing", async () => {
@@ -151,7 +152,7 @@ describe("serveOneTurn — the idempotent nudge no-op", () => {
 
 		const calls: unknown[] = [];
 		const deps = makeDeps({ query: scriptedQuery([], calls) });
-		expect(await serveOneTurn(deps)).toBeNull();
+		expect(await serveOneTurn(deps, new EventTarget())).toBeNull();
 		expect(calls).toEqual([]);
 		expect((await loadTurnRow("turn-b")).status).toBe("queued");
 	});
@@ -175,7 +176,7 @@ describe("serveOneTurn — a full Turn", () => {
 		const calls: { prompt: string; options: Options }[] = [];
 		const deps = makeDeps({ query: scriptedQuery(fullStream, calls) });
 
-		expect(await serveOneTurn(deps)).toBe("done");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("done");
 
 		const turn = await loadTurnRow();
 		expect(turn.status).toBe("done");
@@ -213,7 +214,7 @@ describe("serveOneTurn — a full Turn", () => {
 
 		const chunks = collectLiveChunks(relay);
 		await chunks.ready;
-		expect(await serveOneTurn(deps)).toBe("done");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("done");
 
 		const received = await chunks;
 		expect(received.map((chunk) => chunk.type)).toEqual([
@@ -286,7 +287,7 @@ describe("serveOneTurn — commit-before-publish", () => {
 			]),
 		});
 
-		expect(await serveOneTurn(deps)).toBe("done");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("done");
 
 		const finishSteps = probes.filter((p) => p.chunkType === "finish-step");
 		expect(finishSteps).toHaveLength(2);
@@ -341,7 +342,7 @@ describe("serveOneTurn — failure retains exactly the completed Steps", () => {
 
 		const chunks = collectLiveChunks(relay);
 		await chunks.ready;
-		expect(await serveOneTurn(deps)).toBe("error");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("error");
 
 		expect((await loadTurnRow()).status).toBe("error");
 		const assistants = await loadAssistantRows();
@@ -373,7 +374,7 @@ describe("serveOneTurn — failure retains exactly the completed Steps", () => {
 
 		const chunks = collectLiveChunks(relay);
 		await chunks.ready;
-		expect(await serveOneTurn(deps)).toBe("error");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("error");
 
 		expect((await loadTurnRow()).status).toBe("error");
 		expect((await loadAssistantRows())[0]?.parts).toEqual([
@@ -390,7 +391,7 @@ describe("serveOneTurn — failure retains exactly the completed Steps", () => {
 	it("a stream that ends without a result terminalizes error", async () => {
 		await enqueue();
 		const deps = makeDeps({ query: scriptedQuery(textStep("no result")) });
-		expect(await serveOneTurn(deps)).toBe("error");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("error");
 		expect((await loadTurnRow()).status).toBe("error");
 	});
 
@@ -404,7 +405,7 @@ describe("serveOneTurn — failure retains exactly the completed Steps", () => {
 		const calls: unknown[] = [];
 		const deps = makeDeps({ query: scriptedQuery([], calls) });
 
-		expect(await serveOneTurn(deps)).toBe("error");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("error");
 		expect(calls).toEqual([]);
 		expect((await loadTurnRow()).status).toBe("error");
 		// Nothing completed, so no assistant row is fabricated.
@@ -425,7 +426,7 @@ describe("serveOneTurn — relay failure degrades live delivery only", () => {
 		};
 		const deps = makeDeps({ relay: failingRelay });
 
-		expect(await serveOneTurn(deps)).toBe("done");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("done");
 		expect((await loadTurnRow()).status).toBe("done");
 		expect(await loadAssistantRows()).toHaveLength(1);
 	});
@@ -461,7 +462,7 @@ describe("serveOneTurn — the in-flight Turn ref for the doc tools (#665)", () 
 					yield* [...textStep("hi"), resultSuccess()];
 				})(),
 		});
-		expect(await serveOneTurn(deps)).toBe("done");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("done");
 		expect(seenDuringQuery).toEqual([TURN_ID]);
 		expect(currentTurn.turnId).toBeNull();
 	});
@@ -475,7 +476,169 @@ describe("serveOneTurn — the in-flight Turn ref for the doc tools (#665)", () 
 				throw new Error("model exploded");
 			},
 		});
-		expect(await serveOneTurn(deps)).toBe("error");
+		expect(await serveOneTurn(deps, new EventTarget())).toBe("error");
 		expect(currentTurn.turnId).toBeNull();
+	});
+});
+
+describe("serveOneTurn — the interrupt command (#668)", () => {
+	/** A stream that parks after its scripted prefix until `interrupt()` is
+	 * applied, then yields the SDK's post-interrupt tail. */
+	function interruptibleQuery(
+		prefix: SDKMessage[],
+		tail: SDKMessage[],
+		control: { count: number; drained: boolean; rejectFirst?: boolean },
+	) {
+		return () => {
+			let release!: () => void;
+			const released = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const stream = (async function* () {
+				yield* prefix;
+				await released;
+				yield* tail;
+				control.drained = true;
+			})();
+			return Object.assign(stream, {
+				interrupt: async () => {
+					control.count += 1;
+					if (control.rejectFirst && control.count === 1) {
+						throw new Error("control request failed");
+					}
+					release();
+				},
+			});
+		};
+	}
+
+	it("terminalizes interrupted with exactly the committed Steps, ignoring what streams after the interrupt, and publishes abort", async () => {
+		await enqueue();
+		const control = { count: 0, drained: false };
+		const relay = createInMemoryTurnLiveStreamRelay();
+		const interrupts = new EventTarget();
+		const deps = makeDeps({
+			relay,
+			query: interruptibleQuery(
+				// Parked at a Step boundary: the interrupt lands with no envelope open.
+				[...textStep("Committed.")],
+				// The CLI's post-interrupt tail: the aborted envelope's completion
+				// (here orphaned — no message_start, as at a Step boundary), which
+				// would be a protocol violation to the mapper, a whole Step, and the
+				// result the real CLI reports (error_during_execution).
+				[
+					assistantMessage([{ type: "text", text: "Truncated mid-wo" }]),
+					...textStep("A whole Step after the interrupt"),
+					resultError(["interrupted"]),
+				],
+				control,
+			),
+		});
+		const live = collectLiveChunks(relay);
+		await live.ready;
+
+		const serving = serveOneTurn(deps, interrupts);
+		// Interrupt once the first Step is durably committed.
+		while ((await loadAssistantRows()).length === 0) await Bun.sleep(5);
+		interrupts.dispatchEvent(new Event("interrupt"));
+
+		expect(await serving).toBe("interrupted");
+		expect(control.count).toBe(1);
+		// Drained to the result rather than abandoned on the orphan envelope:
+		// the long-lived session stays aligned on a Turn boundary.
+		expect(control.drained).toBe(true);
+		const turn = await loadTurnRow();
+		expect(turn.status).toBe("interrupted");
+		expect(turn.finishedAt).toBeInstanceOf(Date);
+		const [assistant] = await loadAssistantRows();
+		expect(assistant?.parts).toEqual([
+			{ type: "step-start" },
+			{ type: "text", text: "Committed.", state: "done" },
+		]);
+		const chunks = await live;
+		expect(chunks.at(-1)).toEqual({ type: "abort" });
+		expect(chunks.filter((c) => c.type === "finish-step")).toHaveLength(1);
+		expect(JSON.stringify(chunks)).not.toContain("Truncated");
+		expect(deps.currentTurn.turnId).toBeNull();
+	});
+
+	it("an accepted interrupt wins even when the stream then ends result-less", async () => {
+		await enqueue();
+		const interrupts = new EventTarget();
+		const deps = makeDeps({
+			query: interruptibleQuery([...textStep("Committed.")], [], {
+				count: 0,
+				drained: false,
+			}),
+		});
+		const serving = serveOneTurn(deps, interrupts);
+		await Bun.sleep(20);
+		interrupts.dispatchEvent(new Event("interrupt"));
+
+		expect(await serving).toBe("interrupted");
+		expect((await loadTurnRow()).status).toBe("interrupted");
+		expect((await loadAssistantRows())[0]?.parts).toEqual([
+			{ type: "step-start" },
+			{ type: "text", text: "Committed.", state: "done" },
+		]);
+	});
+
+	it("a rejected SDK control is re-sent by the next command", async () => {
+		await enqueue();
+		const control = { count: 0, drained: false, rejectFirst: true };
+		const interrupts = new EventTarget();
+		const deps = makeDeps({
+			query: interruptibleQuery(
+				[...textStep("Committed.")],
+				[resultError(["interrupted"])],
+				control,
+			),
+		});
+		const serving = serveOneTurn(deps, interrupts);
+		while ((await loadAssistantRows()).length === 0) await Bun.sleep(5);
+		interrupts.dispatchEvent(new Event("interrupt"));
+		await Bun.sleep(10);
+		expect(control.count).toBe(1);
+		expect((await loadTurnRow()).status).toBe("processing");
+		interrupts.dispatchEvent(new Event("interrupt"));
+
+		expect(await serving).toBe("interrupted");
+		expect(control.count).toBe(2);
+	});
+
+	it("a command that lands before the query starts ends the Turn interrupted without a model call", async () => {
+		await enqueue();
+		const interrupts = new EventTarget();
+		const calls: unknown[] = [];
+		const relay = createInMemoryTurnLiveStreamRelay();
+		// The command arrives while the start chunk is publishing — after the
+		// claim, before the query.
+		const deps = makeDeps({
+			relay: {
+				...relay,
+				openPublisher: (key) => {
+					const publisher = relay.openPublisher(key);
+					return {
+						async publish(chunk: UIMessageChunk) {
+							if (chunk.type === "start") {
+								interrupts.dispatchEvent(new Event("interrupt"));
+							}
+							await publisher.publish(chunk);
+						},
+						close: () => publisher.close(),
+					};
+				},
+			},
+			query: scriptedQuery([...textStep("never"), resultSuccess()], calls),
+		});
+		const live = collectLiveChunks(relay);
+		await live.ready;
+
+		expect(await serveOneTurn(deps, interrupts)).toBe("interrupted");
+		expect(calls).toEqual([]);
+		expect((await loadTurnRow()).status).toBe("interrupted");
+		expect(await loadAssistantRows()).toHaveLength(0);
+		expect((await live).map((chunk) => chunk.type)).toEqual(["start", "abort"]);
+		expect(deps.currentTurn.turnId).toBeNull();
 	});
 });

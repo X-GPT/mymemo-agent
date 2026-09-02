@@ -98,8 +98,11 @@ async function configure(env: Env): Promise<void> {
 }
 
 const app = createApp({
-	nudge: () => {
+	nudge: async (command) => {
 		if (!serving) return false;
+		// The command applies before the doorbell rings, so a still-queued
+		// target cannot be claimed by the nudge it arrived on.
+		if (command) await serving.loop.interrupt(command.interrupt);
 		serving.loop.nudge();
 		return true;
 	},

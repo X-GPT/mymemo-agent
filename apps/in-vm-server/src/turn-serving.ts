@@ -30,11 +30,17 @@ import {
  */
 
 /** The SDK `query()` call as a seam: production passes the real function,
- * tests a fake that yields a scripted stream. */
+ * tests a fake that yields a scripted stream. The stream may carry the SDK's
+ * `interrupt()` control (#668); a fake without one is simply not
+ * interruptible mid-stream. */
+export type InterruptibleStream = AsyncIterable<SDKMessage> & {
+	interrupt?: () => Promise<unknown>;
+};
+
 export type TurnQueryFn = (params: {
 	prompt: string;
 	options: Options;
-}) => AsyncIterable<SDKMessage>;
+}) => InterruptibleStream;
 
 export interface TurnLogger {
 	warn(payload: object, message?: string): void;
@@ -74,15 +80,39 @@ export function promptFromParts(parts: unknown): string {
  * Claim and serve the next queued Turn. Returns the Turn's Outcome, or null
  * when there was nothing to claim (nothing queued, or a Turn already in
  * flight — the idempotent-nudge no-op).
+ *
+ * `interrupts` (#668): every "interrupt" event re-sends the SDK `interrupt()`
+ * (a rejected control is retried by the user's next command) and the Turn
+ * ends `interrupted` with the committed snapshot — see "Interrupt a v2 Turn"
+ * in docs/agents/chat-api.md.
  */
 export async function serveOneTurn(
 	deps: TurnServingDeps,
+	interrupts: EventTarget,
 ): Promise<TurnOutcome | null> {
 	const { db, logger, userId, conversationId } = deps;
 	const claimed = await claimNextTurnTx(db, { userId, conversationId });
 	if (!claimed) return null;
 
 	deps.currentTurn.turnId = claimed.messageId;
+	const mapper = new TurnStreamMapper();
+	// `retained` is non-null once the interrupt is accepted: the committed
+	// snapshot at that instant, frozen against the mapper's later in-place
+	// tool-result updates. `stream` is the live query once it exists.
+	const interrupted: {
+		retained: TurnUIMessagePart[] | null;
+		stream: InterruptibleStream | null;
+	} = { retained: null, stream: null };
+	const interrupt = (): void => {
+		interrupted.retained ??= structuredClone(mapper.committedParts);
+		interrupted.stream?.interrupt?.().catch((error: unknown) => {
+			logger.warn(
+				{ ...turnKey, error: toMessage(error) },
+				"SDK interrupt control failed; a retry re-sends it",
+			);
+		});
+	};
+	const requested = (): boolean => interrupted.retained !== null;
 	const turnKey = { userId, conversationId, messageId: claimed.messageId };
 	const assistantMessageId = randomUUID();
 	const publisher = deps.relay.openPublisher({
@@ -107,18 +137,41 @@ export async function serveOneTurn(
 			parts,
 		});
 
-	const mapper = new TurnStreamMapper();
+	// Listening from the claim on (nothing has awaited since it), so a command
+	// that lands before the query starts still counts; the listener's removal
+	// is the `finally` this try owns.
+	interrupts.addEventListener("interrupt", interrupt);
 	try {
 		await publish({ type: "start", messageId: assistantMessageId });
 		const prompt = promptFromParts(claimed.parts);
 		if (prompt.length === 0) {
 			throw new TurnStreamProtocolError("Turn has no text parts to prompt");
 		}
+		// (Read through a call: a direct check here would narrow the property
+		// to null for the rest of the function, closure writes unseen.)
+		if (requested()) {
+			// Interrupted before the query started: nothing to abort, and no
+			// model call to burn on output that would only be discarded.
+			await terminalize(deps, turnKey, "interrupted");
+			await publish({ type: "abort" });
+			return "interrupted";
+		}
+		const stream = deps.query({ prompt, options: deps.queryOptions });
+		interrupted.stream = stream;
 		let outcome: TurnOutcome | null = null;
-		for await (const message of deps.query({
-			prompt,
-			options: deps.queryOptions,
-		})) {
+		for await (const message of stream) {
+			const retained = interrupted.retained;
+			if (retained !== null) {
+				// Post-interrupt traffic bypasses the mapper: the CLI's aborted
+				// envelope may arrive without its message_start, and only the
+				// result matters — it ends the Turn `interrupted` with the snapshot.
+				if (message.type !== "result") continue;
+				if (retained.length > 0) await upsert(retained);
+				await terminalize(deps, turnKey, "interrupted");
+				await publish({ type: "abort" });
+				outcome = "interrupted";
+				continue;
+			}
 			for (const action of mapper.accept(message)) {
 				if (action.kind === "chunk") {
 					await publish(action.chunk);
@@ -142,16 +195,20 @@ export async function serveOneTurn(
 		}
 		return outcome;
 	} catch (error) {
+		// An accepted interrupt wins the Outcome even when the stream then
+		// throws or ends result-less (the CLI died on the abort).
+		const outcome: TurnOutcome =
+			interrupted.retained === null ? "error" : "interrupted";
 		logger.error(
-			{ ...turnKey, error: toMessage(error) },
-			"Turn failed; terminalizing error with the completed Steps retained",
+			{ ...turnKey, error: toMessage(error), outcome },
+			"Turn did not complete; terminalizing with the completed Steps retained",
 		);
 		// Retain exactly the completed Steps — a Step in flight is never
 		// persisted, and no content is fabricated.
-		const parts = mapper.committedParts;
+		const parts = interrupted.retained ?? mapper.committedParts;
 		try {
 			if (parts.length > 0) await upsert(parts);
-			await terminalize(deps, turnKey, "error");
+			await terminalize(deps, turnKey, outcome);
 		} catch (persistError) {
 			// The status flip failed, so no terminal chunk may publish;
 			// publisher.close() below signals the reader to Recover from
@@ -160,11 +217,16 @@ export async function serveOneTurn(
 				{ ...turnKey, error: toMessage(persistError) },
 				"could not terminalize the failed Turn",
 			);
-			return "error";
+			return outcome;
 		}
-		await publish({ type: "error", errorText: "The Turn ended in error." });
-		return "error";
+		await publish(
+			outcome === "interrupted"
+				? { type: "abort" }
+				: { type: "error", errorText: "The Turn ended in error." },
+		);
+		return outcome;
 	} finally {
+		interrupts.removeEventListener("interrupt", interrupt);
 		deps.currentTurn.turnId = null;
 		await publisher.close().catch(() => {});
 	}

@@ -309,3 +309,95 @@ describe("drain loop — restart resumes draining", () => {
 		expect(served).toEqual(["queued-a", "queued-b"]);
 	});
 });
+
+describe("drain loop — the interrupt command (#668)", () => {
+	/** A per-Turn query whose stream parks until interrupted, then reports
+	 * the SDK's result; uninterrupted prompts complete immediately. */
+	function parkingQuery(served: string[], parkOn: string): TurnQueryFn {
+		return ({ prompt }) => {
+			served.push(prompt);
+			let release!: () => void;
+			const released = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const stream = (async function* () {
+				yield* textStep(`echo:${prompt}`);
+				if (prompt === parkOn) await released;
+				yield resultSuccess();
+			})();
+			return Object.assign(stream, { interrupt: async () => release() });
+		};
+	}
+
+	async function untilProcessing(messageId: string) {
+		await until(
+			async () => (await turnStatuses())[messageId] === "processing",
+			`${messageId} to be processing`,
+		);
+	}
+
+	it("interrupts the in-flight Turn; the next queued Turn then serves normally", async () => {
+		const served: string[] = [];
+		loop = startDrainLoop({
+			...makeDeps(parkingQuery(served, "long")),
+			selfHealIntervalMs: NEVER_MS,
+		});
+		await Bun.sleep(20);
+
+		await enqueue("long", "turn-1");
+		await enqueue("next", "turn-2");
+		loop.nudge();
+		await untilProcessing("turn-1");
+
+		await loop.interrupt("turn-1");
+
+		await allTerminal({ "turn-1": "interrupted", "turn-2": "done" });
+		expect(served).toEqual(["long", "next"]);
+	});
+
+	it("a target still queued when the command arrives terminalizes interrupted without ever running", async () => {
+		const served: string[] = [];
+		loop = startDrainLoop({
+			...makeDeps(parkingQuery(served, "long")),
+			selfHealIntervalMs: NEVER_MS,
+		});
+		await Bun.sleep(20);
+
+		await enqueue("long", "turn-1");
+		await enqueue("doomed", "turn-2");
+		await enqueue("after", "turn-3");
+		loop.nudge();
+		await untilProcessing("turn-1");
+
+		await loop.interrupt("turn-2");
+		expect((await turnStatuses())["turn-2"]).toBe("interrupted");
+		await loop.interrupt("turn-1");
+
+		await allTerminal({
+			"turn-1": "interrupted",
+			"turn-2": "interrupted",
+			"turn-3": "done",
+		});
+		expect(served).toEqual(["long", "after"]);
+	});
+
+	it("a command for an unknown or finished Turn is dropped; the running Turn is untouched", async () => {
+		const served: string[] = [];
+		loop = startDrainLoop({
+			...makeDeps(parkingQuery(served, "long")),
+			selfHealIntervalMs: NEVER_MS,
+		});
+		await Bun.sleep(20);
+
+		await enqueue("long", "turn-1");
+		loop.nudge();
+		await untilProcessing("turn-1");
+
+		await loop.interrupt("no-such-turn");
+		expect((await turnStatuses())["turn-1"]).toBe("processing");
+
+		// The retry names the right Turn and lands.
+		await loop.interrupt("turn-1");
+		await allTerminal({ "turn-1": "interrupted" });
+	});
+});

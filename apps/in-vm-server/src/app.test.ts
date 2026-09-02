@@ -3,7 +3,7 @@ import { type AppHandlers, createApp } from "./app";
 
 function handlers(overrides: Partial<AppHandlers> = {}): AppHandlers {
 	return {
-		nudge: () => true,
+		nudge: async () => true,
 		run: async () => {},
 		...overrides,
 	};
@@ -18,11 +18,11 @@ describe("the In-VM server surface", () => {
 	});
 
 	it("accepts a nudge and fires the drain trigger", async () => {
-		let nudges = 0;
+		const nudges: unknown[] = [];
 		const app = createApp(
 			handlers({
-				nudge: () => {
-					nudges++;
+				nudge: async (command) => {
+					nudges.push(command);
 					return true;
 				},
 			}),
@@ -30,11 +30,66 @@ describe("the In-VM server surface", () => {
 		const res = await app.request("/nudge", { method: "POST" });
 		expect(res.status).toBe(202);
 		expect(await res.json()).toEqual({ status: "accepted" });
-		expect(nudges).toBe(1);
+		expect(nudges).toEqual([undefined]);
+	});
+
+	it("delivers the interrupt command carried by a nudge body, applied before answering", async () => {
+		const nudges: unknown[] = [];
+		const app = createApp(
+			handlers({
+				nudge: async (command) => {
+					nudges.push(command);
+					return true;
+				},
+			}),
+		);
+		const res = await app.request("/nudge", {
+			method: "POST",
+			body: JSON.stringify({ interrupt: "turn-1" }),
+			headers: { "content-type": "application/json" },
+		});
+		expect(res.status).toBe(202);
+		expect(nudges).toEqual([{ interrupt: "turn-1" }]);
+	});
+
+	it.each([
+		"not json",
+		"{}",
+		'{"interrupt":7}',
+		'{"interrupt":""}',
+		'{"interrupt":"turn-1","extra":1}',
+	])("rejects a malformed nudge body (%s) without nudging", async (body) => {
+		let nudges = 0;
+		const app = createApp(
+			handlers({
+				nudge: async () => {
+					nudges++;
+					return true;
+				},
+			}),
+		);
+		const res = await app.request("/nudge", { method: "POST", body });
+		expect(res.status).toBe(400);
+		expect(nudges).toBe(0);
+	});
+
+	it("a failing interrupt apply answers non-2xx rather than claiming it applied", async () => {
+		const app = createApp(
+			handlers({
+				nudge: async () => {
+					throw new Error("database unreachable");
+				},
+			}),
+		);
+		const res = await app.request("/nudge", {
+			method: "POST",
+			body: JSON.stringify({ interrupt: "turn-1" }),
+		});
+		expect(res.status).toBe(500);
 	});
 
 	it("answers 503 to a nudge before the run hook configures the server", async () => {
-		const app = createApp(handlers({ nudge: () => false }));
+		const app = createApp(handlers({ nudge: async () => false }));
 		const res = await app.request("/nudge", { method: "POST" });
 		expect(res.status).toBe(503);
 	});
