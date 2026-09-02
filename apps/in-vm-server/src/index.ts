@@ -183,6 +183,12 @@ const app = createApp({
 		);
 		try {
 			await serving.checkpoint();
+			if (serving.loop.nudgedWhilePaused()) {
+				// A Turn was queued during the hold: suspending now would strand it
+				// until the next message. The Checkpoint landed; refuse the suspend
+				// and let the loop drain.
+				throw new Error("a Turn arrived during the suspend hold");
+			}
 		} catch (error) {
 			// The platform sees non-200. Should it keep the VM running, serving
 			// must continue rather than sit parked behind a hook that failed.

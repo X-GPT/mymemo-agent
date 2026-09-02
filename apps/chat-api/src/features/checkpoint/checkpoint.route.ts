@@ -10,9 +10,14 @@ import type { CheckpointStore } from "./checkpoint-store";
  * docs/agents/chat-api.md and the ADR-0034 amendment.
  */
 
-/** Hard cap on one Checkpoint: the 60 s suspend-hook budget at the platform's
- * per-VM bandwidth cannot move more than this anyway. */
-const MAX_CHECKPOINT_BYTES = 256 * 1024 * 1024;
+/**
+ * Hard cap on one Checkpoint. The VM restores inside its 45 s transfer
+ * budget (checkpoint.ts) and #670 quotes 1–16 MB/s per VM, so anything the
+ * low end cannot move in that window would wedge every rehydrate of the
+ * Conversation. ponytail: 32 MiB fits 1 MB/s; raise once the live bandwidth
+ * is measured.
+ */
+const MAX_CHECKPOINT_BYTES = 32 * 1024 * 1024;
 
 /** The verified caller: the Conversation its token names, and the store. */
 async function admit(

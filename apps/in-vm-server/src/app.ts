@@ -79,8 +79,8 @@ export function createApp(handlers: AppHandlers) {
 	});
 
 	// suspend/resume bracket the idle policy's snapshot; a failed suspend
-	// throws into Hono's 500 so the platform never records a Checkpoint that
-	// did not land.
+	// throws into Hono's 500 so the platform never snapshots a VM whose
+	// Checkpoint did not land.
 	app.post(`${HOOKS_BASE}/:hook{suspend|resume}`, async (c) => {
 		await handlers[c.req.param("hook") as "suspend" | "resume"]();
 		return c.text("ok");

@@ -33,10 +33,14 @@ export interface DrainLoopHandle {
 	 * docs/agents/chat-api.md. Rejects only when the queued-cancel itself
 	 * failed, so the nudge answers non-2xx instead of claiming it applied. */
 	interrupt(messageId: string): Promise<void>;
-	/** Hold claims; settles once nothing is in flight (or on `resume`). */
+	/** Hold claims; settles once the loop is parked with nothing in flight
+	 * (after `resume`, once the queue drains). Reentrant. */
 	pause(): Promise<void>;
 	/** Lift `pause` and consult Postgres again. Idempotent. */
 	resume(): void;
+	/** Whether a nudge arrived since `pause` — work the parked loop is
+	 * holding back. */
+	nudgedWhilePaused(): boolean;
 	/** Stop after the Turn in flight (if any) completes. */
 	stop(): Promise<void>;
 }
@@ -53,10 +57,11 @@ export function startDrainLoop(
 	let wake: (() => void) | null = null;
 	let stopped = false;
 	let paused = false;
-	// The pause() caller, released when the loop parks paused (or stops).
-	let parked: (() => void) | null = null;
+	let nudgedWhilePaused = false;
+	// The pause() caller, released when the loop parks idle (or stops).
+	let parked: { settled: Promise<void>; release: () => void } | null = null;
 	const releaseParked = (): void => {
-		parked?.();
+		parked?.release();
 		parked = null;
 	};
 	// The in-flight Turn's interrupt channel (serveOneTurn listens for the
@@ -64,6 +69,7 @@ export function startDrainLoop(
 	const interrupts = new EventTarget();
 
 	const nudge = (): void => {
+		if (paused) nudgedWhilePaused = true;
 		doorbell = true;
 		wake?.();
 		wake = null;
@@ -133,6 +139,8 @@ export function startDrainLoop(
 			// A served Turn (any Outcome) means the queue may hold more; a
 			// doorbell rung mid-Turn means the same. Re-check immediately.
 			if (outcome !== null || doorbell) continue;
+			// Idle: a pause outlived by resume settles here, once the queue drained.
+			releaseParked();
 			await sleep();
 		}
 		releaseParked();
@@ -161,20 +169,24 @@ export function startDrainLoop(
 		},
 		pause() {
 			paused = true;
-			const settled = new Promise<void>((resolve) => {
-				parked = resolve;
-			});
-			// Wake a parked loop so it re-parks as paused and releases us.
-			nudge();
-			return settled;
+			if (!parked) {
+				let release: () => void = () => {};
+				const settled = new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				parked = { settled, release };
+				// Wake a parked loop so it re-parks as paused and releases us.
+				nudge();
+			}
+			// Only nudges from here on count as held-back work.
+			nudgedWhilePaused = false;
+			return parked.settled;
 		},
 		resume() {
 			paused = false;
-			// A pause still waiting on a long Turn is released too: the platform
-			// resumed regardless, so its Checkpoint is taken as-is.
-			releaseParked();
 			nudge();
 		},
+		nudgedWhilePaused: () => nudgedWhilePaused,
 		async stop() {
 			stopped = true;
 			nudge();

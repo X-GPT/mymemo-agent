@@ -467,7 +467,7 @@ describe("drain loop — the suspend hook's graceful-drain gate (#670)", () => {
 		await allTerminal({ t1: "done" });
 	});
 
-	it("resume releases a pause still waiting on a long Turn", async () => {
+	it("a pause outlived by resume settles once the Turn ends and the loop parks idle; pause is reentrant", async () => {
 		const served: string[] = [];
 		const gated = gatedTurn(served);
 		loop = startDrainLoop({
@@ -477,10 +477,40 @@ describe("drain loop — the suspend hook's graceful-drain gate (#670)", () => {
 		await enqueue("one", "t1");
 		loop.nudge();
 		await until(async () => served.length === 1, "t1 to be claimed");
-		const paused = loop.pause();
+		const first = loop.pause();
+		const second = loop.pause();
 		loop.resume();
-		await paused;
+		let settled = false;
+		void first.then(() => {
+			settled = true;
+		});
+		await Bun.sleep(50);
+		// Resumed, but the Turn is still in flight: no consistent moment yet.
+		expect(settled).toBe(false);
 		gated.release();
+		await Promise.all([first, second]);
+		expect(await turnStatuses()).toEqual({ t1: "done" });
+	});
+
+	it("remembers a nudge that arrived during the hold", async () => {
+		const served: string[] = [];
+		loop = startDrainLoop({
+			...makeDeps(
+				scriptedTurnQuery(served, (prompt) => [
+					...textStep(`echo:${prompt}`),
+					resultSuccess(),
+				]),
+			),
+			selfHealIntervalMs: NEVER_MS,
+		});
+		await loop.pause();
+		expect(loop.nudgedWhilePaused()).toBe(false);
+		await enqueue("one", "t1");
+		loop.nudge();
+		expect(loop.nudgedWhilePaused()).toBe(true);
+		loop.resume();
 		await allTerminal({ t1: "done" });
+		await loop.pause();
+		expect(loop.nudgedWhilePaused()).toBe(false);
 	});
 });

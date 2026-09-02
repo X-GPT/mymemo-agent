@@ -341,7 +341,7 @@ one gzipped tar (`apps/in-vm-server/src/checkpoint.ts`).
 
 It is **brokered through chat-api** (`features/checkpoint/`; why not S3
 directly: [ADR-0034, amendment 2026-09-02](../adr/0034-run-the-chat-loop-in-per-conversation-lambda-microvms.md#amendment-2026-09-02--checkpoints-brokered-through-chat-api)).
-`PUT /v2/checkpoint/:conversationId` (Content-Length required, 256 MiB cap,
+`PUT /v2/checkpoint/:conversationId` (Content-Length required, 32 MiB cap — what the restore budget moves at the platform's low-end bandwidth,
 `x-mymemo-microvm-id` = the VM) stores it under
 `conversations/<conversationId>/<uuid>.tar.gz` and moves
 `conversation_vm.checkpoint_pointer`, guarded on the VM id — `409` for a VM
@@ -363,8 +363,13 @@ with stale state, and a restore that fails fails the launch (the client's
 re-POST rehydrates again). Both hooks are registered with the platform's
 60 s maximum (`scripts/deploy/register_microvm_image.sh`); a Turn that
 outruns the suspend budget is snapshotted mid-Turn by the platform, and its
-Checkpoint lands after resume, when the drain completes. A running VM's
-terminate writes no Checkpoint: the suspend-time one is the durable one.
+Checkpoint lands after resume, once the queue drains and the loop parks
+idle (what the platform does with a timed-out suspend hook is unverified —
+the first thing the real-topology pass establishes). A suspend that finds a
+Turn queued during its hold answers 500 after the Checkpoint lands and
+lifts the pause, rather than strand that Turn until the next message. A
+running VM's terminate writes no Checkpoint: the suspend-time one is the
+durable one.
 
 The Agent session id is the Conversation id (a UUID; the In-VM config
 asserts it), so a restored transcript is `resume`d and the rehydrated VM's
