@@ -106,7 +106,11 @@ function fakeControlPlane(
 }
 
 function fakeFetch(status = 202) {
-	const requests: Array<{ url: string; headers: Record<string, string> }> = [];
+	const requests: Array<{
+		url: string;
+		headers: Record<string, string>;
+		body?: unknown;
+	}> = [];
 	const fetchImpl = (async (
 		url: string | URL | Request,
 		init?: RequestInit,
@@ -114,6 +118,7 @@ function fakeFetch(status = 202) {
 		requests.push({
 			url: String(url),
 			headers: Object.fromEntries(new Headers(init?.headers).entries()),
+			body: init?.body,
 		});
 		if (status === 0) throw new Error("connection refused");
 		return new Response(null, { status });
@@ -149,8 +154,8 @@ function ensureWith(
 		fetch: net.fetch,
 		...overrides,
 	});
-	const ensureVm = (r: ConversationRef) =>
-		ensure(r, { info() {}, warn() {}, error() {} });
+	const ensureVm = (r: ConversationRef, command?: { interrupt: string }) =>
+		ensure(r, { info() {}, warn() {}, error() {} }, command);
 	return { ensureVm, store, controlPlane, net };
 }
 
@@ -200,9 +205,34 @@ describe("Ensure-VM (#669)", () => {
 			{
 				url: "https://vm-1.example/nudge",
 				headers: {
+					"content-type": "application/json",
 					"x-aws-proxy-auth": "token-for-microvm-1",
 					"x-aws-proxy-port": "8080",
 				},
+			},
+		]);
+		expect(store.calls).toEqual(["claimLaunch"]);
+	});
+
+	it("carries the interrupt command (#668) as the nudge's JSON body; a cold launch carries none", async () => {
+		const { ensureVm, store, controlPlane, net } = ensureWith();
+		await ensureVm(ref, { interrupt: "turn-1" });
+		// VM-less: launched, not nudged — the boot sweep ends the stale Turn.
+		expect(controlPlane.runs).toHaveLength(1);
+		expect(net.requests).toHaveLength(0);
+		store.calls.length = 0;
+
+		await ensureVm(ref, { interrupt: "turn-1" });
+
+		expect(net.requests).toEqual([
+			{
+				url: "https://vm-1.example/nudge",
+				headers: {
+					"content-type": "application/json",
+					"x-aws-proxy-auth": "token-for-microvm-1",
+					"x-aws-proxy-port": "8080",
+				},
+				body: '{"interrupt":"turn-1"}',
 			},
 		]);
 		expect(store.calls).toEqual(["claimLaunch"]);

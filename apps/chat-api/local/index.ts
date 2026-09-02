@@ -29,9 +29,11 @@ const deps = createDeps(
 // orchestrating a MicroVM. Production composition has no such seam.
 const inVmServerUrl = Bun.env.IN_VM_SERVER_URL?.trim();
 if (inVmServerUrl) {
-	deps.ensureVm = async () => {
+	deps.ensureVm = async (_ref, _logger, command) => {
 		const response = await fetch(new URL("/nudge", inVmServerUrl), {
 			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: command ? JSON.stringify(command) : undefined,
 			signal: AbortSignal.timeout(5_000),
 		});
 		if (!response.ok) {

@@ -1,4 +1,5 @@
 import type { TurnStatus } from "@mymemo/agent-db/turn-store";
+import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 /**
  * The /v2 Conversation history read contract (spec #654, ticket #663): the
@@ -65,6 +66,14 @@ export interface ConversationMessagesStore {
 	enqueueTurn(input: TurnRef & { parts: unknown }): Promise<EnqueueTurnResult>;
 	/** The Turn's current status, or null when no such Turn exists. */
 	getTurnStatus(ref: TurnRef): Promise<TurnStatus | null>;
+	/**
+	 * The id of the Conversation's `processing` Turn (at most one exists), or
+	 * `{ messageId: null }` when nothing is processing; null when the owner has
+	 * no such Conversation. The interrupt route's one read (ticket #668).
+	 */
+	findProcessingTurn(
+		input: ConversationRef,
+	): Promise<{ messageId: string | null } | null>;
 }
 
 export interface TurnRef {

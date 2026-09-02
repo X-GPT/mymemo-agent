@@ -2,6 +2,7 @@ import type { Database, DbTx } from "@mymemo/agent-db/client";
 import { conversationMessages, conversations } from "@mymemo/agent-db/schema";
 import { enqueueTurnTx, type TurnStatus } from "@mymemo/agent-db/turn-store";
 import { and, desc, eq, lt } from "drizzle-orm";
+import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 import type {
 	ConversationMessagesPage,
 	ConversationMessagesPageInput,
@@ -22,16 +23,7 @@ export class PostgresConversationMessagesStore
 		if (!Number.isSafeInteger(input.limit) || input.limit < 1) {
 			throw new Error("Messages page limit must be a positive integer");
 		}
-		const [conversation] = await this.db
-			.select({ conversationId: conversations.conversationId })
-			.from(conversations)
-			.where(
-				and(
-					eq(conversations.userId, input.userId),
-					eq(conversations.conversationId, input.conversationId),
-				),
-			);
-		if (!conversation) return null;
+		if (!(await this.ownsConversation(input))) return null;
 
 		// Newest-first keyset page on the (user, conversation, sequence) index,
 		// one row past the limit to learn whether an older page exists; served
@@ -86,6 +78,38 @@ export class PostgresConversationMessagesStore
 
 	getTurnStatus(ref: TurnRef): Promise<TurnStatus | null> {
 		return selectTurnStatus(this.db, ref);
+	}
+
+	async findProcessingTurn(
+		input: ConversationRef,
+	): Promise<{ messageId: string | null } | null> {
+		if (!(await this.ownsConversation(input))) return null;
+		const [processing] = await this.db
+			.select({ messageId: conversationMessages.messageId })
+			.from(conversationMessages)
+			.where(
+				and(
+					eq(conversationMessages.userId, input.userId),
+					eq(conversationMessages.conversationId, input.conversationId),
+					eq(conversationMessages.status, "processing"),
+				),
+			)
+			.limit(1);
+		return { messageId: processing?.messageId ?? null };
+	}
+
+	/** Missing and foreign Conversations look identical. */
+	private async ownsConversation(input: ConversationRef): Promise<boolean> {
+		const [conversation] = await this.db
+			.select({ conversationId: conversations.conversationId })
+			.from(conversations)
+			.where(
+				and(
+					eq(conversations.userId, input.userId),
+					eq(conversations.conversationId, input.conversationId),
+				),
+			);
+		return conversation !== undefined;
 	}
 }
 

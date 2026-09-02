@@ -3,7 +3,7 @@ import type {
 	SDKMessage,
 	SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { TurnQueryFn } from "./turn-serving";
+import type { InterruptibleStream, TurnQueryFn } from "./turn-serving";
 
 /**
  * ONE long-lived SDK `query()` carrying the Agent session across Turns
@@ -29,11 +29,13 @@ import type { TurnQueryFn } from "./turn-serving";
 export type SessionQueryFn = (params: {
 	prompt: AsyncIterable<SDKUserMessage>;
 	options: Options;
-}) => AsyncIterable<SDKMessage>;
+}) => InterruptibleStream;
 
 interface LiveSession {
 	push(message: SDKUserMessage): void;
 	iterator: AsyncIterator<SDKMessage>;
+	/** The SDK's `interrupt()` control on the live query (#668). */
+	interrupt(): Promise<unknown>;
 }
 
 export function createAgentSession(deps: {
@@ -68,13 +70,14 @@ export function createAgentSession(deps: {
 				wake = null;
 			},
 			iterator: stream[Symbol.asyncIterator](),
+			interrupt: async () => await stream.interrupt?.(),
 		};
 	}
 
-	return ({ prompt }) =>
-		(async function* () {
-			if (live === null) live = start();
-			const session = live;
+	return ({ prompt }) => {
+		if (live === null) live = start();
+		const session = live;
+		const window = (async function* () {
 			session.push({
 				type: "user",
 				message: { role: "user", content: prompt },
@@ -104,4 +107,8 @@ export function createAgentSession(deps: {
 				}
 			}
 		})();
+		// The interrupt control rides the window it targets: the SDK aborts
+		// whatever the session is generating right now, which is this window.
+		return Object.assign(window, { interrupt: () => session.interrupt() });
+	};
 }

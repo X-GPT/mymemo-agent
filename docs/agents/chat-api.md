@@ -262,7 +262,7 @@ names an assistant message instead (those ids are visible in history) is
 
 Client disconnect never interrupts a Turn: chat-api drops its subscription
 and nothing else; the Turn runs to its Outcome and the durable history has
-it.
+it. Interruption is its own route, below.
 
 Local check (the local composition only: `IN_VM_SERVER_URL` in
 `apps/chat-api/local/index.ts` nudges one hand-started In-VM server instead
@@ -274,6 +274,59 @@ H='-H content-type:application/json -H x-member-code:m1 -H x-partner-code:p1'
 ID=$(curl -s -X POST localhost:3000/v2/conversations $H -d '{}' | jq -r .conversationId)   # the In-VM server's MYMEMO_CONVERSATION_ID
 curl -sN -X POST localhost:3000/v2/conversations/$ID/messages $H -d "{\"id\":\"$ID\",\"trigger\":\"submit-message\",\"messages\":[{\"id\":\"m1\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"Say pelican.\"}]}]}"
 curl -s localhost:3000/v2/conversations/$ID/messages $H | jq '.messages[-1]'   # the streamed assistant message, durably
+```
+
+### Interrupt a v2 Turn
+
+`POST /v2/conversations/:conversationId/interrupt` stops the currently
+`processing` Turn (spec #654, #668). There is no Turn id in the route: at
+most one Turn processes. chat-api resolves that Turn's message id and hands
+the nudge's one command, `{interrupt: messageId}`, to Ensure-VM, then
+answers `202 { messageId }`. With nothing processing it answers `204` and does
+nothing. Owner-scoped: missing and foreign Conversations return `404`; `503`
+while MicroVM orchestration is not configured; a launch this request owned
+and lost answers the same retryable `503` + `Retry-After: 5` as the message
+POST. Like v1 interruption, the route bypasses the new-work exposure gate.
+
+Delivery is Ensure-VM's (above) with the command as the nudge's JSON body: a
+`running` VM receives it (auto-resuming if suspended); a VM the platform has
+ended is retired and rehydrated instead, and the new VM's boot sweep
+terminalizes the stale `processing` Turn `interrupted` — so a Turn whose VM
+died still ends. A nudge that fails for any other reason is absorbed exactly
+as on the message POST: the `202` means the command was handed to Ensure-VM,
+not that the VM applied it — a Turn still running is the signal to retry.
+
+Interruption intent is ephemeral — no control table, no flag, no write by
+chat-api. Queued successors are never flushed: after the interruption the
+next queued Turn serves normally.
+
+In the In-VM server the command applies the SDK's `interrupt()` to the
+processing Turn. If the target is still `queued` when the command arrives it
+terminalizes `interrupted` directly, without ever running (`started_at` stays
+NULL); it streamed nothing, so a client holding its message POST sees the
+response end through the terminal watch rather than an `abort` chunk. This
+route never produces that case — it names only a `processing` Turn, and a
+Turn's status is monotonic — so the branch is the In-VM server's own guard
+for any nudge caller naming a queued Turn (#668's race clause). Once
+accepted, `interrupted` wins the Outcome whatever the SDK stream does next:
+the Turn's SSE ends with the `abort` chunk and the assistant row keeps
+exactly what had durably completed at that moment — Steps and tool results
+streamed after the command, the truncated provider envelope included, are
+neither persisted nor published. A command naming a Turn that is neither
+queued nor in flight is dropped — including one that lands in the instant
+between the claim's commit and the In-VM server learning of it. A retry
+always re-sends the SDK control, so a control the CLI rejected is not lost
+either; a command that reaches a claimed Turn before its model call starts
+ends it `interrupted` without making that call.
+
+Local check (same setup as the message POST above, with a prompt long enough
+to still be streaming):
+
+```sh
+curl -sN -X POST localhost:3000/v2/conversations/$ID/messages $H -d "{\"id\":\"$ID\",\"trigger\":\"submit-message\",\"messages\":[{\"id\":\"m2\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"Write a 2000-word essay about pelicans.\"}]}]}" &
+sleep 3; curl -s -i -X POST localhost:3000/v2/conversations/$ID/interrupt $H   # 202 {"messageId":"m2"}; the stream above ends with {"type":"abort"}
+curl -s localhost:3000/v2/conversations/$ID/messages $H | jq '[.messages[] | select(.role=="user")][-1].metadata.status'   # "interrupted"
+curl -s -i -X POST localhost:3000/v2/conversations/$ID/interrupt $H   # 204: nothing processing
 ```
 
 ### Admit and stream a Run

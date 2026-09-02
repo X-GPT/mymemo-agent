@@ -159,3 +159,36 @@ describe("createAgentSession — one long-lived query() across Turns", () => {
 		expect(calls[1]?.prompts).toEqual(["fresh"]);
 	});
 });
+
+describe("createAgentSession — the interrupt control (#668)", () => {
+	it("forwards a window's interrupt() to the live query, and the session survives it", async () => {
+		let interrupts = 0;
+		const sessionQuery: SessionQueryFn = ({ prompt }) => {
+			const stream = (async function* () {
+				for await (const message of prompt) {
+					yield* textStep(`echo:${promptText(message)}`);
+					yield resultSuccess();
+				}
+			})();
+			return Object.assign(stream, {
+				interrupt: async () => {
+					interrupts += 1;
+				},
+			});
+		};
+		const turnQuery = createAgentSession({
+			query: sessionQuery,
+			options: SENTINEL_OPTIONS,
+		});
+
+		const first = turnQuery({ prompt: "one", options: SENTINEL_OPTIONS });
+		await first.interrupt?.();
+		expect(interrupts).toBe(1);
+		expect((await Array.fromAsync(first)).at(-1)?.type).toBe("result");
+
+		const second = await Array.fromAsync(
+			turnQuery({ prompt: "two", options: SENTINEL_OPTIONS }),
+		);
+		expect(second.at(-1)?.type).toBe("result");
+	});
+});

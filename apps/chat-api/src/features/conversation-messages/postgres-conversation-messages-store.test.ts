@@ -254,3 +254,30 @@ describe("PostgresConversationMessagesStore Turn submission", () => {
 		).toEqual({ outcome: "not_found" });
 	});
 });
+
+describe("PostgresConversationMessagesStore processing Turn lookup", () => {
+	const key = { userId: "member-1", conversationId: "conversation-1" };
+
+	it("names the processing Turn, or none, and null for a missing or foreign Conversation", async () => {
+		expect(await store.findProcessingTurn(key)).toEqual({ messageId: null });
+
+		await tdb.db
+			.insert(conversationMessages)
+			.values([
+				userRow(1, "turn-1"),
+				assistantRow(2, "assistant-1", []),
+				userRow(3, "turn-2", { status: "processing" }),
+				userRow(4, "turn-3", { status: "queued" }),
+			]);
+		expect(await store.findProcessingTurn(key)).toEqual({
+			messageId: "turn-2",
+		});
+
+		expect(
+			await store.findProcessingTurn({ ...key, conversationId: "nope" }),
+		).toBeNull();
+		expect(
+			await store.findProcessingTurn({ ...key, userId: "member-2" }),
+		).toBeNull();
+	});
+});

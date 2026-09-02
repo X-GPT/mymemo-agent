@@ -1,4 +1,7 @@
-import { sweepStaleProcessingTurnsTx } from "@mymemo/agent-db/turn-store";
+import {
+	cancelQueuedTurnTx,
+	sweepStaleProcessingTurnsTx,
+} from "@mymemo/agent-db/turn-store";
 import { serveOneTurn, type TurnServingDeps } from "./turn-serving";
 
 /**
@@ -21,6 +24,10 @@ const SELF_HEAL_INTERVAL_MS = 15_000;
 export interface DrainLoopHandle {
 	/** The doorbell: fire-and-forget "consult Postgres now". Always safe. */
 	nudge(): void;
+	/** The nudge's one command (#668) — see "Interrupt a v2 Turn" in
+	 * docs/agents/chat-api.md. Rejects only when the queued-cancel itself
+	 * failed, so the nudge answers non-2xx instead of claiming it applied. */
+	interrupt(messageId: string): Promise<void>;
 	/** Stop after the Turn in flight (if any) completes. */
 	stop(): Promise<void>;
 }
@@ -36,6 +43,9 @@ export function startDrainLoop(
 	let doorbell = false;
 	let wake: (() => void) | null = null;
 	let stopped = false;
+	// The in-flight Turn's interrupt channel (serveOneTurn listens for the
+	// life of its claim).
+	const interrupts = new EventTarget();
 
 	const nudge = (): void => {
 		doorbell = true;
@@ -88,7 +98,7 @@ export function startDrainLoop(
 			doorbell = false;
 			let outcome: Awaited<ReturnType<typeof serveOneTurn>> = null;
 			try {
-				outcome = await serveOneTurn(deps);
+				outcome = await serveOneTurn(deps, interrupts);
 			} catch (error) {
 				// serveOneTurn terminalizes its own Turn failures; only a claim
 				// that never got off the ground (a DB blip) lands here. Sleep
@@ -107,6 +117,25 @@ export function startDrainLoop(
 
 	return {
 		nudge,
+		async interrupt(messageId) {
+			const turnKey = { ...conversationKey, messageId };
+			// Queued-cancel first: it is the DB that says whether the claim
+			// already happened, and the in-flight check below catches a target
+			// claimed while this cancel was refused.
+			if (await cancelQueuedTurnTx(deps.db, turnKey)) {
+				deps.logger.warn(
+					turnKey,
+					"interrupt reached a still-queued Turn; interrupted without running",
+				);
+			} else if (deps.currentTurn.turnId === messageId) {
+				interrupts.dispatchEvent(new Event("interrupt"));
+			} else {
+				deps.logger.warn(
+					turnKey,
+					"interrupt target is neither queued nor in flight; dropped",
+				);
+			}
+		},
 		async stop() {
 			stopped = true;
 			nudge();

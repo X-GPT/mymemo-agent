@@ -14,10 +14,15 @@ import {
  * subscribing to the Turn's Live Stream. Resolves once the VM is running or
  * launching; rejects with {@link VmUnavailableError} only when a launch this
  * caller owned failed after the SDK's retries — the retryable 503.
+ *
+ * The interrupt route (#668) rides the same path with the nudge's one
+ * command: a running VM receives it on the nudge; a VM that is gone is
+ * rehydrated, and its boot sweep terminalizes the stale Turn `interrupted`.
  */
 export type EnsureVm = (
 	ref: ConversationRef,
 	logger: EnsureVmLogger,
+	command?: { interrupt: string },
 ) => Promise<void>;
 
 /** The request logger (hono-pino's, or any pino-shaped one). */
@@ -50,7 +55,7 @@ export function createEnsureVm({
 	config,
 	fetch = globalThis.fetch,
 }: EnsureVmDeps): EnsureVm {
-	return (ref, logger) => {
+	return (ref, logger, command) => {
 		/** This caller owns the `launching` claim: mint, launch, record. */
 		async function launch(claimToken: string): Promise<void> {
 			const gatewayToken = await mintGatewayToken({
@@ -123,7 +128,9 @@ export function createEnsureVm({
 					headers: {
 						"x-aws-proxy-auth": token,
 						"x-aws-proxy-port": String(IN_VM_SERVER_PORT),
+						"content-type": "application/json",
 					},
+					body: command ? JSON.stringify(command) : undefined,
 					signal: AbortSignal.timeout(NUDGE_TIMEOUT_MS),
 				});
 				if (!response.ok) throw new Error(`nudge answered ${response.status}`);
