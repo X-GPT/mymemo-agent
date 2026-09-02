@@ -405,15 +405,12 @@ describe("drain loop — the interrupt command (#668)", () => {
 describe("drain loop — the suspend hook's graceful-drain gate (#670)", () => {
 	/** A Turn whose stream parks until `release` is called. */
 	function gatedTurn(served: string[]) {
-		let release: () => void = () => {};
-		const gate = new Promise<void>((resolve) => {
-			release = resolve;
-		});
+		const gate = Promise.withResolvers<void>();
 		const query = scriptedTurnQuery(served, async (prompt) => {
-			await gate;
+			await gate.promise;
 			return [...textStep(`echo:${prompt}`), resultSuccess()];
 		});
-		return { query, release: () => release() };
+		return { query, release: gate.resolve };
 	}
 
 	it("pause holds new claims while a Turn is in flight and settles at its terminal; resume drains the rest", async () => {
