@@ -71,6 +71,6 @@ aws lambda-microvms terminate-microvm --region $REGION --microvm-identifier "$VM
 
 ## What stays out (by design)
 
-- Orchestration (claim/ensure VM, token minting at `RunMicrovm`, nudge from chat-api) — the orchestration ticket; this runbook drives the same contract by hand.
+- Orchestration lives in chat-api (`apps/chat-api/src/features/conversation-vm/`, #669): the `conversation_vm` launch claim, `RunMicrovm` with the minted gateway token in `runHookPayload`, the per-nudge auth token, lazy rehydrate. This runbook drives the same contract by hand for spot-checks.
 - Checkpoint/rehydrate and the graceful-drain `/suspend` gate — #670; until then the platform snapshot preserves state across suspend/resume.
 - `--additional-os-capabilities` — omitted; nothing in the image needs elevated capabilities now that there is no sandbox to construct.

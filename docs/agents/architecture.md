@@ -48,6 +48,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/chat-api/src/features/conversation-history/` | Owner-scoped permanent history over canonical Run events |
 | `apps/chat-api/src/features/artifacts/` | Current-artifact listing and five-minute S3 download signing |
 | `apps/chat-api/src/features/conversation-store/` | Durable Conversation registry and frozen Scope |
+| `apps/chat-api/src/features/conversation-vm/` | /v2 MicroVM orchestration (#669): the `conversation_vm` registry + transactional launch claim, the Lambda MicroVM control-plane client, and Ensure-VM (claim → `RunMicrovm` with the minted gateway token in `runHookPayload`, nudge, lazy rehydrate, urgent upgrade) |
 | `apps/chat-api/src/features/exposure-gate/` | Production Statsig implementation of the new-work gate |
 | `apps/chat-api/src/features/run-store/` | Run admission, owner-scoped Run reads, and durable interruption |
 | `apps/chat-api/src/db/` | Thin bindings to `@mymemo/agent-db` and the shared migration runner |

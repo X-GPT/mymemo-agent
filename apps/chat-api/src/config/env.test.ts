@@ -79,17 +79,54 @@ describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
 		expect(config.gatewayTokenSecret).toBe("gateway-signing-secret");
 	});
 
-	it("reads the dev-mode In-VM server URL for the v2 message POST", () => {
-		expect(loadApiConfigFromEnv(baseEnv()).inVmServerUrl).toBeUndefined();
-		const env = baseEnv();
-		env.IN_VM_SERVER_URL = "http://127.0.0.1:8080";
-		env.IN_VM_SERVER_AUTH_TOKEN = "per-vm-token";
-		const config = loadApiConfigFromEnv(env);
-		expect(config.inVmServerUrl).toBe("http://127.0.0.1:8080");
-		expect(config.inVmServerAuthToken).toBe("per-vm-token");
+	it("boots without MicroVM orchestration; the v2 message POST degrades, not the boot", () => {
+		expect(loadApiConfigFromEnv(baseEnv()).microvm).toBeUndefined();
 	});
 
-	it("still never reads the remaining worker-only secrets (KB, E2B)", () => {
+	it("reads the MicroVM launch inventory as one all-or-nothing block keyed on MICROVM_IMAGE_ARN", () => {
+		const env = baseEnv();
+		env.MICROVM_IMAGE_ARN = "arn:aws:lambda:us-west-2:123:microvm-image:img";
+		env.MICROVM_EGRESS_CONNECTOR_ARN =
+			"arn:aws:lambda:us-west-2:123:network-connector:egress";
+		env.MICROVM_EXECUTION_ROLE_ARN = "arn:aws:iam::123:role/exec";
+		env.GATEWAY_BASE_URL = "http://alb.internal/";
+		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
+		env.GATEWAY_TOKEN_SECRET = "gateway-signing-secret";
+		expect(loadApiConfigFromEnv(env).microvm).toEqual({
+			imageArn: "arn:aws:lambda:us-west-2:123:microvm-image:img",
+			gatewayTokenSecret: "gateway-signing-secret",
+			egressConnectorArn:
+				"arn:aws:lambda:us-west-2:123:network-connector:egress",
+			executionRoleArn: "arn:aws:iam::123:role/exec",
+			gatewayBaseUrl: "http://alb.internal",
+			kbDatabaseUrl: "postgresql://kb:kb@localhost:5432/mymemo_kb",
+			model: "anthropic/claude-sonnet-5",
+			upgradeUrgent: false,
+		});
+
+		env.OPENROUTER_DEFAULT_MODEL = "anthropic/claude-opus-5";
+		env.MICROVM_IMAGE_UPGRADE_URGENT = "true";
+		expect(loadApiConfigFromEnv(env).microvm).toMatchObject({
+			model: "anthropic/claude-opus-5",
+			upgradeUrgent: true,
+		});
+
+		for (const name of [
+			"MICROVM_EGRESS_CONNECTOR_ARN",
+			"MICROVM_EXECUTION_ROLE_ARN",
+			"GATEWAY_BASE_URL",
+			"KB_DATABASE_URL",
+			"GATEWAY_TOKEN_SECRET",
+		]) {
+			const partial = { ...env };
+			delete partial[name];
+			expect(() => loadApiConfigFromEnv(partial)).toThrow(
+				new RegExp(`${name} is required with MICROVM_IMAGE_ARN`),
+			);
+		}
+	});
+
+	it("never reads the E2B secret, and the KB URL only for MicroVM launch", () => {
 		const env = baseEnv();
 		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
 		env.E2B_API_KEY = "e2b-should-be-ignored";

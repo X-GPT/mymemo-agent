@@ -177,19 +177,62 @@ channel). Earlier messages are the client's history and validation input, not
 new durable history. `regenerate-message`, files, and message metadata are
 rejected with `400`.
 
-Order of operations: identity → `503` while no In-VM server is configured
-(`IN_VM_SERVER_URL`, the dev-mode Ensure-VM stub) → exposure gate (`403`,
+Order of operations: identity → `503` while MicroVM orchestration is not
+configured (`MICROVM_IMAGE_ARN` and its companions) → exposure gate (`403`,
 before any write, on every submission) → the `queued` INSERT under the
 Conversation row lock (`404` for missing or foreign, `409` for an archived
 Conversation — the lock is the one `PATCH` archive takes, so no message slips
 in beside an Archive) → subscribe to the Turn's Live Stream lane (keyed on
 Conversation id + message id: the message id is client-chosen and unique only
-within its Conversation) → nudge → relay. Subscribing before nudging is what
-makes early chunks unlosable: the v2 lane keeps no backlog. That INSERT is chat-api's only write to
+within its Conversation) → Ensure-VM (below) → relay. Subscribing before
+Ensure-VM is what makes early chunks unlosable: the v2 lane keeps no backlog,
+and a cold VM drains the queue the moment it boots. That INSERT is chat-api's only write to
 `conversation_messages`; the In-VM server owns every status transition. There
 is no `409` for concurrency: a second POST is simply the next queued row, and
 its response holds with silent SSE comment keepalives (`: ping`, every 5 s)
 while queued predecessors drain, then carries only its own Turn's chunks.
+
+#### Ensure-VM (orchestration, #669)
+
+chat-api drives the Conversation's MicroVM inline in the POST handler
+(`features/conversation-vm/`); there is no orchestrator service and nothing
+runs in the background. `conversation_vm` (one row per Conversation: VM id,
+endpoint, image version, `launching | running | terminated`, last activity,
+the Checkpoint pointer slot) is both the registry and the **transactional
+launch claim**: one upsert inserts a fresh `launching` row or re-claims a
+`terminated` one (lazy rehydrate) or a `launching` one older than 2 minutes
+(the claimant died mid-launch), and returns a claim token to exactly one
+caller. That caller alone mints the per-Conversation gateway token, composes the
+`runHookPayload` (Conversation identity, agent DB, KB, and Redis URLs, the
+`/v2/gateway/<conversation>` model URL on `GATEWAY_BASE_URL`, the token, the
+model — ≤ 16 KB), calls `RunMicrovm` (AWS SDK adaptive retry, 5 attempts, the
+egress connector, the managed ingress connector, the execution role, idle
+policy 900 s / 3600 s / auto-resume, 8 h maximum duration), and records the
+VM as `running` — a write fenced on its claim token, as is the release below,
+so a launcher whose claim outlived the stale window and was re-claimed
+cannot record over the newer claimant; it terminates the VM it just launched
+instead. It does not nudge: the In-VM server's drain loop starts
+inside the `/run` hook and consumes the queue itself. A launch that fails
+after retries releases the claim (`terminated`, immediately re-claimable) and
+answers `503` with `Retry-After: 5`; the Turn is durable, so the client's
+re-POST is a no-op insert plus a fresh launch.
+
+Every later POST finds the `running` row and **nudges** the VM through its
+endpoint (`CreateMicrovmAuthToken` for port 8080, then `POST /nudge`; a
+suspended VM auto-resumes under the platform, nothing resumes proactively).
+A failed nudge asks `GetMicrovm`: `TERMINATED`, `TERMINATING`, or not found
+marks the row `terminated` and re-runs Ensure-VM once, which re-claims and
+launches onto the current image — the lazy rehydrate after an 8 h-cap kill or
+a failed boot. Any other state (booting, suspending) keeps the row; the
+queued Turn waits for the In-VM server's interval self-heal. A caller that
+finds another's fresh `launching` claim does nothing: that VM's boot drains
+the queue, this Turn included. Archive triggers nothing (the idle policy
+winds the VM down); unarchive does nothing until the next message.
+
+Resume never upgrades the image (snapshot restore), so upgrades land only at
+rehydrate. `MICROVM_IMAGE_UPGRADE_URGENT=true` converts the next nudge of a
+VM whose recorded image version differs from the image's latest active
+version into terminate + rehydrate, once per Conversation.
 
 The response is `200 text/event-stream` with the `x-vercel-ai-ui-message-stream: v1`
 header, each chunk as one `data:` frame exactly as the In-VM server published
@@ -202,10 +245,10 @@ a restarted VM sweeps it `interrupted` — one such read may only be the window
 between the In-VM server's Outcome commit and its terminal publish), the
 stream ends with `[DONE]` and no synthesized chunk. A relay failure mid-stream closes the response without `[DONE]` and
 without synthesizing anything; a subscribe failure answers `503` after a
-best-effort nudge so the queued Turn still runs. A nudge failure is logged
-and the response streams on — the row is durable and the In-VM server's
-interval self-heal consults Postgres on its own. In every case the client
-Recovers from durable history.
+best-effort Ensure-VM so the queued Turn still runs. A nudge failure is
+absorbed inside Ensure-VM and the response streams on — the row is durable
+and the In-VM server's interval self-heal consults Postgres on its own. In
+every case the client Recovers from durable history.
 
 A re-POST of the same client message id creates no second Turn (the primary
 key is the idempotency authority; the row's parts and status stay as they
@@ -221,8 +264,10 @@ Client disconnect never interrupts a Turn: chat-api drops its subscription
 and nothing else; the Turn runs to its Outcome and the durable history has
 it.
 
-Local check (a locally running In-VM server on `IN_VM_SERVER_URL`, the
-Compose Postgres + Redis, and chat-api with the same identity):
+Local check (the local composition only: `IN_VM_SERVER_URL` in
+`apps/chat-api/local/index.ts` nudges one hand-started In-VM server instead
+of orchestrating a MicroVM; the Compose Postgres + Redis, and chat-api with
+the same identity):
 
 ```sh
 H='-H content-type:application/json -H x-member-code:m1 -H x-partner-code:p1'

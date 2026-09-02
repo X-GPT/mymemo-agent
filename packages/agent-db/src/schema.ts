@@ -248,6 +248,59 @@ export const conversationMessages = pgTable(
 	],
 );
 
+/** Every legal `conversation_vm.state`. */
+export const ALL_VM_STATES = ["launching", "running", "terminated"] as const;
+
+/**
+ * The per-Conversation MicroVM registry (spec #654, ticket #669): one row per
+ * Conversation, keyed like the Conversation itself, holding the VM the
+ * Conversation's Turns run on. It doubles as the **transactional launch
+ * claim**: an upsert that inserts a fresh `launching` row, or re-claims a
+ * `terminated` one (rehydrate) or a stale `launching` one (the claimant died
+ * mid-launch), returns a row to exactly one caller — the only caller allowed
+ * to invoke `RunMicrovm`, which the platform cannot make idempotent per
+ * Conversation. `launching` rows never carry a `microvm_id`; recording the
+ * launch flips the row to `running` in the same write, fenced on the
+ * `claim_token` the claim minted so a launcher whose claim went stale and was
+ * re-claimed can neither record nor release over the newer claimant. Written
+ * by chat-api only (`apps/chat-api/src/features/conversation-vm/`).
+ * `checkpoint_pointer` is the Checkpoint ticket's (#670) slot; nothing writes
+ * it yet.
+ */
+export const conversationVm = pgTable(
+	"conversation_vm",
+	{
+		userId: text("user_id").notNull(),
+		conversationId: text("conversation_id").notNull(),
+		/** The platform's MicroVM id; NULL while `launching`. */
+		microvmId: text("microvm_id"),
+		/** The platform's per-VM endpoint host chat-api nudges through. */
+		endpoint: text("endpoint"),
+		/** The image version `RunMicrovm` answered with — what a rehydrate upgrades. */
+		imageVersion: text("image_version"),
+		state: text("state").notNull(),
+		/** The launch claim's fence: minted by the claim, matched by the launch record and release. */
+		claimToken: text("claim_token"),
+		/** Claim time while `launching` (the stale-claim window); launch time while `running`. */
+		lastActivityAt: timestamp("last_activity_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		checkpointPointer: text("checkpoint_pointer"),
+	},
+	(t) => [
+		primaryKey({ columns: [t.userId, t.conversationId] }),
+		foreignKey({
+			columns: [t.userId, t.conversationId],
+			foreignColumns: [conversations.userId, conversations.conversationId],
+			name: "conversation_vm_conversation_fk",
+		}).onDelete("cascade"),
+		check(
+			"conversation_vm_state_check",
+			sql`${t.state} in (${statusList(ALL_VM_STATES)})`,
+		),
+	],
+);
+
 /**
  * Non-cascading transactional outbox for AgentCore dispatch. A Run id is the
  * dispatch identity, so the primary key enforces at most one dispatch per Run.

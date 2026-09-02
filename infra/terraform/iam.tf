@@ -31,6 +31,7 @@ data "aws_iam_policy_document" "read_secrets" {
       local.live_redis_url_secret_arn,
       local.openrouter_api_key_secret_arn,
       aws_secretsmanager_secret.gateway_token.arn,
+      local.kb_database_url_secret_arn,
     ]
   }
 }
