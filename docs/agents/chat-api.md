@@ -372,10 +372,8 @@ config asserts it): it is the SDK `sessionId` of a fresh session and the
 `resume` target whenever its transcript exists under
 `~/.claude/projects/` — after a restore on a new VM, and after a retired
 session within one process. The rehydrated VM's first model call replays
-the earlier Turns' prompts and replies before the new one. A hard kill
-mid-Turn (no hook) leaves that Turn `processing`; the replacement VM's boot
-sweep terminalizes it `interrupted`, and history shows exactly the Steps
-that had committed. No local check: the hooks fire only in the MicroVM.
+the earlier Turns' prompts and replies before the new one. No local check:
+the hooks fire only in the MicroVM.
 
 ### Admit and stream a Run
 
