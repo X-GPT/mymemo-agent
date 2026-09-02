@@ -147,7 +147,7 @@ describe("the In-VM server surface", () => {
 		expect(res.status).toBe(200);
 	});
 
-	it("answers the suspend hook only once the drain-and-checkpoint handler completes, and 500 when it fails", async () => {
+	it("answers the suspend hook only once the drain-and-checkpoint handler completes (500 when it fails), and hands resume to its handler", async () => {
 		const events: string[] = [];
 		const app = createApp(
 			handlers({
@@ -155,13 +155,18 @@ describe("the In-VM server surface", () => {
 					await Bun.sleep(20);
 					events.push("checkpointed");
 				},
+				resume: async () => {
+					events.push("resumed");
+				},
 			}),
 		);
-		const res = await app.request("/aws/lambda-microvms/runtime/v1/suspend", {
-			method: "POST",
-		});
-		expect(res.status).toBe(200);
-		expect(events).toEqual(["checkpointed"]);
+		const hook = (name: string) =>
+			app.request(`/aws/lambda-microvms/runtime/v1/${name}`, {
+				method: "POST",
+			});
+		expect((await hook("suspend")).status).toBe(200);
+		expect((await hook("resume")).status).toBe(200);
+		expect(events).toEqual(["checkpointed", "resumed"]);
 
 		const failing = createApp(
 			handlers({
@@ -177,22 +182,6 @@ describe("the In-VM server surface", () => {
 				})
 			).status,
 		).toBe(500);
-	});
-
-	it("delivers the resume hook to its handler", async () => {
-		let resumed = 0;
-		const app = createApp(
-			handlers({
-				resume: async () => {
-					resumed += 1;
-				},
-			}),
-		);
-		const res = await app.request("/aws/lambda-microvms/runtime/v1/resume", {
-			method: "POST",
-		});
-		expect(res.status).toBe(200);
-		expect(resumed).toBe(1);
 	});
 
 	it("streams the in-VM smoke checks when the image bakes a smoke script", async () => {

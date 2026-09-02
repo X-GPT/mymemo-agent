@@ -6,13 +6,11 @@ import path from "node:path";
 /**
  * The Checkpoint (spec #654, ticket #670): the Agent session (`~/.claude`)
  * and the Workspace as one gzipped tar, exchanged with chat-api's
- * `/v2/checkpoint/<conversation>` door under the per-Conversation gateway
- * token — the VM has no path to S3, and this trusted process is the only
- * thing in the VM that ever holds the token. `save` runs inside the suspend
- * hook once the drain loop is parked; `restore` runs inside the run hook
- * before the boot sweep, so a rehydrated VM serves nothing until its state
- * is back. Both fail loudly: a Checkpoint that did not land must fail its
- * hook rather than let the VM claim durability it does not have.
+ * `/v2/checkpoint/<conversation>` door under the gateway token (why a door
+ * and not S3: ADR-0034, amendment 2026-09-02). `save` runs inside the
+ * suspend hook once the drain loop is parked; `restore` inside the run hook
+ * before the boot sweep. Both fail loudly: a Checkpoint that did not land
+ * must fail its hook rather than let the VM claim durability it lacks.
  *
  * The archive is two roots — `.claude` relative to HOME and the Workspace
  * relative to its parent — so the layout survives a Workspace outside HOME
@@ -61,20 +59,15 @@ async function tar(args: string[]): Promise<void> {
 	}
 }
 
-function claudeDir(paths: CheckpointPaths): string {
-	return path.join(paths.homeDir, ".claude");
-}
-
 /** Pack the session and Workspace and PUT them through the door. */
 export async function saveCheckpoint(
 	paths: CheckpointPaths,
 	door: CheckpointDoor,
 	logger: CheckpointLogger,
-	fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
 	const started = Date.now();
 	// Always a member, so restore never has to ask whether it is there.
-	mkdirSync(claudeDir(paths), { recursive: true });
+	mkdirSync(path.join(paths.homeDir, ".claude"), { recursive: true });
 	const dir = await mkdtemp(path.join(tmpdir(), "checkpoint-"));
 	try {
 		const file = path.join(dir, "checkpoint.tar.gz");
@@ -90,7 +83,7 @@ export async function saveCheckpoint(
 			path.basename(paths.workspaceDir),
 		]);
 		const archive = Bun.file(file);
-		const response = await fetchImpl(door.url, {
+		const response = await fetch(door.url, {
 			method: "PUT",
 			headers: {
 				authorization: `Bearer ${door.token}`,
@@ -120,10 +113,9 @@ export async function restoreCheckpoint(
 	paths: CheckpointPaths,
 	door: CheckpointDoor,
 	logger: CheckpointLogger,
-	fetchImpl: typeof fetch = fetch,
 ): Promise<"restored" | "none"> {
 	const started = Date.now();
-	const response = await fetchImpl(door.url, {
+	const response = await fetch(door.url, {
 		headers: { authorization: `Bearer ${door.token}` },
 		signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
 	});

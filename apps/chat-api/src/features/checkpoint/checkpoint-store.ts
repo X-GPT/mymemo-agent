@@ -25,10 +25,11 @@ export interface CheckpointStore {
 	delete(key: string): Promise<void>;
 }
 
-export function createS3CheckpointStore(
-	config: { bucket: string; region: string },
-	client: Pick<S3Client, "send"> = new S3Client({ region: config.region }),
-): CheckpointStore {
+export function createS3CheckpointStore(config: {
+	bucket: string;
+	region: string;
+}): CheckpointStore {
+	const client = new S3Client({ region: config.region });
 	const Bucket = config.bucket;
 	return {
 		async put(Key, Body, ContentLength) {

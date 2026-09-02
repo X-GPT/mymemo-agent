@@ -1,17 +1,15 @@
 import { Readable } from "node:stream";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "@/deps";
-import { verifyGatewayToken } from "@/features/gateway/gateway-token";
+import { admitGatewayCaller } from "@/features/gateway/gateway.route";
 import type { CheckpointStore } from "./checkpoint-store";
 
 /**
- * The /v2 Checkpoint door (spec #654, ticket #670): the MicroVM's only path
- * for its durable state. The VM cannot reach S3 (no VPC endpoint, by
- * design), so its suspend hook PUTs the Checkpoint here and its run hook
- * GETs it back on rehydrate. Auth is the per-Conversation gateway token —
- * the same one the model gateway verifies — so chat-api derives the
- * Conversation from the verified token and writes exactly that prefix:
- * per-Conversation scoping in code, with no IAM wildcard on any VM role.
+ * The /v2 Checkpoint door (spec #654, ticket #670): the VM's suspend hook
+ * PUTs its Checkpoint here and its run hook GETs it back on rehydrate, under
+ * the same gateway token the model gateway verifies (why a door and not S3:
+ * ADR-0034, amendment 2026-09-02). chat-api derives the Conversation from
+ * the verified token and writes exactly that prefix.
  *
  * PUT streams the body to a fresh key, then moves `checkpoint_pointer` to it
  * in one guarded write (the VM named in `x-mymemo-microvm-id` must still be
@@ -36,23 +34,14 @@ async function admit(
 		return c.json({ error: "Checkpoint route is not configured" }, 503);
 	}
 	const conversationId = c.req.param("conversationId") ?? "";
-	const token = (c.req.header("authorization") ?? "").replace(
-		/^Bearer\s+/i,
-		"",
-	);
-	const verdict = await verifyGatewayToken(token, {
-		secret: config.gatewayTokenSecret,
+	const admitted = await admitGatewayCaller(
+		c,
+		config.gatewayTokenSecret,
 		conversationId,
-	});
-	if (!verdict.ok) {
-		c.var.logger.warn(
-			{ conversationId, reason: verdict.reason },
-			"checkpoint token rejected",
-		);
-		return c.json({ error: "Unauthorized" }, 401);
-	}
+	);
+	if (admitted instanceof Response) return admitted;
 	return {
-		ref: { userId: verdict.userId, conversationId },
+		ref: { userId: admitted.userId, conversationId },
 		store: checkpointStore,
 	};
 }

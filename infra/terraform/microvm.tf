@@ -303,13 +303,10 @@ resource "aws_s3_bucket_policy" "microvm_checkpoints_tls_only" {
 }
 
 # --- VM execution role ------------------------------------------------------
-# Passed at RunMicrovm. It carries no policy: the VM has no network path to
-# S3 (no VPC endpoint — that absence is the egress lockdown), so Checkpoints
-# are brokered through chat-api's /v2/checkpoint route under the
-# per-Conversation gateway token (#670), and the conversations/* residual
-# ADR-0034 once accepted on this role no longer exists. Kept as a role so the
-# launch contract (executionRoleArn) is unchanged; removing it outright is a
-# follow-up once a live RunMicrovm without one is proven.
+# Passed at RunMicrovm. It carries no policy: Checkpoints are brokered through
+# chat-api (#670; ADR-0034 amendment 2026-09-02). Kept so the launch contract
+# (executionRoleArn) is unchanged; removing it outright is a follow-up once a
+# live RunMicrovm without one is proven.
 
 resource "aws_iam_role" "microvm_execution" {
   name               = "${local.microvm_name}-execution"

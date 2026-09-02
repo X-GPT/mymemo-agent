@@ -53,11 +53,11 @@ export function startDrainLoop(
 	let wake: (() => void) | null = null;
 	let stopped = false;
 	let paused = false;
-	// Callers of pause(), released when the loop parks paused (or stops).
-	let parked: (() => void)[] = [];
+	// The pause() caller, released when the loop parks paused (or stops).
+	let parked: (() => void) | null = null;
 	const releaseParked = (): void => {
-		for (const release of parked) release();
-		parked = [];
+		parked?.();
+		parked = null;
 	};
 	// The in-flight Turn's interrupt channel (serveOneTurn listens for the
 	// life of its claim).
@@ -161,7 +161,9 @@ export function startDrainLoop(
 		},
 		pause() {
 			paused = true;
-			const settled = new Promise<void>((resolve) => parked.push(resolve));
+			const settled = new Promise<void>((resolve) => {
+				parked = resolve;
+			});
 			// Wake a parked loop so it re-parks as paused and releases us.
 			nudge();
 			return settled;

@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import type { AppEnv } from "@/deps";
 import { verifyGatewayToken } from "./gateway-token";
 
@@ -139,6 +139,29 @@ function observeStream(
 	});
 }
 
+/**
+ * Admit a VM's request on its Bearer gateway token, for this route and the
+ * Checkpoint door (#670): the verified claims, or the opaque 401 — the
+ * reason stays in the log, and nothing is forwarded or stored.
+ */
+export async function admitGatewayCaller(
+	c: Context<AppEnv>,
+	secret: string,
+	conversationId: string,
+): Promise<{ userId: string } | Response> {
+	const token = (c.req.header("authorization") ?? "").replace(
+		/^Bearer\s+/i,
+		"",
+	);
+	const verdict = await verifyGatewayToken(token, { secret, conversationId });
+	if (verdict.ok) return { userId: verdict.userId };
+	c.var.logger.warn(
+		{ conversationId, reason: verdict.reason },
+		"gateway token rejected",
+	);
+	return c.json({ error: "Unauthorized" }, 401);
+}
+
 const routes = new Hono<AppEnv>();
 
 routes.all("/:conversationId/*", async (c) => {
@@ -147,23 +170,12 @@ routes.all("/:conversationId/*", async (c) => {
 		return c.json({ error: "Gateway is not configured" }, 503);
 	}
 	const conversationId = c.req.param("conversationId");
-	const token = (c.req.header("authorization") ?? "").replace(
-		/^Bearer\s+/i,
-		"",
-	);
-	const verdict = await verifyGatewayToken(token, {
-		secret: config.gatewayTokenSecret,
+	const admitted = await admitGatewayCaller(
+		c,
+		config.gatewayTokenSecret,
 		conversationId,
-	});
-	if (!verdict.ok) {
-		// The reason stays in the log; every caller-visible failure is the same 401
-		// and nothing is forwarded upstream.
-		c.var.logger.warn(
-			{ conversationId, reason: verdict.reason },
-			"gateway token rejected",
-		);
-		return c.json({ error: "Unauthorized" }, 401);
-	}
+	);
+	if (admitted instanceof Response) return admitted;
 
 	const url = new URL(c.req.url);
 	const requestPath = url.pathname.slice(
