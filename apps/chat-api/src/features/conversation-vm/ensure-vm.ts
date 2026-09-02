@@ -26,8 +26,8 @@ export type EnsureVmLogger = Pick<Logger, "info" | "warn" | "error">;
 
 /** A launch failed after retries; the client should retry the POST later. */
 export class VmUnavailableError extends Error {
-	constructor(options: { cause: unknown }) {
-		super("MicroVM launch failed", options);
+	constructor(cause: unknown) {
+		super("MicroVM launch failed", { cause });
 		this.name = "VmUnavailableError";
 	}
 }
@@ -70,11 +70,14 @@ export function createEnsureVm({
 	return (ref, logger) => {
 		/** This caller owns the `launching` claim: mint, launch, record. */
 		async function launch(): Promise<void> {
-			let vm: Awaited<ReturnType<MicrovmControlPlane["run"]>>;
-			try {
-				// The platform caps the payload at 4 KB; its own validation rejects
-				// an oversize one into the catch below.
-				vm = await controlPlane.run({
+			const gatewayToken = await mintGatewayToken({
+				conversationId: ref.conversationId,
+				secret: gatewayTokenSecret,
+			});
+			// The platform caps the payload at 4 KB; its own validation rejects
+			// an oversize one into the catch below.
+			const vm = await controlPlane
+				.run({
 					runHookPayload: JSON.stringify({
 						MYMEMO_USER_ID: ref.userId,
 						MYMEMO_CONVERSATION_ID: ref.conversationId,
@@ -82,27 +85,28 @@ export function createEnsureVm({
 						KB_DATABASE_URL: payload.kbDatabaseUrl,
 						REDIS_URL: payload.redisUrl,
 						MODEL_BASE_URL: `${payload.gatewayBaseUrl}/v2/gateway/${ref.conversationId}`,
-						MODEL_API_KEY: await mintGatewayToken({
-							conversationId: ref.conversationId,
-							secret: gatewayTokenSecret,
-						}),
+						MODEL_API_KEY: gatewayToken,
 						MODEL: payload.model,
 					}),
-				});
-			} catch (error) {
-				// Hand the claim back now rather than after the stale window, so the
-				// client's retry can launch immediately. A RunMicrovm that succeeded
-				// on the platform but failed to answer leaves an orphan the idle
-				// policy winds down — accepted; the orphan sweeper is deferred.
-				await store.releaseClaim(ref).catch((releaseError) => {
+				})
+				.catch(async (error) => {
+					// Hand the claim back now rather than after the stale window, so
+					// the client's retry can launch immediately. A RunMicrovm that
+					// succeeded on the platform but failed to answer leaves an orphan
+					// the idle policy winds down — accepted; the orphan sweeper is
+					// deferred.
+					await store.releaseClaim(ref).catch((releaseError) => {
+						logger.error(
+							{ ...ref, err: releaseError },
+							"VM claim release failed",
+						);
+					});
 					logger.error(
-						{ ...ref, err: releaseError },
-						"VM claim release failed",
+						{ ...ref, err: error },
+						"RunMicrovm failed after retries",
 					);
+					throw new VmUnavailableError(error);
 				});
-				logger.error({ ...ref, err: error }, "RunMicrovm failed after retries");
-				throw new VmUnavailableError({ cause: error });
-			}
 			await store.recordLaunched(ref, vm);
 			logger.info({ ...ref, ...vm }, "MicroVM launched");
 			// No nudge: the In-VM server's drain loop starts inside the /run hook and

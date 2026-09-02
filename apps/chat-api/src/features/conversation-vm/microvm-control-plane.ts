@@ -31,7 +31,7 @@ export interface MicrovmControlPlane {
 	latestImageVersion(): Promise<string | undefined>;
 }
 
-export type MicrovmLaunchConfig = Pick<
+type MicrovmLaunchConfig = Pick<
 	MicrovmConfig,
 	"imageArn" | "egressConnectorArn" | "executionRoleArn"
 > & { region: string };

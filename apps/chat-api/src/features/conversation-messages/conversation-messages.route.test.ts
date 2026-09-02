@@ -580,7 +580,7 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 	it("answers a retryable 503 after the queued INSERT when the VM launch fails after retries", async () => {
 		const { app, store, relay } = submitApp({
 			ensureVm: async () => {
-				throw new VmUnavailableError({ cause: new Error("502 ×5") });
+				throw new VmUnavailableError(new Error("502 ×5"));
 			},
 		});
 

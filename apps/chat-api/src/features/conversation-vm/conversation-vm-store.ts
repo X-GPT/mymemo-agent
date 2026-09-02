@@ -1,4 +1,5 @@
 import type { ALL_VM_STATES } from "@mymemo/agent-db/schema";
+import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 
 /**
  * The per-Conversation MicroVM registry and its transactional launch claim
@@ -8,10 +9,7 @@ import type { ALL_VM_STATES } from "@mymemo/agent-db/schema";
  * the lock, and exactly one claimant launches.
  */
 
-export interface ConversationRef {
-	userId: string;
-	conversationId: string;
-}
+export type { ConversationRef };
 
 export type ConversationVmState = (typeof ALL_VM_STATES)[number];
 
