@@ -59,9 +59,9 @@ export function startDrainLoop(
 	let paused = false;
 	let nudgedWhilePaused = false;
 	// The pause() caller, released when the loop parks idle (or stops).
-	let parked: { settled: Promise<void>; release: () => void } | null = null;
+	let parked: PromiseWithResolvers<void> | null = null;
 	const releaseParked = (): void => {
-		parked?.release();
+		parked?.resolve();
 		parked = null;
 	};
 	// The in-flight Turn's interrupt channel (serveOneTurn listens for the
@@ -170,17 +170,13 @@ export function startDrainLoop(
 		pause() {
 			paused = true;
 			if (!parked) {
-				let release: () => void = () => {};
-				const settled = new Promise<void>((resolve) => {
-					release = resolve;
-				});
-				parked = { settled, release };
+				parked = Promise.withResolvers<void>();
 				// Wake a parked loop so it re-parks as paused and releases us.
 				nudge();
 			}
 			// Only nudges from here on count as held-back work.
 			nudgedWhilePaused = false;
-			return parked.settled;
+			return parked.promise;
 		},
 		resume() {
 			paused = false;
