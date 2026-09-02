@@ -1,10 +1,8 @@
 import type { Logger } from "pino";
 import type { MicrovmConfig } from "@/config/env";
+import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 import { mintGatewayToken } from "@/features/gateway/gateway-token";
-import type {
-	ConversationRef,
-	ConversationVmStore,
-} from "./conversation-vm-store";
+import type { ConversationVmStore } from "./conversation-vm-store";
 import {
 	IN_VM_SERVER_PORT,
 	type MicrovmControlPlane,
@@ -126,11 +124,7 @@ export function createEnsureVm({
 				const state = await controlPlane
 					.getState(row.microvmId)
 					.catch(() => "unknown" as const);
-				if (
-					state === "TERMINATED" ||
-					state === "TERMINATING" ||
-					state === "not-found"
-				) {
+				if (["TERMINATED", "TERMINATING", "not-found"].includes(state)) {
 					logger.warn(
 						{ ...ref, microvmId: row.microvmId, state },
 						"MicroVM gone; rehydrating on the next claim",

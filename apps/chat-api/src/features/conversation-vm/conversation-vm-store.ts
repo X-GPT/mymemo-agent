@@ -9,8 +9,6 @@ import type { ConversationRef } from "@/features/conversation-store/conversation
  * the lock, and exactly one claimant launches.
  */
 
-export type { ConversationRef };
-
 export type ConversationVmState = (typeof ALL_VM_STATES)[number];
 
 export interface ConversationVmRow {

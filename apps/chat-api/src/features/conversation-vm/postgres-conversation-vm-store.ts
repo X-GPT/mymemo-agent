@@ -1,8 +1,8 @@
 import type { Database } from "@mymemo/agent-db/client";
 import { conversationVm } from "@mymemo/agent-db/schema";
 import { and, eq, sql } from "drizzle-orm";
+import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 import type {
-	ConversationRef,
 	ConversationVmRow,
 	ConversationVmState,
 	ConversationVmStore,

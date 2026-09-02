@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import type { ConversationRef } from "@/features/conversation-store/conversation-store";
 import { verifyGatewayToken } from "@/features/gateway/gateway-token";
 import type {
-	ConversationRef,
 	ConversationVmRow,
 	ConversationVmStore,
 } from "./conversation-vm-store";
