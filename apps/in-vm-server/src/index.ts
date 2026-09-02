@@ -7,11 +7,7 @@ import { createKbDb } from "@mymemo/document-tools/client";
 import type { TurnLiveStreamRelay } from "@mymemo/live-text";
 import { createRedisTurnLiveStreamRelay } from "@mymemo/live-text";
 import pino from "pino";
-import {
-	agentSessionId,
-	createAgentSession,
-	hasTranscript,
-} from "./agent-session";
+import { createAgentSession, hasTranscript } from "./agent-session";
 import { createApp } from "./app";
 import {
 	type CheckpointDoor,
@@ -103,8 +99,8 @@ async function configure(env: Env, microvmId?: string): Promise<void> {
 		}),
 	});
 	// ONE long-lived query() carries the Agent session across Turns (#664),
-	// pinned to the Conversation so a restored transcript resumes (#670).
-	const sessionId = agentSessionId(config.conversationId);
+	// pinned to the Conversation id so a restored transcript resumes (#670).
+	const sessionId = config.conversationId;
 	const claudeDir = path.join(homeDir, ".claude");
 	const deps: TurnServingDeps = {
 		db,
@@ -176,9 +172,9 @@ const app = createApp({
 		logger.info({ microvmId }, "configured from runHookPayload; serving");
 	},
 	suspend: async () => {
-		// Unconfigured (the image build, or a suspend racing /run): nothing to
-		// drain or save.
-		if (!serving) return;
+		// Unconfigured (the image build, or a suspend racing /run) or doorless
+		// (never in the MicroVM): nothing to drain or save.
+		if (!serving?.checkpoint) return;
 		const started = Date.now();
 		// The graceful-drain gate: holds while a Turn is processing.
 		await serving.loop.pause();
@@ -186,7 +182,6 @@ const app = createApp({
 			{ heldMs: Date.now() - started },
 			"suspend hook: drained; checkpointing",
 		);
-		if (!serving.checkpoint) return;
 		try {
 			await serving.checkpoint();
 		} catch (error) {

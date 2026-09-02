@@ -8,7 +8,6 @@ import type {
 	SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
-	agentSessionId,
 	createAgentSession,
 	hasTranscript,
 	type SessionQueryFn,
@@ -236,15 +235,6 @@ describe("the pinned Agent session (#670)", () => {
 			resume: "session-1",
 		});
 		expect(calls[1]?.prompts).toEqual(["two"]);
-	});
-
-	it("derives one stable UUID per Conversation id, UUID-shaped or not", () => {
-		const id = agentSessionId("verify-670-conversation");
-		expect(id).toMatch(
-			/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-		);
-		expect(agentSessionId("verify-670-conversation")).toBe(id);
-		expect(agentSessionId("other")).not.toBe(id);
 	});
 
 	it("finds the transcript under any project key, and nothing in a missing or empty .claude", () => {

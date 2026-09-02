@@ -127,8 +127,6 @@ export async function restoreCheckpoint(
 	try {
 		const file = path.join(dir, "checkpoint.tar.gz");
 		const bytes = await Bun.write(file, response);
-		mkdirSync(paths.homeDir, { recursive: true });
-		mkdirSync(path.dirname(paths.workspaceDir), { recursive: true });
 		// One pass per root: portable across GNU and BSD tar, which disagree on
 		// positional -C during extraction.
 		await tar(["-xzf", file, "-C", paths.homeDir, ".claude"]);

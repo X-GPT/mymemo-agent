@@ -339,28 +339,16 @@ What makes that invisible is the **Checkpoint**: the Agent session
 `shell-snapshots` scratch) and the Workspace, packed by the In-VM server as
 one gzipped tar (`apps/in-vm-server/src/checkpoint.ts`).
 
-The VM has no network path to S3 (no VPC endpoint: that absence is the
-egress lockdown), so the Checkpoint is **brokered through chat-api**
-(`features/checkpoint/`): `PUT /v2/checkpoint/:conversationId` accepts it
-and `GET` serves it, both authenticated by the per-Conversation gateway token
-— the same one the model gateway verifies, now carrying
-`{ conversationId, userId, exp }` so chat-api can address the
-`conversation_vm` row by primary key. chat-api derives the Conversation from
-the verified token and writes exactly
-`conversations/<conversationId>/<uuid>.tar.gz` in the checkpoint bucket:
-per-Conversation scoping in code, with no VM-side IAM at all (the VM
-execution role carries no policy). `PUT` streams the body (Content-Length
-required, 256 MiB cap) to a fresh key, then moves
-`conversation_vm.checkpoint_pointer` to it in one write guarded on the VM
-named in `x-mymemo-microvm-id` — a VM the row no longer names (retired by an
-urgent upgrade while its suspend hook was still draining) gets `409` and its
-object is removed, so a stale VM never forks the lineage — and deletes the
-previous object best-effort. The pointer therefore always names a complete
-object: the latest durable Checkpoint. `GET` streams the object the pointer
-names, `204` when there is none (a fresh Conversation), `404` when the
-pointer dangles (the VM then fails its boot rather than serve from nothing).
-Unauthenticated or foreign tokens get the gateway's opaque `401`; `503`
-while MicroVM orchestration is not configured.
+It is **brokered through chat-api** (`features/checkpoint/`; why not S3
+directly: [ADR-0034, amendment 2026-09-02](../adr/0034-run-the-chat-loop-in-per-conversation-lambda-microvms.md#amendment-2026-09-02--checkpoints-brokered-through-chat-api)).
+`PUT /v2/checkpoint/:conversationId` (Content-Length required, 256 MiB cap,
+`x-mymemo-microvm-id` = the VM) stores it under
+`conversations/<conversationId>/<uuid>.tar.gz` and moves
+`conversation_vm.checkpoint_pointer`, guarded on the VM id — `409` for a VM
+the row no longer names; `GET` streams the pointed object, `204` with none,
+`404` for a dangling pointer. Both take the per-Conversation gateway token
+(now `{ conversationId, userId, exp }`), `401` opaque, `503` while MicroVM
+orchestration is not configured.
 
 In the VM the lifecycle hooks drive it. **`/suspend` is a graceful-drain
 gate**: the drain loop is paused (no new claim), the hook holds while a Turn
@@ -379,19 +367,15 @@ Checkpoint lands after resume, when the drain completes. A running VM's
 terminate writes no Checkpoint: the suspend-time one is the durable one.
 
 Model-side memory follows the Conversation because the Agent session id is
-pinned: `agentSessionId(conversationId)` (a UUID v5 — the SDK requires a
-UUID, a Conversation id need not be one) is the SDK `sessionId` of a fresh
-session and the `resume` target whenever its transcript exists under
+pinned to the Conversation id (a UUID, as the SDK requires — the In-VM
+config asserts it): it is the SDK `sessionId` of a fresh session and the
+`resume` target whenever its transcript exists under
 `~/.claude/projects/` — after a restore on a new VM, and after a retired
 session within one process. The rehydrated VM's first model call replays
 the earlier Turns' prompts and replies before the new one. A hard kill
 mid-Turn (no hook) leaves that Turn `processing`; the replacement VM's boot
 sweep terminalizes it `interrupted`, and history shows exactly the Steps
-that had committed.
-
-No local check: the hooks fire only in the MicroVM. The In-VM
-`checkpoint.test.ts` round-trips a Checkpoint through a stand-in door over a
-real socket, and `agent-session.test.ts` pins create-vs-resume.
+that had committed. No local check: the hooks fire only in the MicroVM.
 
 ### Admit and stream a Run
 

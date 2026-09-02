@@ -84,6 +84,14 @@ export function loadInVmConfigFromEnv(env: Env): InVmConfig {
 	assert(userId, "MYMEMO_USER_ID is required");
 	const conversationId = env.MYMEMO_CONVERSATION_ID?.trim();
 	assert(conversationId, "MYMEMO_CONVERSATION_ID is required");
+	// The Conversation id is also the Agent session id (#670), which the SDK
+	// requires to be a UUID — chat-api mints them with crypto.randomUUID().
+	assert(
+		/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+			conversationId,
+		),
+		"MYMEMO_CONVERSATION_ID must be a UUID",
+	);
 
 	const workspaceDir = env.WORKSPACE_DIR?.trim();
 	assert(workspaceDir, "WORKSPACE_DIR is required");
