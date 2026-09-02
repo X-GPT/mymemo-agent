@@ -276,7 +276,7 @@ export const conversationVm = pgTable(
 		/** The image version `RunMicrovm` answered with — what a rehydrate upgrades. */
 		imageVersion: text("image_version"),
 		state: text("state").notNull(),
-		/** Claim time while `launching`; last launch or nudge while `running`. */
+		/** Claim time while `launching` (the stale-claim window); launch time while `running`. */
 		lastActivityAt: timestamp("last_activity_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),

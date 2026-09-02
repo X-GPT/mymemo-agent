@@ -95,39 +95,6 @@ describe("PostgresConversationVmStore — the transactional launch claim", () =>
 		expect((await row())?.state).toBe("running");
 	});
 
-	it("claimUpgrade wins exactly once for the VM it saw", async () => {
-		await store.claimLaunch(ref);
-		await store.recordLaunched(ref, vm);
-		expect(await store.claimUpgrade(ref, { microvmId: vm.microvmId })).toBe(
-			true,
-		);
-		expect(await row()).toMatchObject({ state: "launching", microvmId: null });
-		expect(await store.claimUpgrade(ref, { microvmId: vm.microvmId })).toBe(
-			false,
-		);
-	});
-
-	it("touchActivity stamps a running row only", async () => {
-		await store.claimLaunch(ref);
-		await tdb.db
-			.update(conversationVm)
-			.set({ lastActivityAt: sql`now() - interval '3 minutes'` });
-		await store.touchActivity(ref);
-		const launching = await row();
-		expect(
-			Date.now() - (launching?.lastActivityAt.getTime() ?? 0),
-		).toBeGreaterThan(60_000);
-		await store.recordLaunched(ref, vm);
-		await tdb.db
-			.update(conversationVm)
-			.set({ lastActivityAt: sql`now() - interval '3 minutes'` });
-		await store.touchActivity(ref);
-		const running = await row();
-		expect(Date.now() - (running?.lastActivityAt.getTime() ?? 0)).toBeLessThan(
-			60_000,
-		);
-	});
-
 	it("rejects a claim for a Conversation that does not exist", async () => {
 		await expect(
 			store.claimLaunch({ ...ref, conversationId: "missing" }),

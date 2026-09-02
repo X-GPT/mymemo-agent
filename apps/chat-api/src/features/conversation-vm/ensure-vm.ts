@@ -1,4 +1,5 @@
 import type { Logger } from "pino";
+import type { MicrovmConfig } from "@/config/env";
 import { mintGatewayToken } from "@/features/gateway/gateway-token";
 import type {
 	ConversationRef,
@@ -38,33 +39,19 @@ export interface EnsureVmDeps {
 	store: ConversationVmStore;
 	controlPlane: MicrovmControlPlane;
 	/**
-	 * Everything the In-VM server's `runHookPayload` carries besides the
-	 * Conversation identity and the minted gateway token. Data-plane URLs ride
-	 * the payload into the trusted in-VM process only (ADR-0034).
+	 * The MicroVM config plus the two data-plane URLs the `runHookPayload`
+	 * carries into the trusted in-VM process (ADR-0034).
 	 */
-	payload: {
-		agentDatabaseUrl: string;
-		kbDatabaseUrl: string;
-		redisUrl: string;
-		/** The chat-api origin the VM reaches the `/v2/gateway` route on. */
-		gatewayBaseUrl: string;
-		model: string;
-	};
+	config: MicrovmConfig & { agentDatabaseUrl: string; redisUrl: string };
 	gatewayTokenSecret: string;
-	/**
-	 * True converts the next nudge of a VM on a stale image into a rehydrate
-	 * (#650's urgent lever); false leaves upgrades to natural rotation.
-	 */
-	upgradeUrgent: boolean;
 	fetch?: typeof fetch;
 }
 
 export function createEnsureVm({
 	store,
 	controlPlane,
-	payload,
+	config,
 	gatewayTokenSecret,
-	upgradeUrgent,
 	fetch = globalThis.fetch,
 }: EnsureVmDeps): EnsureVm {
 	return (ref, logger) => {
@@ -81,12 +68,12 @@ export function createEnsureVm({
 					runHookPayload: JSON.stringify({
 						MYMEMO_USER_ID: ref.userId,
 						MYMEMO_CONVERSATION_ID: ref.conversationId,
-						AGENT_DATABASE_URL: payload.agentDatabaseUrl,
-						KB_DATABASE_URL: payload.kbDatabaseUrl,
-						REDIS_URL: payload.redisUrl,
-						MODEL_BASE_URL: `${payload.gatewayBaseUrl}/v2/gateway/${ref.conversationId}`,
+						AGENT_DATABASE_URL: config.agentDatabaseUrl,
+						KB_DATABASE_URL: config.kbDatabaseUrl,
+						REDIS_URL: config.redisUrl,
+						MODEL_BASE_URL: `${config.gatewayBaseUrl}/v2/gateway/${ref.conversationId}`,
 						MODEL_API_KEY: gatewayToken,
-						MODEL: payload.model,
+						MODEL: config.model,
 					}),
 				})
 				.catch(async (error) => {
@@ -132,7 +119,6 @@ export function createEnsureVm({
 					signal: AbortSignal.timeout(NUDGE_TIMEOUT_MS),
 				});
 				if (!response.ok) throw new Error(`nudge answered ${response.status}`);
-				await store.touchActivity(ref);
 				return "nudged";
 			} catch (error) {
 				// Reactive at-cap handling: the platform may have ended the VM (8 h
@@ -172,23 +158,22 @@ export function createEnsureVm({
 			if (claim.state !== "running" || !claim.microvmId || !claim.endpoint) {
 				return;
 			}
-			if (upgradeUrgent) {
+			if (config.upgradeUrgent) {
 				const current = await controlPlane.latestImageVersion();
 				if (current !== undefined && claim.imageVersion !== current) {
-					if (
-						!(await store.claimUpgrade(ref, { microvmId: claim.microvmId }))
-					) {
-						return; // someone else is upgrading it
-					}
-					// Terminate rather than let the stale snapshot auto-resume; a
-					// failure here leaves an orphan the idle policy winds down.
+					// Terminate rather than let the stale snapshot auto-resume (a
+					// repeat on an already-retiring VM is idempotent; a failure leaves
+					// an orphan the idle policy winds down), retire the row — guarded
+					// on this VM id — and rehydrate: the re-claim hands the launch to
+					// exactly one caller.
 					await controlPlane.terminate(claim.microvmId).catch((error) => {
 						logger.warn(
 							{ ...ref, microvmId: claim.microvmId, err: error },
-							"terminate of the stale VM failed; launching anyway",
+							"terminate of the stale VM failed; rehydrating anyway",
 						);
 					});
-					return launch();
+					await store.markTerminated(ref, { microvmId: claim.microvmId });
+					return ensure(true);
 				}
 			}
 			const outcome = await nudge({

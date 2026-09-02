@@ -30,15 +30,6 @@ export interface ConversationVmStore {
 	 * for.
 	 */
 	claimLaunch(ref: ConversationRef): Promise<"claimed" | ConversationVmRow>;
-	/**
-	 * The urgent-upgrade claim: flip the `running` row holding exactly
-	 * `microvmId` back to `launching`. True for the one caller that wins and
-	 * must terminate the old VM and launch; false when the row moved on.
-	 */
-	claimUpgrade(
-		ref: ConversationRef,
-		options: { microvmId: string },
-	): Promise<boolean>;
 	/** Record the `RunMicrovm` result: `launching` → `running` in one write. */
 	recordLaunched(
 		ref: ConversationRef,
@@ -47,13 +38,12 @@ export interface ConversationVmStore {
 	/** A launch that failed: hand the claim back (`launching` → `terminated`). */
 	releaseClaim(ref: ConversationRef): Promise<void>;
 	/**
-	 * The platform ended the VM (8 h cap, failed boot): `running` →
-	 * `terminated`, guarded on `microvmId` so a newer VM is never clobbered.
+	 * The VM is gone or being retired (8 h cap, failed boot, urgent upgrade):
+	 * `running` → `terminated`, guarded on `microvmId` so a newer VM is never
+	 * clobbered. The next `claimLaunch` re-claims the row for exactly one caller.
 	 */
 	markTerminated(
 		ref: ConversationRef,
 		options: { microvmId: string },
 	): Promise<void>;
-	/** A successful nudge: stamp `last_activity_at`. */
-	touchActivity(ref: ConversationRef): Promise<void>;
 }

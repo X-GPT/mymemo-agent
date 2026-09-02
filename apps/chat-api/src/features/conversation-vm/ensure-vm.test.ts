@@ -37,23 +37,6 @@ class FakeVmStore implements ConversationVmStore {
 		return { ...this.row };
 	}
 
-	async claimUpgrade(_ref: ConversationRef, options: { microvmId: string }) {
-		this.calls.push("claimUpgrade");
-		if (
-			this.row?.state !== "running" ||
-			this.row.microvmId !== options.microvmId
-		) {
-			return false;
-		}
-		this.row = {
-			...this.row,
-			state: "launching",
-			microvmId: null,
-			endpoint: null,
-		};
-		return true;
-	}
-
 	async recordLaunched(
 		_ref: ConversationRef,
 		vm: { microvmId: string; endpoint: string; imageVersion: string },
@@ -73,10 +56,6 @@ class FakeVmStore implements ConversationVmStore {
 		if (this.row?.microvmId === options.microvmId) {
 			this.row = { ...this.row, state: "terminated" };
 		}
-	}
-
-	async touchActivity() {
-		this.calls.push("touchActivity");
 	}
 }
 
@@ -133,7 +112,10 @@ function fakeFetch(status = 202) {
 }
 
 function ensureWith(
-	overrides: Partial<EnsureVmDeps> & { store?: FakeVmStore } = {},
+	overrides: Partial<EnsureVmDeps> & {
+		store?: FakeVmStore;
+		urgent?: boolean;
+	} = {},
 ) {
 	const store = overrides.store ?? new FakeVmStore();
 	const controlPlane = (overrides.controlPlane ??
@@ -142,15 +124,18 @@ function ensureWith(
 	const ensure = createEnsureVm({
 		store,
 		controlPlane,
-		payload: {
+		config: {
+			imageArn: "arn:image",
+			egressConnectorArn: "arn:egress",
+			executionRoleArn: "arn:role",
 			agentDatabaseUrl: "postgresql://agent:pw@db.internal/mymemo_agent",
 			kbDatabaseUrl: "postgresql://kb:pw@db.internal/mymemo_kb",
 			redisUrl: "rediss://:pw@redis.internal:6379",
 			gatewayBaseUrl: "http://alb.internal",
 			model: "anthropic/claude-sonnet-5",
+			upgradeUrgent: overrides.urgent ?? false,
 		},
 		gatewayTokenSecret: SECRET,
-		upgradeUrgent: false,
 		fetch: net.fetch,
 		...overrides,
 	});
@@ -210,7 +195,7 @@ describe("Ensure-VM (#669)", () => {
 				},
 			},
 		]);
-		expect(store.calls).toEqual(["claimLaunch", "touchActivity"]);
+		expect(store.calls).toEqual(["claimLaunch"]);
 	});
 
 	it("releases the claim and surfaces a retryable error when the launch fails after retries", async () => {
@@ -303,20 +288,30 @@ describe("Ensure-VM (#669)", () => {
 		});
 		const { ensureVm, store, net } = ensureWith({
 			controlPlane,
-			upgradeUrgent: true,
+			urgent: true,
 		});
 		await ensureVm(ref); // launches on "7" (the fake's RunMicrovm answer)
+		store.calls.length = 0;
 
 		await ensureVm(ref);
 
 		expect(controlPlane.terminated).toEqual(["microvm-1"]);
 		expect(controlPlane.runs).toHaveLength(2);
-		expect(store.row?.microvmId).toBe("microvm-2");
+		expect(store.row).toMatchObject({
+			state: "running",
+			microvmId: "microvm-2",
+		});
+		expect(store.calls).toEqual([
+			"claimLaunch",
+			"markTerminated",
+			"claimLaunch",
+			"recordLaunched",
+		]);
 		expect(net.requests).toHaveLength(0);
 	});
 
 	it("with the urgent flag, a current-image VM is simply nudged", async () => {
-		const { ensureVm, controlPlane, net } = ensureWith({ upgradeUrgent: true });
+		const { ensureVm, controlPlane, net } = ensureWith({ urgent: true });
 		await ensureVm(ref);
 
 		await ensureVm(ref);

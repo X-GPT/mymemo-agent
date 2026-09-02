@@ -158,15 +158,12 @@ export function createDeps(
 							region: config.artifactRegion,
 							...config.microvm,
 						}),
-						payload: {
+						config: {
+							...config.microvm,
 							agentDatabaseUrl: config.databaseUrl,
-							kbDatabaseUrl: config.microvm.kbDatabaseUrl,
 							redisUrl: config.redisUrl,
-							gatewayBaseUrl: config.microvm.gatewayBaseUrl,
-							model: config.microvm.model,
 						},
 						gatewayTokenSecret: config.gatewayTokenSecret,
-						upgradeUrgent: config.microvm.upgradeUrgent,
 					})
 				: undefined,
 		liveStreamTelemetry,

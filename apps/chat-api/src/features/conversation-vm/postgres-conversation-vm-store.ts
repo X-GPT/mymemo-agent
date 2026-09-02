@@ -8,15 +8,6 @@ import type {
 	ConversationVmStore,
 } from "./conversation-vm-store";
 
-/** A fresh `launching` claim: no VM, claim time now. */
-const LAUNCHING_RESET = {
-	state: "launching",
-	microvmId: null,
-	endpoint: null,
-	imageVersion: null,
-	lastActivityAt: sql`now()`,
-};
-
 export class PostgresConversationVmStore implements ConversationVmStore {
 	constructor(private readonly db: Database) {}
 
@@ -34,7 +25,13 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 			.values({ ...ref, state: "launching" })
 			.onConflictDoUpdate({
 				target: [conversationVm.userId, conversationVm.conversationId],
-				set: LAUNCHING_RESET,
+				set: {
+					state: "launching",
+					microvmId: null,
+					endpoint: null,
+					imageVersion: null,
+					lastActivityAt: sql`now()`,
+				},
 				setWhere: sql`${conversationVm.state} = 'terminated' or (${conversationVm.state} = 'launching' and ${conversationVm.lastActivityAt} < now() - interval '2 minutes')`,
 			})
 			.returning({ userId: conversationVm.userId });
@@ -54,24 +51,6 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 			throw new Error("conversation_vm row disappeared during claim");
 		}
 		return { ...row, state: row.state as ConversationVmState };
-	}
-
-	async claimUpgrade(
-		ref: ConversationRef,
-		options: { microvmId: string },
-	): Promise<boolean> {
-		const won = await this.db
-			.update(conversationVm)
-			.set(LAUNCHING_RESET)
-			.where(
-				and(
-					this.owned(ref),
-					eq(conversationVm.state, "running"),
-					eq(conversationVm.microvmId, options.microvmId),
-				),
-			)
-			.returning({ userId: conversationVm.userId });
-		return won.length > 0;
 	}
 
 	async recordLaunched(
@@ -105,13 +84,6 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 					eq(conversationVm.microvmId, options.microvmId),
 				),
 			);
-	}
-
-	async touchActivity(ref: ConversationRef): Promise<void> {
-		await this.db
-			.update(conversationVm)
-			.set({ lastActivityAt: sql`now()` })
-			.where(and(this.owned(ref), eq(conversationVm.state, "running")));
 	}
 
 	private owned(ref: ConversationRef) {
