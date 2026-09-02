@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
@@ -42,8 +43,7 @@ if (!(Number.isSafeInteger(port) && port > 0)) {
 
 // The runtime user's HOME: `.claude` under it is the Agent session the
 // Checkpoint carries (#670).
-const homeDir = processEnv.HOME ?? "";
-if (!homeDir) throw new Error("HOME must be set");
+const homeDir = homedir();
 
 let serving: {
 	loop: DrainLoopHandle;

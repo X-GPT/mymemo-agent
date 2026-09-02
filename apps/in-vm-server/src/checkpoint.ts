@@ -83,7 +83,7 @@ export async function restoreCheckpoint(
 	paths: CheckpointPaths,
 	door: CheckpointDoor,
 	logger: CheckpointLogger,
-): Promise<"restored" | "none"> {
+): Promise<void> {
 	const started = Date.now();
 	const response = await fetch(door.url, {
 		headers: { authorization: `Bearer ${door.token}` },
@@ -91,7 +91,7 @@ export async function restoreCheckpoint(
 	});
 	if (response.status === 204) {
 		logger.info({}, "no checkpoint to restore");
-		return "none";
+		return;
 	}
 	if (!response.ok) {
 		throw new Error(`checkpoint GET answered ${response.status}`);
@@ -108,7 +108,6 @@ export async function restoreCheckpoint(
 			{ bytes, elapsedMs: Date.now() - started },
 			"checkpoint restored",
 		);
-		return "restored";
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

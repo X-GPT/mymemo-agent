@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -94,7 +94,7 @@ describe("the Checkpoint round trip (#670)", () => {
 		});
 
 		const b = vm("b");
-		expect(await restoreCheckpoint(b, door("conv-1"), logger)).toBe("restored");
+		await restoreCheckpoint(b, door("conv-1"), logger);
 		const read = (base: string, relative: string) =>
 			readFileSync(path.join(base, relative), "utf8");
 		expect(read(b.homeDir, ".claude/projects/-workspace/session.jsonl")).toBe(
@@ -111,16 +111,17 @@ describe("the Checkpoint round trip (#670)", () => {
 		write(a.workspaceDir, "only.txt", "workspace only");
 		await saveCheckpoint(a, door("conv-2"), logger);
 		const b = vm("d");
-		expect(await restoreCheckpoint(b, door("conv-2"), logger)).toBe("restored");
+		await restoreCheckpoint(b, door("conv-2"), logger);
 		expect(readFileSync(path.join(b.workspaceDir, "only.txt"), "utf8")).toBe(
 			"workspace only",
 		);
 	});
 
-	it("reports nothing to restore for a fresh Conversation", async () => {
-		expect(await restoreCheckpoint(vm("e"), door("conv-new"), logger)).toBe(
-			"none",
-		);
+	it("restores nothing for a fresh Conversation", async () => {
+		const fresh = vm("e");
+		await restoreCheckpoint(fresh, door("conv-new"), logger);
+		expect(readdirSync(fresh.homeDir)).toEqual([]);
+		expect(readdirSync(fresh.workspaceDir)).toEqual([]);
 	});
 
 	it("fails loudly when the door refuses either direction", async () => {
