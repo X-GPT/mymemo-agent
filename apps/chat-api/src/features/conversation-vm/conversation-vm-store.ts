@@ -1,3 +1,5 @@
+import type { ALL_VM_STATES } from "@mymemo/agent-db/schema";
+
 /**
  * The per-Conversation MicroVM registry and its transactional launch claim
  * (spec #654, ticket #669) over `conversation_vm`. Every write here is what
@@ -11,7 +13,7 @@ export interface ConversationRef {
 	conversationId: string;
 }
 
-export type ConversationVmState = "launching" | "running" | "terminated";
+export type ConversationVmState = (typeof ALL_VM_STATES)[number];
 
 export interface ConversationVmRow {
 	/** NULL while `launching`. */
@@ -19,7 +21,6 @@ export interface ConversationVmRow {
 	endpoint: string | null;
 	imageVersion: string | null;
 	state: ConversationVmState;
-	lastActivityAt: Date;
 }
 
 export interface ConversationVmStore {

@@ -203,7 +203,7 @@ app.post(
 				"v2 Live Stream subscribe failed",
 			);
 			// The Turn is durably queued; let it run so history has it.
-			await ensureVm(ref).catch(() => {});
+			await ensureVm(ref, logger).catch(() => {});
 			return c.json({ error: "Live stream temporarily unavailable" }, 503);
 		}
 		try {
@@ -211,7 +211,7 @@ app.post(
 			// inside (the row is durable and the In-VM server's interval
 			// self-heal consults Postgres on its own); only a launch this
 			// request owned and lost after retries surfaces.
-			await ensureVm(ref);
+			await ensureVm(ref, logger);
 		} catch (error) {
 			readAbort.abort();
 			if (error instanceof VmUnavailableError) {

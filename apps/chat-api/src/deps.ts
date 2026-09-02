@@ -12,7 +12,6 @@ import {
 	type TurnLiveStreamRelay,
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
-import pino from "pino";
 import type { ApiConfig } from "./config/env";
 import type { HarnessChatAgentFactory } from "./features/ai-chat/harness-chat-agent";
 import {
@@ -157,9 +156,7 @@ export function createDeps(
 						store: new PostgresConversationVmStore(database),
 						controlPlane: createLambdaMicrovmControlPlane({
 							region: config.artifactRegion,
-							imageArn: config.microvm.imageArn,
-							egressConnectorArn: config.microvm.egressConnectorArn,
-							executionRoleArn: config.microvm.executionRoleArn,
+							...config.microvm,
 						}),
 						payload: {
 							agentDatabaseUrl: config.databaseUrl,
@@ -171,7 +168,6 @@ export function createDeps(
 						gatewayTokenSecret: config.gatewayTokenSecret,
 						upgradeUrgent: config.microvm.upgradeUrgent,
 						fetch,
-						logger: pino({ level: config.logLevel }),
 					})
 				: undefined,
 		liveStreamTelemetry,

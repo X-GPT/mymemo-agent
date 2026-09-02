@@ -8,6 +8,7 @@ import {
 	RunMicrovmCommand,
 	TerminateMicrovmCommand,
 } from "@aws-sdk/client-lambda-microvms";
+import type { MicrovmConfig } from "@/config/env";
 
 /**
  * chat-api's control-plane authority over per-Conversation MicroVMs (ADR-0034):
@@ -30,12 +31,10 @@ export interface MicrovmControlPlane {
 	latestImageVersion(): Promise<string | undefined>;
 }
 
-export interface MicrovmLaunchConfig {
-	region: string;
-	imageArn: string;
-	egressConnectorArn: string;
-	executionRoleArn: string;
-}
+export type MicrovmLaunchConfig = Pick<
+	MicrovmConfig,
+	"imageArn" | "egressConnectorArn" | "executionRoleArn"
+> & { region: string };
 
 /** The port the image's In-VM server listens on. */
 export const IN_VM_SERVER_PORT = 8080;
@@ -77,7 +76,7 @@ export function createLambdaMicrovmControlPlane(
 					egressNetworkConnectors: [config.egressConnectorArn],
 					executionRoleArn: config.executionRoleArn,
 					runHookPayload,
-					idlePolicy: { ...MICROVM_IDLE_POLICY },
+					idlePolicy: MICROVM_IDLE_POLICY,
 					maximumDurationInSeconds: MICROVM_MAXIMUM_DURATION_SECONDS,
 				}),
 			);

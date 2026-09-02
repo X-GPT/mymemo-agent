@@ -43,7 +43,6 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 				endpoint: conversationVm.endpoint,
 				imageVersion: conversationVm.imageVersion,
 				state: conversationVm.state,
-				lastActivityAt: conversationVm.lastActivityAt,
 			})
 			.from(conversationVm)
 			.where(this.owned(ref));

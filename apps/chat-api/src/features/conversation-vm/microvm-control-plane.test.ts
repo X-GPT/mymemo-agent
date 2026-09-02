@@ -5,11 +5,7 @@ import {
 	ResourceNotFoundException,
 	RunMicrovmCommand,
 } from "@aws-sdk/client-lambda-microvms";
-import {
-	createLambdaMicrovmControlPlane,
-	MICROVM_IDLE_POLICY,
-	MICROVM_MAXIMUM_DURATION_SECONDS,
-} from "./microvm-control-plane";
+import { createLambdaMicrovmControlPlane } from "./microvm-control-plane";
 
 const config = {
 	region: "us-west-2",
@@ -61,8 +57,6 @@ describe("Lambda MicroVM control plane", () => {
 			},
 			maximumDurationInSeconds: 28_800,
 		});
-		expect(MICROVM_IDLE_POLICY.autoResumeEnabled).toBe(true);
-		expect(MICROVM_MAXIMUM_DURATION_SECONDS).toBe(8 * 3600);
 	});
 
 	it("mints a short-lived token scoped to the In-VM server port and returns the proxy header value", async () => {

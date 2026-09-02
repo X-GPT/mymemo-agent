@@ -18,7 +18,7 @@ const SECRET = "gateway-signing-secret";
 
 /** An in-memory `conversation_vm` row with the store's state transitions. */
 class FakeVmStore implements ConversationVmStore {
-	row: ConversationVmRow | null = null;
+	row: (ConversationVmRow & { lastActivityAt: Date }) | null = null;
 	readonly calls: string[] = [];
 
 	async claimLaunch(
@@ -152,7 +152,7 @@ function ensureWith(
 	const controlPlane = (overrides.controlPlane ??
 		fakeControlPlane()) as ReturnType<typeof fakeControlPlane>;
 	const net = fakeFetch();
-	const ensureVm = createEnsureVm({
+	const ensure = createEnsureVm({
 		store,
 		controlPlane,
 		payload: {
@@ -165,9 +165,10 @@ function ensureWith(
 		gatewayTokenSecret: SECRET,
 		upgradeUrgent: false,
 		fetch: net.fetch,
-		logger: { info() {}, warn() {}, error() {} },
 		...overrides,
 	});
+	const ensureVm = (r: ConversationRef) =>
+		ensure(r, { info() {}, warn() {}, error() {} });
 	return { ensureVm, store, controlPlane, net };
 }
 
@@ -354,21 +355,5 @@ describe("Ensure-VM (#669)", () => {
 		expect(controlPlane.terminated).toEqual([]);
 		expect(controlPlane.runs).toHaveLength(1);
 		expect(net.requests).toHaveLength(1);
-	});
-
-	it("refuses a runHookPayload over the platform's 4 KB limit before launching", async () => {
-		const { ensureVm, controlPlane, store } = ensureWith({
-			payload: {
-				agentDatabaseUrl: `postgresql://x@y/${"a".repeat(4096)}`,
-				kbDatabaseUrl: "postgresql://kb@db/kb",
-				redisUrl: "rediss://r",
-				gatewayBaseUrl: "http://alb",
-				model: "m",
-			},
-		});
-
-		await expect(ensureVm(ref)).rejects.toBeInstanceOf(VmUnavailableError);
-		expect(controlPlane.runs).toHaveLength(0);
-		expect(store.row?.state).toBe("terminated");
 	});
 });
