@@ -144,15 +144,11 @@ async function configure(env: Env, microvmId?: string): Promise<void> {
 			"boot sweep terminalized stale processing Turns as interrupted",
 		);
 	}
-	const conversationKey = {
-		userId: config.userId,
-		conversationId: config.conversationId,
-	};
 	serving = {
 		loop: startDrainLoop(deps),
 		relay,
 		checkpoint: door ? () => saveCheckpoint(paths, door, logger) : null,
-		hasQueuedTurns: () => hasQueuedTurnsTx(db, conversationKey),
+		hasQueuedTurns: () => hasQueuedTurnsTx(db, deps),
 	};
 }
 

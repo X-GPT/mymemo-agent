@@ -1,5 +1,4 @@
-import { mkdirSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { $ } from "bun";
@@ -46,7 +45,7 @@ export async function saveCheckpoint(
 ): Promise<void> {
 	const started = Date.now();
 	// Always a member, so restore never has to ask whether it is there.
-	mkdirSync(path.join(paths.homeDir, ".claude"), { recursive: true });
+	await mkdir(path.join(paths.homeDir, ".claude"), { recursive: true });
 	const dir = await mkdtemp(path.join(tmpdir(), "checkpoint-"));
 	try {
 		const file = path.join(dir, "checkpoint.tar.gz");
