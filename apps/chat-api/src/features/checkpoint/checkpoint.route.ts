@@ -5,17 +5,9 @@ import { admitGatewayCaller } from "@/features/gateway/gateway.route";
 import type { CheckpointStore } from "./checkpoint-store";
 
 /**
- * The /v2 Checkpoint door (spec #654, ticket #670): the VM's suspend hook
- * PUTs its Checkpoint here and its run hook GETs it back on rehydrate, under
- * the same gateway token the model gateway verifies (why a door and not S3:
- * ADR-0034, amendment 2026-09-02). chat-api derives the Conversation from
- * the verified token and writes exactly that prefix.
- *
- * PUT streams the body to a fresh key, then moves `checkpoint_pointer` to it
- * in one guarded write (the VM named in `x-mymemo-microvm-id` must still be
- * the row's VM) and deletes the previous object best-effort, so the pointer
- * always names a complete object. GET streams the object the pointer names;
- * 204 means "nothing to restore".
+ * The /v2 Checkpoint door (#670): a VM's Checkpoint in and out of S3 under
+ * the gateway token — see "Checkpoint a v2 Conversation" in
+ * docs/agents/chat-api.md and the ADR-0034 amendment.
  */
 
 /** Hard cap on one Checkpoint: the 60 s suspend-hook budget at the platform's

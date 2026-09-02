@@ -2,19 +2,12 @@ import { mkdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { $ } from "bun";
 
 /**
- * The Checkpoint (spec #654, ticket #670): the Agent session (`~/.claude`)
- * and the Workspace as one gzipped tar, exchanged with chat-api's
- * `/v2/checkpoint/<conversation>` door under the gateway token (why a door
- * and not S3: ADR-0034, amendment 2026-09-02). `save` runs inside the
- * suspend hook once the drain loop is parked; `restore` inside the run hook
- * before the boot sweep. Both fail loudly: a Checkpoint that did not land
- * must fail its hook rather than let the VM claim durability it lacks.
- *
- * The archive is two roots — `.claude` relative to HOME and the Workspace
- * relative to its parent — so the layout survives a Workspace outside HOME
- * (local runs) without renaming members.
+ * The Checkpoint (#670): `~/.claude` + the Workspace as one tar, saved to
+ * and restored from chat-api's `/v2/checkpoint` door — see "Checkpoint a v2
+ * Conversation" in docs/agents/chat-api.md and the ADR-0034 amendment.
  */
 
 export interface CheckpointPaths {
@@ -45,20 +38,6 @@ const CLAUDE_EXCLUDES = [".claude/debug", ".claude/shell-snapshots"];
 /** Well inside the platform's 60 s hook cap, leaving room for the drain. */
 const TRANSFER_TIMEOUT_MS = 45_000;
 
-async function tar(args: string[]): Promise<void> {
-	const proc = Bun.spawn(["tar", ...args], {
-		stdout: "ignore",
-		stderr: "pipe",
-	});
-	const [stderr, exitCode] = await Promise.all([
-		new Response(proc.stderr).text(),
-		proc.exited,
-	]);
-	if (exitCode !== 0) {
-		throw new Error(`tar ${args[0]} failed (${exitCode}): ${stderr.trim()}`);
-	}
-}
-
 /** Pack the session and Workspace and PUT them through the door. */
 export async function saveCheckpoint(
 	paths: CheckpointPaths,
@@ -71,17 +50,8 @@ export async function saveCheckpoint(
 	const dir = await mkdtemp(path.join(tmpdir(), "checkpoint-"));
 	try {
 		const file = path.join(dir, "checkpoint.tar.gz");
-		await tar([
-			"-czf",
-			file,
-			...CLAUDE_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
-			"-C",
-			paths.homeDir,
-			".claude",
-			"-C",
-			path.dirname(paths.workspaceDir),
-			path.basename(paths.workspaceDir),
-		]);
+		// Two roots: `.claude` under HOME, the Workspace under its parent.
+		await $`tar -czf ${file} ${CLAUDE_EXCLUDES.map((p) => `--exclude=${p}`)} -C ${paths.homeDir} .claude -C ${path.dirname(paths.workspaceDir)} ${path.basename(paths.workspaceDir)}`.quiet();
 		const archive = Bun.file(file);
 		const response = await fetch(door.url, {
 			method: "PUT",
@@ -129,14 +99,8 @@ export async function restoreCheckpoint(
 		const bytes = await Bun.write(file, response);
 		// One pass per root: portable across GNU and BSD tar, which disagree on
 		// positional -C during extraction.
-		await tar(["-xzf", file, "-C", paths.homeDir, ".claude"]);
-		await tar([
-			"-xzf",
-			file,
-			"-C",
-			path.dirname(paths.workspaceDir),
-			path.basename(paths.workspaceDir),
-		]);
+		await $`tar -xzf ${file} -C ${paths.homeDir} .claude`.quiet();
+		await $`tar -xzf ${file} -C ${path.dirname(paths.workspaceDir)} ${path.basename(paths.workspaceDir)}`.quiet();
 		logger.info(
 			{ bytes, elapsedMs: Date.now() - started },
 			"checkpoint restored",
