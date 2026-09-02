@@ -85,10 +85,8 @@ export function createApp(handlers: AppHandlers) {
 		await handlers[c.req.param("hook") as "suspend" | "resume"]();
 		return c.text("ok");
 	});
-	// ready gates the image build snapshot; terminate is informational — a
-	// running VM's terminate carries no Checkpoint (the suspend-time one is
-	// the durable one, and a suspended VM's termination fires no hook at
-	// all). 200 = proceed. (validate is not enabled at registration — see
+	// ready gates the image build snapshot; terminate is informational.
+	// 200 = proceed. (validate is not enabled at registration — see
 	// register_microvm_image.sh --hooks.)
 	app.post(`${HOOKS_BASE}/:hook{ready|terminate}`, (c) => c.text("ok"));
 

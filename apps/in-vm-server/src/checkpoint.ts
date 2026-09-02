@@ -89,7 +89,10 @@ export async function restoreCheckpoint(
 		headers: { authorization: `Bearer ${door.token}` },
 		signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
 	});
-	if (response.status === 204) return "none";
+	if (response.status === 204) {
+		logger.info({}, "no checkpoint to restore");
+		return "none";
+	}
 	if (!response.ok) {
 		throw new Error(`checkpoint GET answered ${response.status}`);
 	}

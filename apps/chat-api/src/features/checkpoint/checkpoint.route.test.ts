@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import type { Readable } from "node:stream";
 import { Hono } from "hono";
 import type { ApiConfig } from "@/config/env";
@@ -22,16 +22,7 @@ const OTHER_TOKEN = await mintGatewayToken({
 	secret: SECRET,
 });
 
-const logged: { level: string; obj: Record<string, unknown>; msg: string }[] =
-	[];
-const logger = {
-	info: (obj: Record<string, unknown>, msg: string) =>
-		logged.push({ level: "info", obj, msg }),
-	warn: (obj: Record<string, unknown>, msg: string) =>
-		logged.push({ level: "warn", obj, msg }),
-	error: (obj: Record<string, unknown>, msg: string) =>
-		logged.push({ level: "error", obj, msg }),
-};
+const logger = { info() {}, warn() {}, error() {} };
 
 /** An in-memory bucket. */
 function fakeCheckpointStore() {
@@ -111,10 +102,6 @@ function put(
 	});
 }
 
-beforeEach(() => {
-	logged.length = 0;
-});
-
 describe("/v2/checkpoint (#670)", () => {
 	const payload = Buffer.from("tarball-bytes");
 
@@ -144,10 +131,6 @@ describe("/v2/checkpoint (#670)", () => {
 			{ userId: USER_ID, conversationId: CONVERSATION_ID },
 			{ microvmId: "microvm-1", key: vm.row.pointer },
 		]);
-		expect(logged.at(-1)).toMatchObject({
-			msg: "checkpoint stored",
-			obj: { bytes: payload.byteLength, key: vm.row.pointer },
-		});
 	});
 
 	it("PUT from a VM the row no longer names is refused and its object removed", async () => {

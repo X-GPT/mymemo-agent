@@ -366,14 +366,11 @@ outruns the suspend budget is snapshotted mid-Turn by the platform, and its
 Checkpoint lands after resume, when the drain completes. A running VM's
 terminate writes no Checkpoint: the suspend-time one is the durable one.
 
-Model-side memory follows the Conversation because the Agent session id is
-pinned to the Conversation id (a UUID, as the SDK requires — the In-VM
-config asserts it): it is the SDK `sessionId` of a fresh session and the
-`resume` target whenever its transcript exists under
-`~/.claude/projects/` — after a restore on a new VM, and after a retired
-session within one process. The rehydrated VM's first model call replays
-the earlier Turns' prompts and replies before the new one. No local check:
-the hooks fire only in the MicroVM.
+The Agent session id is the Conversation id (a UUID; the In-VM config
+asserts it), so a restored transcript is `resume`d and the rehydrated VM's
+first model call replays the earlier Turns — see
+`apps/in-vm-server/src/agent-session.ts`. No local check: the hooks fire
+only in the MicroVM.
 
 ### Admit and stream a Run
 

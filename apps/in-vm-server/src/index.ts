@@ -73,8 +73,7 @@ async function configure(env: Env, microvmId?: string): Promise<void> {
 	if (door) {
 		// Before anything reads the Workspace or the session — and before the
 		// platform routes traffic: the VM is never ready with stale state.
-		const restored = await restoreCheckpoint(paths, door, logger);
-		logger.info({ microvmId, restored }, "checkpoint restore complete");
+		await restoreCheckpoint(paths, door, logger);
 	}
 	const relay = createRedisTurnLiveStreamRelay({
 		url: config.redisUrl,

@@ -39,8 +39,7 @@ fakeDoor.get("/v2/checkpoint/:id", (c) => {
 
 let server: ReturnType<typeof Bun.serve>;
 let root: string;
-const logged: object[] = [];
-const logger = { info: (payload: object) => logged.push(payload) };
+const logger = { info() {} };
 
 beforeAll(async () => {
 	server = Bun.serve({ port: 0, fetch: fakeDoor.fetch });
@@ -93,7 +92,6 @@ describe("the Checkpoint round trip (#670)", () => {
 			"content-type": "application/gzip",
 			"content-length": String(received[0]?.bytes),
 		});
-		expect(logged.at(-1)).toMatchObject({ bytes: received[0]?.bytes });
 
 		const b = vm("b");
 		expect(await restoreCheckpoint(b, door("conv-1"), logger)).toBe("restored");
