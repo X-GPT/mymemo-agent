@@ -31,16 +31,14 @@ export interface MicrovmControlPlane {
 	latestImageVersion(): Promise<string | undefined>;
 }
 
-type MicrovmLaunchConfig = Pick<
-	MicrovmConfig,
-	"imageArn" | "egressConnectorArn" | "executionRoleArn"
-> & { region: string };
-
 /** The port the image's In-VM server listens on. */
 export const IN_VM_SERVER_PORT = 8080;
 
 export function createLambdaMicrovmControlPlane(
-	config: MicrovmLaunchConfig,
+	config: Pick<
+		MicrovmConfig,
+		"imageArn" | "egressConnectorArn" | "executionRoleArn"
+	> & { region: string },
 	client: Pick<LambdaMicrovmsClient, "send"> = new LambdaMicrovmsClient({
 		region: config.region,
 		// Adaptive retry absorbs RunMicrovm bursts against the 5 TPS quota and

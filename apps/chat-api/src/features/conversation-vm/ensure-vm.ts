@@ -43,7 +43,6 @@ export interface EnsureVmDeps {
 	 * carries into the trusted in-VM process (ADR-0034).
 	 */
 	config: MicrovmConfig & { agentDatabaseUrl: string; redisUrl: string };
-	gatewayTokenSecret: string;
 	fetch?: typeof fetch;
 }
 
@@ -51,7 +50,6 @@ export function createEnsureVm({
 	store,
 	controlPlane,
 	config,
-	gatewayTokenSecret,
 	fetch = globalThis.fetch,
 }: EnsureVmDeps): EnsureVm {
 	return (ref, logger) => {
@@ -59,7 +57,7 @@ export function createEnsureVm({
 		async function launch(): Promise<void> {
 			const gatewayToken = await mintGatewayToken({
 				conversationId: ref.conversationId,
-				secret: gatewayTokenSecret,
+				secret: config.gatewayTokenSecret,
 			});
 			// The platform caps the payload at 4 KB; its own validation rejects
 			// an oversize one into the catch below.

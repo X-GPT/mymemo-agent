@@ -578,7 +578,7 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 	});
 
 	it("answers a retryable 503 after the queued INSERT when the VM launch fails after retries", async () => {
-		const { app, store, relay } = submitApp({
+		const { app, store } = submitApp({
 			ensureVm: async () => {
 				throw new VmUnavailableError(new Error("502 ×5"));
 			},
@@ -594,15 +594,8 @@ describe("POST /v2/conversations/:conversationId/messages", () => {
 		expect(await response.json()).toEqual({
 			error: "Conversation VM unavailable; retry",
 		});
-		// The Turn is durable (the retry is a no-op re-POST) and the abandoned
-		// subscription is gone: a publish now has no listener.
+		// The Turn is durable: the retry is a no-op re-POST.
 		expect(store.rows.get("turn-1")?.status).toBe("queued");
-		const publisher = relay.openPublisher({
-			conversationId: CONVERSATION_ID,
-			messageId: "turn-1",
-		});
-		await publisher.publish({ type: "finish" });
-		await publisher.close();
 	});
 
 	it("propagates a non-retryable Ensure-VM failure as a 500", async () => {

@@ -134,8 +134,8 @@ function ensureWith(
 			gatewayBaseUrl: "http://alb.internal",
 			model: "anthropic/claude-sonnet-5",
 			upgradeUrgent: overrides.urgent ?? false,
+			gatewayTokenSecret: SECRET,
 		},
-		gatewayTokenSecret: SECRET,
 		fetch: net.fetch,
 		...overrides,
 	});

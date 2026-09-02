@@ -94,6 +94,7 @@ describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
 		env.GATEWAY_TOKEN_SECRET = "gateway-signing-secret";
 		expect(loadApiConfigFromEnv(env).microvm).toEqual({
 			imageArn: "arn:aws:lambda:us-west-2:123:microvm-image:img",
+			gatewayTokenSecret: "gateway-signing-secret",
 			egressConnectorArn:
 				"arn:aws:lambda:us-west-2:123:network-connector:egress",
 			executionRoleArn: "arn:aws:iam::123:role/exec",

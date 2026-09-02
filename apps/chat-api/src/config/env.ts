@@ -72,8 +72,8 @@ export interface ApiConfig {
 	/**
 	 * Per-Conversation MicroVM orchestration (ADR-0034, #669). Present when
 	 * `MICROVM_IMAGE_ARN` is set, in which case every other field is required
-	 * and `gatewayTokenSecret` must be set too — the VM's only model access is
-	 * the gateway token the launch mints. While absent the v2 message POST
+	 * (`GATEWAY_TOKEN_SECRET` included — the VM's only model access is the
+	 * gateway token the launch mints). While absent the v2 message POST
 	 * answers 503 and every other surface serves normally.
 	 */
 	microvm?: MicrovmConfig;
@@ -82,6 +82,8 @@ export interface ApiConfig {
 export interface MicrovmConfig {
 	/** The registered MicroVM image (`MICROVM_IMAGE_ARN`). */
 	imageArn: string;
+	/** The same `GATEWAY_TOKEN_SECRET` the gateway route verifies with; the launch mints with it. */
+	gatewayTokenSecret: string;
 	/** The VPC egress connector VMs run behind (`MICROVM_EGRESS_CONNECTOR_ARN`). */
 	egressConnectorArn: string;
 	/** The execution role passed at `RunMicrovm` (`MICROVM_EXECUTION_ROLE_ARN`). */
@@ -143,12 +145,9 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 			assert(value, `${name} is required with MICROVM_IMAGE_ARN`);
 			return value;
 		};
-		assert(
-			gatewayTokenSecret,
-			"GATEWAY_TOKEN_SECRET is required with MICROVM_IMAGE_ARN",
-		);
 		microvm = {
 			imageArn,
+			gatewayTokenSecret: need("GATEWAY_TOKEN_SECRET"),
 			egressConnectorArn: need("MICROVM_EGRESS_CONNECTOR_ARN"),
 			executionRoleArn: need("MICROVM_EXECUTION_ROLE_ARN"),
 			gatewayBaseUrl: need("GATEWAY_BASE_URL").replace(/\/+$/, ""),

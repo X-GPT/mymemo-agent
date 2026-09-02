@@ -150,22 +150,20 @@ export function createDeps(
 		runStore,
 		liveStreamRelay,
 		turnLiveStreamRelay,
-		ensureVm:
-			config.microvm && config.gatewayTokenSecret
-				? createEnsureVm({
-						store: new PostgresConversationVmStore(database),
-						controlPlane: createLambdaMicrovmControlPlane({
-							region: config.artifactRegion,
-							...config.microvm,
-						}),
-						config: {
-							...config.microvm,
-							agentDatabaseUrl: config.databaseUrl,
-							redisUrl: config.redisUrl,
-						},
-						gatewayTokenSecret: config.gatewayTokenSecret,
-					})
-				: undefined,
+		ensureVm: config.microvm
+			? createEnsureVm({
+					store: new PostgresConversationVmStore(database),
+					controlPlane: createLambdaMicrovmControlPlane({
+						region: config.artifactRegion,
+						...config.microvm,
+					}),
+					config: {
+						...config.microvm,
+						agentDatabaseUrl: config.databaseUrl,
+						redisUrl: config.redisUrl,
+					},
+				})
+			: undefined,
 		liveStreamTelemetry,
 		closeLiveResources: async () => {
 			await Promise.all([liveStreamRelay.close(), turnLiveStreamRelay.close()]);
