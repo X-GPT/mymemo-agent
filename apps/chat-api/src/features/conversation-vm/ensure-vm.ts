@@ -98,15 +98,15 @@ export function createEnsureVm({
 		}
 
 		/** Nudge a `running` VM; a suspended one auto-resumes under the platform. */
-		async function nudge(row: {
-			microvmId: string;
-			endpoint: string;
-		}): Promise<"nudged" | "gone"> {
+		async function nudge(
+			microvmId: string,
+			endpoint: string,
+		): Promise<"nudged" | "gone"> {
 			try {
 				// ponytail: one token mint per nudge; cache per VM if the control-plane
 				// call rate ever matters.
-				const token = await controlPlane.createAuthToken(row.microvmId);
-				const response = await fetch(`https://${row.endpoint}/nudge`, {
+				const token = await controlPlane.createAuthToken(microvmId);
+				const response = await fetch(`https://${endpoint}/nudge`, {
 					method: "POST",
 					headers: {
 						"x-aws-proxy-auth": token,
@@ -122,18 +122,18 @@ export function createEnsureVm({
 				// a booting or suspending VM keeps its row, and its interval
 				// self-heal drains the queue without this nudge.
 				const state = await controlPlane
-					.getState(row.microvmId)
+					.getState(microvmId)
 					.catch(() => "unknown" as const);
 				if (["TERMINATED", "TERMINATING", "not-found"].includes(state)) {
 					logger.warn(
-						{ ...ref, microvmId: row.microvmId, state },
+						{ ...ref, microvmId, state },
 						"MicroVM gone; rehydrating on the next claim",
 					);
-					await store.markTerminated(ref, { microvmId: row.microvmId });
+					await store.markTerminated(ref, { microvmId });
 					return "gone";
 				}
 				logger.warn(
-					{ ...ref, microvmId: row.microvmId, state, err: error },
+					{ ...ref, microvmId, state, err: error },
 					"nudge failed; the queued Turn waits for the In-VM server",
 				);
 				return "nudged";
@@ -168,10 +168,7 @@ export function createEnsureVm({
 					return ensure(true);
 				}
 			}
-			const outcome = await nudge({
-				microvmId: claim.microvmId,
-				endpoint: claim.endpoint,
-			});
+			const outcome = await nudge(claim.microvmId, claim.endpoint);
 			// One lazy rehydrate per POST: the re-claim launches onto the current
 			// image, and the freshly queued Turn runs at the new VM's boot.
 			if (outcome === "gone" && !rehydrated) return ensure(true);

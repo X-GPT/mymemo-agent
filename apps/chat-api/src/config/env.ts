@@ -136,7 +136,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	const statsigServerSecret = env.STATSIG_SERVER_SECRET?.trim();
 	assert(statsigServerSecret, "STATSIG_SERVER_SECRET is required");
 
-	const gatewayTokenSecret = env.GATEWAY_TOKEN_SECRET?.trim() || undefined;
 	let microvm: MicrovmConfig | undefined;
 	const imageArn = env.MICROVM_IMAGE_ARN?.trim();
 	if (imageArn) {
@@ -171,7 +170,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 		openrouterApiKey: env.OPENROUTER_API_KEY?.trim() || undefined,
 		openrouterBaseUrl:
 			env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api",
-		gatewayTokenSecret,
+		gatewayTokenSecret: env.GATEWAY_TOKEN_SECRET?.trim() || undefined,
 		microvm,
 	};
 }
