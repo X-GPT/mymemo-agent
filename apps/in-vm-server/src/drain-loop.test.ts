@@ -464,7 +464,7 @@ describe("drain loop — the suspend hook's graceful-drain gate (#670)", () => {
 		await allTerminal({ t1: "done" });
 	});
 
-	it("a pause outlived by resume settles once the Turn ends and the loop parks idle; pause is reentrant", async () => {
+	it("a pause outlived by resume settles only at the next hold, never mid-Turn; pause is reentrant", async () => {
 		const served: string[] = [];
 		const gated = gatedTurn(served);
 		loop = startDrainLoop({
@@ -485,29 +485,11 @@ describe("drain loop — the suspend hook's graceful-drain gate (#670)", () => {
 		// Resumed, but the Turn is still in flight: no consistent moment yet.
 		expect(settled).toBe(false);
 		gated.release();
-		await Promise.all([first, second]);
-		expect(await turnStatuses()).toEqual({ t1: "done" });
-	});
-
-	it("remembers a nudge that arrived during the hold", async () => {
-		const served: string[] = [];
-		loop = startDrainLoop({
-			...makeDeps(
-				scriptedTurnQuery(served, (prompt) => [
-					...textStep(`echo:${prompt}`),
-					resultSuccess(),
-				]),
-			),
-			selfHealIntervalMs: NEVER_MS,
-		});
-		await loop.pause();
-		expect(loop.nudgedWhilePaused()).toBe(false);
-		await enqueue("one", "t1");
-		loop.nudge();
-		expect(loop.nudgedWhilePaused()).toBe(true);
-		loop.resume();
 		await allTerminal({ t1: "done" });
+		await Bun.sleep(50);
+		// The loop is open again, so the hold has no consistent moment to settle.
+		expect(settled).toBe(false);
 		await loop.pause();
-		expect(loop.nudgedWhilePaused()).toBe(false);
+		await Promise.all([first, second]);
 	});
 });

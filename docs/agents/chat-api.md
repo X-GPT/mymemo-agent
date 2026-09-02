@@ -363,13 +363,14 @@ with stale state, and a restore that fails fails the launch (the client's
 re-POST rehydrates again). Both hooks are registered with the platform's
 60 s maximum (`scripts/deploy/register_microvm_image.sh`); a Turn that
 outruns the suspend budget is snapshotted mid-Turn by the platform, and its
-Checkpoint lands after resume, once the queue drains and the loop parks
-idle (what the platform does with a timed-out suspend hook is unverified —
-the first thing the real-topology pass establishes). A suspend that finds a
-Turn queued during its hold answers 500 after the Checkpoint lands and
-lifts the pause, rather than strand that Turn until the next message. A
-running VM's terminate writes no Checkpoint: the suspend-time one is the
-durable one.
+hold settles only at the next suspend — a Checkpoint is never taken with a
+Turn in flight (what the platform does with a timed-out suspend hook is
+unverified — the first thing the real-topology pass establishes). A suspend
+that finds a Turn still `queued` once the Checkpoint lands — one that
+arrived during the hold, or was waiting behind the Turn in flight — answers
+500 and lifts the pause, rather than strand that Turn until the next
+message. A running VM's terminate writes no Checkpoint: the suspend-time
+one is the durable one.
 
 The Agent session id is the Conversation id (a UUID; the In-VM config
 asserts it), so a restored transcript is `resume`d and the rehydrated VM's

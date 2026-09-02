@@ -19,7 +19,7 @@ chat-api imports the shared client and schema directly. Its migration entrypoint
 - `src/runtime-store.ts`: fenced Run sandbox/taint mutations, in-transaction Agent session pointer updates, Reclamation tainting, and the orphan-sandbox ledger
 - `src/session-store.ts`: Ownership-fenced production Run append/delete operations, transcript reads, and administrative Conversation transcript deletion
 - `src/artifact-store.ts`: pre-upload object ledger and fence-first atomic artifact-pointer/current-metadata/`run_done` commit
-- `src/turn-store.ts`: /v2 Turn-queue primitives on `conversation_messages` (enqueue, one-in-flight claim, at-most-once terminalization, boot sweep, queued-cancel) and the Turn's single assistant-row upsert
+- `src/turn-store.ts`: /v2 Turn-queue primitives on `conversation_messages` (enqueue, one-in-flight claim, at-most-once terminalization, boot sweep, queued-cancel, the suspend hook's queued check) and the Turn's single assistant-row upsert
 - `conversation_vm` (schema and migration here; the store is chat-api's `features/conversation-vm/postgres-conversation-vm-store.ts`, its only writer): the per-Conversation MicroVM registry doubling as the transactional launch claim — one upsert claims a fresh, `terminated`, or stale-`launching` row for exactly one caller — and holding the Checkpoint pointer (#670), moved by the `/v2/checkpoint` route in one write guarded on the VM id, so it always names the latest complete Checkpoint
 - `src/testing.ts`: PGlite harness and shared seed helpers
 

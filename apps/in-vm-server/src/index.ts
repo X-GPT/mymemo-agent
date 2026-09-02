@@ -2,7 +2,10 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createDatabase } from "@mymemo/agent-db/client";
-import { sweepStaleProcessingTurnsTx } from "@mymemo/agent-db/turn-store";
+import {
+	hasQueuedTurnsTx,
+	sweepStaleProcessingTurnsTx,
+} from "@mymemo/agent-db/turn-store";
 import { PostgresDocumentAccessLog } from "@mymemo/document-tools/access-log";
 import { createKbDb } from "@mymemo/document-tools/client";
 import type { TurnLiveStreamRelay } from "@mymemo/live-text";
@@ -50,6 +53,8 @@ let serving: {
 	relay: TurnLiveStreamRelay;
 	/** The suspend-time Checkpoint write; null outside the MicroVM. */
 	checkpoint: (() => Promise<void>) | null;
+	/** The suspend hook's strand check: work the parked loop is holding back. */
+	hasQueuedTurns: () => Promise<boolean>;
 } | null = null;
 
 /**
@@ -65,7 +70,14 @@ async function configure(env: Env, microvmId?: string): Promise<void> {
 	const config = loadInVmConfigFromEnv(env);
 	const paths = { homeDir, workspaceDir: config.workspaceDir };
 	// The Checkpoint door exists only in the MicroVM (the payload names it and
-	// the run hook names the VM); a local run neither restores nor saves.
+	// the run hook names the VM); a local run neither restores nor saves. A
+	// payload that names the door without a VM id fails the launch: serving
+	// without the door would silently forfeit durability.
+	if (config.checkpointUrl && !microvmId) {
+		throw new Error(
+			"CHECKPOINT_URL is set but the run hook named no microvmId",
+		);
+	}
 	const door: CheckpointDoor | null =
 		config.checkpointUrl && microvmId
 			? { url: config.checkpointUrl, token: config.model.apiKey, microvmId }
@@ -132,10 +144,15 @@ async function configure(env: Env, microvmId?: string): Promise<void> {
 			"boot sweep terminalized stale processing Turns as interrupted",
 		);
 	}
+	const conversationKey = {
+		userId: config.userId,
+		conversationId: config.conversationId,
+	};
 	serving = {
 		loop: startDrainLoop(deps),
 		relay,
 		checkpoint: door ? () => saveCheckpoint(paths, door, logger) : null,
+		hasQueuedTurns: () => hasQueuedTurnsTx(db, conversationKey),
 	};
 }
 
@@ -183,11 +200,11 @@ const app = createApp({
 		);
 		try {
 			await serving.checkpoint();
-			if (serving.loop.nudgedWhilePaused()) {
-				// A Turn was queued during the hold: suspending now would strand it
-				// until the next message. The Checkpoint landed; refuse the suspend
-				// and let the loop drain.
-				throw new Error("a Turn arrived during the suspend hold");
+			if (await serving.hasQueuedTurns()) {
+				// A Turn is queued behind the hold (arrived during it, or behind the
+				// Turn that was in flight): suspending now would strand it until the
+				// next message. The Checkpoint landed; refuse the suspend and drain.
+				throw new Error("a Turn is queued behind the suspend hold");
 			}
 		} catch (error) {
 			// The platform sees non-200. Should it keep the VM running, serving

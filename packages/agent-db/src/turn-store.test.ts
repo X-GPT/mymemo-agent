@@ -14,6 +14,7 @@ import {
 	cancelQueuedTurnTx,
 	claimNextTurnTx,
 	enqueueTurnTx,
+	hasQueuedTurnsTx,
 	sweepStaleProcessingTurnsTx,
 	type TurnOutcome,
 	terminalizeTurnTx,
@@ -146,6 +147,17 @@ describe("claimNextTurnTx", () => {
 
 		const claimed = await claim();
 		expect(claimed?.messageId).toBe("m2");
+	});
+});
+
+describe("hasQueuedTurnsTx", () => {
+	it("is true only while a Turn is still queued", async () => {
+		const key = { userId: USER_ID, conversationId: CONVERSATION_ID };
+		expect(await hasQueuedTurnsTx(db, key)).toBe(false);
+		await enqueue("m1");
+		expect(await hasQueuedTurnsTx(db, key)).toBe(true);
+		await claim();
+		expect(await hasQueuedTurnsTx(db, key)).toBe(false);
 	});
 });
 
