@@ -161,15 +161,10 @@ export function createEnsureVm({
 		async function ensure(rehydrated: boolean) {
 			const claim = await store.claimLaunch(ref);
 			if (claim === "claimed") return launch();
-			// `terminated` can only be seen here if the row changed between the
-			// claim and the read (another caller's launch just failed and released
-			// it): claim again, once.
-			if (claim.state === "terminated") {
-				if (!rehydrated) return ensure(true);
-				return;
-			}
 			// Another caller holds a fresh `launching` claim: its VM's boot drains
-			// the queue, this Turn included.
+			// the queue, this Turn included. (`terminated` here means that launch
+			// just failed between the claim and the read; the client's idempotent
+			// re-POST rehydrates.)
 			if (claim.state !== "running" || !claim.microvmId || !claim.endpoint) {
 				return;
 			}

@@ -8,6 +8,15 @@ import type {
 	ConversationVmStore,
 } from "./conversation-vm-store";
 
+/** A fresh `launching` claim: no VM, claim time now. */
+const LAUNCHING_RESET = {
+	state: "launching",
+	microvmId: null,
+	endpoint: null,
+	imageVersion: null,
+	lastActivityAt: sql`now()`,
+};
+
 export class PostgresConversationVmStore implements ConversationVmStore {
 	constructor(private readonly db: Database) {}
 
@@ -25,13 +34,7 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 			.values({ ...ref, state: "launching" })
 			.onConflictDoUpdate({
 				target: [conversationVm.userId, conversationVm.conversationId],
-				set: {
-					state: "launching",
-					microvmId: null,
-					endpoint: null,
-					imageVersion: null,
-					lastActivityAt: sql`now()`,
-				},
+				set: LAUNCHING_RESET,
 				setWhere: sql`${conversationVm.state} = 'terminated' or (${conversationVm.state} = 'launching' and ${conversationVm.lastActivityAt} < now() - interval '2 minutes')`,
 			})
 			.returning({ userId: conversationVm.userId });
@@ -59,13 +62,7 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 	): Promise<boolean> {
 		const won = await this.db
 			.update(conversationVm)
-			.set({
-				state: "launching",
-				microvmId: null,
-				endpoint: null,
-				imageVersion: null,
-				lastActivityAt: sql`now()`,
-			})
+			.set(LAUNCHING_RESET)
 			.where(
 				and(
 					this.owned(ref),

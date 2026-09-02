@@ -38,8 +38,6 @@ export type MicrovmLaunchConfig = Pick<
 
 /** The port the image's In-VM server listens on. */
 export const IN_VM_SERVER_PORT = 8080;
-/** Lifetime of one nudge token; every nudge mints its own. */
-const NUDGE_TOKEN_MINUTES = 5;
 
 export function createLambdaMicrovmControlPlane(
 	config: MicrovmLaunchConfig,
@@ -102,7 +100,8 @@ export function createLambdaMicrovmControlPlane(
 			const minted = await client.send(
 				new CreateMicrovmAuthTokenCommand({
 					microvmIdentifier: microvmId,
-					expirationInMinutes: NUDGE_TOKEN_MINUTES,
+					expirationInMinutes: 5, // every nudge mints its own token
+
 					allowedPorts: [{ port: IN_VM_SERVER_PORT }],
 				}),
 			);

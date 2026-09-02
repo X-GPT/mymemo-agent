@@ -85,21 +85,17 @@ function fakeControlPlane(
 ) {
 	const runs: string[] = [];
 	const terminated: string[] = [];
-	let launches = 0;
 	const plane: MicrovmControlPlane & {
 		runs: string[];
 		terminated: string[];
-		tokens: string[];
 	} = {
 		runs,
 		terminated,
-		tokens: [],
 		async run({ runHookPayload }) {
 			runs.push(runHookPayload);
-			launches += 1;
 			return {
-				microvmId: `microvm-${launches}`,
-				endpoint: `vm-${launches}.example`,
+				microvmId: `microvm-${runs.length}`,
+				endpoint: `vm-${runs.length}.example`,
 				imageVersion: "7",
 			};
 		},
@@ -107,9 +103,7 @@ function fakeControlPlane(
 			return (overrides.state ?? "RUNNING") as "RUNNING";
 		},
 		async createAuthToken(microvmId) {
-			const token = `token-for-${microvmId}`;
-			plane.tokens.push(token);
-			return token;
+			return `token-for-${microvmId}`;
 		},
 		async terminate(microvmId) {
 			terminated.push(microvmId);
