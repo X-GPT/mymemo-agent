@@ -82,6 +82,8 @@ locals {
     { name = "MICROVM_IMAGE_ARN", value = "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:microvm-image:${local.microvm_name}" },
     { name = "MICROVM_EGRESS_CONNECTOR_ARN", value = aws_lambdacore_network_connector.microvm_egress.arn },
     { name = "MICROVM_EXECUTION_ROLE_ARN", value = aws_iam_role.microvm_execution.arn },
+    # The Checkpoint bucket the /v2/checkpoint route streams to (#670).
+    { name = "MICROVM_CHECKPOINT_BUCKET", value = aws_s3_bucket.microvm_checkpoints.bucket },
     # chat-api's own origin as a VM reaches it: the runHookPayload's
     # MODEL_BASE_URL is this plus /v2/gateway/<conversation>.
     { name = "GATEWAY_BASE_URL", value = "http://${aws_lb.agent.dns_name}" },

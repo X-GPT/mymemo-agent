@@ -11,10 +11,11 @@ FROM public.ecr.aws/lambda/microvms:al2023-minimal
 
 # No bubblewrap or socat: they exist only to sandbox shell commands, and there
 # is no shell — the Bash tool is denied (ADR-0034 amendment).
-# nodejs22 runs the smoke checks; shadow-utils provides useradd. dnf installs
-# are all-or-nothing: one unavailable package fails the whole line (ripgrep is
-# absent from AL2023 repos anyway — Claude Code ships its own rg).
-RUN dnf install -y bash git nodejs22 nodejs22-npm shadow-utils util-linux \
+# nodejs22 runs the smoke checks; shadow-utils provides useradd; tar + gzip
+# pack and unpack the Checkpoint (#670). dnf installs are all-or-nothing: one
+# unavailable package fails the whole line (ripgrep is absent from AL2023
+# repos anyway — Claude Code ships its own rg).
+RUN dnf install -y bash git gzip nodejs22 nodejs22-npm shadow-utils tar util-linux \
  && dnf clean all
 
 # Bun runs the In-VM server (the CI-pinned version). The Claude Agent SDK and

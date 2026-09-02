@@ -50,4 +50,16 @@ export interface ConversationVmStore {
 		ref: ConversationRef,
 		options: { microvmId: string },
 	): Promise<void>;
+	/** The S3 key of the latest durable Checkpoint (#670); null before the first. */
+	getCheckpointPointer(ref: ConversationRef): Promise<string | null>;
+	/**
+	 * Point the row at a new durable Checkpoint, guarded on the VM that wrote
+	 * it: a VM the row no longer names (retired by an urgent upgrade while its
+	 * suspend hook was still draining) must not fork the Conversation's
+	 * lineage. Returns the previous key for deletion, or null when refused.
+	 */
+	swapCheckpointPointer(
+		ref: ConversationRef,
+		options: { microvmId: string; key: string },
+	): Promise<{ previous: string | null } | null>;
 }

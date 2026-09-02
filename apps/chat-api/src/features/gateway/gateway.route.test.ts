@@ -8,6 +8,7 @@ import { mintGatewayToken } from "./gateway-token";
 const SECRET = "test-gateway-signing-secret";
 const OPENROUTER_KEY = "sk-or-real-upstream-key";
 const CONVERSATION_ID = "11111111-2222-4333-8444-555555555555";
+const USER_ID = "member-1";
 
 const logged: { level: string; obj: Record<string, unknown>; msg: string }[] =
 	[];
@@ -57,19 +58,23 @@ function fakeUpstream(response: () => Response) {
 
 const VALID_TOKEN = await mintGatewayToken({
 	conversationId: CONVERSATION_ID,
+	userId: USER_ID,
 	secret: SECRET,
 });
 const EXPIRED_TOKEN = await mintGatewayToken({
 	conversationId: CONVERSATION_ID,
+	userId: USER_ID,
 	secret: SECRET,
 	ttlSeconds: -60,
 });
 const WRONG_SECRET_TOKEN = await mintGatewayToken({
 	conversationId: CONVERSATION_ID,
+	userId: USER_ID,
 	secret: "other",
 });
 const WRONG_CONVERSATION_TOKEN = await mintGatewayToken({
 	conversationId: "99999999-2222-4333-8444-555555555555",
+	userId: USER_ID,
 	secret: SECRET,
 });
 

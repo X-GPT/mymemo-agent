@@ -64,6 +64,15 @@ describe("loadInVmConfigFromEnv", () => {
 		);
 	});
 
+	it("reads the Checkpoint door only when the payload names one", () => {
+		const env = baseEnv();
+		expect(loadInVmConfigFromEnv(env).checkpointUrl).toBeUndefined();
+		env.CHECKPOINT_URL = " http://alb.internal/v2/checkpoint/conversation-1 ";
+		expect(loadInVmConfigFromEnv(env).checkpointUrl).toBe(
+			"http://alb.internal/v2/checkpoint/conversation-1",
+		);
+	});
+
 	it("refuses an insecure Redis URL unless the local escape hatch is set", () => {
 		const env = baseEnv();
 		env.REDIS_URL = "redis://127.0.0.1:6379";

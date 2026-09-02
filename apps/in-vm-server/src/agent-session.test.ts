@@ -1,10 +1,18 @@
 import { describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type {
 	Options,
 	SDKMessage,
 	SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { createAgentSession, type SessionQueryFn } from "./agent-session";
+import {
+	agentSessionId,
+	createAgentSession,
+	hasTranscript,
+	type SessionQueryFn,
+} from "./agent-session";
 import { resultSuccess, textStep } from "./testing/sdk-fixtures";
 
 const SENTINEL_OPTIONS = { model: "sentinel" } as Options;
@@ -190,5 +198,70 @@ describe("createAgentSession — the interrupt control (#668)", () => {
 			turnQuery({ prompt: "two", options: SENTINEL_OPTIONS }),
 		);
 		expect(second.at(-1)?.type).toBe("result");
+	});
+});
+
+describe("the pinned Agent session (#670)", () => {
+	it("creates the session under the Conversation's id, and resumes it once its transcript exists", async () => {
+		let transcript = false;
+		const { fn, calls } = fakeSessionQuery((prompt) =>
+			prompt === "break" ? null : [...textStep(prompt), resultSuccess()],
+		);
+		const turnQuery = createAgentSession({
+			query: fn,
+			options: SENTINEL_OPTIONS,
+			session: { id: "session-1", hasTranscript: () => transcript },
+		});
+
+		await Array.fromAsync(
+			turnQuery({ prompt: "one", options: SENTINEL_OPTIONS }),
+		);
+		expect(calls[0]?.options).toEqual({
+			...SENTINEL_OPTIONS,
+			sessionId: "session-1",
+		});
+
+		// The session breaks (result-less window) and is retired; the CLI has
+		// written the transcript by now, so the restart resumes it.
+		transcript = true;
+		await Array.fromAsync(
+			turnQuery({ prompt: "break", options: SENTINEL_OPTIONS }),
+		);
+		await Array.fromAsync(
+			turnQuery({ prompt: "two", options: SENTINEL_OPTIONS }),
+		);
+		expect(calls).toHaveLength(2);
+		expect(calls[1]?.options).toEqual({
+			...SENTINEL_OPTIONS,
+			resume: "session-1",
+		});
+		expect(calls[1]?.prompts).toEqual(["two"]);
+	});
+
+	it("derives one stable UUID per Conversation id, UUID-shaped or not", () => {
+		const id = agentSessionId("verify-670-conversation");
+		expect(id).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+		);
+		expect(agentSessionId("verify-670-conversation")).toBe(id);
+		expect(agentSessionId("other")).not.toBe(id);
+	});
+
+	it("finds the transcript under any project key, and nothing in a missing or empty .claude", () => {
+		const claudeDir = path.join(
+			mkdtempSync(path.join(tmpdir(), "claude-")),
+			".claude",
+		);
+		expect(hasTranscript(claudeDir, "s1")).toBe(false);
+		mkdirSync(path.join(claudeDir, "projects", "-home-developer-workspace"), {
+			recursive: true,
+		});
+		expect(hasTranscript(claudeDir, "s1")).toBe(false);
+		writeFileSync(
+			path.join(claudeDir, "projects", "-home-developer-workspace", "s1.jsonl"),
+			"",
+		);
+		expect(hasTranscript(claudeDir, "s1")).toBe(true);
+		expect(hasTranscript(claudeDir, "s2")).toBe(false);
 	});
 });

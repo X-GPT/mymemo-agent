@@ -17,6 +17,11 @@ import { serveOneTurn, type TurnServingDeps } from "./turn-serving";
  * On start the loop boot-sweeps stale `processing` rows to `interrupted`
  * (a Turn is never re-run) and then claims immediately, so a restart with
  * queued rows resumes draining without a nudge.
+ *
+ * The suspend hook's graceful-drain gate (#670) is `pause`: no new claim
+ * while paused, and the promise settles once the loop is parked with nothing
+ * in flight — the moment the Checkpoint may be taken. `resume` (the resume
+ * hook) lifts it.
  */
 
 const SELF_HEAL_INTERVAL_MS = 15_000;
@@ -28,6 +33,10 @@ export interface DrainLoopHandle {
 	 * docs/agents/chat-api.md. Rejects only when the queued-cancel itself
 	 * failed, so the nudge answers non-2xx instead of claiming it applied. */
 	interrupt(messageId: string): Promise<void>;
+	/** Hold claims; settles once nothing is in flight (or on `resume`). */
+	pause(): Promise<void>;
+	/** Lift `pause` and consult Postgres again. Idempotent. */
+	resume(): void;
 	/** Stop after the Turn in flight (if any) completes. */
 	stop(): Promise<void>;
 }
@@ -43,6 +52,13 @@ export function startDrainLoop(
 	let doorbell = false;
 	let wake: (() => void) | null = null;
 	let stopped = false;
+	let paused = false;
+	// Callers of pause(), released when the loop parks paused (or stops).
+	let parked: (() => void)[] = [];
+	const releaseParked = (): void => {
+		for (const release of parked) release();
+		parked = [];
+	};
 	// The in-flight Turn's interrupt channel (serveOneTurn listens for the
 	// life of its claim).
 	const interrupts = new EventTarget();
@@ -96,6 +112,12 @@ export function startDrainLoop(
 
 		while (!stopped) {
 			doorbell = false;
+			if (paused) {
+				// Parked with nothing in flight: the Checkpoint is consistent now.
+				releaseParked();
+				await sleep();
+				continue;
+			}
 			let outcome: Awaited<ReturnType<typeof serveOneTurn>> = null;
 			try {
 				outcome = await serveOneTurn(deps, interrupts);
@@ -113,6 +135,7 @@ export function startDrainLoop(
 			if (outcome !== null || doorbell) continue;
 			await sleep();
 		}
+		releaseParked();
 	})();
 
 	return {
@@ -135,6 +158,20 @@ export function startDrainLoop(
 					"interrupt target is neither queued nor in flight; dropped",
 				);
 			}
+		},
+		pause() {
+			paused = true;
+			const settled = new Promise<void>((resolve) => parked.push(resolve));
+			// Wake a parked loop so it re-parks as paused and releases us.
+			nudge();
+			return settled;
+		},
+		resume() {
+			paused = false;
+			// A pause still waiting on a long Turn is released too: the platform
+			// resumed regardless, so its Checkpoint is taken as-is.
+			releaseParked();
+			nudge();
 		},
 		async stop() {
 			stopped = true;

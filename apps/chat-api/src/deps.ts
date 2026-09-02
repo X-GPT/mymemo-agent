@@ -22,12 +22,17 @@ import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-downl
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
 import { createS3ArtifactDownloadSigner } from "./features/artifacts/s3-artifact-download-signer";
+import {
+	type CheckpointStore,
+	createS3CheckpointStore,
+} from "./features/checkpoint/checkpoint-store";
 import type { ConversationHistoryStore } from "./features/conversation-history/conversation-history-store";
 import { PostgresConversationHistoryStore } from "./features/conversation-history/postgres-conversation-history-store";
 import type { ConversationMessagesStore } from "./features/conversation-messages/conversation-messages-store";
 import { PostgresConversationMessagesStore } from "./features/conversation-messages/postgres-conversation-messages-store";
 import type { ConversationStore } from "./features/conversation-store/conversation-store";
 import { PostgresConversationStore } from "./features/conversation-store/postgres-conversation-store";
+import type { ConversationVmStore } from "./features/conversation-vm/conversation-vm-store";
 import {
 	createEnsureVm,
 	type EnsureVm,
@@ -80,6 +85,14 @@ export interface AppDeps {
 	 * is not configured, so the v2 message POST answers 503.
 	 */
 	ensureVm?: EnsureVm;
+	/** The per-Conversation MicroVM registry — the Checkpoint pointer lives on its row (#670). */
+	conversationVmStore: ConversationVmStore;
+	/**
+	 * Checkpoint bytes in S3 under `conversations/<id>/` (#670), for the
+	 * `/v2/checkpoint` route. Undefined = MicroVM orchestration is not
+	 * configured, so the route answers 503.
+	 */
+	checkpointStore?: CheckpointStore;
 	/** Cardinality-safe, payload-free Live Stream relay observability. */
 	liveStreamTelemetry: LiveStreamTelemetry;
 	/** Close the lazy Redis relay clients during service shutdown. */
@@ -128,6 +141,7 @@ export function createDeps(
 		database,
 	);
 	const runStore = new PostgresRunStore(database);
+	const conversationVmStore = new PostgresConversationVmStore(database);
 	const liveStreamRelay = createRedisLiveStreamRelay({
 		url: config.redisUrl,
 		deployment: "current",
@@ -152,7 +166,7 @@ export function createDeps(
 		turnLiveStreamRelay,
 		ensureVm: config.microvm
 			? createEnsureVm({
-					store: new PostgresConversationVmStore(database),
+					store: conversationVmStore,
 					controlPlane: createLambdaMicrovmControlPlane({
 						// AWS_REGION — the one region everything in this stack shares.
 						region: config.artifactRegion,
@@ -163,6 +177,13 @@ export function createDeps(
 						agentDatabaseUrl: config.databaseUrl,
 						redisUrl: config.redisUrl,
 					},
+				})
+			: undefined,
+		conversationVmStore,
+		checkpointStore: config.microvm
+			? createS3CheckpointStore({
+					bucket: config.microvm.checkpointBucket,
+					region: config.artifactRegion,
 				})
 			: undefined,
 		liveStreamTelemetry,

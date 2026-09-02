@@ -60,6 +60,7 @@ export function createEnsureVm({
 		async function launch(claimToken: string): Promise<void> {
 			const gatewayToken = await mintGatewayToken({
 				conversationId: ref.conversationId,
+				userId: ref.userId,
 				secret: config.gatewayTokenSecret,
 			});
 			// The platform caps the payload (16 KB); its own validation rejects
@@ -75,6 +76,8 @@ export function createEnsureVm({
 						MODEL_BASE_URL: `${config.gatewayBaseUrl}/v2/gateway/${ref.conversationId}`,
 						MODEL_API_KEY: gatewayToken,
 						MODEL: config.model,
+						// The Checkpoint door (#670): the same token authenticates it.
+						CHECKPOINT_URL: `${config.gatewayBaseUrl}/v2/checkpoint/${ref.conversationId}`,
 					}),
 				})
 				.catch(async (error) => {

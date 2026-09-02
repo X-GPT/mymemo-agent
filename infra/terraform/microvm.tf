@@ -303,43 +303,17 @@ resource "aws_s3_bucket_policy" "microvm_checkpoints_tls_only" {
 }
 
 # --- VM execution role ------------------------------------------------------
-# Passed at RunMicrovm; scoped to the conversations/* prefix — the accepted
-# residual in ADR-0034 (per-prefix, not per-Conversation, mitigated by the
-# in-VM process boundary).
+# Passed at RunMicrovm. It carries no policy: the VM has no network path to
+# S3 (no VPC endpoint — that absence is the egress lockdown), so Checkpoints
+# are brokered through chat-api's /v2/checkpoint route under the
+# per-Conversation gateway token (#670), and the conversations/* residual
+# ADR-0034 once accepted on this role no longer exists. Kept as a role so the
+# launch contract (executionRoleArn) is unchanged; removing it outright is a
+# follow-up once a live RunMicrovm without one is proven.
 
 resource "aws_iam_role" "microvm_execution" {
   name               = "${local.microvm_name}-execution"
   assume_role_policy = data.aws_iam_policy_document.microvm_connector_assume_role.json
-}
-
-data "aws_iam_policy_document" "microvm_execution_checkpoints" {
-  statement {
-    sid = "CheckpointObjects"
-    actions = [
-      "s3:GetObject",
-      "s3:PutObject",
-      "s3:DeleteObject",
-    ]
-    resources = ["${aws_s3_bucket.microvm_checkpoints.arn}/conversations/*"]
-  }
-
-  statement {
-    sid       = "CheckpointList"
-    actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.microvm_checkpoints.arn]
-
-    condition {
-      test     = "StringLike"
-      variable = "s3:prefix"
-      values   = ["conversations/*"]
-    }
-  }
-}
-
-resource "aws_iam_role_policy" "microvm_execution_checkpoints" {
-  name   = "${local.microvm_name}-execution-checkpoints"
-  role   = aws_iam_role.microvm_execution.id
-  policy = data.aws_iam_policy_document.microvm_execution_checkpoints.json
 }
 
 # --- Gateway token signing secret -------------------------------------------
@@ -364,10 +338,12 @@ resource "aws_secretsmanager_secret_version" "gateway_token" {
 }
 
 # --- chat-api control-plane grants ------------------------------------------
-# Exactly the named control-plane actions plus the checkpoint-deletion S3
-# scope; chat-api never reads or writes checkpoint content (data plane stays
-# with the VM execution role). Suspend/Resume are deliberately absent — the
-# platform idle policy owns them. The two reads (#669): GetMicrovm is the
+# Exactly the named control-plane actions plus the Checkpoint S3 scope:
+# chat-api is the bucket's only principal (#670) — its /v2/checkpoint route
+# streams a VM's Checkpoint in and out under the per-Conversation gateway
+# token, writing exactly conversations/<that conversation>/, and permanent
+# deletion (#671) sweeps the prefix. Suspend/Resume are deliberately absent —
+# the platform idle policy owns them. The two reads (#669): GetMicrovm is the
 # reactive at-cap check behind a failed nudge, GetMicrovmImage the
 # urgent-upgrade staleness check.
 
@@ -400,13 +376,17 @@ data "aws_iam_policy_document" "chat_api_microvm_control_plane" {
   }
 
   statement {
-    sid       = "CheckpointCleanupDelete"
-    actions   = ["s3:DeleteObject"]
+    sid = "CheckpointObjects"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+    ]
     resources = ["${aws_s3_bucket.microvm_checkpoints.arn}/conversations/*"]
   }
 
   statement {
-    sid       = "CheckpointCleanupList"
+    sid       = "CheckpointList"
     actions   = ["s3:ListBucket"]
     resources = [aws_s3_bucket.microvm_checkpoints.arn]
 

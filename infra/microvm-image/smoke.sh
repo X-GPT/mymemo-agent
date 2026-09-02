@@ -55,6 +55,14 @@ else
 	r policy-dir PASS "/etc/claude-code not writable by $(whoami)"
 fi
 
+# tar + gzip pack and unpack the Checkpoint (#670): a missing binary would
+# fail every suspend hook, and the run hook of every rehydrate.
+if tar --version >/dev/null 2>&1 && gzip --version >/dev/null 2>&1; then
+	r checkpoint-tools PASS "$(tar --version | head -1)"
+else
+	r checkpoint-tools FAIL "tar or gzip missing"
+fi
+
 # The Workspace must be writable by the runtime user (the file tools' cwd);
 # the server install must not be.
 if touch /home/developer/workspace/.smoke 2>/dev/null; then

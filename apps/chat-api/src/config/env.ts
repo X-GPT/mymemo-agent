@@ -88,6 +88,8 @@ export interface MicrovmConfig {
 	egressConnectorArn: string;
 	/** The execution role passed at `RunMicrovm` (`MICROVM_EXECUTION_ROLE_ARN`). */
 	executionRoleArn: string;
+	/** The S3 bucket Checkpoints live in (`MICROVM_CHECKPOINT_BUCKET`), under `conversations/<id>/`. */
+	checkpointBucket: string;
 	/**
 	 * chat-api's own origin as the VM reaches it (`GATEWAY_BASE_URL`, the
 	 * internal ALB); the payload's `MODEL_BASE_URL` is its `/v2/gateway` route.
@@ -149,6 +151,7 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 			gatewayTokenSecret: need("GATEWAY_TOKEN_SECRET"),
 			egressConnectorArn: need("MICROVM_EGRESS_CONNECTOR_ARN"),
 			executionRoleArn: need("MICROVM_EXECUTION_ROLE_ARN"),
+			checkpointBucket: need("MICROVM_CHECKPOINT_BUCKET"),
 			gatewayBaseUrl: need("GATEWAY_BASE_URL").replace(/\/+$/, ""),
 			kbDatabaseUrl: need("KB_DATABASE_URL"),
 			model:

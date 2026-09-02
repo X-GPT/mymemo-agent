@@ -94,6 +94,35 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 			);
 	}
 
+	async getCheckpointPointer(ref: ConversationRef): Promise<string | null> {
+		const [row] = await this.db
+			.select({ checkpointPointer: conversationVm.checkpointPointer })
+			.from(conversationVm)
+			.where(this.owned(ref));
+		return row?.checkpointPointer ?? null;
+	}
+
+	async swapCheckpointPointer(
+		ref: ConversationRef,
+		options: { microvmId: string; key: string },
+	): Promise<{ previous: string | null } | null> {
+		return await this.db.transaction(async (tx) => {
+			const [row] = await tx
+				.select({ checkpointPointer: conversationVm.checkpointPointer })
+				.from(conversationVm)
+				.where(
+					and(this.owned(ref), eq(conversationVm.microvmId, options.microvmId)),
+				)
+				.for("update");
+			if (!row) return null;
+			await tx
+				.update(conversationVm)
+				.set({ checkpointPointer: options.key })
+				.where(this.owned(ref));
+			return { previous: row.checkpointPointer };
+		});
+	}
+
 	/** This caller's own `launching` claim — the fence for record and release. */
 	private claimed(ref: ConversationRef, claimToken: string) {
 		return and(

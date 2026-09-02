@@ -54,9 +54,10 @@ egress connector, the checkpoint bucket, and the IAM roles/grants — are in
    + `TerminateMicrovm` cycle under the chat-api task role before relying on
    them, and tighten if the policy simulator shows drift.
 
-What the topology asserts (egress lockdown shape, checkpoint retention, the
-control-plane/data-plane IAM split) is documented in the comments in
-`infra/terraform/microvm.tf` itself.
+What the topology asserts (egress lockdown shape, checkpoint retention,
+chat-api as the checkpoint bucket's only principal — the VM has no path to
+S3, so Checkpoints are brokered through `/v2/checkpoint`, #670) is
+documented in the comments in `infra/terraform/microvm.tf` itself.
 
 ## Pre-cutover gate
 

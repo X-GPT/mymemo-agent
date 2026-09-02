@@ -5,6 +5,8 @@ function handlers(overrides: Partial<AppHandlers> = {}): AppHandlers {
 	return {
 		nudge: async () => true,
 		run: async () => {},
+		suspend: async () => {},
+		resume: async () => {},
 		...overrides,
 	};
 }
@@ -136,8 +138,6 @@ describe("the In-VM server surface", () => {
 
 	it.each([
 		"ready",
-		"resume",
-		"suspend",
 		"terminate",
 	])("answers the %s lifecycle hook with 200", async (hook) => {
 		const app = createApp(handlers());
@@ -145,6 +145,54 @@ describe("the In-VM server surface", () => {
 			method: "POST",
 		});
 		expect(res.status).toBe(200);
+	});
+
+	it("answers the suspend hook only once the drain-and-checkpoint handler completes, and 500 when it fails", async () => {
+		const events: string[] = [];
+		const app = createApp(
+			handlers({
+				suspend: async () => {
+					await Bun.sleep(20);
+					events.push("checkpointed");
+				},
+			}),
+		);
+		const res = await app.request("/aws/lambda-microvms/runtime/v1/suspend", {
+			method: "POST",
+		});
+		expect(res.status).toBe(200);
+		expect(events).toEqual(["checkpointed"]);
+
+		const failing = createApp(
+			handlers({
+				suspend: async () => {
+					throw new Error("checkpoint PUT answered 503");
+				},
+			}),
+		);
+		expect(
+			(
+				await failing.request("/aws/lambda-microvms/runtime/v1/suspend", {
+					method: "POST",
+				})
+			).status,
+		).toBe(500);
+	});
+
+	it("delivers the resume hook to its handler", async () => {
+		let resumed = 0;
+		const app = createApp(
+			handlers({
+				resume: async () => {
+					resumed += 1;
+				},
+			}),
+		);
+		const res = await app.request("/aws/lambda-microvms/runtime/v1/resume", {
+			method: "POST",
+		});
+		expect(res.status).toBe(200);
+		expect(resumed).toBe(1);
 	});
 
 	it("streams the in-VM smoke checks when the image bakes a smoke script", async () => {

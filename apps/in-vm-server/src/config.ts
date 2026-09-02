@@ -57,6 +57,12 @@ export interface InVmConfig {
 		apiKey: string;
 		model: string;
 	};
+	/**
+	 * chat-api's `/v2/checkpoint/<conversation>` door (#670), delivered via
+	 * `runHookPayload`; the gateway token above authenticates it. Absent
+	 * locally, where no lifecycle hook ever fires.
+	 */
+	checkpointUrl?: string;
 }
 
 /** Parse + validate the environment into a typed config. Pure: env in, config out. */
@@ -100,6 +106,7 @@ export function loadInVmConfigFromEnv(env: Env): InVmConfig {
 		conversationId,
 		workspaceDir,
 		model: { baseUrl: modelBaseUrl, apiKey: modelApiKey, model },
+		checkpointUrl: env.CHECKPOINT_URL?.trim() || undefined,
 	};
 }
 

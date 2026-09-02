@@ -1,6 +1,6 @@
 # Run the chat loop in per-Conversation Lambda MicroVMs behind a process trust boundary
 
-Status: accepted (amended 2026-09-01 — see [Amendment: no shell](#amendment-2026-09-01--no-shell-in-the-vm))
+Status: accepted (amended 2026-09-01 — see [Amendment: no shell](#amendment-2026-09-01--no-shell-in-the-vm); amended 2026-09-02 — see [Amendment: Checkpoints brokered through chat-api](#amendment-2026-09-02--checkpoints-brokered-through-chat-api))
 
 Supersedes [ADR-0031](0031-make-agentcore-the-sole-execution-runtime.md) (AgentCore
 as sole execution runtime) and [ADR-0033](0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)
@@ -105,3 +105,22 @@ this change or after it — never before, since removing bubblewrap while the
 shell is still allowed would leave the tool demanding a sandbox that cannot be
 built). Restoring a shell means restoring all of it and remaking this security
 case.
+
+## Amendment 2026-09-02 — Checkpoints brokered through chat-api
+
+The VM cannot reach S3: the agent stack has no VPC endpoints, and the
+MicroVM route tables carry only the VPC-local route — that absence *is* the
+egress lockdown. So the Checkpoint (the Agent session under `~/.claude` plus
+the Workspace) is not written by the VM's execution role; it travels through
+the one door the VM already has, the internal ALB, as
+`PUT`/`GET /v2/checkpoint/<conversation>` in chat-api under the
+per-Conversation gateway token (#670). chat-api derives the Conversation from
+the verified token and writes exactly that prefix, moves
+`conversation_vm.checkpoint_pointer` in one write guarded on the VM id, and
+is the checkpoint bucket's only principal. Consequently the execution role's
+`conversations/*` scope — the residual the no-shell amendment above still
+mentions — no longer exists: the role carries no policy. The cost accepted:
+Checkpoint bytes traverse chat-api, which streams them (never buffers), and
+both lifecycle hooks are bounded by the platform's 60 s cap, so the suspend
+hook drains and writes within it and restore-on-boot completes inside the
+run hook.
