@@ -32,11 +32,6 @@ export class VmUnavailableError extends Error {
 	}
 }
 
-/**
- * A `launching` claim older than this with no VM recorded belonged to a
- * chat-api that died mid-launch; the next caller re-claims it.
- */
-export const STALE_LAUNCH_MS = 2 * 60_000;
 const NUDGE_TIMEOUT_MS = 10_000;
 
 export interface EnsureVmDeps {
@@ -61,38 +56,38 @@ export interface EnsureVmDeps {
 	 * (#650's urgent lever); false leaves upgrades to natural rotation.
 	 */
 	upgradeUrgent: boolean;
-	fetch: typeof fetch;
+	fetch?: typeof fetch;
 }
 
-export function createEnsureVm(deps: EnsureVmDeps): EnsureVm {
-	const { store, controlPlane } = deps;
-
+export function createEnsureVm({
+	store,
+	controlPlane,
+	payload,
+	gatewayTokenSecret,
+	upgradeUrgent,
+	fetch = globalThis.fetch,
+}: EnsureVmDeps): EnsureVm {
 	return (ref, logger) => {
-		// The platform caps the payload at 4 KB; its own validation rejects an
-		// oversize one into the launch-failure path below.
-		function runHookPayload(ref: ConversationRef, gatewayToken: string) {
-			return JSON.stringify({
-				MYMEMO_USER_ID: ref.userId,
-				MYMEMO_CONVERSATION_ID: ref.conversationId,
-				AGENT_DATABASE_URL: deps.payload.agentDatabaseUrl,
-				KB_DATABASE_URL: deps.payload.kbDatabaseUrl,
-				REDIS_URL: deps.payload.redisUrl,
-				MODEL_BASE_URL: `${deps.payload.gatewayBaseUrl}/v2/gateway/${ref.conversationId}`,
-				MODEL_API_KEY: gatewayToken,
-				MODEL: deps.payload.model,
-			});
-		}
-
 		/** This caller owns the `launching` claim: mint, launch, record. */
-		async function launch(ref: ConversationRef): Promise<void> {
+		async function launch(): Promise<void> {
 			let vm: Awaited<ReturnType<MicrovmControlPlane["run"]>>;
 			try {
-				const gatewayToken = await mintGatewayToken({
-					conversationId: ref.conversationId,
-					secret: deps.gatewayTokenSecret,
-				});
+				// The platform caps the payload at 4 KB; its own validation rejects
+				// an oversize one into the catch below.
 				vm = await controlPlane.run({
-					runHookPayload: runHookPayload(ref, gatewayToken),
+					runHookPayload: JSON.stringify({
+						MYMEMO_USER_ID: ref.userId,
+						MYMEMO_CONVERSATION_ID: ref.conversationId,
+						AGENT_DATABASE_URL: payload.agentDatabaseUrl,
+						KB_DATABASE_URL: payload.kbDatabaseUrl,
+						REDIS_URL: payload.redisUrl,
+						MODEL_BASE_URL: `${payload.gatewayBaseUrl}/v2/gateway/${ref.conversationId}`,
+						MODEL_API_KEY: await mintGatewayToken({
+							conversationId: ref.conversationId,
+							secret: gatewayTokenSecret,
+						}),
+						MODEL: payload.model,
+					}),
 				});
 			} catch (error) {
 				// Hand the claim back now rather than after the stale window, so the
@@ -116,15 +111,15 @@ export function createEnsureVm(deps: EnsureVmDeps): EnsureVm {
 		}
 
 		/** Nudge a `running` VM; a suspended one auto-resumes under the platform. */
-		async function nudge(
-			ref: ConversationRef,
-			row: { microvmId: string; endpoint: string },
-		): Promise<"nudged" | "gone"> {
+		async function nudge(row: {
+			microvmId: string;
+			endpoint: string;
+		}): Promise<"nudged" | "gone"> {
 			try {
 				// ponytail: one token mint per nudge; cache per VM if the control-plane
 				// call rate ever matters.
 				const token = await controlPlane.createAuthToken(row.microvmId);
-				const response = await deps.fetch(`https://${row.endpoint}/nudge`, {
+				const response = await fetch(`https://${row.endpoint}/nudge`, {
 					method: "POST",
 					headers: {
 						"x-aws-proxy-auth": token,
@@ -163,16 +158,14 @@ export function createEnsureVm(deps: EnsureVmDeps): EnsureVm {
 			}
 		}
 
-		async function ensure(ref: ConversationRef, rehydrated: boolean) {
-			const claim = await store.claimLaunch(ref, {
-				staleLaunchAfterMs: STALE_LAUNCH_MS,
-			});
-			if (claim === "claimed") return launch(ref);
+		async function ensure(rehydrated: boolean) {
+			const claim = await store.claimLaunch(ref);
+			if (claim === "claimed") return launch();
 			// `terminated` can only be seen here if the row changed between the
 			// claim and the read (another caller's launch just failed and released
 			// it): claim again, once.
 			if (claim.state === "terminated") {
-				if (!rehydrated) return ensure(ref, true);
+				if (!rehydrated) return ensure(true);
 				return;
 			}
 			// Another caller holds a fresh `launching` claim: its VM's boot drains
@@ -180,7 +173,7 @@ export function createEnsureVm(deps: EnsureVmDeps): EnsureVm {
 			if (claim.state !== "running" || !claim.microvmId || !claim.endpoint) {
 				return;
 			}
-			if (deps.upgradeUrgent) {
+			if (upgradeUrgent) {
 				const current = await controlPlane.latestImageVersion();
 				if (current !== undefined && claim.imageVersion !== current) {
 					if (
@@ -196,18 +189,18 @@ export function createEnsureVm(deps: EnsureVmDeps): EnsureVm {
 							"terminate of the stale VM failed; launching anyway",
 						);
 					});
-					return launch(ref);
+					return launch();
 				}
 			}
-			const outcome = await nudge(ref, {
+			const outcome = await nudge({
 				microvmId: claim.microvmId,
 				endpoint: claim.endpoint,
 			});
 			// One lazy rehydrate per POST: the re-claim launches onto the current
 			// image, and the freshly queued Turn runs at the new VM's boot.
-			if (outcome === "gone" && !rehydrated) return ensure(ref, true);
+			if (outcome === "gone" && !rehydrated) return ensure(true);
 		}
 
-		return ensure(ref, false);
+		return ensure(false);
 	};
 }

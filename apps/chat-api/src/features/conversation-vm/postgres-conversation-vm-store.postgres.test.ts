@@ -25,7 +25,6 @@ const DB_URL = process.env.AGENT_DATABASE_URL ?? "";
 const RUN = DB_URL !== "" && process.env.RUN_CHAT_API_POSTGRES_TESTS === "true";
 const USER_ID = `vm-claim-${crypto.randomUUID()}`;
 const ref = { userId: USER_ID, conversationId: "vm-race-conversation" };
-const STALE = { staleLaunchAfterMs: 120_000 };
 
 if (RUN) setDefaultTimeout(30_000);
 
@@ -50,7 +49,7 @@ describe.skipIf(!RUN)("conversation_vm launch claim under concurrency", () => {
 
 	it("gives exactly one of many concurrent claimants the launch", async () => {
 		const results = await Promise.all(
-			Array.from({ length: 12 }, () => store.claimLaunch(ref, STALE)),
+			Array.from({ length: 12 }, () => store.claimLaunch(ref)),
 		);
 		expect(results.filter((r) => r === "claimed")).toHaveLength(1);
 		for (const lost of results.filter((r) => r !== "claimed")) {
@@ -59,7 +58,7 @@ describe.skipIf(!RUN)("conversation_vm launch claim under concurrency", () => {
 	});
 
 	it("gives exactly one of many concurrent rehydrators the re-claim", async () => {
-		await store.claimLaunch(ref, STALE);
+		await store.claimLaunch(ref);
 		await store.recordLaunched(ref, {
 			microvmId: "microvm-old",
 			endpoint: "old.example",
@@ -67,7 +66,7 @@ describe.skipIf(!RUN)("conversation_vm launch claim under concurrency", () => {
 		});
 		await store.markTerminated(ref, { microvmId: "microvm-old" });
 		const results = await Promise.all(
-			Array.from({ length: 12 }, () => store.claimLaunch(ref, STALE)),
+			Array.from({ length: 12 }, () => store.claimLaunch(ref)),
 		);
 		expect(results.filter((r) => r === "claimed")).toHaveLength(1);
 	});

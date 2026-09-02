@@ -138,33 +138,21 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	let microvm: MicrovmConfig | undefined;
 	const imageArn = env.MICROVM_IMAGE_ARN?.trim();
 	if (imageArn) {
-		const egressConnectorArn = env.MICROVM_EGRESS_CONNECTOR_ARN?.trim();
-		assert(
-			egressConnectorArn,
-			"MICROVM_EGRESS_CONNECTOR_ARN is required with MICROVM_IMAGE_ARN",
-		);
-		const executionRoleArn = env.MICROVM_EXECUTION_ROLE_ARN?.trim();
-		assert(
-			executionRoleArn,
-			"MICROVM_EXECUTION_ROLE_ARN is required with MICROVM_IMAGE_ARN",
-		);
-		const gatewayBaseUrl = env.GATEWAY_BASE_URL?.trim().replace(/\/+$/, "");
-		assert(
-			gatewayBaseUrl,
-			"GATEWAY_BASE_URL is required with MICROVM_IMAGE_ARN",
-		);
-		const kbDatabaseUrl = env.KB_DATABASE_URL?.trim();
-		assert(kbDatabaseUrl, "KB_DATABASE_URL is required with MICROVM_IMAGE_ARN");
+		const need = (name: string) => {
+			const value = env[name]?.trim();
+			assert(value, `${name} is required with MICROVM_IMAGE_ARN`);
+			return value;
+		};
 		assert(
 			gatewayTokenSecret,
 			"GATEWAY_TOKEN_SECRET is required with MICROVM_IMAGE_ARN",
 		);
 		microvm = {
 			imageArn,
-			egressConnectorArn,
-			executionRoleArn,
-			gatewayBaseUrl,
-			kbDatabaseUrl,
+			egressConnectorArn: need("MICROVM_EGRESS_CONNECTOR_ARN"),
+			executionRoleArn: need("MICROVM_EXECUTION_ROLE_ARN"),
+			gatewayBaseUrl: need("GATEWAY_BASE_URL").replace(/\/+$/, ""),
+			kbDatabaseUrl: need("KB_DATABASE_URL"),
 			model:
 				env.OPENROUTER_DEFAULT_MODEL?.trim() || "anthropic/claude-sonnet-5",
 			upgradeUrgent: env.MICROVM_IMAGE_UPGRADE_URGENT === "true",

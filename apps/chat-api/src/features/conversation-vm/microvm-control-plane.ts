@@ -41,20 +41,6 @@ export const IN_VM_SERVER_PORT = 8080;
 /** Lifetime of one nudge token; every nudge mints its own. */
 const NUDGE_TOKEN_MINUTES = 5;
 
-/**
- * Lifecycle parameters (spec #654, lifetime resolution #650). Fixed in code
- * rather than env so a deployment cannot silently weaken them: the platform
- * suspends after 15 min idle, keeps the snapshot an hour, auto-resumes on
- * the next request, and enforces the 8 h cap itself — an at-cap kill is
- * handled reactively by the next nudge, never tracked.
- */
-export const MICROVM_IDLE_POLICY = {
-	maxIdleDurationSeconds: 900,
-	suspendedDurationSeconds: 3600,
-	autoResumeEnabled: true,
-} as const;
-export const MICROVM_MAXIMUM_DURATION_SECONDS = 28_800;
-
 export function createLambdaMicrovmControlPlane(
 	config: MicrovmLaunchConfig,
 	client: Pick<LambdaMicrovmsClient, "send"> = new LambdaMicrovmsClient({
@@ -76,8 +62,18 @@ export function createLambdaMicrovmControlPlane(
 					egressNetworkConnectors: [config.egressConnectorArn],
 					executionRoleArn: config.executionRoleArn,
 					runHookPayload,
-					idlePolicy: MICROVM_IDLE_POLICY,
-					maximumDurationInSeconds: MICROVM_MAXIMUM_DURATION_SECONDS,
+					// Lifecycle parameters (spec #654, lifetime resolution #650), fixed
+					// in code rather than env so a deployment cannot silently weaken
+					// them: suspend after 15 min idle, keep the snapshot an hour,
+					// auto-resume on the next request; the platform enforces the 8 h
+					// cap itself — an at-cap kill is handled reactively by the next
+					// nudge, never tracked.
+					idlePolicy: {
+						maxIdleDurationSeconds: 900,
+						suspendedDurationSeconds: 3600,
+						autoResumeEnabled: true,
+					},
+					maximumDurationInSeconds: 28_800,
 				}),
 			);
 			if (!vm.microvmId || !vm.endpoint || !vm.imageVersion) {

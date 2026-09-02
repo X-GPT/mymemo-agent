@@ -26,14 +26,12 @@ export interface ConversationVmRow {
 export interface ConversationVmStore {
 	/**
 	 * The launch claim: `"claimed"` when this caller now owns a `launching` row
-	 * (a fresh Conversation, a rehydrate from `terminated`, or a stale
-	 * `launching` claim older than `staleLaunchAfterMs`); otherwise the row the
-	 * Conversation already holds, which the caller must not launch for.
+	 * (a fresh Conversation, a rehydrate from `terminated`, or a `launching`
+	 * claim older than two minutes whose claimant died mid-launch); otherwise
+	 * the row the Conversation already holds, which the caller must not launch
+	 * for.
 	 */
-	claimLaunch(
-		ref: ConversationRef,
-		options: { staleLaunchAfterMs: number },
-	): Promise<"claimed" | ConversationVmRow>;
+	claimLaunch(ref: ConversationRef): Promise<"claimed" | ConversationVmRow>;
 	/**
 	 * The urgent-upgrade claim: flip the `running` row holding exactly
 	 * `microvmId` back to `launching`. True for the one caller that wins and

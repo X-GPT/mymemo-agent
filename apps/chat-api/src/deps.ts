@@ -167,7 +167,6 @@ export function createDeps(
 						},
 						gatewayTokenSecret: config.gatewayTokenSecret,
 						upgradeUrgent: config.microvm.upgradeUrgent,
-						fetch,
 					})
 				: undefined,
 		liveStreamTelemetry,

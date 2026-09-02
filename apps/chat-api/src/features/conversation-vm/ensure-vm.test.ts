@@ -8,7 +8,6 @@ import type {
 import {
 	createEnsureVm,
 	type EnsureVmDeps,
-	STALE_LAUNCH_MS,
 	VmUnavailableError,
 } from "./ensure-vm";
 import type { MicrovmControlPlane } from "./microvm-control-plane";
@@ -16,28 +15,22 @@ import type { MicrovmControlPlane } from "./microvm-control-plane";
 const ref: ConversationRef = { userId: "member-1", conversationId: "conv-1" };
 const SECRET = "gateway-signing-secret";
 
-/** An in-memory `conversation_vm` row with the store's state transitions. */
+/**
+ * An in-memory `conversation_vm` row with the store's state transitions
+ * (the stale-claim window is the SQL's business, covered by the store tests).
+ */
 class FakeVmStore implements ConversationVmStore {
-	row: (ConversationVmRow & { lastActivityAt: Date }) | null = null;
+	row: ConversationVmRow | null = null;
 	readonly calls: string[] = [];
 
-	async claimLaunch(
-		_ref: ConversationRef,
-		options: { staleLaunchAfterMs: number },
-	) {
+	async claimLaunch() {
 		this.calls.push("claimLaunch");
-		expect(options.staleLaunchAfterMs).toBe(STALE_LAUNCH_MS);
-		const stale =
-			this.row?.state === "launching" &&
-			Date.now() - this.row.lastActivityAt.getTime() >
-				options.staleLaunchAfterMs;
-		if (!this.row || this.row.state === "terminated" || stale) {
+		if (!this.row || this.row.state === "terminated") {
 			this.row = {
 				microvmId: null,
 				endpoint: null,
 				imageVersion: null,
 				state: "launching",
-				lastActivityAt: new Date(),
 			};
 			return "claimed" as const;
 		}
@@ -251,7 +244,6 @@ describe("Ensure-VM (#669)", () => {
 			endpoint: null,
 			imageVersion: null,
 			state: "launching",
-			lastActivityAt: new Date(),
 		};
 		const { ensureVm, controlPlane, net } = ensureWith({ store });
 
@@ -259,23 +251,6 @@ describe("Ensure-VM (#669)", () => {
 
 		expect(controlPlane.runs).toHaveLength(0);
 		expect(net.requests).toHaveLength(0);
-	});
-
-	it("re-claims a stale launching claim", async () => {
-		const store = new FakeVmStore();
-		store.row = {
-			microvmId: null,
-			endpoint: null,
-			imageVersion: null,
-			state: "launching",
-			lastActivityAt: new Date(Date.now() - STALE_LAUNCH_MS - 1000),
-		};
-		const { ensureVm, controlPlane } = ensureWith({ store });
-
-		await ensureVm(ref);
-
-		expect(controlPlane.runs).toHaveLength(1);
-		expect(store.row?.state).toBe("running");
 	});
 
 	it("rehydrates lazily when a nudge fails and the platform says the VM is gone", async () => {

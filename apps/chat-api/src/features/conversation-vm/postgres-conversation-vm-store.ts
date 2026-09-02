@@ -13,7 +13,6 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 
 	async claimLaunch(
 		ref: ConversationRef,
-		options: { staleLaunchAfterMs: number },
 	): Promise<"claimed" | ConversationVmRow> {
 		// One statement is the whole claim. The insert wins a fresh Conversation;
 		// on conflict the update re-claims only a `terminated` row (rehydrate) or
@@ -33,7 +32,7 @@ export class PostgresConversationVmStore implements ConversationVmStore {
 					imageVersion: null,
 					lastActivityAt: sql`now()`,
 				},
-				setWhere: sql`${conversationVm.state} = 'terminated' or (${conversationVm.state} = 'launching' and ${conversationVm.lastActivityAt} < now() - make_interval(secs => ${options.staleLaunchAfterMs / 1000}))`,
+				setWhere: sql`${conversationVm.state} = 'terminated' or (${conversationVm.state} = 'launching' and ${conversationVm.lastActivityAt} < now() - interval '2 minutes')`,
 			})
 			.returning({ userId: conversationVm.userId });
 		if (claimed.length > 0) return "claimed";
