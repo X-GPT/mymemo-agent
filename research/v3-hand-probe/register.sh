@@ -4,7 +4,7 @@
 set -euo pipefail
 export AWS_PROFILE="${AWS_PROFILE:-mymemo}" AWS_REGION="${AWS_REGION:-us-west-2}"
 ACCOUNT="${AWS_ACCOUNT_ID:-637423444544}"
-NAME="${PROBE_IMAGE_NAME:-mymemo-agent-probe-v3-hand}"
+NAME="${PROBE_IMAGE_NAME:-mymemo-agent-prod-microvm-probe-v3-hand}"
 BUCKET=mymemo-agent-prod-artifacts
 BUILD_ROLE="arn:aws:iam::${ACCOUNT}:role/mymemo-agent-prod-microvm-image-build"
 BASE="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"

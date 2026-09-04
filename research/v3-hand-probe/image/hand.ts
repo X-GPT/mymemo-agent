@@ -50,8 +50,8 @@ Bun.serve({
 		const url = new URL(req.url);
 		const path = url.pathname;
 		try {
-			if (req.method === "GET" && (path === "/health" || path === "/ready")) return json({ ok: true, ws: WS, t: Date.now() });
-			if (req.method === "POST" && ["/run", "/resume", "/suspend", "/terminate"].includes(path)) return json({ ok: true, hook: path });
+			// Platform hooks (ready/run/resume/suspend/terminate) and health: answer 200 on any method.
+			if (["/health", "/ready", "/run", "/resume", "/suspend", "/terminate"].includes(path)) return json({ ok: true, hook: path, ws: WS, t: Date.now() });
 			if (req.method === "GET" && path === "/export") {
 				const proc = Bun.spawn(["tar", "-C", WS, "-czf", "-", "."], { stdout: "pipe" });
 				return new Response(proc.stdout, { headers: { "content-type": "application/gzip" } });

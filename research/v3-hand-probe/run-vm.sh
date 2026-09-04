@@ -5,7 +5,7 @@
 set -euo pipefail
 export AWS_PROFILE="${AWS_PROFILE:-mymemo}" AWS_REGION="${AWS_REGION:-us-west-2}"
 ACCOUNT="${AWS_ACCOUNT_ID:-637423444544}"
-NAME="${PROBE_IMAGE_NAME:-mymemo-agent-probe-v3-hand}"
+NAME="${PROBE_IMAGE_NAME:-mymemo-agent-prod-microvm-probe-v3-hand}"
 IMAGE_ARN="arn:aws:lambda:${AWS_REGION}:${ACCOUNT}:microvm-image:${NAME}"
 INGRESS="arn:aws:lambda:${AWS_REGION}:aws:network-connector:aws-network-connector:ALL_INGRESS"
 # Egress: the image default (INTERNET_EGRESS). Set MICROVM_EGRESS_CONNECTOR_ARN to the v2 no-NAT connector to probe the offline shape instead.
