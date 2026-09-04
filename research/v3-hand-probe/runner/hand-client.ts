@@ -23,12 +23,3 @@ export async function handGet(op: string): Promise<Response> {
 	const h = { ...headers }; delete h["content-type"];
 	return fetch(`${base}/${op}`, { headers: h });
 }
-export async function handStream(command: string, onEvent: (type: string, data: any) => void, timeoutMs = 120_000) {
-	const res = await fetch(`${base}/bash/stream`, { method: "POST", headers, body: JSON.stringify({ command, timeoutMs }) });
-	if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
-	const dec = new TextDecoder(); let buf = "";
-	for await (const chunk of res.body) {
-		buf += dec.decode(chunk, { stream: true });
-		let i; while ((i = buf.indexOf("\n\n")) >= 0) { const frame = buf.slice(0, i); buf = buf.slice(i + 2); const type = /^event: (.*)$/m.exec(frame)?.[1]; const data = /^data: (.*)$/m.exec(frame)?.[1]; if (type && data) onEvent(type, JSON.parse(data)); }
-	}
-}
