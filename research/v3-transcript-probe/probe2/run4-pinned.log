@@ -1,0 +1,121 @@
+[     4ms] id=615e8aff-4bc5-4d06-a549-e92f16aea489 fake=http://127.0.0.1:57610
+[     8ms] === STEP1 turn1 on A cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgA-AqKRxp cwd=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cwd1-VhHGHH pin=sess-probe2 opts={"sessionId":"615e8aff-4bc5-4d06-a549-e92f16aea489"}
+[   498ms] FAKE non-messages request HEAD /api/hello
+[   819ms] ITER system/init session_id=615e8aff-4bc5-4d06-a549-e92f16aea489
+[   854ms] FAKE model call #1: messages.length=2 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  1080ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  1088ms] ITER system/post_turn_summary 
+[  1090ms] ITER result/success subtype=success session_id=615e8aff-4bc5-4d06-a549-e92f16aea489 is_error=false num_turns=1 result="Hello from fake model."
+[  1298ms] ITER end
+[  1298ms] --- STEP1 turn1 on A: init=615e8aff-4bc5-4d06-a549-e92f16aea489 resultSid=615e8aff-4bc5-4d06-a549-e92f16aea489 isError=false threw=no modelMsgLens=[2]
+[  1316ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgA-AqKRxp:
+423 ./.claude.json
+84 ./backups/.claude.json.backup.1788511704033
+2721 ./projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl
+[  1317ms] STEP1 expected transcript /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgA-AqKRxp/projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl exists=true size=2721 entries=queue-operation,queue-operation,user(cwd=cwd1-VhHGHH),attachment(cwd=cwd1-VhHGHH),atis-latch,assistant(cwd=cwd1-VhHGHH),last-prompt
+[  1357ms] drwx------  0 chengchao wheel       0 Sep  4 01:48 projects/
+drwx------  0 chengchao wheel       0 Sep  4 01:48 projects/sess-probe2/
+-rw-------  0 chengchao wheel    2721 Sep  4 01:48 projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl
+[  1357ms] STEP2 tar size=1392 bytes
+[  1374ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgB-HJNHKR:
+2721 ./projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl
+[  1385ms] === STEP3 turn2 resume on B (projects/ copy, new cwd) cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgB-HJNHKR cwd=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cwd2-wy2Jps pin=sess-probe2 opts={"resume":"615e8aff-4bc5-4d06-a549-e92f16aea489"}
+[  1831ms] FAKE non-messages request HEAD /api/hello
+[  2122ms] ITER system/init session_id=615e8aff-4bc5-4d06-a549-e92f16aea489
+[  2141ms] FAKE model call #2: messages.length=5 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":"<total_tokens>15000000 tokens "},{"role":"assistant","c":["text:Hello from fake model."]},{"role":"user","c":["text:Say hi again"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  2360ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  2368ms] ITER system/post_turn_summary 
+[  2369ms] ITER result/success subtype=success session_id=615e8aff-4bc5-4d06-a549-e92f16aea489 is_error=false num_turns=1 result="Hello from fake model."
+[  2572ms] ITER end
+[  2572ms] --- STEP3 turn2 resume on B (projects/ copy, new cwd): init=615e8aff-4bc5-4d06-a549-e92f16aea489 resultSid=615e8aff-4bc5-4d06-a549-e92f16aea489 isError=false threw=no modelMsgLens=[5]
+[  2573ms] STEP3 B transcript size after turn2=6148 entries=queue-operation,queue-operation,user(cwd=cwd1-VhHGHH),attachment(cwd=cwd1-VhHGHH),atis-latch,assistant(cwd=cwd1-VhHGHH),last-prompt,queue-operation,queue-operation,system(cwd=cwd2-wy2Jps),user(cwd=cwd2-wy2Jps),attachment(cwd=cwd2-wy2Jps),assistant(cwd=cwd2-wy2Jps),last-prompt,mode
+[  2584ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgB-HJNHKR:
+423 ./.claude.json
+84 ./backups/.claude.json.backup.1788511705366
+6148 ./projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl
+[  2585ms] === STEP4 resume in EMPTY C cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgC-i01LCp cwd=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cwd4-MWounR pin=sess-probe2 opts={"resume":"615e8aff-4bc5-4d06-a549-e92f16aea489"}
+[  2958ms] FAKE non-messages request HEAD /api/hello
+[  3173ms] ITER result/error_during_execution subtype=error_during_execution session_id=615e8aff-4bc5-4d06-a549-e92f16aea489 is_error=true num_turns=0 result=["No conversation found with session ID: 615e8aff-4bc5-4d06-a549-e92f16aea489"]
+[  3364ms] QUERY THREW: Claude Code returned an error result: No conversation found with session ID: 615e8aff-4bc5-4d06-a549-e92f16aea489
+[  3365ms] --- STEP4 resume in EMPTY C: init=undefined resultSid=615e8aff-4bc5-4d06-a549-e92f16aea489 isError=true threw=Claude Code returned an error result: No conversation found with session ID: 615e8aff-4bc5-4d06-a549-e92f16aea489 modelMsgLens=[]
+[  3376ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgC-i01LCp:
+423 ./.claude.json
+84 ./backups/.claude.json.backup.1788511706489
+[  3391ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgD-IkB3SP:
+2721 ./projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl
+[  3392ms] === STEP5 resume in D (single JSONL only) cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgD-IkB3SP cwd=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cwd5-m7ULPe pin=sess-probe2 opts={"resume":"615e8aff-4bc5-4d06-a549-e92f16aea489"}
+[  3757ms] FAKE non-messages request HEAD /api/hello
+[  4034ms] ITER system/init session_id=615e8aff-4bc5-4d06-a549-e92f16aea489
+[  4052ms] FAKE model call #3: messages.length=5 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":"<total_tokens>15000000 tokens "},{"role":"assistant","c":["text:Hello from fake model."]},{"role":"user","c":["text:Say hi again"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  4267ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  4274ms] ITER system/post_turn_summary 
+[  4277ms] ITER result/success subtype=success session_id=615e8aff-4bc5-4d06-a549-e92f16aea489 is_error=false num_turns=1 result="Hello from fake model."
+[  4459ms] ITER end
+[  4459ms] --- STEP5 resume in D (single JSONL only): init=615e8aff-4bc5-4d06-a549-e92f16aea489 resultSid=615e8aff-4bc5-4d06-a549-e92f16aea489 isError=false threw=no modelMsgLens=[5]
+[  4471ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgD-IkB3SP:
+423 ./.claude.json
+84 ./backups/.claude.json.backup.1788511707289
+6148 ./projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl
+[  4471ms] === STEP6 turn3 resume on B cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgB-HJNHKR cwd=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cwd6-Q9srcW pin=sess-probe2 opts={"resume":"615e8aff-4bc5-4d06-a549-e92f16aea489"}
+[  4836ms] FAKE non-messages request HEAD /api/hello
+[  5101ms] ITER system/init session_id=615e8aff-4bc5-4d06-a549-e92f16aea489
+[  5120ms] FAKE model call #4: messages.length=8 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":"<total_tokens>15000000 tokens "},{"role":"assistant","c":["text:Hello from fake model."]},{"role":"user","c":["text:Say hi again"]},{"role":"system","c":"<total_tokens>15000000 tokens "},{"role":"assistant","c":["text:Hello from fake model."]},{"role":"user","c":["text:Say hi a third time"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  5335ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  5342ms] ITER system/post_turn_summary 
+[  5344ms] ITER result/success subtype=success session_id=615e8aff-4bc5-4d06-a549-e92f16aea489 is_error=false num_turns=1 result="Hello from fake model."
+[  5527ms] ITER end
+[  5527ms] --- STEP6 turn3 resume on B: init=615e8aff-4bc5-4d06-a549-e92f16aea489 resultSid=615e8aff-4bc5-4d06-a549-e92f16aea489 isError=false threw=no modelMsgLens=[8]
+[  5552ms] STEP6 B transcript entries=queue-operation,queue-operation,user(cwd=cwd1-VhHGHH),attachment(cwd=cwd1-VhHGHH),atis-latch,assistant(cwd=cwd1-VhHGHH),last-prompt,queue-operation,queue-operation,system(cwd=cwd2-wy2Jps),user(cwd=cwd2-wy2Jps),attachment(cwd=cwd2-wy2Jps),assistant(cwd=cwd2-wy2Jps),last-prompt,mode,queue-operation,queue-operation,system(cwd=cwd6-Q9srcW),user(cwd=cwd6-Q9srcW),attachment(cwd=cwd6-Q9srcW),assistant(cwd=cwd6-Q9srcW),last-prompt
+[  5569ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgB-HJNHKR:
+423 ./.claude.json
+84 ./backups/.claude.json.backup.1788511705366
+9506 ./projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl
+[  5569ms] === STEP7 turn1 on E, NO pin, cwd X cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgE-L4oxFB cwd=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cwdX-rStqJ9 pin=undefined opts={"sessionId":"1bad650d-d3e5-4767-b88d-61b6a80dfeb8"}
+[  5949ms] FAKE non-messages request HEAD /api/hello
+[  6214ms] ITER system/init session_id=1bad650d-d3e5-4767-b88d-61b6a80dfeb8
+[  6245ms] FAKE model call #5: messages.length=2 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  6463ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  6472ms] ITER system/post_turn_summary 
+[  6474ms] ITER result/success subtype=success session_id=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 is_error=false num_turns=1 result="Hello from fake model."
+[  6735ms] ITER end
+[  6735ms] --- STEP7 turn1 on E, NO pin, cwd X: init=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 resultSid=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 isError=false threw=no modelMsgLens=[2]
+[  6750ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgE-L4oxFB:
+423 ./.claude.json
+84 ./backups/.claude.json.backup.1788511709479
+2721 ./projects/-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe2-cwdX-rStqJ9/1bad650d-d3e5-4767-b88d-61b6a80dfeb8.jsonl
+[  6778ms] === STEP7 resume on F, NO pin, cwd Y (different) cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgF-t7P5XF cwd=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cwdY-YBl5Z3 pin=undefined opts={"resume":"1bad650d-d3e5-4767-b88d-61b6a80dfeb8"}
+[  7214ms] FAKE non-messages request HEAD /api/hello
+[  7556ms] ITER system/init session_id=1bad650d-d3e5-4767-b88d-61b6a80dfeb8
+[  7577ms] FAKE model call #6: messages.length=5 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":"<total_tokens>15000000 tokens "},{"role":"assistant","c":["text:Hello from fake model."]},{"role":"user","c":["text:Say hi again"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  7791ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  7797ms] ITER system/post_turn_summary 
+[  7799ms] ITER result/success subtype=success session_id=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 is_error=false num_turns=1 result="Hello from fake model."
+[  7991ms] ITER end
+[  7991ms] --- STEP7 resume on F, NO pin, cwd Y (different): init=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 resultSid=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 isError=false threw=no modelMsgLens=[5]
+[  8003ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgF-t7P5XF:
+423 ./.claude.json
+84 ./backups/.claude.json.backup.1788511710750
+6148 ./projects/-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe2-cwdX-rStqJ9/1bad650d-d3e5-4767-b88d-61b6a80dfeb8.jsonl
+[  8003ms] === STEP7 control: resume on F, NO pin, cwd X (same) cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgF-t7P5XF cwd=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cwdX-rStqJ9 pin=undefined opts={"resume":"1bad650d-d3e5-4767-b88d-61b6a80dfeb8"}
+[  8393ms] FAKE non-messages request HEAD /api/hello
+[  8667ms] ITER system/init session_id=1bad650d-d3e5-4767-b88d-61b6a80dfeb8
+[  8687ms] FAKE model call #7: messages.length=8 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":"<total_tokens>15000000 tokens "},{"role":"assistant","c":["text:Hello from fake model."]},{"role":"user","c":["text:Say hi again"]},{"role":"system","c":"<total_tokens>15000000 tokens "},{"role":"assistant","c":["text:Hello from fake model."]},{"role":"user","c":["text:Say hi again"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  8941ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  8948ms] ITER system/post_turn_summary 
+[  8950ms] ITER result/success subtype=success session_id=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 is_error=false num_turns=1 result="Hello from fake model."
+[  9181ms] ITER end
+[  9181ms] --- STEP7 control: resume on F, NO pin, cwd X (same): init=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 resultSid=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 isError=false threw=no modelMsgLens=[8]
+[  9196ms] INVENTORY /private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgF-t7P5XF:
+423 ./.claude.json
+84 ./backups/.claude.json.backup.1788511710750
+9492 ./projects/-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe2-cwdX-rStqJ9/1bad650d-d3e5-4767-b88d-61b6a80dfeb8.jsonl
+[  9196ms] SUMMARY
+STEP1 PASS init=615e8aff-4bc5-4d06-a549-e92f16aea489 msgLens=[2] transcript=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe2/cfgA-AqKRxp/projects/sess-probe2/615e8aff-4bc5-4d06-a549-e92f16aea489.jsonl size=2721
+STEP2 tar(projects only)=1392 bytes
+STEP3 PASS init=615e8aff-4bc5-4d06-a549-e92f16aea489 msgLens=[5] (turn1 was [2]) isError=false threw=no result="Hello from fake model."
+STEP4 PASS(expected failure) init=undefined isError=true result=["No conversation found with session ID: 615e8aff-4bc5-4d06-a549-e92f16aea489"] threw=Claude Code returned an error result: No conversation found with session ID: 615e8aff-4bc5-4d06-a549-e92f16aea489 msgLens=[]
+STEP5 PASS init=615e8aff-4bc5-4d06-a549-e92f16aea489 msgLens=[5] isError=false threw=no result="Hello from fake model."
+STEP6 PASS msgLens=[8] JSONL sizes: afterT1=2721 afterT2=6148 afterT3=9506; projects.tgz afterT3=2030 bytes; gzip(single jsonl)=1574 bytes
+STEP7a(no pin, cwd changes) init=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 isError=false threw=no result="Hello from fake model." msgLens=[5] (turn1 was [2])
+STEP7b(no pin, same cwd X) init=1bad650d-d3e5-4767-b88d-61b6a80dfeb8 isError=false threw=no result="Hello from fake model." msgLens=[8]
+[  9196ms] total model calls=7
