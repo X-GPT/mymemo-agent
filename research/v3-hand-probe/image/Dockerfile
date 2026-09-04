@@ -1,7 +1,7 @@
 # PROBE IMAGE — throwaway (wayfinder #708). The v3 "hand": a bare tool server, no SDK, no
 # credentials, no managed-settings. Everything the model can run lives behind /bash etc.
 FROM public.ecr.aws/lambda/microvms:al2023-minimal
-RUN dnf install -y bash coreutils findutils grep gzip nodejs22 nodejs22-npm shadow-utils tar util-linux \
+RUN dnf install -y bash findutils grep gzip nodejs22 nodejs22-npm shadow-utils tar util-linux \
  && dnf clean all
 RUN npm install -g bun@1.3.0
 RUN useradd -m -u 1000 developer && mkdir -p /opt/hand
