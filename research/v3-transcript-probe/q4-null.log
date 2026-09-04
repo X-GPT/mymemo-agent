@@ -1,0 +1,7 @@
+[     4ms] scenario=q4 id=69446271-e802-4521-88a9-42b3af4f240b fake=http://127.0.0.1:54544
+[     6ms] === q4 resume miss loadMode=null cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe/cfg-fOR1Cq env.CLAUDE_CODE_PROJECT_DIR_NAME=undefined
+[    27ms] STORE load key={"projectKey":"-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe","sessionId":"69446271-e802-4521-88a9-42b3af4f240b"} mode=null
+[   530ms] FAKE non-messages request HEAD /api/hello
+[   871ms] ITER result/error_during_execution session_id=69446271-e802-4521-88a9-42b3af4f240b is_error=true num_turns=0 result=["No conversation found with session ID: 69446271-e802-4521-88a9-42b3af4f240b"]
+[  1035ms] QUERY THREW: Claude Code returned an error result: No conversation found with session ID: 69446271-e802-4521-88a9-42b3af4f240b
+[  1035ms] total model calls=0 appends=0

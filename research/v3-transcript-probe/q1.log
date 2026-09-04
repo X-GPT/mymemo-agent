@@ -1,0 +1,22 @@
+[     8ms] scenario=q1 id=3e22f70c-705b-44cb-ac75-cbd88bb0af32 fake=http://127.0.0.1:54533
+[    13ms] === q1 fresh sessionId+store cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe/cfg-8Tp7FE env.CLAUDE_CODE_PROJECT_DIR_NAME=undefined
+[  3396ms] FAKE non-messages request HEAD /api/hello
+[  3716ms] ITER system/init session_id=3e22f70c-705b-44cb-ac75-cbd88bb0af32
+[  3746ms] FAKE model call #1: messages.length=2 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  3971ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  3981ms] ITER system/post_turn_summary 
+[  3985ms] STORE append#1 START key={"projectKey":"-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe","sessionId":"3e22f70c-705b-44cb-ac75-cbd88bb0af32"} entries=6 withUuid=3 types=["queue-operation","queue-operation","user","attachment","atis-latch","assistant"] withSessionIdField=6
+[  3985ms] STORE append#1 DONE
+[  3987ms] ITER result/success session_id=3e22f70c-705b-44cb-ac75-cbd88bb0af32 is_error=false num_turns=1 result="Hello from fake model."
+[  4372ms] STORE append#2 START key={"projectKey":"-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe","sessionId":"3e22f70c-705b-44cb-ac75-cbd88bb0af32"} entries=1 withUuid=0 types=["last-prompt"] withSessionIdField=1
+[  4372ms] STORE append#2 DONE
+[  4373ms] ITER end (appends so far: 2)
+[  4373ms] MEM -private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe|3e22f70c-705b-44cb-ac75-cbd88bb0af32|: 7 entries; distinct types=["queue-operation","user","attachment","atis-latch","assistant","last-prompt"]; uuid-less types=["queue-operation","queue-operation","atis-latch","last-prompt"]; sessionId-field=7 session_id-field=0
+[  4373ms] ENTRY {"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-04T04:46:38.637Z","sessionId":"3e22f70c-705b-44cb-ac75-cbd88bb0af32"}
+[  4373ms] ENTRY {"type":"queue-operation","operation":"dequeue","timestamp":"2026-09-04T04:46:38.638Z","sessionId":"3e22f70c-705b-44cb-ac75-cbd88bb0af32"}
+[  4373ms] ENTRY {"parentUuid":null,"isSidechain":false,"promptId":"c0727796-2a98-4016-9c13-a2950f6ea815","type":"user","message":"[...]","uuid":"297a7e4b-3040-4dea-aab5-b94744366023","timestamp":"2026-09-04T04:46:38.667Z","permissionMode":"dontAsk","promptSource":"sdk","userType":"external","entrypoint":"claude-des
+[  4373ms] ENTRY {"parentUuid":"297a7e4b-3040-4dea-aab5-b94744366023","isSidechain":false,"attachment":{"type":"total_tokens_reminder","text":"<total_tokens>15000000 tokens left</total_tokens>"},"type":"attachment","uuid":"e040d178-06ce-4101-ace2-fa969eb77a74","timestamp":"2026-09-04T04:46:38.666Z","userType":"exter
+[  4373ms] ENTRY {"type":"atis-latch","atis":"","sessionId":"3e22f70c-705b-44cb-ac75-cbd88bb0af32"}
+[  4373ms] ENTRY {"parentUuid":"e040d178-06ce-4101-ace2-fa969eb77a74","isSidechain":false,"message":"[...]","apiBlockIndex":0,"type":"assistant","uuid":"456bc8e9-8109-4beb-9d6a-30b8e851106a","timestamp":"2026-09-04T04:46:38.923Z","effort":"high","userType":"external","entrypoint":"claude-desktop","cwd":"/private/tmp
+[  4373ms] ENTRY {"type":"last-prompt","lastPrompt":"Say hi","leafUuid":"456bc8e9-8109-4beb-9d6a-30b8e851106a","sessionId":"3e22f70c-705b-44cb-ac75-cbd88bb0af32"}
+[  4373ms] total model calls=1 appends=2

@@ -1,0 +1,5 @@
+[    10ms] scenario=q4 id=a09bd0b4-1fe1-4075-9e2a-3b802847fc4f fake=http://127.0.0.1:54547
+[    11ms] === q4 resume miss loadMode=throw cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe/cfg-RwtxAy env.CLAUDE_CODE_PROJECT_DIR_NAME=undefined
+[    16ms] STORE load key={"projectKey":"-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe","sessionId":"a09bd0b4-1fe1-4075-9e2a-3b802847fc4f"} mode=throw
+[    19ms] QUERY THREW: probe: load exploded
+[    19ms] total model calls=0 appends=0

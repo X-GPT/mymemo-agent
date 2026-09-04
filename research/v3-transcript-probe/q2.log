@@ -1,0 +1,41 @@
+[     8ms] scenario=q2 id=3c0b6c4e-ce17-4a78-903b-670e8a3765bc fake=http://127.0.0.1:54548
+[    12ms] === q2a fresh + PROJECT_DIR_NAME cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe/cfg-OL3wmr env.CLAUDE_CODE_PROJECT_DIR_NAME=sess-abc123
+[   492ms] FAKE non-messages request HEAD /api/hello
+[   889ms] ITER system/init session_id=3c0b6c4e-ce17-4a78-903b-670e8a3765bc
+[   926ms] FAKE model call #1: messages.length=2 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  1143ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  1150ms] ITER system/post_turn_summary 
+[  1154ms] STORE append#1 START key={"projectKey":"sess-abc123","sessionId":"3c0b6c4e-ce17-4a78-903b-670e8a3765bc"} entries=6 withUuid=3 types=["queue-operation","queue-operation","user","attachment","atis-latch","assistant"] withSessionIdField=6
+[  1154ms] STORE append#1 DONE
+[  1155ms] ITER result/success session_id=3c0b6c4e-ce17-4a78-903b-670e8a3765bc is_error=false num_turns=1 result="Hello from fake model."
+[  1330ms] STORE append#2 START key={"projectKey":"sess-abc123","sessionId":"3c0b6c4e-ce17-4a78-903b-670e8a3765bc"} entries=1 withUuid=0 types=["last-prompt"] withSessionIdField=1
+[  1330ms] STORE append#2 DONE
+[  1331ms] ITER end (appends so far: 2)
+[  1331ms] === q2b resume + PROJECT_DIR_NAME cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe/cfg-yrmd8y env.CLAUDE_CODE_PROJECT_DIR_NAME=sess-abc123
+[  1332ms] STORE load key={"projectKey":"sess-abc123","sessionId":"3c0b6c4e-ce17-4a78-903b-670e8a3765bc"} mode=mem
+[  1332ms] STORE load -> 7 entries
+[  1343ms] STORE listSubkeys key={"projectKey":"sess-abc123","sessionId":"3c0b6c4e-ce17-4a78-903b-670e8a3765bc"}
+[  1622ms] FAKE non-messages request HEAD /api/hello
+[  1907ms] ITER system/init session_id=3c0b6c4e-ce17-4a78-903b-670e8a3765bc
+[  1930ms] FAKE model call #2: messages.length=5 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":"<total_tokens>15000000 tokens left</tota"},{"role":"assistant","c":["text:Hello from fake model."]},{"role":"user","c":["text:Say hi again"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  2149ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  2162ms] ITER system/post_turn_summary 
+[  2164ms] STORE append#3 START key={"projectKey":"sess-abc123","sessionId":"3c0b6c4e-ce17-4a78-903b-670e8a3765bc"} entries=6 withUuid=4 types=["queue-operation","queue-operation","system","user","attachment","assistant"] withSessionIdField=6
+[  2165ms] STORE append#3 DONE
+[  2165ms] ITER result/success session_id=3c0b6c4e-ce17-4a78-903b-670e8a3765bc is_error=false num_turns=1 result="Hello from fake model."
+[  2334ms] STORE append#4 START key={"projectKey":"sess-abc123","sessionId":"3c0b6c4e-ce17-4a78-903b-670e8a3765bc"} entries=2 withUuid=0 types=["last-prompt","mode"] withSessionIdField=2
+[  2334ms] STORE append#4 DONE
+[  2335ms] ITER end (appends so far: 4)
+[  2335ms] === q2c fresh, NO PROJECT_DIR_NAME cfg=/private/tmp/claude-501/-Users-chengchao-code-mymemo-mymemo-agent/19b5a1fd-ec9b-463c-9f5d-599cb1cad50f/scratchpad/probe/cfg-cCu1ZP env.CLAUDE_CODE_PROJECT_DIR_NAME=undefined
+[  2623ms] FAKE non-messages request HEAD /api/hello
+[  2877ms] ITER system/init session_id=ef605585-d05b-42e7-8b8d-72dea72a3424
+[  2900ms] FAKE model call #3: messages.length=2 [{"role":"user","c":["text:<system-reminder>\nAs you answe","text:Say hi"]},{"role":"system","c":["text:<total_tokens>15000000 tokens "]}]
+[  3119ms] ITER assistant [{"type":"text","text":"Hello from fake model."}]
+[  3127ms] ITER system/post_turn_summary 
+[  3130ms] STORE append#5 START key={"projectKey":"-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe","sessionId":"ef605585-d05b-42e7-8b8d-72dea72a3424"} entries=6 withUuid=3 types=["queue-operation","queue-operation","user","attachment","atis-latch","assistant"] withSessionIdField=6
+[  3130ms] STORE append#5 DONE
+[  3130ms] ITER result/success session_id=ef605585-d05b-42e7-8b8d-72dea72a3424 is_error=false num_turns=1 result="Hello from fake model."
+[  3296ms] STORE append#6 START key={"projectKey":"-private-tmp-claude-501--Users-chengchao-code-mymemo-mymemo-agent-19b5a1fd-ec9b-463c-9f5d-599cb1cad50f-scratchpad-probe","sessionId":"ef605585-d05b-42e7-8b8d-72dea72a3424"} entries=1 withUuid=0 types=["last-prompt"] withSessionIdField=1
+[  3296ms] STORE append#6 DONE
+[  3296ms] ITER end (appends so far: 6)
+[  3296ms] total model calls=3 appends=6
