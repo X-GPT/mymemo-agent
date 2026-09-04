@@ -50,8 +50,9 @@ Bun.serve({
 		const url = new URL(req.url);
 		const path = url.pathname;
 		try {
-			// Platform hooks (ready/run/resume/suspend/terminate) and health: answer 200 on any method.
-			if (["/health", "/ready", "/run", "/resume", "/suspend", "/terminate"].includes(path)) return json({ ok: true, hook: path, ws: WS, t: Date.now() });
+			// Platform hooks are POST /aws/lambda-microvms/runtime/v1/{ready|run|resume|suspend|terminate}
+			// (v2's in-vm-server served the same prefix). Answer 200 on any method; nothing to do.
+			if (path === "/health" || /^(\/aws\/lambda-microvms\/runtime\/v1)?\/(ready|run|resume|suspend|terminate)$/.test(path)) return json({ ok: true, hook: path, ws: WS, t: Date.now() });
 			if (req.method === "GET" && path === "/export") {
 				const proc = Bun.spawn(["tar", "-C", WS, "-czf", "-", "."], { stdout: "pipe" });
 				return new Response(proc.stdout, { headers: { "content-type": "application/gzip" } });
