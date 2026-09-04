@@ -15,7 +15,7 @@ Shape under test: the **Agent Runner** (here: this Mac) runs the real Claude Age
 ```bash
 cd research/v3-hand-probe
 ./register.sh                                   # zip image/ → S3 → create-microvm-image; polls until CREATED
-eval "$(./run-vm.sh)"                           # RunMicrovm on the v2 no-NAT connector + empty role; exports MICROVM_ID HAND_URL HAND_TOKEN HAND_PORT
+eval "$(./run-vm.sh)"                           # RunMicrovm, image-default egress + empty execution role; exports MICROVM_ID HAND_URL HAND_TOKEN HAND_PORT
 cd runner && bun install
 bun run smoke.ts                                # mechanics + negative controls against the real Sandbox
 export ANTHROPIC_BASE_URL=https://openrouter.ai/api ANTHROPIC_AUTH_TOKEN=<openrouter key>   # never paste the key into the chat
