@@ -5,7 +5,7 @@
 let n = 0;
 const steps: Array<{ tool?: string; input?: unknown; text?: string }> = [
 	{ tool: "mcp__hand__bash", input: { command: "npm test" } },
-	{ tool: "mcp__hand__edit", input: { path: "math.js", old: "return a - b;", new: "return a + b;" } },
+	{ tool: "mcp__hand__edit", input: { file_path: "math.js", old_string: "return a - b;", new_string: "return a + b;" } },
 	{ tool: "mcp__hand__bash", input: { command: "npm test" } },
 	{ text: "Fixed add() in math.js (was subtracting); tests pass." },
 ];
