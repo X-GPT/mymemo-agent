@@ -1,0 +1,26 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "usechat-front",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "research/usechat-prototype/front/server.ts"],
+      "port": 3010
+    },
+    {
+      "name": "mymemo-service-proto",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "cd ../mymemo-service && COMPAT_LEGACY_LOGIN_ENABLED=true HZ_TOKEN=hz-local GZ_API_KEY=gz-local CHAT_SESSION_LOCK_ENABLED=false MYMEMO_AGENT_CHAT_API_URL=http://localhost:3010 uv run --frozen uvicorn src.main:app --host 127.0.0.1 --port 3002"
+      ],
+      "port": 3002
+    },
+    {
+      "name": "mymemo-web-proto",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "cd ../mymemo-web && pnpm local"],
+      "port": 3000
+    }
+  ]
+}
