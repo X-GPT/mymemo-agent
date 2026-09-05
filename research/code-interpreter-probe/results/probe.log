@@ -1,0 +1,122 @@
+[  17055ms] START probe-1: sessionId=01M1SRSYEVNH67H33G3G6XAY91 in 17054 ms
+[  17125ms]   status=READY mounts=[{"s3FilesConfiguration":{"accessPointArn":"arn:aws:s3files:us-west-2:637423444544:file-system/fs-0d35a3146faae211d/access-point/fsap-08da0b167c7c610da","mountPath":"/mnt/ws","fileSystemArn":"arn:aws:s3files:us-west-2:637423444544:file-system/fs-0d35a3146faae211d"}}]
+[  17315ms] $ first executeCommand (spawn warm-up)  [189 ms, exit=0, execTime=0.08550739288330078]
+[  17505ms] $ identity  [190 ms, exit=0, execTime=0.08665227890014648]
+    uid=991(genesis1ptools) gid=991(genesis1ptools) groups=991(genesis1ptools)    
+    pwd=/opt/amazon/genesis1p-tools/var    
+    HOME=/opt/amazon/genesis1p-tools/var USER=genesis1ptools    
+    Linux 6.1.161-18.298.amzn2023.aarch64 aarch64    
+    NAME="Amazon Linux"    
+    VERSION="2023"    
+    
+[  17698ms] $ mount state  [193 ms, exit=0, execTime=0.09805965423583984]
+    127.0.0.1:/ on /mnt/ws type nfs4 (rw,nosuid,nodev,relatime,vers=4.2,rsize=1048576,wsize=1048576,namlen=255,hard,noresvport,proto=tcp,port=20167,timeo=600,retrans=2,sec=sys,clientaddr=127.0.0.1,local_lock=none,addr=127.0.0.1)    
+        
+    Filesystem      Size  Used Avail Use% Mounted on    
+    127.0.0.1:/     8.0E     0  8.0E   0% /mnt/ws    
+        
+    total 8    
+    drwxr-xr-x 2 1000 1000 10240 Sep  5 21:50 .    
+    drwxr-xr-x 1    0    0  4096 Sep  5 21:50 ..    
+        
+    root 1000:1000 755    
+    
+[  17946ms] $ write via bash  [247 ms, exit=0, execTime=0.1071314811706543]
+    touched-as 1000:1000 644    
+    MKDIR_OK    
+    
+[  18144ms] $ toolchain  [198 ms, exit=0, execTime=0.08986949920654297]
+    /usr/bin/bash    
+    /opt/amazon/genesis1p-tools/venv/bin/python3    
+    /opt/amazon/genesis1p-tools/nodejs/bin/node    
+    /usr/bin/rg    
+    which: no git in (/opt/amazon/genesis1p-tools/venv/bin:/opt/amazon/genesis1p-tools/nodejs/bin:/opt/amazon/genesis1p-tools/sqlite/bin:/opt/amazon/genesis1p-tools/deno/bin:/usr/sbin:/usr/bin:/sbin:/bin)    
+    /usr/bin/curl    
+    /usr/bin/aws    
+    /usr/bin/jq    
+    Python 3.12.13    
+    v24.14.0    
+    
+[  20385ms] LATENCY {"executeCommand":{"n":5,"min":135,"median":167,"max":182},"writeFiles":{"n":5,"min":90,"median":97,"max":105},"readFiles":{"n":5,"min":87,"median":96,"max":99},"listFiles":{"n":5,"min":89,"median":95,"max":104}}
+[  21809ms] $ relative writeFiles (79 ms) → path  [1345 ms, exit=1, execTime=1.272430419921875]
+  ! /opt/amazon/genesis1p-tools/var/rel-probe.txt  ! 
+  ! /rom/overlay/root/opt/amazon/genesis1p-tools/var/rel-probe.txt  ! 
+  ! 
+[  22111ms] writeFiles 1 MiB: 296 ms isError=true
+[  22205ms] readFiles content blocks: [{"type":"text","text":"Error executing tool read_files: Invalid file path: potential path traversal detected"}]
+[  38392ms] $ egress probe  [16187 ms, exit=0, execTime=16.091556072235107]
+    172.66.147.243  example.com    
+    104.20.23.154   example.com    
+    dns_rc=0    
+    curl: (28) Connection timed out after 8001 milliseconds    
+    http=000    
+    curl_rc=28    
+    curl: (28) Connection timed out after 8000 milliseconds    
+    http=000    
+    s3_rc=28    
+    
+[  38655ms] $ marker via bash  [180 ms, exit=0, execTime=0.07909631729125977]
+    SYNC_OK    
+    
+[  38788ms] STOP 01M1SRSYEVNH67H33G3G6XAY91 in 133 ms
+[  38788ms] polling the bucket for the markers (S3 Files export lag, expect ~60 s)…
+[ 104476ms]   conv-probe/marker-bash-1788645013380.txt visible after 66084 ms (size 19)
+[ 341860ms]   conv-probe/marker-bash-1788645013380.txt: body="bash 1788645013380" metadata={"fs-id":"fs-0d35a3146faae211d:13290810660219462358:2","user-agent":"aws-s3-files","file-btime":"1788645052113000000ns","file-atime":"1788645052118000000ns","file-owner":"1000","file-permissions":"0100644","file-group":"1000","file-mtime":"1788645052118000000ns"}
+[ 341901ms] bucket keys now: conv-probe/, conv-probe/.probe-touch, conv-probe/artifacts/, conv-probe/marker-bash-1788645013380.txt
+[ 344464ms] START probe-2: sessionId=01M1SS4C16E4FHY4WBXZPT4HHH in 2563 ms
+[ 344533ms]   status=READY mounts=[{"s3FilesConfiguration":{"accessPointArn":"arn:aws:s3files:us-west-2:637423444544:file-system/fs-0d35a3146faae211d/access-point/fsap-08da0b167c7c610da","mountPath":"/mnt/ws","fileSystemArn":"arn:aws:s3files:us-west-2:637423444544:file-system/fs-0d35a3146faae211d"}}]
+[ 344714ms] $ session 2 sees session 1's files?  [181 ms, exit=1, execTime=0.0998544692993164]
+  ! total 20  ! 
+  ! drwxr-xr-x 3 1000 1000 10240 Sep  5 21:50 .  ! 
+  ! drwxr-xr-x 1 root root  4096 Sep  5 21:55 ..  ! 
+  ! -rw-r--r-- 1 1000 1000     0 Sep  5 21:50 .probe-touch  ! 
+  ! drwxr-xr-x 2 1000 1000 10240 Sep  5 21:50 artifacts  ! 
+  ! -rw-r--r-- 1 1000 1000    19 Sep  5 21:50 marker-bash-1788645013380.txt  ! 
+  ! cat: /mnt/ws/marker-api-1788645013380.txt: No such file or directory  ! 
+  ! bash 1788645013380  ! 
+  ! 
+[ 344848ms] STOP 01M1SS4C16E4FHY4WBXZPT4HHH in 134 ms
+[ 344912ms] SUMMARY
+{
+  "startMs1": 17054,
+  "firstExecMs": 189,
+  "identity": "uid=991(genesis1ptools) gid=991(genesis1ptools) groups=991(genesis1ptools)\r\npwd=/opt/amazon/genesis1p-tools/var\r\nHOME=/opt/amazon/genesis1p-tools/var USER=genesis1ptools\r\nLinux 6.1.161-18.298.amzn2023.aarch64 aarch64\r\nNAME=\"Amazon Linux\"\r\nVERSION=\"2023\"",
+  "mount": "127.0.0.1:/ on /mnt/ws type nfs4 (rw,nosuid,nodev,relatime,vers=4.2,rsize=1048576,wsize=1048576,namlen=255,hard,noresvport,proto=tcp,port=20167,timeo=600,retrans=2,sec=sys,clientaddr=127.0.0.1,local_lock=none,addr=127.0.0.1)\r\n\r\nFilesystem      Size  Used Avail Use% Mounted on\r\n127.0.0.1:/     8.0E     0  8.0E   0% /mnt/ws\r\n\r\ntotal 8\r\ndrwxr-xr-x 2 1000 1000 10240 Sep  5 21:50 .\r\ndrwxr-xr-x 1    0    0  4096 Sep  5 21:50 ..\r\n\r\nroot 1000:1000 755",
+  "bashWrite": "touched-as 1000:1000 644\r\nMKDIR_OK",
+  "latencyMs": {
+    "executeCommand": {
+      "n": 5,
+      "min": 135,
+      "median": 167,
+      "max": 182
+    },
+    "writeFiles": {
+      "n": 5,
+      "min": 90,
+      "median": 97,
+      "max": 105
+    },
+    "readFiles": {
+      "n": 5,
+      "min": 87,
+      "median": 96,
+      "max": 99
+    },
+    "listFiles": {
+      "n": 5,
+      "min": 89,
+      "median": 95,
+      "max": 104
+    }
+  },
+  "write1MiBMs": 296,
+  "egress": "172.66.147.243  example.com\r\n104.20.23.154   example.com\r\ndns_rc=0\r\ncurl: (28) Connection timed out after 8001 milliseconds\r\nhttp=000\r\ncurl_rc=28\r\ncurl: (28) Connection timed out after 8000 milliseconds\r\nhttp=000\r\ns3_rc=28",
+  "stopMs1": 133,
+  "exportLagMs": {
+    "conv-probe/marker-bash-1788645013380.txt": 66084
+  },
+  "startMs2": 2563,
+  "persistAcrossSessions": false,
+  "stopMs2": 134,
+  "stoppedSessionInvoke": "ValidationException: Code interpreter session 01M1SS4C16E4FHY4WBXZPT4HHH is not active"
+}

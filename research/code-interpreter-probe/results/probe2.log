@@ -1,0 +1,153 @@
+[   2922ms] START probe2 (third start of this interpreter) in 2923 ms
+[   3043ms] writeFiles ABSOLUTE /mnt/ws/abs.txt [118 ms] isError=true exit=-
+    Error executing tool write_files: Invalid file path: potential path traversal detected
+[   3132ms] writeFiles RELATIVE rel.txt [88 ms] isError=false exit=-
+    Successfully wrote all 1 files
+[   3246ms] listFiles '' [114 ms] isError=false exit=-
+    {"type":"resource_link","uri":"file:///log","name":"log","description":"Directory"}
+    {"type":"resource_link","uri":"file:///node_modules","name":"node_modules","description":"Directory"}
+    {"type":"resource_link","uri":"file:///nodejs-js-execution","name":"nodejs-js-execution","description":"Directory"}
+    {"type":"resource_link","uri":"file:///nodejs-ts-execution","name":"nodejs-ts-execution","description":"Directory"}
+    {"type":"resource_link","mimeType":"application/json","uri":"file:///package-lock.json","name":"package-lock.json","description":"File"}
+    {"type":"resource_link","mimeType":"application/json","uri":"file:///package.json","name":"package.json","description":"File"}
+    {"type":"resource_link","uri":"file:///run","name":"run","description":"Directory"}
+    {"type":"resource_link","mimeType":"text/plain","uri":"file:///rel.txt","name":"rel.txt","description":"File"}
+    {"type":"resource_link","uri":"file:///.ipython","name":".ipython","description":"Directory"}
+[   3347ms] listFiles ABSOLUTE /mnt/ws [101 ms] isError=true exit=-
+    Error executing tool list_files: Invalid file path: potential path traversal detected
+[   3452ms] readFiles RELATIVE rel.txt [105 ms] isError=false exit=-
+    {"type":"resource","resource":{"uri":"file:///rel.txt","mimeType":"text/plain","text":"rel"}}
+[   3528ms] readFiles ../ traversal [76 ms] isError=true exit=-
+    Error executing tool read_files: Invalid file path: potential path traversal detected
+[   3709ms] $ symlink ws -> /mnt/ws in the workdir [181 ms] isError=false exit=0
+    total 20
+    drwxr-xr-x 3 1000 1000 10240 Sep  5 21:50 .
+    drwxr-xr-x 1 root root  4096 Sep  5 21:56 ..
+    -rw-r--r-- 1 1000 1000     0 Sep  5 21:50 .probe-touch
+    drwxr-xr-x 2 1000 1000 10240 Sep  5 21:50 artifacts
+[   3815ms] writeFiles ws/via-symlink.txt (symlink) [106 ms] isError=false exit=-
+    Successfully wrote all 1 files
+[   3926ms] readFiles ws/marker (symlink) [111 ms] isError=false exit=-
+    {"type":"resource","resource":{"uri":"file:///ws/marker-bash-1788645013380.txt","mimeType":"text/plain","text":"bash 1788645013380\n"}}
+[   4021ms] listFiles ws (symlink) [95 ms] isError=false exit=-
+    {"type":"resource_link","mimeType":"text/plain","uri":"file:///ws/marker-bash-1788645013380.txt","name":"marker-bash-1788645013380.txt","description":"File"}
+    {"type":"resource_link","uri":"file:///ws/artifacts","name":"artifacts","description":"Directory"}
+    {"type":"resource_link","uri":"file:///ws/.probe-touch","name":".probe-touch","description":"File"}
+    {"type":"resource_link","mimeType":"text/plain","uri":"file:///ws/via-symlink.txt","name":"via-symlink.txt","description":"File"}
+[   4178ms] $ did the symlink write land on the mount? [157 ms] isError=false exit=0
+    total 24
+    drwxr-xr-x 3 1000 1000 10240 Sep  5 21:56 .
+    drwxr-xr-x 1 root root  4096 Sep  5 21:56 ..
+    -rw-r--r-- 1 1000 1000     0 Sep  5 21:50 .probe-touch
+    drwxr-xr-x 2 1000 1000 10240 Sep  5 21:50 artifacts
+    -rw-r--r-- 1 1000 1000    19 Sep  5 21:50 marker-bash-1788645013380.txt
+    -rw-r--r-- 1 1000 1000    15 Sep  5 21:56 via-symlink.txt
+    through symlink
+[   4360ms] $ second symlink + workdir listing [181 ms] isError=false exit=0
+    total 55
+    drwxrwxr-x  1 genesis1ptools genesis1ptools  4096 Sep  5 21:56 .
+    drwxr-xr-x  1 root           root            4096 Jul 13 03:50 ..
+    drwxr-xr-x  3 genesis1ptools genesis1ptools  4096 Jul 13 04:01 .ipython
+    drwxrwxr-x  2 genesis1ptools genesis1ptools     3 Jun 19 19:30 log
+    drwxr-xr-x 50 genesis1ptools genesis1ptools  1093 Jul 13 03:50 node_modules
+    drwxrwxr-x  1 genesis1ptools genesis1ptools  4096 Jul 13 04:01 nodejs-js-execution
+    drwxrwxr-x  1 genesis1ptools genesis1ptools  4096 Jul 13 04:01 nodejs-ts-execution
+    -rw-r--r--  1 genesis1ptools genesis1ptools 22349 Jul 13 03:50 package-lock.json
+    -rw-r--r--  1 genesis1ptools genesis1ptools   146 Jul 13 03:50 package.json
+    -rw-r--r--  1 genesis1ptools genesis1ptools     3 Sep  5 21:56 rel.txt
+    drwxr-xr-x  2 genesis1ptools genesis1ptools     3 Jul 13 03:39 run
+    lrwxrwxrwx  1 genesis1ptools genesis1ptools    11 Sep  5 21:56 sub -> /mnt/ws/sub
+    lrwxrwxrwx  1 genesis1ptools genesis1ptools     7 Sep  5 21:56 ws -> /mnt/ws
+[   4454ms] writeFiles sub/nested/deep.txt (creates parents?) [95 ms] isError=false exit=-
+    Successfully wrote all 1 files
+[   4657ms] $ bash heredoc write + read (the fallback) [203 ms] isError=false exit=0
+    /mnt/ws/.probe-touch
+    /mnt/ws/marker-bash-1788645013380.txt
+    /mnt/ws/sub/nested/deep.txt
+    /mnt/ws/via-symlink.txt
+    
+    line1
+    line2
+[   4859ms] $ sandbox layout + env [202 ms] isError=false exit=0
+    total 44
+    drwxr-xr-x   1 root root 4096 Jul 13 04:01 .
+    drwxr-xr-x   1 root root 4096 Jul 13 04:01 ..
+    lrwxrwxrwx   1 root root    7 Jan 30  2023 bin -> usr/bin
+    dr-xr-xr-x   2 root root    3 Jan 30  2023 boot
+    drwxr-xr-x   2 root root    3 Jul 13 03:38 build-application-runtime
+    drwxr-xr-x   2 root root    3 Jul 13 03:37 build-bin
+    drwxr-xr-x   2 root root    3 Jul 13 03:38 build-rpm
+    drwxr-xr-x   9 root root 2700 Jul 13 04:01 dev
+    drwxr-xr-x   1 root root 4096 Sep  5 21:56 etc
+    drwxr-xr-x   2 root root    3 Jan 30  2023 home
+    lrwxrwxrwx   1 root root    7 Jan 30  2023 lib -> usr/lib
+    lrwxrwxrwx   1 root root    9 Jan 30  2023 lib64 -> usr/lib64
+    drwxr-xr-x   2 root root    3 Jul 10 01:31 local
+    drwx------   2 root root    3 Jul 13 03:51 lost+found
+    drwxr-xr-x   2 root root    3 Jan 30  2023 media
+    drwxr-xr-x   1 root root 4096 Sep  5 21:56 mnt
+    drwxr-xr-x   2 root root    3 Jul 13 03:52 mount
+    drwxr-xr-x   1 root root 4096 Jul 13 03:39 opt
+    drwxr-xr-x   3 root root   27 Jul 13 03:52 overlay
+    dr-xr-xr-x 145 root root    0 Jul 13 04:01 proc
+    drwxr-xr-x  25 root root  454 Jul 13 03:52 rom
+    dr-xr-x---   6 root root   81 Jul 13 03:50 root
+    drwxr-xr-x  22 root root  640 Sep  5 21:56 run
+    lrwxrwxrwx   1 root root    8 Jan 30  2023 sbin -> usr/sbin
+    drwxr-xr-x   2 root root    3 Jan 30  2023 srv
+    dr-xr-xr-x  12 root root    0 Jul 13 04:01 sys
+    drwxrwxrwt  11 root root  240 Sep  5 21:56 tmp
+    drwxr-xr-x   1 root root 4096 Jul 10 01:32 usr
+    drwxr-xr-x   1 root root 4096 Jul 13 04:01 var
+    total 29
+    drwxr-xr-x 1 root           root           4096 Jul 13 03:50 .
+    drwxr-xr-x 1 root           root           4096 Jul 13 03:39 ..
+    drwxr-xr-x 3 root           root             25 Jul 13 03:50 aws-cli
+    drwxr-xr-x 3 root           root            312 Jul 13 03:50 bin
+    drwxr-xr-x 3 root           root             26 Jul 13 03:39 bzip2
+    drwxr-xr-x 4 root           root             43 Jul 13 03:39 deno
+    drwxr-xr-x 2 root           root              3 Jun 19 19:32 etc
+    drwxr-xr-x 3 root           root             26 Jul 13 03:39 fd
+    drwxr-xr-x 7 root           root            164 Jul 13 03:39 nodejs
+    
+    /sbin/init 
+    HOME=/opt/amazon/genesis1p-tools/var
+    INVOCATION_ID=fb5af291b3c94f1f9df0943efde92ed0
+    JOURNAL_STREAM=8:608
+    LANG=C.UTF-8
+    LD_LIBRARY_PATH=/opt/amazon/genesis1p-tools/bzip2/lib:/opt/amazon/genesis1p-tools/sqlite/lib:/opt/amazon/genesis1p-tools/sqlite/lib:/usr/lib64:/usr/lib
+    LOGNAME=genesis1ptools
+    LOG_LEVEL=info
+    PATH=/opt/amazon/genesis1p-tools/venv/bin:/opt/amazon/genesis1p-tools/nodejs/bin:/opt/amazon/genesis1p-tools/sqlite/bin:/opt/amazon/genesis1p-tools/deno/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PLATFORM_SERVER_HOST=127.0.0.1
+    PLATFORM_SERVER_PORT=48620
+    PWD=/opt/amazon/genesis1p-tools/var
+    SHLVL=1
+    SYSTEMD_EXEC_PID=275
+    TOOLS_SERVER_HOST=0.0.0.0
+    TOOLS_SERVER_LOG_LEVEL=info
+    TOOLS_SERVER_PORT=8080
+    USER=genesis1ptools
+    VIRTUAL_ENV=/opt/amazon/genesis1p-tools/venv
+    VIRTUAL_ENV_PROMPT=(venv) 
+    _=/usr/bin/env
+[   5025ms] $ cd into the mount + relative write [166 ms] isError=false exit=0
+    /mnt/ws
+    artifacts     heredoc.txt		     sub
+    cwd-test.txt  marker-bash-1788645013380.txt  via-symlink.txt
+[   6339ms] $ NFS small-file perf [1313 ms] isError=false exit=0
+    real	0m0.912s
+    user	0m0.010s
+    sys	0m0.000s
+    
+    real	0m0.236s
+    user	0m0.005s
+    sys	0m0.001s
+    106
+    
+    real	0m0.003s
+    user	0m0.004s
+    sys	0m0.000s
+[   6971ms] $ cleanup [632 ms] isError=false exit=0
+    artifacts  marker-bash-1788645013380.txt
+[   7107ms] STOP in 136 ms
