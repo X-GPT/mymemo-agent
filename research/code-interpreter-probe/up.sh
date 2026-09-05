@@ -40,7 +40,7 @@ aws iam put-role-policy --role-name "$ROLE_FS" --policy-name bucket-sync --polic
  {"Sid":"EventBridgeManage","Effect":"Allow","Action":["events:DeleteRule","events:DisableRule","events:EnableRule","events:PutRule","events:PutTargets","events:RemoveTargets"],"Resource":"arn:aws:events:*:*:rule/DO-NOT-DELETE-S3-Files*","Condition":{"StringEquals":{"events:ManagedBy":"elasticfilesystem.amazonaws.com"}}},
  {"Sid":"EventBridgeRead","Effect":"Allow","Action":["events:DescribeRule","events:ListRuleNamesByTarget","events:ListRules","events:ListTargetsByRule"],"Resource":"arn:aws:events:*:*:rule/*"}]}
 JSON
-)"
+)"; sleep 10
 save ROLE_FS_ARN "arn:aws:iam::$ACCOUNT:role/$ROLE_FS"
 
 echo "[3/9] S3 Files file system on the bucket (Q1: does S3 Files exist here?)"
@@ -88,9 +88,9 @@ if ! aws iam get-role --role-name "$ROLE_CI" >/dev/null 2>&1; then
 JSON
 )" >/dev/null; sleep 10; fi
 aws iam put-role-policy --role-name "$ROLE_CI" --policy-name mount-workspace --policy-document "$(cat <<JSON
-{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3files:ClientMount","s3files:ClientWrite","s3files:GetAccessPoint"],"Resource":"$FS_ARN","Condition":{"ArnEquals":{"s3files:AccessPointArn":"$AP_ARN"}}}]}
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3files:ClientMount","s3files:ClientWrite"],"Resource":"$FS_ARN","Condition":{"ArnEquals":{"s3files:AccessPointArn":"$AP_ARN"}}},{"Effect":"Allow","Action":"s3files:GetAccessPoint","Resource":["$FS_ARN","$AP_ARN"]}]}
 JSON
-)"
+)"; sleep 10
 save ROLE_CI_ARN "arn:aws:iam::$ACCOUNT:role/$ROLE_CI"
 
 echo "[9/9] custom Code Interpreter, VPC mode, no-route subnets, S3 Files mount at /mnt/ws"
