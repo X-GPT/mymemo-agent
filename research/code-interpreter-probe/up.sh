@@ -88,7 +88,7 @@ if ! aws iam get-role --role-name "$ROLE_CI" >/dev/null 2>&1; then
 JSON
 )" >/dev/null; sleep 10; fi
 aws iam put-role-policy --role-name "$ROLE_CI" --policy-name mount-workspace --policy-document "$(cat <<JSON
-{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3files:ClientMount","s3files:ClientWrite"],"Resource":"$FS_ARN","Condition":{"ArnEquals":{"s3files:AccessPointArn":"$AP_ARN"}}},{"Effect":"Allow","Action":"s3files:GetAccessPoint","Resource":["$FS_ARN","$AP_ARN"]}]}
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3files:ClientMount","s3files:ClientWrite"],"Resource":"$FS_ARN","Condition":{"ArnEquals":{"s3files:AccessPointArn":"$AP_ARN"}}},{"Effect":"Allow","Action":["s3files:GetAccessPoint","s3files:GetFileSystem","s3files:ListMountTargets","s3files:GetMountTarget","s3files:ListAccessPoints"],"Resource":["$FS_ARN","$AP_ARN","$FS_ARN/*"]},{"Effect":"Allow","Action":["ec2:DescribeSubnets","ec2:DescribeSecurityGroups","ec2:DescribeNetworkInterfaces","ec2:DescribeVpcs"],"Resource":"*"}]}
 JSON
 )"; sleep 10
 save ROLE_CI_ARN "arn:aws:iam::$ACCOUNT:role/$ROLE_CI"
