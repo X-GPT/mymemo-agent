@@ -96,7 +96,7 @@ save ROLE_CI_ARN "arn:aws:iam::$ACCOUNT:role/$ROLE_CI"
 echo "[9/9] custom Code Interpreter, VPC mode, no-route subnets, S3 Files mount at /mnt/ws"
 if [ -z "${CI_ID:-}" ]; then
   out=$(aws bedrock-agentcore-control create-code-interpreter --name mymemo_ci_probe --description "#730 probe" \
-    --execution-role-arn "$ROLE_CI_ARN" --client-token "$P-ci" \
+    --execution-role-arn "$ROLE_CI_ARN" --client-token "$P-ci-$(uuidgen | tr -d -)" \
     --network-configuration "{\"networkMode\":\"VPC\",\"vpcConfig\":{\"subnets\":[\"$SUBNET_A\",\"$SUBNET_B\"],\"securityGroups\":[\"$SG_CI\"]}}" \
     --filesystem-configurations "[{\"s3FilesConfiguration\":{\"accessPointArn\":\"$AP_ARN\",\"fileSystemArn\":\"$FS_ARN\",\"mountPath\":\"/mnt/ws\"}}]")
   save CI_ID "$(echo "$out" | jq -r .codeInterpreterId)"; save CI_ARN "$(echo "$out" | jq -r .codeInterpreterArn)"
