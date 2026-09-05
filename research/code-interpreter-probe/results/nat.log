@@ -1,0 +1,9 @@
+taskdef arn:aws:ecs:us-west-2:637423444544:task-definition/mymemo-ci-probe-nat:1
+task arn:aws:ecs:us-west-2:637423444544:task/mymemo-staging-cluster/5099b4167c6f4b379da37440e32a8310 — waiting for it to stop
+{
+    "exit": 4,
+    "reason": null,
+    "stopped": "Essential container in task exited",
+    "stopCode": "EssentialContainerExited"
+}
+Q4 PASS: HTTP 4xx from https://bedrock-agentcore.us-west-2.amazonaws.com/ via the prod private subnets + fck-nat
