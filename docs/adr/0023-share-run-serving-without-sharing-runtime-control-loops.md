@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): shared Run serving retires at the v1 cutover.
+
 Amended (2026-08-22) by
 [ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md) and the Fargate
 retirement: the coexistence-specific control-loop decision below is superseded.

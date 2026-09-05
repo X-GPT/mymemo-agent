@@ -4,6 +4,8 @@ Status: accepted (2026-08-21). Amends ADR-0025 and ADR-0029 by retiring
 runtime selection, the Fargate creation fallback, runtime reassignment, and the
 Execution runtime gate.
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): AgentCore as the sole execution runtime with E2B retires at the v1 cutover.
+
 Amended (2026-08-22) by the Fargate-retirement release: the retirement removed
 the Fargate Claim, doorbell, deployment-readiness, and Run-serving machinery,
 while temporarily retaining database and public compatibility markers.

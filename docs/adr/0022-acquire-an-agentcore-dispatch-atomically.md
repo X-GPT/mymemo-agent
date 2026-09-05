@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): atomic dispatch acquisition retires at the v1 cutover.
+
 Amended (2026-08-16) by
 [ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md):
 the execution-lane validation is removed with the lane itself, and the

@@ -12,6 +12,8 @@ coexistence ended, and `agent-maintenance` became the sole global expiration,
 Reclamation, and cleanup owner. The publisher remains independently bounded and
 owns none of those responsibilities.
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the dedicated dispatch publisher retires at the v1 cutover.
+
 AgentCore Dispatch publication runs in one dedicated long-lived ECS service,
 not in the Conversation-serving agent-worker process. The service has its own
 app, filtered image, process lifecycle, task and execution roles, security

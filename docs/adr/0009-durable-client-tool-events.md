@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): durable client tool events on the Run log retires at the v1 cutover.
+
 The client needs to show the agent's tool arguments and returned results. Add
 `tool_use` and `tool_result` as additive, unversioned SSE frames projected from
 durable, ordered `run_events`. Tool events commit only at complete-message

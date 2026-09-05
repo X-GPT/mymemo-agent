@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the transactional outbox retires at the v1 cutover.
+
 Amended (2026-08-16) by the incremental production rollout
 ([ADR-0025](./0025-select-the-execution-runtime-at-conversation-creation.md),
 [ADR-0026](./0026-publish-agentcore-dispatch-through-one-advisory-locked-loop.md)):

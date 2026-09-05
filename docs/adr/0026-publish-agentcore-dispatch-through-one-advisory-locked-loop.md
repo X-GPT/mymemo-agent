@@ -2,6 +2,8 @@
 
 Status: accepted (2026-08-16). Amends ADR-0020's publisher consequences.
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the advisory-locked publisher loop retires at the v1 cutover.
+
 Amended (2026-08-17) by
 [ADR-0027](./0027-deploy-the-agentcore-dispatch-publisher-as-a-dedicated-service.md),
 which supersedes only this ADR's initial compute-home consequence.

@@ -2,6 +2,8 @@
 
 Status: accepted (2026-07-10); implementation in progress
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the Redis live lane retires at the v1 cutover.
+
 The provider-envelope and complete-Assistant-message commit findings remain in
 force. [ADR-0012](./0012-expose-a-full-ag-ui-agent-surface.md) supersedes
 this ADR's cursorless Pub/Sub transport,

@@ -2,6 +2,8 @@
 
 Status: accepted (amended 2026-09-01 — see [Amendment: no shell](#amendment-2026-09-01--no-shell-in-the-vm); amended 2026-09-02 — see [Amendment: Checkpoints brokered through chat-api](#amendment-2026-09-02--checkpoints-brokered-through-chat-api))
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the /v2 Lambda MicroVM design (deleted, PR #729) retires at the v1 cutover.
+
 Supersedes [ADR-0031](0031-make-agentcore-the-sole-execution-runtime.md) (AgentCore
 as sole execution runtime) and [ADR-0033](0033-host-the-ai-sdk-chat-loop-in-a-vercel-sandbox-through-harnessagent.md)
 (the Vercel/Harness chat path, abandoned before production mounting). Repeals

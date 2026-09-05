@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): Conversation Ownership retires at the v1 cutover.
+
 Amended by [ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md):
 AgentCore exact acquisition replaces the Fargate Claim and snapshot drain below.
 The Conversation-scoped epoch/lease fence and lost-lease abandonment remain.

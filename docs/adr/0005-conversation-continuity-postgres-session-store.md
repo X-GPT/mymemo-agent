@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the Postgres SessionStore retires at the v1 cutover.
+
 Amended by
 [ADR-0013](./0013-interrupt-runs-without-ending-conversation-continuity.md).
 
