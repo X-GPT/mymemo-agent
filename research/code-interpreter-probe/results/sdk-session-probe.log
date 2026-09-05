@@ -1,0 +1,60 @@
+[     4ms] sdk resolved to /Users/chengchao/code/mymemo/mymemo-agent/research/code-interpreter-probe/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs version=0.3.251
+[    16ms] sessionId=5022ceae-1f0a-4632-ab94-79ee34337686 fixedCwd=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J
+[    22ms] === S1 Turn1 fresh: sessionId + sessionStore cfg=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cfgA-yaHbZC cwd=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J opts={"sessionId":"5022ceae-1f0a-4632-ab94-79ee34337686","sessionStore":"<store>"}
+[  4457ms] ITER system/init session_id=5022ceae-1f0a-4632-ab94-79ee34337686 version=2.1.251 cwd=/private/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J
+[  4487ms] FAKE model call #1: messages.length=2
+[  4630ms] ITER assistant 
+[  4642ms] ITER system/post_turn_summary 
+[  4647ms] ITER result/success subtype=success session_id=5022ceae-1f0a-4632-ab94-79ee34337686 is_error=false num_turns=1 result="Hello from fake model."
+[  5038ms] ITER end
+[  5038ms] --- S1 Turn1 fresh: sessionId + sessionStore: init=5022ceae-1f0a-4632-ab94-79ee34337686 isError=false threw=no modelMsgLens=[2] mirrorErrors=0
+[  5040ms] S1 store {"keys":["-private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686"],"entries":7,"dupUuids":0} local: -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686.jsonl
+[  5040ms] === S2 Turn2: resume via store on FRESH config dir, same cwd cfg=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cfgB-uFD6Hm cwd=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J opts={"resume":"5022ceae-1f0a-4632-ab94-79ee34337686","sessionStore":"<store>"}
+[  5907ms] ITER system/init session_id=5022ceae-1f0a-4632-ab94-79ee34337686 version=2.1.251 cwd=/private/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J
+[  5931ms] FAKE model call #2: messages.length=5
+[  6068ms] ITER assistant 
+[  6077ms] ITER system/post_turn_summary 
+[  6079ms] ITER result/success subtype=success session_id=5022ceae-1f0a-4632-ab94-79ee34337686 is_error=false num_turns=1 result="Hello from fake model."
+[  6251ms] ITER end
+[  6251ms] --- S2 Turn2: resume via store on FRESH config dir, same cwd: init=5022ceae-1f0a-4632-ab94-79ee34337686 isError=false threw=no modelMsgLens=[5] mirrorErrors=0
+[  6251ms] S2 store {"keys":["-private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686"],"entries":15,"dupUuids":0} local: no projects dir
+[  6251ms] === S3 Turn3: resume via store again, fresh config dir cfg=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cfgC-qWsNA0 cwd=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J opts={"resume":"5022ceae-1f0a-4632-ab94-79ee34337686","sessionStore":"<store>"}
+[  7058ms] ITER system/init session_id=5022ceae-1f0a-4632-ab94-79ee34337686 version=2.1.251 cwd=/private/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J
+[  7081ms] FAKE model call #3: messages.length=8
+[  7220ms] ITER assistant 
+[  7230ms] ITER system/post_turn_summary 
+[  7232ms] ITER result/success subtype=success session_id=5022ceae-1f0a-4632-ab94-79ee34337686 is_error=false num_turns=1 result="Hello from fake model."
+[  7416ms] ITER end
+[  7416ms] --- S3 Turn3: resume via store again, fresh config dir: init=5022ceae-1f0a-4632-ab94-79ee34337686 isError=false threw=no modelMsgLens=[8] mirrorErrors=0
+[  7416ms] === S4 negative: resume via an EMPTY store cfg=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cfgD-7xc5X6 cwd=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J opts={"resume":"5022ceae-1f0a-4632-ab94-79ee34337686","sessionStore":"<store>"}
+[  8157ms] ITER result/error_during_execution subtype=error_during_execution session_id=5022ceae-1f0a-4632-ab94-79ee34337686 is_error=true num_turns=0 result=["No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686"]
+[  8323ms] QUERY THREW: Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686
+[  8323ms] --- S4 negative: resume via an EMPTY store: init=undefined isError=true threw=Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686 modelMsgLens=[] mirrorErrors=0
+[  8324ms] === S5 info: resume via store from a DIFFERENT cwd (projectKey changes) cfg=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cfgE-SkfZfO cwd=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-other-S8mtdJ opts={"resume":"5022ceae-1f0a-4632-ab94-79ee34337686","sessionStore":"<store>"}
+[  9145ms] ITER result/error_during_execution subtype=error_during_execution session_id=5022ceae-1f0a-4632-ab94-79ee34337686 is_error=true num_turns=0 result=["No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686"]
+[  9350ms] QUERY THREW: Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686
+[  9350ms] --- S5 info: resume via store from a DIFFERENT cwd (projectKey changes): init=undefined isError=true threw=Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686 modelMsgLens=[] mirrorErrors=0
+[  9350ms] === S6 info: resume WITHOUT a store on cfgB (is the materialised local copy still there?) cfg=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cfgB-uFD6Hm cwd=/var/folders/h6/w9ls6ywj56l4n16v2z98zvvr0000gn/T/cwd-fixed-Lnjm9J opts={"resume":"5022ceae-1f0a-4632-ab94-79ee34337686"}
+[ 10087ms] ITER result/error_during_execution subtype=error_during_execution session_id=5022ceae-1f0a-4632-ab94-79ee34337686 is_error=true num_turns=0 result=["No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686"]
+[ 10238ms] QUERY THREW: Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686
+[ 10238ms] --- S6 info: resume WITHOUT a store on cfgB (is the materialised local copy still there?): init=undefined isError=true threw=Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686 modelMsgLens=[] mirrorErrors=0
+[ 10238ms] STORE CALLS
+  append -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686 +6 [queue-operation,queue-operation,user,attachment,atis-latch,assistant]
+  append -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686 +1 [last-prompt]
+  load -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686 -> 7
+  listSubkeys -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686/ -> []
+  append -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686 +6 [queue-operation,queue-operation,system,user,attachment,assistant]
+  append -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686 +2 [last-prompt,mode]
+  load -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686 -> 15
+  listSubkeys -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686/ -> []
+  append -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686 +6 [queue-operation,queue-operation,system,user,attachment,assistant]
+  append -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686 +1 [last-prompt]
+  load -private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-other-S8mtdJ/5022ceae-1f0a-4632-ab94-79ee34337686 -> null
+[ 10238ms] SUMMARY
+S1 PASS pre-minted id honoured=true entriesInStore=7 msgLens=[2]
+S2 PASS msgLens=[5] (turn1 [2]) localCopyAfterRun=no projects dir
+S3 PASS msgLens=[8] store={"keys":["-private-var-folders-h6-w9ls6ywj56l4n16v2z98zvvr0000gn-T-cwd-fixed-Lnjm9J/5022ceae-1f0a-4632-ab94-79ee34337686"],"entries":22,"dupUuids":0}
+S4 PASS(expected failure) isError=true threw=Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686 result=["No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686"]
+S5 info(different cwd) init=undefined isError=true threw=Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686 msgLens=[] result=["No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686"]
+S6 info(no store, cfgB) init=undefined isError=true threw=Claude Code returned an error result: No conversation found with session ID: 5022ceae-1f0a-4632-ab94-79ee34337686 msgLens=[] local=no projects dir
+[ 10238ms] sdk=2.1.251 totalModelCalls=3 mirrorErrorsTotal=0
