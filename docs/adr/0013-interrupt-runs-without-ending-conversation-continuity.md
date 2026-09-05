@@ -4,6 +4,8 @@ status: accepted
 
 # Interrupt Runs without ending Conversation continuity
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): Run interruption retires at the v1 cutover.
+
 This ADR is the implementation source of truth. Earlier
 cancellation-to-interruption planning notes are superseded wherever they differ
 from this accepted decision.

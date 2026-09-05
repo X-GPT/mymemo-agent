@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the Ownership cutover gate retires at the v1 cutover.
+
 Amended by issue #402's final contract cutover: because the gated surface's
 rows are explicitly disposable, the rollback consequence below is reset and
 redeploy rather than the database restore this ADR originally required.

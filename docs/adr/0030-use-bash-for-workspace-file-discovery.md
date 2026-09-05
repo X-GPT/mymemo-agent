@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): Bash for workspace file discovery (the built-in tools are gone) retires at the v1 cutover.
+
 This decision supersedes the active `Glob` tool portions of ADR-0006 and
 ADR-0009. Their records remain unchanged as the history of the tool surface
 they introduced.

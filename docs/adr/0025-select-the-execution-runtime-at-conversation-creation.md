@@ -10,6 +10,8 @@ as defense in depth.
 Runtime-selection, Fargate-fallback, and reassignment decisions are superseded
 by [ADR-0031](./0031-make-agentcore-the-sole-execution-runtime.md).
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): execution-runtime selection retires at the v1 cutover.
+
 Amended (2026-08-22) by the Fargate-retirement release implementing ADR-0031:
 AgentCore is the sole execution runtime, `agent-maintenance` owns global
 expiration, Reclamation, and cleanup, and the runtime gate, reassignment path,

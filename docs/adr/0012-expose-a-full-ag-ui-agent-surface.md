@@ -1,5 +1,7 @@
 # Expose a full AG-UI agent surface
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the AG-UI agent surface retires at the v1 cutover.
+
 Run-control vocabulary and terminal behavior are amended by
 [ADR-0013](./0013-interrupt-runs-without-ending-conversation-continuity.md).
 The retained per-Run Redis Stream transport — entry-id cursors,

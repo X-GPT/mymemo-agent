@@ -4,6 +4,8 @@ status: accepted
 
 # Producer-buffered Live Stream over pub/sub
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the producer-buffered Live Stream retires at the v1 cutover.
+
 Status: accepted (2026-07-23); implemented by #369. Supersedes the
 retained per-Run Redis Stream transport of
 [ADR-0012](./0012-expose-a-full-ag-ui-agent-surface.md); every non-transport

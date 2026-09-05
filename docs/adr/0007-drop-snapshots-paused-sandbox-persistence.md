@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): paused-sandbox persistence retires at the v1 cutover.
+
 The design (Task 4.1, Task 5.3, Milestone 8) made E2B **snapshots** the
 durability layer for a conversation's workspace: snapshot-if-dirty at each
 turn's end through a barrier, restore from `latest_snapshot_id` when the paused

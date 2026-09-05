@@ -7,6 +7,8 @@ AgentCore-hosted Agent-query Runtime design of issue #560 for the AI SDK chat
 path. Amends ADR-0001 and ADR-0031 for that path only; the production Run path
 is unchanged.
 
+Superseded (2026-09-05) by [ADR-0035](./0035-serve-chat-through-a-lambda-front-and-a-code-interpreter-hand.md): the Vercel/Harness chat path retires at the v1 cutover.
+
 The AI SDK chat route `POST /api/chat` runs Vercel's `@ai-sdk/harness`
 `HarnessAgent` inside the chat-api process, with the upstream `createClaudeCode`
 adapter and `@ai-sdk/sandbox-vercel`. Each Conversation owns one persistent
