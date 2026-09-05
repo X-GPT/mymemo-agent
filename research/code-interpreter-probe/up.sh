@@ -46,7 +46,7 @@ save ROLE_FS_ARN "arn:aws:iam::$ACCOUNT:role/$ROLE_FS"
 echo "[3/9] S3 Files file system on the bucket (Q1: does S3 Files exist here?)"
 if [ -z "${FS_ID:-}" ]; then
   sleep 10 # role propagation
-  out=$(aws s3files create-file-system --bucket "$BUCKET" --role-arn "$ROLE_FS_ARN" --accept-bucket-warning --client-token "$P-fs" --tags key=Name,value=$P)
+  out=$(aws s3files create-file-system --bucket "arn:aws:s3:::$BUCKET" --role-arn "$ROLE_FS_ARN" --accept-bucket-warning --client-token "$P-fs" --tags key=Name,value=$P)
   save FS_ID "$(echo "$out" | jq -r .fileSystemId)"; save FS_ARN "$(echo "$out" | jq -r .fileSystemArn)"
 fi
 wait_for "file system $FS_ID" aws s3files get-file-system --file-system-id "$FS_ID" --query status --output text
