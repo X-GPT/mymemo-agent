@@ -176,30 +176,9 @@ export const conversations = pgTable(
 );
 
 /**
- * The Turn statuses that are an Outcome — the Turn is finished and will never
- * change again (spec #654's at-most-once invariant). Deliberately separate from
- * {@link TERMINAL_RUN_STATUSES} even though the words match: the Run machinery
- * retires wholesale after v2 cutover and the Turn queue must not couple to it.
- */
-export const TERMINAL_TURN_STATUSES = ["done", "error", "interrupted"] as const;
-
-/** Every legal `conversation_messages.status` for a user-role (Turn) row. */
-export const ALL_TURN_STATUSES = [
-	"queued",
-	"processing",
-	...TERMINAL_TURN_STATUSES,
-] as const;
-
-/**
- * Canonical AI SDK messages, doubling as the /v2 Turn queue (ADR-0034,
- * spec #654). The browser-facing representation is stored intact as role plus
- * parts; the monotonically increasing sequence supplies deterministic
- * Conversation order. A user-role row IS the Turn record: its status carries
- * the `queued → processing → done|error|interrupted` lifecycle and the primary
- * key is the enqueue idempotency key. Assistant rows carry no Turn semantics —
- * the status check pins their lifecycle columns to NULL at the database so no
- * writer can forge a Turn out of an assistant message. Turn mutations go
- * through `turn-store.ts`. Not read by the production Run/AG-UI path.
+ * Canonical AI SDK messages. The browser-facing representation is stored
+ * intact as role plus parts; the monotonically increasing sequence supplies
+ * deterministic Conversation order. Not read by the production Run/AG-UI path.
  */
 export const conversationMessages = pgTable(
 	"conversation_messages",
@@ -210,12 +189,6 @@ export const conversationMessages = pgTable(
 		messageId: text("message_id").notNull(),
 		role: text("role").notNull(),
 		parts: jsonb("parts").notNull(),
-		/** Turn lifecycle; NULL exactly when the row is not a Turn (assistant). */
-		status: text("status"),
-		/** Stamped by the queued→processing claim; NULL until then. */
-		startedAt: timestamp("started_at", { withTimezone: true }),
-		/** Stamped once by terminalization (or queued-cancel); never cleared. */
-		finishedAt: timestamp("finished_at", { withTimezone: true }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -231,74 +204,10 @@ export const conversationMessages = pgTable(
 			"conversation_messages_role_check",
 			sql`${t.role} in ('user', 'assistant')`,
 		),
-		// "Turn semantics apply to user-role rows only" as a database invariant:
-		// a user row always has a legal Turn status, any other row never has one.
-		check(
-			"conversation_messages_turn_status_check",
-			// The explicit `is not null` matters: `null in (...)` is NULL, and a
-			// NULL check verdict passes, which would let a user row slip in with no
-			// Turn status at all.
-			sql`(${t.role} = 'user' and ${t.status} is not null and ${t.status} in (${statusList(ALL_TURN_STATUSES)})) or (${t.role} <> 'user' and ${t.status} is null)`,
-		),
 		index("conversation_messages_order_idx").on(
 			t.userId,
 			t.conversationId,
 			t.sequence,
-		),
-	],
-);
-
-/** Every legal `conversation_vm.state`. */
-export const ALL_VM_STATES = ["launching", "running", "terminated"] as const;
-
-/**
- * The per-Conversation MicroVM registry (spec #654, ticket #669): one row per
- * Conversation, keyed like the Conversation itself, holding the VM the
- * Conversation's Turns run on. It doubles as the **transactional launch
- * claim**: an upsert that inserts a fresh `launching` row, or re-claims a
- * `terminated` one (rehydrate) or a stale `launching` one (the claimant died
- * mid-launch), returns a row to exactly one caller — the only caller allowed
- * to invoke `RunMicrovm`, which the platform cannot make idempotent per
- * Conversation. `launching` rows never carry a `microvm_id`; recording the
- * launch flips the row to `running` in the same write, fenced on the
- * `claim_token` the claim minted so a launcher whose claim went stale and was
- * re-claimed can neither record nor release over the newer claimant. Written
- * by chat-api only (`apps/chat-api/src/features/conversation-vm/`).
- * `checkpoint_pointer` (#670) is the S3 key of the latest durable Checkpoint,
- * moved by chat-api's `/v2/checkpoint` route guarded on `microvm_id`, and
- * kept across terminate/re-claim so a rehydrate finds it.
- */
-export const conversationVm = pgTable(
-	"conversation_vm",
-	{
-		userId: text("user_id").notNull(),
-		conversationId: text("conversation_id").notNull(),
-		/** The platform's MicroVM id; NULL while `launching`. */
-		microvmId: text("microvm_id"),
-		/** The platform's per-VM endpoint host chat-api nudges through. */
-		endpoint: text("endpoint"),
-		/** The image version `RunMicrovm` answered with — what a rehydrate upgrades. */
-		imageVersion: text("image_version"),
-		state: text("state").notNull(),
-		/** The launch claim's fence: minted by the claim, matched by the launch record and release. */
-		claimToken: text("claim_token"),
-		/** Claim time while `launching` (the stale-claim window); launch time while `running`. */
-		lastActivityAt: timestamp("last_activity_at", { withTimezone: true })
-			.notNull()
-			.defaultNow(),
-		/** S3 key of the latest durable Checkpoint (`conversations/<id>/<uuid>.tar.gz`); NULL before the first. */
-		checkpointPointer: text("checkpoint_pointer"),
-	},
-	(t) => [
-		primaryKey({ columns: [t.userId, t.conversationId] }),
-		foreignKey({
-			columns: [t.userId, t.conversationId],
-			foreignColumns: [conversations.userId, conversations.conversationId],
-			name: "conversation_vm_conversation_fk",
-		}).onDelete("cascade"),
-		check(
-			"conversation_vm_state_check",
-			sql`${t.state} in (${statusList(ALL_VM_STATES)})`,
 		),
 	],
 );

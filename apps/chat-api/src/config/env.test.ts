@@ -2,10 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { type ApiConfig, loadApiConfigFromEnv } from "./env";
 
 /**
- * Split-runtime env ownership (MYM-45), revised by ADR-0034: `chat-api` owns
- * the writable agent DB, the Statsig exposure config, and — for the /v2 model
- * gateway — the OpenRouter credential. It must still NOT require or read the
- * remaining worker-only secrets (KB, E2B). These tests pin that boundary.
+ * Split-runtime env ownership (MYM-45): `chat-api` owns the writable agent DB
+ * and the Statsig exposure config. It must NOT require or read the
+ * runtime-only secrets (KB, E2B, model provider). These tests pin that boundary.
  */
 
 /** A minimal env that loads cleanly. */
@@ -57,93 +56,26 @@ describe("loadApiConfigFromEnv — Downloadable artifact storage", () => {
 	});
 });
 
-describe("loadApiConfigFromEnv — ADR-0034 gateway credential rule", () => {
-	it("boots without the gateway secrets; the gateway route degrades, not the boot", () => {
-		const env = baseEnv();
-		expect(env.OPENROUTER_API_KEY).toBeUndefined();
-		expect(env.GATEWAY_TOKEN_SECRET).toBeUndefined();
-		const config = loadApiConfigFromEnv(env);
-		expect(config.openrouterApiKey).toBeUndefined();
-		expect(config.gatewayTokenSecret).toBeUndefined();
-		expect(config.openrouterBaseUrl).toBe("https://openrouter.ai/api");
-	});
-
-	it("reads the OpenRouter credential and gateway token secret for the /v2 gateway", () => {
-		const env = baseEnv();
-		env.OPENROUTER_API_KEY = "sk-or-gateway-key";
-		env.OPENROUTER_BASE_URL = "https://openrouter.test/api";
-		env.GATEWAY_TOKEN_SECRET = "gateway-signing-secret";
-		const config = loadApiConfigFromEnv(env);
-		expect(config.openrouterApiKey).toBe("sk-or-gateway-key");
-		expect(config.openrouterBaseUrl).toBe("https://openrouter.test/api");
-		expect(config.gatewayTokenSecret).toBe("gateway-signing-secret");
-	});
-
-	it("boots without MicroVM orchestration; the v2 message POST degrades, not the boot", () => {
-		expect(loadApiConfigFromEnv(baseEnv()).microvm).toBeUndefined();
-	});
-
-	it("reads the MicroVM launch inventory as one all-or-nothing block keyed on MICROVM_IMAGE_ARN", () => {
-		const env = baseEnv();
-		env.MICROVM_IMAGE_ARN = "arn:aws:lambda:us-west-2:123:microvm-image:img";
-		env.MICROVM_EGRESS_CONNECTOR_ARN =
-			"arn:aws:lambda:us-west-2:123:network-connector:egress";
-		env.MICROVM_EXECUTION_ROLE_ARN = "arn:aws:iam::123:role/exec";
-		env.MICROVM_CHECKPOINT_BUCKET = "checkpoints";
-		env.GATEWAY_BASE_URL = "http://alb.internal/";
-		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
-		env.GATEWAY_TOKEN_SECRET = "gateway-signing-secret";
-		expect(loadApiConfigFromEnv(env).microvm).toEqual({
-			imageArn: "arn:aws:lambda:us-west-2:123:microvm-image:img",
-			gatewayTokenSecret: "gateway-signing-secret",
-			egressConnectorArn:
-				"arn:aws:lambda:us-west-2:123:network-connector:egress",
-			executionRoleArn: "arn:aws:iam::123:role/exec",
-			checkpointBucket: "checkpoints",
-			gatewayBaseUrl: "http://alb.internal",
-			kbDatabaseUrl: "postgresql://kb:kb@localhost:5432/mymemo_kb",
-			model: "anthropic/claude-sonnet-5",
-			upgradeUrgent: false,
-		});
-
-		env.OPENROUTER_DEFAULT_MODEL = "anthropic/claude-opus-5";
-		env.MICROVM_IMAGE_UPGRADE_URGENT = "true";
-		expect(loadApiConfigFromEnv(env).microvm).toMatchObject({
-			model: "anthropic/claude-opus-5",
-			upgradeUrgent: true,
-		});
-
-		for (const name of [
-			"MICROVM_EGRESS_CONNECTOR_ARN",
-			"MICROVM_EXECUTION_ROLE_ARN",
-			"MICROVM_CHECKPOINT_BUCKET",
-			"GATEWAY_BASE_URL",
-			"KB_DATABASE_URL",
-			"GATEWAY_TOKEN_SECRET",
-		]) {
-			const partial = { ...env };
-			delete partial[name];
-			expect(() => loadApiConfigFromEnv(partial)).toThrow(
-				new RegExp(`${name} is required with MICROVM_IMAGE_ARN`),
-			);
-		}
-	});
-
-	it("never reads the E2B secret, and the KB URL only for MicroVM launch", () => {
+describe("loadApiConfigFromEnv — runtime-only secrets", () => {
+	it("never reads the E2B, KB, or model-provider secrets", () => {
 		const env = baseEnv();
 		env.KB_DATABASE_URL = "postgresql://kb:kb@localhost:5432/mymemo_kb";
 		env.E2B_API_KEY = "e2b-should-be-ignored";
+		env.OPENROUTER_API_KEY = "sk-or-should-be-ignored";
+		env.GATEWAY_TOKEN_SECRET = "gateway-should-be-ignored";
 		env.LLM_TOKEN_SECRET = "llm-token-secret";
 		env.GATEWAY_PUBLIC_URL = "https://gateway.test";
-		const config = loadApiConfigFromEnv(env);
-		const serialized = JSON.stringify(config);
-		expect(serialized).not.toContain("mymemo_kb");
-		expect(serialized).not.toContain("e2b-should-be-ignored");
-		expect(serialized).not.toContain("llm-token-secret");
-		expect(serialized).not.toContain("gateway.test");
-		expect(config as unknown as Record<string, unknown>).not.toHaveProperty(
-			"kbDatabaseUrl",
-		);
+		const serialized = JSON.stringify(loadApiConfigFromEnv(env));
+		for (const leaked of [
+			"mymemo_kb",
+			"e2b-should-be-ignored",
+			"sk-or-should-be-ignored",
+			"gateway-should-be-ignored",
+			"llm-token-secret",
+			"gateway.test",
+		]) {
+			expect(serialized).not.toContain(leaked);
+		}
 	});
 
 	it("ignores AgentCore queue and SSM dispatch configuration", () => {

@@ -52,69 +52,12 @@ export interface ApiConfig {
 	statsigServerSecret: string;
 	/** Required authenticated TLS Redis secret for the Live Stream relay. */
 	redisUrl: string;
-	/**
-	 * OpenRouter credential for the /v2 model gateway — ADR-0034's deliberate
-	 * revision of the rule that kept provider credentials out of chat-api. Held
-	 * in chat-api env only and injected on gateway-forwarded requests; never
-	 * delivered to a VM, image, or Checkpoint. Optional until the Terraform
-	 * secret wiring lands: while absent the gateway route answers 503 and every
-	 * other surface serves normally.
-	 */
-	openrouterApiKey?: string;
-	/** Upstream base URL the gateway forwards to. */
-	openrouterBaseUrl: string;
-	/**
-	 * HMAC secret for per-Conversation gateway tokens. Mint (at VM launch) and
-	 * verify (on every gateway request) both live in chat-api, so the secret
-	 * never leaves this process. Optional alongside `openrouterApiKey`.
-	 */
-	gatewayTokenSecret?: string;
-	/**
-	 * Per-Conversation MicroVM orchestration (ADR-0034, #669). Present when
-	 * `MICROVM_IMAGE_ARN` is set, in which case every other field is required
-	 * (`GATEWAY_TOKEN_SECRET` included — the VM's only model access is the
-	 * gateway token the launch mints). While absent the v2 message POST
-	 * answers 503 and every other surface serves normally.
-	 */
-	microvm?: MicrovmConfig;
-}
-
-export interface MicrovmConfig {
-	/** The registered MicroVM image (`MICROVM_IMAGE_ARN`). */
-	imageArn: string;
-	/** The same `GATEWAY_TOKEN_SECRET` the gateway route verifies with; the launch mints with it. */
-	gatewayTokenSecret: string;
-	/** The VPC egress connector VMs run behind (`MICROVM_EGRESS_CONNECTOR_ARN`). */
-	egressConnectorArn: string;
-	/** The execution role passed at `RunMicrovm` (`MICROVM_EXECUTION_ROLE_ARN`). */
-	executionRoleArn: string;
-	/** The S3 bucket Checkpoints live in (`MICROVM_CHECKPOINT_BUCKET`), under `conversations/<id>/`. */
-	checkpointBucket: string;
-	/**
-	 * chat-api's own origin as the VM reaches it (`GATEWAY_BASE_URL`, the
-	 * internal ALB); the payload's `MODEL_BASE_URL` is its `/v2/gateway` route.
-	 */
-	gatewayBaseUrl: string;
-	/**
-	 * Read-only `mymemo_kb` URL (`KB_DATABASE_URL`) — read here solely to ride
-	 * the `runHookPayload` into the trusted in-VM process for its document
-	 * tools; chat-api itself never opens it.
-	 */
-	kbDatabaseUrl: string;
-	/** Model id the In-VM server runs (`OPENROUTER_DEFAULT_MODEL`). */
-	model: string;
-	/**
-	 * `MICROVM_IMAGE_UPGRADE_URGENT=true`: a VM on a stale image is terminated
-	 * and rehydrated at its next nudge instead of auto-resuming (#650).
-	 */
-	upgradeUrgent: boolean;
 }
 
 /**
  * Parse + validate the environment into a typed config. Pure: env in, config
- * out. The E2B secret is never read here; the OpenRouter credential is read
- * for the /v2 gateway (ADR-0034) and the KB URL only to hand to a MicroVM's
- * trusted process at launch — neither for chat-api's own use.
+ * out. The E2B, KB, and model-provider secrets are never read here — they are
+ * runtime-only.
  */
 export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	// The conversation registry is the primary surface and cannot work without a
@@ -138,28 +81,6 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 	const statsigServerSecret = env.STATSIG_SERVER_SECRET?.trim();
 	assert(statsigServerSecret, "STATSIG_SERVER_SECRET is required");
 
-	let microvm: MicrovmConfig | undefined;
-	const imageArn = env.MICROVM_IMAGE_ARN?.trim();
-	if (imageArn) {
-		const need = (name: string) => {
-			const value = env[name]?.trim();
-			assert(value, `${name} is required with MICROVM_IMAGE_ARN`);
-			return value;
-		};
-		microvm = {
-			imageArn,
-			gatewayTokenSecret: need("GATEWAY_TOKEN_SECRET"),
-			egressConnectorArn: need("MICROVM_EGRESS_CONNECTOR_ARN"),
-			executionRoleArn: need("MICROVM_EXECUTION_ROLE_ARN"),
-			checkpointBucket: need("MICROVM_CHECKPOINT_BUCKET"),
-			gatewayBaseUrl: need("GATEWAY_BASE_URL").replace(/\/+$/, ""),
-			kbDatabaseUrl: need("KB_DATABASE_URL"),
-			model:
-				env.OPENROUTER_DEFAULT_MODEL?.trim() || "anthropic/claude-sonnet-5",
-			upgradeUrgent: env.MICROVM_IMAGE_UPGRADE_URGENT === "true",
-		};
-	}
-
 	return {
 		logLevel: env.LOG_LEVEL || "info",
 		databaseUrl,
@@ -170,10 +91,5 @@ export function loadApiConfigFromEnv(env: Env): ApiConfig {
 			allowInsecureLoopback:
 				env.LIVE_STREAM_ALLOW_INSECURE_LOCAL_REDIS === "true",
 		}),
-		openrouterApiKey: env.OPENROUTER_API_KEY?.trim() || undefined,
-		openrouterBaseUrl:
-			env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api",
-		gatewayTokenSecret: env.GATEWAY_TOKEN_SECRET?.trim() || undefined,
-		microvm,
 	};
 }

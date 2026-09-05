@@ -119,12 +119,6 @@ jobs:
       # The AgentCore publisher/acquisition races use the same migrated
       # real-Postgres service as the surrounding integration suites.
       - run: bun test packages/agent-db/src/agentcore-dispatch.postgres.test.ts
-      # Turn-queue one-in-flight claim and at-most-once terminalization need
-      # concurrent real-Postgres sessions.
-      - run: bun test packages/agent-db/src/turn-store.postgres.test.ts
-      # Concurrent POSTs to a VM-less Conversation must yield exactly one
-      # MicroVM launcher: the conversation_vm claim race (#669).
-      - run: RUN_CHAT_API_POSTGRES_TESTS=true bun test apps/chat-api/src/features/conversation-vm/postgres-conversation-vm-store.postgres.test.ts
       # The dedicated publisher task's session lock must exclude a rolling-
       # deploy overlap and release when its database backend dies.
       - run: RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS=true bun test apps/agentcore-dispatch-publisher/src/publisher-loop.postgres.test.ts
