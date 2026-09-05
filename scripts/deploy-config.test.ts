@@ -83,9 +83,6 @@ describe("agent deployment behavior", () => {
 				...common,
 				STATSIG_SERVER_SECRET: "statsig-test-secret",
 				E2B_TEMPLATE: "sandbox-template-prod",
-				// ADR-0034: the /v2 gateway credentials ride in chat-api's config.
-				OPENROUTER_API_KEY: "openrouter-test-key",
-				GATEWAY_TOKEN_SECRET: "gateway-token-test-secret",
 			}),
 		).not.toThrow();
 

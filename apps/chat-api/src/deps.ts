@@ -6,10 +6,8 @@ import {
 import {
 	createLiveStreamTelemetry,
 	createRedisLiveStreamRelay,
-	createRedisTurnLiveStreamRelay,
 	type LiveStreamRelay,
 	type LiveStreamTelemetry,
-	type TurnLiveStreamRelay,
 } from "@mymemo/live-text";
 import type { Env as PinoEnv } from "hono-pino";
 import type { ApiConfig } from "./config/env";
@@ -22,23 +20,10 @@ import type { ArtifactDownloadSigner } from "./features/artifacts/artifact-downl
 import type { ArtifactMetadataStore } from "./features/artifacts/artifact-metadata-store";
 import { PostgresArtifactMetadataStore } from "./features/artifacts/postgres-artifact-metadata-store";
 import { createS3ArtifactDownloadSigner } from "./features/artifacts/s3-artifact-download-signer";
-import {
-	type CheckpointStore,
-	createS3CheckpointStore,
-} from "./features/checkpoint/checkpoint-store";
 import type { ConversationHistoryStore } from "./features/conversation-history/conversation-history-store";
 import { PostgresConversationHistoryStore } from "./features/conversation-history/postgres-conversation-history-store";
-import type { ConversationMessagesStore } from "./features/conversation-messages/conversation-messages-store";
-import { PostgresConversationMessagesStore } from "./features/conversation-messages/postgres-conversation-messages-store";
 import type { ConversationStore } from "./features/conversation-store/conversation-store";
 import { PostgresConversationStore } from "./features/conversation-store/postgres-conversation-store";
-import type { ConversationVmStore } from "./features/conversation-vm/conversation-vm-store";
-import {
-	createEnsureVm,
-	type EnsureVm,
-} from "./features/conversation-vm/ensure-vm";
-import { createLambdaMicrovmControlPlane } from "./features/conversation-vm/microvm-control-plane";
-import { PostgresConversationVmStore } from "./features/conversation-vm/postgres-conversation-vm-store";
 import type { InternalIdentity } from "./features/conversations/conversations.schema";
 import {
 	createExposureGate,
@@ -71,28 +56,10 @@ export interface AppDeps {
 	conversationStore: ConversationStore;
 	/** Permanent AG-UI Conversation-history projection over Postgres Runs. */
 	conversationHistoryStore: ConversationHistoryStore;
-	/** /v2 UIMessage history over `conversation_messages` plus the `queued` Turn INSERT — chat-api's only write; the In-VM server owns every status transition. */
-	conversationMessagesStore: ConversationMessagesStore;
 	/** Durable split-runtime run queue and event log. */
 	runStore: RunStore;
 	/** Producer-buffered per-Run relay used by initial and reconnect SSE. */
 	liveStreamRelay: LiveStreamRelay;
-	/** The v2 per-Turn UIMessage lane (#658) the message POST subscribes to. */
-	turnLiveStreamRelay: TurnLiveStreamRelay;
-	/**
-	 * Ensure-VM for one Conversation (#669): claim, launch or rehydrate the
-	 * Conversation's MicroVM, and nudge it. Undefined = MicroVM orchestration
-	 * is not configured, so the v2 message POST answers 503.
-	 */
-	ensureVm?: EnsureVm;
-	/** The per-Conversation MicroVM registry — the Checkpoint pointer lives on its row (#670). */
-	conversationVmStore: ConversationVmStore;
-	/**
-	 * Checkpoint bytes in S3 under `conversations/<id>/` (#670), for the
-	 * `/v2/checkpoint` route. Undefined = MicroVM orchestration is not
-	 * configured, so the route answers 503.
-	 */
-	checkpointStore?: CheckpointStore;
 	/** Cardinality-safe, payload-free Live Stream relay observability. */
 	liveStreamTelemetry: LiveStreamTelemetry;
 	/** Close the lazy Redis relay clients during service shutdown. */
@@ -103,12 +70,6 @@ export interface AppDeps {
 	 * parsed and before any write. Fails closed.
 	 */
 	exposureGate: ExposureGate;
-	/**
-	 * Upstream HTTP client for the /v2 model gateway. Injectable so route tests
-	 * exercise token validation, credential injection, and streaming without a
-	 * network or a real OpenRouter key.
-	 */
-	gatewayUpstreamFetch: typeof fetch;
 }
 
 /** Hono environment: pino logger vars plus request-scoped dependencies and identity. */
@@ -136,20 +97,10 @@ export function createDeps(
 ): AppDeps {
 	// One Drizzle pool over the writable DB, shared by every store.
 	const database = createDatabase(config.databaseUrl);
-	const conversationStore = new PostgresConversationStore(database);
-	const conversationHistoryStore = new PostgresConversationHistoryStore(
-		database,
-	);
-	const runStore = new PostgresRunStore(database);
-	const conversationVmStore = new PostgresConversationVmStore(database);
 	const liveStreamRelay = createRedisLiveStreamRelay({
 		url: config.redisUrl,
 		deployment: "current",
 		telemetry: liveStreamTelemetry,
-	});
-	const turnLiveStreamRelay = createRedisTurnLiveStreamRelay({
-		url: config.redisUrl,
-		deployment: "current",
 	});
 	return {
 		config,
@@ -158,39 +109,12 @@ export function createDeps(
 		documentAccessLog: new PostgresDocumentAccessLog(database),
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
-		conversationStore,
-		conversationHistoryStore,
-		conversationMessagesStore: new PostgresConversationMessagesStore(database),
-		runStore,
+		conversationStore: new PostgresConversationStore(database),
+		conversationHistoryStore: new PostgresConversationHistoryStore(database),
+		runStore: new PostgresRunStore(database),
 		liveStreamRelay,
-		turnLiveStreamRelay,
-		ensureVm: config.microvm
-			? createEnsureVm({
-					store: conversationVmStore,
-					controlPlane: createLambdaMicrovmControlPlane({
-						// AWS_REGION — the one region everything in this stack shares.
-						region: config.artifactRegion,
-						...config.microvm,
-					}),
-					config: {
-						...config.microvm,
-						agentDatabaseUrl: config.databaseUrl,
-						redisUrl: config.redisUrl,
-					},
-				})
-			: undefined,
-		conversationVmStore,
-		checkpointStore: config.microvm
-			? createS3CheckpointStore({
-					bucket: config.microvm.checkpointBucket,
-					region: config.artifactRegion,
-				})
-			: undefined,
 		liveStreamTelemetry,
-		closeLiveResources: async () => {
-			await Promise.all([liveStreamRelay.close(), turnLiveStreamRelay.close()]);
-		},
+		closeLiveResources: () => liveStreamRelay.close(),
 		exposureGate,
-		gatewayUpstreamFetch: fetch,
 	};
 }

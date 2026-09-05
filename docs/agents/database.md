@@ -10,7 +10,7 @@ The package exposes concurrency-critical operations including `acquireAgentCoreD
 
 chat-api imports the shared client and schema directly. Its migration entrypoint imports `MIGRATIONS_DIR` from `@mymemo/agent-db/migrations` and applies `packages/agent-db/drizzle/`.
 
-`document_access_events.run_id` holds a Run id (the Run path's document tools), a Harness turn id (chat-api's document tools on the AI SDK chat path), or a v2 Turn's user-message id (the In-VM server's in-process document tools).
+`document_access_events.run_id` holds a Run id (the Run path's document tools) or a Harness turn id (chat-api's document tools on the AI SDK chat path).
 
 ## Store boundaries
 
@@ -19,8 +19,6 @@ chat-api imports the shared client and schema directly. Its migration entrypoint
 - `src/runtime-store.ts`: fenced Run sandbox/taint mutations, in-transaction Agent session pointer updates, Reclamation tainting, and the orphan-sandbox ledger
 - `src/session-store.ts`: Ownership-fenced production Run append/delete operations, transcript reads, and administrative Conversation transcript deletion
 - `src/artifact-store.ts`: pre-upload object ledger and fence-first atomic artifact-pointer/current-metadata/`run_done` commit
-- `src/turn-store.ts`: /v2 Turn-queue primitives on `conversation_messages` (enqueue, one-in-flight claim, at-most-once terminalization, boot sweep, queued-cancel, the suspend hook's queued check) and the Turn's single assistant-row upsert
-- `conversation_vm` (schema and migration here; the store is chat-api's `features/conversation-vm/postgres-conversation-vm-store.ts`, its only writer): the per-Conversation MicroVM registry doubling as the transactional launch claim — one upsert claims a fresh, `terminated`, or stale-`launching` row for exactly one caller — and holding the Checkpoint pointer (#670), moved by the `/v2/checkpoint` route in one write guarded on the VM id, so it always names the latest complete Checkpoint
 - `src/testing.ts`: PGlite harness and shared seed helpers
 
 chat-api's `PostgresRunStore` composes shared admission inside the Conversation lifecycle lock. The new Run, its `run_started` event, and its Run-keyed dispatch outbox row share that transaction; exact retries insert nothing. Run-store operations compose runtime pointer publication into qualifying terminal transactions through the same live Ownership fence.
@@ -33,7 +31,7 @@ PGlite tests cover transaction behavior that one in-process backend can express.
 - Reclamation skipping a Conversation row held by another session
 - queued-Run expiration racing Reclamation
 
-Turn-queue races (concurrent claimers, racing terminalizers) live in `packages/agent-db/src/turn-store.postgres.test.ts`. The `conversation_vm` launch claim (concurrent POSTs to a VM-less Conversation yield exactly one launcher; concurrent rehydrators exactly one re-claim) lives in `apps/chat-api/src/features/conversation-vm/postgres-conversation-vm-store.postgres.test.ts` and additionally requires `RUN_CHAT_API_POSTGRES_TESTS=true`, because chat-api's unit-suite preload sets a placeholder `AGENT_DATABASE_URL`. AgentCore outbox/acquisition races live in `packages/agent-db/src/agentcore-dispatch.postgres.test.ts`. The dedicated publisher task's deployment-overlap exclusion and backend-termination release live in `apps/agentcore-dispatch-publisher/src/publisher-loop.postgres.test.ts`; it additionally requires `RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS=true` so the publisher app's local `.env` cannot accidentally target a database during its ordinary unit suite. These tests require `AGENT_DATABASE_URL` and run in the CI `integration` job against the Postgres major used in production.
+AgentCore outbox/acquisition races live in `packages/agent-db/src/agentcore-dispatch.postgres.test.ts`. The dedicated publisher task's deployment-overlap exclusion and backend-termination release live in `apps/agentcore-dispatch-publisher/src/publisher-loop.postgres.test.ts`; it additionally requires `RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS=true` so the publisher app's local `.env` cannot accidentally target a database during its ordinary unit suite. These tests require `AGENT_DATABASE_URL` and run in the CI `integration` job against the Postgres major used in production.
 
 ## Drizzle dependency identity
 

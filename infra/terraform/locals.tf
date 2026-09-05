@@ -76,28 +76,10 @@ locals {
     { name = "ARTIFACT_BUCKET", value = aws_s3_bucket.artifacts.bucket },
     { name = "AWS_REGION", value = var.aws_region },
     { name = "DB_SSL", value = var.db_ssl },
-    # /v2 MicroVM orchestration (#669): the launch inventory chat-api passes
-    # at RunMicrovm. The image itself is registered by the microvm-image
-    # workflow, so its ARN is composed here rather than referenced.
-    { name = "MICROVM_IMAGE_ARN", value = "arn:aws:lambda:${var.aws_region}:${var.aws_account_id}:microvm-image:${local.microvm_name}" },
-    { name = "MICROVM_EGRESS_CONNECTOR_ARN", value = aws_lambdacore_network_connector.microvm_egress.arn },
-    { name = "MICROVM_EXECUTION_ROLE_ARN", value = aws_iam_role.microvm_execution.arn },
-    # The Checkpoint bucket the /v2/checkpoint route streams to (#670).
-    { name = "MICROVM_CHECKPOINT_BUCKET", value = aws_s3_bucket.microvm_checkpoints.bucket },
-    # chat-api's own origin as a VM reaches it: the runHookPayload's
-    # MODEL_BASE_URL is this plus /v2/gateway/<conversation>.
-    { name = "GATEWAY_BASE_URL", value = "http://${aws_lb.agent.dns_name}" },
-    { name = "OPENROUTER_DEFAULT_MODEL", value = var.openrouter_default_model },
   ], local.agent_database_url_environment)
 
   chat_api_secrets = concat([
     { name = "STATSIG_SERVER_SECRET", valueFrom = local.statsig_server_secret_arn },
-    # The /v2 gateway route injects this key; it never reaches a MicroVM.
-    { name = "OPENROUTER_API_KEY", valueFrom = local.openrouter_api_key_secret_arn },
-    { name = "GATEWAY_TOKEN_SECRET", valueFrom = aws_secretsmanager_secret.gateway_token.arn },
-    # Read only to ride the runHookPayload into a MicroVM's trusted process
-    # (the in-VM document tools); chat-api never opens the KB itself.
-    { name = "KB_DATABASE_URL", valueFrom = local.kb_database_url_secret_arn },
   ], local.live_redis_url_secret, local.agent_db_password_secret)
 
   agent_maintenance_environment = concat([
