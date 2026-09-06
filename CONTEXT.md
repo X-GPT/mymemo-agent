@@ -189,11 +189,11 @@ _Avoid_: published artifact, attachment, output file, mount listing
 
 **Agent session**:
 The Claude SDK transcript carrying a Conversation's model-side memory across
-Turns, mirrored by the SDK to the transcript prefix on the workspace bucket
-(outside every access point) and loaded from there at each Turn. Its session
-id is the Conversation id. A dropped mirror batch is an accepted loss of
-memory, never of history.
-_Avoid_: chat history, workspace, checkpoint
+Turns: the CLI's one session-log file, which the Runtime downloads from
+`_transcripts/` before running the model and uploads after. Its session id is
+the Conversation id. A Runtime that dies mid-Turn loses that Turn's lines,
+never history.
+_Avoid_: chat history, workspace, checkpoint, SessionStore (the hook this design does not use)
 
 **Chat surface**:
 The client data plane on the Lambda front: v1's eight `/v1/conversations`
