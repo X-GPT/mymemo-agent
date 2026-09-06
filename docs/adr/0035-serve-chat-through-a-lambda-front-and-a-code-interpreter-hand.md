@@ -17,7 +17,7 @@ Runtime** with streaming and relays the **AI SDK UIMessage stream**. The
 Runtime hosts the Claude Agent SDK loop with **every file tool and Bash routed
 to a custom AgentCore Code Interpreter** — the *hand* — over a
 **per-Conversation Amazon S3 Files access point** mounted at `/mnt/ws`; the
-transcript lives in the SDK's **S3 SessionStore**. State is one DynamoDB table
+transcript is one file the Runtime copies to and from S3 around `query()`. State is one DynamoDB table
 and two S3 prefixes. There is no queue, no outbox, no ownership fencing, no
 reclaimer, no Redis, no agent Postgres, no E2B, no MicroVM.
 
@@ -66,11 +66,11 @@ compensation.
 - **Interrupt is cut.** ADR-0013's interruption story dies with the Run path;
   the 10-minute Turn budget (enforced by the Runtime) is the only way a Turn
   ends early.
-- **History is DynamoDB, written incrementally by the Runtime**; text deltas
-  exist only on the stream. The transcript (the model's memory) is a separate
-  concern, mirrored to S3 by the SDK, and its `mirror_error` is logged and
-  otherwise ignored — an accepted loss of that batch's lines, never of
-  history.
+- **History is one S3 object per Turn, written once by the front**; text
+  deltas exist only on the stream. The transcript (the model's memory) is a
+  separate concern: the CLI's session-log file, downloaded by the Runtime
+  before `query()` and uploaded after it. A Runtime that dies mid-Turn loses
+  that Turn's log lines, never history.
 
 ## DynamoDB over Postgres
 
@@ -121,9 +121,9 @@ inactivity and persist across sessions; the file APIs accept relative paths
 only, so the hand symlinks `ws → /mnt/ws` in the sandbox workdir; a stopped
 session raises `ValidationException … not active`; `CreateCodeInterpreter`
 validates the execution role and needs the S3 Files read set beyond the
-documented three actions. From the SDK probe: a pre-minted `sessionId` with a
-`sessionStore` resumes on a fresh config dir on the pinned 0.3.251, with no
-duplicate entries, provided `cwd` is fixed. The prod private subnets reach the
+documented three actions. From the SDK probes: a pre-minted `sessionId` is honoured on the pinned
+0.3.251, and copying the single session-log file into an empty config dir
+and calling `resume` continues the conversation. The prod private subnets reach the
 AgentCore data plane through fck-nat.
 
 ## Consequences
@@ -142,7 +142,7 @@ AgentCore data plane through fck-nat.
   names every component's fate. Deleted now: the whole v2 stack (PR #729)
   and the sandboxed-HTML origin (PR #731).
 - **Operations.** New alarms replace v1's set: Turn error rate by code, budget
-  exhaustion, `mirror_error`, cleanup backlog age, sandbox start failures,
+  exhaustion, transcript upload failures, cleanup backlog age, sandbox start failures,
   front 5xx. Quotas to watch: 1,000 concurrent sandbox sessions, 30 TPS on
   the sandbox APIs, 25,000 access points per file system.
 - **Cost.** A Turn costs its sandbox seconds; an idle Conversation costs its
@@ -232,4 +232,16 @@ with its reply rather than before its chunk; the artifacts amendment above
 changes only in that copies are made at Turn end instead of read from a
 mount, so a download link works the moment the Turn ends and
 `not_exported_yet` no longer exists.
+
+### Addendum 2026-09-06 — the transcript is copied, not mirrored
+
+The SDK's SessionStore hook (an adapter the SDK calls per batch, with uuid
+dedupe on load, a part-file layout, a load timeout and the `mirror_error`
+message) was more machinery than the job needs. The CLI's session log is one
+file at a known path, and the v3 probe showed that dropping that file into an
+empty config directory and calling `resume` continues the conversation. So
+the Runtime downloads `_transcripts/<conversationId>.jsonl` before `query()`
+and uploads it after; the session id is pre-minted, so the file name is
+known. The Runtime keeps `GetObject`/`PutObject` on that one prefix and
+nothing else in S3.
 
