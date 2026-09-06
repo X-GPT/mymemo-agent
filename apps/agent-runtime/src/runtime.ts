@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,7 +62,6 @@ export function createRuntimeServer(
 			busy = true;
 			let active: ReturnType<typeof query> | undefined;
 			let configDir: string | undefined;
-			let child: ChildProcessWithoutNullStreams | undefined;
 			let childExited: Promise<void> | undefined;
 			let budgetTimer: ReturnType<typeof setTimeout> | undefined;
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -99,14 +98,14 @@ export function createRuntimeServer(
 								// The SDK can finish iteration before the CLI exits on abort.
 								// Wait for the child before removing its config directory.
 								spawnClaudeCodeProcess(options) {
-									child = spawn(options.command, options.args, {
+									const child = spawn(options.command, options.args, {
 										cwd: options.cwd,
 										env: options.env,
 										signal: options.signal,
-										stdio: "pipe",
+										stdio: ["pipe", "pipe", "ignore"],
 									});
 									childExited = new Promise((resolve) =>
-										child?.once("close", () => resolve()),
+										child.once("close", () => resolve()),
 									);
 									return child;
 								},
