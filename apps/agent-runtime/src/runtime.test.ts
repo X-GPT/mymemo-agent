@@ -146,6 +146,13 @@ async function harness(mode: "normal" | "budget" | "disconnect" | "throw") {
 			await rm(cwd, { recursive: true, force: true });
 		},
 		async checkRemoved() {
+			for (
+				let i = 0;
+				i < 100 &&
+				(await readdir(tmpdir())).includes(configDir.split("/").at(-1) ?? "");
+				i++
+			)
+				await Bun.sleep(100);
 			expect(
 				(await readdir(tmpdir())).includes(configDir.split("/").at(-1) ?? ""),
 			).toBe(false);
@@ -177,7 +184,6 @@ for (const mode of ["normal", "budget", "disconnect", "throw"] as const) {
 				});
 				await Bun.sleep(500);
 				await expect(fetch(`${h.url}/ping`)).rejects.toThrow();
-				await Bun.sleep(1500);
 				await h.checkRemoved();
 				return;
 			}
