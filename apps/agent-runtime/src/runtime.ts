@@ -1,3 +1,4 @@
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,29 +62,24 @@ export function createRuntimeServer(
 			busy = true;
 			let active: ReturnType<typeof query> | undefined;
 			let configDir: string | undefined;
+			let child: ChildProcessWithoutNullStreams | undefined;
+			let childExited: Promise<void> | undefined;
 			let budgetTimer: ReturnType<typeof setTimeout> | undefined;
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
 			let budgetExpired = false;
 			let binding = {};
-			const { readable, writable } = new TransformStream<
-				Uint8Array,
-				Uint8Array
-			>();
-			const writer = writable.getWriter();
 			const encoder = new TextEncoder();
-			const write = (message: unknown) =>
-				writer.write(encoder.encode(`${JSON.stringify(message)}\n`));
 			let disconnected = false;
 			const abortController = new AbortController();
 			const disconnect = () => {
+				if (disconnected) return;
 				disconnected = true;
 				abortController.abort();
 				active?.close();
 				void server.stop();
 			};
 			request.signal.addEventListener("abort", disconnect, { once: true });
-			void writer.closed.catch(disconnect);
-			const run = async () => {
+			const run = async function* () {
 				try {
 					try {
 						const input = invocationSchema.parse(await request.json());
@@ -100,6 +96,20 @@ export function createRuntimeServer(
 							prompt: input.text,
 							options: {
 								abortController,
+								// The SDK can finish iteration before the CLI exits on abort.
+								// Wait for the child before removing its config directory.
+								spawnClaudeCodeProcess(options) {
+									child = spawn(options.command, options.args, {
+										cwd: options.cwd,
+										env: options.env,
+										signal: options.signal,
+										stdio: "pipe",
+									});
+									childExited = new Promise((resolve) =>
+										child?.once("close", () => resolve()),
+									);
+									return child;
+								},
 								model: config.model,
 								env: { ...config.env, CLAUDE_CONFIG_DIR: configDir },
 								cwd: config.cwd,
@@ -126,7 +136,7 @@ export function createRuntimeServer(
 							Math.max(0, input.budgetUntil - Date.now()),
 						);
 						for await (const message of active) {
-							await write(message);
+							yield encoder.encode(`${JSON.stringify(message)}\n`);
 							// A single-prompt query ends at result. The SDK throws again after
 							// an error result; that is not a second Runtime-side failure.
 							if (message.type === "result") break;
@@ -137,6 +147,7 @@ export function createRuntimeServer(
 						active?.close();
 						try {
 							await active?.return(undefined);
+							await childExited;
 						} finally {
 							if (configDir)
 								await rm(configDir, { recursive: true, force: true });
@@ -145,25 +156,29 @@ export function createRuntimeServer(
 				} catch (error) {
 					const detail = error instanceof Error ? error.message : String(error);
 					logger.error({ ...binding, message: "Turn failed", detail });
-					if (!disconnected) {
-						try {
-							await write({
-								type: "mymemo.error",
-								code: "internal_error",
-								detail,
-							});
-						} catch {
-							disconnect();
-						}
-					}
+					if (!disconnected)
+						yield encoder.encode(
+							`${JSON.stringify({ type: "mymemo.error", code: "internal_error", detail })}\n`,
+						);
 				} finally {
 					request.signal.removeEventListener("abort", disconnect);
-					await writer.close().catch(disconnect);
 					busy = false;
 					if (budgetExpired) void server.stop();
 				}
 			};
-			void run();
+			const messages = run();
+			const readable = new ReadableStream<Uint8Array>({
+				async pull(controller) {
+					const next = await messages.next();
+					if (disconnected) return;
+					if (next.done) controller.close();
+					else controller.enqueue(next.value);
+				},
+				async cancel() {
+					disconnect();
+					await messages.return();
+				},
+			});
 			return new Response(readable, {
 				headers: { "content-type": "application/x-ndjson" },
 			});

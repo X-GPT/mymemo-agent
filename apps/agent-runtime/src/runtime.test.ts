@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -86,7 +87,9 @@ function fakeMessages(tool: boolean) {
 	return events.join("");
 }
 
-async function harness(mode: "normal" | "budget" | "disconnect" | "throw") {
+async function harness(
+	mode: "normal" | "budget" | "disconnect" | "throw" | "mid-throw",
+) {
 	const cwd = await mkdtemp(join(tmpdir(), "runtime-test-"));
 	const captured: SDKMessage[] = [];
 	let configDir = "";
@@ -127,9 +130,12 @@ async function harness(mode: "normal" | "budget" | "disconnect" | "throw") {
 			expect(params.options?.settingSources).toEqual([]);
 			if (mode === "throw") throw new Error("injected failure");
 			const active = query(params);
+			if (mode === "disconnect") return active;
 			const iterator = active[Symbol.asyncIterator].bind(active);
 			active[Symbol.asyncIterator] = async function* () {
 				for await (const message of { [Symbol.asyncIterator]: iterator }) {
+					if (mode === "mid-throw" && captured.length)
+						throw new Error("injected failure");
 					captured.push(message);
 					yield message;
 				}
@@ -146,21 +152,20 @@ async function harness(mode: "normal" | "budget" | "disconnect" | "throw") {
 			await rm(cwd, { recursive: true, force: true });
 		},
 		async checkRemoved() {
-			for (
-				let i = 0;
-				i < 100 &&
-				(await readdir(tmpdir())).includes(configDir.split("/").at(-1) ?? "");
-				i++
-			)
+			for (let i = 0; i < 100 && existsSync(configDir); i++)
 				await Bun.sleep(100);
-			expect(
-				(await readdir(tmpdir())).includes(configDir.split("/").at(-1) ?? ""),
-			).toBe(false);
+			expect(existsSync(configDir)).toBe(false);
 		},
 	};
 }
 
-for (const mode of ["normal", "budget", "disconnect", "throw"] as const) {
+for (const mode of [
+	"normal",
+	"budget",
+	"disconnect",
+	"throw",
+	"mid-throw",
+] as const) {
 	test(`real SDK: ${mode}`, async () => {
 		const h = await harness(mode);
 		try {
@@ -197,7 +202,14 @@ for (const mode of ["normal", "budget", "disconnect", "throw"] as const) {
 					.trim()
 					.split("\n")
 					.map((line) => JSON.parse(line));
-				if (mode === "throw")
+				if (mode === "mid-throw") {
+					expect(messages.slice(0, -1)).toEqual(h.captured);
+					expect(messages.at(-1)).toEqual({
+						type: "mymemo.error",
+						code: "internal_error",
+						detail: "injected failure",
+					});
+				} else if (mode === "throw")
 					expect(messages).toEqual([
 						{
 							type: "mymemo.error",

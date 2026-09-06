@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - apps/agentcore-runtime/**
+      - apps/agent-runtime/**
       - apps/agentcore-dispatch-consumer/**
       - packages/agent-db/**
       - packages/agentcore-dispatch/**
@@ -37,3 +38,12 @@ jobs:
           tags: mymemo-agentcore-runtime:image-check
       - name: Verify request-oriented image offline
         run: scripts/smoke/agentcore-runtime-image-check.sh mymemo-agentcore-runtime:image-check
+
+  agent-runtime-image:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build no-tools Runtime ARM64 image
+        run: docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile -t mymemo-agent-runtime:image-check .
+      - name: Verify pinned SDK stream without a model key
+        run: docker run --rm --entrypoint bun mymemo-agent-runtime:image-check test --timeout=60000 src/runtime.test.ts
