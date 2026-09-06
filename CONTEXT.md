@@ -63,9 +63,11 @@ _Avoid_: permissions, access level
 The one Lambda (Hono, behind an IAM-authenticated streaming Function URL)
 that mymemo-service calls. It verifies identity and the exposure gate,
 resolves Scope, owns the DynamoDB Conversation record, admits Turns by single
-flight, invokes the Runtime, converts the Runtime's raw SDK messages into the
-UIMessage stream for the client, and writes each Turn's reply once, whole, to
-S3 when the stream ends. It is the only writer of Conversation history.
+flight, starts the Turn's Sandbox session and copies the Workspace in, invokes
+the Runtime, converts the Runtime's raw SDK messages into the UIMessage
+stream for the client, and when the stream ends copies the Workspace and the
+Artifacts out, stops the session, and writes the Turn's reply once, whole, to
+S3. It is the only writer of everything durable except the transcript.
 _Avoid_: chat-api (the v1 ECS service), gateway, BFF (that is mymemo-service)
 
 **Exposure gate**:
@@ -77,12 +79,12 @@ _Avoid_: feature flag, rollout percentage
 
 **Runtime**:
 The AgentCore Runtime hosting `apps/agentcore-runtime`: the trusted process
-that holds every credential, runs the Claude Agent SDK `query()`, serves the
-Hand and the document tools as in-process MCP servers, copies the Workspace
-into and out of the Sandbox session, and streams the SDK's own messages back
-to the Lambda front verbatim. It never touches DynamoDB; the only S3 it
-writes is the agent's own state — the Workspace tarball, the artifact copies
-and the transcript. One Runtime session per Turn (session id = Turn id).
+that holds the model and knowledge-base credentials, runs the Claude Agent
+SDK `query()`, and serves the Hand and the document tools as in-process MCP
+servers against the Sandbox session whose id the Lambda front passed in. It
+streams the SDK's own messages back verbatim. It never touches DynamoDB or
+the Workspace; the only S3 it writes is the transcript. One Runtime session
+per Turn (session id = Turn id).
 _Avoid_: execution runtime (the v1/v2 term), worker, In-VM server, agent loop
 
 **Hand**:
@@ -97,18 +99,19 @@ _Avoid_: sandbox tools, built-in tools, remote tools
 **Sandbox session**:
 One Code Interpreter session in `SANDBOX` network mode — a fresh microVM
 with no credential, no VPC and no reachable endpoint but the region's
-anonymous S3 — started by the Runtime at Turn start with the Workspace copied
-in, and stopped at Turn end after the Workspace is copied out. It is never
-resumed; a session lost mid-Turn surfaces as a tool error and the Hand starts
-a fresh one from the last copy.
+anonymous S3 — started by the Lambda front before the Turn with the
+Workspace copied in, used by the Runtime's Hand during the Turn, and stopped
+by the front after the Workspace is copied out. It is never resumed; a
+session lost mid-Turn ends the Turn as an error.
 _Avoid_: sandbox (ambiguous), E2B, MicroVM (the deleted v2 design), mount
 
 **Workspace**:
 The Conversation's durable files: one tarball at `_workspace/<id>/` on the
-workspace bucket, at most 64 MB compressed, copied into every Sandbox session
-at `~/ws` and copied out at Turn end. `artifacts/` is the artifact folder;
-`.mymemo/docs/` is the Docs cache. It dies with the Conversation. Large data
-belongs in the knowledge base, not here.
+workspace bucket, at most 64 MB compressed, copied by the Lambda front into
+every Sandbox session at `~/ws` before the Turn and copied out after it.
+`artifacts/` is the artifact folder; `.mymemo/docs/` is the Docs cache. It
+dies with the Conversation. Large data belongs in the knowledge base, not
+here.
 _Avoid_: sandbox disk, mount, checkpoint, scratch
 
 **Turn**:
@@ -177,8 +180,8 @@ with a stable MyMemo-issued id, and stored with the reply when the Turn ends.
 _Avoid_: HTML widget (the cut lane), component (ambiguous)
 
 **Artifact**:
-A file under the Workspace's `artifacts/` folder, copied by the Runtime at
-Turn end to `_artifacts/<id>/<path>` as its own S3 object and listed in a
+A file under the Workspace's `artifacts/` folder, copied by the Lambda front
+at Turn end to `_artifacts/<id>/<path>` as its own S3 object and listed in a
 manifest with a path-derived stable id; the list mirrors the folder (a
 removed file disappears). Downloaded through a five-minute presigned URL that
 works as soon as the Turn ends.

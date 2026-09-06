@@ -184,10 +184,13 @@ file, with the timer restarting on each write, and with no configuration
 knob — so a download of a file written at the end of a Turn would wait up to
 a minute. The mount also required a VPC-mode interpreter, no-route subnets,
 mount targets, a per-Conversation access point and a 17-second first start.
-Instead the Runtime copies the workspace into a fresh sandbox at Turn start
-(one `writeFiles` blob and `tar xzf`) and copies it out at Turn end (`tar`,
-`split`, chunked `readFiles`), keeping one tarball per Conversation under
-`_workspace/` and one object per artifact under `_artifacts/`. The cap is
+Instead the Lambda front starts a fresh sandbox session for the Turn, copies
+the workspace in (one `writeFiles` blob and `tar xzf`), hands the session id
+to the Runtime, and after the stream ends copies it out (`tar`, `split`,
+chunked `readFiles`), keeping one tarball per Conversation under
+`_workspace/` and one object per artifact under `_artifacts/`, then stops the
+session. The Runtime never starts a session and never touches a workspace;
+the only S3 it writes is the transcript. The cap is
 64 MB compressed; beyond it the Turn ends `workspace_too_large`. Copy-in of
 50 MB measured 4.7 s, copy-out of 30 MB 3.3 s, session start 0.75 s. This is
 the copy-in/copy-out shape the map rejected at charting; it is accepted now
@@ -209,7 +212,7 @@ is the untrusted hand and holds no credential.
 
 **History is written once, whole, by the Lambda front, into S3.** The Runtime
 no longer writes to DynamoDB at all: it streams the Claude Agent SDK's own
-messages verbatim (plus an artifacts line and an error line of MyMemo's) and
+messages verbatim (plus an error line of MyMemo's) and
 the front converts them to UIMessage chunks for the client while folding the
 reply in memory. When the stream ends the front writes
 `_history/<conversationId>/turn-<seq>.json` and clears `processing`. A Turn
@@ -219,7 +222,10 @@ and the next `send` marks it `abandoned`. The per-Step writes, the Step and
 Artifact items, the 400 KB size rules and ADR-0017's "persist before emit"
 were leftovers of the Live-Stream era, when a half reply could be resumed
 from; nothing resumes now. DynamoDB keeps one item per Conversation (the
-record, single flight, listing, the delete queue) and the request ids.
+record, single flight, listing, the delete queue) and the request ids. Every
+durable write except the transcript now has one owner, the front; a front that
+dies mid-Turn loses that Turn's reply and workspace changes together, which
+the whole-or-nothing rule already accepts.
 
 The generative-UI catalog is unchanged except that a payload is persisted
 with its reply rather than before its chunk; the artifacts amendment above
