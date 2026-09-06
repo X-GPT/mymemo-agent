@@ -1,6 +1,6 @@
 # Serve chat through a Lambda front, the AgentCore Runtime and a Code Interpreter hand over DynamoDB and S3
 
-Status: accepted (2026-09-05). Supersedes
+Status: accepted (2026-09-05; amended 2026-09-06 — see [Amendment: no S3 Files, whole-reply history, raw SDK stream](#amendment-2026-09-06--no-s3-files-whole-reply-history-raw-sdk-stream)). Supersedes
 [ADR-0034](0034-run-the-chat-loop-in-per-conversation-lambda-microvms.md) (the
 `/v2` MicroVM design, deleted before it served production) and, with it, every
 decision whose subject retires at cutover: ADR-0005, 0007, 0008, 0009, 0012,
@@ -172,3 +172,58 @@ rule are unchanged. The wire form is a `data-generative-ui` part with a
 stable MyMemo-issued id, persisted into the Turn's Step item before the chunk
 is sent, instead of the AG-UI `CUSTOM mymemo.generative_ui` event. History
 re-serves the same part.
+
+## Amendment 2026-09-06 — no S3 Files, whole-reply history, raw SDK stream
+
+Two more probes on the real account changed three parts of this decision
+(`research/code-interpreter-probe`, logs `probe3*` and `probe4*`).
+
+**The workspace is a tarball, not a mount.** S3 Files exports a file to the
+bucket 60 seconds after its *last* write — measured at 62–67 s for every
+file, with the timer restarting on each write, and with no configuration
+knob — so a download of a file written at the end of a Turn would wait up to
+a minute. The mount also required a VPC-mode interpreter, no-route subnets,
+mount targets, a per-Conversation access point and a 17-second first start.
+Instead the Runtime copies the workspace into a fresh sandbox at Turn start
+(one `writeFiles` blob and `tar xzf`) and copies it out at Turn end (`tar`,
+`split`, chunked `readFiles`), keeping one tarball per Conversation under
+`_workspace/` and one object per artifact under `_artifacts/`. The cap is
+64 MB compressed; beyond it the Turn ends `workspace_too_large`. Copy-in of
+50 MB measured 4.7 s, copy-out of 30 MB 3.3 s, session start 0.75 s. This is
+the copy-in/copy-out shape the map rejected at charting; it is accepted now
+because the mount's promise of "no sync code, no lag" turned out to cost a
+minute, a VPC and a path quirk, while the sync is two commands.
+
+**The sandbox runs in `SANDBOX` network mode, and its residual is accepted.**
+No VPC, no execution role, no credentials inside (verified: no environment
+variables, no `~/.aws`, a metadata endpoint that serves only instance-id,
+placement and tags). Exactly one destination answers from inside: the
+anonymous S3 endpoint of us-west-2. Other regions, DynamoDB, STS, Secrets
+Manager, OpenRouter, raw IPs and DNS all fail; MyMemo's buckets return 403.
+The residual — a prompt-injected command could read any public bucket in the
+region or write to a bucket that permits anonymous writes — was accepted by
+the owner on 2026-09-06: the sandbox holds only the model's scratch and
+documents the user can already download, and v1's E2B sandbox carried the
+same class of residual. The trust stance above otherwise stands: the sandbox
+is the untrusted hand and holds no credential.
+
+**History is written once, whole, by the Lambda front, into S3.** The Runtime
+no longer writes to DynamoDB at all: it streams the Claude Agent SDK's own
+messages verbatim (plus an artifacts line and an error line of MyMemo's) and
+the front converts them to UIMessage chunks for the client while folding the
+reply in memory. When the stream ends the front writes
+`_history/<conversationId>/turn-<seq>.json` and clears `processing`. A Turn
+is therefore whole or absent: a reload mid-Turn shows the user message and
+"working", never a partial reply; a crash anywhere loses that Turn's reply
+and the next `send` marks it `abandoned`. The per-Step writes, the Step and
+Artifact items, the 400 KB size rules and ADR-0017's "persist before emit"
+were leftovers of the Live-Stream era, when a half reply could be resumed
+from; nothing resumes now. DynamoDB keeps one item per Conversation (the
+record, single flight, listing, the delete queue) and the request ids.
+
+The generative-UI catalog is unchanged except that a payload is persisted
+with its reply rather than before its chunk; the artifacts amendment above
+changes only in that copies are made at Turn end instead of read from a
+mount, so a download link works the moment the Turn ends and
+`not_exported_yet` no longer exists.
+

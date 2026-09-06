@@ -1,17 +1,17 @@
 # MyMemo Agent
 
 The MyMemo agent runtime: a chat service where a Lambda front admits each
-Turn, the AgentCore Runtime runs the Claude Agent SDK loop, and every
-model-driven tool executes in a Code Interpreter sandbox mounted on the
-Conversation's own S3-backed Workspace. Decided on ADR-0035; built to
+Turn and records it, the AgentCore Runtime runs the Claude Agent SDK loop, and
+every model-driven tool executes in a fresh Code Interpreter sandbox holding a
+copy of the Conversation's Workspace. Decided on ADR-0035; built to
 Spec #732.
 
 ## Language
 
 **Conversation**:
 The durable, user-visible container for a chat. Its document scope is frozen
-at creation and never changes for its lifetime. It owns one Workspace (an S3
-Files access point), one Agent session and one DynamoDB partition.
+at creation and never changes for its lifetime. It owns one DynamoDB item,
+one Workspace tarball, one Agent session, and one history prefix in S3.
 _Avoid_: chat, session, thread
 
 **Conversation title**:
@@ -36,8 +36,8 @@ _Avoid_: delete, close, expire
 **Permanent deletion**:
 The irreversible end of a Conversation. `DELETE` writes a Tombstone in one
 conditioned write (refused while a Turn is processing), after which every
-route answers 404; the Cleanup sweep then removes the Workspace (all object
-versions), the Agent session, the access point and the items, retrying until
+route answers 404; the Cleanup sweep then removes the Workspace, the artifact
+copies, the history objects, the Agent session and the items, retrying until
 clean.
 _Avoid_: Archive, soft delete
 
@@ -49,9 +49,9 @@ _Avoid_: deleted flag, TTL
 
 **Cleanup sweep**:
 The five-minute scheduled run of the Lambda front that drains Tombstoned
-Conversations: Workspace versions and delete markers, transcript prefix,
-access point, DynamoDB items, Tombstone last. Idempotent; a failure leaves the
-Tombstone for the next run. Alarmed on backlog age.
+Conversations: the `_workspace`, `_artifacts`, `_history` and transcript
+prefixes, then the DynamoDB items, Tombstone last. Idempotent; a failure
+leaves the Tombstone for the next run. Alarmed on backlog age.
 _Avoid_: reaper, maintenance (the v1 reclaimer), garbage collection
 
 **Scope**:
@@ -63,8 +63,9 @@ _Avoid_: permissions, access level
 The one Lambda (Hono, behind an IAM-authenticated streaming Function URL)
 that mymemo-service calls. It verifies identity and the exposure gate,
 resolves Scope, owns the DynamoDB Conversation record, admits Turns by single
-flight, invokes the Runtime with streaming and relays the UIMessage stream
-byte for byte. It never ends a Turn.
+flight, invokes the Runtime, converts the Runtime's raw SDK messages into the
+UIMessage stream for the client, and writes each Turn's reply once, whole, to
+S3 when the stream ends. It is the only writer of Conversation history.
 _Avoid_: chat-api (the v1 ECS service), gateway, BFF (that is mymemo-service)
 
 **Exposure gate**:
@@ -77,40 +78,46 @@ _Avoid_: feature flag, rollout percentage
 **Runtime**:
 The AgentCore Runtime hosting `apps/agentcore-runtime`: the trusted process
 that holds every credential, runs the Claude Agent SDK `query()`, serves the
-Hand and the document tools as in-process MCP servers, writes Steps and the
-Turn's Outcome to DynamoDB, and streams UIMessage chunks back to the Lambda
-front. One Runtime session per Turn (session id = Turn id).
+Hand and the document tools as in-process MCP servers, copies the Workspace
+into and out of the Sandbox session, and streams the SDK's own messages back
+to the Lambda front verbatim. It never touches DynamoDB; the only S3 it
+writes is the agent's own state — the Workspace tarball, the artifact copies
+and the transcript. One Runtime session per Turn (session id = Turn id).
 _Avoid_: execution runtime (the v1/v2 term), worker, In-VM server, agent loop
 
 **Hand**:
 The in-process MCP server in the Runtime that fronts the Code Interpreter
 sandbox as the model's six file and shell tools (`Bash`, `Read`, `Write`,
 `Edit`, `Glob`, `Grep`, aliased to `mcp__hand__*`). It caps outputs at
-64 KiB, confines every path to the Workspace mount, and translates paths into
-the sandbox's relative form. The model has no other tool that touches files.
+64 KiB, confines every path to the Workspace directory `ws/` in the sandbox,
+and maps the model's `/ws/<path>` to the sandbox's relative form. The model
+has no other tool that touches files.
 _Avoid_: sandbox tools, built-in tools, remote tools
 
 **Sandbox session**:
-One Code Interpreter session — a microVM with the Conversation's Workspace
-mounted at `/mnt/ws`, no credential and no network route — started by the
-Runtime at Turn start and stopped at Turn end. It is never resumed; a session
-lost mid-Turn surfaces as a tool error and the Hand starts a fresh one.
-_Avoid_: sandbox (ambiguous), E2B, MicroVM (the deleted v2 design)
+One Code Interpreter session in `SANDBOX` network mode — a fresh microVM
+with no credential, no VPC and no reachable endpoint but the region's
+anonymous S3 — started by the Runtime at Turn start with the Workspace copied
+in, and stopped at Turn end after the Workspace is copied out. It is never
+resumed; a session lost mid-Turn surfaces as a tool error and the Hand starts
+a fresh one from the last copy.
+_Avoid_: sandbox (ambiguous), E2B, MicroVM (the deleted v2 design), mount
 
 **Workspace**:
-The Conversation's durable files: an S3 Files access point rooted at the
-Conversation's prefix on the workspace bucket, mounted into every Sandbox
-session at `/mnt/ws`. Writes become object versions about a minute after
-write inactivity; the bucket is authoritative. `artifacts/` is the artifact
-store; `.mymemo/docs/` is the Docs cache. It dies with the Conversation.
-_Avoid_: sandbox disk, checkpoint, scratch
+The Conversation's durable files: one tarball at `_workspace/<id>/` on the
+workspace bucket, at most 64 MB compressed, copied into every Sandbox session
+at `~/ws` and copied out at Turn end. `artifacts/` is the artifact folder;
+`.mymemo/docs/` is the Docs cache. It dies with the Conversation. Large data
+belongs in the knowledge base, not here.
+_Avoid_: sandbox disk, mount, checkpoint, scratch
 
 **Turn**:
 The processing of one user message: admitted by the Lambda front's single
-flight, executed by the Runtime at most once, ended only by the Runtime with
-an Outcome. The user message and the Turn record are one DynamoDB item; the
-assistant reply is its Step items. A second `send` while a Turn is processing
-is refused with 409; the client resends after the stream ends.
+flight, executed by the Runtime at most once, recorded by the Lambda front as
+one S3 object holding the user message and, once the stream ends, the whole
+reply and its Outcome. A Turn's reply is whole or absent — nothing partial is
+ever stored. A second `send` while a Turn is processing is refused with 409;
+the client resends after the stream ends.
 _Avoid_: Run (the v1 term), request, job, queue entry (there is no queue)
 
 **Single flight**:
@@ -135,45 +142,47 @@ _Avoid_: message id (the front mints those), idempotency token
 
 **Outcome**:
 The single way a Turn ends: `done`, `error` (with an error code —
-`budget_exceeded`, `abandoned`, `quota_exceeded`, `internal_error`) or
-`abandoned` (marked by a later `send` after the budget passed). One word per
-Outcome at every layer.
+`budget_exceeded`, `abandoned`, `quota_exceeded`, `workspace_too_large`,
+`internal_error`) or `abandoned` (a Turn whose reply was never recorded,
+marked when a later `send` finds it stale). One word per Outcome at every
+layer.
 _Avoid_: completed, failed, finished, interrupted
 
 **Step**:
 One model call within a Turn, delimited on the stream by
-`start-step`/`finish-step` and stored as one DynamoDB item holding that Step's
-parts, written whole at `finish-step` and rewritten on every data part. The
-durability unit: a Turn that ends in error keeps exactly its completed Steps.
-_Avoid_: turn (a Turn spans Steps), message
+`start-step`/`finish-step`. A unit of the stream only: Steps are folded into
+the Assistant message in the Lambda front's memory and stored together when
+the Turn ends, never one by one.
+_Avoid_: turn (a Turn spans Steps), message, item
 
 **Assistant message**:
 The Turn's single model-authored UIMessage: its id minted by the Lambda front,
-its parts the ordered Step items, its metadata the Turn record. Streamed once,
-re-served from history identically.
+its parts converted from the Runtime's SDK messages, written once with the
+Turn's object when the stream ends. Streamed once, re-served from history
+identically.
 _Avoid_: provider response (that is a Step), token stream
 
 **Conversation history**:
-The durable, user-visible record: the Turn and Step items of the
-Conversation's partition, read newest Turn first with cursor paging and
-assembled into user and assistant UIMessages. Written incrementally by the
-Runtime, so a reload mid-Turn shows the finished Steps and
-`status: processing`. There is no stream resume; history is the only
-post-disconnect story.
-_Avoid_: transcript (that is the Agent session), thread history, Run history
+The durable, user-visible record: one S3 object per Turn under
+`_history/<id>/`, read newest first with cursor paging and served as user
+and assistant UIMessages. A Turn still processing shows its user message and
+`status: processing` with no reply; the client renders "working". There is no
+stream resume; history is the only post-disconnect story.
+_Avoid_: transcript (that is the Agent session), thread history, Run history, Step item
 
 **Catalog payload**:
-A display-only generative-UI node from the ADR-0017 catalog, carried as a
-`data-generative-ui` part with a stable MyMemo-issued id, validated and
-persisted into its Step before it is streamed.
+A display-only generative-UI node from the ADR-0017 catalog, validated by
+the `PresentUI` tool in the Runtime, carried as a `data-generative-ui` part
+with a stable MyMemo-issued id, and stored with the reply when the Turn ends.
 _Avoid_: HTML widget (the cut lane), component (ambiguous)
 
 **Artifact**:
-A file under the Workspace's `artifacts/` subtree, listed by the Runtime at
-Turn end into DynamoDB with a path-derived stable id; the list mirrors the
-folder (a removed file disappears). Downloaded through a five-minute presigned
-URL that answers 409 until S3 Files has exported the object.
-_Avoid_: published artifact, attachment, output file
+A file under the Workspace's `artifacts/` folder, copied by the Runtime at
+Turn end to `_artifacts/<id>/<path>` as its own S3 object and listed in a
+manifest with a path-derived stable id; the list mirrors the folder (a
+removed file disappears). Downloaded through a five-minute presigned URL that
+works as soon as the Turn ends.
+_Avoid_: published artifact, attachment, output file, mount listing
 
 **Agent session**:
 The Claude SDK transcript carrying a Conversation's model-side memory across
@@ -219,8 +228,8 @@ _Avoid_: chunk, excerpt
 **Docs cache**:
 The reserved `.mymemo/docs/` directory in a Conversation's Workspace where
 loaded searchable-document content is materialized by the document tools
-through the Hand. Reconstructible from the KB, never user work, dies with the
-Conversation.
+through the Hand. Reconstructible from the KB, never user work, travels with
+the Workspace tarball, dies with the Conversation.
 _Avoid_: document store, workspace docs
 
 **Load**:
@@ -245,6 +254,10 @@ One-line gists; full definitions live in git history.
   surface**: the `/v2` Lambda MicroVM design (ADR-0034), deleted on
   2026-09-04 before serving production. Its Postgres-as-work-bus queue,
   interrupt command and checkpoint bundle have no successor.
+- **S3 Files mount / Access point per Conversation / Step item / Artifact
+  row / `not_exported_yet`**: the first cut of this design (2026-09-05),
+  replaced on 2026-09-06 by the tarball Workspace, whole-reply history in S3
+  and artifact copies at Turn end (ADR-0035 amendment).
 - **Harness sandbox / Harness turn**: the abandoned Vercel/Harness chat path
   (never production-mounted).
 - **Downloadable artifact (published)**: v1's publish-on-success copy of
