@@ -1,0 +1,55 @@
+[   1937ms] START 01M1TQC5REZEP9ZWA0ZZB36412
+[  26656ms] $ which endpoints answer [24716 ms]
+    https://s3.us-west-2.amazonaws.com -> http=307 ip=16.15.39.173    
+    https://s3.amazonaws.com -> curl: (28) Connection timed out after 5002 milliseconds    
+    http=000 ip=    
+    https://s3.eu-west-1.amazonaws.com -> curl: (28) Connection timed out after 5002 milliseconds    
+    http=000 ip=    
+    https://mymemo-agent-prod-artifacts.s3.us-west-2.amazonaws.com/ -> http=403 ip=52.92.241.218    
+    https://dynamodb.us-west-2.amazonaws.com -> curl: (7) Failed to connect to dynamodb.us-west-2.amazonaws.com port 443 after 3158 ms: Could not connect to server    
+    http    
+    https://sts.us-west-2.amazonaws.com -> curl: (7) Failed to connect to sts.us-west-2.amazonaws.com port 443 after 3115 ms: Could not connect to server    
+    http=000     
+    https://secretsmanager.us-west-2.amazonaws.com -> curl: (28) Connection timed out after 5001 milliseconds    
+    http=000 ip=    
+    https://api.openrouter.ai -> curl: (6) Could not resolve host: api.openrouter.ai    
+    http=000 ip=    
+    https://1.1.1.1 -> curl: (7) Failed to connect to 1.1.1.1 port 443 after 3135 ms: Could not connect to server    
+    http=000 ip=
+[  26954ms] $ anonymous S3 list + PUT attempt [298 ms]
+    <?xml version="1.0" encoding="UTF-8"?>    
+    <Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><BucketName>mymemo-ci-probe-anon-test</BucketName><RequestId>W1D4EFD1DY83EG8P</RequestId><HostId>hidpmR0dKpRdpLFMGlGFRgUCbIYxlUcctlomtINho2ni+mucw8q/FMRMN965ojwwn5Q6+eNbbDQ=</
+[  27148ms] $ MMDS with a token [193 ms]
+    token_len=48    
+    latest/    
+    Resource not found: /latest/meta-data/iam/security-credentials/.    
+    instance-id    
+    ipv6    
+    placement/    
+    tags/
+[  27343ms] $ resolver + interfaces [196 ms]
+    !     
+    nameserver 127.0.0.2    
+    search .    
+        inet 127.0.0.1/8 scope host lo    
+    2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9001 qdisc pfifo_fast state UP group default qlen 1000    
+        link/ether 22:73:63:66:00:02 brd ff:ff:ff:ff:ff:ff    
+        inet 169.254.0.2/30 brd 169.254.0.3 scope global eth0    
+    3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9001 qdisc pfifo_fast state UP group default qlen 1000    
+        link/ether 22:73:63:66:01:02 brd ff:ff:ff:ff:ff:ff    
+        inet 169.254.1.2/30 brd 169.254.1.3 scope global eth1
+[  27642ms] $ make 10/20/30 MB files [299 ms]
+    10485760 r10.bin    
+    20971520 r20.bin    
+    31457280 r30.bin
+[  28689ms] readFiles 10 MB: 1047 ms ok=true bytes=10485760 
+[  30304ms] readFiles 20 MB: 1615 ms ok=true bytes=20971520 
+[  32937ms] readFiles 30 MB: 2632 ms ok=true bytes=31457280 
+[  33146ms] $ split 30 MB into 8 MB parts [209 ms]
+    8388608 part-00    
+    8388608 part-01    
+    8388608 part-02    
+    6291456 part-03
+[  36490ms] chunked copy-out of 30 MB in 4 reads: 3344 ms, 31457280 bytes
+[  38116ms] readFiles two 8 MB parts in one call: 1625 ms ok=true 
+[  38253ms] stopped

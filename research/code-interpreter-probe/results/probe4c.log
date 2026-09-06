@@ -1,0 +1,2 @@
+readFiles 35 MB: ok=true
+readFiles 40 MB: ERR Response payload too large. Reduce the number or size of files in a single call.
