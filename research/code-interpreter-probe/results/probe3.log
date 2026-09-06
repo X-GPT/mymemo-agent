@@ -1,0 +1,40 @@
+[  19858ms] START p3-writer 01M1TKZBJ7W6YH4YFX5MA9W5G6 in 19856 ms
+[  21153ms] A) 7 files written; polling every 2 s
+[  23841ms] START p3-reader 01M1TKZZVFH4QK0AX7P2N7J4RZ in 2688 ms
+[  24038ms] C) second session sees the writer's files instantly:
+    -rw-r--r-- 1 1000 1000       5 Sep  6 05:45 p3-1788673502283-api-1.txt
+    -rw-r--r-- 1 1000 1000       5 Sep  6 05:45 p3-1788673502283-api-2.txt
+    -rw-r--r-- 1 1000 1000       5 Sep  6 05:45 p3-1788673502283-api-3.txt
+    -rw-r--r-- 1 1000 1000       7 Sep  6 05:45 p3-1788673502283-bash-1.txt
+    -rw-r--r-- 1 1000 1000       7 Sep  6 05:45 p3-1788673502283-bash-2.txt
+    -rw-r--r-- 1 1000 1000       7 Sep  6 05:45 p3-1788673502283-bash-3.txt
+    -rw-r--r-- 1 1000 1000 2097152 Sep  6 05:45 p3-1788673502283-big-2MiB.bin
+    bash-1
+    api-1
+[  24230ms]   B) append #1
+[  34397ms]   B) append #2
+[  44587ms]   B) append #3
+[  54789ms]   B) append #4
+[  64993ms]   B) append #5
+[  75204ms]   B) append #6
+[  83432ms]   bucket: conv-probe/p3-1788673502283-api-3.txt (5 B) before write recorded?
+[  83432ms]   bucket: conv-probe/p3-1788673502283-bash-2.txt (7 B) before write recorded?
+[  83432ms]   bucket: conv-probe/p3-1788673502283-bash-3.txt (7 B) before write recorded?
+[  85401ms]   B) append #7
+[  85401ms]   B) appends finished; timer should start now
+[  85478ms]   bucket: conv-probe/p3-1788673502283-api-1.txt (5 B) before write recorded?
+[  85478ms]   bucket: conv-probe/p3-1788673502283-bash-1.txt (7 B) before write recorded?
+[  85478ms]   bucket: conv-probe/p3-1788673502283-big-2MiB.bin (2097152 B) +64325 ms after last write
+[  87524ms]   bucket: conv-probe/p3-1788673502283-api-2.txt (5 B) before write recorded?
+[ 150943ms]   bucket: conv-probe/p3-1788673502283-append.txt (49 B) +65542 ms after last write
+[ 153130ms] C) reader sees 7 appended lines
+[ 153399ms] sessions stopped
+[ 153399ms] SUMMARY (delay from last write to object visible)
+  api-1	NOT SEEN
+  api-2	NOT SEEN
+  api-3	NOT SEEN
+  append.txt	65.5 s after last write
+  bash-1	NOT SEEN
+  bash-2	NOT SEEN
+  bash-3	NOT SEEN
+  big-2MiB.bin	64.3 s after last write

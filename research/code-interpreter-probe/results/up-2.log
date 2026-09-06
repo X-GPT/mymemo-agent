@@ -1,0 +1,48 @@
+account=637423444544 region=us-west-2 vpc=vpc-05772c7f2f628c024
+[1/9] versioned bucket
+    BUCKET=mymemo-ci-probe-637423444544
+[2/9] S3 Files service role (sync role the file system assumes)
+    ROLE_FS_ARN=arn:aws:iam::637423444544:role/mymemo-ci-probe-s3files
+[3/9] S3 Files file system on the bucket (Q1: does S3 Files exist here?)
+    FS_ID=fs-04c555c780e88126e
+    FS_ARN=arn:aws:s3files:us-west-2:637423444544:file-system/fs-04c555c780e88126e
+    file system fs-04c555c780e88126e: available
+[4/9] two NO-ROUTE subnets (usw2-az2 / usw2-az1) + a route table with only the local route
+    subnet-0d443b7830df4822f	usw2-az2	172.31.90.0/24
+    subnet-01f523d5277daccfc	usw2-az1	172.31.91.0/24
+[5/9] security groups: mount-target SG (ingress 2049 from interpreter SG); interpreter SG (egress 2049 to MT SG ONLY)
+[6/9] mount targets, one per AZ (Q1: do mount targets land in usw2-az1/az2?)
+    MT_A=fsmt-08899509fd01c19b9
+    MT_B=fsmt-06356876e7114b613
+    mount target fsmt-08899509fd01c19b9: available
+    mount target fsmt-06356876e7114b613: available
+    fsmt-06356876e7114b613	usw2-az1	subnet-01f523d5277daccfc	available
+    fsmt-08899509fd01c19b9	usw2-az2	subnet-0d443b7830df4822f	available
+[7/9] access point = one Conversation's workspace: root /conv-probe, POSIX 1000:1000
+    AP_ID=fsap-0d0e2bdd9ebe31940
+    AP_ARN=arn:aws:s3files:us-west-2:637423444544:file-system/fs-04c555c780e88126e/access-point/fsap-0d0e2bdd9ebe31940
+    access point fsap-0d0e2bdd9ebe31940: available
+[8/9] interpreter execution role (mount permissions only)
+    ROLE_CI_ARN=arn:aws:iam::637423444544:role/mymemo-ci-probe-ci-exec
+[9/9] custom Code Interpreter, VPC mode, no-route subnets, S3 Files mount at /mnt/ws
+    CI_ID=mymemo_ci_probe-uyzGwQoFWf
+    CI_ARN=arn:aws:bedrock-agentcore:us-west-2:637423444544:code-interpreter-custom/mymemo_ci_probe-uyzGwQoFWf
+    code interpreter mymemo_ci_probe-uyzGwQoFWf: ready
+
+UP. probe.env:
+RTB=rtb-065e21d30e237602f
+SUBNET_A=subnet-0d443b7830df4822f
+SUBNET_B=subnet-01f523d5277daccfc
+SG_MT=sg-03a53c1dcbc1261ce
+SG_CI=sg-0d741a7db5f21b9a1
+BUCKET=mymemo-ci-probe-637423444544
+ROLE_FS_ARN=arn:aws:iam::637423444544:role/mymemo-ci-probe-s3files
+FS_ID=fs-04c555c780e88126e
+FS_ARN=arn:aws:s3files:us-west-2:637423444544:file-system/fs-04c555c780e88126e
+MT_A=fsmt-08899509fd01c19b9
+MT_B=fsmt-06356876e7114b613
+AP_ID=fsap-0d0e2bdd9ebe31940
+AP_ARN=arn:aws:s3files:us-west-2:637423444544:file-system/fs-04c555c780e88126e/access-point/fsap-0d0e2bdd9ebe31940
+ROLE_CI_ARN=arn:aws:iam::637423444544:role/mymemo-ci-probe-ci-exec
+CI_ID=mymemo_ci_probe-uyzGwQoFWf
+CI_ARN=arn:aws:bedrock-agentcore:us-west-2:637423444544:code-interpreter-custom/mymemo_ci_probe-uyzGwQoFWf
