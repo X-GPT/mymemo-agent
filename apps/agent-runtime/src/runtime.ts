@@ -1,0 +1,173 @@
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { query } from "claude-agent-sdk";
+import pino from "pino";
+import { z } from "zod";
+
+const id = z.string().min(1);
+export const invocationSchema = z
+	.strictObject({
+		conversationId: z.uuid(),
+		turnId: z.uuid(),
+		seq: z.number().int().positive(),
+		requestId: id,
+		userId: id,
+		scope: z.discriminatedUnion("kind", [
+			z.strictObject({ kind: z.literal("general") }),
+			z.strictObject({ kind: z.literal("collection"), collectionId: id }),
+			z.strictObject({ kind: z.literal("document"), summaryId: id }),
+		]),
+		text: z
+			.string()
+			.refine(
+				(text) => text.trim().length > 0 && Buffer.byteLength(text) <= 32768,
+			),
+		startedAt: z.number().int().nonnegative(),
+		budgetUntil: z.number().int().nonnegative(),
+		sandboxSessionId: id,
+	})
+	.refine(
+		(input) =>
+			input.budgetUntil > input.startedAt &&
+			input.budgetUntil <= input.startedAt + 720_000,
+	);
+
+export function createRuntimeServer(
+	config: {
+		model: string;
+		env: Record<string, string | undefined>;
+		pathToClaudeCodeExecutable: string;
+		cwd: string;
+		port?: number;
+	},
+	runQuery = query,
+) {
+	const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
+	let busy = false;
+	const server = Bun.serve({
+		port: config.port ?? 0,
+		hostname: "0.0.0.0",
+		idleTimeout: 0,
+		maxRequestBodySize: 65536,
+		async fetch(request) {
+			const path = new URL(request.url).pathname;
+			if (path === "/ping" && request.method === "GET") {
+				return Response.json({ status: busy ? "HealthyBusy" : "Healthy" });
+			}
+			if (path !== "/invocations" || request.method !== "POST" || busy) {
+				return new Response(null, { status: busy ? 503 : 404 });
+			}
+			busy = true;
+			let active: ReturnType<typeof query> | undefined;
+			let configDir: string | undefined;
+			let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+			let graceTimer: ReturnType<typeof setTimeout> | undefined;
+			let budgetExpired = false;
+			let binding = {};
+			const { readable, writable } = new TransformStream<
+				Uint8Array,
+				Uint8Array
+			>();
+			const writer = writable.getWriter();
+			const encoder = new TextEncoder();
+			const write = (message: unknown) =>
+				writer.write(encoder.encode(`${JSON.stringify(message)}\n`));
+			let disconnected = false;
+			const abortController = new AbortController();
+			const disconnect = () => {
+				disconnected = true;
+				abortController.abort();
+				active?.close();
+				void server.stop();
+			};
+			request.signal.addEventListener("abort", disconnect, { once: true });
+			void writer.closed.catch(disconnect);
+			const run = async () => {
+				try {
+					try {
+						const input = invocationSchema.parse(await request.json());
+						binding = {
+							conversationId: input.conversationId,
+							turnId: input.turnId,
+						};
+						await mkdir(config.cwd, { recursive: true });
+						configDir = await mkdtemp(
+							join(tmpdir(), `claude-${input.turnId}-`),
+						);
+						if (disconnected) return;
+						active = runQuery({
+							prompt: input.text,
+							options: {
+								abortController,
+								model: config.model,
+								env: { ...config.env, CLAUDE_CONFIG_DIR: configDir },
+								cwd: config.cwd,
+								pathToClaudeCodeExecutable: config.pathToClaudeCodeExecutable,
+								tools: [],
+								permissionMode: "dontAsk",
+								settingSources: [],
+								includePartialMessages: true,
+								thinking: { type: "enabled", budgetTokens: 1024 },
+								systemPrompt:
+									"You are MyMemo's assistant. Answer the user's questions concisely. You have no tools.",
+							},
+						});
+						budgetTimer = setTimeout(
+							() => {
+								budgetExpired = true;
+								// interrupt preserves the SDK's terminal result; close discards it.
+								void active?.interrupt().catch(() => active?.close());
+							},
+							Math.max(0, input.budgetUntil - 120_000 - Date.now()),
+						);
+						graceTimer = setTimeout(
+							() => abortController.abort(),
+							Math.max(0, input.budgetUntil - Date.now()),
+						);
+						for await (const message of active) {
+							await write(message);
+							// A single-prompt query ends at result. The SDK throws again after
+							// an error result; that is not a second Runtime-side failure.
+							if (message.type === "result") break;
+						}
+					} finally {
+						clearTimeout(budgetTimer);
+						clearTimeout(graceTimer);
+						active?.close();
+						try {
+							await active?.return(undefined);
+						} finally {
+							if (configDir)
+								await rm(configDir, { recursive: true, force: true });
+						}
+					}
+				} catch (error) {
+					const detail = error instanceof Error ? error.message : String(error);
+					logger.error({ ...binding, message: "Turn failed", detail });
+					if (!disconnected) {
+						try {
+							await write({
+								type: "mymemo.error",
+								code: "internal_error",
+								detail,
+							});
+						} catch {
+							disconnect();
+						}
+					}
+				} finally {
+					request.signal.removeEventListener("abort", disconnect);
+					await writer.close().catch(disconnect);
+					busy = false;
+					if (budgetExpired) void server.stop();
+				}
+			};
+			void run();
+			return new Response(readable, {
+				headers: { "content-type": "application/x-ndjson" },
+			});
+		},
+	});
+	return server;
+}
