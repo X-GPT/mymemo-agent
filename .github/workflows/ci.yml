@@ -55,6 +55,25 @@ jobs:
       - run: bun run test
       - run: bun test e2e/relay-failure-matrix.integration.test.ts
 
+  dynamodb:
+    runs-on: ubuntu-latest
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000
+    env:
+      TEST_DYNAMODB_ENDPOINT: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.0
+      - run: bun install --frozen-lockfile
+      - name: Wait for DynamoDB Local
+        run: curl --silent --show-error --output /dev/null --retry 20 --retry-delay 1 --retry-connrefused "$TEST_DYNAMODB_ENDPOINT"
+      - run: bun test apps/agent-front
+
   infrastructure:
     runs-on: ubuntu-latest
     steps:
