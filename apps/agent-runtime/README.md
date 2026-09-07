@@ -54,4 +54,6 @@ Optional image env: `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`),
 `OPENROUTER_DEFAULT_MODEL` (default `anthropic/claude-sonnet-5`), `PORT` (8080),
 `LOG_LEVEL` (info). The CLI receives `ANTHROPIC_AUTH_TOKEN`,
 `ANTHROPIC_BASE_URL`, and an explicitly empty `ANTHROPIC_API_KEY`, as in v1.
-This app does not change production deployment or secret bootstrap before cutover.
+On AWS, `OPENROUTER_API_KEY_SECRET_ARN` selects Secrets Manager `AWSCURRENT`
+bootstrap instead of the local direct key. Deployment, IAM and invocation steps:
+[Runtime runbook](../../docs/runbooks/agent-runtime.md).
