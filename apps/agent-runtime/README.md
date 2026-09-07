@@ -1,12 +1,13 @@
 # Agent Runtime
 
-Issue #736's no-tools Runtime, separate from v1's `apps/agentcore-runtime`.
-No DynamoDB, workspace, sandbox lifecycle, or transcript adapter is wired yet.
+The #732 Runtime, separate from v1's `apps/agentcore-runtime`. The front owns
+sandbox lifecycle and workspace persistence; this process only invokes its
+supplied session. No DynamoDB or transcript adapter is wired yet.
 
 `POST /invocations` accepts the #732 payload (timestamps are Unix milliseconds;
 `scope.kind` is `general`, `collection`, or `document`). `budgetUntil` includes
 two minutes of grace after the ten-minute query budget. Every SDK message is
-serialized unchanged as NDJSON, including thinking and denied tool results.
+serialized unchanged as NDJSON, including thinking and Hand tool results.
 A terminal SDK result ends the single-prompt query; Runtime failures emit one
 `mymemo.error` line. Budget expiry interrupts the SDK so its result survives;
 caller disconnect closes the query. Both cases close the HTTP server after
@@ -32,16 +33,22 @@ docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile -t mymemo-a
 Tests run the pinned CLI against the fake Anthropic Messages server adapted
 from #730's `sdk-session-probe.ts`, without a model key. They compare every
 forwarded message with the SDK iterator, exercise thinking and an attempted
-disabled tool, budget interruption, disconnect, and Runtime-side failure.
+six aliased tools, budget interruption, disconnect, Runtime-side failure, and
+fatal sandbox loss with no SDK result. Hand checks exercise real local shell
+commands through a fake sandbox transport, path confinement, edits and caps.
 
-For one real-model smoke, export `OPENROUTER_API_KEY` securely, then:
+Set `CODE_INTERPRETER_ID` to a custom SANDBOX-mode interpreter and provide
+the Runtime execution role with InvokeCodeInterpreter authority. The front
+starts and stops sessions; the Runtime never restarts a lost session. See
+`apps/agent-front` for the two-Turn workspace demo.
 
-```sh
-docker run --rm --platform linux/arm64 -p 8080:8080 \
-  -e OPENROUTER_API_KEY mymemo-agent-runtime
-# In another terminal:
-bun run apps/agent-runtime/smoke.ts
-```
+The always-loaded `hand` MCP server exposes Bash, Read, Write, Edit, Glob and
+Grep via SDK aliases. `tools: []` disables built-ins; `allowedTools` lists only
+the six `mcp__hand__*` targets. Model paths live under `/ws`, mapped to `ws/`
+in the sandbox. Bash has a 120-second default and 600-second maximum timeout,
+without background mode. Hand output is capped at 64 KiB; writes at 1 MiB.
+File operations reject traversal and escaping symlinks. Binary reads return
+size and MIME type; PDF page extraction uses Bash. Edits require one match.
 
 Optional image env: `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`),
 `OPENROUTER_DEFAULT_MODEL` (default `anthropic/claude-sonnet-5`), `PORT` (8080),

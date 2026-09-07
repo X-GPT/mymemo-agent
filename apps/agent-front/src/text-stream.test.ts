@@ -225,3 +225,116 @@ describe("SDK text to UIMessage stream", () => {
 		}
 	});
 });
+
+it("converts all hand tools once and persists their capped outputs", () => {
+	const h = harness();
+	for (const name of ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]) {
+		const call = {
+			type: "assistant",
+			message: {
+				content: [
+					{
+						type: "tool_use",
+						id: name,
+						name: `mcp__hand__${name.toLowerCase()}`,
+						input: { path: "/ws/notes.txt" },
+					},
+				],
+			},
+		};
+		h.push(call);
+		h.push(call);
+		h.push({
+			type: "user",
+			message: {
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: name,
+						content: "😀".repeat(3000),
+					},
+				],
+			},
+		});
+	}
+	h.push({ type: "result", subtype: "success" });
+	const message = h.finish();
+	expect(message.metadata.status).toBe("done");
+	expect(message.parts).toHaveLength(6);
+	for (const part of message.parts) {
+		expect(part).toMatchObject({
+			state: "output-available",
+			output: { value: "😀".repeat(2048), truncated: true, totalBytes: 12000 },
+		});
+	}
+	expect(
+		h.chunks
+			.filter((chunk) => chunk.type === "tool-input-available")
+			.map((chunk) => chunk.toolName),
+	).toEqual(["Bash", "Read", "Write", "Edit", "Glob", "Grep"]);
+	expect(
+		h.chunks.filter((chunk) => chunk.type === "tool-output-available"),
+	).toHaveLength(6);
+});
+
+it("keeps UTF-8 truncation valid and emits failures as tool-output-error", () => {
+	const h = harness();
+	for (const [id, content, is_error] of [
+		["unicode", `${"a".repeat(8191)}😀`, false],
+		["error", "missing file", true],
+		["json", [{ type: "text", text: "ok" }], false],
+	] as const) {
+		h.push({
+			type: "assistant",
+			message: { content: [{ type: "tool_use", id, name: "Read", input: {} }] },
+		});
+		h.push({
+			type: "user",
+			message: {
+				content: [{ type: "tool_result", tool_use_id: id, content, is_error }],
+			},
+		});
+	}
+	expect(
+		h.chunks.find((chunk) => chunk.type === "tool-output-available"),
+	).toEqual({
+		type: "tool-output-available",
+		toolCallId: "unicode",
+		output: { value: "a".repeat(8191), truncated: true, totalBytes: 8195 },
+	});
+	expect(h.chunks).toContainEqual({
+		type: "tool-output-error",
+		toolCallId: "error",
+		errorText: "missing file",
+	});
+	expect(h.message.parts[1]).toEqual({
+		type: "tool-Read",
+		toolCallId: "error",
+		input: {},
+		state: "output-error",
+		errorText: "missing file",
+	});
+	expect(h.message.parts[2]).toMatchObject({
+		output: {
+			value: '[{"type":"text","text":"ok"}]',
+			truncated: false,
+			totalBytes: 29,
+		},
+	});
+});
+
+it("exposes result and fatal Runtime error status for workspace copy-out", () => {
+	const stream = createTextStream({
+		messageId: "m",
+		turnId: "t",
+		requestId: "r",
+		startedAt: "now",
+		emit: () => {},
+	});
+	expect(stream.hasResult).toBe(false);
+	expect(stream.fatalRuntimeError).toBe(false);
+	stream.push({ type: "result", subtype: "success" });
+	expect(stream.hasResult).toBe(true);
+	stream.push({ type: "mymemo.error", code: "internal_error" });
+	expect(stream.fatalRuntimeError).toBe(true);
+});

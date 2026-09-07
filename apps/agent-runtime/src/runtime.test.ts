@@ -29,7 +29,19 @@ const payload = () => ({
 });
 
 // Adapted from #730's sdk-session-probe fake Anthropic Messages server.
-function fakeMessages(tool: boolean) {
+const calls = [
+	["Bash", { command: "touch /tmp/mymemo-should-not-execute" }],
+	["Write", { file_path: "/ws/notes.txt", content: "hello" }],
+	["Read", { file_path: "/ws/notes.txt" }],
+	[
+		"Edit",
+		{ file_path: "/ws/notes.txt", old_string: "hello", new_string: "hi" },
+	],
+	["Glob", { pattern: "*.txt" }],
+	["Grep", { pattern: "hi" }],
+] as const;
+function fakeMessages(index: number) {
+	const tool = calls[index];
 	const events: string[] = [];
 	const emit = (type: string, data: object) =>
 		events.push(
@@ -48,7 +60,7 @@ function fakeMessages(tool: boolean) {
 		},
 	});
 	const blocks = tool
-		? [{ type: "tool_use", id: "tool_fake", name: "Bash", input: {} }]
+		? [{ type: "tool_use", id: `tool_${index}`, name: tool[0], input: {} }]
 		: [
 				{ type: "thinking", thinking: "", signature: "" },
 				{ type: "text", text: "" },
@@ -60,7 +72,7 @@ function fakeMessages(tool: boolean) {
 				index,
 				delta: {
 					type: "input_json_delta",
-					partial_json: '{"command":"touch /tmp/mymemo-should-not-execute"}',
+					partial_json: JSON.stringify(tool[1]),
 				},
 			});
 		else if (index === 0) {
@@ -88,7 +100,13 @@ function fakeMessages(tool: boolean) {
 }
 
 async function harness(
-	mode: "normal" | "budget" | "disconnect" | "throw" | "mid-throw",
+	mode:
+		| "normal"
+		| "budget"
+		| "disconnect"
+		| "throw"
+		| "mid-throw"
+		| "dead-sandbox",
 ) {
 	const cwd = await mkdtemp(join(tmpdir(), "runtime-test-"));
 	const captured: SDKMessage[] = [];
@@ -99,14 +117,18 @@ async function harness(
 		async fetch(request) {
 			if (!new URL(request.url).pathname.endsWith("/messages"))
 				return new Response("{}", { status: 404 });
-			const body = (await request.json()) as { tools?: unknown[] };
-			expect(body.tools ?? []).toEqual([]);
+			const body = (await request.json()) as { tools?: { name: string }[] };
+			expect((body.tools ?? []).map((tool) => tool.name).sort()).toEqual(
+				["bash", "read", "write", "edit", "glob", "grep"]
+					.map((n) => `mcp__hand__${n}`)
+					.sort(),
+			);
 			modelCalls++;
 			if (mode === "budget" || mode === "disconnect")
 				return new Response(new ReadableStream({}), {
 					headers: { "content-type": "text/event-stream" },
 				});
-			return new Response(fakeMessages(modelCalls === 1), {
+			return new Response(fakeMessages(modelCalls - 1), {
 				headers: { "content-type": "text/event-stream" },
 			});
 		},
@@ -114,6 +136,30 @@ async function harness(
 	const server = createRuntimeServer(
 		{
 			cwd,
+			handInvoke: () => async (name) => {
+				if (mode === "dead-sandbox")
+					throw Object.assign(new Error("session is not active"), {
+						name: "ValidationException",
+					});
+				if (name === "readFiles")
+					return {
+						content: [
+							{ type: "resource", resource: { type: "text", text: "hello" } },
+						],
+					};
+				return {
+					content: [],
+					structuredContent: {
+						stdout: JSON.stringify({
+							value: "",
+							truncated: false,
+							totalBytes: 0,
+							exitCode: 0,
+						}),
+						exitCode: 0,
+					},
+				};
+			},
 			model: "fake",
 			pathToClaudeCodeExecutable: executable,
 			env: {
@@ -165,6 +211,7 @@ for (const mode of [
 	"disconnect",
 	"throw",
 	"mid-throw",
+	"dead-sandbox",
 ] as const) {
 	test(`real SDK: ${mode}`, async () => {
 		const h = await harness(mode);
@@ -202,7 +249,11 @@ for (const mode of [
 					.trim()
 					.split("\n")
 					.map((line) => JSON.parse(line));
-				if (mode === "mid-throw") {
+				if (mode === "dead-sandbox") {
+					expect(messages.at(-1)?.type).toBe("mymemo.error");
+					expect(messages.at(-1)?.code).toBe("internal_error");
+					expect(messages.some((m) => m.type === "result")).toBe(false);
+				} else if (mode === "mid-throw") {
 					expect(messages.slice(0, -1)).toEqual(h.captured);
 					expect(messages.at(-1)).toEqual({
 						type: "mymemo.error",
@@ -232,6 +283,14 @@ for (const mode of [
 							expect(messages.some((m) => m.type === type)).toBe(true);
 						expect(JSON.stringify(messages)).toContain("thinking_delta");
 						expect(messages.at(-1)?.is_error).toBe(false);
+						const results = messages
+							.filter((m) => m.type === "user")
+							.flatMap((m) => m.message.content)
+							.filter((b: { type: string }) => b.type === "tool_result");
+						expect(results).toHaveLength(6);
+						expect(
+							results.every((b: { is_error?: boolean }) => !b.is_error),
+						).toBe(true);
 					}
 				}
 			}
