@@ -113,6 +113,7 @@ try {
 	const artifact = artifacts[0];
 	assert(artifact, "Turns must publish an artifact");
 	const downloadPath = `${path}/artifacts/${artifact.artifactId}/download-url`;
+	const downloadRequestedAt = Date.now();
 	const { downloadUrl } = (await (await call(downloadPath)).json()) as {
 		downloadUrl: string;
 	};
@@ -143,22 +144,22 @@ try {
 	console.log("PASS: all six Conversation routes returned 404 immediately");
 	let urlRevoked = false;
 	for (;;) {
-		const elapsed = Date.now() - deletedAt;
 		if (!urlRevoked) {
 			const response = await fetch(downloadUrl);
 			await response.body?.cancel();
 			urlRevoked = response.status === 403 || response.status === 404;
+			const urlAge = Date.now() - downloadRequestedAt;
+			assert(
+				urlAge <= 300_000,
+				"URL invalidation was not observed within five minutes of issuance",
+			);
 			if (urlRevoked)
 				console.log(
-					`PASS: old artifact URL returned ${response.status} at ${elapsed} ms`,
-				);
-			else
-				assert(
-					elapsed < 300_000,
-					"Artifact URL still usable after five minutes",
+					`PASS: old artifact URL returned ${response.status} at age ${urlAge} ms`,
 				);
 		}
 		const remaining = await inventory();
+		const elapsed = Date.now() - deletedAt;
 		const empty =
 			remaining.items.length === 0 &&
 			Object.values(remaining.objects).every((count) => count === 0);
@@ -173,7 +174,7 @@ try {
 			elapsed < 600_000,
 			"Automatic cleanup did not complete within ten minutes",
 		);
-		await Bun.sleep(10_000);
+		await Bun.sleep(1_000);
 	}
 } finally {
 	// Only this script's fixture; never invoke the sweeper manually.
