@@ -15,6 +15,8 @@
     "apps/agent-front": {
       "name": "agent-front",
       "dependencies": {
+        "@aws-sdk/client-bedrock-agentcore": "^3.1110.0",
+        "@aws-sdk/client-s3": "^3.883.0",
         "@aws-sdk/client-dynamodb": "^3.883.0",
         "@aws-sdk/lib-dynamodb": "^3.883.0",
         "@hono/standard-validator": "^0.1.5",
