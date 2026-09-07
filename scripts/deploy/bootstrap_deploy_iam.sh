@@ -188,7 +188,7 @@ TOTAL_STAGES=4
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 export AWS_PROFILE=mymemo AWS_PAGER=""
 
-banner "Bootstrap IAM for simplified chat (#749)"
+banner "Bootstrap agent infrastructure IAM (#749)"
 stage "Confirm the operator identity"
 aws --profile mymemo sts get-caller-identity
 [[ $(aws --profile mymemo sts get-caller-identity --query Account --output text) == 637423444544 ]]
@@ -206,13 +206,13 @@ terraform -chdir=infra/bootstrap-iam show -json "$work/bootstrap.tfplan" > "$wor
 jq -e 'all(.resource_changes[]; .mode == "data" or .change.actions == ["no-op"] or
   ((.address == "aws_iam_policy.simplified_chat" or .address == "aws_iam_role_policy_attachment.simplified_chat") and
    (.change.actions == ["create"] or .change.actions == ["update"])))' "$work/plan.json" >/dev/null
-say "Only the simplified-chat managed policy and its attachment may change."
+say "Only the agent infrastructure managed policy and its attachment may change."
 confirm "Apply this saved plan?" || exit 1
 
 stage "Apply and verify the grants"
 terraform -chdir=infra/bootstrap-iam apply "$work/bootstrap.tfplan"
 say "IAM propagation can take time. If verification fails, wait and rerun the checker."
-scripts/deploy/check_simplified_chat_iam.sh | tee "$work/evidence.txt"
+scripts/deploy/check_deploy_iam.sh | tee "$work/evidence.txt"
 pause "Grant checks passed. Press Enter to record the policy versions."
 
 stage "Record the applied output on #749"

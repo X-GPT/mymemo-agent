@@ -388,9 +388,9 @@ values, secret ARNs, or secret names unless an environment intentionally
 overrides the Terraform convention.
 The GitHub workflow does not rewrite long-lived application secret values.
 
-## Simplified-chat deploy permissions (#749)
+## Agent infrastructure deploy permissions (#749)
 
-Run `scripts/deploy/bootstrap_simplified_chat_iam.sh` from an operator terminal
+Run `scripts/deploy/bootstrap_deploy_iam.sh` from an operator terminal
 with Terraform, AWS CLI, jq, and authenticated `gh` installed. It uses the
 `mymemo` profile, verifies account `637423444544`, reviews and applies a saved
 plan targeting only the new managed policy attachment, then posts read-only
@@ -411,7 +411,7 @@ other interpreter operations are scoped to `code-interpreter-custom/*`.
 The new grants live in a managed policy to avoid the inline policy size limit.
 
 To repeat verification after IAM propagation, run
-`scripts/deploy/check_simplified_chat_iam.sh`. It simulates concrete lifecycle
+`scripts/deploy/check_deploy_iam.sh`. It simulates concrete lifecycle
 actions without creating stack resources and fails on denial or missing context.
 These checks prove identity-policy authorization, not successful service deployment;
 #742 and #750 own the live deployment checks.

@@ -39,7 +39,7 @@ esac
 		for (const mode of ["allowed", "denied", "missing", "empty"]) {
 			const log = join(dir, `${mode}.log`);
 			const result = Bun.spawnSync({
-				cmd: ["bash", "scripts/deploy/check_simplified_chat_iam.sh"],
+				cmd: ["bash", "scripts/deploy/check_deploy_iam.sh"],
 				env: {
 					...process.env,
 					PATH: `${dir}:${process.env.PATH}`,
