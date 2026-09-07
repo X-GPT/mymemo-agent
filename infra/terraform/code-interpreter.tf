@@ -5,3 +5,7 @@ resource "aws_bedrockagentcore_code_interpreter" "hand" {
     network_mode = "SANDBOX"
   }
 }
+
+output "code_interpreter_id" {
+  value = aws_bedrockagentcore_code_interpreter.hand.code_interpreter_id
+}

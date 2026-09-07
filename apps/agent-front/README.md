@@ -85,11 +85,12 @@ unknown outcome: reload history and never resend automatically.
 
 `src/lambda.ts` exports `handler` for Hono `streamHandle` requests and a
 scheduled invocation with `{"source":"mymemo.cleanup"}`. HTTP bodies cannot
-select cleanup. Required env: `CONVERSATIONS_TABLE`, `STATSIG_SERVER_SECRET`,
+select cleanup. Required env: `CONVERSATION_TABLE`, `STATSIG_SERVER_SECRET_ARN`,
 `WORKSPACE_BUCKET`, `AGENT_RUNTIME_ARN`, `CODE_INTERPRETER_ID`, and AWS SDK region/role environment.
 Production uses the Statsig gate, drains pending Turns before the handler
 returns, and flushes exposures. No production local-endpoint or open-gate switch.
 
+See [the deployment and signing-proxy runbook](../../docs/runbooks/agent-front.md).
 Deployment (#742 / #750): Node.js 22 / arm64, `AWS_IAM` `RESPONSE_STREAM`
 Function URL, fourteen-minute timeout, Statsig `linux-arm64-gnu` binary,
 DynamoDB read/transaction/update permissions, S3 history Get/Put/List/Delete,
@@ -103,7 +104,7 @@ Listing strongly re-reads GSI projections to hide tombstones; the index remains
 eventually consistent. Archive may proceed during a Turn. Delete requires no
 fresh processing marker. Scheduled cleanup removes S3 history before request
 items and the tombstone; partial S3 delete failures preserve the tombstone for
-retry. Workspace and artifact prefix cleanup join with their owning slices.
+retry. The deployed sweep also removes workspace and artifact prefixes and the exact transcript key before any DynamoDB items.
 
 ## Workspace and Hand tools
 
@@ -124,5 +125,5 @@ See [SANDBOX-DEMO.md](SANDBOX-DEMO.md) for the two-session continuity demo.
 ## Slice boundaries
 
 #741 owns artifacts and generative UI. Artifact routes retain empty lists /
-404 until then. Workspace cleanup joins the cleanup slice. No v1 deployment
+404 until then. The deployed Cleanup sweep removes Workspace objects. No v1 deployment
 is changed here; Terraform owns the SANDBOX-mode interpreter in #742.
