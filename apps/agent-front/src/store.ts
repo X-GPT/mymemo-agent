@@ -1,10 +1,15 @@
-import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
+import { createHash } from "node:crypto";
+import {
+	ConditionalCheckFailedException,
+	TransactionCanceledException,
+} from "@aws-sdk/client-dynamodb";
 import {
 	DeleteCommand,
 	type DynamoDBDocumentClient,
 	GetCommand,
 	PutCommand,
 	QueryCommand,
+	TransactWriteCommand,
 	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { z } from "zod";
@@ -48,6 +53,14 @@ export class NotFound extends Error {}
 export class Processing extends Error {
 	constructor(readonly turnId: string) {
 		super("processing");
+	}
+}
+export class SendConflict extends Error {
+	constructor(
+		readonly code: "archived" | "duplicate_request" | "request_id_conflict",
+		readonly request?: { turnId: string; seq: number },
+	) {
+		super(code);
 	}
 }
 export class ConversationStore {
@@ -105,6 +118,106 @@ export class ConversationStore {
 		);
 		return toSummary(item);
 	}
+	async admit(id: string, userId: string, text: string, requestId: string) {
+		const textHash = createHash("sha256").update(text).digest("hex");
+		// Retry only a lost CAS (including a concurrent rename), never a won Turn.
+		for (;;) {
+			const conversation = await this.get(id, userId);
+			const { Item: request } = await this.db.send(
+				new GetCommand({
+					TableName: this.table,
+					Key: { PK: `CONV#${id}`, SK: `REQ#${requestId}` },
+					ConsistentRead: true,
+				}),
+			);
+			if (request)
+				throw new SendConflict(
+					request.textHash === textHash
+						? "duplicate_request"
+						: "request_id_conflict",
+					{ turnId: request.turnId, seq: request.seq },
+				);
+			if (conversation.archivedAt) throw new SendConflict("archived");
+			const startedAt = new Date().toISOString();
+			if (conversation.processing && conversation.processing.until >= startedAt)
+				throw new Processing(conversation.processing.turnId);
+			const turnId = crypto.randomUUID();
+			const seq = conversation.turnCount + 1;
+			const until = new Date(Date.parse(startedAt) + 720_000).toISOString();
+			try {
+				await this.db.send(
+					new TransactWriteCommand({
+						TransactItems: [
+							{
+								Update: {
+									TableName: this.table,
+									Key: key(id),
+									ConditionExpression:
+										"turnCount = :count AND userId = :owner AND attribute_not_exists(deletedAt) AND attribute_not_exists(archivedAt) AND (attribute_not_exists(processing) OR processing.#until < :now) AND title = :readTitle",
+									UpdateExpression:
+										"SET processing = :processing, turnCount = :seq, lastActivityAt = :now, GSI1SK = :sort, title = :title, titleSearch = :search",
+									ExpressionAttributeNames: { "#until": "until" },
+									ExpressionAttributeValues: {
+										":count": conversation.turnCount,
+										":owner": userId,
+										":now": startedAt,
+										":processing": { turnId, seq, until },
+										":seq": seq,
+										":sort": `${startedAt}#${id}`,
+										":readTitle": conversation.title,
+										":title": conversation.title ?? text.trim().slice(0, 120),
+										":search": (
+											conversation.title ?? text.trim().slice(0, 120)
+										).toLowerCase(),
+									},
+								},
+							},
+							{
+								Put: {
+									TableName: this.table,
+									Item: {
+										PK: `CONV#${id}`,
+										SK: `REQ#${requestId}`,
+										turnId,
+										seq,
+										textHash,
+									},
+									ConditionExpression: "attribute_not_exists(PK)",
+								},
+							},
+						],
+					}),
+				);
+				return { conversation, turnId, seq, requestId, startedAt, until };
+			} catch (error) {
+				if (
+					!(error instanceof TransactionCanceledException) ||
+					!error.CancellationReasons?.some(
+						(reason) =>
+							reason.Code === "ConditionalCheckFailed" ||
+							reason.Code === "TransactionConflict",
+					)
+				)
+					throw error;
+			}
+		}
+	}
+	async clearProcessing(id: string, turnId: string) {
+		try {
+			await this.db.send(
+				new UpdateCommand({
+					TableName: this.table,
+					Key: key(id),
+					ConditionExpression: "processing.turnId = :turnId",
+					UpdateExpression: "REMOVE processing",
+					ExpressionAttributeValues: { ":turnId": turnId },
+				}),
+			);
+		} catch (error) {
+			if (!(error instanceof ConditionalCheckFailedException)) throw error;
+		}
+	}
+
 	async list(query: ListOptions, after?: ListPosition) {
 		const partition = listingPartition(query.userId, query.archived);
 		let cursor = after
@@ -211,7 +324,7 @@ export class ConversationStore {
 			throw new Processing(item.processing?.turnId ?? "");
 		}
 	}
-	async sweep() {
+	async sweep(deleteHistory?: (id: string) => Promise<void>) {
 		let cursor: Record<string, unknown> | undefined;
 		do {
 			const page = await this.db.send(
@@ -232,6 +345,7 @@ export class ConversationStore {
 					}),
 				);
 				if (!Item?.deletedAt) continue;
+				await deleteHistory?.(Item.conversationId);
 				let partitionCursor: Record<string, unknown> | undefined;
 				do {
 					const partition = await this.db.send(

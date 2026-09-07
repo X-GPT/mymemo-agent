@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import type { ExposureGate } from "./exposure-gate";
+import type { Messages } from "./messages";
 import {
 	ConversationId,
 	CreateBody,
@@ -12,11 +13,16 @@ import {
 	InternalIdentity,
 	InvalidCursor,
 	ListQuery,
+	SendBody,
 	UpdateBody,
 } from "./schema";
 import { type ConversationStore, NotFound, Processing } from "./store";
 
-export function createApp(store: ConversationStore, gate: ExposureGate) {
+export function createApp(
+	store: ConversationStore,
+	gate: ExposureGate,
+	messages?: Messages,
+) {
 	const app = new Hono<{
 		Variables: { identity: InternalIdentity };
 	}>();
@@ -115,13 +121,47 @@ export function createApp(store: ConversationStore, gate: ExposureGate) {
 		await store.delete(c.req.param("id"), c.var.identity.memberCode);
 		return c.body(null, 204);
 	});
-	// No Turn or S3 objects exist in this lifecycle slice (#735).
+	app.post(
+		"/v1/conversations/:id/messages",
+		cap,
+		sValidator("json", SendBody, (r, c) => {
+			if (!r.success) return c.json({ error: "Invalid request body" }, 400);
+		}),
+		async (c) => {
+			let enabled = false;
+			try {
+				enabled = await gate.isAgentEnabled(c.var.identity);
+			} catch {
+				/* Fail closed. */
+			}
+			if (!enabled) return c.json({ error: "Agent is not enabled" }, 403);
+			if (!messages) throw new Error("Messages not configured");
+			const { text, requestId } = c.req.valid("json");
+			return messages.send(
+				c.req.param("id"),
+				c.var.identity.memberCode,
+				text,
+				requestId,
+			);
+		},
+	);
 	app.get(
 		"/v1/conversations/:id/messages",
 		sValidator("query", HistoryQuery, (r, c) => {
 			if (!r.success) return c.json({ error: "Invalid query" }, 400);
 		}),
-		(c) => c.json({ messages: [], nextCursor: null }),
+		async (c) => {
+			const conversation = await store.get(
+				c.req.param("id"),
+				c.var.identity.memberCode,
+			);
+			const { limit, cursor } = c.req.valid("query");
+			return c.json(
+				messages
+					? await messages.history.page(conversation, limit, cursor)
+					: { messages: [], nextCursor: null },
+			);
+		},
 	);
 	app.get("/v1/conversations/:id/artifacts", (c) => c.json({ artifacts: [] }));
 	app.get("/v1/conversations/:id/artifacts/:artifactId/download-url", (c) =>

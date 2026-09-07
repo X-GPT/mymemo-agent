@@ -1,22 +1,32 @@
 import type { Writable } from "node:stream";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { S3Client } from "@aws-sdk/client-s3";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { Statsig } from "@statsig/statsig-node-core";
 import { streamHandle } from "hono/aws-lambda";
 import { createApp } from "./app";
 import { StatsigExposureGate } from "./exposure-gate";
+import { HistoryStore } from "./history";
+import { Messages } from "./messages";
+import { agentCoreRuntime } from "./runtime";
 import { ConversationStore } from "./store";
 
 const table = process.env.CONVERSATIONS_TABLE;
 const secret = process.env.STATSIG_SERVER_SECRET;
-if (!table || !secret)
-	throw new Error("CONVERSATIONS_TABLE and STATSIG_SERVER_SECRET are required");
+const bucket = process.env.WORKSPACE_BUCKET;
+const runtimeArn = process.env.AGENT_RUNTIME_ARN;
+if (!table || !secret || !bucket || !runtimeArn)
+	throw new Error(
+		"CONVERSATIONS_TABLE, STATSIG_SERVER_SECRET, WORKSPACE_BUCKET and AGENT_RUNTIME_ARN are required",
+	);
 const store = new ConversationStore(
 	DynamoDBDocumentClient.from(new DynamoDBClient({})),
 	table,
 );
 const statsig = new Statsig(secret, { outputLogLevel: "warn" });
-const app = createApp(store, new StatsigExposureGate(statsig));
+const history = new HistoryStore(new S3Client({}), bucket);
+const messages = new Messages(store, history, agentCoreRuntime(runtimeArn));
+const app = createApp(store, new StatsigExposureGate(statsig), messages);
 type StreamingHandler = (
 	event: Record<string, unknown>,
 	stream: Writable,
@@ -33,12 +43,14 @@ export const handler = awslambda.streamifyResponse(
 		try {
 			// Scheduler supplies this payload directly; HTTP bodies cannot select it.
 			if (event.source === "mymemo.cleanup" && !("requestContext" in event)) {
-				await store.sweep();
+				await store.sweep((id) => history.delete(id));
 				stream.end();
 			} else {
 				await httpHandler(event, stream, context);
 			}
 		} finally {
+			// A disconnected HTTP writer must not freeze the Lambda before the Turn is saved.
+			await Promise.all(messages.pending);
 			await statsig.flushEvents().catch(() => undefined);
 		}
 	},
