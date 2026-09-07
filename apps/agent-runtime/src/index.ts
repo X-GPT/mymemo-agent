@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
+import { readOpenRouterKey } from "./config";
 import { createRuntimeServer } from "./runtime";
 
 const require = createRequire(import.meta.url);
@@ -11,8 +12,7 @@ const executable = require.resolve(
 	{ paths: [dirname(sdk)] },
 );
 execFileSync(executable, ["--version"], { stdio: "ignore" });
-const token = process.env.OPENROUTER_API_KEY;
-if (!token) throw new Error("OPENROUTER_API_KEY is required");
+const token = await readOpenRouterKey(process.env);
 createRuntimeServer({
 	model: process.env.OPENROUTER_DEFAULT_MODEL ?? "anthropic/claude-sonnet-5",
 	env: {
