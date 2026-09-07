@@ -388,6 +388,34 @@ values, secret ARNs, or secret names unless an environment intentionally
 overrides the Terraform convention.
 The GitHub workflow does not rewrite long-lived application secret values.
 
+## Simplified-chat deploy permissions (#749)
+
+Run `scripts/deploy/bootstrap_simplified_chat_iam.sh` from an operator terminal
+with Terraform, AWS CLI, jq, and authenticated `gh` installed. It uses the
+`mymemo` profile, verifies account `637423444544`, reviews and applies a saved
+plan targeting only the new managed policy attachment, then posts read-only
+IAM simulation results and managed policy versions to #749 after confirmation.
+It leaves v1's inline policy unchanged (inline policies have no version IDs).
+The script is repeatable; it refuses unrelated changes, including role trust changes.
+
+The new naming contract for #742/#750 is `mymemo-agent-*-conversations` tables,
+`mymemo-agent-*-front` functions, `mymemo-agent-*-workspace` buckets, and
+`default/mymemo-agent-*-sweep` schedules, in the configured account and region
+(S3 bucket ARNs are global). Front/sweep roles must use `mymemo-agent-*`;
+role, log-group, Runtime and interpreter tagging permissions already exist in
+the legacy policy. No v1 permission is removed.
+
+`CreateCodeInterpreter` requires resource `*` according to the
+[AWS authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonbedrockagentcore.html);
+other interpreter operations are scoped to `code-interpreter-custom/*`.
+The new grants live in a managed policy to avoid the inline policy size limit.
+
+To repeat verification after IAM propagation, run
+`scripts/deploy/check_simplified_chat_iam.sh`. It simulates concrete lifecycle
+actions without creating stack resources and fails on denial or missing context.
+These checks prove identity-policy authorization, not successful service deployment;
+#742 and #750 own the live deployment checks.
+
 ## Local Validation
 
 ```sh
