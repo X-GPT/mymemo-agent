@@ -374,7 +374,11 @@ it("PresentUI retries emit only validated data, retained in the reply without to
 	}
 	const data = h.chunks.filter((c) => c.type === "data-generative-ui");
 	expect(data).toEqual([
-		{ type: "data-generative-ui", id: "ok", data: { version: 1, payload } },
+		{
+			type: "data-generative-ui",
+			id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+			data: { version: 1, payload },
+		},
 	]);
 	expect(h.chunks.some((c) => c.type.startsWith("tool-"))).toBe(false);
 	h.push({ type: "result", subtype: "success" });

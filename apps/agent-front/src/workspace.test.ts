@@ -161,3 +161,20 @@ test("missing or truncated export parts never overwrite the previous Workspace",
 	);
 	expect(h.objects).not.toHaveBeenCalled();
 });
+
+test("readParts accepts the interpreter's UTF-8 text resources without changing bytes", async () => {
+	const h = harness();
+	const text = "name,value\n报告,42\n";
+	h.send.mockImplementationOnce(async () => ({
+		stream: (async function* () {
+			yield {
+				result: {
+					content: [{ type: "resource", resource: { type: "text", text } }],
+				},
+			};
+		})(),
+	}));
+	expect(
+		await h.workspace.readParts("session", ["part-0"], Buffer.byteLength(text)),
+	).toEqual(Buffer.from(text));
+});

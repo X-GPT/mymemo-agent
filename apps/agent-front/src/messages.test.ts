@@ -255,9 +255,15 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			const page = await h.page();
 			expect(page.messages[1]?.parts).toContainEqual({
 				type: "data-generative-ui",
-				id: "ui",
+				id: expect.stringMatching(/^[0-9a-f-]{36}$/),
 				data: { version: 1, payload },
 			});
+			const livePart = body
+				.split("\n\n")
+				.filter((line) => line.startsWith("data: {"))
+				.map((line) => JSON.parse(line.slice(6)))
+				.find((part) => part.type === "data-generative-ui");
+			expect(page.messages[1]?.parts).toContainEqual(livePart);
 			const get = (path: string, headers = h.headers) =>
 				h.app.request(`/v1/conversations/${h.id}/artifacts${path}`, {
 					headers,

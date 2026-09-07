@@ -89,10 +89,11 @@ export class Workspace {
 	}
 
 	async save(id: string, sessionId: string) {
+		// PAX preserves fractional mtimes for artifact diffs after restoration.
 		// Outside ws: the archive must never include itself or a previous export.
 		const directory = `.workspace-export-${crypto.randomUUID()}`;
 		const result = await this.call(sessionId, "executeCommand", {
-			command: `cd ~ && mkdir ${directory} && tar czf ${directory}/out.tgz -C ws . && split -b 8m -d ${directory}/out.tgz ${directory}/part- && stat -c %s ${directory}/out.tgz`,
+			command: `cd ~ && mkdir ${directory} && tar --format=pax -czf ${directory}/out.tgz -C ws . && split -b 8m -d ${directory}/out.tgz ${directory}/part- && stat -c %s ${directory}/out.tgz`,
 		});
 		const size = Number(result.structuredContent?.stdout?.trim());
 		if (!Number.isSafeInteger(size) || size <= 0)
@@ -123,7 +124,12 @@ export class Workspace {
 			if (response.content?.length !== batch.length)
 				throw new Error("Missing file parts");
 			for (const [index, content] of response.content.entries()) {
-				const blob = content.resource?.blob;
+				const resource = content.resource;
+				const blob =
+					resource?.blob ??
+					(typeof resource?.text === "string"
+						? Buffer.from(resource.text)
+						: undefined);
 				if (
 					!(blob instanceof Uint8Array) ||
 					blob.byteLength !==

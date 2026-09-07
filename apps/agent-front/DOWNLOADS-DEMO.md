@@ -52,3 +52,15 @@ filtering, edit/delete/no-change mirrors, five-minute signing, owner isolation,
 error-Turn publication, whole-reply reload, and a real SDK invalid-PresentUI
 retry followed by an accepted table. The validator suite covers all five
 components, the 16 KiB cap, and the pinned Vega-Lite schema.
+
+## Review regression: an unchanged next Turn
+
+A follow-up real-sandbox run used Conversation
+`c3dea82e-bf92-4563-bb08-01b08617396d`. Turn 1 wrote `artifacts/a.txt` with
+mtime `1700000000123456789`, published it, saved the PAX archive, and stopped
+session `01M1WX9HY324C92K6GHYESZW00`. Turn 2 restored into fresh session
+`01M1WX9MDMNPK1NEWK52Q6GTR7`; mtime was identical and the changed-artifact
+count was zero. Both sessions and the test objects were cleaned up.
+This also verified Code Interpreter's text-resource response for small UTF-8
+artifact chunks. A Linux GNU-tar reproduction confirmed the old default format
+rounded `.123456789` to `.000000000`; PAX retained all nine digits.

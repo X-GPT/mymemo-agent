@@ -9,10 +9,12 @@ import {
 	rm,
 	symlink,
 	truncate,
+	utimes,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BedrockAgentCoreClient } from "@aws-sdk/client-bedrock-agentcore";
 import {
 	GetObjectCommand,
 	PutObjectCommand,
@@ -41,7 +43,12 @@ async function harness() {
 			const body = objects.get(input.Key);
 			if (!body)
 				throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
-			return { Body: { transformToString: async () => body.toString() } };
+			return {
+				Body: {
+					transformToString: async () => body.toString(),
+					transformToByteArray: async () => body,
+				},
+			};
 		}
 		writes.push(command.input);
 		if (command instanceof PutObjectCommand) {
@@ -51,35 +58,49 @@ async function harness() {
 		return {};
 	});
 	const batches: number[] = [];
-	const workspace: Pick<Workspace, "call" | "readParts"> = {
-		readParts: Workspace.prototype.readParts,
-		async call(_, name, args) {
-			if (name === "executeCommand") {
-				assert(args.command);
-				const child = Bun.spawn(["sh", "-c", args.command], {
-					env: { ...process.env, HOME: home },
-					stdout: "pipe",
-					stderr: "pipe",
-				});
-				const stdout = await new Response(child.stdout).text();
-				const stderr = await new Response(child.stderr).text();
-				if (await child.exited) throw new Error(stderr);
-				return { content: [], structuredContent: { stdout, exitCode: 0 } };
+	const workspace = new Workspace(
+		new BedrockAgentCoreClient({ region: "us-west-2" }),
+		"test",
+		s3,
+		"bucket",
+	);
+	workspace.call = async (_, name, args) => {
+		if (name === "writeFiles") {
+			for (const entry of args.content ?? []) {
+				assert(entry.path && entry.blob);
+				await writeFile(join(home, entry.path), entry.blob);
 			}
-			assert(args.paths);
-			batches.push(args.paths.length);
-			return {
-				content: await Promise.all(
-					args.paths.map(async (path) => ({
-						type: "resource" as const,
-						resource: {
-							type: "blob" as const,
-							blob: await readFile(join(home, path)),
-						},
-					})),
-				),
-			};
-		},
+			return { content: [] };
+		}
+		if (name === "executeCommand") {
+			assert(args.command);
+			const command =
+				process.platform === "darwin"
+					? args.command.replace("stat -c %s", "stat -f %z")
+					: args.command;
+			const child = Bun.spawn(["sh", "-c", command], {
+				env: { ...process.env, HOME: home },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const stdout = await new Response(child.stdout).text();
+			const stderr = await new Response(child.stderr).text();
+			if (await child.exited) throw new Error(stderr);
+			return { content: [], structuredContent: { stdout, exitCode: 0 } };
+		}
+		assert(args.paths);
+		batches.push(args.paths.length);
+		return {
+			content: await Promise.all(
+				args.paths.map(async (path) => ({
+					type: "resource" as const,
+					resource: {
+						type: "blob" as const,
+						blob: await readFile(join(home, path)),
+					},
+				})),
+			),
+		};
 	};
 	return {
 		home,
@@ -208,4 +229,22 @@ test("incomplete binary reads never publish a manifest or file", async () => {
 		).rejects.toThrow();
 	}
 	expect(h.writes).toHaveLength(0);
+});
+
+test("untouched artifacts keep their nanosecond mtime and emit no changes after Workspace save/restore", async () => {
+	const h = await harness();
+	const file = join(h.home, "ws/artifacts/chart.png");
+	await writeFile(file, "png");
+	await utimes(file, 1700000000.123, 1700000000.123);
+	const first = await h.artifacts.sync("c", "s", h.workspace);
+	await h.workspace.save("c", "s");
+	await rm(join(h.home, "ws"), { recursive: true });
+	await h.workspace.restore("c", "fresh-session");
+	const writes = h.writes.length;
+	expect(await h.artifacts.sync("c", "fresh-session", h.workspace)).toEqual({
+		artifacts: [],
+		removed: [],
+	});
+	expect(await h.artifacts.list("c")).toEqual(first.artifacts);
+	expect(h.writes).toHaveLength(writes);
 });

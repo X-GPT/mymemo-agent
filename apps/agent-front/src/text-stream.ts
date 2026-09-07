@@ -243,7 +243,7 @@ export function createTextStream(input: {
 								if (!validated.ok) throw new Error("Invalid PresentUI result");
 								const part: DataPart = {
 									type: "data-generative-ui",
-									id: block.tool_use_id,
+									id: crypto.randomUUID(),
 									data: { version: 1, payload: validated.value },
 								};
 								message.parts.push(part);
