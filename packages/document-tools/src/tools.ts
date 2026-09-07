@@ -224,8 +224,7 @@ export async function loadDocuments(
 			});
 			continue;
 		}
-		// Budget check before the fetch: an exhausted call neither reads the KB
-		// nor audits a document it cannot cache.
+		// An exhausted call does not read a document it cannot cache.
 		if (remainingCallBytes <= 0) {
 			errors.push({
 				documentId,

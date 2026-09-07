@@ -50,6 +50,9 @@ const calls = [
 	],
 	["Glob", { pattern: "*.txt" }],
 	["Grep", { pattern: "hi" }],
+	["ListDocuments", {}],
+	["SearchDocuments", { query: "needle" }],
+	["LoadDocuments", { documentIds: ["inside"] }],
 ] as const;
 function fakeMessages(index: number) {
 	const tool = calls[index];
@@ -169,9 +172,14 @@ async function harness(
 				messages: unknown[];
 			};
 			expect((body.tools ?? []).map((tool) => tool.name).sort()).toEqual(
-				["bash", "read", "write", "edit", "glob", "grep"]
-					.map((n) => `mcp__hand__${n}`)
-					.sort(),
+				[
+					...["bash", "read", "write", "edit", "glob", "grep"].map(
+						(n) => `mcp__hand__${n}`,
+					),
+					...["ListDocuments", "SearchDocuments", "LoadDocuments"].map(
+						(n) => `mcp__docs__${n}`,
+					),
+				].sort(),
 			);
 			modelCalls++;
 			messageCounts.push(body.messages.length);
@@ -214,6 +222,7 @@ async function harness(
 					},
 				};
 			},
+			kb: { query: async () => [] },
 			s3,
 			bucket: "transcript-test",
 			model: "fake",
@@ -373,7 +382,7 @@ for (const mode of [
 							.filter((m) => m.type === "user")
 							.flatMap((m) => m.message.content)
 							.filter((b: { type: string }) => b.type === "tool_result");
-						expect(results).toHaveLength(6);
+						expect(results).toHaveLength(9);
 						expect(
 							results.every((b: { is_error?: boolean }) => !b.is_error),
 						).toBe(true);

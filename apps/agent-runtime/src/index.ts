@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { S3Client } from "@aws-sdk/client-s3";
-import { readOpenRouterKey } from "./config";
+import { createKbDb } from "@mymemo/document-tools/client";
+import { readKbDatabaseUrl, readOpenRouterKey } from "./config";
 import { createRuntimeServer } from "./runtime";
 
 const require = createRequire(import.meta.url);
@@ -19,6 +20,7 @@ if (!codeInterpreterId) throw new Error("CODE_INTERPRETER_ID is required");
 const bucket = process.env.WORKSPACE_BUCKET;
 if (!bucket) throw new Error("WORKSPACE_BUCKET is required");
 createRuntimeServer({
+	kb: createKbDb(await readKbDatabaseUrl(process.env)),
 	codeInterpreterId,
 	s3: new S3Client({}),
 	bucket,

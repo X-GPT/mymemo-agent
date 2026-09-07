@@ -280,16 +280,29 @@ export function createHand(invoke: HandInvoke, fatal: (error: Error) => void) {
 			},
 		);
 	}
-	return createSdkMcpServer({
-		name: "hand",
-		alwaysLoad: true,
-		tools: [
-			define("bash", handSchemas.bash, handlers.bash),
-			define("read", handSchemas.read, handlers.read),
-			define("write", handSchemas.write, handlers.write),
-			define("edit", handSchemas.edit, handlers.edit),
-			define("glob", handSchemas.glob, handlers.glob),
-			define("grep", handSchemas.grep, handlers.grep),
-		],
-	});
+	return Object.assign(
+		createSdkMcpServer({
+			name: "hand",
+			alwaysLoad: true,
+			tools: [
+				define("bash", handSchemas.bash, handlers.bash),
+				define("read", handSchemas.read, handlers.read),
+				define("write", handSchemas.write, handlers.write),
+				define("edit", handSchemas.edit, handlers.edit),
+				define("glob", handSchemas.glob, handlers.glob),
+				define("grep", handSchemas.grep, handlers.grep),
+			],
+		}),
+		{
+			async writeTextFile({
+				path,
+				content,
+			}: {
+				path: string;
+				content: string;
+			}) {
+				await write(path, content);
+			},
+		},
+	);
 }

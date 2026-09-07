@@ -1,7 +1,6 @@
 import { HarnessAgent } from "@ai-sdk/harness/agent";
 import { createClaudeCode } from "@ai-sdk/harness-claude-code";
 import { createVercelSandbox } from "@ai-sdk/sandbox-vercel";
-import type { DocumentAccessLog } from "@mymemo/document-tools/access-log";
 import {
 	createKbDb,
 	createScopedDocumentClient,
@@ -19,7 +18,6 @@ import {
 export interface HarnessTurn {
 	binding: DocumentToolBinding;
 	scope: FrozenScope;
-	audit: DocumentAccessLog;
 	logger: DocumentToolLogger;
 }
 
@@ -82,7 +80,12 @@ export function createHarnessChatAgentFactory(config: HarnessConfig) {
 	const kb = createKbDb(config.KB_DATABASE_URL);
 	return (turn: HarnessTurn) => {
 		const { tools, onSession } = createHarnessTools({
-			client: createScopedDocumentClient({ kb, ...turn }),
+			client: createScopedDocumentClient({
+				kb,
+				userId: turn.binding.userId,
+				scope: turn.scope,
+				logger: turn.logger,
+			}),
 			binding: turn.binding,
 			logger: turn.logger,
 		});

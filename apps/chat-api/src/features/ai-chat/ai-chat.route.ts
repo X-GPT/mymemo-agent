@@ -110,7 +110,7 @@ routes.post(
 		}
 		// One agent per turn, built before the slot is taken: a constructor throw
 		// holds no slot, and the sandbox is untouched until `createSession`. The
-		// Harness turn id attributes this turn's document access in the audit log.
+		// Harness turn id attributes this turn's document tool calls in application logs.
 		const agent = c.var.deps.createHarnessChatAgent({
 			binding: {
 				userId: c.var.identity.memberCode,
@@ -118,7 +118,6 @@ routes.post(
 				turnId: crypto.randomUUID(),
 			},
 			scope: parseFrozenScope(conversation),
-			audit: c.var.deps.documentAccessLog,
 			logger: c.var.logger,
 		});
 		if (activeTurns.has(body.id)) {

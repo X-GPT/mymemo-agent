@@ -14,7 +14,7 @@ Use this guide when a change crosses service or package boundaries. For canonica
 | `apps/agentcore-runtime` | Sole production execution runtime. The Linux ARM64 image exposes `/ping` and `/invocations`, exactly acquires one dispatched Run, and owns its Run-serving behavior. |
 | `apps/agentcore-local-dispatch-bridge` | Development-only outbox poller that composes the shared publisher and consumer contracts against a local AgentCore Runtime. It is absent from production startup paths and images. |
 | `packages/agent-db` | Shared writable `mymemo_agent` data layer: schema, migrations, Run and Conversation Ownership transactions, runtime pointers, session transcripts, artifact metadata, and PGlite test support. |
-| `packages/document-tools` | Portable document-tool implementation behind chat-api's Harness chat path (#665): the `ListDocuments`/`SearchDocuments`/`LoadDocuments` handlers and caps, frozen-Scope parsing, the scoped read-only KB client, and the `document_access_events` audit writer. Deliberately separate from the Run path's `documents/` module (#610). |
+| `packages/document-tools` | Portable document-tool implementation behind chat-api's Harness chat path (#665): the `ListDocuments`/`SearchDocuments`/`LoadDocuments` handlers and caps, frozen-Scope parsing, the scoped read-only KB client, and Docs cache materialization through `DocsCacheWriter.writeTextFile`. Deliberately separate from the Run path's `documents/` module (#610). |
 | `packages/agentcore-dispatch` | Production-neutral AgentCore Dispatch publication behavior, strict envelope serialization, and separately importable SQS and SSM adapters. |
 | `packages/live-text` | Redis configuration, event validation, and producer-buffered in-memory/Redis Live Stream relay implementations. |
 
@@ -58,7 +58,7 @@ Workspace persistence, Agent session continuity, Searchable document loading, an
 | `apps/agentcore-runtime/src/artifacts/` | Artifact discovery, upload, and publication for Runs with a `done` Outcome |
 | `apps/chat-api/src/features/ai-chat/` | Harness-hosted AI SDK chat route (`POST /api/chat`, local composition only): one Claude Code turn per message on a per-turn `HarnessAgent` with `Read`/`Write`/`Edit`/`Grep` and no other built-in (`activeTools` is `HARNESS_ACTIVE_TOOLS` in `tools/`) in a persistent Vercel Sandbox per Conversation, executing MyMemo's document tools in-process against the read-only KB, streamed as the UI message stream |
 | `apps/chat-api/src/features/ai-chat/tools/` | The Harness `ToolSet` adapter over `@mymemo/document-tools`: per-turn tool construction, the session work-directory capture, and materialization into the sandbox through the session `LoadDocuments` is handed |
-| `packages/document-tools/src/` | Shared document-tool handlers, scoped KB client, frozen-Scope parsing, and the `document_access_events` audit writer |
+| `packages/document-tools/src/` | Shared document-tool handlers, scoped KB client, frozen-Scope parsing, and Docs cache materialization through `DocsCacheWriter.writeTextFile` |
 | `packages/agentcore-dispatch/src/` | Shared AgentCore Dispatch publisher policy, envelope serialization, and isolated SQS/SSM adapters |
 | `packages/agent-db/src/conversation-ownership.ts` | Live Ownership renew, release, and mutation fence |
 | `packages/agent-db/src/run-store.ts` | Fenced Run state and Run event transactions |

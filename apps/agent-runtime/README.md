@@ -34,7 +34,7 @@ docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile -t mymemo-a
 Tests run the pinned CLI against the fake Anthropic Messages server adapted
 from #730's `sdk-session-probe.ts`, without a model key. They compare every
 forwarded message with the SDK iterator, exercise thinking and
-six aliased tools, budget interruption, disconnect, Runtime-side failure, and
+nine aliased tools, budget interruption, disconnect, Runtime-side failure, and
 fatal sandbox loss with no SDK result. Hand checks exercise real local shell
 commands through a fake sandbox transport, path confinement, edits and caps.
 
@@ -45,7 +45,7 @@ starts and stops sessions; the Runtime never restarts a lost session. See
 
 The always-loaded `hand` MCP server exposes Bash, Read, Write, Edit, Glob and
 Grep via SDK aliases. `tools: []` disables built-ins; `allowedTools` lists only
-the six `mcp__hand__*` targets. Model paths live under `/ws`, mapped to `ws/`
+the six `mcp__hand__*` and three `mcp__docs__*` targets. Model paths live under `/ws`, mapped to `ws/`
 in the sandbox. Bash has a 120-second default and 600-second maximum timeout,
 without background mode. Hand output is capped at 64 KiB; writes at 1 MiB.
 File operations reject traversal and escaping symlinks. Binary reads return
@@ -55,7 +55,7 @@ access and export `OPENROUTER_API_KEY` securely, then:
 
 ```sh
 docker run --rm --platform linux/arm64 -p 8080:8080 \
-  -e OPENROUTER_API_KEY -e WORKSPACE_BUCKET -e AWS_REGION -e CODE_INTERPRETER_ID \
+  -e OPENROUTER_API_KEY -e KB_DATABASE_URL -e WORKSPACE_BUCKET -e AWS_REGION -e CODE_INTERPRETER_ID \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
   mymemo-agent-runtime
 # In another terminal:
@@ -104,3 +104,16 @@ AGENT_RUNTIME_ARN='<simplified Runtime ARN>' bun run apps/agent-runtime/smoke.ts
 
 The smoke prints its Conversation id; remove its transcript object after
 recording S3 size/continuity evidence using an operator role, not the Runtime role.
+
+## Knowledge-base documents
+
+The always-loaded `docs` MCP server exposes `ListDocuments`, `SearchDocuments`
+and `LoadDocuments`. Its client takes the user and frozen Scope from the validated
+invoke payload; tool arguments cannot widen either. The KB connection is read-only,
+with `sslmode=verify-full`, supplied by `KB_DATABASE_URL_SECRET_ARN` (AWSCURRENT)
+or `KB_DATABASE_URL` for local runs. No document-access audit is written.
+
+`LoadDocuments` writes `/ws/.mymemo/docs/<id>.md` through the same Hand session
+and returns only metadata. The existing workspace tarball carries the Docs cache
+between Turns. Use `Read` or `Grep` on the returned path; the front streams all
+three public document-tool names with its existing 8 KiB output preview.

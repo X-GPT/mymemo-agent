@@ -52,7 +52,6 @@ type Inspected = {
 const turn: HarnessTurn = {
 	binding: { userId: "member-1", conversationId: "conv-1", turnId: "turn-1" },
 	scope: { type: "general" },
-	audit: { record: async () => {} },
 	logger: { info() {}, error() {} },
 };
 
