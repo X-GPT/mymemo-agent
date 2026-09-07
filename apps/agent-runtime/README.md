@@ -1,8 +1,9 @@
 # Agent Runtime
 
 The #732 Runtime, separate from v1's `apps/agentcore-runtime`. The front owns
-sandbox lifecycle and workspace persistence; this process only invokes its
-supplied session. No DynamoDB or transcript adapter is wired yet.
+sandbox lifecycle and workspace persistence; this process invokes its supplied
+session and copies the CLI transcript to S3 around each query. No DynamoDB
+is wired here.
 
 `POST /invocations` accepts the #732 payload (timestamps are Unix milliseconds;
 `scope.kind` is `general`, `collection`, or `document`). `budgetUntil` includes
@@ -32,7 +33,7 @@ docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile -t mymemo-a
 
 Tests run the pinned CLI against the fake Anthropic Messages server adapted
 from #730's `sdk-session-probe.ts`, without a model key. They compare every
-forwarded message with the SDK iterator, exercise thinking and an attempted
+forwarded message with the SDK iterator, exercise thinking and
 six aliased tools, budget interruption, disconnect, Runtime-side failure, and
 fatal sandbox loss with no SDK result. Hand checks exercise real local shell
 commands through a fake sandbox transport, path confinement, edits and caps.
@@ -49,6 +50,17 @@ in the sandbox. Bash has a 120-second default and 600-second maximum timeout,
 without background mode. Hand output is capped at 64 KiB; writes at 1 MiB.
 File operations reject traversal and escaping symlinks. Binary reads return
 size and MIME type; PDF page extraction uses Bash. Edits require one match.
+For a real-model memory smoke, provide AWS credentials with transcript Get/Put
+access and export `OPENROUTER_API_KEY` securely, then:
+
+```sh
+docker run --rm --platform linux/arm64 -p 8080:8080 \
+  -e OPENROUTER_API_KEY -e WORKSPACE_BUCKET -e AWS_REGION -e CODE_INTERPRETER_ID \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+  mymemo-agent-runtime
+# In another terminal:
+bun run apps/agent-runtime/smoke.ts
+```
 
 Optional image env: `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`),
 `OPENROUTER_DEFAULT_MODEL` (default `anthropic/claude-sonnet-5`), `PORT` (8080),
@@ -57,3 +69,38 @@ Optional image env: `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api`),
 On AWS, `OPENROUTER_API_KEY_SECRET_ARN` selects Secrets Manager `AWSCURRENT`
 bootstrap instead of the local direct key. Deployment, IAM and invocation steps:
 [Runtime runbook](../../docs/runbooks/agent-runtime.md).
+
+## Transcript continuity
+
+`WORKSPACE_BUCKET` is required. Each Turn downloads the one object
+`_transcripts/<conversationId>.jsonl` before querying, to
+`/tmp/claude/<turnId>/projects/-opt-mymemo-project/<conversationId>.jsonl`.
+The fixed empty cwd is `/opt/mymemo/project`; the pinned CLI test verifies its
+project-key convention. An existing file selects `resume: conversationId`;
+the first Turn selects `sessionId: conversationId` when the object is absent.
+
+The role has only GetObject/PutObject on `_transcripts/*`. Without ListBucket,
+S3 reports a missing key as AccessDenied; only `seq: 1` accepts that response
+(or NoSuchKey). Later download failures stop the Turn rather than discard memory.
+An initial permission misconfiguration is indistinguishable from absence;
+the failed upload is counted, and the next Turn fails closed.
+
+After any SDK `result`, including an error result, the Runtime waits for CLI
+exit and uploads the whole file before ending the HTTP stream. Upload/read
+failures log the Conversation/Turn ids and an embedded CloudWatch
+`MyMemo/AgentRuntime` / `TranscriptUploadFailures` Count, without changing the
+Turn result. Every exit removes the per-Turn config directory. A crash before
+a result does not replace the prior transcript. Cleanup (#743) deletes exactly
+`_transcripts/<conversationId>.jsonl`; there are no part objects or alternate prefixes.
+
+The fake-model test runs three fresh servers/config directories, verifies
+model message counts **2 → 5 → 8**, and asserts the one object's size grows.
+The smoke script sends a random fact, then asks for it in a second Turn. Against
+AWS, it uses two different Runtime session ids and the local `mymemo` profile:
+
+```sh
+AGENT_RUNTIME_ARN='<simplified Runtime ARN>' bun run apps/agent-runtime/smoke.ts
+```
+
+The smoke prints its Conversation id; remove its transcript object after
+recording S3 size/continuity evidence using an operator role, not the Runtime role.

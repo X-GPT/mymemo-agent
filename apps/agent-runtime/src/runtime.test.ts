@@ -1,12 +1,23 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+	GetObjectCommand,
+	PutObjectCommand,
+	S3Client,
+} from "@aws-sdk/client-s3";
 import { query, type SDKMessage } from "claude-agent-sdk";
-import { createRuntimeServer, invocationSchema } from "./runtime";
+import {
+	createRuntimeServer,
+	invocationSchema,
+	logger,
+	RUNTIME_CWD,
+} from "./runtime";
 
 const require = createRequire(import.meta.url);
 const executable = require.resolve(
@@ -106,32 +117,74 @@ async function harness(
 		| "disconnect"
 		| "throw"
 		| "mid-throw"
-		| "dead-sandbox",
+		| "dead-sandbox"
+		| "memory"
+		| "upload-failure"
+		| "download-failure",
+	objects = new Map<string, Buffer>(),
 ) {
-	const cwd = await mkdtemp(join(tmpdir(), "runtime-test-"));
+	const cwd = await realpath(await mkdtemp(join(tmpdir(), "runtime-test-")));
 	const captured: SDKMessage[] = [];
 	let configDir = "";
 	let modelCalls = 0;
+	const messageCounts: number[] = [];
+	const operations: string[] = [];
+	const s3 = new S3Client({ region: "us-west-2" });
+	s3.send = async (command) => {
+		const input = command.input as {
+			Key: string;
+			Bucket: string;
+			Body?: Buffer;
+		};
+		expect(input.Bucket).toBe("transcript-test");
+		expect(input.Key).toMatch(/^_transcripts\/[0-9a-f-]+\.jsonl$/);
+		if (command instanceof GetObjectCommand) {
+			operations.push("get");
+			if (mode === "download-failure")
+				throw Object.assign(new Error("access denied"), {
+					name: "AccessDenied",
+				});
+			const body = objects.get(input.Key);
+			if (!body)
+				throw Object.assign(new Error("absent"), {
+					name: mode === "memory" ? "AccessDenied" : "NoSuchKey",
+				});
+			return { Body: { transformToByteArray: async () => body } };
+		}
+		expect(command).toBeInstanceOf(PutObjectCommand);
+		operations.push("put");
+		if (mode === "upload-failure") throw new Error("upload unavailable");
+		assert(input.Body);
+		objects.set(input.Key, Buffer.from(input.Body));
+		return {};
+	};
 	const fake = Bun.serve({
 		port: 0,
 		idleTimeout: 0,
 		async fetch(request) {
 			if (!new URL(request.url).pathname.endsWith("/messages"))
 				return new Response("{}", { status: 404 });
-			const body = (await request.json()) as { tools?: { name: string }[] };
+			const body = (await request.json()) as {
+				tools?: { name: string }[];
+				messages: unknown[];
+			};
 			expect((body.tools ?? []).map((tool) => tool.name).sort()).toEqual(
 				["bash", "read", "write", "edit", "glob", "grep"]
 					.map((n) => `mcp__hand__${n}`)
 					.sort(),
 			);
 			modelCalls++;
+			messageCounts.push(body.messages.length);
 			if (mode === "budget" || mode === "disconnect")
 				return new Response(new ReadableStream({}), {
 					headers: { "content-type": "text/event-stream" },
 				});
-			return new Response(fakeMessages(modelCalls - 1), {
-				headers: { "content-type": "text/event-stream" },
-			});
+			return new Response(
+				fakeMessages(mode === "memory" ? calls.length : modelCalls - 1),
+				{
+					headers: { "content-type": "text/event-stream" },
+				},
+			);
 		},
 	});
 	const server = createRuntimeServer(
@@ -161,6 +214,8 @@ async function harness(
 					},
 				};
 			},
+			s3,
+			bucket: "transcript-test",
 			model: "fake",
 			pathToClaudeCodeExecutable: executable,
 			env: {
@@ -172,6 +227,22 @@ async function harness(
 		},
 		(params) => {
 			configDir = params.options?.env?.CLAUDE_CONFIG_DIR ?? "";
+			expect(configDir).toMatch(/^\/tmp\/claude\/[0-9a-f-]+$/);
+			const sessionId = params.options?.resume ?? params.options?.sessionId;
+			expect(sessionId).toBeDefined();
+			if (params.options?.resume) {
+				expect(params.options.sessionId).toBeUndefined();
+				expect(
+					existsSync(
+						join(
+							configDir,
+							"projects",
+							cwd.replace(/[^a-zA-Z0-9]/g, "-"),
+							`${sessionId}.jsonl`,
+						),
+					),
+				).toBe(true);
+			}
 			expect(params.options?.tools).toEqual([]);
 			expect(params.options?.permissionMode).toBe("dontAsk");
 			expect(params.options?.settingSources).toEqual([]);
@@ -193,9 +264,16 @@ async function harness(
 	return {
 		url: `http://127.0.0.1:${server.port}`,
 		captured,
+		objects,
+		operations,
+		messageCounts,
+		get configDir() {
+			return configDir;
+		},
 		async cleanup() {
 			await server.stop(true);
 			fake.stop(true);
+			s3.destroy();
 			await rm(cwd, { recursive: true, force: true });
 		},
 		async checkRemoved() {
@@ -213,11 +291,15 @@ for (const mode of [
 	"throw",
 	"mid-throw",
 	"dead-sandbox",
+	"upload-failure",
+	"download-failure",
 ] as const) {
 	test(`real SDK: ${mode}`, async () => {
+		const log = spyOn(logger, "error").mockImplementation(() => {});
 		const h = await harness(mode);
 		try {
 			const input = payload();
+			if (mode === "download-failure") input.seq = 2;
 			if (mode === "budget") input.budgetUntil = Date.now() + 128_000;
 			if (mode === "disconnect") {
 				await new Promise<void>((resolve, reject) => {
@@ -261,12 +343,15 @@ for (const mode of [
 						code: "internal_error",
 						detail: "injected failure",
 					});
-				} else if (mode === "throw")
+				} else if (mode === "throw" || mode === "download-failure")
 					expect(messages).toEqual([
 						{
 							type: "mymemo.error",
 							code: "internal_error",
-							detail: "injected failure",
+							detail:
+								mode === "download-failure"
+									? "access denied"
+									: "injected failure",
 						},
 					]);
 				else {
@@ -296,8 +381,32 @@ for (const mode of [
 				}
 			}
 			await h.checkRemoved();
+			expect(h.operations).toEqual([
+				"get",
+				...(["normal", "budget", "upload-failure"].includes(mode)
+					? ["put"]
+					: []),
+			]);
+			if (mode === "upload-failure") {
+				expect(log).toHaveBeenCalledTimes(1);
+				expect(log.mock.calls[0]?.[0]).toMatchObject({
+					conversationId: input.conversationId,
+					turnId: input.turnId,
+					TranscriptUploadFailures: 1,
+					_aws: {
+						CloudWatchMetrics: [
+							{
+								Namespace: "MyMemo/AgentRuntime",
+								Dimensions: [[]],
+								Metrics: [{ Name: "TranscriptUploadFailures", Unit: "Count" }],
+							},
+						],
+					},
+				});
+			}
 		} finally {
 			await h.cleanup();
+			log.mockRestore();
 		}
 	});
 }
@@ -317,4 +426,49 @@ test("invoke boundary rejects unsafe payloads", () => {
 			false,
 		);
 	}
+});
+
+test("three fresh config directories resume one growing CLI transcript", async () => {
+	const objects = new Map<string, Buffer>();
+	const input = payload();
+	const sizes: number[] = [];
+	const counts: number[] = [];
+	const dirs = new Set<string>();
+	expect(RUNTIME_CWD.replace(/[^a-zA-Z0-9]/g, "-")).toBe("-opt-mymemo-project");
+	for (let seq = 1; seq <= 3; seq++) {
+		const h = await harness("memory", objects);
+		try {
+			const response = await fetch(`${h.url}/invocations`, {
+				method: "POST",
+				body: JSON.stringify({ ...input, seq, turnId: crypto.randomUUID() }),
+			});
+			const messages = (await response.text())
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+			expect(messages.at(-1)).toMatchObject({
+				type: "result",
+				is_error: false,
+				session_id: input.conversationId,
+			});
+			expect(h.operations).toEqual(["get", "put"]);
+			counts.push(...h.messageCounts);
+			dirs.add(h.configDir);
+			const transcript = objects.get(
+				`_transcripts/${input.conversationId}.jsonl`,
+			);
+			assert(transcript);
+			expect(transcript.length).toBeGreaterThan(sizes.at(-1) ?? 0);
+			sizes.push(transcript.length);
+			await h.checkRemoved();
+		} finally {
+			await h.cleanup();
+		}
+	}
+	expect(dirs.size).toBe(3);
+	expect(objects.size).toBe(1);
+	expect(counts).toEqual([2, 5, 8]);
+	console.log(
+		JSON.stringify({ messageCounts: counts, transcriptBytes: sizes }),
+	);
 });
