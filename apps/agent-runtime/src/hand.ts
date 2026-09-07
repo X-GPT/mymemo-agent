@@ -200,11 +200,15 @@ export function createHand(invoke: HandInvoke, fatal: (error: Error) => void) {
 		},
 		glob: async (args: z.infer<z.ZodObject<typeof handSchemas.glob>>) => {
 			const path = await checkPath(args.path ?? "/ws");
-			const patterns = [args.pattern];
-			if (args.pattern.startsWith("**/")) patterns.push(args.pattern.slice(3));
-			return command(
-				`find ${quote(path)} -type f '(' ${patterns.map((pattern) => `-${pattern.includes("/") ? "path" : "name"} ${quote(pattern.includes("/") ? `${path}/${pattern}` : pattern)}`).join(" -o ")} ')'`,
+			const relative = path.slice(3);
+			const prefix = relative.replace(/([*?[\]{}\\])/g, "\\$1");
+			const pattern = `/${prefix ? `${prefix}/` : ""}${args.pattern}`;
+			const result = await command(
+				`cd ~/ws && rg --files --hidden --no-ignore --glob ${quote(pattern)} -- ${quote(relative || ".")}`,
 			);
+			if (![0, 1].includes(result.exitCode)) throw new Error(result.value);
+			result.exitCode = 0;
+			return result;
 		},
 		grep: async (args: z.infer<z.ZodObject<typeof handSchemas.grep>>) => {
 			const path = await checkPath(args.path ?? "/ws");
@@ -222,9 +226,9 @@ export function createHand(invoke: HandInvoke, fatal: (error: Error) => void) {
 					if (args[flag] !== undefined) flags.push(flag, String(args[flag]));
 				if (args.context !== undefined) flags.push("-C", String(args.context));
 			}
-			flags.push("--", args.pattern, path);
-			const result = await command(flags.map(quote).join(" "));
-			if (result.exitCode > 1) throw new Error(result.value);
+			flags.push("--", args.pattern, path.slice(3) || ".");
+			const result = await command(`cd ~/ws && ${flags.map(quote).join(" ")}`);
+			if (![0, 1].includes(result.exitCode)) throw new Error(result.value);
 			result.exitCode = 0;
 			const start = args.offset ?? 0;
 			const original = result.value;

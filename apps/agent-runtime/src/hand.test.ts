@@ -124,9 +124,9 @@ test("Hand executes real shell and file operations only through its sandbox tran
 		expect(
 			(await h.call("bash", { command: "cat sub/notes.txt" })).output.value,
 		).toContain("changed");
-		expect((await h.call("glob", { pattern: "*.txt" })).output.value).toContain(
-			"notes.txt",
-		);
+		expect(
+			(await h.call("glob", { pattern: "**/*.txt" })).output.value,
+		).toContain("notes.txt");
 		await h.call("write", { file_path: "/ws/root.txt", content: "root" });
 		expect(
 			(await h.call("glob", { pattern: "**/*.txt" })).output.value,
@@ -135,6 +135,24 @@ test("Hand executes real shell and file operations only through its sandbox tran
 			(await h.call("grep", { pattern: "changed", output_mode: "content" }))
 				.output.value,
 		).toContain("changed");
+		await mkdir(join(home, "ws", "src", "deep"), { recursive: true });
+		await writeFile(join(home, "ws", "src", "root.ts"), "root");
+		await writeFile(join(home, "ws", "src", "deep", "nested.ts"), "nested");
+		const files = async (pattern: string, path?: string) =>
+			(
+				await h.call("glob", { pattern, ...(path ? { path } : {}) })
+			).output.value
+				.trim()
+				.split("\n")
+				.map((path: string) => path.replace(/^\.\//, ""))
+				.sort();
+		expect(await files("src/*.ts")).toEqual(["src/root.ts"]);
+		expect(await files("src/**/*.ts")).toEqual([
+			"src/deep/nested.ts",
+			"src/root.ts",
+		]);
+		expect(await files("*.ts", "/ws/src")).toEqual(["src/root.ts"]);
+		expect((await h.call("glob", { pattern: "missing.*" })).error).toBe(false);
 		await writeFile(
 			join(home, "ws", "large.txt"),
 			"x".repeat(36 * 1024 * 1024),
@@ -202,5 +220,26 @@ test("Dead sandbox reports fatal loss; ordinary errors remain tool errors", asyn
 		} finally {
 			await h.close();
 		}
+	}
+});
+
+test("Grep reports a killed sandbox command as a tool error", async () => {
+	let calls = 0;
+	const h = await harness(async () => ({
+		content: [],
+		structuredContent: {
+			exitCode: 0,
+			stdout: JSON.stringify({
+				value: "",
+				totalBytes: 0,
+				truncated: false,
+				exitCode: calls++ ? -9 : 0,
+			}),
+		},
+	}));
+	try {
+		expect((await h.call("grep", { pattern: "x" })).error).toBe(true);
+	} finally {
+		await h.close();
 	}
 });
