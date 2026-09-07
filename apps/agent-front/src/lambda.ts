@@ -1,4 +1,5 @@
 import type { Writable } from "node:stream";
+import { BedrockAgentCoreClient } from "@aws-sdk/client-bedrock-agentcore";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { S3Client } from "@aws-sdk/client-s3";
 import {
@@ -15,14 +16,16 @@ import { HistoryStore } from "./history";
 import { Messages } from "./messages";
 import { agentCoreRuntime } from "./runtime";
 import { ConversationStore } from "./store";
+import { Workspace } from "./workspace";
 
 const table = process.env.CONVERSATION_TABLE;
 const secretArn = process.env.STATSIG_SERVER_SECRET_ARN;
 const bucket = process.env.WORKSPACE_BUCKET;
 const runtimeArn = process.env.AGENT_RUNTIME_ARN;
-if (!table || !secretArn || !bucket || !runtimeArn)
+const interpreterId = process.env.CODE_INTERPRETER_ID;
+if (!table || !secretArn || !bucket || !runtimeArn || !interpreterId)
 	throw new Error(
-		"CONVERSATION_TABLE, STATSIG_SERVER_SECRET_ARN WORKSPACE_BUCKET and AGENT_RUNTIME_ARN are required",
+		"CONVERSATION_TABLE, STATSIG_SERVER_SECRET_ARN, WORKSPACE_BUCKET, AGENT_RUNTIME_ARN and CODE_INTERPRETER_ID are required",
 	);
 const { SecretString: secret } = await new SecretsManagerClient({}).send(
 	new GetSecretValueCommand({
@@ -38,7 +41,12 @@ const store = new ConversationStore(
 );
 const statsig = new Statsig(secret, { outputLogLevel: "warn" });
 const history = new HistoryStore(s3, bucket);
-const messages = new Messages(store, history, agentCoreRuntime(runtimeArn));
+const messages = new Messages(
+	store,
+	history,
+	agentCoreRuntime(runtimeArn),
+	new Workspace(new BedrockAgentCoreClient({}), interpreterId, s3, bucket),
+);
 const app = createApp(store, new StatsigExposureGate(statsig), messages);
 type StreamingHandler = (
 	event: Record<string, unknown>,

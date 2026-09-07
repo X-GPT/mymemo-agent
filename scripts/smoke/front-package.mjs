@@ -17,6 +17,7 @@ SecretsManagerClient.prototype.send = async () => ({
 Object.assign(process.env, {
 	AWS_REGION: "us-west-2",
 	CONVERSATION_TABLE: "package-smoke",
+	CODE_INTERPRETER_ID: "package_smoke-0123456789",
 	WORKSPACE_BUCKET: "package-smoke",
 	AGENT_RUNTIME_ARN:
 		"arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/package_smoke-0123456789",

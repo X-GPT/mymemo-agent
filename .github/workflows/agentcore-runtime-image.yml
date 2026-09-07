@@ -46,4 +46,6 @@ jobs:
       - name: Build agent-runtime ARM64 image
         run: docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile -t mymemo-agent-runtime:image-check .
       - name: Verify pinned SDK stream without a model key
-        run: docker run --rm --entrypoint bun mymemo-agent-runtime:image-check test --timeout=60000 src
+        # Hand's shell emulation runs in the full CI suite, which has the sandbox
+        # toolchain. Python and rg belong in Code Interpreter, not this image.
+        run: docker run --rm --entrypoint bun mymemo-agent-runtime:image-check test --timeout=60000 src/runtime.test.ts src/config.test.ts

@@ -21,6 +21,7 @@ import { Messages } from "./messages";
 import type { Invocation } from "./runtime";
 import { ConversationStore } from "./store";
 import { createTable } from "./table";
+import { WorkspaceTooLarge } from "./workspace";
 
 const endpoint = process.env.TEST_DYNAMODB_ENDPOINT;
 describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
@@ -61,7 +62,9 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 		client.destroy();
 		s3.destroy();
 	});
-	async function harness() {
+	async function harness(
+		fail?: "start" | "restore" | "save" | "stop" | "oversize",
+	) {
 		const userId = crypto.randomUUID();
 		const headers = {
 			"x-member-code": userId,
@@ -87,6 +90,12 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			input: Invocation;
 			controller: ReadableStreamDefaultController<Uint8Array>;
 		}[] = [];
+		const lifecycle: string[] = [];
+		const operation = async (name: string) => {
+			lifecycle.push(name);
+			if (name === "save" && fail === "oversize") throw new WorkspaceTooLarge();
+			if (name === fail) throw new Error("injected Sandbox failure");
+		};
 		const messages = new Messages(
 			store,
 			history,
@@ -96,6 +105,15 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 						calls.push({ input, controller });
 					},
 				}),
+			{
+				start: async () => {
+					await operation("start");
+					return "test-session";
+				},
+				restore: () => operation("restore"),
+				save: () => operation("save"),
+				stop: () => operation("stop"),
+			},
 		);
 		const app = createApp(
 			store,
@@ -155,6 +173,7 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			);
 		return {
 			id,
+			lifecycle,
 			userId,
 			headers,
 			app,
@@ -168,6 +187,72 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			expire,
 		};
 	}
+
+	test("Sandbox lifecycle saves only after result and always stops before terminal history", async () => {
+		for (const mode of [
+			"done",
+			"error-result",
+			"missing-result",
+			"lost",
+			"start",
+			"restore",
+			"save",
+			"stop",
+			"oversize",
+		] as const) {
+			const h = await harness(
+				["start", "restore", "save", "stop", "oversize"].includes(mode)
+					? (mode as "start" | "restore" | "save" | "stop" | "oversize")
+					: undefined,
+			);
+			const response = await h.send();
+			// start/restore are asynchronous before the Runtime is invoked.
+			for (
+				let i = 0;
+				i < 100 && !h.calls.length && h.messages.pending.size;
+				i++
+			)
+				await Bun.sleep(1);
+			if (h.calls.length) {
+				expect(h.calls[0]?.input.sandboxSessionId).toBe("test-session");
+				if (mode === "lost")
+					h.raw(0, { type: "mymemo.error", code: "internal_error" });
+				if (mode === "missing-result" || mode === "lost")
+					h.calls[0]?.controller.close();
+				else if (mode === "error-result") {
+					h.raw(0, {
+						type: "result",
+						subtype: "error_during_execution",
+						is_error: true,
+						terminal_reason: "aborted_streaming",
+					});
+					h.calls[0]?.controller.close();
+				} else h.complete();
+			}
+			const wire = await response.text();
+			const saved = await h.history.get(h.id, 1);
+			expect(saved?.status).toBe(mode === "done" ? "done" : "error");
+			if (mode !== "done")
+				expect(saved?.errorCode).toBe(
+					mode === "oversize"
+						? "workspace_too_large"
+						: mode === "error-result"
+							? "budget_exceeded"
+							: "internal_error",
+				);
+			expect(h.lifecycle).toEqual(
+				mode === "start"
+					? ["start"]
+					: mode === "restore" || mode === "missing-result" || mode === "lost"
+						? ["start", "restore", "stop"]
+						: ["start", "restore", "save", "stop"],
+			);
+			expect(wire).toContain(
+				mode === "done" ? '"type":"finish"' : '"type":"error"',
+			);
+			expect(await store.get(h.id, h.userId)).not.toHaveProperty("processing");
+		}
+	});
 
 	test("concurrent sends admit exactly once; request retries distinguish duplicate and conflicting text", async () => {
 		const h = await harness();

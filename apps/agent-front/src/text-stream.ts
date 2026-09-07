@@ -6,11 +6,26 @@ export interface MessageMetadata {
 	endedAt?: string;
 	errorCode?: string;
 }
+type ToolName = "Bash" | "Read" | "Write" | "Edit" | "Glob" | "Grep";
+interface ToolOutput {
+	value: string;
+	truncated: boolean;
+	totalBytes: number;
+}
+interface ToolPart {
+	type: `tool-${ToolName}`;
+	toolCallId: string;
+	input: unknown;
+	state: "input-available" | "output-available" | "output-error";
+	output?: ToolOutput;
+	errorText?: string;
+}
 export interface AssistantMessage {
 	id: string;
 	role: "assistant";
 	metadata: MessageMetadata;
 	parts: Array<
+		| ToolPart
 		| { type: "step-start" }
 		| { type: "text"; text: string; state: "streaming" | "done" }
 	>;
@@ -21,7 +36,40 @@ export type TextStreamChunk =
 	| { type: "text-start" | "text-end"; id: string }
 	| { type: "text-delta"; id: string; delta: string }
 	| { type: "message-metadata"; messageMetadata: MessageMetadata }
-	| { type: "error"; errorText: string };
+	| { type: "error"; errorText: string }
+	| { type: "tool-input-start"; toolCallId: string; toolName: ToolName }
+	| {
+			type: "tool-input-available";
+			toolCallId: string;
+			toolName: ToolName;
+			input: unknown;
+	  }
+	| { type: "tool-output-available"; toolCallId: string; output: ToolOutput }
+	| { type: "tool-output-error"; toolCallId: string; errorText: string };
+
+function toolOutput(content: unknown): ToolOutput {
+	const value =
+		typeof content === "string" ? content : JSON.stringify(content ?? "");
+	const bytes = new TextEncoder().encode(value);
+	return {
+		value: new TextDecoder().decode(bytes.subarray(0, 8192), {
+			stream: bytes.length > 8192,
+		}),
+		truncated: bytes.length > 8192,
+		totalBytes: bytes.length,
+	};
+}
+
+const toolNames = new Map<string, ToolName>(
+	Object.entries({
+		bash: "Bash",
+		read: "Read",
+		write: "Write",
+		edit: "Edit",
+		glob: "Glob",
+		grep: "Grep",
+	}),
+);
 
 function object(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object"
@@ -68,6 +116,8 @@ export function createTextStream(input: {
 	let step = 0;
 	let stepOpen = false;
 	let result = false;
+	let fatalRuntimeError = false;
+	const tools = new Map<string, ToolPart>();
 	let errorCode: string | undefined;
 	let finished = false;
 	const texts = new Map<
@@ -96,10 +146,17 @@ export function createTextStream(input: {
 	});
 	return {
 		message,
+		get hasResult() {
+			return result;
+		},
+		get fatalRuntimeError() {
+			return fatalRuntimeError;
+		},
 		push(raw: unknown) {
 			if (finished) return;
 			const value = object(raw);
 			if (value.type === "mymemo.error") {
+				fatalRuntimeError = true;
 				errorCode =
 					typeof value.code === "string" ? value.code : "internal_error";
 				return;
@@ -112,6 +169,66 @@ export function createTextStream(input: {
 			}
 			if (value.type === "assistant" && value.error) {
 				errorCode = sdkError(value);
+				return;
+			}
+			if (value.type === "assistant" || value.type === "user") {
+				const content = object(value.message).content;
+				for (const rawBlock of Array.isArray(content) ? content : []) {
+					const block = object(rawBlock);
+					if (value.type === "assistant" && block.type === "tool_use") {
+						const name =
+							typeof block.name === "string"
+								? toolNames.get(
+										block.name.replace(/^mcp__hand__/, "").toLowerCase(),
+									)
+								: undefined;
+						if (!name || typeof block.id !== "string" || tools.has(block.id))
+							continue;
+						const part: ToolPart = {
+							type: `tool-${name}`,
+							toolCallId: block.id,
+							input: block.input,
+							state: "input-available",
+						};
+						tools.set(block.id, part);
+						message.parts.push(part);
+						emit({
+							type: "tool-input-start",
+							toolCallId: block.id,
+							toolName: name,
+						});
+						emit({
+							type: "tool-input-available",
+							toolCallId: block.id,
+							toolName: name,
+							input: block.input,
+						});
+					} else if (value.type === "user" && block.type === "tool_result") {
+						const part =
+							typeof block.tool_use_id === "string"
+								? tools.get(block.tool_use_id)
+								: undefined;
+						if (!part || part.state !== "input-available") continue;
+						const output = toolOutput(block.content);
+						if (block.is_error) {
+							part.state = "output-error";
+							part.errorText = output.value;
+							emit({
+								type: "tool-output-error",
+								toolCallId: part.toolCallId,
+								errorText: output.value,
+							});
+						} else {
+							part.state = "output-available";
+							part.output = output;
+							emit({
+								type: "tool-output-available",
+								toolCallId: part.toolCallId,
+								output,
+							});
+						}
+					}
+				}
 				return;
 			}
 			if (value.type !== "stream_event") return;

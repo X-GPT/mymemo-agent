@@ -2,6 +2,7 @@ import { type HistoryStore, type Turn, turnMetadata } from "./history";
 import { type InvokeRuntime, sdkMessages } from "./runtime";
 import { type ConversationStore, SendConflict } from "./store";
 import { createTextStream, type TextStreamChunk } from "./text-stream";
+import { type Workspace, WorkspaceTooLarge } from "./workspace";
 
 export class Messages {
 	readonly pending = new Set<Promise<void>>();
@@ -9,6 +10,7 @@ export class Messages {
 		readonly store: ConversationStore,
 		readonly history: HistoryStore,
 		readonly invoke: InvokeRuntime,
+		readonly workspace: Pick<Workspace, "start" | "restore" | "save" | "stop">,
 	) {}
 	async send(id: string, userId: string, text: string, requestId: string) {
 		let admitted: Awaited<ReturnType<ConversationStore["admit"]>>;
@@ -78,7 +80,10 @@ export class Messages {
 				});
 				const run = async () => {
 					let failure: string | undefined;
+					let sessionId: string | undefined;
 					try {
+						sessionId = await this.workspace.start(turnId);
+						await this.workspace.restore(id, sessionId);
 						const raw = await this.invoke({
 							conversationId: id,
 							turnId,
@@ -89,12 +94,25 @@ export class Messages {
 							text,
 							startedAt: Date.parse(startedAt),
 							budgetUntil: Date.parse(until),
-							sandboxSessionId: "unused-no-tools",
+							sandboxSessionId: sessionId,
 						});
 						for await (const message of sdkMessages(raw))
 							converter.push(message);
-					} catch {
-						failure = "internal_error";
+						if (converter.hasResult && !converter.fatalRuntimeError)
+							await this.workspace.save(id, sessionId);
+					} catch (error) {
+						failure =
+							error instanceof WorkspaceTooLarge
+								? "workspace_too_large"
+								: "internal_error";
+					} finally {
+						if (sessionId) {
+							try {
+								await this.workspace.stop(sessionId);
+							} catch {
+								failure ??= "internal_error";
+							}
+						}
 					}
 					turn.assistant = converter.finish(failure);
 					Object.assign(turn, turn.assistant.metadata);

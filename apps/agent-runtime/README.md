@@ -1,13 +1,14 @@
 # Agent Runtime
 
-Issue #736's no-tools Runtime, separate from v1's `apps/agentcore-runtime`.
-Issue #739 copies the CLI transcript to S3 around each query. No DynamoDB,
-workspace, or sandbox lifecycle is wired here.
+The #732 Runtime, separate from v1's `apps/agentcore-runtime`. The front owns
+sandbox lifecycle and workspace persistence; this process invokes its supplied
+session and copies the CLI transcript to S3 around each query. No DynamoDB
+is wired here.
 
 `POST /invocations` accepts the #732 payload (timestamps are Unix milliseconds;
 `scope.kind` is `general`, `collection`, or `document`). `budgetUntil` includes
 two minutes of grace after the ten-minute query budget. Every SDK message is
-serialized unchanged as NDJSON, including thinking and denied tool results.
+serialized unchanged as NDJSON, including thinking and Hand tool results.
 A terminal SDK result ends the single-prompt query; Runtime failures emit one
 `mymemo.error` line. Budget expiry interrupts the SDK so its result survives;
 caller disconnect closes the query. Both cases close the HTTP server after
@@ -32,15 +33,29 @@ docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile -t mymemo-a
 
 Tests run the pinned CLI against the fake Anthropic Messages server adapted
 from #730's `sdk-session-probe.ts`, without a model key. They compare every
-forwarded message with the SDK iterator, exercise thinking and an attempted
-disabled tool, budget interruption, disconnect, and Runtime-side failure.
+forwarded message with the SDK iterator, exercise thinking and
+six aliased tools, budget interruption, disconnect, Runtime-side failure, and
+fatal sandbox loss with no SDK result. Hand checks exercise real local shell
+commands through a fake sandbox transport, path confinement, edits and caps.
 
+Set `CODE_INTERPRETER_ID` to a custom SANDBOX-mode interpreter and provide
+the Runtime execution role with InvokeCodeInterpreter authority. The front
+starts and stops sessions; the Runtime never restarts a lost session. See
+`apps/agent-front` for the two-Turn workspace demo.
+
+The always-loaded `hand` MCP server exposes Bash, Read, Write, Edit, Glob and
+Grep via SDK aliases. `tools: []` disables built-ins; `allowedTools` lists only
+the six `mcp__hand__*` targets. Model paths live under `/ws`, mapped to `ws/`
+in the sandbox. Bash has a 120-second default and 600-second maximum timeout,
+without background mode. Hand output is capped at 64 KiB; writes at 1 MiB.
+File operations reject traversal and escaping symlinks. Binary reads return
+size and MIME type; PDF page extraction uses Bash. Edits require one match.
 For a real-model memory smoke, provide AWS credentials with transcript Get/Put
 access and export `OPENROUTER_API_KEY` securely, then:
 
 ```sh
 docker run --rm --platform linux/arm64 -p 8080:8080 \
-  -e OPENROUTER_API_KEY -e WORKSPACE_BUCKET -e AWS_REGION \
+  -e OPENROUTER_API_KEY -e WORKSPACE_BUCKET -e AWS_REGION -e CODE_INTERPRETER_ID \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
   mymemo-agent-runtime
 # In another terminal:

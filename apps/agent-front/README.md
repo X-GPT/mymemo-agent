@@ -1,6 +1,6 @@
-# Lambda front — Conversations and text Turns
+# Lambda front — Conversations, Turns and Workspaces
 
-Implements #735 and #737 / Spec #732 alongside v1. Identity parsing, Summary
+Implements #735, #737 and #738 / Spec #732 alongside v1. Identity parsing, Summary
 and the fail-closed Statsig gate are copied without importing chat-api.
 Creation and send consult the gate; existing history and management do not.
 
@@ -13,7 +13,7 @@ bun install
 docker compose -f apps/agent-front/compose.yml up -d
 bun run --cwd apps/agent-front db:init
 # Start apps/agent-runtime's container on :8080 (see its README).
-bun run --cwd apps/agent-front dev
+AWS_PROFILE=mymemo AWS_REGION=us-west-2 CODE_INTERPRETER_ID=<sandbox-interpreter-id> bun run --cwd apps/agent-front dev
 ```
 
 DynamoDB Local (:8000) and MinIO (:9000) are disposable local stores.
@@ -86,7 +86,7 @@ unknown outcome: reload history and never resend automatically.
 `src/lambda.ts` exports `handler` for Hono `streamHandle` requests and a
 scheduled invocation with `{"source":"mymemo.cleanup"}`. HTTP bodies cannot
 select cleanup. Required env: `CONVERSATION_TABLE`, `STATSIG_SERVER_SECRET_ARN`,
-`WORKSPACE_BUCKET`, `AGENT_RUNTIME_ARN`, and AWS SDK region/role environment.
+`WORKSPACE_BUCKET`, `AGENT_RUNTIME_ARN`, `CODE_INTERPRETER_ID`, and AWS SDK region/role environment.
 Production uses the Statsig gate, drains pending Turns before the handler
 returns, and flushes exposures. No production local-endpoint or open-gate switch.
 
@@ -94,7 +94,9 @@ See [the deployment and signing-proxy runbook](../../docs/runbooks/agent-front.m
 Deployment (#742 / #750): Node.js 22 / arm64, `AWS_IAM` `RESPONSE_STREAM`
 Function URL, fourteen-minute timeout, Statsig `linux-arm64-gnu` binary,
 DynamoDB read/transaction/update permissions, S3 history Get/Put/List/Delete,
-and `bedrock-agentcore:InvokeAgentRuntime`. Only the trusted BFF may invoke:
+S3 Workspace Get/Put, and `bedrock-agentcore:InvokeAgentRuntime`,
+`StartCodeInterpreterSession`, `InvokeCodeInterpreter`, `StopCodeInterpreterSession`
+on the SANDBOX-mode interpreter. Only the trusted BFF may invoke:
 identity headers are trusted assertions. Run the same browser demo on AWS when
 both deploys land; #737 explicitly permits the local demonstration meanwhile.
 
@@ -104,9 +106,24 @@ fresh processing marker. Scheduled cleanup removes S3 history before request
 items and the tombstone; partial S3 delete failures preserve the tombstone for
 retry. The deployed sweep also removes workspace and artifact prefixes and the exact transcript key before any DynamoDB items.
 
+## Workspace and Hand tools
+
+Each admitted Turn starts a 900-second Code Interpreter session, restores
+`_workspace/<id>/workspace.tgz` into `~/ws`, and passes the session id to the
+Runtime. After a terminal SDK result (including an error result), the front
+exports the tree in 8 MiB parts, three per `readFiles` call, then replaces the
+S3 object. Above 64 MiB compressed, the previous object stays and the Turn
+ends `workspace_too_large`. A missing result or fatal Runtime error skips
+export. Session stop runs in `finally`, before terminal history and chunks.
+
+The six model-facing tools (`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`)
+produce tool-input and tool-output chunks. History retains their inputs and
+outputs with the reply; output previews are capped to 8 KiB of valid UTF-8
+with `truncated` and `totalBytes`. Tool failures use `tool-output-error`.
+See [SANDBOX-DEMO.md](SANDBOX-DEMO.md) for the two-session continuity demo.
+
 ## Slice boundaries
 
-#736's no-tools Runtime receives `sandboxSessionId: "unused-no-tools"`.
-#738 owns real sandbox sessions, workspace copy and tool chunks; #741 owns
-artifacts and generative UI. Artifact routes retain empty lists / 404 until
-then. No v1 deployment or model runtime implementation is changed here.
+#741 owns artifacts and generative UI. Artifact routes retain empty lists /
+404 until then. The deployed Cleanup sweep removes Workspace objects. No v1 deployment
+is changed here; Terraform owns the SANDBOX-mode interpreter in #742.
