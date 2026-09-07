@@ -17,11 +17,11 @@ scripts/deploy/build_front.sh
 ```
 
 `prod.tfvars` supplies the existing API task role, verified against
-`mymemo-staging-api:273`. Set `front_agent_runtime_arn` to the new Runtime ARN
-once #750 exists; until then the front has no Runtime invoke grant and the
-`AGENT_RUNTIME_ARN` value is `pending-runtime-750`. The interpreter id and
-workspace bucket are already wired into the Runtime environment for that
-follow-on. No `send` demo is claimed by this ticket.
+`mymemo-staging-api:273`. The now-merged #750 Runtime, shared SANDBOX interpreter
+and workspace bucket are reused directly: the front's `AGENT_RUNTIME_ARN`
+and invoke grant point at that Runtime, and both services receive the same
+`CODE_INTERPRETER_ID`. No v1 Runtime environment changes are needed. This
+runbook exercises lifecycle routes; it does not claim a `send` demo.
 
 The front reads `STATSIG_SERVER_SECRET_ARN` at cold start (AWSCURRENT); it never
 receives a secret value through Terraform. The existing secret is a raw Statsig
@@ -88,7 +88,8 @@ and cleanup retry tests pass. All eight initial PR CI checks passed. The
 `front-package` CI job also loads the extracted zip in the Node.js 22 ARM64
 Lambda image with AWS calls stubbed, exercising the real Statsig native loader.
 
-A front-only Terraform plan contains 19 additions, 0 changes and 0 deletions.
+The initial front-only Terraform plan contained 19 additions, 0 changes and
+0 deletions. Re-plan before applying: shared resources from #750 now exist.
 It has not been applied: the pre-merge live demo requires explicit operator
 authorization. Normal release remains main-only after merge. No live success
 is claimed by these local/CI checks.

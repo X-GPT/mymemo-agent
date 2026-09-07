@@ -29,7 +29,7 @@ data "aws_iam_policy_document" "front" {
   }
   statement {
     actions   = ["bedrock-agentcore:StartCodeInterpreterSession", "bedrock-agentcore:InvokeCodeInterpreter", "bedrock-agentcore:StopCodeInterpreterSession", "bedrock-agentcore:GetCodeInterpreterSession"]
-    resources = [aws_bedrockagentcore_code_interpreter.workspace.code_interpreter_arn]
+    resources = [aws_bedrockagentcore_code_interpreter.hand.code_interpreter_arn]
   }
   statement {
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
@@ -52,12 +52,12 @@ data "aws_iam_policy_document" "front" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = [local.statsig_server_secret_arn]
   }
-  dynamic "statement" {
-    for_each = var.front_agent_runtime_arn == null ? [] : [var.front_agent_runtime_arn]
-    content {
-      actions   = ["bedrock-agentcore:InvokeAgentRuntime"]
-      resources = [statement.value, "${statement.value}/runtime-endpoint/DEFAULT"]
-    }
+  statement {
+    actions = ["bedrock-agentcore:InvokeAgentRuntime"]
+    resources = [
+      aws_bedrockagentcore_agent_runtime.agent_runtime.agent_runtime_arn,
+      "${aws_bedrockagentcore_agent_runtime.agent_runtime.agent_runtime_arn}/runtime-endpoint/DEFAULT",
+    ]
   }
 }
 
@@ -81,9 +81,9 @@ resource "aws_lambda_function" "front" {
     variables = {
       CONVERSATION_TABLE        = aws_dynamodb_table.conversations.name
       WORKSPACE_BUCKET          = aws_s3_bucket.workspace.bucket
-      CODE_INTERPRETER_ID       = aws_bedrockagentcore_code_interpreter.workspace.code_interpreter_id
+      CODE_INTERPRETER_ID       = aws_bedrockagentcore_code_interpreter.hand.code_interpreter_id
       WORKSPACE_MAX_BYTES       = "67108864"
-      AGENT_RUNTIME_ARN         = coalesce(var.front_agent_runtime_arn, "pending-runtime-750")
+      AGENT_RUNTIME_ARN         = aws_bedrockagentcore_agent_runtime.agent_runtime.agent_runtime_arn
       STATSIG_SERVER_SECRET_ARN = local.statsig_server_secret_arn
     }
   }

@@ -18,7 +18,8 @@ Object.assign(process.env, {
 	AWS_REGION: "us-west-2",
 	CONVERSATION_TABLE: "package-smoke",
 	WORKSPACE_BUCKET: "package-smoke",
-	AGENT_RUNTIME_ARN: "pending-runtime-750",
+	AGENT_RUNTIME_ARN:
+		"arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/package_smoke-0123456789",
 	STATSIG_SERVER_SECRET_ARN:
 		"arn:aws:secretsmanager:us-west-2:123456789012:secret:package-smoke",
 });

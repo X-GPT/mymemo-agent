@@ -1,11 +1,11 @@
-resource "aws_bedrockagentcore_code_interpreter" "workspace" {
-  name = "mymemo_workspace_${var.environment}"
-
+# Shared with the front (#742): the untrusted hand has no role or VPC access.
+resource "aws_bedrockagentcore_code_interpreter" "hand" {
+  name = "mymemo_hand_${var.environment}"
   network_configuration {
     network_mode = "SANDBOX"
   }
 }
 
 output "code_interpreter_id" {
-  value = aws_bedrockagentcore_code_interpreter.workspace.code_interpreter_id
+  value = aws_bedrockagentcore_code_interpreter.hand.code_interpreter_id
 }

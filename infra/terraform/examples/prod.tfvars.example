@@ -54,4 +54,4 @@ openrouter_default_model            = "anthropic/claude-sonnet-5"
 
 mymemo_service_task_role_arn = "arn:aws:iam::123456789012:role/mymemo-service-task"
 # front_lambda_package is supplied by release-deploy via TF_VAR_front_lambda_package.
-# front_agent_runtime_arn is supplied after #750; lifecycle routes work without it.
+# The Runtime ARN and shared interpreter are wired directly from #750.

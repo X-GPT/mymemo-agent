@@ -382,13 +382,3 @@ variable "mymemo_service_task_role_arn" {
     error_message = "An IAM role ARN is required."
   }
 }
-
-variable "front_agent_runtime_arn" {
-  description = "New Runtime ARN from #750; null until that stack exists (lifecycle routes need no Runtime)."
-  type        = string
-  default     = null
-  validation {
-    condition     = var.front_agent_runtime_arn == null ? true : can(regex("^arn:aws:bedrock-agentcore:us-west-2:[0-9]{12}:runtime/[A-Za-z0-9_-]+$", var.front_agent_runtime_arn))
-    error_message = "Use an unqualified us-west-2 AgentCore Runtime ARN."
-  }
-}
