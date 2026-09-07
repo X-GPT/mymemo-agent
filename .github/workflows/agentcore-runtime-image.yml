@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
-      - name: Build no-tools Runtime ARM64 image
+      - name: Build agent-runtime ARM64 image
         run: docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile -t mymemo-agent-runtime:image-check .
       - name: Verify pinned SDK stream without a model key
-        run: docker run --rm --entrypoint bun mymemo-agent-runtime:image-check test --timeout=60000 src/runtime.test.ts
+        run: docker run --rm --entrypoint bun mymemo-agent-runtime:image-check test --timeout=60000 src
