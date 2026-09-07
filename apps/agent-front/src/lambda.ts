@@ -11,14 +11,18 @@ import { streamHandle } from "hono/aws-lambda";
 import { createApp } from "./app";
 import { deleteConversationObjects } from "./cleanup";
 import { StatsigExposureGate } from "./exposure-gate";
+import { HistoryStore } from "./history";
+import { Messages } from "./messages";
+import { agentCoreRuntime } from "./runtime";
 import { ConversationStore } from "./store";
 
 const table = process.env.CONVERSATION_TABLE;
 const secretArn = process.env.STATSIG_SERVER_SECRET_ARN;
 const bucket = process.env.WORKSPACE_BUCKET;
-if (!table || !secretArn || !bucket)
+const runtimeArn = process.env.AGENT_RUNTIME_ARN;
+if (!table || !secretArn || !bucket || !runtimeArn)
 	throw new Error(
-		"CONVERSATION_TABLE, STATSIG_SERVER_SECRET_ARN and WORKSPACE_BUCKET are required",
+		"CONVERSATION_TABLE, STATSIG_SERVER_SECRET_ARN WORKSPACE_BUCKET and AGENT_RUNTIME_ARN are required",
 	);
 const { SecretString: secret } = await new SecretsManagerClient({}).send(
 	new GetSecretValueCommand({
@@ -33,7 +37,9 @@ const store = new ConversationStore(
 	table,
 );
 const statsig = new Statsig(secret, { outputLogLevel: "warn" });
-const app = createApp(store, new StatsigExposureGate(statsig));
+const history = new HistoryStore(s3, bucket);
+const messages = new Messages(store, history, agentCoreRuntime(runtimeArn));
+const app = createApp(store, new StatsigExposureGate(statsig), messages);
 type StreamingHandler = (
 	event: Record<string, unknown>,
 	stream: Writable,
@@ -56,6 +62,8 @@ export const handler = awslambda.streamifyResponse(
 				await httpHandler(event, stream, context);
 			}
 		} finally {
+			// A disconnected HTTP writer must not freeze the Lambda before the Turn is saved.
+			await Promise.all(messages.pending);
 			await statsig.flushEvents().catch(() => undefined);
 		}
 	},

@@ -106,3 +106,15 @@ export function decodeCursor(query: ListOptions): ListPosition | undefined {
 	}
 }
 export class InvalidCursor extends Error {}
+
+export const SendBody = z.strictObject({
+	text: z
+		.string()
+		.refine(
+			(text) => text.trim().length > 0 && Buffer.byteLength(text) <= 32768,
+		),
+	requestId: z
+		.string()
+		.min(1)
+		.refine((value) => Buffer.byteLength(value) <= 1020),
+});

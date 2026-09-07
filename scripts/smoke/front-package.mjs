@@ -18,6 +18,7 @@ Object.assign(process.env, {
 	AWS_REGION: "us-west-2",
 	CONVERSATION_TABLE: "package-smoke",
 	WORKSPACE_BUCKET: "package-smoke",
+	AGENT_RUNTIME_ARN: "pending-runtime-750",
 	STATSIG_SERVER_SECRET_ARN:
 		"arn:aws:secretsmanager:us-west-2:123456789012:secret:package-smoke",
 });

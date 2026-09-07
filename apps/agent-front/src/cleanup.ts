@@ -11,30 +11,7 @@ export async function deleteConversationObjects(
 	id: string,
 ) {
 	for (const prefix of ["_history", "_workspace", "_artifacts"]) {
-		let cursor: string | undefined;
-		do {
-			const page = await s3.send(
-				new ListObjectsV2Command({
-					Bucket: bucket,
-					Prefix: `${prefix}/${id}/`,
-					ContinuationToken: cursor,
-				}),
-			);
-			if (page.Contents?.length) {
-				const result = await s3.send(
-					new DeleteObjectsCommand({
-						Bucket: bucket,
-						Delete: {
-							Objects: page.Contents.map(({ Key }) => ({ Key })),
-							Quiet: true,
-						},
-					}),
-				);
-				if (result.Errors?.length)
-					throw new Error("Conversation object cleanup failed");
-			}
-			cursor = page.NextContinuationToken;
-		} while (cursor);
+		await deletePrefix(s3, bucket, `${prefix}/${id}/`);
 	}
 	await s3.send(
 		new DeleteObjectCommand({
@@ -42,4 +19,35 @@ export async function deleteConversationObjects(
 			Key: `_transcripts/${id}.jsonl`,
 		}),
 	);
+}
+
+export async function deletePrefix(
+	s3: S3Client,
+	bucket: string,
+	prefix: string,
+) {
+	let cursor: string | undefined;
+	do {
+		const page = await s3.send(
+			new ListObjectsV2Command({
+				Bucket: bucket,
+				Prefix: prefix,
+				ContinuationToken: cursor,
+			}),
+		);
+		if (page.Contents?.length) {
+			const result = await s3.send(
+				new DeleteObjectsCommand({
+					Bucket: bucket,
+					Delete: {
+						Objects: page.Contents.map(({ Key }) => ({ Key })),
+						Quiet: true,
+					},
+				}),
+			);
+			if (result.Errors?.length)
+				throw new Error("Conversation object cleanup failed");
+		}
+		cursor = page.NextContinuationToken;
+	} while (cursor);
 }
