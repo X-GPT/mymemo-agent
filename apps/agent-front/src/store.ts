@@ -336,6 +336,17 @@ export class ConversationStore {
 					ExclusiveStartKey: cursor,
 				}),
 			);
+			// GSI2 sorts deletion timestamps oldest first. Emit before any fallible delete.
+			if (!cursor) {
+				const oldest = page.Items?.[0]?.GSI2SK;
+				console.log(
+					JSON.stringify({
+						cleanupOldestAgeSeconds: oldest
+							? Math.max(0, (Date.now() - Date.parse(oldest)) / 1000)
+							: 0,
+					}),
+				);
+			}
 			for (const tombstone of page.Items ?? []) {
 				const { Item } = await this.db.send(
 					new GetCommand({

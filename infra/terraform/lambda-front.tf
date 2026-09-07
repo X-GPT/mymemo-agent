@@ -171,3 +171,31 @@ output "front_function_url" {
 output "workspace_bucket" {
   value = aws_s3_bucket.workspace.bucket
 }
+
+resource "aws_cloudwatch_log_metric_filter" "front_cleanup_age" {
+  name           = "${local.common_name}-front-cleanup-age"
+  log_group_name = aws_cloudwatch_log_group.front.name
+  pattern        = "{ $.cleanupOldestAgeSeconds = * }"
+
+  metric_transformation {
+    name      = "CleanupOldestAgeSeconds"
+    namespace = "${local.common_name}/Front"
+    value     = "$.cleanupOldestAgeSeconds"
+    unit      = "Seconds"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "front_cleanup_age" {
+  alarm_name          = "${local.common_name}-front-cleanup-age"
+  alarm_description   = "Oldest Conversation awaiting permanent deletion is over one hour old."
+  namespace           = "${local.common_name}/Front"
+  metric_name         = "CleanupOldestAgeSeconds"
+  statistic           = "Maximum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 3600
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "missing"
+  alarm_actions       = var.alarm_action_arns
+  ok_actions          = var.alarm_action_arns
+}

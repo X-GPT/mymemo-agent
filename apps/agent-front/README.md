@@ -102,9 +102,10 @@ both deploys land; #737 explicitly permits the local demonstration meanwhile.
 
 Listing strongly re-reads GSI projections to hide tombstones; the index remains
 eventually consistent. Archive may proceed during a Turn. Delete requires no
-fresh processing marker. Scheduled cleanup removes S3 history before request
-items and the tombstone; partial S3 delete failures preserve the tombstone for
-retry. The deployed sweep also removes workspace and artifact prefixes and the exact transcript key before any DynamoDB items.
+fresh processing marker. Scheduled cleanup removes workspace, artifacts (including
+the manifest), history, and the exact transcript key before request items and
+the tombstone, in that order. Partial S3 delete failures preserve the tombstone
+for retry.
 
 ## Workspace and Hand tools
 

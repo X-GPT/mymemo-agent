@@ -10,12 +10,12 @@ test("cleanup paginates exact prefixes, deletes transcript, and preserves tombst
 	const send = spyOn(s3, "send");
 	send
 		.mockImplementationOnce(async () => ({
-			Contents: [{ Key: "_history/id/one" }],
+			Contents: [{ Key: "_workspace/id/one" }],
 			NextContinuationToken: "next",
 		}))
 		.mockImplementationOnce(async () => ({}))
 		.mockImplementationOnce(async () => ({
-			Contents: [{ Key: "_history/id/two" }],
+			Contents: [{ Key: "_workspace/id/two" }],
 		}))
 		.mockImplementationOnce(async () => ({}))
 		.mockImplementationOnce(async () => ({}))
@@ -23,16 +23,6 @@ test("cleanup paginates exact prefixes, deletes transcript, and preserves tombst
 		.mockImplementationOnce(async () => ({}));
 	await deleteConversationObjects(s3, "bucket", "id");
 	expect(send.mock.calls.map(([command]) => command.input)).toEqual([
-		{ Bucket: "bucket", Prefix: "_history/id/", ContinuationToken: undefined },
-		{
-			Bucket: "bucket",
-			Delete: { Objects: [{ Key: "_history/id/one" }], Quiet: true },
-		},
-		{ Bucket: "bucket", Prefix: "_history/id/", ContinuationToken: "next" },
-		{
-			Bucket: "bucket",
-			Delete: { Objects: [{ Key: "_history/id/two" }], Quiet: true },
-		},
 		{
 			Bucket: "bucket",
 			Prefix: "_workspace/id/",
@@ -40,7 +30,21 @@ test("cleanup paginates exact prefixes, deletes transcript, and preserves tombst
 		},
 		{
 			Bucket: "bucket",
+			Delete: { Objects: [{ Key: "_workspace/id/one" }], Quiet: true },
+		},
+		{ Bucket: "bucket", Prefix: "_workspace/id/", ContinuationToken: "next" },
+		{
+			Bucket: "bucket",
+			Delete: { Objects: [{ Key: "_workspace/id/two" }], Quiet: true },
+		},
+		{
+			Bucket: "bucket",
 			Prefix: "_artifacts/id/",
+			ContinuationToken: undefined,
+		},
+		{
+			Bucket: "bucket",
+			Prefix: "_history/id/",
 			ContinuationToken: undefined,
 		},
 		{ Bucket: "bucket", Key: "_transcripts/id.jsonl" },
@@ -55,7 +59,7 @@ test("cleanup paginates exact prefixes, deletes transcript, and preserves tombst
 		}));
 	send
 		.mockImplementationOnce(async () => ({
-			Contents: [{ Key: "_history/id/one" }],
+			Contents: [{ Key: "_workspace/id/one" }],
 		}))
 		.mockImplementationOnce(async () => ({
 			Errors: [{ Code: "AccessDenied" }],
@@ -70,4 +74,43 @@ test("cleanup paginates exact prefixes, deletes transcript, and preserves tombst
 	dbSend.mockRestore();
 	s3.destroy();
 	db.destroy();
+});
+
+test("cleanup reports oldest index age before a failed delete and zero for an empty backlog", async () => {
+	const db = DynamoDBDocumentClient.from(
+		new DynamoDBClient({ region: "us-west-2" }),
+	);
+	const now = Date.now();
+	const clock = spyOn(Date, "now").mockReturnValue(now);
+	const log = spyOn(console, "log").mockImplementation(() => {});
+	const send = spyOn(db, "send")
+		.mockImplementationOnce(async () => ({
+			Items: [
+				{ PK: "CONV#id", GSI2SK: new Date(now - 3_601_000).toISOString() },
+			],
+		}))
+		.mockImplementationOnce(async () => ({
+			Item: { conversationId: "id", deletedAt: "now" },
+		}))
+		.mockImplementationOnce(async () => ({ Items: [] }));
+	try {
+		const store = new ConversationStore(db, "table");
+		await expect(
+			store.sweep(async () => {
+				throw new Error("delete failed");
+			}),
+		).rejects.toThrow("delete failed");
+		expect(JSON.parse(log.mock.calls[0]?.[0])).toEqual({
+			cleanupOldestAgeSeconds: 3601,
+		});
+		await store.sweep();
+		expect(JSON.parse(log.mock.calls[1]?.[0])).toEqual({
+			cleanupOldestAgeSeconds: 0,
+		});
+	} finally {
+		send.mockRestore();
+		log.mockRestore();
+		clock.mockRestore();
+		db.destroy();
+	}
 });
