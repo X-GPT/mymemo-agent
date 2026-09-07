@@ -116,16 +116,11 @@ const logger = {
 	warn: (obj: unknown, msg: string) => logged.push({ level: "warn", obj, msg }),
 };
 
-const documentAccessLog: AppDeps["documentAccessLog"] = {
-	record: async () => {},
-};
-
 function makeApp(deps: Partial<AppDeps>) {
 	const app = new Hono<AppEnv>();
 	app.use("*", async (c, next) => {
 		c.set("deps", {
 			harnessResumeStateStore: fakeResumeStore().store,
-			documentAccessLog,
 			...deps,
 		} as AppDeps);
 		c.set("logger", logger as never);
@@ -237,7 +232,6 @@ it("builds one agent per turn, bound to a fresh Harness turn id and the Conversa
 		},
 	]);
 	expect(turns[0]?.binding.turnId).not.toBe(turns[1]?.binding.turnId);
-	expect(turns[0]?.audit).toBe(documentAccessLog);
 	expect(turns[0]?.logger).toBe(logger as never);
 });
 

@@ -6,6 +6,11 @@ import {
 	PutObjectCommand,
 	type S3Client,
 } from "@aws-sdk/client-s3";
+import {
+	createScopedDocumentClient,
+	type KbDb,
+	parseFrozenScope,
+} from "@mymemo/document-tools/client";
 import { UI_NODE_ROOT_SCHEMA } from "@mymemo/ui-catalog";
 import {
 	PRESENT_UI_TOOL_DESCRIPTION,
@@ -14,6 +19,7 @@ import {
 import { createSdkMcpServer, query, tool } from "claude-agent-sdk";
 import pino from "pino";
 import { z } from "zod";
+import { createDocs, docsToolAliases } from "./docs";
 import { createHand, type HandInvoke, invokeHand, toolAliases } from "./hand";
 
 export const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
@@ -55,6 +61,7 @@ export function createRuntimeServer(
 		cwd?: string;
 		s3: S3Client;
 		bucket: string;
+		kb: KbDb;
 		port?: number;
 		codeInterpreterId?: string;
 		handInvoke?: (sessionId: string, signal: AbortSignal) => HandInvoke;
@@ -160,6 +167,28 @@ export function createRuntimeServer(
 								active?.close();
 							},
 						);
+
+						const docs = createDocs(
+							createScopedDocumentClient({
+								kb: config.kb,
+								userId: input.userId,
+								scope: parseFrozenScope({
+									scope: input.scope.kind,
+									collectionId:
+										input.scope.kind === "collection"
+											? input.scope.collectionId
+											: null,
+									summaryId:
+										input.scope.kind === "document"
+											? input.scope.summaryId
+											: null,
+								}),
+								logger,
+							}),
+							hand,
+							abortController.signal,
+						);
+						const aliases = { ...toolAliases, ...docsToolAliases };
 						active = runQuery({
 							prompt: input.text,
 							options: {
@@ -187,6 +216,7 @@ export function createRuntimeServer(
 								pathToClaudeCodeExecutable: config.pathToClaudeCodeExecutable,
 								tools: [],
 								mcpServers: {
+									docs,
 									hand,
 									ui: createSdkMcpServer({
 										name: "ui",
@@ -201,17 +231,14 @@ export function createRuntimeServer(
 										],
 									}),
 								},
-								toolAliases: { ...toolAliases, PresentUI: "mcp__ui__present" },
-								allowedTools: [
-									...Object.values(toolAliases),
-									"mcp__ui__present",
-								],
+								toolAliases: { ...aliases, PresentUI: "mcp__ui__present" },
+								allowedTools: [...Object.values(aliases), "mcp__ui__present"],
 								permissionMode: "dontAsk",
 								settingSources: [],
 								includePartialMessages: true,
 								thinking: { type: "enabled", budgetTokens: 1024 },
 								systemPrompt:
-									"You are MyMemo's assistant. Answer the user's questions concisely. Your working directory is /ws. Use the Hand tools for all files and shell commands. The workspace persists across Turns and is limited to 64 MiB compressed; large data belongs in the knowledge base. Save downloadable files under artifacts/.",
+									"You are MyMemo's assistant. Answer the user's questions concisely. Your working directory is /ws. Use the Hand tools for all files and shell commands. The workspace persists across Turns and is limited to 64 MiB compressed; large data belongs in the knowledge base. Use ListDocuments and SearchDocuments to discover documents within this Conversation’s Scope, then LoadDocuments to cache them under /ws/.mymemo/docs. Read or Grep the returned paths. Save downloadable files under artifacts/.",
 							},
 						});
 						budgetTimer = setTimeout(

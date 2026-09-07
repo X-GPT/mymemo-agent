@@ -226,9 +226,20 @@ describe("SDK text to UIMessage stream", () => {
 	});
 });
 
-it("converts all hand tools once and persists their capped outputs", () => {
+it("converts hand and docs tools once with public names and capped outputs", () => {
 	const h = harness();
-	for (const name of ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]) {
+	const names = [
+		"Bash",
+		"Read",
+		"Write",
+		"Edit",
+		"Glob",
+		"Grep",
+		"ListDocuments",
+		"SearchDocuments",
+		"LoadDocuments",
+	] as const;
+	for (const name of names) {
 		const call = {
 			type: "assistant",
 			message: {
@@ -236,7 +247,9 @@ it("converts all hand tools once and persists their capped outputs", () => {
 					{
 						type: "tool_use",
 						id: name,
-						name: `mcp__hand__${name.toLowerCase()}`,
+						name: name.endsWith("Documents")
+							? `mcp__docs__${name}`
+							: `mcp__hand__${name.toLowerCase()}`,
 						input: { path: "/ws/notes.txt" },
 					},
 				],
@@ -260,7 +273,7 @@ it("converts all hand tools once and persists their capped outputs", () => {
 	h.push({ type: "result", subtype: "success" });
 	const message = h.finish();
 	expect(message.metadata.status).toBe("done");
-	expect(message.parts).toHaveLength(6);
+	expect(message.parts).toHaveLength(names.length);
 	for (const part of message.parts) {
 		expect(part).toMatchObject({
 			state: "output-available",
@@ -271,10 +284,10 @@ it("converts all hand tools once and persists their capped outputs", () => {
 		h.chunks
 			.filter((chunk) => chunk.type === "tool-input-available")
 			.map((chunk) => chunk.toolName),
-	).toEqual(["Bash", "Read", "Write", "Edit", "Glob", "Grep"]);
+	).toEqual([...names]);
 	expect(
 		h.chunks.filter((chunk) => chunk.type === "tool-output-available"),
-	).toHaveLength(6);
+	).toHaveLength(names.length);
 });
 
 it("keeps UTF-8 truncation valid and emits failures as tool-output-error", () => {

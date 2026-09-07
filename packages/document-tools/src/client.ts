@@ -1,19 +1,9 @@
 import { Pool } from "pg";
-import type { DocumentAccessLog } from "./access-log";
 
-/**
- * Scoped access to the read-only KB, shared by chat-api's Harness chat path
- * and the trusted In-VM server (#665). A fresh, smaller copy of the Runtime's
- * `documents/` module: same SQL, same scope rules, same audit row, bound to
- * one turn's binding at construction. Drift between the two is accepted
- * (decided on #610); a boundary fix lands twice.
- */
-
-/** Identifies one turn's document access for the audit ledger. */
+/** Identifies one Harness turn in application logs. */
 export interface DocumentToolBinding {
 	userId: string;
 	conversationId: string;
-	/** The Harness turn id, or the v2 Turn's user-message id. */
 	turnId: string;
 }
 
@@ -406,17 +396,15 @@ async function resolveDocumentId(
 
 /**
  * The client for one turn: the frozen scope is applied server-side before
- * every query — the input carries no filter a caller could widen — and every
- * call appends one audit row with the turn's binding.
+ * every query — the input carries no filter a caller could widen.
  */
 export function createScopedDocumentClient(deps: {
 	kb: KbDb;
-	audit: DocumentAccessLog;
 	logger: DocumentToolLogger;
-	binding: DocumentToolBinding;
+	userId: string;
 	scope: FrozenScope;
 }): ScopedDocumentClient {
-	const { kb, binding, scope } = deps;
+	const { kb, userId, scope } = deps;
 
 	/** Narrow to the scope's document ids / collection; `null` means unresolvable. */
 	async function narrowing(): Promise<{
@@ -426,7 +414,7 @@ export function createScopedDocumentClient(deps: {
 		if (scope.type === "document") {
 			const documentId = await resolveDocumentId(kb, {
 				summaryId: scope.summaryId,
-				memberCode: binding.userId,
+				memberCode: userId,
 			});
 			return documentId
 				? { documentIds: [documentId], collectionId: null }
@@ -438,35 +426,11 @@ export function createScopedDocumentClient(deps: {
 		};
 	}
 
-	function audit(
-		operation: "list" | "search" | "load",
-		query: string | null,
-		documentIds: string[],
-		resultCount: number,
-	): Promise<void> {
-		return deps.audit.record({
-			turnId: binding.turnId,
-			conversationId: binding.conversationId,
-			userId: binding.userId,
-			operation,
-			scopeType: scope.type,
-			scopeId:
-				scope.type === "collection"
-					? scope.collectionId
-					: scope.type === "document"
-						? scope.summaryId
-						: null,
-			query,
-			documentIds,
-			resultCount,
-		});
-	}
-
 	/** Infrastructure failures become a fixed message; scope errors pass through. */
 	function bounded(failureMessage: string, error: unknown): Error {
 		if (error instanceof DocumentAccessError) return error;
 		deps.logger.error(
-			{ err: error, ...binding },
+			{ err: error, userId },
 			`document tool: ${failureMessage}`,
 		);
 		return new DocumentAccessError(failureMessage);
@@ -477,22 +441,14 @@ export function createScopedDocumentClient(deps: {
 			try {
 				const narrow = await narrowing();
 				if (!narrow) {
-					await audit("list", null, [], 0);
 					return { total: 0, documents: [], next: null };
 				}
-				const page = await listDocuments(kb, {
-					workspaceId: binding.userId,
+				return await listDocuments(kb, {
+					workspaceId: userId,
 					...narrow,
 					limit,
 					after,
 				});
-				await audit(
-					"list",
-					null,
-					page.documents.map((d) => d.documentId),
-					page.total,
-				);
-				return page;
 			} catch (error) {
 				throw bounded("document list failed", error);
 			}
@@ -502,22 +458,14 @@ export function createScopedDocumentClient(deps: {
 			try {
 				const narrow = await narrowing();
 				if (!narrow) {
-					await audit("search", query, [], 0);
 					return [];
 				}
-				const passages = await searchPassages(kb, {
-					workspaceId: binding.userId,
+				return await searchPassages(kb, {
+					workspaceId: userId,
 					query,
 					...narrow,
 					limit: maxResults,
 				});
-				await audit(
-					"search",
-					query,
-					[...new Set(passages.map((p) => p.documentId))],
-					passages.length,
-				);
-				return passages;
 			} catch (error) {
 				throw bounded("document search failed", error);
 			}
@@ -526,7 +474,7 @@ export function createScopedDocumentClient(deps: {
 		async fetch(documentId) {
 			try {
 				// Scope guard first: an out-of-scope id is rejected before any
-				// document row is read or audited.
+				// document row is read.
 				const narrow = await narrowing();
 				const admitted =
 					narrow !== null &&
@@ -535,17 +483,16 @@ export function createScopedDocumentClient(deps: {
 						: narrow.collectionId
 							? await documentInCollection(kb, {
 									collectionId: narrow.collectionId,
-									workspaceId: binding.userId,
+									workspaceId: userId,
 									documentId,
 								})
 							: true);
 				if (!admitted) throw new DocumentAccessError(OUT_OF_SCOPE);
 				const doc = await fetchDocument(kb, {
-					workspaceId: binding.userId,
+					workspaceId: userId,
 					documentId,
 				});
 				if (!doc) throw new DocumentAccessError(OUT_OF_SCOPE);
-				await audit("load", null, [documentId], 1);
 				return doc;
 			} catch (error) {
 				throw bounded("document fetch failed", error);

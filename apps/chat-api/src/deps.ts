@@ -1,9 +1,5 @@
 import { createDatabase } from "@mymemo/agent-db/client";
 import {
-	type DocumentAccessLog,
-	PostgresDocumentAccessLog,
-} from "@mymemo/document-tools/access-log";
-import {
 	createLiveStreamTelemetry,
 	createRedisLiveStreamRelay,
 	type LiveStreamRelay,
@@ -46,8 +42,6 @@ export interface AppDeps {
 	createHarnessChatAgent: HarnessChatAgentFactory;
 	/** Per-Conversation opaque Harness resume pointer (local composition only). */
 	harnessResumeStateStore: HarnessResumeStateStore;
-	/** `document_access_events` rows for the Harness document tools (local composition only). */
-	documentAccessLog: DocumentAccessLog;
 	/** Authoritative current Downloadable artifact metadata in Postgres. */
 	artifactMetadataStore: ArtifactMetadataStore;
 	/** Creates short-lived direct-download URLs after ownership authorization. */
@@ -106,7 +100,6 @@ export function createDeps(
 		config,
 		createHarnessChatAgent,
 		harnessResumeStateStore: new PostgresHarnessResumeStateStore(database),
-		documentAccessLog: new PostgresDocumentAccessLog(database),
 		artifactMetadataStore: new PostgresArtifactMetadataStore(database),
 		artifactDownloadSigner,
 		conversationStore: new PostgresConversationStore(database),

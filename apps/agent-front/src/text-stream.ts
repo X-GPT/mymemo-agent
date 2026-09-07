@@ -17,7 +17,16 @@ export interface MessageMetadata {
 	endedAt?: string;
 	errorCode?: string;
 }
-type ToolName = "Bash" | "Read" | "Write" | "Edit" | "Glob" | "Grep";
+type ToolName =
+	| "Bash"
+	| "Read"
+	| "Write"
+	| "Edit"
+	| "Glob"
+	| "Grep"
+	| "ListDocuments"
+	| "SearchDocuments"
+	| "LoadDocuments";
 interface ToolOutput {
 	value: string;
 	truncated: boolean;
@@ -81,6 +90,9 @@ const toolNames = new Map<string, ToolName>(
 		edit: "Edit",
 		glob: "Glob",
 		grep: "Grep",
+		listdocuments: "ListDocuments",
+		searchdocuments: "SearchDocuments",
+		loaddocuments: "LoadDocuments",
 	}),
 );
 
@@ -207,7 +219,9 @@ export function createTextStream(input: {
 						const name =
 							typeof block.name === "string"
 								? toolNames.get(
-										block.name.replace(/^mcp__hand__/, "").toLowerCase(),
+										block.name
+											.replace(/^mcp__(?:hand|docs)__/, "")
+											.toLowerCase(),
 									)
 								: undefined;
 						if (!name || typeof block.id !== "string" || tools.has(block.id))

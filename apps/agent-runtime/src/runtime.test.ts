@@ -50,6 +50,9 @@ const calls = [
 	],
 	["Glob", { pattern: "*.txt" }],
 	["Grep", { pattern: "hi" }],
+	["ListDocuments", {}],
+	["SearchDocuments", { query: "needle" }],
+	["LoadDocuments", { documentIds: ["inside"] }],
 	[
 		"PresentUI",
 		{ component: "chart", props: { spec: { mark: "not-a-mark" } } },
@@ -180,8 +183,14 @@ async function harness(
 				messages: unknown[];
 			};
 			expect((body.tools ?? []).map((tool) => tool.name).sort()).toEqual(
-				["bash", "read", "write", "edit", "glob", "grep"]
-					.map((n) => `mcp__hand__${n}`)
+				[
+					...["bash", "read", "write", "edit", "glob", "grep"].map(
+						(n) => `mcp__hand__${n}`,
+					),
+					...["ListDocuments", "SearchDocuments", "LoadDocuments"].map(
+						(n) => `mcp__docs__${n}`,
+					),
+				]
 					.concat("mcp__ui__present")
 					.sort(),
 			);
@@ -226,6 +235,7 @@ async function harness(
 					},
 				};
 			},
+			kb: { query: async () => [] },
 			s3,
 			bucket: "transcript-test",
 			model: "fake",
@@ -385,13 +395,13 @@ for (const mode of [
 							.filter((m) => m.type === "user")
 							.flatMap((m) => m.message.content)
 							.filter((b: { type: string }) => b.type === "tool_result");
-						expect(results).toHaveLength(8);
-						expect(results[6].is_error).toBe(true);
-						expect(JSON.stringify(results[6])).toContain("invalid_ui_payload");
-						expect(results[7].is_error).not.toBe(true);
+						expect(results).toHaveLength(11);
+						expect(results[9].is_error).toBe(true);
+						expect(JSON.stringify(results[9])).toContain("invalid_ui_payload");
+						expect(results[10].is_error).not.toBe(true);
 						expect(
 							results
-								.slice(0, 6)
+								.slice(0, 9)
 								.every((b: { is_error?: boolean }) => !b.is_error),
 						).toBe(true);
 					}

@@ -15,6 +15,8 @@ ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem
 WORKDIR /app
 COPY --from=install /app/node_modules node_modules
 COPY --from=install /app/apps/agent-runtime/node_modules apps/agent-runtime/node_modules
+COPY --from=install /app/packages/document-tools packages/document-tools
+COPY packages/document-tools packages/document-tools
 COPY --from=install /app/packages/ui-catalog/node_modules packages/ui-catalog/node_modules
 COPY packages/ui-catalog packages/ui-catalog
 COPY apps/agent-runtime apps/agent-runtime
