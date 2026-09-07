@@ -9,11 +9,14 @@ arrive in #738–#740. The bucket and SANDBOX interpreter prerequisites live in
 
 The PR image job builds linux/arm64 and runs the pinned SDK against the fake
 model server, including bootstrap checks. `release-deploy.yml` builds the same
-image, verifies it, pushes to `mymemo/agent-runtime`, and passes the resolved
+image, pushes to `mymemo/agent-runtime`, and passes the resolved
 `sha256` digest as `TF_VAR_agent_runtime_image_digest` to both Terraform jobs.
 The existing v1 image, digest and rollout steps remain independent.
 
 For a local operator build (all local AWS commands use profile `mymemo`):
+run the SDK test command on an ARM64 host. On x86, build with emulation but
+use the native ARM64 PR check for SDK verification; its deadline test assumes
+CLI startup is fast enough to interrupt an active query.
 
 ```sh
 bun install --frozen-lockfile

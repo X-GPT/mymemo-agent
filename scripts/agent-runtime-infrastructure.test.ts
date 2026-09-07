@@ -44,7 +44,6 @@ test("release carries the new digest through both jobs without replacing v1", ()
 		`agent_runtime_image_digest: \${{ steps.agent_runtime_image.outputs.digest }}`,
 		"TF_VAR_agent_runtime_image_digest=%s",
 		"--platform linux/arm64",
-		"test --timeout=60000 src",
 	])
 		expect(workflow).toContain(expected);
 });

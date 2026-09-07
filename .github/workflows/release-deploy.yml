@@ -206,13 +206,12 @@ jobs:
           printf 'TF_VAR_runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_ENV}"
           printf 'runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Build, verify, and push the ARM64 agent-runtime image
+      - name: Build and push the ARM64 agent-runtime image
         id: agent_runtime_image
         run: |
           repository_uri="$(terraform -chdir=infra/ecr output -raw agent_runtime_ecr_repository_url)"
           docker buildx build --platform linux/arm64 --load \
             --file apps/agent-runtime/Dockerfile --tag mymemo-agent-runtime:verified .
-          docker run --rm --entrypoint bun mymemo-agent-runtime:verified test --timeout=60000 src
           aws ecr get-login-password --region "${AWS_REGION}" |
             docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           docker tag mymemo-agent-runtime:verified "${repository_uri}:${IMAGE_TAG}"
