@@ -117,3 +117,16 @@ or `KB_DATABASE_URL` for local runs. No document-access audit is written.
 and returns only metadata. The existing workspace tarball carries the Docs cache
 between Turns. Use `Read` or `Grep` on the returned path; the front streams all
 three public document-tool names with its existing 8 KiB output preview.
+
+Run the deterministic real-KB smoke with a read-only credential and a disposable
+session on an existing SANDBOX-mode interpreter (no model call):
+
+```sh
+AWS_PROFILE=mymemo AWS_REGION=us-west-2 \
+  KB_DATABASE_URL_SECRET_ARN='<KB secret ARN>' \
+  CODE_INTERPRETER_ID='<interpreter id>' bun run apps/agent-runtime/docs-smoke.ts
+```
+
+It checks the role has no table-write grants, then validates scoped list/search,
+metadata-only load, Grep in the sandbox and outside-Scope rejection. It stops the
+session in `finally` and prints no document content or credentials.

@@ -45,6 +45,17 @@ async function smoke() {
 	assert(identifier, "CODE_INTERPRETER_ID is required");
 	const signal = AbortSignal.timeout(180_000);
 	const kb = createKbDb(await readKbDatabaseUrl(process.env));
+	phase = "KB read-only role validation";
+	const [role] = await kb.query<{ readOnly: boolean }>(`SELECT
+		NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
+		AND NOT EXISTS (
+			SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+			AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+			AND (has_table_privilege(c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE')
+				OR has_any_column_privilege(c.oid, 'INSERT, UPDATE'))
+		) AS "readOnly"`);
+	assert(role?.readOnly, "KB role has write privileges; refusing the smoke");
 	phase = "KB discovery";
 	// Discover existing, currently searchable documents with a literal searchable
 	// English word present in both a passage and the loadable markdown excerpt.
