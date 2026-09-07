@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
+import { S3Client } from "@aws-sdk/client-s3";
 import { readOpenRouterKey } from "./config";
 import { createRuntimeServer } from "./runtime";
 
@@ -13,7 +14,11 @@ const executable = require.resolve(
 );
 execFileSync(executable, ["--version"], { stdio: "ignore" });
 const token = await readOpenRouterKey(process.env);
+const bucket = process.env.WORKSPACE_BUCKET;
+if (!bucket) throw new Error("WORKSPACE_BUCKET is required");
 createRuntimeServer({
+	s3: new S3Client({}),
+	bucket,
 	model: process.env.OPENROUTER_DEFAULT_MODEL ?? "anthropic/claude-sonnet-5",
 	env: {
 		...process.env,
@@ -23,6 +28,5 @@ createRuntimeServer({
 		ANTHROPIC_API_KEY: "",
 	},
 	pathToClaudeCodeExecutable: executable,
-	cwd: "/opt/mymemo/project",
 	port: Number(process.env.PORT ?? 8080),
 });

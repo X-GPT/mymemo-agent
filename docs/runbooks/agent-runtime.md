@@ -1,8 +1,8 @@
 # Simplified chat Runtime on AWS
 
 Issue #750 deploys `apps/agent-runtime` beside v1 in us-west-2. It still has
-#736's no-tools query loop; sandbox tools, KB reads and transcript persistence
-arrive in #738–#740. The bucket and SANDBOX interpreter prerequisites live in
+#736's no-tools query loop with #739's S3 transcript continuity; sandbox
+tools and KB reads arrive in #738/#740. The bucket and SANDBOX interpreter prerequisites live in
 `workspace-bucket.tf` and `code-interpreter.tf`; #742 should reuse them.
 
 ## Build and register
@@ -113,3 +113,20 @@ instead of an SDK result. To observe the graceful SDK error result separately,
 set `startedAt = now - 600000` and `budgetUntil = now + 120000`.
 Record the image digest, Runtime version, event types and terminal outcomes
 on the PR; never record model keys or database URLs.
+
+
+## Verify transcript continuity (#739)
+
+After registering the verified image, run the two-Turn memory smoke:
+
+```sh
+AGENT_RUNTIME_ARN="$runtime_arn" bun run apps/agent-runtime/smoke.ts
+```
+
+It pre-mints one Conversation id and two distinct Runtime session/Turn ids.
+Turn 1 supplies a random UUID fact; Turn 2 must recall it without the question
+repeating it. Check the printed Conversation's `_transcripts/<id>.jsonl` object
+and record the image digest, Runtime version and smoke output on the PR.
+The Runtime owns only Get/Put on that prefix; the cleanup sweep owns deletion.
+Upload failures emit `TranscriptUploadFailures` in `MyMemo/AgentRuntime` using
+CloudWatch embedded metrics, with Conversation/Turn ids in the log event only.

@@ -26,7 +26,6 @@ resource "aws_bedrockagentcore_agent_runtime" "agent_runtime" {
     NODE_EXTRA_CA_CERTS           = "/etc/ssl/certs/rds-global-bundle.pem"
     CODE_INTERPRETER_ID           = aws_bedrockagentcore_code_interpreter.hand.code_interpreter_id
     WORKSPACE_BUCKET              = aws_s3_bucket.workspace.bucket
-    TRANSCRIPT_PREFIX             = "_transcripts/"
     TURN_BUDGET_MS                = "600000"
     BASH_DEFAULT_TIMEOUT_MS       = "120000"
     PORT                          = "8080"
