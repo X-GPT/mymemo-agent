@@ -8,6 +8,8 @@ import {
 import {
 	CreateBucketCommand,
 	DeleteBucketCommand,
+	DeleteObjectCommand,
+	PutObjectCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
 import {
@@ -16,6 +18,7 @@ import {
 	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { createApp } from "./app";
+import { Artifacts } from "./artifacts";
 import { HistoryStore, type Turn } from "./history";
 import { Messages } from "./messages";
 import type { Invocation } from "./runtime";
@@ -96,6 +99,8 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			if (name === "save" && fail === "oversize") throw new WorkspaceTooLarge();
 			if (name === fail) throw new Error("injected Sandbox failure");
 		};
+		const artifacts = new Artifacts(s3, bucket);
+		spyOn(artifacts, "sync").mockResolvedValue({ artifacts: [], removed: [] });
 		const messages = new Messages(
 			store,
 			history,
@@ -113,7 +118,10 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 				restore: () => operation("restore"),
 				save: () => operation("save"),
 				stop: () => operation("stop"),
+				call: async () => ({ content: [] }),
+				readParts: async () => Buffer.alloc(0),
 			},
+			artifacts,
 		);
 		const app = createApp(
 			store,
@@ -173,6 +181,7 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			);
 		return {
 			id,
+			artifacts,
 			lifecycle,
 			userId,
 			headers,
@@ -187,6 +196,124 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			expire,
 		};
 	}
+
+	test.skipIf(!s3Endpoint)(
+		"Downloads and PresentUI arrive on done/error and reload; links work immediately and deletion mirrors",
+		async () => {
+			const h = await harness();
+			const artifact = {
+				artifactId: "chart-id",
+				path: "chart.png",
+				sizeBytes: 3,
+				contentType: "image/png",
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			};
+			const key = `_artifacts/${h.id}/`;
+			const put = (name: string, body: string) =>
+				s3.send(
+					new PutObjectCommand({ Bucket: bucket, Key: key + name, Body: body }),
+				);
+			await put("chart.png", "png");
+			await put(
+				".manifest.json",
+				JSON.stringify([{ ...artifact, mtime: "1" }]),
+			);
+			spyOn(h.artifacts, "sync").mockResolvedValue({
+				artifacts: [artifact],
+				removed: [],
+			});
+			const response = await h.send();
+			await Bun.sleep(20);
+			const payload = {
+				component: "table" as const,
+				props: { columns: [{ key: "x", label: "X" }], rows: [{ x: 42 }] },
+			};
+			h.raw(0, {
+				type: "assistant",
+				message: {
+					content: [
+						{ type: "tool_use", name: "PresentUI", id: "ui", input: payload },
+					],
+				},
+			});
+			h.raw(0, {
+				type: "user",
+				message: {
+					content: [
+						{ type: "tool_result", tool_use_id: "ui", content: "accepted" },
+					],
+				},
+			});
+			h.complete();
+			const body = await response.text();
+			expect(body.indexOf('"type":"data-artifacts"')).toBeLessThan(
+				body.indexOf('"type":"message-metadata"'),
+			);
+			expect(body).toContain('"type":"data-generative-ui"');
+			expect(body).not.toContain('"toolName":"PresentUI"');
+			const page = await h.page();
+			expect(page.messages[1]?.parts).toContainEqual({
+				type: "data-generative-ui",
+				id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+				data: { version: 1, payload },
+			});
+			const livePart = body
+				.split("\n\n")
+				.filter((line) => line.startsWith("data: {"))
+				.map((line) => JSON.parse(line.slice(6)))
+				.find((part) => part.type === "data-generative-ui");
+			expect(page.messages[1]?.parts).toContainEqual(livePart);
+			const get = (path: string, headers = h.headers) =>
+				h.app.request(`/v1/conversations/${h.id}/artifacts${path}`, {
+					headers,
+				});
+			expect(await (await get("")).json()).toEqual({ artifacts: [artifact] });
+			const signed = (await (await get("/chart-id/download-url")).json()) as {
+				downloadUrl: string;
+			};
+			const download = await fetch(signed.downloadUrl);
+			expect(download.status).toBe(200);
+			expect(download.headers.get("content-disposition")).toStartWith(
+				"attachment",
+			);
+			expect(await download.text()).toBe("png");
+			expect((await get("/missing/download-url")).status).toBe(404);
+			expect(
+				(await get("", { ...h.headers, "x-member-code": crypto.randomUUID() }))
+					.status,
+			).toBe(404);
+			await s3.send(
+				new DeleteObjectCommand({ Bucket: bucket, Key: `${key}chart.png` }),
+			);
+			await put(".manifest.json", "[]");
+			spyOn(h.artifacts, "sync").mockResolvedValue({
+				artifacts: [],
+				removed: [artifact.artifactId],
+			});
+			const second = await h.send("delete");
+			await Bun.sleep(20);
+			h.raw(1, {
+				type: "result",
+				subtype: "error_during_execution",
+				is_error: true,
+			});
+			h.calls[1]?.controller.close();
+			const errorBody = await second.text();
+			expect(errorBody).toContain('"removed":["chart-id"]');
+			expect(errorBody.indexOf('"type":"data-artifacts"')).toBeLessThan(
+				errorBody.indexOf('"type":"message-metadata"'),
+			);
+			expect((await get("/chart-id/download-url")).status).toBe(404);
+			expect(await (await get("")).json()).toEqual({ artifacts: [] });
+			await s3.send(
+				new DeleteObjectCommand({
+					Bucket: bucket,
+					Key: `${key}.manifest.json`,
+				}),
+			);
+		},
+	);
 
 	test("Sandbox lifecycle saves only after result and always stops before terminal history", async () => {
 		for (const mode of [
@@ -246,6 +373,9 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 					: mode === "restore" || mode === "missing-result" || mode === "lost"
 						? ["start", "restore", "stop"]
 						: ["start", "restore", "save", "stop"],
+			);
+			expect(h.artifacts.sync).toHaveBeenCalledTimes(
+				["start", "restore", "missing-result", "lost"].includes(mode) ? 0 : 1,
 			);
 			expect(wire).toContain(
 				mode === "done" ? '"type":"finish"' : '"type":"error"',
@@ -474,7 +604,7 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			(
 				await h.app.request(url, {
 					method: "POST",
-					headers: { ...h.headers, "x-member-code": "foreign" },
+					headers: { ...h.headers, "x-member-code": crypto.randomUUID() },
 					body: "{}",
 				})
 			).status,

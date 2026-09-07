@@ -338,3 +338,73 @@ it("exposes result and fatal Runtime error status for workspace copy-out", () =>
 	stream.push({ type: "mymemo.error", code: "internal_error" });
 	expect(stream.fatalRuntimeError).toBe(true);
 });
+
+it("PresentUI retries emit only validated data, retained in the reply without tool parts", () => {
+	const h = harness();
+	const payload = {
+		component: "table" as const,
+		props: { columns: [{ key: "x", label: "X" }], rows: [{ x: 42 }] },
+	};
+	for (const [id, input, failed] of [
+		["bad", { component: "image", props: {} }, true],
+		["ok", payload, false],
+	] as const) {
+		h.push({
+			type: "assistant",
+			message: {
+				content: [{ type: "tool_use", name: "PresentUI", id, input }],
+			},
+		});
+		expect(
+			h.chunks.filter((c) => c.type === "data-generative-ui"),
+		).toHaveLength(0);
+		h.push({
+			type: "user",
+			message: {
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: id,
+						is_error: failed,
+						content: "ack",
+					},
+				],
+			},
+		});
+	}
+	const data = h.chunks.filter((c) => c.type === "data-generative-ui");
+	expect(data).toEqual([
+		{
+			type: "data-generative-ui",
+			id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+			data: { version: 1, payload },
+		},
+	]);
+	expect(h.chunks.some((c) => c.type.startsWith("tool-"))).toBe(false);
+	h.push({ type: "result", subtype: "success" });
+	expect(h.finish().parts).toEqual(data);
+});
+
+it("artifact changes precede terminal metadata on done and error, unchanged mirrors emit nothing", () => {
+	for (const subtype of ["success", "error_during_execution"]) {
+		const h = harness();
+		h.push({ type: "result", subtype });
+		h.artifacts({ artifacts: [], removed: [] });
+		expect(h.chunks.filter((c) => c.type === "data-artifacts")).toHaveLength(0);
+		h.artifacts({ artifacts: [], removed: ["deleted-id"] });
+		const message = h.finish();
+		expect(h.chunks.map((c) => c.type)).toEqual([
+			"start",
+			"data-artifacts",
+			"message-metadata",
+			subtype === "success" ? "finish" : "error",
+		]);
+		expect(message.parts).toEqual([
+			{
+				type: "data-artifacts",
+				id: "turn",
+				data: { artifacts: [], removed: ["deleted-id"] },
+			},
+		]);
+	}
+});

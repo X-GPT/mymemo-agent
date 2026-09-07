@@ -50,6 +50,17 @@ const calls = [
 	],
 	["Glob", { pattern: "*.txt" }],
 	["Grep", { pattern: "hi" }],
+	[
+		"PresentUI",
+		{ component: "chart", props: { spec: { mark: "not-a-mark" } } },
+	],
+	[
+		"PresentUI",
+		{
+			component: "table",
+			props: { columns: [{ key: "x", label: "X" }], rows: [{ x: 42 }] },
+		},
+	],
 ] as const;
 function fakeMessages(index: number) {
 	const tool = calls[index];
@@ -171,6 +182,7 @@ async function harness(
 			expect((body.tools ?? []).map((tool) => tool.name).sort()).toEqual(
 				["bash", "read", "write", "edit", "glob", "grep"]
 					.map((n) => `mcp__hand__${n}`)
+					.concat("mcp__ui__present")
 					.sort(),
 			);
 			modelCalls++;
@@ -373,9 +385,14 @@ for (const mode of [
 							.filter((m) => m.type === "user")
 							.flatMap((m) => m.message.content)
 							.filter((b: { type: string }) => b.type === "tool_result");
-						expect(results).toHaveLength(6);
+						expect(results).toHaveLength(8);
+						expect(results[6].is_error).toBe(true);
+						expect(JSON.stringify(results[6])).toContain("invalid_ui_payload");
+						expect(results[7].is_error).not.toBe(true);
 						expect(
-							results.every((b: { is_error?: boolean }) => !b.is_error),
+							results
+								.slice(0, 6)
+								.every((b: { is_error?: boolean }) => !b.is_error),
 						).toBe(true);
 					}
 				}

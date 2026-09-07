@@ -163,9 +163,24 @@ export function createApp(
 			);
 		},
 	);
-	app.get("/v1/conversations/:id/artifacts", (c) => c.json({ artifacts: [] }));
-	app.get("/v1/conversations/:id/artifacts/:artifactId/download-url", (c) =>
-		c.json({ error: "Artifact not found" }, 404),
+	app.get("/v1/conversations/:id/artifacts", async (c) => {
+		if (!messages) throw new Error("Messages not configured");
+		return c.json({
+			artifacts: await messages.artifacts.list(c.req.param("id")),
+		});
+	});
+	app.get(
+		"/v1/conversations/:id/artifacts/:artifactId/download-url",
+		async (c) => {
+			if (!messages) throw new Error("Messages not configured");
+			const downloadUrl = await messages.artifacts.downloadUrl(
+				c.req.param("id"),
+				c.req.param("artifactId"),
+			);
+			return downloadUrl
+				? c.json({ downloadUrl })
+				: c.json({ error: "Artifact not found" }, 404);
+		},
 	);
 	return app;
 }

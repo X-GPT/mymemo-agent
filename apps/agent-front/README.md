@@ -122,8 +122,29 @@ outputs with the reply; output previews are capped to 8 KiB of valid UTF-8
 with `truncated` and `totalBytes`. Tool failures use `tool-output-error`.
 See [SANDBOX-DEMO.md](SANDBOX-DEMO.md) for the two-session continuity demo.
 
-## Slice boundaries
+## Downloads and display-only UI
 
-#741 owns artifacts and generative UI. Artifact routes retain empty lists /
-404 until then. The deployed Cleanup sweep removes Workspace objects. No v1 deployment
-is changed here; Terraform owns the SANDBOX-mode interpreter in #742.
+After a Runtime result, the front exports the Workspace and mirrors regular
+files under `ws/artifacts/` into `_artifacts/<conversationId>/`. Files over
+100 MiB, symlinks and the reserved `.manifest.json` path are excluded; paths
+must be normalized and relative. The manifest records nanosecond `mtime` as a
+string, compares `(sizeBytes, mtime)`, and keeps the SHA-256 path-based ID and
+creation timestamp stable across edits. Changed files use 8 MiB parts, at most
+three per `readFiles` call. Missing files are removed from the mirror.
+
+`GET /v1/conversations/:id/artifacts` lists the current manifest path-sorted;
+`GET /v1/conversations/:id/artifacts/:artifactId/download-url` signs the copy
+for 300 seconds as an attachment. Both require ownership, bypass the exposure
+gate, and hide tombstoned Conversations. An unknown artifact returns 404.
+
+A changed mirror emits one `data-artifacts` part before terminal metadata on
+both successful and error results. A missing result or lost sandbox skips
+copy-out. Workspace export failures still attempt artifact publication, so
+an over-cap Workspace can retain downloadable output.
+
+`PresentUI` runs inside the Runtime's SDK MCP server, using the shared
+`@mymemo/ui-catalog` ADR-0017 validator (five components, 16 KiB envelope and
+pinned Vega-Lite schema). Invalid calls return repair errors; successful calls
+become `data-generative-ui` parts without tool activity. Both data part types
+are saved with the complete reply and replayed by `GET messages` after reload.
+See [DOWNLOADS-DEMO.md](DOWNLOADS-DEMO.md) for verified browser and sandbox results.
