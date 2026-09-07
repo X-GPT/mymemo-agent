@@ -11,6 +11,13 @@ assert.equal(process.versions.node.split(".")[0], "22");
 const entry = pathToFileURL(resolve(process.argv[2], "index.mjs"));
 const require = createRequire(entry);
 const { SecretsManagerClient } = require("@aws-sdk/client-secrets-manager");
+const { Statsig } = require("@statsig/statsig-node-core");
+let initializationCalls = 0;
+const initialize = Statsig.prototype.initialize;
+Statsig.prototype.initialize = function () {
+	initializationCalls++;
+	return initialize.call(this);
+};
 SecretsManagerClient.prototype.send = async () => ({
 	SecretString: "secret-test",
 });
@@ -27,9 +34,14 @@ Object.assign(process.env, {
 globalThis.awslambda = { streamifyResponse: (handler) => handler };
 const { handler } = await import(entry.href);
 assert.equal(typeof handler, "function");
+assert.equal(
+	initializationCalls,
+	0,
+	"Statsig initialization must wait for an invocation",
+);
 console.log(
 	"PASS: Node.js 22 ARM64 Lambda cold start, including Statsig native binding",
 );
 
-// The native SDK starts background initialization; this smoke check ends at load.
+// No initialization request may straddle Lambda's init-to-invoke freeze.
 process.exit(0);

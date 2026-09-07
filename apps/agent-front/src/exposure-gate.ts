@@ -22,31 +22,34 @@ export interface ExposureGate {
  * Statsig-backed production gate. Fails CLOSED: if initialization fails or an
  * evaluation throws, new work is denied. The Statsig secret is never logged.
  *
- * Initialization is kicked off in the constructor and awaited on the first
- * `isAgentEnabled`, so it overlaps boot (the gate is warm before the first
- * turn).
+ * Initialize only inside a gated invocation: Lambda can freeze between module
+ * initialization and the first handler. A failed attempt denies that request
+ * but must not poison the execution environment for subsequent invocations.
  */
 export class StatsigExposureGate implements ExposureGate {
-	private readonly ready: Promise<boolean>;
+	private ready?: Promise<boolean>;
 
 	constructor(
 		private readonly client: StatsigClientLike,
 		private readonly logger?: GateLogger,
-	) {
-		this.ready = client
+	) {}
+
+	async isAgentEnabled(identity: InternalIdentity): Promise<boolean> {
+		this.ready ??= this.client
 			.initialize()
 			.then((result) => result.isSuccess)
 			.catch((error) => {
-				logger?.error({
+				this.logger?.error({
 					message: "Statsig initialization failed; failing closed",
 					error: error instanceof Error ? error.message : String(error),
 				});
 				return false;
 			});
-	}
-
-	async isAgentEnabled(identity: InternalIdentity): Promise<boolean> {
-		if (!(await this.ready)) return false;
+		const ready = this.ready;
+		if (!(await ready)) {
+			if (this.ready === ready) this.ready = undefined;
+			return false;
+		}
 		try {
 			return this.client.checkGate(
 				new StatsigUser({
