@@ -59,14 +59,16 @@ async function smoke() {
 	phase = "KB discovery";
 	// Discover existing, currently searchable documents with a literal searchable
 	// English word present in both a passage and the loadable markdown excerpt.
+	// ponytail: sample 20 mappings to stay under the KB timeout; widen if fixtures disappear.
 	const candidates = await kb.query<{
 		userId: string;
 		summaryId: string;
 		documentId: string;
 		phrase: string;
-	}>(`SELECT DISTINCT ca.member_code AS "userId", ca.compat_int_id::text AS "summaryId",
+	}>(`SELECT ca.member_code AS "userId", ca.compat_int_id::text AS "summaryId",
 		d.id AS "documentId", word.phrase
-		FROM content_asset ca
+		FROM (SELECT member_code, compat_int_id, kb_document_id FROM content_asset
+			WHERE kb_document_id <> '' AND compat_int_id IS NOT NULL LIMIT 20) ca
 		JOIN document mapped ON mapped.id = ca.kb_document_id
 		JOIN LATERAL (
 			SELECT current_doc.* FROM document current_doc
@@ -76,12 +78,17 @@ async function smoke() {
 			AND sa.workspace_id = ca.member_code AND sa.status = 'ready'
 			ORDER BY current_doc.version DESC, current_doc.id DESC LIMIT 1
 		) d ON TRUE
-		JOIN passage p ON p.document_id = d.id AND p.workspace_id = ca.member_code AND p.status = 'active'
-		CROSS JOIN LATERAL (SELECT (regexp_match(p.passage_text, '[A-Za-z]{5,}'))[1] AS phrase) word
-		WHERE word.phrase IS NOT NULL AND ca.compat_int_id IS NOT NULL
-		AND position(word.phrase IN left(d.canonical_markdown, 50000)) > 0
-		AND p.search_tsv @@ plainto_tsquery('simple', word.phrase)
-		ORDER BY "userId", "documentId", "summaryId", phrase LIMIT 100`);
+		JOIN LATERAL (
+			SELECT word.phrase FROM passage p
+			CROSS JOIN LATERAL (SELECT (regexp_match(p.passage_text, '[A-Za-z]{5,}'))[1] AS phrase) word
+			WHERE p.document_id = d.id AND p.workspace_id = ca.member_code AND p.status = 'active'
+			AND word.phrase IS NOT NULL
+			AND position(word.phrase IN left(d.canonical_markdown, 50000)) > 0
+			AND p.search_tsv @@ plainto_tsquery('simple', word.phrase)
+			LIMIT 1
+		) word ON TRUE
+		WHERE ca.compat_int_id IS NOT NULL
+		LIMIT 100`);
 	const target = candidates.find((row) =>
 		candidates.some(
 			(other) =>
