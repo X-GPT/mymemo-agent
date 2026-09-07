@@ -38,6 +38,7 @@ COPY apps/agentcore-dispatch-consumer apps/agentcore-dispatch-consumer
 COPY packages/agent-db packages/agent-db
 COPY packages/agentcore-dispatch packages/agentcore-dispatch
 COPY packages/live-text packages/live-text
+COPY packages/ui-catalog packages/ui-catalog
 COPY package.json .
 RUN mkdir -p /workspace/conversations && chown -R bun:bun /workspace
 WORKDIR /usr/src/app/apps/agentcore-runtime
@@ -56,6 +57,7 @@ COPY apps/agentcore-dispatch-consumer apps/agentcore-dispatch-consumer
 COPY packages/agent-db packages/agent-db
 COPY packages/agentcore-dispatch packages/agentcore-dispatch
 COPY packages/live-text packages/live-text
+COPY packages/ui-catalog packages/ui-catalog
 COPY package.json .
 
 COPY --from=runtime-files --chmod=0444 /etc/ssl/certs/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
