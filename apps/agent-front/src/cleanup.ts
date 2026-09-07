@@ -10,7 +10,7 @@ export async function deleteConversationObjects(
 	bucket: string,
 	id: string,
 ) {
-	for (const prefix of ["_history", "_workspace", "_artifacts"]) {
+	for (const prefix of ["_workspace", "_artifacts", "_history"]) {
 		await deletePrefix(s3, bucket, `${prefix}/${id}/`);
 	}
 	await s3.send(

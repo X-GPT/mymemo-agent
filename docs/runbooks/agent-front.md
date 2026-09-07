@@ -75,11 +75,16 @@ The Function URL output ends in `/`; remove that trailing slash before
 appending a path for tools that preserve double slashes. Unsigned requests
 must return 403. Missing identity on a signed request must return 401.
 
-The sweep runs every five minutes. It deletes paginated `_history/<id>/`,
-`_workspace/<id>/`, `_artifacts/<id>/` objects and the exact
+The sweep runs every five minutes. It deletes paginated `_workspace/<id>/`,
+`_artifacts/<id>/`, `_history/<id>/` objects and the exact
 `_transcripts/<id>.jsonl` key before clearing DynamoDB items, Tombstone last.
 S3 partial failures retain the Tombstone for retry. Inspect
 `/aws/lambda/mymemo-agent-prod-front` in CloudWatch if cleanup stalls.
+The first CLEANUP index page emits `cleanupOldestAgeSeconds` before deletes
+(including failed attempts), or zero for an empty backlog. Its log metric filter
+publishes `mymemo-agent-prod/Front` / `CleanupOldestAgeSeconds`; the
+`mymemo-agent-prod-front-cleanup-age` alarm fires above 3,600 seconds.
+See [the deletion demo](../../apps/agent-front/DELETION-DEMO.md) for end-to-end evidence.
 
 ## Verification record — 2026-09-07 UTC
 
