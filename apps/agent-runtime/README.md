@@ -34,7 +34,7 @@ docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile -t mymemo-a
 Tests run the pinned CLI against the fake Anthropic Messages server adapted
 from #730's `sdk-session-probe.ts`, without a model key. They compare every
 forwarded message with the SDK iterator, exercise thinking and
-nine aliased tools, budget interruption, disconnect, Runtime-side failure, and
+ten aliased tools, budget interruption, disconnect, Runtime-side failure, and
 fatal sandbox loss with no SDK result. Hand checks exercise real local shell
 commands through a fake sandbox transport, path confinement, edits and caps.
 
@@ -45,7 +45,7 @@ starts and stops sessions; the Runtime never restarts a lost session. See
 
 The always-loaded `hand` MCP server exposes Bash, Read, Write, Edit, Glob and
 Grep via SDK aliases. `tools: []` disables built-ins; `allowedTools` lists only
-the six `mcp__hand__*` and three `mcp__docs__*` targets. Model paths live under `/ws`, mapped to `ws/`
+the six `mcp__hand__*`, three `mcp__docs__*`, and `mcp__ui__present` targets. Model paths live under `/ws`, mapped to `ws/`
 in the sandbox. Bash has a 120-second default and 600-second maximum timeout,
 without background mode. Hand output is capped at 64 KiB; writes at 1 MiB.
 File operations reject traversal and escaping symlinks. Binary reads return

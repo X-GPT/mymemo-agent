@@ -9,6 +9,7 @@ on:
       - packages/agent-db/**
       - packages/agentcore-dispatch/**
       - packages/live-text/**
+      - packages/ui-catalog/**
       - apps/*/package.json
       - packages/*/package.json
       - package.json

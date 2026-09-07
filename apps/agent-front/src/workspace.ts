@@ -89,10 +89,11 @@ export class Workspace {
 	}
 
 	async save(id: string, sessionId: string) {
+		// PAX preserves fractional mtimes for artifact diffs after restoration.
 		// Outside ws: the archive must never include itself or a previous export.
 		const directory = `.workspace-export-${crypto.randomUUID()}`;
 		const result = await this.call(sessionId, "executeCommand", {
-			command: `cd ~ && mkdir ${directory} && tar czf ${directory}/out.tgz -C ws . && split -b 8m -d ${directory}/out.tgz ${directory}/part- && stat -c %s ${directory}/out.tgz`,
+			command: `cd ~ && mkdir ${directory} && tar --format=pax -czf ${directory}/out.tgz -C ws . && split -b 8m -d ${directory}/out.tgz ${directory}/part- && stat -c %s ${directory}/out.tgz`,
 		});
 		const size = Number(result.structuredContent?.stdout?.trim());
 		if (!Number.isSafeInteger(size) || size <= 0)
@@ -102,6 +103,17 @@ export class Workspace {
 			{ length: Math.ceil(size / PART_BYTES) },
 			(_, i) => `${directory}/part-${String(i).padStart(2, "0")}`,
 		);
+		await this.s3.send(
+			new PutObjectCommand({
+				Bucket: this.bucket,
+				Key: key(id),
+				Body: await this.readParts(sessionId, paths, size),
+				ContentType: "application/gzip",
+			}),
+		);
+	}
+
+	async readParts(sessionId: string, paths: string[], size: number) {
 		const parts: Uint8Array[] = [];
 		for (let i = 0; i < paths.length; i += 3) {
 			// Three 8 MiB parts encode to 32 MiB, below the 35 MB response cap.
@@ -110,26 +122,24 @@ export class Workspace {
 				paths: batch,
 			});
 			if (response.content?.length !== batch.length)
-				throw new Error("Missing Workspace parts");
+				throw new Error("Missing file parts");
 			for (const [index, content] of response.content.entries()) {
-				const blob = content.resource?.blob;
+				const resource = content.resource;
+				const blob =
+					resource?.blob ??
+					(typeof resource?.text === "string"
+						? Buffer.from(resource.text)
+						: undefined);
 				if (
 					!(blob instanceof Uint8Array) ||
 					blob.byteLength !==
 						Math.min(PART_BYTES, size - (i + index) * PART_BYTES)
 				)
-					throw new Error("Invalid Workspace part");
+					throw new Error("Invalid file part");
 				parts.push(blob);
 			}
 		}
-		await this.s3.send(
-			new PutObjectCommand({
-				Bucket: this.bucket,
-				Key: key(id),
-				Body: Buffer.concat(parts),
-				ContentType: "application/gzip",
-			}),
-		);
+		return Buffer.concat(parts);
 	}
 
 	async stop(sessionId: string) {

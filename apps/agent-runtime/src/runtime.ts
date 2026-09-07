@@ -11,7 +11,12 @@ import {
 	type KbDb,
 	parseFrozenScope,
 } from "@mymemo/document-tools/client";
-import { query } from "claude-agent-sdk";
+import { UI_NODE_ROOT_SCHEMA } from "@mymemo/ui-catalog";
+import {
+	PRESENT_UI_TOOL_DESCRIPTION,
+	runPresentUiTool,
+} from "@mymemo/ui-catalog/present-ui-tool";
+import { createSdkMcpServer, query, tool } from "claude-agent-sdk";
 import pino from "pino";
 import { z } from "zod";
 import { createDocs, docsToolAliases } from "./docs";
@@ -210,15 +215,30 @@ export function createRuntimeServer(
 								cwd,
 								pathToClaudeCodeExecutable: config.pathToClaudeCodeExecutable,
 								tools: [],
-								mcpServers: { hand, docs },
-								toolAliases: aliases,
-								allowedTools: Object.values(aliases),
+								mcpServers: {
+									docs,
+									hand,
+									ui: createSdkMcpServer({
+										name: "ui",
+										alwaysLoad: true,
+										tools: [
+											tool(
+												"present",
+												PRESENT_UI_TOOL_DESCRIPTION,
+												UI_NODE_ROOT_SCHEMA.shape,
+												async (input) => ({ ...runPresentUiTool(input) }),
+											),
+										],
+									}),
+								},
+								toolAliases: { ...aliases, PresentUI: "mcp__ui__present" },
+								allowedTools: [...Object.values(aliases), "mcp__ui__present"],
 								permissionMode: "dontAsk",
 								settingSources: [],
 								includePartialMessages: true,
 								thinking: { type: "enabled", budgetTokens: 1024 },
 								systemPrompt:
-									"You are MyMemo's assistant. Answer the user's questions concisely. Your working directory is /ws. Use the Hand tools for all files and shell commands. The workspace persists across Turns and is limited to 64 MiB compressed; large data belongs in the knowledge base. Use ListDocuments and SearchDocuments to discover documents within this Conversation’s Scope, then LoadDocuments to cache them under /ws/.mymemo/docs. Read or Grep the returned paths.",
+									"You are MyMemo's assistant. Answer the user's questions concisely. Your working directory is /ws. Use the Hand tools for all files and shell commands. The workspace persists across Turns and is limited to 64 MiB compressed; large data belongs in the knowledge base. Use ListDocuments and SearchDocuments to discover documents within this Conversation’s Scope, then LoadDocuments to cache them under /ws/.mymemo/docs. Read or Grep the returned paths. Save downloadable files under artifacts/.",
 							},
 						});
 						budgetTimer = setTimeout(

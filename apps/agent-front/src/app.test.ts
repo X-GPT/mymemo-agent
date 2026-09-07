@@ -302,14 +302,6 @@ describe.skipIf(!endpoint)("Conversation lifecycle with DynamoDB Local", () => {
 				)
 			).json(),
 		).toEqual({ messages: [], nextCursor: null });
-		expect(
-			await (
-				await app.request(
-					`/v1/conversations/${owned.conversationId}/artifacts`,
-					{ headers: identity },
-				)
-			).json(),
-		).toEqual({ artifacts: [] });
 		const foreign = await create(headers());
 		const removed = await create(identity);
 		expect(

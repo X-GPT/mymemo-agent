@@ -53,6 +53,17 @@ const calls = [
 	["ListDocuments", {}],
 	["SearchDocuments", { query: "needle" }],
 	["LoadDocuments", { documentIds: ["inside"] }],
+	[
+		"PresentUI",
+		{ component: "chart", props: { spec: { mark: "not-a-mark" } } },
+	],
+	[
+		"PresentUI",
+		{
+			component: "table",
+			props: { columns: [{ key: "x", label: "X" }], rows: [{ x: 42 }] },
+		},
+	],
 ] as const;
 function fakeMessages(index: number) {
 	const tool = calls[index];
@@ -179,7 +190,9 @@ async function harness(
 					...["ListDocuments", "SearchDocuments", "LoadDocuments"].map(
 						(n) => `mcp__docs__${n}`,
 					),
-				].sort(),
+				]
+					.concat("mcp__ui__present")
+					.sort(),
 			);
 			modelCalls++;
 			messageCounts.push(body.messages.length);
@@ -382,9 +395,14 @@ for (const mode of [
 							.filter((m) => m.type === "user")
 							.flatMap((m) => m.message.content)
 							.filter((b: { type: string }) => b.type === "tool_result");
-						expect(results).toHaveLength(9);
+						expect(results).toHaveLength(11);
+						expect(results[9].is_error).toBe(true);
+						expect(JSON.stringify(results[9])).toContain("invalid_ui_payload");
+						expect(results[10].is_error).not.toBe(true);
 						expect(
-							results.every((b: { is_error?: boolean }) => !b.is_error),
+							results
+								.slice(0, 9)
+								.every((b: { is_error?: boolean }) => !b.is_error),
 						).toBe(true);
 					}
 				}

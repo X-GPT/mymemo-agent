@@ -1,3 +1,4 @@
+import type { Artifacts } from "./artifacts";
 import { type HistoryStore, type Turn, turnMetadata } from "./history";
 import { type InvokeRuntime, sdkMessages } from "./runtime";
 import { type ConversationStore, SendConflict } from "./store";
@@ -10,7 +11,11 @@ export class Messages {
 		readonly store: ConversationStore,
 		readonly history: HistoryStore,
 		readonly invoke: InvokeRuntime,
-		readonly workspace: Pick<Workspace, "start" | "restore" | "save" | "stop">,
+		readonly workspace: Pick<
+			Workspace,
+			"start" | "restore" | "save" | "stop" | "call" | "readParts"
+		>,
+		readonly artifacts: Artifacts,
 	) {}
 	async send(id: string, userId: string, text: string, requestId: string) {
 		let admitted: Awaited<ReturnType<ConversationStore["admit"]>>;
@@ -98,8 +103,15 @@ export class Messages {
 						});
 						for await (const message of sdkMessages(raw))
 							converter.push(message);
-						if (converter.hasResult && !converter.fatalRuntimeError)
-							await this.workspace.save(id, sessionId);
+						if (converter.hasResult && !converter.fatalRuntimeError) {
+							try {
+								await this.workspace.save(id, sessionId);
+							} finally {
+								converter.artifacts(
+									await this.artifacts.sync(id, sessionId, this.workspace),
+								);
+							}
+						}
 					} catch (error) {
 						failure =
 							error instanceof WorkspaceTooLarge
