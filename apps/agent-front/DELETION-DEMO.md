@@ -29,5 +29,28 @@ has removed all four S3 namespaces and every DynamoDB partition item
 
 ## Execution record
 
-Pending deployed execution. Script bundling and Biome checks passed locally;
-these checks do not establish the deployed deletion deadlines.
+Verified on 2026-09-07, 04:01:58–04:05:58 UTC against
+`mymemo-agent-prod-front` in us-west-2 using the real deployed Runtime,
+Code Interpreter, S3, DynamoDB, and enabled five-minute EventBridge Scheduler.
+The script exited 0. No manual sweep or direct storage deletion was used.
+
+Conversation: `7c7ce5dc-cc91-4539-9407-ea415fcdcd90`.
+
+| Check | Observed result |
+| --- | --- |
+| Two real Turns | Both finished; downloaded `deletion-demo.txt` contained both Turns' text. |
+| Processing guard | DELETE during Turn 1 returned 409. |
+| Before deletion | Workspace: 1 object; artifacts: 2 (file + manifest); history: 2; transcript: 1; DynamoDB: 3 items. |
+| Download before deletion | Presigned URL returned HTTP 200 with both Turns' content. |
+| Immediate deletion | DELETE returned 204 at 04:02:25.361 UTC; all six Conversation routes then returned 404. |
+| Old URL invalidation | HTTP 404 observed 212,274 ms after requesting the URL, within five minutes. |
+| Automatic permanent cleanup | All four S3 namespace listings and the consistent DynamoDB partition Query were empty 212,277 ms after deletion, within ten minutes. |
+| Backlog metric | Scheduled invocation `6d6a9e38-214b-4a48-939c-aa164dc22b21` logged `cleanupOldestAgeSeconds: 211.452` at 04:05:56.851 UTC; CloudWatch `mymemo-agent-prod/Front` / `CleanupOldestAgeSeconds` published the same Maximum in Seconds. |
+| Alarm and schedule | Alarm threshold 3,600 seconds, GreaterThanThreshold, 300-second period; Scheduler ENABLED, `rate(5 minutes)`, flexible window OFF. |
+
+The deployed package was built from implementation commit `be24f59`, rebased
+onto main `9fdefe3` to retain the merged Statsig fix. Package SHA-256:
+`20ba2a6e69df13ed228db9b0e753244a86ba1da01f2dd8cc78947dabf4c3a227`.
+The deployment changed only the front code and the cleanup metric filter/alarm;
+Terraform declares the same monitoring resources. Local verification after
+rebasing: 51 front integration tests passed; front TypeScript check passed.
