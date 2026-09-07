@@ -35,3 +35,6 @@ alarm_action_arns = ["arn:aws:sns:us-west-2:637423444544:mymemo-staging-alarms"]
 # - mymemo-agent-prod-STATSIG_SERVER_SECRET
 # - mymemo-agent-prod-OPENROUTER_API_KEY
 # - mymemo-agent-prod-E2B_API_KEY
+
+# Existing API task role; retains v1 access during the parallel front rollout.
+mymemo_service_task_role_arn = "arn:aws:iam::637423444544:role/mymemo-staging-ecs-task"

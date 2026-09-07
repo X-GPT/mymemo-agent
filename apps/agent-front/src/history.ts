@@ -1,10 +1,9 @@
 import {
-	DeleteObjectsCommand,
 	GetObjectCommand,
-	ListObjectsV2Command,
 	PutObjectCommand,
 	type S3Client,
 } from "@aws-sdk/client-s3";
+import { deletePrefix } from "./cleanup";
 import type { Conversation } from "./store";
 import type { AssistantMessage, MessageMetadata } from "./text-stream";
 
@@ -65,28 +64,7 @@ export class HistoryStore {
 		return { messages, nextCursor: seq > 0 ? String(seq + 1) : null };
 	}
 	async delete(id: string) {
-		let cursor: string | undefined;
-		do {
-			const page = await this.s3.send(
-				new ListObjectsV2Command({
-					Bucket: this.bucket,
-					Prefix: `_history/${id}/`,
-					ContinuationToken: cursor,
-				}),
-			);
-			if (page.Contents?.length) {
-				const result = await this.s3.send(
-					new DeleteObjectsCommand({
-						Bucket: this.bucket,
-						Delete: {
-							Objects: page.Contents.map((item) => ({ Key: item.Key })),
-						},
-					}),
-				);
-				if (result.Errors?.length) throw new Error("History cleanup failed");
-			}
-			cursor = page.NextContinuationToken;
-		} while (cursor);
+		await deletePrefix(this.s3, this.bucket, `_history/${id}/`);
 	}
 }
 export function turnMetadata(

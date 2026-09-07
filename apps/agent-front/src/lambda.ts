@@ -1,30 +1,43 @@
 import type { Writable } from "node:stream";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { S3Client } from "@aws-sdk/client-s3";
+import {
+	GetSecretValueCommand,
+	SecretsManagerClient,
+} from "@aws-sdk/client-secrets-manager";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { Statsig } from "@statsig/statsig-node-core";
 import { streamHandle } from "hono/aws-lambda";
 import { createApp } from "./app";
+import { deleteConversationObjects } from "./cleanup";
 import { StatsigExposureGate } from "./exposure-gate";
 import { HistoryStore } from "./history";
 import { Messages } from "./messages";
 import { agentCoreRuntime } from "./runtime";
 import { ConversationStore } from "./store";
 
-const table = process.env.CONVERSATIONS_TABLE;
-const secret = process.env.STATSIG_SERVER_SECRET;
+const table = process.env.CONVERSATION_TABLE;
+const secretArn = process.env.STATSIG_SERVER_SECRET_ARN;
 const bucket = process.env.WORKSPACE_BUCKET;
 const runtimeArn = process.env.AGENT_RUNTIME_ARN;
-if (!table || !secret || !bucket || !runtimeArn)
+if (!table || !secretArn || !bucket || !runtimeArn)
 	throw new Error(
-		"CONVERSATIONS_TABLE, STATSIG_SERVER_SECRET, WORKSPACE_BUCKET and AGENT_RUNTIME_ARN are required",
+		"CONVERSATION_TABLE, STATSIG_SERVER_SECRET_ARN WORKSPACE_BUCKET and AGENT_RUNTIME_ARN are required",
 	);
+const { SecretString: secret } = await new SecretsManagerClient({}).send(
+	new GetSecretValueCommand({
+		SecretId: secretArn,
+		VersionStage: "AWSCURRENT",
+	}),
+);
+if (!secret) throw new Error("Statsig secret must be a nonempty string");
+const s3 = new S3Client({});
 const store = new ConversationStore(
 	DynamoDBDocumentClient.from(new DynamoDBClient({})),
 	table,
 );
 const statsig = new Statsig(secret, { outputLogLevel: "warn" });
-const history = new HistoryStore(new S3Client({}), bucket);
+const history = new HistoryStore(s3, bucket);
 const messages = new Messages(store, history, agentCoreRuntime(runtimeArn));
 const app = createApp(store, new StatsigExposureGate(statsig), messages);
 type StreamingHandler = (
@@ -43,7 +56,7 @@ export const handler = awslambda.streamifyResponse(
 		try {
 			// Scheduler supplies this payload directly; HTTP bodies cannot select it.
 			if (event.source === "mymemo.cleanup" && !("requestContext" in event)) {
-				await store.sweep((id) => history.delete(id));
+				await store.sweep((id) => deleteConversationObjects(s3, bucket, id));
 				stream.end();
 			} else {
 				await httpHandler(event, stream, context);

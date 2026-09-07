@@ -2,6 +2,7 @@ data "aws_secretsmanager_secret" "kb_database_url" {
   name = local.kb_database_url_secret_name
 }
 
+# The front resolves this ARN at cold start. v1 retains access until cutover.
 data "aws_secretsmanager_secret" "statsig_server" {
   name = local.statsig_server_secret_name
 }

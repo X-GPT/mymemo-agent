@@ -234,6 +234,18 @@ jobs:
           scripts/deploy/build_agentcore_consumer.sh "${consumer_dir}" "${ca_bundle}"
           printf 'TF_VAR_consumer_lambda_package=%s/consumer.zip\n' "${consumer_dir}" >> "${GITHUB_ENV}"
 
+      - name: Package the front Lambda
+        run: |
+          scripts/deploy/build_front.sh "${RUNNER_TEMP}/agent-front"
+          printf 'TF_VAR_front_lambda_package=%s/agent-front/front.zip\n' "${RUNNER_TEMP}" >> "${GITHUB_ENV}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agent-front-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-front/front.zip
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Preserve the planned AgentCore consumer package
         uses: actions/upload-artifact@v7
         with:
@@ -302,6 +314,16 @@ jobs:
 
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: agent-front-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-front
+
+      - name: Use the planned front package
+        run: |
+          test -f "${RUNNER_TEMP}/agent-front/front.zip"
+          printf 'TF_VAR_front_lambda_package=%s/agent-front/front.zip\n' "${RUNNER_TEMP}" >> "${GITHUB_ENV}"
 
       - name: Download the planned AgentCore consumer package
         uses: actions/download-artifact@v8

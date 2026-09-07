@@ -368,3 +368,17 @@ variable "e2b_api_key_secret_name" {
   type        = string
   default     = null
 }
+
+variable "front_lambda_package" {
+  description = "Path to the Linux ARM64 front Lambda zip built by release-deploy."
+  type        = string
+}
+
+variable "mymemo_service_task_role_arn" {
+  description = "Existing mymemo-service task role allowed to sign front Function URL requests."
+  type        = string
+  validation {
+    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.+$", var.mymemo_service_task_role_arn))
+    error_message = "An IAM role ARN is required."
+  }
+}
