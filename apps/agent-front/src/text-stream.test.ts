@@ -101,6 +101,19 @@ describe("SDK text to UIMessage stream", () => {
 
 	it.each([
 		[
+			// Pinned CLI 0.3.251's real result after Runtime budget interrupt().
+			{
+				type: "result",
+				subtype: "error_during_execution",
+				is_error: true,
+				terminal_reason: "aborted_streaming",
+				errors: [
+					"[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null",
+				],
+			},
+			"budget_exceeded",
+		],
+		[
 			{
 				type: "result",
 				subtype: "error_during_execution",

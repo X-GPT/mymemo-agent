@@ -30,6 +30,7 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 function sdkError(message: Record<string, unknown>): string {
+	if (message.terminal_reason === "aborted_streaming") return "budget_exceeded";
 	const detail = JSON.stringify([
 		message.subtype,
 		message.error,
