@@ -211,7 +211,7 @@ export class ConversationStore {
 			throw new Processing(item.processing?.turnId ?? "");
 		}
 	}
-	async sweep() {
+	async sweep(deleteObjects: (id: string) => Promise<void> = async () => {}) {
 		let cursor: Record<string, unknown> | undefined;
 		do {
 			const page = await this.db.send(
@@ -232,6 +232,7 @@ export class ConversationStore {
 					}),
 				);
 				if (!Item?.deletedAt) continue;
+				await deleteObjects(Item.conversationId);
 				let partitionCursor: Record<string, unknown> | undefined;
 				do {
 					const partition = await this.db.send(

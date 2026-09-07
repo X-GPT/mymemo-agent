@@ -51,3 +51,7 @@ openrouter_default_model            = "anthropic/claude-sonnet-5"
 # statsig_server_secret_name     = "mymemo-agent-prod-STATSIG_SERVER_SECRET"
 # openrouter_api_key_secret_name = "mymemo-agent-prod-OPENROUTER_API_KEY"
 # e2b_api_key_secret_name        = "mymemo-agent-prod-E2B_API_KEY"
+
+mymemo_service_task_role_arn = "arn:aws:iam::123456789012:role/mymemo-service-task"
+# front_lambda_package is supplied by release-deploy via TF_VAR_front_lambda_package.
+# front_agent_runtime_arn is supplied after #750; lifecycle routes work without it.

@@ -1,16 +1,33 @@
 import type { Writable } from "node:stream";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { S3Client } from "@aws-sdk/client-s3";
+import {
+	GetSecretValueCommand,
+	SecretsManagerClient,
+} from "@aws-sdk/client-secrets-manager";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { Statsig } from "@statsig/statsig-node-core";
 import { streamHandle } from "hono/aws-lambda";
 import { createApp } from "./app";
+import { deleteConversationObjects } from "./cleanup";
 import { StatsigExposureGate } from "./exposure-gate";
 import { ConversationStore } from "./store";
 
-const table = process.env.CONVERSATIONS_TABLE;
-const secret = process.env.STATSIG_SERVER_SECRET;
-if (!table || !secret)
-	throw new Error("CONVERSATIONS_TABLE and STATSIG_SERVER_SECRET are required");
+const table = process.env.CONVERSATION_TABLE;
+const secretArn = process.env.STATSIG_SERVER_SECRET_ARN;
+const bucket = process.env.WORKSPACE_BUCKET;
+if (!table || !secretArn || !bucket)
+	throw new Error(
+		"CONVERSATION_TABLE, STATSIG_SERVER_SECRET_ARN and WORKSPACE_BUCKET are required",
+	);
+const { SecretString: secret } = await new SecretsManagerClient({}).send(
+	new GetSecretValueCommand({
+		SecretId: secretArn,
+		VersionStage: "AWSCURRENT",
+	}),
+);
+if (!secret) throw new Error("Statsig secret must be a nonempty string");
+const s3 = new S3Client({});
 const store = new ConversationStore(
 	DynamoDBDocumentClient.from(new DynamoDBClient({})),
 	table,
@@ -33,7 +50,7 @@ export const handler = awslambda.streamifyResponse(
 		try {
 			// Scheduler supplies this payload directly; HTTP bodies cannot select it.
 			if (event.source === "mymemo.cleanup" && !("requestContext" in event)) {
-				await store.sweep();
+				await store.sweep((id) => deleteConversationObjects(s3, bucket, id));
 				stream.end();
 			} else {
 				await httpHandler(event, stream, context);

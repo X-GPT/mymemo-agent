@@ -33,12 +33,12 @@ The integration suite creates an isolated table on DynamoDB Local. Without
 
 `src/lambda.ts` exports `handler` for both Hono `streamHandle` requests and a
 scheduled invocation with payload `{"source":"mymemo.cleanup"}`. HTTP request
-bodies cannot select the sweep. Required env: `CONVERSATIONS_TABLE`,
-`STATSIG_SERVER_SECRET`, and the normal AWS SDK region/role environment.
+bodies cannot select the sweep. Required env: `CONVERSATION_TABLE`,
+`STATSIG_SERVER_SECRET_ARN`, and the normal AWS SDK region/role environment.
 Production always uses the fail-closed Statsig gate and flushes events before
 return. It does not accept a local DynamoDB endpoint or an open-gate switch.
 
-Deployment is a later ticket: use Node.js 22 / arm64, an `AWS_IAM`
+See [the deployment and signing-proxy runbook](../../docs/runbooks/agent-front.md). Terraform configures Node.js 22 / arm64, an `AWS_IAM`
 `RESPONSE_STREAM` Function URL, a 14-minute timeout, the Statsig
 `linux-arm64-gnu` native binary, and a five-minute Scheduler invocation. Only
 the trusted mymemo-service caller may invoke the URL; identity headers are
@@ -64,5 +64,5 @@ delete admits only an absent or expired `processing` (ISO UTC `until`).
 
 The sweep queries the sparse GSI2 and deletes each partition's children, then
 its tombstone. A failed delete propagates for Scheduler retry and preserves
-the tombstone. S3 prefix cleanup must join this handler when those stores are
-introduced, before removing any tombstone.
+the tombstone. The deployed handler deletes all three Conversation S3 prefixes and the exact
+transcript key before removing any DynamoDB items.

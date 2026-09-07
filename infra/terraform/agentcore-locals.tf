@@ -32,6 +32,8 @@ locals {
   }
 
   runtime_environment = {
+    CODE_INTERPRETER_ID                       = aws_bedrockagentcore_code_interpreter.workspace.code_interpreter_id
+    WORKSPACE_BUCKET                          = aws_s3_bucket.workspace.bucket
     AWS_REGION                                = var.aws_region
     AGENTCORE_DISPATCH_ENABLED_PARAMETER_NAME = aws_ssm_parameter.dispatch_enabled.name
     AGENT_DATABASE_URL                        = local.managed_agent_database_url
