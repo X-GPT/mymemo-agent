@@ -74,6 +74,27 @@ jobs:
         run: curl --silent --show-error --output /dev/null --retry 20 --retry-delay 1 --retry-connrefused "$TEST_DYNAMODB_ENDPOINT"
       - run: bun test apps/agent-front
 
+  front-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.0
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+      - run: bun install --frozen-lockfile
+      - name: Verify Node.js 22 ARM64 Lambda package
+        run: |
+          scripts/deploy/build_front.sh
+          unzip -q dist/agent-front/front.zip -d "${RUNNER_TEMP}/front-package"
+          docker run --rm --platform linux/arm64 --network none \
+            --entrypoint /var/lang/bin/node \
+            --volume "${RUNNER_TEMP}/front-package:/var/task:ro" \
+            --volume "${PWD}/scripts/smoke/front-package.mjs:/check.mjs:ro" \
+            public.ecr.aws/lambda/nodejs:22 /check.mjs /var/task
+
   infrastructure:
     runs-on: ubuntu-latest
     steps:

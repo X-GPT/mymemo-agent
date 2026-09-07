@@ -34,7 +34,7 @@ The integration suite creates an isolated table on DynamoDB Local. Without
 `src/lambda.ts` exports `handler` for both Hono `streamHandle` requests and a
 scheduled invocation with payload `{"source":"mymemo.cleanup"}`. HTTP request
 bodies cannot select the sweep. Required env: `CONVERSATION_TABLE`,
-`STATSIG_SERVER_SECRET_ARN`, and the normal AWS SDK region/role environment.
+`STATSIG_SERVER_SECRET_ARN`, `WORKSPACE_BUCKET`, and the normal AWS SDK region/role environment.
 Production always uses the fail-closed Statsig gate and flushes events before
 return. It does not accept a local DynamoDB endpoint or an open-gate switch.
 

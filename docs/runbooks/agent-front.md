@@ -8,7 +8,7 @@ steps and Statsig secret access until cutover.
 
 After merge, dispatch `release-deploy.yml` on main with the existing
 `apply-mymemo-agent-prod` confirmation. It builds `front.zip` with Bun and the
-pinned Statsig Linux ARM64 native module, preserves that zip between plan and
+locked production dependencies and Statsig Linux ARM64 native module, preserves that zip between plan and
 apply, then supplies `TF_VAR_front_lambda_package` to Terraform. Local builds:
 
 ```sh
@@ -68,7 +68,7 @@ For direct SigV4 calls without the proxy:
 ```sh
 awscurl --profile mymemo --service lambda --region us-west-2 \
   -H 'X-Member-Code: codex-smoke' -H 'X-Partner-Code: mymemo' \
-  "$FRONT_FUNCTION_URL/v1/conversations"
+  "${FRONT_FUNCTION_URL%/}/v1/conversations"
 ```
 
 The Function URL output ends in `/`; remove that trailing slash before
@@ -83,6 +83,12 @@ S3 partial failures retain the Tombstone for retry. Inspect
 
 ## Verification record
 
-Local: Terraform validate; Linux ARM64 zip build; front TypeScript check;
-proxy SigV4/streaming and cleanup retry tests. Live results are recorded below
-when the front-only apply and signed lifecycle run complete.
+Terraform validate, front and proxy TypeScript checks, proxy SigV4/streaming
+and cleanup retry tests pass. All eight initial PR CI checks passed. The
+`front-package` CI job also loads the extracted zip in the Node.js 22 ARM64
+Lambda image with AWS calls stubbed, exercising the real Statsig native loader.
+
+A front-only Terraform plan contains 19 additions, 0 changes and 0 deletions.
+It has not been applied: the pre-merge live demo requires explicit operator
+authorization. Normal release remains main-only after merge. No live success
+is claimed by these local/CI checks.
