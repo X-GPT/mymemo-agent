@@ -1,10 +1,17 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import {
+	GetObjectCommand,
+	PutObjectCommand,
+	type S3Client,
+} from "@aws-sdk/client-s3";
 import { query } from "claude-agent-sdk";
 import pino from "pino";
 import { z } from "zod";
+
+export const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
+export const RUNTIME_CWD = "/opt/mymemo/project";
 
 const id = z.string().min(1);
 export const invocationSchema = z
@@ -39,12 +46,14 @@ export function createRuntimeServer(
 		model: string;
 		env: Record<string, string | undefined>;
 		pathToClaudeCodeExecutable: string;
-		cwd: string;
+		cwd?: string;
+		s3: S3Client;
+		bucket: string;
 		port?: number;
 	},
 	runQuery = query,
 ) {
-	const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
+	const cwd = config.cwd ?? RUNTIME_CWD;
 	let busy = false;
 	const server = Bun.serve({
 		port: config.port ?? 0,
@@ -62,6 +71,9 @@ export function createRuntimeServer(
 			busy = true;
 			let active: ReturnType<typeof query> | undefined;
 			let configDir: string | undefined;
+			let transcriptPath = "";
+			let transcriptKey = "";
+			let receivedResult = false;
 			let childExited: Promise<void> | undefined;
 			let budgetTimer: ReturnType<typeof setTimeout> | undefined;
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -86,15 +98,50 @@ export function createRuntimeServer(
 							conversationId: input.conversationId,
 							turnId: input.turnId,
 						};
-						await mkdir(config.cwd, { recursive: true });
-						configDir = await mkdtemp(
-							join(tmpdir(), `claude-${input.turnId}-`),
+						await mkdir(cwd, { recursive: true });
+						configDir = `/tmp/claude/${input.turnId}`;
+						transcriptPath = join(
+							configDir,
+							"projects",
+							cwd.replace(/[^a-zA-Z0-9]/g, "-"),
+							`${input.conversationId}.jsonl`,
 						);
+						transcriptKey = `_transcripts/${input.conversationId}.jsonl`;
+						await mkdir(dirname(transcriptPath), { recursive: true });
+						let resumed = false;
+						try {
+							const object = await config.s3.send(
+								new GetObjectCommand({
+									Bucket: config.bucket,
+									Key: transcriptKey,
+								}),
+							);
+							if (!object.Body) throw new Error("Transcript body is missing");
+							await writeFile(
+								transcriptPath,
+								await object.Body.transformToByteArray(),
+							);
+							resumed = true;
+						} catch (error) {
+							// S3 hides missing keys behind AccessDenied without ListBucket.
+							// Only the first Turn can safely start without prior memory.
+							if (
+								!(
+									input.seq === 1 &&
+									error instanceof Error &&
+									["NoSuchKey", "AccessDenied"].includes(error.name)
+								)
+							)
+								throw error;
+						}
 						if (disconnected) return;
 						active = runQuery({
 							prompt: input.text,
 							options: {
 								abortController,
+								...(resumed
+									? { resume: input.conversationId }
+									: { sessionId: input.conversationId }),
 								// The SDK can finish iteration before the CLI exits on abort.
 								// Wait for the child before removing its config directory.
 								spawnClaudeCodeProcess(options) {
@@ -111,7 +158,7 @@ export function createRuntimeServer(
 								},
 								model: config.model,
 								env: { ...config.env, CLAUDE_CONFIG_DIR: configDir },
-								cwd: config.cwd,
+								cwd,
 								pathToClaudeCodeExecutable: config.pathToClaudeCodeExecutable,
 								tools: [],
 								permissionMode: "dontAsk",
@@ -135,6 +182,7 @@ export function createRuntimeServer(
 							Math.max(0, input.budgetUntil - Date.now()),
 						);
 						for await (const message of active) {
+							if (message.type === "result") receivedResult = true;
 							yield encoder.encode(`${JSON.stringify(message)}\n`);
 							// A single-prompt query ends at result. The SDK throws again after
 							// an error result; that is not a second Runtime-side failure.
@@ -148,8 +196,40 @@ export function createRuntimeServer(
 							await active?.return(undefined);
 							await childExited;
 						} finally {
-							if (configDir)
-								await rm(configDir, { recursive: true, force: true });
+							try {
+								if (receivedResult) {
+									await config.s3.send(
+										new PutObjectCommand({
+											Bucket: config.bucket,
+											Key: transcriptKey,
+											Body: await readFile(transcriptPath),
+											ContentType: "application/x-ndjson",
+										}),
+									);
+								}
+							} catch (error) {
+								logger.error({
+									...binding,
+									err: error,
+									msg: "Transcript upload failed",
+									TranscriptUploadFailures: 1,
+									_aws: {
+										Timestamp: Date.now(),
+										CloudWatchMetrics: [
+											{
+												Namespace: "MyMemo/AgentRuntime",
+												Dimensions: [[]],
+												Metrics: [
+													{ Name: "TranscriptUploadFailures", Unit: "Count" },
+												],
+											},
+										],
+									},
+								});
+							} finally {
+								if (configDir)
+									await rm(configDir, { recursive: true, force: true });
+							}
 						}
 					}
 				} catch (error) {
