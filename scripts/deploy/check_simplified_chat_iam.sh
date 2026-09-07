@@ -55,7 +55,8 @@ for name in mymemo-agent-prod-front mymemo-agent-prod-sweep; do
     iam:AttachRolePolicy iam:DetachRolePolicy iam:TagRole iam:UntagRole iam:PassRole
 done
 check "arn:aws:logs:$region:$account:log-group:/aws/lambda/mymemo-agent-prod-front:*" \
-  logs:CreateLogGroup logs:DescribeLogGroups logs:ListTagsForResource logs:TagResource logs:PutRetentionPolicy logs:DeleteLogGroup
+  logs:CreateLogGroup logs:ListTagsForResource logs:TagResource logs:PutRetentionPolicy logs:DeleteLogGroup
+check '*' logs:DescribeLogGroups
 check '*' bedrock-agentcore:CreateAgentRuntime bedrock-agentcore:CreateAgentRuntimeEndpoint \
   bedrock-agentcore:GetAgentRuntime bedrock-agentcore:GetAgentRuntimeEndpoint bedrock-agentcore:UpdateAgentRuntime \
   bedrock-agentcore:DeleteAgentRuntime bedrock-agentcore:ListAgentRuntimeVersions bedrock-agentcore:CreateWorkloadIdentity
