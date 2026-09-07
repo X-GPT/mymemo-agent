@@ -147,6 +147,9 @@ test("Hand executes real shell and file operations only through its sandbox tran
 		expect(
 			(await h.call("read", { file_path: "/ws/binary.bin" })).output.value,
 		).toContain('"sizeBytes": 2');
+		expect(
+			(await h.call("grep", { pattern: "not-present-anywhere" })).error,
+		).toBe(false);
 		const cap = await h.call("bash", {
 			command: "python3 -c 'print(\"x\"*100000)'",
 		});

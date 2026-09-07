@@ -225,6 +225,7 @@ export function createHand(invoke: HandInvoke, fatal: (error: Error) => void) {
 			flags.push("--", args.pattern, path);
 			const result = await command(flags.map(quote).join(" "));
 			if (result.exitCode > 1) throw new Error(result.value);
+			result.exitCode = 0;
 			const start = args.offset ?? 0;
 			const original = result.value;
 			result.value = result.value

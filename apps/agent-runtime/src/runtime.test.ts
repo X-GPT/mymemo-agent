@@ -114,6 +114,7 @@ async function harness(
 	let modelCalls = 0;
 	const fake = Bun.serve({
 		port: 0,
+		idleTimeout: 0,
 		async fetch(request) {
 			if (!new URL(request.url).pathname.endsWith("/messages"))
 				return new Response("{}", { status: 404 });
@@ -217,7 +218,7 @@ for (const mode of [
 		const h = await harness(mode);
 		try {
 			const input = payload();
-			if (mode === "budget") input.budgetUntil = Date.now() + 123_000;
+			if (mode === "budget") input.budgetUntil = Date.now() + 128_000;
 			if (mode === "disconnect") {
 				await new Promise<void>((resolve, reject) => {
 					const req = httpRequest(
