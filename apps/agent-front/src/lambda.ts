@@ -10,6 +10,7 @@ import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { Statsig } from "@statsig/statsig-node-core";
 import { streamHandle } from "hono/aws-lambda";
 import { createApp } from "./app";
+import { Artifacts } from "./artifacts";
 import { deleteConversationObjects } from "./cleanup";
 import { StatsigExposureGate } from "./exposure-gate";
 import { HistoryStore } from "./history";
@@ -46,6 +47,7 @@ const messages = new Messages(
 	history,
 	agentCoreRuntime(runtimeArn),
 	new Workspace(new BedrockAgentCoreClient({}), interpreterId, s3, bucket),
+	new Artifacts(s3, bucket),
 );
 const app = createApp(store, new StatsigExposureGate(statsig), messages);
 type StreamingHandler = (

@@ -157,7 +157,7 @@ test("missing or truncated export parts never overwrite the previous Workspace",
 		})(),
 	}));
 	await expect(h.workspace.save("conversation", "session")).rejects.toThrow(
-		"Missing Workspace parts",
+		"Missing file parts",
 	);
 	expect(h.objects).not.toHaveBeenCalled();
 });

@@ -102,6 +102,17 @@ export class Workspace {
 			{ length: Math.ceil(size / PART_BYTES) },
 			(_, i) => `${directory}/part-${String(i).padStart(2, "0")}`,
 		);
+		await this.s3.send(
+			new PutObjectCommand({
+				Bucket: this.bucket,
+				Key: key(id),
+				Body: await this.readParts(sessionId, paths, size),
+				ContentType: "application/gzip",
+			}),
+		);
+	}
+
+	async readParts(sessionId: string, paths: string[], size: number) {
 		const parts: Uint8Array[] = [];
 		for (let i = 0; i < paths.length; i += 3) {
 			// Three 8 MiB parts encode to 32 MiB, below the 35 MB response cap.
@@ -110,7 +121,7 @@ export class Workspace {
 				paths: batch,
 			});
 			if (response.content?.length !== batch.length)
-				throw new Error("Missing Workspace parts");
+				throw new Error("Missing file parts");
 			for (const [index, content] of response.content.entries()) {
 				const blob = content.resource?.blob;
 				if (
@@ -118,18 +129,11 @@ export class Workspace {
 					blob.byteLength !==
 						Math.min(PART_BYTES, size - (i + index) * PART_BYTES)
 				)
-					throw new Error("Invalid Workspace part");
+					throw new Error("Invalid file part");
 				parts.push(blob);
 			}
 		}
-		await this.s3.send(
-			new PutObjectCommand({
-				Bucket: this.bucket,
-				Key: key(id),
-				Body: Buffer.concat(parts),
-				ContentType: "application/gzip",
-			}),
-		);
+		return Buffer.concat(parts);
 	}
 
 	async stop(sessionId: string) {

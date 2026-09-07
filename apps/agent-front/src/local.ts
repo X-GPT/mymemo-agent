@@ -3,6 +3,7 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { S3Client } from "@aws-sdk/client-s3";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { createApp } from "./app";
+import { Artifacts } from "./artifacts";
 import { HistoryStore } from "./history";
 import { Messages } from "./messages";
 import { ConversationStore } from "./store";
@@ -50,6 +51,7 @@ const app = createApp(
 			localS3,
 			localBucket,
 		),
+		new Artifacts(localS3, localBucket),
 	),
 );
 export default { port: 3000, idleTimeout: 0, fetch: app.fetch };

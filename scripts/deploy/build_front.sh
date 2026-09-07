@@ -18,7 +18,7 @@ cp bun.lock "${build_dir}/bun.lock"
 bun install --cwd "${build_dir}" --frozen-lockfile --production \
   --filter agent-front --linker=hoisted --os=linux --cpu=arm64
 bun build apps/agent-front/src/lambda.ts --target=node --format=esm \
-  --packages=external --outfile="${build_dir}/index.mjs"
+  --external '@aws-sdk/*' --external '@statsig/*' --outfile="${build_dir}/index.mjs"
 test -f "${build_dir}/node_modules/@statsig/statsig-node-core-linux-arm64-gnu/statsig-node-core.linux-arm64-gnu.node"
 rm -f "${output_dir}/front.zip"
 (cd "${build_dir}" && zip -q -X -r "${output_dir}/front.zip" index.mjs node_modules)

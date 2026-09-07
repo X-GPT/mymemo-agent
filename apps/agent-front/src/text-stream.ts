@@ -1,3 +1,14 @@
+import { type UiNode, validateUiPayload } from "@mymemo/ui-catalog";
+import type { ArtifactChanges } from "./artifacts";
+
+export type DataPart =
+	| {
+			type: "data-generative-ui";
+			id: string;
+			data: { version: 1; payload: UiNode };
+	  }
+	| { type: "data-artifacts"; id: string; data: ArtifactChanges };
+
 export interface MessageMetadata {
 	turnId: string;
 	requestId: string;
@@ -25,12 +36,14 @@ export interface AssistantMessage {
 	role: "assistant";
 	metadata: MessageMetadata;
 	parts: Array<
+		| DataPart
 		| ToolPart
 		| { type: "step-start" }
 		| { type: "text"; text: string; state: "streaming" | "done" }
 	>;
 }
 export type TextStreamChunk =
+	| DataPart
 	| { type: "start"; messageId: string; messageMetadata: MessageMetadata }
 	| { type: "start-step" | "finish-step" | "finish" }
 	| { type: "text-start" | "text-end"; id: string }
@@ -118,6 +131,7 @@ export function createTextStream(input: {
 	let result = false;
 	let fatalRuntimeError = false;
 	const tools = new Map<string, ToolPart>();
+	const presentations = new Map<string, unknown>();
 	let errorCode: string | undefined;
 	let finished = false;
 	const texts = new Map<
@@ -152,6 +166,13 @@ export function createTextStream(input: {
 		get fatalRuntimeError() {
 			return fatalRuntimeError;
 		},
+		artifacts(data: ArtifactChanges) {
+			if (finished || (!data.artifacts.length && !data.removed.length)) return;
+			endStep();
+			const part: DataPart = { type: "data-artifacts", id: input.turnId, data };
+			message.parts.push(part);
+			emit(part);
+		},
 		push(raw: unknown) {
 			if (finished) return;
 			const value = object(raw);
@@ -176,6 +197,13 @@ export function createTextStream(input: {
 				for (const rawBlock of Array.isArray(content) ? content : []) {
 					const block = object(rawBlock);
 					if (value.type === "assistant" && block.type === "tool_use") {
+						if (
+							["PresentUI", "mcp__ui__present"].includes(String(block.name)) &&
+							typeof block.id === "string"
+						) {
+							presentations.set(block.id, block.input);
+							continue;
+						}
 						const name =
 							typeof block.name === "string"
 								? toolNames.get(
@@ -204,6 +232,25 @@ export function createTextStream(input: {
 							input: block.input,
 						});
 					} else if (value.type === "user" && block.type === "tool_result") {
+						if (
+							typeof block.tool_use_id === "string" &&
+							presentations.has(block.tool_use_id)
+						) {
+							const payload = presentations.get(block.tool_use_id);
+							presentations.delete(block.tool_use_id);
+							if (!block.is_error) {
+								const validated = validateUiPayload(payload);
+								if (!validated.ok) throw new Error("Invalid PresentUI result");
+								const part: DataPart = {
+									type: "data-generative-ui",
+									id: block.tool_use_id,
+									data: { version: 1, payload: validated.value },
+								};
+								message.parts.push(part);
+								emit(part);
+							}
+							continue;
+						}
 						const part =
 							typeof block.tool_use_id === "string"
 								? tools.get(block.tool_use_id)
