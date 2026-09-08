@@ -31,7 +31,7 @@ certification: record the remaining probes separately below.
 | 5 | Mid-Turn user+processing only; complete reply including chart after reload | Local tests pass; BFF smoke pending. |
 | 6 | Fresh Runtime session recalls earlier Turn; transcript upload failures zero | Local real-SDK transcript tests pass; live recall and metric window pending. |
 | 7 | Immediate 404; automatic deletion of all four S3 namespaces and DynamoDB items within ten minutes | PASS on deployed stack: automatic sweep removed all objects and items in 88.891 seconds; details below. |
-| 8 | Real ten-minute budget with copy-out; >64 MiB rejection preserving tarball; killed Runtime's Sandbox expires by TTL | Live 65 MiB cap passed with unchanged tarball; ten-minute budget probe in progress; killed-session TTL pending. |
+| 8 | Real ten-minute budget with copy-out; >64 MiB rejection preserving tarball; killed Runtime's Sandbox expires by TTL | Live cap passed; ten-minute budget exposed wrong error mapping (fixed locally); candidate retest and killed-session TTL pending. |
 | 9 | Ungated member 403; Statsig unreachable fails closed | Live new test identity returned 403; isolated Statsig-outage probe pending. |
 | Alarms | New metrics observed, alarms enabled and SNS wired | Definitions validated; candidate not deployed. |
 
@@ -112,7 +112,7 @@ the deployed SANDBOX's shell, not a model-generated Bash call through the BFF.
 
 ## Local verification
 
-53 Front tests passed with real DynamoDB Local and MinIO, including failure
+54 Front tests passed with real DynamoDB Local and MinIO, including failure
 correlation, rejected tarball size, artifact/history ordering and cleanup retry.
 The Runtime tests passed in the combined run; its only failure was the old
 cleanup-log assertion, subsequently updated and passed in the Front rerun.
@@ -127,10 +127,21 @@ Direct AWS fixture `b14bd81a-f461-4945-9bcd-168b2edff00d`: baseline Turn
 `8aa8b31e24556e25a0034de6508cf2b1`. Turn
 `0e841c7b-53a2-4bf5-ab2c-6bf21781dc1d` wrote 65 MiB of random data, ended
 `workspace_too_large` at 17:16:41.065 UTC, and left that exact ETag unchanged.
-The subsequent real ten-minute budget probe is not claimed passed yet: the
-local client disconnected after five idle minutes; durable history still showed
-processing, and fixture deletion returned 409. Read its final history and remove
-the fixture after processing completes; do not resend the Turn.
+The real ten-minute Turn `319af235-67b4-4f61-9bba-afca2b845cbc`
+ended at 17:26:42.555 UTC (started 17:16:41.297) with `internal_error`, so the
+budget acceptance **failed**. Copy-out did run: `budget.txt` downloaded with
+HTTP 200 and exact content `BUDGET-COPY-745`. The fixture was deleted (204).
+
+The Runtime's SDK returned `terminal_reason: aborted_tools`; the shared Front
+converter only recognized `aborted_streaming`. This PR adds the missing mapping
+and a regression fixture from the real result (red before the fix, green after).
+A fresh deployed Runtime/Sandbox with a 30-second diagnostic budget reproduced
+`internal_error` before the fix, then passed through the corrected local Front
+converter as `budget_exceeded` in 30.121 seconds: Conversation
+`a722dbaf-fe17-4786-bae1-387150562e2e`, Turn
+`d50e7027-177a-468e-86e8-2a19946d136e`. Both diagnostic sessions were stopped and
+Conversations deleted (204). This verifies the root cause but does not replace
+the full ten-minute test through the candidate deployed Front.
 
 The new test identity `codex-745-denied-8c3fe5b1` received 403 from the deployed
 Front's actual Statsig gate. No gate setting was changed.

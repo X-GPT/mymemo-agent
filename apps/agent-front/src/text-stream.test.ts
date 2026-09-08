@@ -123,6 +123,18 @@ describe("SDK text to UIMessage stream", () => {
 			"budget_exceeded",
 		],
 		[
+			{
+				type: "result",
+				subtype: "error_during_execution",
+				is_error: true,
+				terminal_reason: "aborted_tools",
+				errors: [
+					"[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use",
+				],
+			},
+			"budget_exceeded",
+		],
+		[
 			{ type: "result", subtype: "error_max_budget_usd", is_error: true },
 			"budget_exceeded",
 		],
