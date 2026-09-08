@@ -341,6 +341,8 @@ export class ConversationStore {
 				const oldest = page.Items?.[0]?.GSI2SK;
 				console.log(
 					JSON.stringify({
+						conversationId: page.Items?.[0]?.conversationId ?? null,
+						turnId: null,
 						cleanupOldestAgeSeconds: oldest
 							? Math.max(0, (Date.now() - Date.parse(oldest)) / 1000)
 							: 0,

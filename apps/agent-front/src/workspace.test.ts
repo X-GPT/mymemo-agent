@@ -178,3 +178,31 @@ test("readParts accepts the interpreter's UTF-8 text resources without changing 
 		await h.workspace.readParts("session", ["part-0"], Buffer.byteLength(text)),
 	).toEqual(Buffer.from(text));
 });
+
+test("workspace metrics correlate both copy directions and rejected archive size", async () => {
+	const log = spyOn(console, "log").mockImplementation(() => {});
+	try {
+		const h = harness(1);
+		await h.workspace.restore("conversation", "session", "turn");
+		await h.workspace.save("conversation", "session", "turn");
+		await expect(
+			harness(64 * MiB + 1).workspace.save("conversation", "session", "turn"),
+		).rejects.toBeInstanceOf(WorkspaceTooLarge);
+		const records = log.mock.calls.map(([line]) => JSON.parse(line));
+		expect(records.map((r) => r.event)).toEqual([
+			"workspace_restore",
+			"workspace_size",
+			"workspace_save",
+			"workspace_size",
+		]);
+		for (const record of records) {
+			expect(record.conversationId).toBe("conversation");
+			expect(record.turnId).toBe("turn");
+			if (record.copySeconds !== undefined)
+				expect(record.copySeconds).toBeGreaterThanOrEqual(0);
+		}
+		expect(records.at(-1).tarballBytes).toBe(64 * MiB + 1);
+	} finally {
+		log.mockRestore();
+	}
+});

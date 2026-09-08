@@ -66,7 +66,8 @@ export class Workspace {
 		return response.sessionId;
 	}
 
-	async restore(id: string, sessionId: string) {
+	async restore(id: string, sessionId: string, turnId: string | null = null) {
+		const started = performance.now();
 		let archive: Uint8Array | undefined;
 		try {
 			const object = await this.s3.send(
@@ -86,9 +87,19 @@ export class Workspace {
 		await this.call(sessionId, "executeCommand", {
 			command: `cd ~ && mkdir -p ws && ${archive ? "tar xzf in.tgz -C ws && rm in.tgz && " : ""}mkdir -p ws/artifacts ws/.mymemo/docs`,
 		});
+		console.log(
+			JSON.stringify({
+				conversationId: id,
+				turnId,
+				event: "workspace_restore",
+				tarballBytes: archive?.byteLength ?? 0,
+				copySeconds: (performance.now() - started) / 1000,
+			}),
+		);
 	}
 
-	async save(id: string, sessionId: string) {
+	async save(id: string, sessionId: string, turnId: string | null = null) {
+		const started = performance.now();
 		// PAX preserves fractional mtimes for artifact diffs after restoration.
 		// Outside ws: the archive must never include itself or a previous export.
 		const directory = `.workspace-export-${crypto.randomUUID()}`;
@@ -98,6 +109,14 @@ export class Workspace {
 		const size = Number(result.structuredContent?.stdout?.trim());
 		if (!Number.isSafeInteger(size) || size <= 0)
 			throw new Error("Invalid Workspace size");
+		console.log(
+			JSON.stringify({
+				conversationId: id,
+				turnId,
+				event: "workspace_size",
+				tarballBytes: size,
+			}),
+		);
 		if (size > MAX_BYTES) throw new WorkspaceTooLarge();
 		const paths = Array.from(
 			{ length: Math.ceil(size / PART_BYTES) },
@@ -109,6 +128,14 @@ export class Workspace {
 				Key: key(id),
 				Body: await this.readParts(sessionId, paths, size),
 				ContentType: "application/gzip",
+			}),
+		);
+		console.log(
+			JSON.stringify({
+				conversationId: id,
+				turnId,
+				event: "workspace_save",
+				copySeconds: (performance.now() - started) / 1000,
 			}),
 		);
 	}

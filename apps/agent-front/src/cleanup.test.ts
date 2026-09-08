@@ -101,10 +101,14 @@ test("cleanup reports oldest index age before a failed delete and zero for an em
 			}),
 		).rejects.toThrow("delete failed");
 		expect(JSON.parse(log.mock.calls[0]?.[0])).toEqual({
+			conversationId: null,
+			turnId: null,
 			cleanupOldestAgeSeconds: 3601,
 		});
 		await store.sweep();
 		expect(JSON.parse(log.mock.calls[1]?.[0])).toEqual({
+			conversationId: null,
+			turnId: null,
 			cleanupOldestAgeSeconds: 0,
 		});
 	} finally {
