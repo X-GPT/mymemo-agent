@@ -183,6 +183,7 @@ test("workspace metrics correlate both copy directions and rejected archive size
 	const log = spyOn(console, "log").mockImplementation(() => {});
 	try {
 		const h = harness(1);
+		await h.workspace.start("turn", "conversation");
 		await h.workspace.restore("conversation", "session", "turn");
 		await h.workspace.save("conversation", "session", "turn");
 		await expect(
@@ -190,6 +191,7 @@ test("workspace metrics correlate both copy directions and rejected archive size
 		).rejects.toBeInstanceOf(WorkspaceTooLarge);
 		const records = log.mock.calls.map(([line]) => JSON.parse(line));
 		expect(records.map((r) => r.event)).toEqual([
+			"sandbox_started",
 			"workspace_restore",
 			"workspace_size",
 			"workspace_save",
@@ -198,6 +200,8 @@ test("workspace metrics correlate both copy directions and rejected archive size
 		for (const record of records) {
 			expect(record.conversationId).toBe("conversation");
 			expect(record.turnId).toBe("turn");
+			if (record.startSeconds !== undefined)
+				expect(record.startSeconds).toBeGreaterThanOrEqual(0);
 			if (record.copySeconds !== undefined)
 				expect(record.copySeconds).toBeGreaterThanOrEqual(0);
 		}

@@ -42,6 +42,7 @@ const { conversationId: id } = (await (
 	await call("", "POST", {}, 201)
 ).json()) as { conversationId: string };
 const marker = crypto.randomUUID();
+const fileMarker = crypto.randomUUID();
 console.log(
 	JSON.stringify({ conversationId: id, startedAt: new Date().toISOString() }),
 );
@@ -89,7 +90,7 @@ async function turn(text: string, during?: () => Promise<void>) {
 }
 try {
 	const first = await turn(
-		`Remember the secret word ${marker} for the next Turn. Use Write to create artifacts/gate.txt containing ${marker}. Use Bash to append a newline to artifacts/gate.txt and sleep 8. Present a bar chart with values A=1 and B=2 using PresentUI, then reply READY.`,
+		`Remember the secret word ${marker} for the next Turn. Use Write to create artifacts/gate.txt containing ${fileMarker}. Use Bash to append a newline to artifacts/gate.txt and sleep 8. Present a bar chart with values A=1 and B=2 using PresentUI, then reply READY.`,
 		async () => {
 			await call(
 				`/${id}/messages`,
@@ -134,19 +135,35 @@ try {
 	).json()) as { downloadUrl: string };
 	const download = await fetch(downloadUrl);
 	assert.equal(download.status, 200);
-	assert((await download.text()).includes(marker));
+	assert((await download.text()).includes(fileMarker));
 	const previous = await archive();
 	const second = await turn(
 		"Without reading any file first, reply with the secret word I gave you in the previous Turn. Then use Bash to cat artifacts/gate.txt and append 'Turn 2' to it.",
 	);
 	assert(!second.some((p) => p.type === "error"));
+	const firstTool = second.findIndex((p) => p.type === "tool-input-start");
+	assert(firstTool >= 0, "Turn 2 must use Bash");
 	assert(
 		second
+			.slice(0, firstTool)
 			.filter((p) => p.type === "text-delta")
 			.map((p) => p.delta)
 			.join("")
 			.includes(marker),
 		"Transcript recall failed",
+	);
+	const bash = second.find(
+		(p) => p.type === "tool-input-available" && p.toolName === "Bash",
+	);
+	assert(bash, "Turn 2 Bash call missing");
+	assert(
+		second.some(
+			(p) =>
+				p.type === "tool-output-available" &&
+				p.toolCallId === bash.toolCallId &&
+				p.output.value.includes(fileMarker),
+		),
+		"Turn 2 Bash did not read the persisted file marker",
 	);
 	assert.notEqual(
 		await archive(),

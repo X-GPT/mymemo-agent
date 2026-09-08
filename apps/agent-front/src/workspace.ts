@@ -54,7 +54,8 @@ export class Workspace {
 		return result;
 	}
 
-	async start(turnId: string) {
+	async start(turnId: string, conversationId: string | null = null) {
+		const started = performance.now();
 		const response = await this.client.send(
 			new StartCodeInterpreterSessionCommand({
 				codeInterpreterIdentifier: this.interpreterId,
@@ -63,6 +64,15 @@ export class Workspace {
 			}),
 		);
 		if (!response.sessionId) throw new Error("Sandbox session did not start");
+		console.log(
+			JSON.stringify({
+				conversationId,
+				turnId,
+				sessionId: response.sessionId,
+				event: "sandbox_started",
+				startSeconds: (performance.now() - started) / 1000,
+			}),
+		);
 		return response.sessionId;
 	}
 

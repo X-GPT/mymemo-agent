@@ -31,8 +31,8 @@ certification: record the remaining probes separately below.
 | 5 | Mid-Turn user+processing only; complete reply including chart after reload | Local tests pass; BFF smoke pending. |
 | 6 | Fresh Runtime session recalls earlier Turn; transcript upload failures zero | Local real-SDK transcript tests pass; live recall and metric window pending. |
 | 7 | Immediate 404; automatic deletion of all four S3 namespaces and DynamoDB items within ten minutes | PASS on deployed stack: automatic sweep removed all objects and items in 88.891 seconds; details below. |
-| 8 | Real ten-minute budget with copy-out; >64 MiB rejection preserving tarball; killed Runtime's Sandbox expires by TTL | Local budget/cap tests pass; live fault probes pending. |
-| 9 | Ungated member 403; Statsig unreachable fails closed | Local gate tests pass; live denied identity and isolated outage probe pending. |
+| 8 | Real ten-minute budget with copy-out; >64 MiB rejection preserving tarball; killed Runtime's Sandbox expires by TTL | Live 65 MiB cap passed with unchanged tarball; ten-minute budget probe in progress; killed-session TTL pending. |
+| 9 | Ungated member 403; Statsig unreachable fails closed | Live new test identity returned 403; isolated Statsig-outage probe pending. |
 | Alarms | New metrics observed, alarms enabled and SNS wired | Definitions validated; candidate not deployed. |
 
 For #4, use only an owned disposable Conversation: stop its Runtime, wait for
@@ -58,6 +58,8 @@ Persistence failures have a separate alarm because no durable outcome exists.
 
 - Each error code alarms above 5% in five minutes. Budget exhaustion, workspace
   overflow, sandbox start and persistence failures also alarm on any occurrence.
+- `SandboxStartSeconds` measures successful session starts. Admission logs map
+  requestId to turnId; session-start logs include the returned session ID.
 - `TarballBytes` includes rejected export sizes; `CopyInSeconds` and
   `CopyOutSeconds` measure successful archive transfers, excluding artifact sync.
 - Native Lambda `Url5xxCount` covers HTTP failures; `Errors` covers unhandled
@@ -117,3 +119,23 @@ cleanup-log assertion, subsequently updated and passed in the Front rerun.
 Both scoped TypeScript checks, Biome, Front package build and Terraform validate
 passed (existing provider deprecation warnings only). AWS `test-metric-filter`
 accepted the per-code and sandbox-start filters and excluded negative fixtures.
+
+## Additional live checks — 2026-09-08
+
+Direct AWS fixture `b14bd81a-f461-4945-9bcd-168b2edff00d`: baseline Turn
+`a3286b4d-ecb9-4224-8c0c-ed3576608f93` produced a 416-byte tarball with ETag
+`8aa8b31e24556e25a0034de6508cf2b1`. Turn
+`0e841c7b-53a2-4bf5-ab2c-6bf21781dc1d` wrote 65 MiB of random data, ended
+`workspace_too_large` at 17:16:41.065 UTC, and left that exact ETag unchanged.
+The subsequent real ten-minute budget probe is not claimed passed yet: the
+local client disconnected after five idle minutes; durable history still showed
+processing, and fixture deletion returned 409. Read its final history and remove
+the fixture after processing completes; do not resend the Turn.
+
+The new test identity `codex-745-denied-8c3fe5b1` received 403 from the deployed
+Front's actual Statsig gate. No gate setting was changed.
+
+The candidate Runtime image built locally. Its SDK tests under local ARM64
+emulation terminated the CLI with SIGSEGV; the native ARM64 CI image tests on
+PR head `255354e` passed. Treat the native check as the deployment-platform
+verification and retain the local emulation limitation in the record.

@@ -57,6 +57,14 @@ export class Messages {
 			},
 			assistant: null,
 		};
+		console.log(
+			JSON.stringify({
+				conversationId: id,
+				turnId,
+				requestId,
+				event: "turn_admitted",
+			}),
+		);
 		// A failed initial write must never invoke a Turn whose user message is absent.
 		if (conversation.processing)
 			console.log(
@@ -97,7 +105,7 @@ export class Messages {
 					let sessionId: string | undefined;
 					let stage = "sandbox_start";
 					try {
-						sessionId = await this.workspace.start(turnId);
+						sessionId = await this.workspace.start(turnId, id);
 						stage = "workspace_restore";
 						await this.workspace.restore(id, sessionId, turnId);
 						stage = "runtime";

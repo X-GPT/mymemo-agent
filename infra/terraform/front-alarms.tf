@@ -2,6 +2,7 @@
 locals {
   front_metrics = merge({
     TurnOutcomes         = { pattern = "{ $.event = \"turn_finished\" || $.event = \"turn_abandoned\" }", value = "1", unit = "Count" }
+    SandboxStartSeconds  = { pattern = "{ $.event = \"sandbox_started\" }", value = "$.startSeconds", unit = "Seconds" }
     SandboxStartFailures = { pattern = "{ $.event = \"turn_operation_failed\" && $.stage = \"sandbox_start\" }", value = "1", unit = "Count" }
     PersistenceFailures  = { pattern = "{ $.event = \"turn_persistence_failed\" }", value = "1", unit = "Count" }
     TarballBytes         = { pattern = "{ $.tarballBytes = * }", value = "$.tarballBytes", unit = "Bytes" }
