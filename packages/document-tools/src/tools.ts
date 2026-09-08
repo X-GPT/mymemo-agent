@@ -22,7 +22,7 @@ export type DocumentToolName = (typeof DOCUMENT_TOOL_NAMES)[number];
 /** One model-facing description per tool, shared so the wording cannot drift. */
 export const DOCUMENT_TOOL_DESCRIPTIONS: Record<DocumentToolName, string> = {
 	ListDocuments:
-		"Count and browse the searchable documents in this conversation's scope, newest first.",
+		"Count and browse the searchable documents in this conversation's scope, newest first. Each page contains at most 20 documents. For the next page, copy nextCursor exactly into cursor without adding quotes; stop when nextCursor is null.",
 	SearchDocuments:
 		"Search the MyMemo knowledge base within this conversation's scope for relevant passages.",
 	LoadDocuments:
@@ -70,7 +70,10 @@ function encodeCursor(cursor: DocumentListCursor): string {
 }
 
 function decodeCursor(cursor: string): DocumentListCursor | null {
-	if (cursor.length === 0 || cursor.length > 4_096 || !BASE64URL.test(cursor)) {
+	if (cursor.length === 0 || cursor.length > 4_096) return null;
+	// Recover a copied JSON closing quote; the token must still pass every check.
+	if (cursor.endsWith('"')) cursor = cursor.slice(0, -1);
+	if (!BASE64URL.test(cursor)) {
 		return null;
 	}
 	try {

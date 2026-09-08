@@ -46,7 +46,9 @@ starts and stops sessions; the Runtime never restarts a lost session. See
 The always-loaded `hand` MCP server exposes Bash, Read, Write, Edit, Glob and
 Grep via SDK aliases. `tools: []` disables built-ins; `allowedTools` lists only
 the six `mcp__hand__*`, three `mcp__docs__*`, and `mcp__ui__present` targets. Model paths live under `/ws`, mapped to `ws/`
-in the sandbox. Bash has a 120-second default and 600-second maximum timeout,
+in the sandbox. `/ws` is a file-tool alias; Bash starts in `~/ws` and uses
+relative paths or `~/ws`. The model is instructed to execute `!command`
+verbatim without the leading `!`. Bash has a 120-second default and 600-second maximum timeout,
 without background mode. Hand output is capped at 64 KiB; writes at 1 MiB.
 File operations reject traversal and escaping symlinks. Binary reads return
 size and MIME type; PDF page extraction uses Bash. Edits require one match.

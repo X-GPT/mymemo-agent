@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,6 +93,12 @@ test("Hand executes real shell and file operations only through its sandbox tran
 		throw new Error(`Unexpected ${name}`);
 	});
 	try {
+		const listing = await h.call("bash", { command: "ls" });
+		expect(listing.error).toBe(false);
+		expect(listing.output.value).toBe("");
+		expect(
+			(await h.call("bash", { command: "pwd -P" })).output.value.trim(),
+		).toBe(await realpath(join(home, "ws")));
 		expect(
 			(
 				await h.call("write", {
