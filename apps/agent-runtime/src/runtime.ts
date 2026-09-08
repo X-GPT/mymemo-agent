@@ -94,7 +94,10 @@ export function createRuntimeServer(
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
 			let budgetExpired = false;
 			let sandboxLost: Error | undefined;
-			let binding = {};
+			let binding: { conversationId: string | null; turnId: string | null } = {
+				conversationId: null,
+				turnId: null,
+			};
 			const encoder = new TextEncoder();
 			let disconnected = false;
 			const abortController = new AbortController();
@@ -183,7 +186,7 @@ export function createRuntimeServer(
 											? input.scope.summaryId
 											: null,
 								}),
-								logger,
+								logger: logger.child(binding),
 							}),
 							hand,
 							abortController.signal,

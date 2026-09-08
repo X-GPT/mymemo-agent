@@ -35,7 +35,14 @@ export function createApp(
 			return c.json({ error: "Invalid cursor" }, 400);
 		if (error instanceof HTTPException)
 			return c.json({ error: error.message }, error.status);
-		console.error({ message: "Front request failed", name: error.name });
+		console.error(
+			JSON.stringify({
+				conversationId: c.req.param("id") ?? null,
+				turnId: null,
+				message: "Front request failed",
+				name: error.name,
+			}),
+		);
 		return c.json({ error: "internal_error" }, 500);
 	});
 	app.notFound((c) => c.json({ error: "Not found" }, 404));

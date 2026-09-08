@@ -197,6 +197,36 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 		};
 	}
 
+	test("Turn outcome and sandbox failure logs retain correlation without prompt content", async () => {
+		const log = spyOn(console, "log").mockImplementation(() => {});
+		const error = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const h = await harness("start");
+			const response = await h.send("private prompt");
+			await response.text();
+			const records = [...log.mock.calls, ...error.mock.calls].map(([line]) =>
+				JSON.parse(line),
+			);
+			const outcome = records.find((r) => r.event === "turn_finished");
+			expect(outcome).toMatchObject({
+				conversationId: h.id,
+				status: "error",
+				errorCode: "internal_error",
+			});
+			expect(
+				records.find((r) => r.event === "turn_operation_failed"),
+			).toMatchObject({
+				conversationId: h.id,
+				turnId: outcome.turnId,
+				stage: "sandbox_start",
+			});
+			expect(JSON.stringify(records)).not.toContain("private prompt");
+		} finally {
+			log.mockRestore();
+			error.mockRestore();
+		}
+	});
+
 	test.skipIf(!s3Endpoint)(
 		"Downloads and PresentUI arrive on done/error and reload; links work immediately and deletion mirrors",
 		async () => {

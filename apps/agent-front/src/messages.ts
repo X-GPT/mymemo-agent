@@ -57,7 +57,24 @@ export class Messages {
 			},
 			assistant: null,
 		};
+		console.log(
+			JSON.stringify({
+				conversationId: id,
+				turnId,
+				requestId,
+				event: "turn_admitted",
+			}),
+		);
 		// A failed initial write must never invoke a Turn whose user message is absent.
+		if (conversation.processing)
+			console.log(
+				JSON.stringify({
+					conversationId: id,
+					turnId: conversation.processing.turnId,
+					event: "turn_abandoned",
+					errorCode: "abandoned",
+				}),
+			);
 		await this.history.put(id, turn);
 		const encoder = new TextEncoder();
 		let disconnected = false;
@@ -86,9 +103,12 @@ export class Messages {
 				const run = async () => {
 					let failure: string | undefined;
 					let sessionId: string | undefined;
+					let stage = "sandbox_start";
 					try {
-						sessionId = await this.workspace.start(turnId);
-						await this.workspace.restore(id, sessionId);
+						sessionId = await this.workspace.start(turnId, id);
+						stage = "workspace_restore";
+						await this.workspace.restore(id, sessionId, turnId);
+						stage = "runtime";
 						const raw = await this.invoke({
 							conversationId: id,
 							turnId,
@@ -105,7 +125,8 @@ export class Messages {
 							converter.push(message);
 						if (converter.hasResult && !converter.fatalRuntimeError) {
 							try {
-								await this.workspace.save(id, sessionId);
+								stage = "workspace_save";
+								await this.workspace.save(id, sessionId, turnId);
 							} finally {
 								converter.artifacts(
 									await this.artifacts.sync(id, sessionId, this.workspace),
@@ -113,6 +134,15 @@ export class Messages {
 							}
 						}
 					} catch (error) {
+						console.error(
+							JSON.stringify({
+								conversationId: id,
+								turnId,
+								event: "turn_operation_failed",
+								stage,
+								name: error instanceof Error ? error.name : "Error",
+							}),
+						);
 						failure =
 							error instanceof WorkspaceTooLarge
 								? "workspace_too_large"
@@ -131,6 +161,15 @@ export class Messages {
 					turn.user.metadata = turn.assistant.metadata;
 					await this.history.put(id, turn);
 					await this.store.clearProcessing(id, turnId);
+					console.log(
+						JSON.stringify({
+							conversationId: id,
+							turnId,
+							event: "turn_finished",
+							status: turn.status,
+							errorCode: turn.errorCode ?? "none",
+						}),
+					);
 					for (const chunk of terminal) emit(chunk);
 					if (!disconnected) {
 						controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -139,10 +178,15 @@ export class Messages {
 				};
 				// Keep draining on browser reload; the Lambda response remains open until persistence.
 				const pending = run().catch((error) => {
-					console.error({
-						message: "Turn persistence failed",
-						name: error instanceof Error ? error.name : "Error",
-					});
+					console.error(
+						JSON.stringify({
+							conversationId: id,
+							turnId,
+							event: "turn_persistence_failed",
+							message: "Turn persistence failed",
+							name: error instanceof Error ? error.name : "Error",
+						}),
+					);
 					if (!disconnected) controller.error(error);
 				});
 				this.pending.add(pending);
