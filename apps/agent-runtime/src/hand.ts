@@ -252,7 +252,9 @@ export function createHand(invoke: HandInvoke, fatal: (error: Error) => void) {
 	) {
 		return tool(
 			name,
-			`Run ${name} in the sandbox workspace /ws.`,
+			name === "bash"
+				? "Run a shell command in the sandbox workspace ~/ws. Use relative paths or ~/ws in shell commands; /ws is only a file-tool alias and does not exist in the shell."
+				: `Run ${name} in the sandbox workspace /ws.`,
 			schema,
 			async (args) => {
 				try {

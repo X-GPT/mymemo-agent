@@ -238,7 +238,7 @@ export function createRuntimeServer(
 								includePartialMessages: true,
 								thinking: { type: "enabled", budgetTokens: 1024 },
 								systemPrompt:
-									"You are MyMemo's assistant. Answer the user's questions concisely. Your working directory is /ws. Use the Hand tools for all files and shell commands. The workspace persists across Turns and is limited to 64 MiB compressed; large data belongs in the knowledge base. Use ListDocuments and SearchDocuments to discover documents within this Conversation’s Scope, then LoadDocuments to cache them under /ws/.mymemo/docs. Read or Grep the returned paths. Save downloadable files under artifacts/.",
+									"You are MyMemo's assistant. Answer the user's questions concisely. Use the Hand tools for all files and shell commands. Bash starts in ~/ws; use relative paths or ~/ws in shell commands. /ws is a virtual path prefix for the file tools only, not an absolute shell path. When the user's message starts with !, execute the remaining command verbatim with Bash, without adding flags or paths (for example, !ls means ls). The workspace persists across Turns and is limited to 64 MiB compressed; large data belongs in the knowledge base. Use ListDocuments and SearchDocuments to discover documents within this Conversation’s Scope, then LoadDocuments to cache them under /ws/.mymemo/docs. Read or Grep the returned paths; in Bash use .mymemo/docs relative to the workspace. Save downloadable files under artifacts/.",
 							},
 						});
 						budgetTimer = setTimeout(

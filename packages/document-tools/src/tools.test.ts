@@ -67,6 +67,36 @@ describe("ListDocuments", () => {
 		]);
 	});
 
+	it("accepts a copied cursor with one trailing quote without changing its position", async () => {
+		const c = client();
+		const after = {
+			createdAt: "2026-07-14T04:59:25.539Z",
+			sourceAssetId: "asset",
+		};
+		const cursor = Buffer.from(
+			JSON.stringify({ version: 1, ...after }),
+		).toString("base64url");
+		expect(await listDocuments({ cursor: `${cursor}"`, limit: 80 }, c)).toEqual(
+			{
+				total: 0,
+				documents: [],
+				nextCursor: null,
+			},
+		);
+		expect(c.calls).toEqual([{ limit: 20, after }]);
+		for (const malformed of [
+			`${cursor}""`,
+			`${cursor.slice(0, 10)}"${cursor.slice(10)}`,
+			`invalid!"`,
+		]) {
+			expect(await listDocuments({ cursor: malformed }, c)).toEqual({
+				isError: true,
+				text: "ListDocuments failed: invalid cursor",
+			});
+		}
+		expect(c.calls).toHaveLength(1);
+	});
+
 	it("rejects malformed, foreign, and oversized cursors before touching the client", async () => {
 		const c = client();
 		const encode = (v: unknown) =>

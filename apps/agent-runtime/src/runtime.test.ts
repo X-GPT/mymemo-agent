@@ -268,6 +268,8 @@ async function harness(
 			expect(params.options?.tools).toEqual([]);
 			expect(params.options?.permissionMode).toBe("dontAsk");
 			expect(params.options?.settingSources).toEqual([]);
+			expect(params.options?.systemPrompt).toContain("Bash starts in ~/ws");
+			expect(params.options?.systemPrompt).toContain("!ls means ls");
 			if (mode === "throw") throw new Error("injected failure");
 			const active = query(params);
 			if (mode === "disconnect") return active;
