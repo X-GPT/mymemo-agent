@@ -293,7 +293,9 @@ for secret in "$e2b_secret" "$db_secret" "$redis_secret"; do
       confirm "Was this the already-removed RDS-owned secret?" || exit 1
     }
 done
-say "Follow docs/runbooks/v1-teardown.md: verify live resource absence, then run a signed Turn with ListDocuments through the Function URL."
+say "Complete docs/runbooks/v1-teardown.md: unmanaged prototype/dispatch subnets, conditional gateway secret and former dev bucket."
+confirm "Have those state/ownership checks and cleanup steps been completed and recorded?" || exit 1
+say "Then verify live production resource absence and run a signed Turn with ListDocuments through the Function URL."
 say "Record the Turn id, successful KB tool result and unchanged front hash/Runtime digest."
 confirm "Have the live inventory and real Turn/KB checks passed and been recorded?" || exit 1
 say "Retain the evidence securely. Confirm the roughly USD 80 monthly reduction on the next bill."

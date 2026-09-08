@@ -37,8 +37,8 @@ restart the wizard after resource or output deletion. The wizard is one-shot.
 
 The new DynamoDB/S3 test data is deliberately left alone (the issue calls its
 wipe optional). The legacy artifact bucket, ECR, bootstrap IAM and KB operator
-bridge remain managed. The separate dev artifact-bucket root is retired;
-check its former state if it was deployed before deleting any dev bucket.
+bridge remain managed. The separate dev artifact-bucket root is retired; destroy its existing state
+with the procedure below.
 
 ## Live removal checks
 
@@ -62,6 +62,64 @@ network error is not evidence of absence.
 - `secretsmanager describe-secret --secret-id <recorded ARN>`: E2B and Redis
   have `DeletedDate`. The RDS-managed password may already be absent after DB
   deletion; confirm ResourceNotFound rather than swallowing another error.
+
+## Unmanaged leftovers and the former dev root
+
+Before the final Turn check, complete the #732 fates-ledger cleanup outside
+production Terraform. Read-only inventory on 2026-09-08 found these subnets:
+
+| Subnet | CIDR | Name prefix |
+| --- | --- | --- |
+| `subnet-0ff70ed49ea0c3845` | `172.31.64.0/24` | `mymemo-agentcore-prototype-20260813095724` |
+| `subnet-0fb6cdacd19f98ee8` | `172.31.65.0/24` | `mymemo-agentcore-prototype-20260813095724` |
+| `subnet-0ab286f6d4b8b9f61` | `172.31.70.0/24` | `mymemo-agentcore-dispatch-20260813122403` |
+| `subnet-0fca0efa90d78ab98` | `172.31.71.0/24` | `mymemo-agentcore-dispatch-20260813122403` |
+
+Re-run `ec2 describe-subnets` with the two name-prefix tag filters. Confirm
+these exact IDs are outside all relevant Terraform state before deletion:
+production `before.json`, the former `agentcore-canary-prod.tfstate`, dev,
+and shared-service state. The old canary state currently contains only data
+sources. Never remove the surviving Runtime's `172.31.80/24` and `81/24`
+subnets or the shared-service public subnets.
+
+For each verified retired subnet, inspect `ec2 describe-network-interfaces
+--filters Name=subnet-id,Values=<id>` and its route-table associations.
+The two dispatch subnets currently have four available Lambda VPC ENIs whose
+description ends in `20260813122403-control`. Check requester-managed status
+and the owning Lambda's VPC configuration; retire only the confirmed old
+prototype/dispatch owner and let AWS release service-managed ENIs. Do not
+force-detach an ENI or alter a current service to unblock deletion. If ownership
+is unclear, stop and resolve it. Once no interfaces remain, run
+`aws --profile mymemo --region us-west-2 ec2 delete-subnet --subnet-id <verified-id>`
+and re-list to prove absence.
+
+`secretsmanager list-secrets --include-planned-deletion --filters
+Key=name,Values=GATEWAY_TOKEN_SECRET` returned no entries in this account/region
+on 2026-09-08. Recheck during teardown. If present, verify its exact ARN belongs
+to the retired gateway and is absent from surviving configuration, then use
+`secretsmanager delete-secret --secret-id <verified-arn>
+--recovery-window-in-days 7`. Record DeletedDate; never retrieve the value.
+
+The former `mymemo-agent/dev.tfstate` still manages only the
+`mymemo-agent-local-artifacts` bucket and its seven associated settings.
+Restore its pinned configuration to a private directory and destroy through
+that backend (do not merely remove its state):
+
+```sh
+umask 077
+dev_cleanup="$(mktemp -d)"
+git archive 6338550 infra/dev | tar -x -C "$dev_cleanup"
+AWS_PROFILE=mymemo terraform -chdir="$dev_cleanup/infra/dev" init -lockfile=readonly
+AWS_PROFILE=mymemo terraform -chdir="$dev_cleanup/infra/dev" plan -destroy -out=delete.tfplan
+# Verify only mymemo-agent-local-artifacts and its settings are deleted.
+# If nonempty, inspect and explicitly discard this bucket's contents first;
+# do not touch the production workspace or artifact buckets.
+AWS_PROFILE=mymemo terraform -chdir="$dev_cleanup/infra/dev" apply delete.tfplan
+```
+
+Record the live subnet absence, conditional secret deletion/absence and empty
+dev managed state with the production teardown evidence. These read-only
+inventory results are not evidence that deletion has already happened.
 
 ## New-stack acceptance
 
