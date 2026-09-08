@@ -1,6 +1,4 @@
-aws_region     = "us-east-1"
-aws_account_id = "123456789012"
-environment    = "prod"
+environment = "prod"
 
 tags = {
   Application = "mymemo-agent"
@@ -8,50 +6,26 @@ tags = {
   ManagedBy   = "terraform"
 }
 
-# Existing mymemo-service VPC/subnets/ECS cluster are read from Terraform remote
-# state. The internal ALB is owned by mymemo-agent and accepts traffic only from
-# the configured mymemo-service API ECS service security group.
-mymemo_service_api_security_group_ids = ["sg-REPLACE_WITH_MYMEMO_SERVICE_API_SG"]
 
-# Security group on the existing mymemo-service RDS instance hosting the KB
-# database. mymemo-agent attaches an ingress rule for the AgentCore Runtime.
-kb_database_security_group_id = "sg-REPLACE_WITH_KB_DATABASE_SG"
+# Security group on the existing mymemo-service RDS instance (mymemo-staging-pg)
+# hosting the KB database. mymemo-agent attaches an ingress rule to it so
+# AgentCore Runtime can reach the KB over KB_DATABASE_URL.
+kb_database_security_group_id = "sg-0c7084b87f3e109d7"
 
-# Existing ECS subnets are public/default subnets with no NAT/VPC endpoint egress
-# path, so public IP assignment is an inherited network constraint.
-assign_public_ip = true
 
-# Pin a reviewed fck-nat ARM64 AMI owned by AWS account 568608671756 in aws_region.
-fck_nat_ami_id = "ami-REPLACE_WITH_REVIEWED_FCK_NAT_AMI"
+# fck-nat 1.4.0, published by AWS account 568608671756 for us-west-2 ARM64.
+fck_nat_ami_id = "ami-0d1db1251d2b64626"
 
-chat_api_image                         = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-chat-api:REPLACE_WITH_GIT_SHA"
-agent_maintenance_image                = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agent-maintenance:REPLACE_WITH_GIT_SHA"
-agentcore_dispatch_publisher_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mymemo-agentcore-dispatch-publisher:REPLACE_WITH_GIT_SHA"
-runtime_image_digest                   = "sha256:REPLACE_WITH_64_HEX_CHARACTERS"
-consumer_lambda_package                = "/absolute/path/to/consumer.zip"
+openrouter_default_model = "anthropic/claude-sonnet-5"
 
-openrouter_default_model            = "anthropic/claude-sonnet-5"
+# Established account alarm channel used by the shared staging infrastructure.
+alarm_action_arns = ["arn:aws:sns:us-west-2:637423444544:mymemo-staging-alarms"]
 
-# SNS topics must already have confirmed incident subscriptions.
-# alarm_action_arns = ["arn:aws:sns:us-east-1:123456789012:mymemo-prod-alarms"]
+# Secret values live in AWS Secrets Manager. Terraform resolves these
+# conventional names internally unless an environment overrides *_secret_name:
+# - mymemo-agent-prod-KB_DATABASE_URL
+# - mymemo-agent-prod-STATSIG_SERVER_SECRET
+# - mymemo-agent-prod-OPENROUTER_API_KEY
 
-# Agent-owned writable Postgres. This Terraform root always creates a dedicated
-# RDS instance. The password is generated and stored by RDS in AWS Secrets
-# Manager; ECS receives AGENT_DATABASE_URL without a password plus a DB_PASSWORD
-# secret reference to the RDS-managed password.
-# Non-database secret values are created and rotated outside this example.
-# By default Terraform resolves conventional Secrets Manager names:
-# - <name_prefix>-<environment>-KB_DATABASE_URL
-# - <name_prefix>-<environment>-STATSIG_SERVER_SECRET
-# - <name_prefix>-<environment>-OPENROUTER_API_KEY
-# - <name_prefix>-<environment>-E2B_API_KEY
-#
-# Override these only when an environment cannot use the convention.
-# kb_database_url_secret_name    = "mymemo-agent-prod-KB_DATABASE_URL"
-# statsig_server_secret_name     = "mymemo-agent-prod-STATSIG_SERVER_SECRET"
-# openrouter_api_key_secret_name = "mymemo-agent-prod-OPENROUTER_API_KEY"
-# e2b_api_key_secret_name        = "mymemo-agent-prod-E2B_API_KEY"
-
-mymemo_service_task_role_arn = "arn:aws:iam::123456789012:role/mymemo-service-task"
-# front_lambda_package is supplied by release-deploy via TF_VAR_front_lambda_package.
-# The Runtime ARN and shared interpreter are wired directly from #750.
+# Existing API task role allowed to invoke the Function URL.
+mymemo_service_task_role_arn = "arn:aws:iam::637423444544:role/mymemo-staging-ecs-task"

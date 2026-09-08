@@ -19,7 +19,6 @@ Inputs:
 Secret value inputs, from DEPLOY_SECRETS_CONFIG or environment:
   STATSIG_SERVER_SECRET_VALUE
   OPENROUTER_API_KEY_VALUE
-  E2B_API_KEY_VALUE
   KB_DATABASE_URL_VALUE       optional
 
 DEPLOY_SECRETS_CONFIG uses simple KEY=value dotenv lines. It is parsed as data,
@@ -124,7 +123,6 @@ upsert_secret() {
 
 require_secret_value STATSIG_SERVER_SECRET_VALUE
 require_secret_value OPENROUTER_API_KEY_VALUE
-require_secret_value E2B_API_KEY_VALUE
 
 name_prefix="${NAME_PREFIX:-mymemo-agent}"
 prefix="${name_prefix}-${environment}"
@@ -141,11 +139,6 @@ openrouter_api_key_secret_name="$(
     "OpenRouter API key for mymemo-agent ${environment}"
 )"
 
-e2b_api_key_secret_name="$(
-  upsert_secret "${prefix}-E2B_API_KEY" \
-    "$E2B_API_KEY_VALUE" \
-    "E2B API key for mymemo-agent ${environment}"
-)"
 
 kb_database_url_secret_name="${prefix}-KB_DATABASE_URL"
 if [[ -n "${KB_DATABASE_URL_VALUE:-}" ]]; then
@@ -160,5 +153,4 @@ echo "Agent Secrets Manager entries are ready."
 echo "Terraform will resolve these names:"
 echo "  STATSIG_SERVER_SECRET: ${statsig_server_secret_name}"
 echo "  OPENROUTER_API_KEY: ${openrouter_api_key_secret_name}"
-echo "  E2B_API_KEY: ${e2b_api_key_secret_name}"
 echo "  KB_DATABASE_URL: ${kb_database_url_secret_name}"

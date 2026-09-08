@@ -2,13 +2,7 @@ import path from "node:path/posix";
 import { z } from "zod";
 import type { DocumentListCursor, ScopedDocumentClient } from "./client";
 
-/**
- * The three document-tool handlers, bounded by code constants that mirror the
- * Run path (`apps/agentcore-runtime/src/documents/`). Each returns the plain
- * JSON the model sees, or `{ isError, text }`, which the caller maps to its
- * framework's error shape (throw on the Harness path, an MCP error result on
- * the In-VM path).
- */
+/** Bounded document handlers; the Runtime maps their results to MCP. */
 
 /** The tool names both consumers pin to, so the catalogs cannot drift. */
 export const DOCUMENT_TOOL_NAMES = [

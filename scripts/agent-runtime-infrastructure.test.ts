@@ -35,11 +35,10 @@ test("simplified Runtime authority excludes state, workspace, and sandbox lifecy
 	expect(runtime).not.toContain("aws_security_group.services");
 });
 
-test("release carries the new digest through both jobs without replacing v1", () => {
+test("release carries the new digest through both jobs", () => {
 	const workflow = read(".github/workflows/release-deploy.yml");
 	for (const expected of [
 		"--file apps/agent-runtime/Dockerfile",
-		"--file apps/agentcore-runtime/Dockerfile",
 		`TF_VAR_agent_runtime_image_digest: \${{ needs.plan.outputs.agent_runtime_image_digest }}`,
 		`agent_runtime_image_digest: \${{ steps.agent_runtime_image.outputs.digest }}`,
 		"TF_VAR_agent_runtime_image_digest=%s",

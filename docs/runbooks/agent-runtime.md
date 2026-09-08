@@ -1,9 +1,7 @@
-# Simplified chat Runtime on AWS
+# Runtime on AWS
 
-Issue #750 deploys `apps/agent-runtime` beside v1 in us-west-2. It still has
-#736's no-tools query loop with #739's S3 transcript continuity; sandbox
-tools and KB reads arrive in #738/#740. The bucket and SANDBOX interpreter prerequisites live in
-`workspace-bucket.tf` and `code-interpreter.tf`; #742 should reuse them.
+`apps/agent-runtime` runs the SDK, Hand and scoped KB tools in us-west-2.
+The front owns Sandbox sessions and Workspace copies.
 
 ## Build and register
 
@@ -11,7 +9,7 @@ The PR image job builds linux/arm64 and runs the pinned SDK against the fake
 model server, including bootstrap checks. `release-deploy.yml` builds the same
 image, pushes to `mymemo/agent-runtime`, and passes the resolved
 `sha256` digest as `TF_VAR_agent_runtime_image_digest` to both Terraform jobs.
-The existing v1 image, digest and rollout steps remain independent.
+
 
 For a local operator build (all local AWS commands use profile `mymemo`):
 run the SDK test command on an ARM64 host. On x86, build with emulation but

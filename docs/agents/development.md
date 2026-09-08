@@ -1,26 +1,19 @@
 # Development and verification
 
-Use this guide when installing dependencies, changing TypeScript, running tests, or modifying the database layer.
+Use Bun workspaces: `bun install --frozen-lockfile`, then `bun run test`.
+The root runner isolates each workspace in its own process. For a narrow
+check, run `bun run --cwd apps/agent-front test` or
+`bun run --cwd apps/agent-runtime test`.
 
-## Package manager and scripts
+Biome formats TypeScript with tabs and double quotes and organizes imports:
+`bunx biome check <changed-files>`. Skip unrelated formatting changes.
+There is no root build or typecheck script; Biome is not a typecheck.
 
-This repository uses Bun workspaces. Run `bun install` at the repository root.
+Package the front with `scripts/deploy/build_front.sh`. Build the Runtime
+with `docker build --platform linux/arm64 -f apps/agent-runtime/Dockerfile .`.
+The image workflow runs SDK checks on native ARM64.
 
-There is no repository-wide `build` or `typecheck` script. Do not treat Biome's `check` command as a TypeScript typecheck.
-
-From `apps/chat-api`, use `bun run dev` for the hot-reload development server, `bun run lint` for lint fixes, and `bun run format` for formatting.
-
-## Code style
-
-- Biome is the formatter and linter.
-- Use tab indentation and double quotes.
-- Let Biome organize imports.
-- In `apps/chat-api`, `@/*` maps to `./src/*`.
-
-## Single Drizzle instance invariant
-
-`@mymemo/agent-db` exchanges Drizzle schema and SQL objects across package boundaries. Every workspace that uses `drizzle-orm` must resolve the same instance.
-
-Bun can fork same-version `drizzle-orm` installations when their optional-peer contexts differ. Because `@electric-sql/pglite` is one such optional peer, every workspace that consumes `drizzle-orm` must also list `@electric-sql/pglite` as a dev dependency. Keep those peer sets aligned; do not cast around dual-instance type errors.
-
-`packages/agent-db` owns the Drizzle schema and `packages/agent-db/drizzle/` migrations. chat-api imports that package directly; `apps/chat-api/src/db/migrate.ts` runs the shared migrations through `MIGRATIONS_DIR`.
+Front database integration tests require `TEST_DYNAMODB_ENDPOINT` pointing
+at DynamoDB Local; CI supplies it on port 8000. Hand tests need Python and
+ripgrep. Run Terraform init with `-backend=false -lockfile=readonly`, then
+`terraform -chdir=infra/terraform validate` and `fmt -check`.

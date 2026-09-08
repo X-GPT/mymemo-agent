@@ -1,1 +1,0 @@
-ALTER TABLE "conversation_runtime" ADD COLUMN "harness_resume_state" jsonb;

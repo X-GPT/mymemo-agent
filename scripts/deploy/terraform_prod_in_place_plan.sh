@@ -11,7 +11,7 @@ if [[ ! -f "$tfvars_file" ]]; then
 fi
 
 if [[ ! -f "$generated_tfvars_file" ]]; then
-  echo "Missing generated image var file: $generated_tfvars_file; run scripts/deploy/ci_prepare_tfvars.sh first" >&2
+  echo "Missing generated var file: $generated_tfvars_file; run scripts/deploy/ci_prepare_tfvars.sh first" >&2
   exit 1
 fi
 
@@ -28,13 +28,6 @@ plan_args=(
   -var-file="$generated_tfvars_file_abs"
 )
 
-if [[ "${BOOTSTRAP_ZERO_DESIRED_COUNT:-false}" == "true" ]]; then
-  plan_args+=(
-    -var="chat_api_desired_count=0"
-    -var="agent_maintenance_desired_count=0"
-    -var="agentcore_dispatch_publisher_desired_count=0"
-  )
-fi
 
 terraform -chdir=infra/terraform init
 terraform -chdir=infra/terraform fmt -check

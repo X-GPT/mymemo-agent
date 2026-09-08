@@ -23,40 +23,6 @@ verify_agentcore_current_secrets() {
   done < <(jq -r '.runtime_secret_arns.value[]' <<<"${terraform_output}")
 }
 
-verify_agentcore_alarms() {
-  local region="$1"
-  local terraform_output="$2"
-  local expected_alarms
-  local alarm_names
-  local live_alarms
-
-  expected_alarms="$(jq -c '.alarm_configurations.value' <<<"${terraform_output}")"
-  alarm_names="$(jq -r 'keys | join(" ")' <<<"${expected_alarms}")"
-  live_alarms="$(agentcore_aws cloudwatch describe-alarms \
-    --region "${region}" \
-    --alarm-names ${alarm_names})"
-  jq -e --argjson expected "${expected_alarms}" '
-    .MetricAlarms
-    | map({
-        key: .AlarmName,
-        value: {
-          namespace: .Namespace,
-          metric_name: .MetricName,
-          dimensions: ((.Dimensions // []) | map({ key: .Name, value: .Value }) | from_entries),
-          statistic: .Statistic,
-          period: .Period,
-          evaluation_periods: .EvaluationPeriods,
-          datapoints_to_alarm: (.DatapointsToAlarm // 0),
-          comparison_operator: .ComparisonOperator,
-          threshold: .Threshold,
-          treat_missing_data: .TreatMissingData,
-          actions_enabled: .ActionsEnabled,
-          alarm_actions: ((.AlarmActions // []) | sort)
-        }
-      })
-    | from_entries == $expected
-  ' <<<"${live_alarms}" >/dev/null
-}
 
 verify_agentcore_egress() {
   local region="$1"
@@ -187,52 +153,6 @@ verify_agentcore_egress() {
   done < <(jq -c '.egress_configurations.value | to_entries[].value' <<<"${terraform_output}")
 }
 
-verify_agentcore_dispatch_wiring() {
-  local region="$1"
-  local terraform_output="$2"
-  local expected_dispatch_value="$3"
-  local mapping_uuid
-  local dispatch_queue_arn
-  local expected_consumer_function_arn
-  local enabled_parameter
-  local mapping
-  local consumer_configuration
-  local consumer_concurrency
-
-  mapping_uuid="$(jq -r '.consumer_event_source_mapping_uuid.value' <<<"${terraform_output}")"
-  dispatch_queue_arn="$(jq -r '.dispatch_queue_arn.value' <<<"${terraform_output}")"
-  expected_consumer_function_arn="$(jq -r '.consumer_function_arn.value' <<<"${terraform_output}")"
-  enabled_parameter="$(jq -r '.dispatch_enabled_parameter_name.value' <<<"${terraform_output}")"
-
-  mapping="$(agentcore_aws lambda get-event-source-mapping \
-    --region "${region}" \
-    --uuid "${mapping_uuid}")"
-  jq -e \
-    --arg queueArn "${dispatch_queue_arn}" \
-    --arg functionArn "${expected_consumer_function_arn}" \
-    '.BatchSize == 1
-      and .State == "Enabled"
-      and .EventSourceArn == $queueArn
-      and .FunctionArn == $functionArn
-      and (.FunctionResponseTypes | index("ReportBatchItemFailures")) != null' \
-    <<<"${mapping}" >/dev/null
-  consumer_configuration="$(agentcore_aws lambda get-function-configuration \
-    --region "${region}" \
-    --function-name "${expected_consumer_function_arn}")"
-  jq -e \
-    --arg functionArn "${expected_consumer_function_arn}" \
-    '.FunctionArn == $functionArn and .Timeout == 120' \
-    <<<"${consumer_configuration}" >/dev/null
-  consumer_concurrency="$(agentcore_aws lambda get-function-concurrency \
-    --region "${region}" \
-    --function-name "${expected_consumer_function_arn}")"
-  if [[ -z "${consumer_concurrency}" ]]; then
-    consumer_concurrency="{}"
-  fi
-  jq -e '(.ReservedConcurrentExecutions // null) == null' \
-    <<<"${consumer_concurrency}" >/dev/null
-  [[ "$(agentcore_aws ssm get-parameter --region "${region}" --name "${enabled_parameter}" --query Parameter.Value --output text)" == "${expected_dispatch_value}" ]]
-}
 
 verify_agentcore_runtime_configuration() {
   local region="$1"
@@ -275,32 +195,4 @@ verify_agentcore_runtime_configuration() {
 
   jq -n --arg runtime "${runtime}" --arg endpoint "${endpoint}" \
     '{runtime:($runtime | fromjson), endpoint:($endpoint | fromjson)}'
-}
-
-verify_agentcore_consumer_runtime_authority() {
-  local region="$1"
-  local terraform_output="$2"
-  local runtime_arn
-  local endpoint_arn
-  local consumer_role_arn
-  local simulation
-
-  runtime_arn="$(jq -r '.agent_runtime_arn.value' <<<"${terraform_output}")"
-  endpoint_arn="${runtime_arn}/runtime-endpoint/DEFAULT"
-  consumer_role_arn="$(jq -r '.consumer_role_arn.value' <<<"${terraform_output}")"
-  simulation="$(agentcore_aws iam simulate-principal-policy \
-    --policy-source-arn "${consumer_role_arn}" \
-    --action-names bedrock-agentcore:InvokeAgentRuntime \
-    --resource-arns "${runtime_arn}" "${endpoint_arn}")"
-  jq -e \
-    --arg runtimeArn "${runtime_arn}" \
-    --arg endpointArn "${endpoint_arn}" \
-    '(.EvaluationResults | length == 1)
-      and (.EvaluationResults[0].EvalDecision == "allowed")
-      and ([.EvaluationResults[0].ResourceSpecificResults[]
-        | select(.EvalResourceName == $runtimeArn or .EvalResourceName == $endpointArn)] as $resources
-        | ($resources | length == 2)
-          and ($resources | map(.EvalResourceName) | unique | length == 2)
-          and ($resources | all(.EvalResourceDecision == "allowed")))' \
-    <<<"${simulation}" >/dev/null
 }
