@@ -1,9 +1,28 @@
 # One-time v1 teardown (#765)
 
-Run `scripts/deploy/teardown_v1.sh` from the reviewed removal checkout before
+For an untouched v1 deployment, run `scripts/deploy/teardown_v1.sh` from the reviewed removal checkout before
 its first normal Release deploy. This is a destructive operator procedure:
 all v1 data is disposable, with no migration or final snapshot. Do not run
 Release deploy concurrently. Do not merge as part of this procedure.
+
+## Current production: resume after the partial teardown
+
+The 2026-09-08 production apply removed v1 except for the `services` and
+`live_redis_clients` security groups. Do not restart the one-shot wizard.
+`infra/terraform/v1-security-groups.tf` temporarily retains those two resource
+addresses so normal releases after this PR is merged neither recreate v1 nor
+retry the blocked security-group deletions. This does not complete issue #765.
+
+AgentCore shares ENIs for identical subnet/security-group configurations and
+can retain them for up to eight hours after Runtime deletion
+([AWS documentation](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html)).
+Wait for the old ENIs to disappear; do not detach them or alter the new Runtime.
+Then remove `v1-security-groups.tf`, generate a fresh plan using the deployed
+front ZIP and Runtime digest, and require only the two security-group deletions
+with all surviving resources unchanged before applying it. Keep both addresses
+in `scripts/deploy/v1-resources.txt`: the wizard's final absence check deliberately
+cannot pass while they remain. Complete the live inventory and Turn/KB checks
+below before closing #765. Next-bill confirmation remains in #767.
 
 The wizard uses the `mymemo` AWS profile, checks account `637423444544`, and
 uses us-west-2. It needs Git history containing `6338550`, Terraform, AWS CLI,
