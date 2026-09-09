@@ -78,7 +78,7 @@ Statsig is a 403.
 _Avoid_: feature flag, rollout percentage
 
 **Runtime**:
-The AgentCore Runtime hosting `apps/agentcore-runtime`: the trusted process
+The AgentCore Runtime hosting `apps/agent-runtime`: the trusted process
 that holds the model and knowledge-base credentials, runs the Claude Agent
 SDK `query()`, and serves the Hand and the document tools as in-process MCP
 servers against the Sandbox session whose id the Lambda front passed in. It
@@ -248,7 +248,7 @@ One-line gists; full definitions live in git history.
 - **Run / Active Run / Run interruption / Run event / AG-UI agent surface /
   AgentCore dispatch / Dispatch publisher / Acquisition receipt / Conversation
   Ownership / Ownership epoch / Reclamation / Reconnecting / Session mirror
-  evidence**: the v1 execution model still serving production until cutover
+  evidence**: the retired v1 execution model
   — admitted Runs on a Postgres event log, delivered through an outbox to
   AgentCore + E2B, fenced by ownership epochs, streamed over Redis. Replaced
   by Turns, single flight, the Hand and DynamoDB.

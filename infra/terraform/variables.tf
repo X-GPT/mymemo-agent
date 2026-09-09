@@ -62,31 +62,6 @@ variable "fck_nat_ami_id" {
   }
 }
 
-variable "runtime_image_digest" {
-  description = "Verified Linux ARM64 AgentCore Runtime image digest (sha256:...). Tags are never deployed."
-  type        = string
-
-  validation {
-    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.runtime_image_digest))
-    error_message = "runtime_image_digest must be an exact sha256 image digest."
-  }
-}
-
-variable "consumer_lambda_package" {
-  description = "Path to the verified AgentCore dispatch consumer Lambda deployment package."
-  type        = string
-}
-
-variable "mymemo_service_api_security_group_ids" {
-  description = "Security group IDs for mymemo-service API tasks allowed to call the internal agent ALB."
-  type        = list(string)
-
-  validation {
-    condition     = length(var.mymemo_service_api_security_group_ids) > 0
-    error_message = "At least one mymemo-service API security group ID is required."
-  }
-}
-
 variable "kb_database_security_group_id" {
   description = "Security group ID of the existing mymemo-service RDS instance hosting the KB database. Owned by the mymemo-service stack; this stack attaches AgentCore Runtime ingress."
   type        = string
@@ -97,181 +72,16 @@ variable "kb_database_security_group_id" {
   }
 }
 
-variable "chat_api_image" {
-  description = "Fully qualified chat-api container image URI including tag."
-  type        = string
-
-  validation {
-    condition     = length(var.chat_api_image) > 0
-    error_message = "chat_api_image is required."
-  }
-}
-
-variable "agent_maintenance_image" {
-  description = "Fully qualified agent-maintenance container image URI including tag."
-  type        = string
-
-  validation {
-    condition     = length(var.agent_maintenance_image) > 0
-    error_message = "agent_maintenance_image is required."
-  }
-}
-
-variable "agentcore_dispatch_publisher_image" {
-  description = "Fully qualified AgentCore dispatch publisher container image URI including tag."
-  type        = string
-
-  validation {
-    condition     = length(var.agentcore_dispatch_publisher_image) > 0
-    error_message = "agentcore_dispatch_publisher_image is required."
-  }
-}
-
-variable "chat_api_desired_count" {
-  description = "Desired ECS task count for chat-api."
-  type        = number
-  default     = 1
-}
-
-variable "agent_maintenance_desired_count" {
-  description = "Desired ECS task count for the singleton agent-maintenance owner."
-  type        = number
-  default     = 1
-
-  validation {
-    condition     = var.agent_maintenance_desired_count == 0 || var.agent_maintenance_desired_count == 1
-    error_message = "agent_maintenance_desired_count must be zero or one."
-  }
-}
-
-variable "agentcore_dispatch_publisher_desired_count" {
-  description = "Desired ECS task count for the singleton AgentCore dispatch publisher."
-  type        = number
-  default     = 1
-
-  validation {
-    condition     = var.agentcore_dispatch_publisher_desired_count == 0 || var.agentcore_dispatch_publisher_desired_count == 1
-    error_message = "agentcore_dispatch_publisher_desired_count must be zero or one."
-  }
-}
-
-variable "chat_api_cpu" {
-  description = "Fargate CPU units for chat-api."
-  type        = number
-  default     = 512
-}
-
-variable "chat_api_memory" {
-  description = "Fargate memory MiB for chat-api."
-  type        = number
-  default     = 1024
-}
-
-variable "agent_maintenance_cpu" {
-  description = "Fargate CPU units for agent-maintenance."
-  type        = number
-  default     = 256
-}
-
-variable "agent_maintenance_memory" {
-  description = "Fargate memory MiB for agent-maintenance."
-  type        = number
-  default     = 512
-}
-
-variable "agentcore_dispatch_publisher_cpu" {
-  description = "Fargate CPU units for the AgentCore dispatch publisher."
-  type        = number
-  default     = 256
-}
-
-variable "agentcore_dispatch_publisher_memory" {
-  description = "Fargate memory MiB for the AgentCore dispatch publisher."
-  type        = number
-  default     = 512
-}
-
-variable "agentcore_dispatch_publisher_interval_ms" {
-  description = "Delay between AgentCore Dispatch publication ticks."
-  type        = number
-  default     = 2000
-
-  validation {
-    condition     = var.agentcore_dispatch_publisher_interval_ms > 0 && var.agentcore_dispatch_publisher_interval_ms <= 2147483647
-    error_message = "agentcore_dispatch_publisher_interval_ms must be positive and no greater than 2147483647."
-  }
-}
-
-variable "agentcore_dispatch_queue_name" {
-  description = "Production AgentCore Dispatch queue name."
-  type        = string
-  default     = null
-}
-
-variable "agentcore_dispatch_enabled_parameter_name" {
-  description = "Fail-closed production AgentCore Dispatch SSM parameter name."
-  type        = string
-  default     = null
-}
-
-variable "agentcore_dispatch_queue_kms_alias_name" {
-  description = "Alias of the customer-managed KMS key encrypting the production AgentCore Dispatch queue."
-  type        = string
-  default     = null
-}
-
-variable "chat_api_port" {
-  description = "Container port exposed by chat-api."
-  type        = number
-  default     = 3000
-}
-
-variable "agent_maintenance_port" {
-  description = "Container port exposed by the agent-maintenance health server."
-  type        = number
-  default     = 8080
-}
-
-variable "live_redis_port" {
-  description = "TLS port for the per-Run Redis Live Stream relay."
-  type        = number
-  default     = 6379
-}
-
-variable "live_redis_node_type" {
-  description = "ElastiCache node type for the ephemeral AG-UI pub/sub relay."
-  type        = string
-  default     = "cache.t4g.micro"
-}
-
-variable "live_redis_engine_version" {
-  description = "Valkey engine version for the per-Run Live Stream relay."
-  type        = string
-  default     = "7.2"
-}
-
 variable "alarm_action_arns" {
-  description = "Optional SNS topic ARNs notified by Live Stream relay CloudWatch alarms."
+  description = "SNS topic ARNs notified by Runtime and front CloudWatch alarms."
   type        = list(string)
   default     = []
-}
-
-variable "assign_public_ip" {
-  description = "Inherited existing-network constraint: current mymemo-service ECS subnets are public/default subnets with no NAT/VPC endpoint egress path, so agent ECS tasks need public IPs."
-  type        = bool
-  default     = true
 }
 
 variable "log_retention_days" {
   description = "CloudWatch log retention for agent services."
   type        = number
   default     = 30
-}
-
-variable "worker_e2b_template" {
-  description = "Custom E2B template used by the AgentCore Runtime; installs rg and verifies artifact runtime tools."
-  type        = string
-  default     = "mymemo-agent-sandbox"
 }
 
 variable "openrouter_base_url" {
@@ -283,66 +93,6 @@ variable "openrouter_base_url" {
 variable "openrouter_default_model" {
   description = "Default OpenRouter model used by the AgentCore Runtime."
   type        = string
-}
-
-variable "log_level" {
-  description = "Application log level."
-  type        = string
-  default     = "info"
-}
-
-variable "db_ssl" {
-  description = "Set to disable only for local non-TLS databases."
-  type        = string
-  default     = "require"
-}
-
-variable "agent_database_name" {
-  description = "Database name for writable agent state."
-  type        = string
-  default     = "mymemo_agent"
-}
-
-variable "agent_database_username" {
-  description = "Master username for the agent-owned RDS instance."
-  type        = string
-  default     = "mymemo_agent"
-}
-
-variable "agent_db_instance_class" {
-  description = "RDS instance class for the dedicated agent database."
-  type        = string
-  default     = "db.t4g.micro"
-}
-
-variable "agent_db_allocated_storage_gb" {
-  description = "Initial allocated storage for the dedicated agent database."
-  type        = number
-  default     = 20
-}
-
-variable "agent_db_max_allocated_storage_gb" {
-  description = "Autoscaling storage cap for the dedicated agent database."
-  type        = number
-  default     = 100
-}
-
-variable "agent_db_engine_version" {
-  description = "PostgreSQL engine version for the dedicated agent database."
-  type        = string
-  default     = "17"
-}
-
-variable "agent_db_backup_retention_days" {
-  description = "Backup retention period for the dedicated agent database."
-  type        = number
-  default     = 7
-}
-
-variable "agent_db_deletion_protection" {
-  description = "Protect the dedicated agent database from accidental deletion."
-  type        = bool
-  default     = true
 }
 
 variable "kb_database_url_secret_name" {
@@ -359,12 +109,6 @@ variable "statsig_server_secret_name" {
 
 variable "openrouter_api_key_secret_name" {
   description = "Secrets Manager secret name containing OPENROUTER_API_KEY. Defaults to <name_prefix>-<environment>-OPENROUTER_API_KEY."
-  type        = string
-  default     = null
-}
-
-variable "e2b_api_key_secret_name" {
-  description = "Secrets Manager secret name containing E2B_API_KEY. Defaults to <name_prefix>-<environment>-E2B_API_KEY."
   type        = string
   default     = null
 }

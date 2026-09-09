@@ -1,1 +1,0 @@
-CREATE INDEX "runs_history_paging_idx" ON "runs" USING btree ("user_id","conversation_id") WHERE "runs"."status" in ('done', 'error', 'interrupted');

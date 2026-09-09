@@ -1,6 +1,6 @@
 # Agent Runtime
 
-The #732 Runtime, separate from v1's `apps/agentcore-runtime`. The front owns
+The Spec #732 Runtime. The front owns
 sandbox lifecycle and workspace persistence; this process invokes its supplied
 session and copies the CLI transcript to S3 around each query. No DynamoDB
 is wired here.

@@ -1,11 +1,7 @@
 #!/usr/bin/env bun
 // Runs each workspace's `test` script in its own process, serially.
 //
-// Separate processes give env/module isolation: packages set conflicting test
-// env (e.g. chat-api's STATSIG_SERVER_SECRET vs the worker's OpenRouter/KB vars)
-// and freeze module-load config, so a single shared `bun test` over the whole
-// tree leaks state across packages. Serial execution additionally keeps
-// wall-clock timing tests (the worker's heartbeat/lease timers) stable under load.
+// Separate processes isolate module-load configuration between workspaces.
 //
 // Discovery is by the presence of a `test` script in a workspace's
 // package.json, so a new package opts in just by declaring one — no list to

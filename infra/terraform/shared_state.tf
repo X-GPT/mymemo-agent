@@ -25,13 +25,3 @@ data "aws_subnet" "shared_egress" {
 
   id = each.value
 }
-
-data "aws_ecs_cluster" "shared" {
-  count = local.shared_ecs_cluster_arn_output == null && local.shared_ecs_cluster_name_output != null ? 1 : 0
-
-  cluster_name = local.shared_ecs_cluster_name_output
-}
-
-data "aws_caller_identity" "current" {}
-
-data "aws_partition" "current" {}

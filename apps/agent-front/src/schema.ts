@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Copied from chat-api; v1 is independently removable at cutover.
+// Shared client contract for Conversation creation and updates.
 export const InternalIdentity = z.object({
 	memberCode: z.string().min(1).max(256),
 	partnerCode: z.string().min(1).max(256),

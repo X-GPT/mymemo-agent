@@ -3,7 +3,7 @@ data "aws_ecr_repository" "agent_runtime" {
 }
 
 variable "agent_runtime_image_digest" {
-  description = "Exact ARM64 apps/agent-runtime image digest, separate from v1."
+  description = "Exact ARM64 apps/agent-runtime image digest."
   type        = string
 
   validation {

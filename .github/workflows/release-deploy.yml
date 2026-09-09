@@ -4,13 +4,6 @@ name: Release deploy
 # pinned to runs on refs/heads/main (see infra/bootstrap-iam), and every apply
 # requires the typed workflow input. There is no unattended application lane:
 # every unified Terraform plan receives the same operator authorization.
-# - The deploy job applies the migration task definition and its Terraform
-#   prerequisites, migrates the database, then applies the unified plan and
-#   rolls ECS. This keeps new Runtime, Lambda, and ECS code behind the
-#   compatible schema.
-# - Dispatch from main covers releases, bootstrap, re-deploys, and incident
-#   response. Other refs are rejected before any release work starts.
-
 on:
   workflow_dispatch:
     inputs:
@@ -34,8 +27,6 @@ env:
   TF_IN_AUTOMATION: true
   DEPLOY_ENVIRONMENT: ${{ inputs.environment || 'prod' }}
   DEPLOY_CONFIG: infra/deploy/${{ inputs.environment || 'prod' }}.env
-  AGENTCORE_DISPATCH_PARAMETER: /mymemo/agentcore-dispatch/prod/enabled
-  RDS_CA_DIGEST: e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3
   # The manually dispatched main commit is the only commit this workflow
   # builds, plans, and applies.
   DEPLOY_SHA: ${{ github.sha }}
@@ -49,12 +40,7 @@ jobs:
       id-token: write
     outputs:
       image_tag: ${{ steps.image_tag.outputs.image_tag }}
-      chat_api_image: ${{ steps.images.outputs.chat_api_image }}
-      agent_maintenance_image: ${{ steps.images.outputs.agent_maintenance_image }}
-      agentcore_dispatch_publisher_image: ${{ steps.images.outputs.agentcore_dispatch_publisher_image }}
-      runtime_image_digest: ${{ steps.agentcore_runtime_image.outputs.runtime_image_digest }}
       agent_runtime_image_digest: ${{ steps.agent_runtime_image.outputs.digest }}
-      first_deploy: ${{ steps.agent_deploy_state.outputs.first_deploy }}
     steps:
       - name: Validate production apply confirmation
         env:
@@ -126,85 +112,10 @@ jobs:
         run: |
           terraform -chdir=infra/ecr init
 
-          ecr_state_addresses="$(terraform -chdir=infra/ecr state list)"
-          if ! grep -Fxq "aws_ecr_repository.agentcore_runtime" <<<"${ecr_state_addresses}"; then
-            repository_error="${RUNNER_TEMP}/agentcore-runtime-repository-error"
-            if aws ecr describe-repositories \
-              --region "${AWS_REGION}" \
-              --repository-names mymemo/agentcore-runtime \
-              >/dev/null 2>"${repository_error}"; then
-              terraform -chdir=infra/ecr import \
-                -var="aws_region=${AWS_REGION}" \
-                aws_ecr_repository.agentcore_runtime \
-                mymemo/agentcore-runtime
-            elif grep -q "RepositoryNotFoundException" "${repository_error}"; then
-              echo "AgentCore Runtime repository does not exist yet; Terraform will create it."
-            else
-              sed -n '1,120p' "${repository_error}" >&2
-              exit 1
-            fi
-          fi
-
           terraform -chdir=infra/ecr apply -auto-approve -var="aws_region=${AWS_REGION}"
-
-      - name: Resolve image references
-        id: images
-        run: |
-          chat_api_repository_url="$(terraform -chdir=infra/ecr output -raw chat_api_ecr_repository_url)"
-          agent_maintenance_repository_url="$(terraform -chdir=infra/ecr output -raw agent_maintenance_ecr_repository_url)"
-          agentcore_dispatch_publisher_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_dispatch_publisher_ecr_repository_url)"
-          agentcore_runtime_repository_url="$(terraform -chdir=infra/ecr output -raw agentcore_runtime_ecr_repository_url)"
-          printf 'chat_api_image=%s:%s\n' "${chat_api_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
-          printf 'agent_maintenance_image=%s:%s\n' "${agent_maintenance_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
-          printf 'agentcore_dispatch_publisher_image=%s:%s\n' "${agentcore_dispatch_publisher_repository_url}" "${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
-          printf 'agentcore_runtime_repository_url=%s\n' "${agentcore_runtime_repository_url}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare Terraform variables
         run: scripts/deploy/ci_prepare_tfvars.sh
-
-      - name: Detect first ECS service deploy
-        id: agent_deploy_state
-        run: |
-          first_deploy="$(scripts/deploy/detect_first_agent_deploy.sh)"
-          printf 'first_deploy=%s\n' "${first_deploy}" >> "${GITHUB_OUTPUT}"
-
-      - name: Build and push chat-api image
-        run: scripts/deploy/build_and_push_agent_image.sh chat-api
-
-      - name: Build and push agent-maintenance image
-        run: scripts/deploy/build_and_push_agent_image.sh agent-maintenance
-
-      - name: Build and push AgentCore dispatch publisher image
-        run: scripts/deploy/build_and_push_agent_image.sh agentcore-dispatch-publisher
-
-      - name: Build, verify, and push the ARM64 AgentCore Runtime image
-        id: agentcore_runtime_image
-        run: |
-          repository_uri="${{ steps.images.outputs.agentcore_runtime_repository_url }}"
-          repository_name="${repository_uri#*/}"
-          docker buildx build \
-            --platform linux/arm64 \
-            --load \
-            --file apps/agentcore-runtime/Dockerfile \
-            --tag mymemo-agentcore-runtime:verified \
-            .
-          scripts/smoke/agentcore-runtime-image-check.sh mymemo-agentcore-runtime:verified
-          aws ecr get-login-password --region "${AWS_REGION}" |
-            docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          docker tag mymemo-agentcore-runtime:verified "${repository_uri}:${IMAGE_TAG}"
-          docker push "${repository_uri}:${IMAGE_TAG}"
-          runtime_image_digest="$(aws ecr describe-images \
-            --region "${AWS_REGION}" \
-            --repository-name "${repository_name}" \
-            --image-ids imageTag="${IMAGE_TAG}" \
-            --query 'imageDetails[0].imageDigest' \
-            --output text)"
-          if [[ ! "${runtime_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "ECR returned an invalid Runtime image digest." >&2
-            exit 1
-          fi
-          printf 'TF_VAR_runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_ENV}"
-          printf 'runtime_image_digest=%s\n' "${runtime_image_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Build and push the ARM64 agent-runtime image
         id: agent_runtime_image
@@ -223,17 +134,6 @@ jobs:
           printf 'TF_VAR_agent_runtime_image_digest=%s\n' "${digest}" >> "${GITHUB_ENV}"
           printf 'digest=%s\n' "${digest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Package the AgentCore consumer Lambda
-        run: |
-          ca_bundle="${RUNNER_TEMP}/rds-global-bundle.pem"
-          consumer_dir="${RUNNER_TEMP}/agentcore-consumer"
-          curl --fail --silent --show-error --location \
-            https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
-            --output "${ca_bundle}"
-          echo "${RDS_CA_DIGEST}  ${ca_bundle}" | sha256sum --check
-          scripts/deploy/build_agentcore_consumer.sh "${consumer_dir}" "${ca_bundle}"
-          printf 'TF_VAR_consumer_lambda_package=%s/consumer.zip\n' "${consumer_dir}" >> "${GITHUB_ENV}"
-
       - name: Package the front Lambda
         run: |
           scripts/deploy/build_front.sh "${RUNNER_TEMP}/agent-front"
@@ -246,14 +146,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Preserve the planned AgentCore consumer package
-        uses: actions/upload-artifact@v7
-        with:
-          name: agentcore-consumer-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/agentcore-consumer/consumer.zip
-          if-no-files-found: error
-          retention-days: 1
-
       - name: Terraform plan
         run: scripts/deploy/terraform_prod_in_place_plan.sh
 
@@ -265,15 +157,8 @@ jobs:
       id-token: write
     env:
       IMAGE_TAG: ${{ needs.plan.outputs.image_tag }}
-      # Pin the exact images the plan job pushed so this job never resolves
-      # ECR outputs (ci_prepare_tfvars.sh short-circuits on these).
-      CHAT_API_IMAGE: ${{ needs.plan.outputs.chat_api_image }}
-      AGENT_MAINTENANCE_IMAGE: ${{ needs.plan.outputs.agent_maintenance_image }}
-      AGENTCORE_DISPATCH_PUBLISHER_IMAGE: ${{ needs.plan.outputs.agentcore_dispatch_publisher_image }}
-      TF_VAR_runtime_image_digest: ${{ needs.plan.outputs.runtime_image_digest }}
       TF_VAR_agent_runtime_image_digest: ${{ needs.plan.outputs.agent_runtime_image_digest }}
-      EXPECTED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.runtime_image_digest }}
-      FIRST_DEPLOY: ${{ needs.plan.outputs.first_deploy }}
+      EXPECTED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.agent_runtime_image_digest }}
       CONFIRM_AGENT_PROD_APPLY: ${{ inputs.confirm_prod_apply }}
     steps:
       - uses: actions/checkout@v7
@@ -325,73 +210,8 @@ jobs:
           test -f "${RUNNER_TEMP}/agent-front/front.zip"
           printf 'TF_VAR_front_lambda_package=%s/agent-front/front.zip\n' "${RUNNER_TEMP}" >> "${GITHUB_ENV}"
 
-      - name: Download the planned AgentCore consumer package
-        uses: actions/download-artifact@v8
-        with:
-          name: agentcore-consumer-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/agentcore-consumer
-
-      - name: Use the planned AgentCore consumer package
-        run: |
-          consumer_dir="${RUNNER_TEMP}/agentcore-consumer"
-          test -f "${consumer_dir}/consumer.zip"
-          printf 'TF_VAR_consumer_lambda_package=%s/consumer.zip\n' "${consumer_dir}" >> "${GITHUB_ENV}"
-
-      - name: Capture the AgentCore operational control
-        run: |
-          record_dir="${RUNNER_TEMP}/agentcore-deployment"
-          mkdir -p "${record_dir}"
-
-          caller_account="$(aws sts get-caller-identity --query Account --output text)"
-          if [[ "${caller_account}" != "${AWS_ACCOUNT_ID}" ]]; then
-            echo "The deploy role must target AWS account ${AWS_ACCOUNT_ID}." >&2
-            exit 1
-          fi
-
-          dispatch_value="$(aws ssm get-parameter \
-            --region "${AWS_REGION}" \
-            --name "${AGENTCORE_DISPATCH_PARAMETER}" \
-            --query Parameter.Value \
-            --output text)"
-          if [[ "${dispatch_value}" != "enabled" && "${dispatch_value}" != "disabled" ]]; then
-            echo "${AGENTCORE_DISPATCH_PARAMETER} must be exactly enabled or disabled." >&2
-            exit 1
-          fi
-          if [[ "${FIRST_DEPLOY}" == "true" && "${dispatch_value}" != "disabled" ]]; then
-            echo "The one-time ECS bootstrap requires AgentCore Dispatch to be disabled until the initial migration completes." >&2
-            exit 1
-          fi
-
-          printf 'EXPECTED_DISPATCH_VALUE=%s\n' "${dispatch_value}" >> "${GITHUB_ENV}"
-
-      - name: Terraform bootstrap plan
-        if: env.FIRST_DEPLOY == 'true'
-        env:
-          BOOTSTRAP_ZERO_DESIRED_COUNT: true
-        run: scripts/deploy/terraform_prod_in_place_plan.sh agent-bootstrap.tfplan
-
-      - name: Terraform bootstrap apply
-        if: env.FIRST_DEPLOY == 'true'
-        run: scripts/deploy/terraform_prod_in_place_apply.sh agent-bootstrap.tfplan
-
       - name: Terraform plan
-        if: env.FIRST_DEPLOY != 'true'
         run: scripts/deploy/terraform_prod_in_place_plan.sh
-
-      - name: Apply migration task definition and prerequisites
-        if: env.FIRST_DEPLOY != 'true'
-        run: |
-          scripts/deploy/terraform_prod_migration_plan.sh
-          scripts/deploy/terraform_prod_in_place_apply.sh agent-migration.tfplan
-
-      - name: Run agent DB migrations
-        run: scripts/deploy/run_agent_migration.sh
-
-      - name: Plan the unified release after migrations
-        run: |
-          record_dir="${RUNNER_TEMP}/agentcore-deployment"
-          scripts/deploy/terraform_prod_in_place_plan.sh
-          terraform -chdir=infra/terraform show -no-color agent-prod.tfplan > "${record_dir}/deployment-plan.txt"
 
       - name: Apply the unified release
         run: scripts/deploy/terraform_prod_in_place_apply.sh
@@ -400,23 +220,20 @@ jobs:
         run: |
           scripts/deploy/enforce_agentcore_mmdsv2.sh "${RUNNER_TEMP}/agentcore-deployment/runtime-readiness.json"
 
-      - name: Verify AgentCore deployment and unchanged Dispatch control
+      - name: Verify AgentCore deployment
         env:
-          DEPLOYED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.runtime_image_digest }}
+          DEPLOYED_RUNTIME_IMAGE_DIGEST: ${{ needs.plan.outputs.agent_runtime_image_digest }}
         run: |
           set -o pipefail
           record_dir="${RUNNER_TEMP}/agentcore-deployment"
+          mkdir -p "${record_dir}"
           scripts/deploy/inspect_agentcore.sh | tee "${record_dir}/deployment-inspection.json"
           jq -n \
             --arg commit "${DEPLOY_SHA}" \
             --arg runtimeImageDigest "${DEPLOYED_RUNTIME_IMAGE_DIGEST}" \
-            --arg dispatchValue "${EXPECTED_DISPATCH_VALUE}" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,dispatchValue:$dispatchValue,workflowRun:$workflowRun}' \
+            '{commit:$commit,runtimeImageDigest:$runtimeImageDigest,workflowRun:$workflowRun}' \
             > "${record_dir}/deployment-record.json"
-
-      - name: Roll ECS services
-        run: scripts/deploy/roll_ecs_services.sh
 
       - name: Upload AgentCore deployment evidence
         if: always()

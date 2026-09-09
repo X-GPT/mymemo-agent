@@ -20,18 +20,6 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 12
-    env:
-      TEST_REDIS_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -40,7 +28,7 @@ jobs:
           # generated with. Bump deliberately alongside local upgrades.
           bun-version: 1.3.0
       # The runner image does not include ripgrep. Install the same pinned,
-      # checksum-verified package used by the production E2B template.
+      # checksum-verified package needed by the Hand tests.
       - name: Install pinned ripgrep test dependency
         env:
           RIPGREP_VERSION: "14.1.1"
@@ -53,7 +41,6 @@ jobs:
           sudo dpkg --install "/tmp/${package}"
       - run: bun install --frozen-lockfile
       - run: bun run test
-      - run: bun test e2e/relay-failure-matrix.integration.test.ts
 
   dynamodb:
     runs-on: ubuntu-latest
@@ -106,60 +93,3 @@ jobs:
       - name: Verify backendless provider initialization and lock file
         run: terraform -chdir=infra/terraform init -backend=false -lockfile=readonly
       - run: terraform -chdir=infra/terraform validate
-
-  # Runtime and maintenance image builds live in path-filtered workflows.
-
-  # AgentCore process integration: real Postgres and Redis join chat-api to a
-  # deterministic test-only Runtime through dispatch publication, durable
-  # acquisition, Runtime HTTP invocation, and shared Run-serving. The same job
-  # also owns concurrency tests that need independent Postgres sessions.
-  integration:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        # The major production runs (RDS `agent_db_engine_version`). The
-        # concurrency suite below is only evidence about production while these
-        # match.
-        image: postgres:17
-        env:
-          POSTGRES_USER: mymemo
-          POSTGRES_PASSWORD: mymemo
-          POSTGRES_DB: mymemo_agent
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U mymemo -d mymemo_agent"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 12
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 12
-    env:
-      AGENT_DATABASE_URL: postgresql://mymemo:mymemo@localhost:5432/mymemo_agent
-      DB_SSL: disable
-      TEST_REDIS_URL: redis://127.0.0.1:6379
-    steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.0
-      - run: bun install --frozen-lockfile
-      # Apply the @mymemo/agent-db migrations to the service DB before the apps boot.
-      - run: bun run db:migrate
-        working-directory: apps/chat-api
-      # Reclamation uses SKIP LOCKED and needs concurrent real-Postgres sessions.
-      - run: bun test packages/agent-db/src/conversation-ownership.postgres.test.ts
-      # The AgentCore publisher/acquisition races use the same migrated
-      # real-Postgres service as the surrounding integration suites.
-      - run: bun test packages/agent-db/src/agentcore-dispatch.postgres.test.ts
-      # The dedicated publisher task's session lock must exclude a rolling-
-      # deploy overlap and release when its database backend dies.
-      - run: RUN_AGENTCORE_PUBLISHER_POSTGRES_TESTS=true bun test apps/agentcore-dispatch-publisher/src/publisher-loop.postgres.test.ts
-      - run: bun test e2e/integration.test.ts

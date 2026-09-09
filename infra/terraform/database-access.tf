@@ -30,31 +30,11 @@ resource "aws_security_group_rule" "database_bridge_from_access" {
   protocol                 = "tcp"
 }
 
-resource "aws_security_group_rule" "database_access_to_agent_db" {
-  type                     = "egress"
-  description              = "Private database bridge to dedicated agent Postgres"
-  security_group_id        = aws_security_group.database_bridge.id
-  source_security_group_id = aws_security_group.agent_db.id
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-}
-
 resource "aws_security_group_rule" "database_access_to_kb_db" {
   type                     = "egress"
   description              = "Private database bridge to existing KB Postgres"
   security_group_id        = aws_security_group.database_bridge.id
   source_security_group_id = var.kb_database_security_group_id
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-}
-
-resource "aws_security_group_rule" "agent_db_from_database_access" {
-  type                     = "ingress"
-  description              = "Operator access through the private database bridge"
-  security_group_id        = aws_security_group.agent_db.id
-  source_security_group_id = aws_security_group.database_bridge.id
   from_port                = 5432
   to_port                  = 5432
   protocol                 = "tcp"

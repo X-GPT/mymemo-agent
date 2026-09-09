@@ -1,8 +1,6 @@
 # Deploy and exercise the Lambda front
 
-Issue #742 adds the front half of Spec #732 in us-west-2. The seven lifecycle
-routes work independently of `send` and Runtime #750. v1 keeps its ECS release
-steps and Statsig secret access until cutover.
+Issue #742 adds the front half of Spec #732 in us-west-2. The front owns lifecycle routes and Turn streaming.
 
 ## Release
 
@@ -20,7 +18,7 @@ scripts/deploy/build_front.sh
 `mymemo-staging-api:273`. The now-merged #750 Runtime, shared SANDBOX interpreter
 and workspace bucket are reused directly: the front's `AGENT_RUNTIME_ARN`
 and invoke grant point at that Runtime, and both services receive the same
-`CODE_INTERPRETER_ID`. No v1 Runtime environment changes are needed. This
+`CODE_INTERPRETER_ID`. This
 runbook exercises lifecycle routes; it does not claim a `send` demo.
 
 The front reads `STATSIG_SERVER_SECRET_ARN` at cold start (AWSCURRENT); it never
