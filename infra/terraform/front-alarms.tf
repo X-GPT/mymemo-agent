@@ -32,7 +32,7 @@ resource "aws_cloudwatch_log_metric_filter" "front" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "front_count" {
-  for_each            = toset(["SandboxStartFailures", "PersistenceFailures", "TurnErrors_budget_exceeded", "TurnErrors_workspace_too_large"])
+  for_each            = toset(["SandboxStartFailures", "PersistenceFailures"])
   alarm_name          = "${local.common_name}-front-${each.key}"
   namespace           = "${local.common_name}/Front"
   metric_name         = aws_cloudwatch_log_metric_filter.front[each.key].metric_transformation[0].name
@@ -43,7 +43,7 @@ resource "aws_cloudwatch_metric_alarm" "front_count" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns
-  ok_actions          = var.alarm_action_arns
+  ok_actions          = []
 }
 
 resource "aws_cloudwatch_metric_alarm" "front_error_rate" {
@@ -55,7 +55,7 @@ resource "aws_cloudwatch_metric_alarm" "front_error_rate" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns
-  ok_actions          = var.alarm_action_arns
+  ok_actions          = []
   metric_query {
     id          = "rate"
     expression  = "IF(outcomes > 0, 100 * FILL(errors, 0) / outcomes, 0)"
@@ -95,7 +95,7 @@ resource "aws_cloudwatch_metric_alarm" "front_platform" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns
-  ok_actions          = var.alarm_action_arns
+  ok_actions          = []
 }
 
 resource "aws_cloudwatch_metric_alarm" "transcript_upload" {
@@ -109,7 +109,7 @@ resource "aws_cloudwatch_metric_alarm" "transcript_upload" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns
-  ok_actions          = var.alarm_action_arns
+  ok_actions          = []
 }
 
 resource "aws_cloudwatch_metric_alarm" "runtime_health" {
@@ -128,5 +128,5 @@ resource "aws_cloudwatch_metric_alarm" "runtime_health" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_action_arns
-  ok_actions          = var.alarm_action_arns
+  ok_actions          = []
 }

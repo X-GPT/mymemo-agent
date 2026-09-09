@@ -94,8 +94,9 @@ filters in `${common_name}/Front`. IDs stay in logs, never dimensions.
 `TurnOutcomes` includes finished and healed abandoned Turns; per-code rates use
 outcomes observed in the same five-minute window, not completion cohorts.
 
-- Error-code rates alarm above 5% in five minutes. Budget/cap, sandbox-start
-  and persistence failures also alarm on any occurrence.
+- Error-code rates alarm above 5% in five minutes. Sandbox-start and persistence
+  failures also alarm on any occurrence. Budget/cap errors use only rate alarms
+  to avoid duplicate notifications.
 - `SandboxStartSeconds` measures successful starts. Admission logs map
   requestId to turnId; start logs include the session ID.
 - `TarballBytes` includes rejected exports; `CopyInSeconds` and `CopyOutSeconds`
@@ -106,7 +107,9 @@ outcomes observed in the same five-minute window, not completion cohorts.
 - Existing cleanup-age alarm remains (>3,600 seconds). Existing
   `MyMemo/AgentRuntime/TranscriptUploadFailures` EMF covers upload failures;
   Spec #732/ADR-0035 retired `mirror_error`.
-- Alarm and recovery notifications use `alarm_action_arns`. Missing metrics are
+- Front, transcript-upload and runtime-health alarms notify `alarm_action_arns`
+  only on ALARM; recovery emails are disabled. The separate cleanup-age alarm
+  retains recovery notifications. Missing metrics are
   non-breaching for demand-driven services; absence alone does not prove success.
   Logs use null IDs before admission and for aggregate cleanup/platform events.
 
