@@ -18,5 +18,4 @@ Keep `fck_nat_ami_id` pinned to the reviewed official ARM64 AMI. Preserve
 Runtime private subnets and KB ingress. Release deploy is manually dispatched
 from main and requires the typed apply confirmation.
 
-For the one-time v1 removal use [the teardown runbook](../runbooks/v1-teardown.md)
-before the first release from the removal commit.
+The one-time v1 removal is complete; see [the teardown history](../runbooks/v1-teardown.md).
