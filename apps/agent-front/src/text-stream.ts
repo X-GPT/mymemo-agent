@@ -1,5 +1,24 @@
 import { type UiNode, validateUiPayload } from "@mymemo/ui-catalog";
+import { z } from "zod";
 import type { ArtifactChanges } from "./artifacts";
+
+// Claude Agent SDK 0.3.251 ModelUsage; USD values are SDK estimates.
+const ModelUsage = z.record(
+	z.string(),
+	z.looseObject({
+		inputTokens: z.number().nonnegative(),
+		outputTokens: z.number().nonnegative(),
+		cacheReadInputTokens: z.number().nonnegative(),
+		cacheCreationInputTokens: z.number().nonnegative(),
+		webSearchRequests: z.number().nonnegative(),
+		costUSD: z.number().nonnegative(),
+		contextWindow: z.number().nonnegative(),
+		maxOutputTokens: z.number().nonnegative(),
+		canonicalModel: z.string().optional(),
+		provider: z.string().optional(),
+		costBasis: z.enum(["list", "managed", "unknown"]).optional(),
+	}),
+);
 
 export type DataPart =
 	| {
@@ -16,6 +35,7 @@ export interface MessageMetadata {
 	startedAt: string;
 	endedAt?: string;
 	errorCode?: string;
+	modelUsage?: z.infer<typeof ModelUsage>;
 }
 type ToolName =
 	| "Bash"
@@ -200,6 +220,9 @@ export function createTextStream(input: {
 			}
 			if (value.type === "result") {
 				result = true;
+				const usage = ModelUsage.safeParse(value.modelUsage);
+				if (usage.success)
+					message.metadata = { ...message.metadata, modelUsage: usage.data };
 				if (value.is_error || value.subtype !== "success")
 					errorCode ??= sdkError(value);
 				return;

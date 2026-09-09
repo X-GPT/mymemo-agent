@@ -71,7 +71,15 @@ export function turnMetadata(
 	turn: MessageMetadata,
 	conversation: Conversation,
 ): MessageMetadata {
-	const { turnId, requestId, status, startedAt, endedAt, errorCode } = turn;
+	const {
+		turnId,
+		requestId,
+		status,
+		startedAt,
+		endedAt,
+		errorCode,
+		modelUsage,
+	} = turn;
 	return {
 		turnId,
 		requestId,
@@ -79,6 +87,7 @@ export function turnMetadata(
 		startedAt,
 		...(endedAt ? { endedAt } : {}),
 		...(errorCode ? { errorCode } : {}),
+		...(modelUsage ? { modelUsage } : {}),
 		...(status === "processing" && conversation.processing?.turnId !== turnId
 			? { status: "error", errorCode: "abandoned" }
 			: {}),
