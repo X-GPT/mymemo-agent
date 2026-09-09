@@ -24,6 +24,4 @@ See [development](docs/agents/development.md), [domain language](CONTEXT.md),
 [Runtime operations](docs/runbooks/agent-runtime.md).
 
 Production releases use the main-only `release-deploy.yml` workflow.
-Before the first release of the v1-removal commit, an operator must run
-`scripts/deploy/teardown_v1.sh` as described in
-[the two-phase teardown runbook](docs/runbooks/v1-teardown.md).
+The completed v1 cleanup is recorded in [the teardown history](docs/runbooks/v1-teardown.md).

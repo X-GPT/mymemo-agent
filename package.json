@@ -2,7 +2,7 @@
 	"name": "mymemo-agent",
 	"module": "index.ts",
 	"scripts": {
-		"test": "python3 -B scripts/deploy/check_v1_plan_test.py && bun test scripts/*.test.ts scripts/deploy/agentcore_aws_checks.test.ts && bun run scripts/test-workspaces.ts",
+		"test": "bun test scripts/*.test.ts scripts/deploy/agentcore_aws_checks.test.ts && bun run scripts/test-workspaces.ts",
 		"terraform:fmt": "terraform -chdir=infra/bootstrap-iam fmt && terraform -chdir=infra/terraform fmt && terraform -chdir=infra/ecr fmt",
 		"terraform:validate": "terraform -chdir=infra/bootstrap-iam validate && terraform -chdir=infra/terraform validate && terraform -chdir=infra/ecr validate"
 	},
