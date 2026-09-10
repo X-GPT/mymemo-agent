@@ -43,6 +43,9 @@ async function harness() {
 			const body = objects.get(input.Key);
 			if (!body)
 				throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
+			// Real S3 refuses every byte range against an empty object.
+			if ((command.input as { Range?: string }).Range && body.length === 0)
+				throw Object.assign(new Error("416"), { name: "InvalidRange" });
 			return {
 				ContentLength: body.length,
 				Body: {
@@ -260,12 +263,14 @@ test("previewable marks only text/html within the preview cap, and content serve
 		Buffer.alloc(1024 * 1024 + 1, 60),
 	);
 	await writeFile(join(h.home, "ws/artifacts/notes.txt"), "<p>not html");
+	await writeFile(join(h.home, "ws/artifacts/blank.html"), "");
 	await writeFile(join(h.home, "ws/artifacts/chart.png"), "png");
 	const synced = await h.artifacts.sync("c", "s", h.workspace);
 	const flags = Object.fromEntries(
 		synced.artifacts.map((a) => [a.path, a.previewable]),
 	);
 	expect(flags).toEqual({
+		"blank.html": true,
 		"chart.png": false,
 		"dashboard.html": true,
 		"huge.html": false,
@@ -284,6 +289,10 @@ test("previewable marks only text/html within the preview cap, and content serve
 	const bytes = await h.artifacts.content("c", byPath["dashboard.html"] ?? "");
 	assert(bytes);
 	expect(Buffer.from(bytes).toString()).toBe(page);
+	// An empty page previews as an empty body rather than a 416 failure.
+	expect(await h.artifacts.content("c", byPath["blank.html"] ?? "")).toEqual(
+		new Uint8Array(),
+	);
 	for (const path of ["huge.html", "notes.txt", "chart.png"])
 		expect(await h.artifacts.content("c", byPath[path] ?? "")).toBeUndefined();
 	expect(await h.artifacts.content("c", "unknown")).toBeUndefined();

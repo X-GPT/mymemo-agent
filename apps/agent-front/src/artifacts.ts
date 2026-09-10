@@ -3,6 +3,7 @@ import { posix } from "node:path";
 import {
 	DeleteObjectCommand,
 	GetObjectCommand,
+	type GetObjectCommandOutput,
 	PutObjectCommand,
 	type S3Client,
 } from "@aws-sdk/client-s3";
@@ -153,13 +154,22 @@ export class Artifacts {
 		// A bounded range read (cap + 1 byte) means an oversized object is
 		// detected after draining at most that much, so the response body is
 		// always fully consumed and the connection goes back to the pool.
-		const object = await this.s3.send(
-			new GetObjectCommand({
-				Bucket: this.bucket,
-				Key: `${prefix(id)}${artifact.path}`,
-				Range: `bytes=0-${PREVIEW_BYTES}`,
-			}),
-		);
+		let object: GetObjectCommandOutput;
+		try {
+			object = await this.s3.send(
+				new GetObjectCommand({
+					Bucket: this.bucket,
+					Key: `${prefix(id)}${artifact.path}`,
+					Range: `bytes=0-${PREVIEW_BYTES}`,
+				}),
+			);
+		} catch (error) {
+			// S3 cannot satisfy any byte range against an empty object and
+			// answers 416; an empty page is still a valid (blank) preview.
+			if ((error as { name?: string }).name === "InvalidRange")
+				return new Uint8Array();
+			throw error;
+		}
 		if (!object.Body) throw new Error("Artifact body missing");
 		const bytes = await object.Body.transformToByteArray();
 		return bytes.byteLength > PREVIEW_BYTES ? undefined : bytes;
