@@ -323,6 +323,7 @@ describe.skipIf(!endpoint)("Conversation lifecycle with DynamoDB Local", () => {
 				["GET", "/messages?limit=invalid", undefined],
 				["GET", "/artifacts", undefined],
 				["GET", "/artifacts/missing/download-url", undefined],
+				["GET", "/artifacts/missing/content", undefined],
 				["POST", "/messages", "{}"],
 			] as const) {
 				const response = await app.request(`/v1/conversations/${id}${suffix}`, {

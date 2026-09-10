@@ -2,6 +2,14 @@
 
 Status: accepted
 
+Amended (2026-09-10) by
+[ADR-0036](./0036-preview-html-artifacts-in-an-opaque-origin-sandbox.md): the
+rejection of model-authored sandboxed HTML below is lifted for the artifact lane
+only. The 16 KiB objection does not apply there (a page is an artifact, not an
+event), and contained-but-real execution is accepted inside an opaque-origin
+`srcdoc` sandbox under a `default-src 'none'` CSP. The catalog remains the
+format for single widgets and the only thing that rides `run_events`.
+
 When a visual presentation serves an answer better than prose — a comparison,
 a distribution, a source list, a process explanation — the agent should be
 able to present one. The agent is untrusted and prompt-injectable, so the

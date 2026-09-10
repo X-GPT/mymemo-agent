@@ -200,8 +200,11 @@ A file under the Workspace's `artifacts/` folder, copied by the Lambda front
 at Turn end to `_artifacts/<id>/<path>` as its own S3 object and listed in a
 manifest with a path-derived stable id; the list mirrors the folder (a
 removed file disappears). Downloaded through a five-minute presigned URL that
-works as soon as the Turn ends.
-_Avoid_: published artifact, attachment, output file, mount listing
+works as soon as the Turn ends. An HTML Artifact of at most 1 MiB is
+**previewable**: its bytes are also readable through the `content` route and
+rendered inline in an opaque-origin sandbox (ADR-0036).
+_Avoid_: published artifact, attachment, output file, mount listing, inline
+artifact (say previewable Artifact)
 
 **Agent session**:
 The Claude SDK transcript carrying a Conversation's model-side memory across
