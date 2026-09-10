@@ -147,17 +147,20 @@ export class Artifacts {
 			(entry) => entry.artifactId === requestedId,
 		);
 		if (!artifact || !previewable(artifact)) return undefined;
+		// The manifest is trusted for eligibility, but the object is what gets
+		// buffered: a sync that replaced the file and then died before writing
+		// the manifest leaves a stale previewable entry over a larger object.
+		// A bounded range read (cap + 1 byte) means an oversized object is
+		// detected after draining at most that much, so the response body is
+		// always fully consumed and the connection goes back to the pool.
 		const object = await this.s3.send(
 			new GetObjectCommand({
 				Bucket: this.bucket,
 				Key: `${prefix(id)}${artifact.path}`,
+				Range: `bytes=0-${PREVIEW_BYTES}`,
 			}),
 		);
 		if (!object.Body) throw new Error("Artifact body missing");
-		// The manifest is trusted for eligibility, but the object is what gets
-		// buffered: a sync that replaced the file and then died before writing
-		// the manifest leaves a stale previewable entry over a larger object.
-		if ((object.ContentLength ?? 0) > PREVIEW_BYTES) return undefined;
 		const bytes = await object.Body.transformToByteArray();
 		return bytes.byteLength > PREVIEW_BYTES ? undefined : bytes;
 	}
