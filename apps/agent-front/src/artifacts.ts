@@ -154,7 +154,12 @@ export class Artifacts {
 			}),
 		);
 		if (!object.Body) throw new Error("Artifact body missing");
-		return await object.Body.transformToByteArray();
+		// The manifest is trusted for eligibility, but the object is what gets
+		// buffered: a sync that replaced the file and then died before writing
+		// the manifest leaves a stale previewable entry over a larger object.
+		if ((object.ContentLength ?? 0) > PREVIEW_BYTES) return undefined;
+		const bytes = await object.Body.transformToByteArray();
+		return bytes.byteLength > PREVIEW_BYTES ? undefined : bytes;
 	}
 
 	async sync(
