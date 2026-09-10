@@ -155,6 +155,17 @@ three per `readFiles` call. Missing files are removed from the mirror.
 for 300 seconds as an attachment. Both require ownership, bypass the exposure
 gate, and hide tombstoned Conversations. An unknown artifact returns 404.
 
+A listed artifact is `previewable` when its content type is `text/html` and it
+is at most 1 MiB; the flag is derived on read, not stored.
+`GET /v1/conversations/:id/artifacts/:artifactId/content` returns a previewable
+artifact's bytes with `GetObject` — no presign — as
+`text/plain; charset=utf-8` with `nosniff`, `private, max-age=300` and
+`content-disposition: inline`. Unknown, foreign and non-previewable artifacts
+share one 404. The bytes are never a document here: `mymemo-web` renders them
+only inside an opaque-origin sandboxed `srcdoc` iframe under a
+`default-src 'none'` CSP (ADR-0036). The Runtime system prompt is what tells the
+model to write such a page.
+
 A changed mirror emits one `data-artifacts` part before terminal metadata on
 both successful and error results. A missing result or lost sandbox skips
 copy-out. Workspace export failures still attempt artifact publication, so

@@ -9,6 +9,13 @@ keys. `agent-maintenance` solely owns asynchronous artifact deletion, while
 `chat-api` retains read-only delivery authority. The worker-role split described
 below is historical.
 
+Amended (2026-09-10) by
+[ADR-0036](./0036-preview-html-artifacts-in-an-opaque-origin-sandbox.md): "content
+type never permits inline rendering" continues to govern downloads, which stay
+forced-attachment presigned URLs. A separate ownership-checked `…/content` route
+returns a previewable HTML artifact's bytes as `text/plain` with `nosniff`, and
+only the client turns them into a document, inside an opaque-origin sandbox.
+
 A workspace contains private scratch files, reconstructible knowledge-base
 content, and user-facing outputs, and its files may be written by either the
 text file tools or Bash. Only files deliberately placed in a reserved

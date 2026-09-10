@@ -190,5 +190,24 @@ export function createApp(
 				: c.json({ error: "Artifact not found" }, 404);
 		},
 	);
+	// ADR-0036: bytes for the sandboxed inline preview. Served as text/plain so the
+	// response is never a document on our origin; the client only ever hands it to an
+	// opaque-origin `srcdoc` iframe. Downloads keep their forced-attachment presign.
+	app.get("/v1/conversations/:id/artifacts/:artifactId/content", async (c) => {
+		if (!messages) throw new Error("Messages not configured");
+		const content = await messages.artifacts.content(
+			c.req.param("id"),
+			c.req.param("artifactId"),
+		);
+		if (!content) return c.json({ error: "Artifact not found" }, 404);
+		return new Response(content, {
+			headers: {
+				"content-type": "text/plain; charset=utf-8",
+				"x-content-type-options": "nosniff",
+				"cache-control": "private, max-age=300",
+				"content-disposition": "inline",
+			},
+		});
+	});
 	return app;
 }

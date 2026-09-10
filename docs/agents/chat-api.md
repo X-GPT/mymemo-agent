@@ -4,8 +4,10 @@
 URL. The trusted caller supplies member, partner and optional team identity.
 Scope is frozen at creation. Statsig gates creation and `send`, failing closed.
 
-The eight routes create/list/rename/archive/delete Conversations, send/read
-messages, and list/download Artifacts. `POST /:id/messages` streams AI SDK
+The nine routes create/list/rename/archive/delete Conversations, send/read
+messages, and list/download Artifacts; the ninth reads a `previewable`
+Artifact's bytes for the ADR-0036 sandboxed inline preview.
+`POST /:id/messages` streams AI SDK
 UIMessage chunks; `GET /:id/messages` reads whole Turns with cursor paging.
 A processing Turn exposes its user message and processing status only.
 After a broken connection, reload history; never automatically resend.

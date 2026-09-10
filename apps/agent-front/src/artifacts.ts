@@ -13,6 +13,8 @@ import type { Workspace } from "./workspace";
 
 const MAX_BYTES = 100 * 1024 * 1024;
 const PART_BYTES = 8 * 1024 * 1024;
+/** ADR-0036: the sandboxed srcdoc preview lane, well under the 6 MB Lambda response cap. */
+const PREVIEW_BYTES = 1024 * 1024;
 const pathSchema = z
 	.string()
 	.min(1)
@@ -39,17 +41,27 @@ export interface Artifact {
 	contentType: string;
 	createdAt: string;
 	updatedAt: string;
+	/** Eligible for the ADR-0036 sandboxed inline preview. Derived, never stored. */
+	previewable: boolean;
 }
 export interface ArtifactChanges {
 	artifacts: Artifact[];
 	removed: string[];
 }
-type ManifestEntry = Artifact & { mtime: string };
+/** The stored manifest shape. `previewable` is derived on read, so old manifests keep working. */
+type ManifestEntry = Omit<Artifact, "previewable"> & { mtime: string };
 const prefix = (id: string) => `_artifacts/${id}/`;
 const artifactId = (path: string) =>
 	createHash("sha256").update(path).digest("base64url");
-const publicArtifact = ({ mtime: _, ...artifact }: ManifestEntry): Artifact =>
-	artifact;
+const previewable = (entry: Pick<ManifestEntry, "contentType" | "sizeBytes">) =>
+	entry.contentType === "text/html" && entry.sizeBytes <= PREVIEW_BYTES;
+const publicArtifact = ({
+	mtime: _,
+	...artifact
+}: ManifestEntry): Artifact => ({
+	...artifact,
+	previewable: previewable(artifact),
+});
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 // No symlinks, including the root. Stat nanoseconds survive JSON round trips as strings.
@@ -119,6 +131,30 @@ export class Artifacts {
 			}),
 			{ expiresIn: 300 },
 		);
+	}
+
+	/**
+	 * ADR-0036: the raw bytes of a previewable artifact, for the sandboxed srcdoc lane.
+	 * Undefined for unknown and non-previewable artifacts alike, so the route cannot
+	 * disclose which one it was. Read with GetObject; never presigned, never inline
+	 * rendered by the front itself.
+	 */
+	async content(
+		id: string,
+		requestedId: string,
+	): Promise<Uint8Array | undefined> {
+		const artifact = (await this.manifest(id)).find(
+			(entry) => entry.artifactId === requestedId,
+		);
+		if (!artifact || !previewable(artifact)) return undefined;
+		const object = await this.s3.send(
+			new GetObjectCommand({
+				Bucket: this.bucket,
+				Key: `${prefix(id)}${artifact.path}`,
+			}),
+		);
+		if (!object.Body) throw new Error("Artifact body missing");
+		return await object.Body.transformToByteArray();
 	}
 
 	async sync(

@@ -242,6 +242,17 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 				contentType: "image/png",
 				createdAt: new Date().toISOString(),
 				updatedAt: new Date().toISOString(),
+				previewable: false,
+			};
+			const previewHtml = "<!doctype html><title>dash</title>";
+			const html = {
+				artifactId: "dash-id",
+				path: "dash.html",
+				sizeBytes: previewHtml.length,
+				contentType: "text/html",
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+				previewable: true,
 			};
 			const key = `_artifacts/${h.id}/`;
 			const put = (name: string, body: string) =>
@@ -249,12 +260,18 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 					new PutObjectCommand({ Bucket: bucket, Key: key + name, Body: body }),
 				);
 			await put("chart.png", "png");
+			await put("dash.html", previewHtml);
 			await put(
 				".manifest.json",
-				JSON.stringify([{ ...artifact, mtime: "1" }]),
+				JSON.stringify(
+					[artifact, html].map(({ previewable: _, ...entry }) => ({
+						...entry,
+						mtime: "1",
+					})),
+				),
 			);
 			spyOn(h.artifacts, "sync").mockResolvedValue({
-				artifacts: [artifact],
+				artifacts: [artifact, html],
 				removed: [],
 			});
 			const response = await h.send();
@@ -302,7 +319,30 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 				h.app.request(`/v1/conversations/${h.id}/artifacts${path}`, {
 					headers,
 				});
-			expect(await (await get("")).json()).toEqual({ artifacts: [artifact] });
+			expect(await (await get("")).json()).toEqual({
+				artifacts: [artifact, html],
+			});
+			// ADR-0036: previewable bytes are readable, but never as a document.
+			const preview = await get("/dash-id/content");
+			expect(preview.status).toBe(200);
+			expect(preview.headers.get("content-type")).toBe(
+				"text/plain; charset=utf-8",
+			);
+			expect(preview.headers.get("x-content-type-options")).toBe("nosniff");
+			expect(preview.headers.get("cache-control")).toBe("private, max-age=300");
+			expect(preview.headers.get("content-disposition")).toBe("inline");
+			expect(await preview.text()).toBe(previewHtml);
+			// Not previewable, unknown, and foreign are the same 404.
+			expect((await get("/chart-id/content")).status).toBe(404);
+			expect((await get("/missing/content")).status).toBe(404);
+			expect(
+				(
+					await get("/dash-id/content", {
+						...h.headers,
+						"x-member-code": crypto.randomUUID(),
+					})
+				).status,
+			).toBe(404);
 			const signed = (await (await get("/chart-id/download-url")).json()) as {
 				downloadUrl: string;
 			};
@@ -317,13 +357,14 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 				(await get("", { ...h.headers, "x-member-code": crypto.randomUUID() }))
 					.status,
 			).toBe(404);
-			await s3.send(
-				new DeleteObjectCommand({ Bucket: bucket, Key: `${key}chart.png` }),
-			);
+			for (const name of ["chart.png", "dash.html"])
+				await s3.send(
+					new DeleteObjectCommand({ Bucket: bucket, Key: key + name }),
+				);
 			await put(".manifest.json", "[]");
 			spyOn(h.artifacts, "sync").mockResolvedValue({
 				artifacts: [],
-				removed: [artifact.artifactId],
+				removed: [artifact.artifactId, html.artifactId],
 			});
 			const second = await h.send("delete");
 			await Bun.sleep(20);
@@ -334,11 +375,12 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			});
 			h.calls[1]?.controller.close();
 			const errorBody = await second.text();
-			expect(errorBody).toContain('"removed":["chart-id"]');
+			expect(errorBody).toContain('"removed":["chart-id","dash-id"]');
 			expect(errorBody.indexOf('"type":"data-artifacts"')).toBeLessThan(
 				errorBody.indexOf('"type":"message-metadata"'),
 			);
 			expect((await get("/chart-id/download-url")).status).toBe(404);
+			expect((await get("/dash-id/content")).status).toBe(404);
 			expect(await (await get("")).json()).toEqual({ artifacts: [] });
 			await s3.send(
 				new DeleteObjectCommand({

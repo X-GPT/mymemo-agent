@@ -42,6 +42,7 @@ try {
 	});
 	assert.deepEqual(await call(`${path}/artifacts`), { artifacts: [] });
 	await call(`${path}/artifacts/missing/download-url`, "GET", undefined, 404);
+	await call(`${path}/artifacts/missing/content`, "GET", undefined, 404);
 	assert.ok((await call(path, "PATCH", { archived: true })).archivedAt);
 	assert.equal(
 		(await call(path, "PATCH", { archived: false })).archivedAt,
@@ -52,5 +53,5 @@ try {
 }
 await call(`${path}/messages`, "GET", undefined, 404);
 console.log(
-	`PASS: create, list/search, rename, archive/unarchive, messages, artifacts, download-url and delete (${created.conversationId})`,
+	`PASS: create, list/search, rename, archive/unarchive, messages, artifacts, download-url, preview content and delete (${created.conversationId})`,
 );

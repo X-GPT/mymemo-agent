@@ -272,6 +272,18 @@ async function harness(
 			expect(params.options?.settingSources).toEqual([]);
 			expect(params.options?.systemPrompt).toContain("Bash starts in ~/ws");
 			expect(params.options?.systemPrompt).toContain("!ls means ls");
+			// ADR-0036: the HTML preview lane is prompt-only, and names no other origin.
+			expect(params.options?.systemPrompt).toContain(
+				"artifacts/<descriptive-name>.html",
+			);
+			expect(params.options?.systemPrompt).toContain(
+				"/agent-libs/chart.umd.js",
+			);
+			expect(params.options?.systemPrompt).toContain(
+				"Never fetch or post data",
+			);
+			expect(params.options?.systemPrompt).not.toContain("http://");
+			expect(params.options?.systemPrompt).not.toContain("https://");
 			if (mode === "throw") throw new Error("injected failure");
 			const active = query(params);
 			if (mode === "disconnect") return active;

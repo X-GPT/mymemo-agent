@@ -132,6 +132,7 @@ test("artifact mirror publishes binary chunks, stable ids/timestamps, sorted lis
 		"报告 'x'.csv",
 	]);
 	expect(listed.some((a) => "mtime" in a)).toBe(false);
+	expect(listed.map((a) => a.previewable)).toEqual([false, false, false]);
 	const [empty, png, csv] = listed;
 	assert(empty && png && csv);
 	expect(png.artifactId).toBe(
@@ -247,4 +248,48 @@ test("untouched artifacts keep their nanosecond mtime and emit no changes after 
 	});
 	expect(await h.artifacts.list("c")).toEqual(first.artifacts);
 	expect(h.writes).toHaveLength(writes);
+});
+
+test("previewable marks only text/html within the preview cap, and content serves those bytes alone", async () => {
+	const h = await harness();
+	const page = "<!doctype html><title>dash</title><p>报告";
+	await writeFile(join(h.home, "ws/artifacts/dashboard.html"), page);
+	await writeFile(
+		join(h.home, "ws/artifacts/huge.html"),
+		Buffer.alloc(1024 * 1024 + 1, 60),
+	);
+	await writeFile(join(h.home, "ws/artifacts/notes.txt"), "<p>not html");
+	await writeFile(join(h.home, "ws/artifacts/chart.png"), "png");
+	const synced = await h.artifacts.sync("c", "s", h.workspace);
+	const flags = Object.fromEntries(
+		synced.artifacts.map((a) => [a.path, a.previewable]),
+	);
+	expect(flags).toEqual({
+		"chart.png": false,
+		"dashboard.html": true,
+		"huge.html": false,
+		"notes.txt": false,
+	});
+	const listed = await h.artifacts.list("c");
+	expect(listed).toEqual(
+		[...synced.artifacts].sort((a, b) => (a.path < b.path ? -1 : 1)),
+	);
+	// Derived on read: the durable manifest keeps the pre-ADR-0036 shape.
+	const manifest = JSON.parse(
+		(h.objects.get("_artifacts/c/.manifest.json") as Buffer).toString(),
+	) as Record<string, unknown>[];
+	expect(manifest.some((entry) => "previewable" in entry)).toBe(false);
+	const byPath = Object.fromEntries(listed.map((a) => [a.path, a.artifactId]));
+	const bytes = await h.artifacts.content("c", byPath["dashboard.html"] ?? "");
+	assert(bytes);
+	expect(Buffer.from(bytes).toString()).toBe(page);
+	for (const path of ["huge.html", "notes.txt", "chart.png"])
+		expect(await h.artifacts.content("c", byPath[path] ?? "")).toBeUndefined();
+	expect(await h.artifacts.content("c", "unknown")).toBeUndefined();
+	// Preview never widens deletion or ownership: a removed file stops resolving.
+	await rm(join(h.home, "ws/artifacts/dashboard.html"));
+	await h.artifacts.sync("c", "s", h.workspace);
+	expect(
+		await h.artifacts.content("c", byPath["dashboard.html"] ?? ""),
+	).toBeUndefined();
 });
