@@ -85,6 +85,7 @@ resource "aws_lambda_function" "front" {
       WORKSPACE_MAX_BYTES       = "67108864"
       AGENT_RUNTIME_ARN         = aws_bedrockagentcore_agent_runtime.agent_runtime.agent_runtime_arn
       STATSIG_SERVER_SECRET_ARN = local.statsig_server_secret_arn
+      EXPOSURE_GATE_MODE        = var.exposure_gate_mode
     }
   }
   depends_on = [aws_iam_role_policy.front, aws_cloudwatch_log_group.front]

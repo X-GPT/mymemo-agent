@@ -107,6 +107,16 @@ export function decodeCursor(query: ListOptions): ListPosition | undefined {
 }
 export class InvalidCursor extends Error {}
 
+/** OpenRouter-style model id; the trusted caller picks it per Turn. */
+export const ModelId = z
+	.string()
+	.min(1)
+	.max(200)
+	.regex(/^[a-z0-9][a-z0-9._:/-]*$/);
+/** Raw model spend the SDK may consume in one Turn. */
+export const MaxBudgetUsd = z
+	.number()
+	.refine((value) => Number.isFinite(value) && value > 0 && value <= 10000);
 export const SendBody = z.strictObject({
 	text: z
 		.string()
@@ -117,4 +127,6 @@ export const SendBody = z.strictObject({
 		.string()
 		.min(1)
 		.refine((value) => Buffer.byteLength(value) <= 1020),
+	model: ModelId.optional(),
+	maxBudgetUsd: MaxBudgetUsd.optional(),
 });

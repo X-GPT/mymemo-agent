@@ -17,9 +17,17 @@ export class Messages {
 		>,
 		readonly artifacts: Artifacts,
 	) {}
-	async send(id: string, userId: string, text: string, requestId: string) {
+	async send(
+		id: string,
+		userId: string,
+		text: string,
+		requestId: string,
+		options: { model?: string; maxBudgetUsd?: number } = {},
+	) {
+		const { model, maxBudgetUsd } = options;
 		let admitted: Awaited<ReturnType<ConversationStore["admit"]>>;
 		try {
+			// Only text identifies a retried Turn: model and budget may differ.
 			admitted = await this.store.admit(id, userId, text, requestId);
 		} catch (error) {
 			if (!(error instanceof SendConflict)) throw error;
@@ -45,6 +53,7 @@ export class Messages {
 			requestId,
 			status: "processing" as const,
 			startedAt,
+			...(model ? { model } : {}),
 		};
 		const turn: Turn = {
 			...metadata,
@@ -120,6 +129,8 @@ export class Messages {
 							startedAt: Date.parse(startedAt),
 							budgetUntil: Date.parse(until),
 							sandboxSessionId: sessionId,
+							...(model ? { model } : {}),
+							...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
 						});
 						for await (const message of sdkMessages(raw))
 							converter.push(message);

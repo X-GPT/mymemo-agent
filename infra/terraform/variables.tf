@@ -101,6 +101,16 @@ variable "kb_database_url_secret_name" {
   default     = null
 }
 
+variable "exposure_gate_mode" {
+  description = "Front exposure gate: \"statsig\" evaluates the Statsig gate, \"open\" admits every identity (the Agent is generally available and admission is decided by credit upstream)."
+  type        = string
+  default     = "statsig"
+  validation {
+    condition     = contains(["statsig", "open"], var.exposure_gate_mode)
+    error_message = "exposure_gate_mode must be \"statsig\" or \"open\"."
+  }
+}
+
 variable "statsig_server_secret_name" {
   description = "Secrets Manager secret name containing STATSIG_SERVER_SECRET. Defaults to <name_prefix>-<environment>-STATSIG_SERVER_SECRET."
   type        = string

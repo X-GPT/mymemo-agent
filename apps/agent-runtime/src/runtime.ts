@@ -46,6 +46,17 @@ export const invocationSchema = z
 		startedAt: z.number().int().nonnegative(),
 		budgetUntil: z.number().int().nonnegative(),
 		sandboxSessionId: id,
+		// Per-Turn model and raw spend cap chosen by the trusted caller.
+		model: z
+			.string()
+			.min(1)
+			.max(200)
+			.regex(/^[a-z0-9][a-z0-9._:/-]*$/)
+			.optional(),
+		maxBudgetUsd: z
+			.number()
+			.refine((value) => Number.isFinite(value) && value > 0 && value <= 10000)
+			.optional(),
 	})
 	.refine(
 		(input) =>
@@ -213,7 +224,10 @@ export function createRuntimeServer(
 									);
 									return child;
 								},
-								model: config.model,
+								model: input.model ?? config.model,
+								...(input.maxBudgetUsd === undefined
+									? {}
+									: { maxBudgetUsd: input.maxBudgetUsd }),
 								env: { ...config.env, CLAUDE_CONFIG_DIR: configDir },
 								cwd,
 								pathToClaudeCodeExecutable: config.pathToClaudeCodeExecutable,

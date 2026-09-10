@@ -245,3 +245,47 @@ and uploads it after; the session id is pre-minted, so the file name is
 known. The Runtime keeps `GetObject`/`PutObject` on that one prefix and
 nothing else in S3.
 
+
+## Amendment 2026-09-10 — the trusted caller picks the Turn's model and budget, and the gate can be opened
+
+The Agent becomes generally available in Beta and its usage is prepaid, so
+admission is no longer a Statsig question and the model is no longer a
+deployment constant.
+
+**`POST …/messages` accepts an optional `model` and `maxBudgetUsd`.** The body
+stays strict: `{ text, requestId, model?, maxBudgetUsd? }`, with `model` a
+1–200 character OpenRouter-style id (`^[a-z0-9][a-z0-9._:/-]*$`) and
+`maxBudgetUsd` a finite number in `(0, 10000]`. Both are carried into the
+Runtime `Invocation` and re-validated there; the Runtime passes
+`model: invocation.model ?? config.model` and, when present, `maxBudgetUsd` to
+the SDK's `query()`. `OPENROUTER_DEFAULT_MODEL` remains the default for a Turn
+that names none. The front does not know the catalog, the prices or the
+balance: mymemo-service owns those and computes the raw budget, and the front
+only forwards what a trusted caller asserted. Turn budget (wall clock) is
+unchanged and independent of Turn budget (USD): ten minutes still ends a Turn
+`budget_exceeded`, and the SDK's own budget abort maps to the same code.
+
+**The requested model is reported back in Turn metadata.** `model` joins
+`MessageMetadata`, so it appears on the terminal `message-metadata` chunk, in
+the persisted Turn and in `GET …/messages` history — the attribution key
+mymemo-service needs when it charges the Turn. `modelUsage` is unchanged: it
+is the SDK's report, keyed by whatever the provider named, and is not always
+the id that was requested. The field is absent when the caller named no model,
+because the front cannot see the Runtime's default; in production the service
+always names one.
+
+**Request-id idempotency still compares only `text`.** A retry that changes
+the model or the budget is a `duplicate_request`, not a
+`request_id_conflict`. A client may retry after re-reading its balance or
+after the user switched models, and must not be told its request id is
+poisoned for it.
+
+**The exposure gate gains an `open` mode.** `EXPOSURE_GATE_MODE` is `statsig`
+(the fail-closed Statsig gate, unchanged) or `open` (every identity allowed;
+the Statsig client is not constructed and the secret is not read). An absent
+or unrecognized value means `statsig`, so a misread configuration cannot widen
+exposure. Terraform's `exposure_gate_mode` validates the two values and
+production sets `open`; `STATSIG_SERVER_SECRET_ARN` stays wired so reverting is
+one variable. This does not make the Agent free: refusal moved upstream, where
+mymemo-service answers 402 for a Turn without credit before it ever calls the
+front.

@@ -15,6 +15,10 @@ export interface Invocation {
 	startedAt: number;
 	budgetUntil: number;
 	sandboxSessionId: string;
+	/** Model the trusted caller requested for this Turn; the Runtime default otherwise. */
+	model?: string;
+	/** Raw model spend cap for this Turn, in USD. */
+	maxBudgetUsd?: number;
 }
 export type InvokeRuntime = (
 	input: Invocation,

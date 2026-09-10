@@ -128,11 +128,15 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 			{ isAgentEnabled: async () => true },
 			messages,
 		);
-		const send = (text = "hello", requestId: string = crypto.randomUUID()) =>
+		const send = (
+			text = "hello",
+			requestId: string = crypto.randomUUID(),
+			turn: { model?: string; maxBudgetUsd?: number } = {},
+		) =>
 			app.request(`/v1/conversations/${id}/messages`, {
 				method: "POST",
 				headers,
-				body: JSON.stringify({ text, requestId }),
+				body: JSON.stringify({ text, requestId, ...turn }),
 			});
 		const page = async (query = "") => {
 			const response = await app.request(
@@ -643,5 +647,66 @@ describe.skipIf(!endpoint)("Turn admission and whole-reply history", () => {
 		expect(await (await h.send()).json()).toEqual({ error: "archived" });
 		expect((await store.get(h.id, h.userId)).turnCount).toBe(0);
 		expect(h.calls).toHaveLength(0);
+	});
+
+	test("the Turn's model and budget reach the Runtime and metadata; only text conflicts", async () => {
+		const h = await harness();
+		const requestId = crypto.randomUUID();
+		const model = "deepseek/deepseek-v4-pro";
+		const response = await h.send("hello", requestId, {
+			model,
+			maxBudgetUsd: 4.32,
+		});
+		expect(response.status).toBe(200);
+		await Bun.sleep(20);
+		expect(h.calls[0]?.input).toMatchObject({
+			text: "hello",
+			requestId,
+			model,
+			maxBudgetUsd: 4.32,
+		});
+		// A retry that changes only the model or the budget stays a duplicate.
+		for (const retry of [
+			{ model: "anthropic/claude-sonnet-5", maxBudgetUsd: 9 },
+			{ model },
+			{},
+		]) {
+			const duplicate = await h.send("hello", requestId, retry);
+			expect(duplicate.status).toBe(409);
+			expect(await duplicate.json()).toMatchObject({
+				error: "duplicate_request",
+				status: "processing",
+			});
+		}
+		expect(await (await h.send("hello ", requestId, { model })).json()).toEqual(
+			{
+				error: "request_id_conflict",
+			},
+		);
+		expect(h.calls).toHaveLength(1);
+		h.complete();
+		const wire = await response.text();
+		const terminal = wire
+			.split("\n\n")
+			.filter((line) => line.startsWith("data: {"))
+			.map((line) => JSON.parse(line.slice(6)))
+			.find((chunk) => chunk.type === "message-metadata");
+		expect(terminal.messageMetadata).toMatchObject({ model, status: "done" });
+		const page = await h.page();
+		expect(page.messages).toHaveLength(2);
+		for (const message of page.messages)
+			expect(message.metadata.model).toBe(model);
+
+		// A Turn submitted without a model reports none and lets the Runtime default.
+		const plain = await h.send("second");
+		expect(plain.status).toBe(200);
+		await Bun.sleep(20);
+		expect(h.calls[1]?.input).not.toHaveProperty("model");
+		expect(h.calls[1]?.input).not.toHaveProperty("maxBudgetUsd");
+		h.complete(1);
+		await plain.text();
+		expect((await h.page("?limit=1")).messages[0]?.metadata).not.toHaveProperty(
+			"model",
+		);
 	});
 });
