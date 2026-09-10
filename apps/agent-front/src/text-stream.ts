@@ -35,6 +35,8 @@ export interface MessageMetadata {
 	startedAt: string;
 	endedAt?: string;
 	errorCode?: string;
+	/** The model requested for this Turn; absent when the caller named none. */
+	model?: string;
 	modelUsage?: z.infer<typeof ModelUsage>;
 }
 type ToolName =
@@ -148,6 +150,7 @@ export function createTextStream(input: {
 	turnId: string;
 	requestId: string;
 	startedAt: string;
+	model?: string;
 	emit: (chunk: TextStreamChunk) => void;
 }) {
 	const { emit } = input;
@@ -159,6 +162,7 @@ export function createTextStream(input: {
 			requestId: input.requestId,
 			status: "processing",
 			startedAt: input.startedAt,
+			...(input.model ? { model: input.model } : {}),
 		},
 		parts: [],
 	};

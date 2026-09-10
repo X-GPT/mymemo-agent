@@ -18,6 +18,32 @@ export interface ExposureGate {
 	isAgentEnabled(identity: InternalIdentity): Promise<boolean>;
 }
 
+/** How the front decides exposure. `statsig` is the historical behaviour. */
+export const EXPOSURE_GATE_MODES = ["statsig", "open"] as const;
+export type ExposureGateMode = (typeof EXPOSURE_GATE_MODES)[number];
+
+/**
+ * Read `EXPOSURE_GATE_MODE`. Absent or unrecognized means `statsig`: an
+ * unreadable configuration must never widen exposure by accident. Terraform
+ * validates the variable, so only these two values reach a deployed front.
+ */
+export function exposureGateMode(
+	env: Record<string, string | undefined>,
+): ExposureGateMode {
+	return env.EXPOSURE_GATE_MODE === "open" ? "open" : "statsig";
+}
+
+/**
+ * Every identity is allowed. Used when the Agent is generally available and
+ * admission is decided downstream (by credit, not by a gate). No Statsig
+ * client is constructed and the Statsig secret is never read.
+ */
+export class OpenExposureGate implements ExposureGate {
+	async isAgentEnabled(): Promise<boolean> {
+		return true;
+	}
+}
+
 /**
  * Statsig-backed production gate. Fails CLOSED: if initialization fails or an
  * evaluation throws, new work is denied. The Statsig secret is never logged.

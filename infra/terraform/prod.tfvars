@@ -18,6 +18,11 @@ fck_nat_ami_id = "ami-0d1db1251d2b64626"
 
 openrouter_default_model = "anthropic/claude-sonnet-5"
 
+# The Agent is generally available in Beta: every identity passes the front's
+# exposure gate and mymemo-service refuses a Turn without credit instead.
+# The Statsig secret stays wired so "statsig" remains a one-variable rollback.
+exposure_gate_mode = "open"
+
 # Established account alarm channel used by the shared staging infrastructure.
 alarm_action_arns = ["arn:aws:sns:us-west-2:637423444544:mymemo-staging-alarms"]
 

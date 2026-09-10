@@ -137,6 +137,22 @@ only way a Turn ends early; there is no interrupt.
 _Avoid_: timeout (the Lambda's 14 minutes is the transport ceiling, not the
 budget), cancellation
 
+**Turn model**:
+The model a Turn runs on: the optional `model` the trusted caller sends with
+`send`, or the Runtime's configured default when it sends none. It is
+re-validated at the Runtime boundary, passed to the SDK `query()`, and
+reported back on the Turn's metadata so usage can be attributed. It is not
+`modelUsage`, which is the SDK's own per-model report and may name the model
+differently.
+_Avoid_: default model (that is only the fallback), provider, modelUsage key
+
+**Turn budget (USD)**:
+The optional `maxBudgetUsd` cap on raw model spend for one Turn, asserted by
+the trusted caller and handed to the SDK. Independent of Turn budget, which
+is wall clock; the Agent knows nothing about prices, balances or the service
+fee, and both caps surface the same `budget_exceeded` Outcome.
+_Avoid_: Turn budget (that is the ten minutes), quota, credit, balance
+
 **Request id**:
 The client-generated id sent with each `send` and kept across retries.
 `(conversationId, requestId)` identifies a Turn: the same id with the same

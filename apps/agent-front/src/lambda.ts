@@ -12,7 +12,12 @@ import { streamHandle } from "hono/aws-lambda";
 import { createApp } from "./app";
 import { Artifacts } from "./artifacts";
 import { deleteConversationObjects } from "./cleanup";
-import { StatsigExposureGate } from "./exposure-gate";
+import {
+	type ExposureGate,
+	exposureGateMode,
+	OpenExposureGate,
+	StatsigExposureGate,
+} from "./exposure-gate";
 import { HistoryStore } from "./history";
 import { Messages } from "./messages";
 import { agentCoreRuntime } from "./runtime";
@@ -20,27 +25,37 @@ import { ConversationStore } from "./store";
 import { Workspace } from "./workspace";
 
 const table = process.env.CONVERSATION_TABLE;
-const secretArn = process.env.STATSIG_SERVER_SECRET_ARN;
 const bucket = process.env.WORKSPACE_BUCKET;
 const runtimeArn = process.env.AGENT_RUNTIME_ARN;
 const interpreterId = process.env.CODE_INTERPRETER_ID;
-if (!table || !secretArn || !bucket || !runtimeArn || !interpreterId)
+if (!table || !bucket || !runtimeArn || !interpreterId)
 	throw new Error(
-		"CONVERSATION_TABLE, STATSIG_SERVER_SECRET_ARN, WORKSPACE_BUCKET, AGENT_RUNTIME_ARN and CODE_INTERPRETER_ID are required",
+		"CONVERSATION_TABLE, WORKSPACE_BUCKET, AGENT_RUNTIME_ARN and CODE_INTERPRETER_ID are required",
 	);
-const { SecretString: secret } = await new SecretsManagerClient({}).send(
-	new GetSecretValueCommand({
-		SecretId: secretArn,
-		VersionStage: "AWSCURRENT",
-	}),
-);
-if (!secret) throw new Error("Statsig secret must be a nonempty string");
+const mode = exposureGateMode(process.env);
+let statsig: Statsig | undefined;
+let gate: ExposureGate = new OpenExposureGate();
+if (mode === "statsig") {
+	const secretArn = process.env.STATSIG_SERVER_SECRET_ARN;
+	if (!secretArn)
+		throw new Error(
+			"STATSIG_SERVER_SECRET_ARN is required unless EXPOSURE_GATE_MODE is open",
+		);
+	const { SecretString: secret } = await new SecretsManagerClient({}).send(
+		new GetSecretValueCommand({
+			SecretId: secretArn,
+			VersionStage: "AWSCURRENT",
+		}),
+	);
+	if (!secret) throw new Error("Statsig secret must be a nonempty string");
+	statsig = new Statsig(secret, { outputLogLevel: "warn" });
+	gate = new StatsigExposureGate(statsig);
+}
 const s3 = new S3Client({});
 const store = new ConversationStore(
 	DynamoDBDocumentClient.from(new DynamoDBClient({})),
 	table,
 );
-const statsig = new Statsig(secret, { outputLogLevel: "warn" });
 const history = new HistoryStore(s3, bucket);
 const messages = new Messages(
 	store,
@@ -49,7 +64,7 @@ const messages = new Messages(
 	new Workspace(new BedrockAgentCoreClient({}), interpreterId, s3, bucket),
 	new Artifacts(s3, bucket),
 );
-const app = createApp(store, new StatsigExposureGate(statsig), messages);
+const app = createApp(store, gate, messages);
 type StreamingHandler = (
 	event: Record<string, unknown>,
 	stream: Writable,
@@ -74,7 +89,7 @@ export const handler = awslambda.streamifyResponse(
 		} finally {
 			// A disconnected HTTP writer must not freeze the Lambda before the Turn is saved.
 			await Promise.all(messages.pending);
-			await statsig.flushEvents().catch(() => undefined);
+			await statsig?.flushEvents().catch(() => undefined);
 		}
 	},
 );

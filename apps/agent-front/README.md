@@ -34,10 +34,17 @@ See [DEMO.md](DEMO.md) for the prototype browser demonstration.
 
 ## Response contract
 
-`POST /v1/conversations/:id/messages` accepts strict `{ text, requestId }`.
+`POST /v1/conversations/:id/messages` accepts strict
+`{ text, requestId, model?, maxBudgetUsd? }`.
 Text is nonblank and at most 32 KiB in UTF-8; the request id is nonempty and
 at most 1020 UTF-8 bytes (DynamoDB's sort-key limit minus `REQ#`). Keep it
-unchanged for an explicit retry. Never call `sendMessage` while `useChat.status`
+unchanged for an explicit retry. `model` is a 1–200 character OpenRouter-style
+id matching `^[a-z0-9][a-z0-9._:/-]*$` and `maxBudgetUsd` is a finite number in
+`(0, 10000]`; both are asserted by the trusted BFF, carried into the Runtime
+`Invocation` and revalidated there. The Runtime runs `model` or its configured
+default and caps raw model spend at `maxBudgetUsd` when present. Only `text`
+takes part in the request-id comparison: a retry that changes the model or the
+budget is a `duplicate_request`, never a `request_id_conflict`. Never call `sendMessage` while `useChat.status`
 is `submitted` or `streaming`: the server's 409 is the race backstop.
 
 An owned, live Conversation admits one Turn via a transaction: `turnCount`
@@ -57,7 +64,9 @@ A 200 response is AI SDK UIMessage SSE with
 `x-vercel-ai-ui-message-stream: v1`. The front mints the assistant message id:
 `start` (Turn metadata) → per-model `start-step`, `text-start`/`text-delta`/
 `text-end`, `finish-step` → `message-metadata` → `finish` or
-`error { errorText }`, then `[DONE]`. Reasoning and duplicate SDK assistant
+`error { errorText }`, then `[DONE]`. Turn metadata carries `model` (the model
+requested for that Turn, absent when the caller named none) alongside the SDK's
+own `modelUsage`, on the terminal chunk, in the stored Turn and in history. Reasoning and duplicate SDK assistant
 snapshots are suppressed. Budget abort maps to `budget_exceeded`, provider
 402/429 to `quota_exceeded`, a Runtime `mymemo.error` to its code, and other
 failures or a missing result to `internal_error`.
@@ -85,10 +94,18 @@ unknown outcome: reload history and never resend automatically.
 
 `src/lambda.ts` exports `handler` for Hono `streamHandle` requests and a
 scheduled invocation with `{"source":"mymemo.cleanup"}`. HTTP bodies cannot
-select cleanup. Required env: `CONVERSATION_TABLE`, `STATSIG_SERVER_SECRET_ARN`,
-`WORKSPACE_BUCKET`, `AGENT_RUNTIME_ARN`, `CODE_INTERPRETER_ID`, and AWS SDK region/role environment.
-Production uses the Statsig gate, drains pending Turns before the handler
-returns, and flushes exposures. No production local-endpoint or open-gate switch.
+select cleanup. Required env: `CONVERSATION_TABLE`, `WORKSPACE_BUCKET`, `AGENT_RUNTIME_ARN`,
+`CODE_INTERPRETER_ID`, and AWS SDK region/role environment.
+`EXPOSURE_GATE_MODE` selects the gate: `statsig` (the default; the fail-closed
+Statsig gate, which also requires `STATSIG_SERVER_SECRET_ARN`) or `open`, where
+every identity is allowed, the Statsig client is never constructed and the
+secret is never read. An absent or unrecognized value means `statsig`, so a
+misread configuration cannot widen exposure; Terraform's `exposure_gate_mode`
+validates the two values and production sets `open`, with the secret ARN left
+wired for a one-variable revert. Opening the gate does not make the Agent free:
+mymemo-service refuses a Turn without credit before it calls the front. The
+handler drains pending Turns before returning and flushes exposures when
+Statsig is in use. There is no production local-endpoint switch.
 
 See [the deployment and signing-proxy runbook](../../docs/runbooks/agent-front.md).
 Deployment (#742 / #750): Node.js 22 / arm64, `AWS_IAM` `RESPONSE_STREAM`

@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { AGENT_EXPOSURE_GATE, StatsigExposureGate } from "./exposure-gate";
+import {
+	AGENT_EXPOSURE_GATE,
+	EXPOSURE_GATE_MODES,
+	type ExposureGate,
+	exposureGateMode,
+	OpenExposureGate,
+	StatsigExposureGate,
+} from "./exposure-gate";
 
 const identity = {
 	memberCode: "member",
@@ -78,4 +85,19 @@ test("failed initialization denies this request and retries on the next request"
 		expect(await gate.isAgentEnabled(identity)).toBe(true);
 		expect(calls).toBe(2);
 	}
+});
+
+test("open mode admits every identity without a Statsig client", async () => {
+	expect(exposureGateMode({})).toBe("statsig");
+	expect(exposureGateMode({ EXPOSURE_GATE_MODE: "statsig" })).toBe("statsig");
+	expect(exposureGateMode({ EXPOSURE_GATE_MODE: "open" })).toBe("open");
+	// An unreadable configuration must never widen exposure.
+	for (const value of ["", " open", "OPEN", "yes", "closed"])
+		expect(exposureGateMode({ EXPOSURE_GATE_MODE: value })).toBe("statsig");
+	expect(EXPOSURE_GATE_MODES).toEqual(["statsig", "open"]);
+	const gate: ExposureGate = new OpenExposureGate();
+	expect(await gate.isAgentEnabled(identity)).toBe(true);
+	expect(
+		await gate.isAgentEnabled({ memberCode: "other", partnerCode: "partner" }),
+	).toBe(true);
 });

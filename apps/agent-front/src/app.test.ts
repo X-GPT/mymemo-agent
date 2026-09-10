@@ -13,7 +13,7 @@ import {
 	UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { createApp } from "./app";
-import type { ConversationSummary } from "./schema";
+import { type ConversationSummary, SendBody } from "./schema";
 import { ConversationStore } from "./store";
 import { createTable } from "./table";
 
@@ -484,4 +484,56 @@ describe.skipIf(!endpoint)("Conversation lifecycle with DynamoDB Local", () => {
 			spy.mockRestore();
 		}
 	});
+});
+
+test("send body carries an optional Turn model and budget and stays strict", () => {
+	const base = { text: "hello", requestId: "request" };
+	expect(SendBody.safeParse(base).success).toBe(true);
+	expect(
+		SendBody.parse({
+			...base,
+			model: "anthropic/claude-sonnet-5",
+			maxBudgetUsd: 4,
+		}),
+	).toEqual({
+		...base,
+		model: "anthropic/claude-sonnet-5",
+		maxBudgetUsd: 4,
+	});
+	for (const model of [
+		"a",
+		"9",
+		"deepseek/deepseek-v4-flash",
+		"openai/gpt-4.1-mini",
+		"bedrock:anthropic.claude-3",
+		"a".repeat(200),
+	])
+		expect(SendBody.safeParse({ ...base, model }).success).toBe(true);
+	for (const model of [
+		"",
+		"-leading-dash",
+		"/leading-slash",
+		".leading-dot",
+		"Anthropic/Claude",
+		"has space",
+		"emoji😀",
+		"a".repeat(201),
+		42,
+		null,
+	])
+		expect(SendBody.safeParse({ ...base, model }).success).toBe(false);
+	for (const maxBudgetUsd of [0.01, 1, 4.32, 10000])
+		expect(SendBody.safeParse({ ...base, maxBudgetUsd }).success).toBe(true);
+	for (const maxBudgetUsd of [
+		0,
+		-1,
+		10000.01,
+		Number.NaN,
+		Number.POSITIVE_INFINITY,
+		"4",
+		null,
+	])
+		expect(SendBody.safeParse({ ...base, maxBudgetUsd }).success).toBe(false);
+	expect(SendBody.safeParse({ ...base, extra: 1 }).success).toBe(false);
+	expect(SendBody.safeParse({ ...base, text: " " }).success).toBe(false);
 });

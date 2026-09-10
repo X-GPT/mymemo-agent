@@ -143,12 +143,13 @@ export function createApp(
 			}
 			if (!enabled) return c.json({ error: "Agent is not enabled" }, 403);
 			if (!messages) throw new Error("Messages not configured");
-			const { text, requestId } = c.req.valid("json");
+			const { text, requestId, model, maxBudgetUsd } = c.req.valid("json");
 			return messages.send(
 				c.req.param("id"),
 				c.var.identity.memberCode,
 				text,
 				requestId,
+				{ model, maxBudgetUsd },
 			);
 		},
 	);

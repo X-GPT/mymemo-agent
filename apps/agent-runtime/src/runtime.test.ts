@@ -139,6 +139,7 @@ async function harness(
 ) {
 	const cwd = await realpath(await mkdtemp(join(tmpdir(), "runtime-test-")));
 	const captured: SDKMessage[] = [];
+	const queryOptions: Record<string, unknown>[] = [];
 	let configDir = "";
 	let modelCalls = 0;
 	const messageCounts: number[] = [];
@@ -248,6 +249,7 @@ async function harness(
 			},
 		},
 		(params) => {
+			queryOptions.push((params.options ?? {}) as Record<string, unknown>);
 			configDir = params.options?.env?.CLAUDE_CONFIG_DIR ?? "";
 			expect(configDir).toMatch(/^\/tmp\/claude\/[0-9a-f-]+$/);
 			const sessionId = params.options?.resume ?? params.options?.sessionId;
@@ -288,6 +290,7 @@ async function harness(
 	return {
 		url: `http://127.0.0.1:${server.port}`,
 		captured,
+		queryOptions,
 		objects,
 		operations,
 		messageCounts,
@@ -450,10 +453,32 @@ test("invoke boundary rejects unsafe payloads", () => {
 		{ scope: { kind: "collection" } },
 		{ budgetUntil: Number.MAX_SAFE_INTEGER },
 		{ extra: true },
+		{ model: "" },
+		{ model: "Anthropic/Claude" },
+		{ model: "-leading-dash" },
+		{ model: "has space" },
+		{ model: "a".repeat(201) },
+		{ model: 42 },
+		{ maxBudgetUsd: 0 },
+		{ maxBudgetUsd: -1 },
+		{ maxBudgetUsd: 10000.01 },
+		{ maxBudgetUsd: Number.NaN },
+		{ maxBudgetUsd: Number.POSITIVE_INFINITY },
+		{ maxBudgetUsd: "4" },
 	]) {
 		expect(invocationSchema.safeParse({ ...input, ...patch }).success).toBe(
 			false,
 		);
+	}
+	for (const patch of [
+		{ model: "anthropic/claude-sonnet-5" },
+		{ model: "deepseek/deepseek-v4-flash", maxBudgetUsd: 4.32 },
+		{ maxBudgetUsd: 10000 },
+		{ maxBudgetUsd: 0.01 },
+	]) {
+		const parsed = invocationSchema.safeParse({ ...input, ...patch });
+		expect(parsed.success).toBe(true);
+		expect(parsed.data).toMatchObject(patch);
 	}
 });
 
@@ -500,4 +525,30 @@ test("three fresh config directories resume one growing CLI transcript", async (
 	console.log(
 		JSON.stringify({ messageCounts: counts, transcriptBytes: sizes }),
 	);
+});
+
+test("the invocation's model and budget reach query(), the config model is the default", async () => {
+	for (const [turn, expected] of [
+		[
+			{ model: "deepseek/deepseek-v4-pro", maxBudgetUsd: 4.32 },
+			{ model: "deepseek/deepseek-v4-pro", maxBudgetUsd: 4.32 },
+		],
+		[{}, { model: "fake" }],
+	] as const) {
+		const h = await harness("normal");
+		try {
+			const response = await fetch(`${h.url}/invocations`, {
+				method: "POST",
+				body: JSON.stringify({ ...payload(), ...turn }),
+			});
+			expect(response.status).toBe(200);
+			await response.text();
+			expect(h.queryOptions).toHaveLength(1);
+			expect(h.queryOptions[0]).toMatchObject(expected);
+			if (!("maxBudgetUsd" in turn))
+				expect(h.queryOptions[0]).not.toHaveProperty("maxBudgetUsd");
+		} finally {
+			await h.cleanup();
+		}
+	}
 });
