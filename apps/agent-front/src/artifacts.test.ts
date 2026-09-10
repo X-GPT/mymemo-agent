@@ -44,6 +44,7 @@ async function harness() {
 			if (!body)
 				throw Object.assign(new Error("missing"), { name: "NoSuchKey" });
 			return {
+				ContentLength: body.length,
 				Body: {
 					transformToString: async () => body.toString(),
 					transformToByteArray: async () => body,
@@ -286,6 +287,16 @@ test("previewable marks only text/html within the preview cap, and content serve
 	for (const path of ["huge.html", "notes.txt", "chart.png"])
 		expect(await h.artifacts.content("c", byPath[path] ?? "")).toBeUndefined();
 	expect(await h.artifacts.content("c", "unknown")).toBeUndefined();
+	// A stale manifest (sync died between the object write and the manifest
+	// write) must not let a now-oversized object through the preview cap.
+	h.objects.set(
+		"_artifacts/c/dashboard.html",
+		Buffer.alloc(1024 * 1024 + 1, 60),
+	);
+	expect(
+		await h.artifacts.content("c", byPath["dashboard.html"] ?? ""),
+	).toBeUndefined();
+	h.objects.set("_artifacts/c/dashboard.html", Buffer.from(page));
 	// Preview never widens deletion or ownership: a removed file stops resolving.
 	await rm(join(h.home, "ws/artifacts/dashboard.html"));
 	await h.artifacts.sync("c", "s", h.workspace);
